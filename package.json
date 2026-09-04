@@ -1,0 +1,18 @@
+{
+  "name": "cloudpanel-addons",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build:cli": "bun build --compile --target=bun-linux-x64 --outfile dist/clp-addons-linux-x64 cli/index.ts",
+    "build:instatic": "bun build --compile --target=bun-linux-x64 --outfile dist/instatic-app-linux-x64 addons/instatic/app/index.ts",
+    "build": "bun run build:cli && bun run build:instatic",
+    "lint:wrapper": "shellcheck -S warning addons/*/wrapper/* tools/*.sh install.sh"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}

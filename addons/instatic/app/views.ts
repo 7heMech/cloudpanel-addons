@@ -1,543 +1,335 @@
-import type { InstanceRecord } from "./db";
+// Server-rendered HTML. Every interpolated value goes through esc() or escJs():
+// instance domains and container states originate outside this process, and the
+// page is served to an authenticated operator whose session can create and
+// delete sites.
+
+import { esc, escJs } from "./http";
+import type { InstanceView } from "./service";
+
+const STYLE = `
+:root {
+  --bg: #0b1120; --panel: #131c2e; --border: #24314b; --text: #e6ecf7;
+  --muted: #8fa0bf; --accent: #38bdf8; --ok: #34d399; --warn: #fbbf24; --bad: #f87171;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--accent); }
+header { border-bottom: 1px solid var(--border); padding: 1rem 1.5rem;
+  display: flex; align-items: center; gap: 1rem; }
+header h1 { font-size: 1.05rem; margin: 0; font-weight: 600; }
+header .spacer { flex: 1; }
+main { max-width: 1080px; margin: 0 auto; padding: 1.5rem; }
+.card { background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 1.25rem; margin-bottom: 1.25rem; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; }
+.stat .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase;
+  letter-spacing: 0.06em; }
+.stat .value { font-size: 1.6rem; font-weight: 600; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); padding: 0 0.6rem 0.6rem; font-weight: 600; }
+td { padding: 0.75rem 0.6rem; border-top: 1px solid var(--border); vertical-align: middle; }
+.mono { font-family: var(--mono); font-size: 0.85rem; }
+.badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px;
+  font-size: 0.72rem; font-family: var(--mono); border: 1px solid var(--border); }
+.state-running { color: var(--ok); border-color: var(--ok); }
+.state-exited, .state-created, .state-paused { color: var(--warn); border-color: var(--warn); }
+.state-absent, .state-unknown { color: var(--bad); border-color: var(--bad); }
+.btn { background: transparent; color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.35rem 0.7rem; font-size: 0.8rem; cursor: pointer; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 600; }
+.btn-danger:hover { border-color: var(--bad); color: var(--bad); }
+.actions { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+label { display: block; margin: 1rem 0 0.35rem; font-size: 0.8rem; color: var(--muted); }
+input, select { width: 100%; background: #0d1526; color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 0.55rem 0.7rem; font-size: 0.9rem; }
+input:read-only { color: var(--muted); }
+.hint { color: var(--muted); font-size: 0.78rem; margin-top: 0.3rem; }
+.alert { border: 1px solid var(--bad); color: var(--bad); background: rgba(248,113,113,0.08);
+  border-radius: 8px; padding: 0.7rem 0.9rem; margin-bottom: 1rem; font-size: 0.88rem; }
+.notice { border: 1px solid var(--warn); color: var(--warn); background: rgba(251,191,36,0.08);
+  border-radius: 8px; padding: 0.7rem 0.9rem; margin-bottom: 1rem; font-size: 0.88rem; }
+.empty { color: var(--muted); text-align: center; padding: 2rem 0; }
+dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: 10px; padding: 1.25rem; max-width: 720px; width: 92%; }
+dialog::backdrop { background: rgba(3,7,18,0.72); }
+pre { background: #05090f; border: 1px solid var(--border); border-radius: 6px;
+  padding: 0.8rem; overflow: auto; max-height: 55vh; font-size: 0.78rem; }
+`;
+
+const CLIENT_JS = `
+// The CSRF cookie is readable by this page on purpose; echoing it back in a
+// header is what proves the request came from here and not another origin.
+function csrf() {
+  const m = document.cookie.match(/(?:^|;\\s*)clp_addons_csrf=([^;]+)/);
+  return m ? m[1] : '';
+}
+
+async function call(path, options) {
+  const opts = Object.assign({ headers: {} }, options || {});
+  opts.headers = Object.assign({ 'X-CLP-Addons-CSRF': csrf() }, opts.headers);
+  const res = await fetch(path, opts);
+  let body = null;
+  try { body = await res.json(); } catch (e) { /* non-JSON error page */ }
+  if (!res.ok || !body || body.ok === false) {
+    throw new Error((body && body.error) || ('request failed with ' + res.status));
+  }
+  return body;
+}
+
+function busy(on) {
+  document.querySelectorAll('button').forEach(function (b) { b.disabled = on; });
+  document.body.style.cursor = on ? 'progress' : '';
+}
+
+async function act(domain, verb) {
+  busy(true);
+  try {
+    await call('/api/instances/' + encodeURIComponent(domain) + '/' + verb, { method: 'POST' });
+    location.reload();
+  } catch (e) {
+    busy(false);
+    alert(verb + ' failed: ' + e.message);
+  }
+}
+
+async function showLogs(domain) {
+  const dlg = document.getElementById('logs-dialog');
+  const pre = document.getElementById('logs-body');
+  document.getElementById('logs-title').textContent = 'Logs \\u2014 ' + domain;
+  pre.textContent = 'Loading\\u2026';
+  dlg.showModal();
+  try {
+    const body = await call('/api/instances/' + encodeURIComponent(domain) + '/logs');
+    pre.textContent = (body.data && body.data.logs) || '(no output)';
+  } catch (e) {
+    pre.textContent = 'Could not fetch logs: ' + e.message;
+  }
+}
+
+let pendingUpdate = null;
+function askUpdate(domain, current) {
+  pendingUpdate = domain;
+  document.getElementById('update-domain').textContent = domain;
+  document.getElementById('update-current').textContent = current;
+  document.getElementById('update-tag').value = '';
+  document.getElementById('update-dialog').showModal();
+}
+
+async function confirmUpdate() {
+  const tag = document.getElementById('update-tag').value.trim();
+  if (!/^\\d+\\.\\d+\\.\\d+$/.test(tag)) { alert('Enter an exact version, for example 0.0.18'); return; }
+  document.getElementById('update-dialog').close();
+  busy(true);
+  try {
+    await call('/api/instances/' + encodeURIComponent(pendingUpdate) + '/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag: tag })
+    });
+    location.reload();
+  } catch (e) {
+    busy(false);
+    alert('Update failed and the instance was rolled back: ' + e.message);
+  }
+}
+
+let pendingDelete = null;
+function askDelete(domain) {
+  pendingDelete = domain;
+  document.getElementById('delete-domain').textContent = domain;
+  document.getElementById('delete-confirm').value = '';
+  document.getElementById('delete-dialog').showModal();
+}
+
+async function confirmDelete() {
+  const typed = document.getElementById('delete-confirm').value.trim();
+  if (typed !== pendingDelete) { alert('Type the domain exactly to confirm.'); return; }
+  document.getElementById('delete-dialog').close();
+  busy(true);
+  try {
+    await call('/api/instances/' + encodeURIComponent(pendingDelete) + '/delete', { method: 'POST' });
+    location.href = '/';
+  } catch (e) {
+    busy(false);
+    alert('Delete failed: ' + e.message);
+  }
+}
+
+async function submitCreate(ev) {
+  ev.preventDefault();
+  const domain = document.getElementById('domain').value.trim().toLowerCase();
+  const tag = document.getElementById('tag').value;
+  const status = document.getElementById('create-status');
+  busy(true);
+  status.textContent = 'Creating the site, pulling ' + tag + ' and waiting for a health check. This can take a couple of minutes\\u2026';
+  try {
+    await call('/api/instances', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain: domain, tag: tag })
+    });
+    location.href = '/';
+  } catch (e) {
+    busy(false);
+    status.textContent = '';
+    alert('Create failed: ' + e.message);
+  }
+  return false;
+}
+`;
 
 export function layout(title: string, content: string): string {
-  return `<!DOCTYPE html>
+  return `<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title} | CloudPanel Addons</title>
-  <style>
-    :root {
-      --bg: #0b0f19;
-      --card-bg: #111827;
-      --card-border: #1f2937;
-      --text: #f9fafb;
-      --text-muted: #9ca3af;
-      --primary: #2563eb;
-      --primary-hover: #1d4ed8;
-      --accent: #38bdf8;
-      --danger: #ef4444;
-      --danger-hover: #dc2626;
-      --success: #10b981;
-      --warning: #f59e0b;
-      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background-color: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      line-height: 1.5;
-      padding-bottom: 60px;
-    }
-    header {
-      background: var(--card-bg);
-      border-bottom: 1px solid var(--card-border);
-      padding: 16px 32px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      font-weight: 700;
-      font-size: 1.15rem;
-      text-decoration: none;
-      color: var(--text);
-    }
-    .brand-badge {
-      background: #1e293b;
-      color: var(--accent);
-      padding: 2px 8px;
-      border-radius: 6px;
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      font-weight: 600;
-      border: 1px solid #334155;
-    }
-    nav { display: flex; gap: 16px; align-items: center; }
-    nav a {
-      color: var(--text-muted);
-      text-decoration: none;
-      font-size: 0.95rem;
-      font-weight: 500;
-      transition: color 0.15s;
-    }
-    nav a:hover, nav a.active { color: var(--text); }
-    .container {
-      max-width: 1200px;
-      margin: 40px auto;
-      padding: 0 24px;
-    }
-    .page-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 32px;
-    }
-    .page-title h1 { font-size: 1.75rem; font-weight: 700; }
-    .page-title p { color: var(--text-muted); font-size: 0.95rem; margin-top: 4px; }
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      background: var(--primary);
-      color: white;
-      padding: 10px 18px;
-      border-radius: 8px;
-      text-decoration: none;
-      font-weight: 600;
-      font-size: 0.9rem;
-      border: none;
-      cursor: pointer;
-      transition: background 0.15s;
-    }
-    .btn:hover { background: var(--primary-hover); }
-    .btn-sm { padding: 6px 12px; font-size: 0.8rem; border-radius: 6px; }
-    .btn-outline {
-      background: transparent;
-      border: 1px solid var(--card-border);
-      color: var(--text);
-    }
-    .btn-outline:hover { background: #1e293b; }
-    .btn-danger { background: var(--danger); }
-    .btn-danger:hover { background: var(--danger-hover); }
-    .grid-stats {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 20px;
-      margin-bottom: 32px;
-    }
-    .stat-card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 12px;
-      padding: 20px;
-    }
-    .stat-card .label { font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; }
-    .stat-card .value { font-size: 1.85rem; font-weight: 700; margin-top: 8px; color: var(--text); }
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 12px;
-      overflow: hidden;
-    }
-    table { width: 100%; border-collapse: collapse; text-align: left; }
-    th {
-      background: #161f30;
-      padding: 14px 20px;
-      font-size: 0.8rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--text-muted);
-      border-bottom: 1px solid var(--card-border);
-    }
-    td {
-      padding: 16px 20px;
-      border-bottom: 1px solid var(--card-border);
-      font-size: 0.9rem;
-    }
-    tr:last-child td { border-bottom: none; }
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 0.8rem;
-      padding: 4px 10px;
-      border-radius: 9999px;
-      font-weight: 600;
-    }
-    .status-badge.running { background: rgba(16, 185, 129, 0.15); color: #34d399; }
-    .status-badge.stopped { background: rgba(239, 68, 68, 0.15); color: #f87171; }
-    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-    .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .tag-badge {
-      font-family: var(--font-mono);
-      background: #1e293b;
-      padding: 2px 8px;
-      border-radius: 6px;
-      color: var(--accent);
-      font-size: 0.8rem;
-    }
-    .form-group { margin-bottom: 20px; }
-    label { display: block; font-size: 0.85rem; font-weight: 600; color: var(--text); margin-bottom: 8px; }
-    input, select {
-      width: 100%;
-      padding: 10px 14px;
-      background: #0d1321;
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      color: var(--text);
-      font-size: 0.95rem;
-    }
-    input:focus, select:focus { outline: none; border-color: var(--primary); }
-    .help-text { font-size: 0.8rem; color: var(--text-muted); margin-top: 6px; }
-    .modal {
-      display: none;
-      position: fixed;
-      top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(0,0,0,0.7);
-      backdrop-filter: blur(4px);
-      z-index: 100;
-      justify-content: center;
-      align-items: center;
-    }
-    .modal-content {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 12px;
-      width: 90%;
-      max-width: 600px;
-      padding: 24px;
-      max-height: 80vh;
-      overflow-y: auto;
-    }
-    .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-    .modal-header h3 { font-size: 1.25rem; }
-    pre.log-box {
-      background: #070a12;
-      border: 1px solid var(--card-border);
-      border-radius: 8px;
-      padding: 16px;
-      font-family: var(--font-mono);
-      font-size: 0.8rem;
-      color: #93c5fd;
-      max-height: 400px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-    }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(title)}</title>
+<style>${STYLE}</style>
 </head>
 <body>
-  <header>
-    <a href="/instatic" class="brand">
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 8h10M7 12h10M7 16h6"/></svg>
-      CloudPanel Addons <span class="brand-badge">Instatic</span>
-    </a>
-    <nav>
-      <a href="/instatic">Instances</a>
-      <a href="/instatic/new" class="btn btn-sm">+ New Instance</a>
-      <a href="https://127.0.0.1:8443" target="_blank">Back to Panel</a>
-    </nav>
-  </header>
-  <main class="container">
-    ${content}
-  </main>
+<header>
+  <h1>Instatic</h1>
+  <span class="spacer"></span>
+  <a href="/">Instances</a>
+  <a href="/new">New site</a>
+</header>
+<main>${content}</main>
+<script>${CLIENT_JS}</script>
 </body>
 </html>`;
 }
 
-export function dashboardView(instances: InstanceRecord[], nextPort: number): string {
-  const runningCount = instances.filter(i => i.status === "running").length;
+function stateClass(state: string): string {
+  const known = ["running", "exited", "created", "paused", "absent", "unknown"];
+  return known.includes(state) ? `state-${state}` : "state-unknown";
+}
 
-  const rows = instances.length === 0
-    ? `<tr><td colspan="6" style="text-align:center; padding: 40px; color: var(--text-muted);">No Instatic instances found. Click "+ New Instance" to launch your first site.</td></tr>`
-    : instances.map(i => `
-      <tr>
-        <td>
-          <a href="https://${i.domain}" target="_blank" style="color: var(--accent); font-weight: 600; text-decoration: none;">
-            ${i.domain} ↗
-          </a>
-          <div style="font-size: 0.75rem; color: var(--text-muted);">${i.container_name}</div>
-        </td>
-        <td><span style="font-family: var(--font-mono); color: #cbd5e1;">127.0.0.1:${i.port}</span></td>
-        <td><span class="tag-badge">v${i.tag}</span></td>
-        <td>
-          <span class="status-badge ${i.status}">
-            <span class="status-dot"></span>
-            ${i.status.toUpperCase()}
-          </span>
-        </td>
-        <td style="color: var(--text-muted); font-size: 0.8rem;">
-          ${new Date(i.created_at).toLocaleDateString()}
-        </td>
-        <td>
-          <div class="actions">
-            ${i.status === "running"
-              ? `<button class="btn btn-outline btn-sm" onclick="action('${i.domain}', 'stop')">Stop</button>`
-              : `<button class="btn btn-outline btn-sm" onclick="action('${i.domain}', 'start')">Start</button>`
-            }
-            <button class="btn btn-outline btn-sm" onclick="action('${i.domain}', 'restart')">Restart</button>
-            <button class="btn btn-outline btn-sm" onclick="openUpdateModal('${i.domain}', '${i.tag}')">Update</button>
-            <button class="btn btn-outline btn-sm" onclick="openLogsModal('${i.domain}')">Logs</button>
-            <button class="btn btn-outline btn-sm" onclick="action('${i.domain}', 'snapshot')">Snapshot</button>
-            <button class="btn btn-danger btn-sm" onclick="openDeleteModal('${i.domain}')">Delete</button>
-          </div>
-        </td>
-      </tr>
-    `).join("");
+export function dashboardView(instances: InstanceView[], nextPort: number, snapshotAge: number): string {
+  const running = instances.filter((i) => i.state === "running").length;
 
-  return `
-    <div class="page-header">
-      <div class="page-title">
-        <h1>Instatic CMS Sites</h1>
-        <p>Managed container instances running behind CloudPanel Reverse Proxy.</p>
-      </div>
-      <a href="/instatic/new" class="btn">+ Create Instatic Site</a>
-    </div>
+  // A stale snapshot means the port list the allocator is working from may no
+  // longer match the panel. Say so rather than quietly allocating against it.
+  const staleNotice =
+    snapshotAge > 3600
+      ? `<div class="notice">The panel snapshot is ${Math.floor(snapshotAge / 60)} minutes old.
+         Run <span class="mono">clp-addons repair</span> as root to refresh it before creating a site.</div>`
+      : "";
 
-    <div class="grid-stats">
-      <div class="stat-card">
-        <div class="label">Total Instances</div>
-        <div class="value">${instances.length}</div>
-      </div>
-      <div class="stat-card">
-        <div class="label">Running Containers</div>
-        <div class="value" style="color: #34d399;">${runningCount}</div>
-      </div>
-      <div class="stat-card">
-        <div class="label">Next Available Port</div>
-        <div class="value" style="font-family: var(--font-mono); font-size: 1.5rem;">${nextPort}</div>
-      </div>
-    </div>
+  const rows = instances
+    .map(
+      (i) => `<tr>
+  <td>
+    <a href="https://${esc(i.domain)}" target="_blank" rel="noreferrer noopener">${esc(i.domain)}</a>
+    <div class="mono" style="color:var(--muted)">${esc(i.container_name)}</div>
+  </td>
+  <td class="mono">127.0.0.1:${esc(i.port)}</td>
+  <td><span class="badge">${esc(i.tag)}</span></td>
+  <td><span class="badge ${stateClass(i.state)}">${esc(i.state)}</span></td>
+  <td class="actions">
+    ${
+      i.state === "running"
+        ? `<button class="btn" onclick="act('${escJs(i.domain)}','stop')">Stop</button>`
+        : `<button class="btn" onclick="act('${escJs(i.domain)}','start')">Start</button>`
+    }
+    <button class="btn" onclick="act('${escJs(i.domain)}','restart')">Restart</button>
+    <button class="btn" onclick="askUpdate('${escJs(i.domain)}','${escJs(i.tag)}')">Update</button>
+    <button class="btn" onclick="act('${escJs(i.domain)}','snapshot')">Snapshot</button>
+    <button class="btn" onclick="showLogs('${escJs(i.domain)}')">Logs</button>
+    <button class="btn btn-danger" onclick="askDelete('${escJs(i.domain)}')">Delete</button>
+  </td>
+</tr>`
+    )
+    .join("\n");
 
-    <div class="card">
-      <table>
-        <thead>
-          <tr>
-            <th>Domain & Container</th>
-            <th>Binding Port</th>
-            <th>Image Version</th>
-            <th>Status</th>
-            <th>Created</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows}
-        </tbody>
-      </table>
-    </div>
+  return `${staleNotice}
+<div class="card stats">
+  <div class="stat"><div class="label">Instances</div><div class="value">${instances.length}</div></div>
+  <div class="stat"><div class="label">Running</div><div class="value" style="color:var(--ok)">${running}</div></div>
+  <div class="stat"><div class="label">Next port</div><div class="value mono">${esc(nextPort)}</div></div>
+</div>
 
-    <!-- Modals -->
-    <div id="logsModal" class="modal">
-      <div class="modal-content" style="max-width: 800px;">
-        <div class="modal-header">
-          <h3 id="logsTitle">Container Logs</h3>
-          <button class="btn btn-outline btn-sm" onclick="closeModal('logsModal')">✕</button>
-        </div>
-        <pre id="logContent" class="log-box">Loading logs...</pre>
-      </div>
-    </div>
+<div class="card">
+  ${
+    instances.length === 0
+      ? `<div class="empty">No Instatic instances yet. <a href="/new">Create one</a>.</div>`
+      : `<table>
+    <thead><tr><th>Site</th><th>Bound to</th><th>Version</th><th>State</th><th>Actions</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`
+  }
+</div>
 
-    <div id="updateModal" class="modal">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>Update Instatic Version</h3>
-          <button class="btn btn-outline btn-sm" onclick="closeModal('updateModal')">✕</button>
-        </div>
-        <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 16px;">
-          Updates create an automatic database snapshot, pull the target tag, restart with health checks, and roll back if unready.
-        </p>
-        <form id="updateForm" onsubmit="submitUpdate(event)">
-          <input type="hidden" id="updateDomain" name="domain">
-          <div class="form-group">
-            <label>Target Tag</label>
-            <select id="updateTag" name="tag">
-              <option value="0.0.18">0.0.18 (Latest Verified)</option>
-              <option value="0.0.17">0.0.17</option>
-              <option value="0.0.16">0.0.16</option>
-            </select>
-          </div>
-          <div style="display: flex; justify-content: flex-end; gap: 8px;">
-            <button type="button" class="btn btn-outline" onclick="closeModal('updateModal')">Cancel</button>
-            <button type="submit" class="btn" id="updateSubmitBtn">Apply Update</button>
-          </div>
-        </form>
-      </div>
-    </div>
+<dialog id="logs-dialog">
+  <h3 id="logs-title" style="margin-top:0"></h3>
+  <pre id="logs-body"></pre>
+  <div class="actions" style="justify-content:flex-end">
+    <button class="btn" onclick="document.getElementById('logs-dialog').close()">Close</button>
+  </div>
+</dialog>
 
-    <div id="deleteModal" class="modal">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3 style="color: var(--danger);">Delete Instance</h3>
-          <button class="btn btn-outline btn-sm" onclick="closeModal('deleteModal')">✕</button>
-        </div>
-        <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 16px;">
-          This will archive an emergency backup to <code>/var/backups/clp-addons/instatic/</code>, delete the Docker container, and delete the CloudPanel site.
-        </p>
-        <p style="font-size: 0.85rem; margin-bottom: 8px;">Type domain name <b id="confirmTarget" style="color: var(--danger);"></b> to confirm:</p>
-        <input type="text" id="confirmInput" placeholder="domain.com" style="margin-bottom: 16px;">
-        <div style="display: flex; justify-content: flex-end; gap: 8px;">
-          <button class="btn btn-outline" onclick="closeModal('deleteModal')">Cancel</button>
-          <button class="btn btn-danger" id="deleteSubmitBtn" onclick="submitDelete()">Delete Instance</button>
-        </div>
-      </div>
-    </div>
+<dialog id="update-dialog">
+  <h3 style="margin-top:0">Update <span id="update-domain" class="mono"></span></h3>
+  <p class="hint">Currently running <span id="update-current" class="mono"></span>.
+    A snapshot is taken first; if the new version fails its health check the instance is rolled
+    back to the current tag automatically.</p>
+  <label for="update-tag">Target version</label>
+  <input id="update-tag" placeholder="0.0.18" autocomplete="off">
+  <div class="actions" style="justify-content:flex-end;margin-top:1rem">
+    <button class="btn" onclick="document.getElementById('update-dialog').close()">Cancel</button>
+    <button class="btn btn-primary" onclick="confirmUpdate()">Update</button>
+  </div>
+</dialog>
 
-    <script>
-      function closeModal(id) { document.getElementById(id).style.display = 'none'; }
-      function openModal(id) { document.getElementById(id).style.display = 'flex'; }
-
-      async function action(domain, verb) {
-        if (!confirm('Perform ' + verb + ' on ' + domain + '?')) return;
-        const res = await fetch('/api/instances/' + domain + '/' + verb, { method: 'POST' });
-        const json = await res.json();
-        if (json.ok) {
-          window.location.reload();
-        } else {
-          alert('Error: ' + (json.error || 'Action failed'));
-        }
-      }
-
-      async function openLogsModal(domain) {
-        document.getElementById('logsTitle').innerText = 'Logs: ' + domain;
-        document.getElementById('logContent').innerText = 'Fetching logs...';
-        openModal('logsModal');
-        const res = await fetch('/api/instances/' + domain + '/logs');
-        const text = await res.text();
-        document.getElementById('logContent').innerText = text;
-      }
-
-      function openUpdateModal(domain, currentTag) {
-        document.getElementById('updateDomain').value = domain;
-        openModal('updateModal');
-      }
-
-      async function submitUpdate(e) {
-        e.preventDefault();
-        const domain = document.getElementById('updateDomain').value;
-        const tag = document.getElementById('updateTag').value;
-        const btn = document.getElementById('updateSubmitBtn');
-        btn.disabled = true;
-        btn.innerText = 'Updating & Health Checking...';
-
-        try {
-          const res = await fetch('/api/instances/' + domain + '/update', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tag })
-          });
-          const json = await res.json();
-          if (json.ok) {
-            alert('Instance updated successfully to ' + tag);
-            window.location.reload();
-          } else {
-            alert('Update Failed: ' + json.error);
-            btn.disabled = false;
-            btn.innerText = 'Apply Update';
-          }
-        } catch (err) {
-          alert('Update error: ' + err.message);
-          btn.disabled = false;
-          btn.innerText = 'Apply Update';
-        }
-      }
-
-      let activeDeleteDomain = '';
-      function openDeleteModal(domain) {
-        activeDeleteDomain = domain;
-        document.getElementById('confirmTarget').innerText = domain;
-        document.getElementById('confirmInput').value = '';
-        openModal('deleteModal');
-      }
-
-      async function submitDelete() {
-        const input = document.getElementById('confirmInput').value.trim();
-        if (input !== activeDeleteDomain) {
-          alert('Domain confirmation does not match');
-          return;
-        }
-        const btn = document.getElementById('deleteSubmitBtn');
-        btn.disabled = true;
-        btn.innerText = 'Deleting...';
-
-        const res = await fetch('/api/instances/' + activeDeleteDomain + '/delete', { method: 'POST' });
-        const json = await res.json();
-        if (json.ok) {
-          window.location.reload();
-        } else {
-          alert('Delete failed: ' + json.error);
-          btn.disabled = false;
-          btn.innerText = 'Delete Instance';
-        }
-      }
-    </script>
-  `;
+<dialog id="delete-dialog">
+  <h3 style="margin-top:0">Delete <span id="delete-domain" class="mono"></span></h3>
+  <p class="hint">This removes the container, the CloudPanel site, and the instance data.
+    A final archive is written to <span class="mono">/var/backups/clp-addons/instatic</span> first.
+    Type the domain to confirm.</p>
+  <input id="delete-confirm" placeholder="type the domain" autocomplete="off">
+  <div class="actions" style="justify-content:flex-end;margin-top:1rem">
+    <button class="btn" onclick="document.getElementById('delete-dialog').close()">Cancel</button>
+    <button class="btn btn-danger" onclick="confirmDelete()">Delete</button>
+  </div>
+</dialog>`;
 }
 
 export function newInstanceView(nextPort: number, tags: string[]): string {
-  const tagOptions = tags.map(t => `<option value="${t}">${t}${t === "0.0.18" ? " (Recommended)" : ""}</option>`).join("");
+  const options = tags.map((t, idx) =>
+    `<option value="${esc(t)}"${idx === 0 ? " selected" : ""}>${esc(t)}${idx === 0 ? " (latest)" : ""}</option>`
+  ).join("");
 
-  return `
-    <div class="page-header">
-      <div class="page-title">
-        <h1>Create Instatic Site</h1>
-        <p>Launches an isolated Docker container and configures CloudPanel Reverse Proxy.</p>
-      </div>
+  return `<div class="card">
+  <h2 style="margin-top:0;font-size:1.1rem">New Instatic site</h2>
+  <p class="hint">Creates a CloudPanel reverse-proxy site, starts a pinned Instatic container bound
+    to 127.0.0.1, and verifies the page is served through nginx before recording the instance.
+    Point DNS at this server first, or the health check will not pass.</p>
+
+  <form onsubmit="return submitCreate(event)">
+    <label for="domain">Domain</label>
+    <input id="domain" placeholder="pages.example.com" autocomplete="off" required
+      pattern="[a-z0-9]([a-z0-9\\-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9\\-]{0,61}[a-z0-9])?)+">
+    <div class="hint">Lowercase hostname. Must already resolve to this server.</div>
+
+    <label for="tag">Instatic version</label>
+    <select id="tag" required>${options}</select>
+    <div class="hint">Pinned exactly. Instatic is pre-1.0, so treat every bump as potentially breaking.</div>
+
+    <label for="port">Port</label>
+    <input id="port" value="${esc(nextPort)}" readonly>
+    <div class="hint">Allocated from the reserved range and bound to 127.0.0.1 only.
+      Changing an instance's port later is a manual edit in the panel's vhost editor.</div>
+
+    <div class="actions" style="margin-top:1.25rem">
+      <button type="submit" class="btn btn-primary">Create site</button>
+      <a class="btn" href="/">Cancel</a>
     </div>
-
-    <div class="card" style="max-width: 680px; padding: 32px;">
-      <form id="createForm" onsubmit="submitCreate(event)">
-        <div class="form-group">
-          <label for="domain">Domain Name</label>
-          <input type="text" id="domain" name="domain" placeholder="cms.example.com" required
-                 pattern="^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$">
-          <div class="help-text">Lowercase domain format only. CloudPanel reverse proxy will route traffic here.</div>
-        </div>
-
-        <div class="form-group">
-          <label for="tag">Instatic Image Version</label>
-          <select id="tag" name="tag">
-            ${tagOptions}
-          </select>
-          <div class="help-text">Specific pinned tag from ghcr.io/corebunch/instatic. :latest is forbidden.</div>
-        </div>
-
-        <div class="form-group">
-          <label for="port">Internal Port Allocation</label>
-          <input type="number" id="port" name="port" value="${nextPort}" readonly style="background: #1e293b; cursor: not-allowed;">
-          <div class="help-text">Automatically allocated from reserved block 39000..39999. Bound only to 127.0.0.1.</div>
-        </div>
-
-        <div class="form-group">
-          <label for="siteUser">Site User (Optional)</label>
-          <input type="text" id="siteUser" name="siteUser" placeholder="Auto-generated if left blank">
-          <div class="help-text">Linux user created by CloudPanel to isolate site permissions.</div>
-        </div>
-
-        <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 32px;">
-          <a href="/instatic" class="btn btn-outline">Cancel</a>
-          <button type="submit" class="btn" id="submitBtn">Launch Instatic Site</button>
-        </div>
-      </form>
-    </div>
-
-    <script>
-      async function submitCreate(e) {
-        e.preventDefault();
-        const btn = document.getElementById('submitBtn');
-        const domain = document.getElementById('domain').value.trim();
-        const tag = document.getElementById('tag').value;
-        const siteUser = document.getElementById('siteUser').value.trim();
-
-        btn.disabled = true;
-        btn.innerText = 'Creating CloudPanel Site & Booting Container...';
-
-        try {
-          const res = await fetch('/api/instances', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ domain, tag, siteUser: siteUser || undefined })
-          });
-          const json = await res.json();
-          if (json.ok) {
-            alert('Instatic site created and running for ' + domain + '!');
-            window.location.href = '/instatic';
-          } else {
-            alert('Creation Error: ' + (json.error || 'Failed to create instance'));
-            btn.disabled = false;
-            btn.innerText = 'Launch Instatic Site';
-          }
-        } catch (err) {
-          alert('Request failed: ' + err.message);
-          btn.disabled = false;
-          btn.innerText = 'Launch Instatic Site';
-        }
-      }
-    </script>
-  `;
+    <div class="hint" id="create-status" style="margin-top:0.75rem"></div>
+  </form>
+</div>`;
 }
