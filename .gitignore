@@ -141,3 +141,11 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# CloudPanel Addons specific
+recon*.txt
+*.sq3
+*.db
+*.bak
+dist/
+releases/
