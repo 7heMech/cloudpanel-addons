@@ -1,0 +1,10 @@
+[Unit]
+Description=CloudPanel Addons - Template & State Reconciliation
+After=network.target clp-nginx.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/clp-addons repair
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=CloudPanel Addon - Instatic Manager Service
+After=network.target docker.service clp-nginx.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=instatic-app
+Group=instatic-app
+Environment=PORT=39001
+Environment=HOST=127.0.0.1
+Environment=INSTATIC_APP_DATA=/var/lib/clp-addons/instatic
+Environment=INSTATIC_WRAPPER=/usr/local/lib/clp-addons/clp-action-instatic
+ExecStart=/usr/local/bin/clp-addon-instatic-app
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
