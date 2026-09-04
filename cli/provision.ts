@@ -154,7 +154,7 @@ export function removeSudoers(spec: AddonSpec): void {
  * Shipped defaults land as .new for the operator to diff, so an update can
  * never clobber a config the operator has edited (section 8).
  */
-export function writeConfig(spec: AddonSpec, ownDomain: string): void {
+export function writeConfig(spec: AddonSpec, ownDomain: string, force = false): void {
   const body =
     `# clp-addons: ${spec.name}\n` +
     `# OWN_DOMAIN is the site serving the manager UI. The wrapper refuses to\n` +
@@ -162,7 +162,10 @@ export function writeConfig(spec: AddonSpec, ownDomain: string): void {
     `OWN_DOMAIN=${ownDomain}\n` +
     `PORT=${spec.port}\n`;
 
-  if (existsSync(spec.configFile)) {
+  // On install the operator named the domain explicitly, so their intent is
+  // unambiguous and the file is written. On update it is not: the config may
+  // have been edited since, so defaults land as .new to diff (section 8).
+  if (existsSync(spec.configFile) && !force) {
     const existing = readFileSync(spec.configFile, "utf-8");
     if (existing === body) return;
     writeAtomic(`${spec.configFile}.new`, body, 0o640);
@@ -171,6 +174,7 @@ export function writeConfig(spec: AddonSpec, ownDomain: string): void {
   }
   writeAtomic(spec.configFile, body, 0o640);
   run("chown", [`root:${spec.user}`, spec.configFile]);
+  rmSync(`${spec.configFile}.new`, { force: true });
 }
 
 export function readOwnDomain(spec: AddonSpec): string | null {
@@ -198,23 +202,26 @@ Environment=INSTATIC_WRAPPER=${spec.wrapperPath}
 ExecStart=${CURRENT_LINK}/${spec.appArtifact}
 Restart=always
 RestartSec=5
+UMask=0027
 
-# The service's only privileged path is the wrapper via sudo. Everything else
-# is closed off, so a compromise of the app stays inside this account.
-NoNewPrivileges=no
-PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=${spec.stateDir}
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectControlGroups=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-RestrictNamespaces=yes
-LockPersonality=yes
-MemoryDenyWriteExecute=no
-RestrictSUIDSGID=no
-SystemCallArchitectures=native
+# Deliberately little systemd sandboxing here, and NoNewPrivileges is left off.
+#
+# The app's only privileged path is 'sudo <wrapper>', and NoNewPrivileges=yes
+# blocks sudo outright. Most of the usual hardening directives — ProtectKernel*,
+# RestrictNamespaces, RestrictAddressFamilies, SystemCallArchitectures,
+# MemoryDenyWriteExecute, RestrictSUIDSGID — imply NoNewPrivileges=yes, so they
+# cannot be used here.
+#
+# Namespace directives are just as unhelpful: ProtectSystem and ProtectHome are
+# inherited by children, so they would apply to the wrapper too, and the wrapper
+# legitimately needs /home/clp (to read the panel database) and /etc (clpctl
+# writes vhosts). Sandboxing the unit would break the boundary rather than
+# reinforce it.
+#
+# The isolation that actually holds is the unprivileged account plus a sudoers
+# line naming exactly one script with no wildcards. That is worth precisely as
+# much as the wrapper's argument validation is strict, which is why the wrapper
+# is the file to review line by line.
 
 [Install]
 WantedBy=multi-user.target
@@ -294,7 +301,19 @@ export function ensureAddonSite(spec: AddonSpec, domain: string): boolean {
   }
 
   log.step(`creating CloudPanel reverse-proxy site ${domain} → 127.0.0.1:${spec.port}`);
-  const siteUser = `clpaddon-${spec.name}`.slice(0, 15);
+
+  // Derived from the domain, not from the addon name: a fixed name means a
+  // second addon site, or a reinstall under a different hostname, collides
+  // with a user that clpctl will not reuse.
+  const siteUser = `a${spec.name.slice(0, 4)}-${domain.replace(/[^a-z0-9]/g, "")}`.slice(0, 15);
+  const taken = tryRun("sqlite3", ["-readonly", db,
+    `SELECT domain_name FROM site WHERE user = '${siteUser}';`]);
+  if (taken.ok && taken.out) {
+    fatal(
+      `the site user '${siteUser}' is already used by ${taken.out}.\n` +
+        `  Delete that site, or install under a different hostname.`
+    );
+  }
   const password = `Aa1${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}!`;
   const r = tryRun("clpctl", [
     "site:add:reverse-proxy",

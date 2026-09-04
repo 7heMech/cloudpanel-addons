@@ -82,8 +82,13 @@ validate_domain() {
     # root code execution.
     own=$(sed -n 's/^[[:space:]]*OWN_DOMAIN[[:space:]]*=[[:space:]]*"\?\([^"#]*\)"\?.*/\1/p' \
           "$ADDON_CONFIG" | tail -1 | tr -d '[:space:]')
-    [[ -n $own && $d == "$own" ]] && emit_err "refusing to act on the addon's own site: '$d'"
+    if [[ -n $own && $d == "$own" ]]; then
+      emit_err "refusing to act on the addon's own site: '$d'"
+    fi
   fi
+  # Explicit success: a bare `[[ ]] && ...` here would return 1 when the
+  # condition is false, and set -e would abort the run with no output.
+  return 0
 }
 
 validate_port() {
@@ -92,6 +97,7 @@ validate_port() {
   [[ $p =~ ^[0-9]{1,5}$ ]] || emit_err "port must be an integer: '$p'"
   (( 10#$p >= PORT_MIN && 10#$p <= PORT_MAX )) \
     || emit_err "port $p outside reserved range ${PORT_MIN}-${PORT_MAX}"
+  return 0
 }
 
 validate_tag() {
@@ -101,6 +107,7 @@ validate_tag() {
   # running" unanswerable and rollback impossible (decision 2.8).
   [[ $t =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
     || emit_err "tag must be an exact version like 0.0.18, got: '$t'"
+  return 0
 }
 
 # --- helpers ----------------------------------------------------------------
@@ -136,17 +143,60 @@ gen_password() {
   printf 'Aa1%s!' "${raw:0:16}"
 }
 
+# Per-instance environment, including the master key.
+#
+# The image runs NODE_ENV=production, where Instatic refuses to boot without
+# INSTATIC_SECRET_KEY. The key encrypts recoverable secrets such as API keys
+# and TOTP seeds, so it is generated once and never rotated by an update:
+# a new key leaves every previously encrypted row unreadable.
+#
+# Passed via --env-file rather than -e so the value never appears in the
+# process arguments, where any local user could read it out of ps.
+ensure_env_file() {
+  local dir=$1 port=$2 domain=$3
+  local file="${dir}/instatic.env"
+
+  if [[ -f $file ]]; then
+    # Refresh only the values that legitimately change, and never the key.
+    local key
+    key=$(sed -n 's/^INSTATIC_SECRET_KEY=//p' "$file" | head -1)
+    [[ -n $key ]] || emit_err "instatic.env for ${domain} has no INSTATIC_SECRET_KEY; refusing to generate a new one over existing data"
+    write_env_file "$file" "$key" "$port" "$domain"
+    return
+  fi
+
+  log "generating a master key for ${domain}"
+  write_env_file "$file" "$(head -c 32 /dev/urandom | base64 -w0)" "$port" "$domain"
+}
+
+write_env_file() {
+  local file=$1 key=$2 port=$3 domain=$4
+  local tmp="${file}.tmp"
+  # 0600 root: the key is the instance's secret at rest.
+  ( umask 077
+    cat > "$tmp" <<ENVFILE
+PORT=${CONTAINER_PORT}
+NODE_ENV=production
+DATABASE_URL=sqlite:/app/data/instatic.db
+UPLOADS_DIR=/app/uploads
+INSTATIC_SECRET_KEY=${key}
+PUBLIC_ORIGIN=https://${domain}
+VITE_ALLOWED_ORIGIN=https://${domain}
+ENVFILE
+  )
+  chmod 600 "$tmp"
+  mv "$tmp" "$file"
+}
+
 run_container() {
   local name=$1 port=$2 tag=$3 domain=$4 dir=$5
+  ensure_env_file "$dir" "$port" "$domain"
   docker run -d \
     --name "$name" \
     --restart unless-stopped \
     --label 'clp-addon=instatic' \
     -p "127.0.0.1:${port}:${CONTAINER_PORT}" \
-    -e "PORT=${CONTAINER_PORT}" \
-    -e "DATABASE_URL=sqlite:/app/data/instatic.db" \
-    -e "UPLOADS_DIR=/app/uploads" \
-    -e "PUBLIC_ORIGIN=https://${domain}" \
+    --env-file "${dir}/instatic.env" \
     -v "${dir}/data:/app/data" \
     -v "${dir}/uploads:/app/uploads" \
     "${REGISTRY_IMAGE}:${tag}" >&2
@@ -199,7 +249,11 @@ make_snapshot() {
   fi
 
   # Uploads are inert files, so a plain copy is consistent enough.
-  [[ -d ${dir}/uploads ]] && cp -a "${dir}/uploads" "$stage/uploads"
+  if [[ -d ${dir}/uploads ]]; then cp -a "${dir}/uploads" "$stage/uploads"; fi
+
+  # The master key travels with the data. A restored database without it has
+  # unreadable secret columns, which makes the snapshot useless for recovery.
+  if [[ -f ${dir}/instatic.env ]]; then cp -a "${dir}/instatic.env" "$stage/instatic.env"; fi
 
   tar -czf "$out" -C "$stage" . >&2
   rm -rf "$stage"
@@ -407,7 +461,13 @@ cmd_snapshot() {
 cmd_status() {
   local domain=$1 name state
   name=$(container_name "$domain")
-  state=$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null || echo "absent")
+  # docker inspect emits a bare newline on stdout before failing for an
+  # absent container, which would put a line break inside the JSON and break
+  # the one-object-per-run contract on stdout.
+  # `|| true` is required: docker inspect exits non-zero for an absent
+  # container, and under pipefail that status would abort the assignment.
+  state=$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null | tr -d '[:space:]' || true)
+  [[ -n $state ]] || state="absent"
   emit_ok "{\"domain\":\"${domain}\",\"container\":\"${name}\",\"state\":\"${state}\"}"
 }
 
@@ -453,11 +513,16 @@ case $VERB in
 esac
 
 # Reject arguments the verb does not take, so a typo cannot be silently ignored.
+# `if` rather than `[[ ]] && emit_err`: the latter evaluates to false when the
+# argument is legitimately absent, and set -e would abort on the case's status.
 case $VERB in
   create) ;;
-  update) [[ -n $PORT ]] && emit_err "update does not take --port" ;;
-  delete) [[ -n $PORT || -n $TAG ]] && emit_err "delete takes only --domain and --confirm" ;;
-  *)      [[ -n $PORT || -n $TAG || -n $CONFIRM ]] && emit_err "${VERB} takes only --domain" ;;
+  update)
+    if [[ -n $PORT ]]; then emit_err "update does not take --port"; fi ;;
+  delete)
+    if [[ -n $PORT || -n $TAG ]]; then emit_err "delete takes only --domain and --confirm"; fi ;;
+  *)
+    if [[ -n $PORT || -n $TAG || -n $CONFIRM ]]; then emit_err "${VERB} takes only --domain"; fi ;;
 esac
 
 mkdir -p "$LOCK_DIR" "$DATA_BASE_DIR"

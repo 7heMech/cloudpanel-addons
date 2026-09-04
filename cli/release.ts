@@ -151,6 +151,40 @@ export function verifyAttestation(artifacts: FetchedArtifact[], skip: boolean): 
   }
 }
 
+/**
+ * Load artifacts from a locally built dist/ directory instead of a release.
+ *
+ * This exists for staging: on a box where no release has been cut yet, there
+ * is otherwise no way to exercise the install path at all. It still verifies
+ * every artifact against dist/SHA256SUMS, so a half-finished build is caught,
+ * but it cannot verify provenance because nothing signed it. Never the path
+ * used on a production host.
+ */
+export function loadLocal(dir: string, names: string[]): FetchedArtifact[] {
+  const sumsFile = `${dir}/SHA256SUMS`;
+  if (!existsSync(sumsFile)) {
+    fatal(`${sumsFile} not found. Run 'bun run build' and generate it with:\n  (cd ${dir} && sha256sum -- * > SHA256SUMS)`);
+  }
+  const sums = parseSums(readFileSync(sumsFile, "utf-8"));
+
+  const out: FetchedArtifact[] = [];
+  for (const name of names) {
+    const path = `${dir}/${name}`;
+    if (!existsSync(path)) fatal(`${path} not found; build it first`);
+    const bytes = readFileSync(path);
+    const expected = sums.get(name);
+    if (!expected) fatal(`${sumsFile} does not list ${name}`);
+    const actual = sha256(bytes);
+    if (actual !== expected) {
+      fatal(`checksum mismatch for ${name}\n  expected ${expected}\n  actual   ${actual}`);
+    }
+    log.ok(`${name} matches ${sumsFile}`);
+    out.push({ name, bytes });
+  }
+  log.warn("installing from a local build: provenance was not verified");
+  return out;
+}
+
 /** Version of the running CLI, injected at build time. */
 export const CLI_VERSION: string = (() => {
   // Replaced by the release workflow via --define. Falls back for local builds.

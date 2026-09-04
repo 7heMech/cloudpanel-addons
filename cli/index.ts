@@ -6,7 +6,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { ADDON_NAMES, ADDONS, CLI_BIN, CURRENT_LINK, type AddonSpec } from "./paths";
-import { CLI_VERSION, fetchVerified, resolveRelease, verifyAttestation } from "./release";
+import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation } from "./release";
 import {
   assertNotInDockerGroup, currentRelease, ensureAddonSite, ensureDirs, ensureUser, installSudoers,
   installUnits, installWrapper, placeRelease, pruneReleases, readOwnDomain, removeSudoers,
@@ -32,6 +32,7 @@ function describeTarget(s: TargetStatus): string {
   switch (s.state) {
     case "ok": return "present";
     case "missing-anchor": return "MISSING (repair will re-inject)";
+    case "stale-content": return "STALE (points at an old URL; repair will rewrite it)";
     case "template-absent": return "template not found on this box";
     case "anchor-not-found-in-markup": return "ANCHOR MARKUP GONE — patch needs rebuilding";
     case "upstream-changed":
@@ -57,10 +58,14 @@ function reconcileAnchors(spec: AddonSpec, quiet: boolean): boolean {
   let changed = false;
   let blocked = false;
   for (const target of TARGETS) {
-    const before = inspectTarget(target);
+    const before = inspectTarget(target, url);
     if (before.state === "ok") {
       if (!quiet) log.ok(`anchor ${target.slug}: present`);
       continue;
+    }
+    if (before.state === "stale-content") {
+      // Regenerate from pristine so the rewrite cannot double-apply.
+      removeTarget(target);
     }
     if (before.state === "upstream-changed" || before.state === "anchor-not-found-in-markup") {
       log.err(`anchor ${target.slug}: ${describeTarget(before)}`);
@@ -119,18 +124,26 @@ async function cmdInstall(argv: string[]): Promise<void> {
     fatal("docker is not active. Install and start it before installing this addon.");
   }
 
-  const wanted = typeof flags.version === "string" ? flags.version : "latest";
-  const rel = await resolveRelease(wanted);
-  log.step(`installing ${spec.name} from release ${rel.tag}`);
-
-  const artifacts = await fetchVerified(rel, [CLI_ARTIFACT, spec.appArtifact, spec.wrapperArtifact]);
-  verifyAttestation(artifacts, flags["skip-attestation"] === true);
+  const wantedArtifacts = [CLI_ARTIFACT, spec.appArtifact, spec.wrapperArtifact];
+  let tag: string;
+  let artifacts;
+  if (typeof flags.local === "string") {
+    tag = `local-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    log.step(`installing ${spec.name} from the local build in ${flags.local}`);
+    artifacts = loadLocal(flags.local, wantedArtifacts);
+  } else {
+    const rel = await resolveRelease(typeof flags.version === "string" ? flags.version : "latest");
+    tag = rel.tag;
+    log.step(`installing ${spec.name} from release ${rel.tag}`);
+    artifacts = await fetchVerified(rel, wantedArtifacts);
+    verifyAttestation(artifacts, flags["skip-attestation"] === true);
+  }
 
   ensureUser(spec);
   assertNotInDockerGroup(spec);
   ensureDirs(spec);
 
-  placeRelease(rel.tag, artifacts);
+  placeRelease(tag, artifacts);
   pruneReleases();
 
   const wrapper = artifacts.find((a) => a.name === spec.wrapperArtifact)!;
@@ -142,7 +155,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
   const cli = artifacts.find((a) => a.name === CLI_ARTIFACT)!;
   writeAtomic(CLI_BIN, cli.bytes, 0o755);
 
-  writeConfig(spec, domain);
+  writeConfig(spec, domain, true);
   ensureAddonSite(spec, domain);
 
   installUnits(spec);
@@ -154,7 +167,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
   reconcileAnchors(spec, false);
 
   log.plain();
-  log.ok(`${spec.name} ${rel.tag} installed.`);
+  log.ok(`${spec.name} ${tag} installed.`);
   log.plain(`  Manager UI:  https://${domain}`);
   log.plain(`  Next steps:  add basic auth for that site in the panel, then issue a certificate with`);
   log.plain(`               clpctl lets-encrypt:install:certificate --domainName=${domain}`);
@@ -279,8 +292,9 @@ async function cmdStatus(argv: string[]): Promise<void> {
   log.plain();
 
   log.plain("Panel anchors:");
+  const own = readOwnDomain(spec);
   for (const t of TARGETS) {
-    log.plain(`${pad(`  ${t.slug}`)}${describeTarget(inspectTarget(t))}`);
+    log.plain(`${pad(`  ${t.slug}`)}${describeTarget(inspectTarget(t, own ? `https://${own}` : undefined))}`);
   }
   log.plain();
 
@@ -317,6 +331,7 @@ function usage(): void {
   log.plain(`clp-addons ${CLI_VERSION} — CloudPanel addon manager (run as root)
 
   clp-addons install <addon> --domain=<host> [--version=vX.Y.Z] [--skip-attestation]
+  clp-addons install <addon> --domain=<host> --local=dist      (staging only)
   clp-addons update [<addon>|--all] [--version=vX.Y.Z]
   clp-addons self-update [--version=vX.Y.Z]
   clp-addons repair [<addon>] [--quiet]

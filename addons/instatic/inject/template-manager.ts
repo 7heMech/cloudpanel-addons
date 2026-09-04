@@ -107,12 +107,28 @@ function hashPath(slug: string): string {
 export type TargetStatus =
   | { slug: string; state: "ok" }
   | { slug: string; state: "missing-anchor" }
+  | { slug: string; state: "stale-content" }
   | { slug: string; state: "template-absent" }
   | { slug: string; state: "upstream-changed"; expected: string; found: string }
   | { slug: string; state: "anchor-not-found-in-markup" };
 
-/** Non-mutating: what is the state of this target right now? */
-export function inspectTarget(t: Target): TargetStatus {
+/** Extract the text between our markers, markers included. */
+function markerBlock(content: string): string | null {
+  const from = content.indexOf(START);
+  if (from === -1) return null;
+  const to = content.indexOf(END, from);
+  return to === -1 ? null : content.slice(from, to + END.length);
+}
+
+/**
+ * Non-mutating: what is the state of this target right now?
+ *
+ * The check is functional rather than a file diff (section 8): when the
+ * expected snippet is supplied, a marker block whose content no longer matches
+ * it counts as stale, not as present. Without that, changing the addon's
+ * hostname leaves the nav pointing at the old one forever.
+ */
+export function inspectTarget(t: Target, addonUrl?: string): TargetStatus {
   if (!existsSync(t.file)) return { slug: t.slug, state: "template-absent" };
 
   const onDisk = readFileSync(t.file, "utf-8");
@@ -131,7 +147,15 @@ export function inspectTarget(t: Target): TargetStatus {
     return { slug: t.slug, state: "anchor-not-found-in-markup" };
   }
 
-  return patched ? { slug: t.slug, state: "ok" } : { slug: t.slug, state: "missing-anchor" };
+  if (!patched) return { slug: t.slug, state: "missing-anchor" };
+
+  if (addonUrl !== undefined) {
+    const present = markerBlock(onDisk);
+    const expected = markerBlock(t.snippet(addonUrl));
+    if (present !== expected) return { slug: t.slug, state: "stale-content" };
+  }
+
+  return { slug: t.slug, state: "ok" };
 }
 
 /**
@@ -139,7 +163,7 @@ export function inspectTarget(t: Target): TargetStatus {
  * Refuses to touch the file when upstream's markup has changed under us.
  */
 export function applyTarget(t: Target, addonUrl: string): TargetStatus {
-  const status = inspectTarget(t);
+  const status = inspectTarget(t, addonUrl);
   if (status.state === "template-absent" || status.state === "upstream-changed" ||
       status.state === "anchor-not-found-in-markup") {
     return status;
