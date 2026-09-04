@@ -1,0 +1,167 @@
+// Resolving, downloading and verifying a release.
+//
+// These artifacts end up running as root, so the integrity checks here are
+// load-bearing. A checksum file served next to the binary detects corruption,
+// not substitution: anyone who can replace the binary can replace SHA256SUMS
+// alongside it. The build provenance attestation is what ties an artifact to
+// the workflow that produced it, so verification is on by default and skipping
+// it takes an explicit flag.
+
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { REPO } from "./paths";
+import { fatal, have, log, tryRun } from "./util";
+
+const API = "https://api.github.com";
+const VERSION_TAG_RE = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+export interface ResolvedRelease {
+  tag: string;
+  assets: Map<string, string>;
+}
+
+async function gh(path: string): Promise<unknown> {
+  const res = await fetch(`${API}${path}`, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "clp-addons",
+    },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!res.ok) fatal(`GitHub API ${path} returned ${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+interface GhRelease {
+  tag_name: string;
+  draft: boolean;
+  prerelease: boolean;
+  assets: { name: string; browser_download_url: string }[];
+}
+
+export async function resolveRelease(requested?: string): Promise<ResolvedRelease> {
+  let rel: GhRelease;
+  if (requested && requested !== "latest") {
+    if (!VERSION_TAG_RE.test(requested)) {
+      fatal(`'${requested}' is not a release tag; expected something like v0.1.0`);
+    }
+    rel = (await gh(`/repos/${REPO}/releases/tags/${requested}`)) as GhRelease;
+  } else {
+    rel = (await gh(`/repos/${REPO}/releases/latest`)) as GhRelease;
+  }
+
+  if (rel.draft) fatal(`release ${rel.tag_name} is a draft`);
+
+  const assets = new Map(rel.assets.map((a) => [a.name, a.browser_download_url]));
+  if (!assets.has("SHA256SUMS")) {
+    fatal(`release ${rel.tag_name} has no SHA256SUMS asset; refusing to install unverified binaries`);
+  }
+  return { tag: rel.tag_name, assets };
+}
+
+async function download(url: string): Promise<Buffer> {
+  const res = await fetch(url, {
+    redirect: "follow",
+    headers: { "User-Agent": "clp-addons" },
+    signal: AbortSignal.timeout(300_000),
+  });
+  if (!res.ok) fatal(`download failed: ${res.status} ${res.statusText} for ${url}`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+function sha256(buf: Buffer): string {
+  return createHash("sha256").update(buf).digest("hex");
+}
+
+/** Parse `sha256  name` lines, tolerating the ` *name` binary marker. */
+export function parseSums(text: string): Map<string, string> {
+  const sums = new Map<string, string>();
+  for (const line of text.split("\n")) {
+    const m = line.trim().match(/^([0-9a-f]{64})\s+\*?(\S+)$/);
+    if (m) sums.set(m[2]!, m[1]!);
+  }
+  return sums;
+}
+
+export interface FetchedArtifact {
+  name: string;
+  bytes: Buffer;
+}
+
+/**
+ * Download the named artifacts and verify each against SHA256SUMS. Throws on
+ * the first mismatch: a partially verified release is not installable.
+ */
+export async function fetchVerified(rel: ResolvedRelease, names: string[]): Promise<FetchedArtifact[]> {
+  log.step(`fetching SHA256SUMS for ${rel.tag}`);
+  const sums = parseSums((await download(rel.assets.get("SHA256SUMS")!)).toString("utf-8"));
+
+  const out: FetchedArtifact[] = [];
+  for (const name of names) {
+    const url = rel.assets.get(name);
+    if (!url) fatal(`release ${rel.tag} has no asset named ${name}`);
+
+    const expected = sums.get(name);
+    if (!expected) fatal(`SHA256SUMS for ${rel.tag} does not list ${name}`);
+
+    log.step(`downloading ${name}`);
+    const bytes = await download(url);
+    const actual = sha256(bytes);
+    if (actual !== expected) {
+      fatal(
+        `checksum mismatch for ${name}\n  expected ${expected}\n  actual   ${actual}\n` +
+          `Refusing to install. The artifact is corrupt or has been substituted.`
+      );
+    }
+    log.ok(`${name} matches its recorded checksum`);
+    out.push({ name, bytes });
+  }
+  return out;
+}
+
+/**
+ * Verify build provenance. Ties the artifact to the workflow run that built
+ * it, which the checksum file alone cannot do.
+ */
+export function verifyAttestation(artifacts: FetchedArtifact[], skip: boolean): void {
+  if (skip) {
+    log.warn("provenance verification skipped by --skip-attestation; checksums alone cannot detect substitution");
+    return;
+  }
+  if (!have("gh")) {
+    fatal(
+      "provenance verification needs the GitHub CLI (gh), which is not installed.\n" +
+        "  Install it, or re-run with --skip-attestation to accept checksum-only verification."
+    );
+  }
+
+  const dir = `/tmp/clp-addons-attest.${process.pid}`;
+  mkdirSync(dir, { recursive: true });
+  try {
+    for (const a of artifacts) {
+      const path = `${dir}/${a.name}`;
+      writeFileSync(path, a.bytes);
+      const r = tryRun("gh", ["attestation", "verify", path, "--repo", REPO]);
+      if (!r.ok) fatal(`provenance verification failed for ${a.name}:\n${r.out}`);
+      log.ok(`${a.name} provenance verified against ${REPO}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Version of the running CLI, injected at build time. */
+export const CLI_VERSION: string = (() => {
+  // Replaced by the release workflow via --define. Falls back for local builds.
+  const injected = process.env.CLP_ADDONS_VERSION ?? "";
+  return injected || "0.0.0-dev";
+})();
+
+export function readInstalledVersion(path: string): string | null {
+  try {
+    return existsSync(path) ? readFileSync(path, "utf-8").trim() : null;
+  } catch {
+    return null;
+  }
+}
