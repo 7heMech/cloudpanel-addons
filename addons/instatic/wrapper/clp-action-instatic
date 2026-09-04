@@ -1,0 +1,405 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# clp-action-instatic: Privileged wrapper for Instatic container lifecycle
+# Strict argument validation, per-domain locking, machine-readable JSON on stdout.
+# ==============================================================================
+set -euo pipefail
+
+REGISTRY_IMAGE="ghcr.io/corebunch/instatic"
+LOCK_DIR="/run/lock/clp-addons"
+DATA_BASE_DIR="/var/lib/clp-addons/instatic"
+ADDON_CONFIG="/etc/clp-addons/instatic.conf"
+
+mkdir -p "$LOCK_DIR" "$DATA_BASE_DIR"
+
+log_err() {
+  echo "[ERROR] $*" >&2
+}
+
+log_info() {
+  echo "[INFO] $*" >&2
+}
+
+fail_json() {
+  local msg="$1"
+  local code="${2:-1}"
+  log_err "$msg"
+  printf '{"ok":false,"error":%s}\n' "$(printf '%s' "$msg" | jq -R .)"
+  exit "$code"
+}
+
+success_json() {
+  local payload="${1:-"{}"}"
+  printf '{"ok":true,"data":%s}\n' "$payload"
+}
+
+# --- Validation Helpers ---
+
+validate_domain() {
+  local d="$1"
+  local domain_regex='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'
+  if [[ ! "$d" =~ $domain_regex ]]; then
+    fail_json "Invalid domain format: '$d'. Rejecting."
+  fi
+
+  # Refuse any domain matching the addon's own site
+  if [[ -f "$ADDON_CONFIG" ]]; then
+    # shellcheck disable=SC1090
+    source "$ADDON_CONFIG"
+    if [[ -n "${OWN_DOMAIN:-}" && "$d" == "$OWN_DOMAIN" ]]; then
+      fail_json "Refusing action on addon's own domain: '$d'."
+    fi
+  fi
+}
+
+validate_port() {
+  local p="$1"
+  if [[ ! "$p" =~ ^[0-9]+$ ]]; then
+    fail_json "Port must be numeric: '$p'."
+  fi
+  if (( p < 39000 || p > 39999 )); then
+    fail_json "Port $p outside reserved range 39000..39999."
+  fi
+}
+
+validate_tag() {
+  local t="$1"
+  if [[ "$t" == "latest" || "$t" == ":latest" ]]; then
+    fail_json "Tag ':latest' is strictly forbidden. Pin a specific version."
+  fi
+  local tag_regex='^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$'
+  if [[ ! "$t" =~ $tag_regex ]]; then
+    fail_json "Invalid tag format: '$t'."
+  fi
+}
+
+# --- Commands ---
+
+cmd_create() {
+  local domain=""
+  local port=""
+  local tag=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --domain) domain="$2"; shift 2 ;;
+      --port)   port="$2"; shift 2 ;;
+      --tag)    tag="$2"; shift 2 ;;
+      *) fail_json "Unknown option: $1" ;;
+    esac
+  done
+
+  [[ -z "$domain" ]] && fail_json "Missing --domain"
+  [[ -z "$port" ]] && fail_json "Missing --port"
+  [[ -z "$tag" ]] && fail_json "Missing --tag"
+
+  validate_domain "$domain"
+  validate_port "$port"
+  validate_tag "$tag"
+
+  local container_name="instatic-${domain}"
+  local inst_dir="${DATA_BASE_DIR}/${domain}"
+  local data_dir="${inst_dir}/data"
+  local uploads_dir="${inst_dir}/uploads"
+  local meta_file="${inst_dir}/meta.json"
+
+  if docker ps -a --format '{{.Names}}' | grep -Eq "^${container_name}\$"; then
+    fail_json "Container '$container_name' already exists."
+  fi
+
+  log_info "Creating instance storage directories for $domain..."
+  mkdir -p "$data_dir" "$uploads_dir" "${inst_dir}/snapshots"
+  # Set permissions for bun user inside container (UID 1000)
+  chown -R 1000:1000 "$data_dir" "$uploads_dir"
+  chmod 750 "$inst_dir" "$data_dir" "$uploads_dir"
+
+  log_info "Pulling ${REGISTRY_IMAGE}:${tag}..."
+  docker pull "${REGISTRY_IMAGE}:${tag}" >&2
+
+  log_info "Starting container $container_name on 127.0.0.1:${port}..."
+  docker run -d \
+    --name "$container_name" \
+    --restart unless-stopped \
+    -p "127.0.0.1:${port}:3001" \
+    -e PORT=3001 \
+    -e "DATABASE_URL=sqlite:/app/data/instatic.db" \
+    -e "UPLOADS_DIR=/app/uploads" \
+    -e "PUBLIC_ORIGIN=https://${domain}" \
+    -v "${data_dir}:/app/data" \
+    -v "${uploads_dir}:/app/uploads" \
+    "${REGISTRY_IMAGE}:${tag}" >&2
+
+  # Health check: wait up to 15s for port response
+  log_info "Running health check on 127.0.0.1:${port}..."
+  local healthy=0
+  for _ in {1..15}; do
+    if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}/" | grep -Eq '^[23]'; then
+      healthy=1
+      break
+    fi
+    sleep 1
+  done
+
+  if [[ $healthy -ne 1 ]]; then
+    log_err "Health check failed for container $container_name. Cleaning up."
+    docker stop "$container_name" >&2 || true
+    docker rm -f "$container_name" >&2 || true
+    fail_json "Health check failed after starting $container_name."
+  fi
+
+  # Record metadata
+  cat << META > "$meta_file"
+{
+  "domain": "${domain}",
+  "port": ${port},
+  "tag": "${tag}",
+  "container": "${container_name}",
+  "createdAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+META
+
+  success_json "{\"domain\":\"${domain}\",\"port\":${port},\"tag\":\"${tag}\",\"container\":\"${container_name}\",\"status\":\"running\"}"
+}
+
+cmd_update() {
+  local domain=""
+  local tag=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --domain) domain="$2"; shift 2 ;;
+      --tag)    tag="$2"; shift 2 ;;
+      *) fail_json "Unknown option: $1" ;;
+    esac
+  done
+
+  [[ -z "$domain" ]] && fail_json "Missing --domain"
+  [[ -z "$tag" ]] && fail_json "Missing --tag"
+
+  validate_domain "$domain"
+  validate_tag "$tag"
+
+  local container_name="instatic-${domain}"
+  local inst_dir="${DATA_BASE_DIR}/${domain}"
+  local meta_file="${inst_dir}/meta.json"
+
+  if [[ ! -f "$meta_file" ]]; then
+    fail_json "Metadata not found for $domain. Instance does not exist."
+  fi
+
+  local current_tag current_port
+  current_tag=$(jq -r .tag "$meta_file")
+  current_port=$(jq -r .port "$meta_file")
+
+  if [[ "$current_tag" == "$tag" ]]; then
+    fail_json "Instance is already running tag '$tag'."
+  fi
+
+  # 1. Snapshot database before update
+  log_info "Taking safety snapshot before update..."
+  local ts snapshot_path
+  ts=$(date +%Y%m%d%H%M%S)
+  snapshot_path="${inst_dir}/snapshots/pre-update-${current_tag}-${ts}.tar.gz"
+  tar -czf "$snapshot_path" -C "${inst_dir}" data >&2
+
+  # 2. Pull target image
+  log_info "Pulling target image ${REGISTRY_IMAGE}:${tag}..."
+  if ! docker pull "${REGISTRY_IMAGE}:${tag}" >&2; then
+    fail_json "Failed to pull image ${REGISTRY_IMAGE}:${tag}"
+  fi
+
+  # 3. Stop and rename current container
+  log_info "Stopping current container..."
+  docker stop "$container_name" >&2 || true
+  docker rename "$container_name" "${container_name}-prev" >&2
+
+  # 4. Start new container
+  log_info "Starting updated container with tag $tag..."
+  if ! docker run -d \
+    --name "$container_name" \
+    --restart unless-stopped \
+    -p "127.0.0.1:${current_port}:3001" \
+    -e PORT=3001 \
+    -e "DATABASE_URL=sqlite:/app/data/instatic.db" \
+    -e "UPLOADS_DIR=/app/uploads" \
+    -e "PUBLIC_ORIGIN=https://${domain}" \
+    -v "${inst_dir}/data:/app/data" \
+    -v "${inst_dir}/uploads:/app/uploads" \
+    "${REGISTRY_IMAGE}:${tag}" >&2; then
+
+    log_err "Failed to launch new container. Initiating rollback..."
+    docker rm -f "$container_name" >&2 || true
+    docker rename "${container_name}-prev" "$container_name" >&2
+    docker start "$container_name" >&2
+    fail_json "Failed to launch updated container. Rolled back to ${current_tag}."
+  fi
+
+  # 5. Health check
+  log_info "Health checking updated container on port $current_port..."
+  local healthy=0
+  for _ in {1..15}; do
+    if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${current_port}/" | grep -Eq '^[23]'; then
+      healthy=1
+      break
+    fi
+    sleep 1
+  done
+
+  if [[ $healthy -ne 1 ]]; then
+    log_err "Health check failed after update. Rolling back to ${current_tag}..."
+    docker stop "$container_name" >&2 || true
+    docker rm -f "$container_name" >&2 || true
+    # Restore database data from pre-update snapshot
+    rm -rf "${inst_dir}/data"
+    tar -xzf "$snapshot_path" -C "${inst_dir}" >&2
+    chown -R 1000:1000 "${inst_dir}/data"
+    docker rename "${container_name}-prev" "$container_name" >&2
+    docker start "$container_name" >&2
+    fail_json "Health check failed on update. Rolled back cleanly to ${current_tag}."
+  fi
+
+  # 6. Cleanup previous container and update metadata
+  docker rm -f "${container_name}-prev" >&2 || true
+  jq --arg t "$tag" '.tag = $t | .updatedAt = "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"' "$meta_file" > "${meta_file}.tmp"
+  mv "${meta_file}.tmp" "$meta_file"
+
+  success_json "{\"domain\":\"${domain}\",\"previousTag\":\"${current_tag}\",\"newTag\":\"${tag}\",\"status\":\"running\"}"
+}
+
+cmd_start() {
+  local domain=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --domain) domain="$2"; shift 2 ;;
+      *) fail_json "Unknown option: $1" ;;
+    esac
+  done
+  validate_domain "$domain"
+  docker start "instatic-${domain}" >&2
+  success_json "{\"domain\":\"${domain}\",\"status\":\"started\"}"
+}
+
+cmd_stop() {
+  local domain=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --domain) domain="$2"; shift 2 ;;
+      *) fail_json "Unknown option: $1" ;;
+    esac
+  done
+  validate_domain "$domain"
+  docker stop "instatic-${domain}" >&2
+  success_json "{\"domain\":\"${domain}\",\"status\":\"stopped\"}"
+}
+
+cmd_restart() {
+  local domain=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --domain) domain="$2"; shift 2 ;;
+      *) fail_json "Unknown option: $1" ;;
+    esac
+  done
+  validate_domain "$domain"
+  docker restart "instatic-${domain}" >&2
+  success_json "{\"domain\":\"${domain}\",\"status\":\"restarted\"}"
+}
+
+cmd_delete() {
+  local domain=""
+  local confirm=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --domain)  domain="$2"; shift 2 ;;
+      --confirm) confirm="$2"; shift 2 ;;
+      *) fail_json "Unknown option: $1" ;;
+    esac
+  done
+
+  [[ -z "$domain" ]] && fail_json "Missing --domain"
+  [[ -z "$confirm" ]] && fail_json "Missing --confirm"
+
+  validate_domain "$domain"
+
+  if [[ "$domain" != "$confirm" ]]; then
+    fail_json "Deletion confirmation mismatch: '$domain' != '$confirm'"
+  fi
+
+  local container_name="instatic-${domain}"
+  local inst_dir="${DATA_BASE_DIR}/${domain}"
+
+  log_info "Stopping and removing container $container_name..."
+  docker stop "$container_name" >&2 || true
+  docker rm -f "$container_name" >&2 || true
+
+  log_info "Archiving final snapshot before purge..."
+  if [[ -d "${inst_dir}/data" ]]; then
+    mkdir -p "/var/backups/clp-addons/instatic"
+    tar -czf "/var/backups/clp-addons/instatic/${domain}-deleted-$(date +%Y%m%d%H%M%S).tar.gz" -C "$inst_dir" . >&2 || true
+  fi
+
+  rm -rf "$inst_dir"
+  success_json "{\"domain\":\"${domain}\",\"status\":\"deleted\"}"
+}
+
+cmd_snapshot() {
+  local domain=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --domain) domain="$2"; shift 2 ;;
+      *) fail_json "Unknown option: $1" ;;
+    esac
+  done
+  validate_domain "$domain"
+
+  local inst_dir="${DATA_BASE_DIR}/${domain}"
+  if [[ ! -d "$inst_dir" ]]; then
+    fail_json "Instance directory does not exist: $inst_dir"
+  fi
+
+  local ts archive_path
+  ts=$(date +%Y%m%d%H%M%S)
+  archive_path="${inst_dir}/snapshots/snapshot-${ts}.tar.gz"
+  tar -czf "$archive_path" -C "$inst_dir" data uploads >&2
+
+  success_json "{\"domain\":\"${domain}\",\"snapshot\":\"${archive_path}\",\"timestamp\":\"${ts}\"}"
+}
+
+# --- Main Entry Point ---
+
+if [[ $# -lt 1 ]]; then
+  fail_json "Usage: $0 {create|update|start|stop|restart|delete|snapshot} [options]"
+fi
+
+VERB="$1"
+shift
+
+# Look for --domain in arguments for locking
+LOCKED_DOMAIN=""
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+  if [[ "${args[i]}" == "--domain" && $((i+1)) -lt ${#args[@]} ]]; then
+    LOCKED_DOMAIN="${args[i+1]}"
+    break
+  fi
+done
+
+if [[ -n "$LOCKED_DOMAIN" ]]; then
+  LOCK_FILE="${LOCK_DIR}/${LOCKED_DOMAIN}.flock"
+  exec 200>"$LOCK_FILE"
+  if ! flock -n 200; then
+    fail_json "Could not acquire lock for domain '${LOCKED_DOMAIN}'. Another operation is in progress."
+  fi
+fi
+
+case "$VERB" in
+  create)   cmd_create "$@" ;;
+  update)   cmd_update "$@" ;;
+  start)    cmd_start "$@" ;;
+  stop)     cmd_stop "$@" ;;
+  restart)  cmd_restart "$@" ;;
+  delete)   cmd_delete "$@" ;;
+  snapshot) cmd_snapshot "$@" ;;
+  *) fail_json "Unknown verb: $VERB" ;;
+esac
