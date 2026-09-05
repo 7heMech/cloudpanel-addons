@@ -41,8 +41,6 @@ export const TEMPLATE_WATCH_PATHS = [
 
 export interface AddonSpec {
   name: string;
-  /** Unprivileged account the service runs as. */
-  user: string;
   /** Compiled service binary, as named in the release. */
   appArtifact: string;
   /** Wrapper script, shipped as-is and never compiled (decision 2.13). */
@@ -59,7 +57,6 @@ export interface AddonSpec {
 export const ADDONS: Record<string, AddonSpec> = {
   instatic: {
     name: "instatic",
-    user: "instatic-app",
     appArtifact: "instatic-app-linux-x64",
     wrapperArtifact: "clp-action-instatic",
     wrapperPath: `${LIB_DIR}/clp-action-instatic`,
@@ -73,3 +70,10 @@ export const ADDONS: Record<string, AddonSpec> = {
 };
 
 export const ADDON_NAMES = Object.keys(ADDONS);
+
+/**
+ * Account the Instatic addon used before it moved to the site user CloudPanel
+ * creates. Removed on install and repair so an upgraded box does not keep a
+ * stray account with a sudoers-adjacent history.
+ */
+export const LEGACY_USERS = ["instatic-app"];

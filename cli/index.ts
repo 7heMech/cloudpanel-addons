@@ -8,9 +8,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { ADDON_NAMES, ADDONS, CLI_BIN, CURRENT_LINK, type AddonSpec } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation } from "./release";
 import {
-  assertNotInDockerGroup, currentRelease, ensureAddonSite, ensureDirs, ensureUser, installSudoers,
-  installUnits, installWrapper, placeRelease, pruneReleases, readOwnDomain, removeSudoers,
-  startUnits, stopUnits, unitActive, writeConfig,
+  assertNotInDockerGroup, currentRelease, ensureAddonSite, ensureDirs, hardenSiteUser,
+  installSudoers, installUnits, installWrapper, placeRelease, pruneReleases, readOwnDomain,
+  removeLegacyUsers, removeSudoers, resolveSiteUser, startUnits, stopUnits, unitActive,
+  unitRunningUser, writeConfig,
 } from "./provision";
 import { Fatal, fatal, log, parseFlags, requireRoot, run, tryRun, writeAtomic } from "./util";
 import {
@@ -139,30 +140,34 @@ async function cmdInstall(argv: string[]): Promise<void> {
     await verifyAttestation(artifacts, flags["skip-attestation"] === true);
   }
 
-  ensureUser(spec);
-  assertNotInDockerGroup(spec);
-  ensureDirs(spec);
+  // The site has to exist before anything else: the account the manager runs
+  // as is the one CloudPanel creates for it (decision 2.4).
+  ensureAddonSite(spec, domain);
+  const user = resolveSiteUser(domain);
+  hardenSiteUser(user);
+  assertNotInDockerGroup(user);
+  ensureDirs(spec, user);
 
   placeRelease(tag, artifacts);
   pruneReleases();
 
   const wrapper = artifacts.find((a) => a.name === spec.wrapperArtifact)!;
   installWrapper(spec, wrapper.bytes);
-  installSudoers(spec);
+  installSudoers(spec, user);
 
   // Place the CLI itself last among the binaries, so a failure earlier leaves
   // the previous working CLI in place.
   const cli = artifacts.find((a) => a.name === CLI_ARTIFACT)!;
   writeAtomic(CLI_BIN, cli.bytes, 0o755);
 
-  writeConfig(spec, domain, true);
-  ensureAddonSite(spec, domain);
+  writeConfig(spec, domain, user, true);
 
-  installUnits(spec);
+  installUnits(spec, user);
   log.step("generating the sanitized panel snapshot");
   generateSnapshot();
-  ensureDirs(spec);
+  ensureDirs(spec, user);
   startUnits(spec);
+  removeLegacyUsers(user);
 
   reconcileAnchors(spec, false);
 
@@ -196,15 +201,18 @@ async function cmdUpdate(argv: string[]): Promise<void> {
     log.step(`stopping ${spec.unit} before the swap`);
     tryRun("systemctl", ["stop", spec.unit]);
 
+    const domain = readOwnDomain(spec);
+    const user = domain ? resolveSiteUser(domain) : null;
+    if (!user) fatal("no configured domain for this addon; run install first");
+
     placeRelease(rel.tag, artifacts);
     installWrapper(spec, artifacts.find((a) => a.name === spec.wrapperArtifact)!.bytes);
-    installSudoers(spec);
+    installSudoers(spec, user);
     writeAtomic(CLI_BIN, artifacts.find((a) => a.name === CLI_ARTIFACT)!.bytes, 0o755);
 
-    const domain = readOwnDomain(spec);
-    if (domain) writeConfig(spec, domain);
+    writeConfig(spec, domain!, user);
 
-    installUnits(spec);
+    installUnits(spec, user);
     startUnits(spec);
     reconcileAnchors(spec, false);
     pruneReleases();
@@ -246,9 +254,14 @@ function cmdRepair(argv: string[]): void {
   }
 
   // install minus the download, and idempotent.
-  ensureUser(spec);
-  assertNotInDockerGroup(spec);
-  ensureDirs(spec);
+  const ownDomain = readOwnDomain(spec);
+  if (!ownDomain) fatal("no configured domain for this addon; run install first");
+  const user = resolveSiteUser(ownDomain);
+
+  // Editing the site in the panel can restore the shell, so re-assert it.
+  hardenSiteUser(user, quiet);
+  assertNotInDockerGroup(user);
+  ensureDirs(spec, user);
 
   // The timer calls this every 15 minutes, so a reconciliation that changed
   // nothing should say nothing. Otherwise the journal fills with identical
@@ -256,19 +269,31 @@ function cmdRepair(argv: string[]): void {
   const wrapperSrc = `${CURRENT_LINK}/${spec.wrapperArtifact}`;
   if (existsSync(wrapperSrc)) {
     installWrapper(spec, readFileSync(wrapperSrc), quiet);
-    installSudoers(spec, quiet);
+    installSudoers(spec, user, quiet);
   } else if (!quiet) {
     log.warn(`no wrapper in the current release at ${wrapperSrc}; skipping wrapper reinstall`);
   }
 
-  installUnits(spec);
+  const unitChanged = installUnits(spec, user);
   generateSnapshot();
-  ensureDirs(spec);
+  ensureDirs(spec, user);
 
-  if (unitActive(spec.unit) !== "active") {
+  // Compare against the account the process is actually running as, not just
+  // the unit file: an earlier repair may have rewritten the file already, and
+  // systemd keeps the definition it started with until a restart.
+  const runningAs = unitRunningUser(spec.unit);
+  if (unitChanged || (runningAs !== null && runningAs !== user)) {
+    if (!quiet) {
+      log.step(`${spec.unit} is running as ${runningAs ?? "nothing"}; restarting it as ${user}`);
+    }
+    tryRun("systemctl", ["restart", spec.unit]);
+  } else if (unitActive(spec.unit) !== "active") {
     log.step(`${spec.unit} is not active; starting it`);
     tryRun("systemctl", ["start", spec.unit]);
   }
+
+  // Only now, with nothing running as it, can the old account go.
+  removeLegacyUsers(user, quiet);
   tryRun("systemctl", ["start", "clp-addons-reconcile.timer"]);
 
   reconcileAnchors(spec, quiet);
@@ -297,12 +322,21 @@ async function cmdStatus(argv: string[]): Promise<void> {
     `${pad("  Sudoers")}${existsSync(`/etc/sudoers.d/clp-addon-${spec.name}`) ? "present" : "NOT INSTALLED"}`
   );
 
-  const inDocker = tryRun("id", ["-nG", spec.user]).out.split(/\s+/).includes("docker");
+  const own = readOwnDomain(spec);
+  const runAs = own ? tryRun("sqlite3", ["-readonly", "/home/clp/htdocs/app/data/db.sq3",
+    `SELECT user FROM site WHERE domain_name = '${own}';`]).out.trim() : "";
+  log.plain(`${pad("  Runs as")}${runAs || "unknown"}${runAs ? ` (CloudPanel site user)` : ""}`);
+  if (runAs) {
+    const shell = tryRun("getent", ["passwd", runAs]).out.split(":")[6] ?? "";
+    const pw = tryRun("passwd", ["-S", runAs]).out.split(/\s+/)[1] ?? "";
+    const hardened = shell === "/usr/sbin/nologin" && pw === "L";
+    log.plain(`${pad("  Account locked")}${hardened ? "yes (nologin, password locked)" : "NO — run repair"}`);
+  }
+  const inDocker = runAs ? tryRun("id", ["-nG", runAs]).out.split(/\s+/).includes("docker") : false;
   log.plain(`${pad("  Docker group")}${inDocker ? "YES — equivalent to root, run repair" : "no (correct)"}`);
   log.plain();
 
   log.plain("Panel anchors:");
-  const own = readOwnDomain(spec);
   for (const t of TARGETS) {
     log.plain(`${pad(`  ${t.slug}`)}${describeTarget(inspectTarget(t, own ? `https://${own}` : undefined))}`);
   }

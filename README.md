@@ -62,15 +62,27 @@ after a CloudPanel update wipes it. There is deliberately one implementation of
 | Component | Runs as | Notes |
 |---|---|---|
 | `clp-addons` CLI | root, on demand | installer and reconciler |
-| `instatic-app-linux-x64` | `instatic-app` | manager UI, bound to `127.0.0.1:38080` |
+| `instatic-app-linux-x64` | the addon site's CloudPanel user | manager UI, bound to `127.0.0.1:38080` |
 | `clp-action-instatic` | root, via one sudoers line | the privilege boundary |
 | Instatic instances | container `bun` user | one container per site, `127.0.0.1:39000-39999` |
 
-The manager has no Docker access of its own. Membership in the `docker` group is
-equivalent to root — a member can start a container with the host filesystem
-bind-mounted — so every container operation, including reading state and logs,
-goes through the wrapper. `clp-addons status` reports it if the account ever
-ends up in that group, and `repair` removes it.
+The manager runs as the user CloudPanel already created for the addon's own
+site, rather than an account this installer invents. One account per addon site
+instead of two, and CloudPanel owns its lifecycle: deleting the site removes the
+user.
+
+That account is given a login shell and a password by CloudPanel so operators
+can use SFTP. The installer disables both, because the addon's site is a pure
+reverse proxy with no docroot anyone edits, and this is the one account
+permitted to `sudo` the root wrapper — leaving it reachable would turn that
+site's SFTP credentials into a path to root. `repair` re-asserts it, since
+editing the site in the panel can put the shell back.
+
+The manager has no Docker access of its own either. Membership in the `docker`
+group is equivalent to root — a member can start a container with the host
+filesystem bind-mounted — so every container operation, including reading state
+and logs, goes through the wrapper. `clp-addons status` reports both the shell
+lock and the docker group, and `repair` fixes either.
 
 ## Verification
 
@@ -79,45 +91,15 @@ catches corruption; the attestation catches substitution, which a checksum
 served next to the binary cannot. Provenance verification is on by default and
 skipping it requires `--skip-attestation`.
 
-## Reaching a staging box from your machine
+## Reaching the manager
 
-Everything binds loopback or is a name-based vhost, and on staging the
-hostnames are hosts-file entries rather than real DNS, so a browser needs both
-a tunnel and a local hosts entry.
+The manager binds `127.0.0.1` and is served only through its own CloudPanel
+site, so it is reached at `https://<addon-host>` once that hostname resolves to
+the server. The Instatic nav entry in the panel links there.
 
-Two ports matter, and they are served by different nginx instances:
-
-| Port | Serves |
-|---|---|
-| 8443 | the CloudPanel UI (`clp-nginx`) |
-| 443  | every site, including the addon manager and each Instatic instance |
-
-Forward both. Local **443** rather than some other port, because the nav entry
-the addon injects into the panel links to `https://<addon-host>` with no port,
-and a browser will not rewrite it:
-
-```bash
-sudo ssh -L 443:127.0.0.1:443 -L 8443:127.0.0.1:8443 root@<box>
-```
-
-`sudo` is only needed for the privileged local 443. Then, on your machine:
-
-```
-# /etc/hosts   (%SystemRoot%\System32\drivers\etc\hosts on Windows)
-127.0.0.1 addons.example.invalid demo.example.invalid
-```
-
-Use the hostnames the box actually serves — `clpctl` and the addon record them,
-and `clp-addons status` prints the manager's. Then:
-
-- panel: `https://localhost:8443`
-- addon manager: `https://<addon-host>` — the panel's Instatic nav entry goes here
-- an instance: `https://<instance-host>`
-
-Certificates are per-site and self-signed until Let's Encrypt runs, so expect a
-browser warning on staging. The manager also sits behind whatever per-site
-security you configured, so a basic-auth prompt there is the correct behaviour,
-not a fault.
+If the hostname is not in public DNS yet, forward the server's port 443 and add
+a hosts entry for it locally. Forward **443** specifically: the injected nav
+entry has no port in its URL, so a different local port will not follow.
 
 ## Development
 

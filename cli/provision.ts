@@ -5,22 +5,59 @@
 
 import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, renameSync, readdirSync } from "node:fs";
 import {
-  ADDONS, ANCHOR_SERVICE, CONFIG_DIR, CURRENT_LINK, LIB_DIR, LOCK_DIR, RECONCILE_PATH,
-  RECONCILE_SERVICE, RECONCILE_TIMER, RELEASES_DIR, STATE_DIR, SYSTEMD_DIR, TEMPLATE_WATCH_PATHS,
-  type AddonSpec,
+  ADDONS, ANCHOR_SERVICE, CONFIG_DIR, CURRENT_LINK, LEGACY_USERS, LIB_DIR, LOCK_DIR,
+  RECONCILE_PATH, RECONCILE_SERVICE, RECONCILE_TIMER, RELEASES_DIR, STATE_DIR, SYSTEMD_DIR,
+  TEMPLATE_WATCH_PATHS, type AddonSpec,
 } from "./paths";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
 import type { FetchedArtifact } from "./release";
 
 // --- accounts ---------------------------------------------------------------
 
-export function ensureUser(spec: AddonSpec): void {
-  if (tryRun("id", ["-u", spec.user]).ok) return;
-  log.step(`creating system user ${spec.user}`);
-  // No shell, no home, no docker group. The wrapper is the only privileged
-  // path this account has, which is the whole point of decision 2.5.
-  run("useradd", ["--system", "--shell", "/usr/sbin/nologin", "--no-create-home",
-                  "--home-dir", spec.stateDir, spec.user]);
+const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";
+
+/**
+ * The account the manager runs as is the one CloudPanel created for the
+ * addon's own site (decision 2.4), not one this installer invents. One account
+ * per addon site rather than two, and CloudPanel owns its lifecycle: deleting
+ * the site removes the user, so uninstall has nothing of its own to clean up.
+ */
+export function resolveSiteUser(domain: string): string {
+  const r = tryRun("sqlite3", ["-readonly", PANEL_DB,
+    `SELECT user FROM site WHERE domain_name = '${domain}';`]);
+  const user = r.ok ? r.out.trim() : "";
+  if (!user) {
+    fatal(
+      `could not find the CloudPanel site user for ${domain}.\n` +
+        `  The addon runs as that site's user, so the site has to exist first.`
+    );
+  }
+  return user;
+}
+
+/**
+ * CloudPanel gives site users a login shell and a password so operators can
+ * use SFTP. For the addon's own site that is a liability rather than a
+ * feature: the site has no docroot anyone edits, it is a pure reverse proxy,
+ * and this account is the one permitted to sudo the root wrapper. Leaving it
+ * interactively reachable would turn that site's SFTP credentials into a path
+ * to root for anyone who can read them in the panel.
+ *
+ * Re-asserted by repair, because editing the site in the panel can put the
+ * shell back.
+ */
+export function hardenSiteUser(user: string, quiet = false): void {
+  const shell = tryRun("getent", ["passwd", user]).out.split(":")[6] ?? "";
+  const locked = tryRun("passwd", ["-S", user]).out.split(/\s+/)[1] === "L";
+
+  if (shell !== "/usr/sbin/nologin") {
+    run("usermod", ["-s", "/usr/sbin/nologin", user]);
+    if (!quiet) log.ok(`${user}: login shell disabled`);
+  }
+  if (!locked) {
+    run("passwd", ["-l", user]);
+    if (!quiet) log.ok(`${user}: password locked`);
+  }
 }
 
 /**
@@ -28,29 +65,46 @@ export function ensureUser(spec: AddonSpec): void {
  * container with the host filesystem bind-mounted. Being in it would make the
  * wrapper's argument validation decorative, so check and undo it.
  */
-export function assertNotInDockerGroup(spec: AddonSpec): void {
-  const r = tryRun("id", ["-nG", spec.user]);
+export function assertNotInDockerGroup(user: string): void {
+  const r = tryRun("id", ["-nG", user]);
   if (!r.ok) return;
   if (r.out.split(/\s+/).includes("docker")) {
-    log.warn(`${spec.user} is in the docker group, which is equivalent to root; removing`);
-    tryRun("gpasswd", ["-d", spec.user, "docker"]);
+    log.warn(`${user} is in the docker group, which is equivalent to root; removing`);
+    tryRun("gpasswd", ["-d", user, "docker"]);
+  }
+}
+
+/**
+ * Remove the dedicated account earlier versions created. CloudPanel's site
+ * user replaces it, and leaving it behind means a stray account that once had
+ * a sudoers rule pointing at a root wrapper.
+ */
+export function removeLegacyUsers(activeUser: string, quiet = false): void {
+  for (const legacy of LEGACY_USERS) {
+    if (legacy === activeUser) continue;
+    if (!tryRun("id", ["-u", legacy]).ok) continue;
+    log.warn(`removing the legacy account ${legacy}; the addon now runs as ${activeUser}`);
+    tryRun("gpasswd", ["-d", legacy, "docker"]);
+    rmSync(`/etc/sudoers.d/clp-addon-${legacy}`, { force: true });
+    const r = tryRun("userdel", [legacy]);
+    if (!r.ok && !quiet) log.warn(`could not remove ${legacy}: ${r.out}`);
   }
 }
 
 // --- directories ------------------------------------------------------------
 
-export function ensureDirs(spec: AddonSpec): void {
+export function ensureDirs(spec: AddonSpec, user: string): void {
   for (const d of [LIB_DIR, RELEASES_DIR, CONFIG_DIR, STATE_DIR, LOCK_DIR]) {
     mkdirSync(d, { recursive: true });
   }
   mkdirSync(spec.stateDir, { recursive: true });
-  run("chown", ["-R", `${spec.user}:${spec.user}`, spec.stateDir]);
+  run("chown", ["-R", `${user}:${user}`, spec.stateDir]);
   run("chmod", ["750", spec.stateDir]);
 
   // The snapshot is customer data: the app's group reads it, nobody else.
   const snapshot = `${STATE_DIR}/snapshot.json`;
   if (existsSync(snapshot)) {
-    run("chown", [`root:${spec.user}`, snapshot]);
+    run("chown", [`root:${user}`, snapshot]);
     run("chmod", ["640", snapshot]);
   }
 }
@@ -113,14 +167,14 @@ export function installWrapper(spec: AddonSpec, bytes: Buffer, quiet = false): v
   if (!quiet) log.ok(`wrapper installed root:root 0755 at ${spec.wrapperPath}`);
 }
 
-export function installSudoers(spec: AddonSpec, quiet = false): void {
+export function installSudoers(spec: AddonSpec, user: string, quiet = false): void {
   // One line, one addon, one absolute path, no wildcards. A rule such as
   // `NOPASSWD: /usr/bin/clpctl *` is equivalent to full root.
   const file = `/etc/sudoers.d/clp-addon-${spec.name}`;
   const body =
     `# Managed by clp-addons. One addon, one wrapper, no wildcards.\n` +
-    `# ${spec.user} may run exactly this script as root and nothing else.\n` +
-    `${spec.user} ALL=(root) NOPASSWD: ${spec.wrapperPath}\n`;
+    `# ${user} may run exactly this script as root and nothing else.\n` +
+    `${user} ALL=(root) NOPASSWD: ${spec.wrapperPath}\n`;
 
   // Validate a candidate file before it can affect sudo. A malformed drop-in
   // can lock the box out of sudo entirely, so it is never written into place
@@ -142,7 +196,7 @@ export function installSudoers(spec: AddonSpec, quiet = false): void {
     rmSync(file, { force: true });
     fatal(`sudoers configuration broke after installing the drop-in; removed it:\n${full.out}`);
   }
-  if (!quiet) log.ok(`sudoers drop-in installed and validated (${spec.user} → ${spec.wrapperPath})`);
+  if (!quiet) log.ok(`sudoers drop-in installed and validated (${user} → ${spec.wrapperPath})`);
 }
 
 export function removeSudoers(spec: AddonSpec): void {
@@ -155,13 +209,14 @@ export function removeSudoers(spec: AddonSpec): void {
  * Shipped defaults land as .new for the operator to diff, so an update can
  * never clobber a config the operator has edited (section 8).
  */
-export function writeConfig(spec: AddonSpec, ownDomain: string, force = false): void {
+export function writeConfig(spec: AddonSpec, ownDomain: string, user: string, force = false): void {
   const body =
     `# clp-addons: ${spec.name}\n` +
     `# OWN_DOMAIN is the site serving the manager UI. The wrapper refuses to\n` +
     `# act on it, so the addon cannot delete the vhost it is served through.\n` +
     `OWN_DOMAIN=${ownDomain}\n` +
-    `PORT=${spec.port}\n`;
+    `PORT=${spec.port}\n` +
+    `RUN_AS=${user}\n`;
 
   // On install the operator named the domain explicitly, so their intent is
   // unambiguous and the file is written. On update it is not: the config may
@@ -174,7 +229,7 @@ export function writeConfig(spec: AddonSpec, ownDomain: string, force = false): 
     return;
   }
   writeAtomic(spec.configFile, body, 0o640);
-  run("chown", [`root:${spec.user}`, spec.configFile]);
+  run("chown", [`root:${user}`, spec.configFile]);
   rmSync(`${spec.configFile}.new`, { force: true });
 }
 
@@ -186,7 +241,7 @@ export function readOwnDomain(spec: AddonSpec): string | null {
 
 // --- systemd ----------------------------------------------------------------
 
-function serviceUnit(spec: AddonSpec): string {
+function serviceUnit(spec: AddonSpec, user: string): string {
   return `[Unit]
 Description=CloudPanel addon: ${spec.name} manager
 After=network-online.target docker.service
@@ -194,8 +249,8 @@ Wants=network-online.target docker.service
 
 [Service]
 Type=simple
-User=${spec.user}
-Group=${spec.user}
+User=${user}
+Group=${user}
 Environment=PORT=${spec.port}
 Environment=HOST=127.0.0.1
 Environment=INSTATIC_APP_DATA=${spec.stateDir}
@@ -293,14 +348,24 @@ ExecStart=${CURRENT_LINK}/clp-addons-linux-x64 repair --anchors-only --quiet
   };
 }
 
-export function installUnits(spec: AddonSpec): void {
+/**
+ * Returns true when the addon's own unit changed, which the caller must treat
+ * as "restart required". systemd keeps running the old definition otherwise —
+ * notably the old User=, which then blocks removing the account it replaced.
+ */
+export function installUnits(spec: AddonSpec, user: string): boolean {
   const units = reconcileUnits();
-  writeAtomic(`${SYSTEMD_DIR}/${spec.unit}`, serviceUnit(spec), 0o644);
+  const unitPath = `${SYSTEMD_DIR}/${spec.unit}`;
+  const desired = serviceUnit(spec, user);
+  const current = existsSync(unitPath) ? readFileSync(unitPath, "utf-8") : "";
+  const changed = current !== desired;
+  writeAtomic(unitPath, desired, 0o644);
   writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_SERVICE}`, units.service, 0o644);
   writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_TIMER}`, units.timer, 0o644);
   writeAtomic(`${SYSTEMD_DIR}/${ANCHOR_SERVICE}`, units.anchor, 0o644);
   writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_PATH}`, units.path, 0o644);
   run("systemctl", ["daemon-reload"]);
+  return changed;
 }
 
 export function startUnits(spec: AddonSpec): void {
@@ -323,6 +388,19 @@ export function stopUnits(spec: AddonSpec): void {
     rmSync(f, { force: true });
   }
   tryRun("systemctl", ["daemon-reload"]);
+}
+
+/**
+ * Which account the unit is *actually* running as right now, which is not
+ * necessarily what the unit file says: systemd keeps the definition it started
+ * with until the service is restarted. Comparing the file alone misses the
+ * case where an earlier run already rewrote it.
+ */
+export function unitRunningUser(unit: string): string | null {
+  const pid = tryRun("systemctl", ["show", "-p", "MainPID", "--value", unit]).out.trim();
+  if (!pid || pid === "0") return null;
+  const owner = tryRun("ps", ["-o", "user=", "-p", pid]).out.trim();
+  return owner || null;
 }
 
 export function unitActive(unit: string): string {
