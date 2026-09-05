@@ -11,6 +11,14 @@ export const CURRENT_LINK = `${LIB_DIR}/current`;
 /** The CLI itself, bootstrapped once by the installer then self-updating. */
 export const CLI_BIN = "/usr/local/bin/clp-addons";
 
+/**
+ * CloudPanel's own database. Read-only, always: it is the source of truth for
+ * sites and their users, and writing to it is how you corrupt a panel.
+ * Here rather than in each caller so there is one path to change if CloudPanel
+ * ever moves it.
+ */
+export const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";
+
 export const CONFIG_DIR = "/etc/clp-addons";
 export const STATE_DIR = "/var/lib/clp-addons";
 export const LOCK_DIR = "/run/lock/clp-addons";

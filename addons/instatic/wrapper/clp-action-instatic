@@ -316,9 +316,16 @@ health_check() {
 
 # Consistent copy of a live instance. sqlite3 .backup rather than cp or tar over
 # the raw file, which can capture a database mid-write (decision 2.10).
+# Returns non-zero on failure; it never calls emit_err.
+#
+# It used to, which made `make_snapshot ... || warn` in the delete path
+# unreachable: emit_err exits, so a failed final archive aborted delete after
+# the container and the CloudPanel site were already gone, leaving the state
+# directory and the manager's row behind with nothing left to act on. Callers
+# that must not continue say so explicitly instead.
 make_snapshot() {
   local dir=$1 out=$2 stage f base
-  stage=$(mktemp -d "${dir}/.snap.XXXXXX")
+  stage=$(mktemp -d "${dir}/.snap.XXXXXX") || return 1
 
   mkdir -p "$stage/data"
   if [[ -d ${dir}/data ]]; then
@@ -330,7 +337,7 @@ make_snapshot() {
       [[ $base == *-wal || $base == *-shm ]] && continue
       if [[ $(head -c 15 "$f" 2>/dev/null) == "SQLite format 3" ]]; then
         sqlite3 "$f" ".backup '${stage}/data/${base}'" \
-          || { rm -rf "$stage"; emit_err "sqlite backup failed for ${base}"; }
+          || { warn "sqlite backup failed for ${base}"; rm -rf "$stage"; return 1; }
       else
         cp -a "$f" "$stage/data/"
       fi
@@ -344,8 +351,28 @@ make_snapshot() {
   # unreadable secret columns, which makes the snapshot useless for recovery.
   if [[ -f ${dir}/instatic.env ]]; then cp -a "${dir}/instatic.env" "$stage/instatic.env"; fi
 
-  tar -czf "$out" -C "$stage" . >&2
+  # tar's exit status was previously discarded, so an out-of-space archive
+  # counted as a successful snapshot.
+  if ! tar -czf "$out" -C "$stage" . >&2; then
+    warn "tar failed writing ${out}"
+    rm -rf "$stage" "$out"
+    return 1
+  fi
   rm -rf "$stage"
+  prune_snapshots "$(dirname "$out")"
+}
+
+# Pre-update snapshots are taken on every update and never expired, which on a
+# frequently updated instance grows without bound on the root filesystem. Keep
+# the most recent few: they exist to roll back the update that just happened,
+# not as an archive.
+prune_snapshots() {
+  local dir=$1 keep=5 f n=0
+  [[ -d $dir ]] || return 0
+  while IFS= read -r f; do
+    (( ++n > keep )) && rm -f "$f"
+  done < <(ls -1t "${dir}"/*.tar.gz 2>/dev/null)
+  return 0
 }
 
 # --- verbs ------------------------------------------------------------------
@@ -454,7 +481,8 @@ cmd_update() {
   log "snapshotting before update"
   mkdir -p "${dir}/snapshots"
   snap="${dir}/snapshots/pre-update-${cur_tag}-$(date +%Y%m%d%H%M%S).tar.gz"
-  make_snapshot "$dir" "$snap"
+  make_snapshot "$dir" "$snap" \
+    || emit_err "could not snapshot ${domain} before updating; refusing to continue"
 
   log "pulling ${REGISTRY_IMAGE}:${tag}"
   docker pull "${REGISTRY_IMAGE}:${tag}" >&2 \
@@ -602,7 +630,7 @@ cmd_snapshot() {
   [[ -d $dir ]] || emit_err "no such instance: ${domain}"
   mkdir -p "${dir}/snapshots"
   out="${dir}/snapshots/snapshot-$(date +%Y%m%d%H%M%S).tar.gz"
-  make_snapshot "$dir" "$out"
+  make_snapshot "$dir" "$out" || emit_err "snapshot failed for ${domain}"
   emit_ok "{\"domain\":\"${domain}\",\"snapshot\":\"${out}\"}"
 }
 

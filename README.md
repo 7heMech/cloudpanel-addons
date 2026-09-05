@@ -73,8 +73,10 @@ clp-addons status
 clp-addons uninstall <addon> --yes [--purge]
 ```
 
-`uninstall` removes the service, the wrapper, the sudoers line and the panel
-patches, and deliberately stops there: instances and their data survive, so
+`uninstall` removes the service, the wrapper, the sudoers line, the addon's
+config and the panel patches. When no other addon is left installed it also
+removes `/usr/local/bin/clp-addons` and the release tree, so nothing of the
+platform is left behind. It deliberately stops there: instances and their data survive, so
 uninstalling the manager is not a way to lose a customer's site. `--purge` goes
 further and removes the instances too, each archived to
 `/var/backups/clp-addons/<addon>` first. Either way the command prints exactly

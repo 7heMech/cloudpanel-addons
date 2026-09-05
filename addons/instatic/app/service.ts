@@ -94,9 +94,6 @@ export const instaticService = {
     return { snap, ageSeconds: snapshotAgeSeconds(snap) };
   },
 
-  panelSites(): PanelSnapshot["sites"] {
-    return readSnapshot().sites;
-  },
 
   nextPort(): number {
     // The instance table is authoritative for ports this manager handed out,

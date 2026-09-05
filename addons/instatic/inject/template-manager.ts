@@ -21,7 +21,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
-  existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync,
+  existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync,
 } from "node:fs";
 
 const PANEL_APP = "/home/clp/htdocs/app/files";
@@ -188,16 +188,11 @@ export function applyTarget(t: Target, addonUrl: string): TargetStatus {
   const cut = at + t.anchorAfter.length;
   const patched = pristine.slice(0, cut) + t.snippet(addonUrl) + pristine.slice(cut);
 
-  // Preserve the panel's own ownership and mode; the templates are read by the
-  // clp user, not by us.
-  const before = statSync(t.file);
+  // No chown or chmod afterwards. writeFileSync on an existing path truncates
+  // it in place rather than replacing the inode, so the panel's own ownership
+  // and mode survive by themselves -- restoring them was two process spawns
+  // per target on every reconciliation, doing nothing.
   writeFileSync(t.file, patched, "utf-8");
-  try {
-    execFileSync("chown", [`${before.uid}:${before.gid}`, t.file]);
-    execFileSync("chmod", [(before.mode & 0o7777).toString(8), t.file]);
-  } catch {
-    // Non-fatal: the panel reads the file, and root wrote it with a sane mode.
-  }
 
   return { slug: t.slug, state: "ok" };
 }
@@ -206,13 +201,9 @@ export function removeTarget(t: Target): void {
   if (!existsSync(t.file)) return;
   const onDisk = readFileSync(t.file, "utf-8");
   if (!onDisk.includes(START)) return;
-  const before = statSync(t.file);
+  // In-place truncate, as above: ownership and mode are the panel's and stay
+  // that way without being restored.
   writeFileSync(t.file, stripMarkers(onDisk), "utf-8");
-  try {
-    execFileSync("chown", [`${before.uid}:${before.gid}`, t.file]);
-  } catch {
-    // as above
-  }
 }
 
 /**

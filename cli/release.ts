@@ -235,11 +235,3 @@ export const CLI_VERSION: string = (() => {
   const injected = process.env.CLP_ADDONS_VERSION ?? "";
   return injected || "0.0.0-dev";
 })();
-
-export function readInstalledVersion(path: string): string | null {
-  try {
-    return existsSync(path) ? readFileSync(path, "utf-8").trim() : null;
-  } catch {
-    return null;
-  }
-}

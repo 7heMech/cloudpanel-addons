@@ -196,6 +196,13 @@ own `delete` verb rather than reimplementing the teardown: that path already
 archives the data, passes `--force` so `clpctl` cannot block on a prompt, and
 refuses to delete a site the addon did not create.
 
+Ordering matters and was wrong at first: instances are removed through the
+wrapper, so the wrapper has to outlive that loop and is deleted afterwards, not
+before. The release tree and `clp-addons` itself are shared between addons, so
+they go only when no other addon's config remains -- deleting the binary that
+is currently executing is safe, since the inode survives until the process
+exits.
+
 Both forms print an inventory naming every instance and site they will touch,
 and refuse to act without `--yes`. "and every instance" is not something an
 operator can check against what they believe is on the box; a list of domains

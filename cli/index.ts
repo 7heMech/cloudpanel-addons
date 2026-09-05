@@ -5,12 +5,13 @@
 // calls it rather than duplicating the logic.
 
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { ADDON_NAMES, ADDONS, CLI_BIN, CURRENT_LINK, type AddonSpec } from "./paths";
+import { ADDON_NAMES, ADDONS, CLI_BIN, CURRENT_LINK, LIB_DIR, type AddonSpec } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation } from "./release";
 import {
   assertNotInDockerGroup, currentRelease, ensureAddonSite, ensureDirs, hardenSiteUser,
   installSudoers, installUnits, installWrapper, placeRelease, pruneReleases, readOwnDomain,
-  removeLegacyUsers, removeSudoers, resolveSiteUser, startUnits, stopUnits, unitActive,
+  removeLegacyUsers, removeSudoers, resolveSiteUser, siteUserOf, siteUserState,
+  startUnits, stopUnits, unitActive,
   unitRunningUser, writeConfig,
 } from "./provision";
 import { Fatal, fatal, log, parseFlags, requireRoot, run, tryRun, writeAtomic } from "./util";
@@ -19,6 +20,7 @@ import {
   removeTarget, type TargetStatus,
 } from "../addons/instatic/inject/template-manager";
 import { generateSnapshot } from "../lib/panel-snapshot";
+import { SNAPSHOT_FILE } from "../lib/snapshot-reader";
 
 const CLI_ARTIFACT = "clp-addons-linux-x64";
 
@@ -203,21 +205,25 @@ async function cmdUpdate(argv: string[]): Promise<void> {
     const artifacts = await fetchVerified(rel, [CLI_ARTIFACT, spec.appArtifact, spec.wrapperArtifact]);
     await verifyAttestation(rel, artifacts, flags["skip-attestation"] === true);
 
+    // Resolve who this runs as before stopping anything. Both of these can
+    // fail -- a missing config, a panel site deleted from under us -- and
+    // failing after the stop leaves the manager down with nothing installed to
+    // replace it.
+    const domain = readOwnDomain(spec);
+    if (!domain) fatal("no configured domain for this addon; run install first");
+    const user = resolveSiteUser(domain);
+
     // The wrapper is synchronous and short-lived, so draining is simple: stop
     // the app, which is the only caller, then swap.
     log.step(`stopping ${spec.unit} before the swap`);
     tryRun("systemctl", ["stop", spec.unit]);
-
-    const domain = readOwnDomain(spec);
-    const user = domain ? resolveSiteUser(domain) : null;
-    if (!user) fatal("no configured domain for this addon; run install first");
 
     placeRelease(rel.tag, artifacts);
     installWrapper(spec, artifacts.find((a) => a.name === spec.wrapperArtifact)!.bytes);
     installSudoers(spec, user);
     writeAtomic(CLI_BIN, artifacts.find((a) => a.name === CLI_ARTIFACT)!.bytes, 0o755);
 
-    writeConfig(spec, domain!, user);
+    writeConfig(spec, domain, user);
 
     installUnits(spec, user);
     startUnits(spec);
@@ -320,23 +326,23 @@ async function cmdStatus(argv: string[]): Promise<void> {
   log.plain(`${pad("Docker")}${tryRun("systemctl", ["is-active", "docker"]).out || "unknown"}`);
   log.plain();
 
+  const own = readOwnDomain(spec);
   log.plain(`Addon: ${spec.name}`);
   log.plain(`${pad("  Service")}${unitActive(spec.unit)}`);
   log.plain(`${pad("  Reconcile timer")}${unitActive("clp-addons-reconcile.timer")}`);
-  log.plain(`${pad("  Own site")}${readOwnDomain(spec) ?? "not configured"}`);
+  log.plain(`${pad("  Own site")}${own ?? "not configured"}`);
   log.plain(`${pad("  Wrapper")}${existsSync(spec.wrapperPath) ? spec.wrapperPath : "NOT INSTALLED"}`);
   log.plain(
     `${pad("  Sudoers")}${existsSync(`/etc/sudoers.d/clp-addon-${spec.name}`) ? "present" : "NOT INSTALLED"}`
   );
 
-  const own = readOwnDomain(spec);
-  const runAs = own ? tryRun("sqlite3", ["-readonly", "/home/clp/htdocs/app/data/db.sq3",
-    `SELECT user FROM site WHERE domain_name = '${own}';`]).out.trim() : "";
-  log.plain(`${pad("  Runs as")}${runAs || "unknown"}${runAs ? ` (CloudPanel site user)` : ""}`);
+  const runAs = own ? siteUserOf(own) : null;
+  log.plain(`${pad("  Runs as")}${runAs ?? "unknown"}${runAs ? " (CloudPanel site user)" : ""}`);
   if (runAs) {
-    const shell = tryRun("getent", ["passwd", runAs]).out.split(":")[6] ?? "";
-    const pw = tryRun("passwd", ["-S", runAs]).out.split(/\s+/)[1] ?? "";
-    const hardened = shell === "/usr/sbin/nologin" && pw === "L";
+    // Same reader hardenSiteUser decides from, so status cannot report a state
+    // that repair disagrees with.
+    const { shell, locked } = siteUserState(runAs);
+    const hardened = shell === "/usr/sbin/nologin" && locked;
     log.plain(`${pad("  Account locked")}${hardened ? "yes (nologin, password locked)" : "NO — run repair"}`);
   }
   const inDocker = runAs ? tryRun("id", ["-nG", runAs]).out.split(/\s+/).includes("docker") : false;
@@ -350,7 +356,7 @@ async function cmdStatus(argv: string[]): Promise<void> {
   log.plain();
 
   try {
-    const snap = JSON.parse(readFileSync("/var/lib/clp-addons/snapshot.json", "utf-8"));
+    const snap = JSON.parse(readFileSync(SNAPSHOT_FILE, "utf-8"));
     const age = Math.round((Date.now() - new Date(snap.updatedAt).getTime()) / 1000);
     log.plain(`${pad("Panel snapshot")}${snap.sites.length} sites, ${snap.allocatedPorts.length} ports, ${age}s old`);
   } catch {
@@ -380,25 +386,32 @@ function cmdUninstall(argv: string[]): void {
   const ownDomain = readOwnDomain(spec);
   const ownSiteIsOurs = existsSync(`${spec.stateDir}/.site-created-by-addon`);
 
+  // The release tree and the CLI are shared. A second addon still installed
+  // needs both, so they go only when nothing is left that uses them.
+  const remaining = ADDON_NAMES.filter((n) => n !== spec.name && existsSync(ADDONS[n]!.configFile));
+
   if (flags.yes !== true) {
     // Say exactly what will be destroyed, by name. "and every instance" is not
     // something an operator can check against what they believe is on the box.
-    const plan = purge
-      ? `uninstall --purge removes the service, the wrapper, the sudoers line and the panel\n` +
-        `  patches, and then DESTROYS:\n` +
-        (instances.length
-          ? instances.map((d) => `    - instance ${d}: container, data and its CloudPanel site\n`).join("")
-          : `    - (no instances found)\n`) +
+    const shared = remaining.length
+      ? `    - ${CLI_BIN} and the release tree stay: still used by ${remaining.join(", ")}\n`
+      : `    - ${CLI_BIN} and ${LIB_DIR}\n`;
+    const common =
+      `  Removes the service, the wrapper, the sudoers line, ${spec.configFile} and the\n` +
+      `  panel patches, plus:\n` + shared;
+    fatal(purge
+      ? `uninstall --purge\n` + common +
+        instances.map((d) => `    - instance ${d}: container, data and its CloudPanel site\n`).join("") +
+        (instances.length ? "" : `    - (no instances found)\n`) +
         (ownSiteIsOurs && ownDomain
           ? `    - the manager's own CloudPanel site ${ownDomain}\n`
           : `    - (the manager's site is left alone: not created by this addon)\n`) +
         `    - ${spec.stateDir}\n` +
         `  Each instance is archived to /var/backups/clp-addons/${spec.name} first.\n` +
         `  Re-run with --yes to proceed.`
-      : `uninstall removes the service, the wrapper and the sudoers line, and un-patches the panel.\n` +
+      : `uninstall\n` + common +
         `  Instance containers and their data are left alone. Re-run with --yes to proceed,\n` +
-        `  or add --purge to also remove ${instances.length} instance(s) and their sites.`;
-    fatal(plan);
+        `  or add --purge to also remove ${instances.length} instance(s) and their sites.`);
   }
 
   stopUnits(spec);
@@ -407,37 +420,51 @@ function cmdUninstall(argv: string[]): void {
   purgeTwigCache();
   log.ok("panel anchors removed and the Twig cache purged");
 
-  if (!purge) {
-    log.warn(`Left in place on purpose: ${spec.stateDir}, the addon's CloudPanel site, and every instance container.`);
-    return;
-  }
-
-  // Instances go through the wrapper's own delete verb rather than a second
-  // implementation here. It already archives the data, refuses to delete a
-  // site it did not create, and passes --force so clpctl cannot block on a
-  // prompt -- all of which a reimplementation would have to get right again.
+  // Instances first, while the wrapper is still on disk. They go through its
+  // own delete verb rather than a second implementation here: that path already
+  // archives the data, refuses to delete a site it did not create, and passes
+  // --force so clpctl cannot block on a prompt.
   //
-  // The sudoers line is gone by now, but this runs as root and calls the
-  // script directly, so it does not need it.
-  for (const domain of instances) {
-    log.step(`removing instance ${domain}`);
-    const r = tryRun(spec.wrapperPath, ["delete", "--domain", domain, "--confirm", domain]);
-    if (!r.ok) log.warn(`could not remove ${domain}; leaving it in place`);
-  }
-
-  if (ownSiteIsOurs && ownDomain) {
-    log.step(`deleting the manager's CloudPanel site ${ownDomain}`);
-    if (!tryRun("clpctl", ["site:delete", `--domainName=${ownDomain}`, "--force"]).ok) {
-      log.warn(`clpctl site:delete failed for ${ownDomain}; remove it from the panel by hand`);
+  // The sudoers line is gone by now, but this runs as root and calls the script
+  // directly, so it does not need it.
+  if (purge) {
+    for (const domain of instances) {
+      log.step(`removing instance ${domain}`);
+      const r = tryRun(spec.wrapperPath, ["delete", "--domain", domain, "--confirm", domain]);
+      if (!r.ok) log.warn(`could not remove ${domain}; leaving it in place`);
     }
-  } else if (ownDomain) {
-    log.warn(`leaving ${ownDomain} in place: this addon did not create it`);
+
+    if (ownSiteIsOurs && ownDomain) {
+      log.step(`deleting the manager's CloudPanel site ${ownDomain}`);
+      if (!tryRun("clpctl", ["site:delete", `--domainName=${ownDomain}`, "--force"]).ok) {
+        log.warn(`clpctl site:delete failed for ${ownDomain}; remove it from the panel by hand`);
+      }
+    } else if (ownDomain) {
+      log.warn(`leaving ${ownDomain} in place: this addon did not create it`);
+    }
+
+    rmSync(spec.stateDir, { recursive: true, force: true });
   }
 
-  // Last, because everything above reads from it.
-  rmSync(spec.stateDir, { recursive: true, force: true });
-  log.ok(`${spec.name} purged`);
-  log.plain(`  Archives kept: /var/backups/clp-addons/${spec.name}`);
+  // Then this addon's own files. The plan text has always said uninstall
+  // removes the wrapper; until now it did not.
+  rmSync(spec.wrapperPath, { force: true });
+  rmSync(spec.configFile, { force: true });
+  rmSync(`${spec.configFile}.new`, { force: true });
+
+  if (remaining.length > 0) {
+    log.ok(`${spec.name} removed`);
+    log.plain(`  Kept ${CLI_BIN} and the release tree: still used by ${remaining.join(", ")}`);
+  } else {
+    // Deleting the binary that is executing is safe: the inode survives until
+    // this process exits.
+    rmSync(LIB_DIR, { recursive: true, force: true });
+    rmSync(CLI_BIN, { force: true });
+    log.ok(`${spec.name} removed, along with ${CLI_BIN} and the release tree`);
+  }
+
+  if (purge) log.plain(`  Archives kept: /var/backups/clp-addons/${spec.name}`);
+  else log.warn(`Left in place on purpose: ${spec.stateDir}, the addon's CloudPanel site, and every instance container.`);
 }
 
 function usage(): void {

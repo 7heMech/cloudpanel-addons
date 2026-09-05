@@ -7,10 +7,11 @@
 // must never import this file.
 
 import { execFileSync } from "node:child_process";
-import { writeFileSync, mkdirSync, existsSync, readdirSync, readFileSync, renameSync, chmodSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { PANEL_DB } from "../cli/paths";
+import { writeAtomic } from "../cli/util";
 import { PORT_RANGE, SNAPSHOT_FILE, type PanelSnapshot, type SanitizedSite } from "./snapshot-reader";
 
-const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";
 const INSTATIC_DATA = "/var/lib/clp-addons/instatic";
 
 function query(sql: string): string[] {
@@ -88,14 +89,11 @@ export function generateSnapshot(): PanelSnapshot {
     sites,
   };
 
-  mkdirSync("/var/lib/clp-addons", { recursive: true });
-
-  // Write then rename, so a reader never sees a truncated file. 0640 because
-  // the site list is customer data: the app's group may read it, nobody else.
-  const tmp = `${SNAPSHOT_FILE}.tmp`;
-  writeFileSync(tmp, JSON.stringify(snapshot, null, 2), { mode: 0o640 });
-  chmodSync(tmp, 0o640);
-  renameSync(tmp, SNAPSHOT_FILE);
+  // 0640 because the site list is customer data: the app's group may read it,
+  // nobody else. writeAtomic's temp name carries the pid, which matters here --
+  // a manual repair and the timer can run at the same moment, and a shared
+  // fixed name lets one publish the other's half-written file.
+  writeAtomic(SNAPSHOT_FILE, JSON.stringify(snapshot, null, 2), 0o640);
 
   return snapshot;
 }

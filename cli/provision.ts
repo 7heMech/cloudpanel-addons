@@ -3,10 +3,10 @@
 // implementation of "make the box match what should be installed", or the
 // reconciliation timer and the installer drift apart.
 
-import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, renameSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, renameSync, readdirSync } from "node:fs";
 import {
-  ADDONS, ANCHOR_SERVICE, CONFIG_DIR, CURRENT_LINK, LEGACY_USERS, LIB_DIR, LOCK_DIR,
-  RECONCILE_PATH, RECONCILE_SERVICE, RECONCILE_TIMER, RELEASES_DIR, STATE_DIR, SYSTEMD_DIR,
+  ADDONS, ANCHOR_SERVICE, CLI_BIN, CONFIG_DIR, CURRENT_LINK, LEGACY_USERS, LIB_DIR, LOCK_DIR,
+  PANEL_DB, RECONCILE_PATH, RECONCILE_SERVICE, RECONCILE_TIMER, RELEASES_DIR, STATE_DIR, SYSTEMD_DIR,
   TEMPLATE_WATCH_PATHS, type AddonSpec,
 } from "./paths";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
@@ -14,18 +14,32 @@ import type { FetchedArtifact } from "./release";
 
 // --- accounts ---------------------------------------------------------------
 
-const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";
-
 /**
  * The account the manager runs as is the one CloudPanel created for the
  * addon's own site (decision 2.4), not one this installer invents. One account
  * per addon site rather than two, and CloudPanel owns its lifecycle: deleting
  * the site removes the user, so uninstall has nothing of its own to clean up.
  */
-export function resolveSiteUser(domain: string): string {
+export function siteUserOf(domain: string): string | null {
   const r = tryRun("sqlite3", ["-readonly", PANEL_DB,
     `SELECT user FROM site WHERE domain_name = '${domain}';`]);
-  const user = r.ok ? r.out.trim() : "";
+  return (r.ok && r.out.trim()) || null;
+}
+
+/**
+ * Shell and password state of a site account, as `status` reports it and as
+ * hardenSiteUser decides from. One reader, so the two can never disagree about
+ * what "hardened" means.
+ */
+export function siteUserState(user: string): { shell: string; locked: boolean } {
+  return {
+    shell: tryRun("getent", ["passwd", user]).out.split(":")[6] ?? "",
+    locked: tryRun("passwd", ["-S", user]).out.split(/\s+/)[1] === "L",
+  };
+}
+
+export function resolveSiteUser(domain: string): string {
+  const user = siteUserOf(domain);
   if (!user) {
     fatal(
       `could not find the CloudPanel site user for ${domain}.\n` +
@@ -47,8 +61,7 @@ export function resolveSiteUser(domain: string): string {
  * shell back.
  */
 export function hardenSiteUser(user: string, quiet = false): void {
-  const shell = tryRun("getent", ["passwd", user]).out.split(":")[6] ?? "";
-  const locked = tryRun("passwd", ["-S", user]).out.split(/\s+/)[1] === "L";
+  const { shell, locked } = siteUserState(user);
 
   if (shell !== "/usr/sbin/nologin") {
     run("usermod", ["-s", "/usr/sbin/nologin", user]);
@@ -143,11 +156,22 @@ export function placeRelease(tag: string, artifacts: FetchedArtifact[]): string 
   return dir;
 }
 
-/** Keep the last two releases so a rollback target always exists. */
+/**
+ * Keep the last two releases so a rollback target always exists.
+ *
+ * Ordered by when each was placed, not by name. Sorting the directory names
+ * put v0.10.0 before v0.8.0 lexicographically, so the newest release was the
+ * one pruned and an ancient one kept as the rollback target. Placement time is
+ * also the only ordering that means anything for the `local-<timestamp>` tags
+ * a staging install produces.
+ */
 export function pruneReleases(keep = 2): void {
   if (!existsSync(RELEASES_DIR)) return;
   const current = existsSync(CURRENT_LINK) ? readlinkSync(CURRENT_LINK) : "";
-  const dirs = readdirSync(RELEASES_DIR).sort().reverse();
+  const dirs = readdirSync(RELEASES_DIR)
+    .map((d) => ({ d, at: statSync(`${RELEASES_DIR}/${d}`).mtimeMs }))
+    .sort((a, b) => b.at - a.at)
+    .map((e) => e.d);
   for (const d of dirs.slice(keep)) {
     const path = `${RELEASES_DIR}/${d}`;
     if (path === current) continue;
@@ -295,6 +319,15 @@ WantedBy=multi-user.target
 `;
 }
 
+/**
+ * The units that run the CLI itself.
+ *
+ * These ExecStart ${CLI_BIN} rather than the path inside the current release,
+ * unlike the addon's own service. The CLI has its own update path -- and
+ * `self-update` rewrites exactly one file, ${CLI_BIN} -- so a unit pointing
+ * into the release directory would go on running the previous CLI forever
+ * after a self-update, with nothing to indicate it.
+ */
 function reconcileUnits(): { service: string; timer: string; path: string; anchor: string } {
   return {
     // A dpkg post-invoke hook catches apt-driven updates and misses manual
@@ -305,7 +338,7 @@ After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=${CURRENT_LINK}/clp-addons-linux-x64 repair --quiet
+ExecStart=${CLI_BIN} repair --quiet
 `,
     timer: `[Unit]
 Description=CloudPanel addons: periodic reconciliation
@@ -354,7 +387,7 @@ Type=oneshot
 # not run this concurrently with itself, so a short pause here coalesces the
 # burst into one pass plus a confirming second one.
 ExecStartPre=/bin/sleep 2
-ExecStart=${CURRENT_LINK}/clp-addons-linux-x64 repair --anchors-only --quiet
+ExecStart=${CLI_BIN} repair --anchors-only --quiet
 `,
   };
 }
@@ -427,8 +460,7 @@ export function unitActive(unit: string): string {
  * (decision 2.6).
  */
 export function ensureAddonSite(spec: AddonSpec, domain: string): boolean {
-  const db = "/home/clp/htdocs/app/data/db.sq3";
-  const exists = tryRun("sqlite3", ["-readonly", db,
+  const exists = tryRun("sqlite3", ["-readonly", PANEL_DB,
     `SELECT COUNT(*) FROM site WHERE domain_name = '${domain}';`]);
   if (exists.ok && Number(exists.out) > 0) {
     log.ok(`CloudPanel site ${domain} already exists`);
@@ -441,7 +473,7 @@ export function ensureAddonSite(spec: AddonSpec, domain: string): boolean {
   // second addon site, or a reinstall under a different hostname, collides
   // with a user that clpctl will not reuse.
   const siteUser = `a${spec.name.slice(0, 4)}-${domain.replace(/[^a-z0-9]/g, "")}`.slice(0, 15);
-  const taken = tryRun("sqlite3", ["-readonly", db,
+  const taken = tryRun("sqlite3", ["-readonly", PANEL_DB,
     `SELECT domain_name FROM site WHERE user = '${siteUser}';`]);
   if (taken.ok && taken.out) {
     fatal(
@@ -467,4 +499,3 @@ export function ensureAddonSite(spec: AddonSpec, domain: string): boolean {
   return true;
 }
 
-export { ADDONS };
