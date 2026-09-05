@@ -167,6 +167,45 @@ position. A bundle is signed and bound to its subject's digest, so an attacker
 who can replace a release asset cannot produce one that verifies against the
 replacement -- the failure mode is a refused install, not a silent accept.
 
+## One naming scheme for the accounts CloudPanel creates for us
+
+`clpctl site:add:reverse-proxy` requires `--siteUser` and only generates a name
+for sites created through the panel's own UI, so this addon has to supply one.
+It used to supply two: `a<addon>-<domain>` for the manager's site and
+`inst_<domain>` for an instance's, both truncated to fifteen characters.
+
+Two schemes for one job is the smaller problem. The larger one is that
+truncation made uniqueness rest on a prefix of the domain, and `site.user` is
+UNIQUE, so `demo.clp-stg.local` and `demo.clp-stg.example.com` both reduced to
+`inst_democlpstg` and the second site failed from inside clpctl with nothing
+explaining why.
+
+There is now one scheme, used for every site this addon creates:
+
+    addon-<first 8 alphanumerics of the domain>-<6 hex of sha256(domain)>
+
+Hashing the whole domain is what makes it safe; the readable fragment is for
+operators reading `/etc/passwd`, and the `addon-` prefix both marks ownership
+and guarantees the name starts with a letter, which a domain beginning with a
+digit would not. CloudPanel accepts the resulting 21 characters -- verified
+against a real `site:add:reverse-proxy` before adopting the length.
+
+The manager's site and an instance's site are named the same way on purpose.
+They are both just sites this addon created; which one is the manager's is
+already recorded in `OWN_DOMAIN`, and encoding a role in the account name would
+be a second source of truth for something the config already answers.
+
+It is written twice -- once in `cli/provision.ts` and once in the wrapper,
+which is bash and cannot import TypeScript. Two implementations of one rule
+drift silently, and the failure would be the manager creating a site under one
+name while the wrapper looks for another, so `tools/test-app.ts` runs both over
+a list of domains and asserts they agree, including the pair that used to
+collide.
+
+Nothing migrates. The name is only ever used at creation; everywhere else the
+account is read back from the panel's `site` table, so sites created under the
+old schemes keep working under their old names.
+
 ## The dashboard's inline script is syntax-checked in CI
 
 The client-side script is a TypeScript template literal interpolated into the

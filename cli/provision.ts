@@ -3,6 +3,7 @@
 // implementation of "make the box match what should be installed", or the
 // reconciliation timer and the installer drift apart.
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, renameSync, readdirSync } from "node:fs";
 import {
   ADDONS, ANCHOR_SERVICE, CLI_BIN, CONFIG_DIR, CURRENT_LINK, LEGACY_USERS, LIB_DIR, LOCK_DIR,
@@ -20,6 +21,34 @@ import type { FetchedArtifact } from "./release";
  * per addon site rather than two, and CloudPanel owns its lifecycle: deleting
  * the site removes the user, so uninstall has nothing of its own to clean up.
  */
+/**
+ * The account name to ask CloudPanel to create for a site.
+ *
+ * `clpctl site:add:reverse-proxy` requires --siteUser, so a name has to come
+ * from somewhere; CloudPanel only generates one for sites created through its
+ * own UI. This is that scheme, and it is the only one -- the manager's site and
+ * an instance's site are both just sites this addon created, so they are named
+ * the same way.
+ *
+ *     addon-<first 8 alphanumerics of the domain>-<6 hex of sha256(domain)>
+ *
+ * The hash is what makes it safe. Two earlier schemes truncated the domain to
+ * fit a 15-character budget, which meant uniqueness rested on a prefix:
+ * `demo.clp-stg.local` and `demo.clp-stg.example.com` both reduced to
+ * `inst_democlpstg`, and site.user is UNIQUE, so the second site failed inside
+ * clpctl with nothing explaining why. Hashing the whole domain removes the
+ * question; the readable fragment is for operators reading /etc/passwd.
+ *
+ * Reimplemented in the wrapper, which is bash and cannot import this. That
+ * duplication is pinned by a test asserting both produce the same name.
+ */
+export function siteUserFor(domain: string): string {
+  const d = domain.toLowerCase();
+  const readable = d.replace(/[^a-z0-9]/g, "").slice(0, 8);
+  const hash = createHash("sha256").update(d).digest("hex").slice(0, 6);
+  return `addon-${readable}-${hash}`;
+}
+
 export function siteUserOf(domain: string): string | null {
   const r = tryRun("sqlite3", ["-readonly", PANEL_DB,
     `SELECT user FROM site WHERE domain_name = '${domain}';`]);
@@ -469,10 +498,7 @@ export function ensureAddonSite(spec: AddonSpec, domain: string): boolean {
 
   log.step(`creating CloudPanel reverse-proxy site ${domain} → 127.0.0.1:${spec.port}`);
 
-  // Derived from the domain, not from the addon name: a fixed name means a
-  // second addon site, or a reinstall under a different hostname, collides
-  // with a user that clpctl will not reuse.
-  const siteUser = `a${spec.name.slice(0, 4)}-${domain.replace(/[^a-z0-9]/g, "")}`.slice(0, 15);
+  const siteUser = siteUserFor(domain);
   const taken = tryRun("sqlite3", ["-readonly", PANEL_DB,
     `SELECT domain_name FROM site WHERE user = '${siteUser}';`]);
   if (taken.ok && taken.out) {

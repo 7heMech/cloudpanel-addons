@@ -138,6 +138,31 @@ panel_site_exists() {
   [[ ${n:-0} -gt 0 ]]
 }
 
+# The account name to ask CloudPanel to create for a site.
+#
+# clpctl requires --siteUser, so a name has to come from somewhere. This must
+# stay identical to siteUserFor() in cli/provision.ts, which is the same scheme
+# written in TypeScript because the wrapper cannot import it; tools/test-app.ts
+# asserts the two agree.
+#
+#     addon-<first 8 alphanumerics of the domain>-<6 hex of sha256(domain)>
+#
+# Hashing the whole domain is the point. Truncating the domain to fit a short
+# name made uniqueness depend on a prefix, so two domains sharing one collided
+# on site.user, which is UNIQUE -- and the failure surfaced from inside clpctl
+# with nothing explaining it.
+site_user_for() {
+  local d=${1,,} readable hash
+  readable=${d//[^a-z0-9]/}
+  readable=${readable:0:8}
+  hash=$(printf '%s' "$d" | sha256sum | cut -c1-6)
+  printf 'addon-%s-%s' "$readable" "$hash"
+}
+
+site_user_taken() {
+  getent passwd "$1" >/dev/null 2>&1
+}
+
 # The identity an instance runs as.
 #
 # CloudPanel creates exactly one system user per site and records it in the
@@ -410,8 +435,10 @@ cmd_create() {
   else
     log "creating CloudPanel reverse-proxy site for ${domain}"
     local site_user
-    site_user=$(printf 'inst_%s' "${domain//[^a-z0-9]/}")
-    site_user=${site_user:0:15}
+    site_user=$(site_user_for "$domain")
+    if site_user_taken "$site_user"; then
+      emit_err "the site user ${site_user} already exists; a site for ${domain} may be half-created"
+    fi
     if ! "$CLPCTL" site:add:reverse-proxy \
            --domainName="$domain" \
            --reverseProxyUrl="http://127.0.0.1:${port}" \
