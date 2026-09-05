@@ -101,7 +101,7 @@ export function currentRelease(): string | null {
 
 // --- the wrapper and its sudoers line ---------------------------------------
 
-export function installWrapper(spec: AddonSpec, bytes: Buffer): void {
+export function installWrapper(spec: AddonSpec, bytes: Buffer, quiet = false): void {
   // root:root 0755 in a root-owned directory that is not group-writable. If
   // the site user can write the script it runs as root, we have handed out
   // plain root.
@@ -109,10 +109,10 @@ export function installWrapper(spec: AddonSpec, bytes: Buffer): void {
   run("chown", ["root:root", spec.wrapperPath]);
   run("chown", ["root:root", LIB_DIR]);
   run("chmod", ["755", LIB_DIR]);
-  log.ok(`wrapper installed root:root 0755 at ${spec.wrapperPath}`);
+  if (!quiet) log.ok(`wrapper installed root:root 0755 at ${spec.wrapperPath}`);
 }
 
-export function installSudoers(spec: AddonSpec): void {
+export function installSudoers(spec: AddonSpec, quiet = false): void {
   // One line, one addon, one absolute path, no wildcards. A rule such as
   // `NOPASSWD: /usr/bin/clpctl *` is equivalent to full root.
   const file = `/etc/sudoers.d/clp-addon-${spec.name}`;
@@ -141,7 +141,7 @@ export function installSudoers(spec: AddonSpec): void {
     rmSync(file, { force: true });
     fatal(`sudoers configuration broke after installing the drop-in; removed it:\n${full.out}`);
   }
-  log.ok(`sudoers drop-in installed and validated (${spec.user} → ${spec.wrapperPath})`);
+  if (!quiet) log.ok(`sudoers drop-in installed and validated (${spec.user} → ${spec.wrapperPath})`);
 }
 
 export function removeSudoers(spec: AddonSpec): void {

@@ -243,10 +243,13 @@ function cmdRepair(argv: string[]): void {
   assertNotInDockerGroup(spec);
   ensureDirs(spec);
 
+  // The timer calls this every 15 minutes, so a reconciliation that changed
+  // nothing should say nothing. Otherwise the journal fills with identical
+  // success lines and a real message is lost in them.
   const wrapperSrc = `${CURRENT_LINK}/${spec.wrapperArtifact}`;
   if (existsSync(wrapperSrc)) {
-    installWrapper(spec, readFileSync(wrapperSrc));
-    installSudoers(spec);
+    installWrapper(spec, readFileSync(wrapperSrc), quiet);
+    installSudoers(spec, quiet);
   } else if (!quiet) {
     log.warn(`no wrapper in the current release at ${wrapperSrc}; skipping wrapper reinstall`);
   }
