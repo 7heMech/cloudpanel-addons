@@ -38,7 +38,7 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Unit checks: client script and port allocation
+      - name: Unit checks for the client script and port allocation
         # It lives in a TypeScript template literal, so a stray escape reaches
         # the browser as a broken string and silently kills every button on the
         # page. Nothing else notices: the server still renders and answers.
