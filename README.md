@@ -79,6 +79,46 @@ catches corruption; the attestation catches substitution, which a checksum
 served next to the binary cannot. Provenance verification is on by default and
 skipping it requires `--skip-attestation`.
 
+## Reaching a staging box from your machine
+
+Everything binds loopback or is a name-based vhost, and on staging the
+hostnames are hosts-file entries rather than real DNS, so a browser needs both
+a tunnel and a local hosts entry.
+
+Two ports matter, and they are served by different nginx instances:
+
+| Port | Serves |
+|---|---|
+| 8443 | the CloudPanel UI (`clp-nginx`) |
+| 443  | every site, including the addon manager and each Instatic instance |
+
+Forward both. Local **443** rather than some other port, because the nav entry
+the addon injects into the panel links to `https://<addon-host>` with no port,
+and a browser will not rewrite it:
+
+```bash
+sudo ssh -L 443:127.0.0.1:443 -L 8443:127.0.0.1:8443 root@<box>
+```
+
+`sudo` is only needed for the privileged local 443. Then, on your machine:
+
+```
+# /etc/hosts   (%SystemRoot%\System32\drivers\etc\hosts on Windows)
+127.0.0.1 addons.example.invalid demo.example.invalid
+```
+
+Use the hostnames the box actually serves — `clpctl` and the addon record them,
+and `clp-addons status` prints the manager's. Then:
+
+- panel: `https://localhost:8443`
+- addon manager: `https://<addon-host>` — the panel's Instatic nav entry goes here
+- an instance: `https://<instance-host>`
+
+Certificates are per-site and self-signed until Let's Encrypt runs, so expect a
+browser warning on staging. The manager also sits behind whatever per-site
+security you configured, so a basic-auth prompt there is the correct behaviour,
+not a fault.
+
 ## Development
 
 ```bash
