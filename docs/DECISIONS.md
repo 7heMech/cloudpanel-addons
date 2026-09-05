@@ -71,6 +71,28 @@ a `location /instatic/` block proxying to the app. It was removed because
 
 An own site gets SSL, backups and the panel's own security UI for free.
 
+## The manager runs as CloudPanel's site user
+
+Decision 2.4 says the addon runs as the site user CloudPanel creates. An earlier
+version created a dedicated `instatic-app` account instead, which meant two
+accounts existed for one addon site and uninstall had its own user to clean up.
+The site user is now resolved from the panel database after the site is created,
+and the legacy account is removed on install and repair.
+
+CloudPanel gives site users a login shell and a password so operators can reach
+the docroot over SFTP. For this site that is a liability rather than a feature:
+it is a pure reverse proxy with an empty docroot, and it is the one account
+permitted to `sudo` the root wrapper. Left as-is, the site's SFTP credentials —
+visible to anyone with panel access to that site — would be a path to root.
+
+So the installer sets the shell to `nologin` and locks the password, and
+`repair` re-asserts both, because editing the site in the panel can restore the
+shell. `clp-addons status` reports the state.
+
+This is the one place the design deliberately hardens something CloudPanel set
+up, rather than leaving panel-managed state alone. It is worth the exception
+because the alternative is a documented escalation path.
+
 ## The app has no Docker access
 
 Membership in the `docker` group is equivalent to root: a member can start a
