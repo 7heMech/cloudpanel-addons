@@ -78,6 +78,14 @@ jobs:
               --outfile "$out" "$entry"
           done
 
+      - name: Stage the bootstrap installer
+        # install.sh is part of the release, not just a file in the repo. Being
+        # a release asset gets it into SHA256SUMS, under the same provenance
+        # attestation as the binaries, and behind the /releases/latest/download
+        # redirect -- so the documented one-liner keeps working without anyone
+        # editing a version number into the README after every tag.
+        run: install -m 0755 install.sh dist/install.sh
+
       - name: Stage the wrapper scripts unchanged
         # Never compiled (decision 2.13): the wrapper's security value is that
         # a human can read it in one sitting.
@@ -123,6 +131,7 @@ jobs:
             dist/clp-addons-linux-x64
             dist/instatic-app-linux-x64
             dist/clp-action-instatic
+            dist/install.sh
 
       - name: Verify SHA256SUMS still matches what we are about to publish
         # Cheap guard against the artifact round-trip altering a byte.
@@ -176,4 +185,5 @@ jobs:
             dist/clp-addons-linux-x64 \
             dist/instatic-app-linux-x64 \
             dist/clp-action-instatic \
+            dist/install.sh \
             dist/SHA256SUMS

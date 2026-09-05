@@ -21,11 +21,26 @@ no directory to push files into. Each instance is a container from
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/7heMech/cloudpanel-addons/v0.1.0/install.sh | bash
+curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download/install.sh | bash
 ```
 
-Point that URL at a tag, never at `main`: piping a moving branch into a root
-shell means the script you audited is not necessarily the script that runs.
+That URL redirects to the newest release's copy of the installer, so it does not
+go stale between releases, and the installer defaults to the newest release of
+the binaries too. Pass `--version=vX.Y.Z` to pin those.
+
+It is deliberately a release asset rather than a file read off a branch. Piping
+a moving branch into a root shell means the script you audited is not
+necessarily the script that runs; a release asset changes only when a release is
+cut, is listed in that release's `SHA256SUMS`, and carries the same build
+provenance attestation as the binaries.
+
+To read it before running it, or to pin the installer itself:
+
+```bash
+curl -fsSL -O https://github.com/7heMech/cloudpanel-addons/releases/download/v0.1.2/install.sh
+gh attestation verify install.sh --repo 7heMech/cloudpanel-addons
+less install.sh && bash install.sh
+```
 
 Requirements: a CloudPanel host, x86-64, root, and Docker. The installer refuses
 to continue without them.

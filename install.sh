@@ -2,10 +2,20 @@
 # =============================================================================
 # clp-addons bootstrap installer
 #
-#   curl -fsSL https://raw.githubusercontent.com/7heMech/cloudpanel-addons/v0.1.0/install.sh | bash
+#   curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download/install.sh | bash
 #
-# Point that URL at a tag, never at main: piping a moving branch into a root
-# shell means the script you audited is not necessarily the script that runs.
+# That URL redirects to the newest release's copy of this script. It is a
+# release asset rather than a file read off a branch: piping a moving branch
+# into a root shell means the script you audited is not necessarily the script
+# that runs, whereas a release asset only changes when a release is cut, is
+# listed in that release's SHA256SUMS, and carries the same build provenance
+# attestation as the binaries.
+#
+# To audit before running, or to pin, fetch a specific release instead:
+#
+#   curl -fsSL -O https://github.com/7heMech/cloudpanel-addons/releases/download/vX.Y.Z/install.sh
+#   gh attestation verify install.sh --repo 7heMech/cloudpanel-addons
+#   less install.sh && bash install.sh
 #
 # All prompts read from /dev/tty, not stdin. Under `curl | bash` stdin is the
 # pipe carrying this script, so `read` there consumes the script's own text.

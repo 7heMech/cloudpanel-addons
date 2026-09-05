@@ -119,6 +119,28 @@ Docker fixes a container's configuration at creation, so restarting an instance
 built by an older release will not move it. The `recreate` verb rebuilds it
 from the recorded tag, leaving the data in place.
 
+## The bootstrap installer is a release asset
+
+The documented one-liner used to read `install.sh` off
+`raw.githubusercontent.com` at a hardcoded tag. Two problems, and the second was
+live: the tag had to be edited into the README by hand after every release, and
+because nobody did, the published command was still serving the v0.1.0
+installer -- which predates the tokenless provenance fix and therefore demanded
+`gh auth login` from anyone who ran it.
+
+`install.sh` is now built into `dist/` alongside the binaries, so it appears in
+`SHA256SUMS`, is covered by the same build provenance attestation, and is
+reachable through GitHub's `/releases/latest/download/` redirect. The README
+points at that redirect and stops going stale.
+
+The original rule was "point at a tag, never at `main`", on the grounds that
+piping a moving target into a root shell means the script you audited is not the
+script that runs. The redirect is still a moving target, so that reasoning is
+narrowed rather than abandoned: it moves only when a release is cut, the thing
+it moves to is immutable within that release, and it is attested -- none of
+which is true of a branch. An operator who wants to audit first can fetch a
+pinned release asset and verify it before running it, which the README shows.
+
 ## Uninstall reverses install, and says what it will destroy
 
 `uninstall` removes the manager and un-patches the panel but leaves instances
