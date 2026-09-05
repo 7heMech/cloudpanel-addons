@@ -5,6 +5,7 @@
 
 import { esc, escJs } from "./http";
 import type { InstanceView } from "./service";
+import type { SanitizedSite } from "../../../lib/snapshot-reader";
 
 const STYLE = `
 :root {
@@ -125,17 +126,24 @@ async function confirmUpdate() {
   if (!/^\\d+\\.\\d+\\.\\d+$/.test(tag)) { alert('Enter an exact version, for example 0.0.18'); return; }
   document.getElementById('update-dialog').close();
   busy(true);
-  try {
-    await call('/api/instances/' + encodeURIComponent(pendingUpdate) + '/update', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tag: tag })
-    });
-    location.reload();
-  } catch (e) {
-    busy(false);
-    alert('Update failed and the instance was rolled back: ' + e.message);
-  }
+  const res = await fetch('/api/instances/' + encodeURIComponent(pendingUpdate) + '/update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CLP-Addons-CSRF': csrf() },
+    body: JSON.stringify({ tag: tag })
+  });
+  let body = null;
+  try { body = await res.json(); } catch (e) {}
+  if (res.ok && body && body.ok !== false) { location.reload(); return; }
+
+  busy(false);
+  // A rolled-back update is the case where the container logs are the whole
+  // story, so show them rather than just the failure line.
+  const logs = body && body.data && body.data.logs;
+  document.getElementById('logs-title').textContent =
+    'Update failed \u2014 rolled back to ' + ((body && body.data && body.data.restoredTag) || 'the previous version');
+  document.getElementById('logs-body').textContent =
+    ((body && body.error) || 'update failed') + (logs ? '\n\n--- container logs ---\n' + logs : '');
+  document.getElementById('logs-dialog').showModal();
 }
 
 let pendingDelete = null;
@@ -210,7 +218,12 @@ function stateClass(state: string): string {
   return known.includes(state) ? `state-${state}` : "state-unknown";
 }
 
-export function dashboardView(instances: InstanceView[], nextPort: number, snapshotAge: number): string {
+export function dashboardView(
+  instances: InstanceView[],
+  nextPort: number,
+  snapshotAge: number,
+  panelSites: SanitizedSite[] = []
+): string {
   const running = instances.filter((i) => i.state === "running").length;
 
   // A stale snapshot means the port list the allocator is working from may no
@@ -264,6 +277,24 @@ export function dashboardView(instances: InstanceView[], nextPort: number, snaps
   </table>`
   }
 </div>
+
+<details class="card">
+  <summary style="cursor:pointer;color:var(--muted)">
+    All CloudPanel sites on this server (${panelSites.length}) — from the sanitized snapshot
+  </summary>
+  <p class="hint">Read-only. Written by the privileged side; the manager never reads the panel
+    database itself. Useful for checking a hostname is free before creating an instance.</p>
+  <table style="margin-top:0.75rem">
+    <thead><tr><th>Domain</th><th>Type</th><th>Site user</th></tr></thead>
+    <tbody>${
+      panelSites.length === 0
+        ? `<tr><td colspan="3" class="empty">Snapshot is empty. Run <span class="mono">clp-addons repair</span> as root.</td></tr>`
+        : panelSites
+            .map((s) => `<tr><td>${esc(s.domain)}</td><td><span class="badge">${esc(s.type)}</span></td><td class="mono">${esc(s.user)}</td></tr>`)
+            .join("")
+    }</tbody>
+  </table>
+</details>
 
 <dialog id="logs-dialog">
   <h3 id="logs-title" style="margin-top:0"></h3>

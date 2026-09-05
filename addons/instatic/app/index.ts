@@ -54,8 +54,12 @@ const server = Bun.serve({
       try {
         if (path === "/") {
           const instances = await instaticService.listInstances();
-          const { ageSeconds } = instaticService.snapshot();
-          return html(layout("Instatic instances", dashboardView(instances, instaticService.nextPort(), ageSeconds)), csrf);
+          const { snap, ageSeconds } = instaticService.snapshot();
+          return html(
+            layout("Instatic instances",
+              dashboardView(instances, instaticService.nextPort(), ageSeconds, snap.sites)),
+            csrf
+          );
         }
         const tags = await listAvailableTags();
         return html(layout("New Instatic site", newInstanceView(instaticService.nextPort(), tags)), csrf);

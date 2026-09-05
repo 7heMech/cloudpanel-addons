@@ -42,11 +42,19 @@ emit_ok() {
   printf '{"ok":true,"data":%s}\n' "${1:-null}"
 }
 
+# The second argument, when given, is a JSON object merged in as "data". The
+# update path uses it to hand the failed container's logs to the UI: writing
+# them to stderr only puts them in the service journal, which is precisely
+# where the operator looking at the update failure is not.
 emit_err() {
-  local msg="$1"
+  local msg="$1" data="${2:-}"
   printf '[instatic] ERROR: %s\n' "$msg" >&2
-  printf '{"ok":false,"error":%s}\n' "$(json_str "$msg")"
-  exit "${2:-1}"
+  if [[ -n $data ]]; then
+    printf '{"ok":false,"error":%s,"data":%s}\n' "$(json_str "$msg")" "$data"
+  else
+    printf '{"ok":false,"error":%s}\n' "$(json_str "$msg")"
+  fi
+  exit 1
 }
 
 # Quote a string as a JSON scalar without shelling out to jq, so the error path
@@ -382,15 +390,21 @@ cmd_update() {
   }
 
   if ! run_container "$name" "$cur_port" "$tag" "$domain" "$dir"; then
+    local start_logs
+    start_logs=$(docker logs --tail 200 "$name" 2>&1 || true)
     rollback
-    emit_err "failed to start ${tag}; rolled back to ${cur_tag}"
+    emit_err "failed to start ${tag}; rolled back to ${cur_tag}" \
+      "{\"failedTag\":\"${tag}\",\"restoredTag\":\"${cur_tag}\",\"logs\":$(json_str "$start_logs")}"
   fi
 
   if ! health_check "$cur_port" "$domain"; then
     log "capturing failed container logs before rollback"
-    docker logs --tail 200 "$name" >&2 2>&1 || true
+    local failed_logs
+    failed_logs=$(docker logs --tail 200 "$name" 2>&1 || true)
+    printf '%s\n' "$failed_logs" >&2
     rollback
-    emit_err "health check failed on ${tag}; rolled back to ${cur_tag}"
+    emit_err "health check failed on ${tag}; rolled back to ${cur_tag}" \
+      "{\"failedTag\":\"${tag}\",\"restoredTag\":\"${cur_tag}\",\"logs\":$(json_str "$failed_logs")}"
   fi
 
   docker rm -f "${name}-prev" >&2 2>/dev/null || true

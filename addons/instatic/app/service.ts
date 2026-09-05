@@ -91,6 +91,10 @@ export const instaticService = {
     return { snap, ageSeconds: snapshotAgeSeconds(snap) };
   },
 
+  panelSites(): PanelSnapshot["sites"] {
+    return readSnapshot().sites;
+  },
+
   nextPort(): number {
     return getNextAvailablePort();
   },

@@ -5,8 +5,9 @@
 
 import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, renameSync, readdirSync } from "node:fs";
 import {
-  ADDONS, CONFIG_DIR, CURRENT_LINK, LIB_DIR, LOCK_DIR, RECONCILE_SERVICE, RECONCILE_TIMER,
-  RELEASES_DIR, STATE_DIR, SYSTEMD_DIR, type AddonSpec,
+  ADDONS, ANCHOR_SERVICE, CONFIG_DIR, CURRENT_LINK, LIB_DIR, LOCK_DIR, RECONCILE_PATH,
+  RECONCILE_SERVICE, RECONCILE_TIMER, RELEASES_DIR, STATE_DIR, SYSTEMD_DIR, TEMPLATE_WATCH_PATHS,
+  type AddonSpec,
 } from "./paths";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
 import type { FetchedArtifact } from "./release";
@@ -228,7 +229,7 @@ WantedBy=multi-user.target
 `;
 }
 
-function reconcileUnits(): { service: string; timer: string } {
+function reconcileUnits(): { service: string; timer: string; path: string; anchor: string } {
   return {
     // A dpkg post-invoke hook catches apt-driven updates and misses manual
     // ones. A timer catches every path, including unattended-upgrades at 6am.
@@ -251,6 +252,44 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 `,
+
+    // Event-driven repair on top of the timer, so a CloudPanel update is
+    // repaired in seconds rather than in up to one timer interval.
+    //
+    // This is a root-run path unit rather than a watch inside the addon
+    // service on purpose: /home/clp is 0700 clp:clp, so the app's account
+    // cannot even traverse to the templates. Giving it the access would mean
+    // either the clp group (read/write over the whole panel tree) or a new
+    // wrapper verb — both widen the privilege boundary to save a few minutes.
+    //
+    // systemd re-arms the watch by walking up to the nearest existing parent,
+    // which is what makes this survive cloudpanel.postinst moving the whole
+    // app directory aside and extracting a fresh one.
+    //
+    // The timer stays as the backstop: a path unit can miss an event, and
+    // repair also refreshes the snapshot and the sudoers drop-in.
+    path: `[Unit]
+Description=CloudPanel addons: watch the panel templates we patch
+
+[Path]
+${TEMPLATE_WATCH_PATHS.map((p) => `PathChanged=${p}`).join("\n")}
+Unit=${ANCHOR_SERVICE}
+
+[Install]
+WantedBy=paths.target
+`,
+
+    anchor: `[Unit]
+Description=CloudPanel addons: re-inject the panel anchors
+
+[Service]
+Type=oneshot
+# An update rewrites these templates repeatedly while it extracts. systemd will
+# not run this concurrently with itself, so a short pause here coalesces the
+# burst into one pass plus a confirming second one.
+ExecStartPre=/bin/sleep 2
+ExecStart=${CURRENT_LINK}/clp-addons-linux-x64 repair --anchors-only --quiet
+`,
   };
 }
 
@@ -259,6 +298,8 @@ export function installUnits(spec: AddonSpec): void {
   writeAtomic(`${SYSTEMD_DIR}/${spec.unit}`, serviceUnit(spec), 0o644);
   writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_SERVICE}`, units.service, 0o644);
   writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_TIMER}`, units.timer, 0o644);
+  writeAtomic(`${SYSTEMD_DIR}/${ANCHOR_SERVICE}`, units.anchor, 0o644);
+  writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_PATH}`, units.path, 0o644);
   run("systemctl", ["daemon-reload"]);
 }
 
@@ -267,13 +308,18 @@ export function startUnits(spec: AddonSpec): void {
   run("systemctl", ["restart", spec.unit]);
   run("systemctl", ["enable", RECONCILE_TIMER]);
   run("systemctl", ["restart", RECONCILE_TIMER]);
-  log.ok(`${spec.unit} and ${RECONCILE_TIMER} enabled`);
+  run("systemctl", ["enable", RECONCILE_PATH]);
+  run("systemctl", ["restart", RECONCILE_PATH]);
+  log.ok(`${spec.unit}, ${RECONCILE_TIMER} and ${RECONCILE_PATH} enabled`);
 }
 
 export function stopUnits(spec: AddonSpec): void {
-  for (const u of [spec.unit, RECONCILE_TIMER]) tryRun("systemctl", ["disable", "--now", u]);
+  for (const u of [spec.unit, RECONCILE_TIMER, RECONCILE_PATH]) {
+    tryRun("systemctl", ["disable", "--now", u]);
+  }
   for (const f of [`${SYSTEMD_DIR}/${spec.unit}`, `${SYSTEMD_DIR}/${RECONCILE_SERVICE}`,
-                   `${SYSTEMD_DIR}/${RECONCILE_TIMER}`]) {
+                   `${SYSTEMD_DIR}/${RECONCILE_TIMER}`, `${SYSTEMD_DIR}/${RECONCILE_PATH}`,
+                   `${SYSTEMD_DIR}/${ANCHOR_SERVICE}`]) {
     rmSync(f, { force: true });
   }
   tryRun("systemctl", ["daemon-reload"]);

@@ -238,6 +238,13 @@ function cmdRepair(argv: string[]): void {
   const quiet = flags.quiet === true;
   const spec = resolveAddon(positional[0]);
 
+  // The path unit uses this: anchors only, no wrapper reinstall, no visudo, no
+  // daemon-reload, no snapshot. Cheap enough to run on every template write.
+  if (flags["anchors-only"] === true) {
+    reconcileAnchors(spec, quiet);
+    return;
+  }
+
   // install minus the download, and idempotent.
   ensureUser(spec);
   assertNotInDockerGroup(spec);
@@ -337,7 +344,7 @@ function usage(): void {
   clp-addons install <addon> --domain=<host> --local=dist      (staging only)
   clp-addons update [<addon>|--all] [--version=vX.Y.Z]
   clp-addons self-update [--version=vX.Y.Z]
-  clp-addons repair [<addon>] [--quiet]
+  clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status [<addon>]
   clp-addons uninstall <addon> --yes
   clp-addons --version
