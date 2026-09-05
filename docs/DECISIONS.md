@@ -132,10 +132,35 @@ form. The pristine copy is snapshotted off the running box into
 - **Purging the Twig cache is mandatory.** Twig serves the compiled copy until
   the cache is gone.
 
+### Reconciliation: a timer plus a path unit
+
 Reconciliation is a systemd timer, not a dpkg hook: a hook catches apt-driven
 updates and misses manual ones, while a timer catches every path including
 unattended-upgrades at 6am. It calls `clp-addons repair`, so there is one
 implementation of "make the box match what should be installed".
+
+A 15-minute timer means up to 15 minutes with the nav entry missing, so a
+`.path` unit watches the two templates and repairs on change. Measured on a
+real `cloudpanel.postinst` run with the timer stopped: wiped at 09:36:45,
+repaired at 09:36:50.
+
+The watch is a **root-run systemd path unit, not a watcher inside the addon
+service**. The obvious idea is that the Bun service is still running during a
+panel update and could re-patch the files itself, but `/home/clp` is `0700
+clp:clp` — the service account cannot even traverse into it. Giving it the
+access would mean either the `clp` group, which is read/write over the entire
+panel tree, or a new wrapper verb. Both widen the privilege boundary to save a
+few minutes, and systemd already does the job from outside it.
+
+The path unit triggers `clp-addons-anchor.service`, which runs
+`repair --anchors-only`, rather than the full reconciliation. Pointing it at the
+full repair was measurably wrong: an update rewrites the templates repeatedly
+while it extracts, and that produced six wrapper reinstalls, twelve `visudo`
+runs and six `daemon-reload`s inside twenty seconds, in the middle of a package
+upgrade. A two-second `ExecStartPre` coalesces the burst.
+
+Both stay. The path unit is fast but can miss an event; the timer is the
+backstop and also refreshes the snapshot and the sudoers drop-in.
 
 ## Instances
 
