@@ -1,0 +1,205 @@
+# Decisions
+
+Why the code is shaped the way it is. Where something here says a decision is
+settled, don't relitigate it in code — argue it here first.
+
+## The wrapper is the whole security model
+
+`addons/*/wrapper/clp-action-*` runs as root via one sudoers line. Everything it
+permits, the unprivileged app account can do as root. The account's isolation is
+worth exactly as much as the wrapper's argument validation is strict, so that
+file is the one to review line by line.
+
+Rules, none negotiable:
+
+- **Validate before acting.** Parse every argument, validate it, *then* derive
+  paths and take locks. Deriving the lock path from an unvalidated `--domain`
+  once let `../../../tmp/x` place a root-owned file outside the lock directory.
+- **Reject; never sanitize.** A sanitizer that silently rewrites hostile input
+  hides the attempt and eventually rewrites it wrong.
+- **argv arrays only.** No `sh -c`, no `eval`, no backticks, no interpolating
+  into a command string.
+- **No free-form arguments.** No paths, no filenames, no registry host, no
+  compose file location. One such argument and the verb list stops being closed.
+- **The registry is hardcoded.** Only the tag crosses the boundary.
+- **One wrapper per addon**, so a bug in one cannot be walked through to reach
+  another's verbs. `ALL=(root)`, one absolute path, no wildcards:
+  `NOPASSWD: /usr/bin/clpctl *` is equivalent to full root.
+- **stdout is a contract**: exactly one JSON object. Progress goes to stderr.
+  Never scrape prose for meaning.
+
+### `set -e` in the wrapper, specifically
+
+Two silent failures have come from the same shape:
+
+```bash
+foo() {
+  [[ cond ]] && emit_err "..."     # returns 1 when cond is FALSE
+}
+foo "$x"                            # set -e: exits, with no output at all
+```
+
+A trailing `&&` list returns non-zero on the *success* path. The function then
+returns non-zero, and `set -e` aborts the script producing nothing — which is
+indistinguishable from a no-op. Use `if`, and end validators with `return 0`.
+
+The same applies to `pipefail`: `x=$(cmd | tr ...)` aborts the assignment when
+`cmd` exits non-zero, even though the pipeline produced the value you wanted.
+Add `|| true` where a non-zero exit is expected.
+
+`tools/test-wrapper.sh` asserts that every verb with valid input *emits
+something*, which is what catches this class. A rejection-only test suite does
+not — the bug lives on the success path.
+
+## Placement: the addon is its own CloudPanel site
+
+The manager binds `127.0.0.1` and is reached through a stock CloudPanel
+reverse-proxy site, with per-site security in front. Not a path on the panel's
+own vhost.
+
+The panel-vhost variant is tempting because it is same-origin, and it was tried:
+a `location /instatic/` block proxying to the app. It was removed because
+
+- `proxy_pass` bypasses CloudPanel's PHP session check entirely, so the page was
+  reachable with no credentials at all while every real panel path redirected to
+  `/login`;
+- the panel regenerates its own vhost and `cloudpanel.postinst` replaces
+  `/home/clp/htdocs/app` wholesale on upgrade, so the block is a second fragile
+  surface the reconciliation timer would have to watch;
+- same-origin buys nothing anyway, because there is no way to share the panel's
+  PHP session. Authentication has to be added either way.
+
+An own site gets SSL, backups and the panel's own security UI for free.
+
+## The app has no Docker access
+
+Membership in the `docker` group is equivalent to root: a member can start a
+container with `/` bind-mounted. The app was briefly in that group so it could
+run `docker inspect` and `docker logs` directly, which made every restriction in
+the wrapper decorative.
+
+Container state and logs are wrapper verbs (`status`, `logs`) for this reason.
+`clp-addons status` reports the group if it reappears; `repair` removes it.
+
+## Systemd sandboxing is deliberately thin
+
+`NoNewPrivileges` is left off, and the usual hardening directives are absent.
+This is not an oversight:
+
+- the app's only privileged path is `sudo <wrapper>`, and `NoNewPrivileges=yes`
+  blocks sudo outright. `ProtectKernel*`, `RestrictNamespaces`,
+  `RestrictAddressFamilies`, `SystemCallArchitectures`, `MemoryDenyWriteExecute`
+  and `RestrictSUIDSGID` all imply it;
+- namespace directives are inherited by children, so `ProtectSystem` and
+  `ProtectHome` would apply to the wrapper too — and the wrapper legitimately
+  needs `/home/clp` to read the panel database and `/etc` because `clpctl`
+  writes vhosts.
+
+Sandboxing the unit would break the boundary rather than reinforce it. The
+isolation that holds is the unprivileged account plus a one-line sudoers rule.
+
+## Panel state is a sanitized snapshot
+
+The port-collision check needs the panel's site list, but the panel database
+holds password hashes and site credentials, and the app's account cannot read
+`/home/clp` at all. So the privileged side reads non-secret columns and writes
+`/var/lib/clp-addons/snapshot.json` (0640, temp-file-and-rename); the app reads
+only that.
+
+This is enforced by file layout: `lib/panel-snapshot.ts` is root-only and
+`lib/snapshot-reader.ts` is what the app imports. "The app cannot read the panel
+database" should be visible in the imports, not be a convention someone has to
+remember.
+
+## The panel-side anchor
+
+CloudPanel's Twig templates are proprietary and are never committed here, in any
+form. The pristine copy is snapshotted off the running box into
+`/var/lib/clp-addons/templates`, patched from there, and hashed there.
+
+- **Outside `/home/clp/htdocs/app`**, because `cloudpanel.postinst` moves that
+  directory aside and extracts a fresh copy on upgrade. A pristine backup kept
+  beside the template is destroyed by the exact event it exists to survive.
+- **Regenerate from pristine**, never patch what is on disk. Patching a
+  possibly-patched file eventually double-applies.
+- **Hash the pristine copy.** The panel's PHP is obfuscated and cannot be
+  diffed, but Twig is plain text. If upstream's copy stops matching the recorded
+  hash, CloudPanel has touched the file our patch targets, so stop and flag.
+  Applying a patch built for the old markup is worse than having no link.
+- **The check is functional, not a file diff.** A marker block whose content no
+  longer matches the expected snippet counts as stale, not present — otherwise
+  changing the addon's hostname leaves the nav pointing at the old one forever.
+- **Purging the Twig cache is mandatory.** Twig serves the compiled copy until
+  the cache is gone.
+
+### Reconciliation: a timer plus a path unit
+
+Reconciliation is a systemd timer, not a dpkg hook: a hook catches apt-driven
+updates and misses manual ones, while a timer catches every path including
+unattended-upgrades at 6am. It calls `clp-addons repair`, so there is one
+implementation of "make the box match what should be installed".
+
+A 15-minute timer means up to 15 minutes with the nav entry missing, so a
+`.path` unit watches the two templates and repairs on change. Measured on a
+real `cloudpanel.postinst` run with the timer stopped: wiped at 09:36:45,
+repaired at 09:36:50.
+
+The watch is a **root-run systemd path unit, not a watcher inside the addon
+service**. The obvious idea is that the Bun service is still running during a
+panel update and could re-patch the files itself, but `/home/clp` is `0700
+clp:clp` — the service account cannot even traverse into it. Giving it the
+access would mean either the `clp` group, which is read/write over the entire
+panel tree, or a new wrapper verb. Both widen the privilege boundary to save a
+few minutes, and systemd already does the job from outside it.
+
+The path unit triggers `clp-addons-anchor.service`, which runs
+`repair --anchors-only`, rather than the full reconciliation. Pointing it at the
+full repair was measurably wrong: an update rewrites the templates repeatedly
+while it extracts, and that produced six wrapper reinstalls, twelve `visudo`
+runs and six `daemon-reload`s inside twenty seconds, in the middle of a package
+upgrade. A two-second `ExecStartPre` coalesces the burst.
+
+Both stay. The path unit is fast but can miss an event; the timer is the
+backstop and also refreshes the snapshot and the sudoers drop-in.
+
+## Instances
+
+- **Reverse Proxy site type, never a new value in `site.type`.** The panel keys
+  tab rendering, vhost regeneration and clpctl validation off that column.
+- **Never edit vhosts or write to the panel database.** `clpctl` covers site
+  creation; anything after that means writing an undocumented schema while the
+  panel is running, where a wrong row shape corrupts panel state rather than
+  failing cleanly. This costs a feature: an instance's port cannot be changed
+  from the UI. Accepted.
+- **Pin an exact version, never `latest`.** With a floating tag you cannot tell
+  what is running or roll back.
+- **Bind to `127.0.0.1` explicitly.** Docker publishes past ufw, so `3001:3001`
+  exposes the instance to the internet with the firewall shut.
+- **Ports from 39000-39999**, well clear of where CloudPanel hands out Node.js
+  and Python app ports. The manager itself sits outside that block (38080) so it
+  can never collide with an instance.
+- **`INSTATIC_SECRET_KEY` is generated once per instance and never rotated by an
+  update.** The image runs `NODE_ENV=production`, where Instatic refuses to boot
+  without it, and it encrypts recoverable secrets such as API keys and TOTP
+  seeds — a new key leaves every previously encrypted row unreadable. It is
+  passed by `--env-file`, not `-e`, so it never appears in `ps` output, and it
+  travels inside snapshots, because a restored database without it has
+  unreadable secret columns.
+- **Snapshot with `sqlite3 .backup`, not `cp` or `tar` over the live file**,
+  which can capture a database mid-write. The `-wal`/`-shm` pair is skipped;
+  `.backup` folds it in, and copying it alongside would restore a torn pair.
+- **Update is snapshot, pull, restart, health check, auto rollback.** The health
+  check polls the container, then confirms nginx actually serves the hostname.
+  On failure the container logs are captured before rolling back. Auto-update is
+  off by default: Instatic is 0.0.x and its APIs will shift before 1.0.
+
+## Known gaps
+
+- Instance data directories are `chown 1000:1000` to match the image's `bun`
+  user. On CloudPanel uid 1000 is `clp`, so the panel's own user can read an
+  instance database. Not an escalation — the container has only its own
+  bind mounts — but the uid collision is unintended and worth fixing with a
+  dedicated uid.
+- `--local` installs skip provenance verification by construction. Staging only.
+- Only `x86_64` is built. `recon.sh` confirmed `avx2` on the target, so the
+  standard glibc target applies rather than the baseline variant.
