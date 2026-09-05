@@ -16,6 +16,9 @@ import { fatal, have, log, tryRun } from "./util";
 const API = "https://api.github.com";
 const VERSION_TAG_RE = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
+/** Every artifact's sigstore bundle, one JSON object per line. */
+const BUNDLES_ASSET = "attestations.jsonl";
+
 export interface ResolvedRelease {
   tag: string;
   assets: Map<string, string>;
@@ -128,13 +131,23 @@ export async function fetchVerified(rel: ResolvedRelease, names: string[]): Prom
  * file cannot: anyone who can replace a binary can replace SHA256SUMS beside
  * it. This is the control that detects substitution.
  *
- * The attestation bundle is fetched from the public attestations API and
- * verified offline. `gh attestation verify` on its own would reach for the API
- * itself and demand `gh auth login` or GH_TOKEN even for a public repo, which
- * would put a GitHub account in the path of every install. Fetching the bundle
- * first and passing --bundle keeps verification fully unauthenticated.
+ * The sigstore bundles are a release asset, downloaded once and passed to gh
+ * with --bundle so verification happens offline. `gh attestation verify` on its
+ * own would reach for the attestations API itself and demand `gh auth login` or
+ * GH_TOKEN even for a public repo, which would put a GitHub account in the path
+ * of every install.
+ *
+ * One .jsonl holding every bundle verifies any single artifact, so this is one
+ * download rather than an API round trip per artifact. Serving the bundles from
+ * the release does not weaken the check: a bundle is signed and bound to its
+ * subject's digest, so replacing an asset does not let an attacker produce one
+ * that vouches for the replacement.
  */
-export async function verifyAttestation(artifacts: FetchedArtifact[], skip: boolean): Promise<void> {
+export async function verifyAttestation(
+  rel: ResolvedRelease,
+  artifacts: FetchedArtifact[],
+  skip: boolean
+): Promise<void> {
   if (skip) {
     log.warn("provenance verification skipped by --skip-attestation; checksums alone cannot detect substitution");
     return;
@@ -147,38 +160,32 @@ export async function verifyAttestation(artifacts: FetchedArtifact[], skip: bool
     );
   }
 
+  const bundlesUrl = rel.assets.get(BUNDLES_ASSET);
+  if (!bundlesUrl) {
+    fatal(
+      `release ${rel.tag} has no ${BUNDLES_ASSET} asset, so its provenance cannot be\n` +
+        `  verified without a GitHub account. Releases from v0.1.3 onwards publish one.\n` +
+        `  Install a newer release, or re-run with --skip-attestation.`
+    );
+  }
+
   const dir = mkdtempSync(`${tmpdir()}/clp-addons-attest-`);
   try {
-    for (const a of artifacts) {
-      const digest = sha256(a.bytes);
-      const bundles = await fetchBundles(digest, a.name);
+    const bundlePath = `${dir}/${BUNDLES_ASSET}`;
+    writeFileSync(bundlePath, await download(bundlesUrl));
 
+    for (const a of artifacts) {
       const artifactPath = `${dir}/${a.name}`;
       writeFileSync(artifactPath, a.bytes);
-
-      // More than one attestation can exist for a digest; the artifact is
-      // trusted if any of them verifies against this repo.
-      let verified = false;
-      let lastError = "";
-      for (const [i, bundle] of bundles.entries()) {
-        const bundlePath = `${dir}/${a.name}.bundle.${i}.json`;
-        writeFileSync(bundlePath, JSON.stringify(bundle));
-        const r = tryRun("gh", [
-          "attestation", "verify", artifactPath,
-          "--bundle", bundlePath,
-          "--repo", REPO,
-        ]);
-        if (r.ok) {
-          verified = true;
-          break;
-        }
-        lastError = r.out;
-      }
-
-      if (!verified) {
+      const r = tryRun("gh", [
+        "attestation", "verify", artifactPath,
+        "--bundle", bundlePath,
+        "--repo", REPO,
+      ]);
+      if (!r.ok) {
         fatal(
           `provenance verification failed for ${a.name}.\n` +
-            `  The artifact does not match any attestation for ${REPO}.\n${lastError}`
+            `  The artifact does not match any attestation in ${rel.tag}.\n${r.out}`
         );
       }
       log.ok(`${a.name} provenance verified against ${REPO}`);
@@ -186,36 +193,6 @@ export async function verifyAttestation(artifacts: FetchedArtifact[], skip: bool
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-}
-
-interface AttestationsResponse {
-  attestations?: { bundle?: unknown }[];
-}
-
-async function fetchBundles(digest: string, name: string): Promise<unknown[]> {
-  const url = `${API}/repos/${REPO}/attestations/sha256:${digest}`;
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "clp-addons",
-    },
-    signal: AbortSignal.timeout(20_000),
-  });
-
-  if (res.status === 404) {
-    fatal(
-      `no build provenance attestation exists for ${name}.\n` +
-        `  Every release artifact is attested, so this one was not produced by the\n` +
-        `  release workflow. Refusing to install it.`
-    );
-  }
-  if (!res.ok) fatal(`could not fetch the attestation for ${name}: ${res.status} ${res.statusText}`);
-
-  const body = (await res.json()) as AttestationsResponse;
-  const bundles = (body.attestations ?? []).map((a) => a.bundle).filter((b): b is unknown => b != null);
-  if (bundles.length === 0) fatal(`the attestations API returned no bundle for ${name}`);
-  return bundles;
 }
 
 /**

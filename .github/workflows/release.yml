@@ -125,6 +125,7 @@ jobs:
           path: dist
 
       - name: Attest build provenance
+        id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
@@ -132,6 +133,18 @@ jobs:
             dist/instatic-app-linux-x64
             dist/clp-action-instatic
             dist/install.sh
+
+      - name: Publish the sigstore bundles alongside the artifacts
+        # The bootstrap installer needs a bundle to verify offline, and the
+        # attestations API returns it wrapped in an envelope -- which meant the
+        # installer carried a JSON parser just to unwrap it. Shipping the
+        # bundles as an asset removes that: gh reads this file directly, and a
+        # single .jsonl of every bundle verifies any one of the artifacts.
+        #
+        # Not in SHA256SUMS, and it does not need to be. A bundle is signed and
+        # bound to its subject's digest, so it cannot vouch for anything but the
+        # artifact it was issued for.
+        run: cp "${{ steps.attest.outputs.bundle-path }}" dist/attestations.jsonl
 
       - name: Verify SHA256SUMS still matches what we are about to publish
         # Cheap guard against the artifact round-trip altering a byte.
@@ -186,4 +199,5 @@ jobs:
             dist/instatic-app-linux-x64 \
             dist/clp-action-instatic \
             dist/install.sh \
+            dist/attestations.jsonl \
             dist/SHA256SUMS

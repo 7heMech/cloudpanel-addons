@@ -141,6 +141,32 @@ it moves to is immutable within that release, and it is attested -- none of
 which is true of a branch. An operator who wants to audit first can fetch a
 pinned release asset and verify it before running it, which the README shows.
 
+## Provenance is verified from a released bundle, not from the API
+
+Verification has to work without a GitHub account: `gh attestation verify` on
+its own reaches for the attestations API and demands `gh auth login` or a token
+even for a public repository, which would put an account in the path of every
+install. Passing `--bundle` avoids that, but something has to produce the
+bundle first.
+
+Fetching it from the attestations API works and needs no credentials, but the
+API returns bundles wrapped in an envelope, so the caller has to parse JSON to
+unwrap them. In the bootstrap installer that meant a Python heredoc -- a
+dependency the preflight check did not even test for, added by a comment
+explaining that `jq` could not be relied on. Trading `jq` for `python3` is not
+an improvement, and needing either to install a shell script is the wrong shape
+of problem.
+
+The release now publishes `attestations.jsonl`, every artifact's bundle, one
+per line. `gh` reads that file directly, and a single file verifies any one of
+the artifacts, so the installer parses nothing and the CLI makes one download
+instead of an API call per artifact.
+
+Serving the bundles from the release rather than the API is not a weaker
+position. A bundle is signed and bound to its subject's digest, so an attacker
+who can replace a release asset cannot produce one that verifies against the
+replacement -- the failure mode is a refused install, not a silent accept.
+
 ## Uninstall reverses install, and says what it will destroy
 
 `uninstall` removes the manager and un-patches the panel but leaves instances

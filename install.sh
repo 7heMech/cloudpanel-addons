@@ -222,39 +222,25 @@ if (( SKIP_ATTESTATION )); then
   warn "provenance verification skipped"
 elif command -v gh >/dev/null; then
   step "verifying build provenance"
-  # Fetch the sigstore bundle from the public attestations API and verify it
-  # offline. Letting gh reach for the API itself would demand `gh auth login`
-  # or GH_TOKEN even for a public repo, putting a GitHub account in the path of
-  # every install.
-  if curl -fsSL -H 'Accept: application/vnd.github+json' \
-       "https://api.github.com/repos/${REPO}/attestations/sha256:${actual}" \
-       -o "${TMP}/attestations.json"; then
-    # Pull out each bundle without needing jq, which is not guaranteed present.
-    python3 - "$TMP" <<'PYEOF' || die "could not parse the attestation response"
-import json, sys, pathlib
-tmp = pathlib.Path(sys.argv[1])
-data = json.loads((tmp / "attestations.json").read_text())
-bundles = [a["bundle"] for a in data.get("attestations", []) if a.get("bundle")]
-if not bundles:
-    sys.exit("no attestation bundle returned")
-for i, b in enumerate(bundles):
-    (tmp / f"bundle.{i}.json").write_text(json.dumps(b))
-PYEOF
-    verified=0
-    for bundle in "${TMP}"/bundle.*.json; do
-      [[ -e $bundle ]] || continue
-      if gh attestation verify "${TMP}/${CLI_ARTIFACT}" --bundle "$bundle" --repo "$REPO" >/dev/null 2>&1; then
-        verified=1; break
-      fi
-    done
-    if (( verified )); then
+  # The sigstore bundles are published as a release asset and verified offline.
+  # Letting gh reach for the attestations API itself would demand `gh auth
+  # login` or GH_TOKEN even for a public repo, putting a GitHub account in the
+  # path of every install; fetching the bundles ourselves needs no account and,
+  # since they arrive ready to use, no JSON parsing either.
+  #
+  # Serving the bundles from the release does not weaken anything. A bundle is
+  # signed and bound to its subject's digest, so an attacker who can replace an
+  # asset cannot produce one that verifies against the replacement.
+  if curl -fsSL -o "${TMP}/attestations.jsonl" "${BASE}/attestations.jsonl"; then
+    if gh attestation verify "${TMP}/${CLI_ARTIFACT}" \
+         --bundle "${TMP}/attestations.jsonl" --repo "$REPO" >/dev/null 2>&1; then
       ok "provenance verified against ${REPO}"
     else
-      die "provenance verification failed. The artifact does not match any attestation for ${REPO}."
+      die "provenance verification failed. ${CLI_ARTIFACT} does not match any attestation for ${REPO}."
     fi
   else
-    die "no attestation found for ${CLI_ARTIFACT}. Every release artifact is attested, so this
-one was not produced by the release workflow. Refusing to install it."
+    die "no attestations.jsonl in release ${TAG}. Every release artifact is attested, so this
+release was not produced by the release workflow. Refusing to install from it."
   fi
 else
   warn "gh is not installed, so provenance was not verified (checksum only)"
