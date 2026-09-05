@@ -31,7 +31,7 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-const MUTATING_VERBS = new Set(["start", "stop", "restart", "delete", "snapshot", "update"]);
+const MUTATING_VERBS = new Set(["start", "stop", "restart", "recreate", "delete", "snapshot", "update"]);
 
 const server = Bun.serve({
   port: PORT,
@@ -111,7 +111,8 @@ const server = Bun.serve({
         switch (verb) {
           case "start":
           case "stop":
-          case "restart": {
+          case "restart":
+          case "recreate": {
             const res = await instaticService.lifecycle(domain, verb);
             return json(res, res.ok ? 200 : 400);
           }

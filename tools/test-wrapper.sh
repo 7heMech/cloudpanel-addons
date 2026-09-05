@@ -93,6 +93,10 @@ expect "update reaches the body"   '"ok":false.*no such instance' \
   update --domain "$NOPE" --tag 0.0.18
 expect "delete reaches the body"   '"ok":(true|false)' \
   delete --domain "$NOPE" --confirm "$NOPE"
+expect "recreate reaches the body" '"ok":false.*no such instance' \
+  recreate --domain "$NOPE"
+expect "recreate rejects --tag"    '"ok":false.*takes only --domain' \
+  recreate --domain "$NOPE" --tag 0.0.18
 
 # create is the one verb whose body has side effects, so stop it at its first
 # guard rather than letting it build anything.
@@ -102,6 +106,43 @@ if docker ps -a --format '{{.Names}}' | grep -q '^instatic-'; then
     create --domain "$existing" --port 39999 --tag 0.0.18
 else
   echo "  skip  create reaches the body (no existing instance to collide with)"
+fi
+
+# The instance identity model: an instance runs as the site user CloudPanel
+# created for its domain, and never as a system account. A regression here is
+# not visible from the outside -- a container that cannot write its database
+# still serves pages -- so it is asserted rather than eyeballed.
+echo "== instances run as their own site user =="
+running=$(docker ps --filter 'label=clp-addon=instatic' --format '{{.Names}}' | head -1)
+if [[ -n $running ]]; then
+  dom=${running#instatic-}
+  want=$(sqlite3 -readonly /home/clp/htdocs/app/data/db.sq3 \
+           "SELECT user FROM site WHERE domain_name = '$dom';" 2>/dev/null)
+  want_uid=$(id -u "$want" 2>/dev/null || echo "")
+  got_uid=$(docker inspect "$running" --format '{{.Config.User}}' 2>/dev/null | cut -d: -f1)
+
+  if [[ -n $want_uid && $got_uid == "$want_uid" ]]; then
+    printf '  ok    %s runs as %s (uid %s)\n' "$dom" "$want" "$want_uid"; (( pass++ ))
+  else
+    printf '  FAIL  %s runs as uid %s, expected %s (uid %s)\n' \
+      "$dom" "${got_uid:-<image default>}" "$want" "${want_uid:-?}"; (( fail++ ))
+  fi
+
+  if (( ${want_uid:-0} >= 1000 )) && [[ $want != "clp" ]]; then
+    printf '  ok    %s is a site account, not the panel account\n' "$want"; (( pass++ ))
+  else
+    printf '  FAIL  %s is not a site account (uid %s)\n' "$want" "${want_uid:-?}"; (( fail++ ))
+  fi
+
+  # The failure this actually catches: data owned by someone the container is
+  # not, which leaves it serving reads and silently refusing every write.
+  if docker exec "$running" sh -c 'touch /app/data/.wtest && rm -f /app/data/.wtest' 2>/dev/null; then
+    printf '  ok    %s can write its own data directory\n' "$dom"; (( pass++ ))
+  else
+    printf '  FAIL  %s cannot write /app/data\n' "$dom"; (( fail++ ))
+  fi
+else
+  echo "  skip  instance identity (no running instance)"
 fi
 
 echo "== self-site guard =="

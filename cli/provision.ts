@@ -98,8 +98,19 @@ export function ensureDirs(spec: AddonSpec, user: string): void {
     mkdirSync(d, { recursive: true });
   }
   mkdirSync(spec.stateDir, { recursive: true });
-  run("chown", ["-R", `${user}:${user}`, spec.stateDir]);
+
+  // Not recursive, and deliberately so. The subdirectories of the state dir are
+  // instance storage, each owned by the site user of the instance that runs
+  // there. A `chown -R` here hands all of them to the manager, at which point
+  // every container loses the ability to write its own database -- and since
+  // `repair` calls this and the reconcile timer calls `repair`, it would do so
+  // again every fifteen minutes. The wrapper owns instance directories; this
+  // function owns the manager's own files and nothing below them.
+  run("chown", [`${user}:${user}`, spec.stateDir]);
   run("chmod", ["750", spec.stateDir]);
+
+  const appDb = `${spec.stateDir}/app.db`;
+  if (existsSync(appDb)) run("chown", [`${user}:${user}`, appDb]);
 
   // The snapshot is customer data: the app's group reads it, nobody else.
   const snapshot = `${STATE_DIR}/snapshot.json`;

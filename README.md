@@ -64,12 +64,25 @@ after a CloudPanel update wipes it. There is deliberately one implementation of
 | `clp-addons` CLI | root, on demand | installer and reconciler |
 | `instatic-app-linux-x64` | the addon site's CloudPanel user | manager UI, bound to `127.0.0.1:38080` |
 | `clp-action-instatic` | root, via one sudoers line | the privilege boundary |
-| Instatic instances | container `bun` user | one container per site, `127.0.0.1:39000-39999` |
+| Instatic instances | that instance's CloudPanel site user | one container per site, `127.0.0.1:39000-39999` |
 
 The manager runs as the user CloudPanel already created for the addon's own
 site, rather than an account this installer invents. One account per addon site
 instead of two, and CloudPanel owns its lifecycle: deleting the site removes the
 user.
+
+The same rule applies one level down. Every Instatic instance is a CloudPanel
+site, so every instance has its own site user, and the container is started with
+`--user` set to that account. Two instances on the same box therefore cannot
+read each other's databases, and no instance runs as the panel's own account.
+Without `--user` a container runs as the uid baked into its image -- 1000 for
+the Instatic image, which on a CloudPanel box is `clp`, the account that owns
+the panel and its database.
+
+Because docker fixes a container's configuration when it is created, restarting
+an instance built by an older release will not move it onto its site user.
+`clp-action-instatic recreate --domain=<host>` rebuilds the container from the
+tag already recorded, without touching the data.
 
 That account is given a login shell and a password by CloudPanel so operators
 can use SFTP. The installer disables both, because the addon's site is a pure

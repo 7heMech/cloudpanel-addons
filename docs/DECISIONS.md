@@ -93,6 +93,32 @@ This is the one place the design deliberately hardens something CloudPanel set
 up, rather than leaving panel-managed state alone. It is worth the exception
 because the alternative is a documented escalation path.
 
+## Instances run as their own site user too
+
+The first pass at decision 2.4 changed only the manager. Instances kept the uid
+baked into the Instatic image, and the wrapper chowned their data to `1000:1000`
+to match it. On a CloudPanel box uid 1000 is `clp`, the account that owns the
+panel and `db.sq3`, so every instance's data belonged to the panel's own
+identity and all instances shared one.
+
+Each instance already has a CloudPanel site, and therefore a site user. That
+account is now the instance's identity: `docker run --user <uid>:<gid>`, with
+`data` and `uploads` owned by it. The uid is read from the `site` table rather
+than derived from the domain, because a site the addon adopted keeps whatever
+user it already had. `instatic.env` stays root-owned: it holds the master key,
+and the site user has SFTP.
+
+Ownership is re-applied on every container start rather than only at create.
+The failure it prevents is quiet — a container that cannot write its database
+still answers `GET /`, so the health check passes and the instance looks fine
+until someone tries to save something. `tools/test-wrapper.sh` asserts the
+running container's uid matches the panel's record and that it can actually
+write, because neither is visible from the outside.
+
+Docker fixes a container's configuration at creation, so restarting an instance
+built by an older release will not move it. The `recreate` verb rebuilds it
+from the recorded tag, leaving the data in place.
+
 ## The app has no Docker access
 
 Membership in the `docker` group is equivalent to root: a member can start a

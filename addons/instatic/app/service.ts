@@ -17,6 +17,9 @@ const SUDO_BIN = "/usr/bin/sudo";
 const TIMEOUTS: Record<string, number> = {
   create: 300_000,
   update: 300_000,
+  // recreate does not pull, but it does chown the instance's data and then
+  // wait on the same health check as create.
+  recreate: 180_000,
   delete: 180_000,
   snapshot: 120_000,
 };
@@ -146,7 +149,15 @@ export const instaticService = {
     return res;
   },
 
-  async lifecycle(domain: string, verb: "start" | "stop" | "restart"): Promise<WrapperResult> {
+  /**
+   * `recreate` is in here rather than beside `update` because it changes no
+   * version: it rebuilds the container from the tag already recorded. Docker
+   * bakes a container's configuration in at creation, so an instance created
+   * by an older release keeps that configuration through any number of
+   * restarts, and rebuilding is the only way to pick up a change such as the
+   * uid the container runs as.
+   */
+  async lifecycle(domain: string, verb: "start" | "stop" | "restart" | "recreate"): Promise<WrapperResult> {
     const res = await callWrapper(verb, ["--domain", domain]);
     if (res.ok) instanceRepo.updateStatus(domain, verb === "stop" ? "exited" : "running");
     return res;

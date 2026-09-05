@@ -138,6 +138,80 @@ panel_site_exists() {
   [[ ${n:-0} -gt 0 ]]
 }
 
+# The identity an instance runs as.
+#
+# CloudPanel creates exactly one system user per site and records it in the
+# site table, which is therefore the source of truth: meta.json can drift, the
+# panel row cannot. The container is started under this uid and the instance's
+# data is owned by it, so two instances on the same box cannot read each
+# other's databases.
+#
+# Nothing here falls back to a default. Guessing an owner is how instance data
+# ended up belonging to uid 1000, which on a CloudPanel box is `clp` -- the
+# account that owns the panel itself and its database.
+site_user_of() {
+  [[ -r $PANEL_DB ]] || return 1
+  local user
+  user=$(sqlite3 -readonly "$PANEL_DB" \
+           "SELECT user FROM site WHERE domain_name = '$1';" 2>/dev/null) || return 1
+  [[ -n $user ]] || return 1
+  printf '%s' "$user"
+}
+
+# Sets INSTANCE_OWNER to "uid:gid" for the instance's site user, or fails.
+#
+# A global rather than a return value on purpose. Written as
+# `owner=$(instance_owner ...)` the body runs in a subshell, so emit_err's JSON
+# is captured into the variable instead of reaching stdout and its `exit 1`
+# only leaves the subshell -- set -e then kills the script with no output at
+# all. Any helper that can call emit_err must not be used in a command
+# substitution.
+INSTANCE_OWNER=""
+resolve_owner() {
+  local domain=$1 user uid gid
+  INSTANCE_OWNER=""
+
+  user=$(site_user_of "$domain") || user=""
+  if [[ -z $user ]]; then
+    emit_err "no CloudPanel site user for ${domain}; the site must exist before the instance runs"
+  fi
+
+  uid=$(id -u "$user" 2>/dev/null) || uid=""
+  gid=$(id -g "$user" 2>/dev/null) || gid=""
+  if [[ -z $uid || -z $gid ]]; then
+    emit_err "CloudPanel lists site user '${user}' for ${domain} but the account does not exist"
+  fi
+
+  # A site user is always a regular account. Anything below 1000 is a system
+  # account, and 1000 itself is `clp`; running an instance as either would put
+  # tenant data under the panel's own identity.
+  if [[ $user == "clp" ]] || (( uid < 1000 )); then
+    emit_err "refusing to run ${domain} as '${user}' (uid ${uid}): not a site account"
+  fi
+
+  INSTANCE_OWNER="${uid}:${gid}"
+  return 0
+}
+
+# Put the instance's storage under its own site user, every time the container
+# is about to start. Doing it here rather than only at create means an instance
+# whose ownership drifted -- a restore from an archive, or a migration from an
+# older release that used a fixed uid -- is corrected on the next start rather
+# than silently losing the ability to write.
+#
+# Only data and uploads move: instatic.env holds the master key and stays
+# root-owned so the site user cannot read it over SFTP.
+enforce_ownership() {
+  local dir=$1 owner=$2
+  mkdir -p "${dir}/data" "${dir}/uploads"
+  chown -R "$owner" "${dir}/data" "${dir}/uploads"
+  chmod 750 "${dir}/data" "${dir}/uploads"
+  if [[ -f "${dir}/instatic.env" ]]; then
+    chown root:root "${dir}/instatic.env"
+    chmod 600 "${dir}/instatic.env"
+  fi
+}
+
 read_meta() {
   local file=$2
   sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$file" | head -1
@@ -198,9 +272,16 @@ ENVFILE
 
 run_container() {
   local name=$1 port=$2 tag=$3 domain=$4 dir=$5
+  resolve_owner "$domain"
+  local owner=$INSTANCE_OWNER
   ensure_env_file "$dir" "$port" "$domain"
+  enforce_ownership "$dir" "$owner"
+  # --user overrides the uid baked into the image. Without it the container
+  # runs as the image's own user, uid 1000, which the bind mounts then map onto
+  # whatever uid 1000 is on the host -- `clp` on a CloudPanel box.
   docker run -d \
     --name "$name" \
+    --user "$owner" \
     --restart unless-stopped \
     --label 'clp-addon=instatic' \
     -p "127.0.0.1:${port}:${CONTAINER_PORT}" \
@@ -315,8 +396,9 @@ cmd_create() {
   fi
 
   log "preparing instance storage"
+  # Ownership is not set here: run_container resolves the site user and applies
+  # it, so there is exactly one place that decides who an instance runs as.
   mkdir -p "${dir}/data" "${dir}/uploads" "${dir}/snapshots"
-  chown -R 1000:1000 "${dir}/data" "${dir}/uploads"
   chmod 750 "$dir" "${dir}/data" "${dir}/uploads"
 
   log "pulling ${REGISTRY_IMAGE}:${tag}"
@@ -330,9 +412,11 @@ cmd_create() {
   log "health checking"
   health_check "$port" "$domain" || emit_err "health check failed for ${domain}"
 
+  # Read back what CloudPanel actually recorded rather than re-deriving the
+  # name we asked for: if the site was adopted rather than created, the real
+  # user is whatever that site already had.
   local site_user_final
-  site_user_final=$(printf 'inst_%s' "${domain//[^a-z0-9]/}")
-  site_user_final=${site_user_final:0:15}
+  site_user_final=$(site_user_of "$domain") || site_user_final=""
 
   cat > "${dir}/meta.json" <<META
 {
@@ -352,12 +436,15 @@ META
 
 cmd_update() {
   local domain=$1 tag=$2
-  local name dir meta cur_tag cur_port snap
+  local name dir meta cur_tag cur_port snap owner
 
   name=$(container_name "$domain")
   dir=$(inst_dir "$domain")
   meta="${dir}/meta.json"
   [[ -f $meta ]] || emit_err "no such instance: ${domain}"
+
+  resolve_owner "$domain"
+  owner=$INSTANCE_OWNER
 
   cur_tag=$(read_meta tag "$meta")
   cur_port=$(read_meta port "$meta")
@@ -384,7 +471,9 @@ cmd_update() {
     docker rm -f "$name" >&2 2>/dev/null || true
     rm -rf "${dir}/data" "${dir}/uploads"
     tar -xzf "$snap" -C "$dir" >&2
-    chown -R 1000:1000 "${dir}/data" "${dir}/uploads" 2>/dev/null || true
+    # The archive carries the uids it was written with; the previous container
+    # runs as the site user, so restore its view of the data before starting it.
+    enforce_ownership "$dir" "$owner" 2>/dev/null || true
     docker rename "${name}-prev" "$name" >&2
     docker start "$name" >&2 || warn "could not restart the previous container"
   }
@@ -419,11 +508,59 @@ cmd_update() {
 
 cmd_lifecycle() {
   local action=$1 domain=$2
-  local name
+  local name dir
   name=$(container_name "$domain")
+  dir=$(inst_dir "$domain")
   container_exists "$name" || emit_err "no such container for ${domain}"
+
+  # Correct drifted ownership before handing control back to the container.
+  # A container that cannot write its database still answers GET requests and
+  # still looks healthy, so this failure mode is invisible until someone tries
+  # to save something.
+  if [[ $action != "stop" && -d $dir ]]; then
+    resolve_owner "$domain"
+    enforce_ownership "$dir" "$INSTANCE_OWNER"
+  fi
+
   docker "$action" "$name" >&2 || emit_err "docker ${action} failed for ${domain}"
   emit_ok "{\"domain\":\"${domain}\",\"action\":\"${action}\"}"
+}
+
+# Rebuild the container from the recorded tag and port, without touching the
+# data. `docker start` reuses the configuration a container was created with,
+# so an instance created by an older release keeps running under the uid baked
+# into the image no matter how many times it is restarted. Recreating is the
+# only way to change that, and it is also the general repair for a container
+# whose configuration has drifted from what the wrapper would produce today.
+cmd_recreate() {
+  local domain=$1
+  local name dir meta tag port owner
+
+  name=$(container_name "$domain")
+  dir=$(inst_dir "$domain")
+  meta="${dir}/meta.json"
+  [[ -f $meta ]] || emit_err "no such instance: ${domain}"
+
+  tag=$(read_meta tag "$meta")
+  port=$(read_meta port "$meta")
+  validate_tag "$tag"
+  validate_port "$port"
+  resolve_owner "$domain"
+  owner=$INSTANCE_OWNER
+
+  log "recreating ${name} at ${tag} as uid ${owner}"
+  docker rm -f "$name" >&2 2>/dev/null || true
+
+  if ! run_container "$name" "$port" "$tag" "$domain" "$dir"; then
+    local start_logs
+    start_logs=$(docker logs --tail 200 "$name" 2>&1 || true)
+    emit_err "failed to recreate ${domain} at ${tag}" \
+      "{\"tag\":\"${tag}\",\"logs\":$(json_str "$start_logs")}"
+  fi
+
+  health_check "$port" "$domain" || emit_err "health check failed after recreating ${domain}"
+
+  emit_ok "{\"domain\":\"${domain}\",\"tag\":\"${tag}\",\"port\":${port},\"owner\":\"${owner}\",\"status\":\"running\"}"
 }
 
 cmd_delete() {
@@ -502,7 +639,7 @@ cmd_logs() {
 # building it from raw input lets `--domain ../../..` place a root-owned file
 # anywhere on the filesystem.
 
-(( $# >= 1 )) || emit_err "usage: $0 {create|update|start|stop|restart|delete|snapshot|status|logs} [options]"
+(( $# >= 1 )) || emit_err "usage: $0 {create|update|recreate|start|stop|restart|delete|snapshot|status|logs} [options]"
 
 VERB=$1; shift
 
@@ -520,7 +657,7 @@ done
 case $VERB in
   create)                  validate_domain "$DOMAIN"; validate_port "$PORT"; validate_tag "$TAG" ;;
   update)                  validate_domain "$DOMAIN"; validate_tag "$TAG" ;;
-  start|stop|restart|snapshot|status|logs)
+  start|stop|restart|recreate|snapshot|status|logs)
                            validate_domain "$DOMAIN" ;;
   delete)                  validate_domain "$DOMAIN" ;;
   *) emit_err "unknown verb: '$VERB'" ;;
@@ -553,6 +690,7 @@ case $VERB in
   start)    cmd_lifecycle start "$DOMAIN" ;;
   stop)     cmd_lifecycle stop "$DOMAIN" ;;
   restart)  cmd_lifecycle restart "$DOMAIN" ;;
+  recreate) cmd_recreate "$DOMAIN" ;;
   delete)   cmd_delete "$DOMAIN" "$CONFIRM" ;;
   snapshot) cmd_snapshot "$DOMAIN" ;;
   status)   cmd_status "$DOMAIN" ;;
