@@ -136,7 +136,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
     tag = rel.tag;
     log.step(`installing ${spec.name} from release ${rel.tag}`);
     artifacts = await fetchVerified(rel, wantedArtifacts);
-    verifyAttestation(artifacts, flags["skip-attestation"] === true);
+    await verifyAttestation(artifacts, flags["skip-attestation"] === true);
   }
 
   ensureUser(spec);
@@ -189,7 +189,7 @@ async function cmdUpdate(argv: string[]): Promise<void> {
     }
 
     const artifacts = await fetchVerified(rel, [CLI_ARTIFACT, spec.appArtifact, spec.wrapperArtifact]);
-    verifyAttestation(artifacts, flags["skip-attestation"] === true);
+    await verifyAttestation(artifacts, flags["skip-attestation"] === true);
 
     // The wrapper is synchronous and short-lived, so draining is simple: stop
     // the app, which is the only caller, then swap.
@@ -224,7 +224,7 @@ async function cmdSelfUpdate(argv: string[]): Promise<void> {
   }
 
   const artifacts = await fetchVerified(rel, [CLI_ARTIFACT]);
-  verifyAttestation(artifacts, flags["skip-attestation"] === true);
+  await verifyAttestation(artifacts, flags["skip-attestation"] === true);
 
   // Atomic replace, so a CLI is always present even if this is interrupted.
   writeAtomic(CLI_BIN, artifacts[0]!.bytes, 0o755);
