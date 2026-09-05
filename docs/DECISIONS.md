@@ -119,6 +119,22 @@ Docker fixes a container's configuration at creation, so restarting an instance
 built by an older release will not move it. The `recreate` verb rebuilds it
 from the recorded tag, leaving the data in place.
 
+## Uninstall reverses install, and says what it will destroy
+
+`uninstall` removes the manager and un-patches the panel but leaves instances
+alone, so it cannot become an accidental way to delete a customer's site.
+`--purge` is the full reversal, and it delegates each instance to the wrapper's
+own `delete` verb rather than reimplementing the teardown: that path already
+archives the data, passes `--force` so `clpctl` cannot block on a prompt, and
+refuses to delete a site the addon did not create.
+
+Both forms print an inventory naming every instance and site they will touch,
+and refuse to act without `--yes`. "and every instance" is not something an
+operator can check against what they believe is on the box; a list of domains
+is. Whether the manager's own site is removed depends on a marker written at
+install time — if the addon adopted an existing site, that site was serving
+something first and is left in place.
+
 ## The app has no Docker access
 
 Membership in the `docker` group is equivalent to root: a member can start a

@@ -49,8 +49,19 @@ clp-addons update [<addon>|--all] [--version=vX.Y.Z]
 clp-addons self-update
 clp-addons repair [--quiet]
 clp-addons status
-clp-addons uninstall <addon> --yes
+clp-addons uninstall <addon> --yes [--purge]
 ```
+
+`uninstall` removes the service, the wrapper, the sudoers line and the panel
+patches, and deliberately stops there: instances and their data survive, so
+uninstalling the manager is not a way to lose a customer's site. `--purge` goes
+further and removes the instances too, each archived to
+`/var/backups/clp-addons/<addon>` first. Either way the command prints exactly
+what it will destroy, by name, and does nothing until you add `--yes`.
+
+A purge only deletes CloudPanel sites this addon created. A site that already
+existed when the addon adopted it was serving something first, and is left
+alone.
 
 `repair` is `install` without the download, and is idempotent. A systemd timer
 calls it every 15 minutes, which is how the panel-side nav entry comes back

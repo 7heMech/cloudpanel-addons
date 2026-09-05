@@ -4,7 +4,7 @@
 // `install` minus the download and is idempotent, so the reconciliation timer
 // calls it rather than duplicating the logic.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { ADDON_NAMES, ADDONS, CLI_BIN, CURRENT_LINK, type AddonSpec } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation } from "./release";
 import {
@@ -142,7 +142,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
 
   // The site has to exist before anything else: the account the manager runs
   // as is the one CloudPanel creates for it (decision 2.4).
-  ensureAddonSite(spec, domain);
+  const siteCreated = ensureAddonSite(spec, domain);
   const user = resolveSiteUser(domain);
   hardenSiteUser(user);
   assertNotInDockerGroup(user);
@@ -161,6 +161,13 @@ async function cmdInstall(argv: string[]): Promise<void> {
   writeAtomic(CLI_BIN, cli.bytes, 0o755);
 
   writeConfig(spec, domain, user, true);
+
+  // Remember whether the manager's site is ours to delete. `uninstall --purge`
+  // reads this: a site that already existed and was adopted was serving
+  // something before this addon arrived, and removing it would take that with
+  // it. Absent marker means "not ours", so an install predating this file is
+  // treated as adopted rather than guessed at.
+  if (siteCreated) writeAtomic(`${spec.stateDir}/.site-created-by-addon`, domain, 0o600);
 
   installUnits(spec, user);
   log.step("generating the sanitized panel snapshot");
@@ -351,16 +358,47 @@ async function cmdStatus(argv: string[]): Promise<void> {
   }
 }
 
+/**
+ * Instances the addon is managing, as the addon itself sees them: a directory
+ * under the state dir with a meta.json. Read from disk rather than from docker
+ * so an instance whose container is already gone is still accounted for.
+ */
+function listInstances(spec: AddonSpec): string[] {
+  if (!existsSync(spec.stateDir)) return [];
+  return readdirSync(spec.stateDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && existsSync(`${spec.stateDir}/${e.name}/meta.json`))
+    .map((e) => e.name)
+    .sort();
+}
+
 function cmdUninstall(argv: string[]): void {
   requireRoot("uninstall");
   const { positional, flags } = parseFlags(argv);
   const spec = resolveAddon(positional[0]);
+  const purge = flags.purge === true;
+  const instances = listInstances(spec);
+  const ownDomain = readOwnDomain(spec);
+  const ownSiteIsOurs = existsSync(`${spec.stateDir}/.site-created-by-addon`);
 
   if (flags.yes !== true) {
-    fatal(
-      `uninstall removes the service, the wrapper and the sudoers line, and un-patches the panel.\n` +
-        `  Instance containers and their data are left alone. Re-run with --yes to proceed.`
-    );
+    // Say exactly what will be destroyed, by name. "and every instance" is not
+    // something an operator can check against what they believe is on the box.
+    const plan = purge
+      ? `uninstall --purge removes the service, the wrapper, the sudoers line and the panel\n` +
+        `  patches, and then DESTROYS:\n` +
+        (instances.length
+          ? instances.map((d) => `    - instance ${d}: container, data and its CloudPanel site\n`).join("")
+          : `    - (no instances found)\n`) +
+        (ownSiteIsOurs && ownDomain
+          ? `    - the manager's own CloudPanel site ${ownDomain}\n`
+          : `    - (the manager's site is left alone: not created by this addon)\n`) +
+        `    - ${spec.stateDir}\n` +
+        `  Each instance is archived to /var/backups/clp-addons/${spec.name} first.\n` +
+        `  Re-run with --yes to proceed.`
+      : `uninstall removes the service, the wrapper and the sudoers line, and un-patches the panel.\n` +
+        `  Instance containers and their data are left alone. Re-run with --yes to proceed,\n` +
+        `  or add --purge to also remove ${instances.length} instance(s) and their sites.`;
+    fatal(plan);
   }
 
   stopUnits(spec);
@@ -368,7 +406,38 @@ function cmdUninstall(argv: string[]): void {
   for (const t of TARGETS) removeTarget(t);
   purgeTwigCache();
   log.ok("panel anchors removed and the Twig cache purged");
-  log.warn(`Left in place on purpose: ${spec.stateDir}, the addon's CloudPanel site, and every instance container.`);
+
+  if (!purge) {
+    log.warn(`Left in place on purpose: ${spec.stateDir}, the addon's CloudPanel site, and every instance container.`);
+    return;
+  }
+
+  // Instances go through the wrapper's own delete verb rather than a second
+  // implementation here. It already archives the data, refuses to delete a
+  // site it did not create, and passes --force so clpctl cannot block on a
+  // prompt -- all of which a reimplementation would have to get right again.
+  //
+  // The sudoers line is gone by now, but this runs as root and calls the
+  // script directly, so it does not need it.
+  for (const domain of instances) {
+    log.step(`removing instance ${domain}`);
+    const r = tryRun(spec.wrapperPath, ["delete", "--domain", domain, "--confirm", domain]);
+    if (!r.ok) log.warn(`could not remove ${domain}; leaving it in place`);
+  }
+
+  if (ownSiteIsOurs && ownDomain) {
+    log.step(`deleting the manager's CloudPanel site ${ownDomain}`);
+    if (!tryRun("clpctl", ["site:delete", `--domainName=${ownDomain}`, "--force"]).ok) {
+      log.warn(`clpctl site:delete failed for ${ownDomain}; remove it from the panel by hand`);
+    }
+  } else if (ownDomain) {
+    log.warn(`leaving ${ownDomain} in place: this addon did not create it`);
+  }
+
+  // Last, because everything above reads from it.
+  rmSync(spec.stateDir, { recursive: true, force: true });
+  log.ok(`${spec.name} purged`);
+  log.plain(`  Archives kept: /var/backups/clp-addons/${spec.name}`);
 }
 
 function usage(): void {
@@ -380,7 +449,7 @@ function usage(): void {
   clp-addons self-update [--version=vX.Y.Z]
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status [<addon>]
-  clp-addons uninstall <addon> --yes
+  clp-addons uninstall <addon> --yes [--purge]
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}
