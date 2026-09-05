@@ -110,15 +110,6 @@ jobs:
       id-token: write      # sign the provenance attestation
       attestations: write  # record it
     steps:
-      # gh reads the tag annotation for --notes-from-tag out of a local
-      # repository, so this job needs the tag checked out. It has to come first:
-      # actions/checkout cleans the workspace and would remove the artifact.
-      - name: Check out the tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
       - name: Download the build
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -144,6 +135,29 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Release notes come from the annotated tag, read over the API rather
+          # than with --notes-from-tag. That flag reads the annotation out of a
+          # local clone, so it needs this job to check the repository out purely
+          # to produce a paragraph of text. Asking the API removes both the
+          # checkout and the dependency on how it fetches tags.
+          notes_file="$RUNNER_TEMP/notes.md"
+          : > "$notes_file"
+
+          obj=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" \
+                  --jq '.object.sha // empty' 2>/dev/null || true)
+          if [ -n "$obj" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/git/tags/$obj" \
+              --jq '.message // empty' > "$notes_file" 2>/dev/null || : > "$notes_file"
+          fi
+
+          notes_args=(--notes-file "$notes_file")
+          if [ ! -s "$notes_file" ]; then
+            # Lightweight tag, or the lookup failed. Better a generated
+            # changelog than a release with no description at all.
+            echo "no annotation found for $TAG; falling back to generated notes"
+            notes_args=(--generate-notes)
+          fi
+
           # Re-publishing the same tag has to be safe. A cancelled run, or a tag
           # pushed at the wrong commit and then corrected, leaves a release
           # behind that would make `gh release create` fail, and recovering from
@@ -158,8 +172,7 @@ jobs:
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --title "$TAG" \
-            --notes-from-tag \
-            --verify-tag \
+            "${notes_args[@]}" \
             dist/clp-addons-linux-x64 \
             dist/instatic-app-linux-x64 \
             dist/clp-action-instatic \
