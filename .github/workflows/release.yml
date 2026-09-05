@@ -34,7 +34,12 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: "1.2.21"
+          # Must be able to read bun.lock. The lockfile is lockfileVersion 2,
+          # which older Bun cannot parse, so --frozen-lockfile below fails with
+          # a version that is merely "recent enough" by eye. Bump this and the
+          # lockfile together, never one alone, and verify the pinned version
+          # actually reads the lockfile before pushing a tag.
+          bun-version: "1.4.2"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
