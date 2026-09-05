@@ -14,8 +14,10 @@
 # To audit before running, or to pin, fetch a specific release instead:
 #
 #   curl -fsSL -O https://github.com/7heMech/cloudpanel-addons/releases/download/vX.Y.Z/install.sh
-#   gh attestation verify install.sh --repo 7heMech/cloudpanel-addons
 #   less install.sh && bash install.sh
+#
+# See the README for verifying that download's provenance without a GitHub
+# account; the same bundle-based check this script performs on the CLI binary.
 #
 # All prompts read from /dev/tty, not stdin. Under `curl | bash` stdin is the
 # pipe carrying this script, so `read` there consumes the script's own text.

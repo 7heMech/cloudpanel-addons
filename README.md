@@ -38,7 +38,16 @@ To read it before running it, or to pin the installer itself:
 
 ```bash
 curl -fsSL -O https://github.com/7heMech/cloudpanel-addons/releases/download/v0.1.2/install.sh
-gh attestation verify install.sh --repo 7heMech/cloudpanel-addons
+
+# Verify it came from this repository's release workflow. The bundle is fetched
+# from the public attestations API and checked offline, so this needs no GitHub
+# account -- `gh attestation verify` without --bundle would demand one.
+digest=$(sha256sum install.sh | cut -d' ' -f1)
+curl -fsSL "https://api.github.com/repos/7heMech/cloudpanel-addons/attestations/sha256:$digest" \
+  | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["attestations"][0]["bundle"]))' \
+  > bundle.json
+gh attestation verify install.sh --bundle bundle.json --repo 7heMech/cloudpanel-addons
+
 less install.sh && bash install.sh
 ```
 
