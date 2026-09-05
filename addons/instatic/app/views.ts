@@ -62,7 +62,17 @@ pre { background: #05090f; border: 1px solid var(--border); border-radius: 6px;
   padding: 0.8rem; overflow: auto; max-height: 55vh; font-size: 0.78rem; }
 `;
 
-const CLIENT_JS = `
+/**
+ * The dashboard's inline script.
+ *
+ * Exported only so tools/test-views.ts can parse it. This is a TypeScript
+ * template literal, which means every backslash in it is consumed once before
+ * the browser ever sees it: a `\n` written here reaches the page as a real
+ * newline, and inside a single-quoted JS string that is a SyntaxError which
+ * takes the whole script -- every button on the page -- down with it. Escapes
+ * meant for the browser must be doubled, and the test asserts they were.
+ */
+export const CLIENT_JS = `
 // The CSRF cookie is readable by this page on purpose; echoing it back in a
 // header is what proves the request came from here and not another origin.
 function csrf() {
@@ -142,7 +152,7 @@ async function confirmUpdate() {
   document.getElementById('logs-title').textContent =
     'Update failed \u2014 rolled back to ' + ((body && body.data && body.data.restoredTag) || 'the previous version');
   document.getElementById('logs-body').textContent =
-    ((body && body.error) || 'update failed') + (logs ? '\n\n--- container logs ---\n' + logs : '');
+    ((body && body.error) || 'update failed') + (logs ? '\\n\\n--- container logs ---\\n' + logs : '');
   document.getElementById('logs-dialog').showModal();
 }
 
@@ -253,6 +263,7 @@ export function dashboardView(
     <button class="btn" onclick="act('${escJs(i.domain)}','restart')">Restart</button>
     <button class="btn" onclick="askUpdate('${escJs(i.domain)}','${escJs(i.tag)}')">Update</button>
     <button class="btn" onclick="act('${escJs(i.domain)}','snapshot')">Snapshot</button>
+    <button class="btn" onclick="act('${escJs(i.domain)}','recreate')" title="Rebuild the container from the recorded version without touching the data">Recreate</button>
     <button class="btn" onclick="showLogs('${escJs(i.domain)}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${escJs(i.domain)}')">Delete</button>
   </td>

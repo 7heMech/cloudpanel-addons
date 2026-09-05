@@ -40,8 +40,22 @@ export function snapshotAgeSeconds(snap: PanelSnapshot): number {
   return Math.max(0, Math.round((Date.now() - new Date(snap.updatedAt).getTime()) / 1000));
 }
 
-export function getNextAvailablePort(snap: PanelSnapshot = readSnapshot()): number {
-  const taken = new Set(snap.allocatedPorts);
+/**
+ * The lowest free port in the reserved range.
+ *
+ * `alsoTaken` exists because the snapshot is not live: it is rewritten by the
+ * root CLI on install and repair, so between reconciliation runs it does not
+ * know about instances created since. Two instances created in the same
+ * fifteen-minute window would otherwise both be offered the same port, and the
+ * second create would die on `docker run` failing to bind it. Callers pass the
+ * ports they have already handed out, which is exactly what the snapshot is
+ * stale about.
+ */
+export function getNextAvailablePort(
+  snap: PanelSnapshot = readSnapshot(),
+  alsoTaken: Iterable<number> = []
+): number {
+  const taken = new Set([...snap.allocatedPorts, ...alsoTaken]);
   const { min, max } = snap.portRange ?? PORT_RANGE;
   for (let p = min; p <= max; p++) {
     if (!taken.has(p)) return p;

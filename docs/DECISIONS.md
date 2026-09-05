@@ -167,6 +167,26 @@ position. A bundle is signed and bound to its subject's digest, so an attacker
 who can replace a release asset cannot produce one that verifies against the
 replacement -- the failure mode is a refused install, not a silent accept.
 
+## The dashboard's inline script is syntax-checked in CI
+
+The client-side script is a TypeScript template literal interpolated into the
+page, which means TypeScript consumes one level of backslash before a browser
+ever sees it. A `\n` written for the browser arrives as a real newline, and
+inside a single-quoted JavaScript string that is a SyntaxError.
+
+The consequence is out of all proportion to the typo: the error takes down the
+entire `<script>` element, so every handler on the page is undefined and every
+button silently does nothing. Nothing else notices. The server renders, the
+routes answer, the wrapper works, the tests pass -- the failure is visible only
+in a browser console. It shipped, and the dashboard's buttons were dead through
+four releases while the wrapper underneath them was being exercised directly.
+
+`tools/test-app.ts` compiles the script with the `Function` constructor, which
+parses without executing, and separately reports any line that leaves a quote
+open so the failure names a line rather than an offset into a 4 KB blob. It
+runs in CI. Escapes intended for the browser must be doubled, and this is what
+enforces that.
+
 ## Uninstall reverses install, and says what it will destroy
 
 `uninstall` removes the manager and un-patches the panel but leaves instances

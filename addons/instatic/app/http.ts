@@ -64,7 +64,18 @@ export function guardMutation(req: Request): Response | null {
   const sent = req.headers.get(CSRF_HEADER);
   const cookie = readCookie(req, CSRF_COOKIE);
   if (!sent || !cookie || !constantTimeEquals(sent, cookie)) {
-    return Response.json({ ok: false, error: "CSRF token missing or mismatched" }, { status: 403 });
+    // The cookie is set Secure, so a browser on plain http never stores it and
+    // every mutation lands here. That is the state a fresh install is in until
+    // the certificate step, which makes this the most likely reason by far --
+    // worth saying, because "CSRF token mismatched" sends people looking in
+    // entirely the wrong place.
+    return Response.json({
+      ok: false,
+      error: cookie
+        ? "CSRF token mismatched; reload the page and try again"
+        : "CSRF cookie missing. It is set Secure, so it is not stored over plain http — " +
+          "issue a certificate for this site and use https.",
+    }, { status: 403 });
   }
 
   return null;

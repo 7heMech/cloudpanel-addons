@@ -38,6 +38,12 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Unit checks: client script and port allocation
+        # It lives in a TypeScript template literal, so a stray escape reaches
+        # the browser as a broken string and silently kills every button on the
+        # page. Nothing else notices: the server still renders and answers.
+        run: bun run test:app
+
       - name: Lint the wrapper scripts
         # The wrapper is the privilege boundary. A shellcheck finding there is
         # a merge blocker, not a style note.

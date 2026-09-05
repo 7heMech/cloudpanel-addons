@@ -99,7 +99,9 @@ export const instaticService = {
   },
 
   nextPort(): number {
-    return getNextAvailablePort();
+    // The instance table is authoritative for ports this manager handed out,
+    // including ones created since the snapshot was last written.
+    return getNextAvailablePort(readSnapshot(), instanceRepo.getAll().map((r) => r.port));
   },
 
   // Live container state comes from the wrapper's status verb, one call per
