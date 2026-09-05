@@ -1,0 +1,546 @@
+#!/usr/bin/env bash
+# =============================================================================
+# clp-action-instatic
+#
+# The privilege boundary for the Instatic addon. Runs as root via a single
+# sudoers line granting the unprivileged app user this one script and nothing
+# else. Everything this script permits, the app user can do as root, so the
+# argument validation below is the whole security model.
+#
+# Rules this file must keep (see brief section 7):
+#   - validate before acting, and reject rather than sanitize
+#   - build argv arrays and exec directly; never sh -c, eval, or backticks
+#   - no free-form arguments: no paths, no filenames, no registry host
+#   - the image registry is hardcoded here; only the tag comes from outside
+#   - machine-readable JSON on stdout, human-readable progress on stderr
+# =============================================================================
+set -euo pipefail
+
+# Hardcoded on purpose. A caller must never be able to point this at another
+# registry, or the verb list stops being a closed set.
+readonly REGISTRY_IMAGE="ghcr.io/corebunch/instatic"
+readonly CONTAINER_PORT=3001
+
+readonly LOCK_DIR="/run/lock/clp-addons"
+readonly DATA_BASE_DIR="/var/lib/clp-addons/instatic"
+readonly ADDON_CONFIG="/etc/clp-addons/instatic.conf"
+readonly BACKUP_DIR="/var/backups/clp-addons/instatic"
+readonly PANEL_DB="/home/clp/htdocs/app/data/db.sq3"
+readonly CLPCTL="/usr/bin/clpctl"
+
+readonly PORT_MIN=39000
+readonly PORT_MAX=39999
+
+# Seconds to wait for a container to answer before declaring it unhealthy.
+readonly HEALTH_TIMEOUT=60
+
+log()  { printf '[instatic] %s\n' "$*" >&2; }
+warn() { printf '[instatic] WARN: %s\n' "$*" >&2; }
+
+# stdout is a machine-readable contract. Everything else goes to stderr.
+emit_ok() {
+  printf '{"ok":true,"data":%s}\n' "${1:-null}"
+}
+
+emit_err() {
+  local msg="$1"
+  printf '[instatic] ERROR: %s\n' "$msg" >&2
+  printf '{"ok":false,"error":%s}\n' "$(json_str "$msg")"
+  exit "${2:-1}"
+}
+
+# Quote a string as a JSON scalar without shelling out to jq, so the error path
+# still works on a box where jq is missing.
+json_str() {
+  local s=${1//$'\033'/}
+  s=$(printf '%s' "$s" | tr -d '\000-\010\013\014\016-\037')
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\t'/\\t}
+  s=${s//$'\r'/\\r}
+  printf '"%s"' "$s"
+}
+
+# --- validation -------------------------------------------------------------
+# Every one of these rejects. None of them rewrite their input: a sanitizer
+# that silently corrects a hostile value hides the attempt, and eventually
+# corrects it wrong.
+
+validate_domain() {
+  local d=$1
+  [[ -n $d ]] || emit_err "missing --domain"
+  (( ${#d} <= 253 )) || emit_err "domain too long"
+  local re='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'
+  [[ $d =~ $re ]] || emit_err "invalid domain: '$d'"
+
+  # An instance must never be able to act on the site serving the addon itself,
+  # or the UI can delete the vhost it is being served through.
+  if [[ -r $ADDON_CONFIG ]]; then
+    local own
+    # Read the value, never source the file: sourcing turns a config write into
+    # root code execution.
+    own=$(sed -n 's/^[[:space:]]*OWN_DOMAIN[[:space:]]*=[[:space:]]*"\?\([^"#]*\)"\?.*/\1/p' \
+          "$ADDON_CONFIG" | tail -1 | tr -d '[:space:]')
+    if [[ -n $own && $d == "$own" ]]; then
+      emit_err "refusing to act on the addon's own site: '$d'"
+    fi
+  fi
+  # Explicit success: a bare `[[ ]] && ...` here would return 1 when the
+  # condition is false, and set -e would abort the run with no output.
+  return 0
+}
+
+validate_port() {
+  local p=$1
+  [[ -n $p ]] || emit_err "missing --port"
+  [[ $p =~ ^[0-9]{1,5}$ ]] || emit_err "port must be an integer: '$p'"
+  (( 10#$p >= PORT_MIN && 10#$p <= PORT_MAX )) \
+    || emit_err "port $p outside reserved range ${PORT_MIN}-${PORT_MAX}"
+  return 0
+}
+
+validate_tag() {
+  local t=$1
+  [[ -n $t ]] || emit_err "missing --tag"
+  # Instatic is 0.0.x. Pin an exact version; a floating tag makes "what is
+  # running" unanswerable and rollback impossible (decision 2.8).
+  [[ $t =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || emit_err "tag must be an exact version like 0.0.18, got: '$t'"
+  return 0
+}
+
+# --- helpers ----------------------------------------------------------------
+
+container_name() { printf 'instatic-%s' "$1"; }
+inst_dir()       { printf '%s/%s' "$DATA_BASE_DIR" "$1"; }
+
+container_exists() {
+  docker ps -a --format '{{.Names}}' | grep -Fxq "$1"
+}
+
+# Read-only, and the domain has already passed validate_domain, so it holds
+# nothing but [a-z0-9.-] by the time it reaches this string. sqlite3's CLI has
+# no bind parameters; the validation gate is what makes this safe.
+panel_site_exists() {
+  [[ -r $PANEL_DB ]] || return 1
+  local n
+  n=$(sqlite3 -readonly "$PANEL_DB" \
+        "SELECT COUNT(*) FROM site WHERE domain_name = '$1';" 2>/dev/null) || return 1
+  [[ ${n:-0} -gt 0 ]]
+}
+
+read_meta() {
+  local file=$2
+  sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$file" | head -1
+}
+
+# A password we generate and never print. Avoids the `tr | head` SIGPIPE trap,
+# which under `set -o pipefail` aborts the script instead of returning a value.
+gen_password() {
+  local raw
+  raw=$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')
+  printf 'Aa1%s!' "${raw:0:16}"
+}
+
+# Per-instance environment, including the master key.
+#
+# The image runs NODE_ENV=production, where Instatic refuses to boot without
+# INSTATIC_SECRET_KEY. The key encrypts recoverable secrets such as API keys
+# and TOTP seeds, so it is generated once and never rotated by an update:
+# a new key leaves every previously encrypted row unreadable.
+#
+# Passed via --env-file rather than -e so the value never appears in the
+# process arguments, where any local user could read it out of ps.
+ensure_env_file() {
+  local dir=$1 port=$2 domain=$3
+  local file="${dir}/instatic.env"
+
+  if [[ -f $file ]]; then
+    # Refresh only the values that legitimately change, and never the key.
+    local key
+    key=$(sed -n 's/^INSTATIC_SECRET_KEY=//p' "$file" | head -1)
+    [[ -n $key ]] || emit_err "instatic.env for ${domain} has no INSTATIC_SECRET_KEY; refusing to generate a new one over existing data"
+    write_env_file "$file" "$key" "$port" "$domain"
+    return
+  fi
+
+  log "generating a master key for ${domain}"
+  write_env_file "$file" "$(head -c 32 /dev/urandom | base64 -w0)" "$port" "$domain"
+}
+
+write_env_file() {
+  local file=$1 key=$2 port=$3 domain=$4
+  local tmp="${file}.tmp"
+  # 0600 root: the key is the instance's secret at rest.
+  ( umask 077
+    cat > "$tmp" <<ENVFILE
+PORT=${CONTAINER_PORT}
+NODE_ENV=production
+DATABASE_URL=sqlite:/app/data/instatic.db
+UPLOADS_DIR=/app/uploads
+INSTATIC_SECRET_KEY=${key}
+PUBLIC_ORIGIN=https://${domain}
+VITE_ALLOWED_ORIGIN=https://${domain}
+ENVFILE
+  )
+  chmod 600 "$tmp"
+  mv "$tmp" "$file"
+}
+
+run_container() {
+  local name=$1 port=$2 tag=$3 domain=$4 dir=$5
+  ensure_env_file "$dir" "$port" "$domain"
+  docker run -d \
+    --name "$name" \
+    --restart unless-stopped \
+    --label 'clp-addon=instatic' \
+    -p "127.0.0.1:${port}:${CONTAINER_PORT}" \
+    --env-file "${dir}/instatic.env" \
+    -v "${dir}/data:/app/data" \
+    -v "${dir}/uploads:/app/uploads" \
+    "${REGISTRY_IMAGE}:${tag}" >&2
+}
+
+# Poll the container directly for readiness, then confirm the page is actually
+# reachable through nginx on the real hostname (decision 2.10). --resolve keeps
+# the request on this box regardless of what public DNS says.
+health_check() {
+  local port=$1 domain=$2 i code
+  for (( i = 0; i < HEALTH_TIMEOUT; i++ )); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 \
+             "http://127.0.0.1:${port}/" || true)
+    [[ $code =~ ^[23] ]] && break
+    sleep 1
+  done
+  [[ $code =~ ^[23] ]] || { warn "container did not answer on 127.0.0.1:${port} (last: ${code:-none})"; return 1; }
+
+  for (( i = 0; i < 15; i++ )); do
+    code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 5 \
+             --resolve "${domain}:443:127.0.0.1" "https://${domain}/" || true)
+    [[ $code =~ ^[23] ]] && return 0
+    sleep 1
+  done
+  warn "container is up but nginx did not serve ${domain} (last: ${code:-none})"
+  return 1
+}
+
+# Consistent copy of a live instance. sqlite3 .backup rather than cp or tar over
+# the raw file, which can capture a database mid-write (decision 2.10).
+make_snapshot() {
+  local dir=$1 out=$2 stage f base
+  stage=$(mktemp -d "${dir}/.snap.XXXXXX")
+
+  mkdir -p "$stage/data"
+  if [[ -d ${dir}/data ]]; then
+    for f in "${dir}"/data/*; do
+      [[ -f $f ]] || continue
+      base=$(basename "$f")
+      # -wal and -shm are folded into the .backup output; copying them
+      # alongside it would restore a torn pair.
+      [[ $base == *-wal || $base == *-shm ]] && continue
+      if [[ $(head -c 15 "$f" 2>/dev/null) == "SQLite format 3" ]]; then
+        sqlite3 "$f" ".backup '${stage}/data/${base}'" \
+          || { rm -rf "$stage"; emit_err "sqlite backup failed for ${base}"; }
+      else
+        cp -a "$f" "$stage/data/"
+      fi
+    done
+  fi
+
+  # Uploads are inert files, so a plain copy is consistent enough.
+  if [[ -d ${dir}/uploads ]]; then cp -a "${dir}/uploads" "$stage/uploads"; fi
+
+  # The master key travels with the data. A restored database without it has
+  # unreadable secret columns, which makes the snapshot useless for recovery.
+  if [[ -f ${dir}/instatic.env ]]; then cp -a "${dir}/instatic.env" "$stage/instatic.env"; fi
+
+  tar -czf "$out" -C "$stage" . >&2
+  rm -rf "$stage"
+}
+
+# --- verbs ------------------------------------------------------------------
+
+cmd_create() {
+  local domain=$1 port=$2 tag=$3
+  local name dir site_created=0
+
+  name=$(container_name "$domain")
+  dir=$(inst_dir "$domain")
+
+  container_exists "$name" && emit_err "container '$name' already exists"
+  [[ -e ${dir}/meta.json ]] && emit_err "instance '$domain' already exists"
+
+  # Partial-failure cleanup, unwound in reverse. Anything created before the
+  # failure point is removed; anything that already existed is left alone.
+  cleanup_on_error() {
+    local rc=$?
+    (( rc == 0 )) && return 0
+    warn "create failed, unwinding"
+    docker rm -f "$name" >&2 2>/dev/null || true
+    if (( site_created == 1 )); then
+      warn "removing the CloudPanel site this run created"
+      "$CLPCTL" site:delete --domainName="$domain" --force >&2 2>/dev/null || true
+    fi
+    rm -rf "$dir"
+    return $rc
+  }
+  trap cleanup_on_error EXIT
+
+  if panel_site_exists "$domain"; then
+    # Adopt it rather than failing, but remember we did not create it so the
+    # cleanup path never deletes a site that was already serving something.
+    log "CloudPanel site ${domain} already exists; adopting it"
+  else
+    log "creating CloudPanel reverse-proxy site for ${domain}"
+    local site_user
+    site_user=$(printf 'inst_%s' "${domain//[^a-z0-9]/}")
+    site_user=${site_user:0:15}
+    if ! "$CLPCTL" site:add:reverse-proxy \
+           --domainName="$domain" \
+           --reverseProxyUrl="http://127.0.0.1:${port}" \
+           --siteUser="$site_user" \
+           --siteUserPassword="$(gen_password)" >&2; then
+      emit_err "clpctl site:add:reverse-proxy failed for ${domain}"
+    fi
+    site_created=1
+  fi
+
+  log "preparing instance storage"
+  mkdir -p "${dir}/data" "${dir}/uploads" "${dir}/snapshots"
+  chown -R 1000:1000 "${dir}/data" "${dir}/uploads"
+  chmod 750 "$dir" "${dir}/data" "${dir}/uploads"
+
+  log "pulling ${REGISTRY_IMAGE}:${tag}"
+  docker pull "${REGISTRY_IMAGE}:${tag}" >&2 \
+    || emit_err "failed to pull ${REGISTRY_IMAGE}:${tag}"
+
+  log "starting ${name} on 127.0.0.1:${port}"
+  run_container "$name" "$port" "$tag" "$domain" "$dir" \
+    || emit_err "failed to start container ${name}"
+
+  log "health checking"
+  health_check "$port" "$domain" || emit_err "health check failed for ${domain}"
+
+  local site_user_final
+  site_user_final=$(printf 'inst_%s' "${domain//[^a-z0-9]/}")
+  site_user_final=${site_user_final:0:15}
+
+  cat > "${dir}/meta.json" <<META
+{
+  "domain": "${domain}",
+  "port": ${port},
+  "tag": "${tag}",
+  "container": "${name}",
+  "siteUser": "${site_user_final}",
+  "siteCreatedByAddon": $( (( site_created == 1 )) && echo true || echo false ),
+  "createdAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+META
+
+  trap - EXIT
+  emit_ok "{\"domain\":\"${domain}\",\"port\":${port},\"tag\":\"${tag}\",\"container\":\"${name}\",\"siteUser\":\"${site_user_final}\",\"status\":\"running\"}"
+}
+
+cmd_update() {
+  local domain=$1 tag=$2
+  local name dir meta cur_tag cur_port snap
+
+  name=$(container_name "$domain")
+  dir=$(inst_dir "$domain")
+  meta="${dir}/meta.json"
+  [[ -f $meta ]] || emit_err "no such instance: ${domain}"
+
+  cur_tag=$(read_meta tag "$meta")
+  cur_port=$(read_meta port "$meta")
+  [[ $cur_port =~ ^[0-9]+$ ]] || emit_err "instance metadata is corrupt for ${domain}"
+  [[ $cur_tag == "$tag" ]] && emit_err "already running tag ${tag}"
+
+  log "snapshotting before update"
+  mkdir -p "${dir}/snapshots"
+  snap="${dir}/snapshots/pre-update-${cur_tag}-$(date +%Y%m%d%H%M%S).tar.gz"
+  make_snapshot "$dir" "$snap"
+
+  log "pulling ${REGISTRY_IMAGE}:${tag}"
+  docker pull "${REGISTRY_IMAGE}:${tag}" >&2 \
+    || emit_err "failed to pull ${REGISTRY_IMAGE}:${tag}"
+
+  # Keep the old container around under a second name so rollback is a rename
+  # rather than a rebuild.
+  docker stop "$name" >&2 || true
+  docker rm -f "${name}-prev" >&2 2>/dev/null || true
+  docker rename "$name" "${name}-prev" >&2
+
+  rollback() {
+    warn "rolling back to ${cur_tag}"
+    docker rm -f "$name" >&2 2>/dev/null || true
+    rm -rf "${dir}/data" "${dir}/uploads"
+    tar -xzf "$snap" -C "$dir" >&2
+    chown -R 1000:1000 "${dir}/data" "${dir}/uploads" 2>/dev/null || true
+    docker rename "${name}-prev" "$name" >&2
+    docker start "$name" >&2 || warn "could not restart the previous container"
+  }
+
+  if ! run_container "$name" "$cur_port" "$tag" "$domain" "$dir"; then
+    rollback
+    emit_err "failed to start ${tag}; rolled back to ${cur_tag}"
+  fi
+
+  if ! health_check "$cur_port" "$domain"; then
+    log "capturing failed container logs before rollback"
+    docker logs --tail 200 "$name" >&2 2>&1 || true
+    rollback
+    emit_err "health check failed on ${tag}; rolled back to ${cur_tag}"
+  fi
+
+  docker rm -f "${name}-prev" >&2 2>/dev/null || true
+
+  local tmp
+  tmp=$(mktemp "${dir}/.meta.XXXXXX")
+  sed -e "s/\"tag\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"tag\": \"${tag}\"/" "$meta" > "$tmp"
+  mv "$tmp" "$meta"
+
+  emit_ok "{\"domain\":\"${domain}\",\"previousTag\":\"${cur_tag}\",\"newTag\":\"${tag}\",\"status\":\"running\"}"
+}
+
+cmd_lifecycle() {
+  local action=$1 domain=$2
+  local name
+  name=$(container_name "$domain")
+  container_exists "$name" || emit_err "no such container for ${domain}"
+  docker "$action" "$name" >&2 || emit_err "docker ${action} failed for ${domain}"
+  emit_ok "{\"domain\":\"${domain}\",\"action\":\"${action}\"}"
+}
+
+cmd_delete() {
+  local domain=$1 confirm=$2
+  [[ -n $confirm ]] || emit_err "missing --confirm"
+  [[ $domain == "$confirm" ]] || emit_err "--confirm must equal --domain"
+
+  local name dir created
+  name=$(container_name "$domain")
+  dir=$(inst_dir "$domain")
+
+  log "removing container ${name}"
+  docker rm -f "$name" >&2 2>/dev/null || true
+
+  # Only delete the panel site if this addon created it.
+  created=$([[ -f ${dir}/meta.json ]] && read_meta siteCreatedByAddon "${dir}/meta.json" || echo "")
+  if [[ $created == "true" ]]; then
+    log "deleting CloudPanel site ${domain}"
+    # --force is required: without it clpctl prompts and blocks forever, which
+    # leaves the site row and its vhost orphaned.
+    "$CLPCTL" site:delete --domainName="$domain" --force >&2 || warn "clpctl site:delete failed"
+  else
+    log "leaving CloudPanel site ${domain} in place (not created by this addon)"
+  fi
+
+  if [[ -d $dir ]]; then
+    log "archiving instance data before purge"
+    mkdir -p "$BACKUP_DIR"
+    make_snapshot "$dir" "${BACKUP_DIR}/${domain}-deleted-$(date +%Y%m%d%H%M%S).tar.gz" || warn "final archive failed"
+    rm -rf "$dir"
+  fi
+
+  emit_ok "{\"domain\":\"${domain}\",\"status\":\"deleted\"}"
+}
+
+cmd_snapshot() {
+  local domain=$1 dir out
+  dir=$(inst_dir "$domain")
+  [[ -d $dir ]] || emit_err "no such instance: ${domain}"
+  mkdir -p "${dir}/snapshots"
+  out="${dir}/snapshots/snapshot-$(date +%Y%m%d%H%M%S).tar.gz"
+  make_snapshot "$dir" "$out"
+  emit_ok "{\"domain\":\"${domain}\",\"snapshot\":\"${out}\"}"
+}
+
+# status and logs exist so the app never needs docker access of its own.
+# Membership in the docker group is equivalent to root, which would make every
+# other restriction in this file decorative.
+cmd_status() {
+  local domain=$1 name state
+  name=$(container_name "$domain")
+  # docker inspect emits a bare newline on stdout before failing for an
+  # absent container, which would put a line break inside the JSON and break
+  # the one-object-per-run contract on stdout.
+  # `|| true` is required: docker inspect exits non-zero for an absent
+  # container, and under pipefail that status would abort the assignment.
+  state=$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null | tr -d '[:space:]' || true)
+  [[ -n $state ]] || state="absent"
+  emit_ok "{\"domain\":\"${domain}\",\"container\":\"${name}\",\"state\":\"${state}\"}"
+}
+
+cmd_logs() {
+  local domain=$1 name
+  name=$(container_name "$domain")
+  container_exists "$name" || emit_err "no such container for ${domain}"
+  # Logs are the one verb whose payload is free-form text, so it goes to stdout
+  # as a JSON string rather than raw, keeping the stdout contract intact.
+  local body
+  body=$(docker logs --tail 200 "$name" 2>&1 || true)
+  printf '{"ok":true,"data":{"domain":"%s","logs":%s}}\n' "$domain" "$(json_str "$body")"
+}
+
+# --- argument parsing -------------------------------------------------------
+# Parsed and validated in full before anything is created, locked, or touched.
+# The lock path in particular is derived only from an already-validated domain:
+# building it from raw input lets `--domain ../../..` place a root-owned file
+# anywhere on the filesystem.
+
+(( $# >= 1 )) || emit_err "usage: $0 {create|update|start|stop|restart|delete|snapshot|status|logs} [options]"
+
+VERB=$1; shift
+
+DOMAIN=""; PORT=""; TAG=""; CONFIRM=""
+while (( $# > 0 )); do
+  case $1 in
+    --domain)  [[ $# -ge 2 ]] || emit_err "--domain needs a value";  DOMAIN=$2;  shift 2 ;;
+    --port)    [[ $# -ge 2 ]] || emit_err "--port needs a value";    PORT=$2;    shift 2 ;;
+    --tag)     [[ $# -ge 2 ]] || emit_err "--tag needs a value";     TAG=$2;     shift 2 ;;
+    --confirm) [[ $# -ge 2 ]] || emit_err "--confirm needs a value"; CONFIRM=$2; shift 2 ;;
+    *) emit_err "unknown argument: '$1'" ;;
+  esac
+done
+
+case $VERB in
+  create)                  validate_domain "$DOMAIN"; validate_port "$PORT"; validate_tag "$TAG" ;;
+  update)                  validate_domain "$DOMAIN"; validate_tag "$TAG" ;;
+  start|stop|restart|snapshot|status|logs)
+                           validate_domain "$DOMAIN" ;;
+  delete)                  validate_domain "$DOMAIN" ;;
+  *) emit_err "unknown verb: '$VERB'" ;;
+esac
+
+# Reject arguments the verb does not take, so a typo cannot be silently ignored.
+# `if` rather than `[[ ]] && emit_err`: the latter evaluates to false when the
+# argument is legitimately absent, and set -e would abort on the case's status.
+case $VERB in
+  create) ;;
+  update)
+    if [[ -n $PORT ]]; then emit_err "update does not take --port"; fi ;;
+  delete)
+    if [[ -n $PORT || -n $TAG ]]; then emit_err "delete takes only --domain and --confirm"; fi ;;
+  *)
+    if [[ -n $PORT || -n $TAG || -n $CONFIRM ]]; then emit_err "${VERB} takes only --domain"; fi ;;
+esac
+
+mkdir -p "$LOCK_DIR" "$DATA_BASE_DIR"
+chmod 700 "$LOCK_DIR"
+
+# One lock per domain, held for the whole run. Without it two concurrent
+# updates interleave a snapshot with a restart.
+exec 200>"${LOCK_DIR}/${DOMAIN}.lock"
+flock -w 300 200 || emit_err "another operation is already running for ${DOMAIN}"
+
+case $VERB in
+  create)   cmd_create "$DOMAIN" "$PORT" "$TAG" ;;
+  update)   cmd_update "$DOMAIN" "$TAG" ;;
+  start)    cmd_lifecycle start "$DOMAIN" ;;
+  stop)     cmd_lifecycle stop "$DOMAIN" ;;
+  restart)  cmd_lifecycle restart "$DOMAIN" ;;
+  delete)   cmd_delete "$DOMAIN" "$CONFIRM" ;;
+  snapshot) cmd_snapshot "$DOMAIN" ;;
+  status)   cmd_status "$DOMAIN" ;;
+  logs)     cmd_logs "$DOMAIN" ;;
+esac
