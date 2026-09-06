@@ -167,6 +167,58 @@ position. A bundle is signed and bound to its subject's digest, so an attacker
 who can replace a release asset cannot produce one that verifies against the
 replacement -- the failure mode is a refused install, not a silent accept.
 
+## The platform owns the panel templates; addons only supply markup
+
+The injector used to live inside the Instatic addon, and `cli/index.ts`
+imported it directly. That read as untidy layering. It was worse than untidy:
+two addons could not coexist, and none of it was visible with one installed.
+
+Pristine state was keyed by the addon's target rather than by the template. So
+the second addon to install snapshotted a file that already contained the first
+addon's block -- with that block stripped as if it were its own, because the
+markers were a module-level constant naming Instatic. Reconstructed against the
+real code, with two synthetic addons patching one template:
+
+    both installed        : A=false B=true
+    uninstall addon A     : A=false B=false
+    B reconciles (15 min) : A=false B=true
+    A reconciles (15 min) : A=true  B=false
+
+Installing B silently deleted A's nav entry; the two reconciliation timers then
+overwrote each other every fifteen minutes; and uninstalling either removed
+both.
+
+The pristine copy is now keyed by the template, because the template is what is
+shared, and rendering re-applies every installed addon's snippet in one pass
+from that copy. Removal is not a separate operation: uninstalling an addon
+means reconciling without its injections, so there is no second code path that
+could disagree with the first. Reconciling with none restores the file exactly
+and deletes the snapshot.
+
+Three supporting choices:
+
+- The injector owns the markers, which name the addon and the target
+  (`{# clp-addons:instatic:header-nav:start #}`). An addon supplying its own
+  could pick another addon's by accident, which is precisely what happened.
+- Addons declare a template path relative to CloudPanel's templates directory.
+  An addon has no business knowing where the panel keeps its files, and a value
+  import from the registry back into an addon would close an import cycle.
+- Injections for one file are applied in a stable order, so two addons patching
+  one anchor cannot swap places on each reconciliation and produce a file that
+  never settles.
+
+`tools/test-inject.ts` runs the whole scenario against a throwaway template and
+asserts what the old design got wrong: installing the second addon keeps the
+first, uninstalling one leaves the other, repeated reconciliation is idempotent
+and byte-stable, and removing the last addon restores the original exactly.
+
+Markers written before v0.3.0 had no slug segment. The strip pattern still
+matches them, because the first reconciliation after an upgrade would otherwise
+snapshot a file with the old block still in it and bake that nav entry into the
+pristine copy permanently. Snapshots from the old per-addon keying are deleted
+on sight: they have no `.path` sidecar, nothing reads them, and an operator
+would reasonably mistake them for current.
+
 ## The wrapper's files are the only record of what exists
 
 The manager kept its own SQLite table of instances beside the wrapper's

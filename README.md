@@ -100,6 +100,12 @@ after a CloudPanel update wipes it. There is deliberately one implementation of
 | `clp-action-instatic` | root, via one sudoers line | the privilege boundary |
 | Instatic instances | that instance's CloudPanel site user | one container per site, `127.0.0.1:39000-39999` |
 
+Patching the panel's own templates belongs to the platform, not to an addon.
+An addon declares which template it wants to appear in and the markup to
+insert; `cli/inject.ts` owns the pristine snapshot, the markers and the
+ordering, and rebuilds each template with every installed addon's markup in one
+pass. Adding a second addon is a registry entry plus its own files.
+
 The manager stores nothing of its own. What exists is whatever the wrapper finds
 on disk, so an instance created by calling the wrapper directly shows up in the
 dashboard without anything having to be told about it.

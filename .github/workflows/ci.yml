@@ -44,6 +44,12 @@ jobs:
         # page. Nothing else notices: the server still renders and answers.
         run: bun run test:app
 
+      - name: Two addons must be able to patch one panel template
+        # The scenario that is invisible with a single addon installed:
+        # installing the second used to delete the first's nav entry, and
+        # uninstalling either removed both.
+        run: bun run test:inject
+
       - name: Lint the wrapper scripts
         # The wrapper is the privilege boundary. A shellcheck finding there is
         # a merge blocker, not a style note.

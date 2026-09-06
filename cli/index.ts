@@ -16,9 +16,9 @@ import {
 } from "./provision";
 import { Fatal, fatal, log, parseFlags, requireRoot, run, tryRun, writeAtomic } from "./util";
 import {
-  KNOWN_GOOD_PANEL_VERSIONS, TARGETS, applyTarget, inspectTarget, panelVersion, purgeTwigCache,
-  removeTarget, type TargetStatus,
-} from "../addons/instatic/inject/template-manager";
+  KNOWN_GOOD_PANEL_VERSIONS, inspect, panelVersion, purgeTwigCache, reconcile,
+  type Injection, type TargetStatus,
+} from "./inject";
 import { generateSnapshot } from "../lib/panel-snapshot";
 import { SNAPSHOT_FILE } from "../lib/snapshot-reader";
 
@@ -50,49 +50,55 @@ function describeTarget(s: TargetStatus): string {
  * markup has moved: applying a patch built for the old markup is worse than
  * having no link.
  */
-function reconcileAnchors(spec: AddonSpec, quiet: boolean): boolean {
-  const domain = readOwnDomain(spec);
-  if (!domain) {
-    log.warn("no OWN_DOMAIN in the addon config; skipping anchor injection");
-    return false;
+/**
+ * Every patch every installed addon wants, in one list.
+ *
+ * A template is shared, so it cannot be rendered for one addon at a time: the
+ * injector needs the whole set to rebuild a file from pristine. `exclude` is
+ * how uninstall works -- reconciling without an addon's injections is what
+ * removes its markup, rather than a separate removal path that could disagree.
+ */
+function installedInjections(exclude?: string): Injection[] {
+  const out: Injection[] = [];
+  for (const name of ADDON_NAMES) {
+    if (name === exclude) continue;
+    const s = ADDONS[name]!;
+    if (!existsSync(s.configFile)) continue;
+    const domain = readOwnDomain(s);
+    if (!domain) continue;
+    for (const target of s.targets) out.push({ addon: name, target, url: `https://${domain}` });
   }
-  const url = `https://${domain}`;
+  return out;
+}
 
-  let changed = false;
+function reconcileAnchors(quiet: boolean, exclude?: string): boolean {
+  const injections = installedInjections(exclude);
+  const wanted = new Map(injections.map((i) => [`${i.addon}:${i.target.slug}`, i]));
+  const { statuses, changed } = reconcile(injections);
+
   let blocked = false;
-  for (const target of TARGETS) {
-    const before = inspectTarget(target, url);
-    if (before.state === "ok") {
-      if (!quiet) log.ok(`anchor ${target.slug}: present`);
+  for (const st of statuses) {
+    const key = `${st.addon}:${st.slug}`;
+    const inj = wanted.get(key);
+    if (!inj) continue;
+
+    if (st.state === "ok") {
+      if (!quiet) log.ok(`anchor ${key}: present`);
       continue;
     }
-    if (before.state === "stale-content") {
-      // Regenerate from pristine so the rewrite cannot double-apply.
-      removeTarget(target);
+    if (st.state === "template-absent") {
+      log.warn(`anchor ${key}: ${describeTarget(st)}`);
+      continue;
     }
-    if (before.state === "upstream-changed" || before.state === "anchor-not-found-in-markup") {
-      log.err(`anchor ${target.slug}: ${describeTarget(before)}`);
+    log.err(`anchor ${key}: ${describeTarget(st)}`);
+    if (st.state === "upstream-changed" || st.state === "anchor-not-found-in-markup") {
       log.err(
         `  CloudPanel ${panelVersion()} has changed the markup this patch targets.\n` +
           `  Not applying it. Rebuild the patch against the new markup, then run repair again.\n` +
           `  Known good against: ${KNOWN_GOOD_PANEL_VERSIONS.join(", ")}`
       );
-      if (target.required) blocked = true;
-      continue;
     }
-    if (before.state === "template-absent") {
-      log.warn(`anchor ${target.slug}: ${describeTarget(before)}`);
-      continue;
-    }
-
-    const after = applyTarget(target, url);
-    if (after.state === "ok") {
-      log.ok(`anchor ${target.slug}: injected`);
-      changed = true;
-    } else {
-      log.err(`anchor ${target.slug}: ${describeTarget(after)}`);
-      if (target.required) blocked = true;
-    }
+    if (inj.target.required) blocked = true;
   }
 
   // Purging is mandatory, not optional: Twig serves the compiled copy until
@@ -178,7 +184,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
   startUnits(spec);
   removeLegacyUsers(user);
 
-  reconcileAnchors(spec, false);
+  reconcileAnchors(false);
 
   log.plain();
   log.ok(`${spec.name} ${tag} installed.`);
@@ -227,7 +233,7 @@ async function cmdUpdate(argv: string[]): Promise<void> {
 
     installUnits(spec, user);
     startUnits(spec);
-    reconcileAnchors(spec, false);
+    reconcileAnchors(false);
     pruneReleases();
     log.ok(`${spec.name} updated to ${rel.tag}`);
   }
@@ -262,7 +268,7 @@ function cmdRepair(argv: string[]): void {
   // The path unit uses this: anchors only, no wrapper reinstall, no visudo, no
   // daemon-reload, no snapshot. Cheap enough to run on every template write.
   if (flags["anchors-only"] === true) {
-    reconcileAnchors(spec, quiet);
+    reconcileAnchors(quiet);
     return;
   }
 
@@ -309,7 +315,7 @@ function cmdRepair(argv: string[]): void {
   removeLegacyUsers(user, quiet);
   tryRun("systemctl", ["start", "clp-addons-reconcile.timer"]);
 
-  reconcileAnchors(spec, quiet);
+  reconcileAnchors(quiet);
   if (!quiet) log.ok("repair complete");
 }
 
@@ -350,8 +356,9 @@ async function cmdStatus(argv: string[]): Promise<void> {
   log.plain();
 
   log.plain("Panel anchors:");
-  for (const t of TARGETS) {
-    log.plain(`${pad(`  ${t.slug}`)}${describeTarget(inspectTarget(t, own ? `https://${own}` : undefined))}`);
+  for (const t of spec.targets) {
+    const st = inspect({ addon: spec.name, target: t, url: `https://${own ?? ""}` });
+    log.plain(`${pad(`  ${t.slug}`)}${describeTarget(st)}`);
   }
   log.plain();
 
@@ -416,7 +423,10 @@ function cmdUninstall(argv: string[]): void {
 
   stopUnits(spec);
   removeSudoers(spec);
-  for (const t of TARGETS) removeTarget(t);
+  // Re-render the templates without this addon's injections. Any other addon's
+  // markup is rebuilt in the same pass, so removing one cannot take another's
+  // nav entry with it.
+  reconcileAnchors(true, spec.name);
   purgeTwigCache();
   log.ok("panel anchors removed and the Twig cache purged");
 

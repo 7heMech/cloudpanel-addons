@@ -10,7 +10,8 @@
     "build:instatic": "bun build --compile --target=bun-linux-x64 --outfile dist/instatic-app-linux-x64 addons/instatic/app/index.ts",
     "build": "bun run build:cli && bun run build:instatic",
     "lint:wrapper": "shellcheck -S warning addons/*/wrapper/* tools/*.sh install.sh",
-    "test:app": "bun tools/test-app.ts"
+    "test:app": "bun tools/test-app.ts",
+    "test:inject": "bun tools/test-inject.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

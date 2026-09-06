@@ -1,6 +1,8 @@
 // Every path the installer touches, in one place, so an audit of "what does
 // this write as root" is a single file.
 
+import { INSTATIC_TARGETS } from "../addons/instatic/inject/targets";
+
 export const REPO = "7heMech/cloudpanel-addons";
 
 /** Immutable release directories plus a `current` symlink, so rollback is a symlink swap. */
@@ -19,8 +21,15 @@ export const CLI_BIN = "/usr/local/bin/clp-addons";
  */
 export const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";
 
+/** CloudPanel's Twig templates, and the compiled cache that must be purged after patching them. */
+const PANEL_APP = "/home/clp/htdocs/app/files";
+export const TEMPLATES_DIR = `${PANEL_APP}/templates`;
+export const TWIG_CACHE_DIR = `${PANEL_APP}/var/cache`;
+
 export const CONFIG_DIR = "/etc/clp-addons";
 export const STATE_DIR = "/var/lib/clp-addons";
+/** Pristine copies of the panel templates addons patch, keyed by template. */
+export const TEMPLATE_STATE_DIR = `${STATE_DIR}/templates`;
 export const LOCK_DIR = "/run/lock/clp-addons";
 export const SYSTEMD_DIR = "/etc/systemd/system";
 
@@ -47,6 +56,32 @@ export const TEMPLATE_WATCH_PATHS = [
   "/home/clp/htdocs/app/files/templates/Frontend/Site/New/index.html.twig",
 ];
 
+/**
+ * One patch an addon wants applied to a CloudPanel template.
+ *
+ * The addon supplies markup and where it goes; the injector owns the markers,
+ * the pristine snapshot and the ordering. Declaring targets here rather than
+ * having the CLI import an addon's module is what lets a second addon be a
+ * registry entry plus its own files.
+ */
+export interface AddonTarget {
+  slug: string;
+  /**
+   * Template path relative to CloudPanel's templates directory, e.g.
+   * `Frontend/Partial/header.html.twig`. Relative because an addon should not
+   * need to know where CloudPanel keeps its templates -- the injector resolves
+   * it -- and because a value import from here back into an addon would close
+   * an import cycle through the registry.
+   */
+  template: string;
+  /** Literal markup the snippet is inserted immediately after. */
+  anchorAfter: string;
+  /** Markup only. The injector wraps it in markers naming the addon. */
+  snippet: (addonUrl: string) => string;
+  /** A missing nav entry means the feature is unreachable; a card is a nicety. */
+  required: boolean;
+}
+
 export interface AddonSpec {
   name: string;
   /** Compiled service binary, as named in the release. */
@@ -60,6 +95,8 @@ export interface AddonSpec {
   /** Loopback port for the service. Outside the instance range on purpose. */
   port: number;
   stateDir: string;
+  /** Panel templates this addon patches. */
+  targets: AddonTarget[];
 }
 
 export const ADDONS: Record<string, AddonSpec> = {
@@ -74,6 +111,7 @@ export const ADDONS: Record<string, AddonSpec> = {
     // outside that block so it can never collide with one.
     port: 38080,
     stateDir: `${STATE_DIR}/instatic`,
+    targets: INSTATIC_TARGETS,
   },
 };
 
