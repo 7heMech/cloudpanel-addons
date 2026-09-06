@@ -46,17 +46,6 @@ export const RECONCILE_PATH = "clp-addons-anchor.path";
 export const ANCHOR_SERVICE = "clp-addons-anchor.service";
 
 /**
- * Panel templates the anchor is injected into. Watched by a systemd path unit
- * so a CloudPanel update is repaired in seconds rather than on the next timer
- * tick. Kept here rather than imported from the addon so that paths.ts stays
- * the single place that lists everything installed on the host.
- */
-export const TEMPLATE_WATCH_PATHS = [
-  "/home/clp/htdocs/app/files/templates/Frontend/Partial/header.html.twig",
-  "/home/clp/htdocs/app/files/templates/Frontend/Site/New/index.html.twig",
-];
-
-/**
  * One patch an addon wants applied to a CloudPanel template.
  *
  * The addon supplies markup and where it goes; the injector owns the markers,
@@ -116,6 +105,24 @@ export const ADDONS: Record<string, AddonSpec> = {
 };
 
 export const ADDON_NAMES = Object.keys(ADDONS);
+
+/**
+ * Panel templates the systemd path unit watches, so a CloudPanel update is
+ * repaired in seconds rather than on the next timer tick.
+ *
+ * Derived from the registry rather than written out by hand. It used to be a
+ * literal list of Instatic's two templates, which was correct only for as long
+ * as Instatic was the only addon: a second addon patching a third template got
+ * no fast repair, and nothing connected the two lists so nothing would have said
+ * so. Deduplicated, because two addons patching one template is the normal case.
+ */
+export function templateWatchPaths(): string[] {
+  const paths = new Set<string>();
+  for (const spec of Object.values(ADDONS)) {
+    for (const t of spec.targets) paths.add(`${TEMPLATES_DIR}/${t.template}`);
+  }
+  return [...paths].sort();
+}
 
 /**
  * Account the Instatic addon used before it moved to the site user CloudPanel

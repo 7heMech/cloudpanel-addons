@@ -8,7 +8,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, s
 import {
   ADDONS, ANCHOR_SERVICE, CLI_BIN, CONFIG_DIR, CURRENT_LINK, LEGACY_USERS, LIB_DIR, LOCK_DIR,
   PANEL_DB, RECONCILE_PATH, RECONCILE_SERVICE, RECONCILE_TIMER, RELEASES_DIR, STATE_DIR, SYSTEMD_DIR,
-  TEMPLATE_WATCH_PATHS, type AddonSpec,
+  templateWatchPaths, type AddonSpec,
 } from "./paths";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
 import type { FetchedArtifact } from "./release";
@@ -65,6 +65,67 @@ export function siteUserState(user: string): { shell: string; locked: boolean } 
     shell: tryRun("getent", ["passwd", user]).out.split(":")[6] ?? "",
     locked: tryRun("passwd", ["-S", user]).out.split(/\s+/)[1] === "L",
   };
+}
+
+/**
+ * Whether CloudPanel's own per-site Basic Auth is in front of a site.
+ *
+ * The panel already has this feature -- Site -> Security writes a `basic_auth`
+ * row and points `site.basic_auth_id` at it, with `whitelisted_ips` covering the
+ * IP allowlist too -- so there is nothing here to build. This reads the panel's
+ * record and reports it. Enabling it stays a panel action: `clpctl` has
+ * `cloudpanel:enable:basic-auth`, but that protects the panel's own login, not a
+ * site, and writing `basic_auth` rows ourselves would mean writing an
+ * undocumented schema while the panel is running (decision 2.6).
+ *
+ * `vhostOnly` is the state this box was actually found in: `auth_basic` present
+ * in the site's vhost, `basic_auth_id` NULL. That does protect the site, and it
+ * survives regeneration because the panel rebuilds the vhost from the template
+ * it is stored in, but the panel's Security tab shows Basic Auth as off, so an
+ * operator reading the UI sees an unprotected site and toggling that switch can
+ * rewrite the edit away.
+ */
+export interface SiteAuthState {
+  panelManaged: boolean;
+  active: boolean;
+  ipAllowlist: boolean;
+  vhostOnly: boolean;
+}
+
+export function siteBasicAuth(domain: string): SiteAuthState {
+  const none: SiteAuthState = { panelManaged: false, active: false, ipAllowlist: false, vhostOnly: false };
+  // The domain reaches SQL as a literal, so gate it the way the wrapper does
+  // rather than trusting whatever ended up in the config file.
+  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(domain)) return none;
+
+  const r = tryRun("sqlite3", ["-readonly", PANEL_DB,
+    `SELECT b.is_active, (b.whitelisted_ips IS NOT NULL AND b.whitelisted_ips != '')` +
+    ` FROM site s JOIN basic_auth b ON b.id = s.basic_auth_id WHERE s.domain_name = '${domain}';`]);
+
+  if (r.ok && r.out.trim()) {
+    const [active, ips] = r.out.trim().split("|");
+    return { panelManaged: true, active: active === "1", ipAllowlist: ips === "1", vhostOnly: false };
+  }
+
+  // No panel record. The vhost is read, never written, purely to tell the two
+  // unprotected-looking states apart.
+  const vhost = `/etc/nginx/sites-enabled/${domain}.conf`;
+  if (existsSync(vhost) && /^\s*auth_basic\s+"/m.test(readFileSync(vhost, "utf-8"))) {
+    return { panelManaged: false, active: true, ipAllowlist: false, vhostOnly: true };
+  }
+  return none;
+}
+
+/** How a site's protection reads in `status`. Pure, so it is testable without a panel. */
+export function describeAuthState(a: SiteAuthState): string {
+  if (a.panelManaged && a.active) {
+    return `yes, CloudPanel Basic Auth${a.ipAllowlist ? " + IP allowlist" : ""}`;
+  }
+  if (a.panelManaged) return "NO — CloudPanel Basic Auth exists for this site but is switched off";
+  if (a.vhostOnly) {
+    return "yes, but via a vhost edit — the panel's Security tab shows it as off; move it to Site → Security";
+  }
+  return "NO — the manager is reachable without authentication";
 }
 
 export function resolveSiteUser(domain: string): string {
@@ -371,8 +432,8 @@ User=${user}
 Group=${user}
 Environment=PORT=${spec.port}
 Environment=HOST=127.0.0.1
-Environment=INSTATIC_APP_DATA=${spec.stateDir}
-Environment=INSTATIC_WRAPPER=${spec.wrapperPath}
+Environment=${spec.name.toUpperCase()}_APP_DATA=${spec.stateDir}
+Environment=${spec.name.toUpperCase()}_WRAPPER=${spec.wrapperPath}
 ExecStart=${CURRENT_LINK}/${spec.appArtifact}
 Restart=always
 RestartSec=5
@@ -471,7 +532,7 @@ WantedBy=timers.target
 Description=CloudPanel addons: watch the panel templates we patch
 
 [Path]
-${TEMPLATE_WATCH_PATHS.map((p) => `PathChanged=${p}`).join("\n")}
+${templateWatchPaths().map((p) => `PathChanged=${p}`).join("\n")}
 Unit=${ANCHOR_SERVICE}
 
 [Install]
@@ -526,16 +587,37 @@ export function startUnits(spec: AddonSpec): void {
   log.ok(`${spec.unit}, ${RECONCILE_TIMER} and ${RECONCILE_PATH} enabled`);
 }
 
-export function stopUnits(spec: AddonSpec): void {
-  for (const u of [spec.unit, RECONCILE_TIMER, RECONCILE_PATH]) {
-    tryRun("systemctl", ["disable", "--now", u]);
-  }
-  for (const f of [`${SYSTEMD_DIR}/${spec.unit}`, `${SYSTEMD_DIR}/${RECONCILE_SERVICE}`,
-                   `${SYSTEMD_DIR}/${RECONCILE_TIMER}`, `${SYSTEMD_DIR}/${RECONCILE_PATH}`,
-                   `${SYSTEMD_DIR}/${ANCHOR_SERVICE}`]) {
-    rmSync(f, { force: true });
-  }
+/**
+ * Stop and remove an addon's units.
+ *
+ * `keepShared` is what makes uninstalling one addon safe for another. The
+ * reconcile timer, its service, and the anchor path unit belong to the platform
+ * rather than to any addon, and this used to delete them unconditionally. So
+ * `uninstall addonA` stopped reconciliation for addon B, and B could not recover
+ * on its own: `repair` is what rewrites those units, and the timer that runs
+ * `repair` had just been deleted. cmdUninstall already knew whether anything
+ * else was still installed -- it uses the same answer to decide whether to keep
+ * the CLI and the release tree -- so it passes it here too.
+ */
+export function stopUnits(spec: AddonSpec, keepShared = false): void {
+  const units = keepShared ? [spec.unit] : [spec.unit, RECONCILE_TIMER, RECONCILE_PATH];
+  for (const u of units) tryRun("systemctl", ["disable", "--now", u]);
+
+  const files = keepShared
+    ? [`${SYSTEMD_DIR}/${spec.unit}`]
+    : [`${SYSTEMD_DIR}/${spec.unit}`, `${SYSTEMD_DIR}/${RECONCILE_SERVICE}`,
+       `${SYSTEMD_DIR}/${RECONCILE_TIMER}`, `${SYSTEMD_DIR}/${RECONCILE_PATH}`,
+       `${SYSTEMD_DIR}/${ANCHOR_SERVICE}`];
+  for (const f of files) rmSync(f, { force: true });
+
   tryRun("systemctl", ["daemon-reload"]);
+  // The path unit's watch list is derived from the addons still installed, so
+  // it has to be rebuilt once this one is gone.
+  if (keepShared) {
+    writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_PATH}`, reconcileUnits().path, 0o644);
+    tryRun("systemctl", ["daemon-reload"]);
+    tryRun("systemctl", ["restart", RECONCILE_PATH]);
+  }
 }
 
 /**

@@ -8,11 +8,10 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { PANEL_DB } from "../cli/paths";
+import { ADDONS, PANEL_DB } from "../cli/paths";
 import { writeAtomic } from "../cli/util";
 import { PORT_RANGE, SNAPSHOT_FILE, type PanelSnapshot, type SanitizedSite } from "./snapshot-reader";
 
-const INSTATIC_DATA = "/var/lib/clp-addons/instatic";
 
 function query(sql: string): string[] {
   try {
@@ -61,10 +60,15 @@ export function generateSnapshot(): PanelSnapshot {
     }
   }
 
-  // Ports this addon has already handed out, which the panel does not know about.
-  if (existsSync(INSTATIC_DATA)) {
-    for (const entry of readdirSync(INSTATIC_DATA)) {
-      const meta = `${INSTATIC_DATA}/${entry}/meta.json`;
+  // Ports the addons have already handed out, which the panel does not know
+  // about. Every installed addon, not one hardcoded directory: the `ss` scan
+  // below catches another addon's *running* instances, so a hardcoded path left
+  // exactly the case this loop exists for -- a stopped instance, whose port is
+  // still spoken for but is not listening -- invisible to the allocator.
+  for (const spec of Object.values(ADDONS)) {
+    if (!existsSync(spec.stateDir)) continue;
+    for (const entry of readdirSync(spec.stateDir)) {
+      const meta = `${spec.stateDir}/${entry}/meta.json`;
       if (!existsSync(meta)) continue;
       try {
         addPort(String(JSON.parse(readFileSync(meta, "utf-8")).port));

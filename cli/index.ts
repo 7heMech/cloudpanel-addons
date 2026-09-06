@@ -8,9 +8,11 @@ import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { ADDON_NAMES, ADDONS, CLI_BIN, CURRENT_LINK, LIB_DIR, type AddonSpec } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation } from "./release";
 import {
-  addonIsAtRelease, assertNotInDockerGroup, currentRelease, ensureAddonSite, ensureDirs, hardenSiteUser,
+  addonIsAtRelease, assertNotInDockerGroup, currentRelease, describeAuthState, ensureAddonSite, ensureDirs,
+  hardenSiteUser,
   installSudoers, installUnits, installWrapper, placeRelease, pruneReleases, readOwnDomain,
-  ensureTimerArmed, hardenBackups, removeLegacyUsers, removeSudoers, resolveSiteUser, siteUserOf, siteUserState,
+  ensureTimerArmed, hardenBackups, removeLegacyUsers, removeSudoers, resolveSiteUser, siteBasicAuth,
+  siteUserOf, siteUserState,
   startUnits, stopUnits, timerNextElapse, unitActive,
   unitRunningUser, writeConfig,
 } from "./provision";
@@ -41,6 +43,19 @@ function describeTarget(s: TargetStatus): string {
     case "upstream-changed":
       return `UPSTREAM CHANGED — refusing to patch (expected ${s.expected.slice(0, 12)}, found ${s.found.slice(0, 12)})`;
   }
+}
+
+/**
+ * How the manager's own site is protected, in one line.
+ *
+ * This is the precondition the README leads with: the manager can create and
+ * delete CloudPanel sites, so it must not be reachable without authentication.
+ * Until now `status` had nothing to say about it, which made the one command an
+ * operator runs to check the install silent on the thing that matters most.
+ */
+function describeSiteAuth(domain: string | null): string {
+  if (!domain) return "unknown (no configured domain)";
+  return describeAuthState(siteBasicAuth(domain));
 }
 
 // --- anchors ----------------------------------------------------------------
@@ -193,14 +208,37 @@ async function cmdInstall(argv: string[]): Promise<void> {
   log.plain();
   log.ok(`${spec.name} ${tag} installed.`);
   log.plain(`  Manager UI:  https://${domain}`);
-  log.plain(`  Next steps:  add basic auth for that site in the panel, then issue a certificate with`);
-  log.plain(`               clpctl lets-encrypt:install:certificate --domainName=${domain}`);
+
+  // Say what is actually true rather than reciting the same two steps whether or
+  // not they are already done. On a reinstall they usually are.
+  const auth = siteBasicAuth(domain);
+  if (auth.panelManaged && auth.active) {
+    log.ok(`  ${domain} is behind CloudPanel Basic Auth${auth.ipAllowlist ? " and an IP allowlist" : ""}`);
+  } else if (auth.vhostOnly) {
+    log.warn(
+      `  ${domain} has basic auth in its vhost but not in the panel's own record.\n` +
+        `  The Security tab shows it as off, so switching it there can rewrite the edit away.\n` +
+        `  Re-add it through Site → Security → Basic Auth so the panel owns it.`
+    );
+  } else {
+    log.err(
+      `  ${domain} is reachable without authentication. The manager can create and\n` +
+        `  delete CloudPanel sites, so add Site → Security → Basic Auth now. That page\n` +
+        `  also carries the IP allowlist.`
+    );
+  }
+  log.plain(`  Certificate: clpctl lets-encrypt:install:certificate --domainName=${domain}`);
 }
 
 async function cmdUpdate(argv: string[]): Promise<void> {
   requireRoot("update");
   const { positional, flags } = parseFlags(argv);
-  const targets = flags.all === true ? ADDON_NAMES : [positional[0] ?? "instatic"];
+  // No addon named means every installed one, same as repair. `--all` stays as
+  // the explicit form and now means the same thing.
+  const targets = positional[0]
+    ? [positional[0]]
+    : (flags.all === true ? ADDON_NAMES : installedAddons().map((s) => s.name));
+  if (targets.length === 0) fatal("no addon is installed; run install first");
 
   for (const name of targets) {
     const spec = resolveAddon(name);
@@ -265,22 +303,26 @@ async function cmdSelfUpdate(argv: string[]): Promise<void> {
   log.plain(`  Run 'clp-addons update --all' to move the addons to ${rel.tag} as well.`);
 }
 
-function cmdRepair(argv: string[]): void {
-  requireRoot("repair");
-  const { positional, flags } = parseFlags(argv);
-  const quiet = flags.quiet === true;
-  const spec = resolveAddon(positional[0]);
+/**
+ * Every addon with a config file on disk, which is what "installed" means here.
+ *
+ * `repair` used to reconcile whichever addon `resolveAddon()` defaulted to, and
+ * that default is instatic. The reconcile timer runs `clp-addons repair --quiet`
+ * with no addon named, so on a two-addon box the timer reconciled one of them
+ * and silently ignored the other: no wrapper reinstall, no sudoers re-validation,
+ * no re-hardened site user, no service restart. Panel anchors were the exception
+ * and always covered every addon, which is exactly what would have made this
+ * hard to spot -- the visible symptom, a missing nav entry, was the one thing
+ * that still worked.
+ */
+function installedAddons(): AddonSpec[] {
+  return ADDON_NAMES.map((n) => ADDONS[n]!).filter((s) => existsSync(s.configFile));
+}
 
-  // The path unit uses this: anchors only, no wrapper reinstall, no visudo, no
-  // daemon-reload, no snapshot. Cheap enough to run on every template write.
-  if (flags["anchors-only"] === true) {
-    reconcileAnchors(quiet);
-    return;
-  }
-
-  // install minus the download, and idempotent.
+/** One addon's share of a repair. The shared work is done once by the caller. */
+function repairAddon(spec: AddonSpec, quiet: boolean): void {
   const ownDomain = readOwnDomain(spec);
-  if (!ownDomain) fatal("no configured domain for this addon; run install first");
+  if (!ownDomain) fatal(`no configured domain for ${spec.name}; run install first`);
   const user = resolveSiteUser(ownDomain);
 
   // Editing the site in the panel can restore the shell, so re-assert it.
@@ -320,15 +362,38 @@ function cmdRepair(argv: string[]): void {
 
   // Only now, with nothing running as it, can the old account go.
   removeLegacyUsers(user, quiet);
-  ensureTimerArmed("clp-addons-reconcile.timer", quiet);
+}
 
+function cmdRepair(argv: string[]): void {
+  requireRoot("repair");
+  const { positional, flags } = parseFlags(argv);
+  const quiet = flags.quiet === true;
+
+  // The path unit uses this: anchors only, no wrapper reinstall, no visudo, no
+  // daemon-reload, no snapshot. Cheap enough to run on every template write, and
+  // already covers every addon in one pass.
+  if (flags["anchors-only"] === true) {
+    reconcileAnchors(quiet);
+    return;
+  }
+
+  // Named addon, or everything installed. The timer names none.
+  const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
+  if (specs.length === 0) fatal("no addon is installed; run install first");
+
+  for (const spec of specs) repairAddon(spec, quiet);
+
+  // Platform-wide, so once rather than per addon.
+  ensureTimerArmed("clp-addons-reconcile.timer", quiet);
   reconcileAnchors(quiet);
-  if (!quiet) log.ok("repair complete");
+  if (!quiet) log.ok(`repair complete (${specs.map((s) => s.name).join(", ")})`);
 }
 
 async function cmdStatus(argv: string[]): Promise<void> {
   const { positional } = parseFlags(argv);
-  const spec = resolveAddon(positional[0]);
+  // Every installed addon unless one is named. Defaulting to instatic meant a
+  // second addon was simply absent from the output, with nothing saying so.
+  const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
 
   const pad = (label: string) => label.padEnd(22);
   log.plain(`clp-addons ${CLI_VERSION}`);
@@ -339,6 +404,8 @@ async function cmdStatus(argv: string[]): Promise<void> {
   log.plain(`${pad("Docker")}${tryRun("systemctl", ["is-active", "docker"]).out || "unknown"}`);
   log.plain();
 
+  if (specs.length === 0) log.plain("No addon is installed.");
+  for (const spec of specs) {
   const own = readOwnDomain(spec);
   log.plain(`Addon: ${spec.name}`);
   log.plain(`${pad("  Service")}${unitActive(spec.unit)}`);
@@ -350,6 +417,7 @@ async function cmdStatus(argv: string[]): Promise<void> {
       (nextRun ? `, next ${nextRun}` : ", NO SCHEDULED RUN. Run repair.")
   );
   log.plain(`${pad("  Own site")}${own ?? "not configured"}`);
+  log.plain(`${pad("  Site protected")}${describeSiteAuth(own)}`);
   log.plain(`${pad("  Wrapper")}${existsSync(spec.wrapperPath) ? spec.wrapperPath : "NOT INSTALLED"}`);
   log.plain(
     `${pad("  Sudoers")}${existsSync(`/etc/sudoers.d/clp-addon-${spec.name}`) ? "present" : "NOT INSTALLED"}`
@@ -374,6 +442,7 @@ async function cmdStatus(argv: string[]): Promise<void> {
     log.plain(`${pad(`  ${t.slug}`)}${describeTarget(st)}`);
   }
   log.plain();
+  }
 
   try {
     const snap = JSON.parse(readFileSync(SNAPSHOT_FILE, "utf-8"));
@@ -434,7 +503,8 @@ function cmdUninstall(argv: string[]): void {
         `  or add --purge to also remove ${instances.length} instance(s) and their sites.`);
   }
 
-  stopUnits(spec);
+  // Keep the platform's own units when another addon still needs them.
+  stopUnits(spec, remaining.length > 0);
   removeSudoers(spec);
   // Re-render the templates without this addon's injections. Any other addon's
   // markup is rebuilt in the same pass, so removing one cannot take another's
