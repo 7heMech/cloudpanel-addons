@@ -48,13 +48,25 @@ export interface Injection {
   addon: string;
   target: AddonTarget;
   url: string;
-  /** Overridden only by tests, which must never touch the panel's own files. */
-  templatesDir?: string;
 }
 
-/** Absolute path of the template an injection patches. */
-function fileOf(inj: Injection): string {
-  return `${inj.templatesDir ?? TEMPLATES_DIR}/${inj.target.template}`;
+/**
+ * Where the templates and their snapshots live.
+ *
+ * The only reason this is a parameter rather than two constants is that the
+ * tests must never touch the panel's own files, nor need root to write under
+ * /var/lib. Production callers pass nothing.
+ */
+export interface InjectPaths {
+  templatesDir: string;
+  stateDir: string;
+}
+
+function resolvePaths(p?: Partial<InjectPaths>): InjectPaths {
+  return {
+    templatesDir: p?.templatesDir ?? TEMPLATES_DIR,
+    stateDir: p?.stateDir ?? TEMPLATE_STATE_DIR,
+  };
 }
 
 function sha256(s: string): string {
@@ -104,14 +116,14 @@ function wrap(inj: Injection): string {
  * The name is the path under the templates directory with separators folded,
  * so an operator can tell at a glance which file a snapshot belongs to.
  */
-function fileKey(file: string): string {
-  return file.replace(`${TEMPLATES_DIR}/`, "").replace(/[^A-Za-z0-9.]+/g, "_");
+function fileKey(file: string, p: InjectPaths): string {
+  return file.replace(`${p.templatesDir}/`, "").replace(/[^A-Za-z0-9.]+/g, "_");
 }
-const pristinePath = (file: string) => `${TEMPLATE_STATE_DIR}/${fileKey(file)}.pristine`;
-const hashPath = (file: string) => `${TEMPLATE_STATE_DIR}/${fileKey(file)}.sha256`;
+const pristinePath = (f: string, p: InjectPaths) => `${p.stateDir}/${fileKey(f, p)}.pristine`;
+const hashPath = (f: string, p: InjectPaths) => `${p.stateDir}/${fileKey(f, p)}.sha256`;
 // The key folds path separators, so it cannot be turned back into a path
 // unambiguously. Record the original rather than guessing it back.
-const originPath = (file: string) => `${TEMPLATE_STATE_DIR}/${fileKey(file)}.path`;
+const originPath = (f: string, p: InjectPaths) => `${p.stateDir}/${fileKey(f, p)}.path`;
 
 export type TargetStatus =
   | { addon: string; slug: string; state: "ok" }
@@ -129,17 +141,18 @@ export type TargetStatus =
  * Without that, changing an addon's hostname leaves the nav pointing at the old
  * one forever.
  */
-export function inspect(inj: Injection): TargetStatus {
+export function inspect(inj: Injection, paths?: Partial<InjectPaths>): TargetStatus {
+  const p = resolvePaths(paths);
   const { addon, target } = inj;
   const id = { addon, slug: target.slug };
-  const file = fileOf(inj);
+  const file = `${p.templatesDir}/${target.template}`;
   if (!existsSync(file)) return { ...id, state: "template-absent" };
 
   const onDisk = readFileSync(file, "utf-8");
   const upstream = stripAllMarkers(onDisk);
 
-  if (existsSync(hashPath(file))) {
-    const expected = readFileSync(hashPath(file), "utf-8").trim();
+  if (existsSync(hashPath(file, p))) {
+    const expected = readFileSync(hashPath(file, p), "utf-8").trim();
     const found = sha256(upstream);
     if (expected !== found) return { ...id, state: "upstream-changed", expected, found };
   }
@@ -160,12 +173,16 @@ export function inspect(inj: Injection): TargetStatus {
  * with that addon's injections left out, and the file is re-rendered without
  * them. Passing none for a file restores it to pristine.
  */
-export function reconcile(injections: Injection[]): { statuses: TargetStatus[]; changed: boolean } {
-  dropLegacySnapshots();
+export function reconcile(
+  injections: Injection[],
+  paths?: Partial<InjectPaths>
+): { statuses: TargetStatus[]; changed: boolean } {
+  const p = resolvePaths(paths);
+  dropLegacySnapshots(p);
 
   const byFile = new Map<string, Injection[]>();
   for (const inj of injections) {
-    const file = fileOf(inj);
+    const file = `${p.templatesDir}/${inj.target.template}`;
     const list = byFile.get(file) ?? [];
     list.push(inj);
     byFile.set(file, list);
@@ -173,12 +190,12 @@ export function reconcile(injections: Injection[]): { statuses: TargetStatus[]; 
 
   // Files that carry a block from an addon no longer in the set still have to
   // be visited, or an uninstalled addon's markup stays on the page.
-  for (const file of patchedFiles()) if (!byFile.has(file)) byFile.set(file, []);
+  for (const file of patchedFiles(p)) if (!byFile.has(file)) byFile.set(file, []);
 
   const statuses: TargetStatus[] = [];
   let changed = false;
   for (const [file, list] of byFile) {
-    const r = renderFile(file, list);
+    const r = renderFile(file, list, p);
     statuses.push(...r.statuses);
     changed ||= r.changed;
   }
@@ -191,27 +208,31 @@ export function reconcile(injections: Injection[]): { statuses: TargetStatus[]; 
  * belongs to a different keying, so leaving them would strand state that
  * nothing reads and that an operator would reasonably mistake for current.
  */
-function dropLegacySnapshots(): void {
-  if (!existsSync(TEMPLATE_STATE_DIR)) return;
-  const names = readdirSync(TEMPLATE_STATE_DIR);
+function dropLegacySnapshots(p: InjectPaths): void {
+  if (!existsSync(p.stateDir)) return;
+  const names = readdirSync(p.stateDir);
   for (const f of names) {
     if (!f.endsWith(".pristine") && !f.endsWith(".sha256")) continue;
     const base = f.slice(0, f.lastIndexOf("."));
     if (names.includes(`${base}.path`)) continue;
-    rmSync(`${TEMPLATE_STATE_DIR}/${f}`, { force: true });
+    rmSync(`${p.stateDir}/${f}`, { force: true });
   }
 }
 
 /** Templates we have a pristine snapshot for, i.e. ones some addon has patched. */
-function patchedFiles(): string[] {
-  if (!existsSync(TEMPLATE_STATE_DIR)) return [];
-  return readdirSync(TEMPLATE_STATE_DIR)
+function patchedFiles(p: InjectPaths): string[] {
+  if (!existsSync(p.stateDir)) return [];
+  return readdirSync(p.stateDir)
     .filter((f) => f.endsWith(".path"))
-    .map((f) => readFileSync(`${TEMPLATE_STATE_DIR}/${f}`, "utf-8").trim())
+    .map((f) => readFileSync(`${p.stateDir}/${f}`, "utf-8").trim())
     .filter((f) => f && existsSync(f));
 }
 
-function renderFile(file: string, list: Injection[]): { statuses: TargetStatus[]; changed: boolean } {
+function renderFile(
+  file: string,
+  list: Injection[],
+  p: InjectPaths
+): { statuses: TargetStatus[]; changed: boolean } {
   if (!existsSync(file)) {
     return {
       statuses: list.map(({ addon, target }) => ({ addon, slug: target.slug, state: "template-absent" as const })),
@@ -222,14 +243,14 @@ function renderFile(file: string, list: Injection[]): { statuses: TargetStatus[]
   const onDisk = readFileSync(file, "utf-8");
   const upstream = stripAllMarkers(onDisk);
 
-  mkdirSync(TEMPLATE_STATE_DIR, { recursive: true });
-  if (!existsSync(pristinePath(file))) {
-    writeFileSync(pristinePath(file), upstream, { mode: 0o600 });
-    writeFileSync(hashPath(file), `${sha256(upstream)}\n`, { mode: 0o644 });
-    writeFileSync(originPath(file), `${file}\n`, { mode: 0o644 });
+  mkdirSync(p.stateDir, { recursive: true });
+  if (!existsSync(pristinePath(file, p))) {
+    writeFileSync(pristinePath(file, p), upstream, { mode: 0o600 });
+    writeFileSync(hashPath(file, p), `${sha256(upstream)}\n`, { mode: 0o644 });
+    writeFileSync(originPath(file, p), `${file}\n`, { mode: 0o644 });
   }
 
-  const expected = readFileSync(hashPath(file), "utf-8").trim();
+  const expected = readFileSync(hashPath(file, p), "utf-8").trim();
   const found = sha256(upstream);
   if (expected !== found) {
     // CloudPanel changed the file our patches target. Refuse to write markup
@@ -242,7 +263,7 @@ function renderFile(file: string, list: Injection[]): { statuses: TargetStatus[]
     };
   }
 
-  const pristine = readFileSync(pristinePath(file), "utf-8");
+  const pristine = readFileSync(pristinePath(file, p), "utf-8");
   const statuses: TargetStatus[] = [];
   let rendered = pristine;
 
@@ -268,9 +289,9 @@ function renderFile(file: string, list: Injection[]): { statuses: TargetStatus[]
   // Nothing left patched here, so the snapshot has no further purpose. Keeping
   // it would pin a hash from a CloudPanel version that may since have moved on.
   if (list.length === 0) {
-    rmSync(pristinePath(file), { force: true });
-    rmSync(hashPath(file), { force: true });
-    rmSync(originPath(file), { force: true });
+    rmSync(pristinePath(file, p), { force: true });
+    rmSync(hashPath(file, p), { force: true });
+    rmSync(originPath(file, p), { force: true });
   }
 
   return { statuses, changed };
