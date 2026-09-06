@@ -513,18 +513,54 @@ run_wp_search_replace() {
   fi
 }
 
+# Normalise a stored vhost body down to what an operator actually chose.
+#
+# `site.vhost_template` is not a rendered config: it keeps CloudPanel's own
+# {{ssl_certificate}}, {{root}}, {{php_fpm_port}} and the rest, and only the
+# hostnames are concrete. Two things in it are generated per site rather than
+# chosen, and comparing without accounting for them reports an edit on every
+# ordinary clone:
+#
+#   - CloudPanel prepends an http->https redirect server block, but only when
+#     the hostname is an apex or www. Cloning example.com to stg.example.com
+#     means the source has that block and the clone does not.
+#   - ServerNameProcessor writes `server_name <domain> www1.<domain>;` for an
+#     apex and `server_name <domain>;` for a subdomain.
+#
+# Both are folded away here. Anything else in a server_name line survives, so a
+# hand-widened `server_name <domain> *.<domain>;` still reads as an edit, which
+# is the case this check exists for.
+vhost_shape() {
+  local body=$1 domain=$2
+  printf '%s\n' "$body" \
+    | awk '
+        NR == 1 && /^server \{/ { block = $0 ORS; depth = 1; inblock = 1; next }
+        inblock {
+          block = block $0 ORS
+          depth += gsub(/\{/, "{") - gsub(/\}/, "}")
+          if (/return 301/) redirect = 1
+          if (depth == 0) { inblock = 0; if (!redirect) printf "%s", block }
+          next
+        }
+        { print }
+      ' \
+    | sed -e "s/^[[:space:]]*server_name ${domain} www1\.${domain};[[:space:]]*$/  server_name {GENERATED};/" \
+          -e "s/^[[:space:]]*server_name ${domain};[[:space:]]*$/  server_name {GENERATED};/" \
+    | grep -v '^[[:space:]]*$'
+}
+
 # True when the source's vhost holds edits the clone will not have.
 #
 # Both bodies come out of the panel's own record, so this compares what the
-# panel will render rather than what happens to be on disk. The source's
-# hostname and site user are substituted before comparing, because those differ
-# by definition and are not an edit.
+# panel will render rather than what happens to be on disk.
 vhost_differs() {
   local source=$1 target=$2 src_user=$3 stg_user=$4
   local a b
   a=$(vhost_of "$source") || return 1
   b=$(vhost_of "$target") || return 1
   [[ -n $a && -n $b ]] || return 1
+  a=$(vhost_shape "$a" "$source")
+  b=$(vhost_shape "$b" "$target")
   a=${a//"$source"/"$target"}
   a=${a//"$src_user"/"$stg_user"}
   [[ $a != "$b" ]]

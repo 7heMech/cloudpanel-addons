@@ -265,5 +265,59 @@ console.log("\n== a release tree serves every installed addon ==");
 }
 
 
+console.log("\n== the vhost comparison ignores what CloudPanel generates ==");
+
+// site.vhost_template keeps CloudPanel's placeholders and only the hostnames are
+// concrete, so two things in it are generated rather than chosen: the
+// http->https redirect block, which is prepended only for an apex or www
+// hostname, and the shape of the server_name line, which differs between the
+// two. Cloning example.com into stg.example.com therefore differs in both, and
+// reporting that as a hand edit would fire the note on every ordinary clone.
+{
+  const shapeFn = bashFunction("addons/stager/wrapper/clp-action-stager", "vhost_shape");
+  const shape = (body: string, domain: string) =>
+    execFileSync("bash", ["-c", `${shapeFn}\nvhost_shape "$1" "$2"`, "_", body, domain],
+      { encoding: "utf-8" });
+
+  const REDIRECT = [
+    "server {",
+    "  listen 443 ssl;",
+    "  {{ssl_certificate}}",
+    "  server_name www.example.com;",
+    "  return 301 https://example.com$request_uri;",
+    "}",
+    "",
+  ].join("\n");
+  const MAIN = (nameLine: string, extra = "") => [
+    "server {",
+    "  listen 443 ssl;",
+    `  ${nameLine}`,
+    "  {{root}}",
+    ...(extra ? [`  ${extra}`] : []),
+    "  location / {",
+    "    {{php_fpm_port}}",
+    "  }",
+    "}",
+  ].join("\n");
+
+  const apex = shape(REDIRECT + MAIN("server_name example.com www1.example.com;"), "example.com");
+  const sub = shape(MAIN("server_name stg.example.com;"), "stg.example.com");
+  check("an apex site and a subdomain clone have the same shape",
+    apex === sub, `apex=${JSON.stringify(apex)} sub=${JSON.stringify(sub)}`);
+
+  const edited = shape(
+    REDIRECT + MAIN("server_name example.com www1.example.com;", 'add_header X-Frame-Options "SAMEORIGIN";'),
+    "example.com");
+  check("an added directive still reads as an edit", edited !== apex);
+
+  const widened = shape(MAIN("server_name stg.example.com *.stg.example.com;"), "stg.example.com");
+  check("a hand-widened server_name still reads as an edit", widened !== sub);
+
+  check("the redirect block is dropped, not the whole first block",
+    apex.includes("{{root}}") && apex.includes("{{php_fpm_port}}"), apex);
+  check("a redirect target does not survive into the shape",
+    !apex.includes("return 301"), apex);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
