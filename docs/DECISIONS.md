@@ -449,13 +449,107 @@ backstop and also refreshes the snapshot and the sudoers drop-in.
   On failure the container logs are captured before rolling back. Auto-update is
   off by default: Instatic is 0.0.x and its APIs will shift before 1.0.
 
+## The reconciliation timer needs a calendar trigger
+
+The timer carried only monotonic triggers: `OnBootSec=2min` and
+`OnUnitActiveSec=15min`. Both anchor to an event in the past, and once systemd
+decides there is no future elapse the unit parks in `SubState=elapsed` and never
+fires again. It still reports `active`.
+
+Found on the staging box, thirteen and a half hours dead:
+
+    NextElapseUSecMonotonic=infinity      SubState=elapsed
+    LastTriggerUSec=Sun 2026-09-06 01:10:45 EEST
+
+Two things made it worse than a missed tick. `systemctl restart` on the timer
+does not revive it -- measured, it came back still `elapsed` with no next elapse,
+and only activating the service itself re-anchored `OnUnitActiveSec`. And
+`startUnits()` restarts this timer on every install and update, so cutting a
+release was itself a chance to kill reconciliation. The recovery line in
+`repair` was `systemctl start` on an already-active unit, which is a no-op, so
+the self-healing path could never fix the one state that needed fixing.
+
+What stops silently when it dies: the nav entry stays gone after a CloudPanel
+update, the panel snapshot goes stale, and nothing re-asserts `nologin` on the
+one account permitted to `sudo` the wrapper. The `.path` unit still covers the
+template case, which is why the box looked fine.
+
+`OnCalendar=*:0/15` always has a next elapse, so the unit cannot get stuck.
+Verified against the failing operations: a scratch unit held its next elapse
+through three restarts and a `daemon-reload` issued while the triggered service
+was running. `Persistent=true` also starts meaning something, having only ever
+applied to `OnCalendar=`.
+
+`status` now prints the next elapse rather than `is-active` alone. "Active" was
+the answer that hid this for thirteen hours, so it is not the question to ask.
+
+## Snapshot archives are secrets at rest
+
+`make_snapshot` copies `instatic.env` into the tarball on purpose -- decision
+2.10 says the master key travels with the data, because a restored database
+without it has unreadable secret columns. What was missing is that this makes
+every archive as sensitive as the key file the wrapper keeps at 0600 root.
+
+The mode was left to the caller's umask. Through the app's `sudo` that meant
+0640, because the unit sets `UMask=0027`; run by root from a shell, which is the
+`uninstall --purge` path, it meant 0644. `/var/backups/clp-addons/instatic` was
+0755. So a deleted instance's entire database and the key that decrypts its API
+keys and TOTP seeds sat world-readable, and on a CloudPanel box every site user
+has SFTP. Confirmed on staging by reading one as an unrelated instance's uid.
+
+The archive mode is now set here rather than inherited: `umask 077` around the
+`tar`, an explicit `chmod 600`, and 0700 on both the backup directory and each
+instance's `snapshots/`. Files written before this keep their old mode and
+nothing else would ever revisit them, so `repair` tightens them, which is the
+same reason `repair` re-asserts the login shell.
+
+## `update --all` asked the wrong question
+
+The loop skipped an addon when `currentRelease() === rel.tag`. That is a fact
+about the shared release tree, not about the addon: the first addon called
+`placeRelease()` and moved `current` onto the new tag, so every addon after it
+matched, logged "already on", and had its app binary and wrapper skipped. The
+run reported success for all of them.
+
+`addonIsAtRelease()` asks about the addon's own files instead -- the release has
+to carry its artifacts, and the wrapper actually installed has to be byte-equal
+to the one in that release. Consistent with the rule that what is on disk is the
+record.
+
+## The dashboard says when a release happened
+
+Auto-update is off by default because Instatic is 0.0.x, and that is only a
+defensible policy if something tells the operator a release exists. Nothing did.
+`listAvailableTags()` was wired into the New Site page alone, the dashboard
+showed each instance's pinned tag with nothing to compare it against, and the
+update dialog was a free-text box. Learning about 0.0.19 meant going to look at
+ghcr.io and remembering the number.
+
+The dashboard now fetches the same listing, badges instances behind the newest
+version, counts them in a tile, and offers the real tags in a `<select>`.
+
+Two things the listing has to get right. Versions are compared by number, not as
+strings, or 0.0.9 outranks 0.0.18. And the registry paginates: it returns tags in
+push order, so page one holds the *oldest* tags, and ignoring the `Link` header
+would not produce an obviously broken dropdown -- it would keep offering a stale
+version labelled "(latest)", which is worse. With 20 tags ghcr.io answers in one
+response today, so this is a trap set for later rather than a bug now.
+
+Only a listing that actually reached the registry may claim an instance is
+behind. The offline fallback is one hardcoded version, and badging against it
+would invent updates that do not exist. A stale cache still counts as a real
+answer and says so; the fallback reports no newest version at all.
+
 ## Known gaps
 
-- Instance data directories are `chown 1000:1000` to match the image's `bun`
-  user. On CloudPanel uid 1000 is `clp`, so the panel's own user can read an
-  instance database. Not an escalation — the container has only its own
-  bind mounts — but the uid collision is unintended and worth fixing with a
-  dedicated uid.
 - `--local` installs skip provenance verification by construction. Staging only.
 - Only `x86_64` is built. `recon.sh` confirmed `avx2` on the target, so the
   standard glibc target applies rather than the baseline variant.
+- Snapshot archives written under an instance's `snapshots/` before the mode was
+  set explicitly keep their old 0644. They are protected by the 0700 directory
+  above them, so this is untidy rather than exposed, and `repair` deliberately
+  does not walk instance directories -- those belong to the wrapper.
+- `install.sh` passes one `--domain` to every addon it installs. With a second
+  addon that would put two managers behind one site whose reverse-proxy URL
+  names only the first one's port. It needs a hostname per addon before a second
+  addon ships.

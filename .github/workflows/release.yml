@@ -47,6 +47,12 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Unit checks for the client script and port allocation
+        run: bun run test:app
+
+      - name: Two addons must be able to patch one panel template
+        run: bun run test:inject
+
       - name: Lint the wrapper scripts
         # The wrapper is the privilege boundary. A shellcheck finding there is
         # a release blocker, not a style note.

@@ -5,6 +5,7 @@
 
 import { esc, escJs } from "./http";
 import type { InstanceView } from "./service";
+import { isNewerThan, type AvailableTags } from "./tags";
 import type { SanitizedSite } from "../../../lib/snapshot-reader";
 
 const STYLE = `
@@ -38,6 +39,8 @@ td { padding: 0.75rem 0.6rem; border-top: 1px solid var(--border); vertical-alig
 .state-running { color: var(--ok); border-color: var(--ok); }
 .state-exited, .state-created, .state-paused { color: var(--warn); border-color: var(--warn); }
 .state-absent, .state-unknown { color: var(--bad); border-color: var(--bad); }
+.behind { color: var(--warn); border-color: var(--warn); margin-left: 0.35rem; }
+.btn-update { border-color: var(--warn); color: var(--warn); }
 .btn { background: transparent; color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 0.35rem 0.7rem; font-size: 0.8rem; cursor: pointer; }
 .btn:hover { border-color: var(--accent); color: var(--accent); }
@@ -127,7 +130,21 @@ function askUpdate(domain, current) {
   pendingUpdate = domain;
   document.getElementById('update-domain').textContent = domain;
   document.getElementById('update-current').textContent = current;
-  document.getElementById('update-tag').value = '';
+
+  // The version to update to is picked from the list the registry actually
+  // reports, not typed from memory. Typing it meant knowing a release had
+  // happened, and nothing on this page ever said so.
+  const sel = document.getElementById('update-tag');
+  let chosen = '';
+  for (let i = 0; i < sel.options.length; i++) {
+    const opt = sel.options[i];
+    const isCurrent = opt.value === current;
+    opt.disabled = isCurrent;
+    opt.textContent = opt.dataset.label + (isCurrent ? ' (running now)' : '');
+    if (!isCurrent && !chosen) chosen = opt.value;
+  }
+  // Options are newest first, so the first enabled one is the newest on offer.
+  sel.value = chosen || current;
   document.getElementById('update-dialog').showModal();
 }
 
@@ -232,9 +249,17 @@ export function dashboardView(
   instances: InstanceView[],
   nextPort: number,
   snapshotAge: number,
-  panelSites: SanitizedSite[] = []
+  panelSites: SanitizedSite[] = [],
+  available: AvailableTags = { tags: [], source: "fallback", latest: null }
 ): string {
   const running = instances.filter((i) => i.state === "running").length;
+
+  // Only a list that actually came from the registry may claim an instance is
+  // behind. The offline fallback is one hardcoded version, and badging every
+  // instance against it would invent updates that do not exist.
+  const latest = available.source === "fallback" ? null : available.latest;
+  const behind = (tag: string) => latest !== null && isNewerThan(latest, tag);
+  const outdated = instances.filter((i) => behind(i.tag)).length;
 
   // A stale snapshot means the port list the allocator is working from may no
   // longer match the panel. Say so rather than quietly allocating against it.
@@ -252,7 +277,10 @@ export function dashboardView(
     <div class="mono" style="color:var(--muted)">${esc(i.container)}</div>
   </td>
   <td class="mono">127.0.0.1:${esc(i.port)}</td>
-  <td><span class="badge">${esc(i.tag)}</span></td>
+  <td>
+    <span class="badge">${esc(i.tag)}</span>
+    ${behind(i.tag) ? `<span class="badge behind" title="${esc(latest)} is available">${esc(latest)} available</span>` : ""}
+  </td>
   <td><span class="badge ${stateClass(i.state)}">${esc(i.state)}</span></td>
   <td class="actions">
     ${
@@ -261,7 +289,7 @@ export function dashboardView(
         : `<button class="btn" onclick="act('${escJs(i.domain)}','start')">Start</button>`
     }
     <button class="btn" onclick="act('${escJs(i.domain)}','restart')">Restart</button>
-    <button class="btn" onclick="askUpdate('${escJs(i.domain)}','${escJs(i.tag)}')">Update</button>
+    <button class="btn${behind(i.tag) ? " btn-update" : ""}" onclick="askUpdate('${escJs(i.domain)}','${escJs(i.tag)}')">Update</button>
     <button class="btn" onclick="act('${escJs(i.domain)}','snapshot')">Snapshot</button>
     <button class="btn" onclick="act('${escJs(i.domain)}','recreate')" title="Rebuild the container from the recorded version without touching the data">Recreate</button>
     <button class="btn" onclick="showLogs('${escJs(i.domain)}')">Logs</button>
@@ -271,10 +299,33 @@ export function dashboardView(
     )
     .join("\n");
 
-  return `${staleNotice}
+  // Auto-update is off by default because Instatic is 0.0.x, which only works as
+  // a policy if something tells the operator a release happened. Nothing did:
+  // the version list was fetched for the New Site page and never for this one,
+  // so the only way to learn about 0.0.19 was to go and look at the registry.
+  const versionNotice =
+    available.source === "fallback"
+      ? `<div class="notice">Could not reach ghcr.io, so this page cannot tell which instances are
+         behind. The versions offered below are a last-resort list, not the registry's.</div>`
+      : available.source === "cache"
+        ? `<div class="notice">ghcr.io is unreachable right now; version information is from the
+           last successful check and may be out of date.</div>`
+        : "";
+
+  const updatesTile =
+    latest === null
+      ? ""
+      : `<div class="stat">
+    <div class="label">Updates available</div>
+    <div class="value" style="color:${outdated > 0 ? "var(--warn)" : "var(--muted)"}">${outdated}</div>
+    <div class="hint">latest is ${esc(latest)}</div>
+  </div>`;
+
+  return `${staleNotice}${versionNotice}
 <div class="card stats">
   <div class="stat"><div class="label">Instances</div><div class="value">${instances.length}</div></div>
   <div class="stat"><div class="label">Running</div><div class="value" style="color:var(--ok)">${running}</div></div>
+  ${updatesTile}
   <div class="stat"><div class="label">Next port</div><div class="value mono">${esc(nextPort)}</div></div>
 </div>
 
@@ -321,7 +372,13 @@ export function dashboardView(
     A snapshot is taken first; if the new version fails its health check the instance is rolled
     back to the current tag automatically.</p>
   <label for="update-tag">Target version</label>
-  <input id="update-tag" placeholder="0.0.18" autocomplete="off">
+  <select id="update-tag">${
+    (available.tags.length > 0 ? available.tags : instances.map((i) => i.tag))
+      .map((t, idx) =>
+        `<option value="${esc(t)}" data-label="${esc(t)}${idx === 0 ? " (latest)" : ""}">${esc(t)}${idx === 0 ? " (latest)" : ""}</option>`
+      )
+      .join("")
+  }</select>
   <div class="actions" style="justify-content:flex-end;margin-top:1rem">
     <button class="btn" onclick="document.getElementById('update-dialog').close()">Cancel</button>
     <button class="btn btn-primary" onclick="confirmUpdate()">Update</button>
@@ -341,12 +398,23 @@ export function dashboardView(
 </dialog>`;
 }
 
-export function newInstanceView(nextPort: number, tags: string[]): string {
-  const options = tags.map((t, idx) =>
+export function newInstanceView(nextPort: number, available: AvailableTags): string {
+  const options = available.tags.map((t, idx) =>
     `<option value="${esc(t)}"${idx === 0 ? " selected" : ""}>${esc(t)}${idx === 0 ? " (latest)" : ""}</option>`
   ).join("");
 
-  return `<div class="card">
+  const notice =
+    available.source === "registry"
+      ? ""
+      : `<div class="notice">Could not reach ghcr.io${
+          available.source === "cache" ? " right now, so this list is from the last successful check" : ""
+        }. ${
+          available.source === "fallback"
+            ? "The list below is a hardcoded last resort and may be missing newer releases."
+            : ""
+        }</div>`;
+
+  return `${notice}<div class="card">
   <h2 style="margin-top:0;font-size:1.1rem">New Instatic site</h2>
   <p class="hint">Creates a CloudPanel reverse-proxy site, starts a pinned Instatic container bound
     to 127.0.0.1, and verifies the page is served through nginx before recording the instance.

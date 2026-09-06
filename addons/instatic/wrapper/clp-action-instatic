@@ -378,11 +378,22 @@ make_snapshot() {
 
   # tar's exit status was previously discarded, so an out-of-space archive
   # counted as a successful snapshot.
-  if ! tar -czf "$out" -C "$stage" . >&2; then
+  #
+  # 0600, set explicitly rather than left to the caller's umask. The archive
+  # holds instatic.env -- the master key that decrypts API keys and TOTP seeds --
+  # and the whole database next to it. The mode used to be whatever the caller
+  # happened to have: 0640 when the app invoked this through sudo, because the
+  # unit sets UMask=0027, but 0644 when root ran it from a shell, which is the
+  # `uninstall --purge` path. That put a readable master key in a world-readable
+  # directory, where every site user on the box -- all of which have SFTP -- could
+  # read it. The wrapper keeps instatic.env at 0600 root; the copy inside the tar
+  # has to be protected just as well.
+  if ! ( umask 077; tar -czf "$out" -C "$stage" . >&2 ); then
     warn "tar failed writing ${out}"
     rm -rf "$stage" "$out"
     return 1
   fi
+  chmod 600 "$out"
   rm -rf "$stage"
   prune_snapshots "$(dirname "$out")"
 }
@@ -454,6 +465,8 @@ cmd_create() {
   # it, so there is exactly one place that decides who an instance runs as.
   mkdir -p "${dir}/data" "${dir}/uploads" "${dir}/snapshots"
   chmod 750 "$dir" "${dir}/data" "${dir}/uploads"
+  # Snapshots are tighter than the rest: each archive carries the master key.
+  chmod 700 "${dir}/snapshots"
 
   log "pulling ${REGISTRY_IMAGE}:${tag}"
   docker pull "${REGISTRY_IMAGE}:${tag}" >&2 \
@@ -507,6 +520,7 @@ cmd_update() {
 
   log "snapshotting before update"
   mkdir -p "${dir}/snapshots"
+  chmod 700 "${dir}/snapshots"
   snap="${dir}/snapshots/pre-update-${cur_tag}-$(date +%Y%m%d%H%M%S).tar.gz"
   make_snapshot "$dir" "$snap" \
     || emit_err "could not snapshot ${domain} before updating; refusing to continue"
@@ -643,7 +657,10 @@ cmd_delete() {
 
   if [[ -d $dir ]]; then
     log "archiving instance data before purge"
+    # 0700: these archives contain the instance's master key, so the directory
+    # must not be traversable by other accounts on the box.
     mkdir -p "$BACKUP_DIR"
+    chmod 700 "$BACKUP_DIR"
     make_snapshot "$dir" "${BACKUP_DIR}/${domain}-deleted-$(date +%Y%m%d%H%M%S).tar.gz" || warn "final archive failed"
     rm -rf "$dir"
   fi
@@ -656,6 +673,7 @@ cmd_snapshot() {
   dir=$(inst_dir "$domain")
   [[ -d $dir ]] || emit_err "no such instance: ${domain}"
   mkdir -p "${dir}/snapshots"
+  chmod 700 "${dir}/snapshots"
   out="${dir}/snapshots/snapshot-$(date +%Y%m%d%H%M%S).tar.gz"
   make_snapshot "$dir" "$out" || emit_err "snapshot failed for ${domain}"
   emit_ok "{\"domain\":\"${domain}\",\"snapshot\":\"${out}\"}"
@@ -688,7 +706,7 @@ cmd_status() {
 # One call rather than one per instance, because the manager cannot read these
 # directories itself -- they belong to each instance's own site user.
 cmd_list() {
-  local dir meta domain name state first=1
+  local dir meta domain name state port first=1
   printf '{"ok":true,"data":{"instances":['
 
   for dir in "${DATA_BASE_DIR}"/*/; do
@@ -701,11 +719,18 @@ cmd_list() {
     state=$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null | tr -d '[:space:]' || true)
     [[ -n $state ]] || state="absent"
 
+    # port is the one field interpolated as a JSON number, so a truncated or
+    # half-written meta.json would emit `"port":,` and make the whole reply
+    # unparseable. The manager treats a malformed reply as "no instances", so one
+    # damaged file would empty the entire dashboard rather than hide one row.
+    port=$(read_meta port "$meta")
+    [[ $port =~ ^[0-9]+$ ]] || port=0
+
     (( first )) || printf ','
     first=0
     printf '{"domain":%s,"port":%s,"tag":%s,"container":%s,"siteUser":%s,"createdAt":%s,"state":%s}' \
       "$(json_str "$domain")" \
-      "$(read_meta port "$meta")" \
+      "$port" \
       "$(json_str "$(read_meta tag "$meta")")" \
       "$(json_str "$name")" \
       "$(json_str "$(read_meta siteUser "$meta")")" \

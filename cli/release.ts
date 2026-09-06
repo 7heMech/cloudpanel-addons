@@ -44,7 +44,7 @@ interface GhRelease {
   assets: { name: string; browser_download_url: string }[];
 }
 
-export async function resolveRelease(requested?: string): Promise<ResolvedRelease> {
+export async function resolveRelease(requested?: string, allowPrerelease = false): Promise<ResolvedRelease> {
   let rel: GhRelease;
   if (requested && requested !== "latest") {
     if (!VERSION_TAG_RE.test(requested)) {
@@ -56,6 +56,15 @@ export async function resolveRelease(requested?: string): Promise<ResolvedReleas
   }
 
   if (rel.draft) fatal(`release ${rel.tag_name} is a draft`);
+  // /releases/latest never returns a prerelease, but an explicitly requested tag
+  // can be one, and these artifacts run as root. Installing one has to be a
+  // decision rather than something that happens because a tag was handy.
+  if (rel.prerelease && !allowPrerelease) {
+    fatal(
+      `release ${rel.tag_name} is marked as a prerelease.\n` +
+        `  Install it deliberately with --version=${rel.tag_name} --allow-prerelease, or pick a stable release.`
+    );
+  }
 
   const assets = new Map(rel.assets.map((a) => [a.name, a.browser_download_url]));
   if (!assets.has("SHA256SUMS")) {
