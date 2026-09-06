@@ -8,7 +8,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, s
 import {
   ADDONS, ANCHOR_SERVICE, CLI_BIN, CONFIG_DIR, CURRENT_LINK, LEGACY_USERS, LIB_DIR, LOCK_DIR,
   PANEL_DB, RECONCILE_PATH, RECONCILE_SERVICE, RECONCILE_TIMER, RELEASES_DIR, STATE_DIR, SYSTEMD_DIR,
-  TEMPLATE_WATCH_PATHS, type AddonSpec,
+  templateWatchPaths, type AddonSpec,
 } from "./paths";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
 import type { FetchedArtifact } from "./release";
@@ -371,8 +371,8 @@ User=${user}
 Group=${user}
 Environment=PORT=${spec.port}
 Environment=HOST=127.0.0.1
-Environment=INSTATIC_APP_DATA=${spec.stateDir}
-Environment=INSTATIC_WRAPPER=${spec.wrapperPath}
+Environment=${spec.name.toUpperCase()}_APP_DATA=${spec.stateDir}
+Environment=${spec.name.toUpperCase()}_WRAPPER=${spec.wrapperPath}
 ExecStart=${CURRENT_LINK}/${spec.appArtifact}
 Restart=always
 RestartSec=5
@@ -471,7 +471,7 @@ WantedBy=timers.target
 Description=CloudPanel addons: watch the panel templates we patch
 
 [Path]
-${TEMPLATE_WATCH_PATHS.map((p) => `PathChanged=${p}`).join("\n")}
+${templateWatchPaths().map((p) => `PathChanged=${p}`).join("\n")}
 Unit=${ANCHOR_SERVICE}
 
 [Install]
@@ -526,16 +526,37 @@ export function startUnits(spec: AddonSpec): void {
   log.ok(`${spec.unit}, ${RECONCILE_TIMER} and ${RECONCILE_PATH} enabled`);
 }
 
-export function stopUnits(spec: AddonSpec): void {
-  for (const u of [spec.unit, RECONCILE_TIMER, RECONCILE_PATH]) {
-    tryRun("systemctl", ["disable", "--now", u]);
-  }
-  for (const f of [`${SYSTEMD_DIR}/${spec.unit}`, `${SYSTEMD_DIR}/${RECONCILE_SERVICE}`,
-                   `${SYSTEMD_DIR}/${RECONCILE_TIMER}`, `${SYSTEMD_DIR}/${RECONCILE_PATH}`,
-                   `${SYSTEMD_DIR}/${ANCHOR_SERVICE}`]) {
-    rmSync(f, { force: true });
-  }
+/**
+ * Stop and remove an addon's units.
+ *
+ * `keepShared` is what makes uninstalling one addon safe for another. The
+ * reconcile timer, its service, and the anchor path unit belong to the platform
+ * rather than to any addon, and this used to delete them unconditionally. So
+ * `uninstall addonA` stopped reconciliation for addon B, and B could not recover
+ * on its own: `repair` is what rewrites those units, and the timer that runs
+ * `repair` had just been deleted. cmdUninstall already knew whether anything
+ * else was still installed -- it uses the same answer to decide whether to keep
+ * the CLI and the release tree -- so it passes it here too.
+ */
+export function stopUnits(spec: AddonSpec, keepShared = false): void {
+  const units = keepShared ? [spec.unit] : [spec.unit, RECONCILE_TIMER, RECONCILE_PATH];
+  for (const u of units) tryRun("systemctl", ["disable", "--now", u]);
+
+  const files = keepShared
+    ? [`${SYSTEMD_DIR}/${spec.unit}`]
+    : [`${SYSTEMD_DIR}/${spec.unit}`, `${SYSTEMD_DIR}/${RECONCILE_SERVICE}`,
+       `${SYSTEMD_DIR}/${RECONCILE_TIMER}`, `${SYSTEMD_DIR}/${RECONCILE_PATH}`,
+       `${SYSTEMD_DIR}/${ANCHOR_SERVICE}`];
+  for (const f of files) rmSync(f, { force: true });
+
   tryRun("systemctl", ["daemon-reload"]);
+  // The path unit's watch list is derived from the addons still installed, so
+  // it has to be rebuilt once this one is gone.
+  if (keepShared) {
+    writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_PATH}`, reconcileUnits().path, 0o644);
+    tryRun("systemctl", ["daemon-reload"]);
+    tryRun("systemctl", ["restart", RECONCILE_PATH]);
+  }
 }
 
 /**

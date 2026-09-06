@@ -540,6 +540,38 @@ behind. The offline fallback is one hardcoded version, and badging against it
 would invent updates that do not exist. A stale cache still counts as a real
 answer and says so; the fallback reports no newest version at all.
 
+## The platform is multi-addon; most of it now actually is
+
+"Multi-addon from the start" was the goal, and the injector was rebuilt for it
+after two addons turned out to overwrite each other's nav entries. That fix was
+real but narrow: the injector became addon-agnostic while the rest of the
+platform kept the shape it had when Instatic was the only addon. A review found
+five more places where the second addon would have been the one to discover it.
+
+- `repair` reconciled whatever `resolveAddon()` defaulted to, which is instatic,
+  and the timer runs `repair --quiet` naming no addon. A second addon would never
+  have had its wrapper reinstalled, its sudoers line re-validated, its site user
+  re-hardened or its service restarted. Anchors were the exception, because
+  `reconcileAnchors()` already covered everything -- so the one visible symptom,
+  a missing nav entry, was the one thing that still worked.
+- `uninstall` deleted the reconcile timer, its service and the anchor path unit
+  unconditionally, and all three are shared. Removing addon A stopped
+  reconciliation for addon B, permanently: `repair` rewrites those units, and the
+  timer that runs `repair` was what had just been deleted.
+- The port scan in `panel-snapshot.ts` read one hardcoded directory. The `ss`
+  scan beside it catches another addon's *running* instances, so the hardcoded
+  path left exactly the case the directory scan exists for -- a stopped instance,
+  whose port is still spoken for but not listening.
+- `TEMPLATE_WATCH_PATHS` was a hand-written copy of Instatic's two templates. It
+  is derived from the registry now, because nothing connected the two lists, so
+  an addon patching a third template would have got no fast repair and no
+  warning.
+- `status` and `update` with no addon named defaulted to instatic rather than to
+  everything installed.
+
+`repair`, `status` and `update` now act on every addon with a config file on
+disk, which is what "installed" means here.
+
 ## Known gaps
 
 - `--local` installs skip provenance verification by construction. Staging only.
@@ -553,3 +585,9 @@ answer and says so; the fallback reports no newest version at all.
   addon that would put two managers behind one site whose reverse-proxy URL
   names only the first one's port. It needs a hostname per addon before a second
   addon ships.
+- `snapshot.json` is `root:<that addon's site user>` 0640, so only one addon can
+  read it. A second addon needs a shared group, which is a real decision rather
+  than a patch: it means the installer creating and maintaining a group, adding
+  each addon's site user to it, and `SupplementaryGroups=` on the unit, all to
+  share a file whose contents are the panel's non-secret site list. Left open
+  deliberately until there is a second addon to design it against.
