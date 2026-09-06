@@ -1,4 +1,4 @@
-// Request guards.
+// Request guards shared by every addon's manager app.
 //
 // Authentication itself belongs to nginx: the addon runs as its own CloudPanel
 // site with per-site security in front of it (decision 2.4), and the app binds

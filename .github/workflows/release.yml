@@ -75,7 +75,8 @@ jobs:
           # recon showed avx2 on the target CPU, so the standard glibc x64
           # target applies rather than the baseline variant.
           for spec in "clp-addons-linux-x64:cli/index.ts" \
-                      "instatic-app-linux-x64:addons/instatic/app/index.ts"; do
+                      "instatic-app-linux-x64:addons/instatic/app/index.ts" \
+                      "stager-app-linux-x64:addons/stager/app/index.ts"; do
             out="dist/${spec%%:*}"
             entry="${spec#*:}"
             echo "building $out from $entry"
@@ -137,7 +138,9 @@ jobs:
           subject-path: |
             dist/clp-addons-linux-x64
             dist/instatic-app-linux-x64
+            dist/stager-app-linux-x64
             dist/clp-action-instatic
+            dist/clp-action-stager
             dist/install.sh
 
       - name: Publish the sigstore bundles alongside the artifacts
@@ -203,7 +206,9 @@ jobs:
             "${notes_args[@]}" \
             dist/clp-addons-linux-x64 \
             dist/instatic-app-linux-x64 \
+            dist/stager-app-linux-x64 \
             dist/clp-action-instatic \
+            dist/clp-action-stager \
             dist/install.sh \
             dist/attestations.jsonl \
             dist/SHA256SUMS
