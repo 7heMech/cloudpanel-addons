@@ -100,6 +100,10 @@ after a CloudPanel update wipes it. There is deliberately one implementation of
 | `clp-action-instatic` | root, via one sudoers line | the privilege boundary |
 | Instatic instances | that instance's CloudPanel site user | one container per site, `127.0.0.1:39000-39999` |
 
+The manager stores nothing of its own. What exists is whatever the wrapper finds
+on disk, so an instance created by calling the wrapper directly shows up in the
+dashboard without anything having to be told about it.
+
 The manager runs as the user CloudPanel already created for the addon's own
 site, rather than an account this installer invents. One account per addon site
 instead of two, and CloudPanel owns its lifecycle: deleting the site removes the

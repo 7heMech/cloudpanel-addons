@@ -4,7 +4,6 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { instanceRepo, type InstanceRecord } from "./db";
 import { getNextAvailablePort, readSnapshot, snapshotAgeSeconds, type PanelSnapshot } from "../../../lib/snapshot-reader";
 
 const execFileAsync = promisify(execFile);
@@ -84,7 +83,24 @@ export function validateTag(t: unknown): string | null {
   return typeof t === "string" && TAG_RE.test(t) ? t : null;
 }
 
-export interface InstanceView extends InstanceRecord {
+/**
+ * An instance as the wrapper reports it.
+ *
+ * There is no second copy of this anywhere. The manager used to keep its own
+ * SQLite table beside the wrapper's meta.json files, and the two drifted
+ * whenever anything touched an instance without going through the manager --
+ * an instance created by calling the wrapper directly never showed up here, and
+ * a delete that failed part-way left a row describing something that no longer
+ * existed. The files on disk and the container are the state; this is a view of
+ * them.
+ */
+export interface InstanceView {
+  domain: string;
+  port: number;
+  tag: string;
+  container: string;
+  siteUser: string;
+  createdAt: string;
   state: string;
 }
 
@@ -95,57 +111,43 @@ export const instaticService = {
   },
 
 
-  nextPort(): number {
-    // The instance table is authoritative for ports this manager handed out,
-    // including ones created since the snapshot was last written.
-    return getNextAvailablePort(readSnapshot(), instanceRepo.getAll().map((r) => r.port));
+  async nextPort(): Promise<number> {
+    // The snapshot is rewritten by the root CLI on install and repair, so
+    // between reconciliation runs it does not know about instances created
+    // since. The wrapper does.
+    const instances = await this.listInstances();
+    return getNextAvailablePort(readSnapshot(), instances.map((i) => i.port));
   },
 
-  // Live container state comes from the wrapper's status verb, one call per
-  // instance. The stored status is a cache and the wrapper is the truth.
   async listInstances(): Promise<InstanceView[]> {
-    const records = instanceRepo.getAll();
-    const views: InstanceView[] = [];
-    for (const r of records) {
-      const res = await callWrapper<{ state: string }>("status", ["--domain", r.domain]);
-      const state = res.ok ? (res.data?.state ?? "unknown") : "unknown";
-      if (state !== r.status) instanceRepo.updateStatus(r.domain, state);
-      views.push({ ...r, status: state, state });
+    const res = await callWrapper<{ instances: InstanceView[] }>("list", []);
+    if (!res.ok) {
+      console.error("[instatic] could not list instances:", res.error);
+      return [];
     }
-    return views;
+    return res.data?.instances ?? [];
   },
 
   async createInstance(domain: string, tag: string): Promise<WrapperResult> {
-    if (instanceRepo.getByDomain(domain)) {
+    const existing = await this.listInstances();
+    if (existing.some((i) => i.domain === domain)) {
       return { ok: false, error: `an instance for ${domain} already exists` };
     }
 
-    const port = this.nextPort();
-    const res = await callWrapper<{ container: string; siteUser: string }>("create", [
+    // Nothing is recorded afterwards: the wrapper writes meta.json, which is
+    // what the next list reads. The wrapper re-checks the port too, and holds
+    // a lock while it does, so this allocation is a proposal rather than a
+    // reservation.
+    const port = getNextAvailablePort(readSnapshot(), existing.map((i) => i.port));
+    return callWrapper<{ container: string; siteUser: string }>("create", [
       "--domain", domain,
       "--port", String(port),
       "--tag", tag,
     ]);
-    if (!res.ok) return res;
-
-    const now = new Date().toISOString();
-    instanceRepo.insert({
-      domain,
-      port,
-      tag,
-      container_name: res.data?.container ?? `instatic-${domain}`,
-      site_user: res.data?.siteUser ?? "",
-      status: "running",
-      created_at: now,
-      updated_at: now,
-    });
-    return res;
   },
 
   async updateInstance(domain: string, tag: string): Promise<WrapperResult> {
-    const res = await callWrapper("update", ["--domain", domain, "--tag", tag]);
-    if (res.ok) instanceRepo.updateTag(domain, tag);
-    return res;
+    return callWrapper("update", ["--domain", domain, "--tag", tag]);
   },
 
   /**
@@ -157,16 +159,12 @@ export const instaticService = {
    * uid the container runs as.
    */
   async lifecycle(domain: string, verb: "start" | "stop" | "restart" | "recreate"): Promise<WrapperResult> {
-    const res = await callWrapper(verb, ["--domain", domain]);
-    if (res.ok) instanceRepo.updateStatus(domain, verb === "stop" ? "exited" : "running");
-    return res;
+    return callWrapper(verb, ["--domain", domain]);
   },
 
   async deleteInstance(domain: string): Promise<WrapperResult> {
     // --confirm must equal --domain; the wrapper enforces it too.
-    const res = await callWrapper("delete", ["--domain", domain, "--confirm", domain]);
-    if (res.ok) instanceRepo.delete(domain);
-    return res;
+    return callWrapper("delete", ["--domain", domain, "--confirm", domain]);
   },
 
   async snapshotInstance(domain: string): Promise<WrapperResult> {

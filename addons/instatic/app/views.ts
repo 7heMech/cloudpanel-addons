@@ -249,7 +249,7 @@ export function dashboardView(
       (i) => `<tr>
   <td>
     <a href="https://${esc(i.domain)}" target="_blank" rel="noreferrer noopener">${esc(i.domain)}</a>
-    <div class="mono" style="color:var(--muted)">${esc(i.container_name)}</div>
+    <div class="mono" style="color:var(--muted)">${esc(i.container)}</div>
   </td>
   <td class="mono">127.0.0.1:${esc(i.port)}</td>
   <td><span class="badge">${esc(i.tag)}</span></td>

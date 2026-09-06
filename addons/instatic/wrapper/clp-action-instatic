@@ -677,6 +677,45 @@ cmd_status() {
   emit_ok "{\"domain\":\"${domain}\",\"container\":\"${name}\",\"state\":\"${state}\"}"
 }
 
+# Every instance, from disk, with live container state.
+#
+# This is the manager's only source of truth about what exists. It used to keep
+# its own SQLite table alongside these files, which drifted the moment anything
+# touched an instance without going through the manager: an instance created by
+# calling the wrapper directly never appeared in the dashboard, and a delete
+# that failed part-way left a row describing something that was gone.
+#
+# One call rather than one per instance, because the manager cannot read these
+# directories itself -- they belong to each instance's own site user.
+cmd_list() {
+  local dir meta domain name state first=1
+  printf '{"ok":true,"data":{"instances":['
+
+  for dir in "${DATA_BASE_DIR}"/*/; do
+    meta="${dir}meta.json"
+    [[ -f $meta ]] || continue
+    domain=$(read_meta domain "$meta")
+    [[ -n $domain ]] || continue
+
+    name=$(container_name "$domain")
+    state=$(docker inspect -f '{{.State.Status}}' "$name" 2>/dev/null | tr -d '[:space:]' || true)
+    [[ -n $state ]] || state="absent"
+
+    (( first )) || printf ','
+    first=0
+    printf '{"domain":%s,"port":%s,"tag":%s,"container":%s,"siteUser":%s,"createdAt":%s,"state":%s}' \
+      "$(json_str "$domain")" \
+      "$(read_meta port "$meta")" \
+      "$(json_str "$(read_meta tag "$meta")")" \
+      "$(json_str "$name")" \
+      "$(json_str "$(read_meta siteUser "$meta")")" \
+      "$(json_str "$(read_meta createdAt "$meta")")" \
+      "$(json_str "$state")"
+  done
+
+  printf ']}}\n'
+}
+
 cmd_logs() {
   local domain=$1 name
   name=$(container_name "$domain")
@@ -694,7 +733,7 @@ cmd_logs() {
 # building it from raw input lets `--domain ../../..` place a root-owned file
 # anywhere on the filesystem.
 
-(( $# >= 1 )) || emit_err "usage: $0 {create|update|recreate|start|stop|restart|delete|snapshot|status|logs} [options]"
+(( $# >= 1 )) || emit_err "usage: $0 {list|create|update|recreate|start|stop|restart|delete|snapshot|status|logs} [options]"
 
 VERB=$1; shift
 
@@ -710,6 +749,8 @@ while (( $# > 0 )); do
 done
 
 case $VERB in
+  # The only verb that names no instance: it reports on all of them.
+  list)                    ;;
   create)                  validate_domain "$DOMAIN"; validate_port "$PORT"; validate_tag "$TAG" ;;
   update)                  validate_domain "$DOMAIN"; validate_tag "$TAG" ;;
   start|stop|restart|recreate|snapshot|status|logs)
@@ -723,6 +764,8 @@ esac
 # argument is legitimately absent, and set -e would abort on the case's status.
 case $VERB in
   create) ;;
+  list)
+    if [[ -n $DOMAIN || -n $PORT || -n $TAG || -n $CONFIRM ]]; then emit_err "list takes no arguments"; fi ;;
   update)
     if [[ -n $PORT ]]; then emit_err "update does not take --port"; fi ;;
   delete)
@@ -736,10 +779,18 @@ chmod 700 "$LOCK_DIR"
 
 # One lock per domain, held for the whole run. Without it two concurrent
 # updates interleave a snapshot with a restart.
-exec 200>"${LOCK_DIR}/${DOMAIN}.lock"
-flock -w 300 200 || emit_err "another operation is already running for ${DOMAIN}"
+#
+# list is exempt: it names no domain, so there is nothing to lock, and it only
+# reads. Taking a lock here would also mean the dashboard stops rendering
+# whenever any instance is mid-update, which is exactly when someone is looking
+# at it.
+if [[ $VERB != "list" ]]; then
+  exec 200>"${LOCK_DIR}/${DOMAIN}.lock"
+  flock -w 300 200 || emit_err "another operation is already running for ${DOMAIN}"
+fi
 
 case $VERB in
+  list)     cmd_list ;;
   create)   cmd_create "$DOMAIN" "$PORT" "$TAG" ;;
   update)   cmd_update "$DOMAIN" "$TAG" ;;
   start)    cmd_lifecycle start "$DOMAIN" ;;

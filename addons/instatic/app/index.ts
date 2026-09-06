@@ -57,12 +57,12 @@ const server = Bun.serve({
           const { snap, ageSeconds } = instaticService.snapshot();
           return html(
             layout("Instatic instances",
-              dashboardView(instances, instaticService.nextPort(), ageSeconds, snap.sites)),
+              dashboardView(instances, await instaticService.nextPort(), ageSeconds, snap.sites)),
             csrf
           );
         }
         const tags = await listAvailableTags();
-        return html(layout("New Instatic site", newInstanceView(instaticService.nextPort(), tags)), csrf);
+        return html(layout("New Instatic site", newInstanceView(await instaticService.nextPort(), tags)), csrf);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return html(layout("Error", `<div class="alert">${msg.replace(/[<>&]/g, "")}</div>`), csrf, 500);

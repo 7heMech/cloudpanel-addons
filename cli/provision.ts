@@ -151,9 +151,6 @@ export function ensureDirs(spec: AddonSpec, user: string): void {
   run("chown", [`${user}:${user}`, spec.stateDir]);
   run("chmod", ["750", spec.stateDir]);
 
-  const appDb = `${spec.stateDir}/app.db`;
-  if (existsSync(appDb)) run("chown", [`${user}:${user}`, appDb]);
-
   // The snapshot is customer data: the app's group reads it, nobody else.
   const snapshot = `${STATE_DIR}/snapshot.json`;
   if (existsSync(snapshot)) {

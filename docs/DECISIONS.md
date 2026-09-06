@@ -167,6 +167,32 @@ position. A bundle is signed and bound to its subject's digest, so an attacker
 who can replace a release asset cannot produce one that verifies against the
 replacement -- the failure mode is a refused install, not a silent accept.
 
+## The wrapper's files are the only record of what exists
+
+The manager kept its own SQLite table of instances beside the wrapper's
+`meta.json` files. Two records of one fact drift, and these did: an instance
+created by calling the wrapper directly never appeared in the dashboard, and a
+delete that failed part-way left a row describing something that was already
+gone. The table was also the thing `nextPort` consulted, so a drifted row meant
+a port handed out twice or never reused.
+
+The files on disk and the running container are the state. The wrapper now has
+a `list` verb that walks its own data directory and reports each instance's
+recorded metadata with live container state, and the manager holds nothing of
+its own -- `app.db` and `db.ts` are gone, along with every write that kept them
+in step.
+
+It has to be one call rather than one per instance, because the manager cannot
+read those directories: each belongs to its instance's own site user. `list` is
+also the one verb exempt from the per-domain lock. It names no domain, so there
+is nothing to lock, and locking would mean the dashboard stops rendering
+whenever any instance is mid-update -- precisely when someone is looking at it.
+
+Port allocation is now a proposal rather than a reservation: the manager picks
+the lowest free port and the wrapper re-checks it under the lock. That is the
+honest description of what was always happening, and it no longer depends on a
+record only the manager maintained.
+
 ## One naming scheme for the accounts CloudPanel creates for us
 
 `clpctl site:add:reverse-proxy` requires `--siteUser` and only generates a name
