@@ -250,6 +250,9 @@ export function jobView(job: JobView, logText: string): string {
           <dt>Site user</dt><dd>${esc(result.siteUser)}</dd>
           <dt>PHP</dt><dd>${esc(result.phpVersion)}</dd>
           <dt>Template</dt><dd>${esc(result.vhostTemplate)}</dd>
+          <dt>Vhost</dt><dd>${result.vhostCarried
+            ? "copied from the source"
+            : `the stock ${esc(result.vhostTemplate)} template`}</dd>
         </dl>
         <p class="hint">The site user's password was generated and not kept. Set one in Site → SSH/FTP if you
           need SFTP access.</p>

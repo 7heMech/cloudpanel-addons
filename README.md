@@ -39,17 +39,21 @@ anything it forked itself would be killed with it mid-clone.
 If a step fails, everything that run created is removed: the database, the site,
 the site user, the dump. What was already there is left alone.
 
-Two things it does not copy, and says so afterwards rather than silently:
+The source's nginx config comes with it. Its stored vhost is registered as a
+named template, the clone is created from that, and the template is removed
+again, so CloudPanel renders it, expands every placeholder against the clone's
+own certificate, document root and php-fpm port, and writes both its own record
+and the file. Nothing here edits a vhost or writes a panel row.
 
-- **Hand edits to the source's nginx vhost.** CloudPanel keeps the vhost body in
-  its own database, renders the Vhost tab and every regeneration from that
-  column, and has no `clpctl` verb that writes it. Copying them would mean
-  writing an undocumented schema while the panel is running. The clone is created
-  from the same named vhost template as its source, which covers the difference
-  that comes from the template; anything left is reported for you to paste into
-  the panel's own Vhost editor.
-- **A custom root directory.** `clpctl site:add:php` does not take one, so the
-  clone gets the template's default and the job says if that differs.
+One case cannot be carried: a source whose `server_name` line is itself the hand
+edit, such as a multisite wildcard. CloudPanel requires the `{{server_name}}`
+placeholder on that line and the edit cannot share it, so the panel refuses the
+template, the clone is built from the stock one, and the job says which site to
+copy by hand. That refusal is the point. A staging site that inherited
+`server_name production.example.com` would answer for production.
+
+A custom root directory is not copied either. `clpctl site:add:php` does not take
+one, so the clone gets the template's default and the job says if that differs.
 
 ## Install
 

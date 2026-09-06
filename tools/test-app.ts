@@ -18,7 +18,7 @@ import { expandTarget } from "../addons/stager/app/service";
 import { isNewerThan } from "../addons/instatic/app/tags";
 import type { InstanceView } from "../addons/instatic/app/service";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { describeAuthState, releaseArtifacts, siteUserFor, type SiteAuthState } from "../cli/provision";
 import { ADDONS, ADDON_NAMES } from "../cli/paths";
 import { getNextAvailablePort } from "../lib/snapshot-reader";
@@ -274,7 +274,10 @@ console.log("\n== the vhost comparison ignores what CloudPanel generates ==");
 // two. Cloning example.com into stg.example.com therefore differs in both, and
 // reporting that as a hand edit would fire the note on every ordinary clone.
 {
-  const shapeFn = bashFunction("addons/stager/wrapper/clp-action-stager", "vhost_shape");
+  const W = "addons/stager/wrapper/clp-action-stager";
+  const shapeFn = ["strip_redirect_block", "fold_server_name", "vhost_shape"]
+    .map((n) => bashFunction(W, n))
+    .join("\n");
   const shape = (body: string, domain: string) =>
     execFileSync("bash", ["-c", `${shapeFn}\nvhost_shape "$1" "$2"`, "_", body, domain],
       { encoding: "utf-8" });
@@ -317,6 +320,102 @@ console.log("\n== the vhost comparison ignores what CloudPanel generates ==");
     apex.includes("{{root}}") && apex.includes("{{php_fpm_port}}"), apex);
   check("a redirect target does not survive into the shape",
     !apex.includes("return 301"), apex);
+}
+
+console.log("\n== a carried-over vhost may never name the source site ==");
+
+// The dangerous outcome is a clone that answers for the site it was cloned
+// from: two nginx server blocks claiming one server_name, where the other one
+// is production. CloudPanel's own validator refuses a template with no
+// {{server_name}}, which covers part of it; these are the checks it does not
+// make, run before it is asked.
+{
+  const W = "addons/stager/wrapper/clp-action-stager";
+  const gateFn = [bashFunction(W, "hostname_boundary"), bashFunction(W, "vhost_template_ok")].join("\n");
+  const gate = (body: string) => {
+    const f = `/tmp/clp-stager-gate-test-${process.pid}.tpl`;
+    writeFileSync(f, body);
+    try {
+      const out = execFileSync("bash", ["-c",
+        `${gateFn}\nif vhost_template_ok "$1" "$2" "$3"; then echo PASS; else echo "REJECT: $VHOST_REJECT"; fi`,
+        "_", f, "example.com", "stg.example.com"], { encoding: "utf-8" });
+      return out.trim();
+    } finally {
+      rmSync(f, { force: true });
+    }
+  };
+
+  const ok = ["server {", "  {{server_name}}", "  {{root}}", "}"].join("\n");
+  check("a template naming only the placeholder is accepted", gate(ok) === "PASS", gate(ok));
+
+  const leaked = ["server {", "  {{server_name}}", "  # see https://example.com/docs", "}"].join("\n");
+  check("the source hostname surviving anywhere is refused",
+    gate(leaked).startsWith("REJECT"), gate(leaked));
+
+  const noPlaceholder = ["server {", "  server_name stg.example.com *.stg.example.com;", "}"].join("\n");
+  check("a template with no {{server_name}} is refused before the panel sees it",
+    gate(noPlaceholder).startsWith("REJECT"), gate(noPlaceholder));
+
+  // The maksimasenov.com shape: the hand edit is the server_name line itself.
+  const foreign = ["server {", "  {{server_name}}", "  server_name other.test;", "}"].join("\n");
+  check("a server_name outside the target is refused",
+    gate(foreign).startsWith("REJECT"), gate(foreign));
+
+  const wildcard = ["server {", "  {{server_name}}", "  server_name *.stg.example.com;", "}"].join("\n");
+  check("a wildcard under the target is allowed", gate(wildcard) === "PASS", gate(wildcard));
+
+  const sub = ["server {", "  {{server_name}}", "  server_name a.stg.example.com;", "}"].join("\n");
+  check("a subdomain of the target is allowed", gate(sub) === "PASS", gate(sub));
+
+  // stg.example.com is a subdomain of example.com, so a naive "endsWith the
+  // source" test would pass this. It must be judged against the target.
+  const parent = ["server {", "  {{server_name}}", "  server_name evil.example.com;", "}"].join("\n");
+  check("a sibling under the source's domain is refused",
+    gate(parent).startsWith("REJECT"), gate(parent));
+}
+
+console.log("\n== building the carried-over template ==");
+
+{
+  const W = "addons/stager/wrapper/clp-action-stager";
+  const fns = ["hostname_boundary", "strip_redirect_block", "fold_server_name", "build_vhost_template"]
+    .map((n) => bashFunction(W, n))
+    .join("\n");
+  // vhost_of reads the panel database; stubbed so this runs anywhere.
+  const build = (body: string, source: string, target: string) => {
+    const bodyFile = `/tmp/clp-stager-body-${process.pid}`;
+    writeFileSync(bodyFile, body);
+    try {
+      return execFileSync("bash", ["-c",
+        `vhost_of() { cat "${bodyFile}"; }\n${fns}\n` +
+        `build_vhost_template "$1" "$2" >/dev/null && cat "$TEMPLATE_FILE"; rm -rf "$TEMPLATE_STAGE"`,
+        "_", source, target], { encoding: "utf-8" });
+    } finally {
+      rmSync(bodyFile, { force: true });
+    }
+  };
+
+  const SOURCE = [
+    "server {",
+    "  listen 443 ssl;",
+    "  server_name example.com www1.example.com;",
+    "  {{root}}",
+    '  add_header Link "<https://example.com/api>; rel=preconnect";',
+    '  add_header X-Unrelated "https://notexample.com/keep";',
+    "}",
+  ].join("\n");
+
+  const out = build(SOURCE, "example.com", "stg.example.com");
+
+  check("the generated server_name becomes the placeholder again",
+    out.includes("{{server_name}}") && !out.includes("server_name example.com"), out);
+  check("a hand edit naming the source is rewritten to the target",
+    out.includes("<https://stg.example.com/api>"), out);
+  check("a hostname that merely ends in the source is left alone",
+    out.includes("https://notexample.com/keep"), out);
+  check("the clone's own name is not mangled into a double prefix",
+    !out.includes("stg.stg.example.com"), out);
+  check("CloudPanel's other placeholders survive untouched", out.includes("{{root}}"), out);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

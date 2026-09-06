@@ -233,6 +233,7 @@ DUMP_FILE=""
 STG_DB_NAME=""
 STG_DB_USER=""
 STG_DB_PASS=""
+TEMPLATE_NAME=""
 
 set_step() {
   STEP=$1
@@ -288,6 +289,11 @@ cmd_run() {
       warn "removing the staging database this run created"
       "$CLPCTL" db:delete --databaseName="$STG_DB_NAME" --force >&2 2>/dev/null || true
     fi
+    drop_template_stage
+    if [[ -n $TEMPLATE_NAME ]]; then
+      "$CLPCTL" vhost-template:delete --name="$TEMPLATE_NAME" >&2 2>/dev/null || true
+      TEMPLATE_NAME=""
+    fi
     if (( SITE_CREATED == 1 )); then
       warn "removing the staging site this run created"
       "$CLPCTL" site:delete --domainName="$target" --force >&2 2>/dev/null || true
@@ -302,6 +308,8 @@ cmd_run() {
 
   # --- source facts ---------------------------------------------------------
   set_step "reading the source site"
+  local -a notes=()
+  local vhost_carried=1
   local row src_type src_user src_root src_app php_version src_db
   row=$(site_row "$source") || fail_job "cannot read the panel database"
   [[ -n $row ]] || fail_job "no CloudPanel site for ${source}"
@@ -322,6 +330,41 @@ cmd_run() {
   [[ -d $src_dir ]] || fail_job "source directory not found: ${src_dir}"
 
   # --- the staging site -----------------------------------------------------
+  # --- the source's own vhost, if it can be carried safely ------------------
+  # Attempted for every clone rather than asked about, because the operator has
+  # no way to know in advance whether their source has edits. When it cannot be
+  # done the clone still gets built from the stock template and the job says
+  # what was left behind, so the failure is a message rather than a missing
+  # clone -- and never a staging site answering for production.
+  # Resolved quietly here and only mentioned below if it ends up being used:
+  # saying the base template is missing is noise when the source's own vhost
+  # was carried across and the base was never reached.
+  local base_template=$src_app base_missing=0
+  if ! vhost_template_exists "$base_template"; then
+    base_missing=1
+    base_template="Generic"
+  fi
+
+  local vhost_template=$base_template
+  if build_vhost_template "$source" "$target" \
+     && vhost_template_ok "$TEMPLATE_FILE" "$source" "$target"; then
+    local candidate="clp-stager-${id}"
+    if "$CLPCTL" vhost-template:add --name="$candidate" --file="$TEMPLATE_FILE" >&2; then
+      TEMPLATE_NAME=$candidate
+      vhost_template=$candidate
+      log "carrying ${source}'s vhost across"
+    else
+      notes+=("CloudPanel would not accept a vhost template built from ${source}, so the clone uses the stock ${base_template} template. Copy any edits across in Site -> Vhost")
+      vhost_carried=0
+      (( base_missing == 1 )) && notes+=("${source} names a vhost template the panel no longer has, so ${base_template} was used instead")
+    fi
+  else
+    notes+=("${source}'s vhost was not carried across: ${VHOST_REJECT:-it could not be read}. The clone uses the stock ${base_template} template; copy the edits across in Site -> Vhost")
+    vhost_carried=0
+    (( base_missing == 1 )) && notes+=("${source} names a vhost template the panel no longer has, so ${base_template} was used instead")
+  fi
+  drop_template_stage
+
   set_step "creating the staging site ${target} on PHP ${php_version}"
   local stg_user stg_pass
   stg_user=$(site_user_for "$target")
@@ -331,11 +374,22 @@ cmd_run() {
   "$CLPCTL" site:add:php \
     --domainName="$target" \
     --phpVersion="$php_version" \
-    --vhostTemplate="$src_app" \
+    --vhostTemplate="$vhost_template" \
     --siteUser="$stg_user" \
     --siteUserPassword="$stg_pass" >&2 \
     || fail_job "clpctl site:add:php failed for ${target}"
   SITE_CREATED=1
+
+  # Its whole purpose was this one site:add:php. CloudPanel copies the rendered
+  # body into the site's own record, so the clone is unaffected by the template
+  # going away, and the panel's template library does not grow by one entry per
+  # clone. Only site.application still names it, which nothing but the new-site
+  # form reads.
+  if [[ -n $TEMPLATE_NAME ]]; then
+    "$CLPCTL" vhost-template:delete --name="$TEMPLATE_NAME" >&2 \
+      || warn "could not remove the temporary vhost template ${TEMPLATE_NAME}"
+    TEMPLATE_NAME=""
+  fi
 
   local dest_dir="/home/${stg_user}/htdocs/${target}"
   [[ -d $dest_dir ]] || fail_job "CloudPanel did not create ${dest_dir}"
@@ -390,7 +444,6 @@ cmd_run() {
   chown -R "${stg_user}:${stg_user}" "$dest_dir" || fail_job "could not chown ${dest_dir}"
 
   # --- application config ---------------------------------------------------
-  local -a notes=()
   if [[ -n $src_db ]]; then
     set_step "rewriting the application's database credentials"
     if [[ -f "${dest_dir}/wp-config.php" ]]; then
@@ -415,8 +468,11 @@ cmd_run() {
   if [[ -n $src_root && -n $stg_root && "${src_root#"$source"}" != "${stg_root#"$target"}" ]]; then
     notes+=("the source's root directory is '${src_root}' but the clone's is '${stg_root}'; set it in Site -> Settings")
   fi
-  if vhost_differs "$source" "$target" "$src_user" "$stg_user"; then
-    notes+=("${source} has vhost edits beyond the ${src_app} template. This addon does not copy them, because the panel stores the vhost in its own database and no clpctl verb writes it. Copy them across in Site -> Vhost")
+  # Only when the carry-over was attempted and appeared to work. If it was
+  # refused, the note saying so was added above and already names the reason;
+  # repeating it in different words reads like two separate problems.
+  if (( vhost_carried == 1 )) && vhost_differs "$source" "$target" "$src_user" "$stg_user"; then
+    notes+=("${source}'s vhost still differs from the clone's after carrying it across. Compare them in Site -> Vhost")
   fi
 
   # --- certificate ----------------------------------------------------------
@@ -454,8 +510,9 @@ cmd_run() {
   # out of the panel, and it is needed whenever the application's config could
   # not be rewritten. 0600 in a 0700 directory, and `prune` drops the whole
   # record after JOB_RETENTION_DAYS.
-  printf '{"siteUser":%s,"phpVersion":%s,"vhostTemplate":%s,"database":%s,"notes":%s}\n' \
-    "$(json_str "$stg_user")" "$(json_str "$php_version")" "$(json_str "$src_app")" \
+  printf '{"siteUser":%s,"phpVersion":%s,"vhostTemplate":%s,"vhostCarried":%s,"database":%s,"notes":%s}\n' \
+    "$(json_str "$stg_user")" "$(json_str "$php_version")" "$(json_str "$base_template")" \
+    "$( (( vhost_carried == 1 )) && echo true || echo false )" \
     "$db_json" "$notes_json" > "${dir}/result.json"
   chmod 600 "${dir}/result.json"
 
@@ -530,22 +587,51 @@ run_wp_search_replace() {
 # Both are folded away here. Anything else in a server_name line survives, so a
 # hand-widened `server_name <domain> *.<domain>;` still reads as an edit, which
 # is the case this check exists for.
+# An ERE matching $1 only as a whole hostname, capturing the characters either
+# side so a substitution can put them back.
+#
+# A hostname is not a substring: example.com appears inside stg.example.com and
+# inside notexample.com, and treating it as one either rewrites hostnames that
+# merely end in it or reports the clone's own name as the source leaking
+# through. The neighbouring character must not be one that can continue a
+# hostname, which for the left side includes the dot.
+hostname_boundary() {
+  local h=${1//./\\.}
+  printf '(^|[^A-Za-z0-9.-])%s([^A-Za-z0-9-]|$)' "$h"
+}
+
+# Drop the http->https redirect server block CloudPanel prepends. It is present
+# only when the hostname is an apex or www, so a source and its subdomain clone
+# differ by the whole block without anyone having edited anything.
+strip_redirect_block() {
+  awk '
+    NR == 1 && /^server \{/ { block = $0 ORS; depth = 1; inblock = 1; next }
+    inblock {
+      block = block $0 ORS
+      depth += gsub(/\{/, "{") - gsub(/\}/, "}")
+      if (/return 301/) redirect = 1
+      if (depth == 0) { inblock = 0; if (!redirect) printf "%s", block }
+      next
+    }
+    { print }
+  '
+}
+
+# Replace the two forms ServerNameProcessor generates with $2, leaving any other
+# server_name line alone. A hand-widened `server_name <d> *.<d>;` is not one of
+# them and survives, which is what lets both callers below tell an edit from a
+# rendering artefact.
+fold_server_name() {
+  local domain=${1//./\\.} repl=$2
+  sed -e "s|^\([[:space:]]*\)server_name ${domain} www1\\.${domain};[[:space:]]*\$|\\1${repl}|" \
+      -e "s|^\([[:space:]]*\)server_name ${domain};[[:space:]]*\$|\\1${repl}|"
+}
+
 vhost_shape() {
   local body=$1 domain=$2
   printf '%s\n' "$body" \
-    | awk '
-        NR == 1 && /^server \{/ { block = $0 ORS; depth = 1; inblock = 1; next }
-        inblock {
-          block = block $0 ORS
-          depth += gsub(/\{/, "{") - gsub(/\}/, "}")
-          if (/return 301/) redirect = 1
-          if (depth == 0) { inblock = 0; if (!redirect) printf "%s", block }
-          next
-        }
-        { print }
-      ' \
-    | sed -e "s/^[[:space:]]*server_name ${domain} www1\.${domain};[[:space:]]*$/  server_name {GENERATED};/" \
-          -e "s/^[[:space:]]*server_name ${domain};[[:space:]]*$/  server_name {GENERATED};/" \
+    | strip_redirect_block \
+    | fold_server_name "$domain" "server_name {GENERATED};" \
     | grep -v '^[[:space:]]*$'
 }
 
@@ -564,6 +650,117 @@ vhost_differs() {
   a=${a//"$source"/"$target"}
   a=${a//"$src_user"/"$stg_user"}
   [[ $a != "$b" ]]
+}
+
+# Build a named vhost template that reproduces the source's config for the
+# clone, or fail.
+#
+# The clone is created from this instead of the stock template, which is what
+# carries the source's hand edits across. Going through CloudPanel's own
+# template mechanism rather than writing the vhost ourselves matters twice
+# over: the panel renders every {{placeholder}} against the *clone's* values,
+# so the copy tracks its own certificate, root, php-fpm port and log paths
+# rather than freezing the source's; and the panel writes both its database
+# record and the file on disk, so nothing it does later reverts the result. A
+# vhost written only to disk is reverted by the next thing that regenerates it.
+# Where a candidate template is handed to clpctl, and why it is not the job
+# directory.
+#
+# /usr/bin/clpctlWrapper ends with `su -s /bin/bash -c "$COMMAND" clp`, so
+# clpctl reads --file as the clp user rather than as root. A job directory is
+# 0700 root, so the panel saw an unreadable path as an empty template and
+# refused it with "Vhost Template cannot be empty". The handoff is root:clp
+# 0640 inside a 0710 root:clp directory: exactly one other account can read it
+# and none can list the directory. Removed as soon as the template is
+# registered, and by the rollback if it is not.
+TEMPLATE_STAGE=""
+TEMPLATE_FILE=""
+
+build_vhost_template() {
+  local source=$1 target=$2
+  local body cand
+  TEMPLATE_FILE=""
+
+  body=$(vhost_of "$source") || return 1
+  [[ -n $body ]] || return 1
+
+  cand=$(printf '%s\n' "$body" | strip_redirect_block | fold_server_name "$source" "{{server_name}}")
+  # Whatever names the source after the generated forms are folded away is a
+  # hand edit that mentions the hostname, and it has to name the clone instead.
+  #
+  # Not a plain substring replacement. The ordinary target is a subdomain of the
+  # source -- stg.example.com contains example.com -- so replacing the substring
+  # rewrites hostnames that merely end in it, and testing for the substring
+  # afterwards flags the clone's own name as a leak. Both are done on whole
+  # hostname boundaries instead.
+  cand=$(printf '%s\n' "$cand" | sed -E "s/$(hostname_boundary "$source")/\\1${target}\\2/g")
+  [[ -n $cand ]] || return 1
+
+  TEMPLATE_STAGE=$(mktemp -d /tmp/clp-stager-tpl.XXXXXXXX) || return 1
+  chown root:clp "$TEMPLATE_STAGE" && chmod 710 "$TEMPLATE_STAGE" || return 1
+  TEMPLATE_FILE="${TEMPLATE_STAGE}/vhost.tpl"
+  printf '%s\n' "$cand" > "$TEMPLATE_FILE"
+  chown root:clp "$TEMPLATE_FILE" && chmod 640 "$TEMPLATE_FILE" || return 1
+}
+
+drop_template_stage() {
+  [[ -n $TEMPLATE_STAGE ]] || return 0
+  rm -rf "$TEMPLATE_STAGE"
+  TEMPLATE_STAGE=""
+  TEMPLATE_FILE=""
+  return 0
+}
+
+# Is this a named template the panel still has?
+#
+# site.application records the name a site was created from, not a reference to
+# it, so the template can have been deleted or renamed since. Falling back to
+# one that is gone fails site:add:php with "Vhost Template ... does not exist",
+# which is a confusing way to lose a clone.
+vhost_template_exists() {
+  local n
+  n=$(panel_query "SELECT COUNT(*) FROM vhost_template WHERE name = '${1//\'/\'\'}';") || return 1
+  [[ ${n:-0} -gt 0 ]]
+}
+
+# Set when the template is refused, so the job can say why rather than leaving
+# an operator to guess which of several conditions applied.
+VHOST_REJECT=""
+
+# Would this template give the clone a config that is safe to serve?
+#
+# The dangerous outcome is a clone that answers for the site it was cloned from:
+# two nginx server blocks claiming one server_name, on a box where the other one
+# is production. CloudPanel's own validator catches part of it -- it requires
+# {{server_name}} and rejects a template without one -- but only part, so the
+# checks it does not make are made here, before it is asked.
+vhost_template_ok() {
+  local file=$1 source=$2 target=$3
+  VHOST_REJECT=""
+
+  if ! grep -q '{{server_name}}' "$file"; then
+    VHOST_REJECT="the source's server_name is hand edited, so CloudPanel's {{server_name}} placeholder cannot be kept"
+    return 1
+  fi
+  local leaks
+  leaks=$(grep -cE "$(hostname_boundary "$source")" "$file") || leaks=0
+  if (( leaks > 0 )); then
+    VHOST_REJECT="the source hostname still appears on ${leaks} line(s) after substitution"
+    return 1
+  fi
+
+  local line tok host
+  while IFS= read -r line; do
+    for tok in $(printf '%s' "$line" | sed -e 's/^[[:space:]]*server_name//' -e 's/;[[:space:]]*$//'); do
+      host=${tok#\*.}
+      if [[ $host != "$target" && $host != *".${target}" ]]; then
+        VHOST_REJECT="a server_name names '${tok}', which is not ${target} or below it"
+        return 1
+      fi
+    done
+  done < <(grep -E '^[[:space:]]*server_name ' "$file")
+
+  return 0
 }
 
 # --- verbs ------------------------------------------------------------------

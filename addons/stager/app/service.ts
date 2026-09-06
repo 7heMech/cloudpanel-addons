@@ -111,6 +111,8 @@ export interface JobResult {
   siteUser: string;
   phpVersion: string;
   vhostTemplate: string;
+  /** Whether the source site's own vhost was reproduced for the clone. */
+  vhostCarried: boolean;
   database: { source: string; name: string; user: string; password: string } | null;
   notes: string[];
 }
