@@ -16,7 +16,7 @@ import { isNewerThan } from "../addons/instatic/app/tags";
 import type { InstanceView } from "../addons/instatic/app/service";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { siteUserFor } from "../cli/provision";
+import { describeAuthState, siteUserFor, type SiteAuthState } from "../cli/provision";
 import { getNextAvailablePort } from "../lib/snapshot-reader";
 import type { PanelSnapshot } from "../lib/snapshot-reader";
 
@@ -151,6 +151,29 @@ const offlineHtml = dashboardView(
 );
 check("the offline fallback never claims an update", !offlineHtml.includes("0.0.18 available"));
 check("and says the registry was unreachable", offlineHtml.includes("Could not reach ghcr.io"));
+
+// How the manager's own site reports as protected.
+//
+// The README's first instruction is to put authentication in front of the
+// manager, because it can create and delete CloudPanel sites -- and until now
+// `status` said nothing about whether that was done. CloudPanel already has the
+// feature, so this reads the panel's record rather than inventing a mechanism;
+// these pin the four states apart, including the one a real box was found in.
+console.log("== site protection ==");
+
+const auth = (o: Partial<SiteAuthState>): SiteAuthState =>
+  ({ panelManaged: false, active: false, ipAllowlist: false, vhostOnly: false, ...o });
+
+check("panel-managed and on reads as protected",
+  describeAuthState(auth({ panelManaged: true, active: true })).startsWith("yes, CloudPanel Basic Auth"));
+check("an IP allowlist is mentioned when present",
+  describeAuthState(auth({ panelManaged: true, active: true, ipAllowlist: true })).includes("IP allowlist"));
+check("configured but switched off is NOT protected",
+  describeAuthState(auth({ panelManaged: true, active: false })).startsWith("NO"));
+check("a vhost-only edit counts as protected but is called out",
+  /^yes, but via a vhost edit/.test(describeAuthState(auth({ vhostOnly: true, active: true }))));
+check("nothing at all is NOT protected",
+  describeAuthState(auth({})).startsWith("NO"));
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

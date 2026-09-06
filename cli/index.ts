@@ -8,9 +8,11 @@ import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { ADDON_NAMES, ADDONS, CLI_BIN, CURRENT_LINK, LIB_DIR, type AddonSpec } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation } from "./release";
 import {
-  addonIsAtRelease, assertNotInDockerGroup, currentRelease, ensureAddonSite, ensureDirs, hardenSiteUser,
+  addonIsAtRelease, assertNotInDockerGroup, currentRelease, describeAuthState, ensureAddonSite, ensureDirs,
+  hardenSiteUser,
   installSudoers, installUnits, installWrapper, placeRelease, pruneReleases, readOwnDomain,
-  ensureTimerArmed, hardenBackups, removeLegacyUsers, removeSudoers, resolveSiteUser, siteUserOf, siteUserState,
+  ensureTimerArmed, hardenBackups, removeLegacyUsers, removeSudoers, resolveSiteUser, siteBasicAuth,
+  siteUserOf, siteUserState,
   startUnits, stopUnits, timerNextElapse, unitActive,
   unitRunningUser, writeConfig,
 } from "./provision";
@@ -41,6 +43,19 @@ function describeTarget(s: TargetStatus): string {
     case "upstream-changed":
       return `UPSTREAM CHANGED — refusing to patch (expected ${s.expected.slice(0, 12)}, found ${s.found.slice(0, 12)})`;
   }
+}
+
+/**
+ * How the manager's own site is protected, in one line.
+ *
+ * This is the precondition the README leads with: the manager can create and
+ * delete CloudPanel sites, so it must not be reachable without authentication.
+ * Until now `status` had nothing to say about it, which made the one command an
+ * operator runs to check the install silent on the thing that matters most.
+ */
+function describeSiteAuth(domain: string | null): string {
+  if (!domain) return "unknown (no configured domain)";
+  return describeAuthState(siteBasicAuth(domain));
 }
 
 // --- anchors ----------------------------------------------------------------
@@ -193,8 +208,26 @@ async function cmdInstall(argv: string[]): Promise<void> {
   log.plain();
   log.ok(`${spec.name} ${tag} installed.`);
   log.plain(`  Manager UI:  https://${domain}`);
-  log.plain(`  Next steps:  add basic auth for that site in the panel, then issue a certificate with`);
-  log.plain(`               clpctl lets-encrypt:install:certificate --domainName=${domain}`);
+
+  // Say what is actually true rather than reciting the same two steps whether or
+  // not they are already done. On a reinstall they usually are.
+  const auth = siteBasicAuth(domain);
+  if (auth.panelManaged && auth.active) {
+    log.ok(`  ${domain} is behind CloudPanel Basic Auth${auth.ipAllowlist ? " and an IP allowlist" : ""}`);
+  } else if (auth.vhostOnly) {
+    log.warn(
+      `  ${domain} has basic auth in its vhost but not in the panel's own record.\n` +
+        `  The Security tab shows it as off, so switching it there can rewrite the edit away.\n` +
+        `  Re-add it through Site → Security → Basic Auth so the panel owns it.`
+    );
+  } else {
+    log.err(
+      `  ${domain} is reachable without authentication. The manager can create and\n` +
+        `  delete CloudPanel sites, so add Site → Security → Basic Auth now. That page\n` +
+        `  also carries the IP allowlist.`
+    );
+  }
+  log.plain(`  Certificate: clpctl lets-encrypt:install:certificate --domainName=${domain}`);
 }
 
 async function cmdUpdate(argv: string[]): Promise<void> {
@@ -384,6 +417,7 @@ async function cmdStatus(argv: string[]): Promise<void> {
       (nextRun ? `, next ${nextRun}` : ", NO SCHEDULED RUN. Run repair.")
   );
   log.plain(`${pad("  Own site")}${own ?? "not configured"}`);
+  log.plain(`${pad("  Site protected")}${describeSiteAuth(own)}`);
   log.plain(`${pad("  Wrapper")}${existsSync(spec.wrapperPath) ? spec.wrapperPath : "NOT INSTALLED"}`);
   log.plain(
     `${pad("  Sudoers")}${existsSync(`/etc/sudoers.d/clp-addon-${spec.name}`) ? "present" : "NOT INSTALLED"}`

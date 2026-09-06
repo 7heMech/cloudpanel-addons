@@ -572,6 +572,54 @@ five more places where the second addon would have been the one to discover it.
 `repair`, `status` and `update` now act on every addon with a config file on
 disk, which is what "installed" means here.
 
+## Authentication is CloudPanel's, not ours
+
+The manager can create and delete sites, so it must not be reachable without
+authentication, and the question of where that comes from keeps coming up.
+Reusing the panel's admin login was checked properly rather than assumed, and
+all three routes are closed:
+
+- **Share the session cookie.** `session.name = PHPSESSID`, scoped to the
+  panel's origin, so we would have to be served from the panel's vhost. That is
+  the injected-tab variant, and `proxy_pass` hands the request over without
+  running any of the panel's PHP, so nothing validates the cookie. Same-origin
+  gets you the cookie and none of the checking.
+- **Validate the session ourselves.** Sessions are files under
+  `/var/lib/php/sessions`, mode `1733 root:root` -- write and traverse for
+  others, readable only by root, which is deliberate PHP hardening so one app
+  cannot read another's sessions. The manager is unprivileged precisely so it is
+  not root. Reading them anyway means a wrapper verb where root parses
+  PHP-serialized Symfony security tokens, a format we cannot inspect because the
+  panel's PHP is obfuscated and which upstream can change in any release. A
+  root-privileged parser for an undocumented format, added to the one file that
+  is the whole security model.
+- **`api_token`.** The table exists. It authenticates calls *to* CloudPanel's
+  API: "may this script act on the panel", not "is this browser a logged-in
+  admin". Wrong direction, and reading it means reading the panel database.
+
+The `user` table also carries `mfa` and `mfa_secret`, so anything reimplemented
+here would have to honour MFA or become the weakest door to the same box.
+
+So authentication is nginx basic auth, and specifically **CloudPanel's own
+per-site Basic Auth feature**, not a mechanism of ours. `site.basic_auth_id`
+points at a `basic_auth` row, `is_active` is the toggle and `whitelisted_ips` is
+the IP allowlist, which covers both things the README asks for. Enabling it stays
+a panel action: `clpctl cloudpanel:enable:basic-auth` protects the panel's own
+login rather than a site, and writing `basic_auth` rows ourselves would mean
+writing an undocumented schema while the panel is running (decision 2.6).
+
+What the addon adds is a read. `status` reports whether the manager's own site is
+protected, because that is the precondition the README leads with and the one
+command an operator runs to check an install had nothing to say about it. It
+tells apart four states, including the one a real box was found in: `auth_basic`
+in the vhost with `basic_auth_id` NULL. That does protect the site and survives
+regeneration, since the panel rebuilds the vhost from the template the edit lives
+in, but the Security tab shows Basic Auth as off, so an operator reading the UI
+sees an unprotected site and toggling the switch can rewrite the edit away.
+
+The cost of not reusing the panel login is honest and worth stating: it is a
+second credential, not single sign-on.
+
 ## Known gaps
 
 - `--local` installs skip provenance verification by construction. Staging only.

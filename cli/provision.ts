@@ -67,6 +67,67 @@ export function siteUserState(user: string): { shell: string; locked: boolean } 
   };
 }
 
+/**
+ * Whether CloudPanel's own per-site Basic Auth is in front of a site.
+ *
+ * The panel already has this feature -- Site -> Security writes a `basic_auth`
+ * row and points `site.basic_auth_id` at it, with `whitelisted_ips` covering the
+ * IP allowlist too -- so there is nothing here to build. This reads the panel's
+ * record and reports it. Enabling it stays a panel action: `clpctl` has
+ * `cloudpanel:enable:basic-auth`, but that protects the panel's own login, not a
+ * site, and writing `basic_auth` rows ourselves would mean writing an
+ * undocumented schema while the panel is running (decision 2.6).
+ *
+ * `vhostOnly` is the state this box was actually found in: `auth_basic` present
+ * in the site's vhost, `basic_auth_id` NULL. That does protect the site, and it
+ * survives regeneration because the panel rebuilds the vhost from the template
+ * it is stored in, but the panel's Security tab shows Basic Auth as off, so an
+ * operator reading the UI sees an unprotected site and toggling that switch can
+ * rewrite the edit away.
+ */
+export interface SiteAuthState {
+  panelManaged: boolean;
+  active: boolean;
+  ipAllowlist: boolean;
+  vhostOnly: boolean;
+}
+
+export function siteBasicAuth(domain: string): SiteAuthState {
+  const none: SiteAuthState = { panelManaged: false, active: false, ipAllowlist: false, vhostOnly: false };
+  // The domain reaches SQL as a literal, so gate it the way the wrapper does
+  // rather than trusting whatever ended up in the config file.
+  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(domain)) return none;
+
+  const r = tryRun("sqlite3", ["-readonly", PANEL_DB,
+    `SELECT b.is_active, (b.whitelisted_ips IS NOT NULL AND b.whitelisted_ips != '')` +
+    ` FROM site s JOIN basic_auth b ON b.id = s.basic_auth_id WHERE s.domain_name = '${domain}';`]);
+
+  if (r.ok && r.out.trim()) {
+    const [active, ips] = r.out.trim().split("|");
+    return { panelManaged: true, active: active === "1", ipAllowlist: ips === "1", vhostOnly: false };
+  }
+
+  // No panel record. The vhost is read, never written, purely to tell the two
+  // unprotected-looking states apart.
+  const vhost = `/etc/nginx/sites-enabled/${domain}.conf`;
+  if (existsSync(vhost) && /^\s*auth_basic\s+"/m.test(readFileSync(vhost, "utf-8"))) {
+    return { panelManaged: false, active: true, ipAllowlist: false, vhostOnly: true };
+  }
+  return none;
+}
+
+/** How a site's protection reads in `status`. Pure, so it is testable without a panel. */
+export function describeAuthState(a: SiteAuthState): string {
+  if (a.panelManaged && a.active) {
+    return `yes, CloudPanel Basic Auth${a.ipAllowlist ? " + IP allowlist" : ""}`;
+  }
+  if (a.panelManaged) return "NO — CloudPanel Basic Auth exists for this site but is switched off";
+  if (a.vhostOnly) {
+    return "yes, but via a vhost edit — the panel's Security tab shows it as off; move it to Site → Security";
+  }
+  return "NO — the manager is reachable without authentication";
+}
+
 export function resolveSiteUser(domain: string): string {
   const user = siteUserOf(domain);
   if (!user) {

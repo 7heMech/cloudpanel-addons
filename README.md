@@ -54,11 +54,17 @@ to continue without them.
 Two things are not done for you, and the addon is not safe to expose until they
 are:
 
-1. Add per-site security to the manager's own site in the panel
-   (Site → Security → Basic Auth, plus an IP allowlist if you have static
-   addresses). The manager can create and delete CloudPanel sites. It binds
-   `127.0.0.1`, so its own site's vhost is the only route in, and that vhost is
-   where authentication happens.
+1. Add per-site security to the manager's own site in the panel, under
+   Site → Security → Basic Auth. The IP allowlist lives on that same page, so
+   use it too if your addresses are static. The manager can create and delete
+   CloudPanel sites. It binds `127.0.0.1`, so its own site's vhost is the only
+   route in, and that vhost is where authentication happens.
+
+   Use the panel's feature rather than editing the vhost by hand. Both put
+   `auth_basic` in front of the site, but only the panel's own one is recorded
+   against the site, so a hand edit leaves the Security tab showing Basic Auth as
+   off, and switching it there can rewrite the edit away. `clp-addons status`
+   reports which of the two you have.
 2. Issue a certificate for it:
    `clpctl lets-encrypt:install:certificate --domainName=<host>`
 
