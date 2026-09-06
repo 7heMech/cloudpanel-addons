@@ -8,10 +8,10 @@ import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { ADDON_NAMES, ADDONS, CLI_BIN, CURRENT_LINK, LIB_DIR, type AddonSpec } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation } from "./release";
 import {
-  assertNotInDockerGroup, currentRelease, ensureAddonSite, ensureDirs, hardenSiteUser,
+  addonIsAtRelease, assertNotInDockerGroup, currentRelease, ensureAddonSite, ensureDirs, hardenSiteUser,
   installSudoers, installUnits, installWrapper, placeRelease, pruneReleases, readOwnDomain,
-  removeLegacyUsers, removeSudoers, resolveSiteUser, siteUserOf, siteUserState,
-  startUnits, stopUnits, unitActive,
+  ensureTimerArmed, hardenBackups, removeLegacyUsers, removeSudoers, resolveSiteUser, siteUserOf, siteUserState,
+  startUnits, stopUnits, timerNextElapse, unitActive,
   unitRunningUser, writeConfig,
 } from "./provision";
 import { Fatal, fatal, log, parseFlags, requireRoot, run, tryRun, writeAtomic } from "./util";
@@ -141,7 +141,10 @@ async function cmdInstall(argv: string[]): Promise<void> {
     log.step(`installing ${spec.name} from the local build in ${flags.local}`);
     artifacts = loadLocal(flags.local, wantedArtifacts);
   } else {
-    const rel = await resolveRelease(typeof flags.version === "string" ? flags.version : "latest");
+    const rel = await resolveRelease(
+      typeof flags.version === "string" ? flags.version : "latest",
+      flags["allow-prerelease"] === true
+    );
     tag = rel.tag;
     log.step(`installing ${spec.name} from release ${rel.tag}`);
     artifacts = await fetchVerified(rel, wantedArtifacts);
@@ -155,6 +158,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
   hardenSiteUser(user);
   assertNotInDockerGroup(user);
   ensureDirs(spec, user);
+  hardenBackups(spec);
 
   placeRelease(tag, artifacts);
   pruneReleases();
@@ -201,9 +205,11 @@ async function cmdUpdate(argv: string[]): Promise<void> {
   for (const name of targets) {
     const spec = resolveAddon(name);
     const wanted = typeof flags.version === "string" ? flags.version : "latest";
-    const rel = await resolveRelease(wanted);
+    const rel = await resolveRelease(wanted, flags["allow-prerelease"] === true);
 
-    if (rel.tag === currentRelease()) {
+    // Per addon, not per release tree. `currentRelease()` is shared, so asking it
+    // here meant the first addon updated and every later one was skipped.
+    if (addonIsAtRelease(spec, rel.tag)) {
       log.ok(`${spec.name} is already on ${rel.tag}`);
       continue;
     }
@@ -243,7 +249,7 @@ async function cmdSelfUpdate(argv: string[]): Promise<void> {
   requireRoot("self-update");
   const { flags } = parseFlags(argv);
   const wanted = typeof flags.version === "string" ? flags.version : "latest";
-  const rel = await resolveRelease(wanted);
+  const rel = await resolveRelease(wanted, flags["allow-prerelease"] === true);
 
   if (rel.tag === `v${CLI_VERSION}`) {
     log.ok(`already running ${rel.tag}`);
@@ -281,6 +287,7 @@ function cmdRepair(argv: string[]): void {
   hardenSiteUser(user, quiet);
   assertNotInDockerGroup(user);
   ensureDirs(spec, user);
+  hardenBackups(spec, quiet);
 
   // The timer calls this every 15 minutes, so a reconciliation that changed
   // nothing should say nothing. Otherwise the journal fills with identical
@@ -313,7 +320,7 @@ function cmdRepair(argv: string[]): void {
 
   // Only now, with nothing running as it, can the old account go.
   removeLegacyUsers(user, quiet);
-  tryRun("systemctl", ["start", "clp-addons-reconcile.timer"]);
+  ensureTimerArmed("clp-addons-reconcile.timer", quiet);
 
   reconcileAnchors(quiet);
   if (!quiet) log.ok("repair complete");
@@ -335,7 +342,13 @@ async function cmdStatus(argv: string[]): Promise<void> {
   const own = readOwnDomain(spec);
   log.plain(`Addon: ${spec.name}`);
   log.plain(`${pad("  Service")}${unitActive(spec.unit)}`);
-  log.plain(`${pad("  Reconcile timer")}${unitActive("clp-addons-reconcile.timer")}`);
+  // is-active alone says `active` for a timer that has elapsed and will never
+  // fire again, so name the next elapse. No elapse means reconciliation is dead.
+  const nextRun = timerNextElapse("clp-addons-reconcile.timer");
+  log.plain(
+    `${pad("  Reconcile timer")}${unitActive("clp-addons-reconcile.timer")}` +
+      (nextRun ? `, next ${nextRun}` : ", NO SCHEDULED RUN. Run repair.")
+  );
   log.plain(`${pad("  Own site")}${own ?? "not configured"}`);
   log.plain(`${pad("  Wrapper")}${existsSync(spec.wrapperPath) ? spec.wrapperPath : "NOT INSTALLED"}`);
   log.plain(
@@ -490,6 +503,9 @@ function usage(): void {
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}
+
+install, update and self-update refuse a release marked as a prerelease. These
+artifacts run as root, so add --allow-prerelease when you mean it.
 
 'repair' is 'install' without the download and is safe to run repeatedly; the
 reconciliation timer calls it every 15 minutes to put the panel-side anchors

@@ -4,7 +4,7 @@
 // reconciliation timer and the installer drift apart.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, renameSync, readdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, renameSync, readdirSync } from "node:fs";
 import {
   ADDONS, ANCHOR_SERVICE, CLI_BIN, CONFIG_DIR, CURRENT_LINK, LEGACY_USERS, LIB_DIR, LOCK_DIR,
   PANEL_DB, RECONCILE_PATH, RECONCILE_SERVICE, RECONCILE_TIMER, RELEASES_DIR, STATE_DIR, SYSTEMD_DIR,
@@ -159,6 +159,39 @@ export function ensureDirs(spec: AddonSpec, user: string): void {
   }
 }
 
+/**
+ * Tighten snapshot archives written before the mode was set explicitly.
+ *
+ * Every archive the wrapper produces contains the instance's instatic.env, and
+ * therefore its master key, alongside the database. The mode used to be inherited
+ * from whoever invoked the wrapper, so archives written by root from a shell
+ * landed at 0644 inside a 0755 directory -- readable by every account on the box,
+ * and on a CloudPanel host every site user has SFTP. The wrapper now sets the mode
+ * itself, but files already on disk keep the old one, and nothing else would ever
+ * revisit them. repair is the place that makes the box match what should be
+ * installed, so it fixes them here.
+ */
+export function hardenBackups(spec: AddonSpec, quiet = false): void {
+  const dir = `/var/backups/clp-addons/${spec.name}`;
+  if (!existsSync(dir)) return;
+
+  let tightened = 0;
+  const fix = (path: string, mode: number) => {
+    if ((statSync(path).mode & 0o777) === mode) return;
+    chmodSync(path, mode);
+    tightened++;
+  };
+
+  fix(dir, 0o700);
+  for (const entry of readdirSync(dir)) {
+    const path = `${dir}/${entry}`;
+    if (statSync(path).isFile()) fix(path, 0o600);
+  }
+  if (tightened > 0 && !quiet) {
+    log.ok(`${dir}: tightened ${tightened} path(s); the archives hold instance master keys`);
+  }
+}
+
 // --- releases ---------------------------------------------------------------
 
 /**
@@ -204,6 +237,30 @@ export function pruneReleases(keep = 2): void {
     log.step(`pruning old release ${d}`);
     rmSync(path, { recursive: true, force: true });
   }
+}
+
+/**
+ * Is this addon's own installed state already from `tag`?
+ *
+ * `update --all` used to ask `currentRelease() === rel.tag`, which is a fact about
+ * the shared release tree rather than about the addon. The first addon in the loop
+ * called placeRelease() and moved `current` onto the new tag, so every addon after
+ * it matched, logged "already on", and had its app binary and wrapper skipped
+ * entirely. Nothing looked wrong -- the run reported success for all of them.
+ *
+ * The addon's files are the honest answer, in keeping with the wrapper's own rule
+ * that what is on disk is the record: the release has to carry this addon's
+ * artifacts, and the wrapper actually installed has to be the one in that release.
+ */
+export function addonIsAtRelease(spec: AddonSpec, tag: string): boolean {
+  if (currentRelease() !== tag) return false;
+
+  const releaseDir = `${RELEASES_DIR}/${tag}`;
+  const app = `${releaseDir}/${spec.appArtifact}`;
+  const wrapper = `${releaseDir}/${spec.wrapperArtifact}`;
+  if (!existsSync(app) || !existsSync(wrapper) || !existsSync(spec.wrapperPath)) return false;
+
+  return readFileSync(spec.wrapperPath).equals(readFileSync(wrapper));
 }
 
 export function currentRelease(): string | null {
@@ -366,13 +423,30 @@ After=network.target
 Type=oneshot
 ExecStart=${CLI_BIN} repair --quiet
 `,
+    // OnCalendar, not OnUnitActiveSec.
+    //
+    // The timer used to carry only monotonic triggers: OnBootSec=2min and
+    // OnUnitActiveSec=15min. Both anchor to an event in the past, so as soon as
+    // systemd decides there is no future elapse the unit parks in SubState=elapsed
+    // and never fires again. Restarting the timer does not revive it -- measured
+    // on a staging box, `systemctl restart` left it elapsed with
+    // NextElapseUSecMonotonic=infinity, and only activating the service itself
+    // re-anchored OnUnitActiveSec. Since startUnits() restarts this timer on every
+    // install and update, that made every install a chance to kill reconciliation
+    // silently: no nav entry after a panel upgrade, a stale panel snapshot, and no
+    // re-assertion of nologin on the one account permitted to sudo the wrapper.
+    //
+    // A calendar trigger always has a next elapse, so the unit cannot get stuck.
+    // Persistent=true also starts meaning something here; it only ever applied to
+    // OnCalendar= and was decorative next to the monotonic triggers.
     timer: `[Unit]
 Description=CloudPanel addons: periodic reconciliation
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=15min
+OnCalendar=*:0/15
 Persistent=true
+RandomizedDelaySec=30
 
 [Install]
 WantedBy=timers.target
@@ -445,6 +519,10 @@ export function startUnits(spec: AddonSpec): void {
   run("systemctl", ["restart", RECONCILE_TIMER]);
   run("systemctl", ["enable", RECONCILE_PATH]);
   run("systemctl", ["restart", RECONCILE_PATH]);
+  // Restarting a timer is the operation that used to leave it permanently
+  // elapsed, so confirm it came back with a real next elapse rather than
+  // assuming it did.
+  ensureTimerArmed(RECONCILE_TIMER);
   log.ok(`${spec.unit}, ${RECONCILE_TIMER} and ${RECONCILE_PATH} enabled`);
 }
 
@@ -475,6 +553,39 @@ export function unitRunningUser(unit: string): string | null {
 
 export function unitActive(unit: string): string {
   return tryRun("systemctl", ["is-active", unit]).out || "unknown";
+}
+
+/**
+ * When a timer will next fire, or null when it has no scheduled elapse.
+ *
+ * `systemctl is-active` is not enough to tell whether a timer still works. A
+ * timer that has fallen into SubState=elapsed reports `active` and will never
+ * run again, which is exactly the state the old monotonic-only unit reached --
+ * so `status` said the reconciliation timer was healthy while it had been dead
+ * for thirteen hours. Ask for the next elapse instead, because that is the thing
+ * that has to be true for the timer to be doing its job.
+ */
+export function timerNextElapse(unit: string): string | null {
+  for (const prop of ["NextElapseUSecRealtime", "NextElapseUSecMonotonic"]) {
+    const v = tryRun("systemctl", ["show", "-p", prop, "--value", unit]).out.trim();
+    if (v && v !== "0" && v !== "infinity" && v !== "n/a") return v;
+  }
+  return null;
+}
+
+/**
+ * Put a stuck timer back to work.
+ *
+ * `systemctl start` is a no-op on a unit that is already active, so the previous
+ * recovery here could never fix an elapsed timer -- the one case that needed
+ * fixing. Restart is what re-evaluates the trigger, and with a calendar trigger
+ * that always yields a future elapse.
+ */
+export function ensureTimerArmed(unit: string, quiet = false): void {
+  if (timerNextElapse(unit)) return;
+  if (!quiet) log.warn(`${unit} has no scheduled elapse; restarting it`);
+  tryRun("systemctl", ["restart", unit]);
+  if (!timerNextElapse(unit)) log.err(`${unit} still has no scheduled elapse after a restart`);
 }
 
 // --- the addon's own CloudPanel site ----------------------------------------

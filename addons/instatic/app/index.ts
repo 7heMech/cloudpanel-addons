@@ -55,14 +55,19 @@ const server = Bun.serve({
         if (path === "/") {
           const instances = await instaticService.listInstances();
           const { snap, ageSeconds } = instaticService.snapshot();
+          // The dashboard needs the registry listing too, not just /new. Without
+          // it the page showed each instance's pinned tag with nothing to compare
+          // it against, so a new Instatic release was invisible here and the
+          // update dialog asked the operator to type a version from memory.
+          const available = await listAvailableTags();
           return html(
             layout("Instatic instances",
-              dashboardView(instances, await instaticService.nextPort(), ageSeconds, snap.sites)),
+              dashboardView(instances, await instaticService.nextPort(), ageSeconds, snap.sites, available)),
             csrf
           );
         }
-        const tags = await listAvailableTags();
-        return html(layout("New Instatic site", newInstanceView(await instaticService.nextPort(), tags)), csrf);
+        const available = await listAvailableTags();
+        return html(layout("New Instatic site", newInstanceView(await instaticService.nextPort(), available)), csrf);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return html(layout("Error", `<div class="alert">${msg.replace(/[<>&]/g, "")}</div>`), csrf, 500);

@@ -11,7 +11,9 @@
 // The Function constructor compiles without executing, which is exactly the
 // check that was missing.
 
-import { CLIENT_JS } from "../addons/instatic/app/views";
+import { CLIENT_JS, dashboardView } from "../addons/instatic/app/views";
+import { isNewerThan } from "../addons/instatic/app/tags";
+import type { InstanceView } from "../addons/instatic/app/service";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { siteUserFor } from "../cli/provision";
@@ -19,9 +21,10 @@ import { getNextAvailablePort } from "../lib/snapshot-reader";
 import type { PanelSnapshot } from "../lib/snapshot-reader";
 
 let failed = 0;
+let passed = 0;
 
 function check(label: string, cond: boolean, detail = ""): void {
-  if (cond) console.log(`  ok    ${label}`);
+  if (cond) { console.log(`  ok    ${label}`); passed++; }
   else { console.log(`  FAIL  ${label}${detail ? `: ${detail}` : ""}`); failed++; }
 }
 
@@ -103,6 +106,51 @@ for (const d of DOMAINS) {
   seen.set(ts, d);
 }
 
-const passed = 6 + DOMAINS.length * 2 - failed;
+// Version comparison and the "this instance is behind" rendering.
+//
+// Auto-update is off by default because Instatic is pre-1.0, and that is only a
+// defensible policy if the dashboard says when a release happened. It did not:
+// the registry listing was fetched for the New Site page only, and the update
+// dialog was a free-text box, so learning about 0.0.19 meant going to look at
+// ghcr.io. These assert the comparison is by number rather than by string, and
+// that a stale instance actually renders as stale.
+console.log("== version awareness ==");
+
+check("0.0.19 is newer than 0.0.18", isNewerThan("0.0.19", "0.0.18"));
+check("0.0.18 is not newer than itself", !isNewerThan("0.0.18", "0.0.18"));
+check("0.0.9 is not newer than 0.0.18", !isNewerThan("0.0.9", "0.0.18"));
+check("0.0.18 is newer than 0.0.9 (numeric, not lexicographic)", isNewerThan("0.0.18", "0.0.9"));
+check("1.0.0 is newer than 0.9.9", isNewerThan("1.0.0", "0.9.9"));
+check("a non-version is never newer", !isNewerThan("latest", "0.0.18"));
+
+const instance = (tag: string): InstanceView => ({
+  domain: "demo.example.com", port: 39000, tag, container: `instatic-demo.example.com`,
+  siteUser: "addon-demoexam-abc123", createdAt: "2026-01-01T00:00:00Z", state: "running",
+});
+const emptySnap: PanelSnapshot = {
+  updatedAt: new Date().toISOString(), portRange: { min: 39000, max: 39999 },
+  allocatedPorts: [], sites: [],
+};
+
+const live = (latest: string) => ({ tags: [latest], source: "registry" as const, latest });
+
+const behindHtml = dashboardView([instance("0.0.17")], 39001, 0, emptySnap.sites, live("0.0.18"));
+check("an out-of-date instance is badged", behindHtml.includes("0.0.18 available"));
+check("and counted in the updates tile", /Updates available<\/div>\s*<div class="value"[^>]*>1</.test(behindHtml));
+
+const currentHtml = dashboardView([instance("0.0.18")], 39001, 0, emptySnap.sites, live("0.0.18"));
+check("a current instance is not badged", !currentHtml.includes("available</span>"));
+check("and the tile reads zero", /Updates available<\/div>\s*<div class="value"[^>]*>0</.test(currentHtml));
+
+// The offline list is one hardcoded version. Badging against it would invent
+// updates that do not exist, and claim an instance is behind a version that may
+// long since have been superseded.
+const offlineHtml = dashboardView(
+  [instance("0.0.17")], 39001, 0, emptySnap.sites,
+  { tags: ["0.0.18"], source: "fallback", latest: null }
+);
+check("the offline fallback never claims an update", !offlineHtml.includes("0.0.18 available"));
+check("and says the registry was unreachable", offlineHtml.includes("Could not reach ghcr.io"));
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
