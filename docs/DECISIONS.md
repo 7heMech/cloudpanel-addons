@@ -186,6 +186,19 @@ for being in the right place, and the provenance attestation afterwards runs
 over the same bytes either way. The sigstore bundle is still fetched every time,
 because it is a few kilobytes and is what detects substitution.
 
+The bootstrap installer seeds that directory with the CLI it has just verified,
+before handing off. Otherwise the CLI was downloaded twice on every fresh
+install: once by `install.sh`, which then deletes its temp directory, and once
+by the CLI itself, whose cache looks in a release tree nothing had created yet.
+On a single-addon install that was a third of the whole download. Seeding cannot
+smuggle anything in, because the CLI re-hashes whatever it finds against the
+release's own SHA256SUMS before using it, and what the installer places there
+has already been checked against the same file.
+
+The tag is shape-checked in `install.sh` before it is used, because at that
+point it stops being only a URL fragment and becomes a path component that root
+writes to.
+
 The directory is a parameter with a default so the reuse logic can be tested
 somewhere writable, for the same reason the injector's paths are parameters.
 

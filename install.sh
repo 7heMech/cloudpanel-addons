@@ -135,6 +135,10 @@ fi
 # Pull the tag without needing jq, which is not guaranteed on a fresh box.
 TAG=$(printf '%s' "$RELEASE_JSON" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
 [[ -n $TAG ]] || die "could not determine the release tag"
+# Shape-checked because it is about to be a path component that root writes to,
+# not only a URL fragment. The same pattern the CLI applies to a tag.
+[[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+  || die "the release tag '${TAG}' is not a version tag this installer will use"
 ok "release ${TAG}"
 
 BASE="https://github.com/${REPO}/releases/download/${TAG}"
@@ -284,6 +288,27 @@ fi
 step "installing ${CLI_TARGET}"
 install -o root -g root -m 0755 "${TMP}/${CLI_ARTIFACT}" "$CLI_TARGET"
 ok "clp-addons $("$CLI_TARGET" --version) installed"
+
+# Put the copy just verified into the release tree, so the CLI's own first fetch
+# reuses it rather than downloading the same 78 MiB again. Without this, a
+# single-addon bootstrap downloaded the CLI twice: once here, and once by the
+# CLI, because its cache looks in the release tree and nothing had created it
+# yet. That was a third of the whole bootstrap.
+#
+# The path has to match RELEASES_DIR in cli/paths.ts, and the mode and ownership
+# match what placeRelease writes, so the CLI finds a file indistinguishable from
+# one it placed itself. Seeding cannot smuggle anything in: the CLI re-hashes
+# whatever it finds against the release's own SHA256SUMS before using it, and
+# what is placed here has already been checked against the same file.
+RELEASE_DIR="/usr/local/lib/clp-addons/releases/${TAG}"
+if install -D -o root -g root -m 0755 \
+     "${TMP}/${CLI_ARTIFACT}" "${RELEASE_DIR}/${CLI_ARTIFACT}" 2>/dev/null; then
+  ok "seeded ${RELEASE_DIR} so ${CLI_ARTIFACT} is not fetched twice"
+else
+  # Not fatal. The CLI will download its own copy, which is what happened before
+  # this existed.
+  warn "could not seed ${RELEASE_DIR}; the CLI will download its own copy"
+fi
 
 # --- hand off to the CLI ----------------------------------------------------
 # The CLI owns installation from here, so there is one implementation of
