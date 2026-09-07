@@ -216,20 +216,28 @@ export function ensureSharedGroup(user: string, quiet = false): void {
   }
 }
 
-export function ensureDirs(spec: AddonSpec, user: string): void {
+export function ensureDirs(spec: AddonSpec): void {
   for (const d of [LIB_DIR, RELEASES_DIR, CONFIG_DIR, STATE_DIR, LOCK_DIR]) {
     mkdirSync(d, { recursive: true });
   }
   mkdirSync(spec.stateDir, { recursive: true });
 
-  // Not recursive, and deliberately so. The subdirectories of the state dir are
-  // instance storage, each owned by the site user of the instance that runs
-  // there. A `chown -R` here hands all of them to the manager, at which point
-  // every container loses the ability to write its own database -- and since
-  // `repair` calls this and the reconcile timer calls `repair`, it would do so
-  // again every fifteen minutes. The wrapper owns instance directories; this
-  // function owns the manager's own files and nothing below them.
-  run("chown", [`${user}:${user}`, spec.stateDir]);
+  // root:root, not the addon's site user.
+  //
+  // Only the wrapper writes here, and it runs as root; the manager reaches every
+  // one of these files through the wrapper rather than off the filesystem. Giving
+  // the directory to the app user let that account rename the wrapper's own
+  // root-owned records aside -- `jobs/` for the stager, an instance directory for
+  // instatic -- and put its own in their place, which made every path the wrapper
+  // derives from those records caller-controlled. The ownership dates from when
+  // the manager kept an app.db of its own in here; that file was removed and the
+  // ownership was not.
+  //
+  // Still not recursive, for the original reason: the subdirectories are instance
+  // storage, each owned by the site user of the instance that runs there, and a
+  // `chown -R` would take that away every fifteen minutes when the reconcile
+  // timer next called repair.
+  run("chown", ["root:root", spec.stateDir]);
   run("chmod", ["750", spec.stateDir]);
 
   // The snapshot is customer data: the addons' shared group reads it, nobody
@@ -737,10 +745,31 @@ export function ensureTimerArmed(unit: string, quiet = false): void {
  * (decision 2.6).
  */
 export function ensureAddonSite(spec: AddonSpec, domain: string): boolean {
-  const exists = tryRun("sqlite3", ["-readonly", PANEL_DB,
-    `SELECT COUNT(*) FROM site WHERE domain_name = '${domain}';`]);
-  if (exists.ok && Number(exists.out) > 0) {
-    log.ok(`CloudPanel site ${domain} already exists`);
+  // An existing site is adopted, but only when it is already the reverse proxy
+  // this manager needs. Adopting a static or PHP site instead leaves the manager
+  // running on its port with nothing routing to it, and nothing says so: the
+  // hostname resolves, nginx answers 200 from whatever was there first, and the
+  // install reports success. Same defect the wrapper's cmd_create had for
+  // instances; the panel records both facts that tell the two apart.
+  const row = tryRun("sqlite3", ["-readonly", PANEL_DB,
+    `SELECT type, COALESCE(reverse_proxy_url, '') FROM site WHERE domain_name = '${domain}';`]);
+  if (row.ok && row.out.trim()) {
+    const [type, url] = row.out.trim().split("|");
+    const wanted = `http://127.0.0.1:${spec.port}`;
+    if (type !== "reverse-proxy") {
+      fatal(
+        `a CloudPanel site for ${domain} already exists and is a '${type}' site, not a reverse proxy.\n` +
+          `  Adopting it would leave the ${spec.name} manager unreachable. Delete that site, or\n` +
+          `  install this addon under a hostname of its own.`
+      );
+    }
+    if (url !== wanted) {
+      fatal(
+        `the CloudPanel site ${domain} proxies '${url}' rather than ${wanted}.\n` +
+          `  That is somebody else's upstream. Install ${spec.name} under a hostname of its own.`
+      );
+    }
+    log.ok(`CloudPanel site ${domain} already exists and proxies ${wanted}`);
     return false;
   }
 

@@ -1008,6 +1008,13 @@ case $VERB in
   run)
     LOCK_TARGET=$(job_get "$(job_dir "$JOB")" target)
     if [[ -n $LOCK_TARGET ]]; then
+      # Validated before it becomes a path, not after. cmd_run re-validates the
+      # job record, but the lock is taken first, so this value reached a path
+      # root creates while it was still only "whatever the file said". The rule
+      # the instatic wrapper states for its own lock -- derive it only from an
+      # already-validated domain -- applies to a value read back off disk just
+      # as much as to one that arrived in argv.
+      validate_domain "$LOCK_TARGET" target
       exec 200>"${LOCK_DIR}/stager-${LOCK_TARGET}.lock"
       flock -w 30 200 || emit_err "another operation is already running for ${LOCK_TARGET}"
     fi ;;

@@ -820,6 +820,76 @@ for up to fifteen minutes.
 The group is the smallest thing that fixes it. The file holds the panel's
 non-secret site list, which does not justify anything more elaborate.
 
+## An existing site is adopted only when it is already the right proxy
+
+`cmd_create` and `ensureAddonSite` both adopted any CloudPanel site whose
+hostname matched, rather than failing. That is right for a reverse proxy already
+pointing at the port in question and wrong for every other kind of site.
+
+The failure it produced was silent, which is the reason this is written down.
+Point either at an existing `static` or `php` site and the container starts,
+binds its port and answers on `127.0.0.1` -- and then the health check's second
+probe, the one that goes through nginx on the real hostname, reaches the site
+that was already there and gets a 200 from it. Create reported success and wrote
+`meta.json` for an instance nothing routes to. No probe through nginx can tell
+the two apart, because the wrong site answers exactly like the right one.
+
+The panel records both facts that do tell them apart: `site.type` and
+`site.reverse_proxy_url`. Adoption now requires `reverse-proxy` and a URL equal
+to `http://127.0.0.1:<port>`, and refuses with what it found instead.
+
+This mattered immediately rather than hypothetically: migrating an existing
+static site to an Instatic instance under its own hostname is the ordinary way
+someone arrives at this code path.
+
+## The state directory belongs to root
+
+`ensureDirs` gave each addon's state directory to the addon's site user. Nothing
+needed it: the manager reaches every one of those files through the wrapper, and
+the only reader on the filesystem is `lib/panel-snapshot.ts`, which runs as
+root. The ownership dates from when the manager kept an `app.db` of its own
+there; that file was removed in the same refactor that made the wrapper's files
+the only record, and the ownership stayed.
+
+What it bought was a way around the wrapper. Owning the parent directory is
+enough to rename a root-owned child aside and put your own in its place, so the
+manager's account could substitute the wrapper's own records -- `jobs/` for the
+stager, an instance directory for instatic -- and every path the wrapper derived
+from those records became caller-controlled. That is the one thing the privilege
+boundary exists to prevent.
+
+Root-owned closes it at the source. Two read-back paths were tightened in the
+same pass, because a boundary should not depend on a directory mode alone:
+
+- `cmd_update` validated neither the tag nor the port it read from `meta.json`,
+  while `cmd_recreate`, reading the same file, validated both. The tag becomes a
+  path component of the pre-update snapshot, which `tar` writes as root.
+- the stager's `run` verb built its lock path from the job record's `target`
+  before `cmd_run` re-validated it. The instatic wrapper already states the rule
+  -- derive a lock path only from an already-validated domain -- and a value read
+  back off disk is owed it as much as one that arrived in argv.
+
+Instance subdirectories are still owned by each instance's own site user, and
+this is still not a recursive chown: `repair` calls it every fifteen minutes,
+and a `chown -R` would take every container's database away on that schedule.
+
+## Deletion archives are not a rolling window
+
+`make_snapshot` ended by pruning its own output directory to the five most
+recent archives. For an instance's `snapshots/` directory that is right -- those
+exist to roll back the update that just happened. For the pre-delete archive it
+is data loss, because `cmd_delete` writes into `/var/backups/clp-addons/<addon>`,
+which is shared by every instance and holds one archive per deleted instance,
+each the last copy of data whose CloudPanel site is already gone.
+
+So the guarantee the README states -- each instance archived before it is purged
+-- quietly expired after the fifth deletion. Worse, `uninstall --purge` deletes
+instances in a loop, so on a box with six or more it destroyed archives it had
+written itself earlier in the same run.
+
+Pruning now belongs to the two verbs whose output directory really is a rolling
+window, `update` and `snapshot`. `make_snapshot` writes the archive and stops.
+
 ## Known gaps
 
 - `--local` installs skip provenance verification by construction. Staging only.

@@ -138,6 +138,40 @@ panel_site_exists() {
   [[ ${n:-0} -gt 0 ]]
 }
 
+# Set when adoption is refused, so the error can name what was found instead.
+ADOPT_REJECT=""
+
+# Is a site that already exists under this hostname the reverse proxy this
+# instance needs?
+#
+# cmd_create adopted any site whose hostname matched, which is right for a
+# reverse proxy already pointing at this port and wrong for every other kind.
+# Adopt a static or PHP site and the container starts, binds its port and
+# answers on 127.0.0.1 -- and then the health check's second probe reaches the
+# *existing* site through nginx and gets a 200 from it. So create reported
+# success and wrote meta.json for an instance nothing routes to. The panel
+# records both facts needed to tell the two apart, and no probe through nginx
+# can: the wrong site answers exactly like the right one.
+site_is_our_proxy() {
+  local domain=$1 port=$2 row type url
+  ADOPT_REJECT=""
+  [[ -r $PANEL_DB ]] || { ADOPT_REJECT="the panel database could not be read"; return 1; }
+  row=$(sqlite3 -readonly "$PANEL_DB" \
+          "SELECT type, COALESCE(reverse_proxy_url, '') FROM site WHERE domain_name = '$domain';" \
+        2>/dev/null) || { ADOPT_REJECT="the panel database could not be read"; return 1; }
+  IFS='|' read -r type url <<< "$row"
+
+  if [[ $type != "reverse-proxy" ]]; then
+    ADOPT_REJECT="it is a '${type}' site, not a reverse proxy"
+    return 1
+  fi
+  if [[ $url != "http://127.0.0.1:${port}" ]]; then
+    ADOPT_REJECT="it proxies '${url}' rather than http://127.0.0.1:${port}"
+    return 1
+  fi
+  return 0
+}
+
 # The account name to ask CloudPanel to create for a site.
 #
 # clpctl requires --siteUser, so a name has to come from somewhere. This must
@@ -395,13 +429,23 @@ make_snapshot() {
   fi
   chmod 600 "$out"
   rm -rf "$stage"
-  prune_snapshots "$(dirname "$out")"
+  # Deliberately does not prune. This function also writes the pre-delete
+  # archive into BACKUP_DIR, which is shared by every instance and is not a
+  # rolling window: pruning the output directory here expired one deleted
+  # instance's archive as soon as a sixth was made, and `uninstall --purge`
+  # on six or more instances destroyed the archives it had written earlier in
+  # the same run. The two callers whose output directory really is a rolling
+  # window prune it themselves.
+  return 0
 }
 
-# Pre-update snapshots are taken on every update and never expired, which on a
-# frequently updated instance grows without bound on the root filesystem. Keep
-# the most recent few: they exist to roll back the update that just happened,
-# not as an archive.
+# Keep the most recent few snapshots in one instance's own snapshots directory.
+#
+# Called by the verbs that write there, never by make_snapshot, because only
+# those directories are a rolling window: they exist to roll back the update
+# that just happened. BACKUP_DIR is the opposite -- one archive per deleted
+# instance, each the last copy of data whose site is already gone -- so it must
+# never be handed to this.
 prune_snapshots() {
   local dir=$1 keep=5 f n=0
   [[ -d $dir ]] || return 0
@@ -440,9 +484,13 @@ cmd_create() {
   trap cleanup_on_error EXIT
 
   if panel_site_exists "$domain"; then
-    # Adopt it rather than failing, but remember we did not create it so the
-    # cleanup path never deletes a site that was already serving something.
-    log "CloudPanel site ${domain} already exists; adopting it"
+    # Adopt it rather than failing, but only when it is already the reverse
+    # proxy this instance needs. site_created stays 0 either way, so the cleanup
+    # path never deletes a site that was already serving something.
+    if ! site_is_our_proxy "$domain" "$port"; then
+      emit_err "a CloudPanel site for ${domain} already exists and cannot be adopted: ${ADOPT_REJECT}. Delete it, or use a hostname of its own for this instance"
+    fi
+    log "CloudPanel site ${domain} already exists as the right reverse proxy; adopting it"
   else
     log "creating CloudPanel reverse-proxy site for ${domain}"
     local site_user
@@ -515,7 +563,14 @@ cmd_update() {
 
   cur_tag=$(read_meta tag "$meta")
   cur_port=$(read_meta port "$meta")
-  [[ $cur_port =~ ^[0-9]+$ ]] || emit_err "instance metadata is corrupt for ${domain}"
+  # Validated, not merely read. meta.json is a file on disk and cur_tag becomes
+  # a path component below, so the same gate cmd_recreate applies to the values
+  # it reads back belongs here too -- it was the one read-back path that trusted
+  # them. The emptiness check comes first so a truncated file is reported as
+  # what it is rather than as a missing argument.
+  [[ -n $cur_tag && -n $cur_port ]] || emit_err "instance metadata is corrupt for ${domain}"
+  validate_tag "$cur_tag"
+  validate_port "$cur_port"
   [[ $cur_tag == "$tag" ]] && emit_err "already running tag ${tag}"
 
   log "snapshotting before update"
@@ -524,6 +579,7 @@ cmd_update() {
   snap="${dir}/snapshots/pre-update-${cur_tag}-$(date +%Y%m%d%H%M%S).tar.gz"
   make_snapshot "$dir" "$snap" \
     || emit_err "could not snapshot ${domain} before updating; refusing to continue"
+  prune_snapshots "${dir}/snapshots"
 
   log "pulling ${REGISTRY_IMAGE}:${tag}"
   docker pull "${REGISTRY_IMAGE}:${tag}" >&2 \
@@ -676,6 +732,7 @@ cmd_snapshot() {
   chmod 700 "${dir}/snapshots"
   out="${dir}/snapshots/snapshot-$(date +%Y%m%d%H%M%S).tar.gz"
   make_snapshot "$dir" "$out" || emit_err "snapshot failed for ${domain}"
+  prune_snapshots "${dir}/snapshots"
   emit_ok "{\"domain\":\"${domain}\",\"snapshot\":\"${out}\"}"
 }
 

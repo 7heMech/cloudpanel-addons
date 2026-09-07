@@ -179,7 +179,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
   hardenSiteUser(user);
   assertNotInDockerGroup(user);
   ensureSharedGroup(user);
-  ensureDirs(spec, user);
+  ensureDirs(spec);
   hardenBackups(spec);
 
   placeRelease(tag, artifacts, wantedArtifacts);
@@ -206,7 +206,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
   installUnits(spec, user);
   log.step("generating the sanitized panel snapshot");
   generateSnapshot();
-  ensureDirs(spec, user);
+  ensureDirs(spec);
   startUnits(spec);
   removeLegacyUsers(user);
 
@@ -361,7 +361,7 @@ function repairAddon(spec: AddonSpec, quiet: boolean): void {
   hardenSiteUser(user, quiet);
   assertNotInDockerGroup(user);
   ensureSharedGroup(user, quiet);
-  ensureDirs(spec, user);
+  ensureDirs(spec);
   hardenBackups(spec, quiet);
 
   // The timer calls this every 15 minutes, so a reconciliation that changed
@@ -384,7 +384,7 @@ function repairAddon(spec: AddonSpec, quiet: boolean): void {
 
   const unitChanged = installUnits(spec, user);
   generateSnapshot();
-  ensureDirs(spec, user);
+  ensureDirs(spec);
 
   // Compare against the account the process is actually running as, not just
   // the unit file: an earlier repair may have rewritten the file already, and

@@ -18,7 +18,7 @@ import { expandTarget } from "../addons/stager/app/service";
 import { isNewerThan } from "../addons/instatic/app/tags";
 import type { InstanceView } from "../addons/instatic/app/service";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { cachedArtifact } from "../cli/release";
@@ -448,6 +448,61 @@ console.log("\n== reusing an artifact already in the release tree ==");
       cachedArtifact(tag, "tampered", digest, dir) === null);
     check("a copy under a different tag is not reused",
       cachedArtifact("v9.9.8", "good", digest, dir) === null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+console.log("\n== archiving an instance is not a rolling window ==");
+
+// make_snapshot used to prune its own output directory to the five newest
+// archives. Correct for an instance's snapshots/ directory, which exists to roll
+// back the update that just happened. Wrong for the pre-delete archive, which
+// goes to /var/backups/clp-addons/<addon>: that directory holds one archive per
+// deleted instance, each the last copy of data whose CloudPanel site is already
+// gone. So `uninstall --purge` on six or more instances destroyed archives it had
+// written itself earlier in the same run.
+{
+  const W = "addons/instatic/wrapper/clp-action-instatic";
+  const fns = ["prune_snapshots", "make_snapshot"].map((n) => bashFunction(W, n)).join("\n");
+  // make_snapshot reports failure through warn() and logs through log().
+  const preamble = `log() { :; }\nwarn() { printf 'WARN: %s\\n' "$*" >&2; }\n${fns}`;
+
+  const dir = mkdtempSync(`${tmpdir()}/clp-addons-archive-`);
+  try {
+    const inst = `${dir}/instance`;
+    mkdirSync(`${inst}/data`, { recursive: true });
+    mkdirSync(`${inst}/uploads`, { recursive: true });
+    // A real SQLite file, so the sqlite3 .backup branch is the one exercised.
+    execFileSync("sqlite3", [`${inst}/data/instatic.db`, "create table t(x); insert into t values(1);"]);
+    writeFileSync(`${inst}/instatic.env`, "INSTATIC_SECRET_KEY=deadbeef\n");
+
+    const backups = `${dir}/backups`;
+    mkdirSync(backups, { recursive: true });
+
+    // Six deletions, the way uninstall --purge makes them: one archive each,
+    // into the one shared directory.
+    for (let i = 1; i <= 6; i++) {
+      execFileSync("bash", ["-c",
+        `${preamble}\nmake_snapshot "$1" "$2"`,
+        "_", inst, `${backups}/site${i}.example.com-deleted-2020010${i}.tar.gz`],
+        { encoding: "utf-8" });
+    }
+
+    const kept = readdirSync(backups).sort();
+    check("every deleted instance's archive survives the sixth delete",
+      kept.length === 6, `kept ${kept.length}: ${kept.join(", ")}`);
+    check("the first instance deleted is still archived",
+      kept.includes("site1.example.com-deleted-20200101.tar.gz"), kept.join(", "));
+
+    // The rolling window itself still has to work, or update would fill the
+    // root filesystem with pre-update snapshots instead.
+    const rolling = `${dir}/snapshots`;
+    mkdirSync(rolling, { recursive: true });
+    for (let i = 1; i <= 7; i++) writeFileSync(`${rolling}/pre-update-0.0.${i}-2020010${i}.tar.gz`, "x");
+    execFileSync("bash", ["-c", `${preamble}\nprune_snapshots "$1"`, "_", rolling]);
+    check("an instance's own snapshots are still pruned to five",
+      readdirSync(rolling).length === 5, `${readdirSync(rolling).length}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
