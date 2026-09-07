@@ -5,12 +5,13 @@
 // calls it rather than duplicating the logic.
 
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { ADDON_NAMES, ADDONS, CLI_BIN, CURRENT_LINK, LIB_DIR, type AddonSpec } from "./paths";
+import { ADDON_NAMES, ADDONS, CLI_BIN, CURRENT_LINK, LIB_DIR, SHARED_GROUP, type AddonSpec } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation } from "./release";
 import {
   addonIsAtRelease, assertNotInDockerGroup, currentRelease, describeAuthState, ensureAddonSite, ensureDirs,
-  hardenSiteUser,
+  ensureSharedGroup, hardenSiteUser,
   installSudoers, installUnits, installWrapper, placeRelease, pruneReleases, readOwnDomain,
+  releaseArtifacts,
   ensureTimerArmed, hardenBackups, removeLegacyUsers, removeSudoers, resolveSiteUser, siteBasicAuth,
   siteUserOf, siteUserState,
   startUnits, stopUnits, timerNextElapse, unitActive,
@@ -144,11 +145,16 @@ async function cmdInstall(argv: string[]): Promise<void> {
     fatal(`--domain='${domain}' is not a valid hostname`);
   }
 
-  if (!tryRun("systemctl", ["is-active", "docker"]).ok) {
-    fatal("docker is not active. Install and start it before installing this addon.");
+  for (const unit of spec.requiresUnits ?? []) {
+    if (!tryRun("systemctl", ["is-active", unit]).ok) {
+      fatal(`${unit} is not active. Install and start it before installing ${spec.name}.`);
+    }
   }
 
-  const wantedArtifacts = [CLI_ARTIFACT, spec.appArtifact, spec.wrapperArtifact];
+  // Not just this addon's. `current` is shared, so a release tree carrying only
+  // the addon being installed would break every addon already running from it.
+  const alsoInstalled = installedAddons().filter((s) => s.name !== spec.name);
+  const wantedArtifacts = releaseArtifacts([spec, ...alsoInstalled], CLI_ARTIFACT);
   let tag: string;
   let artifacts;
   if (typeof flags.local === "string") {
@@ -172,10 +178,11 @@ async function cmdInstall(argv: string[]): Promise<void> {
   const user = resolveSiteUser(domain);
   hardenSiteUser(user);
   assertNotInDockerGroup(user);
+  ensureSharedGroup(user);
   ensureDirs(spec, user);
   hardenBackups(spec);
 
-  placeRelease(tag, artifacts);
+  placeRelease(tag, artifacts, wantedArtifacts);
   pruneReleases();
 
   const wrapper = artifacts.find((a) => a.name === spec.wrapperArtifact)!;
@@ -204,6 +211,24 @@ async function cmdInstall(argv: string[]): Promise<void> {
   removeLegacyUsers(user);
 
   reconcileAnchors(false);
+
+  // Installing an addon changes platform-wide state: snapshot.json now belongs
+  // to the shared group rather than to whichever addon was installed first.
+  // Without this, that first addon keeps running with its old supplementary
+  // groups and silently loses the panel's site list until the reconciliation
+  // timer next runs -- up to fifteen minutes of a dashboard with no sites on it,
+  // caused by installing something else entirely.
+  for (const other of installedAddons()) {
+    if (other.name === spec.name) continue;
+    const otherDomain = readOwnDomain(other);
+    const otherUser = otherDomain ? siteUserOf(otherDomain) : null;
+    if (!otherUser) continue;
+    ensureSharedGroup(otherUser);
+    if (installUnits(other, otherUser)) {
+      log.step(`${other.unit} did not name the ${SHARED_GROUP} group; restarting it`);
+      tryRun("systemctl", ["restart", other.unit]);
+    }
+  }
 
   log.plain();
   log.ok(`${spec.name} ${tag} installed.`);
@@ -252,7 +277,14 @@ async function cmdUpdate(argv: string[]): Promise<void> {
       continue;
     }
 
-    const artifacts = await fetchVerified(rel, [CLI_ARTIFACT, spec.appArtifact, spec.wrapperArtifact]);
+    // Every installed addon's artifacts, for the same reason install fetches
+    // them: this call moves `current`, and the addons not named here go on
+    // running from it.
+    const wantedArtifacts = releaseArtifacts(
+      [spec, ...installedAddons().filter((s) => s.name !== spec.name)],
+      CLI_ARTIFACT
+    );
+    const artifacts = await fetchVerified(rel, wantedArtifacts);
     await verifyAttestation(rel, artifacts, flags["skip-attestation"] === true);
 
     // Resolve who this runs as before stopping anything. Both of these can
@@ -268,7 +300,7 @@ async function cmdUpdate(argv: string[]): Promise<void> {
     log.step(`stopping ${spec.unit} before the swap`);
     tryRun("systemctl", ["stop", spec.unit]);
 
-    placeRelease(rel.tag, artifacts);
+    placeRelease(rel.tag, artifacts, wantedArtifacts);
     installWrapper(spec, artifacts.find((a) => a.name === spec.wrapperArtifact)!.bytes);
     installSudoers(spec, user);
     writeAtomic(CLI_BIN, artifacts.find((a) => a.name === CLI_ARTIFACT)!.bytes, 0o755);
@@ -328,6 +360,7 @@ function repairAddon(spec: AddonSpec, quiet: boolean): void {
   // Editing the site in the panel can restore the shell, so re-assert it.
   hardenSiteUser(user, quiet);
   assertNotInDockerGroup(user);
+  ensureSharedGroup(user, quiet);
   ensureDirs(spec, user);
   hardenBackups(spec, quiet);
 
@@ -340,6 +373,13 @@ function repairAddon(spec: AddonSpec, quiet: boolean): void {
     installSudoers(spec, user, quiet);
   } else if (!quiet) {
     log.warn(`no wrapper in the current release at ${wrapperSrc}; skipping wrapper reinstall`);
+  }
+
+  // Whatever this addon has to do on a schedule. Failure is reported and then
+  // ignored: housekeeping must never be the reason a repair stops half done.
+  if (spec.maintenanceVerb && existsSync(spec.wrapperPath)) {
+    const r = tryRun(spec.wrapperPath, [spec.maintenanceVerb]);
+    if (!r.ok && !quiet) log.warn(`${spec.name} ${spec.maintenanceVerb} failed: ${r.out}`);
   }
 
   const unitChanged = installUnits(spec, user);
@@ -401,7 +441,11 @@ async function cmdStatus(argv: string[]): Promise<void> {
 
   log.plain(`${pad("Installed release")}${currentRelease() ?? "none"}`);
   log.plain(`${pad("CloudPanel")}${panelVersion()}`);
-  log.plain(`${pad("Docker")}${tryRun("systemctl", ["is-active", "docker"]).out || "unknown"}`);
+  // Only the units something installed actually depends on. Reporting Docker on
+  // a box running an addon that never touches it invites the wrong diagnosis.
+  for (const unit of [...new Set(specs.flatMap((s) => s.requiresUnits ?? []))]) {
+    log.plain(`${pad(unit)}${tryRun("systemctl", ["is-active", unit]).out || "unknown"}`);
+  }
   log.plain();
 
   if (specs.length === 0) log.plain("No addon is installed.");
@@ -499,8 +543,11 @@ function cmdUninstall(argv: string[]): void {
         `  Each instance is archived to /var/backups/clp-addons/${spec.name} first.\n` +
         `  Re-run with --yes to proceed.`
       : `uninstall\n` + common +
-        `  Instance containers and their data are left alone. Re-run with --yes to proceed,\n` +
-        `  or add --purge to also remove ${instances.length} instance(s) and their sites.`);
+        (instances.length
+          ? `  Instance containers and their data are left alone. Re-run with --yes to proceed,\n` +
+            `  or add --purge to also remove ${instances.length} instance(s) and their sites.`
+          : `  ${spec.stateDir} is left alone. Re-run with --yes to proceed, or add --purge to\n` +
+            `  remove it too.`));
   }
 
   // Keep the platform's own units when another addon still needs them.
@@ -557,7 +604,11 @@ function cmdUninstall(argv: string[]): void {
   }
 
   if (purge) log.plain(`  Archives kept: /var/backups/clp-addons/${spec.name}`);
-  else log.warn(`Left in place on purpose: ${spec.stateDir}, the addon's CloudPanel site, and every instance container.`);
+  else if (instances.length) {
+    log.warn(`Left in place on purpose: ${spec.stateDir}, the addon's CloudPanel site, and every instance container.`);
+  } else {
+    log.warn(`Left in place on purpose: ${spec.stateDir} and the addon's CloudPanel site.`);
+  }
 }
 
 function usage(): void {

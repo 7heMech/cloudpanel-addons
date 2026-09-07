@@ -427,6 +427,13 @@ backstop and also refreshes the snapshot and the sudoers drop-in.
   panel is running, where a wrong row shape corrupts panel state rather than
   failing cleanly. This costs a feature: an instance's port cannot be changed
   from the UI. Accepted.
+
+  Read as "never write panel state ourselves", not "never reproduce a vhost".
+  This bullet is about instances, and it was taken as a platform-wide ban, which
+  cost the Stager addon a feature it could have had all along -- see "Carrying a
+  site's vhost to its clone". The test is whether `clpctl` can be made to do the
+  writing. When it can, doing it through `clpctl` is not an exception to this
+  rule, it is the rule.
 - **Pin an exact version, never `latest`.** With a floating tag you cannot tell
   what is running or roll back.
 - **Bind to `127.0.0.1` explicitly.** Docker publishes past ufw, so `3001:3001`
@@ -620,6 +627,164 @@ sees an unprotected site and toggling the switch can rewrite the edit away.
 The cost of not reusing the panel login is honest and worth stating: it is a
 second credential, not single sign-on.
 
+## The Stager addon
+
+`clp-stager` is a Bash script you paste into `nano` on the server and run as
+root. It works. Turning it into an addon is not about the steps, which are
+unchanged in substance; it is about who is allowed to ask for them and what the
+request may contain.
+
+**The button is Twig, not HTML.** Instatic's injections are static markup: a nav
+entry pointing at one hostname. The Stager button has to name the site whose
+page it is rendered on, and `{{ site.domainName }}` is how the panel's own
+templates already do that, so the snippet is a Twig fragment rather than a
+string of HTML. The cost is that it is only correct where `site` is in scope,
+which is a property of the target template rather than of the snippet -- both
+targets either receive `site` as an include parameter or set it as a loop
+variable, and a third one may not. It is also guarded by `site.type == 'php'`,
+because only a PHP site can be cloned and a button that always errors is worse
+than no button.
+
+**Cloning is a job, not a request.** A clone of a real site takes minutes:
+`clpctl db:export`, a tar pipeline over the whole document root, `db:import`.
+The manager's own vhost gives it 900 seconds and Bun caps a request well below
+that, so a synchronous clone is not merely slow, it cannot finish. The wrapper
+writes a job record, hands the work to `systemd-run`, and answers with an id the
+page polls.
+
+The transient unit is not a detail. The manager is a systemd service with
+`Restart=always`, so anything it forks lives in that service's cgroup and is
+killed with it -- and a fifteen-minute clone is long enough for a restart to be
+ordinary rather than hypothetical, leaving a site half built. `systemd-run` asks
+PID 1 for a cgroup of its own, which nothing this addon does can interrupt.
+`Type=exec` rather than `oneshot`, because `oneshot` makes `systemd-run` wait
+for the whole clone, which is the opposite of the point; `Type=exec` returns as
+soon as the job has been exec'd, so a job that could not start at all is still
+reported rather than sitting queued forever.
+
+The lock is released before the job starts. Holding the target's lock across
+`systemd-run` deadlocked the two against each other: the job blocked on `flock`
+until its timeout, failed, and the failure surfaced as systemd refusing to start
+it.
+
+**The dump goes in the job directory, not `/tmp`.** The original writes
+`/tmp/<production database>.sql.gz`, which is a full dump of a customer's
+database in a world-readable directory under a name anyone can predict, and a
+path any local user can pre-create as a symlink for root to write through. Job
+directories are `0700 root` and the dump is deleted as soon as it is imported.
+
+**Job records expire.** A record holds the staging database password, which is
+the one credential in a clone that the panel cannot show again and that the
+operator needs whenever the application's config could not be rewritten. It is
+kept for fourteen days, and `repair` runs the addon's `prune` verb on every
+reconciliation -- the expiry has to be something that actually runs, and the
+timer that runs `repair` every fifteen minutes already exists. Giving the addon
+a timer of its own would be two answers to one question.
+
+**A custom root directory is not copied**, because `clpctl site:add:php` has no
+option for one. The job says when the clone's differs from the source's.
+
+**Names come from the one scheme.** The staging site's account is
+`addon-<8>-<6 hex of sha256(domain)>`, the same as any other site this project
+creates, and the database and its user are derived from the target domain the
+same way rather than randomly. Deterministic names mean a retry after a failed
+clone proposes the same names, so "already exists" means something.
+
+## Carrying a site's vhost to its clone
+
+A staging copy that does not reproduce its source's nginx config is not a
+staging copy of the thing you are testing. On the box this was built against, 2
+of 25 PHP sites have hand edits: one adds a Content-Security-Policy and strips
+`X-Frame-Options` off the backend, the other widens `server_name` to a wildcard
+and rewrites the WordPress multisite rules. Cloning either without its vhost
+produces a site that behaves differently from production in exactly the way you
+were trying to test.
+
+The first attempt refused to do it, citing the "never edit vhosts or write to
+the panel database" bullet under Instances. That bullet is about instances, and
+applying it as a platform-wide law cost a feature that `clpctl` could deliver
+without breaking it at all.
+
+**`clpctl vhost-template:add` is the route.** The source's stored vhost becomes
+a named template, the clone is created from it, and the template is deleted
+again. The panel renders it, expands every placeholder against the clone's own
+values, writes its own database record and the file on disk, and reloads nginx.
+Nothing here writes panel state or touches a vhost.
+
+Three facts make it work, and none of them were obvious:
+
+- **`site.vhost_template` is not a rendered config.** It keeps
+  `{{ssl_certificate}}`, `{{root}}`, `{{php_fpm_port}}` and the rest; only the
+  hostnames are concrete. So the copy needs one substitution rather than a
+  general rewrite, and the clone's certificate, document root, php-fpm port and
+  log paths go on tracking its own settings. The original script copies the
+  *rendered file* into that column instead, which freezes the source's values:
+  the staging site keeps working, but a later certificate renewal or PHP version
+  change regenerates from a column that can no longer follow it.
+- **CloudPanel's own validator is half the safety.** `vhost-template:add`
+  requires `{{server_name}}`. When the source's `server_name` line *is* the hand
+  edit, folding it back into the placeholder would drop the edit and keeping it
+  literal leaves no placeholder, so the panel refuses the template and the clone
+  falls back to the stock one with a note. The dangerous outcome -- a staging
+  site carrying `server_name production.example.com` and answering for it -- is
+  structurally unreachable rather than merely avoided.
+- **A hostname is not a substring.** `example.com` occurs inside
+  `stg.example.com` and inside `notexample.com`. Rewriting it as a substring
+  mangles hostnames that merely end in it, and testing for it as a substring
+  reports the clone's own name as the source leaking through, which rejected
+  every ordinary clone. Both are done on whole-hostname boundaries.
+
+The remaining checks are made before the panel is asked, so a refusal names the
+line responsible: the source hostname must not survive anywhere, and every
+`server_name` token must be the target or below it. A clone that would answer
+for another site is the failure worth spending a gate on.
+
+**The handoff file is root:clp 0640 in a 0710 root:clp directory.**
+`/usr/bin/clpctlWrapper` ends with `su -s /bin/bash -c "$COMMAND" clp`, so
+clpctl reads `--file` as the `clp` user, not as root. A template written into a
+job directory, which is 0700 root, reached the panel as an empty file and was
+rejected as such. This applies to every path handed to `clpctl`, not just this
+one.
+
+**The base template is checked before it is used.** `site.application` records
+the *name* a site was created from, not a reference to it, so that template can
+have been deleted or renamed since. Falling back to one that is gone fails
+`site:add:php` with "does not exist", which is a confusing way to lose a clone;
+a missing one falls back to Generic and says so.
+
+## A release tree has to serve every installed addon
+
+`current` is a symlink shared by every addon: each service unit ExecStarts
+`current/<its app binary>`. `install` fetched the artifacts for the addon being
+installed, wrote them into a new release directory and moved `current` onto it.
+
+With one addon that is correct. With two it takes the other addon's binary out
+from under its own unit, and the symptom is `status=203/EXEC` on a service that
+had been running for weeks, produced by installing something else entirely.
+`update <one addon>` had the same shape.
+
+Both now fetch the artifacts of every installed addon, not just the one named,
+and `placeRelease` refuses to move `current` onto a directory that is missing
+any of them. The guard lives with the symlink swap rather than in the callers,
+because every caller of it has the same obligation.
+
+## One snapshot, one shared group
+
+`snapshot.json` is the panel's sanitized site list, written by root and read by
+the managers. It was `root:<that addon's site user>` 0640, which is right for one
+addon and silently wrong for two: installing the second chowned the file to its
+own user and the first addon's dashboard lost its site list.
+
+There is now a `clp-addons` system group. Every addon's site user joins it, the
+file is `root:clp-addons` 0640, and each unit names `SupplementaryGroups=` rather
+than relying on how systemd treats an account's group list. `install` brings
+along the addons already installed rather than leaving them to the next timer
+tick, since otherwise installing one addon takes another one's site list away
+for up to fifteen minutes.
+
+The group is the smallest thing that fixes it. The file holds the panel's
+non-secret site list, which does not justify anything more elaborate.
+
 ## Known gaps
 
 - `--local` installs skip provenance verification by construction. Staging only.
@@ -629,13 +794,22 @@ second credential, not single sign-on.
   set explicitly keep their old 0644. They are protected by the 0700 directory
   above them, so this is untidy rather than exposed, and `repair` deliberately
   does not walk instance directories -- those belong to the wrapper.
-- `install.sh` passes one `--domain` to every addon it installs. With a second
-  addon that would put two managers behind one site whose reverse-proxy URL
-  names only the first one's port. It needs a hostname per addon before a second
-  addon ships.
-- `snapshot.json` is `root:<that addon's site user>` 0640, so only one addon can
-  read it. A second addon needs a shared group, which is a real decision rather
-  than a patch: it means the installer creating and maintaining a group, adding
-  each addon's site user to it, and `SupplementaryGroups=` on the unit, all to
-  share a file whose contents are the panel's non-secret site list. Left open
-  deliberately until there is a second addon to design it against.
+- The Stager addon does not delete a staging site. CloudPanel already does, from
+  Site -> Settings, and deleting a site is where a mistake costs the most; a
+  second button for it would be a second way to get it wrong.
+- URL rewriting inside a cloned database is WordPress only, through `wp-cli`.
+  A Laravel or Symfony clone gets its `.env` credentials rewritten but nothing
+  reaches into its database, so anything storing an absolute URL there still
+  names the source site.
+- A source whose `server_name` line is itself hand edited cannot have its vhost
+  carried across: CloudPanel requires the `{{server_name}}` placeholder, and the
+  edit and the placeholder cannot both occupy that line. The clone is built from
+  the stock template and the job says so. On the box this was built against that
+  is 1 site in 25.
+- A clone copies the source's files and database as they are at that moment.
+  There is no quiescing: a site written to during the copy can produce a staging
+  copy whose files and database are from slightly different instants.
+- Each addon needs a hostname of its own, so two addons mean two DNS records,
+  two certificates and two Basic Auth setups. Serving both from one host would
+  mean either editing a vhost or adding a routing service, and the first is
+  forbidden while the second is a new component to keep alive.

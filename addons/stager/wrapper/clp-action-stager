@@ -1,0 +1,1024 @@
+#!/usr/bin/env bash
+# =============================================================================
+# clp-action-stager
+#
+# The privilege boundary for the Stager addon. Runs as root via a single
+# sudoers line granting the unprivileged app user this one script and nothing
+# else. Everything this script permits, the app user can do as root, so the
+# argument validation below is the whole security model.
+#
+# Rules this file must keep (see docs/DECISIONS.md):
+#   - validate before acting, and reject rather than sanitize
+#   - build argv arrays and exec directly; never sh -c, eval, or backticks
+#   - no free-form arguments: no paths, no filenames, no SQL
+#   - clpctl is the only thing that writes panel state; we never do
+#   - machine-readable JSON on stdout, human-readable progress on stderr
+#
+# What this does NOT do, deliberately: it does not copy the source site's
+# custom nginx edits. Those live in `site.vhost_template`, the panel renders
+# the Vhost tab and every regeneration from that column, and there is no clpctl
+# verb that sets it -- so cloning them means writing an undocumented schema
+# while the panel is running. The clone is created from the same named vhost
+# template as its source, which covers the template-shaped difference, and any
+# remaining edit is reported for the operator to paste into the panel's own
+# Vhost editor.
+# =============================================================================
+set -euo pipefail
+
+readonly LOCK_DIR="/run/lock/clp-addons"
+readonly DATA_BASE_DIR="/var/lib/clp-addons/stager"
+readonly JOBS_DIR="${DATA_BASE_DIR}/jobs"
+readonly ADDON_CONFIG="/etc/clp-addons/stager.conf"
+readonly PANEL_DB="/home/clp/htdocs/app/data/db.sq3"
+readonly CLPCTL="/usr/bin/clpctl"
+
+# Hardcoded rather than "$0". The sudoers line names this exact path, so it is
+# the only copy of this script that has been reviewed and granted anything;
+# re-entering through $0 would follow whatever path the caller was invoked by.
+readonly SELF="/usr/local/lib/clp-addons/clp-action-stager"
+
+# Job records outlive the clone because they carry the staging database
+# password, which is the one credential the operator cannot read back out of
+# the panel. Long enough to be useful, short enough that the box is not a
+# permanent store of them.
+readonly JOB_RETENTION_DAYS=14
+readonly LOG_TAIL_LINES=400
+
+log()  { printf '[stager] %s\n' "$*" >&2; }
+warn() { printf '[stager] WARN: %s\n' "$*" >&2; }
+
+# stdout is a machine-readable contract. Everything else goes to stderr.
+emit_ok() {
+  printf '{"ok":true,"data":%s}\n' "${1:-null}"
+}
+
+emit_err() {
+  local msg="$1"
+  printf '[stager] ERROR: %s\n' "$msg" >&2
+  printf '{"ok":false,"error":%s}\n' "$(json_str "$msg")"
+  exit 1
+}
+
+# Quote a string as a JSON scalar without shelling out to jq, so the error path
+# still works on a box where jq is missing.
+json_str() {
+  local s=${1//$'\033'/}
+  s=$(printf '%s' "$s" | tr -d '\000-\010\013\014\016-\037')
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\t'/\\t}
+  s=${s//$'\r'/\\r}
+  printf '"%s"' "$s"
+}
+
+# --- validation -------------------------------------------------------------
+# Every one of these rejects. None of them rewrite their input.
+
+validate_domain() {
+  local d=$1 what=$2
+  [[ -n $d ]] || emit_err "missing --${what}"
+  (( ${#d} <= 253 )) || emit_err "the --${what} domain is too long"
+  local re='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'
+  [[ $d =~ $re ]] || emit_err "invalid domain for --${what}: '$d'"
+
+  # Neither end of a clone may be the site serving this addon: as a source it
+  # would copy the manager's own credentials into a new site, and as a target
+  # it would hand the manager's vhost to a clone of something else.
+  if [[ -r $ADDON_CONFIG ]]; then
+    local own
+    # Read the value, never source the file: sourcing turns a config write into
+    # root code execution.
+    own=$(sed -n 's/^[[:space:]]*OWN_DOMAIN[[:space:]]*=[[:space:]]*"\?\([^"#]*\)"\?.*/\1/p' \
+          "$ADDON_CONFIG" | tail -1 | tr -d '[:space:]')
+    if [[ -n $own && $d == "$own" ]]; then
+      emit_err "refusing to act on the addon's own site: '$d'"
+    fi
+  fi
+  return 0
+}
+
+# Generated here and only here, so the format is fixed rather than something a
+# caller proposes: a job id reaches the filesystem as a directory name.
+validate_job() {
+  local j=$1
+  [[ -n $j ]] || emit_err "missing --job"
+  [[ $j =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$ ]] || emit_err "invalid job id: '$j'"
+  return 0
+}
+
+validate_flag() {
+  local v=$1 what=$2
+  [[ $v == "yes" || $v == "no" ]] || emit_err "--${what} takes yes or no, got: '$v'"
+  return 0
+}
+
+# --- panel reads ------------------------------------------------------------
+# Read-only, always. The domain has passed validate_domain by the time it
+# reaches any of these, so it holds nothing but [a-z0-9.-]; sqlite3's CLI has
+# no bind parameters, and that validation gate is what makes the interpolation
+# safe.
+
+panel_query() {
+  [[ -r $PANEL_DB ]] || return 1
+  sqlite3 -readonly "$PANEL_DB" "$1" 2>/dev/null
+}
+
+site_exists() {
+  local n
+  n=$(panel_query "SELECT COUNT(*) FROM site WHERE domain_name = '$1';") || return 1
+  [[ ${n:-0} -gt 0 ]]
+}
+
+# type|user|root_directory|application for one site, or nothing.
+site_row() {
+  panel_query "SELECT type, user, root_directory, COALESCE(application, '') FROM site WHERE domain_name = '$1';"
+}
+
+php_version_of() {
+  panel_query "SELECT p.php_version FROM php_settings p JOIN site s ON s.id = p.site_id WHERE s.domain_name = '$1';"
+}
+
+database_of() {
+  panel_query "SELECT d.name FROM database d JOIN site s ON s.id = d.site_id WHERE s.domain_name = '$1' ORDER BY d.id LIMIT 1;"
+}
+
+vhost_of() {
+  panel_query "SELECT vhost_template FROM site WHERE domain_name = '$1';"
+}
+
+# --- naming -----------------------------------------------------------------
+
+# The one scheme for accounts CloudPanel creates for this project. Reimplemented
+# from cli/provision.ts, which is TypeScript and cannot be imported here; a test
+# runs both over a list of domains and asserts they agree. Hashing the whole
+# domain is what keeps it unique -- earlier schemes truncated the domain, and
+# site.user is UNIQUE, so two sites sharing a prefix collided inside clpctl.
+site_user_for() {
+  local d=${1,,} readable hash
+  readable=${d//[^a-z0-9]/}
+  readable=${readable:0:8}
+  hash=$(printf '%s' "$d" | sha256sum | cut -c1-6)
+  printf 'addon-%s-%s' "$readable" "$hash"
+}
+
+# Derived from the target domain rather than random, so a retry after a failed
+# clone proposes the same names and "already exists" means something.
+db_name_for() {
+  local d=${1,,} readable hash
+  readable=${d//[^a-z0-9]/}
+  readable=${readable:0:8}
+  hash=$(printf '%s' "$d" | sha256sum | cut -c1-6)
+  printf 'stg%s%s' "$readable" "$hash"
+}
+
+db_user_for() {
+  local d=${1,,} readable hash
+  readable=${d//[^a-z0-9]/}
+  readable=${readable:0:8}
+  hash=$(printf '%s' "$d" | sha256sum | cut -c1-6)
+  printf 'u%s%s' "$readable" "$hash"
+}
+
+user_taken() {
+  getent passwd "$1" >/dev/null 2>&1
+}
+
+# CloudPanel requires an upper, a lower, a digit and a symbol. Everything after
+# the fixed prefix is [A-Za-z0-9], which also keeps it safe to place in a sed
+# replacement when it is written into wp-config.php.
+gen_password() {
+  local raw
+  raw=$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')
+  printf 'Aa1%s!' "${raw:0:16}"
+}
+
+# No symbols at all: this one is interpolated into wp-config.php and .env
+# through sed, where & and \ are replacement metacharacters.
+gen_db_password() {
+  head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 24
+}
+
+# --- job records ------------------------------------------------------------
+# One small file per field rather than one JSON document that every step
+# rewrites. A partial write then costs one field instead of the whole record,
+# and bash can set a field with a single redirect.
+
+job_dir() { printf '%s/%s' "$JOBS_DIR" "$1"; }
+
+job_set() {
+  local dir=$1 field=$2 value=$3
+  printf '%s\n' "$value" > "${dir}/${field}"
+  chmod 600 "${dir}/${field}"
+}
+
+job_get() {
+  local dir=$1 field=$2
+  [[ -f "${dir}/${field}" ]] && head -c 4096 "${dir}/${field}" | tr -d '\n' || true
+}
+
+new_job_id() {
+  printf '%s-%s' "$(date -u +%Y%m%dT%H%M%SZ)" "$(openssl rand -hex 3)"
+}
+
+# --- clone steps ------------------------------------------------------------
+
+# Progress and unwind state for one clone. Globals rather than locals because
+# the EXIT trap that rolls a failed clone back runs outside cmd_run's scope.
+STEP=""
+JOB_DIR=""
+SITE_CREATED=0
+DB_CREATED=0
+DUMP_FILE=""
+STG_DB_NAME=""
+STG_DB_USER=""
+STG_DB_PASS=""
+TEMPLATE_NAME=""
+
+set_step() {
+  STEP=$1
+  [[ -n $JOB_DIR ]] && job_set "$JOB_DIR" step "$1"
+  log "$1"
+}
+
+fail_job() {
+  local msg=$1
+  if [[ -n $JOB_DIR ]]; then
+    job_set "$JOB_DIR" error "$msg"
+    job_set "$JOB_DIR" state failed
+  fi
+  printf '[stager] ERROR: %s\n' "$msg" >&2
+  exit 1
+}
+
+cmd_run() {
+  local id=$1
+  local dir; dir=$(job_dir "$id")
+  [[ -d $dir ]] || emit_err "no such job: ${id}"
+  JOB_DIR=$dir
+
+  # Everything from here is the job's transcript. The caller is systemd, which
+  # would otherwise put a staging database password into the journal.
+  exec >>"${dir}/log" 2>&1
+  chmod 600 "${dir}/log"
+
+  local source target tls
+  source=$(job_get "$dir" source)
+  target=$(job_get "$dir" target)
+  tls=$(job_get "$dir" tls)
+  [[ -n $source && -n $target ]] || fail_job "job record is incomplete"
+
+  # Re-validated rather than trusted: this file was written by an earlier run of
+  # this script, but a job directory is still a file on disk.
+  validate_domain "$source" source
+  validate_domain "$target" target
+  validate_job "$id"
+
+  local state; state=$(job_get "$dir" state)
+  [[ $state == "queued" ]] || fail_job "job ${id} is ${state}, not queued"
+
+  job_set "$dir" state running
+  job_set "$dir" startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  rollback() {
+    local rc=$?
+    (( rc == 0 )) && return 0
+    warn "clone failed during '${STEP}', unwinding"
+    [[ -n $DUMP_FILE && -f $DUMP_FILE ]] && rm -f "$DUMP_FILE"
+    if (( DB_CREATED == 1 )); then
+      warn "removing the staging database this run created"
+      "$CLPCTL" db:delete --databaseName="$STG_DB_NAME" --force >&2 2>/dev/null || true
+    fi
+    drop_template_stage
+    if [[ -n $TEMPLATE_NAME ]]; then
+      "$CLPCTL" vhost-template:delete --name="$TEMPLATE_NAME" >&2 2>/dev/null || true
+      TEMPLATE_NAME=""
+    fi
+    if (( SITE_CREATED == 1 )); then
+      warn "removing the staging site this run created"
+      "$CLPCTL" site:delete --domainName="$target" --force >&2 2>/dev/null || true
+    fi
+    if [[ $(job_get "$dir" state) != "failed" ]]; then
+      job_set "$dir" error "clone failed during '${STEP}'"
+      job_set "$dir" state failed
+    fi
+    return $rc
+  }
+  trap rollback EXIT
+
+  # --- source facts ---------------------------------------------------------
+  set_step "reading the source site"
+  local -a notes=()
+  local vhost_carried=1
+  local row src_type src_user src_root src_app php_version src_db
+  row=$(site_row "$source") || fail_job "cannot read the panel database"
+  [[ -n $row ]] || fail_job "no CloudPanel site for ${source}"
+  IFS='|' read -r src_type src_user src_root src_app <<< "$row"
+  [[ $src_type == "php" ]] || fail_job "${source} is a '${src_type}' site; only PHP sites can be cloned"
+  [[ -n $src_user ]] || fail_job "${source} has no site user recorded"
+
+  php_version=$(php_version_of "$source")
+  [[ -n $php_version ]] || fail_job "cannot determine the PHP version of ${source}"
+  src_db=$(database_of "$source")
+
+  # The panel records which named template a site was created from, so the
+  # clone can be created from the same one instead of a guess. Older rows can
+  # have no application; Generic is what the panel itself falls back to.
+  [[ -n $src_app ]] || src_app="Generic"
+
+  local src_dir="/home/${src_user}/htdocs/${source}"
+  [[ -d $src_dir ]] || fail_job "source directory not found: ${src_dir}"
+
+  # --- the staging site -----------------------------------------------------
+  # --- the source's own vhost, if it can be carried safely ------------------
+  # Attempted for every clone rather than asked about, because the operator has
+  # no way to know in advance whether their source has edits. When it cannot be
+  # done the clone still gets built from the stock template and the job says
+  # what was left behind, so the failure is a message rather than a missing
+  # clone -- and never a staging site answering for production.
+  # Resolved quietly here and only mentioned below if it ends up being used:
+  # saying the base template is missing is noise when the source's own vhost
+  # was carried across and the base was never reached.
+  local base_template=$src_app base_missing=0
+  if ! vhost_template_exists "$base_template"; then
+    base_missing=1
+    base_template="Generic"
+  fi
+
+  local vhost_template=$base_template
+  if build_vhost_template "$source" "$target" \
+     && vhost_template_ok "$TEMPLATE_FILE" "$source" "$target"; then
+    local candidate="clp-stager-${id}"
+    if "$CLPCTL" vhost-template:add --name="$candidate" --file="$TEMPLATE_FILE" >&2; then
+      TEMPLATE_NAME=$candidate
+      vhost_template=$candidate
+      log "carrying ${source}'s vhost across"
+    else
+      notes+=("CloudPanel would not accept a vhost template built from ${source}, so the clone uses the stock ${base_template} template. Copy any edits across in Site -> Vhost")
+      vhost_carried=0
+      (( base_missing == 1 )) && notes+=("${source} names a vhost template the panel no longer has, so ${base_template} was used instead")
+    fi
+  else
+    notes+=("${source}'s vhost was not carried across: ${VHOST_REJECT:-it could not be read}. The clone uses the stock ${base_template} template; copy the edits across in Site -> Vhost")
+    vhost_carried=0
+    (( base_missing == 1 )) && notes+=("${source} names a vhost template the panel no longer has, so ${base_template} was used instead")
+  fi
+  drop_template_stage
+
+  set_step "creating the staging site ${target} on PHP ${php_version}"
+  local stg_user stg_pass
+  stg_user=$(site_user_for "$target")
+  user_taken "$stg_user" && fail_job "the site user ${stg_user} already exists; ${target} may be half-created"
+  stg_pass=$(gen_password)
+
+  "$CLPCTL" site:add:php \
+    --domainName="$target" \
+    --phpVersion="$php_version" \
+    --vhostTemplate="$vhost_template" \
+    --siteUser="$stg_user" \
+    --siteUserPassword="$stg_pass" >&2 \
+    || fail_job "clpctl site:add:php failed for ${target}"
+  SITE_CREATED=1
+
+  # Its whole purpose was this one site:add:php. CloudPanel copies the rendered
+  # body into the site's own record, so the clone is unaffected by the template
+  # going away, and the panel's template library does not grow by one entry per
+  # clone. Only site.application still names it, which nothing but the new-site
+  # form reads.
+  if [[ -n $TEMPLATE_NAME ]]; then
+    "$CLPCTL" vhost-template:delete --name="$TEMPLATE_NAME" >&2 \
+      || warn "could not remove the temporary vhost template ${TEMPLATE_NAME}"
+    TEMPLATE_NAME=""
+  fi
+
+  local dest_dir="/home/${stg_user}/htdocs/${target}"
+  [[ -d $dest_dir ]] || fail_job "CloudPanel did not create ${dest_dir}"
+
+  # --- the database ---------------------------------------------------------
+  if [[ -n $src_db ]]; then
+    STG_DB_NAME=$(db_name_for "$target")
+    STG_DB_USER=$(db_user_for "$target")
+    STG_DB_PASS=$(gen_db_password)
+
+    # Into the job directory, which is 0700 root. The original script wrote it
+    # to /tmp under a name derived from the production database, where any
+    # local user could read a full dump of it, or pre-create the path as a
+    # symlink and have root write through it.
+    DUMP_FILE="${dir}/dump.sql.gz"
+
+    set_step "exporting ${src_db}"
+    "$CLPCTL" db:export --databaseName="$src_db" --file="$DUMP_FILE" >&2 \
+      || fail_job "clpctl db:export failed for ${src_db}"
+    chmod 600 "$DUMP_FILE"
+
+    set_step "creating the staging database ${STG_DB_NAME}"
+    "$CLPCTL" db:add \
+      --domainName="$target" \
+      --databaseName="$STG_DB_NAME" \
+      --databaseUserName="$STG_DB_USER" \
+      --databaseUserPassword="$STG_DB_PASS" >&2 \
+      || fail_job "clpctl db:add failed for ${STG_DB_NAME}"
+    DB_CREATED=1
+
+    set_step "importing into ${STG_DB_NAME}"
+    "$CLPCTL" db:import --databaseName="$STG_DB_NAME" --file="$DUMP_FILE" >&2 \
+      || fail_job "clpctl db:import failed for ${STG_DB_NAME}"
+
+    rm -f "$DUMP_FILE"
+    DUMP_FILE=""
+  else
+    log "the source site has no database; skipping the database steps"
+  fi
+
+  # --- files ----------------------------------------------------------------
+  set_step "copying files"
+  # pipefail so a source-side failure is not masked by the receiving tar
+  # reporting success. tar exit 1 is "file changed as we read it", which is
+  # normal on a live site; 2 and above are real.
+  local rc=0
+  set +e
+  ( set -o pipefail; tar -C "$src_dir" -cf - . | tar -xf - -C "$dest_dir" )
+  rc=$?
+  set -e
+  (( rc >= 2 )) && fail_job "copying files failed (tar exit ${rc})"
+  chown -R "${stg_user}:${stg_user}" "$dest_dir" || fail_job "could not chown ${dest_dir}"
+
+  # --- application config ---------------------------------------------------
+  if [[ -n $src_db ]]; then
+    set_step "rewriting the application's database credentials"
+    if [[ -f "${dest_dir}/wp-config.php" ]]; then
+      rewrite_wp_config "${dest_dir}/wp-config.php" "$target"
+      if command -v wp >/dev/null 2>&1; then
+        set_step "rewriting URLs with wp-cli"
+        run_wp_search_replace "$stg_user" "$dest_dir" "$source" "$target" \
+          || notes+=("wp-cli search-replace reported problems; check the log")
+      else
+        notes+=("wp-cli is not installed, so URLs inside the database still name ${source}")
+      fi
+    elif [[ -f "${dest_dir}/.env" ]]; then
+      rewrite_dotenv "${dest_dir}/.env"
+    else
+      notes+=("no wp-config.php or .env found, so the database credentials were not written into the application; they are in this job's result")
+    fi
+  fi
+
+  # --- what the clone could not carry over ----------------------------------
+  local stg_root
+  stg_root=$(panel_query "SELECT root_directory FROM site WHERE domain_name = '$target';")
+  if [[ -n $src_root && -n $stg_root && "${src_root#"$source"}" != "${stg_root#"$target"}" ]]; then
+    notes+=("the source's root directory is '${src_root}' but the clone's is '${stg_root}'; set it in Site -> Settings")
+  fi
+  # Only when the carry-over was attempted and appeared to work. If it was
+  # refused, the note saying so was added above and already names the reason;
+  # repeating it in different words reads like two separate problems.
+  if (( vhost_carried == 1 )) && vhost_differs "$source" "$target" "$src_user" "$stg_user"; then
+    notes+=("${source}'s vhost still differs from the clone's after carrying it across. Compare them in Site -> Vhost")
+  fi
+
+  # --- certificate ----------------------------------------------------------
+  if [[ $tls == "yes" ]]; then
+    set_step "requesting a Let's Encrypt certificate for ${target}"
+    if ! "$CLPCTL" lets-encrypt:install:certificate --domainName="$target" >&2; then
+      notes+=("the certificate request failed; point ${target} at this server and retry from Site -> SSL/TLS")
+    fi
+  else
+    notes+=("no certificate was requested; ${target} is served with CloudPanel's self-signed one until you issue one")
+  fi
+
+  # --- result ---------------------------------------------------------------
+  # Named for what is happening rather than "done": the state file is what says
+  # the clone finished, and a step that claims it a moment early is the kind of
+  # thing an operator reads as a hang when the next line takes a while.
+  set_step "recording the result"
+  local notes_json="["
+  local first=1 n
+  for n in ${notes[@]+"${notes[@]}"}; do
+    (( first == 1 )) || notes_json+=","
+    notes_json+=$(json_str "$n")
+    first=0
+  done
+  notes_json+="]"
+
+  local db_json="null"
+  if [[ -n $src_db ]]; then
+    db_json=$(printf '{"source":%s,"name":%s,"user":%s,"password":%s}' \
+      "$(json_str "$src_db")" "$(json_str "$STG_DB_NAME")" \
+      "$(json_str "$STG_DB_USER")" "$(json_str "$STG_DB_PASS")")
+  fi
+
+  # The database password is the one credential here that cannot be read back
+  # out of the panel, and it is needed whenever the application's config could
+  # not be rewritten. 0600 in a 0700 directory, and `prune` drops the whole
+  # record after JOB_RETENTION_DAYS.
+  printf '{"siteUser":%s,"phpVersion":%s,"vhostTemplate":%s,"vhostCarried":%s,"database":%s,"notes":%s}\n' \
+    "$(json_str "$stg_user")" "$(json_str "$php_version")" "$(json_str "$base_template")" \
+    "$( (( vhost_carried == 1 )) && echo true || echo false )" \
+    "$db_json" "$notes_json" > "${dir}/result.json"
+  chmod 600 "${dir}/result.json"
+
+  job_set "$dir" finishedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  job_set "$dir" state "done"
+  trap - EXIT
+  log "clone complete: ${target}"
+}
+
+# sed rather than a PHP parser, on the four defines CloudPanel's own templates
+# and every WordPress install agree on. Every replacement value is generated by
+# this script from [A-Za-z0-9], so none of them can carry a sed metacharacter.
+rewrite_wp_config() {
+  local file=$1 target=$2
+  sed -i \
+    -e "s/define( *'DB_NAME', *'[^']*' *);/define('DB_NAME', '${STG_DB_NAME}');/g" \
+    -e "s/define( *'DB_USER', *'[^']*' *);/define('DB_USER', '${STG_DB_USER}');/g" \
+    -e "s/define( *'DB_PASSWORD', *'[^']*' *);/define('DB_PASSWORD', '${STG_DB_PASS}');/g" \
+    "$file"
+
+  if grep -q "WP_HOME" "$file"; then
+    sed -i \
+      -e "s|define( *'WP_HOME', *'[^']*' *);|define('WP_HOME', 'https://${target}');|g" \
+      -e "s|define( *'WP_SITEURL', *'[^']*' *);|define('WP_SITEURL', 'https://${target}');|g" \
+      "$file"
+  else
+    sed -i "/define( *'DB_PASSWORD'/a define('WP_HOME', 'https://${target}');\ndefine('WP_SITEURL', 'https://${target}');" "$file"
+  fi
+
+  if grep -q "DOMAIN_CURRENT_SITE" "$file"; then
+    sed -i "s/define( *'DOMAIN_CURRENT_SITE', *'[^']*' *);/define('DOMAIN_CURRENT_SITE', '${target}');/g" "$file"
+  fi
+}
+
+rewrite_dotenv() {
+  local file=$1
+  sed -i \
+    -e "s/^DB_DATABASE=.*/DB_DATABASE=${STG_DB_NAME}/" \
+    -e "s/^DB_USERNAME=.*/DB_USERNAME=${STG_DB_USER}/" \
+    -e "s/^DB_PASSWORD=.*/DB_PASSWORD=${STG_DB_PASS}/" \
+    "$file"
+}
+
+# As the staging site's own user, never as root: wp-cli refuses to run as root
+# without --allow-root, and running a site's plugins as root is exactly the
+# thing that flag exists to stop.
+run_wp_search_replace() {
+  local user=$1 path=$2 from=$3 to=$4
+  local -a cmd=(runuser -u "$user" -- env "HOME=/home/${user}" wp
+                --path="$path" --skip-plugins --skip-themes search-replace)
+  if grep -q "DOMAIN_CURRENT_SITE" "${path}/wp-config.php" 2>/dev/null; then
+    "${cmd[@]}" "$from" "$to" --network >&2
+  else
+    "${cmd[@]}" "https://${from}" "https://${to}" >&2
+  fi
+}
+
+# Normalise a stored vhost body down to what an operator actually chose.
+#
+# `site.vhost_template` is not a rendered config: it keeps CloudPanel's own
+# {{ssl_certificate}}, {{root}}, {{php_fpm_port}} and the rest, and only the
+# hostnames are concrete. Two things in it are generated per site rather than
+# chosen, and comparing without accounting for them reports an edit on every
+# ordinary clone:
+#
+#   - CloudPanel prepends an http->https redirect server block, but only when
+#     the hostname is an apex or www. Cloning example.com to stg.example.com
+#     means the source has that block and the clone does not.
+#   - ServerNameProcessor writes `server_name <domain> www1.<domain>;` for an
+#     apex and `server_name <domain>;` for a subdomain.
+#
+# Both are folded away here. Anything else in a server_name line survives, so a
+# hand-widened `server_name <domain> *.<domain>;` still reads as an edit, which
+# is the case this check exists for.
+# An ERE matching $1 only as a whole hostname, capturing the characters either
+# side so a substitution can put them back.
+#
+# A hostname is not a substring: example.com appears inside stg.example.com and
+# inside notexample.com, and treating it as one either rewrites hostnames that
+# merely end in it or reports the clone's own name as the source leaking
+# through. The neighbouring character must not be one that can continue a
+# hostname, which for the left side includes the dot.
+hostname_boundary() {
+  local h=${1//./\\.}
+  printf '(^|[^A-Za-z0-9.-])%s([^A-Za-z0-9-]|$)' "$h"
+}
+
+# Drop the http->https redirect server block CloudPanel prepends. It is present
+# only when the hostname is an apex or www, so a source and its subdomain clone
+# differ by the whole block without anyone having edited anything.
+strip_redirect_block() {
+  awk '
+    NR == 1 && /^server \{/ { block = $0 ORS; depth = 1; inblock = 1; next }
+    inblock {
+      block = block $0 ORS
+      depth += gsub(/\{/, "{") - gsub(/\}/, "}")
+      if (/return 301/) redirect = 1
+      if (depth == 0) { inblock = 0; if (!redirect) printf "%s", block }
+      next
+    }
+    { print }
+  '
+}
+
+# Replace the two forms ServerNameProcessor generates with $2, leaving any other
+# server_name line alone. A hand-widened `server_name <d> *.<d>;` is not one of
+# them and survives, which is what lets both callers below tell an edit from a
+# rendering artefact.
+fold_server_name() {
+  local domain=${1//./\\.} repl=$2
+  sed -e "s|^\([[:space:]]*\)server_name ${domain} www1\\.${domain};[[:space:]]*\$|\\1${repl}|" \
+      -e "s|^\([[:space:]]*\)server_name ${domain};[[:space:]]*\$|\\1${repl}|"
+}
+
+vhost_shape() {
+  local body=$1 domain=$2
+  printf '%s\n' "$body" \
+    | strip_redirect_block \
+    | fold_server_name "$domain" "server_name {GENERATED};" \
+    | grep -v '^[[:space:]]*$'
+}
+
+# True when the source's vhost holds edits the clone will not have.
+#
+# Both bodies come out of the panel's own record, so this compares what the
+# panel will render rather than what happens to be on disk.
+vhost_differs() {
+  local source=$1 target=$2 src_user=$3 stg_user=$4
+  local a b
+  a=$(vhost_of "$source") || return 1
+  b=$(vhost_of "$target") || return 1
+  [[ -n $a && -n $b ]] || return 1
+  a=$(vhost_shape "$a" "$source")
+  b=$(vhost_shape "$b" "$target")
+  a=${a//"$source"/"$target"}
+  a=${a//"$src_user"/"$stg_user"}
+  [[ $a != "$b" ]]
+}
+
+# Build a named vhost template that reproduces the source's config for the
+# clone, or fail.
+#
+# The clone is created from this instead of the stock template, which is what
+# carries the source's hand edits across. Going through CloudPanel's own
+# template mechanism rather than writing the vhost ourselves matters twice
+# over: the panel renders every {{placeholder}} against the *clone's* values,
+# so the copy tracks its own certificate, root, php-fpm port and log paths
+# rather than freezing the source's; and the panel writes both its database
+# record and the file on disk, so nothing it does later reverts the result. A
+# vhost written only to disk is reverted by the next thing that regenerates it.
+# Where a candidate template is handed to clpctl, and why it is not the job
+# directory.
+#
+# /usr/bin/clpctlWrapper ends with `su -s /bin/bash -c "$COMMAND" clp`, so
+# clpctl reads --file as the clp user rather than as root. A job directory is
+# 0700 root, so the panel saw an unreadable path as an empty template and
+# refused it with "Vhost Template cannot be empty". The handoff is root:clp
+# 0640 inside a 0710 root:clp directory: exactly one other account can read it
+# and none can list the directory. Removed as soon as the template is
+# registered, and by the rollback if it is not.
+TEMPLATE_STAGE=""
+TEMPLATE_FILE=""
+
+# The text transform, on stdout. Separate from the staging below because it is
+# the part with the rules in it, and keeping it free of root and of the clp
+# group is what lets tools/test-app.ts drive it on any machine. It used to be
+# one function, and the test that covered it therefore needed both -- which
+# passed here and failed in CI.
+vhost_template_body() {
+  local source=$1 target=$2 body cand
+
+  body=$(vhost_of "$source") || return 1
+  [[ -n $body ]] || return 1
+
+  cand=$(printf '%s\n' "$body" | strip_redirect_block | fold_server_name "$source" "{{server_name}}")
+  # Whatever names the source after the generated forms are folded away is a
+  # hand edit that mentions the hostname, and it has to name the clone instead.
+  #
+  # Not a plain substring replacement. The ordinary target is a subdomain of the
+  # source -- stg.example.com contains example.com -- so replacing the substring
+  # rewrites hostnames that merely end in it, and testing for the substring
+  # afterwards flags the clone's own name as a leak. Both are done on whole
+  # hostname boundaries instead.
+  cand=$(printf '%s\n' "$cand" | sed -E "s/$(hostname_boundary "$source")/\\1${target}\\2/g")
+  [[ -n $cand ]] || return 1
+
+  printf '%s\n' "$cand"
+}
+
+build_vhost_template() {
+  local source=$1 target=$2 cand
+  TEMPLATE_FILE=""
+
+  cand=$(vhost_template_body "$source" "$target") || return 1
+  [[ -n $cand ]] || return 1
+
+  TEMPLATE_STAGE=$(mktemp -d /tmp/clp-stager-tpl.XXXXXXXX) || return 1
+  chown root:clp "$TEMPLATE_STAGE" && chmod 710 "$TEMPLATE_STAGE" || return 1
+  TEMPLATE_FILE="${TEMPLATE_STAGE}/vhost.tpl"
+  printf '%s\n' "$cand" > "$TEMPLATE_FILE"
+  chown root:clp "$TEMPLATE_FILE" && chmod 640 "$TEMPLATE_FILE" || return 1
+}
+
+drop_template_stage() {
+  [[ -n $TEMPLATE_STAGE ]] || return 0
+  rm -rf "$TEMPLATE_STAGE"
+  TEMPLATE_STAGE=""
+  TEMPLATE_FILE=""
+  return 0
+}
+
+# Is this a named template the panel still has?
+#
+# site.application records the name a site was created from, not a reference to
+# it, so the template can have been deleted or renamed since. Falling back to
+# one that is gone fails site:add:php with "Vhost Template ... does not exist",
+# which is a confusing way to lose a clone.
+vhost_template_exists() {
+  local n
+  n=$(panel_query "SELECT COUNT(*) FROM vhost_template WHERE name = '${1//\'/\'\'}';") || return 1
+  [[ ${n:-0} -gt 0 ]]
+}
+
+# Set when the template is refused, so the job can say why rather than leaving
+# an operator to guess which of several conditions applied.
+VHOST_REJECT=""
+
+# Would this template give the clone a config that is safe to serve?
+#
+# The dangerous outcome is a clone that answers for the site it was cloned from:
+# two nginx server blocks claiming one server_name, on a box where the other one
+# is production. CloudPanel's own validator catches part of it -- it requires
+# {{server_name}} and rejects a template without one -- but only part, so the
+# checks it does not make are made here, before it is asked.
+vhost_template_ok() {
+  local file=$1 source=$2 target=$3
+  VHOST_REJECT=""
+
+  if ! grep -q '{{server_name}}' "$file"; then
+    VHOST_REJECT="the source's server_name is hand edited, so CloudPanel's {{server_name}} placeholder cannot be kept"
+    return 1
+  fi
+  local leaks
+  leaks=$(grep -cE "$(hostname_boundary "$source")" "$file") || leaks=0
+  if (( leaks > 0 )); then
+    VHOST_REJECT="the source hostname still appears on ${leaks} line(s) after substitution"
+    return 1
+  fi
+
+  local line tok host
+  while IFS= read -r line; do
+    for tok in $(printf '%s' "$line" | sed -e 's/^[[:space:]]*server_name//' -e 's/;[[:space:]]*$//'); do
+      host=${tok#\*.}
+      if [[ $host != "$target" && $host != *".${target}" ]]; then
+        VHOST_REJECT="a server_name names '${tok}', which is not ${target} or below it"
+        return 1
+      fi
+    done
+  done < <(grep -E '^[[:space:]]*server_name ' "$file")
+
+  return 0
+}
+
+# --- verbs ------------------------------------------------------------------
+
+cmd_sites() {
+  local rows out="" first=1
+  rows=$(panel_query "
+    SELECT s.domain_name, s.user, COALESCE(p.php_version, ''), COALESCE(s.application, ''),
+           (SELECT COUNT(*) FROM database d WHERE d.site_id = s.id)
+      FROM site s LEFT JOIN php_settings p ON p.site_id = s.id
+     WHERE s.type = 'php'
+     ORDER BY s.domain_name;") || emit_err "cannot read the panel database"
+
+  local domain user php app dbs
+  while IFS='|' read -r domain user php app dbs; do
+    [[ -n $domain ]] || continue
+    (( first == 1 )) || out+=","
+    out+=$(printf '{"domain":%s,"siteUser":%s,"phpVersion":%s,"application":%s,"databases":%d}' \
+      "$(json_str "$domain")" "$(json_str "$user")" "$(json_str "$php")" \
+      "$(json_str "$app")" "${dbs:-0}")
+    first=0
+  done <<< "$rows"
+
+  emit_ok "{\"sites\":[${out}]}"
+}
+
+cmd_describe() {
+  local domain=$1 row type user root app php db size
+  row=$(site_row "$domain") || emit_err "cannot read the panel database"
+  [[ -n $row ]] || emit_err "no CloudPanel site for ${domain}"
+  IFS='|' read -r type user root app <<< "$row"
+  [[ $type == "php" ]] || emit_err "${domain} is a '${type}' site; only PHP sites can be cloned"
+
+  php=$(php_version_of "$domain")
+  db=$(database_of "$domain")
+  size=0
+  if [[ -d "/home/${user}/htdocs/${domain}" ]]; then
+    size=$(du -sm "/home/${user}/htdocs/${domain}" 2>/dev/null | cut -f1) || size=0
+  fi
+  [[ $size =~ ^[0-9]+$ ]] || size=0
+
+  emit_ok "$(printf '{"domain":%s,"siteUser":%s,"phpVersion":%s,"application":%s,"rootDirectory":%s,"database":%s,"sizeMb":%d}' \
+    "$(json_str "$domain")" "$(json_str "$user")" "$(json_str "$php")" \
+    "$(json_str "${app:-Generic}")" "$(json_str "$root")" "$(json_str "$db")" "$size")"
+}
+
+cmd_clone() {
+  local source=$1 target=$2 tls=$3
+
+  [[ $source != "$target" ]] || emit_err "the source and the target are the same site"
+  site_exists "$source" || emit_err "no CloudPanel site for ${source}"
+  ! site_exists "$target" || emit_err "a CloudPanel site for ${target} already exists"
+
+  local row type
+  row=$(site_row "$source") || emit_err "cannot read the panel database"
+  IFS='|' read -r type _ _ _ <<< "$row"
+  [[ $type == "php" ]] || emit_err "${source} is a '${type}' site; only PHP sites can be cloned"
+
+  local stg_user; stg_user=$(site_user_for "$target")
+  ! user_taken "$stg_user" || emit_err "the site user ${stg_user} already exists; ${target} may be half-created"
+
+  # An unfinished job for the same target means a clone is already in flight.
+  local existing
+  for existing in "$JOBS_DIR"/*/; do
+    [[ -d $existing ]] || continue
+    [[ $(job_get "${existing%/}" target) == "$target" ]] || continue
+    local st; st=$(job_get "${existing%/}" state)
+    [[ $st == "queued" || $st == "running" ]] \
+      && emit_err "a clone into ${target} is already ${st}"
+  done
+
+  local id dir
+  id=$(new_job_id)
+  dir=$(job_dir "$id")
+  mkdir -p "$dir"
+  chmod 700 "$dir"
+
+  job_set "$dir" source "$source"
+  job_set "$dir" target "$target"
+  job_set "$dir" tls "$tls"
+  job_set "$dir" createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  job_set "$dir" step "queued"
+  job_set "$dir" state queued
+  : > "${dir}/log"
+  chmod 600 "${dir}/log"
+
+  # The lock goes before the job starts, not after. `run` takes the same lock
+  # for the length of the clone, and holding it here while waiting on systemd
+  # deadlocked the two against each other: the job sat blocked on flock until
+  # its timeout, failed, and the failure was reported as systemd refusing to
+  # start it.
+  exec 200>&-
+
+  # A transient unit rather than a background subshell. The app is a systemd
+  # service, so anything it forks lives in that service's cgroup and dies with
+  # it -- and the unit has Restart=always. A clone of a large site takes long
+  # enough that a restart during one is not hypothetical, and it would leave a
+  # site half built. systemd-run asks PID 1 to start the work in a cgroup of
+  # its own, where nothing this addon does can interrupt it.
+  #
+  # Type=exec rather than oneshot: with oneshot, systemd-run waits for the whole
+  # clone to finish, which is the opposite of what this verb is for. Type=exec
+  # returns as soon as the job has been exec'd successfully, so a job that could
+  # not be started at all is still reported here rather than sitting in the
+  # queue forever.
+  if ! systemd-run \
+        --unit="clp-addon-stager-job-${id}" \
+        --description="clp-addons: cloning ${source} into ${target}" \
+        --collect \
+        --property=Type=exec \
+        -- "$SELF" run --job "$id" >&2; then
+    job_set "$dir" error "could not start the clone job"
+    job_set "$dir" state failed
+    emit_err "systemd-run refused to start the clone job"
+  fi
+
+  emit_ok "$(printf '{"job":%s,"source":%s,"target":%s}' \
+    "$(json_str "$id")" "$(json_str "$source")" "$(json_str "$target")")"
+}
+
+job_json() {
+  local dir=$1 id=$2 result
+  result=$(cat "${dir}/result.json" 2>/dev/null || true)
+  [[ -n $result ]] || result="null"
+  printf '{"id":%s,"source":%s,"target":%s,"state":%s,"step":%s,"error":%s,"createdAt":%s,"startedAt":%s,"finishedAt":%s,"result":%s}' \
+    "$(json_str "$id")" \
+    "$(json_str "$(job_get "$dir" source)")" \
+    "$(json_str "$(job_get "$dir" target)")" \
+    "$(json_str "$(job_get "$dir" state)")" \
+    "$(json_str "$(job_get "$dir" step)")" \
+    "$(json_str "$(job_get "$dir" error)")" \
+    "$(json_str "$(job_get "$dir" createdAt)")" \
+    "$(json_str "$(job_get "$dir" startedAt)")" \
+    "$(json_str "$(job_get "$dir" finishedAt)")" \
+    "$result"
+}
+
+cmd_job() {
+  local id=$1 dir
+  dir=$(job_dir "$id")
+  [[ -d $dir ]] || emit_err "no such job: ${id}"
+  local body tail_log
+  body=$(job_json "$dir" "$id")
+  tail_log=$(tail -n "$LOG_TAIL_LINES" "${dir}/log" 2>/dev/null || true)
+  printf '{"ok":true,"data":{"job":%s,"log":%s}}\n' "$body" "$(json_str "$tail_log")"
+}
+
+cmd_jobs() {
+  local out="" first=1 dir id
+  # Newest first: the id starts with a UTC timestamp, so a reverse sort of the
+  # directory names is a reverse sort by time.
+  for dir in $(ls -1 "$JOBS_DIR" 2>/dev/null | sort -r); do
+    [[ -d "${JOBS_DIR}/${dir}" ]] || continue
+    [[ $dir =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$ ]] || continue
+    id=$dir
+    (( first == 1 )) || out+=","
+    out+=$(job_json "${JOBS_DIR}/${dir}" "$id")
+    first=0
+  done
+  emit_ok "{\"jobs\":[${out}]}"
+}
+
+cmd_prune() {
+  local removed=0 dir state
+  for dir in "$JOBS_DIR"/*/; do
+    [[ -d $dir ]] || continue
+    state=$(job_get "${dir%/}" state)
+    # Never touch work in flight, however old the record looks.
+    [[ $state == "queued" || $state == "running" ]] && continue
+    if [[ -n $(find "$dir" -maxdepth 0 -mtime "+${JOB_RETENTION_DAYS}" 2>/dev/null) ]]; then
+      rm -rf "$dir"
+      removed=$((removed + 1))
+    fi
+  done
+  emit_ok "{\"removed\":${removed}}"
+}
+
+# --- argument parsing -------------------------------------------------------
+# Parsed and validated in full before anything is created, locked, or touched.
+
+(( $# >= 1 )) || emit_err "usage: $0 {sites|describe|clone|run|job|jobs|prune} [options]"
+
+VERB=$1; shift
+
+SOURCE=""; TARGET=""; DOMAIN=""; JOB=""; TLS="no"
+while (( $# > 0 )); do
+  case $1 in
+    --source) [[ $# -ge 2 ]] || emit_err "--source needs a value"; SOURCE=$2; shift 2 ;;
+    --target) [[ $# -ge 2 ]] || emit_err "--target needs a value"; TARGET=$2; shift 2 ;;
+    --domain) [[ $# -ge 2 ]] || emit_err "--domain needs a value"; DOMAIN=$2; shift 2 ;;
+    --job)    [[ $# -ge 2 ]] || emit_err "--job needs a value";    JOB=$2;    shift 2 ;;
+    --tls)    [[ $# -ge 2 ]] || emit_err "--tls needs a value";    TLS=$2;    shift 2 ;;
+    *) emit_err "unknown argument: '$1'" ;;
+  esac
+done
+
+case $VERB in
+  sites|jobs|prune) ;;
+  describe)         validate_domain "$DOMAIN" domain ;;
+  clone)            validate_domain "$SOURCE" source; validate_domain "$TARGET" target
+                    validate_flag "$TLS" tls ;;
+  run|job)          validate_job "$JOB" ;;
+  *) emit_err "unknown verb: '$VERB'" ;;
+esac
+
+# Reject arguments the verb does not take, so a typo cannot be silently ignored.
+case $VERB in
+  clone) if [[ -n $DOMAIN || -n $JOB ]]; then emit_err "clone takes --source, --target and --tls"; fi ;;
+  describe) if [[ -n $SOURCE || -n $TARGET || -n $JOB || $TLS != "no" ]]; then emit_err "describe takes only --domain"; fi ;;
+  run|job) if [[ -n $SOURCE || -n $TARGET || -n $DOMAIN || $TLS != "no" ]]; then emit_err "${VERB} takes only --job"; fi ;;
+  sites|jobs|prune)
+    if [[ -n $SOURCE || -n $TARGET || -n $DOMAIN || -n $JOB || $TLS != "no" ]]; then
+      emit_err "${VERB} takes no arguments"
+    fi ;;
+esac
+
+mkdir -p "$LOCK_DIR" "$JOBS_DIR"
+# The addon's state directory itself belongs to the installer, which owns it by
+# the app's site user; setting a mode here too would have the two overwrite each
+# other every time the reconciliation timer runs. Job records are what hold
+# secrets, and this is the directory that keeps them from every other account.
+chmod 700 "$LOCK_DIR" "$JOBS_DIR"
+
+# One lock per target domain, held for the whole run, so two clones cannot
+# build the same site at once. The read-only verbs take none: they would
+# otherwise stop answering for the whole length of a clone, which is exactly
+# when someone is watching.
+case $VERB in
+  clone)
+    exec 200>"${LOCK_DIR}/stager-${TARGET}.lock"
+    flock -w 30 200 || emit_err "another operation is already running for ${TARGET}" ;;
+  run)
+    LOCK_TARGET=$(job_get "$(job_dir "$JOB")" target)
+    if [[ -n $LOCK_TARGET ]]; then
+      exec 200>"${LOCK_DIR}/stager-${LOCK_TARGET}.lock"
+      flock -w 30 200 || emit_err "another operation is already running for ${LOCK_TARGET}"
+    fi ;;
+esac
+
+case $VERB in
+  sites)    cmd_sites ;;
+  describe) cmd_describe "$DOMAIN" ;;
+  clone)    cmd_clone "$SOURCE" "$TARGET" "$TLS" ;;
+  run)      cmd_run "$JOB" ;;
+  job)      cmd_job "$JOB" ;;
+  jobs)     cmd_jobs ;;
+  prune)    cmd_prune ;;
+esac

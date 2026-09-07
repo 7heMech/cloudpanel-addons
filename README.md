@@ -1,7 +1,7 @@
 # cloudpanel-addons
 
-Addons for [CloudPanel](https://www.cloudpanel.io/). Multi-addon from the start;
-`instatic` is the first.
+Addons for [CloudPanel](https://www.cloudpanel.io/). Multi-addon from the start:
+`instatic` and `stager`.
 
 The design decisions, and the reasoning behind them, live in `docs/DECISIONS.md`.
 Read that before changing anything under `addons/*/wrapper/`. Those scripts are
@@ -17,6 +17,43 @@ Bun server with SQLite or Postgres that bakes pages to its own disk, so there is
 no directory to push files into. Each instance is a container from
 `ghcr.io/corebunch/instatic`, pinned to an exact version and bound to
 `127.0.0.1`, behind a stock CloudPanel reverse-proxy site.
+
+## stager
+
+Adds a Staging tab to every PHP site in CloudPanel, and a Clone link beside each
+one in the site list. Both open a page that copies that site into a new one:
+same PHP version, same vhost template, files copied, database exported and
+imported, and the application's own config rewritten to point at the copy.
+
+It is [clp-stager](https://github.com/7heMech/clp-stager) as an addon. The script
+is interactive and runs in a terminal as root; this runs the same steps from the
+panel, behind the addon's per-site authentication, with the argument validation
+in `addons/stager/wrapper/clp-action-stager` between the web page and root.
+
+A clone takes minutes on a real site, so it is a job rather than a request. The
+wrapper hands the work to a transient systemd unit and answers with a job id;
+the page polls it and shows the log as it goes. Putting the work in its own unit
+is not decoration: the manager is a systemd service with `Restart=always`, and
+anything it forked itself would be killed with it mid-clone.
+
+If a step fails, everything that run created is removed: the database, the site,
+the site user, the dump. What was already there is left alone.
+
+The source's nginx config comes with it. Its stored vhost is registered as a
+named template, the clone is created from that, and the template is removed
+again, so CloudPanel renders it, expands every placeholder against the clone's
+own certificate, document root and php-fpm port, and writes both its own record
+and the file. Nothing here edits a vhost or writes a panel row.
+
+One case cannot be carried: a source whose `server_name` line is itself the hand
+edit, such as a multisite wildcard. CloudPanel requires the `{{server_name}}`
+placeholder on that line and the edit cannot share it, so the panel refuses the
+template, the clone is built from the stock one, and the job says which site to
+copy by hand. That refusal is the point. A staging site that inherited
+`server_name production.example.com` would answer for production.
+
+A custom root directory is not copied either. `clpctl site:add:php` does not take
+one, so the clone gets the template's default and the job says if that differs.
 
 ## Install
 
@@ -79,6 +116,12 @@ clp-addons status
 clp-addons uninstall <addon> --yes [--purge]
 ```
 
+Each addon is served as its own CloudPanel site, so each needs a hostname of its
+own. The bootstrap installer takes `--domain=HOST` when you are installing one
+addon and `--domain-<addon>=HOST` when you are installing several; it refuses one
+hostname shared between two, because the site it creates proxies a single port
+and the second manager would install cleanly and answer on the first one's port.
+
 `install`, `update` and `self-update` refuse a release marked as a prerelease.
 These artifacts run as root, so installing one should be a decision rather than
 something that happens because a tag was handy. Add `--allow-prerelease` when
@@ -114,6 +157,9 @@ has stopped is not obvious from anywhere else. `systemctl is-active` says
 | `instatic-app-linux-x64` | the addon site's CloudPanel user | manager UI, bound to `127.0.0.1:38080` |
 | `clp-action-instatic` | root, via one sudoers line | the privilege boundary |
 | Instatic instances | that instance's CloudPanel site user | one container per site, `127.0.0.1:39000-39999` |
+| `stager-app-linux-x64` | the addon site's CloudPanel user | manager UI, bound to `127.0.0.1:38081` |
+| `clp-action-stager` | root, via one sudoers line | the privilege boundary |
+| a clone in progress | root, in its own transient systemd unit | survives a restart of the manager |
 
 Patching the panel's own templates belongs to the platform, not to an addon.
 An addon declares which template it wants to appear in and the markup to insert.
@@ -165,9 +211,10 @@ takes an explicit `--skip-attestation`.
 
 ## Reaching the manager
 
-The manager binds `127.0.0.1` and its own CloudPanel site is the only thing that
+Each manager binds `127.0.0.1` and its own CloudPanel site is the only thing that
 serves it, so you reach it at `https://<addon-host>` once that hostname resolves
-to the server. The Instatic nav entry in the panel links there.
+to the server. The panel entries link there: Instatic from the header nav, Stager
+from each site's Staging tab.
 
 If the hostname is not in public DNS yet, forward the server's port 443 and add
 a hosts entry for it locally. Forward 443 specifically, because the injected nav
@@ -179,8 +226,21 @@ entry has no port in its URL and a different local port will not follow.
 bun install
 bun run typecheck
 bun run lint:wrapper     # needs shellcheck; a finding here blocks a release
+bun run test:app
+bun run test:inject
 bun run build
 ```
+
+The wrapper contract tests run as root against an installed wrapper, so they are
+not part of `bun run`:
+
+```bash
+tools/test-wrapper.sh          # instatic
+tools/test-wrapper-stager.sh   # stager
+```
+
+Neither creates a site. Every case either fails validation or names a hostname
+that does not exist, so the wrapper answers before it reaches `clpctl`.
 
 `tools/recon.sh` is read-only and dumps facts about a CloudPanel host. **Never
 commit its output.** On a production clone it names real customer domains and
@@ -194,6 +254,7 @@ CloudPanel's templates are proprietary. The injector snapshots them to
 bun run build
 (cd dist && sha256sum -- * > SHA256SUMS)
 ./dist/clp-addons-linux-x64 install instatic --domain=addons.example.com --local=dist
+./dist/clp-addons-linux-x64 install stager --domain=stager.example.com --local=dist
 ```
 
 `--local` still verifies checksums but cannot verify provenance. Staging only.

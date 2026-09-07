@@ -7,7 +7,8 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, renameSync, readdirSync } from "node:fs";
 import {
   ADDONS, ANCHOR_SERVICE, CLI_BIN, CONFIG_DIR, CURRENT_LINK, LEGACY_USERS, LIB_DIR, LOCK_DIR,
-  PANEL_DB, RECONCILE_PATH, RECONCILE_SERVICE, RECONCILE_TIMER, RELEASES_DIR, STATE_DIR, SYSTEMD_DIR,
+  PANEL_DB, RECONCILE_PATH, RECONCILE_SERVICE, RECONCILE_TIMER, RELEASES_DIR, SHARED_GROUP, STATE_DIR,
+  SYSTEMD_DIR,
   templateWatchPaths, type AddonSpec,
 } from "./paths";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
@@ -196,6 +197,25 @@ export function removeLegacyUsers(activeUser: string, quiet = false): void {
 
 // --- directories ------------------------------------------------------------
 
+/**
+ * The group that lets every addon read one snapshot file.
+ *
+ * Idempotent, and called from both install and repair, because a site user can
+ * lose the membership: editing the site in the panel rewrites the account, and
+ * the same reasoning that makes hardenSiteUser re-assert the shell applies here.
+ */
+export function ensureSharedGroup(user: string, quiet = false): void {
+  if (!tryRun("getent", ["group", SHARED_GROUP]).ok) {
+    run("groupadd", ["--system", SHARED_GROUP]);
+    if (!quiet) log.ok(`created the ${SHARED_GROUP} group`);
+  }
+  const groups = tryRun("id", ["-nG", user]).out.split(/\s+/).filter(Boolean);
+  if (!groups.includes(SHARED_GROUP)) {
+    run("usermod", ["-aG", SHARED_GROUP, user]);
+    if (!quiet) log.ok(`added ${user} to ${SHARED_GROUP}`);
+  }
+}
+
 export function ensureDirs(spec: AddonSpec, user: string): void {
   for (const d of [LIB_DIR, RELEASES_DIR, CONFIG_DIR, STATE_DIR, LOCK_DIR]) {
     mkdirSync(d, { recursive: true });
@@ -212,10 +232,12 @@ export function ensureDirs(spec: AddonSpec, user: string): void {
   run("chown", [`${user}:${user}`, spec.stateDir]);
   run("chmod", ["750", spec.stateDir]);
 
-  // The snapshot is customer data: the app's group reads it, nobody else.
+  // The snapshot is customer data: the addons' shared group reads it, nobody
+  // else. The group rather than this addon's own user, or installing a second
+  // addon would take the file away from the first one.
   const snapshot = `${STATE_DIR}/snapshot.json`;
   if (existsSync(snapshot)) {
-    run("chown", [`root:${user}`, snapshot]);
+    run("chown", [`root:${SHARED_GROUP}`, snapshot]);
     run("chmod", ["640", snapshot]);
   }
 }
@@ -256,10 +278,34 @@ export function hardenBackups(spec: AddonSpec, quiet = false): void {
 // --- releases ---------------------------------------------------------------
 
 /**
+ * Every artifact that has to exist in a release tree for these addons to run.
+ *
+ * `current` is shared: each addon's service unit ExecStarts
+ * `current/<its app binary>`, so a release directory is only safe to point at
+ * once it holds every installed addon's copy.
+ */
+export function releaseArtifacts(specs: AddonSpec[], cliArtifact: string): string[] {
+  const names = new Set<string>([cliArtifact]);
+  for (const spec of specs) {
+    names.add(spec.appArtifact);
+    names.add(spec.wrapperArtifact);
+  }
+  return [...names];
+}
+
+/**
  * Place a release under releases/<tag> and move `current` onto it. Immutable
  * directories mean a rollback is a symlink swap rather than a re-download.
+ *
+ * `required` is what must be in the directory before `current` moves. Installing
+ * a second addon used to fetch only that addon's artifacts, write them into a
+ * new release directory and point `current` at it -- which took the first
+ * addon's app binary out from under its own unit, and the only symptom was
+ * status=203/EXEC on a service that had been running for weeks. The guard is
+ * here rather than in the caller because this is the function that moves the
+ * symlink, and every caller of it has the same obligation.
  */
-export function placeRelease(tag: string, artifacts: FetchedArtifact[]): string {
+export function placeRelease(tag: string, artifacts: FetchedArtifact[], required: string[] = []): string {
   const dir = `${RELEASES_DIR}/${tag}`;
   mkdirSync(dir, { recursive: true });
   for (const a of artifacts) {
@@ -267,6 +313,14 @@ export function placeRelease(tag: string, artifacts: FetchedArtifact[]): string 
     writeAtomic(`${dir}/${a.name}`, a.bytes, 0o755);
   }
   writeAtomic(`${dir}/VERSION`, `${tag}\n`, 0o644);
+
+  const missing = required.filter((n) => !existsSync(`${dir}/${n}`));
+  if (missing.length > 0) {
+    fatal(
+      `refusing to point 'current' at ${tag}: ${dir} is missing ${missing.join(", ")}.\n` +
+        `  Another installed addon runs from that release tree and would stop starting.`
+    );
+  }
 
   const tmpLink = `${CURRENT_LINK}.new`;
   rmSync(tmpLink, { force: true });
@@ -434,6 +488,10 @@ Environment=PORT=${spec.port}
 Environment=HOST=127.0.0.1
 Environment=${spec.name.toUpperCase()}_APP_DATA=${spec.stateDir}
 Environment=${spec.name.toUpperCase()}_WRAPPER=${spec.wrapperPath}
+# Named rather than left to the account's own group list, so the unit states
+# what it needs to read ${STATE_DIR}/snapshot.json instead of depending on
+# systemd's default handling of an account's supplementary groups.
+SupplementaryGroups=${SHARED_GROUP}
 ExecStart=${CURRENT_LINK}/${spec.appArtifact}
 Restart=always
 RestartSec=5

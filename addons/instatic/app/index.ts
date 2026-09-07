@@ -6,7 +6,7 @@
 
 import { instaticService, validateDomain, validateTag } from "./service";
 import { layout, dashboardView, newInstanceView } from "./views";
-import { guardMutation, newCsrfToken, csrfCookieHeader, SECURITY_HEADERS } from "./http";
+import { guardMutation, newCsrfToken, csrfCookieHeader, SECURITY_HEADERS } from "../../../lib/app-http";
 import { listAvailableTags } from "./tags";
 
 const PORT = Number(process.env.PORT || 38080);

@@ -2,6 +2,7 @@
 // this write as root" is a single file.
 
 import { INSTATIC_TARGETS } from "../addons/instatic/inject/targets";
+import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 
 export const REPO = "7heMech/cloudpanel-addons";
 
@@ -25,6 +26,18 @@ export const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";
 const PANEL_APP = "/home/clp/htdocs/app/files";
 export const TEMPLATES_DIR = `${PANEL_APP}/templates`;
 export const TWIG_CACHE_DIR = `${PANEL_APP}/var/cache`;
+
+/**
+ * Group that owns the sanitized panel snapshot.
+ *
+ * The snapshot was `root:<that addon's site user>` 0640, which was correct for
+ * exactly one addon and silently wrong for two: installing the second addon
+ * chowned the file to its own user and the first addon's app lost the site list
+ * it allocates ports against. A system group every addon's site user joins is
+ * the smallest thing that fixes it, and the file's contents -- the panel's
+ * non-secret site list -- do not justify anything more elaborate.
+ */
+export const SHARED_GROUP = "clp-addons";
 
 export const CONFIG_DIR = "/etc/clp-addons";
 export const STATE_DIR = "/var/lib/clp-addons";
@@ -83,7 +96,25 @@ export interface AddonSpec {
   configFile: string;
   /** Loopback port for the service. Outside the instance range on purpose. */
   port: number;
+  /**
+   * systemd units that must already be running for this addon to work.
+   *
+   * Per addon rather than a fixed check in `install`, which required Docker for
+   * anything: the Stager addon drives clpctl and tar and would have been
+   * refused on a box with no Docker at all, for a dependency it does not have.
+   */
+  requiresUnits?: string[];
   stateDir: string;
+  /**
+   * A wrapper verb `repair` calls on every reconciliation, or nothing.
+   *
+   * Housekeeping an addon needs on a schedule rather than on demand. The Stager
+   * addon's job records hold the staging database password, so they expire --
+   * and something has to actually run the expiry. The reconciliation timer is
+   * already the thing that runs every fifteen minutes; giving the addon a
+   * second timer of its own would be two answers to one question.
+   */
+  maintenanceVerb?: string;
   /** Panel templates this addon patches. */
   targets: AddonTarget[];
 }
@@ -99,8 +130,23 @@ export const ADDONS: Record<string, AddonSpec> = {
     // Instances get 39000-39999 (decision 2.11); the manager itself sits
     // outside that block so it can never collide with one.
     port: 38080,
+    requiresUnits: ["docker"],
     stateDir: `${STATE_DIR}/instatic`,
     targets: INSTATIC_TARGETS,
+  },
+  stager: {
+    name: "stager",
+    appArtifact: "stager-app-linux-x64",
+    wrapperArtifact: "clp-action-stager",
+    wrapperPath: `${LIB_DIR}/clp-action-stager`,
+    unit: "clp-addon-stager.service",
+    configFile: `${CONFIG_DIR}/stager.conf`,
+    // Beside the Instatic manager and equally clear of the 39000-39999 block
+    // that Instatic hands out to its instances.
+    port: 38081,
+    stateDir: `${STATE_DIR}/stager`,
+    maintenanceVerb: "prune",
+    targets: STAGER_TARGETS,
   },
 };
 
