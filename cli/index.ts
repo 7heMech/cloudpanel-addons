@@ -467,9 +467,25 @@ function platformDomain(): string | null {
 }
 
 /** One addon's share of a repair. The shared work is done once by the caller. */
-function repairAddon(spec: AddonSpec, user: string, quiet: boolean): void {
+function repairAddon(spec: AddonSpec, domain: string, user: string, quiet: boolean): void {
   ensureDirs(spec);
   hardenBackups(spec, quiet);
+
+  // OWN_DOMAIN has to name the site actually serving the manager, because that
+  // is the whole of the wrapper's self-protection: it refuses to act on that
+  // hostname, so an addon cannot destroy the vhost it is reached through.
+  //
+  // On a box migrating from one site per addon, each config still names the site
+  // that addon used to have, and the guard then protects a hostname nobody is
+  // served on. So this is asserted rather than preserved. It is not an operator
+  // preference -- OWN_DOMAIN, PORT and RUN_AS are all facts about where the
+  // manager runs -- which is why it is forced here while writeConfig's usual
+  // rule of landing shipped defaults as .new still applies everywhere else.
+  const own = readOwnDomain(spec);
+  if (own !== domain) {
+    log.warn(`${spec.configFile} names ${own ?? "nothing"} but the manager is served from ${domain}; rewriting it`);
+    writeConfig(spec, domain, user, true);
+  }
 
   // The timer calls this every 15 minutes, so a reconciliation that changed
   // nothing should say nothing. Otherwise the journal fills with identical
@@ -555,7 +571,7 @@ function cmdRepair(argv: string[]): void {
   }
   writePlatformConfig(domain, user);
 
-  for (const spec of specs) repairAddon(spec, user, quiet);
+  for (const spec of specs) repairAddon(spec, domain, user, quiet);
 
   // The unit has to describe every installed addon, not just the ones named
   // here: it is one process serving all of them, so repairing `stager` alone
