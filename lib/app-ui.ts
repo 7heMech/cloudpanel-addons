@@ -84,7 +84,10 @@ function csrf() {
 async function call(path, options) {
   const opts = Object.assign({ headers: {} }, options || {});
   opts.headers = Object.assign({ 'X-CLP-Addons-CSRF': csrf() }, opts.headers);
-  const res = await fetch(path, opts);
+  // Every addon is served under a path on one hostname, so a bare '/api/...'
+  // would reach the router rather than this addon. CLP_BASE is emitted into the
+  // page by renderLayout; prefixing here fixes every caller at once.
+  const res = await fetch(CLP_BASE + path, opts);
   let body = null;
   try { body = await res.json(); } catch (e) { /* non-JSON error page */ }
   if (!res.ok || !body || body.ok === false) {
@@ -102,6 +105,8 @@ function busy(on) {
 export interface Chrome {
   /** Product name in the header, e.g. "Instatic". */
   brand: string;
+  /** Where this addon is mounted, e.g. "/instatic". Prefixes every fetch. */
+  base: string;
   nav: { href: string; label: string }[];
   /** Rules appended after BASE_STYLE, for anything only this addon draws. */
   css?: string;
@@ -128,7 +133,8 @@ export function renderLayout(title: string, content: string, chrome: Chrome): st
 ${nav}
 </header>
 <main>${content}</main>
-<script>${BASE_CLIENT_JS}${chrome.script}</script>
+<script>const CLP_BASE = ${JSON.stringify(chrome.base)};
+${BASE_CLIENT_JS}${chrome.script}</script>
 </body>
 </html>`;
 }

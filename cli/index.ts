@@ -5,17 +5,20 @@
 // calls it rather than duplicating the logic.
 
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { ADDON_NAMES, ADDONS, CLI_ARTIFACT, CLI_BIN, CURRENT_LINK, LIB_DIR, SHARED_GROUP, type AddonSpec } from "./paths";
+import {
+  ADDON_NAMES, ADDONS, CLI_ARTIFACT, CLI_BIN, CURRENT_LINK, LIB_DIR, MANAGER_PORT, MANAGER_UNIT,
+  PLATFORM_CONFIG, SITE_CREATED_MARKER, mountPath, type AddonSpec,
+} from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation } from "./release";
 import {
-  addonIsAtRelease, assertNotInDockerGroup, currentRelease, describeAuthState, ensureAddonSite, ensureDirs,
+  addonIsAtRelease, assertNotInDockerGroup, currentRelease, describeAuthState, ensureDirs, ensureManagerSite,
   ensureSharedGroup, hardenSiteUser,
-  installSudoers, installUnits, installWrapper, placeRelease, pruneReleases, readOwnDomain,
+  installSudoers, installUnits, installWrapper, placeRelease, pruneReleases, readOwnDomain, readPlatformDomain,
   releaseArtifacts,
   ensureTimerArmed, hardenBackups, removeLegacyUsers, removeSudoers, resolveSiteUser, siteBasicAuth,
   siteUserOf, siteUserState,
-  startUnits, stopUnits, timerNextElapse, unitActive,
-  unitRunningUser, writeConfig,
+  removeLegacyUnits, startUnits, stopUnits, timerNextElapse, unitActive,
+  unitRunningUser, writeConfig, writePlatformConfig,
 } from "./provision";
 import { Fatal, fatal, log, parseFlags, requireRoot, run, tryRun, writeAtomic } from "./util";
 import {
@@ -24,21 +27,25 @@ import {
 } from "./inject";
 import { generateSnapshot } from "../lib/panel-snapshot";
 import { SNAPSHOT_FILE } from "../lib/snapshot-reader";
-import { serve as serveInstatic } from "../addons/instatic/app/index";
-import { serve as serveStager } from "../addons/stager/app/index";
+import { handle as handleInstatic } from "../addons/instatic/app/index";
+import { handle as handleStager } from "../addons/stager/app/index";
+import { splitMount } from "../lib/mount";
+import { SECURITY_HEADERS, esc } from "../lib/app-http";
+import { renderLayout } from "../lib/app-ui";
 
 /**
- * Each addon's manager, bundled into this binary.
+ * Each addon's request handler, bundled into this binary.
  *
- * The addon modules export a starter rather than serving on import, so naming
- * one here costs nothing at startup for the commands that are not `serve`. The
- * registry in paths.ts stays free of it: that file is imported by the addons'
- * own inject/targets.ts, and a value import back the other way would close the
- * cycle.
+ * The addon modules export a handler rather than serving on import, so naming
+ * one here costs nothing at startup for the commands that are not `serve`, and
+ * one process can mount all of them. The registry in paths.ts stays free of it:
+ * that file is imported by the addons' own inject/targets.ts, and a value import
+ * back the other way would close the cycle.
  */
-const MANAGERS: Record<string, () => void> = {
-  instatic: serveInstatic,
-  stager: serveStager,
+type AddonHandler = (req: Request, path: string) => Promise<Response>;
+const MANAGERS: Record<string, AddonHandler> = {
+  instatic: handleInstatic,
+  stager: handleStager,
 };
 
 function resolveAddon(name: string | undefined): AddonSpec {
@@ -96,7 +103,11 @@ function installedInjections(exclude?: string): Injection[] {
     if (!existsSync(s.configFile)) continue;
     const domain = readOwnDomain(s);
     if (!domain) continue;
-    for (const target of s.targets) out.push({ addon: name, target, url: `https://${domain}` });
+    // One host, one path per addon. The injector only ever sees the finished
+    // URL, so mounting is a fact about the platform rather than about a patch.
+    for (const target of s.targets) {
+      out.push({ addon: name, target, url: `https://${domain}${mountPath(name)}` });
+    }
   }
   return out;
 }
@@ -148,16 +159,31 @@ async function cmdInstall(argv: string[]): Promise<void> {
   const { positional, flags } = parseFlags(argv);
   const spec = resolveAddon(positional[0]);
 
-  const domain = typeof flags.domain === "string" ? flags.domain : null;
-  if (!domain) {
+  // One CloudPanel site serves every addon, so the hostname belongs to the
+  // platform rather than to this addon. The first install names it; later ones
+  // inherit it, and may only re-state it if it matches -- silently moving every
+  // installed addon to a new hostname because one install said so would take the
+  // others offline, and the operator asked about one addon.
+  const given = typeof flags.domain === "string" ? flags.domain : null;
+  if (given && !/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(given)) {
+    fatal(`--domain='${given}' is not a valid hostname`);
+  }
+  const established = readPlatformDomain();
+  if (established && given && given !== established) {
     fatal(
-      `install needs --domain=<hostname> for the manager's own CloudPanel site.\n` +
-        `  Example: clp-addons install ${spec.name} --domain=addons.example.com`
+      `the addons are already served from ${established}, and there is one site for all of them.\n` +
+        `  Install ${spec.name} without --domain to add it there, or uninstall the others first\n` +
+        `  if you mean to move the whole thing to ${given}.`
     );
   }
-  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(domain)) {
-    fatal(`--domain='${domain}' is not a valid hostname`);
+  if (!established && !given) {
+    fatal(
+      `install needs --domain=<hostname> for the CloudPanel site the addons are served from.\n` +
+        `  Example: clp-addons install ${spec.name} --domain=addons.example.com\n` +
+        `  Every addon is mounted under a path on it, so this is asked once.`
+    );
   }
+  const domain = (given ?? established)!;
 
   for (const unit of spec.requiresUnits ?? []) {
     if (!tryRun("systemctl", ["is-active", unit]).ok) {
@@ -188,7 +214,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
 
   // The site has to exist before anything else: the account the manager runs
   // as is the one CloudPanel creates for it (decision 2.4).
-  const siteCreated = ensureAddonSite(spec, domain);
+  const siteCreated = ensureManagerSite(domain);
   const user = resolveSiteUser(domain);
   hardenSiteUser(user);
   assertNotInDockerGroup(user);
@@ -208,45 +234,41 @@ async function cmdInstall(argv: string[]): Promise<void> {
   const cli = artifacts.find((a) => a.name === CLI_ARTIFACT)!;
   writeAtomic(CLI_BIN, cli.bytes, 0o755);
 
+  writePlatformConfig(domain, user);
   writeConfig(spec, domain, user, true);
 
-  // Remember whether the manager's site is ours to delete. `uninstall --purge`
-  // reads this: a site that already existed and was adopted was serving
-  // something before this addon arrived, and removing it would take that with
-  // it. Absent marker means "not ours", so an install predating this file is
-  // treated as adopted rather than guessed at.
-  if (siteCreated) writeAtomic(`${spec.stateDir}/.site-created-by-addon`, domain, 0o600);
+  // Remember whether the site is ours to delete. `uninstall --purge` reads this:
+  // a site that already existed and was adopted was serving something before the
+  // addons arrived, and removing it would take that with it. Absent marker means
+  // "not ours", so an install predating this file is treated as adopted rather
+  // than guessed at. Platform-level, like the site it describes.
+  if (siteCreated) writeAtomic(SITE_CREATED_MARKER, domain, 0o600);
 
-  installUnits(spec, user);
+  // Every installed addon, because there is one unit and it serves all of them:
+  // installing a second addon has to add its routes to the running manager.
+  const serving = installedAddons();
+  removeLegacyUnits();
+  installUnits(serving, user);
   log.step("generating the sanitized panel snapshot");
   generateSnapshot();
-  ensureDirs(spec);
-  startUnits(spec);
+  for (const sp of serving) ensureDirs(sp);
+  startUnits();
   removeLegacyUsers(user);
 
   reconcileAnchors(false);
 
-  // Installing an addon changes platform-wide state: snapshot.json now belongs
-  // to the shared group rather than to whichever addon was installed first.
-  // Without this, that first addon keeps running with its old supplementary
-  // groups and silently loses the panel's site list until the reconciliation
-  // timer next runs -- up to fifteen minutes of a dashboard with no sites on it,
-  // caused by installing something else entirely.
-  for (const other of installedAddons()) {
-    if (other.name === spec.name) continue;
-    const otherDomain = readOwnDomain(other);
-    const otherUser = otherDomain ? siteUserOf(otherDomain) : null;
-    if (!otherUser) continue;
-    ensureSharedGroup(otherUser);
-    if (installUnits(other, otherUser)) {
-      log.step(`${other.unit} did not name the ${SHARED_GROUP} group; restarting it`);
-      tryRun("systemctl", ["restart", other.unit]);
-    }
-  }
+  // The catch-up loop that used to live here -- re-adding the shared group to
+  // every other addon's account and restarting its unit -- is gone with the
+  // second account and the second unit. There is one of each, and both were just
+  // written above.
 
   log.plain();
   log.ok(`${spec.name} ${tag} installed.`);
-  log.plain(`  Manager UI:  https://${domain}`);
+  log.plain(`  Manager UI:  https://${domain}${mountPath(spec.name)}`);
+  if (serving.length > 1) {
+    log.plain(`  Also here:   ${serving.filter((sp) => sp.name !== spec.name)
+      .map((sp) => `https://${domain}${mountPath(sp.name)}`).join(", ")}`);
+  }
 
   // Say what is actually true rather than reciting the same two steps whether or
   // not they are already done. On a reinstall they usually are.
@@ -304,24 +326,27 @@ async function cmdUpdate(argv: string[]): Promise<void> {
     // fail -- a missing config, a panel site deleted from under us -- and
     // failing after the stop leaves the manager down with nothing installed to
     // replace it.
-    const domain = readOwnDomain(spec);
-    if (!domain) fatal("no configured domain for this addon; run install first");
+    const domain = readPlatformDomain() ?? readOwnDomain(spec);
+    if (!domain) fatal("no configured domain; run install first");
     const user = resolveSiteUser(domain);
 
     // The wrapper is synchronous and short-lived, so draining is simple: stop
-    // the app, which is the only caller, then swap.
-    log.step(`stopping ${spec.unit} before the swap`);
-    tryRun("systemctl", ["stop", spec.unit]);
+    // the manager, which is the only caller, then swap. It serves every addon
+    // now, so this is a brief outage for all of them rather than for one -- the
+    // price of one process, and an update is already a restart.
+    log.step(`stopping ${MANAGER_UNIT} before the swap`);
+    tryRun("systemctl", ["stop", MANAGER_UNIT]);
 
     placeRelease(rel.tag, artifacts, wantedArtifacts);
     installWrapper(spec, artifacts.find((a) => a.name === spec.wrapperArtifact)!.bytes);
     installSudoers(spec, user);
     writeAtomic(CLI_BIN, artifacts.find((a) => a.name === CLI_ARTIFACT)!.bytes, 0o755);
 
+    writePlatformConfig(domain, user);
     writeConfig(spec, domain, user);
 
-    installUnits(spec, user);
-    startUnits(spec);
+    installUnits(installedAddons(), user);
+    startUnits();
     reconcileAnchors(false);
     pruneReleases();
     log.ok(`${spec.name} updated to ${rel.tag}`);
@@ -365,15 +390,7 @@ function installedAddons(): AddonSpec[] {
 }
 
 /** One addon's share of a repair. The shared work is done once by the caller. */
-function repairAddon(spec: AddonSpec, quiet: boolean): void {
-  const ownDomain = readOwnDomain(spec);
-  if (!ownDomain) fatal(`no configured domain for ${spec.name}; run install first`);
-  const user = resolveSiteUser(ownDomain);
-
-  // Editing the site in the panel can restore the shell, so re-assert it.
-  hardenSiteUser(user, quiet);
-  assertNotInDockerGroup(user);
-  ensureSharedGroup(user, quiet);
+function repairAddon(spec: AddonSpec, user: string, quiet: boolean): void {
   ensureDirs(spec);
   hardenBackups(spec, quiet);
 
@@ -395,22 +412,37 @@ function repairAddon(spec: AddonSpec, quiet: boolean): void {
     if (!r.ok && !quiet) log.warn(`${spec.name} ${spec.maintenanceVerb} failed: ${r.out}`);
   }
 
-  const unitChanged = installUnits(spec, user);
+}
+
+/**
+ * The half of a repair that belongs to the platform rather than to any addon:
+ * the one account, the one unit, the snapshot. Called once after every addon has
+ * had its own share, because there is one of each no matter how many addons are
+ * installed.
+ */
+function repairPlatform(specs: AddonSpec[], user: string, quiet: boolean): void {
+  // Editing the site in the panel can restore the shell, so re-assert it.
+  hardenSiteUser(user, quiet);
+  assertNotInDockerGroup(user);
+  ensureSharedGroup(user, quiet);
+
+  removeLegacyUnits(quiet);
+  const unitChanged = installUnits(specs, user);
   generateSnapshot();
-  ensureDirs(spec);
+  for (const spec of specs) ensureDirs(spec);
 
   // Compare against the account the process is actually running as, not just
   // the unit file: an earlier repair may have rewritten the file already, and
   // systemd keeps the definition it started with until a restart.
-  const runningAs = unitRunningUser(spec.unit);
+  const runningAs = unitRunningUser(MANAGER_UNIT);
   if (unitChanged || (runningAs !== null && runningAs !== user)) {
     if (!quiet) {
-      log.step(`${spec.unit} is running as ${runningAs ?? "nothing"}; restarting it as ${user}`);
+      log.step(`${MANAGER_UNIT} is running as ${runningAs ?? "nothing"}; restarting it as ${user}`);
     }
-    tryRun("systemctl", ["restart", spec.unit]);
-  } else if (unitActive(spec.unit) !== "active") {
-    log.step(`${spec.unit} is not active; starting it`);
-    tryRun("systemctl", ["start", spec.unit]);
+    tryRun("systemctl", ["restart", MANAGER_UNIT]);
+  } else if (unitActive(MANAGER_UNIT) !== "active") {
+    log.step(`${MANAGER_UNIT} is not active; starting it`);
+    tryRun("systemctl", ["start", MANAGER_UNIT]);
   }
 
   // Only now, with nothing running as it, can the old account go.
@@ -434,7 +466,16 @@ function cmdRepair(argv: string[]): void {
   const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
   if (specs.length === 0) fatal("no addon is installed; run install first");
 
-  for (const spec of specs) repairAddon(spec, quiet);
+  const domain = readPlatformDomain();
+  if (!domain) fatal("no configured domain; run install first");
+  const user = resolveSiteUser(domain);
+
+  for (const spec of specs) repairAddon(spec, user, quiet);
+
+  // The unit has to describe every installed addon, not just the ones named
+  // here: it is one process serving all of them, so repairing `stager` alone
+  // must not rewrite the unit as though instatic were gone.
+  repairPlatform(installedAddons(), user, quiet);
 
   // Platform-wide, so once rather than per addon.
   ensureTimerArmed("clp-addons-reconcile.timer", quiet);
@@ -448,7 +489,9 @@ async function cmdStatus(argv: string[]): Promise<void> {
   // second addon was simply absent from the output, with nothing saying so.
   const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
 
-  const pad = (label: string) => label.padEnd(22);
+  // Wide enough for the longest label any addon contributes, which is an anchor
+  // slug: "  anchor site-list-action" is 25. At 22 it ran into its own value.
+  const pad = (label: string) => label.padEnd(26);
   log.plain(`clp-addons ${CLI_VERSION}`);
   log.plain();
 
@@ -456,16 +499,19 @@ async function cmdStatus(argv: string[]): Promise<void> {
   log.plain(`${pad("CloudPanel")}${panelVersion()}`);
   // Only the units something installed actually depends on. Reporting Docker on
   // a box running an addon that never touches it invites the wrong diagnosis.
-  for (const unit of [...new Set(specs.flatMap((s) => s.requiresUnits ?? []))]) {
+  for (const unit of [...new Set(specs.flatMap((sp) => sp.requiresUnits ?? []))]) {
     log.plain(`${pad(unit)}${tryRun("systemctl", ["is-active", unit]).out || "unknown"}`);
   }
   log.plain();
 
-  if (specs.length === 0) log.plain("No addon is installed.");
-  for (const spec of specs) {
-  const own = readOwnDomain(spec);
-  log.plain(`Addon: ${spec.name}`);
-  log.plain(`${pad("  Service")}${unitActive(spec.unit)}`);
+  // One site, one service, one account, however many addons. Reported once,
+  // because printing it under each addon invited the reading that each had its
+  // own -- which is exactly what stopped being true.
+  const domain = readPlatformDomain();
+  log.plain("Platform:");
+  log.plain(`${pad("  Site")}${domain ?? "not configured"}`);
+  log.plain(`${pad("  Site protected")}${describeSiteAuth(domain)}`);
+  log.plain(`${pad("  Manager service")}${unitActive(MANAGER_UNIT)}`);
   // is-active alone says `active` for a timer that has elapsed and will never
   // fire again, so name the next elapse. No elapse means reconciliation is dead.
   const nextRun = timerNextElapse("clp-addons-reconcile.timer");
@@ -473,14 +519,8 @@ async function cmdStatus(argv: string[]): Promise<void> {
     `${pad("  Reconcile timer")}${unitActive("clp-addons-reconcile.timer")}` +
       (nextRun ? `, next ${nextRun}` : ", NO SCHEDULED RUN. Run repair.")
   );
-  log.plain(`${pad("  Own site")}${own ?? "not configured"}`);
-  log.plain(`${pad("  Site protected")}${describeSiteAuth(own)}`);
-  log.plain(`${pad("  Wrapper")}${existsSync(spec.wrapperPath) ? spec.wrapperPath : "NOT INSTALLED"}`);
-  log.plain(
-    `${pad("  Sudoers")}${existsSync(`/etc/sudoers.d/clp-addon-${spec.name}`) ? "present" : "NOT INSTALLED"}`
-  );
 
-  const runAs = own ? siteUserOf(own) : null;
+  const runAs = domain ? siteUserOf(domain) : null;
   log.plain(`${pad("  Runs as")}${runAs ?? "unknown"}${runAs ? " (CloudPanel site user)" : ""}`);
   if (runAs) {
     // Same reader hardenSiteUser decides from, so status cannot report a state
@@ -491,22 +531,29 @@ async function cmdStatus(argv: string[]): Promise<void> {
   }
   const inDocker = runAs ? tryRun("id", ["-nG", runAs]).out.split(/\s+/).includes("docker") : false;
   log.plain(`${pad("  Docker group")}${inDocker ? "YES — equivalent to root, run repair" : "no (correct)"}`);
-  log.plain();
-
-  log.plain("Panel anchors:");
-  for (const t of spec.targets) {
-    const st = inspect({ addon: spec.name, target: t, url: `https://${own ?? ""}` });
-    log.plain(`${pad(`  ${t.slug}`)}${describeTarget(st)}`);
-  }
-  log.plain();
-  }
-
   try {
     const snap = JSON.parse(readFileSync(SNAPSHOT_FILE, "utf-8"));
     const age = Math.round((Date.now() - new Date(snap.updatedAt).getTime()) / 1000);
-    log.plain(`${pad("Panel snapshot")}${snap.sites.length} sites, ${snap.allocatedPorts.length} ports, ${age}s old`);
+    log.plain(`${pad("  Panel snapshot")}${snap.sites.length} sites, ${snap.allocatedPorts.length} ports, ${age}s old`);
   } catch {
-    log.plain(`${pad("Panel snapshot")}missing — run repair`);
+    log.plain(`${pad("  Panel snapshot")}missing — run repair`);
+  }
+  log.plain();
+
+  if (specs.length === 0) log.plain("No addon is installed.");
+  for (const spec of specs) {
+    const url = domain ? `https://${domain}${mountPath(spec.name)}` : mountPath(spec.name);
+    log.plain(`Addon: ${spec.name}`);
+    log.plain(`${pad("  Mounted at")}${url}`);
+    log.plain(`${pad("  Wrapper")}${existsSync(spec.wrapperPath) ? spec.wrapperPath : "NOT INSTALLED"}`);
+    log.plain(
+      `${pad("  Sudoers")}${existsSync(`/etc/sudoers.d/clp-addon-${spec.name}`) ? "present" : "NOT INSTALLED"}`
+    );
+    for (const t of spec.targets) {
+      const st = inspect({ addon: spec.name, target: t, url });
+      log.plain(`${pad(`  anchor ${t.slug}`)}${describeTarget(st)}`);
+    }
+    log.plain();
   }
 }
 
@@ -529,12 +576,17 @@ function cmdUninstall(argv: string[]): void {
   const spec = resolveAddon(positional[0]);
   const purge = flags.purge === true;
   const instances = listInstances(spec);
-  const ownDomain = readOwnDomain(spec);
-  const ownSiteIsOurs = existsSync(`${spec.stateDir}/.site-created-by-addon`);
+  const ownDomain = readPlatformDomain();
 
   // The release tree and the CLI are shared. A second addon still installed
   // needs both, so they go only when nothing is left that uses them.
   const remaining = ADDON_NAMES.filter((n) => n !== spec.name && existsSync(ADDONS[n]!.configFile));
+
+  // So is the CloudPanel site, now that every addon is served from one. It goes
+  // only when this is the last addon *and* this installer is what created it --
+  // an adopted site was serving something before the addons arrived.
+  const siteIsOurs = existsSync(SITE_CREATED_MARKER);
+  const siteGoes = purge && siteIsOurs && remaining.length === 0;
 
   if (flags.yes !== true) {
     // Say exactly what will be destroyed, by name. "and every instance" is not
@@ -542,16 +594,24 @@ function cmdUninstall(argv: string[]): void {
     const shared = remaining.length
       ? `    - ${CLI_BIN} and the release tree stay: still used by ${remaining.join(", ")}\n`
       : `    - ${CLI_BIN} and ${LIB_DIR}\n`;
-    const common =
-      `  Removes the service, the wrapper, the sudoers line, ${spec.configFile} and the\n` +
-      `  panel patches, plus:\n` + shared;
+    // Say what actually happens to the manager. It is shared now, so removing one
+    // addon restarts it without that addon's routes rather than stopping it, and
+    // a confirmation prompt that overstates what it destroys is worse than none.
+    const service = remaining.length
+      ? `  Removes the wrapper, the sudoers line, ${spec.configFile} and the panel patches,\n` +
+        `  and restarts ${MANAGER_UNIT} without ${spec.name}'s routes. Plus:\n`
+      : `  Removes ${MANAGER_UNIT}, the wrapper, the sudoers line, ${spec.configFile} and the\n` +
+        `  panel patches, plus:\n`;
+    const common = service + shared;
     fatal(purge
       ? `uninstall --purge\n` + common +
         instances.map((d) => `    - instance ${d}: container, data and its CloudPanel site\n`).join("") +
         (instances.length ? "" : `    - (no instances found)\n`) +
-        (ownSiteIsOurs && ownDomain
-          ? `    - the manager's own CloudPanel site ${ownDomain}\n`
-          : `    - (the manager's site is left alone: not created by this addon)\n`) +
+        (siteGoes && ownDomain
+          ? `    - the shared CloudPanel site ${ownDomain}\n`
+          : remaining.length > 0
+            ? `    - (the site stays: ${remaining.join(", ")} is still served from it)\n`
+            : `    - (the site is left alone: not created by this installer)\n`) +
         `    - ${spec.stateDir}\n` +
         `  Each instance is archived to /var/backups/clp-addons/${spec.name} first.\n` +
         `  Re-run with --yes to proceed.`
@@ -563,8 +623,10 @@ function cmdUninstall(argv: string[]): void {
             `  remove it too.`));
   }
 
-  // Keep the platform's own units when another addon still needs them.
-  stopUnits(spec, remaining.length > 0);
+  // Keep the platform's own units when another addon still needs them. The
+  // manager unit is one of those now: it serves every addon, so removing one
+  // means rewriting and restarting it rather than stopping it.
+  stopUnits(remaining.length > 0);
   removeSudoers(spec);
   // Re-render the templates without this addon's injections. Any other addon's
   // markup is rebuilt in the same pass, so removing one cannot take another's
@@ -587,13 +649,16 @@ function cmdUninstall(argv: string[]): void {
       if (!r.ok) log.warn(`could not remove ${domain}; leaving it in place`);
     }
 
-    if (ownSiteIsOurs && ownDomain) {
-      log.step(`deleting the manager's CloudPanel site ${ownDomain}`);
+    if (siteGoes && ownDomain) {
+      log.step(`deleting the shared CloudPanel site ${ownDomain}`);
       if (!tryRun("clpctl", ["site:delete", `--domainName=${ownDomain}`, "--force"]).ok) {
         log.warn(`clpctl site:delete failed for ${ownDomain}; remove it from the panel by hand`);
       }
+      rmSync(SITE_CREATED_MARKER, { force: true });
+    } else if (ownDomain && remaining.length > 0) {
+      log.warn(`leaving ${ownDomain} in place: ${remaining.join(", ")} is still served from it`);
     } else if (ownDomain) {
-      log.warn(`leaving ${ownDomain} in place: this addon did not create it`);
+      log.warn(`leaving ${ownDomain} in place: this installer did not create it`);
     }
 
     rmSync(spec.stateDir, { recursive: true, force: true });
@@ -606,21 +671,35 @@ function cmdUninstall(argv: string[]): void {
   rmSync(`${spec.configFile}.new`, { force: true });
 
   if (remaining.length > 0) {
+    // The routes this addon served have to stop answering, and the unit has to
+    // stop naming its state directory. Both are one rewrite of the shared unit.
+    const domain = readPlatformDomain();
+    const user = domain ? siteUserOf(domain) : null;
+    if (user) {
+      installUnits(remaining.map((n) => ADDONS[n]!), user);
+      tryRun("systemctl", ["restart", MANAGER_UNIT]);
+      log.ok(`${MANAGER_UNIT} restarted without ${spec.name}`);
+    }
     log.ok(`${spec.name} removed`);
     log.plain(`  Kept ${CLI_BIN} and the release tree: still used by ${remaining.join(", ")}`);
   } else {
     // Deleting the binary that is executing is safe: the inode survives until
     // this process exits.
     rmSync(LIB_DIR, { recursive: true, force: true });
+    rmSync(PLATFORM_CONFIG, { force: true });
     rmSync(CLI_BIN, { force: true });
     log.ok(`${spec.name} removed, along with ${CLI_BIN} and the release tree`);
   }
 
+  // The site is shared, so name it as what it is rather than as this addon's.
+  const site = remaining.length
+    ? `the CloudPanel site (${remaining.join(", ")} is still served from it)`
+    : "the CloudPanel site";
   if (purge) log.plain(`  Archives kept: /var/backups/clp-addons/${spec.name}`);
   else if (instances.length) {
-    log.warn(`Left in place on purpose: ${spec.stateDir}, the addon's CloudPanel site, and every instance container.`);
+    log.warn(`Left in place on purpose: ${spec.stateDir}, ${site}, and every instance container.`);
   } else {
-    log.warn(`Left in place on purpose: ${spec.stateDir} and the addon's CloudPanel site.`);
+    log.warn(`Left in place on purpose: ${spec.stateDir} and ${site}.`);
   }
 }
 
@@ -632,19 +711,50 @@ function cmdUninstall(argv: string[]): void {
  * unprivileged, and the manager's whole design is that its only privileged path
  * is sudo of its own wrapper.
  */
-async function cmdServe(argv: string[]): Promise<never> {
-  const { positional } = parseFlags(argv);
-  // No default. `resolveAddon(undefined)` answers instatic, which is a
-  // reasonable default for a command an operator types and a bad one for a unit
-  // file: a typo in ExecStart would silently start the wrong manager on the
-  // wrong port.
-  if (!positional[0]) fatal(`serve needs an addon named: ${ADDON_NAMES.join(", ")}`);
-  const spec = resolveAddon(positional[0]);
+async function cmdServe(_argv: string[]): Promise<never> {
+  // Every installed addon, mounted under its own path on the one site. No addon
+  // argument: there is one unit, and which addons it serves is a fact about what
+  // is installed rather than something ExecStart restates and can get wrong.
+  const specs = installedAddons();
+  if (specs.length === 0) fatal("no addon is installed; run install first");
 
-  const start = MANAGERS[spec.name];
-  if (!start) fatal(`no manager is bundled in this binary for '${spec.name}'`);
+  const mounted = specs.map((s2) => s2.name).filter((n) => MANAGERS[n]);
+  const missing = specs.map((s2) => s2.name).filter((n) => !MANAGERS[n]);
+  for (const n of missing) log.warn(`${n} is installed but no manager for it is bundled in this binary`);
+  if (mounted.length === 0) fatal("none of the installed addons have a manager in this binary");
 
-  start();
+  const server = Bun.serve({
+    // The unit declares PORT, so read it rather than assuming the default. That
+    // is also what lets a second copy be started on a spare port to try it.
+    port: Number(process.env.PORT || MANAGER_PORT),
+    hostname: process.env.HOST || "127.0.0.1",
+    // The longest an addon route may take. Instatic's create pulls an image and
+    // waits on a health check, which is the slowest thing any of them do.
+    idleTimeout: 255,
+
+    async fetch(req) {
+      const path = new URL(req.url).pathname.replace(/\/+$/, "") || "/";
+
+      // Liveness for systemd, above the mounts so it answers whatever is
+      // installed. It reports nothing about any addon.
+      if (path === "/health") {
+        return Response.json({ ok: true, service: "clp-addons", addons: mounted }, { headers: SECURITY_HEADERS });
+      }
+
+      const hit = splitMount(path, mounted);
+      if (hit) return MANAGERS[hit.addon]!(req, hit.rest);
+
+      // The root is an index rather than a redirect to whichever addon happens
+      // to be first: with two installed, picking one is a guess, and the operator
+      // arriving at the bare hostname is the one who does not yet know what is
+      // here.
+      if (path === "/") return indexPage(mounted);
+
+      return Response.json({ ok: false, error: "not found" }, { status: 404, headers: SECURITY_HEADERS });
+    },
+  });
+
+  log.plain(`[clp-addons] listening on http://${server.hostname}:${server.port} serving ${mounted.join(", ")}`);
 
   // Bun.serve holds the event loop open on its own. Never resolving is what
   // keeps main() from returning into the process.exit() that ends every other
@@ -652,20 +762,39 @@ async function cmdServe(argv: string[]): Promise<never> {
   return new Promise<never>(() => {});
 }
 
+/** The bare hostname: what is installed, and where each one lives. */
+function indexPage(addons: string[]): Response {
+  const links = addons
+    .map((n) => `<li><a href="${esc(mountPath(n))}/">${esc(n)}</a></li>`)
+    .join("");
+  return new Response(
+    renderLayout("CloudPanel addons", `<div class="card"><ul>${links}</ul></div>`, {
+      brand: "CloudPanel addons",
+      base: "",
+      nav: [],
+      script: "",
+    }),
+    { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", ...SECURITY_HEADERS } }
+  );
+}
+
 function usage(): void {
   log.plain(`clp-addons ${CLI_VERSION} — CloudPanel addon manager (run as root)
 
-  clp-addons install <addon> --domain=<host> [--version=vX.Y.Z] [--skip-attestation]
+  clp-addons install <addon> [--domain=<host>] [--version=vX.Y.Z] [--skip-attestation]
   clp-addons install <addon> --domain=<host> --local=dist      (staging only)
   clp-addons update [<addon>|--all] [--version=vX.Y.Z]
   clp-addons self-update [--version=vX.Y.Z]
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status [<addon>]
   clp-addons uninstall <addon> --yes [--purge]
-  clp-addons serve <addon>                                     (systemd runs this)
+  clp-addons serve                                             (systemd runs this)
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}
+
+One CloudPanel site serves all of them, each under its own path, so --domain is
+asked once: the first install names it and later ones join it.
 
 install, update and self-update refuse a release marked as a prerelease. These
 artifacts run as root, so add --allow-prerelease when you mean it.

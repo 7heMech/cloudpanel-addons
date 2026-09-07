@@ -24,6 +24,7 @@ import { createHash } from "node:crypto";
 import { cachedArtifact } from "../cli/release";
 import { describeAuthState, releaseArtifacts, siteUserFor, type SiteAuthState } from "../cli/provision";
 import { ADDONS, ADDON_NAMES, CLI_ARTIFACT } from "../cli/paths";
+import { mountPath, splitMount } from "../lib/mount";
 import { getNextAvailablePort } from "../lib/snapshot-reader";
 import type { PanelSnapshot } from "../lib/snapshot-reader";
 
@@ -510,6 +511,42 @@ console.log("\n== archiving an instance is not a rolling window ==");
       readdirSync(rolling).length === 5, `${readdirSync(rolling).length}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+console.log("\n== addons are told apart by the path they are mounted at ==");
+
+// One CloudPanel site serves every addon, so the path is the only thing that
+// says which one a request is for. The case worth guarding is a prefix that is
+// not a whole segment: a bare startsWith() sends /instatic-notes to instatic and
+// hands it a sub-path of "-notes", which is a 404 from somewhere unexpected
+// rather than from the router.
+{
+  const all = ["instatic", "stager"];
+  const hit = (p: string) => {
+    const m = splitMount(p, all);
+    return m ? `${m.addon}:${m.rest}` : "none";
+  };
+
+  check("a bare mount is that addon's root", hit("/instatic") === "instatic:/", hit("/instatic"));
+  check("a trailing slash is still its root", hit("/instatic/") === "instatic:/", hit("/instatic/"));
+  check("a sub-path keeps its leading slash", hit("/instatic/api/instances") === "instatic:/api/instances",
+    hit("/instatic/api/instances"));
+  check("the second addon is reached too", hit("/stager/jobs/abc") === "stager:/jobs/abc", hit("/stager/jobs/abc"));
+  check("a query-free deep path survives", hit("/stager/new") === "stager:/new", hit("/stager/new"));
+
+  check("the site root belongs to no addon", hit("/") === "none", hit("/"));
+  check("an unknown mount belongs to no addon", hit("/nope") === "none", hit("/nope"));
+  // The prefix bug, both directions.
+  check("a longer name is not the addon's mount", hit("/instatic-notes") === "none", hit("/instatic-notes"));
+  check("a name merely starting the same is not it", hit("/instaticx/api") === "none", hit("/instaticx/api"));
+  check("a name ending in the addon is not it", hit("/my-stager") === "none", hit("/my-stager"));
+
+  // Every registered addon must actually be reachable at the path the CLI
+  // advertises to the panel, or the injected nav points at a 404.
+  for (const name of ADDON_NAMES) {
+    check(`${name} is reachable at ${mountPath(name)}`,
+      hit(`${mountPath(name)}/x`) === `${name}:/x`, hit(`${mountPath(name)}/x`));
   }
 }
 

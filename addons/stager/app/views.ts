@@ -4,6 +4,15 @@
 
 import { esc } from "../../../lib/app-http";
 import { renderLayout } from "../../../lib/app-ui";
+import { mountPath } from "../../../lib/mount";
+
+/**
+ * Where this addon is served. One CloudPanel site carries every addon, so every
+ * link this file emits is relative to a mount rather than to the site root.
+ * A constant rather than a per-request value: the mount is fixed by the addon's
+ * name, so a link that forgets it is a bug at build time, not a routing choice.
+ */
+const BASE = mountPath("stager");
 import type { JobView, SiteDetail, SiteSummary } from "./service";
 
 // Only what the shared shell does not carry.
@@ -58,7 +67,7 @@ async function startClone() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source: source, target: target, tls: tls }),
     });
-    location.href = '/jobs/' + encodeURIComponent(body.data.job);
+    location.href = CLP_BASE + '/jobs/' + encodeURIComponent(body.data.job);
   } catch (e) {
     busy(false);
     alert('Could not start the clone: ' + e.message);
@@ -110,9 +119,10 @@ document.addEventListener('DOMContentLoaded', function () {
 export function layout(title: string, content: string): string {
   return renderLayout(title, content, {
     brand: "Stager",
+    base: BASE,
     nav: [
-      { href: "/", label: "Clones" },
-      { href: "/new", label: "New staging site" },
+      { href: `${BASE}/`, label: "Clones" },
+      { href: `${BASE}/new`, label: "New staging site" },
     ],
     css: STYLE,
     script: CLIENT_JS,
@@ -134,7 +144,7 @@ export function jobsView(jobs: JobView[]): string {
     .map(
       (j) => `
         <tr>
-          <td><a href="/jobs/${esc(j.id)}" class="mono">${esc(j.target)}</a></td>
+          <td><a href="${BASE}/jobs/${esc(j.id)}" class="mono">${esc(j.target)}</a></td>
           <td class="mono">${esc(j.source)}</td>
           <td><span class="badge ${stateClass(j.state)}">${esc(j.state)}</span></td>
           <td class="step">${esc(j.state === "done" ? "" : j.step)}</td>
@@ -152,7 +162,7 @@ export function jobsView(jobs: JobView[]): string {
     </div>
     <div class="card">
       <div class="actions" style="justify-content: flex-end; margin-bottom: 0.75rem;">
-        <a class="btn btn-primary" href="/new">New staging site</a>
+        <a class="btn btn-primary" href="${BASE}/new">New staging site</a>
       </div>
       ${
         jobs.length === 0
@@ -168,7 +178,7 @@ export function jobsView(jobs: JobView[]): string {
 export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], error?: string): string {
   if (!source) {
     const options = sites
-      .map((s) => `<li><a href="/new?source=${encodeURIComponent(s.domain)}" class="mono">${esc(s.domain)}</a>
+      .map((s) => `<li><a href="${BASE}/new?source=${encodeURIComponent(s.domain)}" class="mono">${esc(s.domain)}</a>
         <span class="hint" style="display:inline">PHP ${esc(s.phpVersion)} · ${esc(s.application || "Generic")}</span></li>`)
       .join("");
     return `

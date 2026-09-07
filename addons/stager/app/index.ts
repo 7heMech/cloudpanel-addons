@@ -27,13 +27,14 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-// The whole request surface, as a plain function rather than a method on the
-// Bun.serve object, so this module has no side effect at import time -- the
-// single clp-addons binary imports every addon's manager and starts exactly the
-// one named on the command line.
-async function handle(req: Request): Promise<Response> {
+// The whole request surface, exported so the one manager process can mount it.
+//
+// `path` is this addon's own path, with the mount prefix already stripped by the
+// router: a request for /stager/api/... arrives here as /api/... .
+// Taking it as an argument rather than reading req.url is what keeps every route
+// below written as though this addon owned the site, which it used to.
+export async function handle(req: Request, path: string): Promise<Response> {
   const url = new URL(req.url);
-  const path = url.pathname.replace(/\/+$/, "") || "/";
   const method = req.method;
 
   // Liveness probe for systemd. No auth implications: it reports nothing
@@ -142,20 +143,4 @@ function escapeMinimal(s: string): string {
 function errorBlock(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   return `<div class="alert">${escapeMinimal(msg)}</div>`;
-}
-
-/**
- * Start the manager. Invoked by `clp-addons serve stager`, which is what the
- * systemd unit ExecStarts; there is one compiled binary for the whole project
- * rather than one per addon (each was 77 MB of identical Bun runtime carrying a
- * few tens of KB of code).
- */
-export function serve(): void {
-  const server = Bun.serve({
-    port: Number(process.env.PORT || 38081),
-    hostname: process.env.HOST || "127.0.0.1",
-    idleTimeout: 120,
-    fetch: handle,
-  });
-  console.log(`[stager-manager] listening on http://${server.hostname}:${server.port}`);
 }

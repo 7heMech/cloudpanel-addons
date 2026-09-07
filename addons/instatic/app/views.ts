@@ -5,6 +5,15 @@
 
 import { esc, escJs } from "../../../lib/app-http";
 import { renderLayout } from "../../../lib/app-ui";
+import { mountPath } from "../../../lib/mount";
+
+/**
+ * Where this addon is served. One CloudPanel site carries every addon, so every
+ * link this file emits is relative to a mount rather than to the site root.
+ * A constant rather than a per-request value: the mount is fixed by the addon's
+ * name, so a link that forgets it is a bug at build time, not a routing choice.
+ */
+const BASE = mountPath("instatic");
 import type { InstanceView } from "./service";
 import { isNewerThan, type AvailableTags } from "./tags";
 import type { SanitizedSite } from "../../../lib/snapshot-reader";
@@ -81,7 +90,7 @@ async function confirmUpdate() {
   if (!/^\\d+\\.\\d+\\.\\d+$/.test(tag)) { alert('Enter an exact version, for example 0.0.18'); return; }
   document.getElementById('update-dialog').close();
   busy(true);
-  const res = await fetch('/api/instances/' + encodeURIComponent(pendingUpdate) + '/update', {
+  const res = await fetch(CLP_BASE + '/api/instances/' + encodeURIComponent(pendingUpdate) + '/update', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-CLP-Addons-CSRF': csrf() },
     body: JSON.stringify({ tag: tag })
@@ -116,7 +125,7 @@ async function confirmDelete() {
   busy(true);
   try {
     await call('/api/instances/' + encodeURIComponent(pendingDelete) + '/delete', { method: 'POST' });
-    location.href = '/';
+    location.href = CLP_BASE + '/';
   } catch (e) {
     busy(false);
     alert('Delete failed: ' + e.message);
@@ -136,7 +145,7 @@ async function submitCreate(ev) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain: domain, tag: tag })
     });
-    location.href = '/';
+    location.href = CLP_BASE + '/';
   } catch (e) {
     busy(false);
     status.textContent = '';
@@ -149,9 +158,10 @@ async function submitCreate(ev) {
 export function layout(title: string, content: string): string {
   return renderLayout(title, content, {
     brand: "Instatic",
+    base: BASE,
     nav: [
-      { href: "/", label: "Instances" },
-      { href: "/new", label: "New site" },
+      { href: `${BASE}/`, label: "Instances" },
+      { href: `${BASE}/new`, label: "New site" },
     ],
     css: STYLE,
     script: CLIENT_JS,
@@ -250,7 +260,7 @@ export function dashboardView(
 <div class="card">
   ${
     instances.length === 0
-      ? `<div class="empty">No Instatic instances yet. <a href="/new">Create one</a>.</div>`
+      ? `<div class="empty">No Instatic instances yet. <a href="${BASE}/new">Create one</a>.</div>`
       : `<table>
     <thead><tr><th>Site</th><th>Bound to</th><th>Version</th><th>State</th><th>Actions</th></tr></thead>
     <tbody>${rows}</tbody>
@@ -355,7 +365,7 @@ export function newInstanceView(nextPort: number, available: AvailableTags): str
 
     <div class="actions" style="margin-top:1.25rem">
       <button type="submit" class="btn btn-primary">Create site</button>
-      <a class="btn" href="/">Cancel</a>
+      <a class="btn" href="${BASE}/">Cancel</a>
     </div>
     <div class="hint" id="create-status" style="margin-top:0.75rem"></div>
   </form>

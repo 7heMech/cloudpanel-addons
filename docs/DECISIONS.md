@@ -167,6 +167,56 @@ position. A bundle is signed and bound to its subject's digest, so an attacker
 who can replace a release asset cannot produce one that verifies against the
 replacement -- the failure mode is a refused install, not a silent accept.
 
+## One CloudPanel site for every addon, routed by path
+
+Each addon used to get a site of its own. That is a hostname, a certificate, a
+Basic Auth setup and a site user per addon, and the addon is unreachable until
+the first two are done and unsafe until the third is. Four manual steps per
+addon, repeated.
+
+What it bought was worth stating honestly: one account per addon meant a
+compromised manager could sudo its own wrapper and not the other's, so an
+attacker got one closed verb set rather than the union. That is a real property.
+It is not worth what it costs, because a control whose reliable output is "I will
+do the auth later" protects less than its diagram suggests -- and the README
+already had to shout that a manager is unsafe until the operator has done the
+work.
+
+So: one site, one `clp-addons.service`, one account, and the addons mounted under
+it by path. The one account can sudo every installed addon's wrapper. That is
+said out loud in the unit file rather than left to be discovered, and it puts all
+the weight on the wrapper's argument validation -- which is where it always
+actually was.
+
+**The routing is in the manager, not in nginx, and that is forced.** Measured
+against the panel rather than assumed:
+
+  - the stock reverse-proxy vhost has exactly one `{{reverse_proxy_url}}`, inside
+    a single `location @reverse_proxy`
+  - `clpctl site:add:reverse-proxy` rejects `--vhostTemplate` outright -- "The
+    "--vhostTemplate" option does not exist"
+  - the `site` namespace is `add:*`, `delete` and `install:certificate`. Nothing
+    rewrites an existing site's vhost.
+
+So per-path upstreams in nginx would mean writing `site.vhost_template` directly,
+and every addon installed afterwards would mean writing it again -- against an
+undocumented schema, while the panel is running, racing the panel's own writes.
+One process on one port needs none of it, and the vhost stays stock, which is
+what keeps `clpctl` the only thing that writes panel state (decision 2.6).
+
+Two consequences in the app:
+
+  - `lib/mount.ts` owns the mapping from addon name to path, and both sides
+    import it: the CLI builds the panel's nav URLs from it, and each addon's
+    views build their own links from it. An addon reaching into `cli/paths.ts` to
+    find out where it is served would be the app depending on the installer.
+  - `call()` in the shared client script prefixes every fetch with the mount, so
+    an addon's routes are still written as though it owned the site. The two
+    places that bypass `call()` -- a raw `fetch` and a `location.href` -- have to
+    prefix by hand, which is exactly the kind of thing a test should hold, and
+    `splitMount` is tested for the prefix-is-not-a-segment case that would send
+    `/instatic-notes` to instatic.
+
 ## One compiled binary, not one per addon
 
 `bun build --compile` embeds the Bun runtime, so every artifact carried a

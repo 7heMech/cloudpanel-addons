@@ -2,6 +2,7 @@
 // this write as root" is a single file.
 
 import { INSTATIC_TARGETS } from "../addons/instatic/inject/targets";
+export { mountPath } from "../lib/mount";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 
 export const REPO = "7heMech/cloudpanel-addons";
@@ -24,6 +25,27 @@ export const CLI_BIN = "/usr/local/bin/clp-addons";
  * 77.6 MB rather than a few tens of KB.
  */
 export const CLI_ARTIFACT = "clp-addons-linux-x64";
+
+/**
+ * The one manager service, and the one loopback port it binds.
+ *
+ * Every addon used to get a CloudPanel site of its own, which meant a hostname,
+ * a certificate, a Basic Auth setup and a site user each. That is four manual
+ * steps per addon before the thing is safe to expose, and the isolation it
+ * bought -- one compromised manager reaching one wrapper rather than both -- is
+ * not worth an operator skipping any of them. So there is one site, one service
+ * and one account, and the addons are mounted under it by path.
+ *
+ * Path routing lives here rather than in nginx because CloudPanel's stock
+ * reverse-proxy vhost has exactly one {{reverse_proxy_url}}, and there is no
+ * clpctl verb that changes an existing site's vhost -- so a second addon could
+ * not be added later without writing site.vhost_template by hand. One process
+ * on one port needs none of that.
+ */
+export const MANAGER_UNIT = "clp-addons.service";
+export const MANAGER_PORT = 38080;
+
+
 
 /**
  * CloudPanel's own database. Read-only, always: it is the source of truth for
@@ -51,7 +73,22 @@ export const TWIG_CACHE_DIR = `${PANEL_APP}/var/cache`;
 export const SHARED_GROUP = "clp-addons";
 
 export const CONFIG_DIR = "/etc/clp-addons";
+/**
+ * The platform's own config: the shared hostname, the manager port and the
+ * account it runs as. The per-addon files beside it mark which addons are
+ * installed and give each wrapper its own copy of OWN_DOMAIN; this one is the
+ * source of truth those are written from, so uninstalling an addon cannot take
+ * the platform's hostname with it.
+ */
+export const PLATFORM_CONFIG = `${CONFIG_DIR}/platform.conf`;
 export const STATE_DIR = "/var/lib/clp-addons";
+/**
+ * Written when this installer created the shared CloudPanel site, so
+ * `uninstall --purge` can tell a site it made from one it adopted. Platform
+ * level, like the site: it used to sit under whichever addon happened to be
+ * installed first, which stopped being meaningful once they shared one.
+ */
+export const SITE_CREATED_MARKER = `${STATE_DIR}/.site-created-by-addons`;
 /** Pristine copies of the panel templates addons patch, keyed by template. */
 export const TEMPLATE_STATE_DIR = `${STATE_DIR}/templates`;
 export const LOCK_DIR = "/run/lock/clp-addons";
@@ -101,10 +138,11 @@ export interface AddonSpec {
   wrapperArtifact: string;
   /** Absolute path the sudoers line names. Must match exactly. */
   wrapperPath: string;
-  unit: string;
+  /**
+   * Marks the addon installed, and is what its wrapper reads OWN_DOMAIN from.
+   * Every one of these carries the same hostname now: there is one site.
+   */
   configFile: string;
-  /** Loopback port for the service. Outside the instance range on purpose. */
-  port: number;
   /**
    * systemd units that must already be running for this addon to work.
    *
@@ -133,11 +171,7 @@ export const ADDONS: Record<string, AddonSpec> = {
     name: "instatic",
     wrapperArtifact: "clp-action-instatic",
     wrapperPath: `${LIB_DIR}/clp-action-instatic`,
-    unit: "clp-addon-instatic.service",
     configFile: `${CONFIG_DIR}/instatic.conf`,
-    // Instances get 39000-39999 (decision 2.11); the manager itself sits
-    // outside that block so it can never collide with one.
-    port: 38080,
     requiresUnits: ["docker"],
     stateDir: `${STATE_DIR}/instatic`,
     targets: INSTATIC_TARGETS,
@@ -146,11 +180,7 @@ export const ADDONS: Record<string, AddonSpec> = {
     name: "stager",
     wrapperArtifact: "clp-action-stager",
     wrapperPath: `${LIB_DIR}/clp-action-stager`,
-    unit: "clp-addon-stager.service",
     configFile: `${CONFIG_DIR}/stager.conf`,
-    // Beside the Instatic manager and equally clear of the 39000-39999 block
-    // that Instatic hands out to its instances.
-    port: 38081,
     stateDir: `${STATE_DIR}/stager`,
     maintenanceVerb: "prune",
     targets: STAGER_TARGETS,
@@ -183,3 +213,14 @@ export function templateWatchPaths(): string[] {
  * stray account with a sudoers-adjacent history.
  */
 export const LEGACY_USERS = ["instatic-app"];
+
+/**
+ * Units from before the addons shared one manager.
+ *
+ * Each addon had a service of its own, ExecStarting `serve <addon>`. That verb
+ * takes no argument now, so a leftover unit does not merely sit idle -- it has
+ * Restart=always, so it fails and respawns forever, filling the journal and
+ * making `systemctl --failed` useless for spotting anything real. Removed on
+ * install and on repair, the same way the account they ran as is.
+ */
+export const LEGACY_UNITS = ["clp-addon-instatic.service", "clp-addon-stager.service"];

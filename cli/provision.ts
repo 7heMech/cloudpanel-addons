@@ -7,8 +7,8 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, renameSync, readdirSync } from "node:fs";
 import {
   ADDONS, ANCHOR_SERVICE, CLI_ARTIFACT, CLI_BIN, CONFIG_DIR, CURRENT_LINK, LEGACY_USERS, LIB_DIR, LOCK_DIR,
-  PANEL_DB, RECONCILE_PATH, RECONCILE_SERVICE, RECONCILE_TIMER, RELEASES_DIR, SHARED_GROUP, STATE_DIR,
-  SYSTEMD_DIR,
+  LEGACY_UNITS, MANAGER_PORT, MANAGER_UNIT, PANEL_DB, PLATFORM_CONFIG, RECONCILE_PATH, RECONCILE_SERVICE, RECONCILE_TIMER,
+  RELEASES_DIR, SHARED_GROUP, STATE_DIR, SYSTEMD_DIR,
   templateWatchPaths, type AddonSpec,
 } from "./paths";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
@@ -451,10 +451,12 @@ export function removeSudoers(spec: AddonSpec): void {
 export function writeConfig(spec: AddonSpec, ownDomain: string, user: string, force = false): void {
   const body =
     `# clp-addons: ${spec.name}\n` +
-    `# OWN_DOMAIN is the site serving the manager UI. The wrapper refuses to\n` +
-    `# act on it, so the addon cannot delete the vhost it is served through.\n` +
+    `# OWN_DOMAIN is the site serving the manager UI. Every addon shares it now:\n` +
+    `# there is one CloudPanel site and each addon is mounted under a path on it.\n` +
+    `# The wrapper refuses to act on this hostname, so an addon cannot delete the\n` +
+    `# vhost it is served through -- or the one another addon is served through.\n` +
     `OWN_DOMAIN=${ownDomain}\n` +
-    `PORT=${spec.port}\n` +
+    `PORT=${MANAGER_PORT}\n` +
     `RUN_AS=${user}\n`;
 
   // On install the operator named the domain explicitly, so their intent is
@@ -472,6 +474,30 @@ export function writeConfig(spec: AddonSpec, ownDomain: string, user: string, fo
   rmSync(`${spec.configFile}.new`, { force: true });
 }
 
+/**
+ * The platform's own record of the shared site.
+ *
+ * Separate from the per-addon files because it outlives them: uninstalling one
+ * addon must not take the hostname the others are served on. Those files are
+ * written from this one, never the other way round.
+ */
+export function writePlatformConfig(domain: string, user: string): void {
+  writeAtomic(PLATFORM_CONFIG,
+    `# clp-addons: the platform\n` +
+    `# One CloudPanel site serves every addon, each mounted under its own path.\n` +
+    `DOMAIN=${domain}\n` +
+    `PORT=${MANAGER_PORT}\n` +
+    `RUN_AS=${user}\n`,
+    0o640);
+  run("chown", [`root:${user}`, PLATFORM_CONFIG]);
+}
+
+export function readPlatformDomain(): string | null {
+  if (!existsSync(PLATFORM_CONFIG)) return null;
+  const m = readFileSync(PLATFORM_CONFIG, "utf-8").match(/^\s*DOMAIN\s*=\s*(.+)$/m);
+  return m ? m[1]!.trim() : null;
+}
+
 export function readOwnDomain(spec: AddonSpec): string | null {
   if (!existsSync(spec.configFile)) return null;
   const m = readFileSync(spec.configFile, "utf-8").match(/^\s*OWN_DOMAIN\s*=\s*(.+)$/m);
@@ -480,25 +506,40 @@ export function readOwnDomain(spec: AddonSpec): string | null {
 
 // --- systemd ----------------------------------------------------------------
 
-function serviceUnit(spec: AddonSpec, user: string): string {
+/**
+ * The one manager unit. It serves every installed addon, each under its own
+ * path on the shared site, so there is one service, one account and one port
+ * rather than a set of each per addon.
+ *
+ * Every addon's environment is declared here because the process holds all of
+ * them. Derived from the installed set rather than written out, so adding an
+ * addon is still a registry entry.
+ */
+function serviceUnit(specs: AddonSpec[], user: string): string {
+  // Only the units something installed actually depends on. A box running an
+  // addon that never touches Docker should not order its manager after it.
+  const after = ["network-online.target", ...new Set(specs.flatMap((sp) => sp.requiresUnits ?? []).map((u) => `${u}.service`))];
+  const env = specs.flatMap((sp) => [
+    `Environment=${sp.name.toUpperCase()}_APP_DATA=${sp.stateDir}`,
+    `Environment=${sp.name.toUpperCase()}_WRAPPER=${sp.wrapperPath}`,
+  ]);
   return `[Unit]
-Description=CloudPanel addon: ${spec.name} manager
-After=network-online.target docker.service
-Wants=network-online.target docker.service
+Description=CloudPanel addons: manager for ${specs.map((sp) => sp.name).join(", ") || "no addon"}
+After=${after.join(" ")}
+Wants=${after.join(" ")}
 
 [Service]
 Type=simple
 User=${user}
 Group=${user}
-Environment=PORT=${spec.port}
+Environment=PORT=${MANAGER_PORT}
 Environment=HOST=127.0.0.1
-Environment=${spec.name.toUpperCase()}_APP_DATA=${spec.stateDir}
-Environment=${spec.name.toUpperCase()}_WRAPPER=${spec.wrapperPath}
+${env.join("\n")}
 # Named rather than left to the account's own group list, so the unit states
 # what it needs to read ${STATE_DIR}/snapshot.json instead of depending on
 # systemd's default handling of an account's supplementary groups.
 SupplementaryGroups=${SHARED_GROUP}
-ExecStart=${CURRENT_LINK}/${CLI_ARTIFACT} serve ${spec.name}
+ExecStart=${CURRENT_LINK}/${CLI_ARTIFACT} serve
 Restart=always
 RestartSec=5
 UMask=0027
@@ -518,9 +559,10 @@ UMask=0027
 # reinforce it.
 #
 # The isolation that actually holds is the unprivileged account plus a sudoers
-# line naming exactly one script with no wildcards. That is worth precisely as
-# much as the wrapper's argument validation is strict, which is why the wrapper
-# is the file to review line by line.
+# line naming exactly one script with no wildcards. One account now reaches
+# every installed addon's wrapper rather than only its own; that is the price of
+# one hostname, and it is the wrapper's argument validation that was always
+# carrying the weight.
 
 [Install]
 WantedBy=multi-user.target
@@ -622,10 +664,10 @@ ExecStart=${CLI_BIN} repair --anchors-only --quiet
  * as "restart required". systemd keeps running the old definition otherwise —
  * notably the old User=, which then blocks removing the account it replaced.
  */
-export function installUnits(spec: AddonSpec, user: string): boolean {
+export function installUnits(specs: AddonSpec[], user: string): boolean {
   const units = reconcileUnits();
-  const unitPath = `${SYSTEMD_DIR}/${spec.unit}`;
-  const desired = serviceUnit(spec, user);
+  const unitPath = `${SYSTEMD_DIR}/${MANAGER_UNIT}`;
+  const desired = serviceUnit(specs, user);
   const current = existsSync(unitPath) ? readFileSync(unitPath, "utf-8") : "";
   const changed = current !== desired;
   writeAtomic(unitPath, desired, 0o644);
@@ -637,9 +679,9 @@ export function installUnits(spec: AddonSpec, user: string): boolean {
   return changed;
 }
 
-export function startUnits(spec: AddonSpec): void {
-  run("systemctl", ["enable", spec.unit]);
-  run("systemctl", ["restart", spec.unit]);
+export function startUnits(): void {
+  run("systemctl", ["enable", MANAGER_UNIT]);
+  run("systemctl", ["restart", MANAGER_UNIT]);
   run("systemctl", ["enable", RECONCILE_TIMER]);
   run("systemctl", ["restart", RECONCILE_TIMER]);
   run("systemctl", ["enable", RECONCILE_PATH]);
@@ -648,7 +690,7 @@ export function startUnits(spec: AddonSpec): void {
   // elapsed, so confirm it came back with a real next elapse rather than
   // assuming it did.
   ensureTimerArmed(RECONCILE_TIMER);
-  log.ok(`${spec.unit}, ${RECONCILE_TIMER} and ${RECONCILE_PATH} enabled`);
+  log.ok(`${MANAGER_UNIT}, ${RECONCILE_TIMER} and ${RECONCILE_PATH} enabled`);
 }
 
 /**
@@ -663,25 +705,24 @@ export function startUnits(spec: AddonSpec): void {
  * else was still installed -- it uses the same answer to decide whether to keep
  * the CLI and the release tree -- so it passes it here too.
  */
-export function stopUnits(spec: AddonSpec, keepShared = false): void {
-  const units = keepShared ? [spec.unit] : [spec.unit, RECONCILE_TIMER, RECONCILE_PATH];
-  for (const u of units) tryRun("systemctl", ["disable", "--now", u]);
+export function stopUnits(keepShared = false): void {
+  // The manager unit is now shared too: it serves every installed addon, so it
+  // only goes when the last one does. Uninstalling one addon rewrites and
+  // restarts it instead, which is what drops that addon's routes.
+  if (keepShared) {
+    tryRun("systemctl", ["daemon-reload"]);
+    return;
+  }
 
-  const files = keepShared
-    ? [`${SYSTEMD_DIR}/${spec.unit}`]
-    : [`${SYSTEMD_DIR}/${spec.unit}`, `${SYSTEMD_DIR}/${RECONCILE_SERVICE}`,
-       `${SYSTEMD_DIR}/${RECONCILE_TIMER}`, `${SYSTEMD_DIR}/${RECONCILE_PATH}`,
-       `${SYSTEMD_DIR}/${ANCHOR_SERVICE}`];
+  for (const u of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH]) {
+    tryRun("systemctl", ["disable", "--now", u]);
+  }
+  const files = [`${SYSTEMD_DIR}/${MANAGER_UNIT}`, `${SYSTEMD_DIR}/${RECONCILE_SERVICE}`,
+     `${SYSTEMD_DIR}/${RECONCILE_TIMER}`, `${SYSTEMD_DIR}/${RECONCILE_PATH}`,
+     `${SYSTEMD_DIR}/${ANCHOR_SERVICE}`];
   for (const f of files) rmSync(f, { force: true });
 
   tryRun("systemctl", ["daemon-reload"]);
-  // The path unit's watch list is derived from the addons still installed, so
-  // it has to be rebuilt once this one is gone.
-  if (keepShared) {
-    writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_PATH}`, reconcileUnits().path, 0o644);
-    tryRun("systemctl", ["daemon-reload"]);
-    tryRun("systemctl", ["restart", RECONCILE_PATH]);
-  }
 }
 
 /**
@@ -695,6 +736,21 @@ export function unitRunningUser(unit: string): string | null {
   if (!pid || pid === "0") return null;
   const owner = tryRun("ps", ["-o", "user=", "-p", pid]).out.trim();
   return owner || null;
+}
+
+/**
+ * Remove the per-addon service units that predate the shared manager. Idempotent,
+ * and safe to call when they were never there.
+ */
+export function removeLegacyUnits(quiet = false): void {
+  for (const unit of LEGACY_UNITS) {
+    const file = `${SYSTEMD_DIR}/${unit}`;
+    if (!existsSync(file)) continue;
+    if (!quiet) log.warn(`removing the legacy unit ${unit}; one manager serves every addon now`);
+    tryRun("systemctl", ["disable", "--now", unit]);
+    rmSync(file, { force: true });
+    tryRun("systemctl", ["daemon-reload"]);
+  }
 }
 
 export function unitActive(unit: string): string {
@@ -737,12 +793,16 @@ export function ensureTimerArmed(unit: string, quiet = false): void {
 // --- the addon's own CloudPanel site ----------------------------------------
 
 /**
- * The manager runs behind a stock CloudPanel reverse-proxy site (decision 2.4),
- * so SSL, backups and per-site security keep working without us touching a
- * vhost. clpctl is the only thing that writes panel state; we never do
- * (decision 2.6).
+ * The one CloudPanel site every addon is served from (decision 2.4).
+ *
+ * Stock reverse proxy, so SSL, backups and per-site security keep working
+ * without us touching a vhost, and clpctl stays the only thing that writes
+ * panel state (decision 2.6). One site rather than one per addon is also what
+ * keeps the vhost stock: the template has exactly one {{reverse_proxy_url}} and
+ * no clpctl verb rewrites an existing site's vhost, so routing per addon has to
+ * happen above nginx. It happens in the manager, by path.
  */
-export function ensureAddonSite(spec: AddonSpec, domain: string): boolean {
+export function ensureManagerSite(domain: string): boolean {
   // An existing site is adopted, but only when it is already the reverse proxy
   // this manager needs. Adopting a static or PHP site instead leaves the manager
   // running on its port with nothing routing to it, and nothing says so: the
@@ -753,25 +813,25 @@ export function ensureAddonSite(spec: AddonSpec, domain: string): boolean {
     `SELECT type, COALESCE(reverse_proxy_url, '') FROM site WHERE domain_name = '${domain}';`]);
   if (row.ok && row.out.trim()) {
     const [type, url] = row.out.trim().split("|");
-    const wanted = `http://127.0.0.1:${spec.port}`;
+    const wanted = `http://127.0.0.1:${MANAGER_PORT}`;
     if (type !== "reverse-proxy") {
       fatal(
         `a CloudPanel site for ${domain} already exists and is a '${type}' site, not a reverse proxy.\n` +
-          `  Adopting it would leave the ${spec.name} manager unreachable. Delete that site, or\n` +
-          `  install this addon under a hostname of its own.`
+          `  Adopting it would leave the manager unreachable. Delete that site, or use a\n` +
+          `  hostname of its own for the addons.`
       );
     }
     if (url !== wanted) {
       fatal(
         `the CloudPanel site ${domain} proxies '${url}' rather than ${wanted}.\n` +
-          `  That is somebody else's upstream. Install ${spec.name} under a hostname of its own.`
+          `  That is somebody else's upstream. Use a hostname of its own for the addons.`
       );
     }
     log.ok(`CloudPanel site ${domain} already exists and proxies ${wanted}`);
     return false;
   }
 
-  log.step(`creating CloudPanel reverse-proxy site ${domain} → 127.0.0.1:${spec.port}`);
+  log.step(`creating CloudPanel reverse-proxy site ${domain} → 127.0.0.1:${MANAGER_PORT}`);
 
   const siteUser = siteUserFor(domain);
   const taken = tryRun("sqlite3", ["-readonly", PANEL_DB,
@@ -786,7 +846,7 @@ export function ensureAddonSite(spec: AddonSpec, domain: string): boolean {
   const r = tryRun("clpctl", [
     "site:add:reverse-proxy",
     `--domainName=${domain}`,
-    `--reverseProxyUrl=http://127.0.0.1:${spec.port}`,
+    `--reverseProxyUrl=http://127.0.0.1:${MANAGER_PORT}`,
     `--siteUser=${siteUser}`,
     `--siteUserPassword=${password}`,
   ]);

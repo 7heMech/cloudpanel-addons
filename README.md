@@ -88,14 +88,15 @@ less install.sh && bash install.sh
 Requirements: a CloudPanel host, x86-64, root, and Docker. The installer refuses
 to continue without them.
 
-Two things are not done for you, and the addon is not safe to expose until they
-are:
+Two things are not done for you, and the addons are not safe to expose until
+they are. Both are done once for the site, not once per addon:
 
-1. Add per-site security to the manager's own site in the panel, under
+1. Add per-site security to the manager's site in the panel, under
    Site → Security → Basic Auth. The IP allowlist lives on that same page, so
    use it too if your addresses are static. The manager can create and delete
-   CloudPanel sites. It binds `127.0.0.1`, so its own site's vhost is the only
-   route in, and that vhost is where authentication happens.
+   CloudPanel sites. It binds `127.0.0.1`, so that site's vhost is the only
+   route in, and that vhost is where authentication happens -- for every addon
+   at once, since they are paths on it.
 
    Use the panel's feature rather than editing the vhost by hand. Both put
    `auth_basic` in front of the site, but only the panel's own one is recorded
@@ -108,20 +109,20 @@ are:
 ## Commands
 
 ```
-clp-addons install <addon> --domain=<host> [--version=vX.Y.Z] [--skip-attestation]
+clp-addons install <addon> [--domain=<host>] [--version=vX.Y.Z] [--skip-attestation]
 clp-addons update [<addon>|--all] [--version=vX.Y.Z]
 clp-addons self-update
 clp-addons repair [--quiet]
 clp-addons status
 clp-addons uninstall <addon> --yes [--purge]
-clp-addons serve <addon>
+clp-addons serve
 ```
 
-Each addon is served as its own CloudPanel site, so each needs a hostname of its
-own. The bootstrap installer takes `--domain=HOST` when you are installing one
-addon and `--domain-<addon>=HOST` when you are installing several; it refuses one
-hostname shared between two, because the site it creates proxies a single port
-and the second manager would install cleanly and answer on the first one's port.
+One CloudPanel site serves every addon, each under its own path, so `--domain`
+is asked once. The first install names the site; later ones join it, and
+re-stating a different hostname is refused rather than moving the addons already
+installed there. `clp-addons install stager` with no `--domain` is the ordinary
+way to add a second addon.
 
 Run `self-update` before `update` when moving across a release that changes the
 artifact set. `update` fetches what the *running* CLI believes a release
@@ -169,11 +170,37 @@ what should be installed", not two.
 has stopped is not obvious from anywhere else. `systemctl is-active` says
 `active` for a timer that has elapsed and will never run again.
 
+## One site, one manager
+
+Every addon used to get a CloudPanel site of its own: a hostname, a certificate,
+a Basic Auth setup and a site user each. Four manual steps per addon before the
+thing is safe to expose, and the addon is unreachable until the first two are
+done. What that bought was isolation -- one compromised manager could reach its
+own wrapper and not the other's -- and it is not worth an operator skipping any
+of those steps, which is the failure it actually invites.
+
+So there is one site, one `clp-addons.service`, one account, and the addons are
+mounted under it by path. The one account can `sudo` every installed addon's
+wrapper, which is the real cost and is stated plainly in the unit file. The
+wrapper's argument validation was always the thing carrying the weight.
+
+The routing is in the manager rather than in nginx, and that is forced rather
+than chosen. CloudPanel's stock reverse-proxy vhost has exactly one
+`{{reverse_proxy_url}}`, `site:add:reverse-proxy` does not accept
+`--vhostTemplate`, and no `clpctl` verb rewrites an existing site's vhost -- so
+per-path upstreams would mean writing `site.vhost_template` by hand, and adding a
+second addon later would mean rewriting it again. One process on one port needs
+none of that, and the vhost stays stock.
+
+Each addon's views build their links from `lib/mount.ts` rather than from the
+site root, and `call()` in the shared client script prefixes every fetch, so an
+addon's own code reads as though it still owned the site.
+
 ## One binary
 
 The release ships a single compiled artifact. `clp-addons` is the CLI, and
-`clp-addons serve <addon>` is that addon's manager -- which is what its systemd
-unit ExecStarts. Each addon is a few tens of KB of code, so bundling them all
+`clp-addons serve` is the manager for every installed addon -- which is what the
+systemd unit ExecStarts. Each addon is a few tens of KB of code, so bundling them all
 and choosing one at startup costs nothing, while a binary each meant a copy of
 the Bun runtime each:
 
@@ -195,10 +222,9 @@ the commands that are not `serve` pay nothing for them being compiled in.
 | Component | Runs as | Notes |
 |---|---|---|
 | `clp-addons` CLI | root, on demand | installer and reconciler |
-| `clp-addons serve instatic` | the addon site's CloudPanel user | manager UI, bound to `127.0.0.1:38080` |
+| `clp-addons serve` | the site's CloudPanel user | every addon's UI, bound to `127.0.0.1:38080` |
 | `clp-action-instatic` | root, via one sudoers line | the privilege boundary |
 | Instatic instances | that instance's CloudPanel site user | one container per site, `127.0.0.1:39000-39999` |
-| `clp-addons serve stager` | the addon site's CloudPanel user | manager UI, bound to `127.0.0.1:38081` |
 | `clp-action-stager` | root, via one sudoers line | the privilege boundary |
 | a clone in progress | root, in its own transient systemd unit | survives a restart of the manager |
 
@@ -252,10 +278,12 @@ takes an explicit `--skip-attestation`.
 
 ## Reaching the manager
 
-Each manager binds `127.0.0.1` and its own CloudPanel site is the only thing that
-serves it, so you reach it at `https://<addon-host>` once that hostname resolves
-to the server. The panel entries link there: Instatic from the header nav, Stager
-from each site's Staging tab.
+The manager binds `127.0.0.1` and one CloudPanel site is the only thing that
+serves it, so you reach it at `https://<host>` once that hostname resolves to the
+server. Each addon is under its own path -- `https://<host>/instatic`,
+`https://<host>/stager` -- and the bare hostname lists what is installed. The
+panel entries link straight to them: Instatic from the header nav, Stager from
+each site's Staging tab.
 
 If the hostname is not in public DNS yet, forward the server's port 443 and add
 a hosts entry for it locally. Forward 443 specifically, because the injected nav

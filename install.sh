@@ -33,12 +33,11 @@ AVAILABLE_ADDONS=("instatic" "stager")
 
 VERSION="latest"
 SELECTED=""
+# One hostname for all of them. There is one CloudPanel reverse-proxy site and
+# one manager behind it, with each addon mounted under its own path, so this is
+# asked once however many addons are selected -- and it is one certificate and
+# one Basic Auth setup rather than a set per addon.
 DOMAIN=""
-# One hostname per addon. Each addon is served as its own CloudPanel
-# reverse-proxy site pointing at its own port, so a single --domain shared
-# between two of them would put both behind one vhost that only proxies the
-# first one's port -- the second manager would be installed and unreachable.
-declare -A DOMAIN_FOR=()
 ASSUME_YES=0
 SKIP_ATTESTATION=0
 
@@ -59,10 +58,9 @@ usage() {
 clp-addons installer
 
   --addons=a,b          install these addons without prompting
-  --domain=HOST         hostname for the manager's own CloudPanel site.
-                        Only when installing a single addon; each addon needs
-                        a hostname of its own.
-  --domain-ADDON=HOST   hostname for that one addon, e.g. --domain-stager=
+  --domain=HOST         hostname for the CloudPanel site the addons are served
+                        from. One site carries all of them, each under its own
+                        path, so this is asked once.
   --version=vX.Y.Z      install a specific release (default: latest)
   --yes                 non-interactive; requires --addons and --domain
   --skip-attestation    accept checksum-only verification
@@ -75,7 +73,6 @@ USAGE
 for arg in "$@"; do
   case $arg in
     --addons=*)         SELECTED="${arg#*=}" ;;
-    --domain-*=*)       key="${arg#--domain-}"; DOMAIN_FOR["${key%%=*}"]="${arg#*=}" ;;
     --domain=*)         DOMAIN="${arg#*=}" ;;
     --version=*)        VERSION="${arg#*=}" ;;
     --yes|-y)           ASSUME_YES=1 ;;
@@ -189,48 +186,25 @@ for a in "${ADDON_LIST[@]}"; do
 done
 ok "installing: ${ADDON_LIST[*]}"
 
-# --- a hostname per addon ---------------------------------------------------
+# --- the hostname -----------------------------------------------------------
 
-# A bare --domain is still the ordinary case, because installing one addon is.
-# It is refused for two, rather than quietly applied to both, since the failure
-# it produces is a manager that installs cleanly and then answers on somebody
-# else's port.
-if [[ -n $DOMAIN ]]; then
-  if (( ${#ADDON_LIST[@]} > 1 )); then
-    die "--domain names one site but ${#ADDON_LIST[@]} addons were selected. Give each its own: $(
-      for a in "${ADDON_LIST[@]}"; do printf -- '--domain-%s=HOST ' "$a"; done)"
+if [[ -z $DOMAIN ]]; then
+  if (( ASSUME_YES )) || ! have_tty; then
+    die "--domain=HOST is required: it names the CloudPanel site the addons are served from"
   fi
-  DOMAIN_FOR["${ADDON_LIST[0]}"]="$DOMAIN"
+  say ""
+  say "${B}Hostname for the addons${N}"
+  say "${DIM}  One CloudPanel reverse-proxy site is created for it, so it gets SSL, backups${N}"
+  say "${DIM}  and per-site security -- once, not once per addon. Each addon is mounted${N}"
+  say "${DIM}  under its own path on it. It must resolve to this server.${N}"
+  say ""
+  printf 'Hostname: '
+  read -r reply < /dev/tty || reply=""
+  DOMAIN="$reply"
 fi
 
-for addon in "${ADDON_LIST[@]}"; do
-  if [[ -z ${DOMAIN_FOR[$addon]:-} ]]; then
-    if (( ASSUME_YES )) || ! have_tty; then
-      die "--domain-${addon}=HOST is required: each addon is served as its own CloudPanel site"
-    fi
-    say ""
-    say "${B}Hostname for the ${addon} manager's own site${N}"
-    say "${DIM}  A CloudPanel reverse-proxy site is created for it, so it gets SSL, backups${N}"
-    say "${DIM}  and per-site security. It must resolve to this server.${N}"
-    say ""
-    printf 'Hostname: '
-    read -r reply < /dev/tty || reply=""
-    DOMAIN_FOR["$addon"]="$reply"
-  fi
-
-  [[ ${DOMAIN_FOR[$addon]} =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] \
-    || die "'${DOMAIN_FOR[$addon]}' is not a valid lowercase hostname"
-done
-
-# Two addons behind one hostname is the same failure as a shared --domain,
-# reached by spelling it out twice.
-for addon in "${ADDON_LIST[@]}"; do
-  for other in "${ADDON_LIST[@]}"; do
-    [[ $addon == "$other" ]] && continue
-    [[ ${DOMAIN_FOR[$addon]} == "${DOMAIN_FOR[$other]}" ]] \
-      && die "${addon} and ${other} were both given ${DOMAIN_FOR[$addon]}; each addon needs its own hostname"
-  done
-done
+[[ $DOMAIN =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] \
+  || die "'${DOMAIN}' is not a valid lowercase hostname"
 
 # --- fetch and verify the CLI ----------------------------------------------
 
@@ -317,23 +291,29 @@ fi
 extra=()
 (( SKIP_ATTESTATION )) && extra+=("--skip-attestation")
 
+# --domain on every one of them: the CLI takes the first as the site to create
+# and requires the rest to match it, so passing it each time is a statement of
+# intent rather than a chance to disagree with what is already installed.
 for addon in "${ADDON_LIST[@]}"; do
   say ""
-  step "installing addon: ${addon} at ${DOMAIN_FOR[$addon]}"
-  "$CLI_TARGET" install "$addon" --domain="${DOMAIN_FOR[$addon]}" --version="$TAG" "${extra[@]+"${extra[@]}"}"
+  step "installing addon: ${addon} at ${DOMAIN}/${addon}"
+  "$CLI_TARGET" install "$addon" --domain="$DOMAIN" --version="$TAG" "${extra[@]+"${extra[@]}"}"
 done
 
 say ""
 ok "done"
 say ""
-say "${B}Before these are reachable, do these two things in the panel for each:${N}"
+say "${B}Before this is reachable, do these two things in the panel -- once:${N}"
+say ""
+say "  ${B}${DOMAIN}${N}"
+say "  1. Security → add Basic Auth (and an IP allowlist if you can)."
+say "     The manager can create and delete sites; it must not be open."
+say "  2. Issue a certificate:"
+say "     clpctl lets-encrypt:install:certificate --domainName=${DOMAIN}"
+say ""
+say "  Then each addon is at:"
 for addon in "${ADDON_LIST[@]}"; do
-  say ""
-  say "  ${B}${DOMAIN_FOR[$addon]}${N} (${addon})"
-  say "  1. Security → add Basic Auth (and an IP allowlist if you can)."
-  say "     A manager can create and delete sites; it must not be open."
-  say "  2. Issue a certificate:"
-  say "     clpctl lets-encrypt:install:certificate --domainName=${DOMAIN_FOR[$addon]}"
+  say "    https://${DOMAIN}/${addon}"
 done
 say ""
 say "Then check the install with: ${B}clp-addons status${N}"
