@@ -676,10 +676,13 @@ vhost_differs() {
 TEMPLATE_STAGE=""
 TEMPLATE_FILE=""
 
-build_vhost_template() {
-  local source=$1 target=$2
-  local body cand
-  TEMPLATE_FILE=""
+# The text transform, on stdout. Separate from the staging below because it is
+# the part with the rules in it, and keeping it free of root and of the clp
+# group is what lets tools/test-app.ts drive it on any machine. It used to be
+# one function, and the test that covered it therefore needed both -- which
+# passed here and failed in CI.
+vhost_template_body() {
+  local source=$1 target=$2 body cand
 
   body=$(vhost_of "$source") || return 1
   [[ -n $body ]] || return 1
@@ -694,6 +697,16 @@ build_vhost_template() {
   # afterwards flags the clone's own name as a leak. Both are done on whole
   # hostname boundaries instead.
   cand=$(printf '%s\n' "$cand" | sed -E "s/$(hostname_boundary "$source")/\\1${target}\\2/g")
+  [[ -n $cand ]] || return 1
+
+  printf '%s\n' "$cand"
+}
+
+build_vhost_template() {
+  local source=$1 target=$2 cand
+  TEMPLATE_FILE=""
+
+  cand=$(vhost_template_body "$source" "$target") || return 1
   [[ -n $cand ]] || return 1
 
   TEMPLATE_STAGE=$(mktemp -d /tmp/clp-stager-tpl.XXXXXXXX) || return 1

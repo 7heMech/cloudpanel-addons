@@ -378,17 +378,19 @@ console.log("\n== building the carried-over template ==");
 
 {
   const W = "addons/stager/wrapper/clp-action-stager";
-  const fns = ["hostname_boundary", "strip_redirect_block", "fold_server_name", "build_vhost_template"]
+  const fns = ["hostname_boundary", "strip_redirect_block", "fold_server_name", "vhost_template_body"]
     .map((n) => bashFunction(W, n))
     .join("\n");
-  // vhost_of reads the panel database; stubbed so this runs anywhere.
+  // vhost_template_body rather than build_vhost_template: the latter stages the
+  // result as root:clp, so a test that drove it needed both root and a clp
+  // group. That passed on the CloudPanel box and failed in CI, which is the
+  // whole reason the text transform is now its own function.
   const build = (body: string, source: string, target: string) => {
     const bodyFile = `/tmp/clp-stager-body-${process.pid}`;
     writeFileSync(bodyFile, body);
     try {
       return execFileSync("bash", ["-c",
-        `vhost_of() { cat "${bodyFile}"; }\n${fns}\n` +
-        `build_vhost_template "$1" "$2" >/dev/null && cat "$TEMPLATE_FILE"; rm -rf "$TEMPLATE_STAGE"`,
+        `vhost_of() { cat "${bodyFile}"; }\n${fns}\nvhost_template_body "$1" "$2"`,
         "_", source, target], { encoding: "utf-8" });
     } finally {
       rmSync(bodyFile, { force: true });
@@ -407,6 +409,9 @@ console.log("\n== building the carried-over template ==");
 
   const out = build(SOURCE, "example.com", "stg.example.com");
 
+  // First, because the two checks phrased as absences are both satisfied by an
+  // empty string. When this function broke, one of them still reported ok.
+  check("the builder produced a template at all", out.trim().length > 0, JSON.stringify(out));
   check("the generated server_name becomes the placeholder again",
     out.includes("{{server_name}}") && !out.includes("server_name example.com"), out);
   check("a hand edit naming the source is rewritten to the target",
