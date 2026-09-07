@@ -9,9 +9,6 @@ import { layout, dashboardView, newInstanceView } from "./views";
 import { guardMutation, newCsrfToken, csrfCookieHeader, SECURITY_HEADERS } from "../../../lib/app-http";
 import { listAvailableTags } from "./tags";
 
-const PORT = Number(process.env.PORT || 38080);
-const HOST = process.env.HOST || "127.0.0.1";
-
 function html(body: string, csrf: string, status = 200): Response {
   return new Response(body, {
     status,
@@ -33,121 +30,133 @@ function json(body: unknown, status = 200): Response {
 
 const MUTATING_VERBS = new Set(["start", "stop", "restart", "recreate", "delete", "snapshot", "update"]);
 
-const server = Bun.serve({
-  port: PORT,
-  hostname: HOST,
-  idleTimeout: 255,
+// The whole request surface, as a plain function rather than a method on the
+// Bun.serve object, so this module has no side effect at import time -- the
+// single clp-addons binary imports every addon's manager and starts exactly the
+// one named on the command line.
+async function handle(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const path = url.pathname.replace(/\/+$/, "") || "/";
+  const method = req.method;
 
-  async fetch(req) {
-    const url = new URL(req.url);
-    const path = url.pathname.replace(/\/+$/, "") || "/";
-    const method = req.method;
+  // Liveness probe for systemd and the wrapper's health check. No auth
+  // implications: it reports nothing about instances.
+  if (path === "/health") {
+    return json({ ok: true, service: "instatic-manager" });
+  }
 
-    // Liveness probe for systemd and the wrapper's health check. No auth
-    // implications: it reports nothing about instances.
-    if (path === "/health") {
-      return json({ ok: true, service: "instatic-manager" });
-    }
-
-    if (method === "GET" && (path === "/" || path === "/new")) {
-      const csrf = newCsrfToken();
-      try {
-        if (path === "/") {
-          const instances = await instaticService.listInstances();
-          const { snap, ageSeconds } = instaticService.snapshot();
-          // The dashboard needs the registry listing too, not just /new. Without
-          // it the page showed each instance's pinned tag with nothing to compare
-          // it against, so a new Instatic release was invisible here and the
-          // update dialog asked the operator to type a version from memory.
-          const available = await listAvailableTags();
-          return html(
-            layout("Instatic instances",
-              dashboardView(instances, await instaticService.nextPort(), ageSeconds, snap.sites, available)),
-            csrf
-          );
-        }
+  if (method === "GET" && (path === "/" || path === "/new")) {
+    const csrf = newCsrfToken();
+    try {
+      if (path === "/") {
+        const instances = await instaticService.listInstances();
+        const { snap, ageSeconds } = instaticService.snapshot();
+        // The dashboard needs the registry listing too, not just /new. Without
+        // it the page showed each instance's pinned tag with nothing to compare
+        // it against, so a new Instatic release was invisible here and the
+        // update dialog asked the operator to type a version from memory.
         const available = await listAvailableTags();
-        return html(layout("New Instatic site", newInstanceView(await instaticService.nextPort(), available)), csrf);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return html(layout("Error", `<div class="alert">${msg.replace(/[<>&]/g, "")}</div>`), csrf, 500);
+        return html(
+          layout("Instatic instances",
+            dashboardView(instances, await instaticService.nextPort(), ageSeconds, snap.sites, available)),
+          csrf
+        );
       }
+      const available = await listAvailableTags();
+      return html(layout("New Instatic site", newInstanceView(await instaticService.nextPort(), available)), csrf);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return html(layout("Error", `<div class="alert">${msg.replace(/[<>&]/g, "")}</div>`), csrf, 500);
     }
+  }
 
-    if (path === "/api/instances" && method === "GET") {
-      return json({ ok: true, instances: await instaticService.listInstances() });
+  if (path === "/api/instances" && method === "GET") {
+    return json({ ok: true, instances: await instaticService.listInstances() });
+  }
+
+  if (path === "/api/instances" && method === "POST") {
+    const blocked = guardMutation(req);
+    if (blocked) return blocked;
+
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return json({ ok: false, error: "body must be JSON" }, 400);
     }
+    const { domain: rawDomain, tag: rawTag } = (body ?? {}) as Record<string, unknown>;
+    const domain = validateDomain(rawDomain);
+    const tag = validateTag(rawTag);
+    if (!domain) return json({ ok: false, error: "domain is not a valid hostname" }, 400);
+    if (!tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
 
-    if (path === "/api/instances" && method === "POST") {
-      const blocked = guardMutation(req);
-      if (blocked) return blocked;
+    const res = await instaticService.createInstance(domain, tag);
+    return json(res, res.ok ? 200 : 400);
+  }
 
-      let body: unknown;
-      try {
-        body = await req.json();
-      } catch {
-        return json({ ok: false, error: "body must be JSON" }, 400);
-      }
-      const { domain: rawDomain, tag: rawTag } = (body ?? {}) as Record<string, unknown>;
-      const domain = validateDomain(rawDomain);
-      const tag = validateTag(rawTag);
-      if (!domain) return json({ ok: false, error: "domain is not a valid hostname" }, 400);
-      if (!tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
+  const m = path.match(/^\/api\/instances\/([^/]+)\/([a-z]+)$/);
+  if (m) {
+    const domain = validateDomain(decodeURIComponent(m[1]!));
+    const verb = m[2]!;
+    if (!domain) return json({ ok: false, error: "domain is not a valid hostname" }, 400);
 
-      const res = await instaticService.createInstance(domain, tag);
+    if (verb === "logs" && method === "GET") {
+      const res = await instaticService.getLogs(domain);
       return json(res, res.ok ? 200 : 400);
     }
 
-    const m = path.match(/^\/api\/instances\/([^/]+)\/([a-z]+)$/);
-    if (m) {
-      const domain = validateDomain(decodeURIComponent(m[1]!));
-      const verb = m[2]!;
-      if (!domain) return json({ ok: false, error: "domain is not a valid hostname" }, 400);
+    if (MUTATING_VERBS.has(verb) && method === "POST") {
+      const blocked = guardMutation(req);
+      if (blocked) return blocked;
 
-      if (verb === "logs" && method === "GET") {
-        const res = await instaticService.getLogs(domain);
-        return json(res, res.ok ? 200 : 400);
-      }
-
-      if (MUTATING_VERBS.has(verb) && method === "POST") {
-        const blocked = guardMutation(req);
-        if (blocked) return blocked;
-
-        switch (verb) {
-          case "start":
-          case "stop":
-          case "restart":
-          case "recreate": {
-            const res = await instaticService.lifecycle(domain, verb);
-            return json(res, res.ok ? 200 : 400);
+      switch (verb) {
+        case "start":
+        case "stop":
+        case "restart":
+        case "recreate": {
+          const res = await instaticService.lifecycle(domain, verb);
+          return json(res, res.ok ? 200 : 400);
+        }
+        case "snapshot": {
+          const res = await instaticService.snapshotInstance(domain);
+          return json(res, res.ok ? 200 : 400);
+        }
+        case "delete": {
+          const res = await instaticService.deleteInstance(domain);
+          return json(res, res.ok ? 200 : 400);
+        }
+        case "update": {
+          let tag: string | null = null;
+          try {
+            tag = validateTag(((await req.json()) as Record<string, unknown>)?.tag);
+          } catch {
+            // fall through to the 400 below
           }
-          case "snapshot": {
-            const res = await instaticService.snapshotInstance(domain);
-            return json(res, res.ok ? 200 : 400);
-          }
-          case "delete": {
-            const res = await instaticService.deleteInstance(domain);
-            return json(res, res.ok ? 200 : 400);
-          }
-          case "update": {
-            let tag: string | null = null;
-            try {
-              tag = validateTag(((await req.json()) as Record<string, unknown>)?.tag);
-            } catch {
-              // fall through to the 400 below
-            }
-            if (!tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
-            const res = await instaticService.updateInstance(domain, tag);
-            return json(res, res.ok ? 200 : 400);
-          }
+          if (!tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
+          const res = await instaticService.updateInstance(domain, tag);
+          return json(res, res.ok ? 200 : 400);
         }
       }
-
-      return json({ ok: false, error: `unsupported ${method} on ${verb}` }, 405);
     }
 
-    return json({ ok: false, error: "not found" }, 404);
-  },
-});
+    return json({ ok: false, error: `unsupported ${method} on ${verb}` }, 405);
+  }
 
-console.log(`[instatic-manager] listening on http://${server.hostname}:${server.port}`);
+  return json({ ok: false, error: "not found" }, 404);
+}
+
+/**
+ * Start the manager. Invoked by `clp-addons serve instatic`, which is what the
+ * systemd unit ExecStarts; there is one compiled binary for the whole project
+ * rather than one per addon (each was 77 MB of identical Bun runtime carrying a
+ * few tens of KB of code).
+ */
+export function serve(): void {
+  const server = Bun.serve({
+    port: Number(process.env.PORT || 38080),
+    hostname: process.env.HOST || "127.0.0.1",
+    idleTimeout: 255,
+    fetch: handle,
+  });
+  console.log(`[instatic-manager] listening on http://${server.hostname}:${server.port}`);
+}

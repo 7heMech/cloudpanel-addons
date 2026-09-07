@@ -15,6 +15,17 @@ export const CURRENT_LINK = `${LIB_DIR}/current`;
 export const CLI_BIN = "/usr/local/bin/clp-addons";
 
 /**
+ * The one compiled binary this project ships.
+ *
+ * It is the CLI and every addon's manager in a single artifact, selected by
+ * `clp-addons serve <addon>`. Three binaries meant three copies of the Bun
+ * runtime: 77.5 MB each, carrying 56 KB, 28 KB and 24 KB of actual code, for a
+ * 244 MB download where 81 MB does the same job. Each addon added cost another
+ * 77.6 MB rather than a few tens of KB.
+ */
+export const CLI_ARTIFACT = "clp-addons-linux-x64";
+
+/**
  * CloudPanel's own database. Read-only, always: it is the source of truth for
  * sites and their users, and writing to it is how you corrupt a panel.
  * Here rather than in each caller so there is one path to change if CloudPanel
@@ -86,8 +97,6 @@ export interface AddonTarget {
 
 export interface AddonSpec {
   name: string;
-  /** Compiled service binary, as named in the release. */
-  appArtifact: string;
   /** Wrapper script, shipped as-is and never compiled (decision 2.13). */
   wrapperArtifact: string;
   /** Absolute path the sudoers line names. Must match exactly. */
@@ -122,7 +131,6 @@ export interface AddonSpec {
 export const ADDONS: Record<string, AddonSpec> = {
   instatic: {
     name: "instatic",
-    appArtifact: "instatic-app-linux-x64",
     wrapperArtifact: "clp-action-instatic",
     wrapperPath: `${LIB_DIR}/clp-action-instatic`,
     unit: "clp-addon-instatic.service",
@@ -136,7 +144,6 @@ export const ADDONS: Record<string, AddonSpec> = {
   },
   stager: {
     name: "stager",
-    appArtifact: "stager-app-linux-x64",
     wrapperArtifact: "clp-action-stager",
     wrapperPath: `${LIB_DIR}/clp-action-stager`,
     unit: "clp-addon-stager.service",

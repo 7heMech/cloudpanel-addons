@@ -167,6 +167,43 @@ position. A bundle is signed and bound to its subject's digest, so an attacker
 who can replace a release asset cannot produce one that verifies against the
 replacement -- the failure mode is a refused install, not a silent accept.
 
+## One compiled binary, not one per addon
+
+`bun build --compile` embeds the Bun runtime, so every artifact carried a
+complete copy of it. Measured on the v0.5.2 build:
+
+```
+empty bun --compile binary   81,315,296 bytes
+clp-addons-linux-x64         81,372,640   ->  56 KB of code
+instatic-app-linux-x64       81,343,968   ->  28 KB
+stager-app-linux-x64         81,339,872   ->  24 KB
+```
+
+244 MB of release assets to deliver 108 KB of code, three copies of the same
+runtime, and another 77.6 MB for each addon added. The runtime is not the part
+that varies.
+
+So there is one artifact. `clp-addons` is the CLI; `clp-addons serve <addon>` is
+that addon's manager, and the systemd unit ExecStarts that rather than a binary
+of its own. 81.4 MB total, and an addon now costs its wrapper script.
+
+Two consequences worth stating, because both were load-bearing in how it was
+done:
+
+- **The addon modules export a starter, and do not serve on import.** A
+  module-level `Bun.serve` would run for `clp-addons status` as much as for
+  `serve`. The CLI imports every manager statically -- at this size there is
+  nothing to gain from a dynamic import -- so those modules must have no import
+  side effect.
+- **`serve` takes no default addon.** `resolveAddon(undefined)` answers instatic,
+  which is a fair default for a command an operator types and a bad one inside a
+  unit file: a typo in `ExecStart` would start the wrong manager on the wrong
+  port and look like it worked.
+
+`serve` is also the one verb that is deliberately not `requireRoot`. It runs as
+the addon site's own CloudPanel account; its single privileged path is sudo of
+its own wrapper.
+
 ## An artifact already in the release tree is not downloaded again
 
 The artifact set is per release, not per addon: `current` is shared, so every
@@ -789,14 +826,19 @@ a missing one falls back to Generic and says so.
 
 ## A release tree has to serve every installed addon
 
-`current` is a symlink shared by every addon: each service unit ExecStarts
-`current/<its app binary>`. `install` fetched the artifacts for the addon being
-installed, wrote them into a new release directory and moved `current` onto it.
+`current` is a symlink shared by every addon: each service unit ExecStarts the
+binary in `current`, and needs its own wrapper beside it. `install` fetched the
+artifacts for the addon being installed, wrote them into a new release directory
+and moved `current` onto it.
 
-With one addon that is correct. With two it takes the other addon's binary out
-from under its own unit, and the symptom is `status=203/EXEC` on a service that
+With one addon that is correct. With two it took the other addon's files out
+from under its own unit, and the symptom was `status=203/EXEC` on a service that
 had been running for weeks, produced by installing something else entirely.
 `update <one addon>` had the same shape.
+
+Merging the app binaries into one artifact narrowed this but did not remove it:
+the binary is now shared, but each addon still has a wrapper of its own in the
+release tree, so the obligation is the same one directory down.
 
 Both now fetch the artifacts of every installed addon, not just the one named,
 and `placeRelease` refuses to move `current` onto a directory that is missing

@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { cachedArtifact } from "../cli/release";
 import { describeAuthState, releaseArtifacts, siteUserFor, type SiteAuthState } from "../cli/provision";
-import { ADDONS, ADDON_NAMES } from "../cli/paths";
+import { ADDONS, ADDON_NAMES, CLI_ARTIFACT } from "../cli/paths";
 import { getNextAvailablePort } from "../lib/snapshot-reader";
 import type { PanelSnapshot } from "../lib/snapshot-reader";
 
@@ -243,27 +243,32 @@ console.log("\n== a release tree serves every installed addon ==");
 
 // Installing a second addon used to fetch only that addon's artifacts, write
 // them into a new release directory and move `current` onto it -- which took the
-// first addon's app binary out from under its own unit. The service had been
-// running for weeks and the only symptom was status=203/EXEC.
+// first addon's binary out from under its own unit. The service had been running
+// for weeks and the only symptom was status=203/EXEC. The app binaries have
+// since merged into the one CLI artifact, but each addon still has a wrapper of
+// its own in the release tree, so the same obligation applies to those.
 {
-  const CLI = "clp-addons-linux-x64";
   const all = ADDON_NAMES.map((n) => ADDONS[n]!);
-  const names = releaseArtifacts(all, CLI);
+  const names = releaseArtifacts(all);
 
-  check("the CLI is always in the set", names.includes(CLI));
+  check("the one binary is always in the set", names.includes(CLI_ARTIFACT));
   for (const spec of all) {
-    check(`${spec.name}'s app binary is in the set`, names.includes(spec.appArtifact));
     check(`${spec.name}'s wrapper is in the set`, names.includes(spec.wrapperArtifact));
   }
   check("nothing is listed twice", names.length === new Set(names).size, names.join(", "));
 
-  // The shape of the bug: one addon's set omits the other's binary, which is
-  // why the caller has to pass every installed addon rather than just its own.
-  const one = releaseArtifacts([all[0]!], CLI);
+  // One binary rather than one per addon, which is the whole point of the merge:
+  // the set grows by a wrapper per addon, not by another 77 MB of Bun runtime.
+  check("no per-addon app binary is expected any more",
+    names.filter((n) => n.endsWith("-linux-x64")).length === 1, names.join(", "));
+
+  // The shape of the original bug: one addon's set omits the other's wrapper,
+  // which is why the caller passes every installed addon rather than just its own.
+  const one = releaseArtifacts([all[0]!]);
   const others = all.slice(1);
   if (others.length > 0) {
     check("one addon's set does not cover another's",
-      others.every((o) => !one.includes(o.appArtifact)));
+      others.every((o) => !one.includes(o.wrapperArtifact)));
   }
 }
 

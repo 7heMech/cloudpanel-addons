@@ -72,18 +72,15 @@ jobs:
           set -euo pipefail
           mkdir -p dist
 
+          # One binary: the CLI and every addon's manager, selected at runtime by
+          # `clp-addons serve <addon>`. Three artifacts meant three copies of the
+          # same 77.5 MB Bun runtime to carry ~100 KB of code between them.
+          #
           # recon showed avx2 on the target CPU, so the standard glibc x64
           # target applies rather than the baseline variant.
-          for spec in "clp-addons-linux-x64:cli/index.ts" \
-                      "instatic-app-linux-x64:addons/instatic/app/index.ts" \
-                      "stager-app-linux-x64:addons/stager/app/index.ts"; do
-            out="dist/${spec%%:*}"
-            entry="${spec#*:}"
-            echo "building $out from $entry"
-            bun build --compile --target=bun-linux-x64 \
-              --define "process.env.CLP_ADDONS_VERSION=\"${VERSION}\"" \
-              --outfile "$out" "$entry"
-          done
+          bun build --compile --target=bun-linux-x64 \
+            --define "process.env.CLP_ADDONS_VERSION=\"${VERSION}\"" \
+            --outfile dist/clp-addons-linux-x64 cli/index.ts
 
       - name: Stage the bootstrap installer
         # install.sh is part of the release, not just a file in the repo. Being
@@ -137,8 +134,6 @@ jobs:
         with:
           subject-path: |
             dist/clp-addons-linux-x64
-            dist/instatic-app-linux-x64
-            dist/stager-app-linux-x64
             dist/clp-action-instatic
             dist/clp-action-stager
             dist/install.sh
@@ -205,8 +200,6 @@ jobs:
             --title "$TAG" \
             "${notes_args[@]}" \
             dist/clp-addons-linux-x64 \
-            dist/instatic-app-linux-x64 \
-            dist/stager-app-linux-x64 \
             dist/clp-action-instatic \
             dist/clp-action-stager \
             dist/install.sh \

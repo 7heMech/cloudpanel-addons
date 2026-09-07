@@ -114,6 +114,7 @@ clp-addons self-update
 clp-addons repair [--quiet]
 clp-addons status
 clp-addons uninstall <addon> --yes [--purge]
+clp-addons serve <addon>
 ```
 
 Each addon is served as its own CloudPanel site, so each needs a hostname of its
@@ -149,15 +150,36 @@ what should be installed", not two.
 has stopped is not obvious from anywhere else. `systemctl is-active` says
 `active` for a timer that has elapsed and will never run again.
 
+## One binary
+
+The release ships a single compiled artifact. `clp-addons` is the CLI, and
+`clp-addons serve <addon>` is that addon's manager -- which is what its systemd
+unit ExecStarts. Each addon is a few tens of KB of code, so bundling them all
+and choosing one at startup costs nothing, while a binary each meant a copy of
+the Bun runtime each:
+
+```
+empty bun --compile binary   81,315,296 bytes
+clp-addons-linux-x64         81,372,640   ->  56 KB of code
+instatic-app-linux-x64       81,343,968   ->  28 KB
+stager-app-linux-x64         81,339,872   ->  24 KB
+```
+
+244 MB of download for 108 KB of code, and another 77.6 MB for every addon
+added. Merged it is 81.4 MB, and an addon costs a wrapper script.
+
+The addon modules therefore export a starter rather than serving on import, so
+the commands that are not `serve` pay nothing for them being compiled in.
+
 ## What runs where
 
 | Component | Runs as | Notes |
 |---|---|---|
 | `clp-addons` CLI | root, on demand | installer and reconciler |
-| `instatic-app-linux-x64` | the addon site's CloudPanel user | manager UI, bound to `127.0.0.1:38080` |
+| `clp-addons serve instatic` | the addon site's CloudPanel user | manager UI, bound to `127.0.0.1:38080` |
 | `clp-action-instatic` | root, via one sudoers line | the privilege boundary |
 | Instatic instances | that instance's CloudPanel site user | one container per site, `127.0.0.1:39000-39999` |
-| `stager-app-linux-x64` | the addon site's CloudPanel user | manager UI, bound to `127.0.0.1:38081` |
+| `clp-addons serve stager` | the addon site's CloudPanel user | manager UI, bound to `127.0.0.1:38081` |
 | `clp-action-stager` | root, via one sudoers line | the privilege boundary |
 | a clone in progress | root, in its own transient systemd unit | survives a restart of the manager |
 
@@ -228,7 +250,7 @@ bun run typecheck
 bun run lint:wrapper     # needs shellcheck; a finding here blocks a release
 bun run test:app
 bun run test:inject
-bun run build
+bun run build            # one binary: dist/clp-addons-linux-x64
 ```
 
 The wrapper contract tests run as root against an installed wrapper, so they are
@@ -252,6 +274,8 @@ CloudPanel's templates are proprietary. The injector snapshots them to
 
 ```bash
 bun run build
+# the release tree carries one wrapper per addon, so --local needs them here too
+for w in addons/*/wrapper/*; do install -m 0755 "$w" "dist/$(basename "$w")"; done
 (cd dist && sha256sum -- * > SHA256SUMS)
 ./dist/clp-addons-linux-x64 install instatic --domain=addons.example.com --local=dist
 ./dist/clp-addons-linux-x64 install stager --domain=stager.example.com --local=dist

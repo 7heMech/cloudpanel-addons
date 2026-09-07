@@ -5,7 +5,7 @@
 // calls it rather than duplicating the logic.
 
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { ADDON_NAMES, ADDONS, CLI_BIN, CURRENT_LINK, LIB_DIR, SHARED_GROUP, type AddonSpec } from "./paths";
+import { ADDON_NAMES, ADDONS, CLI_ARTIFACT, CLI_BIN, CURRENT_LINK, LIB_DIR, SHARED_GROUP, type AddonSpec } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation } from "./release";
 import {
   addonIsAtRelease, assertNotInDockerGroup, currentRelease, describeAuthState, ensureAddonSite, ensureDirs,
@@ -24,8 +24,22 @@ import {
 } from "./inject";
 import { generateSnapshot } from "../lib/panel-snapshot";
 import { SNAPSHOT_FILE } from "../lib/snapshot-reader";
+import { serve as serveInstatic } from "../addons/instatic/app/index";
+import { serve as serveStager } from "../addons/stager/app/index";
 
-const CLI_ARTIFACT = "clp-addons-linux-x64";
+/**
+ * Each addon's manager, bundled into this binary.
+ *
+ * The addon modules export a starter rather than serving on import, so naming
+ * one here costs nothing at startup for the commands that are not `serve`. The
+ * registry in paths.ts stays free of it: that file is imported by the addons'
+ * own inject/targets.ts, and a value import back the other way would close the
+ * cycle.
+ */
+const MANAGERS: Record<string, () => void> = {
+  instatic: serveInstatic,
+  stager: serveStager,
+};
 
 function resolveAddon(name: string | undefined): AddonSpec {
   const key = name ?? "instatic";
@@ -154,7 +168,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
   // Not just this addon's. `current` is shared, so a release tree carrying only
   // the addon being installed would break every addon already running from it.
   const alsoInstalled = installedAddons().filter((s) => s.name !== spec.name);
-  const wantedArtifacts = releaseArtifacts([spec, ...alsoInstalled], CLI_ARTIFACT);
+  const wantedArtifacts = releaseArtifacts([spec, ...alsoInstalled]);
   let tag: string;
   let artifacts;
   if (typeof flags.local === "string") {
@@ -281,8 +295,7 @@ async function cmdUpdate(argv: string[]): Promise<void> {
     // them: this call moves `current`, and the addons not named here go on
     // running from it.
     const wantedArtifacts = releaseArtifacts(
-      [spec, ...installedAddons().filter((s) => s.name !== spec.name)],
-      CLI_ARTIFACT
+      [spec, ...installedAddons().filter((s) => s.name !== spec.name)]
     );
     const artifacts = await fetchVerified(rel, wantedArtifacts);
     await verifyAttestation(rel, artifacts, flags["skip-attestation"] === true);
@@ -611,6 +624,34 @@ function cmdUninstall(argv: string[]): void {
   }
 }
 
+/**
+ * Run one addon's manager in the foreground. This is what its systemd unit
+ * ExecStarts, with User= set to the addon site's own CloudPanel account.
+ *
+ * Deliberately not requireRoot(): this is the one verb that is meant to run
+ * unprivileged, and the manager's whole design is that its only privileged path
+ * is sudo of its own wrapper.
+ */
+async function cmdServe(argv: string[]): Promise<never> {
+  const { positional } = parseFlags(argv);
+  // No default. `resolveAddon(undefined)` answers instatic, which is a
+  // reasonable default for a command an operator types and a bad one for a unit
+  // file: a typo in ExecStart would silently start the wrong manager on the
+  // wrong port.
+  if (!positional[0]) fatal(`serve needs an addon named: ${ADDON_NAMES.join(", ")}`);
+  const spec = resolveAddon(positional[0]);
+
+  const start = MANAGERS[spec.name];
+  if (!start) fatal(`no manager is bundled in this binary for '${spec.name}'`);
+
+  start();
+
+  // Bun.serve holds the event loop open on its own. Never resolving is what
+  // keeps main() from returning into the process.exit() that ends every other
+  // command the moment it is done.
+  return new Promise<never>(() => {});
+}
+
 function usage(): void {
   log.plain(`clp-addons ${CLI_VERSION} — CloudPanel addon manager (run as root)
 
@@ -621,6 +662,7 @@ function usage(): void {
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status [<addon>]
   clp-addons uninstall <addon> --yes [--purge]
+  clp-addons serve <addon>                                     (systemd runs this)
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}
@@ -646,6 +688,7 @@ async function main(): Promise<number> {
     case "repair":       cmdRepair(rest); return 0;
     case "status":       await cmdStatus(rest); return 0;
     case "uninstall":    cmdUninstall(rest); return 0;
+    case "serve":        return await cmdServe(rest);
     case "help":
     case "--help":
     case "-h":

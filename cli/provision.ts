@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, renameSync, readdirSync } from "node:fs";
 import {
-  ADDONS, ANCHOR_SERVICE, CLI_BIN, CONFIG_DIR, CURRENT_LINK, LEGACY_USERS, LIB_DIR, LOCK_DIR,
+  ADDONS, ANCHOR_SERVICE, CLI_ARTIFACT, CLI_BIN, CONFIG_DIR, CURRENT_LINK, LEGACY_USERS, LIB_DIR, LOCK_DIR,
   PANEL_DB, RECONCILE_PATH, RECONCILE_SERVICE, RECONCILE_TIMER, RELEASES_DIR, SHARED_GROUP, STATE_DIR,
   SYSTEMD_DIR,
   templateWatchPaths, type AddonSpec,
@@ -288,16 +288,14 @@ export function hardenBackups(spec: AddonSpec, quiet = false): void {
 /**
  * Every artifact that has to exist in a release tree for these addons to run.
  *
- * `current` is shared: each addon's service unit ExecStarts
- * `current/<its app binary>`, so a release directory is only safe to point at
- * once it holds every installed addon's copy.
+ * `current` is shared: every addon's service unit ExecStarts the one binary in
+ * `current`, and each addon needs its own wrapper beside it, so a release
+ * directory is only safe to point at once it holds every installed addon's
+ * wrapper as well as the binary.
  */
-export function releaseArtifacts(specs: AddonSpec[], cliArtifact: string): string[] {
-  const names = new Set<string>([cliArtifact]);
-  for (const spec of specs) {
-    names.add(spec.appArtifact);
-    names.add(spec.wrapperArtifact);
-  }
+export function releaseArtifacts(specs: AddonSpec[]): string[] {
+  const names = new Set<string>([CLI_ARTIFACT]);
+  for (const spec of specs) names.add(spec.wrapperArtifact);
   return [...names];
 }
 
@@ -379,7 +377,7 @@ export function addonIsAtRelease(spec: AddonSpec, tag: string): boolean {
   if (currentRelease() !== tag) return false;
 
   const releaseDir = `${RELEASES_DIR}/${tag}`;
-  const app = `${releaseDir}/${spec.appArtifact}`;
+  const app = `${releaseDir}/${CLI_ARTIFACT}`;
   const wrapper = `${releaseDir}/${spec.wrapperArtifact}`;
   if (!existsSync(app) || !existsSync(wrapper) || !existsSync(spec.wrapperPath)) return false;
 
@@ -500,7 +498,7 @@ Environment=${spec.name.toUpperCase()}_WRAPPER=${spec.wrapperPath}
 # what it needs to read ${STATE_DIR}/snapshot.json instead of depending on
 # systemd's default handling of an account's supplementary groups.
 SupplementaryGroups=${SHARED_GROUP}
-ExecStart=${CURRENT_LINK}/${spec.appArtifact}
+ExecStart=${CURRENT_LINK}/${CLI_ARTIFACT} serve ${spec.name}
 Restart=always
 RestartSec=5
 UMask=0027
