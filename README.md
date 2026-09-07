@@ -123,6 +123,25 @@ addon and `--domain-<addon>=HOST` when you are installing several; it refuses on
 hostname shared between two, because the site it creates proxies a single port
 and the second manager would install cleanly and answer on the first one's port.
 
+Run `self-update` before `update` when moving across a release that changes the
+artifact set. `update` fetches what the *running* CLI believes a release
+contains, so a CLI older than that change asks for an asset the new release does
+not have and stops with `release vX.Y.Z has no asset named ...`. `self-update`
+fetches only the CLI itself, so it always works, and the CLI it leaves behind
+knows the new shape. Moving from v0.5.2 or earlier to v0.6.0 is exactly this
+case, because the per-addon app binaries merged into one:
+
+```bash
+clp-addons self-update
+clp-addons update          # every installed addon
+```
+
+Update every addon in one run rather than one at a time. `update` rewrites only
+the named addon's unit, so on a release that changes what a unit ExecStarts, an
+addon left behind keeps a unit pointing at something the new release tree does
+not carry. It survives until it next restarts, and the reconciliation timer
+repairs it within fifteen minutes, but doing them together skips the window.
+
 `install`, `update` and `self-update` refuse a release marked as a prerelease.
 These artifacts run as root, so installing one should be a decision rather than
 something that happens because a tag was handy. Add `--allow-prerelease` when
