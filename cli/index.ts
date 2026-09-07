@@ -169,7 +169,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
   if (given && !/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(given)) {
     fatal(`--domain='${given}' is not a valid hostname`);
   }
-  const established = readPlatformDomain();
+  const established = platformDomain();
   if (established && given && given !== established) {
     fatal(
       `the addons are already served from ${established}, and there is one site for all of them.\n` +
@@ -334,7 +334,7 @@ async function cmdUpdate(argv: string[]): Promise<void> {
     // fail -- a missing config, a panel site deleted from under us -- and
     // failing after the stop leaves the manager down with nothing installed to
     // replace it.
-    const domain = readPlatformDomain() ?? readOwnDomain(spec);
+    const domain = platformDomain();
     if (!domain) fatal("no configured domain; run install first");
     const user = resolveSiteUser(domain);
 
@@ -445,6 +445,27 @@ function installedAddons(): AddonSpec[] {
   return ADDON_NAMES.map((n) => ADDONS[n]!).filter((s) => existsSync(s.configFile));
 }
 
+/**
+ * The hostname every addon is served from.
+ *
+ * `platform.conf` is the record, but it postdates the addons: a box installed
+ * before they shared one site has no such file, and the hostname lives in each
+ * addon's own config instead -- which is where its wrapper reads it from, so it
+ * is still true. Falling back to that is what lets `repair` carry such a box
+ * forward instead of stopping, and repair stopping is worse here than most
+ * failures, because the reconciliation timer is the thing that calls it every
+ * fifteen minutes. Reconstructing it is exactly repair's job.
+ */
+function platformDomain(): string | null {
+  const recorded = readPlatformDomain();
+  if (recorded) return recorded;
+  for (const spec of installedAddons()) {
+    const own = readOwnDomain(spec);
+    if (own) return own;
+  }
+  return null;
+}
+
 /** One addon's share of a repair. The shared work is done once by the caller. */
 function repairAddon(spec: AddonSpec, user: string, quiet: boolean): void {
   ensureDirs(spec);
@@ -522,9 +543,17 @@ function cmdRepair(argv: string[]): void {
   const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
   if (specs.length === 0) fatal("no addon is installed; run install first");
 
-  const domain = readPlatformDomain();
+  const domain = platformDomain();
   if (!domain) fatal("no configured domain; run install first");
   const user = resolveSiteUser(domain);
+
+  // Write it back whether or not it was there. On a box that predates the file
+  // this is the migration; everywhere else it is a no-op that keeps the record
+  // agreeing with the addon configs it was derived from.
+  if (!readPlatformDomain()) {
+    log.warn(`no ${PLATFORM_CONFIG}; taking ${domain} from the installed addons and writing it`);
+  }
+  writePlatformConfig(domain, user);
 
   for (const spec of specs) repairAddon(spec, user, quiet);
 
@@ -563,7 +592,7 @@ async function cmdStatus(argv: string[]): Promise<void> {
   // One site, one service, one account, however many addons. Reported once,
   // because printing it under each addon invited the reading that each had its
   // own -- which is exactly what stopped being true.
-  const domain = readPlatformDomain();
+  const domain = platformDomain();
   log.plain("Platform:");
   log.plain(`${pad("  Site")}${domain ?? "not configured"}`);
   log.plain(`${pad("  Site protected")}${describeSiteAuth(domain)}`);
@@ -632,7 +661,7 @@ function cmdUninstall(argv: string[]): void {
   const spec = resolveAddon(positional[0]);
   const purge = flags.purge === true;
   const instances = listInstances(spec);
-  const ownDomain = readPlatformDomain();
+  const ownDomain = platformDomain();
 
   // The release tree and the CLI are shared. A second addon still installed
   // needs both, so they go only when nothing is left that uses them.
@@ -729,7 +758,7 @@ function cmdUninstall(argv: string[]): void {
   if (remaining.length > 0) {
     // The routes this addon served have to stop answering, and the unit has to
     // stop naming its state directory. Both are one rewrite of the shared unit.
-    const domain = readPlatformDomain();
+    const domain = platformDomain();
     const user = domain ? siteUserOf(domain) : null;
     if (user) {
       installUnits(remaining.map((n) => ADDONS[n]!), user);
