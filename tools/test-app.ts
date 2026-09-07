@@ -18,7 +18,10 @@ import { expandTarget } from "../addons/stager/app/service";
 import { isNewerThan } from "../addons/instatic/app/tags";
 import type { InstanceView } from "../addons/instatic/app/service";
 import { execFileSync } from "node:child_process";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import { cachedArtifact } from "../cli/release";
 import { describeAuthState, releaseArtifacts, siteUserFor, type SiteAuthState } from "../cli/provision";
 import { ADDONS, ADDON_NAMES } from "../cli/paths";
 import { getNextAvailablePort } from "../lib/snapshot-reader";
@@ -421,6 +424,33 @@ console.log("\n== building the carried-over template ==");
   check("the clone's own name is not mangled into a double prefix",
     !out.includes("stg.stg.example.com"), out);
   check("CloudPanel's other placeholders survive untouched", out.includes("{{root}}"), out);
+}
+
+console.log("\n== reusing an artifact already in the release tree ==");
+
+// Reuse is only sound because it is gated on the release's own recorded
+// checksum. The case worth spending a test on is the third one: a file sitting
+// in the release tree under the right name whose bytes are not the right bytes
+// must be downloaded again, not trusted for being in the right place.
+{
+  const dir = mkdtempSync(`${tmpdir()}/clp-addons-cache-test-`);
+  try {
+    const tag = "v9.9.9";
+    mkdirSync(`${dir}/${tag}`, { recursive: true });
+    const bytes = Buffer.from("the artifact");
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    writeFileSync(`${dir}/${tag}/good`, bytes);
+    writeFileSync(`${dir}/${tag}/tampered`, Buffer.from("something else"));
+
+    check("a matching copy is reused", cachedArtifact(tag, "good", digest, dir)?.equals(bytes) === true);
+    check("an absent copy is not reused", cachedArtifact(tag, "missing", digest, dir) === null);
+    check("a copy that does not match its checksum is not reused",
+      cachedArtifact(tag, "tampered", digest, dir) === null);
+    check("a copy under a different tag is not reused",
+      cachedArtifact("v9.9.8", "good", digest, dir) === null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

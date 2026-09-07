@@ -10,7 +10,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { REPO } from "./paths";
+import { RELEASES_DIR, REPO } from "./paths";
 import { fatal, have, log, tryRun } from "./util";
 
 const API = "https://api.github.com";
@@ -103,6 +103,36 @@ export interface FetchedArtifact {
 }
 
 /**
+ * Is a copy already sitting in the release tree, and is it the right one?
+ *
+ * `releases/<tag>` is immutable and is where placeRelease has already put
+ * whatever an earlier call fetched, so it doubles as the cache with no second
+ * directory to manage and no cleanup path of its own -- pruneReleases already
+ * owns it. Reusing a file is not a weaker check than downloading one: both are
+ * accepted only if they hash to what the release's own SHA256SUMS records, and
+ * the attestation that runs afterwards is over the same bytes either way.
+ *
+ * This matters because the artifact set is per release rather than per addon.
+ * `update` with two addons installed fetched all five artifacts twice, roughly
+ * 480 MB where 240 would do, and it got worse with each addon added. install.sh
+ * did the same by invoking the CLI once per addon.
+ *
+ * The directory is a parameter so a test can point it somewhere writable rather
+ * than needing root, the same reason the injector's paths are parameters.
+ */
+export function cachedArtifact(
+  tag: string,
+  name: string,
+  expected: string,
+  releasesDir: string = RELEASES_DIR
+): Buffer | null {
+  const path = `${releasesDir}/${tag}/${name}`;
+  if (!existsSync(path)) return null;
+  const bytes = readFileSync(path);
+  return sha256(bytes) === expected ? bytes : null;
+}
+
+/**
  * Download the named artifacts and verify each against SHA256SUMS. Throws on
  * the first mismatch: a partially verified release is not installable.
  */
@@ -117,6 +147,13 @@ export async function fetchVerified(rel: ResolvedRelease, names: string[]): Prom
 
     const expected = sums.get(name);
     if (!expected) fatal(`SHA256SUMS for ${rel.tag} does not list ${name}`);
+
+    const cached = cachedArtifact(rel.tag, name, expected);
+    if (cached) {
+      log.ok(`${name} already in releases/${rel.tag} and matches its recorded checksum`);
+      out.push({ name, bytes: cached });
+      continue;
+    }
 
     log.step(`downloading ${name}`);
     const bytes = await download(url);

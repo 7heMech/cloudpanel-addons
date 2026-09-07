@@ -167,6 +167,28 @@ position. A bundle is signed and bound to its subject's digest, so an attacker
 who can replace a release asset cannot produce one that verifies against the
 replacement -- the failure mode is a refused install, not a silent accept.
 
+## An artifact already in the release tree is not downloaded again
+
+The artifact set is per release, not per addon: `current` is shared, so every
+call has to fetch every installed addon's copy. That made the cost quadratic in
+addons. `update` with two installed fetched all five artifacts twice, about 480
+MB where 240 would do, and `install.sh` did the same by invoking the CLI once
+per addon.
+
+`releases/<tag>` is where `placeRelease` has already written whatever an earlier
+call fetched, so it doubles as the cache. No second directory, no cleanup path
+of its own: `pruneReleases` already owns it.
+
+Reuse is gated on the release's own recorded checksum, so it is not a weaker
+check than downloading. A file sitting in the right directory under the right
+name whose bytes hash to something else is downloaded again rather than trusted
+for being in the right place, and the provenance attestation afterwards runs
+over the same bytes either way. The sigstore bundle is still fetched every time,
+because it is a few kilobytes and is what detects substitution.
+
+The directory is a parameter with a default so the reuse logic can be tested
+somewhere writable, for the same reason the injector's paths are parameters.
+
 ## The platform owns the panel templates; addons only supply markup
 
 The injector used to live inside the Instatic addon, and `cli/index.ts`
