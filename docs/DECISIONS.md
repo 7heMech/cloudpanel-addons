@@ -254,6 +254,33 @@ done:
 the addon site's own CloudPanel account; its single privileged path is sudo of
 its own wrapper.
 
+## `update` moves the CLI first, then hands over to it
+
+`update` fetches what the *running* CLI believes a release contains. That is
+fine until a release changes the artifact set, and then it is a hard stop: v0.6.0
+merged the per-addon app binaries into one, so a v0.5.2 CLI asked v0.6.0 for
+`instatic-app-linux-x64` and refused to go on. The documented answer was
+`self-update` first, which worked because `self-update` only ever fetches the CLI
+-- an asset every release has.
+
+Telling an operator to run two commands in the right order is a worse answer than
+running them in the right order. So `update` brings the CLI to the target release
+before it touches an addon.
+
+Doing that in one process would not have been enough, and this is the part worth
+remembering: writing `${CLI_BIN}` does not change the process already executing.
+The old code would still have driven the addon updates, with the old idea of the
+artifact set, and the failure would have been identical. So `update` installs the
+new CLI and then **re-runs the same command as that copy**, with `spawnSync` and
+inherited streams so the hand-over is invisible in the output.
+
+The re-run carries `--no-self-update`, which is what bounds it. A version that
+never compares equal -- a local build reports `0.0.0-dev` and no release ever
+matches it -- would otherwise re-run forever instead of failing once.
+
+`upgrade` is an alias. Both are what people type, and answering one of them with
+"unknown command" is a worse outcome than doing the job.
+
 ## An artifact already in the release tree is not downloaded again
 
 The artifact set is per release, not per addon: `current` is shared, so every

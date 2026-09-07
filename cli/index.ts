@@ -5,11 +5,12 @@
 // calls it rather than duplicating the logic.
 
 import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import {
   ADDON_NAMES, ADDONS, CLI_ARTIFACT, CLI_BIN, CURRENT_LINK, LIB_DIR, MANAGER_PORT, MANAGER_UNIT,
-  PLATFORM_CONFIG, SITE_CREATED_MARKER, mountPath, type AddonSpec,
+  PLATFORM_CONFIG, RELEASES_DIR, SITE_CREATED_MARKER, mountPath, type AddonSpec,
 } from "./paths";
-import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation } from "./release";
+import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation, type ResolvedRelease } from "./release";
 import {
   addonIsAtRelease, assertNotInDockerGroup, currentRelease, describeAuthState, ensureDirs, ensureManagerSite,
   ensureSharedGroup, hardenSiteUser,
@@ -301,10 +302,17 @@ async function cmdUpdate(argv: string[]): Promise<void> {
     : (flags.all === true ? ADDON_NAMES : installedAddons().map((s) => s.name));
   if (targets.length === 0) fatal("no addon is installed; run install first");
 
+  // Resolved once. It used to be asked per addon, which was an API round trip
+  // per addon for an answer that cannot differ between them.
+  const wanted = typeof flags.version === "string" ? flags.version : "latest";
+  const rel = await resolveRelease(wanted, flags["allow-prerelease"] === true);
+
+  // The CLI before the addons. If it moves, this call does not come back: it
+  // re-runs the command as the CLI it just installed.
+  await selfUpdateFirst(rel, flags);
+
   for (const name of targets) {
     const spec = resolveAddon(name);
-    const wanted = typeof flags.version === "string" ? flags.version : "latest";
-    const rel = await resolveRelease(wanted, flags["allow-prerelease"] === true);
 
     // Per addon, not per release tree. `currentRelease()` is shared, so asking it
     // here meant the first addon updated and every later one was skipped.
@@ -353,6 +361,54 @@ async function cmdUpdate(argv: string[]): Promise<void> {
   }
 }
 
+/**
+ * Bring the CLI to the target release before it updates anything else, and hand
+ * over to the copy just written.
+ *
+ * Replacing ${CLI_BIN} does not change the process already running, so without
+ * the hand-over the *old* CLI would go on to update the addons using its own
+ * idea of what a release contains. That is not hypothetical: v0.6.0 merged the
+ * per-addon app binaries into one, so a v0.5.2 CLI asked it for
+ * `instatic-app-linux-x64` and stopped. Doing the CLI first only helps if what
+ * continues is the new one.
+ *
+ * Either returns, having found nothing to do, or hands over and never comes
+ * back -- so the caller can simply carry on afterwards.
+ *
+ * The re-run carries --no-self-update so this can happen at most once. A version
+ * that never compares equal -- a local build reports 0.0.0-dev -- would otherwise
+ * be an infinite loop rather than a failed update.
+ */
+async function selfUpdateFirst(rel: ResolvedRelease, flags: Record<string, string | true>): Promise<void> {
+  if (flags["no-self-update"] === true) return;
+  const target = rel.tag.replace(/^v/, "");
+  if (CLI_VERSION === target) return;
+
+  log.step(`updating clp-addons itself from ${CLI_VERSION} to ${target} first`);
+  const artifacts = await fetchVerified(rel, [CLI_ARTIFACT]);
+  await verifyAttestation(rel, artifacts, flags["skip-attestation"] === true);
+  writeAtomic(CLI_BIN, artifacts[0]!.bytes, 0o755);
+
+  // Seed the release tree with the copy just verified, so the re-run finds it
+  // instead of fetching the same 78 MiB again -- `fetchVerified` looks in
+  // `releases/<tag>` first, and nothing had put it there yet. Same reason
+  // install.sh seeds it after the bootstrap download, and the same reason it is
+  // safe: the re-run re-hashes whatever it finds against the release's own
+  // SHA256SUMS before using it.
+  //
+  // Only the file. Moving `current` is placeRelease's job and must wait until
+  // the directory holds every installed addon's wrapper too, which is exactly
+  // what the re-run is about to do.
+  writeAtomic(`${RELEASES_DIR}/${rel.tag}/${CLI_ARTIFACT}`, artifacts[0]!.bytes, 0o755);
+
+  log.ok(`clp-addons is now ${target}; continuing as that`);
+
+  // spawnSync rather than an exec: there is no execve here, and inheriting the
+  // streams makes the hand-over invisible to whoever is watching the output.
+  const r = spawnSync(CLI_BIN, [...process.argv.slice(2), "--no-self-update"], { stdio: "inherit" });
+  process.exit(r.status ?? 1);
+}
+
 async function cmdSelfUpdate(argv: string[]): Promise<void> {
   requireRoot("self-update");
   const { flags } = parseFlags(argv);
@@ -370,7 +426,7 @@ async function cmdSelfUpdate(argv: string[]): Promise<void> {
   // Atomic replace, so a CLI is always present even if this is interrupted.
   writeAtomic(CLI_BIN, artifacts[0]!.bytes, 0o755);
   log.ok(`clp-addons updated from ${CLI_VERSION} to ${rel.tag.replace(/^v/, "")}`);
-  log.plain(`  Run 'clp-addons update --all' to move the addons to ${rel.tag} as well.`);
+  log.plain(`  'clp-addons update' moves the addons to ${rel.tag} too, and does this step itself.`);
 }
 
 /**
@@ -783,7 +839,7 @@ function usage(): void {
 
   clp-addons install <addon> [--domain=<host>] [--version=vX.Y.Z] [--skip-attestation]
   clp-addons install <addon> --domain=<host> --local=dist      (staging only)
-  clp-addons update [<addon>|--all] [--version=vX.Y.Z]
+  clp-addons update [<addon>|--all] [--version=vX.Y.Z]   (alias: upgrade)
   clp-addons self-update [--version=vX.Y.Z]
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status [<addon>]
@@ -795,6 +851,10 @@ Addons: ${ADDON_NAMES.join(", ")}
 
 One CloudPanel site serves all of them, each under its own path, so --domain is
 asked once: the first install names it and later ones join it.
+
+update brings the CLI itself to the release first, then hands over to that copy
+to move the addons -- so what a release contains is always read by the CLI from
+that release, whatever changed about it.
 
 install, update and self-update refuse a release marked as a prerelease. These
 artifacts run as root, so add --allow-prerelease when you mean it.
@@ -812,7 +872,10 @@ async function main(): Promise<number> {
       log.plain(CLI_VERSION);
       return 0;
     case "install":      await cmdInstall(rest); return 0;
-    case "update":       await cmdUpdate(rest); return 0;
+    // `upgrade` is the same command. Both are what people type, and having one
+    // of them be an unknown-command error is a worse answer than doing the job.
+    case "update":
+    case "upgrade":      await cmdUpdate(rest); return 0;
     case "self-update":  await cmdSelfUpdate(rest); return 0;
     case "repair":       cmdRepair(rest); return 0;
     case "status":       await cmdStatus(rest); return 0;

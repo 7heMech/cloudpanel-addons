@@ -110,7 +110,7 @@ they are. Both are done once for the site, not once per addon:
 
 ```
 clp-addons install <addon> [--domain=<host>] [--version=vX.Y.Z] [--skip-attestation]
-clp-addons update [<addon>|--all] [--version=vX.Y.Z]
+clp-addons update [<addon>|--all] [--version=vX.Y.Z]     # alias: upgrade
 clp-addons self-update
 clp-addons repair [--quiet]
 clp-addons status
@@ -124,24 +124,22 @@ re-stating a different hostname is refused rather than moving the addons already
 installed there. `clp-addons install stager` with no `--domain` is the ordinary
 way to add a second addon.
 
-Run `self-update` before `update` when moving across a release that changes the
-artifact set. `update` fetches what the *running* CLI believes a release
-contains, so a CLI older than that change asks for an asset the new release does
-not have and stops with `release vX.Y.Z has no asset named ...`. `self-update`
-fetches only the CLI itself, so it always works, and the CLI it leaves behind
-knows the new shape. Moving from v0.5.2 or earlier to v0.6.0 is exactly this
-case, because the per-addon app binaries merged into one:
+`update` does the CLI first, then the addons. `upgrade` is the same command.
+
+That order matters, and doing it in one process would not be enough. `update`
+fetches whatever the *running* CLI believes a release contains, so a CLI older
+than a change to the artifact set asks for something the new release does not
+have -- moving to v0.6.0 with a v0.5.2 CLI asked for `instatic-app-linux-x64`
+and stopped, because the per-addon app binaries had merged into one. Replacing
+`/usr/local/bin/clp-addons` does not change the process already running either,
+so `update` installs the new CLI and then re-runs itself as that copy. What a
+release contains is therefore always read by the CLI from that release.
 
 ```bash
-clp-addons self-update
-clp-addons update          # every installed addon
+clp-addons update          # the CLI, then every installed addon
 ```
 
-Update every addon in one run rather than one at a time. `update` rewrites only
-the named addon's unit, so on a release that changes what a unit ExecStarts, an
-addon left behind keeps a unit pointing at something the new release tree does
-not carry. It survives until it next restarts, and the reconciliation timer
-repairs it within fifteen minutes, but doing them together skips the window.
+`self-update` still exists for moving the CLI alone.
 
 `install`, `update` and `self-update` refuse a release marked as a prerelease.
 These artifacts run as root, so installing one should be a decision rather than
