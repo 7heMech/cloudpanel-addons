@@ -60,12 +60,28 @@ async function startClone() {
   const target = expandTarget(document.getElementById('target').value, source);
   const tls = document.getElementById('tls').checked;
   if (!target) { alert('Enter a hostname for the staging site.'); return false; }
+  const payload = { source: source, target: target, tls: tls };
+  // Present only when the source is an Instatic site. Read straight into the
+  // request and never stored anywhere, because the password belongs to the
+  // administrator of another running application.
+  const email = document.getElementById('instatic-email');
+  if (email) {
+    const password = document.getElementById('instatic-password');
+    const code = document.getElementById('instatic-mfa');
+    if (!email.value || !password.value) {
+      alert('Enter the source instance admin email and password.');
+      return false;
+    }
+    payload.instaticEmail = email.value;
+    payload.instaticPassword = password.value;
+    if (code && code.value) payload.mfaCode = code.value;
+  }
   busy(true);
   try {
     const body = await call('/api/clones', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source: source, target: target, tls: tls }),
+      body: JSON.stringify(payload),
     });
     location.href = CLP_BASE + '/jobs/' + encodeURIComponent(body.data.job);
   } catch (e) {
@@ -146,6 +162,7 @@ export function jobsView(jobs: JobView[]): string {
         <tr>
           <td><a href="${BASE}/jobs/${esc(j.id)}" class="mono">${esc(j.target)}</a></td>
           <td class="mono">${esc(j.source)}</td>
+          <td>${esc(j.result ? typeLabel(j.result.siteType) : "—")}</td>
           <td><span class="badge ${stateClass(j.state)}">${esc(j.state)}</span></td>
           <td class="step">${esc(j.state === "done" ? "" : j.step)}</td>
           <td class="mono">${esc(when(j.createdAt))}</td>
@@ -168,18 +185,28 @@ export function jobsView(jobs: JobView[]): string {
         jobs.length === 0
           ? `<div class="empty">No clones yet. Start one from a site's Staging tab in CloudPanel, or with the button above.</div>`
           : `<table>
-        <thead><tr><th>Staging site</th><th>Cloned from</th><th>State</th><th>Step</th><th>Started</th></tr></thead>
+        <thead><tr><th>Staging site</th><th>Cloned from</th><th>Type</th><th>State</th><th>Step</th><th>Started</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`
       }
     </div>`;
 }
 
+/** How a site's `type` column reads to an operator. */
+function typeLabel(t: string): string {
+  if (t === "php") return "PHP";
+  if (t === "static") return "Static";
+  if (t === "reverse-proxy") return "Instatic";
+  return t;
+}
+
 export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], error?: string): string {
   if (!source) {
     const options = sites
       .map((s) => `<li><a href="${BASE}/new?source=${encodeURIComponent(s.domain)}" class="mono">${esc(s.domain)}</a>
-        <span class="hint" style="display:inline">PHP ${esc(s.phpVersion)} · ${esc(s.application || "Generic")}</span></li>`)
+        <span class="hint" style="display:inline">${esc(typeLabel(s.siteType))}${
+          s.phpVersion ? ` ${esc(s.phpVersion)}` : ""
+        } · ${esc(s.application || "Generic")}</span></li>`)
       .join("");
     return `
       ${error ? `<div class="alert">${esc(error)}</div>` : ""}
@@ -187,7 +214,7 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
         <h2 style="margin-top:0;font-size:1rem;">Which site should be cloned?</h2>
         ${
           sites.length === 0
-            ? `<div class="empty">No PHP sites found in CloudPanel.</div>`
+            ? `<div class="empty">No clonable sites found in CloudPanel.</div>`
             : `<ul class="notes">${options}</ul>`
         }
       </div>`;
@@ -195,6 +222,31 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
 
   const sizeNote = source.sizeMb > 0 ? `${source.sizeMb} MB of files` : "size unknown";
   const dbNote = source.database ? `database ${esc(source.database)}` : "no database";
+  const isInstatic = source.siteType === "reverse-proxy";
+
+  // Only for an Instatic source, because only there is there a second
+  // application to sign into. The password is the source instance's own
+  // administrator credential: it is posted once, reaches the wrapper on stdin,
+  // and is deleted the moment the export it exists for has finished.
+  const instaticFields = isInstatic
+    ? `
+      <div class="secret" style="margin-top:1.25rem;">
+        <label for="instatic-email">Instatic admin email on ${esc(source.domain)}</label>
+        <input id="instatic-email" type="email" autocomplete="off" placeholder="you@example.com">
+        <label for="instatic-password" style="margin-top:0.75rem;">Password</label>
+        <input id="instatic-password" type="password" autocomplete="new-password">
+        <label for="instatic-mfa" style="margin-top:0.75rem;">Authentication code (only if MFA is on)</label>
+        <input id="instatic-mfa" autocomplete="off" inputmode="numeric" placeholder="123456">
+        <div class="hint">Used once, to export the source's content through Instatic's own site bundle.
+          It is never stored: the clone gets an owner, a secret key and a container of its own.</div>
+      </div>`
+    : "";
+
+  const carriedNote = isInstatic
+    ? `The clone gets its own Instatic container, port and secret key, and the source's pages and media
+       are copied across through Instatic's own site bundle. The source's nginx config is carried too.`
+    : `The clone is created ${source.phpVersion ? "with the same PHP version and " : ""}with the source's
+       own nginx config where that can be done safely; when it cannot, the job says why.`;
 
   return `
     ${error ? `<div class="alert">${esc(error)}</div>` : ""}
@@ -202,18 +254,19 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
       <h2 style="margin-top:0;font-size:1rem;">Clone ${esc(source.domain)}</h2>
       <dl class="kv">
         <dt>Source</dt><dd>${esc(source.domain)}</dd>
-        <dt>PHP</dt><dd>${esc(source.phpVersion)}</dd>
+        <dt>Type</dt><dd>${esc(typeLabel(source.siteType))}</dd>
+        ${source.phpVersion ? `<dt>PHP</dt><dd>${esc(source.phpVersion)}</dd>` : ""}
         <dt>Template</dt><dd>${esc(source.application)}</dd>
         <dt>Contents</dt><dd>${esc(sizeNote)}, ${dbNote}</dd>
       </dl>
-      <p class="hint">The clone is created with the same PHP version and the same vhost template.
-        Any hand edits to the source's vhost are reported afterwards rather than copied.</p>
+      <p class="hint">${carriedNote}</p>
     </div>
     <div class="card">
       <input type="hidden" id="source-domain" value="${esc(source.domain)}">
       <label for="target">Staging hostname</label>
       <input id="target" autocomplete="off" placeholder="stg" oninput="previewTarget()">
       <div class="hint" id="target-preview">A label such as stg becomes stg.${esc(source.domain)}</div>
+      ${instaticFields}
 
       <label for="tls" style="display:flex;align-items:center;gap:0.5rem;margin-top:1.25rem;">
         <input type="checkbox" id="tls" style="width:auto;">
@@ -253,19 +306,51 @@ export function jobView(job: JobView, logText: string): string {
       </div>`
     : "";
 
+  // Named for the mechanism, because the two are not equivalent: `template`
+  // means CloudPanel rendered and wrote everything, `rendered` means this addon
+  // wrote the clone's panel record and its vhost file itself, which is the only
+  // route for a site type clpctl gives no --vhostTemplate option.
+  const vhostNote = !result
+    ? ""
+    : result.vhostCarried
+      ? result.vhostCarriedBy === "template"
+        ? "copied from the source, through CloudPanel's own vhost template"
+        : "copied from the source, written into the panel and rendered"
+      : `the stock ${esc(result.vhostTemplate)} vhost`;
+
   const site = result
     ? `<div class="card">
         <dl class="kv">
           <dt>Staging site</dt><dd><a href="https://${esc(job.target)}" target="_blank" rel="noopener">${esc(job.target)}</a></dd>
+          <dt>Type</dt><dd>${esc(typeLabel(result.siteType))}</dd>
           <dt>Site user</dt><dd>${esc(result.siteUser)}</dd>
-          <dt>PHP</dt><dd>${esc(result.phpVersion)}</dd>
+          ${result.phpVersion ? `<dt>PHP</dt><dd>${esc(result.phpVersion)}</dd>` : ""}
           <dt>Template</dt><dd>${esc(result.vhostTemplate)}</dd>
-          <dt>Vhost</dt><dd>${result.vhostCarried
-            ? "copied from the source"
-            : `the stock ${esc(result.vhostTemplate)} template`}</dd>
+          <dt>Vhost</dt><dd>${vhostNote}</dd>
         </dl>
         <p class="hint">The site user's password was generated and not kept. Set one in Site → SSH/FTP if you
           need SFTP access.</p>
+      </div>`
+    : "";
+
+  // The clone's Instatic owner. Kept beside the staging database password and
+  // for the same reason: it is minted by the job, it is the only way into the
+  // clone's admin, and nothing can show it again once this record expires.
+  const instatic = result?.instatic
+    ? `<div class="card secret">
+        <h2 style="margin-top:0;font-size:1rem;">Staging Instatic instance</h2>
+        <dl class="kv">
+          <!-- esc() even though the wrapper emits this as a JSON number and
+               validate_port bounds it: every other value on this page is
+               escaped, and the one that is not is the one nobody re-checks
+               after the type it was declared with changes. -->
+          <dt>Port</dt><dd>127.0.0.1:${esc(String(result.instatic.port))}</dd>
+          <dt>Version</dt><dd>${esc(result.instatic.tag)}</dd>
+          <dt>Owner</dt><dd>${esc(result.instatic.email)}</dd>
+          <dt>Password</dt><dd>${esc(result.instatic.password)}</dd>
+        </dl>
+        <p class="hint">A new owner on a new instance with a secret key of its own — the source's users and
+          secrets are deliberately not part of a site bundle. This record is deleted after 14 days.</p>
       </div>`
     : "";
 
@@ -286,6 +371,7 @@ export function jobView(job: JobView, logText: string): string {
       </dl>
     </div>
     ${site}
+    ${instatic}
     ${credentials}
     ${notes}
     <div class="card">

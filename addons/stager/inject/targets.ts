@@ -14,13 +14,20 @@
 import type { AddonTarget } from "../../../cli/paths";
 
 /**
- * Only PHP sites can be cloned: the wrapper reads a PHP version and a database
- * out of the panel and refuses anything else. Guarding here as well means a
- * static or Node.js site does not show a button that only ever answers with an
- * error. `'php'` is the literal `site.type` column value, which is also what
- * the wrapper's own query filters on.
+ * The site types the wrapper will clone, guarded here too so a Node.js or
+ * Python site does not show a button that only ever answers with an error.
+ * These are the literal `site.type` column values, and they must stay in step
+ * with CLONABLE_TYPES in the wrapper -- which is the thing that actually
+ * decides, and which this only mirrors.
+ *
+ * A reverse-proxy site is clonable only when its backend is an Instatic
+ * instance this box manages, and Twig cannot see that: the fact lives in the
+ * Instatic addon's own records. So the button appears on every reverse proxy
+ * and the wrapper refuses the ones that are not, by name. Showing it and
+ * explaining the refusal is better than the alternative, which would be
+ * teaching the panel's templates about another addon's state directory.
  */
-const PHP_ONLY = "{% if site.type == 'php' %}";
+const CLONABLE = "{% if site.type in ['php', 'static', 'reverse-proxy'] %}";
 
 export const STAGER_TARGETS: AddonTarget[] = [
   {
@@ -33,7 +40,7 @@ export const STAGER_TARGETS: AddonTarget[] = [
     </li>`,
     required: true,
     snippet: (url) => `
-        ${PHP_ONLY}
+        ${CLONABLE}
           <li>
             <a href="${url}/new?source={{ site.domainName|url_encode }}" target="_blank" rel="noopener">Staging</a>
           </li>
@@ -45,7 +52,7 @@ export const STAGER_TARGETS: AddonTarget[] = [
     anchorAfter: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
     required: false,
     snippet: (url) => `
-        ${PHP_ONLY}
+        ${CLONABLE}
           <a href="${url}/new?source={{ site.domainName|url_encode }}" target="_blank" rel="noopener" style="margin-left: 0.75rem;">Clone</a>
         {% endif %}`,
   },

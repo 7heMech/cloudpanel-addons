@@ -824,6 +824,32 @@ async function cmdServe(_argv: string[]): Promise<never> {
   for (const n of missing) log.warn(`${n} is installed but no manager for it is bundled in this binary`);
   if (mounted.length === 0) fatal("none of the installed addons have a manager in this binary");
 
+  // A backstop, and only here -- every other command in this binary is a
+  // short-lived root operation where dying on an unexpected throw is the right
+  // answer. This one is a long-lived service that answers requests, and since
+  // v0.7.0 it is the *only* one: every installed addon is served from this
+  // process, so anything that kills it takes them all down together.
+  //
+  // The failures this exists for are out of band by construction. A stream
+  // error on a child's stdin, a socket reset -- they fire on their own tick,
+  // outside the promise `fetch` returned, so `Bun.serve` never sees them and no
+  // per-route try/catch can. A 1 MiB password field reproduced exactly that,
+  // twenty times out of twenty, because the wrapper validates its arguments and
+  // exits before reading stdin and the write then failed with EPIPE. That
+  // specific case is fixed where it belongs, at the field bound and with a
+  // listener on the stream; this catches the next one of its shape.
+  //
+  // Logged loudly rather than swallowed. `Restart=always` would bring the
+  // process back, but a request that can kill it is a request that can hold both
+  // addons in a restart loop, and a crash loop is a worse failure than a logged
+  // exception on a request that already had its own error path.
+  const survive = (what: string) => (err: unknown) => {
+    console.error(`[clp-addons] ${what} outside any request:`,
+      err instanceof Error ? (err.stack ?? err.message) : String(err));
+  };
+  process.on("uncaughtException", survive("uncaught exception"));
+  process.on("unhandledRejection", survive("unhandled rejection"));
+
   const server = Bun.serve({
     // The unit declares PORT, so read it rather than assuming the default. That
     // is also what lets a second copy be started on a spare port to try it.
