@@ -115,7 +115,7 @@ export const instaticService = {
     // The snapshot is rewritten by the root CLI on install and repair, so
     // between reconciliation runs it does not know about instances created
     // since. The wrapper does.
-    const instances = await this.listInstances();
+    const instances = await this.listInstancesOrThrow();
     return getNextAvailablePort(readSnapshot(), instances.map((i) => i.port));
   },
 
@@ -128,8 +128,22 @@ export const instaticService = {
     return res.data?.instances ?? [];
   },
 
+  /**
+   * The same list, but a wrapper failure is an error rather than an empty one.
+   *
+   * A dashboard can render "no instances" and be read by someone who knows the
+   * difference. An allocator cannot: an empty list means every port in use
+   * silently disappears from the calculation, and the next create is handed one
+   * that is already spoken for. So the two readers ask different questions.
+   */
+  async listInstancesOrThrow(): Promise<InstanceView[]> {
+    const res = await callWrapper<{ instances: InstanceView[] }>("list", []);
+    if (!res.ok) throw new Error(res.error ?? "the Instatic wrapper could not list instances");
+    return res.data?.instances ?? [];
+  },
+
   async createInstance(domain: string, tag: string): Promise<WrapperResult> {
-    const existing = await this.listInstances();
+    const existing = await this.listInstancesOrThrow();
     if (existing.some((i) => i.domain === domain)) {
       return { ok: false, error: `an instance for ${domain} already exists` };
     }

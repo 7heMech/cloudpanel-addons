@@ -389,10 +389,31 @@ also the one verb exempt from the per-domain lock. It names no domain, so there
 is nothing to lock, and locking would mean the dashboard stops rendering
 whenever any instance is mid-update -- precisely when someone is looking at it.
 
-Port allocation is now a proposal rather than a reservation: the manager picks
-the lowest free port and the wrapper re-checks it under the lock. That is the
-honest description of what was always happening, and it no longer depends on a
-record only the manager maintained.
+Port allocation is a proposal rather than a reservation: the manager picks the
+lowest free port and the wrapper re-checks it under the lock. That is the honest
+description of what was always happening, and it no longer depends on a record
+only the manager maintained.
+
+The re-check had to be written before that sentence was true. `validate_port`
+checked the range and nothing else, so a number two sides had both handed out
+met as `docker run` failing to bind, reported as "failed to start container"
+with nothing naming the port. That is reachable without anyone doing anything
+odd: the Stager allocates from the same reserved block for the clone of an
+Instatic site, both sides read a snapshot the root CLI rewrites every fifteen
+minutes, and each was compensating only for its own creates inside that window.
+`cmd_create` now refuses a taken port by name, from two sources -- another
+instance's `meta.json`, which covers one that is stopped and therefore not
+listening, and a listening socket, which covers everything else including a
+clone the Stager has in flight, whose instance does not exist yet and so has no
+record to find.
+
+The manager side is fixed in both directions too: the Stager counts live
+Instatic instances as well as its own in-flight jobs. And neither list may fail
+quietly on that path. `listInstances()` and `listJobs()` return an empty array
+when the wrapper cannot answer, which is right for a dashboard -- it renders
+"none" and an operator reads it as such -- and wrong for an allocator, where it
+means every port in use silently disappears from the calculation. The allocation
+path calls strict variants that throw instead.
 
 ## One naming scheme for the accounts CloudPanel creates for us
 

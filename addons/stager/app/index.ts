@@ -9,6 +9,12 @@ import type { JobView } from "./service";
 import { layout, jobsView, newCloneView, jobView } from "./views";
 import { guardMutation, newCsrfToken, csrfCookieHeader, SECURITY_HEADERS } from "../../../lib/app-http";
 import { getNextAvailablePort, readSnapshot } from "../../../lib/snapshot-reader";
+// The Stager already depends on the Instatic addon: cloning a reverse-proxy
+// site means driving its wrapper, and this addon refuses one whose backend is
+// not an instance that addon manages. The dependency runs one way only -- the
+// Instatic addon knows nothing about this one -- so importing its service here
+// closes no cycle.
+import { instaticService } from "../../instatic/app/service";
 
 /**
  * Ports this addon has handed out that the panel snapshot cannot know about.
@@ -155,92 +161,130 @@ export async function handle(req: Request, path: string): Promise<Response> {
   }
 
   if (method === "POST" && path === "/api/clones") {
-    const blocked = guardMutation(req);
-    if (blocked) return blocked;
-
-    let body: unknown;
+    // The one mutating route, and the only one that had no try/catch while
+    // every GET branch has one. `readSnapshot()` throws when the snapshot is
+    // missing, `getNextAvailablePort()` throws when the range is exhausted, and
+    // the two strict list calls below throw when the wrapper cannot answer --
+    // all of which surfaced as a bare 500 with nothing said.
     try {
-      body = await req.json();
-    } catch {
-      return json({ ok: false, error: "body must be JSON" }, 400);
+      return await postClone(req);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[stager] clone request failed:", msg);
+      return json({ ok: false, error: msg }, 500);
     }
-    const {
-      source: rawSource, target: rawTarget, tls,
-      instaticEmail, instaticPassword, mfaCode,
-    } = (body ?? {}) as Record<string, unknown>;
-
-    const source = validateDomain(typeof rawSource === "string" ? rawSource.toLowerCase() : null);
-    if (!source) return json({ ok: false, error: "source is not a valid hostname" }, 400);
-
-    // The shorthand is expanded here so the wrapper only ever sees a complete
-    // hostname; it must reject rather than rewrite.
-    const target = validateDomain(expandTarget(typeof rawTarget === "string" ? rawTarget : "", source));
-    if (!target) return json({ ok: false, error: "target is not a valid hostname" }, 400);
-    if (target === source) return json({ ok: false, error: "the target is the site being cloned" }, 400);
-
-    // The credential fields are accepted only for a source that really is an
-    // Instatic site, and that is settled by asking the wrapper rather than by
-    // trusting the body: `describe` refuses a reverse-proxy site whose backend
-    // is not an instance this box manages. Nothing here is ever logged.
-    const detail = await stagerService.describe(source);
-    if (!detail.ok || !detail.data) {
-      return json({ ok: false, error: detail.error ?? `cannot clone ${source}` }, 400);
-    }
-    let instatic: { port: number; email: string; password: string; mfaCode?: string } | undefined;
-    if (detail.data.siteType === "reverse-proxy") {
-      if (typeof instaticEmail !== "string" || !instaticEmail.trim()) {
-        return json({ ok: false, error: "cloning an Instatic site needs the source's admin email address" }, 400);
-      }
-      if (instaticEmail.length > MAX_EMAIL) {
-        return json({ ok: false, error: "that email address is too long" }, 400);
-      }
-      if (typeof instaticPassword !== "string" || !instaticPassword) {
-        return json({ ok: false, error: "cloning an Instatic site needs the source's admin password" }, 400);
-      }
-      // Bounded, and bounded here rather than left to the wrapper, because the
-      // wrapper validates its arguments before it ever reads stdin: an
-      // over-long password is refused with the pipe unread, and anything past
-      // the 64 KiB pipe buffer then fails the write with EPIPE on a stream tick
-      // no request promise can catch. One 1 MiB field killed the process that
-      // serves every addon, 20 times out of 20. The stream error is handled in
-      // service.ts as well; this is the half that stops the oversized write from
-      // being attempted at all.
-      if (instaticPassword.length > MAX_PASSWORD) {
-        return json({ ok: false, error: `the password may be at most ${MAX_PASSWORD} characters` }, 400);
-      }
-      // Rejected, not trimmed. The credential crosses to the wrapper as one line
-      // on stdin, so a newline in it would arrive as a shorter password -- a 401
-      // that spends the production account's lockout budget on a value the
-      // operator never typed. A control character has no business in a password
-      // field either.
-      if (CONTROL_CHARS.test(instaticPassword)) {
-        return json({ ok: false, error: "the password may not contain a newline or a control character" }, 400);
-      }
-      const mfa = typeof mfaCode === "string" ? mfaCode.trim() : "";
-      if (mfa.length > MAX_MFA) {
-        return json({ ok: false, error: "that authentication code is too long" }, 400);
-      }
-      // Allocated here because the app is the side that can read the panel
-      // snapshot both addons share; the wrapper only re-validates the number.
-      const snapshot = readSnapshot();
-      instatic = {
-        port: getNextAvailablePort(
-          snapshot,
-          portsSinceSnapshot(await stagerService.listJobs(), snapshot.updatedAt)
-        ),
-        email: instaticEmail.trim().toLowerCase(),
-        password: instaticPassword,
-        ...(mfa ? { mfaCode: mfa } : {}),
-      };
-    } else if (instaticEmail !== undefined || instaticPassword !== undefined || mfaCode !== undefined) {
-      return json({ ok: false, error: `${source} is not an Instatic site, so it takes no credentials` }, 400);
-    }
-
-    const res = await stagerService.startClone(source, target, tls === true, instatic);
-    return json(res, res.ok ? 200 : 400);
   }
 
   return json({ ok: false, error: "not found" }, 404);
+}
+
+async function postClone(req: Request): Promise<Response> {
+  const blocked = guardMutation(req);
+  if (blocked) return blocked;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ ok: false, error: "body must be JSON" }, 400);
+  }
+  const {
+    source: rawSource, target: rawTarget, tls,
+    instaticEmail, instaticPassword, mfaCode,
+  } = (body ?? {}) as Record<string, unknown>;
+
+  const source = validateDomain(typeof rawSource === "string" ? rawSource.toLowerCase() : null);
+  if (!source) return json({ ok: false, error: "source is not a valid hostname" }, 400);
+
+  // The shorthand is expanded here so the wrapper only ever sees a complete
+  // hostname; it must reject rather than rewrite.
+  const target = validateDomain(expandTarget(typeof rawTarget === "string" ? rawTarget : "", source));
+  if (!target) return json({ ok: false, error: "target is not a valid hostname" }, 400);
+  if (target === source) return json({ ok: false, error: "the target is the site being cloned" }, 400);
+
+  // The credential fields are accepted only for a source that really is an
+  // Instatic site, and that is settled by asking the wrapper rather than by
+  // trusting the body. Nothing here is ever logged.
+  //
+  // `sites` rather than `describe`, because the only question this route has is
+  // what type the source is and `describe` answers it by also running `du -sm`
+  // over the whole document root -- a read with a 120-second timeout that a PHP
+  // clone needing no credentials has no use for. The listing applies the same
+  // gates, including leaving out a reverse proxy whose backend is not an
+  // instance this box manages, so a source missing from it is one the wrapper
+  // would refuse; `describe` is asked once after that, for the sentence saying
+  // which condition applied.
+  const summary = (await stagerService.listSites()).find((site) => site.domain === source);
+  if (!summary) {
+    const detail = await stagerService.describe(source);
+    return json({ ok: false, error: detail.error ?? `cannot clone ${source}` }, 400);
+  }
+  let instatic: { port: number; email: string; password: string; mfaCode?: string } | undefined;
+  if (summary.siteType === "reverse-proxy") {
+    if (typeof instaticEmail !== "string" || !instaticEmail.trim()) {
+      return json({ ok: false, error: "cloning an Instatic site needs the source's admin email address" }, 400);
+    }
+    if (instaticEmail.length > MAX_EMAIL) {
+      return json({ ok: false, error: "that email address is too long" }, 400);
+    }
+    if (typeof instaticPassword !== "string" || !instaticPassword) {
+      return json({ ok: false, error: "cloning an Instatic site needs the source's admin password" }, 400);
+    }
+    // Bounded, and bounded here rather than left to the wrapper, because the
+    // wrapper validates its arguments before it ever reads stdin: an
+    // over-long password is refused with the pipe unread, and anything past
+    // the 64 KiB pipe buffer then fails the write with EPIPE on a stream tick
+    // no request promise can catch. One 1 MiB field killed the process that
+    // serves every addon, 20 times out of 20. The stream error is handled in
+    // service.ts as well; this is the half that stops the oversized write from
+    // being attempted at all.
+    if (instaticPassword.length > MAX_PASSWORD) {
+      return json({ ok: false, error: `the password may be at most ${MAX_PASSWORD} characters` }, 400);
+    }
+    // Rejected, not trimmed. The credential crosses to the wrapper as one line
+    // on stdin, so a newline in it would arrive as a shorter password -- a 401
+    // that spends the production account's lockout budget on a value the
+    // operator never typed. A control character has no business in a password
+    // field either.
+    if (CONTROL_CHARS.test(instaticPassword)) {
+      return json({ ok: false, error: "the password may not contain a newline or a control character" }, 400);
+    }
+    const mfa = typeof mfaCode === "string" ? mfaCode.trim() : "";
+    if (mfa.length > MAX_MFA) {
+      return json({ ok: false, error: "that authentication code is too long" }, 400);
+    }
+    // Allocated here because the app is the side that can read the panel
+    // snapshot both addons share; the wrapper re-checks the number under its
+    // own lock, so this is a proposal rather than a reservation.
+    //
+    // Both sources, because the snapshot is stale about both and each side was
+    // only compensating for its own. `listInstances` is what the Instatic
+    // addon already asks before it creates one; an instance made from its
+    // dashboard inside the fifteen-minute window is invisible to the snapshot,
+    // and without this both sides offered the same number and the clone died
+    // on `docker run` failing to bind it. Neither list may fail quietly here:
+    // an empty one reads as "nothing is using any port", which is the one
+    // answer that produces a collision.
+    const snapshot = readSnapshot();
+    const [jobs, instances] = await Promise.all([
+      stagerService.listJobsOrThrow(),
+      instaticService.listInstancesOrThrow(),
+    ]);
+    instatic = {
+      port: getNextAvailablePort(snapshot, [
+        ...portsSinceSnapshot(jobs, snapshot.updatedAt),
+        ...instances.map((i) => i.port),
+      ]),
+      email: instaticEmail.trim().toLowerCase(),
+      password: instaticPassword,
+      ...(mfa ? { mfaCode: mfa } : {}),
+    };
+  } else if (instaticEmail !== undefined || instaticPassword !== undefined || mfaCode !== undefined) {
+    return json({ ok: false, error: `${source} is not an Instatic site, so it takes no credentials` }, 400);
+  }
+
+  const res = await stagerService.startClone(source, target, tls === true, instatic);
+  return json(res, res.ok ? 200 : 400);
 }
 
 function escapeMinimal(s: string): string {

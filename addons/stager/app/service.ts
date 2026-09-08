@@ -246,4 +246,19 @@ export const stagerService = {
     }
     return res.data?.jobs ?? [];
   },
+
+  /**
+   * The same list, but a wrapper failure is an error rather than an empty one.
+   *
+   * The dashboard can render "no clones yet" and be read by someone who knows
+   * the difference. The port allocator cannot: an empty list means every
+   * in-flight clone's reserved port silently disappears from the calculation,
+   * and the next clone is handed one that is already spoken for. So the two
+   * readers ask different questions.
+   */
+  async listJobsOrThrow(): Promise<JobView[]> {
+    const res = await callWrapper<{ jobs: JobView[] }>("jobs", []);
+    if (!res.ok) throw new Error(res.error ?? "the stager wrapper could not list jobs");
+    return res.data?.jobs ?? [];
+  },
 };

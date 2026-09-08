@@ -276,6 +276,31 @@ read_meta() {
   sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$file" | head -1
 }
 
+# Who has this port, if anyone. Prints a description and returns 0 when taken.
+#
+# Two sources, because either alone misses a case. Another instance's meta.json
+# covers one that is stopped and therefore not listening -- the port is still
+# spoken for. A listening socket covers everything else on the box, including a
+# clone the Stager has in flight, whose instance does not exist yet and so has no
+# record here to find.
+port_holder() {
+  local port=$1 self=$2 dir domain
+  for dir in "${DATA_BASE_DIR}"/*/; do
+    [[ -f "${dir}meta.json" ]] || continue
+    domain=$(basename "${dir%/}")
+    [[ $domain == "$self" ]] && continue
+    if [[ $(read_meta port "${dir}meta.json") == "$port" ]]; then
+      printf 'the instance for %s' "$domain"
+      return 0
+    fi
+  done
+  if [[ -n $(ss -ltnH "sport = :${port}" 2>/dev/null) ]]; then
+    printf 'something already listening on 127.0.0.1:%s' "$port"
+    return 0
+  fi
+  return 1
+}
+
 # A password we generate and never print. Avoids the `tr | head` SIGPIPE trap,
 # which under `set -o pipefail` aborts the script instead of returning a value.
 gen_password() {
@@ -466,6 +491,18 @@ cmd_create() {
 
   container_exists "$name" && emit_err "container '$name' already exists"
   [[ -e ${dir}/meta.json ]] && emit_err "instance '$domain' already exists"
+
+  # Decision 2.7 calls the manager's allocation a proposal and says the wrapper
+  # re-checks it under the lock. It did not: validate_port only checked the
+  # range. So two sides handing out numbers from one reserved block against a
+  # snapshot the root CLI rewrites every fifteen minutes -- this dashboard and
+  # the Stager, which allocates a port for the clone of an Instatic site -- met
+  # as `docker run` failing to bind, reported as "failed to start container"
+  # with nothing naming the port or saying who had it.
+  local holder
+  if holder=$(port_holder "$port" "$domain"); then
+    emit_err "port ${port} is already taken by ${holder}; retry, or pick a hostname whose instance can have a port of its own"
+  fi
 
   # Partial-failure cleanup, unwound in reverse. Anything created before the
   # failure point is removed; anything that already existed is left alone.

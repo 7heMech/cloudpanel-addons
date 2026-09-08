@@ -1046,6 +1046,75 @@ console.log("\n== one request may not kill the manager ==");
     (cli.match(/process\.on\("uncaughtException"/g) ?? []).length === 1);
 }
 
+console.log("\n== two addons hand out ports from one block ==");
+
+// Both addons allocate from the same reserved range against a snapshot the root
+// CLI only rewrites every fifteen minutes, and each was compensating only for
+// its own creates inside that window. An instance made from the Instatic
+// dashboard was invisible to the Stager, both sides offered the same number, and
+// the clone died on `docker run` failing to bind it -- reported as "failed to
+// start container", with nothing naming the port.
+{
+  const stagerIndex = readFileSync("addons/stager/app/index.ts", "utf-8");
+  const stagerService2 = readFileSync("addons/stager/app/service.ts", "utf-8");
+  const instaticService2 = readFileSync("addons/instatic/app/service.ts", "utf-8");
+  const instaticWrapper = readFileSync("addons/instatic/wrapper/clp-action-instatic", "utf-8");
+
+  check("the stager counts live Instatic instances, not only its own jobs",
+    stagerIndex.includes("instaticService.listInstancesOrThrow()")
+    && stagerIndex.includes("stagerService.listJobsOrThrow()"));
+  check("an unreadable list is an error on the allocation path, not an empty one",
+    /listJobsOrThrow[\s\S]*?throw new Error/.test(stagerService2)
+    && /listInstancesOrThrow[\s\S]*?throw new Error/.test(instaticService2));
+  check("the lenient readers are still there for the dashboards",
+    stagerService2.includes("async listJobs()") && instaticService2.includes("async listInstances()"));
+  check("and the instatic create no longer allocates against a silent empty list",
+    instaticService2.includes("const existing = await this.listInstancesOrThrow()"));
+
+  // The wrapper is where the proposal becomes a decision, under the lock.
+  const create = instaticWrapper.slice(instaticWrapper.indexOf("cmd_create() {"));
+  check("the wrapper re-checks the port rather than only its range",
+    create.slice(0, create.indexOf("\ncmd_update")).includes('port_holder "$port" "$domain"'));
+  check("and names who has it",
+    instaticWrapper.includes("is already taken by"));
+
+  // Driven for real: a stopped instance's record still holds its port, which is
+  // the case a listening-socket check alone would miss.
+  const fn = bashFunction("addons/instatic/wrapper/clp-action-instatic", "port_holder");
+  const meta = bashFunction("addons/instatic/wrapper/clp-action-instatic", "read_meta");
+  const probe = (recorded: number, asked: number, self: string) => {
+    const d = mkdtempSync(`${tmpdir()}/clp-ports-`);
+    try {
+      mkdirSync(`${d}/other.test`, { recursive: true });
+      writeFileSync(`${d}/other.test/meta.json`, JSON.stringify({ domain: "other.test", port: recorded }));
+      return execFileSync("bash", ["-c",
+        `DATA_BASE_DIR="${d}"\n${meta}\n${fn}\nif port_holder "$1" "$2"; then echo; else echo FREE; fi`,
+        "_", String(asked), self], { encoding: "utf-8" }).trim();
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  };
+  // 39997/39998 rather than the bottom of the range: this test runs on the box
+  // the addon targets, where the first ports really are bound by real instances,
+  // and the socket half of the check would then answer for the record half.
+  check("a port another instance recorded is taken, listening or not",
+    probe(39997, 39997, "mine.test") === "the instance for other.test",
+    probe(39997, 39997, "mine.test"));
+  check("a free port is free", probe(39997, 39998, "mine.test") === "FREE",
+    probe(39997, 39998, "mine.test"));
+  check("an instance does not report its own port as taken by someone else",
+    probe(39997, 39997, "other.test") === "FREE", probe(39997, 39997, "other.test"));
+
+  // The one mutating route now has the try/catch every GET branch had, because
+  // readSnapshot() and getNextAvailablePort() both throw.
+  check("the clone route turns a throw into a message rather than a bare 500",
+    /path === "\/api\/clones"[\s\S]{0,600}?try \{[\s\S]{0,200}?postClone/.test(stagerIndex));
+  // And it no longer runs du over the whole docroot for a source that needs no
+  // credentials.
+  check("the route asks the cheap question first",
+    stagerIndex.includes("(await stagerService.listSites()).find((site) => site.domain === source)"));
+}
+
 console.log("\n== no credential outlives the job that carried it ==");
 
 // sudo journals this wrapper's whole COMMAND line -- verified against this
