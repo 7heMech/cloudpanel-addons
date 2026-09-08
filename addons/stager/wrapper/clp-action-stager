@@ -1670,10 +1670,27 @@ carry_vhost() {
 
   # Restore and say why. Used by every failure path below, so there is one
   # implementation of "put the stock vhost back" rather than four.
+  #
+  # `row` for every path that runs after the UPDATE could have gone through, and
+  # that is more paths than it looks. panel_update_site returning 1 from its
+  # *read-back* means the UPDATE already ran and only the verification of it
+  # failed -- so the one branch that runs after the row changed was the one
+  # branch that put back only the file, leaving the row holding whatever the
+  # failed write left there while the config on disk reverted to stock. The
+  # panel regenerates the file from the row, so that is the disagreement the
+  # file-first ordering exists to prevent, reached by the failure path instead of
+  # the success path. The reload branch already restored both halves; the
+  # asymmetry was backwards.
   local restore_note=""
   carry_restore() {
     cp "$backup" "$conf" && chown root:root "$conf" && chmod 644 "$conf" \
       || warn "could not restore the stock vhost for ${target}"
+    if [[ ${1:-} == "row" ]]; then
+      # The clone's own stock body, as the panel stored it moments ago, written
+      # back through the same guarded path that wrote the carried one.
+      panel_update_site "$target" "$type" "$application" "$stock" \
+        || warn "the panel record for ${target} may still hold the carried vhost; check Site -> Vhost"
+    fi
     CARRY_REJECT=$restore_note
   }
 
@@ -1696,7 +1713,7 @@ carry_vhost() {
 
   if ! panel_update_site "$target" "$type" "$application" "$body"; then
     restore_note="$PANEL_WRITE_REJECT"
-    carry_restore
+    carry_restore row
     return 1
   fi
 
@@ -1705,9 +1722,7 @@ carry_vhost() {
     # config that is not in service, which is the one direction the ordering
     # above exists to avoid. Put both halves back, in the same order.
     restore_note="nginx would not reload the carried config, so the clone keeps the stock one"
-    carry_restore
-    panel_update_site "$target" "$type" "$application" "$stock" \
-      || warn "the panel record for ${target} still holds the carried vhost; check Site -> Vhost"
+    carry_restore row
     systemctl reload nginx >&2 || warn "nginx did not reload after restoring ${target}"
     return 1
   fi

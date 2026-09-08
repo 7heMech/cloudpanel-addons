@@ -713,6 +713,23 @@ console.log("\n== learning what CloudPanel substituted into a vhost ==");
     check("and the rendered file is staged with one",
       fn.includes(`printf '\\n' >> "$rendered"`),
       fn.split("\n").filter((l) => l.includes("$rendered")).join(" | "));
+
+    // Every failure that can run after the UPDATE has to put the row back as
+    // well as the file, and that is more branches than it looks:
+    // panel_update_site returning 1 from its *read-back* means the UPDATE
+    // already ran. Leaving the row alone there is the one disagreement the
+    // file-first ordering exists to prevent -- the panel regenerates the file
+    // from the row -- reached by the failure path instead of the success path.
+    const calls = fn.split("\n").map((l) => l.trim())
+      .filter((l) => l === "carry_restore" || l === "carry_restore row");
+    const writeAt = fn.indexOf('panel_update_site "$target" "$type" "$application" "$body"');
+    const after = fn.slice(writeAt).split("\n").map((l) => l.trim()).filter((l) => l.startsWith("carry_restore"));
+    check("every restore that can follow the panel write restores the row too",
+      writeAt !== -1 && after.length === 2 && after.every((l) => l === "carry_restore row"),
+      after.join(" | "));
+    check("and the ones that cannot do not touch the row",
+      calls.length === 4 && calls.filter((l) => l === "carry_restore").length === 2,
+      calls.join(" | "));
   }
 }
 
