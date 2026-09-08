@@ -83,8 +83,15 @@ async function callWrapper<T = unknown>(
     input
   );
   if (error && !stdout.trim()) {
-    console.error(`[wrapper] ${verb} failed without a JSON reply:`, stderr || error.message);
-    return { ok: false, error: stderr.trim() || error.message || `wrapper ${verb} failed` };
+    // Never `error.message`. execFile builds it as "Command failed: <full
+    // argv>", so logging it put every argument this addon passes -- including
+    // --email, the address of another site's administrator -- into the journal,
+    // which is the same mistake as passing a credential in argv with an extra
+    // step. The wrapper's own stderr is the useful half and carries nothing that
+    // was not meant to be read.
+    const why = stderr.trim() || `wrapper ${verb} exited ${error.code ?? "abnormally"}`;
+    console.error(`[wrapper] ${verb} failed without a JSON reply:`, why);
+    return { ok: false, error: why };
   }
 
   if (stderr.trim()) console.error(`[wrapper:${verb}]`, stderr.trim());
@@ -204,9 +211,14 @@ export const stagerService = {
    * `instatic` is supplied only when the source is an Instatic site. Its port
    * is allocated here rather than guessed by the wrapper: `getNextAvailablePort`
    * reads the panel snapshot both addons share, so the number that crosses the
-   * boundary is one the wrapper only has to re-validate. The password travels on
-   * stdin and never as an argument -- argv is readable out of `ps` by every
-   * account on the box, and this is another site's administrator password.
+   * boundary is one the wrapper only has to re-validate.
+   *
+   * Both secrets travel on stdin, one per line, and neither is ever an argument.
+   * argv is readable out of `ps` by every account on the box, and worse than
+   * that: `sudo` journals this wrapper's whole COMMAND line, so an argument
+   * outlives the process entirely. The authentication code was in argv until
+   * that was measured against this box's own journal -- and the wrapper
+   * deliberately accepts a *recovery* code there, which does not expire.
    */
   async startClone(
     source: string,
@@ -215,11 +227,11 @@ export const stagerService = {
     instatic?: { port: number; email: string; password: string; mfaCode?: string }
   ): Promise<WrapperResult<{ job: string }>> {
     const args = ["--source", source, "--target", target, "--tls", tls ? "yes" : "no"];
-    if (instatic) {
-      args.push("--port", String(instatic.port), "--email", instatic.email);
-      if (instatic.mfaCode) args.push("--mfa", instatic.mfaCode);
-    }
-    return callWrapper<{ job: string }>("clone", args, instatic ? `${instatic.password}\n` : undefined);
+    if (instatic) args.push("--port", String(instatic.port), "--email", instatic.email);
+    const input = instatic
+      ? `${instatic.password}\n${instatic.mfaCode ? `${instatic.mfaCode}\n` : ""}`
+      : undefined;
+    return callWrapper<{ job: string }>("clone", args, input);
   },
 
   async getJob(id: string): Promise<WrapperResult<{ job: JobView; log: string }>> {

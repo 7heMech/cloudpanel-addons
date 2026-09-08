@@ -1046,6 +1046,81 @@ console.log("\n== one request may not kill the manager ==");
     (cli.match(/process\.on\("uncaughtException"/g) ?? []).length === 1);
 }
 
+console.log("\n== no credential outlives the job that carried it ==");
+
+// sudo journals this wrapper's whole COMMAND line -- verified against this
+// box's own journal -- so an argument does not merely appear in `ps` for the
+// life of the process, it is written down permanently. `--mfa` put the
+// authentication code there, and validate_mfa deliberately accepts a RECOVERY
+// code, which does not expire.
+{
+  const W = "addons/stager/wrapper/clp-action-stager";
+  const wrapper = readFileSync(W, "utf-8");
+  const service = readFileSync("addons/stager/app/service.ts", "utf-8");
+
+  check("the wrapper takes no --mfa argument at all", !wrapper.includes("--mfa)"));
+  check("nor does anything build one", !/args\.push\([^)]*"--mfa"/.test(service));
+  check("the wrapper's footer says both credentials are on stdin",
+    wrapper.includes("There is deliberately no --password and no --mfa"));
+  check("and the code is put on stdin beside the password",
+    service.includes("instatic.mfaCode ? `${instatic.mfaCode}\\n` : \"\""));
+
+  // The framing, driven as the wrapper reads it: one secret per line, only the
+  // caller's terminator removed, and anything else refused rather than trimmed.
+  const parse = (stdin: string) =>
+    execFileSync("bash", ["-c", `
+      supplied=$(cat; printf x) || true
+      supplied=\${supplied%x}
+      supplied=\${supplied%$'\\n'}
+      password=\${supplied%%$'\\n'*}
+      mfa=""
+      if [[ $supplied == *$'\\n'* ]]; then mfa=\${supplied#*$'\\n'}; fi
+      printf 'P=%s|M=%s|EXTRA=%s' "$password" "$mfa" "$( [[ $mfa == *$'\\n'* ]] && echo yes || echo no )"
+    `], { encoding: "utf-8", input: stdin });
+  check("a password alone parses as a password alone",
+    parse("hunter2\n") === "P=hunter2|M=|EXTRA=no", parse("hunter2\n"));
+  check("a password and a code parse as two lines",
+    parse("hunter2\n123456\n") === "P=hunter2|M=123456|EXTRA=no", parse("hunter2\n123456\n"));
+  check("a password ending in a space keeps it",
+    parse("hunter2 \n") === "P=hunter2 |M=|EXTRA=no", JSON.stringify(parse("hunter2 \n")));
+  check("a third line is visible as one, so it can be refused",
+    parse("a\nb\nc\n").endsWith("EXTRA=yes"), parse("a\nb\nc\n"));
+
+  // Deleted, not merely 0600. The code had no deletion at all and survived the
+  // fourteen days a job record is kept.
+  check("both credentials are deleted once the sign-in has succeeded",
+    wrapper.includes('rm -f "${dir}/srcPassword" "${dir}/mfa"'));
+  const rollback = wrapper.slice(wrapper.indexOf("  rollback() {"));
+  const unwind = rollback.slice(0, rollback.indexOf("\n  }\n"));
+  check("the rollback removes them and both cookie jars",
+    unwind.includes('"${dir}/mfa"') && unwind.includes('"${dir}/cookies-src"')
+    && unwind.includes('"${dir}/cookies-dst"'),
+    unwind.split("\n").filter((l) => l.includes("rm -f")).join(" | "));
+  check("and revokes any session the run opened rather than leaving one live",
+    (unwind.match(/instatic_logout/g) ?? []).length === 2,
+    unwind.split("\n").filter((l) => l.includes("instatic_logout")).join(" | "));
+  const refused = wrapper.slice(wrapper.indexOf("systemd-run refused to start") - 600);
+  check("a job systemd-run would not start loses them too",
+    refused.slice(0, 600).includes('rm -f "${dir}/srcPassword" "${dir}/mfa"'));
+
+  // curl writes its output and its jar with the process umask, and cmd_run
+  // inherits UMask=0022 from the unit.
+  check("curl's output file is created 0600 before curl writes it",
+    (wrapper.match(/new_secret_file "\$out"/g) ?? []).length === 2,
+    String((wrapper.match(/new_secret_file "\$out"/g) ?? []).length));
+  check("and so is each cookie jar, where the session starts",
+    (wrapper.match(/new_secret_file "\$jar"/g) ?? []).length === 2,
+    String((wrapper.match(/new_secret_file "\$jar"/g) ?? []).length));
+  check("the export is no longer chmod'd only after it has downloaded",
+    !wrapper.includes('chmod 600 "$export_zip"'));
+
+  // execFile's error.message is "Command failed: <full argv>".
+  const code = service.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  check("a wrapper failure is not logged with its own argv",
+    !code.includes("error.message"),
+    code.split("\n").filter((l) => l.includes("error.message")).join(" | "));
+}
+
 console.log("\n== a site the job adopted is not a site the job created ==");
 
 // The Instatic wrapper adopts a matching pre-existing reverse-proxy site rather

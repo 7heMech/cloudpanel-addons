@@ -1021,13 +1021,42 @@ the same line the WordPress search-replace step draws.
 
 Three details decide whether it works at all:
 
-- **The source's password is on stdin, never in argv.** Anything passed as an
-  argument is readable out of `ps` by every account on the box, and this is
-  another site's administrator credential. It is stored 0600 in the job
-  directory -- which is where it has to live, because `run` is started by
-  `systemd-run` and inherits no stdin -- and deleted the moment the export it
-  exists for has finished. The Instatic addon already refuses to put its master
-  key in `docker run -e` for this reason.
+- **Both of the source's credentials are on stdin, never in argv.** Anything
+  passed as an argument is readable out of `ps` by every account on the box, and
+  worse: `sudo` journals this wrapper's whole `COMMAND` line, verified against
+  this box's own journal, so an argument outlives the process entirely. The
+  authentication code was an argument until that was measured, and it is the one
+  that mattered most -- `validate_mfa` deliberately accepts a *recovery* code,
+  which does not expire, so a permanent second factor was being written into the
+  persistent journal. Both now cross as one line each on the same channel.
+
+  They are stored 0600 in the job directory, which is where they have to live
+  because `run` is started by `systemd-run` and inherits no stdin, and both are
+  deleted the moment the sign-in they exist for has succeeded -- not after the
+  export, which is the long step and needs neither. The Instatic addon already
+  refuses to put its master key in `docker run -e` for this reason.
+
+  Line framing across two secrets is only sound because a newline inside either
+  is refused rather than trimmed. `IFS= read -r` used to stop at the first one,
+  so a password containing a newline arrived shortened and produced a 401 --
+  spending the production account's lockout budget on a value the operator never
+  typed.
+- **What the job leaves behind is part of the design, including when it fails.**
+  A failure between login and export used to leave a live administrator session
+  on the *production* instance -- Instatic's absolute timeout is 90 days -- with
+  its token in a cookie jar the job directory kept for `JOB_RETENTION_DAYS`. The
+  rollback now revokes every session the run opened and removes both jars, so
+  "a clone leaves nothing live on the site it copied" holds on the path where it
+  matters most. A job `systemd-run` refuses to start deletes its credentials too;
+  that record is marked failed and then kept for the full retention window.
+- **Files curl creates are made before curl creates them.** `curl` writes its
+  output and its cookie jar with the process umask, and `run` inherits the unit's
+  `UMask=0022`, so a live session token and a full export of a customer's site
+  appeared as 0644 among files that are otherwise 0600 -- the export for the
+  whole length of the download, because the `chmod` only ran once it finished.
+  Each is created empty and 0600 first; `-o` and `-c` truncate rather than
+  recreate, so that is the mode they keep. The 0700 job directory is the other
+  half of this, and neither is a substitute for the other.
 - **Every mutating request carries an explicit `Origin`.** Instatic runs a CSRF
   origin check against its configured `PUBLIC_ORIGIN`, and these requests arrive
   on `127.0.0.1` rather than on the hostname. Sessions ride in a curl cookie jar

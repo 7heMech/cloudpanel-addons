@@ -450,9 +450,25 @@ cmd_run() {
     (( rc == 0 )) && return 0
     warn "clone failed during '${STEP}', unwinding"
     [[ -n $DUMP_FILE && -f $DUMP_FILE ]] && rm -f "$DUMP_FILE"
-    # The source instance's password and the bundle taken with it never outlive
-    # the run, however it ends.
-    rm -f "${dir}/srcPassword" "${dir}/site-bundle.zip" "${dir}/.api-req" "${dir}/.api-out"
+    # A session this run opened is revoked rather than left to expire, and that
+    # has to hold when the clone fails -- which is exactly when it did not.
+    # Instatic's absolute session timeout is 90 days, so a failure between login
+    # and export used to leave a live administrator session on the production
+    # instance with its token sitting in the job directory for the fourteen days
+    # a record is kept. A clone leaves nothing live on the site it copied.
+    if [[ -n ${src_port:-} && -f "${dir}/cookies-src" ]]; then
+      warn "revoking the session this run opened on ${source}"
+      instatic_logout "${src_port}" "$source" "${dir}/cookies-src"
+    fi
+    if [[ -n ${port:-} && -f "${dir}/cookies-dst" ]]; then
+      instatic_logout "${port}" "$target" "${dir}/cookies-dst"
+    fi
+    # The source instance's credentials, the bundle taken with them and the
+    # cookie jars holding their sessions never outlive the run, however it ends.
+    # The authentication code is in that list because validate_mfa deliberately
+    # accepts a recovery code, and a recovery code does not expire.
+    rm -f "${dir}/srcPassword" "${dir}/mfa" "${dir}/site-bundle.zip" \
+          "${dir}/cookies-src" "${dir}/cookies-dst" "${dir}/.api-req" "${dir}/.api-out"
     if (( DB_CREATED == 1 )); then
       warn "removing the staging database this run created"
       "$CLPCTL" db:delete --databaseName="$STG_DB_NAME" --force >&2 2>/dev/null || true
@@ -548,20 +564,26 @@ cmd_run() {
     set_step "signing in to ${source}"
     instatic_login "$src_port" "$source" "${dir}/cookies-src" \
       "$email" "$src_password" "$mfa" "$source" || fail_job "$INSTATIC_REJECT"
+    # Both credentials have done their one job: everything after this rides in
+    # the cookie jar. Deleted here rather than after the export, which is the
+    # long step and needs neither of them -- and the authentication code
+    # especially, because validate_mfa deliberately accepts a recovery code and a
+    # recovery code does not expire. Nothing used to delete it at all, so it
+    # outlived the clone by the fourteen days a job record is kept.
     src_password=""
+    mfa=""
+    rm -f "${dir}/srcPassword" "${dir}/mfa"
 
     set_step "exporting ${source}'s content"
     export_zip="${dir}/site-bundle.zip"
     local export_code
     export_code=$(instatic_get "$src_port" "$source" "${dir}/cookies-src" \
       "/admin/api/cms/export?includeSite=1&includeMedia=1" "$export_zip")
-    chmod 600 "$export_zip" 2>/dev/null || true
     if [[ ! $export_code =~ ^2 ]]; then
       fail_job "${source} refused the export (HTTP ${export_code}): $(instatic_error "$export_zip")"
     fi
-    # The password has done its one job. The session goes with it rather than
-    # being left to expire: a clone should leave nothing live on its source.
-    rm -f "${dir}/srcPassword"
+    # The session goes rather than being left to expire: a clone should leave
+    # nothing live on its source.
     instatic_logout "$src_port" "$source" "${dir}/cookies-src"
     log "exported $(stat -c%s "$export_zip") bytes of site bundle"
   else
@@ -1959,6 +1981,7 @@ instatic_backend_of() {
 # the assignment under set -e would report it as nothing at all.
 instatic_post() {
   local port=$1 domain=$2 jar=$3 path=$4 ctype=$5 req=$6 out=$7
+  new_secret_file "$out"
   curl -sS --max-time 900 -o "$out" -w '%{http_code}' \
     -c "$jar" -b "$jar" \
     -X POST "http://127.0.0.1:${port}${path}" \
@@ -1969,10 +1992,29 @@ instatic_post() {
 
 instatic_get() {
   local port=$1 domain=$2 jar=$3 path=$4 out=$5
+  new_secret_file "$out"
   curl -sS --max-time 900 -o "$out" -w '%{http_code}' \
     -c "$jar" -b "$jar" \
     "http://127.0.0.1:${port}${path}" \
     -H "Origin: https://${domain}" || true
+}
+
+# A file curl is about to create, made empty and 0600 first.
+#
+# curl writes its output file and its cookie jar with the process umask, and
+# `cmd_run` inherits the unit's UMask=0022 -- so a live session token and a full
+# export of a customer's site landed as 0644 while every other secret in that
+# directory is 0600. The export stayed that way for the whole download, because
+# the chmod only ran once curl had finished. Both `-o` and `-c` truncate an
+# existing file rather than recreating it, so the mode set here is the mode they
+# keep. The 0700 job directory is the other half of this; a mode is not a
+# substitute for it, and it is not a substitute for a mode.
+new_secret_file() {
+  local f=$1
+  rm -f "$f"
+  ( umask 077; : > "$f" )
+  chmod 600 "$f"
+  return 0
 }
 
 # Write a JSON request body without any of it passing through argv. printf is a
@@ -2004,7 +2046,9 @@ instatic_login() {
   local req="${JOB_DIR}/.api-req" out="${JOB_DIR}/.api-out" code
   INSTATIC_REJECT=""
 
-  rm -f "$jar"
+  # The jar starts here, so this is where its mode is set. Every later call
+  # passes -b as well as -c and must not truncate it.
+  new_secret_file "$jar"
   instatic_body "$req" "$(printf '{"email":%s,"password":%s}' "$(json_str "$email")" "$(json_str "$password")")"
   code=$(instatic_post "$port" "$domain" "$jar" "/admin/api/cms/login" "application/json" "$req" "$out")
   rm -f "$req"
@@ -2082,6 +2126,9 @@ instatic_setup() {
   local port=$1 domain=$2 jar=$3 email=$4 password=$5 site_name=$6
   local req="${JOB_DIR}/.api-req" out="${JOB_DIR}/.api-out" code
   INSTATIC_REJECT=""
+
+  # The first call on the clone's own jar, so the same rule applies here.
+  new_secret_file "$jar"
 
   instatic_body "$req" "$(printf '{"siteName":%s,"email":%s,"password":%s}' \
     "$(json_str "$site_name")" "$(json_str "$email")" "$(json_str "$password")")"
@@ -2166,7 +2213,7 @@ cmd_describe() {
 }
 
 cmd_clone() {
-  local source=$1 target=$2 tls=$3 port=$4 email=$5 mfa=$6
+  local source=$1 target=$2 tls=$3 port=$4 email=$5
 
   [[ $source != "$target" ]] || emit_err "the source and the target are the same site"
   site_exists "$source" || emit_err "no CloudPanel site for ${source}"
@@ -2182,30 +2229,41 @@ cmd_clone() {
   # settled here rather than inside the job: a refusal that arrives minutes
   # later, after a job record exists and a page has been polling it, reads as a
   # failed clone rather than as a request that was never going to work.
-  local password=""
+  local password="" mfa=""
   if [[ $type == "reverse-proxy" ]]; then
     instatic_backend_of "$source" || emit_err "${source} cannot be cloned: ${INSTATIC_REJECT}"
     [[ -n $port ]]  || emit_err "cloning an Instatic site needs --port for the clone's own instance"
     [[ -n $email ]] || emit_err "cloning an Instatic site needs --email for the source instance's admin account"
-    # On stdin, never in argv: anything passed as an argument is readable out
-    # of ps by every account on this box, and this is the password to another
-    # site's administration.
+    # Both secrets on stdin, never in argv. An argument is readable out of `ps`
+    # by every account on this box for as long as the process lives, and worse
+    # than that here: `sudo` journals this wrapper's whole COMMAND line --
+    # verified against this box's own journal -- so `--mfa` wrote the code into
+    # the persistent journal. validate_mfa deliberately accepts a *recovery*
+    # code, and a recovery code does not expire.
     #
-    # The whole of stdin, not one line of it. `IFS= read -r` stops at the first
-    # newline, so a password containing one arrived here silently shortened and
-    # produced a 401 -- spending the production account's lockout budget on a
-    # value the operator never typed. The `x` survives command substitution's
-    # newline strip so that only the terminator the caller adds is removed, and
-    # anything left with a newline in it is refused rather than trimmed.
-    password=$(cat; printf x) || true
-    password=${password%x}
-    password=${password%$'\n'}
+    # One per line, the password first. The whole of stdin rather than one
+    # `read`: `IFS= read -r` stops at the first newline, so a password
+    # containing one arrived here silently shortened and produced a 401 --
+    # spending the production account's lockout budget on a value the operator
+    # never typed. The `x` survives command substitution's newline strip so that
+    # only the terminator the caller adds is removed, and line framing is sound
+    # only because a newline inside either secret is refused rather than trimmed.
+    local supplied
+    supplied=$(cat; printf x) || true
+    supplied=${supplied%x}
+    supplied=${supplied%$'\n'}
+    password=${supplied%%$'\n'*}
+    if [[ $supplied == *$'\n'* ]]; then mfa=${supplied#*$'\n'}; fi
+    supplied=""
     [[ -n $password ]] || emit_err "cloning an Instatic site needs the source instance's admin password on stdin"
-    [[ $password != *$'\n'* ]] || emit_err "the password may not contain a newline"
     (( ${#password} <= 256 )) || emit_err "the password is too long"
+    if [[ -n $mfa ]]; then
+      [[ $mfa != *$'\n'* ]] || emit_err "stdin holds more than a password and an authentication code"
+      validate_mfa "$mfa"
+    fi
   else
-    if [[ -n $port || -n $email || -n $mfa ]]; then
-      emit_err "--port, --email and --mfa apply only to cloning an Instatic site"
+    if [[ -n $port || -n $email ]]; then
+      emit_err "--port and --email apply only to cloning an Instatic site"
     fi
   fi
 
@@ -2233,11 +2291,14 @@ cmd_clone() {
   job_set "$dir" tls "$tls"
   if [[ -n $port ]];  then job_set "$dir" port "$port"; fi
   if [[ -n $email ]]; then job_set "$dir" email "$email"; fi
-  if [[ -n $mfa ]];   then job_set "$dir" mfa "$mfa"; fi
-  # 0600 in a 0700 root directory, like the database dump, and deleted by the
-  # job the moment the export it exists for has finished. `run` is started by
-  # systemd and inherits no stdin, so this is the only way the credential can
-  # reach it -- and it is why the record is a file rather than an argument.
+  # Both credentials land as files, 0600 in a 0700 root directory like the
+  # database dump, and both are deleted by the job the moment the sign-in they
+  # exist for has succeeded. `run` is started by systemd and inherits no stdin,
+  # so a file is the only way either can reach it -- and it is why the record is
+  # a file rather than an argument. Nothing used to delete the authentication
+  # code at all, so it survived JOB_RETENTION_DAYS in a record that is kept
+  # precisely because it holds a credential the panel cannot show again.
+  if [[ -n $mfa ]];      then job_set "$dir" mfa "$mfa"; fi
   if [[ -n $password ]]; then job_set "$dir" srcPassword "$password"; fi
   job_set "$dir" createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   job_set "$dir" step "queued"
@@ -2272,6 +2333,12 @@ cmd_clone() {
         -- "$SELF" run --job "$id" >&2; then
     job_set "$dir" error "could not start the clone job"
     job_set "$dir" state failed
+    # The credentials go with the job that will never run them. This path
+    # marked the record failed and left them on disk, where `prune` keeps a
+    # failed record for JOB_RETENTION_DAYS -- so a job that never started was
+    # the one way another site's administrator password outlived the request
+    # that carried it.
+    rm -f "${dir}/srcPassword" "${dir}/mfa"
     emit_err "systemd-run refused to start the clone job"
   fi
 
@@ -2350,7 +2417,7 @@ cmd_prune() {
 
 VERB=$1; shift
 
-SOURCE=""; TARGET=""; DOMAIN=""; JOB=""; TLS="no"; PORT=""; EMAIL=""; MFA=""
+SOURCE=""; TARGET=""; DOMAIN=""; JOB=""; TLS="no"; PORT=""; EMAIL=""
 while (( $# > 0 )); do
   case $1 in
     --source) [[ $# -ge 2 ]] || emit_err "--source needs a value"; SOURCE=$2; shift 2 ;;
@@ -2360,14 +2427,17 @@ while (( $# > 0 )); do
     --tls)    [[ $# -ge 2 ]] || emit_err "--tls needs a value";    TLS=$2;    shift 2 ;;
     --port)   [[ $# -ge 2 ]] || emit_err "--port needs a value";   PORT=$2;   shift 2 ;;
     --email)  [[ $# -ge 2 ]] || emit_err "--email needs a value";  EMAIL=$2;  shift 2 ;;
-    --mfa)    [[ $# -ge 2 ]] || emit_err "--mfa needs a value";    MFA=$2;    shift 2 ;;
     *) emit_err "unknown argument: '$1'" ;;
   esac
 done
 
-# There is deliberately no --password. The one credential this wrapper takes
-# arrives on stdin, because an argument is visible in ps to every account on the
-# box for as long as the process lives.
+# There is deliberately no --password and no --mfa. Both credentials this
+# wrapper takes arrive on stdin, one per line, because an argument is visible in
+# ps to every account on the box for as long as the process lives -- and because
+# sudo journals this wrapper's whole COMMAND line, so an argument outlives the
+# process entirely. The authentication code was in argv until that was measured
+# against this box's own journal; validate_mfa accepts a recovery code, and a
+# recovery code does not expire.
 
 case $VERB in
   sites|jobs|prune) ;;
@@ -2375,19 +2445,18 @@ case $VERB in
   clone)            validate_domain "$SOURCE" source; validate_domain "$TARGET" target
                     validate_flag "$TLS" tls
                     if [[ -n $PORT ]];  then validate_port "$PORT";   fi
-                    if [[ -n $EMAIL ]]; then validate_email "$EMAIL"; fi
-                    if [[ -n $MFA ]];   then validate_mfa "$MFA";     fi ;;
+                    if [[ -n $EMAIL ]]; then validate_email "$EMAIL"; fi ;;
   run|job)          validate_job "$JOB" ;;
   *) emit_err "unknown verb: '$VERB'" ;;
 esac
 
 # Reject arguments the verb does not take, so a typo cannot be silently ignored.
 case $VERB in
-  clone) if [[ -n $DOMAIN || -n $JOB ]]; then emit_err "clone takes --source, --target, --tls and, for an Instatic site, --port, --email and --mfa"; fi ;;
-  describe) if [[ -n $SOURCE || -n $TARGET || -n $JOB || $TLS != "no" || -n $PORT || -n $EMAIL || -n $MFA ]]; then emit_err "describe takes only --domain"; fi ;;
-  run|job) if [[ -n $SOURCE || -n $TARGET || -n $DOMAIN || $TLS != "no" || -n $PORT || -n $EMAIL || -n $MFA ]]; then emit_err "${VERB} takes only --job"; fi ;;
+  clone) if [[ -n $DOMAIN || -n $JOB ]]; then emit_err "clone takes --source, --target, --tls and, for an Instatic site, --port and --email"; fi ;;
+  describe) if [[ -n $SOURCE || -n $TARGET || -n $JOB || $TLS != "no" || -n $PORT || -n $EMAIL ]]; then emit_err "describe takes only --domain"; fi ;;
+  run|job) if [[ -n $SOURCE || -n $TARGET || -n $DOMAIN || $TLS != "no" || -n $PORT || -n $EMAIL ]]; then emit_err "${VERB} takes only --job"; fi ;;
   sites|jobs|prune)
-    if [[ -n $SOURCE || -n $TARGET || -n $DOMAIN || -n $JOB || $TLS != "no" || -n $PORT || -n $EMAIL || -n $MFA ]]; then
+    if [[ -n $SOURCE || -n $TARGET || -n $DOMAIN || -n $JOB || $TLS != "no" || -n $PORT || -n $EMAIL ]]; then
       emit_err "${VERB} takes no arguments"
     fi ;;
 esac
@@ -2425,7 +2494,7 @@ esac
 case $VERB in
   sites)    cmd_sites ;;
   describe) cmd_describe "$DOMAIN" ;;
-  clone)    cmd_clone "$SOURCE" "$TARGET" "$TLS" "$PORT" "$EMAIL" "$MFA" ;;
+  clone)    cmd_clone "$SOURCE" "$TARGET" "$TLS" "$PORT" "$EMAIL" ;;
   run)      cmd_run "$JOB" ;;
   job)      cmd_job "$JOB" ;;
   jobs)     cmd_jobs ;;
