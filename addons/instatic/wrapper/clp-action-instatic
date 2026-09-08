@@ -546,7 +546,12 @@ cmd_create() {
 META
 
   trap - EXIT
-  emit_ok "{\"domain\":\"${domain}\",\"port\":${port},\"tag\":\"${tag}\",\"container\":\"${name}\",\"siteUser\":\"${site_user_final}\",\"status\":\"running\"}"
+  # siteCreatedByAddon is in the reply and not only in meta.json because it is
+  # the answer to "was this site mine to make", and a caller that adopted rather
+  # than created has to be able to tell. The Stager reads it: it delegates the
+  # whole reverse-proxy create here, and taking a zero exit as "created" had it
+  # rewrite the panel record of a site that was already serving something.
+  emit_ok "{\"domain\":\"${domain}\",\"port\":${port},\"tag\":\"${tag}\",\"container\":\"${name}\",\"siteUser\":\"${site_user_final}\",\"siteCreatedByAddon\":$( (( site_created == 1 )) && echo true || echo false ),\"status\":\"running\"}"
 }
 
 cmd_update() {

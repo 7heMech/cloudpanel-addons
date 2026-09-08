@@ -942,6 +942,77 @@ console.log("\n== the fallback carries vhosts the template route has to refuse =
   }
 }
 
+console.log("\n== a site the job adopted is not a site the job created ==");
+
+// The Instatic wrapper adopts a matching pre-existing reverse-proxy site rather
+// than failing, and keeps its own site_created=0 precisely so its cleanup never
+// deletes a site that was already serving something. The Stager delegates the
+// whole reverse-proxy create to it and used to set SITE_CREATED=1 on a zero exit,
+// which threw that answer away twice: SITE_CREATED is the only guard on the panel
+// write, and the rollback deleted through the same flag.
+//
+// The answer now crosses in the reply, so the field name is a contract between
+// two files that cannot import each other -- which is the thing a test has to
+// hold.
+{
+  const S = "addons/stager/wrapper/clp-action-stager";
+  const I = "addons/instatic/wrapper/clp-action-instatic";
+  const stager = readFileSync(S, "utf-8");
+  const instatic = readFileSync(I, "utf-8");
+
+  const createReply = instatic.slice(instatic.indexOf("cmd_create() {"));
+  check("the instatic create reply carries the created-or-adopted answer",
+    createReply.slice(0, createReply.indexOf("\ncmd_update")).includes('\\"siteCreatedByAddon\\":'),
+    createReply.split("\n").filter((l) => l.includes("emit_ok")).join(" | "));
+  check("and the stager reads that same field",
+    stager.includes('json_field "${dir}/.instatic-create" siteCreatedByAddon'));
+  check("rather than trusting the exit status",
+    !/create --domain "\$target".*\n\s*\|\| fail_job.*\n\s*SITE_CREATED=1/.test(stager));
+
+  // The reader itself, driven as the real bash function over a reply of the
+  // shape the instatic wrapper emits.
+  const fn = bashFunction(S, "json_field");
+  const read = (json: string, field: string) => {
+    const d = mkdtempSync(`${tmpdir()}/clp-json-field-`);
+    try {
+      writeFileSync(`${d}/reply`, json);
+      return execFileSync("bash", ["-c", `${fn}\njson_field "$1" "$2" || true`, "_", `${d}/reply`, field],
+        { encoding: "utf-8" }).trim();
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  };
+  const CREATED = '{"ok":true,"data":{"domain":"stg.demo.test","port":39001,"tag":"0.0.18",'
+    + '"container":"instatic-stg","siteUser":"addon-stgdemot-abc123","siteCreatedByAddon":true,"status":"running"}}';
+  const ADOPTED = CREATED.replace("true,\"status", "false,\"status");
+  check("a created site reads as true", read(CREATED, "siteCreatedByAddon") === "true",
+    read(CREATED, "siteCreatedByAddon"));
+  check("an adopted site reads as false", read(ADOPTED, "siteCreatedByAddon") === "false",
+    read(ADOPTED, "siteCreatedByAddon"));
+  check("a reply without the field reads as nothing, which is not true",
+    read('{"ok":true,"data":{"domain":"x"}}', "siteCreatedByAddon") === "");
+  check("the port still reads out of the same helper", read(CREATED, "port") === "39001",
+    read(CREATED, "port"));
+
+  // The two unwind questions are separate, because an Instatic clone can have
+  // created the instance while adopting the site: that wrapper refuses outright
+  // if the container or meta.json already exist, so the container and the data
+  // directory are always the job's, and its own delete leaves an adopted site
+  // alone while removing them.
+  const rollback = stager.slice(stager.indexOf("  rollback() {"));
+  const unwind = rollback.slice(0, rollback.indexOf("\n  }\n"));
+  check("the instatic unwind is keyed on the instance, not on the site",
+    unwind.indexOf("SITE_VIA_INSTATIC == 1") < unwind.indexOf("SITE_CREATED == 1")
+    && unwind.includes("elif (( SITE_CREATED == 1 ))"),
+    unwind.split("\n").filter((l) => l.includes("SITE_")).join(" | "));
+
+  // And the window cmd_clone leaves open when it drops the lock before handing
+  // the work to systemd is closed where the work actually starts.
+  check("the run verb re-checks that the target does not already exist",
+    /if site_exists "\$target"; then\n\s*fail_job/.test(stager),
+    stager.split("\n").filter((l) => l.includes("site_exists")).join(" | "));
+}
+
 console.log("\n== reusing an artifact already in the release tree ==");
 
 // Reuse is only sound because it is gated on the release's own recorded

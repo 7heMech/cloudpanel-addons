@@ -110,6 +110,17 @@ json_str() {
   printf '"%s"' "$s"
 }
 
+# One field out of a flat JSON object, without a JSON parser, so the error path
+# still works on a box where jq is missing. Only ever pointed at documents this
+# project's own wrappers wrote -- an instance's meta.json and the reply from the
+# Instatic wrapper's own stdout contract -- which is what makes a sed defensible
+# where a parser would otherwise be owed.
+json_field() {
+  local file=$1 field=$2
+  [[ -f $file ]] || return 1
+  sed -n "s/.*\"${field}\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$file" | head -1
+}
+
 # --- validation -------------------------------------------------------------
 # Every one of these rejects. None of them rewrite their input.
 
@@ -348,10 +359,21 @@ new_job_id() {
 # the EXIT trap that rolls a failed clone back runs outside cmd_run's scope.
 STEP=""
 JOB_DIR=""
+# Did this job create the CloudPanel *site*? It gates the one panel write, so
+# "yes" has to mean the row was made seconds ago and belonged to nobody before.
+# It is not the same question as whether anything was created at all: the
+# Instatic wrapper adopts a matching pre-existing reverse-proxy site rather than
+# failing, and keeps its own site_created=0 so its cleanup never deletes a site
+# that was already serving something. Taking a zero exit status as "created"
+# threw that answer away.
 SITE_CREATED=0
-# An Instatic clone's site is created by the Instatic wrapper together with its
-# container and its data directory, so unwinding one means going back through
-# that wrapper rather than deleting the CloudPanel site out from under it.
+# Did this job create the Instatic *instance* -- the container and the data
+# directory -- so that unwinding means going back through the Instatic wrapper
+# rather than deleting the CloudPanel site out from under it? A separate
+# question from the one above, because that wrapper refuses outright if the
+# container or meta.json already exist, so a successful create always made the
+# instance even when it only adopted the site. Its own `delete` then removes
+# exactly what it made and leaves an adopted site alone.
 SITE_VIA_INSTATIC=0
 DB_CREATED=0
 DUMP_FILE=""
@@ -410,6 +432,16 @@ cmd_run() {
   local state; state=$(job_get "$dir" state)
   [[ $state == "queued" ]] || fail_job "job ${id} is ${state}, not queued"
 
+  # Re-checked here and not only in `clone`. That verb refuses a target that
+  # already exists, but it releases the target's lock before handing the work to
+  # systemd -- deliberately, because holding it deadlocked the two against each
+  # other -- so a site can appear in the window between. Every guard below that
+  # says "a site this job created" rests on nothing having created it first, and
+  # this is the only place under the lock where that can still be established.
+  if site_exists "$target"; then
+    fail_job "a CloudPanel site for ${target} appeared after this clone was queued; nothing was changed"
+  fi
+
   job_set "$dir" state running
   job_set "$dir" startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -431,16 +463,20 @@ cmd_run() {
       "$CLPCTL" vhost-template:delete --name="$TEMPLATE_NAME" >&2 2>/dev/null || true
       TEMPLATE_NAME=""
     fi
-    if (( SITE_CREATED == 1 )); then
+    # Keyed on what was created rather than on one flag for both, because an
+    # Instatic clone can have created the instance while adopting the site.
+    if (( SITE_VIA_INSTATIC == 1 )); then
+      # Through the Instatic wrapper, which also removes the container and
+      # archives the data. Deleting the CloudPanel site directly would leave a
+      # running container bound to a port nothing routes to -- and that wrapper
+      # is also the side that knows whether the site was its to delete: it reads
+      # siteCreatedByAddon out of the instance's own meta.json and leaves an
+      # adopted site in place.
+      warn "removing the staging Instatic instance this run created"
+      "$INSTATIC_WRAPPER" delete --domain "$target" --confirm "$target" >&2 2>/dev/null || true
+    elif (( SITE_CREATED == 1 )); then
       warn "removing the staging site this run created"
-      if (( SITE_VIA_INSTATIC == 1 )); then
-        # Through the Instatic wrapper, which also removes the container and
-        # archives the data. Deleting the CloudPanel site directly would leave
-        # a running container bound to a port nothing routes to.
-        "$INSTATIC_WRAPPER" delete --domain "$target" --confirm "$target" >&2 2>/dev/null || true
-      else
-        "$CLPCTL" site:delete --domainName="$target" --force >&2 2>/dev/null || true
-      fi
+      "$CLPCTL" site:delete --domainName="$target" --force >&2 2>/dev/null || true
     fi
     if [[ $(job_get "$dir" state) != "failed" ]]; then
       job_set "$dir" error "clone failed during '${STEP}'"
@@ -606,10 +642,31 @@ cmd_run() {
       # reimplemented because that wrapper is where "what an Instatic instance
       # is" lives, and a second implementation of it here would drift.
       set_step "creating the staging Instatic instance ${target} on port ${port}"
-      "$INSTATIC_WRAPPER" create --domain "$target" --port "$port" --tag "$src_tag" >&2 \
+      # stdout is captured rather than folded into the log, because the reply is
+      # the only place the created-or-adopted answer exists for *this* call. The
+      # wrapper's progress still goes to stderr and therefore into the job's
+      # transcript.
+      "$INSTATIC_WRAPPER" create --domain "$target" --port "$port" --tag "$src_tag" \
+        > "${dir}/.instatic-create" \
         || fail_job "the Instatic addon could not create an instance for ${target}"
-      SITE_CREATED=1
-      SITE_VIA_INSTATIC=1 ;;
+      # The container and the data directory are always this job's: that wrapper
+      # refuses outright if either already exists, so a zero exit means it made
+      # them. Unwinding therefore goes back through it whatever happened to the
+      # site.
+      SITE_VIA_INSTATIC=1
+      # The site is a separate question, and it is the one that decides whether
+      # the panel record may be rewritten. That wrapper adopts a matching
+      # pre-existing reverse-proxy site rather than failing, and says so; taking
+      # its exit status as "created" claimed a row this job did not make, which
+      # is precisely what SITE_CREATED exists to refuse. Anything but an explicit
+      # `true` counts as adopted, because the safe answer to "am I sure this is
+      # mine" is no.
+      if [[ $(json_field "${dir}/.instatic-create" siteCreatedByAddon) == "true" ]]; then
+        SITE_CREATED=1
+      else
+        notes+=("the CloudPanel site for ${target} already existed and was adopted rather than created, so its vhost and panel record were left as they were")
+      fi
+      rm -f "${dir}/.instatic-create" ;;
   esac
 
   # Its whole purpose was this one site:add:php. CloudPanel copies the rendered
@@ -1759,7 +1816,7 @@ instatic_meta() {
   local domain=$1 field=$2
   local file="${INSTATIC_DATA_DIR}/${domain}/meta.json"
   [[ -f $file ]] || return 1
-  sed -n "s/.*\"${field}\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$file" | head -1
+  json_field "$file" "$field"
 }
 
 INSTATIC_REJECT=""
