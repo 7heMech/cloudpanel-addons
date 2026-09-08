@@ -5,8 +5,31 @@
 // route in is that site's nginx vhost, which carries the per-site security.
 
 import { stagerService, validateDomain, validateJobId, expandTarget } from "./service";
+import type { JobView } from "./service";
 import { layout, jobsView, newCloneView, jobView } from "./views";
 import { guardMutation, newCsrfToken, csrfCookieHeader, SECURITY_HEADERS } from "../../../lib/app-http";
+import { getNextAvailablePort, readSnapshot } from "../../../lib/snapshot-reader";
+
+/**
+ * Ports this addon has handed out that the panel snapshot cannot know about.
+ *
+ * The snapshot is rewritten by the root CLI on repair, so it is authoritative
+ * only for instances that existed when it was written. Two windows are not
+ * covered by it: a clone still in flight, whose instance does not exist yet,
+ * and a clone that finished after the snapshot was taken. Both are added here.
+ * A failed clone is not -- its instance was rolled back, so its port is free.
+ */
+function portsSinceSnapshot(jobs: JobView[], snapshotTakenAt: string): number[] {
+  const taken = Date.parse(snapshotTakenAt);
+  return jobs
+    .filter((j) => j.port > 0 && j.state !== "failed")
+    .filter((j) => {
+      if (j.state === "queued" || j.state === "running") return true;
+      const finished = Date.parse(j.finishedAt);
+      return Number.isNaN(finished) || Number.isNaN(taken) || finished >= taken;
+    })
+    .map((j) => j.port);
+}
 
 function html(body: string, csrf: string, status = 200): Response {
   return new Response(body, {
@@ -118,7 +141,10 @@ export async function handle(req: Request, path: string): Promise<Response> {
     } catch {
       return json({ ok: false, error: "body must be JSON" }, 400);
     }
-    const { source: rawSource, target: rawTarget, tls } = (body ?? {}) as Record<string, unknown>;
+    const {
+      source: rawSource, target: rawTarget, tls,
+      instaticEmail, instaticPassword, mfaCode,
+    } = (body ?? {}) as Record<string, unknown>;
 
     const source = validateDomain(typeof rawSource === "string" ? rawSource.toLowerCase() : null);
     if (!source) return json({ ok: false, error: "source is not a valid hostname" }, 400);
@@ -129,7 +155,39 @@ export async function handle(req: Request, path: string): Promise<Response> {
     if (!target) return json({ ok: false, error: "target is not a valid hostname" }, 400);
     if (target === source) return json({ ok: false, error: "the target is the site being cloned" }, 400);
 
-    const res = await stagerService.startClone(source, target, tls === true);
+    // The credential fields are accepted only for a source that really is an
+    // Instatic site, and that is settled by asking the wrapper rather than by
+    // trusting the body: `describe` refuses a reverse-proxy site whose backend
+    // is not an instance this box manages. Nothing here is ever logged.
+    const detail = await stagerService.describe(source);
+    if (!detail.ok || !detail.data) {
+      return json({ ok: false, error: detail.error ?? `cannot clone ${source}` }, 400);
+    }
+    let instatic: { port: number; email: string; password: string; mfaCode?: string } | undefined;
+    if (detail.data.siteType === "reverse-proxy") {
+      if (typeof instaticEmail !== "string" || !instaticEmail.trim()) {
+        return json({ ok: false, error: "cloning an Instatic site needs the source's admin email address" }, 400);
+      }
+      if (typeof instaticPassword !== "string" || !instaticPassword) {
+        return json({ ok: false, error: "cloning an Instatic site needs the source's admin password" }, 400);
+      }
+      // Allocated here because the app is the side that can read the panel
+      // snapshot both addons share; the wrapper only re-validates the number.
+      const snapshot = readSnapshot();
+      instatic = {
+        port: getNextAvailablePort(
+          snapshot,
+          portsSinceSnapshot(await stagerService.listJobs(), snapshot.updatedAt)
+        ),
+        email: instaticEmail.trim().toLowerCase(),
+        password: instaticPassword,
+        ...(typeof mfaCode === "string" && mfaCode.trim() ? { mfaCode: mfaCode.trim() } : {}),
+      };
+    } else if (instaticEmail !== undefined || instaticPassword !== undefined || mfaCode !== undefined) {
+      return json({ ok: false, error: `${source} is not an Instatic site, so it takes no credentials` }, 400);
+    }
+
+    const res = await stagerService.startClone(source, target, tls === true, instatic);
     return json(res, res.ok ? 200 : 400);
   }
 

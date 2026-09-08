@@ -790,9 +790,17 @@ templates already do that, so the snippet is a Twig fragment rather than a
 string of HTML. The cost is that it is only correct where `site` is in scope,
 which is a property of the target template rather than of the snippet -- both
 targets either receive `site` as an include parameter or set it as a loop
-variable, and a third one may not. It is also guarded by `site.type == 'php'`,
-because only a PHP site can be cloned and a button that always errors is worse
-than no button.
+variable, and a third one may not. It is also guarded by a membership test over
+the site types the wrapper will clone, because a button that always errors is
+worse than no button.
+
+That guard is a mirror of `CLONABLE_TYPES` in the wrapper, which is the thing
+that actually decides. One case it deliberately cannot mirror: a reverse-proxy
+site is clonable only when its backend is an Instatic instance this box manages,
+and that fact lives in the Instatic addon's own records, where Twig cannot reach
+it. So the button appears on every reverse proxy and the wrapper refuses the ones
+that are not, by name. Teaching the panel's templates about another addon's state
+directory would be the worse trade.
 
 **Cloning is a job, not a request.** A clone of a real site takes minutes:
 `clpctl db:export`, a tar pipeline over the whole document root, `db:import`.
@@ -887,6 +895,132 @@ The remaining checks are made before the panel is asked, so a refusal names the
 line responsible: the source hostname must not survive anywhere, and every
 `server_name` token must be the target or below it. A clone that would answer
 for another site is the failure worth spending a gate on.
+
+### Where `clpctl` offers no route, the Stager writes the panel itself
+
+The template route above is only available for PHP. Measured against the
+installed 2.5.4-3 CLI: **`site:add:php` is the only `site:add:*` verb with a
+`--vhostTemplate` option** -- `site:add:static`, `site:add:reverse-proxy`,
+`site:add:nodejs` and `site:add:python` reject it with "the option does not
+exist". So for a static or Instatic clone the choice is not between two routes,
+it is between writing `site.vhost_template` and shipping a staging site whose
+nginx config is not the one being tested.
+
+This is a deliberate, scoped exception to "clpctl is the only thing that writes
+panel state", and the test the Instances bullet states still applies: *when
+clpctl can be made to do the writing, doing it through clpctl is the rule, not
+an exception*. Here it cannot. The exception is bounded by what it is allowed to
+touch rather than by good intentions:
+
+- **One `UPDATE`, one row.** `WHERE domain_name = <target> AND type = <type>`,
+  on a UNIQUE column, setting `vhost_template`, `application` and `updated_at`.
+  Guarded by `SITE_CREATED == 1`, so the row can only ever be one this job
+  created seconds ago -- an adopted or pre-existing site is never written to.
+- **Run as `clp`, never as root.** The database is `journal_mode=delete`, so a
+  write creates a transient `db.sq3-journal` beside it. Made by root, that file
+  is left root-owned in a `clp:clp` 0770 directory and the panel cannot recover
+  it. `/usr/bin/clpctlWrapper` already runs the whole CLI as `clp`; this matches.
+- **The body reaches sqlite through `readfile()`**, so a multi-kilobyte nginx
+  config is never escaped into a SQL string. The staged file is `root:clp` 0640
+  in a `root:clp` 0710 directory -- the same dance the template handoff uses,
+  and for the same reason. The interpolated `<target>` has passed
+  `validate_domain`, which is what makes it safe; `<type>` is one of three
+  literals.
+- **Read back and compared** inside sqlite against the same file, so it is a
+  byte comparison of the column rather than of two shell variables command
+  substitution has already trimmed. It fails closed.
+
+**The renderer is learned, not reimplemented.** CloudPanel's rendering is pure
+`{{placeholder}}` substitution -- `Template::build()` runs each placeholder's
+processor and `removeEmptyPlaceholders()` blanks the rest -- and there is no
+console command that re-renders a vhost from the database. Rather than hardcode
+a processor list a panel update can change, the addon splits the *clone's own*
+freshly stored body on its placeholders and walks the file the panel wrote for
+it seconds earlier, matching literal segments in order. What lies between two
+literals is the preceding placeholder's value. It copies whatever this panel did
+to this site a moment ago.
+
+That is only sound because it refuses rather than guesses. The walk must consume
+the rendered file exactly to EOF; a placeholder appearing twice must resolve
+identically both times; a value is only ever taken as the shortest string that
+reaches the next literal, so a wrong guess surfaces as a later literal failing to
+match rather than as a plausible wrong answer; and a placeholder in the composed
+body the map does not know is a refusal, never an empty string. Blanking it the
+way the panel does would turn an unknown `{{root}}` into a server block with no
+document root, which nginx accepts and serves as the wrong thing.
+
+**Install order is file first**, and that ordering is the whole safety argument.
+The rendered config is written and `nginx -t`-ed before the database is touched,
+so the row the panel would regenerate from is never left describing a config
+nginx rejected; nothing is reloaded until both have succeeded, so a bad config is
+never served; and every failure restores the backup. The worst outcome is a
+working clone on the stock vhost plus a note saying why -- never a missing clone
+and never a broken nginx.
+
+**It carries vhosts the template route has to refuse.** The `{{server_name}}`
+requirement exists only because `vhost-template:add` demands the placeholder, and
+this path does not go through that verb. So the gap listed below -- a source
+whose `server_name` line is itself the hand edit -- is closed for every type,
+because a PHP source the template route refuses now falls through to this one.
+The two real checks are unchanged and are what the gate still is: the source
+hostname must not survive anywhere, and every `server_name` token must be the
+target or below it.
+
+## Cloning an Instatic site means cloning the application, not the hostname
+
+A reverse-proxy site's backend is a port. Cloning the site alone gives a second
+hostname pointing at the *same* container -- a staging site that edits production
+content, which is the one outcome a staging tool must never produce. So the
+reverse-proxy path starts by establishing that the backend is an Instatic
+instance this box manages: `/var/lib/clp-addons/instatic/<source>/meta.json`
+exists, **and** the panel's own `site.reverse_proxy_url` is that record's port on
+the loopback. Either alone is not enough -- a record outlives a site that was
+repointed, and a loopback URL says nothing about what is listening on it.
+Anything else is refused by name, with nothing created.
+
+The content then moves through **Instatic's own site-bundle export and import**,
+never through its files. Reaching into an instance's `data/` and `uploads/` would
+freeze this addon against one version of a schema it does not own, and drag the
+source's master key and sessions along with the content. The bundle is the
+supported interface and survives Instatic's own migrations.
+
+What makes the bundle the *right* transfer is what it leaves behind: the site
+shell, tables, rows, media, folders and redirects travel; **no users and no
+secrets do**. So the clone gets its own `INSTATIC_SECRET_KEY`, its own owner and
+its own sessions, and nothing encrypted at rest crosses between two instances.
+The cost is stated in the job rather than papered over: per-instance integration
+secrets are encrypted under the source's key and must be re-entered, and absolute
+links typed into a page still name the source -- the env-level origin is correct
+on the clone, but rewriting content would need bundle-schema knowledge, which is
+the same line the WordPress search-replace step draws.
+
+Three details decide whether it works at all:
+
+- **The source's password is on stdin, never in argv.** Anything passed as an
+  argument is readable out of `ps` by every account on the box, and this is
+  another site's administrator credential. It is stored 0600 in the job
+  directory -- which is where it has to live, because `run` is started by
+  `systemd-run` and inherits no stdin -- and deleted the moment the export it
+  exists for has finished. The Instatic addon already refuses to put its master
+  key in `docker run -e` for this reason.
+- **Every mutating request carries an explicit `Origin`.** Instatic runs a CSRF
+  origin check against its configured `PUBLIC_ORIGIN`, and these requests arrive
+  on `127.0.0.1` rather than on the hostname. Sessions ride in a curl cookie jar
+  rather than a cookie name written down here, because the name is Instatic's to
+  change.
+- **The import is `strategy=replace`.** The public one-shot `setup` endpoint
+  seeds a starter homepage, and a merge would leave it beside the imported pages;
+  replace is what makes the clone match its source rather than merely contain it.
+  It is also the highest-blast-radius operation Instatic has, so it wants
+  `data.import` plus `content.manage` plus an open step-up window -- which is why
+  the clone signs in and opens one rather than importing straight after setup.
+
+The session on the source is revoked rather than left to expire. A clone should
+leave nothing live on the site it copied.
+
+Node.js and Python sites are deliberately not clonable. Both are a `site:add:*`
+verb away, but neither exists on the box this was built against, and an untested
+clone path that creates real sites is worse than an honest refusal.
 
 **The handoff file is root:clp 0640 in a 0710 root:clp directory.**
 `/usr/bin/clpctlWrapper` ends with `su -s /bin/bash -c "$COMMAND" clp`, so
@@ -1025,11 +1159,9 @@ window, `update` and `snapshot`. `make_snapshot` writes the archive and stops.
   A Laravel or Symfony clone gets its `.env` credentials rewritten but nothing
   reaches into its database, so anything storing an absolute URL there still
   names the source site.
-- A source whose `server_name` line is itself hand edited cannot have its vhost
-  carried across: CloudPanel requires the `{{server_name}}` placeholder, and the
-  edit and the placeholder cannot both occupy that line. The clone is built from
-  the stock template and the job says so. On the box this was built against that
-  is 1 site in 25.
+- A clone's Instatic content is whatever the source's site bundle held at export
+  time. Absolute links typed into a page still name the source, and per-instance
+  integration secrets are absent by construction. Both are reported as notes.
 - A clone copies the source's files and database as they are at that moment.
   There is no quiescing: a site written to during the copy can produce a staging
   copy whose files and database are from slightly different instants.

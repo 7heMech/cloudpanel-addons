@@ -4,9 +4,35 @@
 // re-validates before acting.
 
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import type { ExecFileOptions } from "node:child_process";
 
-const execFileAsync = promisify(execFile);
+/**
+ * execFile, awaited, with an optional stdin.
+ *
+ * Written out rather than `promisify(execFile)` because the one credential this
+ * addon passes to the wrapper travels on stdin, and the promisified form gives
+ * no handle to write to. `execFile` returns the ChildProcess synchronously, so
+ * the write happens before anything is awaited.
+ */
+function runCommand(
+  cmd: string,
+  args: string[],
+  options: ExecFileOptions,
+  input?: string
+): Promise<{ error: (Error & { code?: number }) | null; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const child = execFile(cmd, args, options, (error, stdout, stderr) => {
+      resolve({
+        error: error as (Error & { code?: number }) | null,
+        stdout: String(stdout ?? ""),
+        stderr: String(stderr ?? ""),
+      });
+    });
+    // Always closed, even with nothing to send: a wrapper verb that read stdin
+    // would otherwise wait on a pipe nobody is going to write to.
+    child.stdin?.end(input ?? "");
+  });
+}
 
 const WRAPPER_BIN = process.env.STAGER_WRAPPER || "/usr/local/lib/clp-addons/clp-action-stager";
 const SUDO_BIN = "/usr/bin/sudo";
@@ -27,29 +53,27 @@ export interface WrapperResult<T = unknown> {
   error?: string;
 }
 
-async function callWrapper<T = unknown>(verb: string, args: string[]): Promise<WrapperResult<T>> {
+async function callWrapper<T = unknown>(
+  verb: string,
+  args: string[],
+  // On stdin rather than in argv, because the only value that ever needs this
+  // is a password and argv is world-readable through /proc.
+  input?: string
+): Promise<WrapperResult<T>> {
   const argv = [verb, ...args];
   const runningAsRoot = process.getuid?.() === 0;
   const cmd = runningAsRoot ? WRAPPER_BIN : SUDO_BIN;
   const cmdArgs = runningAsRoot ? argv : ["-n", WRAPPER_BIN, ...argv];
 
-  let stdout = "";
-  let stderr = "";
-  try {
-    const r = await execFileAsync(cmd, cmdArgs, {
-      timeout: TIMEOUTS[verb] ?? DEFAULT_TIMEOUT,
-      maxBuffer: 8 * 1024 * 1024,
-    });
-    stdout = r.stdout;
-    stderr = r.stderr;
-  } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; message?: string };
-    stdout = e.stdout ?? "";
-    stderr = e.stderr ?? "";
-    if (!stdout.trim()) {
-      console.error(`[wrapper] ${verb} failed without a JSON reply:`, stderr || e.message);
-      return { ok: false, error: stderr.trim() || e.message || `wrapper ${verb} failed` };
-    }
+  const { error, stdout, stderr } = await runCommand(
+    cmd,
+    cmdArgs,
+    { timeout: TIMEOUTS[verb] ?? DEFAULT_TIMEOUT, maxBuffer: 8 * 1024 * 1024 },
+    input
+  );
+  if (error && !stdout.trim()) {
+    console.error(`[wrapper] ${verb} failed without a JSON reply:`, stderr || error.message);
+    return { ok: false, error: stderr.trim() || error.message || `wrapper ${verb} failed` };
   }
 
   if (stderr.trim()) console.error(`[wrapper:${verb}]`, stderr.trim());
@@ -93,27 +117,44 @@ export function expandTarget(input: string, source: string): string {
   return t.includes(".") ? t : `${t}.${source}`;
 }
 
+/** The `site.type` values the wrapper will clone. Kept in step with CLONABLE_TYPES. */
+export type SiteType = "php" | "static" | "reverse-proxy";
+
 export interface SiteSummary {
   domain: string;
+  siteType: SiteType | string;
   siteUser: string;
+  /** Empty for anything but a PHP site: the others have no php_settings row. */
   phpVersion: string;
   application: string;
   databases: number;
 }
 
 export interface SiteDetail extends Omit<SiteSummary, "databases"> {
+  /** True when a reverse-proxy source's backend is an Instatic instance of ours. */
+  instatic: boolean;
   rootDirectory: string;
   database: string;
   sizeMb: number;
 }
 
 export interface JobResult {
+  siteType: SiteType | string;
   siteUser: string;
   phpVersion: string;
   vhostTemplate: string;
   /** Whether the source site's own vhost was reproduced for the clone. */
   vhostCarried: boolean;
+  /**
+   * How it was reproduced. `template` is CloudPanel's own vhost-template route,
+   * available only for PHP; `rendered` is the panel-record write plus a rendered
+   * file, which is the only route for every other type; `stock` means it was not
+   * carried and the notes say why.
+   */
+  vhostCarriedBy: "template" | "rendered" | "stock" | string;
   database: { source: string; name: string; user: string; password: string } | null;
+  /** The clone's own Instatic instance, when the source was one. */
+  instatic: { port: number; tag: string; email: string; password: string } | null;
   notes: string[];
 }
 
@@ -121,6 +162,8 @@ export interface JobView {
   id: string;
   source: string;
   target: string;
+  /** The Instatic port this clone reserved, or 0 for a clone that needed none. */
+  port: number;
   state: "queued" | "running" | "done" | "failed" | string;
   step: string;
   error: string;
@@ -144,12 +187,28 @@ export const stagerService = {
     return callWrapper<SiteDetail>("describe", ["--domain", domain]);
   },
 
-  async startClone(source: string, target: string, tls: boolean): Promise<WrapperResult<{ job: string }>> {
-    return callWrapper<{ job: string }>("clone", [
-      "--source", source,
-      "--target", target,
-      "--tls", tls ? "yes" : "no",
-    ]);
+  /**
+   * Start a clone.
+   *
+   * `instatic` is supplied only when the source is an Instatic site. Its port
+   * is allocated here rather than guessed by the wrapper: `getNextAvailablePort`
+   * reads the panel snapshot both addons share, so the number that crosses the
+   * boundary is one the wrapper only has to re-validate. The password travels on
+   * stdin and never as an argument -- argv is readable out of `ps` by every
+   * account on the box, and this is another site's administrator password.
+   */
+  async startClone(
+    source: string,
+    target: string,
+    tls: boolean,
+    instatic?: { port: number; email: string; password: string; mfaCode?: string }
+  ): Promise<WrapperResult<{ job: string }>> {
+    const args = ["--source", source, "--target", target, "--tls", tls ? "yes" : "no"];
+    if (instatic) {
+      args.push("--port", String(instatic.port), "--email", instatic.email);
+      if (instatic.mfaCode) args.push("--mfa", instatic.mfaCode);
+    }
+    return callWrapper<{ job: string }>("clone", args, instatic ? `${instatic.password}\n` : undefined);
   },
 
   async getJob(id: string): Promise<WrapperResult<{ job: JobView; log: string }>> {

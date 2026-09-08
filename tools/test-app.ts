@@ -340,7 +340,9 @@ console.log("\n== a carried-over vhost may never name the source site ==");
 // make, run before it is asked.
 {
   const W = "addons/stager/wrapper/clp-action-stager";
-  const gateFn = [bashFunction(W, "hostname_boundary"), bashFunction(W, "vhost_template_ok")].join("\n");
+  const gateFn = ["hostname_boundary", "vhost_body_ok", "vhost_template_ok"]
+    .map((n) => bashFunction(W, n))
+    .join("\n");
   const gate = (body: string) => {
     const f = `/tmp/clp-stager-gate-test-${process.pid}.tpl`;
     writeFileSync(f, body);
@@ -430,6 +432,313 @@ console.log("\n== building the carried-over template ==");
   check("the clone's own name is not mangled into a double prefix",
     !out.includes("stg.stg.example.com"), out);
   check("CloudPanel's other placeholders survive untouched", out.includes("{{root}}"), out);
+}
+
+console.log("\n== learning what CloudPanel substituted into a vhost ==");
+
+// site:add:php is the only site:add verb with a --vhostTemplate option, so for
+// a static or reverse-proxy clone the source's config can only be carried by
+// writing the panel record and rendering the file. Rendering it means knowing
+// what this panel put in each {{placeholder}} -- learned by comparing the pair
+// the panel wrote for the clone a moment ago, rather than by reimplementing a
+// processor list a panel update can change.
+//
+// A wrong value here is a wrong nginx config, so what these actually pin is the
+// refusals: the walk must consume the rendered file exactly to EOF, and a
+// placeholder appearing twice must resolve identically both times.
+{
+  const W = "addons/stager/wrapper/clp-action-stager";
+  const MAP_FNS = ["learn_vhost_map", "render_vhost_body"]
+    .map((n) => bashFunction(W, n))
+    .join("\n");
+  // The array and the reject variable are file-level state the two functions
+  // share, so a test that drove them without both would be driving something
+  // that cannot exist.
+  const MAP_PREAMBLE = 'declare -A VHOST_MAP=()\nVHOST_MAP_REJECT=""\n' + MAP_FNS;
+
+  // NUL-separated because the values are nginx config: {{php_settings}} is nine
+  // lines and {{settings}} is empty, and any line- or field-based encoding would
+  // lose one of them.
+  const DUMP = [
+    'if learn_vhost_map "$1" "$2"; then',
+    '  for k in "${!VHOST_MAP[@]}"; do printf \'%s\\0%s\\0\' "$k" "${VHOST_MAP[$k]}"; done',
+    "else",
+    "  printf 'REJECT\\0%s\\0' \"$VHOST_MAP_REJECT\"",
+    "fi",
+  ].join("\n");
+
+  const learn = (stored: string, rendered: string): Map<string, string> => {
+    const d = mkdtempSync(`${tmpdir()}/clp-stager-map-`);
+    try {
+      writeFileSync(`${d}/stored`, stored);
+      writeFileSync(`${d}/rendered`, rendered);
+      const out = execFileSync("bash", ["-c", `${MAP_PREAMBLE}\n${DUMP}`, "_", `${d}/stored`, `${d}/rendered`],
+        { encoding: "utf-8" });
+      const parts = out.split("\0");
+      const map = new Map<string, string>();
+      for (let i = 0; i + 1 < parts.length; i += 2) map.set(parts[i]!, parts[i + 1]!);
+      return map;
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  };
+
+  const render = (body: string, stored: string, rendered: string): string => {
+    const d = mkdtempSync(`${tmpdir()}/clp-stager-render-`);
+    try {
+      writeFileSync(`${d}/stored`, stored);
+      writeFileSync(`${d}/rendered`, rendered);
+      return execFileSync("bash", ["-c",
+        `${MAP_PREAMBLE}\nlearn_vhost_map "$1" "$2" || { printf 'LEARN-REJECT: %s' "$VHOST_MAP_REJECT"; exit 0; }\n` +
+        `render_vhost_body "$3" || printf 'RENDER-REJECT: %s' "$VHOST_MAP_REJECT"`,
+        "_", `${d}/stored`, `${d}/rendered`, body], { encoding: "utf-8" });
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  };
+
+  // Modelled line for line on a real stored/rendered pair off a CloudPanel
+  // 2.5.4 box: a placeholder on its own line, one inline inside a directive,
+  // one appearing twice, one expanding to several lines and one to nothing.
+  const STORED = [
+    "server {",
+    "  {{ssl_certificate}}",
+    "  server_name stg.example.com;",
+    "  {{root}}",
+    "",
+    "  {{nginx_access_log}}",
+    "",
+    "  {{settings}}",
+    "",
+    "  location / {",
+    "    {{root}}",
+    "  }",
+    "",
+    "  location ~ .php$ {",
+    "    fastcgi_pass 127.0.0.1:{{php_fpm_port}};",
+    '    fastcgi_param PHP_VALUE "{{php_settings}}";',
+    "  }",
+    "}",
+  ].join("\n");
+
+  const ROOT = "root /home/addon-stgexamp-ab12cd/htdocs/stg.example.com;";
+  const RENDERED = [
+    "server {",
+    "  ssl_certificate /etc/nginx/ssl-certificates/stg.example.com.crt;",
+    "  server_name stg.example.com;",
+    `  ${ROOT}`,
+    "",
+    "  access_log /home/addon-stgexamp-ab12cd/logs/nginx/access.log main;",
+    "",
+    "  ",
+    "",
+    "  location / {",
+    `    ${ROOT}`,
+    "  }",
+    "",
+    "  location ~ .php$ {",
+    "    fastcgi_pass 127.0.0.1:18031;",
+    '    fastcgi_param PHP_VALUE "',
+    "memory_limit=512M;",
+    'display_errors=off;";',
+    "  }",
+    "}",
+    // The panel writes the rendered template plus one newline the template
+    // itself does not carry. Every site on the box measured this way.
+    "",
+  ].join("\n");
+
+  const map = learn(STORED, RENDERED);
+  check("the walk recovers every placeholder", map.size === 6 && !map.has("REJECT"),
+    [...map.keys()].join(", "));
+  check("a placeholder on its own line", map.get("ssl_certificate") ===
+    "ssl_certificate /etc/nginx/ssl-certificates/stg.example.com.crt;", map.get("ssl_certificate"));
+  check("one inline inside a directive", map.get("php_fpm_port") === "18031", map.get("php_fpm_port"));
+  check("one that appears twice resolves once", map.get("root") === ROOT, map.get("root"));
+  check("one that expands to several lines",
+    map.get("php_settings") === "\nmemory_limit=512M;\ndisplay_errors=off;",
+    JSON.stringify(map.get("php_settings")));
+  check("one that expands to nothing", map.get("settings") === "", JSON.stringify(map.get("settings")));
+
+  // The walk is only sound because it fails rather than guesses. Both of these
+  // would otherwise produce a plausible-looking map and a wrong nginx config.
+  const trailing = learn(STORED, `${RENDERED}# something the template does not have\n`);
+  check("a walk that does not consume the file is refused",
+    trailing.get("REJECT") !== undefined, [...trailing.keys()].join(", "));
+
+  const inconsistent = learn(STORED, RENDERED.replace(`    ${ROOT}`, "    root /somewhere/else;"));
+  check("a placeholder that would resolve two ways is refused",
+    inconsistent.get("REJECT") !== undefined, [...inconsistent.keys()].join(", "));
+  check("and says which placeholder", (inconsistent.get("REJECT") ?? "").includes("{{root}}"),
+    inconsistent.get("REJECT"));
+
+  // Rendering the stored body back through its own learned map must reproduce
+  // the file it was learned from. If that does not hold, nothing built on the
+  // map can be trusted either.
+  check("the map round-trips the body it was learned from",
+    `${render(STORED, STORED, RENDERED)}\n` === RENDERED);
+
+  // An unknown placeholder is a refusal, never an empty string. CloudPanel's own
+  // removeEmptyPlaceholders() blanks leftovers; copying that here would turn an
+  // unknown {{root}} into a server block with no document root, which nginx
+  // accepts and serves as the wrong thing.
+  const unknown = render(STORED.replace("{{root}}", "{{nodejs_proxy_pass}}"), STORED, RENDERED);
+  check("a placeholder the panel did not use is refused, not blanked",
+    unknown.startsWith("RENDER-REJECT") && unknown.includes("nodejs_proxy_pass"), unknown);
+}
+
+console.log("\n== composing a clone's vhost from its source's ==");
+
+// Four things separate a source's stored body from its clone's, and every one
+// of them is something CloudPanel generated rather than something an operator
+// chose: the http->https redirect block, which only an apex or www hostname
+// earns; the shape of the server_name line; any hand edit that names the source
+// hostname; and nothing else at all.
+{
+  const W = "addons/stager/wrapper/clp-action-stager";
+  const fns = ["hostname_boundary", "strip_redirect_block", "take_redirect_block",
+               "fold_server_name", "generated_server_name", "compose_vhost_body"]
+    .map((n) => bashFunction(W, n))
+    .join("\n");
+
+  const compose = (bodies: Record<string, string>, source: string, target: string): string => {
+    const d = mkdtempSync(`${tmpdir()}/clp-stager-compose-`);
+    try {
+      for (const [domain, body] of Object.entries(bodies)) writeFileSync(`${d}/${domain}`, body);
+      // vhost_of is the one panel read compose_vhost_body makes, so stubbing it
+      // is what lets the transform be driven on any machine -- the same reason
+      // vhost_template_body was split out of build_vhost_template.
+      return execFileSync("bash", ["-c",
+        `vhost_of() { cat "${d}/$1"; }\nVHOST_COMPOSE_REJECT=""\n${fns}\n` +
+        `compose_vhost_body "$1" "$2" || printf 'REJECT: %s' "$VHOST_COMPOSE_REJECT"`,
+        "_", source, target], { encoding: "utf-8" });
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  };
+
+  // A static site's stored body, apex, with the redirect block CloudPanel
+  // prepends for one, and two hand edits: one naming the source hostname and
+  // one naming a hostname that merely ends in it.
+  const STATIC_SOURCE = [
+    "server {",
+    "  {{ssl_certificate}}",
+    "  server_name www.example.com;",
+    "  return 301 https://example.com$request_uri;",
+    "}",
+    "",
+    "server {",
+    "  {{ssl_certificate}}",
+    "  server_name example.com www1.example.com;",
+    "  {{root}}",
+    '  add_header Content-Security-Policy "default-src https://example.com";',
+    '  add_header X-Unrelated "https://notexample.com/keep";',
+    "  index index.html;",
+    "}",
+  ].join("\n");
+
+  const SUB_TARGET = [
+    "server {",
+    "  {{ssl_certificate}}",
+    "  server_name stg.example.com;",
+    "  {{root}}",
+    "  index index.html;",
+    "}",
+  ].join("\n");
+
+  const out = compose(
+    { "example.com": STATIC_SOURCE, "stg.example.com": SUB_TARGET },
+    "example.com", "stg.example.com"
+  );
+
+  // First, because two of the checks below are phrased as absences and an empty
+  // string satisfies both.
+  check("composition produced a body at all", out.trim().length > 0, JSON.stringify(out));
+  check("the source's redirect block is dropped", !out.includes("return 301"), out);
+  check("the clone's own server_name replaces the source's",
+    out.includes("server_name stg.example.com;") && !out.includes("server_name example.com"), out);
+  check("a hand edit naming the source is rewritten to the target",
+    out.includes('default-src https://stg.example.com'), out);
+  check("a hostname that merely ends in the source is left alone",
+    out.includes("https://notexample.com/keep"), out);
+  check("the clone's own name is not mangled into a double prefix",
+    !out.includes("stg.stg.example.com"), out);
+  check("CloudPanel's placeholders survive untouched",
+    out.includes("{{root}}") && out.includes("{{ssl_certificate}}"), out);
+
+  // The mirror case: the clone is itself an apex, so it earns a redirect block
+  // of its own, taken from what the panel wrote for it rather than from the
+  // source's.
+  const APEX_TARGET = [
+    "server {",
+    "  {{ssl_certificate}}",
+    "  server_name www.staging.test;",
+    "  return 301 https://staging.test$request_uri;",
+    "}",
+    "",
+    "server {",
+    "  {{ssl_certificate}}",
+    "  server_name staging.test www1.staging.test;",
+    "  {{root}}",
+    "  index index.html;",
+    "}",
+  ].join("\n");
+
+  const apex = compose(
+    { "example.com": STATIC_SOURCE, "staging.test": APEX_TARGET },
+    "example.com", "staging.test"
+  );
+  check("an apex clone gets its own redirect block",
+    apex.includes("return 301 https://staging.test$request_uri;")
+    && !apex.includes("https://example.com$request_uri"), apex);
+  check("and only one of them", (apex.match(/return 301/g) ?? []).length === 1, apex);
+  check("the apex clone's two-name server_name is used",
+    apex.includes("server_name staging.test www1.staging.test;"), apex);
+}
+
+console.log("\n== the fallback carries vhosts the template route has to refuse ==");
+
+// vhost_body_ok is vhost_template_ok without the {{server_name}} requirement,
+// which exists only because clpctl's vhost-template:add demands the placeholder.
+// The fallback does not go through that verb, so it can carry a source whose
+// server_name line is itself the hand edit -- the one case docs/DECISIONS.md
+// listed as a known gap. What it must still refuse is a clone that would answer
+// for the site it was cloned from.
+{
+  const W = "addons/stager/wrapper/clp-action-stager";
+  const fns = [bashFunction(W, "hostname_boundary"), bashFunction(W, "vhost_body_ok")].join("\n");
+  const gate = (body: string) => {
+    const d = mkdtempSync(`${tmpdir()}/clp-stager-body-gate-`);
+    try {
+      writeFileSync(`${d}/body`, body);
+      return execFileSync("bash", ["-c",
+        `VHOST_REJECT=""\n${fns}\nif vhost_body_ok "$1" "$2" "$3"; then echo PASS; else echo "REJECT: $VHOST_REJECT"; fi`,
+        "_", `${d}/body`, "example.com", "stg.example.com"], { encoding: "utf-8" }).trim();
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  };
+
+  const handEdited = ["server {", "  server_name stg.example.com *.stg.example.com;", "  {{root}}", "}"].join("\n");
+  check("a hand-edited server_name naming the target is accepted",
+    gate(handEdited) === "PASS", gate(handEdited));
+
+  const noPlaceholder = ["server {", "  server_name stg.example.com;", "}"].join("\n");
+  check("and it needs no {{server_name}} placeholder", gate(noPlaceholder) === "PASS", gate(noPlaceholder));
+
+  const foreign = ["server {", "  server_name other.test;", "}"].join("\n");
+  check("a server_name outside the target is still refused",
+    gate(foreign).startsWith("REJECT"), gate(foreign));
+
+  // stg.example.com is a subdomain of example.com, so a naive "ends with the
+  // source" test would pass this. It is judged against the target.
+  const sibling = ["server {", "  server_name evil.example.com;", "}"].join("\n");
+  check("a sibling under the source's domain is refused",
+    gate(sibling).startsWith("REJECT"), gate(sibling));
+
+  const leaked = ["server {", "  server_name stg.example.com;", "  # see https://example.com/docs", "}"].join("\n");
+  check("the source hostname surviving anywhere is refused",
+    gate(leaked).startsWith("REJECT"), gate(leaked));
 }
 
 console.log("\n== reusing an artifact already in the release tree ==");

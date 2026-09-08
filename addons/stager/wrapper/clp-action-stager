@@ -11,17 +11,31 @@
 #   - validate before acting, and reject rather than sanitize
 #   - build argv arrays and exec directly; never sh -c, eval, or backticks
 #   - no free-form arguments: no paths, no filenames, no SQL
-#   - clpctl is the only thing that writes panel state; we never do
 #   - machine-readable JSON on stdout, human-readable progress on stderr
 #
-# What this does NOT do, deliberately: it does not copy the source site's
-# custom nginx edits. Those live in `site.vhost_template`, the panel renders
-# the Vhost tab and every regeneration from that column, and there is no clpctl
-# verb that sets it -- so cloning them means writing an undocumented schema
-# while the panel is running. The clone is created from the same named vhost
-# template as its source, which covers the template-shaped difference, and any
-# remaining edit is reported for the operator to paste into the panel's own
-# Vhost editor.
+# What it clones: php, static and reverse-proxy sites. A reverse-proxy site is
+# only clonable when its backend is an Instatic instance this box manages,
+# because duplicating the hostname alone would point a staging site at the live
+# application; the content moves through Instatic's own site-bundle export and
+# import, and the clone gets a container, a port and a master key of its own.
+#
+# How it carries the source's hand-edited nginx config, and why that is two
+# different mechanisms. For a php source the clone is created from a throwaway
+# named vhost template, so CloudPanel does all the writing -- that is the route
+# to prefer and it is tried first. For every other type there is no such route:
+# `site:add:php` is the only `site:add:*` verb with a --vhostTemplate option, so
+# the choice is between writing the panel record ourselves and shipping a
+# staging site whose nginx config is not the one being tested.
+#
+# So this file does write panel state, in exactly one place and under guards
+# that are the whole justification (see "Carrying a site's vhost to its clone"
+# in docs/DECISIONS.md): one UPDATE, one column pair, one row, only for a site
+# this job created seconds ago, run as `clp` rather than as root, with the body
+# reaching sqlite through readfile() so no nginx config is ever interpolated
+# into SQL, and read back and compared before the job calls it done. The file on
+# disk is written and `nginx -t`-ed first, so the database is never left
+# describing a config nginx rejected, and any failure restores the stock vhost
+# and reports why rather than losing the clone.
 # =============================================================================
 set -euo pipefail
 
@@ -31,6 +45,29 @@ readonly JOBS_DIR="${DATA_BASE_DIR}/jobs"
 readonly ADDON_CONFIG="/etc/clp-addons/stager.conf"
 readonly PANEL_DB="/home/clp/htdocs/app/data/db.sq3"
 readonly CLPCTL="/usr/bin/clpctl"
+
+# Confirmed against Creator::NGINX_VHOST_DIRECTORY in the panel's own source.
+# Files there are root:root 0644 and the panel rewrites them from
+# `site.vhost_template` whenever it regenerates a site.
+readonly NGINX_VHOST_DIR="/etc/nginx/sites-enabled"
+
+# The sibling addon's boundary, reached by absolute path for the same reason
+# SELF is hardcoded: it is the copy the sudoers line names and the only one
+# that has been reviewed. Absent when the Stager is installed on its own, which
+# is a refusal rather than a fallback.
+readonly INSTATIC_WRAPPER="/usr/local/lib/clp-addons/clp-action-instatic"
+readonly INSTATIC_DATA_DIR="/var/lib/clp-addons/instatic"
+
+# One list, and every gate reads from it. Node.js and Python sites are a
+# `site:add:*` verb away but neither exists on the box this was built against,
+# and an untested clone path that creates real sites is worse than an honest
+# refusal.
+readonly CLONABLE_TYPES=(php static reverse-proxy)
+
+# Instatic instances live in the block decision 2.11 reserves. The port is
+# proposed by the app, which reads the panel snapshot, and re-validated here.
+readonly PORT_MIN=39000
+readonly PORT_MAX=39999
 
 # Hardcoded rather than "$0". The sudoers line names this exact path, so it is
 # the only copy of this script that has been reviewed and granted anything;
@@ -113,6 +150,46 @@ validate_flag() {
   return 0
 }
 
+# Only ever reached for an Instatic clone, where it becomes a published port
+# and part of a container's configuration.
+validate_port() {
+  local p=$1
+  [[ -n $p ]] || emit_err "missing --port"
+  [[ $p =~ ^[0-9]{1,5}$ ]] || emit_err "port must be an integer: '$p'"
+  (( 10#$p >= PORT_MIN && 10#$p <= PORT_MAX )) \
+    || emit_err "port $p outside the reserved range ${PORT_MIN}-${PORT_MAX}"
+  return 0
+}
+
+# The source instance's admin address. It identifies an account on another
+# service rather than anything on this box, so the only thing this can do is
+# reject a shape Instatic itself would reject.
+validate_email() {
+  local e=$1
+  [[ -n $e ]] || emit_err "missing --email"
+  (( ${#e} <= 254 )) || emit_err "--email is too long"
+  [[ $e =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$ ]] \
+    || emit_err "invalid email address: '$e'"
+  return 0
+}
+
+# TOTP or a recovery code, both of which Instatic accepts on the same field.
+validate_mfa() {
+  local c=$1
+  [[ $c =~ ^[A-Za-z0-9-]{6,32}$ ]] || emit_err "the authentication code has an unexpected shape"
+  return 0
+}
+
+# Membership rather than equality, so adding a type is one line here and
+# nothing else has to be found.
+type_is_clonable() {
+  local t=$1 c
+  for c in "${CLONABLE_TYPES[@]}"; do
+    if [[ $t == "$c" ]]; then return 0; fi
+  done
+  return 1
+}
+
 # --- panel reads ------------------------------------------------------------
 # Read-only, always. The domain has passed validate_domain by the time it
 # reaches any of these, so it holds nothing but [a-z0-9.-]; sqlite3's CLI has
@@ -145,6 +222,14 @@ database_of() {
 
 vhost_of() {
   panel_query "SELECT vhost_template FROM site WHERE domain_name = '$1';"
+}
+
+application_of() {
+  panel_query "SELECT COALESCE(application, '') FROM site WHERE domain_name = '$1';"
+}
+
+reverse_proxy_url_of() {
+  panel_query "SELECT COALESCE(reverse_proxy_url, '') FROM site WHERE domain_name = '$1';"
 }
 
 # --- naming -----------------------------------------------------------------
@@ -228,6 +313,10 @@ new_job_id() {
 STEP=""
 JOB_DIR=""
 SITE_CREATED=0
+# An Instatic clone's site is created by the Instatic wrapper together with its
+# container and its data directory, so unwinding one means going back through
+# that wrapper rather than deleting the CloudPanel site out from under it.
+SITE_VIA_INSTATIC=0
 DB_CREATED=0
 DUMP_FILE=""
 STG_DB_NAME=""
@@ -262,17 +351,25 @@ cmd_run() {
   exec >>"${dir}/log" 2>&1
   chmod 600 "${dir}/log"
 
-  local source target tls
+  local source target tls port email mfa
   source=$(job_get "$dir" source)
   target=$(job_get "$dir" target)
   tls=$(job_get "$dir" tls)
+  port=$(job_get "$dir" port)
+  email=$(job_get "$dir" email)
+  mfa=$(job_get "$dir" mfa)
   [[ -n $source && -n $target ]] || fail_job "job record is incomplete"
 
   # Re-validated rather than trusted: this file was written by an earlier run of
-  # this script, but a job directory is still a file on disk.
+  # this script, but a job directory is still a file on disk. That applies to
+  # the port and the address as much as to the hostnames -- the port becomes a
+  # published container port and part of the clone's proxy URL.
   validate_domain "$source" source
   validate_domain "$target" target
   validate_job "$id"
+  if [[ -n $port ]];  then validate_port "$port"; fi
+  if [[ -n $email ]]; then validate_email "$email"; fi
+  if [[ -n $mfa ]];   then validate_mfa "$mfa"; fi
 
   local state; state=$(job_get "$dir" state)
   [[ $state == "queued" ]] || fail_job "job ${id} is ${state}, not queued"
@@ -285,18 +382,29 @@ cmd_run() {
     (( rc == 0 )) && return 0
     warn "clone failed during '${STEP}', unwinding"
     [[ -n $DUMP_FILE && -f $DUMP_FILE ]] && rm -f "$DUMP_FILE"
+    # The source instance's password and the bundle taken with it never outlive
+    # the run, however it ends.
+    rm -f "${dir}/srcPassword" "${dir}/site-bundle.zip" "${dir}/.api-req" "${dir}/.api-out"
     if (( DB_CREATED == 1 )); then
       warn "removing the staging database this run created"
       "$CLPCTL" db:delete --databaseName="$STG_DB_NAME" --force >&2 2>/dev/null || true
     fi
     drop_template_stage
+    drop_vhost_stage
     if [[ -n $TEMPLATE_NAME ]]; then
       "$CLPCTL" vhost-template:delete --name="$TEMPLATE_NAME" >&2 2>/dev/null || true
       TEMPLATE_NAME=""
     fi
     if (( SITE_CREATED == 1 )); then
       warn "removing the staging site this run created"
-      "$CLPCTL" site:delete --domainName="$target" --force >&2 2>/dev/null || true
+      if (( SITE_VIA_INSTATIC == 1 )); then
+        # Through the Instatic wrapper, which also removes the container and
+        # archives the data. Deleting the CloudPanel site directly would leave
+        # a running container bound to a port nothing routes to.
+        "$INSTATIC_WRAPPER" delete --domain "$target" --confirm "$target" >&2 2>/dev/null || true
+      else
+        "$CLPCTL" site:delete --domainName="$target" --force >&2 2>/dev/null || true
+      fi
     fi
     if [[ $(job_get "$dir" state) != "failed" ]]; then
       job_set "$dir" error "clone failed during '${STEP}'"
@@ -309,16 +417,22 @@ cmd_run() {
   # --- source facts ---------------------------------------------------------
   set_step "reading the source site"
   local -a notes=()
-  local vhost_carried=1
-  local row src_type src_user src_root src_app php_version src_db
+  local row src_type src_user src_root src_app php_version="" src_db=""
   row=$(site_row "$source") || fail_job "cannot read the panel database"
   [[ -n $row ]] || fail_job "no CloudPanel site for ${source}"
   IFS='|' read -r src_type src_user src_root src_app <<< "$row"
-  [[ $src_type == "php" ]] || fail_job "${source} is a '${src_type}' site; only PHP sites can be cloned"
+  type_is_clonable "$src_type" \
+    || fail_job "${source} is a '${src_type}' site; only ${CLONABLE_TYPES[*]} sites can be cloned"
   [[ -n $src_user ]] || fail_job "${source} has no site user recorded"
 
-  php_version=$(php_version_of "$source")
-  [[ -n $php_version ]] || fail_job "cannot determine the PHP version of ${source}"
+  # Conditional, not unconditional: a static site has no php_settings row, and
+  # demanding one is what used to abort the clone before it had started. Every
+  # step below is likewise driven by what the source *has* -- a source with no
+  # database simply skips the database steps -- rather than by its type.
+  if [[ $src_type == "php" ]]; then
+    php_version=$(php_version_of "$source")
+    [[ -n $php_version ]] || fail_job "cannot determine the PHP version of ${source}"
+  fi
   src_db=$(database_of "$source")
 
   # The panel records which named template a site was created from, so the
@@ -327,72 +441,182 @@ cmd_run() {
   [[ -n $src_app ]] || src_app="Generic"
 
   local src_dir="/home/${src_user}/htdocs/${source}"
-  [[ -d $src_dir ]] || fail_job "source directory not found: ${src_dir}"
 
-  # --- the staging site -----------------------------------------------------
+  # --- an Instatic source, established and exported before anything exists ---
+  # Both halves of this happen before the clone is created, and deliberately:
+  # a backend that turns out not to be ours must be refused with nothing built,
+  # and an export that fails must not leave a half-made staging site behind.
+  local src_port="" src_tag="" export_zip="" src_password=""
+  if [[ $src_type == "reverse-proxy" ]]; then
+    instatic_backend_of "$source" || fail_job "${source} cannot be cloned: ${INSTATIC_REJECT}"
+    src_port=$INSTATIC_PORT
+    src_tag=$INSTATIC_TAG
+    [[ -n $port ]]  || fail_job "no port was allocated for the clone's Instatic instance"
+    [[ -n $email ]] || fail_job "cloning an Instatic site needs the source instance's admin email address"
+    [[ -s "${dir}/srcPassword" ]] \
+      || fail_job "cloning an Instatic site needs the source instance's admin password"
+    # Read off disk rather than out of argv, and held only for the two requests
+    # that need it. The setup of the source was run long ago, so this is the one
+    # credential in a clone that the stager cannot mint for itself.
+    src_password=$(cat "${dir}/srcPassword")
+
+    set_step "signing in to ${source}"
+    instatic_login "$src_port" "$source" "${dir}/cookies-src" \
+      "$email" "$src_password" "$mfa" "$source" || fail_job "$INSTATIC_REJECT"
+    src_password=""
+
+    set_step "exporting ${source}'s content"
+    export_zip="${dir}/site-bundle.zip"
+    local export_code
+    export_code=$(instatic_get "$src_port" "$source" "${dir}/cookies-src" \
+      "/admin/api/cms/export?includeSite=1&includeMedia=1" "$export_zip")
+    chmod 600 "$export_zip" 2>/dev/null || true
+    if [[ ! $export_code =~ ^2 ]]; then
+      fail_job "${source} refused the export (HTTP ${export_code}): $(instatic_error "$export_zip")"
+    fi
+    # The password has done its one job. The session goes with it rather than
+    # being left to expire: a clone should leave nothing live on its source.
+    rm -f "${dir}/srcPassword"
+    instatic_logout "$src_port" "$source" "${dir}/cookies-src"
+    log "exported $(stat -c%s "$export_zip") bytes of site bundle"
+  else
+    [[ -d $src_dir ]] || fail_job "source directory not found: ${src_dir}"
+  fi
+
   # --- the source's own vhost, if it can be carried safely ------------------
   # Attempted for every clone rather than asked about, because the operator has
   # no way to know in advance whether their source has edits. When it cannot be
   # done the clone still gets built from the stock template and the job says
   # what was left behind, so the failure is a message rather than a missing
   # clone -- and never a staging site answering for production.
+  #
+  # Two routes, and the order matters. CloudPanel's own template mechanism is
+  # preferred wherever it exists, because then the panel does every write; it
+  # exists only for php, since site:add:php is the only site:add verb with a
+  # --vhostTemplate option. Everything else, and any php source the template
+  # route refuses, falls through to carry_vhost below.
+  #
   # Resolved quietly here and only mentioned below if it ends up being used:
   # saying the base template is missing is noise when the source's own vhost
   # was carried across and the base was never reached.
-  local base_template=$src_app base_missing=0
-  if ! vhost_template_exists "$base_template"; then
-    base_missing=1
-    base_template="Generic"
-  fi
-
+  local base_template=$src_app base_missing=0 template_route=0 template_reject=""
   local vhost_template=$base_template
-  if build_vhost_template "$source" "$target" \
-     && vhost_template_ok "$TEMPLATE_FILE" "$source" "$target"; then
-    local candidate="clp-stager-${id}"
-    if "$CLPCTL" vhost-template:add --name="$candidate" --file="$TEMPLATE_FILE" >&2; then
-      TEMPLATE_NAME=$candidate
-      vhost_template=$candidate
-      log "carrying ${source}'s vhost across"
-    else
-      notes+=("CloudPanel would not accept a vhost template built from ${source}, so the clone uses the stock ${base_template} template. Copy any edits across in Site -> Vhost")
-      vhost_carried=0
-      (( base_missing == 1 )) && notes+=("${source} names a vhost template the panel no longer has, so ${base_template} was used instead")
+  if [[ $src_type == "php" ]]; then
+    if ! vhost_template_exists "$base_template"; then
+      base_missing=1
+      base_template="Generic"
+      vhost_template=$base_template
     fi
-  else
-    notes+=("${source}'s vhost was not carried across: ${VHOST_REJECT:-it could not be read}. The clone uses the stock ${base_template} template; copy the edits across in Site -> Vhost")
-    vhost_carried=0
-    (( base_missing == 1 )) && notes+=("${source} names a vhost template the panel no longer has, so ${base_template} was used instead")
+    if build_vhost_template "$source" "$target" \
+       && vhost_template_ok "$TEMPLATE_FILE" "$source" "$target"; then
+      local candidate="clp-stager-${id}"
+      if "$CLPCTL" vhost-template:add --name="$candidate" --file="$TEMPLATE_FILE" >&2; then
+        TEMPLATE_NAME=$candidate
+        vhost_template=$candidate
+        template_route=1
+        log "carrying ${source}'s vhost across through CloudPanel's own template mechanism"
+      else
+        template_reject="CloudPanel would not accept a vhost template built from ${source}"
+      fi
+    else
+      # No apostrophe in the default: bash runs quote processing over the word
+      # of a ${x:-word}, so one there opens a single-quoted string that swallows
+      # the rest of the file.
+      template_reject="${VHOST_REJECT:-the stored vhost could not be read}"
+    fi
+    drop_template_stage
   fi
-  drop_template_stage
 
-  set_step "creating the staging site ${target} on PHP ${php_version}"
   local stg_user stg_pass
   stg_user=$(site_user_for "$target")
   user_taken "$stg_user" && fail_job "the site user ${stg_user} already exists; ${target} may be half-created"
   stg_pass=$(gen_password)
 
-  "$CLPCTL" site:add:php \
-    --domainName="$target" \
-    --phpVersion="$php_version" \
-    --vhostTemplate="$vhost_template" \
-    --siteUser="$stg_user" \
-    --siteUserPassword="$stg_pass" >&2 \
-    || fail_job "clpctl site:add:php failed for ${target}"
-  SITE_CREATED=1
+  case $src_type in
+    php)
+      set_step "creating the staging site ${target} on PHP ${php_version}"
+      "$CLPCTL" site:add:php \
+        --domainName="$target" \
+        --phpVersion="$php_version" \
+        --vhostTemplate="$vhost_template" \
+        --siteUser="$stg_user" \
+        --siteUserPassword="$stg_pass" >&2 \
+        || fail_job "clpctl site:add:php failed for ${target}"
+      SITE_CREATED=1 ;;
+    static)
+      set_step "creating the staging site ${target}"
+      "$CLPCTL" site:add:static \
+        --domainName="$target" \
+        --siteUser="$stg_user" \
+        --siteUserPassword="$stg_pass" >&2 \
+        || fail_job "clpctl site:add:static failed for ${target}"
+      SITE_CREATED=1 ;;
+    reverse-proxy)
+      # One call, and it makes the CloudPanel site, the container, the data
+      # directory and a master key of the clone's own. Delegated rather than
+      # reimplemented because that wrapper is where "what an Instatic instance
+      # is" lives, and a second implementation of it here would drift.
+      set_step "creating the staging Instatic instance ${target} on port ${port}"
+      "$INSTATIC_WRAPPER" create --domain "$target" --port "$port" --tag "$src_tag" >&2 \
+        || fail_job "the Instatic addon could not create an instance for ${target}"
+      SITE_CREATED=1
+      SITE_VIA_INSTATIC=1 ;;
+  esac
 
   # Its whole purpose was this one site:add:php. CloudPanel copies the rendered
   # body into the site's own record, so the clone is unaffected by the template
   # going away, and the panel's template library does not grow by one entry per
-  # clone. Only site.application still names it, which nothing but the new-site
-  # form reads.
+  # clone. Only site.application still names it, which is put back below.
   if [[ -n $TEMPLATE_NAME ]]; then
     "$CLPCTL" vhost-template:delete --name="$TEMPLATE_NAME" >&2 \
       || warn "could not remove the temporary vhost template ${TEMPLATE_NAME}"
     TEMPLATE_NAME=""
   fi
 
+  # Read back rather than re-derived. The account is whatever CloudPanel
+  # actually recorded, which is the same thing every other part of this project
+  # treats as the source of truth.
+  local recorded_user
+  recorded_user=$(panel_query "SELECT user FROM site WHERE domain_name = '$target';") || recorded_user=""
+  if [[ -n $recorded_user ]]; then stg_user=$recorded_user; fi
+
   local dest_dir="/home/${stg_user}/htdocs/${target}"
   [[ -d $dest_dir ]] || fail_job "CloudPanel did not create ${dest_dir}"
+
+  # --- the vhost, now that there is a clone to put one on -------------------
+  local vhost_carried=0 vhost_by="stock" clone_application
+  clone_application=$(application_of "$target") || clone_application=""
+  [[ -n $clone_application ]] || clone_application="Generic"
+  if [[ $src_type == "php" ]]; then clone_application=$base_template; fi
+
+  if (( template_route == 1 )); then
+    vhost_carried=1
+    vhost_by="template"
+    # site.application is left naming a template the panel no longer has, which
+    # is what the clone's Vhost tab then reports it was built from. One scoped
+    # UPDATE puts the base name back; a failure here costs a label, so it is a
+    # note rather than a failed clone.
+    if [[ $(application_of "$target") != "$clone_application" ]]; then
+      panel_update_site "$target" "$src_type" "$clone_application" \
+        || notes+=("the clone's Vhost tab still names the temporary template this job used: ${PANEL_WRITE_REJECT}")
+    fi
+  else
+    set_step "carrying ${source}'s vhost onto the clone"
+    if carry_vhost "$source" "$target" "$src_type" "$clone_application"; then
+      vhost_carried=1
+      vhost_by="rendered"
+      log "carried ${source}'s vhost across by writing the clone's panel record and rendering its file"
+    else
+      notes+=("${source}'s vhost was not carried across: ${CARRY_REJECT}. The clone keeps the stock ${clone_application} vhost; copy the edits across in Site -> Vhost")
+      if [[ -n $template_reject ]]; then
+        notes+=("CloudPanel's own template route was not taken either: ${template_reject}")
+      fi
+    fi
+    drop_vhost_stage
+  fi
+  if (( base_missing == 1 )); then
+    notes+=("${source} names a vhost template the panel no longer has, so ${base_template} was used instead")
+  fi
 
   # --- the database ---------------------------------------------------------
   if [[ -n $src_db ]]; then
@@ -431,17 +655,62 @@ cmd_run() {
   fi
 
   # --- files ----------------------------------------------------------------
-  set_step "copying files"
-  # pipefail so a source-side failure is not masked by the receiving tar
-  # reporting success. tar exit 1 is "file changed as we read it", which is
-  # normal on a live site; 2 and above are real.
-  local rc=0
-  set +e
-  ( set -o pipefail; tar -C "$src_dir" -cf - . | tar -xf - -C "$dest_dir" )
-  rc=$?
-  set -e
-  (( rc >= 2 )) && fail_job "copying files failed (tar exit ${rc})"
-  chown -R "${stg_user}:${stg_user}" "$dest_dir" || fail_job "could not chown ${dest_dir}"
+  # An Instatic site's document root is empty by construction -- it is a pure
+  # reverse proxy -- and its content lives inside a container, so copying the
+  # docroot would copy nothing and imply the content had moved. The bundle
+  # below is what moves it.
+  if [[ $src_type == "reverse-proxy" ]]; then
+    log "the source is a reverse proxy; its content moves through the site bundle rather than through its document root"
+  else
+    set_step "copying files"
+    # pipefail so a source-side failure is not masked by the receiving tar
+    # reporting success. tar exit 1 is "file changed as we read it", which is
+    # normal on a live site; 2 and above are real.
+    local rc=0
+    set +e
+    ( set -o pipefail; tar -C "$src_dir" -cf - . | tar -xf - -C "$dest_dir" )
+    rc=$?
+    set -e
+    (( rc >= 2 )) && fail_job "copying files failed (tar exit ${rc})"
+    chown -R "${stg_user}:${stg_user}" "$dest_dir" || fail_job "could not chown ${dest_dir}"
+  fi
+
+  # --- the clone's own Instatic content --------------------------------------
+  local inst_email="" inst_pass=""
+  if [[ $src_type == "reverse-proxy" ]]; then
+    inst_email="admin@${target}"
+    inst_pass=$(gen_password)
+
+    set_step "bootstrapping the clone's Instatic owner"
+    instatic_setup "$port" "$target" "${dir}/cookies-dst" "$inst_email" "$inst_pass" "$target" \
+      || fail_job "$INSTATIC_REJECT"
+
+    set_step "signing in to the clone"
+    instatic_login "$port" "$target" "${dir}/cookies-dst" "$inst_email" "$inst_pass" "" "the clone" \
+      || fail_job "$INSTATIC_REJECT"
+    instatic_step_up "$port" "$target" "${dir}/cookies-dst" "$inst_pass" "" \
+      || fail_job "$INSTATIC_REJECT"
+
+    set_step "importing ${source}'s content into the clone"
+    # strategy=replace rather than a merge: setup seeds a starter homepage, and
+    # merging would leave it beside the imported pages. The clone should match
+    # its source rather than merely contain it.
+    local import_code
+    import_code=$(instatic_post "$port" "$target" "${dir}/cookies-dst" \
+      "/admin/api/cms/import/archive?strategy=replace" "application/zip" \
+      "$export_zip" "${dir}/.api-out")
+    if [[ ! $import_code =~ ^2 ]]; then
+      fail_job "the clone refused the import (HTTP ${import_code}): $(instatic_error "${dir}/.api-out")"
+    fi
+    log "import: $(instatic_error "${dir}/.api-out")"
+    rm -f "${dir}/.api-out"
+    instatic_logout "$port" "$target" "${dir}/cookies-dst"
+    rm -f "$export_zip"
+    export_zip=""
+
+    notes+=("the clone's PUBLIC_ORIGIN is https://${target}, but absolute links typed into a page still name ${source}; the bundle carries content, not a URL rewrite")
+    notes+=("integration secrets such as API keys and TOTP seeds are encrypted under ${source}'s own key and are deliberately absent from the bundle; re-enter them on the clone")
+  fi
 
   # --- application config ---------------------------------------------------
   if [[ -n $src_db ]]; then
@@ -506,14 +775,25 @@ cmd_run() {
       "$(json_str "$STG_DB_USER")" "$(json_str "$STG_DB_PASS")")
   fi
 
+  # The clone's Instatic owner gets the same treatment as the staging database
+  # password, and for the same reason: it is minted here, it is the only way
+  # into the clone's admin, and nothing else can show it again.
+  local instatic_json="null"
+  if [[ $src_type == "reverse-proxy" ]]; then
+    instatic_json=$(printf '{"port":%d,"tag":%s,"email":%s,"password":%s}' \
+      "$port" "$(json_str "$src_tag")" "$(json_str "$inst_email")" "$(json_str "$inst_pass")")
+  fi
+
   # The database password is the one credential here that cannot be read back
   # out of the panel, and it is needed whenever the application's config could
   # not be rewritten. 0600 in a 0700 directory, and `prune` drops the whole
   # record after JOB_RETENTION_DAYS.
-  printf '{"siteUser":%s,"phpVersion":%s,"vhostTemplate":%s,"vhostCarried":%s,"database":%s,"notes":%s}\n' \
-    "$(json_str "$stg_user")" "$(json_str "$php_version")" "$(json_str "$base_template")" \
+  printf '{"siteType":%s,"siteUser":%s,"phpVersion":%s,"vhostTemplate":%s,"vhostCarried":%s,"vhostCarriedBy":%s,"database":%s,"instatic":%s,"notes":%s}\n' \
+    "$(json_str "$src_type")" "$(json_str "$stg_user")" "$(json_str "$php_version")" \
+    "$(json_str "$clone_application")" \
     "$( (( vhost_carried == 1 )) && echo true || echo false )" \
-    "$db_json" "$notes_json" > "${dir}/result.json"
+    "$(json_str "$vhost_by")" \
+    "$db_json" "$instatic_json" "$notes_json" > "${dir}/result.json"
   chmod 600 "${dir}/result.json"
 
   job_set "$dir" finishedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -627,6 +907,48 @@ fold_server_name() {
       -e "s|^\([[:space:]]*\)server_name ${domain};[[:space:]]*\$|\\1${repl}|"
 }
 
+# The inverse of strip_redirect_block: emit only the block it drops.
+#
+# The redirect is generated from the hostname, so a clone gets whichever block
+# its own name earns rather than the source's. Composing a body means dropping
+# the source's and prepending the target's, and the two halves are written as
+# each other's mirror so a change to what counts as the redirect block cannot
+# be made in one of them alone.
+take_redirect_block() {
+  awk '
+    NR == 1 && /^server \{/ { block = $0 ORS; depth = 1; inblock = 1; next }
+    inblock {
+      block = block $0 ORS
+      depth += gsub(/\{/, "{") - gsub(/\}/, "}")
+      if (/return 301/) redirect = 1
+      if (depth == 0) { if (redirect) printf "%s", block; exit }
+      next
+    }
+  '
+}
+
+# The server_name line CloudPanel generated for this site, lifted out of its own
+# stored body rather than rebuilt from the domain.
+#
+# ServerNameProcessor writes two forms and picks between them by whether the
+# hostname is an apex, which is a rule this file would otherwise have to keep a
+# second copy of. Reading back what the panel actually wrote a moment ago is
+# what keeps the clone's line right across a panel that changes its mind.
+generated_server_name() {
+  local d=$1
+  awk -v d="$d" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      if (line == "server_name " d ";" || line == "server_name " d " www1." d ";") {
+        print line
+        exit
+      }
+    }
+  '
+}
+
 vhost_shape() {
   local body=$1 domain=$2
   printf '%s\n' "$body" \
@@ -676,6 +998,18 @@ vhost_differs() {
 TEMPLATE_STAGE=""
 TEMPLATE_FILE=""
 
+# One staging directory, made the same way for both accounts that have to reach
+# into it: clpctl reading a --file, and sqlite3 reading a body through
+# readfile() while running as clp. Written once so the two cannot drift into
+# different modes, which is the kind of difference that shows up as an empty
+# template rather than as an error.
+make_clp_stage() {
+  local dir
+  dir=$(mktemp -d /tmp/clp-stager-stage.XXXXXXXX) || return 1
+  chown root:clp "$dir" && chmod 710 "$dir" || return 1
+  printf '%s' "$dir"
+}
+
 # The text transform, on stdout. Separate from the staging below because it is
 # the part with the rules in it, and keeping it free of root and of the clp
 # group is what lets tools/test-app.ts drive it on any machine. It used to be
@@ -709,8 +1043,7 @@ build_vhost_template() {
   cand=$(vhost_template_body "$source" "$target") || return 1
   [[ -n $cand ]] || return 1
 
-  TEMPLATE_STAGE=$(mktemp -d /tmp/clp-stager-tpl.XXXXXXXX) || return 1
-  chown root:clp "$TEMPLATE_STAGE" && chmod 710 "$TEMPLATE_STAGE" || return 1
+  TEMPLATE_STAGE=$(make_clp_stage) || return 1
   TEMPLATE_FILE="${TEMPLATE_STAGE}/vhost.tpl"
   printf '%s\n' "$cand" > "$TEMPLATE_FILE"
   chown root:clp "$TEMPLATE_FILE" && chmod 640 "$TEMPLATE_FILE" || return 1
@@ -755,6 +1088,22 @@ vhost_template_ok() {
     VHOST_REJECT="the source's server_name is hand edited, so CloudPanel's {{server_name}} placeholder cannot be kept"
     return 1
   fi
+  vhost_body_ok "$file" "$source" "$target"
+}
+
+# The two checks that are about safety rather than about clpctl's own validator.
+#
+# Split out of vhost_template_ok because the fallback below does not go through
+# `vhost-template:add` and therefore owes nothing to its {{server_name}}
+# requirement -- which means the fallback can carry a vhost whose server_name
+# line is itself the hand edit, the one case the template route has to refuse.
+# What it may not do is let the clone answer for the site it was cloned from,
+# and that is exactly these two lines of reasoning: the source hostname must not
+# survive anywhere, and every server_name token must be the target or below it.
+vhost_body_ok() {
+  local file=$1 source=$2 target=$3
+  VHOST_REJECT=""
+
   local leaks
   leaks=$(grep -cE "$(hostname_boundary "$source")" "$file") || leaks=0
   if (( leaks > 0 )); then
@@ -776,23 +1125,675 @@ vhost_template_ok() {
   return 0
 }
 
+# --- carrying a vhost without clpctl ----------------------------------------
+#
+# Everything from here is the fallback for the site types `site:add:*` gives no
+# --vhostTemplate option. It runs after the clone already exists on its stock
+# template, so the panel has just written a consistent
+# (site.vhost_template, /etc/nginx/sites-enabled/<clone>.conf) pair -- and that
+# pair, not a hardcoded list of processors, is what this reads the panel's
+# substitutions out of.
+
+# What this panel put into this site's vhost, learned by comparing the two
+# halves of that pair.
+#
+# CloudPanel's renderer is pure {{placeholder}} substitution: Template::build()
+# runs each placeholder's processor over the stored body and
+# removeEmptyPlaceholders() blanks whatever is left. So splitting the stored
+# body on its placeholders and walking the rendered file, matching each literal
+# segment in order, recovers every value the panel produced. Doing it this way
+# rather than reimplementing the processors is what keeps the addon correct
+# across CloudPanel versions: it copies whatever *this* panel did to *this* site
+# a moment ago.
+#
+# It fails closed in three ways, because a wrong value here is a wrong nginx
+# config. The walk must consume the rendered file exactly to EOF; a placeholder
+# appearing twice must resolve identically both times; and a value is only ever
+# guessed as the shortest string that reaches the next literal, so a wrong guess
+# surfaces as a later literal failing to match rather than as a plausible wrong
+# answer.
+declare -A VHOST_MAP=()
+VHOST_MAP_REJECT=""
+
+learn_vhost_map() {
+  local stored=$1 rendered=$2
+  VHOST_MAP=()
+  VHOST_MAP_REJECT=""
+
+  local tpl out
+  # The trailing `x` survives command substitution's newline strip, so a body
+  # and a file that differ only in their final newline are not quietly made
+  # equal -- which would leave the walk one byte short of EOF and refuse.
+  tpl=$(cat "$stored"; printf x) || { VHOST_MAP_REJECT="the clone's stored vhost could not be read"; return 1; }
+  out=$(cat "$rendered"; printf x) || { VHOST_MAP_REJECT="the clone's rendered vhost could not be read"; return 1; }
+  tpl=${tpl%x}
+  out=${out%x}
+  # The panel writes the rendered template followed by one newline the template
+  # itself does not carry -- measured on every site on this box, static, php and
+  # reverse-proxy alike. Accounting for it here is what lets the walk below
+  # demand EOF exactly rather than "near enough", and the installer puts the
+  # same newline back when it writes the carried file.
+  out=${out%$'\n'}
+
+  local lit raw key tail value
+  while [[ $tpl == *"{{"* ]]; do
+    lit=${tpl%%"{{"*}
+    tpl=${tpl#*"{{"}
+    if [[ $tpl != *"}}"* ]]; then
+      VHOST_MAP_REJECT="the clone's stored vhost has an unterminated placeholder"
+      return 1
+    fi
+    raw=${tpl%%"}}"*}
+    tpl=${tpl#*"}}"}
+    # Template::getPlaceholders() matches /{{[\sa-zA-Z0-9_]+}}/, so whitespace
+    # inside the braces is legal and names the same placeholder.
+    key=${raw//[[:space:]]/}
+    if [[ ! $key =~ ^[a-zA-Z0-9_]+$ ]]; then
+      VHOST_MAP_REJECT="the clone's stored vhost has a placeholder named '${raw}'"
+      return 1
+    fi
+
+    if [[ ${out:0:${#lit}} != "$lit" ]]; then
+      VHOST_MAP_REJECT="the rendered vhost diverges from the stored one before {{${key}}}"
+      return 1
+    fi
+    out=${out:${#lit}}
+
+    if [[ $tpl == *"{{"* ]]; then
+      tail=${tpl%%"{{"*}
+      if [[ $out != *"$tail"* ]]; then
+        VHOST_MAP_REJECT="the rendered vhost has nothing matching the text after {{${key}}}"
+        return 1
+      fi
+      value=${out%%"$tail"*}
+    else
+      # The last placeholder is anchored at the end rather than at the next
+      # literal, which is what makes "consumed exactly to EOF" a property of the
+      # walk instead of a hope. It is also the multi-line case: {{php_settings}}
+      # is the final placeholder and expands to nine lines.
+      tail=$tpl
+      if [[ -n $tail && $out != *"$tail" ]]; then
+        VHOST_MAP_REJECT="the rendered vhost does not end with the text after {{${key}}}"
+        return 1
+      fi
+      value=${out%"$tail"}
+    fi
+    out=${out:${#value}}
+
+    if [[ -v "VHOST_MAP[$key]" && ${VHOST_MAP[$key]} != "$value" ]]; then
+      VHOST_MAP_REJECT="{{${key}}} was rendered two different ways in one vhost"
+      return 1
+    fi
+    VHOST_MAP[$key]=$value
+  done
+
+  if [[ $out != "$tpl" ]]; then
+    VHOST_MAP_REJECT="the rendered vhost does not end where the stored one does"
+    return 1
+  fi
+  return 0
+}
+
+# Substitute the learned map through a composed body, on stdout.
+#
+# A placeholder the map does not know is a refusal, never an empty string. The
+# panel's own removeEmptyPlaceholders() blanks the leftovers, and copying that
+# behaviour here would silently drop a directive the source depends on -- an
+# unknown {{root}} would produce a server block with no document root, which
+# nginx accepts and serves as the wrong thing.
+render_vhost_body() {
+  local body=$1 out="" lit raw key
+  VHOST_MAP_REJECT=""
+
+  while [[ $body == *"{{"* ]]; do
+    lit=${body%%"{{"*}
+    body=${body#*"{{"}
+    if [[ $body != *"}}"* ]]; then
+      VHOST_MAP_REJECT="the composed vhost has an unterminated placeholder"
+      return 1
+    fi
+    raw=${body%%"}}"*}
+    body=${body#*"}}"}
+    key=${raw//[[:space:]]/}
+    if [[ ! $key =~ ^[a-zA-Z0-9_]+$ ]]; then
+      VHOST_MAP_REJECT="the composed vhost has a placeholder named '${raw}'"
+      return 1
+    fi
+    if [[ ! -v "VHOST_MAP[$key]" ]]; then
+      VHOST_MAP_REJECT="the source's vhost uses {{${key}}}, which CloudPanel did not put in the clone's own"
+      return 1
+    fi
+    out+="${lit}${VHOST_MAP[$key]}"
+  done
+
+  printf '%s' "${out}${body}"
+}
+
+# Set when composition is refused, so the job can name the reason.
+VHOST_COMPOSE_REJECT=""
+
+# The source's stored body, made into the clone's, on stdout.
+#
+# Four steps, and each one is undoing something CloudPanel generated rather than
+# something an operator chose:
+#
+#   1. drop the source's http->https redirect block, which exists only because
+#      the source's hostname is an apex or www;
+#   2. put the target's own generated server_name line where the source's was,
+#      taken from what the panel wrote for the clone a moment ago;
+#   3. rewrite whatever still names the source -- a hand edit that mentions the
+#      hostname -- on whole hostname boundaries, because example.com sits inside
+#      both stg.example.com and notexample.com;
+#   4. prepend the clone's own redirect block, if its own name earned one.
+#
+# Everything else in the source's body, including its placeholders, survives
+# untouched: the point is that the clone's certificate, root, log paths and
+# proxied port go on tracking the clone.
+compose_vhost_body() {
+  local source=$1 target=$2 src_body tgt_body name_line redirect cand
+  VHOST_COMPOSE_REJECT=""
+
+  src_body=$(vhost_of "$source") || { VHOST_COMPOSE_REJECT="the source's vhost could not be read"; return 1; }
+  tgt_body=$(vhost_of "$target") || { VHOST_COMPOSE_REJECT="the clone's vhost could not be read"; return 1; }
+  if [[ -z $src_body || -z $tgt_body ]]; then
+    VHOST_COMPOSE_REJECT="the panel has no stored vhost for one of the two sites"
+    return 1
+  fi
+
+  name_line=$(printf '%s\n' "$tgt_body" | generated_server_name "$target")
+  if [[ -z $name_line ]]; then
+    VHOST_COMPOSE_REJECT="the clone's own vhost has no generated server_name line to copy"
+    return 1
+  fi
+
+  cand=$(printf '%s\n' "$src_body" | strip_redirect_block | fold_server_name "$source" "$name_line")
+  cand=$(printf '%s\n' "$cand" | sed -E "s/$(hostname_boundary "$source")/\\1${target}\\2/g")
+  # Dropping the redirect block leaves the blank line that separated it from the
+  # next one, so the body would start with an empty line the panel never writes.
+  # Cosmetic in nginx, visible in the Vhost tab, and it would make a clone's body
+  # differ from its own stock one by a byte nobody chose.
+  cand=$(printf '%s\n' "$cand" | sed '/./,$!d')
+  if [[ -z $cand ]]; then
+    VHOST_COMPOSE_REJECT="the source's vhost was empty once its generated parts were removed"
+    return 1
+  fi
+
+  redirect=$(printf '%s\n' "$tgt_body" | take_redirect_block)
+  if [[ -n $redirect ]]; then
+    printf '%s\n\n%s\n' "$redirect" "$cand"
+  else
+    printf '%s\n' "$cand"
+  fi
+}
+
+# The one write this addon makes to the panel database, and every guard on it.
+#
+# It exists because `site:add:php` is the only site:add verb with a
+# --vhostTemplate option, so for a static or reverse-proxy clone there is no
+# clpctl route to carry the source's config -- see "Carrying a site's vhost to
+# its clone" in docs/DECISIONS.md. What keeps it from being a hole:
+#
+#   - SITE_CREATED == 1. The row can only ever be one this job created seconds
+#     ago; an adopted or pre-existing site is never written to.
+#   - One UPDATE, one WHERE on a UNIQUE column, and a `type` that is one of
+#     three literals, so the statement cannot touch a second row.
+#   - $target has passed validate_domain, which is what makes interpolating it
+#     into SQL safe: it holds nothing but [a-z0-9.-].
+#   - The body reaches sqlite through readfile(), so a multi-kilobyte nginx
+#     config is never escaped into a SQL string.
+#   - runuser -u clp, not root. journal_mode is `delete`, so the write creates a
+#     transient db.sq3-journal beside the database; made by root it is left
+#     root-owned in a clp:clp 0770 directory and the panel cannot recover it.
+#   - read back and compared before anything reports success.
+PANEL_WRITE_REJECT=""
+
+panel_update_site() {
+  local target=$1 type=$2 application=$3 body_file=${4:-}
+  PANEL_WRITE_REJECT=""
+
+  if (( SITE_CREATED != 1 )); then
+    PANEL_WRITE_REJECT="refusing to write the panel record of a site this job did not create"
+    return 1
+  fi
+  if [[ ! -r $PANEL_DB ]]; then
+    PANEL_WRITE_REJECT="the panel database is not readable"
+    return 1
+  fi
+
+  local set_vhost=""
+  if [[ -n $body_file ]]; then
+    if [[ ! -f $body_file ]]; then
+      PANEL_WRITE_REJECT="the composed vhost was not staged"
+      return 1
+    fi
+    set_vhost="vhost_template = CAST(readfile('${body_file}') AS TEXT), "
+  fi
+
+  # stdout is discarded rather than logged: the sqlite3 CLI echoes a PRAGMA's
+  # resulting value, so the busy_timeout would otherwise put a bare `5000` in
+  # the job transcript. Errors go to stderr and are kept.
+  if ! runuser -u clp -- sqlite3 "$PANEL_DB" \
+       "PRAGMA busy_timeout=5000;
+        UPDATE site
+           SET ${set_vhost}application = '${application}', updated_at = datetime('now')
+         WHERE domain_name = '${target}' AND type = '${type}';" >/dev/null; then
+    PANEL_WRITE_REJECT="the panel database refused the update"
+    return 1
+  fi
+
+  # Compared inside sqlite against the same file, so this is a byte comparison
+  # of the column rather than of two shell variables that command substitution
+  # has already trimmed.
+  local check
+  if [[ -n $body_file ]]; then
+    check=$(panel_query "SELECT CASE WHEN vhost_template = CAST(readfile('${body_file}') AS TEXT)
+                                 AND application = '${application}' THEN 1 ELSE 0 END
+                           FROM site WHERE domain_name = '${target}';") || check=""
+  else
+    check=$(panel_query "SELECT CASE WHEN application = '${application}' THEN 1 ELSE 0 END
+                           FROM site WHERE domain_name = '${target}';") || check=""
+  fi
+  if [[ $check != "1" ]]; then
+    PANEL_WRITE_REJECT="the panel record does not read back as it was written"
+    return 1
+  fi
+  return 0
+}
+
+# Where the composed body and the clone's own pair are staged. Separate from
+# TEMPLATE_STAGE because the two exist at different points in a clone -- the
+# template is gone before the site is created, this appears afterwards -- and
+# one variable for both would make the rollback unable to say what it is
+# removing.
+VHOST_STAGE=""
+
+drop_vhost_stage() {
+  [[ -n $VHOST_STAGE ]] || return 0
+  rm -rf "$VHOST_STAGE"
+  VHOST_STAGE=""
+  return 0
+}
+
+# Set when the carry-over is refused, so the job can name the reason rather
+# than leaving an operator to guess which of several conditions applied.
+CARRY_REJECT=""
+
+# Carry the source's vhost to a clone that already exists on its stock one.
+#
+# File first, and that ordering is the point. The rendered config is written and
+# `nginx -t`-ed before the database is touched, so the row the panel would
+# regenerate from is never left describing a config nginx rejected; and nothing
+# is reloaded until both have succeeded, so a bad config is never served. Every
+# failure restores the backup, which means the worst outcome is a working clone
+# on the stock vhost plus a note saying why -- never a missing clone and never
+# a broken nginx.
+carry_vhost() {
+  local source=$1 target=$2 type=$3 application=$4
+  CARRY_REJECT=""
+
+  local conf="${NGINX_VHOST_DIR}/${target}.conf"
+  if [[ ! -f $conf ]]; then
+    CARRY_REJECT="CloudPanel wrote no vhost file for the clone"
+    return 1
+  fi
+
+  drop_vhost_stage
+  VHOST_STAGE=$(make_clp_stage) || { CARRY_REJECT="a staging directory could not be created"; return 1; }
+  local stock="${VHOST_STAGE}/stock.tpl"
+  local body="${VHOST_STAGE}/body.tpl"
+  local rendered="${VHOST_STAGE}/rendered.conf"
+  local backup="${VHOST_STAGE}/backup.conf"
+
+  # writefile() rather than a SELECT into a variable: the column is the half of
+  # the pair the walk below measures against, and command substitution would
+  # trim trailing newlines off one side of that comparison.
+  if ! panel_query "SELECT writefile('${stock}', vhost_template) FROM site WHERE domain_name = '${target}';" >/dev/null \
+     || [[ ! -s $stock ]]; then
+    CARRY_REJECT="the clone's own stored vhost could not be read back"
+    return 1
+  fi
+  chown root:clp "$stock" && chmod 640 "$stock" || true
+
+  if ! learn_vhost_map "$stock" "$conf"; then
+    CARRY_REJECT="$VHOST_MAP_REJECT"
+    return 1
+  fi
+
+  local composed
+  if ! composed=$(compose_vhost_body "$source" "$target"); then
+    CARRY_REJECT="$VHOST_COMPOSE_REJECT"
+    return 1
+  fi
+  printf '%s\n' "$composed" > "$body"
+  chown root:clp "$body" && chmod 640 "$body" || true
+
+  if ! vhost_body_ok "$body" "$source" "$target"; then
+    CARRY_REJECT="$VHOST_REJECT"
+    return 1
+  fi
+
+  if ! render_vhost_body "$composed" > "$rendered"; then
+    CARRY_REJECT="$VHOST_MAP_REJECT"
+    return 1
+  fi
+  # The newline learn_vhost_map accounted for on the way in, put back on the
+  # way out, so the file the panel would write and the file written here differ
+  # in nothing at all.
+  printf '\n' >> "$rendered"
+
+  cp -a "$conf" "$backup" || { CARRY_REJECT="the clone's vhost could not be backed up"; return 1; }
+
+  # Restore and say why. Used by every failure path below, so there is one
+  # implementation of "put the stock vhost back" rather than four.
+  local restore_note=""
+  carry_restore() {
+    cp "$backup" "$conf" && chown root:root "$conf" && chmod 644 "$conf" \
+      || warn "could not restore the stock vhost for ${target}"
+    CARRY_REJECT=$restore_note
+  }
+
+  if ! { cp "$rendered" "$conf" && chown root:root "$conf" && chmod 644 "$conf"; }; then
+    restore_note="the carried vhost could not be written to ${conf}"
+    carry_restore
+    return 1
+  fi
+
+  # Captured rather than streamed. `nginx -t` reports every warning in every
+  # vhost on the box -- sixty lines on this one -- which buries the clone's own
+  # progress on the success path and buries the actual error on the failure one.
+  local check_out=""
+  if ! check_out=$(nginx -t 2>&1); then
+    printf '%s\n' "$check_out" >&2
+    restore_note="nginx rejected the carried config, so the clone keeps the stock one"
+    carry_restore
+    return 1
+  fi
+
+  if ! panel_update_site "$target" "$type" "$application" "$body"; then
+    restore_note="$PANEL_WRITE_REJECT"
+    carry_restore
+    return 1
+  fi
+
+  if ! systemctl reload nginx >&2; then
+    # nginx -t passed, so this is exotic -- but the database now describes a
+    # config that is not in service, which is the one direction the ordering
+    # above exists to avoid. Put both halves back, in the same order.
+    restore_note="nginx would not reload the carried config, so the clone keeps the stock one"
+    carry_restore
+    panel_update_site "$target" "$type" "$application" "$stock" \
+      || warn "the panel record for ${target} still holds the carried vhost; check Site -> Vhost"
+    systemctl reload nginx >&2 || warn "nginx did not reload after restoring ${target}"
+    return 1
+  fi
+
+  # The stage is dropped by the caller, not here. A failed carry-over is not a
+  # failed clone -- the job goes on with the stock vhost -- so the rollback trap
+  # never runs, and a `return 1` that skipped the cleanup left a root-owned
+  # directory in /tmp behind every refusal. Observed once, forcing nginx -t to
+  # fail on a composed body.
+  return 0
+}
+
+# --- cloning an Instatic instance -------------------------------------------
+#
+# A reverse-proxy site's backend is a port, so cloning the site alone gives a
+# second hostname pointing at the *same* container -- a staging site that edits
+# production content. Everything here exists to make that outcome unreachable:
+# the backend is established as an Instatic instance this box manages before
+# anything is created, the clone gets a container, a port and a master key of
+# its own, and the content moves through Instatic's own site-bundle export and
+# import rather than through its files.
+#
+# The bundle is the right transfer precisely because of what it leaves behind.
+# It carries the site shell, data tables, rows, media, media folders and
+# redirects -- and no users and no secrets. So the clone gets its own
+# INSTATIC_SECRET_KEY, its own owner and its own sessions, and nothing encrypted
+# at rest travels between the two instances. Reaching into an instance's data/
+# and uploads/ instead would freeze this addon against one version of a schema
+# it does not own and drag the source's key along with the content.
+
+# Read one field out of an instance's record. The same shape the Instatic
+# wrapper uses on its own files, because it is the same file.
+instatic_meta() {
+  local domain=$1 field=$2
+  local file="${INSTATIC_DATA_DIR}/${domain}/meta.json"
+  [[ -f $file ]] || return 1
+  sed -n "s/.*\"${field}\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$file" | head -1
+}
+
+INSTATIC_REJECT=""
+INSTATIC_PORT=""
+INSTATIC_TAG=""
+
+# Establish that a reverse-proxy site really is an Instatic instance of ours.
+#
+# Two facts, and both have to hold: the Instatic addon has a record for this
+# hostname, and the panel's own reverse_proxy_url is that record's port on the
+# loopback. Either alone is not enough -- a record can outlive a site that was
+# repointed, and a loopback URL says nothing about what is listening on it.
+instatic_backend_of() {
+  local domain=$1 port tag url
+  INSTATIC_REJECT=""
+  INSTATIC_PORT=""
+  INSTATIC_TAG=""
+
+  if [[ ! -x $INSTATIC_WRAPPER ]]; then
+    INSTATIC_REJECT="the Instatic addon is not installed on this server, so there is no supported way to duplicate the backend"
+    return 1
+  fi
+  if [[ ! -f "${INSTATIC_DATA_DIR}/${domain}/meta.json" ]]; then
+    INSTATIC_REJECT="its backend is not an Instatic instance this box manages; cloning would point the staging hostname at the live application"
+    return 1
+  fi
+
+  port=$(instatic_meta "$domain" port) || port=""
+  tag=$(instatic_meta "$domain" tag) || tag=""
+  if [[ ! $port =~ ^[0-9]{1,5}$ ]] || [[ ! $tag =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    INSTATIC_REJECT="the Instatic record for ${domain} is incomplete"
+    return 1
+  fi
+
+  url=$(reverse_proxy_url_of "$domain") || url=""
+  if [[ $url != "http://127.0.0.1:${port}" ]]; then
+    INSTATIC_REJECT="it proxies '${url}' rather than the Instatic instance recorded for it; cloning would point the staging hostname at whatever that is"
+    return 1
+  fi
+
+  INSTATIC_PORT=$port
+  INSTATIC_TAG=$tag
+  return 0
+}
+
+# Instatic's admin API, over the loopback port the instance publishes.
+#
+# Three details decide whether these work at all. Instatic runs a CSRF origin
+# check on every mutating method against its configured PUBLIC_ORIGIN, and these
+# requests arrive on 127.0.0.1 rather than on the hostname, so each one carries
+# an explicit Origin header naming the real one. The session rides in a curl
+# cookie jar rather than in a cookie name written down here, because the name is
+# Instatic's to change. And no credential is ever an argument: request bodies
+# are written to a 0600 file in the job directory and handed to curl as @file,
+# because anything in argv is readable out of ps by every account on the box.
+#
+# `|| true` on the curl: -w prints 000 for a request that never got a response,
+# which is the failure the caller has to see. Letting the non-zero exit abort
+# the assignment under set -e would report it as nothing at all.
+instatic_post() {
+  local port=$1 domain=$2 jar=$3 path=$4 ctype=$5 req=$6 out=$7
+  curl -sS --max-time 900 -o "$out" -w '%{http_code}' \
+    -c "$jar" -b "$jar" \
+    -X POST "http://127.0.0.1:${port}${path}" \
+    -H "Origin: https://${domain}" \
+    -H "Content-Type: ${ctype}" \
+    --data-binary "@${req}" || true
+}
+
+instatic_get() {
+  local port=$1 domain=$2 jar=$3 path=$4 out=$5
+  curl -sS --max-time 900 -o "$out" -w '%{http_code}' \
+    -c "$jar" -b "$jar" \
+    "http://127.0.0.1:${port}${path}" \
+    -H "Origin: https://${domain}" || true
+}
+
+# Write a JSON request body without any of it passing through argv. printf is a
+# shell builtin, so the value never becomes a process argument even for an
+# instant.
+instatic_body() {
+  local file=$1 json=$2
+  ( umask 077; printf '%s' "$json" > "$file" )
+  chmod 600 "$file"
+}
+
+# The reason a request failed, as Instatic reported it, for the job's log.
+instatic_error() {
+  local out=$1
+  local msg
+  msg=$(head -c 400 "$out" 2>/dev/null | tr -d '\000-\037') || msg=""
+  printf '%s' "${msg:-no response body}"
+}
+
+# Open a session on an instance. Returns 0 with the jar populated.
+#
+# MFA is not optional to handle: a source owner with it enabled gets a pending
+# session out of /login and a 401 out of everything else, which without this
+# would surface as "export refused" and send the operator looking at
+# capabilities. The code is asked for up front instead, and its absence is a
+# failure before anything is created.
+instatic_login() {
+  local port=$1 domain=$2 jar=$3 email=$4 password=$5 mfa=$6 what=$7
+  local req="${JOB_DIR}/.api-req" out="${JOB_DIR}/.api-out" code
+  INSTATIC_REJECT=""
+
+  rm -f "$jar"
+  instatic_body "$req" "$(printf '{"email":%s,"password":%s}' "$(json_str "$email")" "$(json_str "$password")")"
+  code=$(instatic_post "$port" "$domain" "$jar" "/admin/api/cms/login" "application/json" "$req" "$out")
+  rm -f "$req"
+  if [[ $code != "200" ]]; then
+    INSTATIC_REJECT="${what} refused the login (HTTP ${code}): $(instatic_error "$out")"
+    rm -f "$out"
+    return 1
+  fi
+
+  if grep -q '"mfaRequired":true' "$out"; then
+    if [[ -z $mfa ]]; then
+      INSTATIC_REJECT="${what} has multi-factor authentication enabled and no authentication code was supplied"
+      rm -f "$out"
+      return 1
+    fi
+    instatic_body "$req" "$(printf '{"code":%s}' "$(json_str "$mfa")")"
+    code=$(instatic_post "$port" "$domain" "$jar" "/admin/api/cms/auth/mfa/verify" "application/json" "$req" "$out")
+    rm -f "$req"
+    if [[ $code != "200" ]]; then
+      INSTATIC_REJECT="${what} rejected the authentication code (HTTP ${code}): $(instatic_error "$out")"
+      rm -f "$out"
+      return 1
+    fi
+  fi
+  rm -f "$out"
+  return 0
+}
+
+# Revoked rather than left to expire. A clone should not leave a live session
+# behind on the site it copied.
+instatic_logout() {
+  local port=$1 domain=$2 jar=$3
+  local req="${JOB_DIR}/.api-req" out="${JOB_DIR}/.api-out"
+  [[ -f $jar ]] || return 0
+  instatic_body "$req" "{}"
+  instatic_post "$port" "$domain" "$jar" "/admin/api/cms/logout" "application/json" "$req" "$out" >/dev/null
+  rm -f "$req" "$out" "$jar"
+  return 0
+}
+
+# Open the step-up window `strategy=replace` requires.
+#
+# replace wipes every data row before reinserting, which Instatic treats as the
+# highest-blast-radius operation it has: data.import plus content.manage plus a
+# step-up window no older than the policy allows. Nothing else gives a clone
+# that matches its source rather than merely containing it -- the setup step
+# seeds a starter homepage, and a merge would leave it behind.
+instatic_step_up() {
+  local port=$1 domain=$2 jar=$3 password=$4 mfa=$5
+  local req="${JOB_DIR}/.api-req" out="${JOB_DIR}/.api-out" code
+  INSTATIC_REJECT=""
+
+  if [[ -n $mfa ]]; then
+    instatic_body "$req" "$(printf '{"password":%s,"mfaCode":%s}' "$(json_str "$password")" "$(json_str "$mfa")")"
+  else
+    instatic_body "$req" "$(printf '{"password":%s}' "$(json_str "$password")")"
+  fi
+  code=$(instatic_post "$port" "$domain" "$jar" "/admin/api/cms/auth/step-up" "application/json" "$req" "$out")
+  rm -f "$req"
+  if [[ $code != "200" ]]; then
+    INSTATIC_REJECT="the clone refused to open a step-up window (HTTP ${code}): $(instatic_error "$out")"
+    rm -f "$out"
+    return 1
+  fi
+  rm -f "$out"
+  return 0
+}
+
+# Bootstrap the clone's first owner through the public one-shot setup endpoint.
+#
+# Public because it 409s once anyone has run it, which is what keeps it from
+# being an account-creation backdoor -- and what makes it usable here exactly
+# once, on an instance that booted seconds ago with an empty database.
+instatic_setup() {
+  local port=$1 domain=$2 jar=$3 email=$4 password=$5 site_name=$6
+  local req="${JOB_DIR}/.api-req" out="${JOB_DIR}/.api-out" code
+  INSTATIC_REJECT=""
+
+  instatic_body "$req" "$(printf '{"siteName":%s,"email":%s,"password":%s}' \
+    "$(json_str "$site_name")" "$(json_str "$email")" "$(json_str "$password")")"
+  code=$(instatic_post "$port" "$domain" "$jar" "/admin/api/cms/setup" "application/json" "$req" "$out")
+  rm -f "$req"
+  if [[ $code != "201" ]]; then
+    INSTATIC_REJECT="the clone would not bootstrap its owner (HTTP ${code}): $(instatic_error "$out")"
+    rm -f "$out"
+    return 1
+  fi
+  rm -f "$out"
+  return 0
+}
+
 # --- verbs ------------------------------------------------------------------
+
+# The SQL fragment that keeps the type gate in one place. Every value in it is
+# a literal from CLONABLE_TYPES, never anything a caller supplied.
+clonable_types_sql() {
+  local t out=""
+  for t in "${CLONABLE_TYPES[@]}"; do
+    [[ -z $out ]] || out+=","
+    out+="'${t}'"
+  done
+  printf '%s' "$out"
+}
 
 cmd_sites() {
   local rows out="" first=1
+  # LEFT JOIN rather than JOIN: a static or reverse-proxy site has no
+  # php_settings row, and an inner join is what used to make the list PHP-only
+  # even after the type filter came off.
   rows=$(panel_query "
-    SELECT s.domain_name, s.user, COALESCE(p.php_version, ''), COALESCE(s.application, ''),
+    SELECT s.domain_name, s.type, s.user, COALESCE(p.php_version, ''), COALESCE(s.application, ''),
            (SELECT COUNT(*) FROM database d WHERE d.site_id = s.id)
       FROM site s LEFT JOIN php_settings p ON p.site_id = s.id
-     WHERE s.type = 'php'
+     WHERE s.type IN ($(clonable_types_sql))
      ORDER BY s.domain_name;") || emit_err "cannot read the panel database"
 
-  local domain user php app dbs
-  while IFS='|' read -r domain user php app dbs; do
+  local domain type user php app dbs
+  while IFS='|' read -r domain type user php app dbs; do
     [[ -n $domain ]] || continue
+    # A reverse-proxy site is only clonable when its backend is an Instatic
+    # instance this box manages. Offering the others in a list headed "which
+    # site should be cloned?" would be offering something that can only answer
+    # with a refusal -- including the addon's own site.
+    if [[ $type == "reverse-proxy" ]] && ! instatic_backend_of "$domain"; then continue; fi
     (( first == 1 )) || out+=","
-    out+=$(printf '{"domain":%s,"siteUser":%s,"phpVersion":%s,"application":%s,"databases":%d}' \
-      "$(json_str "$domain")" "$(json_str "$user")" "$(json_str "$php")" \
+    out+=$(printf '{"domain":%s,"siteType":%s,"siteUser":%s,"phpVersion":%s,"application":%s,"databases":%d}' \
+      "$(json_str "$domain")" "$(json_str "$type")" "$(json_str "$user")" "$(json_str "$php")" \
       "$(json_str "$app")" "${dbs:-0}")
     first=0
   done <<< "$rows"
@@ -801,13 +1802,18 @@ cmd_sites() {
 }
 
 cmd_describe() {
-  local domain=$1 row type user root app php db size
+  local domain=$1 row type user root app php="" db size instatic="false"
   row=$(site_row "$domain") || emit_err "cannot read the panel database"
   [[ -n $row ]] || emit_err "no CloudPanel site for ${domain}"
   IFS='|' read -r type user root app <<< "$row"
-  [[ $type == "php" ]] || emit_err "${domain} is a '${type}' site; only PHP sites can be cloned"
+  type_is_clonable "$type" \
+    || emit_err "${domain} is a '${type}' site; only ${CLONABLE_TYPES[*]} sites can be cloned"
 
-  php=$(php_version_of "$domain")
+  if [[ $type == "reverse-proxy" ]]; then
+    instatic_backend_of "$domain" || emit_err "${domain} cannot be cloned: ${INSTATIC_REJECT}"
+    instatic="true"
+  fi
+  if [[ $type == "php" ]]; then php=$(php_version_of "$domain"); fi
   db=$(database_of "$domain")
   size=0
   if [[ -d "/home/${user}/htdocs/${domain}" ]]; then
@@ -815,13 +1821,14 @@ cmd_describe() {
   fi
   [[ $size =~ ^[0-9]+$ ]] || size=0
 
-  emit_ok "$(printf '{"domain":%s,"siteUser":%s,"phpVersion":%s,"application":%s,"rootDirectory":%s,"database":%s,"sizeMb":%d}' \
-    "$(json_str "$domain")" "$(json_str "$user")" "$(json_str "$php")" \
+  emit_ok "$(printf '{"domain":%s,"siteType":%s,"instatic":%s,"siteUser":%s,"phpVersion":%s,"application":%s,"rootDirectory":%s,"database":%s,"sizeMb":%d}' \
+    "$(json_str "$domain")" "$(json_str "$type")" "$instatic" \
+    "$(json_str "$user")" "$(json_str "$php")" \
     "$(json_str "${app:-Generic}")" "$(json_str "$root")" "$(json_str "$db")" "$size")"
 }
 
 cmd_clone() {
-  local source=$1 target=$2 tls=$3
+  local source=$1 target=$2 tls=$3 port=$4 email=$5 mfa=$6
 
   [[ $source != "$target" ]] || emit_err "the source and the target are the same site"
   site_exists "$source" || emit_err "no CloudPanel site for ${source}"
@@ -830,7 +1837,28 @@ cmd_clone() {
   local row type
   row=$(site_row "$source") || emit_err "cannot read the panel database"
   IFS='|' read -r type _ _ _ <<< "$row"
-  [[ $type == "php" ]] || emit_err "${source} is a '${type}' site; only PHP sites can be cloned"
+  type_is_clonable "$type" \
+    || emit_err "${source} is a '${type}' site; only ${CLONABLE_TYPES[*]} sites can be cloned"
+
+  # An Instatic clone needs three things the others do not, and all three are
+  # settled here rather than inside the job: a refusal that arrives minutes
+  # later, after a job record exists and a page has been polling it, reads as a
+  # failed clone rather than as a request that was never going to work.
+  local password=""
+  if [[ $type == "reverse-proxy" ]]; then
+    instatic_backend_of "$source" || emit_err "${source} cannot be cloned: ${INSTATIC_REJECT}"
+    [[ -n $port ]]  || emit_err "cloning an Instatic site needs --port for the clone's own instance"
+    [[ -n $email ]] || emit_err "cloning an Instatic site needs --email for the source instance's admin account"
+    # On stdin, never in argv: anything passed as an argument is readable out
+    # of ps by every account on this box, and this is the password to another
+    # site's administration.
+    IFS= read -r password || true
+    [[ -n $password ]] || emit_err "cloning an Instatic site needs the source instance's admin password on stdin"
+  else
+    if [[ -n $port || -n $email || -n $mfa ]]; then
+      emit_err "--port, --email and --mfa apply only to cloning an Instatic site"
+    fi
+  fi
 
   local stg_user; stg_user=$(site_user_for "$target")
   ! user_taken "$stg_user" || emit_err "the site user ${stg_user} already exists; ${target} may be half-created"
@@ -854,6 +1882,14 @@ cmd_clone() {
   job_set "$dir" source "$source"
   job_set "$dir" target "$target"
   job_set "$dir" tls "$tls"
+  if [[ -n $port ]];  then job_set "$dir" port "$port"; fi
+  if [[ -n $email ]]; then job_set "$dir" email "$email"; fi
+  if [[ -n $mfa ]];   then job_set "$dir" mfa "$mfa"; fi
+  # 0600 in a 0700 root directory, like the database dump, and deleted by the
+  # job the moment the export it exists for has finished. `run` is started by
+  # systemd and inherits no stdin, so this is the only way the credential can
+  # reach it -- and it is why the record is a file rather than an argument.
+  if [[ -n $password ]]; then job_set "$dir" srcPassword "$password"; fi
   job_set "$dir" createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   job_set "$dir" step "queued"
   job_set "$dir" state queued
@@ -895,13 +1931,20 @@ cmd_clone() {
 }
 
 job_json() {
-  local dir=$1 id=$2 result
+  local dir=$1 id=$2 result port
   result=$(cat "${dir}/result.json" 2>/dev/null || true)
   [[ -n $result ]] || result="null"
-  printf '{"id":%s,"source":%s,"target":%s,"state":%s,"step":%s,"error":%s,"createdAt":%s,"startedAt":%s,"finishedAt":%s,"result":%s}' \
+  # Reported so the app can keep a second Instatic clone off a port the first
+  # one has taken but the panel snapshot does not know about yet. Emitted as a
+  # JSON number, so a record without one has to read 0 rather than nothing --
+  # `"port":,` would make the whole reply unparseable and empty the dashboard.
+  port=$(job_get "$dir" port)
+  [[ $port =~ ^[0-9]+$ ]] || port=0
+  printf '{"id":%s,"source":%s,"target":%s,"port":%d,"state":%s,"step":%s,"error":%s,"createdAt":%s,"startedAt":%s,"finishedAt":%s,"result":%s}' \
     "$(json_str "$id")" \
     "$(json_str "$(job_get "$dir" source)")" \
     "$(json_str "$(job_get "$dir" target)")" \
+    "$port" \
     "$(json_str "$(job_get "$dir" state)")" \
     "$(json_str "$(job_get "$dir" step)")" \
     "$(json_str "$(job_get "$dir" error)")" \
@@ -958,7 +2001,7 @@ cmd_prune() {
 
 VERB=$1; shift
 
-SOURCE=""; TARGET=""; DOMAIN=""; JOB=""; TLS="no"
+SOURCE=""; TARGET=""; DOMAIN=""; JOB=""; TLS="no"; PORT=""; EMAIL=""; MFA=""
 while (( $# > 0 )); do
   case $1 in
     --source) [[ $# -ge 2 ]] || emit_err "--source needs a value"; SOURCE=$2; shift 2 ;;
@@ -966,26 +2009,36 @@ while (( $# > 0 )); do
     --domain) [[ $# -ge 2 ]] || emit_err "--domain needs a value"; DOMAIN=$2; shift 2 ;;
     --job)    [[ $# -ge 2 ]] || emit_err "--job needs a value";    JOB=$2;    shift 2 ;;
     --tls)    [[ $# -ge 2 ]] || emit_err "--tls needs a value";    TLS=$2;    shift 2 ;;
+    --port)   [[ $# -ge 2 ]] || emit_err "--port needs a value";   PORT=$2;   shift 2 ;;
+    --email)  [[ $# -ge 2 ]] || emit_err "--email needs a value";  EMAIL=$2;  shift 2 ;;
+    --mfa)    [[ $# -ge 2 ]] || emit_err "--mfa needs a value";    MFA=$2;    shift 2 ;;
     *) emit_err "unknown argument: '$1'" ;;
   esac
 done
+
+# There is deliberately no --password. The one credential this wrapper takes
+# arrives on stdin, because an argument is visible in ps to every account on the
+# box for as long as the process lives.
 
 case $VERB in
   sites|jobs|prune) ;;
   describe)         validate_domain "$DOMAIN" domain ;;
   clone)            validate_domain "$SOURCE" source; validate_domain "$TARGET" target
-                    validate_flag "$TLS" tls ;;
+                    validate_flag "$TLS" tls
+                    if [[ -n $PORT ]];  then validate_port "$PORT";   fi
+                    if [[ -n $EMAIL ]]; then validate_email "$EMAIL"; fi
+                    if [[ -n $MFA ]];   then validate_mfa "$MFA";     fi ;;
   run|job)          validate_job "$JOB" ;;
   *) emit_err "unknown verb: '$VERB'" ;;
 esac
 
 # Reject arguments the verb does not take, so a typo cannot be silently ignored.
 case $VERB in
-  clone) if [[ -n $DOMAIN || -n $JOB ]]; then emit_err "clone takes --source, --target and --tls"; fi ;;
-  describe) if [[ -n $SOURCE || -n $TARGET || -n $JOB || $TLS != "no" ]]; then emit_err "describe takes only --domain"; fi ;;
-  run|job) if [[ -n $SOURCE || -n $TARGET || -n $DOMAIN || $TLS != "no" ]]; then emit_err "${VERB} takes only --job"; fi ;;
+  clone) if [[ -n $DOMAIN || -n $JOB ]]; then emit_err "clone takes --source, --target, --tls and, for an Instatic site, --port, --email and --mfa"; fi ;;
+  describe) if [[ -n $SOURCE || -n $TARGET || -n $JOB || $TLS != "no" || -n $PORT || -n $EMAIL || -n $MFA ]]; then emit_err "describe takes only --domain"; fi ;;
+  run|job) if [[ -n $SOURCE || -n $TARGET || -n $DOMAIN || $TLS != "no" || -n $PORT || -n $EMAIL || -n $MFA ]]; then emit_err "${VERB} takes only --job"; fi ;;
   sites|jobs|prune)
-    if [[ -n $SOURCE || -n $TARGET || -n $DOMAIN || -n $JOB || $TLS != "no" ]]; then
+    if [[ -n $SOURCE || -n $TARGET || -n $DOMAIN || -n $JOB || $TLS != "no" || -n $PORT || -n $EMAIL || -n $MFA ]]; then
       emit_err "${VERB} takes no arguments"
     fi ;;
 esac
@@ -1023,7 +2076,7 @@ esac
 case $VERB in
   sites)    cmd_sites ;;
   describe) cmd_describe "$DOMAIN" ;;
-  clone)    cmd_clone "$SOURCE" "$TARGET" "$TLS" ;;
+  clone)    cmd_clone "$SOURCE" "$TARGET" "$TLS" "$PORT" "$EMAIL" "$MFA" ;;
   run)      cmd_run "$JOB" ;;
   job)      cmd_job "$JOB" ;;
   jobs)     cmd_jobs ;;
