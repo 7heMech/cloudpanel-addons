@@ -1334,12 +1334,34 @@ server_name_hosts() {
 # across CloudPanel versions: it copies whatever *this* panel did to *this* site
 # a moment ago.
 #
-# It fails closed in three ways, because a wrong value here is a wrong nginx
+# It fails closed in four ways, because a wrong value here is a wrong nginx
 # config. The walk must consume the rendered file exactly to EOF; a placeholder
-# appearing twice must resolve identically both times; and a value is only ever
-# guessed as the shortest string that reaches the next literal, so a wrong guess
-# surfaces as a later literal failing to match rather than as a plausible wrong
-# answer.
+# appearing twice must resolve identically both times; two placeholders with
+# nothing between them are refused rather than split at an arbitrary point; and
+# the whole parse is done twice from opposite ends and the two must agree.
+#
+# That last one is not belt and braces, it is the guard the other three cannot
+# be. Reading forwards, a value is the *shortest* string that reaches the next
+# literal, so a wrong guess normally surfaces as a later literal failing to
+# match. It does not when the literal separating two DIFFERENT placeholders also
+# occurs inside the first one's value, because then the short guess and the long
+# one both consume the file to EOF. Confirmed against the real function:
+#
+#   stored:   server {\n  {{settings}}\n  {{root}}\n}
+#   rendered: server {\n  include /etc/nginx/a;\n  include /etc/nginx/b;
+#             \n  root /home/u/htdocs/d;\n}
+#
+# was ACCEPTED, with settings="include /etc/nginx/a;" and root spanning the
+# other two lines. The truth is settings="include a;\n  include b;", and
+# rendering the *source's* body -- which differs from the stock one, the whole
+# reason this exists -- would then have relocated or dropped a directive. No
+# stock CloudPanel template on this box triggers it, but the layout that does is
+# one they already use: a multi-line placeholder directly above another at the
+# same indent, which is exactly {{nginx_access_log}} over {{nginx_error_log}}.
+#
+# Reading backwards takes the *longest* value instead. Where the parse is unique
+# the two readings are the same map; where a boundary could sit in more than one
+# place they differ, and differing is a refusal.
 declare -A VHOST_MAP=()
 VHOST_MAP_REJECT=""
 
@@ -1359,20 +1381,24 @@ learn_vhost_map() {
   # The panel writes the rendered template followed by one newline the template
   # itself does not carry -- measured on every site on this box, static, php and
   # reverse-proxy alike. Accounting for it here is what lets the walk below
-  # demand EOF exactly rather than "near enough", and the installer puts the
-  # same newline back when it writes the carried file.
+  # demand EOF exactly rather than "near enough", and the installer stores the
+  # body without one for the same reason.
   out=${out%$'\n'}
 
-  local lit raw key tail value
-  while [[ $tpl == *"{{"* ]]; do
-    lit=${tpl%%"{{"*}
-    tpl=${tpl#*"{{"}
-    if [[ $tpl != *"}}"* ]]; then
+  # Split the stored body into literal and placeholder segments once, so the two
+  # walks below are the same parse read in opposite directions rather than two
+  # parsers that could disagree about something other than a boundary.
+  local -a lits=() keys=()
+  local rest=$tpl raw key
+  while [[ $rest == *"{{"* ]]; do
+    lits+=("${rest%%"{{"*}")
+    rest=${rest#*"{{"}
+    if [[ $rest != *"}}"* ]]; then
       VHOST_MAP_REJECT="the clone's stored vhost has an unterminated placeholder"
       return 1
     fi
-    raw=${tpl%%"}}"*}
-    tpl=${tpl#*"}}"}
+    raw=${rest%%"}}"*}
+    rest=${rest#*"}}"}
     # Template::getPlaceholders() matches /{{[\sa-zA-Z0-9_]+}}/, so whitespace
     # inside the braces is legal and names the same placeholder.
     key=${raw//[[:space:]]/}
@@ -1380,45 +1406,100 @@ learn_vhost_map() {
       VHOST_MAP_REJECT="the clone's stored vhost has a placeholder named '${raw}'"
       return 1
     fi
+    keys+=("$key")
+  done
+  lits+=("$rest")
 
-    if [[ ${out:0:${#lit}} != "$lit" ]]; then
-      VHOST_MAP_REJECT="the rendered vhost diverges from the stored one before {{${key}}}"
+  local n=${#keys[@]}
+  (( n > 0 )) || return 0
+
+  local i
+  for (( i = 1; i < n; i++ )); do
+    if [[ -z ${lits[i]} ]]; then
+      VHOST_MAP_REJECT="the clone's stored vhost puts {{${keys[i-1]}}} and {{${keys[i]}}} next to each other, which cannot be read apart"
       return 1
     fi
-    out=${out:${#lit}}
+  done
 
-    if [[ $tpl == *"{{"* ]]; then
-      tail=${tpl%%"{{"*}
-      if [[ $out != *"$tail"* ]]; then
-        VHOST_MAP_REJECT="the rendered vhost has nothing matching the text after {{${key}}}"
+  # Forwards: every value is the shortest string that reaches the next literal.
+  local -A fwd=()
+  local o=$out tail value
+  for (( i = 0; i < n; i++ )); do
+    if [[ ${o:0:${#lits[i]}} != "${lits[i]}" ]]; then
+      VHOST_MAP_REJECT="the rendered vhost diverges from the stored one before {{${keys[i]}}}"
+      return 1
+    fi
+    o=${o:${#lits[i]}}
+    if (( i + 1 < n )); then
+      tail=${lits[i+1]}
+      if [[ $o != *"$tail"* ]]; then
+        VHOST_MAP_REJECT="the rendered vhost has nothing matching the text after {{${keys[i]}}}"
         return 1
       fi
-      value=${out%%"$tail"*}
+      value=${o%%"$tail"*}
     else
       # The last placeholder is anchored at the end rather than at the next
       # literal, which is what makes "consumed exactly to EOF" a property of the
       # walk instead of a hope. It is also the multi-line case: {{php_settings}}
       # is the final placeholder and expands to nine lines.
-      tail=$tpl
-      if [[ -n $tail && $out != *"$tail" ]]; then
-        VHOST_MAP_REJECT="the rendered vhost does not end with the text after {{${key}}}"
+      tail=${lits[n]}
+      if [[ -n $tail && $o != *"$tail" ]]; then
+        VHOST_MAP_REJECT="the rendered vhost does not end with the text after {{${keys[i]}}}"
         return 1
       fi
-      value=${out%"$tail"}
+      value=${o%"$tail"}
     fi
-    out=${out:${#value}}
-
-    if [[ -v "VHOST_MAP[$key]" && ${VHOST_MAP[$key]} != "$value" ]]; then
-      VHOST_MAP_REJECT="{{${key}}} was rendered two different ways in one vhost"
+    o=${o:${#value}}
+    if [[ -v "fwd[${keys[i]}]" && ${fwd[${keys[i]}]} != "$value" ]]; then
+      VHOST_MAP_REJECT="{{${keys[i]}}} was rendered two different ways in one vhost"
       return 1
     fi
-    VHOST_MAP[$key]=$value
+    fwd[${keys[i]}]=$value
   done
-
-  if [[ $out != "$tpl" ]]; then
+  if [[ $o != "${lits[n]}" ]]; then
     VHOST_MAP_REJECT="the rendered vhost does not end where the stored one does"
     return 1
   fi
+
+  # Backwards: every value is the longest string that still leaves the literal
+  # before it somewhere to match.
+  local -A bwd=()
+  local p=$out
+  if [[ -n ${lits[n]} ]]; then
+    p=${p%"${lits[n]}"}
+  fi
+  for (( i = n - 1; i >= 0; i-- )); do
+    if [[ -z ${lits[i]} ]]; then
+      # Only reachable at i == 0: a body that opens with a placeholder has
+      # nothing before it, so whatever is left is its value.
+      value=$p
+      p=""
+    else
+      if [[ $p != *"${lits[i]}"* ]]; then
+        VHOST_MAP_REJECT="the rendered vhost has nothing matching the text before {{${keys[i]}}}"
+        return 1
+      fi
+      value=${p##*"${lits[i]}"}
+      p=${p%"${lits[i]}${value}"}
+    fi
+    if [[ -v "bwd[${keys[i]}]" && ${bwd[${keys[i]}]} != "$value" ]]; then
+      VHOST_MAP_REJECT="{{${keys[i]}}} was rendered two different ways in one vhost"
+      return 1
+    fi
+    bwd[${keys[i]}]=$value
+  done
+  if [[ -n $p ]]; then
+    VHOST_MAP_REJECT="the rendered vhost does not begin where the stored one does"
+    return 1
+  fi
+
+  for key in "${!fwd[@]}"; do
+    if [[ ${bwd[$key]-} != "${fwd[$key]}" ]]; then
+      VHOST_MAP_REJECT="{{${key}}} could be read out of the clone's vhost in more than one way, so where it ends is a guess"
+      return 1
+    fi
+    VHOST_MAP[$key]=${fwd[$key]}
+  done
   return 0
 }
 

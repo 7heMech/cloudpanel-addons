@@ -660,8 +660,59 @@ console.log("\n== learning what CloudPanel substituted into a vhost ==");
     JSON.stringify(map.get("php_settings")));
   check("one that expands to nothing", map.get("settings") === "", JSON.stringify(map.get("settings")));
 
-  // The walk is only sound because it fails rather than guesses. Both of these
-  // would otherwise produce a plausible-looking map and a wrong nginx config.
+  // The walk is only sound because it fails rather than guesses. These would
+  // otherwise produce a plausible-looking map and a wrong nginx config.
+  //
+  // The last of them is the one the other guards cannot see. Reading forwards
+  // takes the shortest value that reaches the next literal, so a wrong guess
+  // usually surfaces as a later literal failing to match -- but not when the
+  // literal between two DIFFERENT placeholders also occurs inside the first
+  // one's value, because then the short reading and the long one both consume
+  // the file to EOF. No stock CloudPanel template on this box triggers it; the
+  // layout that does is one they already use, a multi-line placeholder directly
+  // above another at the same indent, which is {{nginx_access_log}} over
+  // {{nginx_error_log}}.
+  {
+    const stored = ["server {", "  {{settings}}", "  {{root}}", "}"].join("\n");
+    const rendered = ["server {", "  include /etc/nginx/a;", "  include /etc/nginx/b;",
+                      "  root /home/u/htdocs/d;", "}", ""].join("\n");
+    const ambiguous = learn(stored, rendered);
+    check("a boundary that could sit in two places is refused",
+      ambiguous.get("REJECT") !== undefined,
+      [...ambiguous.entries()].map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", "));
+    check("and says which placeholder could be read two ways",
+      (ambiguous.get("REJECT") ?? "").includes("more than one way"), ambiguous.get("REJECT"));
+
+    // The same shape with the ambiguity removed resolves, so what is being
+    // refused is the ambiguity and not the layout.
+    const unambiguous = learn(
+      ["server {", "  {{settings}}", "  root {{root}};", "}"].join("\n"),
+      ["server {", "  include /etc/nginx/a;", "  include /etc/nginx/b;",
+       "  root /home/u/htdocs/d;", "}", ""].join("\n"));
+    check("the same layout without the ambiguity still resolves",
+      unambiguous.get("settings") === "include /etc/nginx/a;\n  include /etc/nginx/b;",
+      JSON.stringify(unambiguous.get("settings")));
+    check("and the second placeholder gets what is left of the line",
+      unambiguous.get("root") === "/home/u/htdocs/d", JSON.stringify(unambiguous.get("root")));
+
+    // The live layout this would fire on: two log placeholders at one indent,
+    // where the first expands to more than a line.
+    const logs = learn(
+      ["server {", "  {{nginx_access_log}}", "  {{nginx_error_log}}", "}"].join("\n"),
+      ["server {", "  access_log /home/u/logs/nginx/access.log main;",
+       "  access_log /home/u/logs/nginx/json.log json;",
+       "  error_log /home/u/logs/nginx/error.log;", "}", ""].join("\n"));
+    check("a multi-line placeholder above another at the same indent is refused",
+      logs.get("REJECT") !== undefined,
+      [...logs.entries()].map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", "));
+
+    // Two placeholders with nothing between them cannot be told apart at all.
+    const adjacent = learn("server {\n  {{settings}}{{root}}\n}", "server {\n  ab\n}\n");
+    check("two placeholders with nothing between them are refused",
+      adjacent.get("REJECT") !== undefined && (adjacent.get("REJECT") ?? "").includes("next to each other"),
+      adjacent.get("REJECT"));
+  }
+
   const trailing = learn(STORED, `${RENDERED}# something the template does not have\n`);
   check("a walk that does not consume the file is refused",
     trailing.get("REJECT") !== undefined, [...trailing.keys()].join(", "));
