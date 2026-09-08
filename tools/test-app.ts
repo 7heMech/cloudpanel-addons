@@ -685,6 +685,35 @@ console.log("\n== learning what CloudPanel substituted into a vhost ==");
   const unknown = render(STORED.replace("{{root}}", "{{nodejs_proxy_pass}}"), STORED, RENDERED);
   check("a placeholder the panel did not use is refused, not blanked",
     unknown.startsWith("RENDER-REJECT") && unknown.includes("nodejs_proxy_pass"), unknown);
+
+  // The column's convention is not the file's, and the difference is load
+  // bearing. Every panel-written site.vhost_template on this box ends with `}`
+  // -- all 31 rows measured -- while the file it renders to ends with exactly
+  // one newline, and the walk above compensates for that. A body stored with a
+  // trailing newline is therefore a body this addon cannot read back: the clone
+  // this implementation first produced, stg.demo.clp-stg.local, stored 10 as its
+  // last codepoint and refused to be cloned again.
+  const withNewline = learn(`${STORED}\n`, RENDERED);
+  check("a stored body carrying a trailing newline is refused",
+    withNewline.get("REJECT") !== undefined, [...withNewline.keys()].join(", "));
+  check("which is what a re-clone of this addon's own output used to hit",
+    (withNewline.get("REJECT") ?? "").includes("does not end with the text after"),
+    withNewline.get("REJECT"));
+
+  // So the installer has to stage the two halves the way the panel writes them.
+  // Read out of the wrapper rather than asserted about a string, because the two
+  // writes sit twenty lines apart and drifting apart again is the failure.
+  {
+    const src = readFileSync("addons/stager/wrapper/clp-action-stager", "utf-8");
+    const from = src.indexOf("carry_vhost() {");
+    const fn = src.slice(from, src.indexOf("\n}\n", from));
+    check("the carried body is staged without a trailing newline",
+      fn.includes(`printf '%s' "$composed" > "$body"`) && !fn.includes(`printf '%s\\n' "$composed"`),
+      fn.split("\n").filter((l) => l.includes('> "$body"')).join(" | "));
+    check("and the rendered file is staged with one",
+      fn.includes(`printf '\\n' >> "$rendered"`),
+      fn.split("\n").filter((l) => l.includes("$rendered")).join(" | "));
+  }
 }
 
 console.log("\n== composing a clone's vhost from its source's ==");

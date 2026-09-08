@@ -1640,7 +1640,16 @@ carry_vhost() {
     CARRY_REJECT="$VHOST_COMPOSE_REJECT"
     return 1
   fi
-  printf '%s\n' "$composed" > "$body"
+  # No trailing newline, because the panel does not write one. Every
+  # panel-written `site.vhost_template` on this box ends with `}` -- all 31 rows
+  # measured -- while the file it renders to ends with exactly one newline, and
+  # learn_vhost_map compensates for precisely that asymmetry when it reads a pair
+  # back. Storing the body with a newline therefore made this addon unable to
+  # read its own output: `stg.demo.clp-stg.local`, the clone this implementation
+  # produced, stored 10 as its last codepoint, and cloning it again refused with
+  # "the rendered vhost does not end with the text after {{settings}}". Store
+  # what the panel would store.
+  printf '%s' "$composed" > "$body"
   chown root:clp "$body" && chmod 640 "$body" || true
 
   if ! vhost_body_ok "$body" "$source" "$target"; then
