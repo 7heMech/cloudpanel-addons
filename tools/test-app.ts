@@ -434,6 +434,106 @@ console.log("\n== building the carried-over template ==");
   check("CloudPanel's other placeholders survive untouched", out.includes("{{root}}"), out);
 }
 
+console.log("\n== an application name may never reach SQL as text ==");
+
+// `site.application` is the one value in the panel write that does not come
+// from this addon. It is the *source* site's application name, and CloudPanel
+// validates nothing on the way to it: VhostTemplateAddCommand stores
+// `trim($input->getOption("name"))` as given, SiteAddPhpCommand copies that name
+// into site.application verbatim, and /etc/sudoers.d/cloudpanel lets every
+// local account run clpctlWrapper. Interpolating it was a SQL injection that
+// escalated to an arbitrary root write, because the read-back runs `sqlite3
+// -readonly` as root and writefile() is compiled in even there.
+//
+// Two things are pinned. The predicate, driven as the real bash function; and
+// the structural property that the statement holds no application text at all,
+// which is what makes the predicate a second line of defence rather than the
+// only one.
+{
+  const W = "addons/stager/wrapper/clp-action-stager";
+  const fn = bashFunction(W, "application_ok");
+  const ok = (name: string) =>
+    execFileSync("bash", ["-c", `${fn}\nif application_ok "$1"; then echo YES; else echo NO; fi`, "_", name],
+      { encoding: "utf-8" }).trim() === "YES";
+
+  // Every stock template name on this box, plus the two site.application values
+  // that force a character beyond [A-Za-z0-9]: PrestaShop 1.7 the dot, and the
+  // stager's own throwaway template names the hyphen and the digits.
+  const REAL = [
+    "Generic", "WordPress", "Static", "ReverseProxy", "Nodejs", "Python", "WHMCS",
+    "WooCommerce", "Laminas", "CakePHP 5", "CodeIgniter 4", "Contao 4", "Drupal 11",
+    "Joomla 6", "Laravel 13", "Magento 2", "Matomo 5", "Mautic 7", "Moodle 5",
+    "Neos 9", "Nextcloud 34", "OwnCloud 12", "PrestaShop 1.7", "Shopware 6",
+    "Slim 4", "Symfony 8", "TYPO3 14", "Yii 2",
+    "clp-stager-src2", "clp-stager-20260907T090213Z-56f3aa", "My_App",
+  ];
+  for (const name of REAL) {
+    check(`a real application name is accepted: ${name}`, ok(name));
+  }
+
+  // The reproduced payloads. The first rewrote site.user to root; the second
+  // reached an unrelated row; the third created a root-owned file through
+  // writefile() under -readonly.
+  const PAYLOADS = [
+    "Generic', user = 'root",
+    "Generic' WHERE 1=1; UPDATE site SET user = 'root",
+    "Generic' AND 1=1; SELECT writefile('/tmp/x','ALL ALL=(ALL) NOPASSWD: ALL'); SELECT '1",
+    "Generic'",
+    'Generic"',
+    "Generic;",
+    "Generic--",
+    "Generic\nWordPress",
+    "Generic`id`",
+    "Generic$(id)",
+    "",
+    " Generic",
+    "Generic ",
+    "-Generic",
+    "../../etc/passwd",
+    "x".repeat(65),
+  ];
+  for (const name of PAYLOADS) {
+    check(`refused: ${JSON.stringify(name)}`, !ok(name));
+  }
+
+  // The predicate is not the whole answer, and this is the half that would
+  // survive someone adding a caller that forgets to call it. Neither statement
+  // may contain the application as text: it goes in through readfile(), the same
+  // way the nginx body does.
+  const src = readFileSync(W, "utf-8");
+  const stmt = src.slice(src.indexOf("panel_write_site() {"));
+  const body = stmt.slice(0, stmt.indexOf("\n}\n") + 2);
+  check("the panel write never interpolates the application name",
+    !body.includes("'${application}'") && !body.includes('${application}"')
+    && body.includes("readfile('${app_file}')"),
+    body.split("\n").filter((l) => l.includes("application")).join(" | "));
+  // Three: the UPDATE, and the read-back in each of its two forms -- with a
+  // carried vhost and with only the application to put back.
+  check("and neither form of the read-back does either",
+    (body.match(/application = CAST\(readfile/g) ?? []).length === 3,
+    body.split("\n").filter((l) => l.includes("application =")).join(" | "));
+
+  // vhost_template_exists put the same value in a query and doubled the quotes
+  // in it, which is sanitizing rather than rejecting. It must now refuse.
+  const existsFn = [bashFunction(W, "application_ok"), bashFunction(W, "vhost_template_exists")].join("\n");
+  const asked = execFileSync("bash", ["-c",
+    `${existsFn}\npanel_query() { printf 'ASKED: %s\\n' "$1" >&2; echo 1; }\n` +
+    `if vhost_template_exists "$1"; then echo YES; else echo NO; fi`,
+    "_", "Generic', user = 'root"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+  check("a template name that fails the predicate is reported missing, not escaped",
+    asked === "NO", asked);
+  check("and no query is made for it at all",
+    !execFileSync("bash", ["-c",
+      `${existsFn}\npanel_query() { printf 'ASKED' >&2; echo 1; }\n` +
+      `vhost_template_exists "$1" 2>&1 || true`,
+      "_", "Generic', user = 'root"], { encoding: "utf-8" }).includes("ASKED"));
+  check("a legitimate name is still queried",
+    execFileSync("bash", ["-c",
+      `${existsFn}\npanel_query() { printf 'ASKED' >&2; echo 1; }\n` +
+      `vhost_template_exists "$1" 2>&1 || true`,
+      "_", "WordPress"], { encoding: "utf-8" }).includes("ASKED"));
+}
+
 console.log("\n== learning what CloudPanel substituted into a vhost ==");
 
 // site:add:php is the only site:add verb with a --vhostTemplate option, so for

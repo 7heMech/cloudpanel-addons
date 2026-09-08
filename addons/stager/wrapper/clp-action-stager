@@ -30,9 +30,10 @@
 # So this file does write panel state, in exactly one place and under guards
 # that are the whole justification (see "Carrying a site's vhost to its clone"
 # in docs/DECISIONS.md): one UPDATE, one column pair, one row, only for a site
-# this job created seconds ago, run as `clp` rather than as root, with the body
-# reaching sqlite through readfile() so no nginx config is ever interpolated
-# into SQL, and read back and compared before the job calls it done. The file on
+# this job created seconds ago, run as `clp` rather than as root, with both
+# written values reaching sqlite through readfile() so that nothing a caller
+# influenced is ever interpolated into SQL at all, and read back and compared
+# before the job calls it done. The file on
 # disk is written and `nginx -t`-ed first, so the database is never left
 # describing a config nginx rejected, and any failure restores the stock vhost
 # and reports why rather than losing the clone.
@@ -177,6 +178,41 @@ validate_email() {
 validate_mfa() {
   local c=$1
   [[ $c =~ ^[A-Za-z0-9-]{6,32}$ ]] || emit_err "the authentication code has an unexpected shape"
+  return 0
+}
+
+# The name of a CloudPanel vhost template, which is what `site.application`
+# holds. A predicate rather than an emit_err validator, because the callers
+# degrade to the stock template name instead of losing the clone over a label.
+#
+# This is not cosmetic. `application` originates in `site.application` of the
+# *source* site, read straight out of the panel, and it reaches SQL --
+# `panel_update_site` and `vhost_template_exists` both put a name in a
+# statement. CloudPanel does nothing to earn that trust:
+# `VhostTemplateAddCommand` stores `trim($input->getOption("name"))` with no
+# character check, `SiteAddPhpCommand` copies that name into `site.application`
+# verbatim, and `/etc/sudoers.d/cloudpanel` lets every local account run
+# `clpctlWrapper`. So any local user could register a template whose *name* is
+# a SQL payload, create a php site from it and have a clone of that site run it.
+# Reproduced against a throwaway database: `Generic', user = 'root` rewrote
+# `site.user` to root, and because `sqlite3 -readonly` still has fileio compiled
+# in, `SELECT writefile(...)` in the read-back was an arbitrary root write.
+#
+# The accepted set is measured, not guessed. Every one of the 31 stock template
+# names on this box and every `site.application` value in its `site` table uses
+# only letters, digits, space, dot and hyphen -- `PrestaShop 1.7` is what forces
+# the dot and `clp-stager-src2` the hyphen. Underscore is admitted beside them
+# because it is equally inert -- none of these can close a SQL string literal --
+# and an operator naming a custom template plausibly types one. Anything else is
+# refused rather than escaped, so the value that reaches SQL is one that could
+# not carry a payload however it got into the panel.
+application_ok() {
+  local a=$1
+  # In a variable, like every other pattern here, because a bracket expression
+  # is POSIX and takes no backslash escapes: writing the space as `\ ` inline
+  # would admit a literal backslash into the accepted set.
+  local re='^[A-Za-z0-9]([A-Za-z0-9 ._-]{0,62}[A-Za-z0-9])?$'
+  [[ $a =~ $re ]] || return 1
   return 0
 }
 
@@ -438,6 +474,19 @@ cmd_run() {
   # The panel records which named template a site was created from, so the
   # clone can be created from the same one instead of a guess. Older rows can
   # have no application; Generic is what the panel itself falls back to.
+  #
+  # A name that fails application_ok is discarded here rather than carried any
+  # further, because from this point it would become a --vhostTemplate argument
+  # and a value in the clone's own panel record. Discarded, not repaired: the
+  # hostile string is thrown away whole and the stock name used instead, which
+  # is a fallback rather than the sanitizing the rules here forbid. It costs a
+  # label and a note; refusing the clone over the source's label would cost the
+  # clone.
+  if [[ -n $src_app ]] && ! application_ok "$src_app"; then
+    notes+=("${source} records an application name this addon will not put in a query or a command line, so the clone was built from Generic instead; check Site -> Vhost on ${source}")
+    warn "${source} has an unusable site.application; falling back to Generic"
+    src_app=""
+  fi
   [[ -n $src_app ]] || src_app="Generic"
 
   local src_dir="/home/${src_user}/htdocs/${source}"
@@ -586,6 +635,12 @@ cmd_run() {
   # --- the vhost, now that there is a clone to put one on -------------------
   local vhost_carried=0 vhost_by="stock" clone_application
   clone_application=$(application_of "$target") || clone_application=""
+  # Read back off the clone's own row, which clpctl wrote seconds ago, so this
+  # should always be a stock name -- but it is the value that goes back into the
+  # row below, and a read-back is owed the same check as an argument.
+  if [[ -n $clone_application ]] && ! application_ok "$clone_application"; then
+    clone_application=""
+  fi
   [[ -n $clone_application ]] || clone_application="Generic"
   if [[ $src_type == "php" ]]; then clone_application=$base_template; fi
 
@@ -1063,9 +1118,17 @@ drop_template_stage() {
 # it, so the template can have been deleted or renamed since. Falling back to
 # one that is gone fails site:add:php with "Vhost Template ... does not exist",
 # which is a confusing way to lose a clone.
+#
+# A name that fails application_ok answers "no" rather than being escaped into
+# the query. This used to double the quotes in it, which is sanitizing the one
+# kind of input the rules here say to reject -- and it put a caller-influenced
+# string in a statement run by `sqlite3 -readonly`, where `writefile()` is still
+# compiled in. Fail-closed is also the right answer on its own terms: a template
+# whose name this addon will not query is one it must not create a site from.
 vhost_template_exists() {
   local n
-  n=$(panel_query "SELECT COUNT(*) FROM vhost_template WHERE name = '${1//\'/\'\'}';") || return 1
+  application_ok "$1" || return 1
+  n=$(panel_query "SELECT COUNT(*) FROM vhost_template WHERE name = '${1}';") || return 1
   [[ ${n:-0} -gt 0 ]]
 }
 
@@ -1339,8 +1402,16 @@ compose_vhost_body() {
 #     three literals, so the statement cannot touch a second row.
 #   - $target has passed validate_domain, which is what makes interpolating it
 #     into SQL safe: it holds nothing but [a-z0-9.-].
-#   - The body reaches sqlite through readfile(), so a multi-kilobyte nginx
-#     config is never escaped into a SQL string.
+#   - Nothing a caller influenced is interpolated at all. The nginx body and the
+#     application name both reach sqlite through readfile() from files this
+#     function staged, so neither is ever escaped into a SQL string. The
+#     application name used to be interpolated, and that was the hole: it
+#     originates in the *source* site's `site.application`, which CloudPanel
+#     fills from an unvalidated template name, so it could carry a payload into
+#     both the UPDATE and the read-back -- and the read-back runs `sqlite3
+#     -readonly`, where `writefile()` is still compiled in and root-owned.
+#     application_ok now refuses such a name upstream; readfile() is what makes
+#     the statement safe even if it ever got past that.
 #   - runuser -u clp, not root. journal_mode is `delete`, so the write creates a
 #     transient db.sq3-journal beside the database; made by root it is left
 #     root-owned in a clp:clp 0770 directory and the panel cannot recover it.
@@ -1359,13 +1430,49 @@ panel_update_site() {
     PANEL_WRITE_REJECT="the panel database is not readable"
     return 1
   fi
+  # Refused here as well as where it was read, because this is the function that
+  # puts it in a statement and a boundary should not depend on its callers.
+  if ! application_ok "$application"; then
+    PANEL_WRITE_REJECT="refusing to record '${application}' as the clone's application: not a name CloudPanel could have written"
+    return 1
+  fi
+  if [[ -n $body_file && ! -f $body_file ]]; then
+    PANEL_WRITE_REJECT="the composed vhost was not staged"
+    return 1
+  fi
+
+  # The application name is handed to sqlite the same way the body is, so the
+  # statement holds no caller-influenced text at all. That needs a file, and one
+  # staging directory per call rather than a long-lived one: this is the only
+  # thing in it, and a stage that outlives the statement is a root-owned
+  # directory in /tmp waiting for a signal to strand it.
+  local stage rc=0
+  stage=$(make_clp_stage) || {
+    PANEL_WRITE_REJECT="a staging directory for the panel write could not be created"
+    return 1
+  }
+  panel_write_site "${stage}/application" "$target" "$type" "$application" "$body_file" || rc=1
+  rm -rf "$stage"
+  return $rc
+}
+
+# The statement itself, with both values already staged as files. Split out so
+# panel_update_site owns the guards and the stage's lifetime, and this owns the
+# SQL -- the same split as vhost_template_body and build_vhost_template, and for
+# the same reason: the part with the rules in it should be readable on its own.
+panel_write_site() {
+  local app_file=$1 target=$2 type=$3 application=$4 body_file=$5
+
+  # No trailing newline: this file is compared against a column, and printf '%s'
+  # is what keeps the comparison a byte comparison rather than an off-by-one.
+  printf '%s' "$application" > "$app_file" || {
+    PANEL_WRITE_REJECT="the application name could not be staged"
+    return 1
+  }
+  chown root:clp "$app_file" && chmod 640 "$app_file" || true
 
   local set_vhost=""
   if [[ -n $body_file ]]; then
-    if [[ ! -f $body_file ]]; then
-      PANEL_WRITE_REJECT="the composed vhost was not staged"
-      return 1
-    fi
     set_vhost="vhost_template = CAST(readfile('${body_file}') AS TEXT), "
   fi
 
@@ -1375,22 +1482,23 @@ panel_update_site() {
   if ! runuser -u clp -- sqlite3 "$PANEL_DB" \
        "PRAGMA busy_timeout=5000;
         UPDATE site
-           SET ${set_vhost}application = '${application}', updated_at = datetime('now')
+           SET ${set_vhost}application = CAST(readfile('${app_file}') AS TEXT),
+               updated_at = datetime('now')
          WHERE domain_name = '${target}' AND type = '${type}';" >/dev/null; then
     PANEL_WRITE_REJECT="the panel database refused the update"
     return 1
   fi
 
-  # Compared inside sqlite against the same file, so this is a byte comparison
-  # of the column rather than of two shell variables that command substitution
+  # Compared inside sqlite against the same files, so this is a byte comparison
+  # of the columns rather than of two shell variables that command substitution
   # has already trimmed.
   local check
   if [[ -n $body_file ]]; then
     check=$(panel_query "SELECT CASE WHEN vhost_template = CAST(readfile('${body_file}') AS TEXT)
-                                 AND application = '${application}' THEN 1 ELSE 0 END
+                                 AND application = CAST(readfile('${app_file}') AS TEXT) THEN 1 ELSE 0 END
                            FROM site WHERE domain_name = '${target}';") || check=""
   else
-    check=$(panel_query "SELECT CASE WHEN application = '${application}' THEN 1 ELSE 0 END
+    check=$(panel_query "SELECT CASE WHEN application = CAST(readfile('${app_file}') AS TEXT) THEN 1 ELSE 0 END
                            FROM site WHERE domain_name = '${target}';") || check=""
   fi
   if [[ $check != "1" ]]; then

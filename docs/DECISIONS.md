@@ -920,14 +920,39 @@ touch rather than by good intentions:
   write creates a transient `db.sq3-journal` beside it. Made by root, that file
   is left root-owned in a `clp:clp` 0770 directory and the panel cannot recover
   it. `/usr/bin/clpctlWrapper` already runs the whole CLI as `clp`; this matches.
-- **The body reaches sqlite through `readfile()`**, so a multi-kilobyte nginx
-  config is never escaped into a SQL string. The staged file is `root:clp` 0640
-  in a `root:clp` 0710 directory -- the same dance the template handoff uses,
-  and for the same reason. The interpolated `<target>` has passed
-  `validate_domain`, which is what makes it safe; `<type>` is one of three
-  literals.
-- **Read back and compared** inside sqlite against the same file, so it is a
-  byte comparison of the column rather than of two shell variables command
+- **Nothing a caller influenced is interpolated into the SQL.** Both written
+  values reach sqlite through `readfile()` from staged files, so neither a
+  multi-kilobyte nginx config nor an application name is ever escaped into a SQL
+  string. Each staged file is `root:clp` 0640 in a `root:clp` 0710 directory --
+  the same dance the template handoff uses, and for the same reason. What is
+  still interpolated is `<target>`, which has passed `validate_domain` and holds
+  nothing but `[a-z0-9.-]`, and `<type>`, which is one of three literals.
+
+  This bullet used to claim only the *body* went through `readfile()`, and the
+  claim was load-bearing while being incomplete: `application` was interpolated
+  too, in both the `UPDATE` and the read-back. That value originates in the
+  **source** site's `site.application`, and CloudPanel puts no character
+  validation anywhere on the path to it -- `VhostTemplateAddCommand` stores
+  `trim($input->getOption("name"))` as given, `SiteAddPhpCommand` copies that
+  name into `site.application` verbatim, and `/etc/sudoers.d/cloudpanel` grants
+  *every* local account `NOPASSWD: /usr/bin/clpctlWrapper`. Reproduced against a
+  throwaway database by running the real function: an application of
+  `Generic', user = 'root` rewrote `site.user` to `root`. Worse, the read-back
+  runs `sqlite3 -readonly` **as root** and this build has `fileio` compiled in,
+  so `SELECT writefile('/tmp/x', ...)` under `-readonly` created a root-owned
+  file -- an arbitrary root write reachable from a template name.
+
+  So `application_ok` refuses any name outside `[A-Za-z0-9 ._-]` (measured, not
+  guessed: every stock template name on this box and every `site.application`
+  value in its `site` table uses only letters, digits, space, dot and hyphen,
+  with `PrestaShop 1.7` forcing the dot and `clp-stager-src2` the hyphen), a
+  source whose name fails it is cloned from `Generic` with a note rather than
+  refused, and `readfile()` is what makes the statement safe even for a value
+  that somehow got past the check. `vhost_template_exists` answers "no" for such
+  a name instead of doubling the quotes in it, which was sanitizing the one kind
+  of input the rules here say to reject.
+- **Read back and compared** inside sqlite against the same files, so it is a
+  byte comparison of the columns rather than of two shell variables command
   substitution has already trimmed. It fails closed.
 
 **The renderer is learned, not reimplemented.** CloudPanel's rendering is pure
