@@ -836,8 +836,18 @@ cmd_run() {
     if [[ ! $import_code =~ ^2 ]]; then
       fail_job "the clone refused the import (HTTP ${import_code}): $(instatic_error "${dir}/.api-out")"
     fi
+    # Instatic's own accounting for what landed, put in the record rather than
+    # only in the log. It is the operator's one check against a bundle that was
+    # short: an account with data.export but without content.manage exports only
+    # the rows canSeeAllDataRows lets it see, and still answers 200, so a clone
+    # missing another author's pages looks exactly like a complete one.
+    local import_tables import_rows import_media
+    import_tables=$(json_field "${dir}/.api-out" tablesAffected)
+    import_rows=$(json_field "${dir}/.api-out" rowsInserted)
+    import_media=$(json_field "${dir}/.api-out" mediaImported)
     log "import: $(instatic_error "${dir}/.api-out")"
     rm -f "${dir}/.api-out"
+    notes+=("the import reported ${import_tables:-?} table(s), ${import_rows:-?} row(s) and ${import_media:-?} media file(s); that is everything the export contained, so check it against ${source} rather than against what you expect")
     instatic_logout "$port" "$target" "${dir}/cookies-dst"
     rm -f "$export_zip"
     export_zip=""
