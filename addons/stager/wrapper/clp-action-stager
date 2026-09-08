@@ -1167,25 +1167,93 @@ vhost_body_ok() {
   local file=$1 source=$2 target=$3
   VHOST_REJECT=""
 
+  # -i because DNS is case-insensitive. Without it `server_name RENAISSANCE.BG;`
+  # walked straight past this check, and the clone answered for the production
+  # apex it names.
   local leaks
-  leaks=$(grep -cE "$(hostname_boundary "$source")" "$file") || leaks=0
+  leaks=$(grep -ciE "$(hostname_boundary "$source")" "$file") || leaks=0
   if (( leaks > 0 )); then
     VHOST_REJECT="the source hostname still appears on ${leaks} line(s) after substitution"
     return 1
   fi
 
-  local line tok host
-  while IFS= read -r line; do
-    for tok in $(printf '%s' "$line" | sed -e 's/^[[:space:]]*server_name//' -e 's/;[[:space:]]*$//'); do
-      host=${tok#\*.}
-      if [[ $host != "$target" && $host != *".${target}" ]]; then
-        VHOST_REJECT="a server_name names '${tok}', which is not ${target} or below it"
-        return 1
-      fi
-    done
-  done < <(grep -E '^[[:space:]]*server_name ' "$file")
+  # Collected into a variable rather than read from a process substitution,
+  # because a substitution that fails to run at all leaves the loop with nothing
+  # to iterate and this function returning 0 -- a gate that answers "safe"
+  # because it could not look. This way the failure is a refusal.
+  local hosts
+  if ! hosts=$(server_name_hosts < "$file"); then
+    VHOST_REJECT="the server_name directives in the composed vhost could not be read"
+    return 1
+  fi
+
+  local tok host t=${target,,}
+  while IFS= read -r tok; do
+    [[ -n $tok ]] || continue
+    # A wildcard is judged as the thing it covers: `*.example.com` is every
+    # subdomain of example.com, so it has to clear the same bar example.com
+    # would. `*.<target>` is the one wildcard form that passes, and it is a real
+    # hand edit on this box.
+    host=${tok#\*.}
+    if [[ $host != "$t" && $host != *".${t}" ]]; then
+      VHOST_REJECT="a server_name names '${tok}', which is not ${target} or below it"
+      return 1
+    fi
+  done <<< "$hosts"
 
   return 0
+}
+
+# Every hostname a server_name directive in this config names, lowercased, one
+# per line.
+#
+# Selecting the lines is what the first version got wrong, and it got it wrong
+# in the direction that matters. It used
+# `grep -E '^[[:space:]]*server_name '`, which demands a literal space and a
+# line start, so the token check above never saw four real shapes. Driven end to
+# end through compose_vhost_body and vhost_body_ok for a clone of
+# renaissance.bg into stg.renaissance.bg, all four were ACCEPTED:
+#
+#   server_name<TAB>RENAISSANCE.BG;         claims the production apex
+#   server_name<TAB>*.renaissance.bg;       claims every subdomain of it
+#   server_name stg.renaissance.bg          a list whose second line is hostile
+#                 victim-production.com;
+#   listen 8443; server_name victim.com;    sharing a line with another directive
+#
+# Nothing downstream would have caught them. `nginx -t` treats a duplicate
+# server_name as a *warning* and exits 0 -- measured -- and `sites-enabled/*.conf`
+# glob order decides which block wins, so `dev.renaissance.bg.conf` sorts before
+# `renaissance.bg.conf` and takes production's traffic. This gate is the only
+# thing between a hand-edited source vhost and a clone that answers for
+# production, because this path deliberately dropped the {{server_name}}
+# requirement that used to make the outcome structurally unreachable.
+#
+# So the config is tokenised the way nginx reads one rather than matched as
+# lines: arguments are separated by any whitespace including a newline, `;` ends
+# a directive and needs no space around it, and a block brace can never sit
+# inside a directive's arguments. Everything ambiguous yields a token that is not
+# the target, and therefore a refusal -- `server_name _;` and a regex
+# `server_name ~^.+$;` both land there, which is right, since either would have
+# the clone answer for hostnames nobody chose.
+server_name_hosts() {
+  awk '
+    {
+      line = $0
+      # A comment ends what nginx was reading, so a commented-out server_name is
+      # not one nginx acts on. Only where # starts a token, so a # inside a
+      # quoted value cannot swallow the rest of the line -- that direction would
+      # hide a real directive rather than flag a dead one.
+      sub(/(^|[[:space:]])#.*$/, "", line)
+      gsub(/[;{}]/, " & ", line)
+      n = split(line, t, /[[:space:]]+/)
+      for (i = 1; i <= n; i++) {
+        if (t[i] == "") continue
+        if (t[i] == ";" || t[i] == "{" || t[i] == "}") { naming = 0; continue }
+        if (naming) { print tolower(t[i]); continue }
+        if (t[i] == "server_name") naming = 1
+      }
+    }
+  '
 }
 
 # --- carrying a vhost without clpctl ----------------------------------------

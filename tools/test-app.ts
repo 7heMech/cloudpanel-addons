@@ -340,7 +340,7 @@ console.log("\n== a carried-over vhost may never name the source site ==");
 // make, run before it is asked.
 {
   const W = "addons/stager/wrapper/clp-action-stager";
-  const gateFn = ["hostname_boundary", "vhost_body_ok", "vhost_template_ok"]
+  const gateFn = ["hostname_boundary", "server_name_hosts", "vhost_body_ok", "vhost_template_ok"]
     .map((n) => bashFunction(W, n))
     .join("\n");
   const gate = (body: string) => {
@@ -806,7 +806,7 @@ console.log("\n== the fallback carries vhosts the template route has to refuse =
 // for the site it was cloned from.
 {
   const W = "addons/stager/wrapper/clp-action-stager";
-  const fns = [bashFunction(W, "hostname_boundary"), bashFunction(W, "vhost_body_ok")].join("\n");
+  const fns = ["hostname_boundary", "vhost_body_ok", "server_name_hosts"].map((n) => bashFunction(W, n)).join("\n");
   const gate = (body: string) => {
     const d = mkdtempSync(`${tmpdir()}/clp-stager-body-gate-`);
     try {
@@ -839,6 +839,61 @@ console.log("\n== the fallback carries vhosts the template route has to refuse =
   const leaked = ["server {", "  server_name stg.example.com;", "  # see https://example.com/docs", "}"].join("\n");
   check("the source hostname surviving anywhere is refused",
     gate(leaked).startsWith("REJECT"), gate(leaked));
+
+  // Every one of these was ACCEPTED before the gate stopped selecting lines
+  // with `grep -E '^[[:space:]]*server_name '`, which demands a literal space
+  // at a line start and compares case-sensitively. Driven end to end through the
+  // real compose_vhost_body for renaissance.bg -> stg.renaissance.bg, the first
+  // two gave a clone that claims the production apex and every subdomain of it.
+  //
+  // nginx -t does not catch any of them -- a duplicate server_name is a warning
+  // and exits 0 -- and sites-enabled/*.conf glob order decides which block
+  // wins, so a staging name that sorts first takes production's traffic.
+  const HOSTILE: [string, string][] = [
+    ["a tab instead of a space, in upper case",
+      "server {\n  server_name\tEXAMPLE.COM;\n  {{root}}\n}"],
+    ["a tab and a wildcard over the source",
+      "server {\n  server_name\t*.example.com;\n  {{root}}\n}"],
+    ["a wildcard over the source, spaced normally",
+      "server {\n  server_name *.example.com;\n  {{root}}\n}"],
+    ["a list whose second line is hostile",
+      "server {\n  server_name stg.example.com\n                victim-production.test;\n  {{root}}\n}"],
+    ["a value on its own line",
+      "server {\n  server_name\n    victim-production.test;\n  {{root}}\n}"],
+    ["sharing a line with another directive",
+      "server {\n  listen 8443; server_name victim-production.test;\n  {{root}}\n}"],
+    ["several spaces before the value",
+      "server {\n  server_name    victim-production.test;\n  {{root}}\n}"],
+    ["a catch-all default server",
+      "server {\n  server_name _;\n  {{root}}\n}"],
+    ["a regular expression server_name",
+      "server {\n  server_name ~^.+$;\n  {{root}}\n}"],
+    ["the target in upper case beside a hostile name",
+      "server {\n  server_name STG.EXAMPLE.COM VICTIM-PRODUCTION.TEST;\n  {{root}}\n}"],
+    ["a second server block further down the file",
+      "server {\n  server_name stg.example.com;\n  {{root}}\n}\n\nserver {\n  server_name victim-production.test;\n}"],
+  ];
+  for (const [label, body] of HOSTILE) {
+    check(`refused: ${label}`, gate(body).startsWith("REJECT"), `${JSON.stringify(body)} -> ${gate(body)}`);
+  }
+
+  // And the shapes that must still pass, because a gate that refuses everything
+  // is a gate that has stopped being one. DNS is case-insensitive, so the
+  // clone's own name in upper case is the clone's own name.
+  const BENIGN: [string, string][] = [
+    ["a tab before the clone's own name", "server {\n  server_name\tstg.example.com;\n  {{root}}\n}"],
+    ["the clone's own name in upper case", "server {\n  server_name STG.EXAMPLE.COM;\n  {{root}}\n}"],
+    ["a wildcard under the clone", "server {\n  server_name stg.example.com *.stg.example.com;\n  {{root}}\n}"],
+    ["a value spanning two lines, both below the clone",
+      "server {\n  server_name stg.example.com\n                a.stg.example.com;\n  {{root}}\n}"],
+    ["sharing a line with another directive", "server {\n  listen 8443; server_name stg.example.com;\n  {{root}}\n}"],
+    ["the {{server_name}} placeholder itself", "server {\n  {{server_name}}\n  {{root}}\n}"],
+    ["a commented-out server_name nginx would not act on",
+      "server {\n  server_name stg.example.com;\n  # server_name victim-production.test;\n  {{root}}\n}"],
+  ];
+  for (const [label, body] of BENIGN) {
+    check(`accepted: ${label}`, gate(body) === "PASS", `${JSON.stringify(body)} -> ${gate(body)}`);
+  }
 }
 
 console.log("\n== reusing an artifact already in the release tree ==");
