@@ -407,9 +407,14 @@ listening, and a listening socket, which covers everything else including a
 clone the Stager has in flight, whose instance does not exist yet and so has no
 record to find.
 
-The manager side is fixed in both directions too: the Stager counts live
-Instatic instances as well as its own in-flight jobs. And neither list may fail
-quietly on that path. `listInstances()` and `listJobs()` return an empty array
+The manager side is narrowed but not symmetric, and it is worth being exact
+about which half is which. The Stager counts live Instatic instances as well as
+its own in-flight jobs, so it no longer proposes a port the Instatic addon has
+already used. The Instatic dashboard still cannot see a Stager clone whose
+instance does not exist and is not listening yet -- that window closes at
+`cmd_create`, which refuses by name rather than failing at `docker run`. So the
+residual case is a clear refusal, not a collision, and the two are not the same
+guarantee. And neither list may fail quietly on that path. `listInstances()` and `listJobs()` return an empty array
 when the wrapper cannot answer, which is right for a dashboard -- it renders
 "none" and an operator reads it as such -- and wrong for an allocator, where it
 means every port in use silently disappears from the calculation. The allocation

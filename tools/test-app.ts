@@ -985,6 +985,21 @@ console.log("\n== the fallback carries vhosts the template route has to refuse =
       "server {\n  server_name STG.EXAMPLE.COM VICTIM-PRODUCTION.TEST;\n  {{root}}\n}"],
     ["a second server block further down the file",
       "server {\n  server_name stg.example.com;\n  {{root}}\n}\n\nserver {\n  server_name victim-production.test;\n}"],
+    // These five defeated the replacement gate too, until server_name_hosts
+    // stopped stripping comments by regex. nginx begins a comment only where #
+    // begins a token, so a # inside a quoted value is an ordinary character --
+    // reading it as a comment deleted the rest of a line nginx still executes.
+    // Verified against nginx 1.30.4: the first of them hijacked the hidden name.
+    ["a # inside a quoted value hiding a server_name",
+      "server {\n  add_header X-M \" # \" ; server_name victim-production.test;\n  {{root}}\n}"],
+    ["a tab-wrapped # inside a quoted value",
+      "server {\n  add_header X-M \"\t#\t\" ; server_name victim-production.test;\n  {{root}}\n}"],
+    ["a quoted # hiding a wildcard over the source",
+      "server {\n  add_header X-M \" # \" ; server_name *.example.com;\n  {{root}}\n}"],
+    ["a quoted value spanning lines with # at a line start",
+      "server {\n  add_header X-A \"\n# \";  server_name victim-production.test;\n  {{root}}\n}"],
+    ["a quoted value that is never closed",
+      "server {\n  add_header X \"oops ; server_name victim-production.test;\n  {{root}}\n}"],
   ];
   for (const [label, body] of HOSTILE) {
     check(`refused: ${label}`, gate(body).startsWith("REJECT"), `${JSON.stringify(body)} -> ${gate(body)}`);
@@ -1003,6 +1018,12 @@ console.log("\n== the fallback carries vhosts the template route has to refuse =
     ["the {{server_name}} placeholder itself", "server {\n  {{server_name}}\n  {{root}}\n}"],
     ["a commented-out server_name nginx would not act on",
       "server {\n  server_name stg.example.com;\n  # server_name victim-production.test;\n  {{root}}\n}"],
+    // The other half of the same rule: refusing every # would make the gate
+    // useless on real configs, where a # inside a header value is ordinary.
+    ["a # inside a header value is not a comment",
+      "server {\n  server_name stg.example.com;\n  add_header X-M \" # \";\n  {{root}}\n}"],
+    ["single quotes inside a double-quoted CSP",
+      "server {\n  server_name stg.example.com;\n  add_header Content-Security-Policy \"default-src 'self'\";\n  {{root}}\n}"],
   ];
   for (const [label, body] of BENIGN) {
     check(`accepted: ${label}`, gate(body) === "PASS", `${JSON.stringify(body)} -> ${gate(body)}`);
@@ -1223,28 +1244,35 @@ console.log("\n== no credential outlives the job that carried it ==");
   check("the wrapper's footer says both credentials are on stdin",
     wrapper.includes("There is deliberately no --password and no --mfa"));
   check("and the code is put on stdin beside the password",
-    service.includes("instatic.mfaCode ? `${instatic.mfaCode}\\n` : \"\""));
+    service.includes("${instatic.password}\\n${instatic.mfaCode ?? \"\"}\\n"));
 
-  // The framing, driven as the wrapper reads it: one secret per line, only the
-  // caller's terminator removed, and anything else refused rather than trimmed.
+  // The framing, driven as the wrapper reads it: exactly two fields, only the
+  // caller's terminator removed, and any other shape refused rather than
+  // trimmed. The count is fixed because a variable one cannot tell a password
+  // containing a newline from a password followed by a code -- and where the
+  // tail looked like a code, the run went on and authenticated with a
+  // shortened secret.
   const parse = (stdin: string) =>
     execFileSync("bash", ["-c", `
       supplied=$(cat; printf x) || true
       supplied=\${supplied%x}
       supplied=\${supplied%$'\\n'}
+      newlines=\${supplied//[!$'\\n']/}
+      if (( \${#newlines} != 1 )); then printf 'REFUSED'; exit 0; fi
       password=\${supplied%%$'\\n'*}
-      mfa=""
-      if [[ $supplied == *$'\\n'* ]]; then mfa=\${supplied#*$'\\n'}; fi
-      printf 'P=%s|M=%s|EXTRA=%s' "$password" "$mfa" "$( [[ $mfa == *$'\\n'* ]] && echo yes || echo no )"
+      mfa=\${supplied#*$'\\n'}
+      printf 'P=%s|M=%s' "$password" "$mfa"
     `], { encoding: "utf-8", input: stdin });
-  check("a password alone parses as a password alone",
-    parse("hunter2\n") === "P=hunter2|M=|EXTRA=no", parse("hunter2\n"));
-  check("a password and a code parse as two lines",
-    parse("hunter2\n123456\n") === "P=hunter2|M=123456|EXTRA=no", parse("hunter2\n123456\n"));
+  check("a password with no code is still two fields",
+    parse("hunter2\n\n") === "P=hunter2|M=", parse("hunter2\n\n"));
+  check("a password and a code parse as two",
+    parse("hunter2\n123456\n") === "P=hunter2|M=123456", parse("hunter2\n123456\n"));
   check("a password ending in a space keeps it",
-    parse("hunter2 \n") === "P=hunter2 |M=|EXTRA=no", JSON.stringify(parse("hunter2 \n")));
-  check("a third line is visible as one, so it can be refused",
-    parse("a\nb\nc\n").endsWith("EXTRA=yes"), parse("a\nb\nc\n"));
+    parse("hunter2 \n\n") === "P=hunter2 |M=", JSON.stringify(parse("hunter2 \n\n")));
+  check("a single line is refused rather than read as a bare password",
+    parse("hunter2\n") === "REFUSED", parse("hunter2\n"));
+  check("a password containing a newline is refused, not silently shortened",
+    parse("hunter2\nabc1234\nrest\n") === "REFUSED", parse("hunter2\nabc1234\nrest\n"));
 
   // Deleted, not merely 0600. The code had no deletion at all and survived the
   // fourteen days a job record is kept.

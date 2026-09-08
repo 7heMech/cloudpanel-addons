@@ -229,7 +229,10 @@ export const stagerService = {
     const args = ["--source", source, "--target", target, "--tls", tls ? "yes" : "no"];
     if (instatic) args.push("--port", String(instatic.port), "--email", instatic.email);
     const input = instatic
-      ? `${instatic.password}\n${instatic.mfaCode ? `${instatic.mfaCode}\n` : ""}`
+      // Always two lines, even with no code. A channel whose field count
+      // varies cannot tell a password containing a newline from a password
+      // followed by a code; a fixed count lets the wrapper refuse the first.
+      ? `${instatic.password}\n${instatic.mfaCode ?? ""}\n`
       : undefined;
     return callWrapper<{ job: string }>("clone", args, input);
   },

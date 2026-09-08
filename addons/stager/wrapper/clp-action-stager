@@ -219,6 +219,13 @@ validate_mfa() {
 # not carry a payload however it got into the panel.
 application_ok() {
   local a=$1
+  # C, so the ranges mean what they say. Under a UTF-8 locale a bracket range is
+  # collation-ordered rather than codepoint-ordered, and `[A-Za-z]` then admits
+  # accented letters -- `Generic` with an acute accent passed a check whose own
+  # commit message called the accepted set "letters, digits, space, dot and
+  # hyphen". readfile() staging means nothing escaped through it, but a
+  # predicate that does not match its description is one nobody can rely on.
+  local LC_ALL=C
   # In a variable, like every other pattern here, because a bracket expression
   # is POSIX and takes no backslash escapes: writing the space as `\ ` inline
   # would admit a literal backslash into the accepted set.
@@ -1338,22 +1345,64 @@ vhost_body_ok() {
 # `server_name ~^.+$;` both land there, which is right, since either would have
 # the clone answer for hostnames nobody chose.
 server_name_hosts() {
+  # A character scanner rather than a line matcher, because the thing that
+  # decides whether nginx is reading a directive is quote state, and quote
+  # state does not respect lines. The first version stripped comments with
+  # `sub(/(^|[[:space:]])#.*$/, "")`, which reads a # inside a quoted value as
+  # the start of a comment. nginx does not: a # begins a comment only where it
+  # begins a token, so inside a string it is an ordinary character. That gap
+  # deleted text nginx still executes, which is the one direction that hides a
+  # directive rather than flagging a dead one. Confirmed against nginx 1.30.4:
+  #
+  #   add_header X-M " # " ; server_name kleros.bg;
+  #
+  # yielded no tokens here, and hijacked kleros.bg there.
+  #
+  # Anything this cannot model exactly is a refusal rather than a guess. A quote
+  # opening mid-token is legal to nginx (it is only a string delimiter at the
+  # start of one) but the two readings diverge there, and a body whose quotes
+  # never close is not a config anyone meant to write. Both emit a token that
+  # cannot be the target, so vhost_body_ok refuses on them wherever they appear
+  # -- the cost is a stock vhost and a note, which is the safe way to be wrong.
   awk '
-    {
-      line = $0
-      # A comment ends what nginx was reading, so a commented-out server_name is
-      # not one nginx acts on. Only where # starts a token, so a # inside a
-      # quoted value cannot swallow the rest of the line -- that direction would
-      # hide a real directive rather than flag a dead one.
-      sub(/(^|[[:space:]])#.*$/, "", line)
-      gsub(/[;{}]/, " & ", line)
-      n = split(line, t, /[[:space:]]+/)
+    function flush(t) {
+      if (t == "") return
+      if (naming) { print tolower(t); return }
+      if (t == "server_name") naming = 1
+    }
+    { body = body $0 "\n" }
+    END {
+      n = length(body); inq = ""; tok = ""; naming = 0
       for (i = 1; i <= n; i++) {
-        if (t[i] == "") continue
-        if (t[i] == ";" || t[i] == "{" || t[i] == "}") { naming = 0; continue }
-        if (naming) { print tolower(t[i]); continue }
-        if (t[i] == "server_name") naming = 1
+        c = substr(body, i, 1)
+        if (inq != "") {
+          # nginx honours a backslash escape inside a string, so a \" does not
+          # close it. Reading that as a close would end the string early and put
+          # the scanner back in sync with the wrong half of the line.
+          if (c == "\\") { i++; tok = tok substr(body, i, 1); continue }
+          if (c == inq) { inq = ""; continue }
+          tok = tok c
+          continue
+        }
+        if (c == "\"" || c == "\047") {
+          if (tok != "") { print "\001quote-inside-token"; exit }
+          inq = c
+          continue
+        }
+        if (c == "#") {
+          if (tok == "") {
+            while (i <= n && substr(body, i, 1) != "\n") i++
+            continue
+          }
+          tok = tok c
+          continue
+        }
+        if (c == ";" || c == "{" || c == "}") { flush(tok); tok = ""; naming = 0; continue }
+        if (c == " " || c == "\t" || c == "\r" || c == "\n") { flush(tok); tok = ""; continue }
+        tok = tok c
       }
+      flush(tok)
+      if (inq != "") print "\001unterminated-quote"
     }
   '
 }
@@ -2376,8 +2425,17 @@ cmd_clone() {
     supplied=$(cat; printf x) || true
     supplied=${supplied%x}
     supplied=${supplied%$'\n'}
+    # Exactly two fields, always, even when there is no code -- the app sends an
+    # empty second line rather than omitting it. A variable number of lines made
+    # the channel ambiguous: a password with a newline in it split into a
+    # shortened password and a tail, and where that tail happened to look like a
+    # code the clone went ahead and authenticated with the wrong secret. With a
+    # fixed count that input is three lines and is refused here, rather than
+    # relying on the app to have screened it.
+    local newlines=${supplied//[!$'\n']/}
+    (( ${#newlines} == 1 )) || emit_err "the credential channel takes exactly two lines"
     password=${supplied%%$'\n'*}
-    if [[ $supplied == *$'\n'* ]]; then mfa=${supplied#*$'\n'}; fi
+    mfa=${supplied#*$'\n'}
     supplied=""
     [[ -n $password ]] || emit_err "cloning an Instatic site needs the source instance's admin password on stdin"
     (( ${#password} <= 256 )) || emit_err "the password is too long"
