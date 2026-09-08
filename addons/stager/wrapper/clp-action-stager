@@ -2190,8 +2190,19 @@ cmd_clone() {
     # On stdin, never in argv: anything passed as an argument is readable out
     # of ps by every account on this box, and this is the password to another
     # site's administration.
-    IFS= read -r password || true
+    #
+    # The whole of stdin, not one line of it. `IFS= read -r` stops at the first
+    # newline, so a password containing one arrived here silently shortened and
+    # produced a 401 -- spending the production account's lockout budget on a
+    # value the operator never typed. The `x` survives command substitution's
+    # newline strip so that only the terminator the caller adds is removed, and
+    # anything left with a newline in it is refused rather than trimmed.
+    password=$(cat; printf x) || true
+    password=${password%x}
+    password=${password%$'\n'}
     [[ -n $password ]] || emit_err "cloning an Instatic site needs the source instance's admin password on stdin"
+    [[ $password != *$'\n'* ]] || emit_err "the password may not contain a newline"
+    (( ${#password} <= 256 )) || emit_err "the password is too long"
   else
     if [[ -n $port || -n $email || -n $mfa ]]; then
       emit_err "--port, --email and --mfa apply only to cloning an Instatic site"

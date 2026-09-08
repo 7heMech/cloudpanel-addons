@@ -993,6 +993,59 @@ console.log("\n== the fallback carries vhosts the template route has to refuse =
   }
 }
 
+console.log("\n== one request may not kill the manager ==");
+
+// Every wrapper verb validates its arguments before it reads stdin, so an
+// oversized credential is refused with the pipe unread. The write then fails
+// with EPIPE on a stream tick outside the request promise, where Bun.serve
+// cannot turn it into a 500 -- and Node's default for an unhandled 'error'
+// event is to throw. Since v0.7.0 one process serves every addon, so a 1 MiB
+// password field took all of them down, 20 times out of 20.
+//
+// Driven for real: a child that exits before reading, a megabyte written to it,
+// and the question is whether the process is still there afterwards.
+{
+  const driver = `
+    import { stagerService } from "${process.cwd()}/addons/stager/app/service";
+    const res = await stagerService.startClone("a.example.com", "stg.a.example.com", false,
+      { port: 39000, email: "a@example.com", password: "x".repeat(1024 * 1024) });
+    console.log("SURVIVED", res.ok);
+  `;
+  let out = "";
+  let survived = false;
+  try {
+    out = execFileSync("bun", ["-e", driver], {
+      encoding: "utf-8",
+      env: { ...process.env, STAGER_WRAPPER: "/bin/true" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    survived = out.includes("SURVIVED");
+  } catch (err) {
+    out = String((err as { stdout?: string; stderr?: string }).stderr ?? err);
+  }
+  check("a megabyte on a pipe nothing reads does not kill the process", survived, out.slice(-400));
+
+  const service = readFileSync("addons/stager/app/service.ts", "utf-8");
+  check("the write has an error listener rather than Node's default throw",
+    /child\.stdin\?\.on\("error"/.test(service));
+
+  const index = readFileSync("addons/stager/app/index.ts", "utf-8");
+  check("and the field is bounded before the write is even attempted",
+    index.includes("instaticPassword.length > MAX_PASSWORD"));
+  check("a newline in a credential is refused, not trimmed",
+    index.includes("CONTROL_CHARS.test(instaticPassword)"));
+
+  // The long-lived process is the one place an unexpected throw should not be
+  // fatal: it is the only process, and Restart=always turns a request that can
+  // kill it into a request that can hold both addons in a crash loop.
+  const cli = readFileSync("cli/index.ts", "utf-8");
+  const serve = cli.slice(cli.indexOf("async function cmdServe"));
+  check("the manager survives an out-of-band throw",
+    serve.includes('process.on("uncaughtException"') && serve.includes('process.on("unhandledRejection"'));
+  check("and nothing else in the CLI installs one",
+    (cli.match(/process\.on\("uncaughtException"/g) ?? []).length === 1);
+}
+
 console.log("\n== a site the job adopted is not a site the job created ==");
 
 // The Instatic wrapper adopts a matching pre-existing reverse-proxy site rather

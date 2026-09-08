@@ -28,6 +28,17 @@ function runCommand(
         stderr: String(stderr ?? ""),
       });
     });
+    // Every wrapper verb validates its arguments before it reads stdin, so the
+    // ordinary rejection path exits with the pipe still unread. Anything larger
+    // than the 64 KiB pipe buffer then fails the write with EPIPE -- and that
+    // fires on a stream tick outside this promise, where `Bun.serve` cannot turn
+    // it into a 500. Without a listener Node's default for an 'error' event is
+    // to throw, so one oversized field killed the process that serves every
+    // addon. The wrapper's own reply is the answer either way; a write that
+    // could not be delivered adds nothing but a line in the journal.
+    child.stdin?.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code !== "EPIPE") console.error("[wrapper] stdin could not be written:", err.code ?? err.message);
+    });
     // Always closed, even with nothing to send: a wrapper verb that read stdin
     // would otherwise wait on a pipe nobody is going to write to.
     child.stdin?.end(input ?? "");

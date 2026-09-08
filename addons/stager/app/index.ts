@@ -31,6 +31,29 @@ function portsSinceSnapshot(jobs: JobView[], snapshotTakenAt: string): number[] 
     .map((j) => j.port);
 }
 
+/**
+ * Bounds on the credential fields, because the wrapper cannot be the one to
+ * enforce them.
+ *
+ * Every wrapper verb validates its arguments before it reads stdin, so the
+ * ordinary rejection path exits with the pipe still unread. A body larger than
+ * the 64 KiB pipe buffer then fails the write with EPIPE, on a stream tick
+ * outside any request promise, where `Bun.serve` cannot turn it into a 500. One
+ * 1 MiB password killed the process -- and since v0.7.0 that process serves
+ * every addon, not just this one.
+ *
+ * The numbers are what the wrapper would accept anyway: 254 is the longest legal
+ * email address and what `validate_email` allows, 32 is the top of
+ * `validate_mfa`'s range, and 256 is generous for a password while staying four
+ * orders of magnitude clear of the buffer.
+ */
+const MAX_EMAIL = 254;
+const MAX_PASSWORD = 256;
+const MAX_MFA = 32;
+
+/** A newline in a credential would arrive at the wrapper as a shorter one. */
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+
 function html(body: string, csrf: string, status = 200): Response {
   return new Response(body, {
     status,
@@ -168,8 +191,34 @@ export async function handle(req: Request, path: string): Promise<Response> {
       if (typeof instaticEmail !== "string" || !instaticEmail.trim()) {
         return json({ ok: false, error: "cloning an Instatic site needs the source's admin email address" }, 400);
       }
+      if (instaticEmail.length > MAX_EMAIL) {
+        return json({ ok: false, error: "that email address is too long" }, 400);
+      }
       if (typeof instaticPassword !== "string" || !instaticPassword) {
         return json({ ok: false, error: "cloning an Instatic site needs the source's admin password" }, 400);
+      }
+      // Bounded, and bounded here rather than left to the wrapper, because the
+      // wrapper validates its arguments before it ever reads stdin: an
+      // over-long password is refused with the pipe unread, and anything past
+      // the 64 KiB pipe buffer then fails the write with EPIPE on a stream tick
+      // no request promise can catch. One 1 MiB field killed the process that
+      // serves every addon, 20 times out of 20. The stream error is handled in
+      // service.ts as well; this is the half that stops the oversized write from
+      // being attempted at all.
+      if (instaticPassword.length > MAX_PASSWORD) {
+        return json({ ok: false, error: `the password may be at most ${MAX_PASSWORD} characters` }, 400);
+      }
+      // Rejected, not trimmed. The credential crosses to the wrapper as one line
+      // on stdin, so a newline in it would arrive as a shorter password -- a 401
+      // that spends the production account's lockout budget on a value the
+      // operator never typed. A control character has no business in a password
+      // field either.
+      if (CONTROL_CHARS.test(instaticPassword)) {
+        return json({ ok: false, error: "the password may not contain a newline or a control character" }, 400);
+      }
+      const mfa = typeof mfaCode === "string" ? mfaCode.trim() : "";
+      if (mfa.length > MAX_MFA) {
+        return json({ ok: false, error: "that authentication code is too long" }, 400);
       }
       // Allocated here because the app is the side that can read the panel
       // snapshot both addons share; the wrapper only re-validates the number.
@@ -181,7 +230,7 @@ export async function handle(req: Request, path: string): Promise<Response> {
         ),
         email: instaticEmail.trim().toLowerCase(),
         password: instaticPassword,
-        ...(typeof mfaCode === "string" && mfaCode.trim() ? { mfaCode: mfaCode.trim() } : {}),
+        ...(mfa ? { mfaCode: mfa } : {}),
       };
     } else if (instaticEmail !== undefined || instaticPassword !== undefined || mfaCode !== undefined) {
       return json({ ok: false, error: `${source} is not an Instatic site, so it takes no credentials` }, 400);
