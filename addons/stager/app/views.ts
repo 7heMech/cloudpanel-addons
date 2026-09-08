@@ -340,7 +340,11 @@ export function jobView(job: JobView, logText: string): string {
     ? `<div class="card secret">
         <h2 style="margin-top:0;font-size:1rem;">Staging Instatic instance</h2>
         <dl class="kv">
-          <dt>Port</dt><dd>127.0.0.1:${result.instatic.port}</dd>
+          <!-- esc() even though the wrapper emits this as a JSON number and
+               validate_port bounds it: every other value on this page is
+               escaped, and the one that is not is the one nobody re-checks
+               after the type it was declared with changes. -->
+          <dt>Port</dt><dd>127.0.0.1:${esc(String(result.instatic.port))}</dd>
           <dt>Version</dt><dd>${esc(result.instatic.tag)}</dd>
           <dt>Owner</dt><dd>${esc(result.instatic.email)}</dd>
           <dt>Password</dt><dd>${esc(result.instatic.password)}</dd>

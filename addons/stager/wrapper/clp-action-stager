@@ -844,6 +844,19 @@ cmd_run() {
 
     notes+=("the clone's PUBLIC_ORIGIN is https://${target}, but absolute links typed into a page still name ${source}; the bundle carries content, not a URL rewrite")
     notes+=("integration secrets such as API keys and TOTP seeds are encrypted under ${source}'s own key and are deliberately absent from the bundle; re-enter them on the clone")
+    # What the bundle is is also what it is not, and both belong in the record
+    # rather than in a surprise. It carries the site shell, tables, rows, media,
+    # folders and redirects -- not plugins, and not the runtime assets a publish
+    # produces. So a clone of a PUBLISHED source serves pages whose
+    # /_instatic/assets/* answer 404 until it is published again, and a source
+    # with plugins yields a clone with none.
+    notes+=("publish the clone in its own admin before using it: the site bundle carries content, not the runtime assets a publish produces, so /_instatic/assets/* on ${target} will 404 until it has been published once")
+    notes+=("plugins are not part of the site bundle, so any plugin installed on ${source} has to be installed again on the clone")
+    # The export is scoped to what the exporting account may see. Instatic's
+    # canSeeAllDataRows gates that on content.manage, and an account without it
+    # exports only its OWN rows -- with a 200 and no warning of any kind. The
+    # clone is then missing other authors' pages and looks complete.
+    notes+=("the export contains only the rows the account you signed in as may see: without the content.manage capability Instatic exports that account's own rows and still answers 200, so compare the clone's pages against ${source}'s before trusting it")
   fi
 
   # --- application config ---------------------------------------------------

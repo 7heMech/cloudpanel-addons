@@ -1253,8 +1253,16 @@ window, `update` and `snapshot`. `make_snapshot` writes the archive and stops.
   reaches into its database, so anything storing an absolute URL there still
   names the source site.
 - A clone's Instatic content is whatever the source's site bundle held at export
-  time. Absolute links typed into a page still name the source, and per-instance
-  integration secrets are absent by construction. Both are reported as notes.
+  time. Absolute links typed into a page still name the source; per-instance
+  integration secrets are absent by construction; plugins and the runtime assets
+  a publish produces are not in the bundle either, so a clone of a *published*
+  source serves pages whose `/_instatic/assets/*` 404 until it is published
+  again, and a source with plugins yields a clone with none. And the export is
+  scoped to what the exporting account may see: Instatic gates that on
+  `content.manage` through `canSeeAllDataRows`, so an account without it exports
+  only its own rows and still answers 200, producing a clone that is missing
+  other authors' pages and looks complete. Every one of these is reported as a
+  note on the job rather than left to be discovered.
 - A clone copies the source's files and database as they are at that moment.
   There is no quiescing: a site written to during the copy can produce a staging
   copy whose files and database are from slightly different instants.
