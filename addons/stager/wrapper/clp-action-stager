@@ -1762,6 +1762,81 @@ drop_vhost_stage() {
   return 0
 }
 
+# Where the clone's stock vhost is kept while the carried one is being tried.
+#
+# Beside the file it backs up, under a suffix nginx does not include -- the glob
+# in nginx.conf is `sites-enabled/*.conf`, checked on this box. A fixed,
+# discoverable name is the whole point: it is what lets a later run find one that
+# a killed job left behind.
+vhost_backup_path() {
+  printf '%s/%s.conf.clp-stager-bak' "$NGINX_VHOST_DIR" "$1"
+}
+
+# Put back a vhost a killed clone left half-carried.
+#
+# carry_vhost writes the composed config over the clone's own and then runs
+# `nginx -t`. Between those two the file in service is unvalidated, and if the
+# process dies there -- OOM, `systemctl stop`, a reboot -- the job's own restore
+# never runs. The config then breaks the *next* reload of any site on this box,
+# which is a failure nobody will connect to a clone that happened hours earlier.
+#
+# Run from `prune`, which `repair` calls on every reconciliation, so this is a
+# recovery rather than a note in a log nobody reads.
+#
+# It restores only where the clone did not finish. A job still queued or running
+# is left alone -- it owns that file. A job that reached `done` carried its vhost
+# successfully and was killed after the reload but before dropping the backup, so
+# its leftover is deleted rather than applied; applying it would revert a clone
+# that worked.
+recover_carried_vhosts() {
+  local recovered=0 bak domain state
+  for bak in "$NGINX_VHOST_DIR"/*.conf.clp-stager-bak; do
+    [[ -f $bak ]] || continue
+    domain=$(basename "$bak")
+    domain=${domain%.conf.clp-stager-bak}
+    state=$(job_state_for "$domain")
+    if [[ $state == "queued" || $state == "running" ]]; then continue; fi
+    if [[ $state == "done" ]]; then
+      rm -f "$bak"
+      continue
+    fi
+    warn "restoring the stock vhost for ${domain}: a clone was interrupted while carrying one across"
+    if cp "$bak" "${NGINX_VHOST_DIR}/${domain}.conf" \
+       && chown root:root "${NGINX_VHOST_DIR}/${domain}.conf" \
+       && chmod 644 "${NGINX_VHOST_DIR}/${domain}.conf"; then
+      recovered=$((recovered + 1))
+    else
+      warn "could not restore the stock vhost for ${domain}"
+    fi
+    rm -f "$bak"
+  done
+  if (( recovered > 0 )); then
+    if nginx -t >/dev/null 2>&1; then
+      systemctl reload nginx >&2 || warn "nginx did not reload after recovering ${recovered} vhost(s)"
+    else
+      warn "nginx still rejects its configuration after recovering ${recovered} vhost(s); not reloading"
+    fi
+  fi
+  printf '%d' "$recovered"
+}
+
+# The state of the newest job for a target, or nothing.
+#
+# Newest first because the id starts with a UTC timestamp, so a reverse sort of
+# the directory names is a reverse sort by time -- the same reason cmd_jobs does
+# it that way.
+job_state_for() {
+  local target=$1 name dir
+  while IFS= read -r name; do
+    dir="${JOBS_DIR}/${name}"
+    [[ -d $dir ]] || continue
+    [[ $(job_get "$dir" target) == "$target" ]] || continue
+    job_get "$dir" state
+    return 0
+  done < <(ls -1 "$JOBS_DIR" 2>/dev/null | sort -r)
+  return 0
+}
+
 # Set when the carry-over is refused, so the job can name the reason rather
 # than leaving an operator to guess which of several conditions applied.
 CARRY_REJECT=""
@@ -1790,7 +1865,13 @@ carry_vhost() {
   local stock="${VHOST_STAGE}/stock.tpl"
   local body="${VHOST_STAGE}/body.tpl"
   local rendered="${VHOST_STAGE}/rendered.conf"
-  local backup="${VHOST_STAGE}/backup.conf"
+  # Beside the vhost, not inside the stage. nginx includes `sites-enabled/*.conf`
+  # so this suffix is never loaded, and putting it where the file is is what
+  # makes recovery possible: a SIGKILL between the write below and `nginx -t`
+  # leaves an unvalidated config in service with the job's own restore never run,
+  # and a backup in a temp directory is a backup nothing would ever look for.
+  # `prune` finds this one -- see recover_carried_vhosts.
+  local backup; backup=$(vhost_backup_path "$target")
 
   # writefile() rather than a SELECT into a variable: the column is the half of
   # the pair the walk below measures against, and command substitution would
@@ -1839,6 +1920,7 @@ carry_vhost() {
   printf '\n' >> "$rendered"
 
   cp -a "$conf" "$backup" || { CARRY_REJECT="the clone's vhost could not be backed up"; return 1; }
+  chmod 600 "$backup" || true
 
   # Restore and say why. Used by every failure path below, so there is one
   # implementation of "put the stock vhost back" rather than four.
@@ -1857,6 +1939,7 @@ carry_vhost() {
   carry_restore() {
     cp "$backup" "$conf" && chown root:root "$conf" && chmod 644 "$conf" \
       || warn "could not restore the stock vhost for ${target}"
+    rm -f "$backup"
     if [[ ${1:-} == "row" ]]; then
       # The clone's own stock body, as the panel stored it moments ago, written
       # back through the same guarded path that wrote the carried one.
@@ -1898,6 +1981,12 @@ carry_vhost() {
     systemctl reload nginx >&2 || warn "nginx did not reload after restoring ${target}"
     return 1
   fi
+
+  # The carry is complete and in service, so the backup has nothing left to
+  # recover and is dropped last. A kill in the window between the reload and
+  # this line leaves a backup for a job whose record already reads `done`, which
+  # recover_carried_vhosts drops rather than applies for exactly that reason.
+  rm -f "$backup"
 
   # The stage is dropped by the caller, not here. A failed carry-over is not a
   # failed clone -- the job goes on with the stock vhost -- so the rollback trap
@@ -2408,18 +2497,53 @@ cmd_jobs() {
 }
 
 cmd_prune() {
-  local removed=0 dir state
+  local removed=0 stuck=0 dir id state
   for dir in "$JOBS_DIR"/*/; do
     [[ -d $dir ]] || continue
+    id=$(basename "${dir%/}")
     state=$(job_get "${dir%/}" state)
-    # Never touch work in flight, however old the record looks.
-    [[ $state == "queued" || $state == "running" ]] && continue
+
+    # A record stuck in `running` is not merely untidy: prune skips work in
+    # flight, so it never expires, and `clone` refuses a target that already has
+    # a queued or running job -- so the hostname is blocked for good. That is
+    # exactly what a killed job leaves behind, because cmd_run writes `running`
+    # and only ever writes `done` or `failed` itself.
+    #
+    # systemd knows the difference, because the job runs in a transient unit of
+    # its own. `--collect` removes that unit when it exits, so "not active" means
+    # the job is not running, whether it finished or died. The age check is only
+    # there for the seconds between `clone` writing the record and systemd-run
+    # having started the unit; anything genuinely running is active regardless of
+    # how long it has gone without writing a step.
+    if [[ $state == "queued" || $state == "running" ]]; then
+      if systemctl is-active --quiet "clp-addon-stager-job-${id}" 2>/dev/null; then continue; fi
+      if [[ -z $(find "$dir" -maxdepth 0 -mmin +5 2>/dev/null) ]]; then continue; fi
+      warn "job ${id} is recorded as ${state} but nothing is running it; marking it failed"
+      job_set "${dir%/}" error "the clone job stopped without recording a result"
+      job_set "${dir%/}" state failed
+      state=failed
+      stuck=$((stuck + 1))
+    fi
+
     if [[ -n $(find "$dir" -maxdepth 0 -mtime "+${JOB_RETENTION_DAYS}" 2>/dev/null) ]]; then
       rm -rf "$dir"
       removed=$((removed + 1))
     fi
   done
-  emit_ok "{\"removed\":${removed}}"
+
+  # After the records, because recovery asks each one what state it is in and a
+  # job that has just been marked failed is a job whose vhost should be put back.
+  local vhosts
+  vhosts=$(recover_carried_vhosts)
+
+  # A stage is a root-owned directory in /tmp holding a clone's composed vhost.
+  # Every path a clone takes drops it, including the rollback, so one that
+  # survives means the job was killed outright -- and nothing else on the box
+  # would ever remove it. A day is far longer than any clone.
+  find /tmp -maxdepth 1 -type d -name 'clp-stager-stage.*' -mmin +1440 \
+       -exec rm -rf {} + 2>/dev/null || true
+
+  emit_ok "{\"removed\":${removed},\"stuck\":${stuck},\"vhostsRecovered\":${vhosts}}"
 }
 
 # --- argument parsing -------------------------------------------------------

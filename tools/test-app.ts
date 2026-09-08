@@ -1062,6 +1062,81 @@ console.log("\n== one request may not kill the manager ==");
     (cli.match(/process\.on\("uncaughtException"/g) ?? []).length === 1);
 }
 
+console.log("\n== a killed clone does not leave the box worse off ==");
+
+// carry_vhost writes the composed config over the clone's own and then runs
+// `nginx -t`. A SIGKILL in between -- OOM, `systemctl stop`, a reboot -- leaves
+// an unvalidated config in service, with the job's own restore never run, and it
+// breaks the NEXT reload of any site on the box: a failure nobody will connect
+// to a clone that happened hours earlier. So the backup lives beside the file
+// under a name nginx does not include, and `prune`, which repair runs every
+// fifteen minutes, is what finds it.
+{
+  const W = "addons/stager/wrapper/clp-action-stager";
+  const wrapper = readFileSync(W, "utf-8");
+  const fns = ["vhost_backup_path", "job_get", "job_state_for", "recover_carried_vhosts"]
+    .map((n) => bashFunction(W, n)).join("\n");
+
+  check("the backup is not something nginx's sites-enabled/*.conf glob loads",
+    !"example.com.conf.clp-stager-bak".endsWith(".conf"));
+
+  // Driven with nginx and systemctl stubbed, because the point is which file
+  // ends up in place rather than whether this box reloads.
+  const recover = (state: string) => {
+    const d = mkdtempSync(`${tmpdir()}/clp-stager-recover-`);
+    try {
+      mkdirSync(`${d}/vhosts`, { recursive: true });
+      mkdirSync(`${d}/jobs/20260908T120000Z-aaaaaa`, { recursive: true });
+      writeFileSync(`${d}/jobs/20260908T120000Z-aaaaaa/target`, "stg.example.com\n");
+      writeFileSync(`${d}/jobs/20260908T120000Z-aaaaaa/state`, `${state}\n`);
+      writeFileSync(`${d}/vhosts/stg.example.com.conf`, "CARRIED\n");
+      writeFileSync(`${d}/vhosts/stg.example.com.conf.clp-stager-bak`, "STOCK\n");
+      const out = execFileSync("bash", ["-c",
+        `NGINX_VHOST_DIR="${d}/vhosts"\nJOBS_DIR="${d}/jobs"\n` +
+        `warn() { :; }\nnginx() { return 0; }\nsystemctl() { return 0; }\nchown() { return 0; }\n` +
+        `${fns}\nprintf 'n=%s ' "$(recover_carried_vhosts)"`,
+        "_"], { encoding: "utf-8" });
+      return {
+        out: out.trim(),
+        conf: readFileSync(`${d}/vhosts/stg.example.com.conf`, "utf-8").trim(),
+        bak: readdirSync(`${d}/vhosts`).some((f) => f.endsWith(".clp-stager-bak")),
+      };
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  };
+
+  const failed = recover("failed");
+  check("a job that did not finish gets its stock vhost put back",
+    failed.conf === "STOCK" && failed.bak === false && failed.out === "n=1",
+    JSON.stringify(failed));
+
+  const done = recover("done");
+  check("a job that finished keeps its carried vhost, and the leftover is dropped",
+    done.conf === "CARRIED" && done.bak === false && done.out === "n=0",
+    JSON.stringify(done));
+
+  const running = recover("running");
+  check("a job still running owns that file and is left alone",
+    running.conf === "CARRIED" && running.bak === true && running.out === "n=0",
+    JSON.stringify(running));
+
+  // A record stuck in `running` never expires -- prune skips work in flight --
+  // and `clone` refuses a target that already has one, so the hostname is
+  // blocked for good. That is what a killed job leaves, because cmd_run writes
+  // `running` and only ever writes `done` or `failed` itself.
+  const prune = wrapper.slice(wrapper.indexOf("cmd_prune() {"));
+  const body = prune.slice(0, prune.indexOf("\n}\n"));
+  check("prune asks systemd whether a running record is really running",
+    body.includes('systemctl is-active --quiet "clp-addon-stager-job-${id}"'));
+  check("and marks it failed rather than skipping it forever",
+    body.includes('job_set "${dir%/}" state failed'));
+  check("it also sweeps a staging directory a killed job left in /tmp",
+    body.includes("-name 'clp-stager-stage.*'"));
+  check("and runs the vhost recovery after the records, not before",
+    body.indexOf("recover_carried_vhosts") > body.indexOf('job_set "${dir%/}" state failed'));
+}
+
 console.log("\n== two addons hand out ports from one block ==");
 
 // Both addons allocate from the same reserved range against a snapshot the root
