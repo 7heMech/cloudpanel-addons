@@ -1410,6 +1410,20 @@ learn_vhost_map() {
   # Split the stored body into literal and placeholder segments once, so the two
   # walks below are the same parse read in opposite directions rather than two
   # parsers that could disagree about something other than a boundary.
+  # A placeholder name is taken exactly as written, whitespace and all, because
+  # CloudPanel does the same and it is not the same placeholder.
+  # Template::getPlaceholders() matches /{{[\sa-zA-Z0-9_]+}}/, so `{{ root }}` is
+  # *recognised* -- and then never filled: Processor::$placeholder is the exact
+  # string `{{root}}` and replace() is a plain str_replace, so it survives every
+  # processor and removeEmptyPlaceholders() blanks it. Folding the whitespace
+  # away, which this used to do with a comment claiming the panel treated the two
+  # alike, produced a rendered file holding a root directive and a stored body
+  # the panel will regenerate without one. nginx -t passes, the clone serves, and
+  # the document root disappears the next time anything touches the site. So the
+  # spaced form falls through the [a-zA-Z0-9_]+ check below and is refused by
+  # name in both directions. Nothing on this box writes one: none of the 31 stock
+  # templates and none of the 31 stored bodies contain a placeholder with
+  # whitespace inside its braces.
   local -a lits=() keys=()
   local rest=$tpl raw key
   while [[ $rest == *"{{"* ]]; do
@@ -1421,9 +1435,7 @@ learn_vhost_map() {
     fi
     raw=${rest%%"}}"*}
     rest=${rest#*"}}"}
-    # Template::getPlaceholders() matches /{{[\sa-zA-Z0-9_]+}}/, so whitespace
-    # inside the braces is legal and names the same placeholder.
-    key=${raw//[[:space:]]/}
+    key=$raw
     if [[ ! $key =~ ^[a-zA-Z0-9_]+$ ]]; then
       VHOST_MAP_REJECT="the clone's stored vhost has a placeholder named '${raw}'"
       return 1
@@ -1545,9 +1557,9 @@ render_vhost_body() {
     fi
     raw=${body%%"}}"*}
     body=${body#*"}}"}
-    key=${raw//[[:space:]]/}
+    key=$raw
     if [[ ! $key =~ ^[a-zA-Z0-9_]+$ ]]; then
-      VHOST_MAP_REJECT="the composed vhost has a placeholder named '${raw}'"
+      VHOST_MAP_REJECT="the source's vhost has a placeholder named '${raw}', which CloudPanel matches but never fills; it would render here and be blanked the next time the panel regenerates the site"
       return 1
     fi
     if [[ ! -v "VHOST_MAP[$key]" ]]; then

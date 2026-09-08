@@ -988,12 +988,30 @@ to this site a moment ago.
 
 That is only sound because it refuses rather than guesses. The walk must consume
 the rendered file exactly to EOF; a placeholder appearing twice must resolve
-identically both times; a value is only ever taken as the shortest string that
-reaches the next literal, so a wrong guess surfaces as a later literal failing to
-match rather than as a plausible wrong answer; and a placeholder in the composed
-body the map does not know is a refusal, never an empty string. Blanking it the
-way the panel does would turn an unknown `{{root}}` into a server block with no
+identically both times; two placeholders with nothing between them are refused
+rather than split at an arbitrary point; the whole parse is done again from the
+other end and the two readings must agree; and a placeholder in the composed body
+the map does not know is a refusal, never an empty string. Blanking it the way
+the panel does would turn an unknown `{{root}}` into a server block with no
 document root, which nginx accepts and serves as the wrong thing.
+
+The second-reading guard is the one the others cannot be. Read forwards, a value
+is the *shortest* string that reaches the next literal, so a wrong guess normally
+surfaces as a later literal failing to match -- except when that literal also
+occurs inside the first placeholder's value, where the short reading and the long
+one both consume the file to EOF and both look clean. Read backwards the value is
+the longest instead, so a unique parse gives the same map twice and an ambiguous
+one does not.
+
+`{{ root }}` is not `{{root}}`, and treating it as the same was a bug rather than
+a convenience. `Template::getPlaceholders()` matches `/{{[\sa-zA-Z0-9_]+}}/`, so
+the panel *recognises* the spaced form -- and then never fills it, because
+`Processor::$placeholder` is the exact string `{{root}}` and `replace()` is a
+plain `str_replace`. It survives every processor and `removeEmptyPlaceholders()`
+blanks it. Folding the whitespace away here produced a rendered file holding a
+`root` directive and a stored body the panel will regenerate without one: `nginx
+-t` passes, the clone serves, and the document root disappears the next time
+anything touches the site. Both directions refuse it by name instead.
 
 **Install order is file first**, and that ordering is the whole safety argument.
 The rendered config is written and `nginx -t`-ed before the database is touched,

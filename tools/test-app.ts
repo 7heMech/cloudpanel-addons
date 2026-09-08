@@ -706,6 +706,22 @@ console.log("\n== learning what CloudPanel substituted into a vhost ==");
       logs.get("REJECT") !== undefined,
       [...logs.entries()].map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", "));
 
+    // `{{ root }}` is not `{{root}}`. Template::getPlaceholders() matches
+    // /{{[\sa-zA-Z0-9_]+}}/ so the panel recognises it, but
+    // Processor::$placeholder is the exact string `{{root}}` and replace() is a
+    // plain str_replace, so no processor ever fills it and
+    // removeEmptyPlaceholders() blanks it. Folding the whitespace away gave a
+    // rendered file with a root directive and a stored body the panel will
+    // regenerate without one -- nginx -t passes, the clone serves, and the
+    // document root vanishes the next time anything touches the site.
+    const spacedStored = learn("server {\n  {{ root }}\n}", "server {\n  \n}\n");
+    check("a placeholder with whitespace in its braces is refused when learning",
+      spacedStored.get("REJECT") !== undefined,
+      [...spacedStored.keys()].join(", "));
+    const spacedBody = render("server {\n  {{ root }}\n}", STORED, RENDERED);
+    check("and refused when rendering, rather than filled as if it were {{root}}",
+      spacedBody.startsWith("RENDER-REJECT") && spacedBody.includes("never fills"), spacedBody);
+
     // Two placeholders with nothing between them cannot be told apart at all.
     const adjacent = learn("server {\n  {{settings}}{{root}}\n}", "server {\n  ab\n}\n");
     check("two placeholders with nothing between them are refused",
