@@ -4,46 +4,66 @@ import { readSnapshot, snapshotAgeSeconds, type PanelSnapshot } from "../../../l
 // only ask for one of a closed set of verbs, with arguments the wrapper
 // re-validates before acting.
 
-import { execFile } from "node:child_process";
-import type { ExecFileOptions } from "node:child_process";
+interface RunCommandOptions {
+  timeout: number;
+  maxBuffer: number;
+}
 
-/**
- * execFile, awaited, with an optional stdin.
- *
- * Written out rather than `promisify(execFile)` because the one credential this
- * addon passes to the wrapper travels on stdin, and the promisified form gives
- * no handle to write to. `execFile` returns the ChildProcess synchronously, so
- * the write happens before anything is awaited.
- */
-function runCommand(
+interface CommandFailure {
+  code?: number | string | null;
+}
+
+interface CommandResult {
+  error: CommandFailure | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** Run the policy wrapper with a bounded, byte-oriented Bun subprocess. */
+async function runCommand(
   cmd: string,
   args: string[],
-  options: ExecFileOptions,
+  options: RunCommandOptions,
   input?: string
-): Promise<{ error: (Error & { code?: number }) | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = execFile(cmd, args, options, (error, stdout, stderr) => {
-      resolve({
-        error: error as (Error & { code?: number }) | null,
-        stdout: String(stdout ?? ""),
-        stderr: String(stderr ?? ""),
-      });
+): Promise<CommandResult> {
+  const stdin = new TextEncoder().encode(input ?? "");
+
+  let child: Bun.Subprocess<Uint8Array, "pipe", "pipe">;
+  try {
+    child = Bun.spawn({
+      cmd: [cmd, ...args],
+      // Passing bytes directly gives Bun ownership of the write and close. If
+      // the wrapper exits before consuming them, Bun absorbs the resulting
+      // EPIPE instead of exposing an unhandled writable-stream error. The old
+      // `child.stdin?.on("error", ...)` listener was needed only for Node's
+      // manually written pipe.
+      stdin,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: process.env,
+      timeout: options.timeout,
+      maxBuffer: options.maxBuffer,
     });
-    // Every wrapper verb validates its arguments before it reads stdin, so the
-    // ordinary rejection path exits with the pipe still unread. Anything larger
-    // than the 64 KiB pipe buffer then fails the write with EPIPE -- and that
-    // fires on a stream tick outside this promise, where `Bun.serve` cannot turn
-    // it into a 500. Without a listener Node's default for an 'error' event is
-    // to throw, so one oversized field killed the process that serves every
-    // addon. The wrapper's own reply is the answer either way; a write that
-    // could not be delivered adds nothing but a line in the journal.
-    child.stdin?.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code !== "EPIPE") console.error("[wrapper] stdin could not be written:", err.code ?? err.message);
-    });
-    // Always closed, even with nothing to send: a wrapper verb that read stdin
-    // would otherwise wait on a pipe nobody is going to write to.
-    child.stdin?.end(input ?? "");
-  });
+  } catch (error) {
+    const failure = error as CommandFailure;
+    return { error: failure, stdout: "", stderr: "" };
+  }
+
+  const [stdoutResult, stderrResult, exitResult] = await Promise.allSettled([
+    child.stdout.text(),
+    child.stderr.text(),
+    child.exited,
+  ]);
+  const stdout = stdoutResult.status === "fulfilled" ? stdoutResult.value : "";
+  const stderr = stderrResult.status === "fulfilled" ? stderrResult.value : "";
+  const exitCode = exitResult.status === "fulfilled" ? exitResult.value : undefined;
+  const outputFailed = stdoutResult.status === "rejected" || stderrResult.status === "rejected";
+
+  return {
+    error: exitCode === 0 && !outputFailed ? null : { code: exitCode },
+    stdout,
+    stderr,
+  };
 }
 
 const WRAPPER_BIN = process.env.STAGER_WRAPPER || "/usr/local/libexec/clp-addons/clp-action-stager";
