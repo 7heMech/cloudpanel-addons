@@ -298,6 +298,8 @@ async function cmdInstall(argv: string[]): Promise<void> {
     // writeManagerAuth already printed it, at the moment it existed in the
     // clear. Saying it twice invites the reading that there are two.
     log.plain(`  The manager credential was generated above (user ${managerAuth.user})`);
+  } else if (managerAuth.source === "absent") {
+    log.err(`  No manager credential was written, so the manager is refusing every request.`);
   } else if (managerAuth.source === "panel") {
     log.ok(`  The manager accepts this site's CloudPanel Basic Auth credential (user ${managerAuth.user})`);
   } else {
@@ -389,7 +391,10 @@ async function cmdUpdate(argv: string[]): Promise<void> {
     writeConfig(spec, domain, user);
 
     installUnits(installedAddons(), user);
-    writeManagerAuth(domain, user, true);
+    // Not quiet: `update` is always run by an operator, so if this box has no
+    // credential yet it may generate one and show it. Only the timer is
+    // unattended, and only the timer must not mint a secret.
+    writeManagerAuth(domain, user, false);
     startUnits();
     reconcileAnchors(false);
     pruneReleases();
