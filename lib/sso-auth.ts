@@ -74,7 +74,7 @@ export function issueToken(user: string, sessionId: string, now = Math.floor(Dat
   return `${payload}.${signature(payload, key)}`;
 }
 
-export function verifyToken(token: string, now = Math.floor(Date.now() / 1000)): string | null {
+export function verifyToken(token: string, sessionId?: string, now = Math.floor(Date.now() / 1000)): string | null {
   const key = hmacKey();
   if (!key) return null;
   const parts = token.split(".");
@@ -90,6 +90,7 @@ export function verifyToken(token: string, now = Math.floor(Date.now() / 1000)):
     const value = JSON.parse(decoded) as { exp?: unknown; sid?: unknown; user?: unknown };
     if (!Number.isSafeInteger(value.exp) || (value.exp as number) <= now) return null;
     if (typeof value.sid !== "string" || !/^[a-f0-9]{64}$/.test(value.sid)) return null;
+    if (!sessionId || !SESSION_ID_RE.test(sessionId) || value.sid !== sessionFingerprint(sessionId)) return null;
     return typeof value.user === "string" && USER_RE.test(value.user) ? value.user : null;
   } catch {
     return null;
@@ -135,13 +136,13 @@ export async function authenticateRequest(req: Request): Promise<{
   auth: AuthenticatedRequest | null;
   response?: Response;
 }> {
+  const sessionId = readCookie(req, SESSION_COOKIE);
   const token = readCookie(req, TOKEN_COOKIE);
   if (token) {
-    const user = verifyToken(token);
+    const user = verifyToken(token, sessionId ?? undefined);
     if (user) return { auth: { user } };
   }
 
-  const sessionId = readCookie(req, SESSION_COOKIE);
   if (!sessionId) return { auth: null, response: redirectToLogin() };
   const user = await verifyCloudPanelSession(sessionId);
   if (!user) return { auth: null, response: redirectToLogin() };

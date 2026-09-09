@@ -493,9 +493,9 @@ function commandFailure(command: string, args: string[]): string | null {
   }
 }
 
-function restoreNginxPristine(path: string, pristine: string): void {
+function restoreNginxContent(path: string, content: string): void {
   const mode = statSync(path).mode & 0o777;
-  writeAtomic(path, pristine, mode);
+  writeAtomic(path, content, mode);
 }
 
 function removeNginxState(files: { pristine: string; hash: string; path: string }): void {
@@ -581,13 +581,13 @@ export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; r
 
   const tested = commandFailure("nginx", ["-t"]);
   if (tested) {
-    restoreNginxPristine(vhostPath, pristine);
+    restoreNginxContent(vhostPath, onDisk);
     return { state: "validation-failed", changed: false, vhostPath: selectedPath, detail: `nginx -t failed: ${tested}` };
   }
 
   const reloaded = commandFailure("systemctl", ["reload", "nginx"]);
   if (reloaded) {
-    restoreNginxPristine(vhostPath, pristine);
+    restoreNginxContent(vhostPath, onDisk);
     return { state: "validation-failed", changed: false, vhostPath: selectedPath, detail: `nginx reload failed: ${reloaded}` };
   }
 

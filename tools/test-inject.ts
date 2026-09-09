@@ -130,6 +130,26 @@ else process.env.PATH = oldPath;
 check("Nginx validation failure restores the pristine vhost", nginxFailure.state === "validation-failed" && readFileSync(nginxFailureVhost, "utf-8") === nginxOriginal);
 rmSync(nginxFailureDir, { recursive: true, force: true });
 
+const nginxDisableFailureDir = mkdtempSync(`${tmpdir()}/nginx-disable-failure-test-`);
+const nginxDisableFailureVhost = `${nginxDisableFailureDir}/cloudpanel.conf`;
+const nginxDisableFailureState = `${nginxDisableFailureDir}/state`;
+const nginxWithProxy = `${nginxOriginal.trimEnd()}\n${NGINX_PROXY_BLOCK}\n`;
+writeFileSync(nginxDisableFailureVhost, nginxWithProxy);
+mkdirSync(`${nginxDisableFailureDir}/bin`);
+writeFileSync(`${nginxDisableFailureDir}/bin/nginx`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+const previousPath = process.env.PATH;
+process.env.PATH = `${nginxDisableFailureDir}/bin:${previousPath ?? ""}`;
+const nginxDisableFailure = reconcileNginxProxy({
+  vhostPath: nginxDisableFailureVhost,
+  stateDir: nginxDisableFailureState,
+  enabled: false,
+});
+if (previousPath === undefined) delete process.env.PATH;
+else process.env.PATH = previousPath;
+check("Nginx disable failure restores the previously active proxy",
+  nginxDisableFailure.state === "validation-failed" && readFileSync(nginxDisableFailureVhost, "utf-8") === nginxWithProxy);
+rmSync(nginxDisableFailureDir, { recursive: true, force: true });
+
 rmSync(dir, { recursive: true, force: true });
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly SESSION_DIR="${CLP_ADDONS_PHP_SESSION_DIR:-/var/lib/php/sessions}"
+readonly SESSION_DIR="/var/lib/php/sessions"
 
 invalid() {
   printf '%s\n' '{"valid":false}'
