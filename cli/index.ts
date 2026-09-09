@@ -28,6 +28,7 @@ import {
   KNOWN_GOOD_PANEL_VERSIONS, inspect, panelVersion, purgeTwigCache, reconcile,
   type Injection, type TargetStatus,
 } from "./inject";
+import { requestCertificate } from "./certificate";
 import { guardAuth } from "../lib/manager-auth";
 import { generateSnapshot } from "../lib/panel-snapshot";
 import { SNAPSHOT_FILE } from "../lib/snapshot-reader";
@@ -182,6 +183,9 @@ async function cmdInstall(argv: string[]): Promise<void> {
   // inherit it, and may only re-state it if it matches -- silently moving every
   // installed addon to a new hostname because one install said so would take the
   // others offline, and the operator asked about one addon.
+  if (flags.certificate !== undefined && flags.certificate !== "yes" && flags.certificate !== "no") {
+    fatal("--certificate must be yes or no");
+  }
   const given = typeof flags.domain === "string" ? flags.domain : null;
   if (given && !/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(given)) {
     fatal(`--domain='${given}' is not a valid hostname`);
@@ -319,14 +323,9 @@ async function cmdInstall(argv: string[]): Promise<void> {
         `  Re-add it through Site → Security → Basic Auth so the panel owns it.`
     );
   } else {
-    log.warn(
-      `  ${domain} has no Basic Auth in front of it. The manager authenticates on its\n` +
-        `  own now, so this is no longer the only gate, but adding Site → Security →\n` +
-        `  Basic Auth keeps unauthenticated requests off the app entirely and carries\n` +
-        `  the IP allowlist.`
-    );
+    log.plain("  Manager authentication is enabled. CloudPanel Basic Auth is optional.");
   }
-  log.plain(`  Certificate: clpctl lets-encrypt:install:certificate --domainName=${domain}`);
+  if (siteCreated || flags.certificate !== undefined) requestCertificate(domain, flags.certificate);
 }
 
 async function cmdUpdate(argv: string[]): Promise<void> {
@@ -587,6 +586,9 @@ function cmdRepair(argv: string[]): void {
   requireRoot("repair");
   const { positional, flags } = parseFlags(argv);
   const quiet = flags.quiet === true;
+  if (flags.certificate !== undefined && flags.certificate !== "yes" && flags.certificate !== "no") {
+    fatal("--certificate must be yes or no");
+  }
 
   // The path unit uses this: anchors only, no wrapper reinstall, no visudo, no
   // daemon-reload, no snapshot. Cheap enough to run on every template write, and
@@ -602,6 +604,16 @@ function cmdRepair(argv: string[]): void {
 
   const domain = platformDomain();
   if (!domain) fatal("no configured domain; run install first");
+  if (flags["restore-site"] === true) {
+    if (quiet) fatal("--restore-site cannot be combined with --quiet");
+    if (ensureManagerSite(domain)) writeAtomic(SITE_CREATED_MARKER, `${domain}\n`, 0o600);
+  }
+  if (!siteUserOf(domain)) {
+    tryRun("systemctl", ["stop", MANAGER_UNIT]);
+    fatal(`The manager site ${domain} is missing. Addon data is preserved.\n` +
+      "  Restore it with: clp-addons repair --restore-site\n" +
+      "  Or remove the addons with: clp-addons uninstall <addon> --yes");
+  }
   const user = resolveSiteUser(domain);
 
   // Write it back whether or not it was there. On a box that predates the file
@@ -626,6 +638,7 @@ function cmdRepair(argv: string[]): void {
   // Platform-wide, so once rather than per addon.
   ensureTimerArmed("clp-addons-reconcile.timer", quiet);
   reconcileAnchors(quiet);
+  if (flags["restore-site"] === true) requestCertificate(domain, flags.certificate);
   if (!quiet) log.ok(`repair complete (${specs.map((s) => s.name).join(", ")})`);
 }
 
@@ -668,6 +681,7 @@ async function cmdStatus(argv: string[]): Promise<void> {
   );
 
   const runAs = domain ? siteUserOf(domain) : null;
+  if (domain && !runAs) log.warn("Manager site missing or unreadable. To restore a deleted site: clp-addons repair --restore-site");
   log.plain(`${pad("  Runs as")}${runAs ?? "unknown"}${runAs ? " (CloudPanel site user)" : ""}`);
   if (runAs) {
     // Same reader hardenSiteUser decides from, so status cannot report a state
@@ -968,10 +982,13 @@ function usage(): void {
   log.plain(`clp-addons ${CLI_VERSION} — CloudPanel addon manager (run as root)
 
   clp-addons install <addon> [--domain=<host>] [--version=vX.Y.Z] [--skip-attestation]
+                            [--certificate=yes|no]
   clp-addons install <addon> --domain=<host> --local=dist      (staging only)
   clp-addons update [<addon>|--all] [--version=vX.Y.Z]   (alias: upgrade)
   clp-addons self-update [--version=vX.Y.Z]
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
+  clp-addons auth reset                                       (generate a new login)
+  clp-addons repair --restore-site                            (recover deleted manager site)
   clp-addons status [<addon>]
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons serve                                             (systemd runs this)
@@ -1007,6 +1024,14 @@ async function main(): Promise<number> {
     case "update":
     case "upgrade":      await cmdUpdate(rest); return 0;
     case "self-update":  await cmdSelfUpdate(rest); return 0;
+    case "auth": {
+      requireRoot("auth");
+      if (rest.length !== 1 || rest[0] !== "reset") fatal("usage: clp-addons auth reset");
+      const domain = platformDomain();
+      if (!domain) fatal("no manager is installed");
+      writeManagerAuth(domain, resolveSiteUser(domain), false, true);
+      return 0;
+    }
     case "repair":       cmdRepair(rest); return 0;
     case "status":       await cmdStatus(rest); return 0;
     case "uninstall":    cmdUninstall(rest); return 0;

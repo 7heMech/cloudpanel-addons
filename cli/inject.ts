@@ -268,9 +268,10 @@ function renderFile(
   let rendered = pristine;
 
   // Stable order, so two addons patching one anchor do not swap places on
-  // every reconciliation and produce a file that never settles.
+  // every reconciliation and produce a file that never settles. Insert in reverse
+  // order because each block lands immediately after the same original anchor.
   for (const inj of [...list].sort((a, b) =>
-    a.addon.localeCompare(b.addon) || a.target.slug.localeCompare(b.target.slug)
+    b.addon.localeCompare(a.addon) || b.target.slug.localeCompare(a.target.slug)
   )) {
     const at = rendered.indexOf(inj.target.anchorAfter);
     if (at === -1) {

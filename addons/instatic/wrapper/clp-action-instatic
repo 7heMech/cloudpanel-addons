@@ -411,7 +411,7 @@ make_snapshot() {
   local dir=$1 out=$2 stage f base
   stage=$(mktemp -d "${dir}/.snap.XXXXXX") || return 1
 
-  mkdir -p "$stage/data"
+  mkdir -p "$stage/data" || { rm -rf "$stage"; return 1; }
   if [[ -d ${dir}/data ]]; then
     for f in "${dir}"/data/*; do
       [[ -f $f ]] || continue
@@ -423,17 +423,17 @@ make_snapshot() {
         sqlite3 "$f" ".backup '${stage}/data/${base}'" \
           || { warn "sqlite backup failed for ${base}"; rm -rf "$stage"; return 1; }
       else
-        cp -a "$f" "$stage/data/"
+        cp -a "$f" "$stage/data/" || { rm -rf "$stage"; return 1; }
       fi
     done
   fi
 
   # Uploads are inert files, so a plain copy is consistent enough.
-  if [[ -d ${dir}/uploads ]]; then cp -a "${dir}/uploads" "$stage/uploads"; fi
+  if [[ -d ${dir}/uploads ]]; then cp -a "${dir}/uploads" "$stage/uploads" || { rm -rf "$stage"; return 1; }; fi
 
   # The master key travels with the data. A restored database without it has
   # unreadable secret columns, which makes the snapshot useless for recovery.
-  if [[ -f ${dir}/instatic.env ]]; then cp -a "${dir}/instatic.env" "$stage/instatic.env"; fi
+  if [[ -f ${dir}/instatic.env ]]; then cp -a "${dir}/instatic.env" "$stage/instatic.env" || { rm -rf "$stage"; return 1; }; fi
 
   # tar's exit status was previously discarded, so an out-of-space archive
   # counted as a successful snapshot.
@@ -735,33 +735,39 @@ cmd_delete() {
   [[ -n $confirm ]] || emit_err "missing --confirm"
   [[ $domain == "$confirm" ]] || emit_err "--confirm must equal --domain"
 
-  local name dir created
+  local name dir created count port
   name=$(container_name "$domain")
   dir=$(inst_dir "$domain")
+  [[ -f ${dir}/meta.json ]] || emit_err "no such instance: ${domain}"
 
-  log "removing container ${name}"
-  docker rm -f "$name" >&2 2>/dev/null || true
-
-  # Only delete the panel site if this addon created it.
-  created=$([[ -f ${dir}/meta.json ]] && read_meta siteCreatedByAddon "${dir}/meta.json" || echo "")
-  if [[ $created == "true" ]]; then
-    log "deleting CloudPanel site ${domain}"
-    # --force is required: without it clpctl prompts and blocks forever, which
-    # leaves the site row and its vhost orphaned.
-    "$CLPCTL" site:delete --domainName="$domain" --force >&2 || warn "clpctl site:delete failed"
-  else
-    log "leaving CloudPanel site ${domain} in place (not created by this addon)"
+  # A failed database query is not evidence that the site was deleted.
+  count=$(sqlite3 -readonly "$PANEL_DB" "SELECT COUNT(*) FROM site WHERE domain_name = '$domain';") \
+    || emit_err "cannot read CloudPanel sites; nothing was deleted"
+  [[ $count =~ ^[01]$ ]] || emit_err "unexpected CloudPanel site count; nothing was deleted"
+  created=$(read_meta siteCreatedByAddon "${dir}/meta.json")
+  if [[ $count == 1 && $created == true ]]; then
+    port=$(read_meta port "${dir}/meta.json")
+    site_is_our_proxy "$domain" "$port" || emit_err "refusing to delete a changed CloudPanel site: ${ADOPT_REJECT}"
   fi
 
-  if [[ -d $dir ]]; then
-    log "archiving instance data before purge"
-    # 0700: these archives contain the instance's master key, so the directory
-    # must not be traversable by other accounts on the box.
-    mkdir -p "$BACKUP_DIR"
-    chmod 700 "$BACKUP_DIR"
-    make_snapshot "$dir" "${BACKUP_DIR}/${domain}-deleted-$(date +%Y%m%d%H%M%S).tar.gz" || warn "final archive failed"
-    rm -rf "$dir"
+  # Keep data on every failure. In particular, never purge after a failed archive.
+  log "archiving instance data before deletion"
+  mkdir -p "$BACKUP_DIR"
+  chmod 700 "$BACKUP_DIR"
+  make_snapshot "$dir" "${BACKUP_DIR}/${domain}-deleted-$(date +%Y%m%d%H%M%S).tar.gz" \
+    || emit_err "final archive failed; nothing was deleted"
+
+  local containers
+  containers=$(docker ps -a --format '{{.Names}}') || emit_err "cannot query Docker; data preserved"
+  if printf '%s\n' "$containers" | grep -Fxq "$name"; then
+    docker rm -f "$name" >&2 || emit_err "container removal failed; data preserved"
   fi
+
+  if [[ $created == true && $count == 1 ]]; then
+    "$CLPCTL" site:delete --domainName="$domain" --force >&2 \
+      || emit_err "CloudPanel site deletion failed; archive and instance data preserved; retry Delete"
+  fi
+  rm -rf "$dir"
 
   emit_ok "{\"domain\":\"${domain}\",\"status\":\"deleted\"}"
 }

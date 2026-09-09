@@ -202,7 +202,7 @@ export function dashboardView(
       (i) => `<tr>
   <td>
     <a href="https://${esc(i.domain)}" target="_blank" rel="noreferrer noopener">${esc(i.domain)}</a>
-    <div class="mono" style="color:var(--muted)">${esc(i.container)}</div>
+    ${snapshotAge <= 3600 && !panelSites.some((s) => s.domain === i.domain) ? '<div class="hint">CloudPanel site missing. Delete here to archive and clean up the instance.</div>' : ''}
   </td>
   <td class="mono">127.0.0.1:${esc(i.port)}</td>
   <td>
@@ -210,7 +210,7 @@ export function dashboardView(
     ${behind(i.tag) ? `<span class="badge behind" title="${esc(latest)} is available">${esc(latest)} available</span>` : ""}
   </td>
   <td><span class="badge ${stateClass(i.state)}">${esc(i.state)}</span></td>
-  <td class="actions">
+  <td><details class="row-actions"><summary class="btn">Manage</summary><div class="actions">
     ${
       i.state === "running"
         ? `<button class="btn" onclick="act('${escJs(i.domain)}','stop')">Stop</button>`
@@ -222,7 +222,7 @@ export function dashboardView(
     <button class="btn" onclick="act('${escJs(i.domain)}','recreate')" title="Rebuild the container from the recorded version without touching the data">Recreate</button>
     <button class="btn" onclick="showLogs('${escJs(i.domain)}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${escJs(i.domain)}')">Delete</button>
-  </td>
+  </div></details></td>
 </tr>`
     )
     .join("\n");
@@ -249,12 +249,11 @@ export function dashboardView(
     <div class="hint">latest is ${esc(latest)}</div>
   </div>`;
 
-  return `${staleNotice}${versionNotice}
+  return `<div class="page-heading"><div><h2>Instatic sites</h2><p>Create and manage your Instatic instances.</p></div><a class="btn btn-primary" href="${BASE}/new">New site</a></div>${staleNotice}${versionNotice}
 <div class="card stats">
   <div class="stat"><div class="label">Instances</div><div class="value">${instances.length}</div></div>
   <div class="stat"><div class="label">Running</div><div class="value" style="color:var(--ok)">${running}</div></div>
   ${updatesTile}
-  <div class="stat"><div class="label">Next port</div><div class="value mono">${esc(nextPort)}</div></div>
 </div>
 
 <div class="card">
@@ -270,10 +269,9 @@ export function dashboardView(
 
 <details class="card">
   <summary style="cursor:pointer;color:var(--muted)">
-    All CloudPanel sites on this server (${panelSites.length}) — from the sanitized snapshot
+    All CloudPanel sites on this server (${panelSites.length})
   </summary>
-  <p class="hint">Read-only. Written by the privileged side; the manager never reads the panel
-    database itself. Useful for checking a hostname is free before creating an instance.</p>
+  <p class="hint">Check whether a hostname is already in use before creating an instance.</p>
   <table style="margin-top:0.75rem">
     <thead><tr><th>Domain</th><th>Type</th><th>Site user</th></tr></thead>
     <tbody>${
