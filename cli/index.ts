@@ -37,6 +37,7 @@ import { handle as handleStager } from "../addons/stager/app/index";
 import { splitMount } from "../lib/mount";
 import { SECURITY_HEADERS, esc } from "../lib/app-http";
 import { renderLayout } from "../lib/app-ui";
+import { checkCliUpdate } from "../lib/update-check";
 
 /**
  * Each addon's request handler, bundled into this binary.
@@ -47,7 +48,7 @@ import { renderLayout } from "../lib/app-ui";
  * that file is imported by the addons' own inject/targets.ts, and a value import
  * back the other way would close the cycle.
  */
-type AddonHandler = (req: Request, path: string) => Promise<Response>;
+type AddonHandler = (req: Request, path: string, updateNotice?: { current: string; latest: string } | null) => Promise<Response>;
 const MANAGERS: Record<string, AddonHandler> = {
   instatic: handleInstatic,
   stager: handleStager,
@@ -941,14 +942,17 @@ async function cmdServe(_argv: string[]): Promise<never> {
         headers: { ...Object.fromEntries(denied.headers), ...SECURITY_HEADERS },
       });
 
+      const update = await checkCliUpdate(CLI_VERSION);
+      const updateNotice = update && update.hasUpdate ? { current: update.current, latest: update.latest } : null;
+
       const hit = splitMount(path, mounted);
-      if (hit) return MANAGERS[hit.addon]!(req, hit.rest);
+      if (hit) return MANAGERS[hit.addon]!(req, hit.rest, updateNotice);
 
       // The root is an index rather than a redirect to whichever addon happens
       // to be first: with two installed, picking one is a guess, and the operator
       // arriving at the bare hostname is the one who does not yet know what is
       // here.
-      if (path === "/") return indexPage(mounted);
+      if (path === "/") return indexPage(mounted, updateNotice);
 
       return Response.json({ ok: false, error: "not found" }, { status: 404, headers: SECURITY_HEADERS });
     },
@@ -963,7 +967,7 @@ async function cmdServe(_argv: string[]): Promise<never> {
 }
 
 /** The bare hostname: what is installed, and where each one lives. */
-function indexPage(addons: string[]): Response {
+function indexPage(addons: string[], update?: { current: string; latest: string } | null): Response {
   const links = addons
     .map((n) => `<li><a href="${esc(mountPath(n))}/">${esc(n)}</a></li>`)
     .join("");
@@ -973,6 +977,7 @@ function indexPage(addons: string[]): Response {
       base: "",
       nav: [],
       script: "",
+      updateNotice: update,
     }),
     { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", ...SECURITY_HEADERS } }
   );
@@ -1011,9 +1016,84 @@ reconciliation timer calls it every 15 minutes to put the panel-side anchors
 back after a CloudPanel update.`);
 }
 
+
+async function cmdOverview(): Promise<void> {
+  log.plain(`
+  ____ _                 _ ____                  _      _       _     _                 
+ / ___| | ___  _   _  __| |  _ \\ __ _ _ __   ___| |    / \\   __| | __| | ___  _ __  ___ 
+| |   | |/ _ \\| | | |/ _\` | |_) / _\` | \x27_ \\ / _ \\ |   / _ \\ / _\` |/ _\` |/ _ \\| \x27_ \\/ __|
+| |___| | (_) | |_| | (_| |  __/ (_| | | | |  __/ |  / ___ \\ (_| | (_| | (_) | | | \\__ \\
+ \\____|_|\\___/ \\__,_|\\__,_|_|   \\__,_|_| |_|\\___|_| /_/   \\_\\__,_|\\__,_|\\___/|_| |_|___/
+                                       v${CLI_VERSION}
+`);
+
+  const update = await checkCliUpdate(CLI_VERSION);
+  if (update && update.hasUpdate) {
+    const padLen = Math.max(0, 48 - update.latest.length);
+    log.plain(`┌──────────────────────────────────────────────────────────────────────────┐`);
+    log.plain(`│  Update available: v${update.current} → v${update.latest}${" ".repeat(padLen)}│`);
+    log.plain(`│  Run: clp-addons update                                                  │`);
+    log.plain(`└──────────────────────────────────────────────────────────────────────────┘\n`);
+  }
+
+  const domain = platformDomain();
+  const installed = installedAddons();
+  const installedNames = new Set(installed.map((s) => s.name));
+  const available = ADDON_NAMES.filter((n) => !installedNames.has(n));
+
+  if (domain) {
+    const active = unitActive(MANAGER_UNIT);
+    const activeDot = active === "active" ? "\x1b[32m● active\x1b[0m" : `\x1b[33m● ${active}\x1b[0m`;
+    log.plain(`Platform:`);
+    log.plain(`  Manager site       https://${domain}`);
+    log.plain(`  Service            ${activeDot}`);
+    log.plain(``);
+  }
+
+  log.plain(`Active Addons (${installed.length}):`);
+  if (installed.length === 0) {
+    log.plain(`  (no addons installed yet)`);
+  } else {
+    for (const spec of installed) {
+      const url = domain ? `https://${domain}${mountPath(spec.name)}` : mountPath(spec.name);
+      const isUp = existsSync(spec.wrapperPath);
+      log.plain(`  • \x1b[1m${spec.name}\x1b[0m ${isUp ? "\x1b[32m● active\x1b[0m" : "\x1b[31m● missing wrapper\x1b[0m"}`);
+      log.plain(`    Mounted at: ${url}`);
+      if (spec.description) log.plain(`    ${spec.description}`);
+    }
+  }
+  log.plain(``);
+
+  if (available.length > 0) {
+    log.plain(`Available Addons (${available.length}):`);
+    for (const name of available) {
+      const spec = ADDONS[name]!;
+      log.plain(`  • \x1b[1m${spec.name}\x1b[0m: ${spec.description ?? "CloudPanel addon"}`);
+      log.plain(`    Install: clp-addons install ${name}`);
+    }
+    log.plain(``);
+  }
+
+  log.plain(`Quick Commands:`);
+  log.plain(`  clp-addons status              Full platform and addon diagnostics`);
+  if (update?.hasUpdate) {
+    log.plain(`  clp-addons update              \x1b[33mUpdate to v${update.latest}\x1b[0m`);
+  } else {
+    log.plain(`  clp-addons update              Update CLI and active addons`);
+  }
+  log.plain(`  clp-addons install <addon>     Install an addon (${ADDON_NAMES.join(", ")})`);
+  log.plain(`  clp-addons repair              Repair configuration and re-assert anchors`);
+  log.plain(`  clp-addons --help              Detailed command reference`);
+}
 async function main(): Promise<number> {
-  const [verb = "help", ...rest] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  if (args.length === 0) {
+    await cmdOverview();
+    return 0;
+  }
+  const [verb = "help", ...rest] = args;
   switch (verb) {
+    case "overview":     await cmdOverview(); return 0;
     case "--version":
     case "-v":
       log.plain(CLI_VERSION);

@@ -37,7 +37,7 @@ const MUTATING_VERBS = new Set(["start", "stop", "restart", "recreate", "delete"
 // router: a request for /instatic/api/... arrives here as /api/... .
 // Taking it as an argument rather than reading req.url is what keeps every route
 // below written as though this addon owned the site, which it used to.
-export async function handle(req: Request, path: string): Promise<Response> {
+export async function handle(req: Request, path: string, updateNotice?: { current: string; latest: string } | null): Promise<Response> {
   const method = req.method;
 
   // Liveness probe for systemd and the wrapper's health check. No auth
@@ -69,15 +69,17 @@ export async function handle(req: Request, path: string): Promise<Response> {
         const available = await listAvailableTags();
         return html(
           layout("Instatic instances",
-            dashboardView(instances, await instaticService.nextPort(), snapshotAge, panelSites, available, snapshotTakenAt)),
+            dashboardView(instances, await instaticService.nextPort(), snapshotAge, panelSites, available, snapshotTakenAt),
+            updateNotice
+          ),
           csrf
         );
       }
       const available = await listAvailableTags();
-      return html(layout("New Instatic site", newInstanceView(await instaticService.nextPort(), available)), csrf);
+      return html(layout("New Instatic site", newInstanceView(await instaticService.nextPort(), available), updateNotice), csrf);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return html(layout("Error", `<div class="alert">${msg.replace(/[<>&]/g, "")}</div>`), csrf, 500);
+      return html(layout("Error", `<div class="alert">${msg.replace(/[<>&]/g, "")}</div>`, updateNotice), csrf, 500);
     }
   }
 
