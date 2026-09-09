@@ -84,20 +84,20 @@ export async function handle(req: Request, path: string): Promise<Response> {
     } catch {
       return json({ ok: false, error: "body must be JSON" }, 400);
     }
-    const { domain: rawDomain, tag: rawTag } = (body ?? {}) as Record<string, unknown>;
+    const { domain: rawDomain, tag: rawTag, tls } = (body ?? {}) as Record<string, unknown>;
     const domain = validateDomain(rawDomain);
     const tag = validateTag(rawTag);
     if (!domain) return json({ ok: false, error: "domain is not a valid hostname" }, 400);
     if (!tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
 
-    const res = await instaticService.createInstance(domain, tag);
+    const res = await instaticService.createInstance(domain, tag, tls === true);
     return json(res, res.ok ? 200 : 400);
   }
 
   const m = path.match(/^\/api\/instances\/([^/]+)\/([a-z]+)$/);
   if (m) {
     const domain = validateDomain(decodeURIComponent(m[1]!));
-    const verb = m[2]!;
+    const verb = m[2]! ;
     if (!domain) return json({ ok: false, error: "domain is not a valid hostname" }, 400);
 
     if (verb === "logs" && method === "GET") {

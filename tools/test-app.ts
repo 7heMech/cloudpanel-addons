@@ -11,7 +11,7 @@
 // The Function constructor compiles without executing, which is exactly the
 // check that was missing.
 
-import { CLIENT_JS, dashboardView } from "../addons/instatic/app/views";
+import { CLIENT_JS, dashboardView, newInstanceView } from "../addons/instatic/app/views";
 import { BASE_CLIENT_JS } from "../lib/app-ui";
 import { CLIENT_JS as STAGER_CLIENT_JS, isSiteMissing, jobsView, jobView } from "../addons/stager/app/views";
 import type { JobView } from "../addons/stager/app/service";
@@ -1688,6 +1688,37 @@ if addon_needs_docker ${addons.map((a) => `'${a}'`).join(" ")}; then echo yes; e
   check("jobView links to staging site when present",
     presentDetail.includes('href="https://stg.example.com"') &&
     !presentDetail.includes("This staging site has been deleted from CloudPanel."));
+}
+
+
+console.log("\n== instatic TLS certificate option ==");
+{
+  const newView = newInstanceView(39001, { tags: ["0.0.18"], source: "registry", latest: "0.0.18" });
+  check("newInstanceView renders the TLS checkbox",
+    newView.includes("<input type=\"checkbox\" id=\"tls\"")
+    && newView.includes("Request a Let's Encrypt certificate immediately"));
+
+  const I = "addons/instatic/wrapper/clp-action-instatic";
+  const instatic = readFileSync(I, "utf-8");
+  check("clp-action-instatic create accepts --tls flag",
+    instatic.includes("--tls)")
+    && instatic.includes("validate_flag \"$TLS\" tls"));
+  check("clp-action-instatic requests certificate when tls is yes",
+    instatic.includes("if [[ $tls == \"yes\" ]]; then")
+    && instatic.includes("lets-encrypt:install:certificate --domainName=\"$domain\""));
+
+  const flagFn = bashFunction(I, "validate_flag");
+  const testFlag = (val: string) => {
+    try {
+      execFileSync("bash", ["-c", `${flagFn}\nemit_err() { exit 1; }\nvalidate_flag "\$1" test`, "_", val], { stdio: "pipe" });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  check("validate_flag accepts 'yes'", testFlag("yes"));
+  check("validate_flag accepts 'no'", testFlag("no"));
+  check("validate_flag rejects invalid values", !testFlag("maybe") && !testFlag("true") && !testFlag(""));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

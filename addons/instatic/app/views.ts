@@ -104,7 +104,7 @@ async function confirmUpdate() {
   // story, so show them rather than just the failure line.
   const logs = body && body.data && body.data.logs;
   document.getElementById('logs-title').textContent =
-    'Update failed \u2014 rolled back to ' + ((body && body.data && body.data.restoredTag) || 'the previous version');
+    'Update failed \\u2014 rolled back to ' + ((body && body.data && body.data.restoredTag) || 'the previous version');
   document.getElementById('logs-body').textContent =
     ((body && body.error) || 'update failed') + (logs ? '\\n\\n--- container logs ---\\n' + logs : '');
   document.getElementById('logs-dialog').showModal();
@@ -136,6 +136,7 @@ async function submitCreate(ev) {
   ev.preventDefault();
   const domain = document.getElementById('domain').value.trim().toLowerCase();
   const tag = document.getElementById('tag').value;
+  const tls = document.getElementById('tls').checked;
   const status = document.getElementById('create-status');
   busy(true);
   status.textContent = 'Creating the site, pulling ' + tag + ' and waiting for a health check. This can take a couple of minutes\\u2026';
@@ -143,7 +144,7 @@ async function submitCreate(ev) {
     await call('/api/instances', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ domain: domain, tag: tag })
+      body: JSON.stringify({ domain: domain, tag: tag, tls: tls })
     });
     location.href = CLP_BASE + '/';
   } catch (e) {
@@ -360,6 +361,13 @@ export function newInstanceView(nextPort: number, available: AvailableTags): str
     <input id="port" value="${esc(nextPort)}" readonly>
     <div class="hint">Allocated from the reserved range and bound to 127.0.0.1 only.
       Changing an instance's port later is a manual edit in the panel's vhost editor.</div>
+
+    <label for="tls" style="display:flex;align-items:center;gap:0.5rem;margin-top:1.25rem;">
+      <input type="checkbox" id="tls" style="width:auto;">
+      Request a Let's Encrypt certificate immediately
+    </label>
+    <div class="hint">Works only if the domain already resolves to this server. Leave off if DNS is still propagating,
+      and you issue it later from Site → SSL/TLS.</div>
 
     <div class="actions" style="margin-top:1.25rem">
       <button type="submit" class="btn btn-primary">Create site</button>
