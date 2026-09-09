@@ -11,6 +11,8 @@
 // The Function constructor compiles without executing, which is exactly the
 // check that was missing.
 
+// The .test.ts suffix keeps this suite in Bun's default discovery set.
+import { expect, test } from "bun:test";
 import { CLIENT_JS, dashboardView, isInstanceMissing, newInstanceView } from "../addons/instatic/app/views";
 import { BASE_CLIENT_JS, renderLayout } from "../lib/app-ui";
 import { headerTarget, headerUpdateScript } from "../lib/panel-nav";
@@ -30,12 +32,10 @@ import { authCookie, verifyToken } from "../lib/sso-auth";
 import { getNextAvailablePort } from "../lib/snapshot-reader";
 import type { PanelSnapshot } from "../lib/snapshot-reader";
 
-let failed = 0;
-let passed = 0;
-
 function check(label: string, cond: boolean, detail = ""): void {
-  if (cond) { console.log(`  ok    ${label}`); passed++; }
-  else { console.log(`  FAIL  ${label}${detail ? `: ${detail}` : ""}`); failed++; }
+  test.serial(label, () => {
+    expect(cond, detail).toBe(true);
+  });
 }
 
 // Checked as the browser receives it: the shared helpers and the addon's own
@@ -1749,6 +1749,3 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   check("headerTarget includes update check script", snip.includes("window.__clpAddonsUpdateInit"));
   check("headerTarget embeds the configured version", snip.includes("\"0.9.3\""));
 }
-
-console.log(`\n${passed} passed, ${failed} failed`);
-process.exit(failed === 0 ? 0 : 1);

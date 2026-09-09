@@ -10,17 +10,18 @@
 //
 // Runs against a throwaway template, never the panel's own.
 
+// The .test.ts suffix keeps this suite in Bun's default discovery set.
+import { expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, symlinkSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { NGINX_PROXY_BLOCK, inspectNginxProxy, reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
 import { headerTarget } from "../lib/panel-nav";
 import type { AddonTarget } from "../cli/paths";
 
-let failed = 0;
-let passed = 0;
 function check(label: string, cond: boolean, detail = ""): void {
-  if (cond) { console.log(`  ok    ${label}`); passed++; }
-  else { console.log(`  FAIL  ${label}${detail ? `: ${detail}` : ""}`); failed++; }
+  test.serial(label, () => {
+    expect(cond, detail).toBe(true);
+  });
 }
 
 // Everything happens under a temporary directory: this must not touch the
@@ -151,5 +152,3 @@ check("Nginx disable failure restores the previously active proxy",
 rmSync(nginxDisableFailureDir, { recursive: true, force: true });
 
 rmSync(dir, { recursive: true, force: true });
-console.log(`\n${passed} passed, ${failed} failed`);
-process.exit(failed === 0 ? 0 : 1);
