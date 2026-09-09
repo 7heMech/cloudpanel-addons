@@ -123,7 +123,10 @@ if [[ $VERSION == "latest" ]]; then
   RELEASE_JSON=$(api "https://api.github.com/repos/${REPO}/releases/latest") \
     || die "could not reach the GitHub API to resolve the latest release"
 else
-  [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] || die "--version must look like v0.1.0, got '$VERSION'"
+  # Anchored at both ends: this becomes a URL path segment and, through the
+  # tag, a directory root writes to. Unanchored, 'v1.2.3/../..' passed.
+  [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+    || die "--version must look like v0.1.0, got '$VERSION'"
   step "resolving release ${VERSION}"
   RELEASE_JSON=$(api "https://api.github.com/repos/${REPO}/releases/tags/${VERSION}") \
     || die "no such release: ${VERSION}"
@@ -244,8 +247,13 @@ elif command -v gh >/dev/null; then
   # signed and bound to its subject's digest, so an attacker who can replace an
   # asset cannot produce one that verifies against the replacement.
   if curl -fsSL -o "${TMP}/attestations.jsonl" "${BASE}/attestations.jsonl"; then
+    # --signer-workflow, not just --repo: with only the repo, any workflow in it
+    # that can mint an attestation satisfies the check, so a pull_request or
+    # workflow_dispatch job added later would be enough. Releases come from one
+    # workflow and this says so.
     if gh attestation verify "${TMP}/${CLI_ARTIFACT}" \
-         --bundle "${TMP}/attestations.jsonl" --repo "$REPO" >/dev/null 2>&1; then
+         --bundle "${TMP}/attestations.jsonl" --repo "$REPO" \
+         --signer-workflow "${REPO}/.github/workflows/release.yml" >/dev/null 2>&1; then
       ok "provenance verified against ${REPO}"
     else
       die "provenance verification failed. ${CLI_ARTIFACT} does not match any attestation for ${REPO}."
@@ -255,8 +263,18 @@ elif command -v gh >/dev/null; then
 release was not produced by the release workflow. Refusing to install from it."
   fi
 else
-  warn "gh is not installed, so provenance was not verified (checksum only)"
-  warn "  install the GitHub CLI for the stronger check, or pass --skip-attestation to silence this"
+  # Not a warning. The next two lines install this artifact as root and run it,
+  # and SHA256SUMS came down the same channel as the artifact -- a checksum
+  # detects corruption, not substitution. gh is absent on a stock Debian and so
+  # this was the *default* path, which made the strongest check the one almost
+  # nobody got. Refusing here makes the downgrade something an operator chooses.
+  die "gh is not installed, so build provenance cannot be verified.
+
+  apt-get install gh   (or see https://github.com/cli/cli#installation)
+
+Provenance is what detects a substituted binary; the checksum only detects a
+corrupted one, and it travelled with the artifact. To install anyway, knowing
+that, re-run with --skip-attestation."
 fi
 
 step "installing ${CLI_TARGET}"

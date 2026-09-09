@@ -25,6 +25,8 @@ import { cachedArtifact } from "../cli/release";
 import { describeAuthState, releaseArtifacts, siteUserFor, type SiteAuthState } from "../cli/provision";
 import { ADDONS, ADDON_NAMES, CLI_ARTIFACT } from "../cli/paths";
 import { mountPath, splitMount } from "../lib/mount";
+import { formatAuth, guardAuth, resetAuthCache } from "../lib/manager-auth";
+import { escJs } from "../lib/app-http";
 import { getNextAvailablePort } from "../lib/snapshot-reader";
 import type { PanelSnapshot } from "../lib/snapshot-reader";
 
@@ -1495,6 +1497,97 @@ console.log("\n== addons are told apart by the path they are mounted at ==");
   for (const name of ADDON_NAMES) {
     check(`${name} is reachable at ${mountPath(name)}`,
       hit(`${mountPath(name)}/x`) === `${name}:/x`, hit(`${mountPath(name)}/x`));
+  }
+}
+
+// The gate that stops the account already on the box. Everything here failed
+// against the code as shipped in v0.8.0, where the app authenticated nothing
+// and a site user reached the root wrapper over loopback.
+{
+  console.log("\n== the manager authenticates its own callers ==");
+
+  const dir = mkdtempSync(`${tmpdir()}/clp-auth-`);
+  const file = `${dir}/manager-auth`;
+  const basic = (u: string, p: string) =>
+    new Request("http://127.0.0.1:38080/instatic/api/instances", {
+      headers: { authorization: `Basic ${Buffer.from(`${u}:${p}`).toString("base64")}` },
+    });
+  const bare = () => new Request("http://127.0.0.1:38080/instatic/api/instances");
+  const guard = (req: Request) => { resetAuthCache(); return guardAuth(req, file); };
+
+  // Fail closed. An install that has not written a credential serves nothing --
+  // the opposite of the old ordering, which started the service and then
+  // advised adding Basic Auth.
+  check("no credential file means the manager refuses everything",
+    guard(bare())?.status === 503);
+  check("a credential file cannot be bypassed by simply omitting the header",
+    (writeFileSync(file, formatAuth("clpaddons", "s3cret")), guard(bare())?.status) === 401);
+
+  check("the right credential is let through", guard(basic("clpaddons", "s3cret")) === null);
+  check("a wrong password is refused", guard(basic("clpaddons", "s3cret "))?.status === 401);
+  check("a wrong username is refused", guard(basic("clpaddon", "s3cret"))?.status === 401);
+  check("an empty password is refused", guard(basic("clpaddons", ""))?.status === 401);
+
+  // The header is attacker-controlled, so every malformed shape must land on
+  // 401 rather than on a throw that the request promise cannot catch.
+  const raw = (v: string) => new Request("http://127.0.0.1:38080/x", { headers: { authorization: v } });
+  check("a non-Basic scheme is refused", guard(raw("Bearer abcdef"))?.status === 401);
+  check("Basic with no credentials is refused", guard(raw("Basic"))?.status === 401);
+  check("undecodable base64 is refused", guard(raw("Basic !!!!"))?.status === 401);
+  check("base64 with no colon is refused",
+    guard(raw(`Basic ${Buffer.from("nocolonhere").toString("base64")}`))?.status === 401);
+  check("an oversized header is refused without hashing it",
+    guard(raw(`Basic ${"A".repeat(9000)}`))?.status === 401);
+  check("a 401 tells the client how to authenticate",
+    guard(bare())?.headers.get("www-authenticate")?.startsWith("Basic ") === true);
+
+  // A password containing a colon is legal in Basic auth: only the first colon
+  // separates the fields.
+  writeFileSync(file, formatAuth("clpaddons", "pa:ss:word"));
+  check("a password containing colons round-trips", guard(basic("clpaddons", "pa:ss:word")) === null);
+
+  // The stored form is a hash, not the password, and a fresh salt each time
+  // means two files for the same password never match byte for byte.
+  const a = formatAuth("clpaddons", "same");
+  const b = formatAuth("clpaddons", "same");
+  check("the credential is not stored in the clear", !a.includes("same"));
+  check("two hashes of one password differ", a !== b);
+  check("both still verify",
+    (writeFileSync(file, a), guard(basic("clpaddons", "same")) === null) &&
+    (writeFileSync(file, b), guard(basic("clpaddons", "same")) === null));
+
+  // A truncated or hand-mangled file must read as "no credential" -- 503 --
+  // rather than as an empty credential that anything matches.
+  for (const [label, body] of [
+    ["an empty file", ""],
+    ["comments only", "# nothing here\n"],
+    ["no separator", "clpaddonsnohash\n"],
+    ["an unknown hash format", "clpaddons:$2y$10$abcdefghijklmnop\n"],
+    ["a truncated salt", "clpaddons:$s1$AAAA$AAAA\n"],
+  ] as const) {
+    writeFileSync(file, body);
+    check(`${label} is treated as no credential, not as a match`, guard(bare())?.status === 503);
+  }
+
+  rmSync(dir, { recursive: true, force: true });
+}
+
+// escJs writes into a single-quoted JS string that itself sits inside a
+// double-quoted HTML attribute, so a character that is inert to JavaScript can
+// still end the attribute.
+{
+  console.log("\n== escJs may not break out of the attribute it sits in ==");
+  check("a double quote does not survive as a quote", !escJs('a"b').includes('"'));
+  check("a single quote is escaped", escJs("a'b") === "a\\'b");
+  check("a tag opener cannot start markup", !escJs("</script>").includes("<"));
+  check("a tag closer is escaped too", !escJs("</script>").includes(">"));
+  check("an ampersand cannot start an entity", !escJs("&amp;").includes("&"));
+  check("a newline stays an escape sequence", escJs("a\nb") === "a\\nb");
+  check("ordinary text is untouched", escJs("stg.example.com") === "stg.example.com");
+  // The whole point: what comes out must still be the input to JavaScript.
+  for (const v of ['a"b', "a'b", "</script>", "&amp;", "a\nb", "µ—ü"]) {
+    check(`${JSON.stringify(v)} still means itself to JavaScript`,
+      new Function(`return '${escJs(v)}'`)() === v);
   }
 }
 

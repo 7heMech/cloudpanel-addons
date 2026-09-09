@@ -91,9 +91,25 @@ export function esc(value: unknown): string {
     .replaceAll("'", "&#39;");
 }
 
-/** Escape for interpolation into a single-quoted JavaScript string literal. */
+/**
+ * Escape for interpolation into a single-quoted JavaScript string literal.
+ *
+ * The `"` case is not decoration. These literals are emitted inside `onclick`
+ * and friends, so the string sits within a double-quoted HTML attribute, and
+ * JSON.stringify renders a quote as the two characters `\"` -- a backslash,
+ * which HTML does not read, followed by a quote, which closes the attribute.
+ * Escaping it as \u0022 keeps it a quote to JavaScript and nothing at all to
+ * the HTML parser. No caller can reach it today, because the domain and tag
+ * patterns forbid a quote, but the function is the thing that promises safety.
+ */
 export function escJs(value: unknown): string {
-  return JSON.stringify(String(value)).slice(1, -1).replaceAll("'", "\\'").replaceAll("<", "\\u003c");
+  return JSON.stringify(String(value))
+    .slice(1, -1)
+    .replaceAll('\\"', "\\u0022")
+    .replaceAll("'", "\\'")
+    .replaceAll("<", "\\u003c")
+    .replaceAll(">", "\\u003e")
+    .replaceAll("&", "\\u0026");
 }
 
 export const SECURITY_HEADERS: Record<string, string> = {

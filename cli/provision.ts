@@ -3,15 +3,17 @@
 // implementation of "make the box match what should be installed", or the
 // reconciliation timer and the installer drift apart.
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, renameSync, readdirSync } from "node:fs";
 import {
   ADDONS, ANCHOR_SERVICE, CLI_ARTIFACT, CLI_BIN, CONFIG_DIR, CURRENT_LINK, LEGACY_USERS, LIB_DIR, LOCK_DIR,
-  LEGACY_UNITS, MANAGER_PORT, MANAGER_UNIT, PANEL_DB, PLATFORM_CONFIG, RECONCILE_PATH, RECONCILE_SERVICE, RECONCILE_TIMER,
+  LEGACY_UNITS, MANAGER_AUTH_FILE, MANAGER_PORT, MANAGER_UNIT, PANEL_DB, PLATFORM_CONFIG, RECONCILE_PATH,
+  RECONCILE_SERVICE, RECONCILE_TIMER,
   RELEASES_DIR, SHARED_GROUP, STATE_DIR, SYSTEMD_DIR,
   templateWatchPaths, type AddonSpec,
 } from "./paths";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
+import { formatAuth } from "../lib/manager-auth";
 import type { FetchedArtifact } from "./release";
 
 // --- accounts ---------------------------------------------------------------
@@ -115,6 +117,101 @@ export function siteBasicAuth(domain: string): SiteAuthState {
     return { panelManaged: false, active: true, ipAllowlist: false, vhostOnly: true };
   }
   return none;
+}
+
+/**
+ * The credential the operator set in Site → Security, if it is usable.
+ *
+ * CloudPanel stores it in the clear -- `basic_auth.password` on this box held a
+ * readable eight-character string -- so the panel's own record, not the
+ * htpasswd file, is what can be reused. That matters: the file it writes into
+ * /etc/nginx/basic-auth holds a 13-character DES `crypt(3)` hash, which
+ * truncates the password at eight characters and is fast to attack offline. We
+ * take the plaintext, hash it with scrypt, and keep only that.
+ *
+ * Returns null when the panel has no active record, or when the stored value
+ * does not look like plaintext -- if a future CloudPanel starts hashing it,
+ * re-hashing the hash would silently make the manager unopenable, so the
+ * ambiguous case declines rather than guesses.
+ */
+export function panelBasicAuthCredential(domain: string): { user: string; password: string } | null {
+  if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(domain)) return null;
+
+  // Two queries rather than one row: a password may contain sqlite's column
+  // separator, and splitting on it would truncate the credential.
+  const q = (col: string) => tryRun("sqlite3", ["-readonly", PANEL_DB,
+    `SELECT b.${col} FROM site s JOIN basic_auth b ON b.id = s.basic_auth_id` +
+    ` WHERE s.domain_name = '${domain}' AND b.is_active = 1;`]);
+
+  const u = q("user_name");
+  const p = q("password");
+  if (!u.ok || !p.ok) return null;
+  const user = u.out.replace(/\n$/, "");
+  const password = p.out.replace(/\n$/, "");
+  if (!user || !password) return null;
+
+  // crypt(3) DES is 13 chars of [./0-9A-Za-z]; the modular formats all start $.
+  if (password.startsWith("$") || /^[./0-9A-Za-z]{13}$/.test(password)) return null;
+  return { user, password };
+}
+
+export type ManagerAuthSource = "panel" | "existing" | "generated";
+export interface ManagerAuthResult {
+  source: ManagerAuthSource;
+  user: string;
+  /** Only for `generated`: shown once, never stored in the clear. */
+  password?: string;
+}
+
+/**
+ * Put a credential on disk for the manager to check requests against.
+ *
+ * The manager refuses to serve without this file, so provisioning has to be the
+ * thing that creates it -- and has to create it before the unit starts. The
+ * install used to start the service and then advise adding Basic Auth, which
+ * left a live root-equivalent API on every box whose operator did not act on
+ * the advice.
+ *
+ * Preference order is deliberate. The panel's credential wins when there is
+ * one, so an operator who sets Basic Auth in Site → Security has one password
+ * for both gates rather than two. An existing file is kept rather than rotated,
+ * because `repair` runs from a timer and silently changing the password out
+ * from under a working install is its own outage. Only a box with neither gets
+ * a generated one, which is printed once.
+ */
+export function writeManagerAuth(domain: string, user: string, quiet = false): ManagerAuthResult {
+  const panel = panelBasicAuthCredential(domain);
+  if (panel) {
+    const body = `# clp-addons manager credential.\n` +
+      `# Reused from this site's CloudPanel Basic Auth, re-hashed with scrypt.\n` +
+      `# Change it in Site → Security → Basic Auth, then run: clp-addons repair\n` +
+      formatAuth(panel.user, panel.password);
+    writeAtomic(MANAGER_AUTH_FILE, body, 0o640);
+    run("chown", [`root:${user}`, MANAGER_AUTH_FILE]);
+    if (!quiet) log.ok(`manager credential taken from CloudPanel Basic Auth (user ${panel.user})`);
+    return { source: "panel", user: panel.user };
+  }
+
+  if (existsSync(MANAGER_AUTH_FILE)) {
+    // Re-assert ownership and mode, which is the part `repair` is for. The
+    // contents are the operator's.
+    run("chown", [`root:${user}`, MANAGER_AUTH_FILE]);
+    chmodSync(MANAGER_AUTH_FILE, 0o640);
+    const existing = readFileSync(MANAGER_AUTH_FILE, "utf-8");
+    const named = existing.split("\n").find((l) => l.trim() && !l.startsWith("#"))?.split(":")[0] ?? "clpaddons";
+    return { source: "existing", user: named };
+  }
+
+  // 24 bytes of base64url: enough that the scrypt cost is irrelevant to an
+  // attacker, and short enough to be pasted into a browser prompt.
+  const password = randomBytes(24).toString("base64url");
+  const body = `# clp-addons manager credential, generated at install.\n` +
+    `# To use one password for both this and the vhost, set Site → Security →\n` +
+    `# Basic Auth in CloudPanel and run: clp-addons repair\n` +
+    formatAuth("clpaddons", password);
+  writeAtomic(MANAGER_AUTH_FILE, body, 0o640);
+  run("chown", [`root:${user}`, MANAGER_AUTH_FILE]);
+  return { source: "generated", user: "clpaddons", password };
 }
 
 /** How a site's protection reads in `status`. Pure, so it is testable without a panel. */

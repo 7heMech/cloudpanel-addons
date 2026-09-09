@@ -223,10 +223,16 @@ export async function verifyAttestation(
     for (const a of artifacts) {
       const artifactPath = `${dir}/${a.name}`;
       writeFileSync(artifactPath, a.bytes);
+      // --signer-workflow as well as --repo. With only --repo, any workflow in
+      // the repository that can mint an attestation satisfies the check, so a
+      // pull_request or workflow_dispatch job added later -- by anyone who can
+      // land a workflow file -- would produce artifacts that verify. Releases
+      // come from exactly one workflow, and this is where that is asserted.
       const r = tryRun("gh", [
         "attestation", "verify", artifactPath,
         "--bundle", bundlePath,
         "--repo", REPO,
+        "--signer-workflow", `${REPO}/.github/workflows/release.yml`,
       ]);
       if (!r.ok) {
         fatal(
