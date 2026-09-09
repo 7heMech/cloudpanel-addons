@@ -59,7 +59,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
-          shellcheck -S warning addons/*/wrapper/* tools/*.sh install.sh
+          shellcheck -S warning addons/*/wrapper/* libexec/* tools/*.sh install.sh
 
       - name: Resolve the version from the tag
         id: version
@@ -73,7 +73,7 @@ jobs:
           mkdir -p dist
 
           # One binary: the CLI and every addon's manager, selected at runtime by
-          # `clp-addons serve <addon>`. Three artifacts meant three copies of the
+          # `clp-addons serve`. Three artifacts meant three copies of the
           # same 77.5 MB Bun runtime to carry ~100 KB of code between them.
           #
           # recon showed avx2 on the target CPU, so the standard glibc x64
@@ -98,6 +98,7 @@ jobs:
           for w in addons/*/wrapper/*; do
             install -m 0755 "$w" "dist/$(basename "$w")"
           done
+          install -m 0755 libexec/clp-verify-session dist/clp-verify-session
 
       - name: Generate SHA256SUMS
         run: |
@@ -136,6 +137,7 @@ jobs:
             dist/clp-addons-linux-x64
             dist/clp-action-instatic
             dist/clp-action-stager
+            dist/clp-verify-session
             dist/install.sh
 
       - name: Publish the sigstore bundles alongside the artifacts
@@ -212,6 +214,7 @@ jobs:
             dist/clp-addons-linux-x64 \
             dist/clp-action-instatic \
             dist/clp-action-stager \
+            dist/clp-verify-session \
             dist/install.sh \
             dist/attestations.jsonl \
             dist/SHA256SUMS

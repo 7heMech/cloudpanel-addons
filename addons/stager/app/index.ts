@@ -1,8 +1,6 @@
 // Entry point for the Stager manager service.
 //
-// Served at the root of its own CloudPanel reverse-proxy site (decision 2.4),
-// not under a path prefix on the panel's vhost. Bound to 127.0.0.1 so the only
-// route in is that site's nginx vhost, which carries the per-site security.
+// The manager router strips the /addons/ prefix before dispatching here.
 
 import { stagerService, validateDomain, validateJobId, expandTarget } from "./service";
 import type { JobView } from "./service";
@@ -82,7 +80,7 @@ function json(body: unknown, status = 200): Response {
 // The whole request surface, exported so the one manager process can mount it.
 //
 // `path` is this addon's own path, with the mount prefix already stripped by the
-// router: a request for /stager/api/... arrives here as /api/... .
+// router: a request for /addons/stager/api/... arrives here as /api/... .
 // Taking it as an argument rather than reading req.url is what keeps every route
 // below written as though this addon owned the site, which it used to.
 export async function handle(req: Request, path: string, updateNotice?: { current: string; latest: string } | null): Promise<Response> {

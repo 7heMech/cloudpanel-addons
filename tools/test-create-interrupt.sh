@@ -10,7 +10,7 @@
 
 set -uo pipefail
 
-W=/usr/local/lib/clp-addons/clp-action-instatic
+W=/usr/local/libexec/clp-addons/clp-action-instatic
 DOMAIN=${1:-interrupt-test.clp-stg.local}
 PANEL_DB=/home/clp/htdocs/app/data/db.sq3
 STATE=/var/lib/clp-addons/instatic/${DOMAIN}

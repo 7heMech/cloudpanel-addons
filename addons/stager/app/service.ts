@@ -46,7 +46,7 @@ function runCommand(
   });
 }
 
-const WRAPPER_BIN = process.env.STAGER_WRAPPER || "/usr/local/lib/clp-addons/clp-action-stager";
+const WRAPPER_BIN = process.env.STAGER_WRAPPER || "/usr/local/libexec/clp-addons/clp-action-stager";
 const SUDO_BIN = "/usr/bin/sudo";
 
 // `clone` only writes a job record and hands the work to systemd, so it

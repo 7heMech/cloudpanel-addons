@@ -29,8 +29,12 @@
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync } from "node:fs";
-import { TEMPLATE_STATE_DIR, TEMPLATES_DIR, TWIG_CACHE_DIR, type AddonTarget } from "./paths";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync, realpathSync } from "node:fs";
+import {
+  NGINX_PROXY_STATE_DIR, NGINX_SITES_DIR, TEMPLATE_STATE_DIR, TEMPLATES_DIR, TWIG_CACHE_DIR,
+  type AddonTarget,
+} from "./paths";
+import { writeAtomic } from "./util";
 
 // CloudPanel versions this patch's markup assumptions were verified against.
 // A version outside this list is not fatal, but the hash gate below is what
@@ -71,10 +75,6 @@ function resolvePaths(p?: Partial<InjectPaths>): InjectPaths {
 
 function sha256(s: string): string {
   return createHash("sha256").update(s).digest("hex");
-}
-
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 const startMarker = (addon: string, slug: string) => `{# clp-addons:${addon}:${slug}:start #}`;
@@ -315,4 +315,284 @@ export function panelVersion(): string {
   } catch {
     return "unknown";
   }
+}
+
+export const NGINX_PROXY_BLOCK = `    # clp-addons:proxy:start
+    location /addons/ {
+        proxy_pass http://unix:/run/clp-addons/manager.sock:/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+    }
+    # clp-addons:proxy:end`;
+
+const NGINX_PROXY_BLOCK_RE = /\n?[ \t]*# clp-addons:proxy:start[\s\S]*?[ \t]*# clp-addons:proxy:end\n?/g;
+
+export interface NginxPaths {
+  vhostPath?: string;
+  sitesDir?: string;
+  stateDir?: string;
+}
+
+export type NginxProxyState =
+  | "ok"
+  | "missing"
+  | "stale-content"
+  | "upstream-changed"
+  | "conflict"
+  | "validation-failed";
+
+export interface NginxProxyStatus {
+  state: NginxProxyState;
+  vhostPath?: string;
+  detail?: string;
+}
+
+export interface NginxReconcileResult extends NginxProxyStatus {
+  changed: boolean;
+}
+
+function nginxPaths(options: NginxPaths): Required<NginxPaths> {
+  return {
+    vhostPath: options.vhostPath ?? "",
+    sitesDir: options.sitesDir ?? NGINX_SITES_DIR,
+    stateDir: options.stateDir ?? NGINX_PROXY_STATE_DIR,
+  };
+}
+
+function readNginxFile(path: string): string | null {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+function candidateScore(path: string, content: string): number {
+  const name = path.split("/").pop()?.toLowerCase() ?? "";
+  let score = 0;
+  if (name === "cloudpanel.conf" || name.startsWith("cloudpanel")) score += 100;
+  if (name === "default" || name === "default.conf") score += 40;
+  if (/listen\s+[^;]*\b8443\b/.test(content)) score += 80;
+  if (/\/home\/clp\/htdocs/.test(content)) score += 30;
+  if (/server_name\s+[^;]+;/.test(content)) score += 10;
+  return score;
+}
+
+export function findMasterVhost(options: NginxPaths = {}): string | null {
+  const explicit = options.vhostPath || process.env.CLP_ADDONS_NGINX_VHOST;
+  if (explicit) return existsSync(explicit) ? explicit : null;
+
+  const dir = options.sitesDir ?? NGINX_SITES_DIR;
+  if (!existsSync(dir)) return null;
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name) => !name.startsWith("."));
+  } catch {
+    return null;
+  }
+
+  let best: { path: string; score: number } | null = null;
+  for (const name of names) {
+    const path = `${dir}/${name}`;
+    const content = readNginxFile(path);
+    if (content === null || !/\bserver\s*\{/.test(content)) continue;
+    const score = candidateScore(path, content);
+    if (!best || score > best.score) best = { path, score };
+  }
+  return best?.path ?? null;
+}
+
+export function masterVhostHost(options: NginxPaths = {}): string | null {
+  const path = findMasterVhost(options);
+  if (!path) return null;
+  const content = readNginxFile(path);
+  const match = content?.match(/\bserver_name\s+([^;]+);/);
+  if (!match) return null;
+  return match[1]!.split(/\s+/).find((name) => name !== "_" && name !== "localhost") ?? null;
+}
+
+function stripNginxProxy(content: string): string {
+  return content.replace(NGINX_PROXY_BLOCK_RE, "");
+}
+
+function matchingBrace(content: string, open: number): number | null {
+  let depth = 0;
+  let quote = "";
+  let comment = false;
+  for (let i = open; i < content.length; i++) {
+    const ch = content[i];
+    if (comment) {
+      if (ch === "\n") comment = false;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote && content[i - 1] !== "\\") quote = "";
+      continue;
+    }
+    if (ch === "#") {
+      comment = true;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "{") depth++;
+    if (ch === "}" && --depth === 0) return i;
+  }
+  return null;
+}
+
+function serverBlocks(content: string): { start: number; end: number; body: string }[] {
+  const blocks: { start: number; end: number; body: string }[] = [];
+  const re = /\bserver\s*\{/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(content))) {
+    const open = content.indexOf("{", match.index);
+    const end = matchingBrace(content, open);
+    if (end === null) continue;
+    blocks.push({ start: match.index, end, body: content.slice(match.index, end + 1) });
+    re.lastIndex = end + 1;
+  }
+  return blocks;
+}
+
+function renderNginxProxy(content: string, enabled: boolean): { content?: string; state?: "conflict" } {
+  if (!enabled) return { content: stripNginxProxy(content) };
+  const upstream = stripNginxProxy(content);
+  if (/\blocation\s+(?:=\s*)?\/addons\//.test(upstream)) return { state: "conflict" };
+
+  const blocks = serverBlocks(upstream);
+  const target = blocks.find((block) => /\blisten\s+[^;]*\b8443\b/.test(block.body)) ?? blocks[0];
+  if (!target) return { state: "conflict" };
+  return {
+    content: `${upstream.slice(0, target.end)}\n${NGINX_PROXY_BLOCK}\n${upstream.slice(target.end)}`,
+  };
+}
+
+function nginxStateFiles(stateDir: string): { pristine: string; hash: string; path: string } {
+  return {
+    pristine: `${stateDir}/vhost.pristine`,
+    hash: `${stateDir}/vhost.sha256`,
+    path: `${stateDir}/vhost.path`,
+  };
+}
+
+function commandFailure(command: string, args: string[]): string | null {
+  try {
+    execFileSync(command, args, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+    return null;
+  } catch (err) {
+    const e = err as { stdout?: string; stderr?: string; message?: string };
+    return (e.stderr || e.stdout || e.message || `${command} failed`).toString().trim();
+  }
+}
+
+function restoreNginxPristine(path: string, pristine: string): void {
+  const mode = statSync(path).mode & 0o777;
+  writeAtomic(path, pristine, mode);
+}
+
+function removeNginxState(files: { pristine: string; hash: string; path: string }): void {
+  rmSync(files.pristine, { force: true });
+  rmSync(files.hash, { force: true });
+  rmSync(files.path, { force: true });
+}
+
+export function inspectNginxProxy(options: NginxPaths = {}): NginxProxyStatus {
+  const path = findMasterVhost(options);
+  if (!path) return { state: "missing", detail: "CloudPanel master vhost was not found" };
+  const content = readNginxFile(path);
+  if (content === null) return { state: "missing", vhostPath: path, detail: "vhost could not be read" };
+  const files = nginxStateFiles(options.stateDir ?? NGINX_PROXY_STATE_DIR);
+  if (existsSync(files.hash)) {
+    const expected = readFileSync(files.hash, "utf-8").trim();
+    const found = sha256(stripNginxProxy(content));
+    if (expected !== found) {
+      return { state: "upstream-changed", vhostPath: path, detail: "CloudPanel rewrote the master vhost" };
+    }
+  }
+  if (!content.includes("# clp-addons:proxy:start")) {
+    return { state: "missing", vhostPath: path, detail: "proxy block is not installed" };
+  }
+  if (!content.includes(NGINX_PROXY_BLOCK)) {
+    return { state: "stale-content", vhostPath: path, detail: "proxy block differs from the managed definition" };
+  }
+  return { state: "ok", vhostPath: path };
+}
+
+export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; reload?: boolean } = {}): NginxReconcileResult {
+  const { enabled = true, reload = true, ...paths } = options;
+  const p = nginxPaths(paths);
+  const selectedPath = findMasterVhost(p);
+  if (!selectedPath) {
+    return { state: "missing", changed: false, detail: "CloudPanel master vhost was not found" };
+  }
+  const vhostPath = (() => {
+    try {
+      return realpathSync(selectedPath);
+    } catch {
+      return selectedPath;
+    }
+  })();
+
+  const onDisk = readNginxFile(selectedPath);
+  if (onDisk === null) return { state: "missing", changed: false, vhostPath: selectedPath, detail: "vhost could not be read" };
+
+  const files = nginxStateFiles(p.stateDir);
+  mkdirSync(p.stateDir, { recursive: true });
+  const upstream = stripNginxProxy(onDisk);
+  const found = sha256(upstream);
+  let pristine: string | null = null;
+  try {
+    const stored = readFileSync(files.pristine, "utf-8");
+    const recorded = readFileSync(files.hash, "utf-8").trim();
+    if (recorded === sha256(stored) && recorded === found) pristine = stored;
+  } catch {
+    pristine = null;
+  }
+  if (pristine === null) {
+    pristine = upstream;
+    writeAtomic(files.pristine, pristine, 0o600);
+    writeAtomic(files.hash, `${found}\n`, 0o600);
+    writeAtomic(files.path, `${vhostPath}\n`, 0o600);
+  }
+
+  const rendered = renderNginxProxy(onDisk, enabled);
+  if (!rendered.content) {
+    return { state: "conflict", changed: false, vhostPath: selectedPath, detail: "an unmanaged /addons/ location already exists" };
+  }
+  if (rendered.content === onDisk) {
+    if (!enabled) removeNginxState(files);
+    return { state: enabled ? "ok" : "missing", changed: false, vhostPath: selectedPath };
+  }
+  const mode = statSync(vhostPath).mode & 0o777;
+  writeAtomic(vhostPath, rendered.content, mode);
+
+  if (!reload) {
+    if (!enabled) removeNginxState(files);
+    return { state: enabled ? "ok" : "missing", changed: true, vhostPath: selectedPath };
+  }
+
+  const tested = commandFailure("nginx", ["-t"]);
+  if (tested) {
+    restoreNginxPristine(vhostPath, pristine);
+    return { state: "validation-failed", changed: false, vhostPath: selectedPath, detail: `nginx -t failed: ${tested}` };
+  }
+
+  const reloaded = commandFailure("systemctl", ["reload", "nginx"]);
+  if (reloaded) {
+    restoreNginxPristine(vhostPath, pristine);
+    return { state: "validation-failed", changed: false, vhostPath: selectedPath, detail: `nginx reload failed: ${reloaded}` };
+  }
+
+  if (!enabled) {
+    removeNginxState(files);
+  }
+  return { state: enabled ? "ok" : "missing", changed: true, vhostPath: selectedPath };
 }

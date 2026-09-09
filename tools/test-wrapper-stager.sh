@@ -18,7 +18,7 @@
 
 set -uo pipefail
 
-W=${1:-/usr/local/lib/clp-addons/clp-action-stager}
+W=${1:-/usr/local/libexec/clp-addons/clp-action-stager}
 [[ -x $W ]] || { echo "not executable: $W" >&2; exit 2; }
 [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 2; }
 
@@ -85,18 +85,6 @@ expect "a source that is not a CloudPanel site" '"ok":false.*no CloudPanel site'
   clone --source no-such-site.example.test --target stg.no-such-site.example.test
 expect "describing a site that does not exist" '"ok":false.*no CloudPanel site' \
   describe --domain no-such-site.example.test
-
-# The addon must not be able to clone, or clone over, the site serving it.
-OWN=$(sed -n 's/^[[:space:]]*OWN_DOMAIN[[:space:]]*=[[:space:]]*"\?\([^"#]*\)"\?.*/\1/p' \
-      /etc/clp-addons/stager.conf 2>/dev/null | tail -1 | tr -d '[:space:]')
-if [[ -n $OWN ]]; then
-  expect "refuses the addon's own site as a source" '"ok":false.*own site' \
-    clone --source "$OWN" --target stg.example.test
-  expect "refuses the addon's own site as a target" '"ok":false.*own site' \
-    clone --source example.test --target "$OWN"
-else
-  echo "  skip  own-site refusal (no OWN_DOMAIN in /etc/clp-addons/stager.conf)"
-fi
 
 echo
 echo "== valid input reaches the verb body =="

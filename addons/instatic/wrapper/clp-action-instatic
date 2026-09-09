@@ -23,7 +23,6 @@ readonly CONTAINER_PORT=3001
 
 readonly LOCK_DIR="/run/lock/clp-addons"
 readonly DATA_BASE_DIR="/var/lib/clp-addons/instatic"
-readonly ADDON_CONFIG="/etc/clp-addons/instatic.conf"
 readonly BACKUP_DIR="/var/backups/clp-addons/instatic"
 readonly PANEL_DB="/home/clp/htdocs/app/data/db.sq3"
 readonly CLPCTL="/usr/bin/clpctl"
@@ -82,18 +81,6 @@ validate_domain() {
   local re='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'
   [[ $d =~ $re ]] || emit_err "invalid domain: '$d'"
 
-  # An instance must never be able to act on the site serving the addon itself,
-  # or the UI can delete the vhost it is being served through.
-  if [[ -r $ADDON_CONFIG ]]; then
-    local own
-    # Read the value, never source the file: sourcing turns a config write into
-    # root code execution.
-    own=$(sed -n 's/^[[:space:]]*OWN_DOMAIN[[:space:]]*=[[:space:]]*"\?\([^"#]*\)"\?.*/\1/p' \
-          "$ADDON_CONFIG" | tail -1 | tr -d '[:space:]')
-    if [[ -n $own && $d == "$own" ]]; then
-      emit_err "refusing to act on the addon's own site: '$d'"
-    fi
-  fi
   # Explicit success: a bare `[[ ]] && ...` here would return 1 when the
   # condition is false, and set -e would abort the run with no output.
   return 0
@@ -178,12 +165,9 @@ site_is_our_proxy() {
   return 0
 }
 
-# The account name to ask CloudPanel to create for a site.
+# The account name to ask CloudPanel to create for an instance site.
 #
-# clpctl requires --siteUser, so a name has to come from somewhere. This must
-# stay identical to siteUserFor() in cli/provision.ts, which is the same scheme
-# written in TypeScript because the wrapper cannot import it; tools/test-app.ts
-# asserts the two agree.
+# clpctl requires --siteUser, so a name has to come from somewhere.
 #
 #     addon-<first 8 alphanumerics of the domain>-<6 hex of sha256(domain)>
 #

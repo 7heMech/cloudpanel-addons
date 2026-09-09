@@ -10,15 +10,16 @@
 //
 // Runs against a throwaway template, never the panel's own.
 
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, symlinkSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { reconcile, type Injection } from "../cli/inject";
+import { NGINX_PROXY_BLOCK, inspectNginxProxy, reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
 import { headerTarget } from "../lib/panel-nav";
 import type { AddonTarget } from "../cli/paths";
 
 let failed = 0;
+let passed = 0;
 function check(label: string, cond: boolean, detail = ""): void {
-  if (cond) console.log(`  ok    ${label}`);
+  if (cond) { console.log(`  ok    ${label}`); passed++; }
   else { console.log(`  FAIL  ${label}${detail ? `: ${detail}` : ""}`); failed++; }
 }
 
@@ -93,7 +94,42 @@ check("Stager navigation remains when Instatic is removed", body().includes(">St
 reconcile([], PATHS);
 check("removing shipped navigation restores native header", body() === navOriginal);
 
+const nginxDir = mkdtempSync(`${tmpdir()}/nginx-test-`);
+const nginxSource = `${nginxDir}/cloudpanel.conf`;
+const nginxLink = `${nginxDir}/enabled.conf`;
+const nginxState = `${nginxDir}/state`;
+const nginxOriginal = `server {\n    listen 8443 ssl;\n    server_name panel.example.test;\n}\n`;
+writeFileSync(nginxSource, nginxOriginal);
+symlinkSync(nginxSource, nginxLink);
+const nginxResult = reconcileNginxProxy({ vhostPath: nginxLink, stateDir: nginxState, reload: false });
+check("Nginx reconciliation injects the UNIX-socket proxy", nginxResult.state === "ok" && readFileSync(nginxSource, "utf-8").includes(NGINX_PROXY_BLOCK));
+check("Nginx reconciliation preserves enabled-site symlinks", lstatSync(nginxLink).isSymbolicLink());
+check("Nginx inspection accepts the managed block", inspectNginxProxy({ vhostPath: nginxLink, stateDir: nginxState }).state === "ok");
+const nginxUpdated = nginxOriginal.replace("panel.example.test", "panel-updated.example.test");
+writeFileSync(nginxSource, nginxUpdated);
+const nginxReinjected = reconcileNginxProxy({ vhostPath: nginxLink, stateDir: nginxState, reload: false });
+check("Nginx reconciliation recovers after a vhost regeneration", nginxReinjected.state === "ok" && readFileSync(nginxSource, "utf-8").includes("panel-updated.example.test"));
+const nginxRemoved = reconcileNginxProxy({ vhostPath: nginxLink, stateDir: nginxState, enabled: false, reload: false });
+check("Nginx reconciliation can remove its managed block", nginxRemoved.changed && readFileSync(nginxSource, "utf-8") === nginxUpdated);
+check("removing the Nginx proxy clears its rollback state", !existsSync(`${nginxState}/vhost.pristine`) && !existsSync(`${nginxState}/vhost.sha256`));
+rmSync(nginxDir, { recursive: true, force: true });
+
+const nginxFailureDir = mkdtempSync(`${tmpdir()}/nginx-failure-test-`);
+const nginxFailureVhost = `${nginxFailureDir}/cloudpanel.conf`;
+const nginxFailureState = `${nginxFailureDir}/state`;
+writeFileSync(nginxFailureVhost, nginxOriginal);
+const fakeBin = `${nginxFailureDir}/bin`;
+mkdirSync(fakeBin);
+writeFileSync(`${fakeBin}/nginx`, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+chmodSync(`${fakeBin}/nginx`, 0o755);
+const oldPath = process.env.PATH;
+process.env.PATH = `${fakeBin}:${oldPath ?? ""}`;
+const nginxFailure = reconcileNginxProxy({ vhostPath: nginxFailureVhost, stateDir: nginxFailureState });
+if (oldPath === undefined) delete process.env.PATH;
+else process.env.PATH = oldPath;
+check("Nginx validation failure restores the pristine vhost", nginxFailure.state === "validation-failed" && readFileSync(nginxFailureVhost, "utf-8") === nginxOriginal);
+rmSync(nginxFailureDir, { recursive: true, force: true });
+
 rmSync(dir, { recursive: true, force: true });
-const passed = 15 - failed;
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -50,9 +50,6 @@ jobs:
         # uninstalling either removed both.
         run: bun run test:inject
 
-      - name: Certificate consent and failure handling
-        run: bun run test:certificate
-
       - name: Installer keyboard selection
         run: python3 tools/test-installer.py
 
@@ -65,7 +62,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
-          shellcheck -S warning addons/*/wrapper/* tools/*.sh install.sh
+          shellcheck -S warning addons/*/wrapper/* libexec/* tools/*.sh install.sh
 
       - name: Build
         # Compiling is part of the check: a type error the checker tolerates

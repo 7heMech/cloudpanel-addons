@@ -43,7 +43,6 @@ set -euo pipefail
 readonly LOCK_DIR="/run/lock/clp-addons"
 readonly DATA_BASE_DIR="/var/lib/clp-addons/stager"
 readonly JOBS_DIR="${DATA_BASE_DIR}/jobs"
-readonly ADDON_CONFIG="/etc/clp-addons/stager.conf"
 readonly PANEL_DB="/home/clp/htdocs/app/data/db.sq3"
 readonly CLPCTL="/usr/bin/clpctl"
 
@@ -56,7 +55,7 @@ readonly NGINX_VHOST_DIR="/etc/nginx/sites-enabled"
 # SELF is hardcoded: it is the copy the sudoers line names and the only one
 # that has been reviewed. Absent when the Stager is installed on its own, which
 # is a refusal rather than a fallback.
-readonly INSTATIC_WRAPPER="/usr/local/lib/clp-addons/clp-action-instatic"
+readonly INSTATIC_WRAPPER="/usr/local/libexec/clp-addons/clp-action-instatic"
 readonly INSTATIC_DATA_DIR="/var/lib/clp-addons/instatic"
 
 # One list, and every gate reads from it. Node.js and Python sites are a
@@ -73,7 +72,7 @@ readonly PORT_MAX=39999
 # Hardcoded rather than "$0". The sudoers line names this exact path, so it is
 # the only copy of this script that has been reviewed and granted anything;
 # re-entering through $0 would follow whatever path the caller was invoked by.
-readonly SELF="/usr/local/lib/clp-addons/clp-action-stager"
+readonly SELF="/usr/local/libexec/clp-addons/clp-action-stager"
 
 # Job records outlive the clone because they carry the staging database
 # password, which is the one credential the operator cannot read back out of
@@ -131,19 +130,6 @@ validate_domain() {
   local re='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'
   [[ $d =~ $re ]] || emit_err "invalid domain for --${what}: '$d'"
 
-  # Neither end of a clone may be the site serving this addon: as a source it
-  # would copy the manager's own credentials into a new site, and as a target
-  # it would hand the manager's vhost to a clone of something else.
-  if [[ -r $ADDON_CONFIG ]]; then
-    local own
-    # Read the value, never source the file: sourcing turns a config write into
-    # root code execution.
-    own=$(sed -n 's/^[[:space:]]*OWN_DOMAIN[[:space:]]*=[[:space:]]*"\?\([^"#]*\)"\?.*/\1/p' \
-          "$ADDON_CONFIG" | tail -1 | tr -d '[:space:]')
-    if [[ -n $own && $d == "$own" ]]; then
-      emit_err "refusing to act on the addon's own site: '$d'"
-    fi
-  fi
   return 0
 }
 
