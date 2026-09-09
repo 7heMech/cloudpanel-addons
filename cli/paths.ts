@@ -14,6 +14,14 @@ export const CURRENT_LINK = `${LIB_DIR}/current`;
 
 /** The CLI itself, bootstrapped once by the installer then self-updating. */
 export const CLI_BIN = "/usr/local/bin/clp-addons";
+/**
+ * A private copy of the GitHub CLI, placed by install.sh when the box has no gh
+ * that can verify attestations. Deliberately not on PATH and deliberately not
+ * an apt repository: adding cli.github.com to a panel host's sources changes
+ * what every later `apt upgrade` pulls, which is a far larger footprint than
+ * one verification justifies.
+ */
+export const GH_PRIVATE = `${LIB_DIR}/gh`;
 
 /**
  * The one compiled binary this project ships.
@@ -81,6 +89,13 @@ export const CONFIG_DIR = "/etc/clp-addons";
  * the platform's hostname with it.
  */
 export const PLATFORM_CONFIG = `${CONFIG_DIR}/platform.conf`;
+/**
+ * The manager's own credential, scrypt-hashed. root:<run-as> 0640, because the
+ * service reads it on every request and nothing else has any business doing so.
+ * Its absence is what makes the manager refuse to serve, so it is deliberately
+ * not created by anything except provisioning.
+ */
+export const MANAGER_AUTH_FILE = `${CONFIG_DIR}/manager-auth`;
 export const STATE_DIR = "/var/lib/clp-addons";
 /**
  * Written when this installer created the shared CloudPanel site, so

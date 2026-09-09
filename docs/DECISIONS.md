@@ -802,6 +802,93 @@ sees an unprotected site and toggling the switch can rewrite the edit away.
 The cost of not reusing the panel login is honest and worth stating: it is a
 second credential, not single sign-on.
 
+### nginx is not the only door, so the app checks too
+
+The reasoning above stopped one step short, and the step it missed was the
+important one. "The app binds 127.0.0.1, so everything reaching it came through
+the vhost" is false. A TCP port on loopback restricts which *machine* may
+connect, not which *user*: loopback has no permission model, and every account
+on the box is equally entitled to it. On a CloudPanel host those accounts are
+the PHP behind each hosted site.
+
+Measured rather than argued, on a box hosting real sites:
+
+    runuser -u kleros -- curl http://127.0.0.1:38080/instatic/api/instances
+    -> 200 {"ok":true,"instances":[...]}
+
+    runuser -u kleros -- curl -X POST -H 'Origin: http://127.0.0.1:38080' \
+      -H 'x-clp-addons-csrf: T' -H 'Cookie: clp_addons_csrf=T' \
+      http://127.0.0.1:38080/instatic/api/instances/x/stop
+    -> 400 {"ok":false,"error":"no such container for x"}
+
+The second is the root wrapper's own answer. The `Origin`/CSRF pair is not
+authentication and was never meant to be -- it compares `Origin` against `Host`,
+which stops a browser on another origin and does nothing to a caller who sets
+both headers. So one vulnerable WordPress plugin on any site on the box reached
+a root-equivalent API: create and delete sites, clone one (which `db:export`s
+the production database), then read the staging password back off the job.
+
+So the manager authenticates its own callers, on every route including GET, and
+**fails closed**: with no credential on disk it answers 503 and serves nothing.
+The ordering matters as much as the check. Install used to create the site,
+start the service and *then* advise adding Basic Auth, so every box whose
+operator did not act on the advice ran a live root-equivalent API. Provisioning
+now writes the credential before the unit starts.
+
+The credential is the panel's where the operator set one. CloudPanel keeps the
+Basic Auth password in the clear in `basic_auth.password`, so provisioning reads
+it as root and re-hashes it with scrypt -- one password for both gates. What is
+deliberately *not* reused is CloudPanel's hash: the file it writes into
+`/etc/nginx/basic-auth` holds a 13-character DES `crypt(3)`, which truncates the
+password at eight characters and is cheap to attack offline. A box with no panel
+Basic Auth gets a generated credential printed once. If a future CloudPanel
+starts hashing that column, the value stops looking like plaintext and
+provisioning declines to reuse it rather than hashing a hash.
+
+This does not replace Basic Auth in the vhost, which still keeps unauthenticated
+requests off the app entirely and carries the IP allowlist. It stops being the
+*only* gate, which is the part that was wrong.
+
+A unix socket was the other candidate, and it is the stronger answer in the
+abstract: a socket is a filesystem object with an owner and a mode, so it can
+express "only nginx" in a way a loopback port cannot. It was rejected because
+CloudPanel's stock reverse-proxy vhost has exactly one `{{reverse_proxy_url}}`
+and `site:add:reverse-proxy` takes a URL, so pointing nginx at a socket would
+mean hand-writing `site.vhost_template` on every install and re-asserting it
+after every regeneration. That makes a scoped, opt-in fallback into a mandatory
+step in everyone's install path -- a wider blast radius than the bug.
+
+### The installer provisions gh rather than refusing without it
+
+Provenance is the only check that detects a *substituted* binary -- the checksum
+travels down the same channel as the artifact -- and the next thing the
+installer does is run that artifact as root. So it cannot be optional by
+default. But refusing outright puts a manual step in front of every new box,
+and "is gh installed" turned out to be the wrong question twice over:
+
+- Debian bookworm's own package is **gh 2.23**, and `gh attestation` arrived in
+  **2.49**. On such a box the old check said yes and the verification then
+  failed, reported as "provenance verification failed" -- which points the
+  operator at the release rather than at their gh.
+- On a box with no gh at all, the installer used to warn and continue, so the
+  strongest check was the one almost nobody got.
+
+Both are fixed by asking whether `gh attestation` exists rather than whether gh
+does, and by fetching one when it does not. The tarball comes from
+`github.com/cli/cli` over the same TLS the artifact already relies on, and its
+published checksum is verified on the way in. This adds no trust assumption: it
+is a *different* repository, so the attacker the attestation defends against --
+one who can replace an asset in our release -- does not control it.
+
+It lands at `/usr/local/lib/clp-addons/gh`, not on PATH and not via
+`cli.github.com` in apt sources. Adding a third-party repository to a panel host
+changes what every later `apt upgrade` pulls, which is a far larger and more
+permanent footprint than one verification justifies. The CLI prefers that copy
+for the same reason, so `clp-addons update` keeps verifying on a box whose
+system gh is too old.
+
+`--skip-attestation` still exists and now means what it says.
+
 ## The Stager addon
 
 `clp-stager` is a Bash script you paste into `nano` on the server and run as
@@ -1271,6 +1358,16 @@ window, `update` and `snapshot`. `make_snapshot` writes the archive and stops.
 - A clone copies the source's files and database as they are at that moment.
   There is no quiescing: a site written to during the copy can produce a staging
   copy whose files and database are from slightly different instants.
+- A site user's password and a staging database's password reach `clpctl` as
+  command-line options, where any account on the box can read them out of
+  `/proc/<pid>/cmdline` for as long as the process runs. This is the one place
+  the project's own rule -- secrets on stdin or in an `--env-file`, never in
+  argv -- is broken, and it cannot be fixed here: `site:add:*` declares
+  `siteUserPassword` as a Symfony `InputOption::VALUE_REQUIRED` and reads it
+  with `$input->getOption()`, so there is no stdin, environment or file form to
+  use instead. Mounting `/proc` with `hidepid=2` closes it at the host level and
+  is the only real remedy; the addon does not make that change, because
+  remounting `/proc` on someone else's panel host is not its call.
 - Each addon needs a hostname of its own, so two addons mean two DNS records,
   two certificates and two Basic Auth setups. Serving both from one host would
   mean either editing a vhost or adding a routing service, and the first is

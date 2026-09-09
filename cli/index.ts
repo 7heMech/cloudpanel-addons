@@ -4,10 +4,11 @@
 // `install` minus the download and is idempotent, so the reconciliation timer
 // calls it rather than duplicating the logic.
 
-import { existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import {
-  ADDON_NAMES, ADDONS, CLI_ARTIFACT, CLI_BIN, CURRENT_LINK, LIB_DIR, MANAGER_PORT, MANAGER_UNIT,
+  ADDON_NAMES, ADDONS, CLI_ARTIFACT, CLI_BIN, CURRENT_LINK, LIB_DIR, MANAGER_AUTH_FILE, MANAGER_PORT,
+  MANAGER_UNIT,
   PLATFORM_CONFIG, RELEASES_DIR, SITE_CREATED_MARKER, mountPath, type AddonSpec,
 } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation, type ResolvedRelease } from "./release";
@@ -17,6 +18,7 @@ import {
   installSudoers, installUnits, installWrapper, placeRelease, pruneReleases, readOwnDomain, readPlatformDomain,
   releaseArtifacts,
   ensureTimerArmed, hardenBackups, removeLegacyUsers, removeSudoers, resolveSiteUser, siteBasicAuth,
+  writeManagerAuth,
   siteUserOf, siteUserState,
   removeLegacyUnits, startUnits, stopUnits, timerNextElapse, unitActive,
   unitRunningUser, writeConfig, writePlatformConfig,
@@ -26,6 +28,7 @@ import {
   KNOWN_GOOD_PANEL_VERSIONS, inspect, panelVersion, purgeTwigCache, reconcile,
   type Injection, type TargetStatus,
 } from "./inject";
+import { guardAuth } from "../lib/manager-auth";
 import { generateSnapshot } from "../lib/panel-snapshot";
 import { SNAPSHOT_FILE } from "../lib/snapshot-reader";
 import { handle as handleInstatic } from "../addons/instatic/app/index";
@@ -79,6 +82,20 @@ function describeTarget(s: TargetStatus): string {
 function describeSiteAuth(domain: string | null): string {
   if (!domain) return "unknown (no configured domain)";
   return describeAuthState(siteBasicAuth(domain));
+}
+
+/**
+ * The manager's own gate, which is the one that holds against a caller already
+ * on the box. Reported separately from the vhost's, because they protect
+ * different things: nginx stops the internet, this stops the other accounts.
+ */
+function describeManagerAuth(): string {
+  if (!existsSync(MANAGER_AUTH_FILE)) {
+    return "NONE — the manager is refusing all requests; run `clp-addons repair`";
+  }
+  const st = statSync(MANAGER_AUTH_FILE);
+  const mode = (st.mode & 0o777).toString(8);
+  return `yes, scrypt credential in ${MANAGER_AUTH_FILE} (0${mode})`;
 }
 
 // --- anchors ----------------------------------------------------------------
@@ -253,6 +270,10 @@ async function cmdInstall(argv: string[]): Promise<void> {
   log.step("generating the sanitized panel snapshot");
   generateSnapshot();
   for (const sp of serving) ensureDirs(sp);
+  // Before the unit starts, never after: the manager refuses to serve without
+  // this file, and the window between "listening" and "authenticated" is
+  // exactly the hole this closes.
+  const managerAuth = writeManagerAuth(domain, user);
   startUnits();
   removeLegacyUsers(user);
 
@@ -271,8 +292,24 @@ async function cmdInstall(argv: string[]): Promise<void> {
       .map((sp) => `https://${domain}${mountPath(sp.name)}`).join(", ")}`);
   }
 
-  // Say what is actually true rather than reciting the same two steps whether or
-  // not they are already done. On a reinstall they usually are.
+  // The manager's own gate first, because it is the one that holds regardless
+  // of what the operator does next.
+  if (managerAuth.source === "generated") {
+    log.plain();
+    log.warn(`  The manager requires a credential. This is the only time it is shown:`);
+    log.plain(`      user      ${managerAuth.user}`);
+    log.plain(`      password  ${managerAuth.password}`);
+    log.plain(`  To use one password here and in the vhost, set Site → Security → Basic Auth`);
+    log.plain(`  in CloudPanel and run: clp-addons repair`);
+  } else if (managerAuth.source === "panel") {
+    log.ok(`  The manager accepts this site's CloudPanel Basic Auth credential (user ${managerAuth.user})`);
+  } else {
+    log.ok(`  The manager is using the credential already in ${MANAGER_AUTH_FILE} (user ${managerAuth.user})`);
+  }
+
+  // Then the vhost, which is a second gate rather than the only one. Say what is
+  // actually true rather than reciting the same steps whether or not they are
+  // already done -- on a reinstall they usually are.
   const auth = siteBasicAuth(domain);
   if (auth.panelManaged && auth.active) {
     log.ok(`  ${domain} is behind CloudPanel Basic Auth${auth.ipAllowlist ? " and an IP allowlist" : ""}`);
@@ -283,10 +320,11 @@ async function cmdInstall(argv: string[]): Promise<void> {
         `  Re-add it through Site → Security → Basic Auth so the panel owns it.`
     );
   } else {
-    log.err(
-      `  ${domain} is reachable without authentication. The manager can create and\n` +
-        `  delete CloudPanel sites, so add Site → Security → Basic Auth now. That page\n` +
-        `  also carries the IP allowlist.`
+    log.warn(
+      `  ${domain} has no Basic Auth in front of it. The manager authenticates on its\n` +
+        `  own now, so this is no longer the only gate, but adding Site → Security →\n` +
+        `  Basic Auth keeps unauthenticated requests off the app entirely and carries\n` +
+        `  the IP allowlist.`
     );
   }
   log.plain(`  Certificate: clpctl lets-encrypt:install:certificate --domainName=${domain}`);
@@ -354,6 +392,7 @@ async function cmdUpdate(argv: string[]): Promise<void> {
     writeConfig(spec, domain, user);
 
     installUnits(installedAddons(), user);
+    writeManagerAuth(domain, user, true);
     startUnits();
     reconcileAnchors(false);
     pruneReleases();
@@ -570,6 +609,10 @@ function cmdRepair(argv: string[]): void {
     log.warn(`no ${PLATFORM_CONFIG}; taking ${domain} from the installed addons and writing it`);
   }
   writePlatformConfig(domain, user);
+  // Re-assert the manager's credential: this is how an operator who has just
+  // set Site → Security → Basic Auth moves the manager onto the same password,
+  // and how a credential file that lost its mode or owner gets them back.
+  writeManagerAuth(domain, user, quiet);
 
   for (const spec of specs) repairAddon(spec, domain, user, quiet);
 
@@ -612,6 +655,7 @@ async function cmdStatus(argv: string[]): Promise<void> {
   log.plain("Platform:");
   log.plain(`${pad("  Site")}${domain ?? "not configured"}`);
   log.plain(`${pad("  Site protected")}${describeSiteAuth(domain)}`);
+  log.plain(`${pad("  Manager auth")}${describeManagerAuth()}`);
   log.plain(`${pad("  Manager service")}${unitActive(MANAGER_UNIT)}`);
   // is-active alone says `active` for a timer that has elapsed and will never
   // fire again, so name the next elapse. No elapse means reconciliation is dead.
@@ -863,10 +907,23 @@ async function cmdServe(_argv: string[]): Promise<never> {
       const path = new URL(req.url).pathname.replace(/\/+$/, "") || "/";
 
       // Liveness for systemd, above the mounts so it answers whatever is
-      // installed. It reports nothing about any addon.
+      // installed -- and the one route that stays open, because a liveness
+      // probe that needs a credential is a liveness probe that reports the
+      // credential's state rather than the service's. It names no addon: what
+      // is installed is not something an unauthenticated caller needs.
       if (path === "/health") {
-        return Response.json({ ok: true, service: "clp-addons", addons: mounted }, { headers: SECURITY_HEADERS });
+        return Response.json({ ok: true, service: "clp-addons" }, { headers: SECURITY_HEADERS });
       }
+
+      // Everything else authenticates, GET included. Loopback is not a
+      // perimeter (see lib/manager-auth.ts), and the read routes are worth
+      // taking on their own: the instance inventory, the site list, and the
+      // job records that carry a cloned database's password.
+      const denied = guardAuth(req, MANAGER_AUTH_FILE);
+      if (denied) return new Response(denied.body, {
+        status: denied.status,
+        headers: { ...Object.fromEntries(denied.headers), ...SECURITY_HEADERS },
+      });
 
       const hit = splitMount(path, mounted);
       if (hit) return MANAGERS[hit.addon]!(req, hit.rest);

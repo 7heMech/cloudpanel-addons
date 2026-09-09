@@ -191,6 +191,58 @@ export interface JobView {
   result: JobResult | null;
 }
 
+/**
+ * `describe` is the one read that costs real work: the wrapper runs `du -sm`
+ * over the source's whole document root as root, with a 120-second timeout.
+ * Measured on this box, one pass over ~18 GB took 22 seconds of wall time and 9
+ * of system time. Nothing bounded how many could run at once, so a handful of
+ * requests could keep root walking the disk indefinitely.
+ *
+ * Requests are authenticated now, which takes the anonymous version of that
+ * away. It does not take away the browser version: a page on another origin can
+ * point an `<img>` at this route, and the browser attaches the operator's Basic
+ * Auth credentials on its own. So the work itself is bounded rather than the
+ * caller.
+ *
+ * One at a time, and a short queue -- past that the answer is an error, because
+ * a caller waiting behind fifty disk walks would rather be told than timed out.
+ * Repeating the same domain joins the in-flight call instead of starting a
+ * second identical walk, which is the shape a refreshed page actually makes.
+ */
+const DESCRIBE_QUEUE_MAX = 4;
+let describeRunning = 0;
+let describeQueued = 0;
+let describeChain: Promise<unknown> = Promise.resolve();
+const describeInFlight = new Map<string, Promise<WrapperResult<SiteDetail>>>();
+
+async function withDescribeSlot(
+  domain: string,
+  work: () => Promise<WrapperResult<SiteDetail>>,
+): Promise<WrapperResult<SiteDetail>> {
+  const shared = describeInFlight.get(domain);
+  if (shared) return shared;
+
+  if (describeRunning > 0 && describeQueued >= DESCRIBE_QUEUE_MAX) {
+    return { ok: false, error: "too many size scans are already running; try again in a moment" };
+  }
+
+  describeQueued++;
+  const run = describeChain.then(async () => {
+    describeQueued--;
+    describeRunning++;
+    try {
+      return await work();
+    } finally {
+      describeRunning--;
+      describeInFlight.delete(domain);
+    }
+  });
+  // The chain must not break on a rejection, or every later caller inherits it.
+  describeChain = run.catch(() => undefined);
+  describeInFlight.set(domain, run);
+  return run;
+}
+
 export const stagerService = {
   async listSites(): Promise<SiteSummary[]> {
     const res = await callWrapper<{ sites: SiteSummary[] }>("sites", []);
@@ -202,7 +254,7 @@ export const stagerService = {
   },
 
   async describe(domain: string): Promise<WrapperResult<SiteDetail>> {
-    return callWrapper<SiteDetail>("describe", ["--domain", domain]);
+    return withDescribeSlot(domain, () => callWrapper<SiteDetail>("describe", ["--domain", domain]));
   },
 
   /**

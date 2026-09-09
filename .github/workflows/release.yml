@@ -184,15 +184,25 @@ jobs:
             notes_args=(--generate-notes)
           fi
 
-          # Re-publishing the same tag has to be safe. A cancelled run, or a tag
-          # pushed at the wrong commit and then corrected, leaves a release
-          # behind that would make `gh release create` fail, and recovering from
-          # that means hand-editing the repository. Removing any existing
-          # release first keeps the tag as the single source of truth for what
-          # ships. The git tag itself is left alone.
+          # Re-publishing the same tag has to be safe to *recover* from, but not
+          # to do silently. A cancelled run can leave a draft behind that would
+          # make `gh release create` fail, and clearing that by hand is busywork.
+          # A release that is already published is different: someone may have
+          # installed from it, and `git push -f` on the tag would then replace
+          # those bytes under a checksum and an attestation that both still
+          # verify. Pinning a version has to mean something, so a published
+          # release is never overwritten from here.
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "a release already exists for $TAG; replacing it"
-            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+            is_draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft -q .isDraft)
+            if [ "$is_draft" = "true" ]; then
+              echo "a draft release exists for $TAG; replacing it"
+              gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+            else
+              echo "::error::$TAG is already published. Refusing to replace it: anyone who" \
+                   "installed that version would silently receive different bytes. Cut a new" \
+                   "version, or delete the release deliberately if nothing has consumed it."
+              exit 1
+            fi
           fi
 
           gh release create "$TAG" \
