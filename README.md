@@ -88,23 +88,36 @@ less install.sh && bash install.sh
 Requirements: a CloudPanel host, x86-64, root, and Docker. The installer refuses
 to continue without them.
 
-Two things are not done for you, and the addons are not safe to expose until
-they are. Both are done once for the site, not once per addon:
+The installer offers a keyboard checklist (arrows, Space, **a** for all,
+**n** for none) and asks once whether to request a Let's Encrypt certificate.
+DNS must point to the server. For unattended installs, pass
+`--certificate=yes` to request one or `--certificate=no` to skip. `--yes` alone
+never requests a certificate. Failure prints the retry command without undoing
+the installation; use HTTPS only once a valid certificate is installed.
 
-1. Add per-site security to the manager's site in the panel, under
-   Site → Security → Basic Auth. The IP allowlist lives on that same page, so
-   use it too if your addresses are static. The manager can create and delete
-   CloudPanel sites. It binds `127.0.0.1`, so that site's vhost is the only
-   route in, and that vhost is where authentication happens -- for every addon
-   at once, since they are paths on it.
+The manager authenticates every request itself. On first install it displays a
+unique 32-character password in a login block; save it in your password manager.
+Only a scrypt hash is stored. There is no shared default password, and the
+manager checks the entire password. To replace a lost generated password, run
+`clp-addons auth reset` as root.
 
-   Use the panel's feature rather than editing the vhost by hand. Both put
-   `auth_basic` in front of the site, but only the panel's own one is recorded
-   against the site, so a hand edit leaves the Security tab showing Basic Auth as
-   off, and switching it there can rewrite the edit away. `clp-addons status`
-   reports which of the two you have.
-2. Issue a certificate for it:
-   `clpctl lets-encrypt:install:certificate --domainName=<host>`
+CloudPanel Basic Auth is optional. If already configured, its credential is
+also used by the manager, re-hashed with scrypt. Change that credential in
+Site → Security and run `clp-addons repair`. CloudPanel's legacy DES hash may
+only check eight characters at nginx; the manager still checks the full password.
+An IP allowlist can further restrict access.
+
+Deleting an Instatic site directly in CloudPanel removes its panel site, but
+leaves the container and addon data. The manager flags missing sites after the
+panel snapshot refreshes (normally within 15 minutes). Use **Delete** in the
+Instatic manager to archive and clean up the remaining instance. Cleanup requires
+a successful archive and retains data if Docker or panel deletion fails.
+
+Deleting the **manager** site does not delete Instatic instances or staging
+copies. The next full repair stops the manager and reports the missing site;
+it does not recreate a site behind your back. Recover with
+`clp-addons repair --restore-site`, then restore any site security settings and
+issue its certificate when prompted. The stored manager credential is retained.
 
 ## Commands
 

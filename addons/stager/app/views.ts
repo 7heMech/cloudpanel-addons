@@ -171,6 +171,7 @@ export function jobsView(jobs: JobView[]): string {
     .join("");
 
   return `
+    <div class="page-heading"><div><h2>Staging sites</h2><p>Clone a site to test changes before going live.</p></div><a class="btn btn-primary" href="${BASE}/new">New staging site</a></div>
     <div class="card">
       <div class="stats">
         <div class="stat"><div class="label">Clones on record</div><div class="value">${jobs.length}</div></div>
@@ -178,9 +179,6 @@ export function jobsView(jobs: JobView[]): string {
       </div>
     </div>
     <div class="card">
-      <div class="actions" style="justify-content: flex-end; margin-bottom: 0.75rem;">
-        <a class="btn btn-primary" href="${BASE}/new">New staging site</a>
-      </div>
       ${
         jobs.length === 0
           ? `<div class="empty">No clones yet. Start one from a site's Staging tab in CloudPanel, or with the button above.</div>`

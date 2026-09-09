@@ -50,6 +50,15 @@ jobs:
         # uninstalling either removed both.
         run: bun run test:inject
 
+      - name: Certificate consent and failure handling
+        run: bun run test:certificate
+
+      - name: Installer keyboard selection
+        run: python3 tools/test-installer.py
+
+      - name: Deletion preserves data on failure
+        run: bun run test:delete
+
       - name: Lint the wrapper scripts
         # The wrapper is the privilege boundary. A shellcheck finding there is
         # a merge blocker, not a style note.

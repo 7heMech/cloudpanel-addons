@@ -189,9 +189,10 @@ export interface ManagerAuthResult {
  * honest state, and what `status` already reports -- until an operator runs
  * repair themselves. Every interactive path passes false and may generate.
  */
-export function writeManagerAuth(domain: string, user: string, quiet = false): ManagerAuthResult {
+export function writeManagerAuth(domain: string, user: string, quiet = false, reset = false): ManagerAuthResult {
   const panel = panelBasicAuthCredential(domain);
   if (panel) {
+    if (reset) fatal("This manager uses CloudPanel Basic Auth. Change its password in Site → Security, then run clp-addons repair.");
     const body = `# clp-addons manager credential.\n` +
       `# Reused from this site's CloudPanel Basic Auth, re-hashed with scrypt.\n` +
       `# Change it in Site → Security → Basic Auth, then run: clp-addons repair\n` +
@@ -202,7 +203,7 @@ export function writeManagerAuth(domain: string, user: string, quiet = false): M
     return { source: "panel", user: panel.user };
   }
 
-  if (existsSync(MANAGER_AUTH_FILE)) {
+  if (!reset && existsSync(MANAGER_AUTH_FILE)) {
     // Re-assert ownership and mode, which is the part `repair` is for. The
     // contents are the operator's.
     run("chown", [`root:${user}`, MANAGER_AUTH_FILE]);
@@ -241,11 +242,14 @@ export function writeManagerAuth(domain: string, user: string, quiet = false): M
   // out of their own manager, where deleting the file to retry would only
   // generate another unshown one.
   log.plain();
-  log.warn("The manager requires a credential. This is the only time it is shown:");
+  log.plain("════════════════════════════════════════════════════════════");
+  log.plain("  SAVE YOUR MANAGER LOGIN — unique to this installation");
+  log.plain(`  https://${domain}`);
   log.plain(`    user      clpaddons`);
   log.plain(`    password  ${password}`);
-  log.plain(`  To use one password here and in the vhost instead, set Site → Security →`);
-  log.plain(`  Basic Auth in CloudPanel and run: clp-addons repair`);
+  log.plain("  Save this password now. Only its hash is stored.");
+  log.plain("  Lost it? Run: clp-addons auth reset");
+  log.plain("════════════════════════════════════════════════════════════");
   log.plain();
   return { source: "generated", user: "clpaddons", password };
 }
@@ -259,7 +263,7 @@ export function describeAuthState(a: SiteAuthState): string {
   if (a.vhostOnly) {
     return "yes, but via a vhost edit — the panel's Security tab shows it as off; move it to Site → Security";
   }
-  return "NO — the manager is reachable without authentication";
+  return "not enabled (optional; the manager authenticates separately)";
 }
 
 export function resolveSiteUser(domain: string): string {
@@ -944,7 +948,8 @@ export function ensureManagerSite(domain: string): boolean {
   // instances; the panel records both facts that tell the two apart.
   const row = tryRun("sqlite3", ["-readonly", PANEL_DB,
     `SELECT type, COALESCE(reverse_proxy_url, '') FROM site WHERE domain_name = '${domain}';`]);
-  if (row.ok && row.out.trim()) {
+  if (!row.ok) fatal(`Cannot read CloudPanel sites: ${row.out}`);
+  if (row.out.trim()) {
     const [type, url] = row.out.trim().split("|");
     const wanted = `http://127.0.0.1:${MANAGER_PORT}`;
     if (type !== "reverse-proxy") {
@@ -985,11 +990,6 @@ export function ensureManagerSite(domain: string): boolean {
   ]);
   if (!r.ok) fatal(`clpctl site:add:reverse-proxy failed for ${domain}:\n${r.out}`);
   log.ok(`site ${domain} created`);
-  log.warn(
-    `Add per-site security for ${domain} in the panel now (Site → Security → Basic Auth,\n` +
-      `  and an IP allowlist if you have static addresses). The manager can create and delete\n` +
-      `  sites, so it must not be reachable without authentication.`
-  );
   return true;
 }
 

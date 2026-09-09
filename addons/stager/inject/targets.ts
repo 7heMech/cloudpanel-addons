@@ -12,6 +12,7 @@
 // it as a loop variable, and nothing else may be added here without checking.
 
 import type { AddonTarget } from "../../../cli/paths";
+import { headerTarget } from "../../../lib/panel-nav";
 
 /**
  * The site types the wrapper will clone, guarded here too so a Node.js or
@@ -30,6 +31,7 @@ import type { AddonTarget } from "../../../cli/paths";
 const CLONABLE = "{% if site.type in ['php', 'static', 'reverse-proxy'] %}";
 
 export const STAGER_TARGETS: AddonTarget[] = [
+  headerTarget("Stager"),
   {
     slug: "site-tab",
     template: "Frontend/Site/Partial/tab-container.html.twig",

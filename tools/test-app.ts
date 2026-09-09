@@ -238,8 +238,8 @@ check("configured but switched off is NOT protected",
   describeAuthState(auth({ panelManaged: true, active: false })).startsWith("NO"));
 check("a vhost-only edit counts as protected but is called out",
   /^yes, but via a vhost edit/.test(describeAuthState(auth({ vhostOnly: true, active: true }))));
-check("nothing at all is NOT protected",
-  describeAuthState(auth({})).startsWith("NO"));
+check("absent vhost auth is optional because the manager authenticates separately",
+  describeAuthState(auth({})).includes("optional; the manager authenticates separately"));
 
 
 console.log("\n== a release tree serves every installed addon ==");

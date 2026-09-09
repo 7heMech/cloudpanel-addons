@@ -44,6 +44,7 @@ SKIP_ATTESTATION=0
 # and the hostname"; widening it into "add a root-equivalent group and rewrite
 # this host's iptables" is exactly the scope creep it should not have.
 INSTALL_DOCKER=0
+CERTIFICATE="ask"
 
 if [[ -t 1 ]]; then
   B=$'\033[1m'; DIM=$'\033[2m'; RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; N=$'\033[0m'
@@ -69,6 +70,7 @@ clp-addons installer
   --yes                 non-interactive; requires --addons and --domain
   --skip-attestation    accept checksum-only verification
   --install-docker      install Docker without asking, if an addon needs it
+  --certificate=yes|no request a certificate, or skip (default: ask)
   --help
 
 Available addons: ${AVAILABLE_ADDONS[*]}
@@ -82,6 +84,8 @@ for arg in "$@"; do
     --version=*)        VERSION="${arg#*=}" ;;
     --yes|-y)           ASSUME_YES=1 ;;
     --install-docker)   INSTALL_DOCKER=1 ;;
+    --certificate=yes)  CERTIFICATE="yes" ;;
+    --certificate=no)   CERTIFICATE="no" ;;
     --skip-attestation) SKIP_ATTESTATION=1 ;;
     --help|-h)          usage; exit 0 ;;
     *)                  die "unknown option: $arg" ;;
@@ -152,27 +156,66 @@ if [[ -z $SELECTED ]]; then
     die "no addons selected and no terminal to ask on. Pass --addons=${AVAILABLE_ADDONS[0]}"
   fi
 
-  say ""
-  say "${B}Which addons should be installed?${N}"
-  for i in "${!AVAILABLE_ADDONS[@]}"; do
-    printf '  %d) %s\n' "$((i + 1))" "${AVAILABLE_ADDONS[i]}"
-  done
-  say ""
-  printf 'Enter numbers separated by spaces, or "all" [all]: '
-  read -r reply < /dev/tty || reply=""
-  reply=${reply:-all}
-
-  if [[ $reply == "all" ]]; then
-    SELECTED=$(IFS=,; printf '%s' "${AVAILABLE_ADDONS[*]}")
-  else
-    picked=()
-    for n in $reply; do
-      [[ $n =~ ^[0-9]+$ ]] || die "not a number: '$n'"
-      idx=$((n - 1))
-      [[ -n ${AVAILABLE_ADDONS[idx]:-} ]] || die "no addon numbered $n"
-      picked+=("${AVAILABLE_ADDONS[idx]}")
+  if [[ ${TERM:-dumb} != dumb ]] && [[ -t 1 ]]; then
+    # The terminal remains in its normal mode; read only changes it for each key.
+    # No dependency downloads, alternate screen, or hidden cursor to restore.
+    selected=(); cursor=0
+    for i in "${!AVAILABLE_ADDONS[@]}"; do selected[i]=1; done
+    say "Which addons should be installed?"
+    say "↑/↓ move · Space toggle · a select all · n clear · Enter install · q cancel"
+    while :; do
+      for i in "${!AVAILABLE_ADDONS[@]}"; do
+        pointer=" "; mark=" "
+        (( i == cursor )) && pointer=">"
+        (( selected[i] )) && mark="x"
+        printf '\r\033[2K %s [%s] %s\n' "$pointer" "$mark" "${AVAILABLE_ADDONS[i]}"
+      done
+      key=""
+      IFS= read -rsn1 key < /dev/tty || die "terminal closed"
+      if [[ $key == $'\033' ]]; then
+        sequence=""
+        IFS= read -rsn2 -t 0.2 sequence < /dev/tty || true
+        key+=$sequence
+      fi
+      case $key in
+        $'\033[A'|k) cursor=$(( (cursor + ${#AVAILABLE_ADDONS[@]} - 1) % ${#AVAILABLE_ADDONS[@]} )) ;;
+        $'\033[B'|j) cursor=$(( (cursor + 1) % ${#AVAILABLE_ADDONS[@]} )) ;;
+        ' ') selected[cursor]=$((1 - selected[cursor])) ;;
+        a|A) for i in "${!AVAILABLE_ADDONS[@]}"; do selected[i]=1; done ;;
+        n|N) for i in "${!AVAILABLE_ADDONS[@]}"; do selected[i]=0; done ;;
+        q|Q) die "installation cancelled" ;;
+        '')
+          picked=()
+          for i in "${!AVAILABLE_ADDONS[@]}"; do
+            if (( selected[i] )); then picked+=("${AVAILABLE_ADDONS[i]}"); fi
+          done
+          if (( ${#picked[@]} )); then
+            SELECTED=$(IFS=,; printf '%s' "${picked[*]}")
+            break
+          fi ;;
+      esac
+      printf '\033[%dA' "${#AVAILABLE_ADDONS[@]}"
     done
-    SELECTED=$(IFS=,; printf '%s' "${picked[*]}")
+  else
+    say "Which addons should be installed?"
+    for i in "${!AVAILABLE_ADDONS[@]}"; do
+      printf '  %d) %s\n' "$((i + 1))" "${AVAILABLE_ADDONS[i]}"
+    done
+    printf 'Enter numbers separated by spaces, or "all" [all]: '
+    read -r reply < /dev/tty || die "terminal closed"
+    reply=${reply:-all}
+    if [[ $reply == all ]]; then
+      SELECTED=$(IFS=,; printf '%s' "${AVAILABLE_ADDONS[*]}")
+    else
+      picked=()
+      for n in $reply; do
+        [[ $n =~ ^[1-9][0-9]*$ && ${#n} -le 3 ]] || die "not a selection: '$n'"
+        idx=$((10#$n - 1))
+        [[ -n ${AVAILABLE_ADDONS[idx]:-} ]] || die "no addon numbered $n"
+        picked+=("${AVAILABLE_ADDONS[idx]}")
+      done
+      SELECTED=$(IFS=,; printf '%s' "${picked[*]}")
+    fi
   fi
 fi
 
@@ -413,7 +456,7 @@ fi
 # The CLI owns installation from here, so there is one implementation of
 # "make the box match what should be installed" rather than two.
 
-extra=()
+extra=("--certificate=no")
 (( SKIP_ATTESTATION )) && extra+=("--skip-attestation")
 
 # --domain on every one of them: the CLI takes the first as the site to create
@@ -428,17 +471,35 @@ done
 say ""
 ok "done"
 say ""
-say "${B}Before this is reachable, do these two things in the panel -- once:${N}"
+if [[ $CERTIFICATE == ask ]]; then
+  if (( ! ASSUME_YES )) && have_tty; then
+    say "Request a Let's Encrypt certificate for ${DOMAIN}? DNS must point here."
+    printf 'Issue certificate now? [Y/n]: '
+    read -r reply < /dev/tty || reply=n
+    case $reply in ""|y|Y|yes|YES) CERTIFICATE=yes ;; *) CERTIFICATE=no ;; esac
+  else
+    CERTIFICATE=no
+  fi
+fi
+if [[ $CERTIFICATE == yes ]]; then
+  if clpctl lets-encrypt:install:certificate --domainName="$DOMAIN"; then
+    ok "certificate installed for ${DOMAIN}"
+  else
+    warn "certificate issuance failed; check DNS and retry the command below"
+    CERTIFICATE=no
+  fi
+fi
+if [[ $CERTIFICATE == no ]]; then
+  warn "No certificate was requested successfully by this installer. HTTPS requires a valid certificate."
+  say "  clpctl lets-encrypt:install:certificate --domainName=${DOMAIN}"
+fi
 say ""
-say "  ${B}${DOMAIN}${N}"
-say "  1. Security → add Basic Auth (and an IP allowlist if you can)."
-say "     The manager can create and delete sites; it must not be open."
-say "  2. Issue a certificate:"
-say "     clpctl lets-encrypt:install:certificate --domainName=${DOMAIN}"
-say ""
-say "  Then each addon is at:"
+say "${B}Your addons${N}"
 for addon in "${ADDON_LIST[@]}"; do
-  say "    https://${DOMAIN}/${addon}"
+  say "  https://${DOMAIN}/${addon}"
 done
 say ""
-say "Then check the install with: ${B}clp-addons status${N}"
+say "Sign in with the manager credential shown during installation."
+say "Lost the password? Run: clp-addons auth reset"
+say "Optional: restrict access by IP in CloudPanel's site security settings."
+say "Check the install with: ${B}clp-addons status${N}"
