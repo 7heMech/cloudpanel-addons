@@ -190,6 +190,7 @@ export interface JobView {
   startedAt: string;
   finishedAt: string;
   result: JobResult | null;
+  panelSite?: boolean | null;
 }
 
 /**

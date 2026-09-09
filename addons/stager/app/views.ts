@@ -163,6 +163,8 @@ export function isSiteMissing(
   snapshotTakenAt?: string
 ): boolean {
   if (job.state !== "done") return false;
+  if (job.panelSite === false) return true;
+  if (job.panelSite === true) return false;
   if (snapshotAge > 3600) return false;
   if (snapshotTakenAt) {
     const taken = Date.parse(snapshotTakenAt);

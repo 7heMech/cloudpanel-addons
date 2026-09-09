@@ -102,6 +102,7 @@ export interface InstanceView {
   siteUser: string;
   createdAt: string;
   state: string;
+  panelSite?: boolean | null;
 }
 
 export const instaticService = {

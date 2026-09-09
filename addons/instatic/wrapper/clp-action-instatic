@@ -825,6 +825,11 @@ cmd_status() {
 # directories itself -- they belong to each instance's own site user.
 cmd_list() {
   local dir meta domain name state port first=1
+  local panel_sites="" has_panel_db=0
+  if [[ -r $PANEL_DB ]]; then
+    panel_sites=$(sqlite3 -readonly "$PANEL_DB" "SELECT domain_name FROM site;" 2>/dev/null || true)
+    has_panel_db=1
+  fi
   printf '{"ok":true,"data":{"instances":['
 
   for dir in "${DATA_BASE_DIR}"/*/; do
@@ -844,16 +849,26 @@ cmd_list() {
     port=$(read_meta port "$meta")
     [[ $port =~ ^[0-9]+$ ]] || port=0
 
+    local panel_site="null"
+    if (( has_panel_db )); then
+      if printf '%s\n' "$panel_sites" | grep -Fxq "$domain"; then
+        panel_site="true"
+      else
+        panel_site="false"
+      fi
+    fi
+
     (( first )) || printf ','
     first=0
-    printf '{"domain":%s,"port":%s,"tag":%s,"container":%s,"siteUser":%s,"createdAt":%s,"state":%s}' \
+    printf '{"domain":%s,"port":%s,"tag":%s,"container":%s,"siteUser":%s,"createdAt":%s,"state":%s,"panelSite":%s}' \
       "$(json_str "$domain")" \
       "$port" \
       "$(json_str "$(read_meta tag "$meta")")" \
       "$(json_str "$name")" \
       "$(json_str "$(read_meta siteUser "$meta")")" \
       "$(json_str "$(read_meta createdAt "$meta")")" \
-      "$(json_str "$state")"
+      "$(json_str "$state")" \
+      "$panel_site"
   done
 
   printf ']}}\n'

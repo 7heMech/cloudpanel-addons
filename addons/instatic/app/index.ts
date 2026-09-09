@@ -8,6 +8,7 @@ import { instaticService, validateDomain, validateTag } from "./service";
 import { layout, dashboardView, newInstanceView } from "./views";
 import { guardMutation, newCsrfToken, csrfCookieHeader, SECURITY_HEADERS } from "../../../lib/app-http";
 import { listAvailableTags } from "./tags";
+import type { SanitizedSite } from "../../../lib/snapshot-reader";
 
 function html(body: string, csrf: string, status = 200): Response {
   return new Response(body, {
@@ -50,7 +51,17 @@ export async function handle(req: Request, path: string): Promise<Response> {
     try {
       if (path === "/") {
         const instances = await instaticService.listInstances();
-        const { snap, ageSeconds } = instaticService.snapshot();
+        let panelSites: SanitizedSite[] = [];
+        let snapshotAge = Infinity;
+        let snapshotTakenAt = "";
+        try {
+          const { snap, ageSeconds } = instaticService.snapshot();
+          panelSites = snap.sites;
+          snapshotAge = ageSeconds;
+          snapshotTakenAt = snap.updatedAt;
+        } catch {
+          // Snapshot missing or unreadable; fallback to wrapper live data
+        }
         // The dashboard needs the registry listing too, not just /new. Without
         // it the page showed each instance's pinned tag with nothing to compare
         // it against, so a new Instatic release was invisible here and the
@@ -58,7 +69,7 @@ export async function handle(req: Request, path: string): Promise<Response> {
         const available = await listAvailableTags();
         return html(
           layout("Instatic instances",
-            dashboardView(instances, await instaticService.nextPort(), ageSeconds, snap.sites, available)),
+            dashboardView(instances, await instaticService.nextPort(), snapshotAge, panelSites, available, snapshotTakenAt)),
           csrf
         );
       }
