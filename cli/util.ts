@@ -36,18 +36,39 @@ export function run(cmd: string, args: string[], opts: ExecFileSyncOptions = {})
   return execFileSync(cmd, args, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], ...opts }) as string;
 }
 
+function outputText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value instanceof Uint8Array) return Buffer.from(value).toString("utf-8");
+  return value == null ? "" : String(value);
+}
+
+function commandFailureMessage(cmd: string, args: string[]): string {
+  return `Command failed: ${cmd}${args.length ? ` ${args.join(" ")}` : ""}`;
+}
+
 /** Run a command, returning success rather than throwing. */
 export function tryRun(cmd: string, args: string[]): { ok: boolean; out: string } {
   try {
-    return { ok: true, out: run(cmd, args).trim() };
+    const result = Bun.spawnSync([cmd, ...args], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: process.env,
+    });
+    if (result.success) return { ok: true, out: outputText(result.stdout).trim() };
+    const stderr = outputText(result.stderr);
+    const stdout = outputText(result.stdout);
+    return { ok: false, out: (stderr || stdout || commandFailureMessage(cmd, args)).trim() };
   } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; message?: string };
-    return { ok: false, out: (e.stderr || e.stdout || e.message || "").trim() };
+    const e = err as { stdout?: unknown; stderr?: unknown; message?: unknown };
+    const stderr = outputText(e.stderr);
+    const stdout = outputText(e.stdout);
+    return { ok: false, out: (stderr || stdout || outputText(e.message) || commandFailureMessage(cmd, args)).trim() };
   }
 }
 
 export function have(cmd: string): boolean {
-  return tryRun("command", ["-v", cmd]).ok || tryRun("/usr/bin/which", [cmd]).ok;
+  return Bun.which(cmd, { PATH: process.env.PATH }) !== null;
 }
 
 /**

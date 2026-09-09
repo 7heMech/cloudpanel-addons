@@ -27,7 +27,6 @@
 // entry -- and then the two reconciliation timers overwrote each other every
 // fifteen minutes, forever.
 
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync, realpathSync } from "node:fs";
 import {
@@ -74,7 +73,7 @@ function resolvePaths(p?: Partial<InjectPaths>): InjectPaths {
 }
 
 function sha256(s: string): string {
-  return createHash("sha256").update(s).digest("hex");
+  return Bun.CryptoHasher.hash("sha256", s, "hex");
 }
 
 const startMarker = (addon: string, slug: string) => `{# clp-addons:${addon}:${slug}:start #}`;
@@ -485,11 +484,26 @@ function nginxStateFiles(stateDir: string): { pristine: string; hash: string; pa
 
 function commandFailure(command: string, args: string[]): string | null {
   try {
-    execFileSync(command, args, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-    return null;
+    const result = Bun.spawnSync([command, ...args], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: process.env,
+    });
+    if (result.success) return null;
+    const stderr = result.stderr.toString("utf-8");
+    const stdout = result.stdout.toString("utf-8");
+    return (stderr || stdout || `Command failed: ${command}${args.length ? ` ${args.join(" ")}` : ""}`).trim();
   } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; message?: string };
-    return (e.stderr || e.stdout || e.message || `${command} failed`).toString().trim();
+    const e = err as { stdout?: unknown; stderr?: unknown; message?: unknown };
+    const output = (value: unknown): string => {
+      if (typeof value === "string") return value;
+      if (value instanceof Uint8Array) return Buffer.from(value).toString("utf-8");
+      return value == null ? "" : String(value);
+    };
+    const stderr = output(e.stderr);
+    const stdout = output(e.stdout);
+    return (stderr || stdout || output(e.message) || `Command failed: ${command}${args.length ? ` ${args.join(" ")}` : ""}`).trim();
   }
 }
 

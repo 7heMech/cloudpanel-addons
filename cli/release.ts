@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { GH_PRIVATE, REPO } from "./paths";
@@ -62,7 +61,7 @@ export async function resolveRelease(requested?: string, allowPrerelease = false
 }
 
 function sha256(bytes: Buffer): string {
-  return createHash("sha256").update(bytes).digest("hex");
+  return Bun.CryptoHasher.hash("sha256", bytes, "hex");
 }
 
 export function parseSums(text: string): Map<string, string> {
