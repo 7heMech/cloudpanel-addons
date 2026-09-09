@@ -2530,6 +2530,7 @@ cmd_clone() {
 
 job_json() {
   local dir=$1 id=$2 result port
+  local has_panel_db=${3:-0} panel_sites=${4:-}
   result=$(cat "${dir}/result.json" 2>/dev/null || true)
   [[ -n $result ]] || result="null"
   # Reported so the app can keep a second Instatic clone off a port the first
@@ -2538,7 +2539,19 @@ job_json() {
   # `"port":,` would make the whole reply unparseable and empty the dashboard.
   port=$(job_get "$dir" port)
   [[ $port =~ ^[0-9]+$ ]] || port=0
-  printf '{"id":%s,"source":%s,"target":%s,"port":%d,"state":%s,"step":%s,"error":%s,"createdAt":%s,"startedAt":%s,"finishedAt":%s,"result":%s}' \
+  local panel_site="null"
+  if (( has_panel_db )) && [[ $(job_get "$dir" state) == "done" ]]; then
+    local target
+    target=$(job_get "$dir" target)
+    if [[ -n $target ]]; then
+      if printf '%s\n' "$panel_sites" | grep -Fxq "$target"; then
+        panel_site="true"
+      else
+        panel_site="false"
+      fi
+    fi
+  fi
+  printf '{"id":%s,"source":%s,"target":%s,"port":%d,"state":%s,"step":%s,"error":%s,"createdAt":%s,"startedAt":%s,"finishedAt":%s,"result":%s,"panelSite":%s}' \
     "$(json_str "$id")" \
     "$(json_str "$(job_get "$dir" source)")" \
     "$(json_str "$(job_get "$dir" target)")" \
@@ -2549,21 +2562,32 @@ job_json() {
     "$(json_str "$(job_get "$dir" createdAt)")" \
     "$(json_str "$(job_get "$dir" startedAt)")" \
     "$(json_str "$(job_get "$dir" finishedAt)")" \
-    "$result"
+    "$result" \
+    "$panel_site"
 }
 
 cmd_job() {
   local id=$1 dir
   dir=$(job_dir "$id")
   [[ -d $dir ]] || emit_err "no such job: ${id}"
+  local panel_sites="" has_panel_db=0
+  if [[ -r $PANEL_DB ]]; then
+    panel_sites=$(sqlite3 -readonly "$PANEL_DB" "SELECT domain_name FROM site;" 2>/dev/null || true)
+    has_panel_db=1
+  fi
   local body tail_log
-  body=$(job_json "$dir" "$id")
+  body=$(job_json "$dir" "$id" "$has_panel_db" "$panel_sites")
   tail_log=$(tail -n "$LOG_TAIL_LINES" "${dir}/log" 2>/dev/null || true)
   printf '{"ok":true,"data":{"job":%s,"log":%s}}\n' "$body" "$(json_str "$tail_log")"
 }
 
 cmd_jobs() {
   local out="" first=1 dir id
+  local panel_sites="" has_panel_db=0
+  if [[ -r $PANEL_DB ]]; then
+    panel_sites=$(sqlite3 -readonly "$PANEL_DB" "SELECT domain_name FROM site;" 2>/dev/null || true)
+    has_panel_db=1
+  fi
   # Newest first: the id starts with a UTC timestamp, so a reverse sort of the
   # directory names is a reverse sort by time.
   for dir in $(ls -1 "$JOBS_DIR" 2>/dev/null | sort -r); do
@@ -2571,7 +2595,7 @@ cmd_jobs() {
     [[ $dir =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$ ]] || continue
     id=$dir
     (( first == 1 )) || out+=","
-    out+=$(job_json "${JOBS_DIR}/${dir}" "$id")
+    out+=$(job_json "${JOBS_DIR}/${dir}" "$id" "$has_panel_db" "$panel_sites")
     first=0
   done
   emit_ok "{\"jobs\":[${out}]}"

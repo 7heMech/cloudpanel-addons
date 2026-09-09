@@ -174,12 +174,32 @@ function stateClass(state: string): string {
   return known.includes(state) ? `state-${state}` : "state-unknown";
 }
 
+export function isInstanceMissing(
+  instance: InstanceView,
+  snapshotAge: number,
+  panelSites: SanitizedSite[],
+  snapshotTakenAt?: string
+): boolean {
+  if (instance.panelSite === false) return true;
+  if (instance.panelSite === true) return false;
+  if (snapshotAge > 3600) return false;
+  if (snapshotTakenAt) {
+    const taken = Date.parse(snapshotTakenAt);
+    const created = Date.parse(instance.createdAt);
+    if (!Number.isNaN(taken) && !Number.isNaN(created) && created >= taken) {
+      return false;
+    }
+  }
+  return !panelSites.some((s) => s.domain === instance.domain);
+}
+
 export function dashboardView(
   instances: InstanceView[],
   nextPort: number,
   snapshotAge: number,
   panelSites: SanitizedSite[] = [],
-  available: AvailableTags = { tags: [], source: "fallback", latest: null }
+  available: AvailableTags = { tags: [], source: "fallback", latest: null },
+  snapshotTakenAt = ""
 ): string {
   const running = instances.filter((i) => i.state === "running").length;
 
@@ -199,18 +219,26 @@ export function dashboardView(
       : "";
 
   const rows = instances
-    .map(
-      (i) => `<tr>
+    .map((i) => {
+      const missing = isInstanceMissing(i, snapshotAge, panelSites, snapshotTakenAt);
+      return `<tr>
   <td>
-    <a href="https://${esc(i.domain)}" target="_blank" rel="noreferrer noopener">${esc(i.domain)}</a>
-    ${snapshotAge <= 3600 && !panelSites.some((s) => s.domain === i.domain) ? '<div class="hint">CloudPanel site missing. Delete here to archive and clean up the instance.</div>' : ''}
+    ${
+      missing
+        ? `<span class="mono">${esc(i.domain)}</span>`
+        : `<a href="https://${esc(i.domain)}" target="_blank" rel="noreferrer noopener">${esc(i.domain)}</a>`
+    }
+    ${missing ? '<div class="hint">CloudPanel site deleted. Delete here to archive and clean up the instance.</div>' : ''}
   </td>
   <td class="mono">127.0.0.1:${esc(i.port)}</td>
   <td>
     <span class="badge">${esc(i.tag)}</span>
     ${behind(i.tag) ? `<span class="badge behind" title="${esc(latest)} is available">${esc(latest)} available</span>` : ""}
   </td>
-  <td><span class="badge ${stateClass(i.state)}">${esc(i.state)}</span></td>
+  <td>
+    <span class="badge ${stateClass(i.state)}">${esc(i.state)}</span>
+    ${missing ? '<span class="badge" style="color:var(--bad);border-color:var(--bad);margin-left:0.25rem;">deleted</span>' : ''}
+  </td>
   <td><details class="row-actions"><summary class="btn">Manage</summary><div class="actions">
     ${
       i.state === "running"
@@ -224,8 +252,8 @@ export function dashboardView(
     <button class="btn" onclick="showLogs('${escJs(i.domain)}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${escJs(i.domain)}')">Delete</button>
   </div></details></td>
-</tr>`
-    )
+</tr>`;
+    })
     .join("\n");
 
   // Auto-update is off by default because Instatic is 0.0.x, which only works as

@@ -11,7 +11,7 @@
 // The Function constructor compiles without executing, which is exactly the
 // check that was missing.
 
-import { CLIENT_JS, dashboardView, newInstanceView } from "../addons/instatic/app/views";
+import { CLIENT_JS, dashboardView, isInstanceMissing, newInstanceView } from "../addons/instatic/app/views";
 import { BASE_CLIENT_JS } from "../lib/app-ui";
 import { CLIENT_JS as STAGER_CLIENT_JS, isSiteMissing, jobsView, jobView } from "../addons/stager/app/views";
 import type { JobView } from "../addons/stager/app/service";
@@ -1719,6 +1719,83 @@ console.log("\n== instatic TLS certificate option ==");
   check("validate_flag accepts 'yes'", testFlag("yes"));
   check("validate_flag accepts 'no'", testFlag("no"));
   check("validate_flag rejects invalid values", !testFlag("maybe") && !testFlag("true") && !testFlag(""));
+}
+
+
+console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
+{
+  const instBase: InstanceView = {
+    domain: "inst.example.com",
+    port: 39001,
+    tag: "0.0.18",
+    container: "instatic-inst.example.com",
+    siteUser: "inst_user",
+    createdAt: "2026-09-09T09:00:00Z",
+    state: "running",
+  };
+
+  const snapSites = [{ domain: "other.example.com", user: "other", type: "php" }];
+  const snapTime = "2026-09-09T10:00:00Z";
+
+  // Live wrapper check overrides snapshot:
+  check("panelSite === false marks instance as missing immediately",
+    isInstanceMissing({ ...instBase, panelSite: false }, 10, [...snapSites, { domain: "inst.example.com", user: "inst_user", type: "reverse-proxy" }], snapTime));
+
+  check("panelSite === true marks instance as present even if absent from snapshot",
+    !isInstanceMissing({ ...instBase, panelSite: true }, 10, snapSites, snapTime));
+
+  // Snapshot fallback when panelSite is undefined:
+  check("an instance absent from a newer snapshot is missing",
+    isInstanceMissing(instBase, 120, snapSites, snapTime));
+
+  check("an instance present in the snapshot is NOT missing",
+    !isInstanceMissing(instBase, 120, [...snapSites, { domain: "inst.example.com", user: "inst_user", type: "reverse-proxy" }], snapTime));
+
+  check("an instance created AFTER the snapshot was taken is not marked missing yet",
+    !isInstanceMissing(instBase, 120, snapSites, "2026-09-09T08:55:00Z"));
+
+  check("a stale snapshot (> 3600s) does not falsely report missing",
+    !isInstanceMissing(instBase, 3601, snapSites, snapTime));
+
+  // dashboardView rendering:
+  const missingHtml = dashboardView(
+    [{ ...instBase, panelSite: false }],
+    39002, 120, snapSites, { tags: ["0.0.18"], source: "registry", latest: "0.0.18" }, snapTime
+  );
+  check("dashboardView renders CloudPanel site deleted hint and deleted badge for missing instances",
+    missingHtml.includes("CloudPanel site deleted. Delete here to archive and clean up the instance.")
+    && missingHtml.includes("deleted</span>")
+    && !missingHtml.includes('href="https://inst.example.com"'));
+
+  const presentHtml = dashboardView(
+    [{ ...instBase, panelSite: true }],
+    39002, 120, snapSites, { tags: ["0.0.18"], source: "registry", latest: "0.0.18" }, snapTime
+  );
+  check("dashboardView does not show deleted notice when site is present",
+    !presentHtml.includes("CloudPanel site deleted")
+    && presentHtml.includes('href="https://inst.example.com"'));
+
+  // Stager live wrapper check:
+  const stgJob: JobView = {
+    id: "20260909T100000Z-112233",
+    source: "prod.example.com",
+    target: "stg.example.com",
+    port: 0,
+    state: "done",
+    step: "",
+    createdAt: "2026-09-09T09:00:00Z",
+    finishedAt: "2026-09-09T09:05:00Z",
+    result: null,
+  };
+  check("stager panelSite === false marks job as missing immediately",
+    isSiteMissing({ ...stgJob, panelSite: false }, 10, [{ domain: "stg.example.com", user: "u", type: "php" }], snapTime));
+  check("stager panelSite === true marks job as NOT missing even if absent from snapshot",
+    !isSiteMissing({ ...stgJob, panelSite: true }, 10, [], snapTime));
+
+  check("clp-action-stager jobs includes panelSite in JSON output",
+    readFileSync("addons/stager/wrapper/clp-action-stager", "utf-8").includes('"panelSite":%s'));
+  check("clp-action-instatic list includes panelSite in JSON output",
+    readFileSync("addons/instatic/wrapper/clp-action-instatic", "utf-8").includes('"panelSite":%s'));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
