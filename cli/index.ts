@@ -295,12 +295,9 @@ async function cmdInstall(argv: string[]): Promise<void> {
   // The manager's own gate first, because it is the one that holds regardless
   // of what the operator does next.
   if (managerAuth.source === "generated") {
-    log.plain();
-    log.warn(`  The manager requires a credential. This is the only time it is shown:`);
-    log.plain(`      user      ${managerAuth.user}`);
-    log.plain(`      password  ${managerAuth.password}`);
-    log.plain(`  To use one password here and in the vhost, set Site → Security → Basic Auth`);
-    log.plain(`  in CloudPanel and run: clp-addons repair`);
+    // writeManagerAuth already printed it, at the moment it existed in the
+    // clear. Saying it twice invites the reading that there are two.
+    log.plain(`  The manager credential was generated above (user ${managerAuth.user})`);
   } else if (managerAuth.source === "panel") {
     log.ok(`  The manager accepts this site's CloudPanel Basic Auth credential (user ${managerAuth.user})`);
   } else {

@@ -211,6 +211,21 @@ export function writeManagerAuth(domain: string, user: string, quiet = false): M
     formatAuth("clpaddons", password);
   writeAtomic(MANAGER_AUTH_FILE, body, 0o640);
   run("chown", [`root:${user}`, MANAGER_AUTH_FILE]);
+
+  // Printed here rather than left to the caller, and printed even when the
+  // caller asked for quiet. Only the plaintext is any use and only this moment
+  // has it -- the file keeps a scrypt hash. `update` and `repair` both pass
+  // quiet=true and discard the return value, so a box upgrading into this
+  // version with no panel Basic Auth would have had a credential generated,
+  // written, and never shown: an operator locked out of their own manager, and
+  // deleting the file to retry would only generate another unshown one.
+  log.plain();
+  log.warn("The manager requires a credential. This is the only time it is shown:");
+  log.plain(`    user      clpaddons`);
+  log.plain(`    password  ${password}`);
+  log.plain(`  To use one password here and in the vhost instead, set Site → Security →`);
+  log.plain(`  Basic Auth in CloudPanel and run: clp-addons repair`);
+  log.plain();
   return { source: "generated", user: "clpaddons", password };
 }
 
