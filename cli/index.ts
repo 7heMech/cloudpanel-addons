@@ -295,12 +295,11 @@ async function cmdInstall(argv: string[]): Promise<void> {
   // The manager's own gate first, because it is the one that holds regardless
   // of what the operator does next.
   if (managerAuth.source === "generated") {
-    log.plain();
-    log.warn(`  The manager requires a credential. This is the only time it is shown:`);
-    log.plain(`      user      ${managerAuth.user}`);
-    log.plain(`      password  ${managerAuth.password}`);
-    log.plain(`  To use one password here and in the vhost, set Site → Security → Basic Auth`);
-    log.plain(`  in CloudPanel and run: clp-addons repair`);
+    // writeManagerAuth already printed it, at the moment it existed in the
+    // clear. Saying it twice invites the reading that there are two.
+    log.plain(`  The manager credential was generated above (user ${managerAuth.user})`);
+  } else if (managerAuth.source === "absent") {
+    log.err(`  No manager credential was written, so the manager is refusing every request.`);
   } else if (managerAuth.source === "panel") {
     log.ok(`  The manager accepts this site's CloudPanel Basic Auth credential (user ${managerAuth.user})`);
   } else {
@@ -392,7 +391,10 @@ async function cmdUpdate(argv: string[]): Promise<void> {
     writeConfig(spec, domain, user);
 
     installUnits(installedAddons(), user);
-    writeManagerAuth(domain, user, true);
+    // Not quiet: `update` is always run by an operator, so if this box has no
+    // credential yet it may generate one and show it. Only the timer is
+    // unattended, and only the timer must not mint a secret.
+    writeManagerAuth(domain, user, false);
     startUnits();
     reconcileAnchors(false);
     pruneReleases();

@@ -155,7 +155,7 @@ export function panelBasicAuthCredential(domain: string): { user: string; passwo
   return { user, password };
 }
 
-export type ManagerAuthSource = "panel" | "existing" | "generated";
+export type ManagerAuthSource = "panel" | "existing" | "generated" | "absent";
 export interface ManagerAuthResult {
   source: ManagerAuthSource;
   user: string;
@@ -178,6 +178,16 @@ export interface ManagerAuthResult {
  * because `repair` runs from a timer and silently changing the password out
  * from under a working install is its own outage. Only a box with neither gets
  * a generated one, which is printed once.
+ */
+/**
+ * `quiet` means "nobody is watching", not merely "print less".
+ *
+ * The reconciliation timer runs `repair --quiet`, and a timer must never mint a
+ * secret: printing it would put the password in the journal, and not printing
+ * it would leave a credential nobody has. So an unattended run declines to
+ * generate and says what is missing. The manager then stays 503 -- which is the
+ * honest state, and what `status` already reports -- until an operator runs
+ * repair themselves. Every interactive path passes false and may generate.
  */
 export function writeManagerAuth(domain: string, user: string, quiet = false): ManagerAuthResult {
   const panel = panelBasicAuthCredential(domain);
@@ -202,6 +212,17 @@ export function writeManagerAuth(domain: string, user: string, quiet = false): M
     return { source: "existing", user: named };
   }
 
+  if (quiet) {
+    log.err(
+      `no manager credential exists at ${MANAGER_AUTH_FILE}, and an unattended run\n` +
+        `  will not create one -- a generated password printed here would go to the\n` +
+        `  journal, and one not printed would be a password nobody has. The manager\n` +
+        `  is refusing every request until this is resolved. Either set Site →\n` +
+        `  Security → Basic Auth in CloudPanel, or run: clp-addons repair`
+    );
+    return { source: "absent", user: "" };
+  }
+
   // 24 bytes of base64url: enough that the scrypt cost is irrelevant to an
   // attacker, and short enough to be pasted into a browser prompt.
   const password = randomBytes(24).toString("base64url");
@@ -211,6 +232,21 @@ export function writeManagerAuth(domain: string, user: string, quiet = false): M
     formatAuth("clpaddons", password);
   writeAtomic(MANAGER_AUTH_FILE, body, 0o640);
   run("chown", [`root:${user}`, MANAGER_AUTH_FILE]);
+
+  // Printed here rather than left to the caller. Only the plaintext is any use
+  // and only this moment has it -- the file keeps a scrypt hash -- and three
+  // callers all had to remember. `update` and `repair` passed quiet=true and
+  // discarded what this returns, so a box that reached either of them without a
+  // credential had one generated, written and never shown: an operator locked
+  // out of their own manager, where deleting the file to retry would only
+  // generate another unshown one.
+  log.plain();
+  log.warn("The manager requires a credential. This is the only time it is shown:");
+  log.plain(`    user      clpaddons`);
+  log.plain(`    password  ${password}`);
+  log.plain(`  To use one password here and in the vhost instead, set Site → Security →`);
+  log.plain(`  Basic Auth in CloudPanel and run: clp-addons repair`);
+  log.plain();
   return { source: "generated", user: "clpaddons", password };
 }
 
