@@ -79,7 +79,7 @@ try {
   writeFileSync(`${checksumDir}/artifact`, bytes);
   writeFileSync(`${checksumDir}/SHA256SUMS`, `${expected} *artifact\nnot-a-checksum artifact\n`);
   const loaded = loadLocal(checksumDir, ["artifact"]);
-  check("loadLocal accepts a valid Bun SHA-256 checksum", loaded.length === 1 && loaded[0]?.bytes.equals(bytes));
+  check("loadLocal accepts a valid Bun SHA-256 checksum", loaded.length === 1 && (loaded[0]?.bytes.equals(bytes) ?? false));
 
   writeFileSync(`${checksumDir}/artifact`, Buffer.from("tampered\n", "utf-8"));
   check("loadLocal keeps rejecting checksum mismatches", throws(() => loadLocal(checksumDir, ["artifact"])));
@@ -117,11 +117,12 @@ check("tag sorting uses reversed Bun semver order", tagsSource.includes("Bun.sem
 
 const originalFetch = globalThis.fetch;
 try {
-  globalThis.fetch = async (input) => {
+  const fetchMock: typeof fetch = Object.assign(async (input: string | URL | Request) => {
     const url = String(input);
     if (url.includes("/token?")) return new Response(JSON.stringify({ token: "test-token" }));
     return new Response(JSON.stringify({ tags: ["1.0.9", "1.0.18", "not-a-version", "1.0.10"] }));
-  };
+  }, { preconnect: originalFetch.preconnect });
+  globalThis.fetch = fetchMock;
   const listed = await listAvailableTags();
   check("registry tags are filtered and sorted descending", listed.tags.join(",") === "1.0.18,1.0.10,1.0.9", listed.tags.join(","));
 } finally {

@@ -1558,11 +1558,17 @@ if addon_needs_docker ${addons.map((a) => `'${a}'`).join(" ")}; then echo yes; e
     createdAt: "2026-09-09T09:00:00Z",
     startedAt: "2026-09-09T09:00:01Z",
     finishedAt: "2026-09-09T09:05:00Z",
+    error: "",
     result: {
       siteType: "php",
       siteUser: "stg-user",
+      phpVersion: "",
       vhostCarried: false,
+      vhostCarriedBy: "stock",
       vhostTemplate: "Generic",
+      database: null,
+      instatic: null,
+      notes: [],
     },
   };
 
@@ -1702,7 +1708,9 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
     state: "done",
     step: "",
     createdAt: "2026-09-09T09:00:00Z",
+    startedAt: "2026-09-09T09:00:01Z",
     finishedAt: "2026-09-09T09:05:00Z",
+    error: "",
     result: null,
   };
   check("stager panelSite === false marks job as missing immediately",

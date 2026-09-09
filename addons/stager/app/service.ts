@@ -11,6 +11,7 @@ interface RunCommandOptions {
 
 interface CommandFailure {
   code?: number | string | null;
+  reason?: string;
 }
 
 interface CommandResult {
@@ -58,9 +59,19 @@ async function runCommand(
   const stderr = stderrResult.status === "fulfilled" ? stderrResult.value : "";
   const exitCode = exitResult.status === "fulfilled" ? exitResult.value : undefined;
   const outputFailed = stdoutResult.status === "rejected" || stderrResult.status === "rejected";
+  const terminated = child.signalCode !== null;
+  const outputLimited =
+    Buffer.byteLength(stdout, "utf8") > options.maxBuffer ||
+    Buffer.byteLength(stderr, "utf8") > options.maxBuffer;
 
   return {
-    error: exitCode === 0 && !outputFailed ? null : { code: exitCode },
+    error: exitCode === 0 && !outputFailed && !terminated && !outputLimited
+      ? null
+      : {
+          code: exitCode,
+          ...(terminated ? { reason: "wrapper process terminated" } : {}),
+          ...(outputLimited ? { reason: `wrapper output exceeded ${options.maxBuffer} bytes` } : {}),
+        },
     stdout,
     stderr,
   };
@@ -85,12 +96,18 @@ export interface WrapperResult<T = unknown> {
   error?: string;
 }
 
-async function callWrapper<T = unknown>(
+export interface WrapperCallOptions {
+  timeout?: number;
+  maxBuffer?: number;
+}
+
+export async function callWrapper<T = unknown>(
   verb: string,
   args: string[],
   // On stdin rather than in argv, because the only value that ever needs this
   // is a password and argv is world-readable through /proc.
-  input?: string
+  input?: string,
+  options: WrapperCallOptions = {},
 ): Promise<WrapperResult<T>> {
   const argv = [verb, ...args];
   const runningAsRoot = process.getuid?.() === 0;
@@ -100,18 +117,17 @@ async function callWrapper<T = unknown>(
   const { error, stdout, stderr } = await runCommand(
     cmd,
     cmdArgs,
-    { timeout: TIMEOUTS[verb] ?? DEFAULT_TIMEOUT, maxBuffer: 8 * 1024 * 1024 },
+    {
+      timeout: options.timeout ?? TIMEOUTS[verb] ?? DEFAULT_TIMEOUT,
+      maxBuffer: options.maxBuffer ?? 8 * 1024 * 1024,
+    },
     input
   );
-  if (error && !stdout.trim()) {
-    // Never `error.message`. execFile builds it as "Command failed: <full
-    // argv>", so logging it put every argument this addon passes -- including
-    // --email, the address of another site's administrator -- into the journal,
-    // which is the same mistake as passing a credential in argv with an extra
-    // step. The wrapper's own stderr is the useful half and carries nothing that
-    // was not meant to be read.
-    const why = stderr.trim() || `wrapper ${verb} exited ${error.code ?? "abnormally"}`;
-    console.error(`[wrapper] ${verb} failed without a JSON reply:`, why);
+  if (error) {
+    // Never log a subprocess error object: its message may contain the full
+    // argv. The wrapper's stderr is the useful, non-secret diagnostic channel.
+    const why = error.reason ?? (stderr.trim() || `wrapper ${verb} exited ${error.code ?? "abnormally"}`);
+    console.error(`[wrapper] ${verb} failed before a valid JSON reply:`, why);
     return { ok: false, error: why };
   }
 

@@ -8,7 +8,9 @@
 
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ADDONS, PANEL_DB } from "../cli/paths";
 import { writeAtomic } from "../cli/util";
 import { PORT_RANGE, SNAPSHOT_FILE, type PanelSnapshot, type SanitizedSite } from "./snapshot-reader";
@@ -48,46 +50,69 @@ function addPort(ports: Set<number>, raw: string | number | null): void {
   if (Number.isInteger(n) && n > 0 && n < 65536) ports.add(n);
 }
 
+interface IsolatedDatabase {
+  db: Database;
+  directory: string;
+}
+
+function openIsolatedDatabase(databasePath: string): IsolatedDatabase | null {
+  let directory: string | undefined;
+  try {
+    directory = mkdtempSync(join(tmpdir(), "clp-panel-db-"));
+    const isolatedPath = join(directory, "panel.sqlite");
+    copyFileSync(databasePath, isolatedPath);
+
+    // A WAL database's committed state can be split across all three files.
+    // Open only the copy so Bun cannot create sidecars beside the panel DB.
+    for (const suffix of ["-wal", "-shm"] as const) {
+      const sidecar = `${databasePath}${suffix}`;
+      if (existsSync(sidecar)) copyFileSync(sidecar, `${isolatedPath}${suffix}`);
+    }
+
+    return { db: new Database(isolatedPath, { readonly: true }), directory };
+  } catch {
+    if (directory) rmSync(directory, { recursive: true, force: true });
+    return null;
+  }
+}
+
 export function readPanelDatabase(databasePath = PANEL_DB): PanelDatabaseSnapshot {
   if (!existsSync(databasePath)) return emptyPanelDatabaseSnapshot();
 
-  let db: Database;
-  try {
-    db = new Database(databasePath, { readonly: true });
-  } catch {
-    return emptyPanelDatabaseSnapshot();
-  }
+  const isolated = openIsolatedDatabase(databasePath);
+  if (!isolated) return emptyPanelDatabaseSnapshot();
 
   const ports = new Set<number>();
   const sites: SanitizedSite[] = [];
   try {
-    for (const row of queryRows<SiteRow>(db, "SELECT domain_name, user, type FROM site;")) {
+    for (const row of queryRows<SiteRow>(isolated.db, "SELECT domain_name, user, type FROM site;")) {
       const domain = asText(row.domain_name);
       if (domain) sites.push({ domain, user: asText(row.user), type: asText(row.type) });
     }
 
     for (const row of queryRows<ValueRow>(
-      db,
+      isolated.db,
       "SELECT pool_port AS value FROM php_settings WHERE pool_port IS NOT NULL;",
     )) addPort(ports, row.value);
     for (const row of queryRows<ValueRow>(
-      db,
+      isolated.db,
       "SELECT port AS value FROM nodejs_settings WHERE port IS NOT NULL;",
     )) addPort(ports, row.value);
     for (const row of queryRows<ValueRow>(
-      db,
+      isolated.db,
       "SELECT port AS value FROM python_settings WHERE port IS NOT NULL;",
     )) addPort(ports, row.value);
 
     for (const row of queryRows<ValueRow>(
-      db,
+      isolated.db,
       "SELECT reverse_proxy_url AS value FROM site WHERE reverse_proxy_url IS NOT NULL AND reverse_proxy_url != '';",
     )) {
       const m = asText(row.value).match(/:(\d{2,5})(?:\/|$)/);
       if (m) addPort(ports, m[1] ?? null);
     }
   } finally {
-    db.close();
+    isolated.db.close();
+    rmSync(isolated.directory, { recursive: true, force: true });
   }
 
   return { allocatedPorts: [...ports].sort((a, b) => a - b), sites };

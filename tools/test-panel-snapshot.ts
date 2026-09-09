@@ -93,6 +93,49 @@ try {
   const malformed = readPanelDatabase(malformedPath);
   check("a malformed database is treated as empty", malformed.sites.length === 0 && malformed.allocatedPorts.length === 0);
   check("a malformed database produces no WAL sidecars", sidecars(malformedPath).length === 0);
+
+  const walPath = join(fixtureDir, "wal.sqlite");
+  const walDb = new Database(walPath);
+  try {
+    walDb.run("PRAGMA journal_mode=WAL");
+    walDb.run("PRAGMA wal_autocheckpoint=0");
+    walDb.run("CREATE TABLE site (domain_name TEXT, user TEXT, type TEXT, reverse_proxy_url TEXT)");
+    walDb.query("INSERT INTO site VALUES (?, ?, ?, ?)").run(
+      "wal.example",
+      "wal-user",
+      "php",
+      "http://127.0.0.1:39124/",
+    );
+    walDb.run("CREATE TABLE php_settings (pool_port INTEGER)");
+    walDb.query("INSERT INTO php_settings VALUES (?)").run(39003);
+
+    const originalFiles = [walPath, `${walPath}-wal`, `${walPath}-shm`];
+    const beforeWal = originalFiles.map((file) => ({
+      file,
+      bytes: readFileSync(file),
+      mtimeMs: statSync(file).mtimeMs,
+    }));
+    const wal = readPanelDatabase(walPath);
+    const afterWal = originalFiles.map((file) => ({
+      file,
+      bytes: readFileSync(file),
+      mtimeMs: statSync(file).mtimeMs,
+    }));
+    check(
+      "a WAL database remains readable from the isolated copy",
+      wal.sites[0]?.domain === "wal.example" && wal.allocatedPorts.join(",") === "39003,39124",
+      JSON.stringify(wal),
+    );
+    check(
+      "a WAL scan leaves the original database and sidecars byte-for-byte unchanged",
+      beforeWal.length === afterWal.length && beforeWal.every((before, index) => {
+        const after = afterWal[index];
+        return after?.file === before.file && after.mtimeMs === before.mtimeMs && after.bytes.equals(before.bytes);
+      }),
+    );
+  } finally {
+    walDb.close(true);
+  }
 } finally {
   rmSync(fixtureDir, { recursive: true, force: true });
 }

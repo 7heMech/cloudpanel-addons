@@ -8,7 +8,13 @@ import { spawnSync } from "node:child_process";
 const source = readFileSync("addons/instatic/wrapper/clp-action-instatic", "utf8").split("# --- argument parsing")[0]!;
 const SCENARIOS = ["missing", "present", "archive-fails", "database-fails", "docker-fails", "panel-fails", "changed-site"] as const;
 
-test.serial.each(SCENARIOS)("delete %s", (scenario) => {
+function outputText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value instanceof Uint8Array) return Buffer.from(value).toString("utf8");
+  return value == null ? "" : String(value);
+}
+
+for (const scenario of SCENARIOS) test.serial(`delete ${scenario}`, () => {
   const root = mkdtempSync(`${tmpdir()}/delete-test-`);
   try {
     const data = `${root}/instances/example.com`;
@@ -32,9 +38,9 @@ cmd_delete example.com example.com
 `;
     const result = spawnSync("bash", [], { input: script, encoding: "utf8", env: { ...process.env, SCENARIO: scenario, TEST_ROOT: root } });
     const successful = ["missing", "present"].includes(scenario);
-    expect(result.status === 0, `${scenario}: ${result.stdout} ${result.stderr}`).toBe(successful);
+    expect(result.status === 0, `${scenario}: ${outputText(result.stdout)} ${outputText(result.stderr)}`).toBe(successful);
     expect(existsSync(data), `${scenario}: data retention`).toBe(!successful);
-    const actions = existsSync(`${root}/actions`) ? readFileSync(`${root}/actions`, "utf8") : "";
+    const actions = existsSync(`${root}/actions`) ? outputText(readFileSync(`${root}/actions`, "utf8")) : "";
     if (["archive-fails", "database-fails", "changed-site"].includes(scenario)) expect(actions).toBe("");
     if (scenario === "missing") expect(actions).toBe("docker-removed\n");
     if (scenario === "present") expect(actions).toBe("docker-removed\npanel-deleted\n");

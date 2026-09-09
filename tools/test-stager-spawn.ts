@@ -50,6 +50,14 @@ case "$mode" in
     printf '%s\\n' '{"ok":false,"error":"policy rejected"}'
     exit 9
     ;;
+  timeout)
+    printf '%s' '{"ok":true,"data":{"job":"should-not-be-accepted"}}'
+    sleep 1
+    ;;
+  max-buffer)
+    printf '%s' '{"ok":true,"data":{"job":"should-not-be-accepted"}}'
+    head -c 4096 /dev/zero | tr '\\0' ' '
+    ;;
   malformed)
     printf '%s\\n' 'not JSON'
     ;;
@@ -65,7 +73,7 @@ try {
   writeFileSync(modePath, "success\n");
 
   process.env.STAGER_WRAPPER = wrapperPath;
-  const { stagerService } = await import("../addons/stager/app/service.ts");
+  const { callWrapper, stagerService } = await import("../addons/stager/app/service.ts");
 
   const password = "secret password that must stay off argv";
   const mfaCode = "654321";
@@ -99,7 +107,18 @@ try {
 
   writeFileSync(modePath, "json-nonzero\n");
   const jsonFailure = await stagerService.getJob("20260909T120000Z-abcdef");
-  assert.deepEqual(jsonFailure, { ok: false, error: "policy rejected" });
+  assert.equal(jsonFailure.ok, false);
+  assert.match(jsonFailure.error ?? "", /wrapper job exited 9/);
+
+  writeFileSync(modePath, "timeout\n");
+  const timedOut = await callWrapper("job", [], undefined, { timeout: 25 });
+  assert.equal(timedOut.ok, false);
+  assert.equal(timedOut.error, "wrapper process terminated");
+
+  writeFileSync(modePath, "max-buffer\n");
+  const overLimit = await callWrapper("job", [], undefined, { maxBuffer: 256 });
+  assert.equal(overLimit.ok, false);
+  assert.equal(overLimit.error, "wrapper output exceeded 256 bytes");
 
   writeFileSync(modePath, "malformed\n");
   const malformed = await stagerService.getJob("20260909T120000Z-abcdef");
