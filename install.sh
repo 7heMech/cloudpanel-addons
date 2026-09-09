@@ -233,9 +233,72 @@ ok "${CLI_ARTIFACT} matches its recorded checksum"
 
 # The checksum detects corruption. Provenance is what detects substitution,
 # since whoever can swap the binary can swap SHA256SUMS beside it.
+# `gh attestation` arrived in gh 2.49. Debian bookworm's own package is 2.23,
+# which has no such subcommand -- so "is gh installed" was the wrong question
+# twice over: it answered no on a stock box, and on a box with Debian's gh it
+# answered yes and then failed the verification for a reason that had nothing to
+# do with the artifact. Ask what actually matters instead.
+gh_can_attest() { [[ -x ${1:-} || -n $(command -v "${1:-}" 2>/dev/null) ]] && "$1" attestation --help >/dev/null 2>&1; }
+
+# A private copy, deliberately not on PATH and not an apt repository. Adding
+# cli.github.com to a panel host's sources changes what every future
+# `apt upgrade` pulls, which is a much larger footprint than this script has any
+# business leaving behind for one verification.
+GH_PRIVATE="/usr/local/lib/clp-addons/gh"
+
+find_gh() {
+  local candidate
+  for candidate in "$GH_PRIVATE" "$(command -v gh 2>/dev/null || true)"; do
+    [[ -n $candidate ]] || continue
+    if gh_can_attest "$candidate"; then printf '%s' "$candidate"; return 0; fi
+  done
+  return 1
+}
+
+# Fetch gh itself rather than refusing. This adds no trust assumption: the
+# tarball comes from GitHub over the same TLS this script already relies on for
+# the artifact, and it is a *different* repository from ours -- so the attacker
+# the attestation defends against, one who can replace an asset in our release,
+# does not control it. Its own published checksum is checked on the way in.
+install_gh() {
+  local json tag base tarball
+  json=$(api "https://api.github.com/repos/cli/cli/releases/latest") || return 1
+  tag=$(printf '%s' "$json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  base="https://github.com/cli/cli/releases/download/${tag}"
+  tarball="gh_${tag#v}_linux_amd64.tar.gz"
+
+  curl -fsSL -o "${TMP}/${tarball}" "${base}/${tarball}" || return 1
+  curl -fsSL -o "${TMP}/gh_checksums.txt" "${base}/gh_${tag#v}_checksums.txt" || return 1
+  ( cd "$TMP" && grep " ${tarball}\$" gh_checksums.txt | sha256sum -c --status - ) || return 1
+
+  tar -xzf "${TMP}/${tarball}" -C "$TMP" || return 1
+  install -o root -g root -m 0755 -D "${TMP}/gh_${tag#v}_linux_amd64/bin/gh" "$GH_PRIVATE" || return 1
+  gh_can_attest "$GH_PRIVATE" || return 1
+  printf '%s' "$tag"
+}
+
 if (( SKIP_ATTESTATION )); then
   warn "provenance verification skipped"
-elif command -v gh >/dev/null; then
+else
+  if ! GH_BIN=$(find_gh); then
+    step "installing the GitHub CLI (needed to verify build provenance)"
+    if GH_TAG=$(install_gh); then
+      GH_BIN="$GH_PRIVATE"
+      ok "gh ${GH_TAG} installed to ${GH_PRIVATE}"
+    else
+      die "build provenance cannot be verified: no gh with 'gh attestation' is
+installed, and fetching one from github.com/cli/cli failed.
+
+Provenance is what detects a *substituted* binary. The checksum only detects a
+corrupted one, and it travelled down the same channel as the artifact -- while
+the next step installs that artifact as root and runs it.
+
+Install gh 2.49 or newer (https://github.com/cli/cli#installation) and re-run,
+or, accepting checksum-only verification, re-run with --skip-attestation."
+    fi
+  fi
+
   step "verifying build provenance"
   # The sigstore bundles are published as a release asset and verified offline.
   # Letting gh reach for the attestations API itself would demand `gh auth
@@ -251,7 +314,7 @@ elif command -v gh >/dev/null; then
     # that can mint an attestation satisfies the check, so a pull_request or
     # workflow_dispatch job added later would be enough. Releases come from one
     # workflow and this says so.
-    if gh attestation verify "${TMP}/${CLI_ARTIFACT}" \
+    if "$GH_BIN" attestation verify "${TMP}/${CLI_ARTIFACT}" \
          --bundle "${TMP}/attestations.jsonl" --repo "$REPO" \
          --signer-workflow "${REPO}/.github/workflows/release.yml" >/dev/null 2>&1; then
       ok "provenance verified against ${REPO}"
@@ -262,19 +325,6 @@ elif command -v gh >/dev/null; then
     die "no attestations.jsonl in release ${TAG}. Every release artifact is attested, so this
 release was not produced by the release workflow. Refusing to install from it."
   fi
-else
-  # Not a warning. The next two lines install this artifact as root and run it,
-  # and SHA256SUMS came down the same channel as the artifact -- a checksum
-  # detects corruption, not substitution. gh is absent on a stock Debian and so
-  # this was the *default* path, which made the strongest check the one almost
-  # nobody got. Refusing here makes the downgrade something an operator chooses.
-  die "gh is not installed, so build provenance cannot be verified.
-
-  apt-get install gh   (or see https://github.com/cli/cli#installation)
-
-Provenance is what detects a substituted binary; the checksum only detects a
-corrupted one, and it travelled with the artifact. To install anyway, knowing
-that, re-run with --skip-attestation."
 fi
 
 step "installing ${CLI_TARGET}"

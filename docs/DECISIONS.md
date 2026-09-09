@@ -858,6 +858,37 @@ mean hand-writing `site.vhost_template` on every install and re-asserting it
 after every regeneration. That makes a scoped, opt-in fallback into a mandatory
 step in everyone's install path -- a wider blast radius than the bug.
 
+### The installer provisions gh rather than refusing without it
+
+Provenance is the only check that detects a *substituted* binary -- the checksum
+travels down the same channel as the artifact -- and the next thing the
+installer does is run that artifact as root. So it cannot be optional by
+default. But refusing outright puts a manual step in front of every new box,
+and "is gh installed" turned out to be the wrong question twice over:
+
+- Debian bookworm's own package is **gh 2.23**, and `gh attestation` arrived in
+  **2.49**. On such a box the old check said yes and the verification then
+  failed, reported as "provenance verification failed" -- which points the
+  operator at the release rather than at their gh.
+- On a box with no gh at all, the installer used to warn and continue, so the
+  strongest check was the one almost nobody got.
+
+Both are fixed by asking whether `gh attestation` exists rather than whether gh
+does, and by fetching one when it does not. The tarball comes from
+`github.com/cli/cli` over the same TLS the artifact already relies on, and its
+published checksum is verified on the way in. This adds no trust assumption: it
+is a *different* repository, so the attacker the attestation defends against --
+one who can replace an asset in our release -- does not control it.
+
+It lands at `/usr/local/lib/clp-addons/gh`, not on PATH and not via
+`cli.github.com` in apt sources. Adding a third-party repository to a panel host
+changes what every later `apt upgrade` pulls, which is a far larger and more
+permanent footprint than one verification justifies. The CLI prefers that copy
+for the same reason, so `clp-addons update` keeps verifying on a box whose
+system gh is too old.
+
+`--skip-attestation` still exists and now means what it says.
+
 ## The Stager addon
 
 `clp-stager` is a Bash script you paste into `nano` on the server and run as

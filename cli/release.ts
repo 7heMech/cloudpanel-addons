@@ -10,7 +10,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { RELEASES_DIR, REPO } from "./paths";
+import { GH_PRIVATE, RELEASES_DIR, REPO } from "./paths";
 import { fatal, have, log, tryRun } from "./util";
 
 const API = "https://api.github.com";
@@ -189,6 +189,24 @@ export async function fetchVerified(rel: ResolvedRelease, names: string[]): Prom
  * subject's digest, so replacing an asset does not let an attacker produce one
  * that vouches for the replacement.
  */
+/**
+ * A gh that can actually verify an attestation, or null.
+ *
+ * `have("gh")` was the wrong question. `gh attestation` arrived in gh 2.49 and
+ * Debian bookworm ships 2.23, so on such a box the old check said yes and the
+ * verification then failed for a reason that had nothing to do with the
+ * artifact -- reported as "provenance verification failed", which sends an
+ * operator looking at the release rather than at their gh. The private copy
+ * install.sh places is preferred, since it is the one whose version we chose.
+ */
+function attestingGh(): string | null {
+  for (const candidate of [GH_PRIVATE, "gh"]) {
+    if (candidate !== "gh" && !existsSync(candidate)) continue;
+    if (tryRun(candidate, ["attestation", "--help"]).ok) return candidate;
+  }
+  return null;
+}
+
 export async function verifyAttestation(
   rel: ResolvedRelease,
   artifacts: FetchedArtifact[],
@@ -198,11 +216,18 @@ export async function verifyAttestation(
     log.warn("provenance verification skipped by --skip-attestation; checksums alone cannot detect substitution");
     return;
   }
-  if (!have("gh")) {
+  const gh = attestingGh();
+  if (!gh) {
     fatal(
-      "provenance verification needs the GitHub CLI (gh), which is not installed.\n" +
-        "  Debian/Ubuntu: https://github.com/cli/cli/blob/trunk/docs/install_linux.md\n" +
-        "  Or re-run with --skip-attestation to accept checksum-only verification."
+      have("gh")
+        ? "the installed GitHub CLI has no `gh attestation`, so provenance cannot be\n" +
+          "  verified. That subcommand arrived in gh 2.49; Debian bookworm ships 2.23.\n" +
+          `  Re-running the installer places a private copy at ${GH_PRIVATE}, or\n` +
+          "  upgrade gh: https://github.com/cli/cli/blob/trunk/docs/install_linux.md\n" +
+          "  Or re-run with --skip-attestation to accept checksum-only verification."
+        : "provenance verification needs the GitHub CLI (gh), which is not installed.\n" +
+          "  Debian/Ubuntu: https://github.com/cli/cli/blob/trunk/docs/install_linux.md\n" +
+          "  Or re-run with --skip-attestation to accept checksum-only verification."
     );
   }
 
@@ -228,7 +253,7 @@ export async function verifyAttestation(
       // pull_request or workflow_dispatch job added later -- by anyone who can
       // land a workflow file -- would produce artifacts that verify. Releases
       // come from exactly one workflow, and this is where that is asserted.
-      const r = tryRun("gh", [
+      const r = tryRun(gh, [
         "attestation", "verify", artifactPath,
         "--bundle", bundlePath,
         "--repo", REPO,

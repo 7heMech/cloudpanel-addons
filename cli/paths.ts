@@ -14,6 +14,14 @@ export const CURRENT_LINK = `${LIB_DIR}/current`;
 
 /** The CLI itself, bootstrapped once by the installer then self-updating. */
 export const CLI_BIN = "/usr/local/bin/clp-addons";
+/**
+ * A private copy of the GitHub CLI, placed by install.sh when the box has no gh
+ * that can verify attestations. Deliberately not on PATH and deliberately not
+ * an apt repository: adding cli.github.com to a panel host's sources changes
+ * what every later `apt upgrade` pulls, which is a far larger footprint than
+ * one verification justifies.
+ */
+export const GH_PRIVATE = `${LIB_DIR}/gh`;
 
 /**
  * The one compiled binary this project ships.
