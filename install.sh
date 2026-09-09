@@ -40,6 +40,10 @@ SELECTED=""
 DOMAIN=""
 ASSUME_YES=0
 SKIP_ATTESTATION=0
+# Deliberately not implied by --yes. That flag means "do not ask me about addons
+# and the hostname"; widening it into "add a root-equivalent group and rewrite
+# this host's iptables" is exactly the scope creep it should not have.
+INSTALL_DOCKER=0
 
 if [[ -t 1 ]]; then
   B=$'\033[1m'; DIM=$'\033[2m'; RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; N=$'\033[0m'
@@ -64,6 +68,7 @@ clp-addons installer
   --version=vX.Y.Z      install a specific release (default: latest)
   --yes                 non-interactive; requires --addons and --domain
   --skip-attestation    accept checksum-only verification
+  --install-docker      install Docker without asking, if an addon needs it
   --help
 
 Available addons: ${AVAILABLE_ADDONS[*]}
@@ -76,6 +81,7 @@ for arg in "$@"; do
     --domain=*)         DOMAIN="${arg#*=}" ;;
     --version=*)        VERSION="${arg#*=}" ;;
     --yes|-y)           ASSUME_YES=1 ;;
+    --install-docker)   INSTALL_DOCKER=1 ;;
     --skip-attestation) SKIP_ATTESTATION=1 ;;
     --help|-h)          usage; exit 0 ;;
     *)                  die "unknown option: $arg" ;;
@@ -98,13 +104,6 @@ for c in curl sha256sum sqlite3 systemctl; do
 done
 
 command -v clpctl >/dev/null || die "clpctl not found; this installer expects a CloudPanel host"
-
-if ! command -v docker >/dev/null; then
-  die "docker is not installed. Install it first: curl -fsSL https://get.docker.com | sh"
-fi
-if ! systemctl is-active --quiet docker; then
-  die "docker is installed but not running: systemctl enable --now docker"
-fi
 
 # A staging marker means this is a clone of production. Not fatal, but worth
 # saying out loud before something writes to a remote destination.
@@ -188,6 +187,64 @@ for a in "${ADDON_LIST[@]}"; do
   (( found )) || die "unknown addon '$a'. Available: ${AVAILABLE_ADDONS[*]}"
 done
 ok "installing: ${ADDON_LIST[*]}"
+
+# --- what the chosen addons need -------------------------------------------
+
+# Mirrors `requiresUnits` in cli/paths.ts, which is what the CLI itself gates on
+# (cli/index.ts). The two used to disagree: this script demanded Docker of
+# everyone in its preflight, while `clp-addons install stager` on the same box
+# was perfectly happy without it. The stricter of the two was the one with no
+# reason to be -- the Stager drives clpctl and tar and never opens a socket to a
+# daemon.
+addon_needs_docker() {
+  local a
+  for a in "$@"; do [[ $a == "instatic" ]] && return 0; done
+  return 1
+}
+
+if addon_needs_docker "${ADDON_LIST[@]}"; then
+  if ! command -v docker >/dev/null; then
+    say ""
+    say "${B}Docker is required by the instatic addon and is not installed.${N}"
+    say "${DIM}  Installing it adds a daemon, an apt repository that changes what later${N}"
+    say "${DIM}  upgrades pull, a bridge interface, iptables rules, and a docker group${N}"
+    say "${DIM}  that is equivalent to root. On a CloudPanel host the firewall rules are${N}"
+    say "${DIM}  the part worth thinking about. It is not removed when addons are.${N}"
+    say ""
+    say "${DIM}  To do it yourself instead: curl -fsSL https://get.docker.com | sh${N}"
+    say ""
+
+    if (( ! INSTALL_DOCKER )); then
+      if (( ASSUME_YES )) || ! have_tty; then
+        die "docker is not installed. Install it first (curl -fsSL https://get.docker.com | sh),
+pass --install-docker to have this script do it, or leave instatic out of --addons."
+      fi
+      printf 'Install Docker now via get.docker.com? [y/N]: '
+      read -r reply < /dev/tty || reply=""
+      [[ $reply =~ ^[Yy]$ ]] || die "not installing Docker. Re-run without instatic, or install it yourself."
+    fi
+
+    step "installing Docker via get.docker.com"
+    # Its own directory: TMP is not created until the release is fetched, and a
+    # predictable path under /tmp is not somewhere root should be running a
+    # script from.
+    docker_tmp=$(mktemp -d)
+    curl -fsSL https://get.docker.com -o "${docker_tmp}/get-docker.sh" \
+      || { rm -rf "$docker_tmp"; die "could not download the Docker install script"; }
+    sh "${docker_tmp}/get-docker.sh" || { rm -rf "$docker_tmp"; die "the Docker install script failed"; }
+    rm -rf "$docker_tmp"
+    command -v docker >/dev/null || die "the Docker install script ran but docker is still not on PATH"
+    ok "Docker installed"
+  fi
+
+  # Starting a daemon that is already installed is not the same imposition as
+  # installing one, so this is done rather than asked about.
+  if ! systemctl is-active --quiet docker; then
+    step "starting docker"
+    systemctl enable --now docker || die "could not start docker: systemctl enable --now docker"
+  fi
+  ok "docker is active"
+fi
 
 # --- the hostname -----------------------------------------------------------
 

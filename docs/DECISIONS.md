@@ -889,6 +889,35 @@ system gh is too old.
 
 `--skip-attestation` still exists and now means what it says.
 
+### Docker is asked about; gh is not
+
+Both are dependencies fetched over the network, and they are treated
+differently on purpose. `gh` is one static binary in a private directory: no
+daemon, no apt source, no group, no network changes, and deleting it costs
+nothing. Docker installs a daemon, adds a repository that changes what every
+later `apt upgrade` pulls, creates a bridge interface, rewrites iptables rules,
+and creates a `docker` group that is equivalent to root. On a CloudPanel host
+the firewall rules are the part that matters, because the panel manages its own.
+None of it is removed when the addons are.
+
+So the rule is *side effects that outlive the addon need consent*, not
+*dependencies are the operator's problem*. Docker is prompted for, defaulting to
+no, over the same `/dev/tty` the installer already uses. `--install-docker`
+exists for automation; `--yes` deliberately does not imply it, because that flag
+means "do not ask me about addons and the hostname" and widening it into "add a
+root-equivalent group and rewrite this host's firewall" is the scope creep it
+should not have. A daemon that is merely stopped is started without asking --
+that is not the same imposition as installing one.
+
+The check also moved out of the unconditional preflight and behind the addon
+selection, which is where it always belonged. `cli/index.ts` gates on the
+`requiresUnits` of the addon being installed, so `clp-addons install stager`
+never needed Docker; only the shell script demanded it of everyone, and the
+Stager drives clpctl and tar and never opens a socket to a daemon. The two now
+agree, and a test asserts the installer's list against the specs in paths.ts so
+a future addon declaring `requiresUnits: ["docker"]` cannot silently fall out of
+the prompt.
+
 ## The Stager addon
 
 `clp-stager` is a Bash script you paste into `nano` on the server and run as

@@ -1591,5 +1591,38 @@ console.log("\n== addons are told apart by the path they are mounted at ==");
   }
 }
 
+// The installer's Docker requirement must follow the addons actually chosen.
+// It used to be an unconditional preflight, so `--addons=stager` demanded a
+// daemon the Stager never opens a socket to -- while `clp-addons install
+// stager`, gating on the same requiresUnits, was happy without it.
+{
+  console.log("\n== Docker is required only by the addons that need it ==");
+
+  const fn = bashFunction("install.sh", "addon_needs_docker");
+  const asks = (...addons: string[]) => {
+    const r = execFileSync("bash", ["-c",
+      `${fn}
+if addon_needs_docker ${addons.map((a) => `'${a}'`).join(" ")}; then echo yes; else echo no; fi`,
+    ]).toString().trim();
+    return r === "yes";
+  };
+
+  check("the stager alone does not need Docker", !asks("stager"));
+  check("instatic alone needs Docker", asks("instatic"));
+  check("both together need Docker", asks("instatic", "stager"));
+  check("order does not matter", asks("stager", "instatic"));
+  check("an empty selection needs nothing", !asks());
+  check("an unknown addon does not drag Docker in", !asks("nonesuch"));
+
+  // The shell list is a hand-kept mirror of cli/paths.ts. If a future addon
+  // declares requiresUnits: ["docker"] and the installer is not updated, the
+  // preflight silently stops asking for a daemon that addon needs.
+  const dockerAddons = ADDON_NAMES.filter((n) => (ADDONS[n]!.requiresUnits ?? []).includes("docker"));
+  check("every addon whose spec requires docker is one the installer asks for",
+    dockerAddons.every((n) => asks(n)), dockerAddons.join(","));
+  check("no addon without that requirement triggers the prompt",
+    ADDON_NAMES.filter((n) => !dockerAddons.includes(n)).every((n) => !asks(n)));
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
