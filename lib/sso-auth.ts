@@ -21,15 +21,7 @@ export interface AuthenticatedRequest {
 }
 
 function readCookie(req: Request, name: string): string | null {
-  const raw = req.headers.get("cookie");
-  if (!raw) return null;
-  for (const part of raw.split(";")) {
-    const separator = part.indexOf("=");
-    if (separator < 0) continue;
-    if (part.slice(0, separator).trim() !== name) continue;
-    return part.slice(separator + 1).trim() || null;
-  }
-  return null;
+  return new Bun.CookieMap(req.headers.get("cookie") ?? "").get(name) || null;
 }
 
 function hmacKey(): Buffer | null {

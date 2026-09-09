@@ -77,7 +77,7 @@ export async function handle(req: Request, path: string, updateNotice?: { curren
       return html(layout("New Instatic site", newInstanceView(await instaticService.nextPort(), available), updateNotice), csrf);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return html(layout("Error", `<div class="alert">${msg.replace(/[<>&]/g, "")}</div>`, updateNotice), csrf, 500);
+      return html(layout("Error", `<div class="alert">${Bun.escapeHTML(msg)}</div>`, updateNotice), csrf, 500);
     }
   }
 

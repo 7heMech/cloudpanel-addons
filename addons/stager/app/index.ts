@@ -161,7 +161,7 @@ export async function handle(req: Request, path: string, updateNotice?: { curren
     if (!id) return html(layout("Not found", `<div class="alert">No such job.</div>`, updateNotice), csrf, 404);
     const res = await stagerService.getJob(id);
     if (!res.ok || !res.data) {
-      return html(layout("Not found", `<div class="alert">${escapeMinimal(res.error ?? "No such job.")}</div>`, updateNotice), csrf, 404);
+      return html(layout("Not found", `<div class="alert">${Bun.escapeHTML(res.error ?? "No such job.")}</div>`, updateNotice), csrf, 404);
     }
     let panelSites: SanitizedSite[] = [];
     let snapshotAge = Infinity;
@@ -321,11 +321,7 @@ async function postClone(req: Request): Promise<Response> {
   return json(res, res.ok ? 200 : 400);
 }
 
-function escapeMinimal(s: string): string {
-  return s.replace(/[<>&]/g, "");
-}
-
 function errorBlock(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
-  return `<div class="alert">${escapeMinimal(msg)}</div>`;
+  return `<div class="alert">${Bun.escapeHTML(msg)}</div>`;
 }

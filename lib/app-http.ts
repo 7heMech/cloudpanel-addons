@@ -14,14 +14,7 @@ export function newCsrfToken(): string {
 }
 
 function readCookie(req: Request, name: string): string | null {
-  const raw = req.headers.get("cookie");
-  if (!raw) return null;
-  for (const part of raw.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    if (part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
-  }
-  return null;
+  return new Bun.CookieMap(req.headers.get("cookie") ?? "").get(name);
 }
 
 function constantTimeEquals(a: string, b: string): boolean {
@@ -75,12 +68,7 @@ export function guardMutation(req: Request): Response | null {
 
 /** Escape for interpolation into HTML text or a double-quoted attribute. */
 export function esc(value: unknown): string {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+  return Bun.escapeHTML(String(value));
 }
 
 /**
