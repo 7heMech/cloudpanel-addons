@@ -13,6 +13,7 @@
 
 import { CLIENT_JS, dashboardView, isInstanceMissing, newInstanceView } from "../addons/instatic/app/views";
 import { BASE_CLIENT_JS, renderLayout } from "../lib/app-ui";
+import { headerTarget, headerUpdateScript } from "../lib/panel-nav";
 import { compareSemver, isNewerVersion } from "../lib/update-check";
 import { CLIENT_JS as STAGER_CLIENT_JS, isSiteMissing, jobsView, jobView } from "../addons/stager/app/views";
 import type { JobView } from "../addons/stager/app/service";
@@ -47,6 +48,7 @@ function check(label: string, cond: boolean, detail = ""): void {
 const SCRIPTS: { name: string; source: string }[] = [
   { name: "instatic", source: BASE_CLIENT_JS + CLIENT_JS },
   { name: "stager", source: BASE_CLIENT_JS + STAGER_CLIENT_JS },
+  { name: "clp header update notice", source: headerUpdateScript("0.9.3") },
 ];
 
 for (const { name, source } of SCRIPTS) {
@@ -1826,6 +1828,11 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   check("layout with updateNotice renders update banner", htmlWith.includes("update-banner"));
   check("layout with updateNotice names current and latest versions", htmlWith.includes("v0.9.4") && htmlWith.includes("v0.9.3"));
   check("layout with updateNotice contains clp-addons update shortcut", htmlWith.includes("clp-addons update"));
+
+  const snip = headerTarget("Instatic", "0.9.3").snippet("https://addons.example.com/instatic");
+  check("headerTarget includes update badge style", snip.includes("clp-addon-update-badge"));
+  check("headerTarget includes update check script", snip.includes("window.__clpAddonsUpdateInit"));
+  check("headerTarget embeds the configured version", snip.includes("\"0.9.3\""));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
