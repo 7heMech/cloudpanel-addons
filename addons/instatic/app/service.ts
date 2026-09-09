@@ -142,7 +142,7 @@ export const instaticService = {
     return res.data?.instances ?? [];
   },
 
-  async createInstance(domain: string, tag: string): Promise<WrapperResult> {
+  async createInstance(domain: string, tag: string, tls = false): Promise<WrapperResult> {
     const existing = await this.listInstancesOrThrow();
     if (existing.some((i) => i.domain === domain)) {
       return { ok: false, error: `an instance for ${domain} already exists` };
@@ -157,6 +157,7 @@ export const instaticService = {
       "--domain", domain,
       "--port", String(port),
       "--tag", tag,
+      "--tls", tls ? "yes" : "no",
     ]);
   },
 

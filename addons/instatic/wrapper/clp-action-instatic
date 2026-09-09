@@ -118,6 +118,12 @@ validate_tag() {
   return 0
 }
 
+validate_flag() {
+  local v=$1 what=$2
+  [[ $v == "yes" || $v == "no" ]] || emit_err "--${what} takes yes or no, got: '$v'"
+  return 0
+}
+
 # --- helpers ----------------------------------------------------------------
 
 container_name() { printf 'instatic-%s' "$1"; }
@@ -483,7 +489,7 @@ prune_snapshots() {
 # --- verbs ------------------------------------------------------------------
 
 cmd_create() {
-  local domain=$1 port=$2 tag=$3
+  local domain=$1 port=$2 tag=$3 tls=${4:-no}
   local name dir site_created=0
 
   name=$(container_name "$domain")
@@ -583,6 +589,13 @@ cmd_create() {
 META
 
   trap - EXIT
+
+  if [[ $tls == "yes" ]]; then
+    log "requesting a Let's Encrypt certificate for ${domain}"
+    if ! "$CLPCTL" lets-encrypt:install:certificate --domainName="$domain" >&2; then
+      warn "the certificate request failed; point ${domain} at this server and retry from Site -> SSL/TLS"
+    fi
+  fi
   # siteCreatedByAddon is in the reply and not only in meta.json because it is
   # the answer to "was this site mine to make", and a caller that adopted rather
   # than created has to be able to tell. The Stager reads it: it delegates the
@@ -867,13 +880,14 @@ cmd_logs() {
 
 VERB=$1; shift
 
-DOMAIN=""; PORT=""; TAG=""; CONFIRM=""
+DOMAIN=""; PORT=""; TAG=""; CONFIRM=""; TLS="no"
 while (( $# > 0 )); do
   case $1 in
     --domain)  [[ $# -ge 2 ]] || emit_err "--domain needs a value";  DOMAIN=$2;  shift 2 ;;
     --port)    [[ $# -ge 2 ]] || emit_err "--port needs a value";    PORT=$2;    shift 2 ;;
     --tag)     [[ $# -ge 2 ]] || emit_err "--tag needs a value";     TAG=$2;     shift 2 ;;
     --confirm) [[ $# -ge 2 ]] || emit_err "--confirm needs a value"; CONFIRM=$2; shift 2 ;;
+    --tls)     [[ $# -ge 2 ]] || emit_err "--tls needs a value";     TLS=$2;     shift 2 ;;
     *) emit_err "unknown argument: '$1'" ;;
   esac
 done
@@ -881,7 +895,7 @@ done
 case $VERB in
   # The only verb that names no instance: it reports on all of them.
   list)                    ;;
-  create)                  validate_domain "$DOMAIN"; validate_port "$PORT"; validate_tag "$TAG" ;;
+  create)                  validate_domain "$DOMAIN"; validate_port "$PORT"; validate_tag "$TAG"; validate_flag "$TLS" tls ;;
   update)                  validate_domain "$DOMAIN"; validate_tag "$TAG" ;;
   start|stop|restart|recreate|snapshot|status|logs)
                            validate_domain "$DOMAIN" ;;
@@ -921,7 +935,7 @@ fi
 
 case $VERB in
   list)     cmd_list ;;
-  create)   cmd_create "$DOMAIN" "$PORT" "$TAG" ;;
+  create)   cmd_create "$DOMAIN" "$PORT" "$TAG" "$TLS" ;;
   update)   cmd_update "$DOMAIN" "$TAG" ;;
   start)    cmd_lifecycle start "$DOMAIN" ;;
   stop)     cmd_lifecycle stop "$DOMAIN" ;;
