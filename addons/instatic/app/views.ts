@@ -156,7 +156,11 @@ async function submitCreate(ev) {
 }
 `;
 
-export function layout(title: string, content: string): string {
+export function layout(
+  title: string,
+  content: string,
+  updateNotice?: { current: string; latest: string } | null
+): string {
   return renderLayout(title, content, {
     brand: "Instatic",
     base: BASE,
@@ -166,6 +170,7 @@ export function layout(title: string, content: string): string {
     ],
     css: STYLE,
     script: CLIENT_JS,
+    updateNotice,
   });
 }
 

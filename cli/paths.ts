@@ -149,6 +149,8 @@ export interface AddonTarget {
 
 export interface AddonSpec {
   name: string;
+  title?: string;
+  description?: string;
   /** Wrapper script, shipped as-is and never compiled (decision 2.13). */
   wrapperArtifact: string;
   /** Absolute path the sudoers line names. Must match exactly. */
@@ -184,6 +186,8 @@ export interface AddonSpec {
 export const ADDONS: Record<string, AddonSpec> = {
   instatic: {
     name: "instatic",
+    title: "Instatic",
+    description: "Instant static site hosting and staging on CloudPanel",
     wrapperArtifact: "clp-action-instatic",
     wrapperPath: `${LIB_DIR}/clp-action-instatic`,
     configFile: `${CONFIG_DIR}/instatic.conf`,
@@ -193,6 +197,8 @@ export const ADDONS: Record<string, AddonSpec> = {
   },
   stager: {
     name: "stager",
+    title: "Stager",
+    description: "Instant staging environments & site clones (WordPress, PHP, Node.js)",
     wrapperArtifact: "clp-action-stager",
     wrapperPath: `${LIB_DIR}/clp-action-stager`,
     configFile: `${CONFIG_DIR}/stager.conf`,

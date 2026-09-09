@@ -85,7 +85,7 @@ function json(body: unknown, status = 200): Response {
 // router: a request for /stager/api/... arrives here as /api/... .
 // Taking it as an argument rather than reading req.url is what keeps every route
 // below written as though this addon owned the site, which it used to.
-export async function handle(req: Request, path: string): Promise<Response> {
+export async function handle(req: Request, path: string, updateNotice?: { current: string; latest: string } | null): Promise<Response> {
   const url = new URL(req.url);
   const method = req.method;
 
@@ -112,12 +112,13 @@ export async function handle(req: Request, path: string): Promise<Response> {
       return html(
         layout(
           "Staging clones",
-          jobsView(await stagerService.listJobs(), snapshotAge, panelSites, snapshotTakenAt)
+          jobsView(await stagerService.listJobs(), snapshotAge, panelSites, snapshotTakenAt),
+          updateNotice
         ),
         csrf
       );
     } catch (err) {
-      return html(layout("Error", errorBlock(err)), csrf, 500);
+      return html(layout("Error", errorBlock(err), updateNotice), csrf, 500);
     }
   }
 
@@ -129,13 +130,14 @@ export async function handle(req: Request, path: string): Promise<Response> {
     try {
       const raw = url.searchParams.get("source");
       if (!raw) {
-        return html(layout("New staging site", newCloneView(null, await stagerService.listSites())), csrf);
+        return html(layout("New staging site", newCloneView(null, await stagerService.listSites()), updateNotice), csrf);
       }
       const source = validateDomain(raw.toLowerCase());
       if (!source) {
         return html(
           layout("New staging site",
-            newCloneView(null, await stagerService.listSites(), "That is not a valid hostname.")),
+            newCloneView(null, await stagerService.listSites(), "That is not a valid hostname."),
+            updateNotice),
           csrf, 400
         );
       }
@@ -143,13 +145,14 @@ export async function handle(req: Request, path: string): Promise<Response> {
       if (!detail.ok || !detail.data) {
         return html(
           layout("New staging site",
-            newCloneView(null, await stagerService.listSites(), detail.error ?? `Cannot clone ${source}.`)),
+            newCloneView(null, await stagerService.listSites(), detail.error ?? `Cannot clone ${source}.`),
+            updateNotice),
           csrf, 400
         );
       }
-      return html(layout(`Clone ${source}`, newCloneView(detail.data, [])), csrf);
+      return html(layout(`Clone ${source}`, newCloneView(detail.data, []), updateNotice), csrf);
     } catch (err) {
-      return html(layout("Error", errorBlock(err)), csrf, 500);
+      return html(layout("Error", errorBlock(err), updateNotice), csrf, 500);
     }
   }
 
@@ -157,10 +160,10 @@ export async function handle(req: Request, path: string): Promise<Response> {
   if (method === "GET" && jobPage) {
     const csrf = newCsrfToken();
     const id = validateJobId(decodeURIComponent(jobPage[1]!));
-    if (!id) return html(layout("Not found", `<div class="alert">No such job.</div>`), csrf, 404);
+    if (!id) return html(layout("Not found", `<div class="alert">No such job.</div>`, updateNotice), csrf, 404);
     const res = await stagerService.getJob(id);
     if (!res.ok || !res.data) {
-      return html(layout("Not found", `<div class="alert">${escapeMinimal(res.error ?? "No such job.")}</div>`), csrf, 404);
+      return html(layout("Not found", `<div class="alert">${escapeMinimal(res.error ?? "No such job.")}</div>`, updateNotice), csrf, 404);
     }
     let panelSites: SanitizedSite[] = [];
     let snapshotAge = Infinity;
@@ -174,7 +177,8 @@ export async function handle(req: Request, path: string): Promise<Response> {
     return html(
       layout(
         `Clone into ${res.data.job.target}`,
-        jobView(res.data.job, res.data.log, snapshotAge, panelSites, snapshotTakenAt)
+        jobView(res.data.job, res.data.log, snapshotAge, panelSites, snapshotTakenAt),
+        updateNotice
       ),
       csrf
     );

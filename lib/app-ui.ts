@@ -134,6 +134,8 @@ export interface Chrome {
   css?: string;
   /** The addon's own script. BASE_CLIENT_JS is prepended. */
   script: string;
+  /** Optional update notice if a newer clp-addons release is available. */
+  updateNotice?: { current: string; latest: string } | null;
 }
 
 export function renderLayout(title: string, content: string, chrome: Chrome): string {
@@ -154,7 +156,10 @@ export function renderLayout(title: string, content: string, chrome: Chrome): st
   <span class="spacer"></span>
 ${nav}
 </header>
-<main>${content}</main>
+<main>${chrome.updateNotice ? `  <div class="notice update-banner" style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;background:rgba(59,130,246,0.08);border:1px solid var(--accent);color:var(--text);border-radius:8px;padding:0.75rem 1rem;">
+    <div><strong>Update available:</strong> clp-addons <code>v${esc(chrome.updateNotice.latest)}</code> is available (running v${esc(chrome.updateNotice.current)}).</div>
+    <div><span class="mono" style="background:var(--panel);padding:0.25rem 0.5rem;border-radius:4px;border:1px solid var(--border);font-size:0.8rem;">clp-addons update</span></div>
+  </div>\n` : ""}${content}</main>
 <script>const CLP_BASE = ${JSON.stringify(chrome.base)};
 ${BASE_CLIENT_JS}${chrome.script}</script>
 </body>
