@@ -1,3 +1,4 @@
+import type { SanitizedSite } from "../../../lib/snapshot-reader";
 // Server-rendered HTML. Every interpolated value goes through esc() or escJs():
 // domains, job steps and wrapper notes all originate outside this process, and
 // the page is served to an operator whose session can create CloudPanel sites.
@@ -154,24 +155,63 @@ function when(iso: string): string {
   return iso ? iso.replace("T", " ").replace("Z", " UTC") : "—";
 }
 
-export function jobsView(jobs: JobView[]): string {
+
+export function isSiteMissing(
+  job: JobView,
+  snapshotAge: number,
+  panelSites: SanitizedSite[],
+  snapshotTakenAt?: string
+): boolean {
+  if (job.state !== "done") return false;
+  if (snapshotAge > 3600) return false;
+  if (snapshotTakenAt) {
+    const taken = Date.parse(snapshotTakenAt);
+    const finished = Date.parse(job.finishedAt || job.createdAt);
+    if (!Number.isNaN(taken) && !Number.isNaN(finished) && finished >= taken) {
+      return false;
+    }
+  }
+  return !panelSites.some((s) => s.domain === job.target);
+}
+
+export function jobsView(
+  jobs: JobView[],
+  snapshotAge = Infinity,
+  panelSites: SanitizedSite[] = [],
+  snapshotTakenAt = ""
+): string {
   const active = jobs.filter((j) => j.state === "queued" || j.state === "running").length;
+  const staleNotice =
+    snapshotAge > 3600 && snapshotAge !== Infinity
+      ? `<div class="notice">The panel snapshot is ${Math.floor(snapshotAge / 60)} minutes old.
+         Run <span class="mono">clp-addons repair</span> as root to refresh it.</div>`
+      : "";
   const rows = jobs
     .map(
-      (j) => `
+      (j) => {
+        const missing = isSiteMissing(j, snapshotAge, panelSites, snapshotTakenAt);
+        return `
         <tr>
-          <td><a href="${BASE}/jobs/${esc(j.id)}" class="mono">${esc(j.target)}</a></td>
+          <td>
+            <a href="${BASE}/jobs/${esc(j.id)}" class="mono">${esc(j.target)}</a>
+            ${missing ? '<div class="hint">CloudPanel site deleted</div>' : ""}
+          </td>
           <td class="mono">${esc(j.source)}</td>
           <td>${esc(j.result ? typeLabel(j.result.siteType) : "—")}</td>
-          <td><span class="badge ${stateClass(j.state)}">${esc(j.state)}</span></td>
+          <td>
+            <span class="badge ${stateClass(j.state)}">${esc(j.state)}</span>
+            ${missing ? '<span class="badge" style="color:var(--bad);border-color:var(--bad);margin-left:0.25rem;">deleted</span>' : ""}
+          </td>
           <td class="step">${esc(j.state === "done" ? "" : j.step)}</td>
           <td class="mono">${esc(when(j.createdAt))}</td>
-        </tr>`
+        </tr>`;
+      }
     )
     .join("");
 
   return `
     <div class="page-heading"><div><h2>Staging sites</h2><p>Clone a site to test changes before going live.</p></div><a class="btn btn-primary" href="${BASE}/new">New staging site</a></div>
+    ${staleNotice}
     <div class="card">
       <div class="stats">
         <div class="stat"><div class="label">Clones on record</div><div class="value">${jobs.length}</div></div>
@@ -181,7 +221,7 @@ export function jobsView(jobs: JobView[]): string {
     <div class="card">
       ${
         jobs.length === 0
-          ? `<div class="empty">No clones yet. Start one from a site's Staging tab in CloudPanel, or with the button above.</div>`
+          ? `<div class="empty">No clones yet. Start one from the Sites list in CloudPanel, or with the button above.</div>`
           : `<table>
         <thead><tr><th>Staging site</th><th>Cloned from</th><th>Type</th><th>State</th><th>Step</th><th>Started</th></tr></thead>
         <tbody>${rows}</tbody>
@@ -279,9 +319,16 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
     </div>`;
 }
 
-export function jobView(job: JobView, logText: string): string {
+export function jobView(
+  job: JobView,
+  logText: string,
+  snapshotAge = Infinity,
+  panelSites: SanitizedSite[] = [],
+  snapshotTakenAt = ""
+): string {
   const finished = job.state === "done" || job.state === "failed";
   const result = job.result;
+  const missing = isSiteMissing(job, snapshotAge, panelSites, snapshotTakenAt);
 
   const notes = result?.notes?.length
     ? `<div class="card">
@@ -319,15 +366,22 @@ export function jobView(job: JobView, logText: string): string {
   const site = result
     ? `<div class="card">
         <dl class="kv">
-          <dt>Staging site</dt><dd><a href="https://${esc(job.target)}" target="_blank" rel="noopener">${esc(job.target)}</a></dd>
+          <dt>Staging site</dt><dd>${
+            missing
+              ? `<span class="mono">${esc(job.target)}</span> <span class="hint" style="display:inline">(deleted from CloudPanel)</span>`
+              : `<a href="https://${esc(job.target)}" target="_blank" rel="noopener">${esc(job.target)}</a>`
+          }</dd>
           <dt>Type</dt><dd>${esc(typeLabel(result.siteType))}</dd>
           <dt>Site user</dt><dd>${esc(result.siteUser)}</dd>
           ${result.phpVersion ? `<dt>PHP</dt><dd>${esc(result.phpVersion)}</dd>` : ""}
           <dt>Template</dt><dd>${esc(result.vhostTemplate)}</dd>
           <dt>Vhost</dt><dd>${vhostNote}</dd>
         </dl>
-        <p class="hint">The site user's password was generated and not kept. Set one in Site → SSH/FTP if you
-          need SFTP access.</p>
+        <p class="hint">${
+          missing
+            ? "This staging site has been deleted from CloudPanel."
+            : "The site user's password was generated and not kept. Set one in Site → SSH/FTP if you need SFTP access."
+        }</p>
       </div>`
     : "";
 
@@ -360,8 +414,10 @@ export function jobView(job: JobView, logText: string): string {
         <span class="mono">${esc(job.target)}</span>
         <span class="spacer" style="flex:1;"></span>
         <span class="badge ${stateClass(job.state)}" id="job-state">${esc(job.state)}</span>
+        ${missing ? '<span class="badge" style="color:var(--bad);border-color:var(--bad);">site deleted</span>' : ""}
       </div>
       <div class="step" id="job-step" style="margin-top:0.5rem;">${esc(finished ? "" : job.step)}</div>
+      ${missing ? '<div class="alert" style="margin-top:0.75rem;">This staging site has been deleted from CloudPanel.</div>' : ""}
       ${job.error ? `<div class="alert" style="margin-top:0.75rem;">${esc(job.error)}</div>` : ""}
       <dl class="kv" style="margin-top:1rem;">
         <dt>Started</dt><dd>${esc(when(job.startedAt || job.createdAt))}</dd>

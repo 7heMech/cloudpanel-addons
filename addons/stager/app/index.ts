@@ -8,7 +8,7 @@ import { stagerService, validateDomain, validateJobId, expandTarget } from "./se
 import type { JobView } from "./service";
 import { layout, jobsView, newCloneView, jobView } from "./views";
 import { guardMutation, newCsrfToken, csrfCookieHeader, SECURITY_HEADERS } from "../../../lib/app-http";
-import { getNextAvailablePort, readSnapshot } from "../../../lib/snapshot-reader";
+import { getNextAvailablePort, readSnapshot, type SanitizedSite } from "../../../lib/snapshot-reader";
 // The Stager already depends on the Instatic addon: cloning a reverse-proxy
 // site means driving its wrapper, and this addon refuses one whose backend is
 // not an instance that addon manages. The dependency runs one way only -- the
@@ -98,7 +98,24 @@ export async function handle(req: Request, path: string): Promise<Response> {
   if (method === "GET" && path === "/") {
     const csrf = newCsrfToken();
     try {
-      return html(layout("Staging clones", jobsView(await stagerService.listJobs())), csrf);
+      let panelSites: SanitizedSite[] = [];
+      let snapshotAge = Infinity;
+      let snapshotTakenAt = "";
+      try {
+        const { snap, ageSeconds } = stagerService.snapshot();
+        panelSites = snap.sites;
+        snapshotAge = ageSeconds;
+        snapshotTakenAt = snap.updatedAt;
+      } catch {
+        // Snapshot missing or unreadable; render without site presence checks
+      }
+      return html(
+        layout(
+          "Staging clones",
+          jobsView(await stagerService.listJobs(), snapshotAge, panelSites, snapshotTakenAt)
+        ),
+        csrf
+      );
     } catch (err) {
       return html(layout("Error", errorBlock(err)), csrf, 500);
     }
@@ -145,7 +162,22 @@ export async function handle(req: Request, path: string): Promise<Response> {
     if (!res.ok || !res.data) {
       return html(layout("Not found", `<div class="alert">${escapeMinimal(res.error ?? "No such job.")}</div>`), csrf, 404);
     }
-    return html(layout(`Clone into ${res.data.job.target}`, jobView(res.data.job, res.data.log)), csrf);
+    let panelSites: SanitizedSite[] = [];
+    let snapshotAge = Infinity;
+    let snapshotTakenAt = "";
+    try {
+      const { snap, ageSeconds } = stagerService.snapshot();
+      panelSites = snap.sites;
+      snapshotAge = ageSeconds;
+      snapshotTakenAt = snap.updatedAt;
+    } catch {}
+    return html(
+      layout(
+        `Clone into ${res.data.job.target}`,
+        jobView(res.data.job, res.data.log, snapshotAge, panelSites, snapshotTakenAt)
+      ),
+      csrf
+    );
   }
 
   if (method === "GET" && path === "/api/sites") {

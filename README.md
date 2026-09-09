@@ -20,8 +20,8 @@ no directory to push files into. Each instance is a container from
 
 ## stager
 
-Adds a Staging tab to every PHP site in CloudPanel, and a Clone link beside each
-one in the site list. Both open a page that copies that site into a new one:
+Adds a Clone link beside each PHP, static, and reverse-proxy site in the
+CloudPanel site list. It opens a page that copies that site into a new one:
 same PHP version, same vhost template, files copied, database exported and
 imported, and the application's own config rewritten to point at the copy.
 
@@ -293,8 +293,8 @@ The manager binds `127.0.0.1` and one CloudPanel site is the only thing that
 serves it, so you reach it at `https://<host>` once that hostname resolves to the
 server. Each addon is under its own path -- `https://<host>/instatic`,
 `https://<host>/stager` -- and the bare hostname lists what is installed. The
-panel entries link straight to them: Instatic from the header nav, Stager from
-each site's Staging tab.
+panel entries link straight to them: Instatic and Stager from the header nav, and Stager from
+the Clone action in the site list.
 
 If the hostname is not in public DNS yet, forward the server's port 443 and add
 a hosts entry for it locally. Forward 443 specifically, because the injected nav

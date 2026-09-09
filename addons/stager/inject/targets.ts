@@ -4,12 +4,12 @@
 // the pristine snapshot, the hash gate and the ordering, so everything here is
 // data.
 //
-// Both snippets are Twig rather than plain HTML, which the Instatic addon's are
-// not. That is the point of them: the button has to name the site whose page it
+// The snippet is Twig rather than plain HTML, which the Instatic addon's are
+// not. That is the point of it: the button has to name the site whose page it
 // is rendered on, and `{{ site.domainName }}` is how the template already does
-// that. It also means these blocks are only correct where `site` is in scope --
-// both target templates that either receive it as an include parameter or set
-// it as a loop variable, and nothing else may be added here without checking.
+// that. It also means this block is only correct where `site` is in scope --
+// the target template sets it as a loop variable, and nothing else may be
+// added here without checking.
 
 import type { AddonTarget } from "../../../cli/paths";
 import { headerTarget } from "../../../lib/panel-nav";
@@ -32,22 +32,6 @@ const CLONABLE = "{% if site.type in ['php', 'static', 'reverse-proxy'] %}";
 
 export const STAGER_TARGETS: AddonTarget[] = [
   headerTarget("Stager"),
-  {
-    slug: "site-tab",
-    template: "Frontend/Site/Partial/tab-container.html.twig",
-    // The last tab in the row, so the panel's own order is untouched. This
-    // partial is included by every per-site page, which is what puts the button
-    // on each site rather than on one page listing them.
-    anchorAfter: `      <a href="{{ path('clp_site_logs', {'domainName': site.domainName}) }}">{% trans %}Logs{% endtrans %}</a>
-    </li>`,
-    required: true,
-    snippet: (url) => `
-        ${CLONABLE}
-          <li>
-            <a href="${url}/new?source={{ site.domainName|url_encode }}" target="_blank" rel="noopener">Staging</a>
-          </li>
-        {% endif %}`,
-  },
   {
     slug: "site-list-action",
     template: "Frontend/Site/index.html.twig",

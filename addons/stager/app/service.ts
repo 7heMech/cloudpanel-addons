@@ -1,3 +1,4 @@
+import { readSnapshot, snapshotAgeSeconds, type PanelSnapshot } from "../../../lib/snapshot-reader";
 // Every privileged action goes through the wrapper. The app has no clpctl
 // access, no database access and no write access to any site's files: it can
 // only ask for one of a closed set of verbs, with arguments the wrapper
@@ -315,5 +316,10 @@ export const stagerService = {
     const res = await callWrapper<{ jobs: JobView[] }>("jobs", []);
     if (!res.ok) throw new Error(res.error ?? "the stager wrapper could not list jobs");
     return res.data?.jobs ?? [];
+  },
+
+  snapshot(): { snap: PanelSnapshot; ageSeconds: number } {
+    const snap = readSnapshot();
+    return { snap, ageSeconds: snapshotAgeSeconds(snap) };
   },
 };
