@@ -13,7 +13,8 @@
 
 import { CLIENT_JS, dashboardView } from "../addons/instatic/app/views";
 import { BASE_CLIENT_JS } from "../lib/app-ui";
-import { CLIENT_JS as STAGER_CLIENT_JS } from "../addons/stager/app/views";
+import { CLIENT_JS as STAGER_CLIENT_JS, isSiteMissing, jobsView, jobView } from "../addons/stager/app/views";
+import type { JobView } from "../addons/stager/app/service";
 import { expandTarget } from "../addons/stager/app/service";
 import { isNewerThan } from "../addons/instatic/app/tags";
 import type { InstanceView } from "../addons/instatic/app/service";
@@ -1622,6 +1623,71 @@ if addon_needs_docker ${addons.map((a) => `'${a}'`).join(" ")}; then echo yes; e
     dockerAddons.every((n) => asks(n)), dockerAddons.join(","));
   check("no addon without that requirement triggers the prompt",
     ADDON_NAMES.filter((n) => !dockerAddons.includes(n)).every((n) => !asks(n)));
+}
+
+
+// Stager UI indicates when a cloned staging site has been deleted in CloudPanel.
+{
+  console.log("\n== stager UI indicates deleted staging sites ==");
+
+  const jobBase: JobView = {
+    id: "20260909T100000Z-112233",
+    source: "prod.example.com",
+    target: "stg.example.com",
+    port: 0,
+    state: "done",
+    step: "",
+    createdAt: "2026-09-09T09:00:00Z",
+    startedAt: "2026-09-09T09:00:01Z",
+    finishedAt: "2026-09-09T09:05:00Z",
+    result: {
+      siteType: "php",
+      siteUser: "stg-user",
+      vhostCarried: false,
+      vhostTemplate: "Generic",
+    },
+  };
+
+  const snapSites = [{ domain: "prod.example.com", user: "prod-user", type: "php" }];
+  const snapTime = "2026-09-09T10:00:00Z";
+
+  check("a done job whose site is absent from a newer snapshot is missing",
+    isSiteMissing(jobBase, 120, snapSites, snapTime));
+
+  check("a done job whose site is present in the snapshot is NOT missing",
+    !isSiteMissing(jobBase, 120, [...snapSites, { domain: "stg.example.com", user: "stg-user", type: "php" }], snapTime));
+
+  check("a clone that finished AFTER the snapshot was taken is not marked missing yet",
+    !isSiteMissing(jobBase, 120, snapSites, "2026-09-09T09:02:00Z"));
+
+  check("a stale snapshot (> 3600s) does not falsely report missing",
+    !isSiteMissing(jobBase, 3601, snapSites, snapTime));
+
+  check("a running or queued job is not marked missing",
+    !isSiteMissing({ ...jobBase, state: "running" }, 120, snapSites, snapTime) &&
+    !isSiteMissing({ ...jobBase, state: "queued" }, 120, snapSites, snapTime));
+
+  check("a failed job is not marked missing",
+    !isSiteMissing({ ...jobBase, state: "failed" }, 120, snapSites, snapTime));
+
+  const jobsHtml = jobsView([jobBase], 120, snapSites, snapTime);
+  check("jobsView renders CloudPanel site deleted hint and deleted badge for missing sites",
+    jobsHtml.includes("CloudPanel site deleted") && jobsHtml.includes("deleted</span>"));
+
+  const presentHtml = jobsView([jobBase], 120, [...snapSites, { domain: "stg.example.com", user: "stg-user", type: "php" }], snapTime);
+  check("jobsView does not show deleted notice when site is present",
+    !presentHtml.includes("CloudPanel site deleted"));
+
+  const detailHtml = jobView(jobBase, "all good", 120, snapSites, snapTime);
+  check("jobView indicates that the staging site has been deleted from CloudPanel",
+    detailHtml.includes("This staging site has been deleted from CloudPanel.") &&
+    detailHtml.includes("(deleted from CloudPanel)") &&
+    !detailHtml.includes('href="https://stg.example.com"'));
+
+  const presentDetail = jobView(jobBase, "all good", 120, [...snapSites, { domain: "stg.example.com", user: "stg-user", type: "php" }], snapTime);
+  check("jobView links to staging site when present",
+    presentDetail.includes('href="https://stg.example.com"') &&
+    !presentDetail.includes("This staging site has been deleted from CloudPanel."));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
