@@ -52,7 +52,7 @@ expect "shell metacharacters in --domain" '"ok":false.*invalid domain' \
   create --domain 'foo.com; touch /tmp/clp-test-pwned' --port 39000 --tag 0.0.18
 expect "path traversal in --domain" '"ok":false.*invalid domain' \
   stop --domain '../../../tmp/clp-test-traversal'
-expect "uppercase domain" '"ok":false.*invalid domain' stop --domain 'BAD.EXAMPLE.COM'
+expect "malformed domain label" '"ok":false.*invalid domain' stop --domain 'bad..example.com'
 expect "single-label domain" '"ok":false.*invalid domain' stop --domain 'localhost'
 expect "port below the reserved range" '"ok":false.*outside reserved range' \
   create --domain a.example.com --port 8080 --tag 0.0.18

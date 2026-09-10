@@ -53,7 +53,7 @@ expect "shell metacharacters in --target" '"ok":false.*invalid domain for --targ
   clone --source example.test --target 'stg.example.test$(id>/tmp/clp-stager-pwned)'
 expect "path traversal in --target" '"ok":false.*invalid domain for --target' \
   clone --source example.test --target '../../../tmp/clp-stager-traversal'
-expect "uppercase domain" '"ok":false.*invalid domain for --domain' describe --domain 'BAD.EXAMPLE.COM'
+expect "malformed domain label" '"ok":false.*invalid domain for --domain' describe --domain 'bad..example.com'
 expect "single-label domain" '"ok":false.*invalid domain for --domain' describe --domain localhost
 expect "a domain over 253 characters" '"ok":false.*is too long' \
   describe --domain "$(printf 'a%.0s' {1..250}).example.test"

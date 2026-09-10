@@ -4,16 +4,104 @@ import {
 } from "node:fs";
 import {
   ADDON_NAMES, ANCHOR_SERVICE, CONFIG_DIR, HMAC_KEY_PATH, LIBEXEC_DIR, LEGACY_UNITS,
-  LEGACY_USERS, LOCK_DIR, MANAGER_UNIT, PANEL_GROUP, RECONCILE_PATH, RECONCILE_SERVICE,
+  ADDONS, GH_PRIVATE, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT, PANEL_GROUP, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
   SYSTEMD_DIR, TWIG_CACHE_DIR, type AddonSpec, templateWatchPaths,
 } from "./paths";
+import { findMasterVhost } from "./inject";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
 
 const LEGACY_MANAGER_AUTH = `${CONFIG_DIR}/manager-auth`;
 const LEGACY_PLATFORM_CONFIG = `${CONFIG_DIR}/platform.conf`;
 const LEGACY_SITE_MARKER = `${STATE_DIR}/.site-created-by-addons`;
 const LEGACY_LIBRARY_DIR = "/usr/local/lib/clp-addons";
+export const PANEL_IDENTITY_PATH = `${CONFIG_DIR}/panel-identity.conf`;
+export const SESSION_VALIDATOR_PATH = `${LIBEXEC_DIR}/clp-verify-session`;
+
+const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
+const HOSTNAME_RE = new RegExp(`^(?:${HOSTNAME_LABEL})(?:\\.${HOSTNAME_LABEL})+$`);
+const WILDCARD_HOSTNAME_RE = new RegExp(`^\\*\\.(?:${HOSTNAME_LABEL})(?:\\.${HOSTNAME_LABEL})+$`);
+
+export interface PanelIdentity {
+  primary: string;
+  aliases: string[];
+}
+
+function normalizePanelHostname(value: string): string | null {
+  let host = value.trim().toLowerCase();
+  if (host.endsWith(".")) host = host.slice(0, -1);
+  if (!host || host.includes("..")) return null;
+  if (HOSTNAME_RE.test(host) || WILDCARD_HOSTNAME_RE.test(host)) return host;
+  return null;
+}
+
+/** Extract the panel's exact and wildcard server names from a root-owned vhost. */
+export function panelIdentityFromVhost(content: string): PanelIdentity | null {
+  const names = new Set<string>();
+  const uncommented = content.replace(/#[^\r\n]*/g, "");
+  const directive = /(?:^|[;{}])\s*server_name\s+([^;]+);/gim;
+  let match: RegExpExecArray | null;
+  while ((match = directive.exec(uncommented))) {
+    for (const raw of match[1]!.trim().split(/\s+/)) {
+      if (raw === "_" || raw.toLowerCase() === "localhost") continue;
+      const name = normalizePanelHostname(raw);
+      if (!name) return null;
+      names.add(name);
+    }
+  }
+
+  const exact = [...names].find((name) => HOSTNAME_RE.test(name));
+  if (!exact) return null;
+  return { primary: exact, aliases: [...names].filter((name) => name !== exact).sort() };
+}
+
+function installedAddonSpecs(): AddonSpec[] {
+  return ADDON_NAMES.map((name) => ADDONS[name]!).filter((spec) => existsSync(spec.configFile));
+}
+
+export function sudoersCommandPaths(specs: AddonSpec[] = installedAddonSpecs()): string[] {
+  const wrappers = specs.map((spec) => spec.wrapperPath).filter((path) => path !== GH_PRIVATE);
+  return [...new Set([SESSION_VALIDATOR_PATH, ...wrappers])].sort();
+}
+
+export function sudoersRule(specs: AddonSpec[] = installedAddonSpecs()): string {
+  const commands = sudoersCommandPaths(specs);
+  if (commands.some((path) => !path.startsWith("/") || /[*?[\]]/.test(path))) {
+    fatal("refusing to install sudoers configuration with a non-absolute or wildcard command path");
+  }
+  return `${SERVICE_USER} ALL=(root) NOPASSWD: ${commands.join(", ")}`;
+}
+
+function ensurePanelIdentity(quiet = false): void {
+  const vhostPath = findMasterVhost();
+  if (!vhostPath) fatal("CloudPanel master vhost was not found; refusing to install root wrappers");
+
+  let content: string;
+  let rootOwned = false;
+  try {
+    const stat = statSync(vhostPath);
+    rootOwned = stat.isFile() && stat.uid === 0 && (stat.mode & 0o022) === 0;
+    content = readFileSync(vhostPath, "utf-8");
+  } catch {
+    fatal(`CloudPanel master vhost could not be read: ${vhostPath}`);
+  }
+  if (!rootOwned) fatal(`CloudPanel master vhost is not a root-owned, non-writable file: ${vhostPath}`);
+
+  const identity = panelIdentityFromVhost(content);
+  if (!identity) {
+    fatal(`CloudPanel master vhost has no valid panel identity: ${vhostPath}`);
+  }
+
+  const aliases = identity.aliases.length ? identity.aliases.join(" ") : "";
+  const body =
+    "# Managed by clp-addons; read by root action wrappers.\n" +
+    `PRIMARY=${identity.primary}\n` +
+    `ALIASES=${aliases}\n`;
+  writeAtomic(PANEL_IDENTITY_PATH, body, 0o600);
+  run("chown", ["root:root", PANEL_IDENTITY_PATH]);
+  run("chmod", ["600", PANEL_IDENTITY_PATH]);
+  if (!quiet) log.ok(`panel identity recorded from ${vhostPath}`);
+}
 
 export function ensureServiceUser(quiet = false): void {
   const userExists = tryRun("id", ["-u", SERVICE_USER]).ok;
@@ -92,6 +180,8 @@ export function ensureDirs(specs: AddonSpec[] = []): void {
 
   run("chown", ["root:root", LIBEXEC_DIR]);
   run("chmod", ["755", LIBEXEC_DIR]);
+  run("chown", ["root:root", CONFIG_DIR]);
+  run("chmod", ["755", CONFIG_DIR]);
   run("chown", [`root:${SHARED_GROUP}`, STATE_DIR]);
   run("chmod", ["750", STATE_DIR]);
   run("chown", [`${SERVICE_USER}:${SERVICE_GROUP}`, SOCKET_DIR]);
@@ -146,18 +236,18 @@ export function installWrapper(spec: AddonSpec, bytes: Buffer, quiet = false): v
 }
 
 export function installSessionValidator(bytes: Buffer, quiet = false): void {
-  const path = `${LIBEXEC_DIR}/clp-verify-session`;
-  writeAtomic(path, bytes, 0o755);
-  run("chown", ["root:root", path]);
+  writeAtomic(SESSION_VALIDATOR_PATH, bytes, 0o755);
+  run("chown", ["root:root", SESSION_VALIDATOR_PATH]);
   if (!quiet) log.ok("installed CloudPanel session validator");
 }
 
-export function installSudoers(quiet = false): void {
+export function installSudoers(quiet = false, specs: AddonSpec[] = installedAddonSpecs()): void {
   const file = "/etc/sudoers.d/clp-addons";
   const candidate = "/etc/sudoers.d/.clp-addons.candidate";
+  ensurePanelIdentity(quiet);
   const body =
     "# Managed by clp-addons.\n" +
-    `${SERVICE_USER} ALL=(root) NOPASSWD: ${LIBEXEC_DIR}/*\n`;
+    `${sudoersRule(specs)}\n`;
 
   writeAtomic(candidate, body, 0o440);
   const check = tryRun("visudo", ["-c", "-f", candidate]);
@@ -178,6 +268,7 @@ export function installSudoers(quiet = false): void {
 
 export function removeSudoers(): void {
   rmSync("/etc/sudoers.d/clp-addons", { force: true });
+  rmSync(PANEL_IDENTITY_PATH, { force: true });
   removeLegacySudoers();
 }
 
