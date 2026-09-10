@@ -69,6 +69,7 @@ async function runCommand(
       ? null
       : {
           code: exitCode,
+          ...(outputFailed ? { reason: "wrapper output could not be read" } : {}),
           ...(terminated ? { reason: "wrapper process terminated" } : {}),
           ...(outputLimited ? { reason: `wrapper output exceeded ${options.maxBuffer} bytes` } : {}),
         },
@@ -94,6 +95,17 @@ export interface WrapperResult<T = unknown> {
   ok: boolean;
   data?: T;
   error?: string;
+}
+
+function parseWrapperReply<T>(stdout: string): WrapperResult<T> | null {
+  try {
+    const reply: unknown = JSON.parse(stdout.trim());
+    if (reply === null || typeof reply !== "object" || Array.isArray(reply)) return null;
+    if (typeof (reply as { ok?: unknown }).ok !== "boolean") return null;
+    return reply as WrapperResult<T>;
+  } catch {
+    return null;
+  }
 }
 
 export interface WrapperCallOptions {
@@ -124,6 +136,21 @@ export async function callWrapper<T = unknown>(
     input
   );
   if (error) {
+    // A policy rejection is a normal wrapper reply even though the wrapper
+    // exits non-zero. A terminated or output-limited process may leave a
+    // complete-looking JSON prefix behind, so only parse a normal non-zero
+    // exit whose output was read to completion.
+    const normalNonzeroExit =
+      error.reason === undefined &&
+      error.code !== undefined &&
+      error.code !== null &&
+      error.code !== 0;
+    const reply = normalNonzeroExit ? parseWrapperReply<T>(stdout) : null;
+    if (reply) {
+      if (stderr.trim()) console.error(`[wrapper:${verb}]`, stderr.trim());
+      return reply;
+    }
+
     // Never log a subprocess error object: its message may contain the full
     // argv. The wrapper's stderr is the useful, non-secret diagnostic channel.
     const why = error.reason ?? (stderr.trim() || `wrapper ${verb} exited ${error.code ?? "abnormally"}`);
@@ -135,12 +162,10 @@ export async function callWrapper<T = unknown>(
 
   // stdout is a contract: exactly one JSON object. Never scrape the prose on
   // stderr for meaning.
-  try {
-    return JSON.parse(stdout.trim()) as WrapperResult<T>;
-  } catch {
-    console.error(`[wrapper] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
-    return { ok: false, error: "wrapper returned a malformed reply" };
-  }
+  const reply = parseWrapperReply<T>(stdout);
+  if (reply) return reply;
+  console.error(`[wrapper] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
+  return { ok: false, error: "wrapper returned a malformed reply" };
 }
 
 // Mirrors the wrapper's own validation. Not a substitute for it: the wrapper is

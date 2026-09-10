@@ -43,6 +43,7 @@ case "$mode" in
     printf '%s\\n' 'wrapper diagnostic' >&2
     ;;
   nonzero)
+    printf '%s\\n' 'not JSON'
     printf '%s\\n' 'wrapper rejected request' >&2
     exit 9
     ;;
@@ -107,8 +108,7 @@ try {
 
   writeFileSync(modePath, "json-nonzero\n");
   const jsonFailure = await stagerService.getJob("20260909T120000Z-abcdef");
-  assert.equal(jsonFailure.ok, false);
-  assert.match(jsonFailure.error ?? "", /wrapper job exited 9/);
+  assert.deepEqual(jsonFailure, { ok: false, error: "policy rejected" });
 
   writeFileSync(modePath, "timeout\n");
   const timedOut = await callWrapper("job", [], undefined, { timeout: 25 });
