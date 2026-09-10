@@ -1,7 +1,106 @@
 # Decisions
 
-Why the code is shaped the way it is. Where something here says a decision is
-settled, don't relitigate it in code — argue it here first.
+Why the code is shaped the way it is. The current integrated-manager decisions
+are recorded first; the historical notes below are retained for their rationale
+and regression history. Where old deployment details conflict with the current
+section, the current section wins.
+
+The implementation specification is
+[SPEC_VHOST_UNIX_SOCKET_SSO.md](SPEC_VHOST_UNIX_SOCKET_SSO.md).
+
+## Current architecture
+
+### Privilege boundary
+
+The manager runs as the locked `clp-addons` system user. It can invoke only the
+root-owned action wrappers named by `/etc/sudoers.d/clp-addons`:
+
+```text
+clp-addons ALL=(root) NOPASSWD: /usr/local/libexec/clp-addons/clp-action-instatic, /usr/local/libexec/clp-addons/clp-action-stager
+```
+
+The generated rule contains exactly the wrapper paths for the installed addons.
+It deliberately does not grant a directory wildcard, so a new file placed in
+`/usr/local/libexec/clp-addons/` cannot become a passwordless root command
+without an explicit provisioning change. Session validation is performed by the
+manager itself and is not a privileged command.
+
+Every wrapper validates its complete argument set before reading input,
+deriving paths, or taking a lock. Commands use argument arrays; no shell
+evaluation or caller-supplied paths cross the boundary. Wrapper stdout is one
+JSON object and diagnostics go to stderr.
+
+### Integrated manager and Nginx transport
+
+The manager does not create a CloudPanel site or write the `site` table. One
+process serves all installed addons under `/addons/` on CloudPanel's master
+origin. `cli/inject.ts` adds a marked Nginx location that proxies to
+`/run/clp-addons/manager.sock`.
+
+The injector snapshots the upstream vhost, reconciles its managed block, and
+always runs `nginx -t` before a reload. A failed validation or reload restores
+the pristine vhost immediately. Twig navigation uses the same
+reconcile-from-pristine model, so multiple addon markers can coexist and
+removing one cannot remove another's link.
+
+### Identity and socket permissions
+
+`clp-addons` has `/usr/sbin/nologin` and is a member of CloudPanel's `clp`
+group. `clp-addons.service` runs as `User=clp-addons`, `Group=clp-addons`, with
+`SupplementaryGroups=clp` and `RuntimeDirectory=clp-addons`. Its single active
+entrypoint is:
+
+```text
+/usr/local/bin/clp-addons serve
+```
+
+The service creates `/run/clp-addons/manager.sock` with mode `0660`, owned by
+`clp-addons:clp`, so Nginx can connect without exposing a TCP listener. No
+authentication key or privileged pre-start command is required.
+
+### CloudPanel SSO
+
+Each protected request reads the `PHPSESSID` file directly with Bun from the
+fixed CloudPanel session directory `/var/lib/php/sessions`. The session id must
+match `^[a-zA-Z0-9,-]+$`; the manager checks the file with `lstat` before reading,
+requires ownership by `clp`, rejects symlinks, caps its size, and warns when the
+stock world-writable parent is encountered. A bounded structural scanner then
+checks `_sf2_meta` expiry, the nested `_security_main` token, the authenticated
+username, and `mfaAuthenticated === true`. Invalid sessions redirect to
+`/login`.
+
+### Active artifact layout and updates
+
+There is one active binary at `/usr/local/bin/clp-addons`. Addon wrappers live
+directly in `/usr/local/libexec/clp-addons/`; the active installation has no
+release directory or `current` symlink. `clp-addons update`
+resolves a release, verifies checksums and provenance when artifacts are needed,
+atomically replaces the CLI and installed helpers, restarts the service, and
+reconciles panel integration. A same-version update reuses artifacts only when
+the root-owned manifest and every installed file's SHA-256 match; otherwise it
+fetches and verifies them before reconciliation. `upgrade` is an alias;
+`self-update` is a deprecation error.
+
+### CloudPanel data and maintenance
+
+Root reconciliation reads non-secret site and port fields into the sanitized
+`/var/lib/clp-addons/snapshot.json`. Applications read that snapshot and use
+their root wrapper for privileged operations. Instance wrappers may create and
+manage the CloudPanel sites that represent addon instances; the manager itself
+never creates one.
+
+The periodic timer and template path unit invoke the same idempotent repair
+commands used by installation. Repair restores service-user, socket, sudoers,
+unit, snapshot, Twig, and Nginx invariants without a second login or manual
+domain configuration.
+
+## Historical design record
+
+The sections that follow are preserved from the pre-socket design. They are
+useful rationale and regression history, but statements about a manager site,
+per-site Basic Auth, a TCP listener, release-tree storage, or custom manager
+credentials describe the superseded implementation. The current decisions
+above take precedence.
 
 ## The wrapper is the whole security model
 
@@ -356,7 +455,7 @@ Three supporting choices:
   one anchor cannot swap places on each reconciliation and produce a file that
   never settles.
 
-`tools/test-inject.ts` runs the whole scenario against a throwaway template and
+`bun run test:inject` runs the whole scenario against a throwaway template and
 asserts what the old design got wrong: installing the second addon keeps the
 first, uninstalling one leaves the other, repeated reconciliation is idempotent
 and byte-stable, and removing the last addon restores the original exactly.

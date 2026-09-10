@@ -1,8 +1,6 @@
 // Entry point for the Instatic manager service.
 //
-// Served at the root of its own CloudPanel reverse-proxy site (decision 2.4),
-// not under a path prefix on the panel's vhost. Bound to 127.0.0.1 so the only
-// route in is that site's nginx vhost, which carries the per-site security.
+// The manager router strips the /addons/ prefix before dispatching here.
 
 import { instaticService, validateDomain, validateTag } from "./service";
 import { layout, dashboardView, newInstanceView } from "./views";
@@ -34,7 +32,7 @@ const MUTATING_VERBS = new Set(["start", "stop", "restart", "recreate", "delete"
 // The whole request surface, exported so the one manager process can mount it.
 //
 // `path` is this addon's own path, with the mount prefix already stripped by the
-// router: a request for /instatic/api/... arrives here as /api/... .
+// router: a request for /addons/instatic/api/... arrives here as /api/... .
 // Taking it as an argument rather than reading req.url is what keeps every route
 // below written as though this addon owned the site, which it used to.
 export async function handle(req: Request, path: string, updateNotice?: { current: string; latest: string } | null): Promise<Response> {
@@ -79,7 +77,7 @@ export async function handle(req: Request, path: string, updateNotice?: { curren
       return html(layout("New Instatic site", newInstanceView(await instaticService.nextPort(), available), updateNotice), csrf);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return html(layout("Error", `<div class="alert">${msg.replace(/[<>&]/g, "")}</div>`, updateNotice), csrf, 500);
+      return html(layout("Error", `<div class="alert">${Bun.escapeHTML(msg)}</div>`, updateNotice), csrf, 500);
     }
   }
 

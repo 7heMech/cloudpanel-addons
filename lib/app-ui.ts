@@ -127,7 +127,7 @@ function busy(on) {
 export interface Chrome {
   /** Product name in the header, e.g. "Instatic". */
   brand: string;
-  /** Where this addon is mounted, e.g. "/instatic". Prefixes every fetch. */
+  /** Where this addon is mounted, e.g. "/addons/instatic". */
   base: string;
   nav: { href: string; label: string }[];
   /** Rules appended after BASE_STYLE, for anything only this addon draws. */

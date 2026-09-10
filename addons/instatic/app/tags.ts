@@ -33,13 +33,7 @@ export interface AvailableTags {
 let cache: { at: number; tags: string[] } | null = null;
 
 function byVersionDesc(a: string, b: string): number {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < 3; i++) {
-    const d = (pb[i] ?? 0) - (pa[i] ?? 0);
-    if (d !== 0) return d;
-  }
-  return 0;
+  return Bun.semver.order(b, a);
 }
 
 /** True when `candidate` is a newer version than `current`. */

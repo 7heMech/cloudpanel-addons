@@ -8,7 +8,7 @@ import { getNextAvailablePort, readSnapshot, snapshotAgeSeconds, type PanelSnaps
 
 const execFileAsync = promisify(execFile);
 
-const WRAPPER_BIN = process.env.INSTATIC_WRAPPER || "/usr/local/lib/clp-addons/clp-action-instatic";
+const WRAPPER_BIN = process.env.INSTATIC_WRAPPER || "/usr/local/libexec/clp-addons/clp-action-instatic";
 const SUDO_BIN = "/usr/bin/sudo";
 
 // create pulls an image and waits on a health check, so it needs the longest

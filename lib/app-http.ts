@@ -1,11 +1,8 @@
 // Request guards shared by every addon's manager app.
 //
-// Authentication itself belongs to nginx: the addon runs as its own CloudPanel
-// site with per-site security in front of it (decision 2.4), and the app binds
-// 127.0.0.1 so it is not reachable except through that vhost. What nginx basic
-// auth does NOT protect against is a cross-origin request from a browser that
-// already holds those credentials, so mutating routes additionally require a
-// same-origin check and a CSRF token.
+// Authentication at the shared manager boundary belongs to lib/sso-auth. These
+// guards protect mutating addon routes after the request has passed SSO: a
+// same-origin check and a CSRF token stop cross-origin browser requests.
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
 
@@ -17,14 +14,7 @@ export function newCsrfToken(): string {
 }
 
 function readCookie(req: Request, name: string): string | null {
-  const raw = req.headers.get("cookie");
-  if (!raw) return null;
-  for (const part of raw.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    if (part.slice(0, eq).trim() === name) return part.slice(eq + 1).trim();
-  }
-  return null;
+  return new Bun.CookieMap(req.headers.get("cookie") ?? "").get(name);
 }
 
 function constantTimeEquals(a: string, b: string): boolean {
@@ -38,7 +28,7 @@ export function csrfCookieHeader(token: string): string {
   // Not HttpOnly on purpose: the page's own script has to read it to echo it
   // back in the header. That is what makes the double-submit check work, and
   // it is safe because a cross-origin page cannot read another origin's cookie.
-  return `${CSRF_COOKIE}=${token}; Path=/; SameSite=Strict; Secure`;
+  return `${CSRF_COOKIE}=${token}; Path=/addons; SameSite=Strict; Secure`;
 }
 
 /** Returns null when the request may proceed, or a Response to send instead. */
@@ -64,17 +54,12 @@ export function guardMutation(req: Request): Response | null {
   const sent = req.headers.get(CSRF_HEADER);
   const cookie = readCookie(req, CSRF_COOKIE);
   if (!sent || !cookie || !constantTimeEquals(sent, cookie)) {
-    // The cookie is set Secure, so a browser on plain http never stores it and
-    // every mutation lands here. That is the state a fresh install is in until
-    // the certificate step, which makes this the most likely reason by far --
-    // worth saying, because "CSRF token mismatched" sends people looking in
-    // entirely the wrong place.
+    // The cookie is set Secure, so a browser on plain http never stores it.
     return Response.json({
       ok: false,
       error: cookie
         ? "CSRF token mismatched; reload the page and try again"
-        : "CSRF cookie missing. It is set Secure, so it is not stored over plain http — " +
-          "issue a certificate for this site and use https.",
+        : "CSRF cookie missing. It is set Secure, so use the CloudPanel HTTPS URL.",
     }, { status: 403 });
   }
 
@@ -83,12 +68,7 @@ export function guardMutation(req: Request): Response | null {
 
 /** Escape for interpolation into HTML text or a double-quoted attribute. */
 export function esc(value: unknown): string {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+  return Bun.escapeHTML(String(value));
 }
 
 /**

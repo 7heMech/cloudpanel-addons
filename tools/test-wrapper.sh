@@ -17,7 +17,7 @@
 
 set -uo pipefail
 
-W=${1:-/usr/local/lib/clp-addons/clp-action-instatic}
+W=${1:-/usr/local/libexec/clp-addons/clp-action-instatic}
 [[ -x $W ]] || { echo "not executable: $W" >&2; exit 2; }
 [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 2; }
 
@@ -52,7 +52,7 @@ expect "shell metacharacters in --domain" '"ok":false.*invalid domain' \
   create --domain 'foo.com; touch /tmp/clp-test-pwned' --port 39000 --tag 0.0.18
 expect "path traversal in --domain" '"ok":false.*invalid domain' \
   stop --domain '../../../tmp/clp-test-traversal'
-expect "uppercase domain" '"ok":false.*invalid domain' stop --domain 'BAD.EXAMPLE.COM'
+expect "malformed domain label" '"ok":false.*invalid domain' stop --domain 'bad..example.com'
 expect "single-label domain" '"ok":false.*invalid domain' stop --domain 'localhost'
 expect "port below the reserved range" '"ok":false.*outside reserved range' \
   create --domain a.example.com --port 8080 --tag 0.0.18
@@ -143,14 +143,6 @@ if [[ -n $running ]]; then
   fi
 else
   echo "  skip  instance identity (no running instance)"
-fi
-
-echo "== self-site guard =="
-own=$(sed -n 's/^[[:space:]]*OWN_DOMAIN[[:space:]]*=[[:space:]]*//p' /etc/clp-addons/instatic.conf 2>/dev/null | tail -1 | tr -d '[:space:]')
-if [[ -n $own ]]; then
-  expect "refuses the addon's own site" '"ok":false.*own site' delete --domain "$own" --confirm "$own"
-else
-  echo "  skip  self-site guard (no OWN_DOMAIN configured)"
 fi
 
 rm -f /run/lock/clp-addons/*.lock 2>/dev/null

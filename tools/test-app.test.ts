@@ -11,34 +11,30 @@
 // The Function constructor compiles without executing, which is exactly the
 // check that was missing.
 
+// The .test.ts suffix keeps this suite in Bun's default discovery set.
+import { expect, test } from "bun:test";
 import { CLIENT_JS, dashboardView, isInstanceMissing, newInstanceView } from "../addons/instatic/app/views";
 import { BASE_CLIENT_JS, renderLayout } from "../lib/app-ui";
 import { headerTarget, headerUpdateScript } from "../lib/panel-nav";
-import { compareSemver, isNewerVersion } from "../lib/update-check";
+import { isNewerVersion } from "../lib/update-check";
 import { CLIENT_JS as STAGER_CLIENT_JS, isSiteMissing, jobsView, jobView } from "../addons/stager/app/views";
 import type { JobView } from "../addons/stager/app/service";
 import { expandTarget } from "../addons/stager/app/service";
 import { isNewerThan } from "../addons/instatic/app/tags";
 import type { InstanceView } from "../addons/instatic/app/service";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { createHash } from "node:crypto";
-import { cachedArtifact } from "../cli/release";
-import { describeAuthState, releaseArtifacts, siteUserFor, type SiteAuthState } from "../cli/provision";
-import { ADDONS, ADDON_NAMES, CLI_ARTIFACT } from "../cli/paths";
+import { ADDONS, ADDON_NAMES, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, SOCKET_PATH, SERVICE_USER } from "../cli/paths";
 import { mountPath, splitMount } from "../lib/mount";
-import { formatAuth, guardAuth, resetAuthCache } from "../lib/manager-auth";
 import { escJs } from "../lib/app-http";
 import { getNextAvailablePort } from "../lib/snapshot-reader";
 import type { PanelSnapshot } from "../lib/snapshot-reader";
 
-let failed = 0;
-let passed = 0;
-
 function check(label: string, cond: boolean, detail = ""): void {
-  if (cond) { console.log(`  ok    ${label}`); passed++; }
-  else { console.log(`  FAIL  ${label}${detail ? `: ${detail}` : ""}`); failed++; }
+  test.serial(label, () => {
+    expect(cond, detail).toBe(true);
+  });
 }
 
 // Checked as the browser receives it: the shared helpers and the addon's own
@@ -134,13 +130,11 @@ for (const file of WRAPPERS) {
   const short = file.split("/").pop();
   const seen = new Map<string, string>();
   for (const d of DOMAINS) {
-    const ts = siteUserFor(d);
     const sh = execFileSync("bash", ["-c", `${fn}\nsite_user_for "$1"`, "_", d], { encoding: "utf-8" });
-    check(`${short}: ${d} names the same account as the TypeScript`, ts === sh, `ts=${ts} bash=${sh}`);
-    check(`${short}: ${d} is a valid Linux account name`, /^[a-z][a-z0-9-]{0,31}$/.test(ts), ts);
-    const clash = seen.get(ts);
-    if (clash && clash !== d) check(`${short}: ${d} does not collide with ${clash}`, false, ts);
-    seen.set(ts, d);
+    check(`${short}: ${d} yields a valid Linux account name`, /^[a-z][a-z0-9-]{0,31}$/.test(sh), sh);
+    const clash = seen.get(sh);
+    if (clash && clash !== d) check(`${short}: ${d} does not collide with ${clash}`, false, sh);
+    seen.set(sh, d);
   }
 }
 
@@ -222,62 +216,26 @@ const offlineHtml = dashboardView(
 check("the offline fallback never claims an update", !offlineHtml.includes("0.0.18 available"));
 check("and says the registry was unreachable", offlineHtml.includes("Could not reach ghcr.io"));
 
-// How the manager's own site reports as protected.
-//
-// The README's first instruction is to put authentication in front of the
-// manager, because it can create and delete CloudPanel sites -- and until now
-// `status` said nothing about whether that was done. CloudPanel already has the
-// feature, so this reads the panel's record rather than inventing a mechanism;
-// these pin the four states apart, including the one a real box was found in.
-console.log("== site protection ==");
+console.log("\n== the active layout has one binary and direct helpers ==");
 
-const auth = (o: Partial<SiteAuthState>): SiteAuthState =>
-  ({ panelManaged: false, active: false, ipAllowlist: false, vhostOnly: false, ...o });
-
-check("panel-managed and on reads as protected",
-  describeAuthState(auth({ panelManaged: true, active: true })).startsWith("yes, CloudPanel Basic Auth"));
-check("an IP allowlist is mentioned when present",
-  describeAuthState(auth({ panelManaged: true, active: true, ipAllowlist: true })).includes("IP allowlist"));
-check("configured but switched off is NOT protected",
-  describeAuthState(auth({ panelManaged: true, active: false })).startsWith("NO"));
-check("a vhost-only edit counts as protected but is called out",
-  /^yes, but via a vhost edit/.test(describeAuthState(auth({ vhostOnly: true, active: true }))));
-check("absent vhost auth is optional because the manager authenticates separately",
-  describeAuthState(auth({})).includes("optional; the manager authenticates separately"));
-
-
-console.log("\n== a release tree serves every installed addon ==");
-
-// Installing a second addon used to fetch only that addon's artifacts, write
-// them into a new release directory and move `current` onto it -- which took the
-// first addon's binary out from under its own unit. The service had been running
-// for weeks and the only symptom was status=203/EXEC. The app binaries have
-// since merged into the one CLI artifact, but each addon still has a wrapper of
-// its own in the release tree, so the same obligation applies to those.
 {
   const all = ADDON_NAMES.map((n) => ADDONS[n]!);
-  const names = releaseArtifacts(all);
-
-  check("the one binary is always in the set", names.includes(CLI_ARTIFACT));
+  check("the active binary uses the single system path", CLI_BIN === "/usr/local/bin/clp-addons");
+  check("the helper directory uses the direct layout", LIBEXEC_DIR === "/usr/local/libexec/clp-addons");
+  check("the service uses the UNIX socket path", SOCKET_PATH === "/run/clp-addons/manager.sock");
+  check("the service account is dedicated", SERVICE_USER === "clp-addons");
+  check("the one binary is the shipped artifact", CLI_ARTIFACT === "clp-addons-linux-x64");
   for (const spec of all) {
-    check(`${spec.name}'s wrapper is in the set`, names.includes(spec.wrapperArtifact));
-  }
-  check("nothing is listed twice", names.length === new Set(names).size, names.join(", "));
-
-  // One binary rather than one per addon, which is the whole point of the merge:
-  // the set grows by a wrapper per addon, not by another 77 MB of Bun runtime.
-  check("no per-addon app binary is expected any more",
-    names.filter((n) => n.endsWith("-linux-x64")).length === 1, names.join(", "));
-
-  // The shape of the original bug: one addon's set omits the other's wrapper,
-  // which is why the caller passes every installed addon rather than just its own.
-  const one = releaseArtifacts([all[0]!]);
-  const others = all.slice(1);
-  if (others.length > 0) {
-    check("one addon's set does not cover another's",
-      others.every((o) => !one.includes(o.wrapperArtifact)));
+    check(`${spec.name}'s wrapper uses the direct helper path`, spec.wrapperPath === `${LIBEXEC_DIR}/${spec.wrapperArtifact}`);
   }
 }
+
+console.log("\n== CloudPanel SSO is in-process and fail-closed ==");
+const ssoSource = readFileSync("lib/sso-auth.ts", "utf-8");
+check("SSO reads sessions with Bun.file", ssoSource.includes("Bun.file(path).arrayBuffer()"));
+check("SSO uses the fixed session directory", ssoSource.includes("SESSION_DIR") && ssoSource.includes("sess_"));
+check("SSO has no HMAC token exchange", !ssoSource.includes("issueToken") && !ssoSource.includes("verifyToken"));
+check("the external session validator is gone", !existsSync("libexec/clp-verify-session"));
 
 
 console.log("\n== the vhost comparison ignores what CloudPanel generates ==");
@@ -1386,33 +1344,6 @@ console.log("\n== a site the job adopted is not a site the job created ==");
     stager.split("\n").filter((l) => l.includes("site_exists")).join(" | "));
 }
 
-console.log("\n== reusing an artifact already in the release tree ==");
-
-// Reuse is only sound because it is gated on the release's own recorded
-// checksum. The case worth spending a test on is the third one: a file sitting
-// in the release tree under the right name whose bytes are not the right bytes
-// must be downloaded again, not trusted for being in the right place.
-{
-  const dir = mkdtempSync(`${tmpdir()}/clp-addons-cache-test-`);
-  try {
-    const tag = "v9.9.9";
-    mkdirSync(`${dir}/${tag}`, { recursive: true });
-    const bytes = Buffer.from("the artifact");
-    const digest = createHash("sha256").update(bytes).digest("hex");
-    writeFileSync(`${dir}/${tag}/good`, bytes);
-    writeFileSync(`${dir}/${tag}/tampered`, Buffer.from("something else"));
-
-    check("a matching copy is reused", cachedArtifact(tag, "good", digest, dir)?.equals(bytes) === true);
-    check("an absent copy is not reused", cachedArtifact(tag, "missing", digest, dir) === null);
-    check("a copy that does not match its checksum is not reused",
-      cachedArtifact(tag, "tampered", digest, dir) === null);
-    check("a copy under a different tag is not reused",
-      cachedArtifact("v9.9.8", "good", digest, dir) === null);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
 console.log("\n== archiving an instance is not a rolling window ==");
 
 // make_snapshot used to prune its own output directory to the five newest
@@ -1504,78 +1435,6 @@ console.log("\n== addons are told apart by the path they are mounted at ==");
   }
 }
 
-// The gate that stops the account already on the box. Everything here failed
-// against the code as shipped in v0.8.0, where the app authenticated nothing
-// and a site user reached the root wrapper over loopback.
-{
-  console.log("\n== the manager authenticates its own callers ==");
-
-  const dir = mkdtempSync(`${tmpdir()}/clp-auth-`);
-  const file = `${dir}/manager-auth`;
-  const basic = (u: string, p: string) =>
-    new Request("http://127.0.0.1:38080/instatic/api/instances", {
-      headers: { authorization: `Basic ${Buffer.from(`${u}:${p}`).toString("base64")}` },
-    });
-  const bare = () => new Request("http://127.0.0.1:38080/instatic/api/instances");
-  const guard = (req: Request) => { resetAuthCache(); return guardAuth(req, file); };
-
-  // Fail closed. An install that has not written a credential serves nothing --
-  // the opposite of the old ordering, which started the service and then
-  // advised adding Basic Auth.
-  check("no credential file means the manager refuses everything",
-    guard(bare())?.status === 503);
-  check("a credential file cannot be bypassed by simply omitting the header",
-    (writeFileSync(file, formatAuth("clpaddons", "s3cret")), guard(bare())?.status) === 401);
-
-  check("the right credential is let through", guard(basic("clpaddons", "s3cret")) === null);
-  check("a wrong password is refused", guard(basic("clpaddons", "s3cret "))?.status === 401);
-  check("a wrong username is refused", guard(basic("clpaddon", "s3cret"))?.status === 401);
-  check("an empty password is refused", guard(basic("clpaddons", ""))?.status === 401);
-
-  // The header is attacker-controlled, so every malformed shape must land on
-  // 401 rather than on a throw that the request promise cannot catch.
-  const raw = (v: string) => new Request("http://127.0.0.1:38080/x", { headers: { authorization: v } });
-  check("a non-Basic scheme is refused", guard(raw("Bearer abcdef"))?.status === 401);
-  check("Basic with no credentials is refused", guard(raw("Basic"))?.status === 401);
-  check("undecodable base64 is refused", guard(raw("Basic !!!!"))?.status === 401);
-  check("base64 with no colon is refused",
-    guard(raw(`Basic ${Buffer.from("nocolonhere").toString("base64")}`))?.status === 401);
-  check("an oversized header is refused without hashing it",
-    guard(raw(`Basic ${"A".repeat(9000)}`))?.status === 401);
-  check("a 401 tells the client how to authenticate",
-    guard(bare())?.headers.get("www-authenticate")?.startsWith("Basic ") === true);
-
-  // A password containing a colon is legal in Basic auth: only the first colon
-  // separates the fields.
-  writeFileSync(file, formatAuth("clpaddons", "pa:ss:word"));
-  check("a password containing colons round-trips", guard(basic("clpaddons", "pa:ss:word")) === null);
-
-  // The stored form is a hash, not the password, and a fresh salt each time
-  // means two files for the same password never match byte for byte.
-  const a = formatAuth("clpaddons", "same");
-  const b = formatAuth("clpaddons", "same");
-  check("the credential is not stored in the clear", !a.includes("same"));
-  check("two hashes of one password differ", a !== b);
-  check("both still verify",
-    (writeFileSync(file, a), guard(basic("clpaddons", "same")) === null) &&
-    (writeFileSync(file, b), guard(basic("clpaddons", "same")) === null));
-
-  // A truncated or hand-mangled file must read as "no credential" -- 503 --
-  // rather than as an empty credential that anything matches.
-  for (const [label, body] of [
-    ["an empty file", ""],
-    ["comments only", "# nothing here\n"],
-    ["no separator", "clpaddonsnohash\n"],
-    ["an unknown hash format", "clpaddons:$2y$10$abcdefghijklmnop\n"],
-    ["a truncated salt", "clpaddons:$s1$AAAA$AAAA\n"],
-  ] as const) {
-    writeFileSync(file, body);
-    check(`${label} is treated as no credential, not as a match`, guard(bare())?.status === 503);
-  }
-
-  rmSync(dir, { recursive: true, force: true });
-}
-
 // escJs writes into a single-quoted JS string that itself sits inside a
 // double-quoted HTML attribute, so a character that is inert to JavaScript can
 // still end the attribute.
@@ -1643,11 +1502,17 @@ if addon_needs_docker ${addons.map((a) => `'${a}'`).join(" ")}; then echo yes; e
     createdAt: "2026-09-09T09:00:00Z",
     startedAt: "2026-09-09T09:00:01Z",
     finishedAt: "2026-09-09T09:05:00Z",
+    error: "",
     result: {
       siteType: "php",
       siteUser: "stg-user",
+      phpVersion: "",
       vhostCarried: false,
+      vhostCarriedBy: "stock",
       vhostTemplate: "Generic",
+      database: null,
+      instatic: null,
+      notes: [],
     },
   };
 
@@ -1787,7 +1652,9 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
     state: "done",
     step: "",
     createdAt: "2026-09-09T09:00:00Z",
+    startedAt: "2026-09-09T09:00:01Z",
     finishedAt: "2026-09-09T09:05:00Z",
+    error: "",
     result: null,
   };
   check("stager panelSite === false marks job as missing immediately",
@@ -1834,6 +1701,3 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   check("headerTarget includes update check script", snip.includes("window.__clpAddonsUpdateInit"));
   check("headerTarget embeds the configured version", snip.includes("\"0.9.3\""));
 }
-
-console.log(`\n${passed} passed, ${failed} failed`);
-process.exit(failed === 0 ? 0 : 1);

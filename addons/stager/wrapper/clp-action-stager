@@ -43,9 +43,15 @@ set -euo pipefail
 readonly LOCK_DIR="/run/lock/clp-addons"
 readonly DATA_BASE_DIR="/var/lib/clp-addons/stager"
 readonly JOBS_DIR="${DATA_BASE_DIR}/jobs"
-readonly ADDON_CONFIG="/etc/clp-addons/stager.conf"
 readonly PANEL_DB="/home/clp/htdocs/app/data/db.sq3"
 readonly CLPCTL="/usr/bin/clpctl"
+readonly PANEL_IDENTITY_FILE="/etc/clp-addons/panel-identity.conf"
+
+readonly HOSTNAME_RE='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'
+readonly WILDCARD_HOSTNAME_RE='^\*\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'
+PANEL_IDENTITY_PRIMARY=""
+declare -a PANEL_IDENTITY_ALIASES=()
+VALIDATED_DOMAIN=""
 
 # Confirmed against Creator::NGINX_VHOST_DIRECTORY in the panel's own source.
 # Files there are root:root 0644 and the panel rewrites them from
@@ -56,7 +62,7 @@ readonly NGINX_VHOST_DIR="/etc/nginx/sites-enabled"
 # SELF is hardcoded: it is the copy the sudoers line names and the only one
 # that has been reviewed. Absent when the Stager is installed on its own, which
 # is a refusal rather than a fallback.
-readonly INSTATIC_WRAPPER="/usr/local/lib/clp-addons/clp-action-instatic"
+readonly INSTATIC_WRAPPER="/usr/local/libexec/clp-addons/clp-action-instatic"
 readonly INSTATIC_DATA_DIR="/var/lib/clp-addons/instatic"
 
 # One list, and every gate reads from it. Node.js and Python sites are a
@@ -73,7 +79,7 @@ readonly PORT_MAX=39999
 # Hardcoded rather than "$0". The sudoers line names this exact path, so it is
 # the only copy of this script that has been reviewed and granted anything;
 # re-entering through $0 would follow whatever path the caller was invoked by.
-readonly SELF="/usr/local/lib/clp-addons/clp-action-stager"
+readonly SELF="/usr/local/libexec/clp-addons/clp-action-stager"
 
 # Job records outlive the clone because they carry the staging database
 # password, which is the one credential the operator cannot read back out of
@@ -122,28 +128,102 @@ json_field() {
 }
 
 # --- validation -------------------------------------------------------------
-# Every one of these rejects. None of them rewrite their input.
+# Every unsafe value is rejected. Valid DNS case and one trailing dot are
+# canonicalized before they reach paths, locks, or panel commands.
+
+normalize_identity_hostname() {
+  local host=${1,,}
+  [[ $host != *..* ]] || return 1
+  [[ $host == *. ]] && host=${host%.}
+  [[ $host =~ $HOSTNAME_RE || $host =~ $WILDCARD_HOSTNAME_RE ]] || return 1
+  printf '%s' "$host"
+}
+
+read_panel_identity() {
+  PANEL_IDENTITY_PRIMARY=""
+  PANEL_IDENTITY_ALIASES=()
+  [[ -f $PANEL_IDENTITY_FILE && ! -L $PANEL_IDENTITY_FILE ]] || return 1
+
+  local owner mode
+  owner=$(/usr/bin/stat -c '%u' "$PANEL_IDENTITY_FILE" 2>/dev/null) || return 1
+  mode=$(/usr/bin/stat -c '%a' "$PANEL_IDENTITY_FILE" 2>/dev/null) || return 1
+  [[ $owner == 0 && $mode =~ ^[0-7]+$ ]] || return 1
+  (( (8#$mode & 022) == 0 )) || return 1
+
+  local line key value host alias
+  local seen_primary=0 seen_aliases=0
+  local -a aliases=()
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ -z ${line//[[:space:]]/} || $line =~ ^[[:space:]]*# ]] && continue
+    [[ $line == *=* ]] || return 1
+    key=${line%%=*}
+    value=${line#*=}
+    case $key in
+      PRIMARY)
+        (( seen_primary == 0 )) || return 1
+        host=$(normalize_identity_hostname "$value") || return 1
+        [[ $host =~ $HOSTNAME_RE ]] || return 1
+        PANEL_IDENTITY_PRIMARY=$host
+        seen_primary=1
+        ;;
+      ALIASES)
+        (( seen_aliases == 0 )) || return 1
+        read -r -a aliases <<< "$value"
+        for alias in "${aliases[@]}"; do
+          host=$(normalize_identity_hostname "$alias") || return 1
+          PANEL_IDENTITY_ALIASES+=("$host")
+        done
+        seen_aliases=1
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  done < "$PANEL_IDENTITY_FILE"
+
+  (( seen_primary == 1 && seen_aliases == 1 )) || return 1
+  return 0
+}
+
+panel_identity_matches() {
+  local candidate=$1 alias suffix
+  [[ $candidate == "$PANEL_IDENTITY_PRIMARY" ]] && return 0
+  for alias in "${PANEL_IDENTITY_ALIASES[@]}"; do
+    if [[ $alias == \*.* ]]; then
+      suffix=${alias#*.}
+      [[ $candidate == "$suffix" || $candidate == *".$suffix" ]] && return 0
+    elif [[ $candidate == "$alias" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+panel_identity_guard() {
+  local domain=$1 normalized
+  read_panel_identity || emit_err "the CloudPanel panel identity is missing or malformed"
+  normalized=$(normalize_identity_hostname "$domain") || return 0
+  panel_identity_matches "$normalized" \
+    && emit_err "refusing to act on the CloudPanel panel site or alias: '$domain'"
+  return 0
+}
+
+normalize_domain() {
+  local domain=${1,,}
+  [[ $domain != *..* ]] || return 1
+  [[ $domain == *. ]] && domain=${domain%.}
+  [[ $domain =~ $HOSTNAME_RE ]] || return 1
+  printf '%s' "$domain"
+}
 
 validate_domain() {
-  local d=$1 what=$2
+  local d=$1 what=$2 normalized
   [[ -n $d ]] || emit_err "missing --${what}"
   (( ${#d} <= 253 )) || emit_err "the --${what} domain is too long"
-  local re='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$'
-  [[ $d =~ $re ]] || emit_err "invalid domain for --${what}: '$d'"
+  normalized=$(normalize_domain "$d") || emit_err "invalid domain for --${what}: '$d'"
+  panel_identity_guard "$normalized"
+  VALIDATED_DOMAIN=$normalized
 
-  # Neither end of a clone may be the site serving this addon: as a source it
-  # would copy the manager's own credentials into a new site, and as a target
-  # it would hand the manager's vhost to a clone of something else.
-  if [[ -r $ADDON_CONFIG ]]; then
-    local own
-    # Read the value, never source the file: sourcing turns a config write into
-    # root code execution.
-    own=$(sed -n 's/^[[:space:]]*OWN_DOMAIN[[:space:]]*=[[:space:]]*"\?\([^"#]*\)"\?.*/\1/p' \
-          "$ADDON_CONFIG" | tail -1 | tr -d '[:space:]')
-    if [[ -n $own && $d == "$own" ]]; then
-      emit_err "refusing to act on the addon's own site: '$d'"
-    fi
-  fi
   return 0
 }
 
@@ -430,7 +510,9 @@ cmd_run() {
   # the port and the address as much as to the hostnames -- the port becomes a
   # published container port and part of the clone's proxy URL.
   validate_domain "$source" source
+  source=$VALIDATED_DOMAIN
   validate_domain "$target" target
+  target=$VALIDATED_DOMAIN
   validate_job "$id"
   if [[ -n $port ]];  then validate_port "$port"; fi
   if [[ -n $email ]]; then validate_email "$email"; fi
@@ -2681,9 +2763,10 @@ done
 # recovery code does not expire.
 
 case $VERB in
-  sites|jobs|prune) ;;
-  describe)         validate_domain "$DOMAIN" domain ;;
-  clone)            validate_domain "$SOURCE" source; validate_domain "$TARGET" target
+  sites|jobs)         ;;
+  prune)              read_panel_identity || emit_err "the CloudPanel panel identity is missing or malformed" ;;
+  describe)         validate_domain "$DOMAIN" domain; DOMAIN=$VALIDATED_DOMAIN ;;
+  clone)            validate_domain "$SOURCE" source; SOURCE=$VALIDATED_DOMAIN; validate_domain "$TARGET" target; TARGET=$VALIDATED_DOMAIN
                     validate_flag "$TLS" tls
                     if [[ -n $PORT ]];  then validate_port "$PORT";   fi
                     if [[ -n $EMAIL ]]; then validate_email "$EMAIL"; fi ;;
@@ -2727,6 +2810,7 @@ case $VERB in
       # already-validated domain -- applies to a value read back off disk just
       # as much as to one that arrived in argv.
       validate_domain "$LOCK_TARGET" target
+      LOCK_TARGET=$VALIDATED_DOMAIN
       exec 200>"${LOCK_DIR}/stager-${LOCK_TARGET}.lock"
       flock -w 30 200 || emit_err "another operation is already running for ${LOCK_TARGET}"
     fi ;;

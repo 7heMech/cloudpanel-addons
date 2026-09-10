@@ -4,49 +4,81 @@ import { readSnapshot, snapshotAgeSeconds, type PanelSnapshot } from "../../../l
 // only ask for one of a closed set of verbs, with arguments the wrapper
 // re-validates before acting.
 
-import { execFile } from "node:child_process";
-import type { ExecFileOptions } from "node:child_process";
-
-/**
- * execFile, awaited, with an optional stdin.
- *
- * Written out rather than `promisify(execFile)` because the one credential this
- * addon passes to the wrapper travels on stdin, and the promisified form gives
- * no handle to write to. `execFile` returns the ChildProcess synchronously, so
- * the write happens before anything is awaited.
- */
-function runCommand(
-  cmd: string,
-  args: string[],
-  options: ExecFileOptions,
-  input?: string
-): Promise<{ error: (Error & { code?: number }) | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = execFile(cmd, args, options, (error, stdout, stderr) => {
-      resolve({
-        error: error as (Error & { code?: number }) | null,
-        stdout: String(stdout ?? ""),
-        stderr: String(stderr ?? ""),
-      });
-    });
-    // Every wrapper verb validates its arguments before it reads stdin, so the
-    // ordinary rejection path exits with the pipe still unread. Anything larger
-    // than the 64 KiB pipe buffer then fails the write with EPIPE -- and that
-    // fires on a stream tick outside this promise, where `Bun.serve` cannot turn
-    // it into a 500. Without a listener Node's default for an 'error' event is
-    // to throw, so one oversized field killed the process that serves every
-    // addon. The wrapper's own reply is the answer either way; a write that
-    // could not be delivered adds nothing but a line in the journal.
-    child.stdin?.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code !== "EPIPE") console.error("[wrapper] stdin could not be written:", err.code ?? err.message);
-    });
-    // Always closed, even with nothing to send: a wrapper verb that read stdin
-    // would otherwise wait on a pipe nobody is going to write to.
-    child.stdin?.end(input ?? "");
-  });
+interface RunCommandOptions {
+  timeout: number;
+  maxBuffer: number;
 }
 
-const WRAPPER_BIN = process.env.STAGER_WRAPPER || "/usr/local/lib/clp-addons/clp-action-stager";
+interface CommandFailure {
+  code?: number | string | null;
+  reason?: string;
+}
+
+interface CommandResult {
+  error: CommandFailure | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** Run the policy wrapper with a bounded, byte-oriented Bun subprocess. */
+async function runCommand(
+  cmd: string,
+  args: string[],
+  options: RunCommandOptions,
+  input?: string
+): Promise<CommandResult> {
+  const stdin = new TextEncoder().encode(input ?? "");
+
+  let child: Bun.Subprocess<Uint8Array, "pipe", "pipe">;
+  try {
+    child = Bun.spawn({
+      cmd: [cmd, ...args],
+      // Passing bytes directly gives Bun ownership of the write and close. If
+      // the wrapper exits before consuming them, Bun absorbs the resulting
+      // EPIPE instead of exposing an unhandled writable-stream error. The old
+      // `child.stdin?.on("error", ...)` listener was needed only for Node's
+      // manually written pipe.
+      stdin,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: process.env,
+      timeout: options.timeout,
+      maxBuffer: options.maxBuffer,
+    });
+  } catch (error) {
+    const failure = error as CommandFailure;
+    return { error: failure, stdout: "", stderr: "" };
+  }
+
+  const [stdoutResult, stderrResult, exitResult] = await Promise.allSettled([
+    child.stdout.text(),
+    child.stderr.text(),
+    child.exited,
+  ]);
+  const stdout = stdoutResult.status === "fulfilled" ? stdoutResult.value : "";
+  const stderr = stderrResult.status === "fulfilled" ? stderrResult.value : "";
+  const exitCode = exitResult.status === "fulfilled" ? exitResult.value : undefined;
+  const outputFailed = stdoutResult.status === "rejected" || stderrResult.status === "rejected";
+  const terminated = child.signalCode !== null;
+  const outputLimited =
+    Buffer.byteLength(stdout, "utf8") > options.maxBuffer ||
+    Buffer.byteLength(stderr, "utf8") > options.maxBuffer;
+
+  return {
+    error: exitCode === 0 && !outputFailed && !terminated && !outputLimited
+      ? null
+      : {
+          code: exitCode,
+          ...(outputFailed ? { reason: "wrapper output could not be read" } : {}),
+          ...(terminated ? { reason: "wrapper process terminated" } : {}),
+          ...(outputLimited ? { reason: `wrapper output exceeded ${options.maxBuffer} bytes` } : {}),
+        },
+    stdout,
+    stderr,
+  };
+}
+
+const WRAPPER_BIN = process.env.STAGER_WRAPPER || "/usr/local/libexec/clp-addons/clp-action-stager";
 const SUDO_BIN = "/usr/bin/sudo";
 
 // `clone` only writes a job record and hands the work to systemd, so it
@@ -65,12 +97,29 @@ export interface WrapperResult<T = unknown> {
   error?: string;
 }
 
-async function callWrapper<T = unknown>(
+function parseWrapperReply<T>(stdout: string): WrapperResult<T> | null {
+  try {
+    const reply: unknown = JSON.parse(stdout.trim());
+    if (reply === null || typeof reply !== "object" || Array.isArray(reply)) return null;
+    if (typeof (reply as { ok?: unknown }).ok !== "boolean") return null;
+    return reply as WrapperResult<T>;
+  } catch {
+    return null;
+  }
+}
+
+export interface WrapperCallOptions {
+  timeout?: number;
+  maxBuffer?: number;
+}
+
+export async function callWrapper<T = unknown>(
   verb: string,
   args: string[],
   // On stdin rather than in argv, because the only value that ever needs this
   // is a password and argv is world-readable through /proc.
-  input?: string
+  input?: string,
+  options: WrapperCallOptions = {},
 ): Promise<WrapperResult<T>> {
   const argv = [verb, ...args];
   const runningAsRoot = process.getuid?.() === 0;
@@ -80,18 +129,32 @@ async function callWrapper<T = unknown>(
   const { error, stdout, stderr } = await runCommand(
     cmd,
     cmdArgs,
-    { timeout: TIMEOUTS[verb] ?? DEFAULT_TIMEOUT, maxBuffer: 8 * 1024 * 1024 },
+    {
+      timeout: options.timeout ?? TIMEOUTS[verb] ?? DEFAULT_TIMEOUT,
+      maxBuffer: options.maxBuffer ?? 8 * 1024 * 1024,
+    },
     input
   );
-  if (error && !stdout.trim()) {
-    // Never `error.message`. execFile builds it as "Command failed: <full
-    // argv>", so logging it put every argument this addon passes -- including
-    // --email, the address of another site's administrator -- into the journal,
-    // which is the same mistake as passing a credential in argv with an extra
-    // step. The wrapper's own stderr is the useful half and carries nothing that
-    // was not meant to be read.
-    const why = stderr.trim() || `wrapper ${verb} exited ${error.code ?? "abnormally"}`;
-    console.error(`[wrapper] ${verb} failed without a JSON reply:`, why);
+  if (error) {
+    // A policy rejection is a normal wrapper reply even though the wrapper
+    // exits non-zero. A terminated or output-limited process may leave a
+    // complete-looking JSON prefix behind, so only parse a normal non-zero
+    // exit whose output was read to completion.
+    const normalNonzeroExit =
+      error.reason === undefined &&
+      error.code !== undefined &&
+      error.code !== null &&
+      error.code !== 0;
+    const reply = normalNonzeroExit ? parseWrapperReply<T>(stdout) : null;
+    if (reply) {
+      if (stderr.trim()) console.error(`[wrapper:${verb}]`, stderr.trim());
+      return reply;
+    }
+
+    // Never log a subprocess error object: its message may contain the full
+    // argv. The wrapper's stderr is the useful, non-secret diagnostic channel.
+    const why = error.reason ?? (stderr.trim() || `wrapper ${verb} exited ${error.code ?? "abnormally"}`);
+    console.error(`[wrapper] ${verb} failed before a valid JSON reply:`, why);
     return { ok: false, error: why };
   }
 
@@ -99,12 +162,10 @@ async function callWrapper<T = unknown>(
 
   // stdout is a contract: exactly one JSON object. Never scrape the prose on
   // stderr for meaning.
-  try {
-    return JSON.parse(stdout.trim()) as WrapperResult<T>;
-  } catch {
-    console.error(`[wrapper] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
-    return { ok: false, error: "wrapper returned a malformed reply" };
-  }
+  const reply = parseWrapperReply<T>(stdout);
+  if (reply) return reply;
+  console.error(`[wrapper] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
+  return { ok: false, error: "wrapper returned a malformed reply" };
 }
 
 // Mirrors the wrapper's own validation. Not a substitute for it: the wrapper is
