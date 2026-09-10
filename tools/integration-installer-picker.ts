@@ -264,15 +264,26 @@ async function main(): Promise<void> {
   const harness = buildHarness(picker);
   writeFileSync(TMP_SCRIPT, harness);
 
-  let failed = 0;
+  // Two separate tallies, on purpose: `failedCases` is bounded by
+  // CASES.length and answers "how many of the 7 cases are trustworthy",
+  // while `failedChecks` counts individual assertion/guard failures and can
+  // exceed 7 when a single case fails more than one check (e.g. it gets the
+  // wrong RESULT *and* renders the wrong UI). Reporting only the latter is
+  // how a run once printed "11 of 7 case(s) failed" -- a count bigger than
+  // its own denominator, which reads like harness corruption rather than a
+  // test result.
+  let failedCases = 0;
+  let failedChecks = 0;
   try {
     for (const c of CASES) {
+      let caseFailed = false;
       const result = await runCase(c);
       if (result.ok) {
         console.log(`ok ${c.name}`);
       } else {
         console.log(`FAIL ${c.name}: ${result.message}`);
-        failed++;
+        failedChecks++;
+        caseFailed = true;
       }
 
       // Guard against a TERM regression producing a silently vacuous pass:
@@ -282,26 +293,32 @@ async function main(): Promise<void> {
       // six arrow-key cases would exercise the numbered fallback instead and
       // (for cases whose keys happen to still parse under that prompt) could
       // still report green -- exactly the vacuous-pass failure mode this
-      // check exists to catch.
+      // check exists to catch. A guard failure counts as its own check
+      // failure and still fails the case (and the run) even if the case's
+      // own assertions above passed.
       if (c.term === "xterm" && !result.sawCheckboxUi) {
         console.log(
           `FAIL ${c.name}: expected the checkbox UI ('[x] stager') to render under TERM=xterm, ` +
             `but it did not (saw numbered fallback: ${result.sawNumberedFallback}). ` +
             "TERM may not be propagating to the child process.",
         );
-        failed++;
+        failedChecks++;
+        caseFailed = true;
       }
       if (c.term === "dumb" && !result.sawNumberedFallback) {
         console.log(`FAIL ${c.name}: expected the numbered fallback prompt ('[all]:') to render under TERM=dumb.`);
-        failed++;
+        failedChecks++;
+        caseFailed = true;
       }
+
+      if (caseFailed) failedCases++;
     }
   } finally {
     rmSync(TMP_SCRIPT, { force: true });
   }
 
-  if (failed > 0) {
-    console.log(`\n${failed} of ${CASES.length} case(s) failed`);
+  if (failedCases > 0) {
+    console.log(`\n${failedCases} of ${CASES.length} case(s) failed (${failedChecks} check(s) failed)`);
     process.exit(1);
   }
   console.log(`\nall ${CASES.length} cases passed`);
