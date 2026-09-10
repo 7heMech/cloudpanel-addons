@@ -389,7 +389,7 @@ function listInstances(spec: AddonSpec): string[] {
     .sort();
 }
 
-function cmdUninstall(argv: string[]): void {
+export function cmdUninstall(argv: string[]): void {
   requireRoot("uninstall");
   const { positional, flags } = parseFlags(argv);
   const spec = resolveAddon(positional[0]);
@@ -414,16 +414,23 @@ function cmdUninstall(argv: string[]): void {
 
   stopUnits(remaining.length > 0);
   removeLegacyInstall();
-  removeSudoers();
   reconcileAnchors(true, spec.name);
   purgeTwigCache();
   if (purge) {
+    const failed: string[] = [];
     for (const domain of instances) {
       const result = tryRun(spec.wrapperPath, ["delete", "--domain", domain, "--confirm", domain]);
-      if (!result.ok) log.warn(`could not remove ${domain}: ${result.out}`);
+      if (!result.ok) {
+        failed.push(domain);
+        log.warn(`could not remove ${domain}: ${result.out}`);
+      }
     }
-    rmSync(spec.stateDir, { recursive: true, force: true });
+    if (failed.length > 0) {
+      fatal(`could not remove ${spec.name} instances; state preserved for retry: ${failed.join(", ")}`);
+    }
   }
+  removeSudoers();
+  if (purge) rmSync(spec.stateDir, { recursive: true, force: true });
   rmSync(spec.wrapperPath, { force: true });
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
@@ -439,7 +446,6 @@ function cmdUninstall(argv: string[]): void {
 
   reconcileNginx(true, false);
   stopUnits();
-  removeSudoers();
   rmSync(CLI_BIN, { force: true });
   rmSync(LIBEXEC_DIR, { recursive: true, force: true });
   rmSync(HMAC_KEY_PATH, { force: true });
