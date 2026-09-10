@@ -83,17 +83,18 @@ function tryAction(command, args) {
   return { ok: result.status === 0, out: (stderr || stdout || String(result.error ?? "")).trim() };
 }
 
+// Derived from the real module rather than hand-listed, so any export
+// cli/index.ts (or anything it imports, e.g. cli/recon.ts) starts reading
+// is picked up automatically. Only the paths the test deliberately redirects
+// into the temp fixture root are overridden below.
+const realPaths = await import("./cli/paths.ts");
 mock.module("./cli/paths.ts", () => ({
-  ADDON_NAMES: ["instatic"],
-  ADDONS: { instatic: spec },
+  ...realPaths,
+  ADDONS: { ...realPaths.ADDONS, instatic: spec },
   ARTIFACT_MANIFEST_PATH: root + "/artifacts.json",
-  CLI_ARTIFACT: "clp-addons-linux-x64",
   CLI_BIN: actionBin,
   LIBEXEC_DIR: legacyActionDir,
-  MANAGER_UNIT: "clp-addons.service",
-  PANEL_GROUP: "clp",
   SOCKET_PATH: root + "/manager.sock",
-  mountPath: (name) => "/addons/" + name,
 }));
 mock.module("./cli/release.ts", () => ({
   CLI_VERSION: "1.0.0",

@@ -12,12 +12,7 @@
 // config detail that shouldn't leave the box carelessly.
 
 import { existsSync } from "node:fs";
-
-// Hardcoded rather than imported from ./paths: this file must stay usable
-// (and typecheck-mockable in tests) without pulling in the addon-provisioning
-// module graph. addons/instatic/action.ts and addons/stager/action.ts follow
-// the same precedent for this same path.
-const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";
+import { PANEL_DB } from "./paths";
 
 /**
  * Run a shell snippet via `sh -c` and return its captured stdout as text.
