@@ -334,9 +334,9 @@ export const stagerService = {
    * Start a clone.
    *
    * `instatic` is supplied only when the source is an Instatic site. Its port
-   * is allocated here rather than guessed by the wrapper: `getNextAvailablePort`
+   * is allocated here rather than guessed by the action binary: `getNextAvailablePort`
    * reads the panel snapshot both addons share, so the number that crosses the
-   * boundary is one the wrapper only has to re-validate.
+   * boundary is one the action binary only has to re-validate.
    *
    * Both secrets travel on stdin, one per line, and neither is ever an argument.
    * argv is readable out of `ps` by every account on the box, and worse than
