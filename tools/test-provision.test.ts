@@ -7,7 +7,7 @@ import {
   ADDONS, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
 } from "../cli/paths";
 import {
-  ensurePanelSessionReadable, serviceUnit, sudoersCommandPaths, sudoersRule,
+  ensurePanelSessionReadable, serviceUnit, sudoersCommandPaths, sudoersRule, warnIfPanelSessionUnreadable,
 } from "../cli/provision";
 
 const REPO = join(import.meta.dir, "..");
@@ -259,4 +259,55 @@ test("provisioning verifies manager readability of a panel-owned session", () =>
   } finally {
     rmSync(sessionDir, { recursive: true, force: true });
   }
+});
+
+test("fails clearly when the session directory has no matching CloudPanel session", () => {
+  const sessionDir = mkdtempSync(`${tmpdir()}/panel-session-empty-`);
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  try {
+    expect(() => ensurePanelSessionReadable({
+      run: () => "",
+      tryRun: () => ({ ok: true, out: "" }),
+    }, sessionDir, uid)).toThrow(/could not find a regular CloudPanel session/);
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true });
+  }
+});
+
+// Run in a fresh subprocess (rather than in-process, like the tests above) so the
+// console.warn capture below cannot be polluted by other test files in this suite that
+// mock.module("../cli/util") to silence logging for their own purposes.
+function panelSessionWarningProbe(sessionDir: string): { threw: boolean; warnings: string[] } {
+  const script = `
+    import { warnIfPanelSessionUnreadable } from "./cli/provision.ts";
+    const warnings = [];
+    console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
+    const commands = { run: () => "", tryRun: () => ({ ok: true, out: "" }) };
+    let threw = false;
+    try {
+      warnIfPanelSessionUnreadable(commands, ${JSON.stringify(sessionDir)}, 0);
+    } catch {
+      threw = true;
+    }
+    console.log(JSON.stringify({ threw, warnings }));
+  `;
+  return JSON.parse(execFileSync(process.execPath, ["-e", script], { cwd: REPO, encoding: "utf8" }));
+}
+
+test("warnIfPanelSessionUnreadable logs and continues instead of aborting", () => {
+  const sessionDir = mkdtempSync(`${tmpdir()}/panel-session-empty-`);
+  try {
+    const result = panelSessionWarningProbe(sessionDir);
+    expect(result.threw).toBe(false);
+    expect(result.warnings.some((line) => line.includes("panel session check failed"))).toBe(true);
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true });
+  }
+});
+
+test("warnIfPanelSessionUnreadable never aborts, even when the session directory does not exist at all", () => {
+  const missingDir = `${mkdtempSync(`${tmpdir()}/panel-session-missing-`)}/does-not-exist`;
+  const result = panelSessionWarningProbe(missingDir);
+  expect(result.threw).toBe(false);
+  expect(result.warnings.some((line) => line.includes("panel session check failed"))).toBe(true);
 });

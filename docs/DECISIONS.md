@@ -838,12 +838,12 @@ form. The pristine copy is snapshotted off the running box into
 Reconciliation is a systemd timer, not a dpkg hook: a hook catches apt-driven
 updates and misses manual ones, while a timer catches every path including
 unattended-upgrades at 6am. `clp-addons-reconcile.timer` fires
-`OnCalendar=*:0/15` (`cli/provision.ts:450`) and its service runs
-`clp-addons repair --quiet` (`cli/provision.ts:444`), so there is one
+`OnCalendar=*:0/15` (`cli/provision.ts:469`) and its service runs
+`clp-addons repair --quiet` (`cli/provision.ts:463`), so there is one
 implementation of "make the box match what should be installed": the service
 user, sudoers, systemd units, the panel snapshot, the Twig anchors and the
 Nginx proxy. **It now also runs the Stager's own maintenance verb, `prune`**
-(`runStagerMaintenance`, `cli/index.ts:295-302`, called from `cmdRepair` after
+(`runStagerMaintenance`, `cli/index.ts:295-303`, called from `cmdRepair` after
 the Nginx proxy reconciliation above), gated on the Stager addon being
 installed and never allowed to fail the rest of `repair`. That wiring was
 missing for a long time; see "Job records expire" and "Known gaps" below for
@@ -1252,8 +1252,8 @@ meaning none of the cleanup below ran automatically on any panel, ever, no
 matter how long it had been up. See "Known gaps" for how bad that got in
 practice (a killed clone permanently blocking re-clones of its target).
 
-**Resolved.** `cmdRepair` (`cli/index.ts:304-340`) now calls
-`runStagerMaintenance` (`cli/index.ts:295-302`), which runs `prune` through
+**Resolved.** `cmdRepair` (`cli/index.ts:305-344`) now calls
+`runStagerMaintenance` (`cli/index.ts:295-303`), which runs `prune` through
 the same `runStagerAction` path `action stager prune` always used, gated on
 the Stager addon being installed. It runs after the Nginx proxy
 reconciliation in the same function, not before: `recoverCarriedVhosts` does
@@ -1655,6 +1655,41 @@ written itself earlier in the same run.
 Pruning now belongs to the two verbs whose output directory really is a rolling
 window, `update` and `snapshot`. `make_snapshot` writes the archive and stops.
 
+## Unattended repair must not fail when no panel session exists
+
+`ensureDirs`'s second argument, `verifySession`, calls `ensurePanelSessionReadable`
+(`cli/provision.ts:253-290`), which requires a currently existing `sess_*` file under
+the PHP session directory, owned by the panel user and readable by the service
+account. The check exists for `install`: a human runs it, sees a clear failure, and
+can act on it -- an unreadable session there means the addon's CloudPanel SSO
+integration cannot work.
+
+`cmdRepair` called `ensureDirs(all, true)` unconditionally, the same hard-fail check
+`cmdInstall` uses. But `repair` is not only run by an operator -- it is also the body
+of `clp-addons-reconcile.service`, fired by `clp-addons-reconcile.timer` every fifteen
+minutes (`OnCalendar=*:0/15`, `cli/provision.ts:469`), with nobody watching its exit
+code. Whenever no operator happened to be logged into the panel UI at that moment --
+which is the common case, not the exception, on most boxes most of the time --
+`ensurePanelSessionReadable` found no session file, `fatal()` threw, and every
+reconciliation step after it never ran: `writeConfig`, `hardenBackups`,
+`removeLegacyUnits`, `removeLegacyUsers`, `installSudoers`, `installUnits`,
+`generateSnapshot`, `startUnits`/`ensureTimerArmed`, `reconcileAnchors` and
+`reconcileNginx`. This reproduced on every installed panel; every fifteen minutes, the
+self-healing pass silently did nothing. Only `clp-addons-anchor.path` ->
+`repair --anchors-only` kept working, because that branch returns before the session
+gate is ever reached (`cli/index.ts:309-311`).
+
+`repair` now calls `ensureDirs(all)` (no session check) and separately
+`warnIfPanelSessionUnreadable()` (`cli/provision.ts:298-309`). That wrapper runs the
+identical check but turns a failure into `log.warn` instead of `fatal`, so an
+unreadable session is recorded in the journal instead of aborting the run -- and it
+cannot itself abort, whether the session file is merely missing or the whole session
+directory does not exist. `log.warn` writes through `console.warn` unconditionally; it
+is not gated by `--quiet` anywhere in this codebase, so the warning still reaches the
+journal from the timer's `repair --quiet` invocation. `install` is unchanged: it still
+calls `ensureDirs(specs, true)` and still fails loudly when no session exists, because
+there a human is present to see it and act.
+
 ## Known gaps
 
 - `--local` installs skip provenance verification by construction. Staging only.
@@ -1729,8 +1764,8 @@ window, `update` and `snapshot`. `make_snapshot` writes the archive and stops.
   during that cleanup pass rather than folded into it, so that a behavior
   change was not smuggled into a docs-only commit; this entry recorded that
   gap so it would not be forgotten. It has since been wired: `cmdRepair`
-  (`cli/index.ts:304-340`) now calls `runStagerMaintenance`
-  (`cli/index.ts:295-302`), gated on the Stager addon being installed, after
+  (`cli/index.ts:305-344`) now calls `runStagerMaintenance`
+  (`cli/index.ts:295-303`), gated on the Stager addon being installed, after
   the Nginx proxy reconciliation and with its own failure caught and logged
   rather than allowed to fail the rest of `repair`. The original intent was
   the right design all along: one fifteen-minute timer already exists, so

@@ -9,7 +9,7 @@ import {
   ensureDirs, ensureServiceUser, ensureTimerArmed, hardenBackups,
   installSudoers, installUnits, installedConfig, purgeTwigCache, removeLegacyUnits,
   removeLegacyInstall, removeLegacyUsers, removeSudoers, startUnits, stopUnits, unitActive,
-  unitPid, writeConfig,
+  unitPid, warnIfPanelSessionUnreadable, writeConfig,
 } from "./provision";
 import {
   KNOWN_GOOD_PANEL_VERSIONS, inspect, inspectNginxProxy, masterVhostHost, panelVersion, purgeTwigCache as purgeInjectCache,
@@ -196,7 +196,7 @@ function dashboardUrl(): string {
   return `https://${host}/addons/`;
 }
 
-async function cmdInstall(argv: string[]): Promise<void> {
+export async function cmdInstall(argv: string[]): Promise<void> {
   requireRoot("install");
   const { positional, flags } = parseFlags(argv);
   const spec = resolveAddon(positional[0]);
@@ -316,7 +316,10 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   const all = installedAddons();
   ensureServiceUser(quiet);
   removeLegacyInstall(quiet);
-  ensureDirs(all, true);
+  ensureDirs(all);
+  // Unattended (timer-driven) reconciliation must not abort just because nobody is
+  // currently logged into the panel; unlike install, warn and keep repairing.
+  warnIfPanelSessionUnreadable();
   for (const spec of all) {
     writeConfig(spec, true);
     hardenBackups(spec, quiet);

@@ -64,6 +64,7 @@ const mockPrelude = String.raw`
     stopUnits: () => {},
     unitActive: () => "active",
     unitPid: () => null,
+    warnIfPanelSessionUnreadable: () => {},
     writeConfig: () => {},
   }));
   mock.module("./cli/inject.ts", () => ({
