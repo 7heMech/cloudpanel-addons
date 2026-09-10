@@ -1236,13 +1236,14 @@ interrupted clone (`recoverCarriedVhosts`, `addons/stager/action.ts:1170`).
 The plan on paper was that `repair` would run `prune` on every reconciliation,
 because the timer that runs `repair` every fifteen minutes already exists and
 giving the addon a timer of its own would be two answers to one question. **That
-wiring was never built.** `maintenanceVerb: "prune"` is declared on the
-Stager's `AddonSpec` (`cli/paths.ts:59,79`) but nothing reads that field — a
-tree-wide grep across the whole repository turns up only its declaration and
-its one setting. `cmdRepair` (`cli/index.ts:286-315`) never calls `prune`; see
-the correction above. `prune` today is reachable only by an operator (or a
-script) explicitly running `clp-addons action stager prune`. See "Known gaps"
-for the consequence.
+wiring was never built.** A `maintenanceVerb: "prune"` field was declared on
+the Stager's `AddonSpec` for exactly this purpose, but nothing ever read it —
+a tree-wide grep across the whole repository turned up only its declaration
+and its one setting — so it has since been removed as dead code. `cmdRepair`
+(`cli/index.ts:286-315`) never calls `prune`; see the correction above.
+`prune` today is reachable only by an operator (or a script) explicitly
+running `clp-addons action stager prune`. See "Known gaps" for the
+consequence.
 
 **A custom root directory is not copied**, because `clpctl site:add:php` has no
 option for one. The job says when the clone's differs from the source's.
@@ -1687,12 +1688,14 @@ window, `update` and `snapshot`. `make_snapshot` writes the archive and stops.
   transport".
 - **The Stager's `prune` verb is not wired into the maintenance cycle —
   open.** `maintenanceVerb: "prune"` was declared on the Stager's `AddonSpec`
-  (`cli/paths.ts:59,79`) as the intended hook for the fifteen-minute timer
-  described under "Reconciliation: a timer plus a path unit" above, but
-  `cmdRepair` (`cli/index.ts:286-315`) never reads that field and never calls
-  `prune`. `maintenanceVerb` is dead code — its only two occurrences in the
-  entire tree are its own declaration and assignment — and is being removed as
-  part of this documentation cleanup. Concretely, this means none of the
+  as the intended hook for the fifteen-minute timer described under
+  "Reconciliation: a timer plus a path unit" above, but `cmdRepair`
+  (`cli/index.ts:286-315`) never read that field and never called `prune`.
+  `maintenanceVerb` was dead code — its only two occurrences in the entire
+  tree were its own declaration and assignment — and the field itself has
+  since been removed from `cli/paths.ts` as dead code; that removal does not
+  close this gap, because the wiring it was meant to support was never built
+  either. Concretely, this means none of the
   cleanup `prune` performs (fourteen-day job-record expiry, stale-`running`
   job recovery, orphaned-vhost-backup recovery via `recoverCarriedVhosts`) has
   ever run automatically on any panel running this code: job records and their
