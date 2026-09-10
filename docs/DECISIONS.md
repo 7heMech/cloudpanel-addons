@@ -12,19 +12,18 @@ The implementation specification is
 
 ### Privilege boundary
 
-Addon applications run as the locked `clp-addons` system user. They can invoke
-only the root-owned helpers named by `/etc/sudoers.d/clp-addons`:
+The manager runs as the locked `clp-addons` system user. It can invoke only the
+root-owned action wrappers named by `/etc/sudoers.d/clp-addons`:
 
 ```text
-clp-addons ALL=(root) NOPASSWD: /usr/local/libexec/clp-addons/clp-verify-session, /usr/local/libexec/clp-addons/clp-action-instatic, /usr/local/libexec/clp-addons/clp-action-stager
+clp-addons ALL=(root) NOPASSWD: /usr/local/libexec/clp-addons/clp-action-instatic, /usr/local/libexec/clp-addons/clp-action-stager
 ```
 
-The generated rule contains the validator and exactly the wrapper paths for the
-installed addons. It deliberately does not grant a directory wildcard, so a
-new file placed in `/usr/local/libexec/clp-addons/` cannot become a passwordless
-root command without an explicit provisioning change. Earlier deployment notes
-refer to the wildcard that preceded this rule; those notes remain historical,
-not an authorization granted by the current installation.
+The generated rule contains exactly the wrapper paths for the installed addons.
+It deliberately does not grant a directory wildcard, so a new file placed in
+`/usr/local/libexec/clp-addons/` cannot become a passwordless root command
+without an explicit provisioning change. Session validation is performed by the
+manager itself and is not a privileged command.
 
 Every wrapper validates its complete argument set before reading input,
 deriving paths, or taking a lock. Commands use argument arrays; no shell
@@ -56,30 +55,25 @@ entrypoint is:
 ```
 
 The service creates `/run/clp-addons/manager.sock` with mode `0660`, owned by
-`clp-addons:clp`, so Nginx can connect without exposing a TCP listener. The HMAC
-key is root-owned and readable by the service group; an elevated
-`ExecStartPre` recreates it after `/run` is cleared during a reboot.
+`clp-addons:clp`, so Nginx can connect without exposing a TCP listener. No
+authentication key or privileged pre-start command is required.
 
-### CloudPanel SSO and token exchange
+### CloudPanel SSO
 
-Requests first try the short-lived `clp_addons_token` HMAC cookie. Its payload
-contains a SHA-256 fingerprint of the current `PHPSESSID`; the manager compares
-that fingerprint with the request's PHP session before accepting the token. A
-missing, expired, malformed, or session-mismatched token falls back to the
-root-owned validator rather than granting access.
-
-`clp-verify-session` accepts exactly one `--cookie=<id>` argument, permits only
-`^[a-zA-Z0-9,-]+$`, and reads the fixed CloudPanel session directory
-`/var/lib/php/sessions`. It checks `_sf2_meta` expiry, requires an authenticated
-security token, extracts a valid username, and emits only the fixed JSON
-contract. A valid session receives a five-minute cookie scoped to `/addons/`;
-otherwise the manager redirects to `/login`.
+Each protected request reads the `PHPSESSID` file directly with Bun from the
+fixed CloudPanel session directory `/var/lib/php/sessions`. The session id must
+match `^[a-zA-Z0-9,-]+$`; the manager checks the file with `lstat` before reading,
+requires ownership by `clp`, rejects symlinks, caps its size, and warns when the
+stock world-writable parent is encountered. A bounded structural scanner then
+checks `_sf2_meta` expiry, the nested `_security_main` token, the authenticated
+username, and `mfaAuthenticated === true`. Invalid sessions redirect to
+`/login`.
 
 ### Active artifact layout and updates
 
-There is one active binary at `/usr/local/bin/clp-addons`. The session validator
-and addon wrappers live directly in `/usr/local/libexec/clp-addons/`; the active
-installation has no release directory or `current` symlink. `clp-addons update`
+There is one active binary at `/usr/local/bin/clp-addons`. Addon wrappers live
+directly in `/usr/local/libexec/clp-addons/`; the active installation has no
+release directory or `current` symlink. `clp-addons update`
 resolves a release, verifies checksums and provenance when artifacts are needed,
 atomically replaces the CLI and installed helpers, restarts the service, and
 reconciles panel integration. A same-version update reuses artifacts only when
@@ -96,7 +90,7 @@ manage the CloudPanel sites that represent addon instances; the manager itself
 never creates one.
 
 The periodic timer and template path unit invoke the same idempotent repair
-commands used by installation. Repair restores service-user, key, sudoers,
+commands used by installation. Repair restores service-user, socket, sudoers,
 unit, snapshot, Twig, and Nginx invariants without a second login or manual
 domain configuration.
 

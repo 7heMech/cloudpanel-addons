@@ -1,6 +1,6 @@
 # CloudPanel Addons: Core Modernization & Simplification Specification
 
-> **Target Audience:** Implementing Subagents / Developers  
+> **Target Audience:** Implementing Subagents / Developers
 > **Objective:** Transition `cloudpanel-addons` from an external standalone reverse-proxy site into an integrated CloudPanel subpath (`/addons/`) served over a UNIX domain socket, with CloudPanel session-based Single Sign-On (SSO), unified single-path updates, and a streamlined CLI.
 
 ---

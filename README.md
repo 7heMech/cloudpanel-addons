@@ -77,10 +77,11 @@ connects through the CloudPanel `clp` group. The installer injects a marked
 before reloading it. If validation fails, the injector restores its pristine
 snapshot.
 
-CloudPanel SSO is automatic. The manager validates `PHPSESSID` through the
-root-owned `/usr/local/libexec/clp-addons/clp-verify-session`, then issues a
-five-minute HMAC cookie scoped to `/addons/`. The HMAC token is bound to the
-same PHP session ID. Requests without a valid session redirect to `/login`.
+CloudPanel SSO is automatic. The manager reads the `PHPSESSID` session file
+in-process with Bun, validates the `_security_main` token and completed
+`mfaAuthenticated` state, and requires the session file to be owned by `clp`.
+Requests without a valid session redirect to `/login`; authentication stays
+inside the manager with no separate helper process.
 
 ## Commands
 
@@ -93,8 +94,8 @@ clp-addons uninstall <addon> --yes [--purge]
 clp-addons serve
 ```
 
-`clp-addons update` verifies and atomically installs the CLI, session validator,
-and wrappers for every installed addon when artifacts are missing or changed,
+`clp-addons update` verifies and atomically installs the CLI and wrappers for
+every installed addon when artifacts are missing or changed,
 restarts `clp-addons.service`, and reconciles the Twig and Nginx integration.
 Same-version updates reuse artifacts only when their root-owned manifest hashes
 match. The active paths are always
@@ -102,7 +103,7 @@ match. The active paths are always
 release directory or `current` symlink. `upgrade` is an alias. `self-update` is
 removed as an operation; invoking it reports that `update` should be used.
 
-`repair` is idempotent. Its timer reasserts the service account, socket key
+`repair` is idempotent. Its timer reasserts the service account, socket
 permissions, sudoers, units, panel snapshot, Twig anchors, and Nginx proxy after
 reboots or CloudPanel updates. `status` is a compact dashboard for those
 invariants and prints the `/addons/` URL.
@@ -178,7 +179,6 @@ them to `/var/lib/clp-addons/templates` at runtime instead of vendoring them.
 ```bash
 bun run build
 for w in addons/*/wrapper/*; do install -m 0755 "$w" "dist/$(basename "$w")"; done
-install -m 0755 libexec/clp-verify-session dist/clp-verify-session
 (cd dist && sha256sum -- * > SHA256SUMS)
 ./dist/clp-addons-linux-x64 install instatic --local=dist
 ```
