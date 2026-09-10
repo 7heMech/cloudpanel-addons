@@ -34,6 +34,7 @@ export interface StagerActionPaths {
   actionBinary: string;
   tempDir: string;
   sqlite3: string;
+  emitReply?: boolean;
 }
 
 export const DEFAULT_STAGER_ACTION_PATHS: StagerActionPaths = {
@@ -63,6 +64,8 @@ export interface ParsedStagerAction {
 
 export interface StagerActionOptions {
   paths?: Partial<StagerActionPaths>;
+  /** Emit the action's JSON reply on stdout. Defaults to true for CLI callers. */
+  emitReply?: boolean;
 }
 
 interface SiteRow {
@@ -107,7 +110,23 @@ interface JobView {
 }
 
 function pathsFor(options?: StagerActionOptions): StagerActionPaths {
-  return { ...DEFAULT_STAGER_ACTION_PATHS, ...options?.paths };
+  return {
+    ...DEFAULT_STAGER_ACTION_PATHS,
+    ...options?.paths,
+    emitReply: options?.emitReply !== false,
+  };
+}
+
+function emitStagerOk(paths: StagerActionPaths, data: unknown): void {
+  if (paths.emitReply !== false) emitActionOk(data);
+}
+
+function emitStagerError(message: string, data: unknown, emitReply: boolean): void {
+  if (emitReply) {
+    emitActionError(message, data, "stager");
+  } else {
+    process.stderr.write(`[stager] ERROR: ${message}\n`);
+  }
 }
 
 function requireRoot(): void {
@@ -1534,7 +1553,7 @@ function cmdSites(paths: StagerActionPaths): void {
       databases: Number(row.databases ?? 0) || 0,
     });
   }
-  emitActionOk({ sites });
+  emitStagerOk(paths, { sites });
 }
 
 function cmdDescribe(paths: StagerActionPaths, domain: string): void {
@@ -1580,7 +1599,7 @@ function cmdDescribe(paths: StagerActionPaths, domain: string): void {
     const match = size.stdout.trim().match(/^([0-9]+)/);
     sizeMb = match ? Number(match[1]) || 0 : 0;
   }
-  emitActionOk({
+  emitStagerOk(paths, {
     domain,
     siteType: type,
     instatic,
@@ -1681,7 +1700,7 @@ function cmdClone(action: ParsedStagerAction, paths: StagerActionPaths, releaseL
   // type checker and make it explicit that the source backend is only used for
   // reverse-proxy clones. The stored job is the source of truth for run.
   void backend;
-  emitActionOk({ job: id, source, target });
+  emitStagerOk(paths, { job: id, source, target });
 }
 
 function runReplyError(ctx: RunContext, message: string): never {
@@ -2151,7 +2170,7 @@ function cmdJob(paths: StagerActionPaths, id: string): void {
   const panel = panelDomains(paths);
   const logResult = runCommand("tail", ["-n", String(LOG_TAIL_LINES), join(dir, "log")]);
   const log = logResult.ok ? logResult.stdout.replace(/\n+$/g, "") : "";
-  emitActionOk({ job: jobJson(paths, dir, id, panel.readable, panel.domains), log });
+  emitStagerOk(paths, { job: jobJson(paths, dir, id, panel.readable, panel.domains), log });
 }
 
 function cmdJobs(paths: StagerActionPaths): void {
@@ -2169,7 +2188,7 @@ function cmdJobs(paths: StagerActionPaths): void {
     if (!isDirectory(dir)) continue;
     jobs.push(jobJson(paths, dir, entry, panel.readable, panel.domains));
   }
-  emitActionOk({ jobs });
+  emitStagerOk(paths, { jobs });
 }
 
 function findOlderThan(path: string, unitMilliseconds: number, count: number): boolean {
@@ -2226,7 +2245,7 @@ function cmdPrune(paths: StagerActionPaths): void {
     // Stale staging cleanup is best effort: a failure here must not fail the
     // whole prune.
   }
-  emitActionOk({ removed, stuck, vhostsRecovered });
+  emitStagerOk(paths, { removed, stuck, vhostsRecovered });
 }
 
 async function dispatch(action: ParsedStagerAction, paths: StagerActionPaths, releaseLock: () => void): Promise<void> {
@@ -2254,6 +2273,7 @@ export function parseStagerAction(argv: string[], options?: StagerActionOptions)
 }
 
 export async function runStagerAction(argv: string[], options?: StagerActionOptions): Promise<number> {
+  const emitReply = options?.emitReply !== false;
   try {
     requireRoot();
     const paths = pathsFor(options);
@@ -2297,15 +2317,15 @@ export async function runStagerAction(argv: string[], options?: StagerActionOpti
   } catch (error) {
     if (error instanceof JobFailure || error instanceof RunReplyFailure) return 1;
     if (error instanceof ActionFailure) {
-      emitActionError(error.message, error.data, "stager");
+      emitStagerError(error.message, error.data, emitReply);
       return 1;
     }
     if (error instanceof ActionCommandFailure) {
-      emitActionError(error.message, undefined, "stager");
+      emitStagerError(error.message, undefined, emitReply);
       return 1;
     }
     const message = error instanceof Error ? error.message : "stager action failed";
-    emitActionError(message, undefined, "stager");
+    emitStagerError(message, undefined, emitReply);
     return 1;
   }
 }

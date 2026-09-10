@@ -295,7 +295,8 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
 export async function runStagerMaintenance(installed: AddonSpec[], options?: StagerActionOptions): Promise<void> {
   if (!installed.some((spec) => spec.name === "stager")) return;
   try {
-    await runStagerAction(["prune"], options);
+    const result = await runStagerAction(["prune"], { ...(options ?? {}), emitReply: false });
+    if (result !== 0) log.warn(`stager maintenance (prune) returned exit code ${result}`);
   } catch (error) {
     log.warn(`stager maintenance (prune) failed: ${error instanceof Error ? error.message : String(error)}`);
   }

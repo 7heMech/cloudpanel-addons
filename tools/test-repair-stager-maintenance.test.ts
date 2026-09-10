@@ -168,7 +168,17 @@ test.serial("repair's automatic entry point runs prune for real: a stuck job fli
     const paths = ${JSON.stringify(paths)};
     const { runStagerMaintenance } = await import("./cli/index.ts");
     const stagerSpec = { name: "stager", title: "Stager", description: "", configFile: "", stateDir: "", targets: [] };
-    await runStagerMaintenance([stagerSpec], { paths });
+    const maintenanceOutput = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (chunk) => {
+      maintenanceOutput.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+      return true;
+    };
+    try {
+      await runStagerMaintenance([stagerSpec], { paths });
+    } finally {
+      process.stdout.write = originalWrite;
+    }
 
     const { readFileSync } = await import("node:fs");
     const state = readFileSync(${JSON.stringify(jobDir)} + "/state", "utf8").trim();
@@ -176,7 +186,7 @@ test.serial("repair's automatic entry point runs prune for real: a stuck job fli
     const { runStagerAction } = await import("./addons/stager/action.ts");
     const cloneCode = await runStagerAction(["clone", "--source", "example.com", "--target", "stg.example.com"], { paths });
 
-    process.stdout.write(JSON.stringify({ state, cloneCode }));
+    process.stdout.write(JSON.stringify({ state, cloneCode, maintenanceOutput: maintenanceOutput.join("") }));
   `;
   try {
     const result = spawnSync(process.execPath, ["-e", script], {
@@ -185,12 +195,13 @@ test.serial("repair's automatic entry point runs prune for real: a stuck job fli
       env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
     });
     expect(result.status, result.stderr).toBe(0);
-    // action verbs emit their own reply line (prune's, then clone's) ahead of
-    // this test's own summary; only the last line is ours.
+    // The automatic repair path suppresses prune's action reply. The manual
+    // clone action below still emits its normal reply before this summary.
     const lastLine = result.stdout.trim().split("\n").pop() ?? "";
-    const output = JSON.parse(lastLine) as { state: string; cloneCode: number };
+    const output = JSON.parse(lastLine) as { state: string; cloneCode: number; maintenanceOutput: string };
     expect(output.state).toBe("failed");
     expect(output.cloneCode).toBe(0);
+    expect(output.maintenanceOutput).toBe("");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
