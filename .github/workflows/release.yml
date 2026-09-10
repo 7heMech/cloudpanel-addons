@@ -51,19 +51,18 @@ jobs:
         run: bun run test
 
       - name: Installer keyboard selection
-        run: python3 tools/test-installer.py
+        run: bun run test:installer
 
       - name: Lint shell scripts
-        # Shellcheck findings in the installer and contract harnesses are
-        # release blockers, not style notes.
+        # install.sh is the only shell script left in the repo, and a finding
+        # here is a release blocker, not a style note: it is the bootstrap a
+        # customer runs via `curl ... | bash` before any binary exists on the
+        # box, so there is no compiler or test suite standing between a bug
+        # in it and that customer's shell.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
-          shopt -s nullglob
-          shellcheck_files=(tools/*.sh install.sh)
-          if ((${#shellcheck_files[@]})); then
-            shellcheck -S warning -- "${shellcheck_files[@]}"
-          fi
+          shellcheck -S warning install.sh
 
       - name: Resolve the version from the tag
         id: version

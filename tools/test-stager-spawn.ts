@@ -26,13 +26,13 @@ const stdinPath = join(tempDir, "stdin");
 const servicePath = join(dirname(fileURLToPath(import.meta.url)), "../addons/stager/app/service.ts");
 const previousActionTestBin = process.env.CLP_ADDONS_ACTION_TEST_BIN;
 const originalGetuid = Object.getOwnPropertyDescriptor(process, "getuid");
-const needsDirectWrapperForTest = process.getuid?.() !== 0;
+const needsDirectActionForTest = process.getuid?.() !== 0;
 
-if (needsDirectWrapperForTest) {
+if (needsDirectActionForTest) {
   Object.defineProperty(process, "getuid", { value: () => 0, configurable: true, writable: true });
 }
 
-const wrapper = `#!/usr/bin/env bash
+const action = `#!/usr/bin/env bash
 set -eu
 printf '%s\\n' "$@" > ${shellQuote(argvPath)}
 mode=$(<${shellQuote(modePath)})
@@ -40,11 +40,11 @@ case "$mode" in
   success)
     cat > ${shellQuote(stdinPath)}
     printf '%s\\n' '{"ok":true,"data":{"job":"20260909T120000Z-abcdef"}}'
-    printf '%s\\n' 'wrapper diagnostic' >&2
+    printf '%s\\n' 'action diagnostic' >&2
     ;;
   nonzero)
     printf '%s\\n' 'not JSON'
-    printf '%s\\n' 'wrapper rejected request' >&2
+    printf '%s\\n' 'action rejected request' >&2
     exit 9
     ;;
   json-nonzero)
@@ -69,12 +69,12 @@ esac
 `;
 
 try {
-  writeFileSync(actionProbePath, wrapper, { mode: 0o700 });
+  writeFileSync(actionProbePath, action, { mode: 0o700 });
   chmodSync(actionProbePath, 0o700);
   writeFileSync(modePath, "success\n");
 
   process.env.CLP_ADDONS_ACTION_TEST_BIN = actionProbePath;
-  const { callWrapper, stagerService } = await import("../addons/stager/app/service.ts");
+  const { callAction, stagerService } = await import("../addons/stager/app/service.ts");
 
   const password = "secret password that must stay off argv";
   const mfaCode = "654321";
@@ -88,7 +88,7 @@ try {
     ok: true,
     data: { job: "20260909T120000Z-abcdef" },
   });
-  assert(success.lines.some((line) => line.includes("[wrapper:clone] wrapper diagnostic")));
+  assert(success.lines.some((line) => line.includes("[action:clone] action diagnostic")));
   const argv = readFileSync(argvPath, "utf8");
   assert(argv.startsWith("action\nstager\nclone\n"));
   assert(argv.includes("--email\nadmin@example.com\n"));
@@ -103,7 +103,7 @@ try {
     false,
     { port: 39000, email: "admin@example.com", password, mfaCode },
   ));
-  assert.deepEqual(failed.value, { ok: false, error: "wrapper rejected request" });
+  assert.deepEqual(failed.value, { ok: false, error: "action rejected request" });
   assert(!failed.lines.join("\n").includes(password));
   assert(!failed.lines.join("\n").includes(mfaCode));
 
@@ -112,18 +112,18 @@ try {
   assert.deepEqual(jsonFailure, { ok: false, error: "policy rejected" });
 
   writeFileSync(modePath, "timeout\n");
-  const timedOut = await callWrapper("job", [], undefined, { timeout: 25 });
+  const timedOut = await callAction("job", [], undefined, { timeout: 25 });
   assert.equal(timedOut.ok, false);
-  assert.equal(timedOut.error, "wrapper process terminated");
+  assert.equal(timedOut.error, "action process terminated");
 
   writeFileSync(modePath, "max-buffer\n");
-  const overLimit = await callWrapper("job", [], undefined, { maxBuffer: 256 });
+  const overLimit = await callAction("job", [], undefined, { maxBuffer: 256 });
   assert.equal(overLimit.ok, false);
-  assert.equal(overLimit.error, "wrapper output exceeded 256 bytes");
+  assert.equal(overLimit.error, "action output exceeded 256 bytes");
 
   writeFileSync(modePath, "malformed\n");
   const malformed = await stagerService.getJob("20260909T120000Z-abcdef");
-  assert.deepEqual(malformed, { ok: false, error: "wrapper returned a malformed reply" });
+  assert.deepEqual(malformed, { ok: false, error: "action returned a malformed reply" });
 
   writeFileSync(modePath, "early-exit\n");
   const earlyExit = await stagerService.startClone(
@@ -137,7 +137,7 @@ try {
       mfaCode,
     },
   );
-  assert.deepEqual(earlyExit, { ok: false, error: "wrapper returned a malformed reply" });
+  assert.deepEqual(earlyExit, { ok: false, error: "action returned a malformed reply" });
 
   const service = readFileSync(servicePath, "utf8");
   assert.match(service, /Bun\.spawn/);

@@ -130,8 +130,8 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
 
   switch (verb) {
     case "list":
-      // This intentionally omits --tls, matching the standalone wrapper's
-      // accepted-but-ignored option.
+      // This intentionally omits --tls, preserving the original clp-action-instatic
+      // wrapper's accepted-but-ignored option for compatibility.
       if (domain || port || tag || confirm) failAction("list takes no arguments");
       break;
     case "update":
@@ -141,7 +141,8 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
       if (port || tag) failAction("delete takes only --domain and --confirm");
       break;
     case "create":
-      // --confirm is accepted and ignored by the existing wrapper.
+      // --confirm is accepted and ignored, preserving the original wrapper's
+      // leniency here.
       break;
     default:
       if (port || tag || confirm) failAction(`${verb} takes only --domain`);
@@ -223,8 +224,9 @@ function panelSiteDomains(paths: InstaticActionPaths): { readable: boolean; doma
       domains: new Set(rows.map((row) => typeof row.domain_name === "string" ? row.domain_name : "")),
     };
   } catch {
-    // The shell wrapper records that the database was readable before the
-    // query, so a failed query reports panelSite=false rather than null.
+    // Readability was already confirmed before this query ran, so a failed
+    // query here still reports readable: true with an empty domain set (i.e.
+    // panelSite=false downstream) rather than falling back to unreadable/null.
     return { readable: true, domains: new Set() };
   }
 }
@@ -281,8 +283,9 @@ function commandCombinedOutput(command: string, args: string[]): string {
         env: process.env,
       });
     } catch {
-      // The wrapper uses `|| true` for log collection: an unavailable or
-      // failing log command contributes whatever output it managed to write.
+      // Log collection is best effort: an unavailable or failing log command
+      // still contributes whatever output it managed to write before the catch
+      // swallows the error.
     }
     closeSync(fd);
     fd = -1;
@@ -699,7 +702,7 @@ function rollbackUpdate(name: string, dir: string, snapshot: string, owner: stri
   try {
     enforceOwnership(dir, owner);
   } catch {
-    // The shell rollback continues after ownership repair fails; the old
+    // This rollback continues even if ownership repair fails; the old
     // container is still renamed back and restarted below.
   }
   runDiagnostic("docker", ["rename", `${name}-prev`, name]);

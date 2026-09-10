@@ -1,6 +1,6 @@
-// Every privileged action goes through the wrapper. The app deliberately has
-// no docker access of its own: membership in the docker group is equivalent to
-// root, which would make the wrapper's argument validation decorative.
+// Every privileged action goes through the action binary. The app deliberately
+// has no docker access of its own: membership in the docker group is equivalent
+// to root, which would make the action binary's argument validation decorative.
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -25,13 +25,13 @@ const TIMEOUTS: Record<string, number> = {
 };
 const DEFAULT_TIMEOUT = 60_000;
 
-export interface WrapperResult<T = unknown> {
+export interface ActionResult<T = unknown> {
   ok: boolean;
   data?: T;
   error?: string;
 }
 
-async function callWrapper<T = unknown>(verb: string, args: string[]): Promise<WrapperResult<T>> {
+async function callAction<T = unknown>(verb: string, args: string[]): Promise<ActionResult<T>> {
   const argv = ["action", "instatic", verb, ...args];
   const runningAsRoot = process.getuid?.() === 0;
   const cmd = runningAsRoot ? ACTION_BIN : SUDO_BIN;
@@ -51,28 +51,29 @@ async function callWrapper<T = unknown>(verb: string, args: string[]): Promise<W
     stdout = e.stdout ?? "";
     stderr = e.stderr ?? "";
     if (!stdout.trim()) {
-      // No JSON on stdout means the wrapper never got far enough to answer.
+      // No JSON on stdout means the action binary never got far enough to answer.
       // Surface its stderr rather than a bare exec error.
-      console.error(`[wrapper] ${verb} failed without a JSON reply:`, stderr || e.message);
-      return { ok: false, error: stderr.trim() || e.message || `wrapper ${verb} failed` };
+      console.error(`[action] ${verb} failed without a JSON reply:`, stderr || e.message);
+      return { ok: false, error: stderr.trim() || e.message || `action ${verb} failed` };
     }
   }
 
-  if (stderr.trim()) console.error(`[wrapper:${verb}]`, stderr.trim());
+  if (stderr.trim()) console.error(`[action:${verb}]`, stderr.trim());
 
   // stdout is a contract: exactly one JSON object. Never scrape the prose on
   // stderr for meaning.
   try {
-    return JSON.parse(stdout.trim()) as WrapperResult<T>;
+    return JSON.parse(stdout.trim()) as ActionResult<T>;
   } catch {
-    console.error(`[wrapper] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
-    return { ok: false, error: "wrapper returned a malformed reply" };
+    console.error(`[action] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
+    return { ok: false, error: "action returned a malformed reply" };
   }
 }
 
-// Mirrors the wrapper's own validation. Not a substitute for it: the wrapper
-// is the boundary and re-checks everything. This exists so the UI can reject
-// bad input with a useful message instead of a generic wrapper error.
+// Mirrors the action binary's own validation. Not a substitute for it: the
+// action binary is the boundary and re-checks everything. This exists so the
+// UI can reject bad input with a useful message instead of a generic error
+// from the action binary.
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const TAG_RE = /^\d+\.\d+\.\d+$/;
 
@@ -85,13 +86,13 @@ export function validateTag(t: unknown): string | null {
 }
 
 /**
- * An instance as the wrapper reports it.
+ * An instance as the action binary reports it.
  *
  * There is no second copy of this anywhere. The manager used to keep its own
- * SQLite table beside the wrapper's meta.json files, and the two drifted
+ * SQLite table beside the action binary's meta.json files, and the two drifted
  * whenever anything touched an instance without going through the manager --
- * an instance created by calling the wrapper directly never showed up here, and
- * a delete that failed part-way left a row describing something that no longer
+ * an instance created by calling the action binary directly never showed up
+ * here, and a delete that failed part-way left a row describing something that no longer
  * existed. The files on disk and the container are the state; this is a view of
  * them.
  */
@@ -116,13 +117,13 @@ export const instaticService = {
   async nextPort(): Promise<number> {
     // The snapshot is rewritten by the root CLI on install and repair, so
     // between reconciliation runs it does not know about instances created
-    // since. The wrapper does.
+    // since. The action binary does.
     const instances = await this.listInstancesOrThrow();
     return getNextAvailablePort(readSnapshot(), instances.map((i) => i.port));
   },
 
   async listInstances(): Promise<InstanceView[]> {
-    const res = await callWrapper<{ instances: InstanceView[] }>("list", []);
+    const res = await callAction<{ instances: InstanceView[] }>("list", []);
     if (!res.ok) {
       console.error("[instatic] could not list instances:", res.error);
       return [];
@@ -131,7 +132,7 @@ export const instaticService = {
   },
 
   /**
-   * The same list, but a wrapper failure is an error rather than an empty one.
+   * The same list, but a call failure is an error rather than an empty one.
    *
    * A dashboard can render "no instances" and be read by someone who knows the
    * difference. An allocator cannot: an empty list means every port in use
@@ -139,23 +140,23 @@ export const instaticService = {
    * that is already spoken for. So the two readers ask different questions.
    */
   async listInstancesOrThrow(): Promise<InstanceView[]> {
-    const res = await callWrapper<{ instances: InstanceView[] }>("list", []);
-    if (!res.ok) throw new Error(res.error ?? "the Instatic wrapper could not list instances");
+    const res = await callAction<{ instances: InstanceView[] }>("list", []);
+    if (!res.ok) throw new Error(res.error ?? "the Instatic action could not list instances");
     return res.data?.instances ?? [];
   },
 
-  async createInstance(domain: string, tag: string, tls = false): Promise<WrapperResult> {
+  async createInstance(domain: string, tag: string, tls = false): Promise<ActionResult> {
     const existing = await this.listInstancesOrThrow();
     if (existing.some((i) => i.domain === domain)) {
       return { ok: false, error: `an instance for ${domain} already exists` };
     }
 
-    // Nothing is recorded afterwards: the wrapper writes meta.json, which is
-    // what the next list reads. The wrapper re-checks the port too, and holds
+    // Nothing is recorded afterwards: the action binary writes meta.json, which is
+    // what the next list reads. The action binary re-checks the port too, and holds
     // a lock while it does, so this allocation is a proposal rather than a
     // reservation.
     const port = getNextAvailablePort(readSnapshot(), existing.map((i) => i.port));
-    return callWrapper<{ container: string; siteUser: string }>("create", [
+    return callAction<{ container: string; siteUser: string }>("create", [
       "--domain", domain,
       "--port", String(port),
       "--tag", tag,
@@ -163,8 +164,8 @@ export const instaticService = {
     ]);
   },
 
-  async updateInstance(domain: string, tag: string): Promise<WrapperResult> {
-    return callWrapper("update", ["--domain", domain, "--tag", tag]);
+  async updateInstance(domain: string, tag: string): Promise<ActionResult> {
+    return callAction("update", ["--domain", domain, "--tag", tag]);
   },
 
   /**
@@ -175,20 +176,20 @@ export const instaticService = {
    * restarts, and rebuilding is the only way to pick up a change such as the
    * uid the container runs as.
    */
-  async lifecycle(domain: string, verb: "start" | "stop" | "restart" | "recreate"): Promise<WrapperResult> {
-    return callWrapper(verb, ["--domain", domain]);
+  async lifecycle(domain: string, verb: "start" | "stop" | "restart" | "recreate"): Promise<ActionResult> {
+    return callAction(verb, ["--domain", domain]);
   },
 
-  async deleteInstance(domain: string): Promise<WrapperResult> {
-    // --confirm must equal --domain; the wrapper enforces it too.
-    return callWrapper("delete", ["--domain", domain, "--confirm", domain]);
+  async deleteInstance(domain: string): Promise<ActionResult> {
+    // --confirm must equal --domain; the action binary enforces it too.
+    return callAction("delete", ["--domain", domain, "--confirm", domain]);
   },
 
-  async snapshotInstance(domain: string): Promise<WrapperResult> {
-    return callWrapper("snapshot", ["--domain", domain]);
+  async snapshotInstance(domain: string): Promise<ActionResult> {
+    return callAction("snapshot", ["--domain", domain]);
   },
 
-  async getLogs(domain: string): Promise<WrapperResult<{ logs: string }>> {
-    return callWrapper<{ logs: string }>("logs", ["--domain", domain]);
+  async getLogs(domain: string): Promise<ActionResult<{ logs: string }>> {
+    return callAction<{ logs: string }>("logs", ["--domain", domain]);
   },
 };

@@ -154,7 +154,7 @@ bun install
 bun run typecheck
 bun run test:inject
 bun run test
-bun run lint:wrapper     # needs shellcheck
+bun run lint:install     # needs shellcheck
 bun run build            # dist/clp-addons-linux-x64
 ```
 
@@ -162,16 +162,21 @@ The action contract tests run as root against an installed binary and are not
 part of `bun run test`:
 
 ```bash
-tools/test-wrapper.sh          # instatic
-tools/test-wrapper-stager.sh   # stager
+sudo bun tools/integration-action-instatic.ts        # instatic
+sudo bun tools/integration-action-stager.ts          # stager
+sudo bun tools/integration-create-interrupt.ts       # create, killed mid-provision
 ```
 
-Neither creates a site: each invalid case is rejected before `clpctl`, and each
-valid-shaped case names a hostname that does not exist.
+Neither of the first two creates a site: each invalid case is rejected before
+`clpctl`, and each valid-shaped case names a hostname that does not exist. The
+third does create (and then force-destroys) a real site, so it must only be
+run on a disposable CloudPanel host.
 
-`tools/recon.sh` is read-only and dumps facts about a CloudPanel host. Never
-commit its output. CloudPanel templates are proprietary; the injector snapshots
-them to `/var/lib/clp-addons/templates` at runtime instead of vendoring them.
+`clp-addons recon` is read-only and dumps facts about a CloudPanel host. Never
+commit its output. It is a diagnostic, not a user command, and is deliberately
+absent from `--help`. CloudPanel templates are proprietary; the injector
+snapshots them to `/var/lib/clp-addons/templates` at runtime instead of
+vendoring them.
 
 ### Testing a local build
 

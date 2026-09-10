@@ -1,6 +1,7 @@
 import type { SanitizedSite } from "../../../lib/snapshot-reader";
 // Server-rendered HTML. Every interpolated value goes through esc() or escJs():
-// domains, job steps and wrapper notes all originate outside this process, and
+// domains, job steps and the action binary's notes all originate outside this
+// process, and
 // the page is served to an operator whose session can create CloudPanel sites.
 
 import { esc } from "../../../lib/app-http";
@@ -271,8 +272,8 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
 
   // Only for an Instatic source, because only there is there a second
   // application to sign into. The password is the source instance's own
-  // administrator credential: it is posted once, reaches the wrapper on stdin,
-  // and is deleted the moment the export it exists for has finished.
+  // administrator credential: it is posted once, reaches the action binary on
+  // stdin, and is deleted the moment the export it exists for has finished.
   const instaticFields = isInstatic
     ? `
       <div class="secret" style="margin-top:1.25rem;">
@@ -399,8 +400,8 @@ export function jobView(
     ? `<div class="card secret">
         <h2 style="margin-top:0;font-size:1rem;">Staging Instatic instance</h2>
         <dl class="kv">
-          <!-- esc() even though the wrapper emits this as a JSON number and
-               validate_port bounds it: every other value on this page is
+          <!-- esc() even though the action binary emits this as a JSON number and
+               validatePort bounds it: every other value on this page is
                escaped, and the one that is not is the one nobody re-checks
                after the type it was declared with changes. -->
           <dt>Port</dt><dd>127.0.0.1:${esc(String(result.instatic.port))}</dd>

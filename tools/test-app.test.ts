@@ -152,9 +152,10 @@ const DOMAINS = [
   }
 }
 
-// The bare-label shorthand the original script accepted. It is expanded in the
-// app rather than in the wrapper, which must reject its input rather than
-// rewrite it, so this is the only place the rule is implemented.
+// The bare-label shorthand the original wrapper script accepted. It is
+// expanded in the app rather than in the action binary, which must reject its
+// input rather than rewrite it, so this is the only place the rule is
+// implemented.
 check("a bare label becomes a subdomain of the source",
   expandTarget("stg", "example.com") === "stg.example.com");
 check("a full hostname is left alone",
@@ -880,12 +881,12 @@ console.log("\n== the fallback carries vhosts the template route has to refuse =
 
 console.log("\n== one request may not kill the manager ==");
 
-// Every wrapper verb validates its arguments before it reads stdin, so an
-// oversized credential is refused with the pipe unread. The write then fails
-// with EPIPE on a stream tick outside the request promise, where Bun.serve
-// cannot turn it into a 500 -- and Node's default for an unhandled 'error'
-// event is to throw. Since v0.7.0 one process serves every addon, so a 1 MiB
-// password field took all of them down, 20 times out of 20.
+// Every verb of the action binary validates its arguments before it reads
+// stdin, so an oversized credential is refused with the pipe unread. The
+// write then fails with EPIPE on a stream tick outside the request promise,
+// where Bun.serve cannot turn it into a 500 -- and Node's default for an
+// unhandled 'error' event is to throw. Since v0.7.0 one process serves every
+// addon, so a 1 MiB password field took all of them down, 20 times out of 20.
 //
 // Driven for real: a child that exits before reading, a megabyte written to it,
 // and the question is whether the process is still there afterwards.
@@ -911,8 +912,8 @@ console.log("\n== one request may not kill the manager ==");
   check("a megabyte on a pipe nothing reads does not kill the process", survived, out.slice(-400));
 
   const service = readFileSync("addons/stager/app/service.ts", "utf-8");
-  check("the write has an error listener rather than Node's default throw",
-    /child\.stdin\?\.on\("error"/.test(service));
+  check("the payload is handed to Bun.spawn's stdin option, so Bun owns the write and absorbs EPIPE",
+    /Bun\.spawn\(\{\s*cmd:\s*\[cmd,\s*\.\.\.args\],[\s\S]*?^\s*stdin,\s*$[\s\S]*?stdout:\s*"pipe",/m.test(service));
 
   const index = readFileSync("addons/stager/app/index.ts", "utf-8");
   check("and the field is bounded before the write is even attempted",
@@ -1092,7 +1093,7 @@ console.log("\n== no credential outlives the job that carried it ==");
 // sudo journals this action binary's whole COMMAND line -- verified against this
 // box's own journal -- so an argument does not merely appear in `ps` for the
 // life of the process, it is written down permanently. `--mfa` put the
-// authentication code there, and validate_mfa deliberately accepts a RECOVERY
+// authentication code there, and validateMfa deliberately accepts a RECOVERY
 // code, which does not expire.
 {
   const action = readFileSync("addons/stager/action.ts", "utf-8");
@@ -1105,7 +1106,8 @@ console.log("\n== no credential outlives the job that carried it ==");
   check("and the code is put on stdin beside the password",
     service.includes("${instatic.password}\\n${instatic.mfaCode ?? \"\"}\\n"));
 
-  // The framing, driven as the wrapper reads it: exactly two fields, only the
+  // The framing, driven as parseCloneCredentials in
+  // addons/stager/action.ts reads it: exactly two fields, only the
   // caller's terminator removed, and any other shape refused rather than
   // trimmed. The count is fixed because a variable one cannot tell a password
   // containing a newline from a password followed by a code -- and where the
@@ -1162,14 +1164,14 @@ console.log("\n== no credential outlives the job that carried it ==");
 
   // execFile's error.message is "Command failed: <full argv>".
   const code = service.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
-  check("a wrapper failure is not logged with its own argv",
+  check("an action failure is not logged with its own argv",
     !code.includes("error.message"),
     code.split("\n").filter((l) => l.includes("error.message")).join(" | "));
 }
 
 console.log("\n== a site the job adopted is not a site the job created ==");
 
-// The Instatic wrapper adopts a matching pre-existing reverse-proxy site rather
+// The Instatic action adopts a matching pre-existing reverse-proxy site rather
 // than failing, and keeps its own site_created=0 precisely so its cleanup never
 // deletes a site that was already serving something. The Stager delegates the
 // whole reverse-proxy create to it and used to set SITE_CREATED=1 on a zero exit,
@@ -1221,7 +1223,7 @@ console.log("\n== a site the job adopted is not a site the job created ==");
     read(CREATED, "port"));
 
   // The two unwind questions are separate, because an Instatic clone can have
-  // created the instance while adopting the site: that wrapper refuses outright
+  // created the instance while adopting the site: that action refuses outright
   // if the container or meta.json already exist, so the container and the data
   // directory are always the job's, and its own delete leaves an adopted site
   // alone while removing them.
@@ -1489,7 +1491,7 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   const snapSites = [{ domain: "other.example.com", user: "other", type: "php" }];
   const snapTime = "2026-09-09T10:00:00Z";
 
-  // Live wrapper check overrides snapshot:
+  // Live panelSite value overrides snapshot:
   check("panelSite === false marks instance as missing immediately",
     isInstanceMissing({ ...instBase, panelSite: false }, 10, [...snapSites, { domain: "inst.example.com", user: "inst_user", type: "reverse-proxy" }], snapTime));
 
@@ -1527,7 +1529,7 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
     !presentHtml.includes("CloudPanel site deleted")
     && presentHtml.includes('href="https://inst.example.com"'));
 
-  // Stager live wrapper check:
+  // Stager live panelSite check:
   const stgJob: JobView = {
     id: "20260909T100000Z-112233",
     source: "prod.example.com",

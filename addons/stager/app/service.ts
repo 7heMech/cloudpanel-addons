@@ -21,7 +21,7 @@ interface CommandResult {
   stderr: string;
 }
 
-/** Run the policy wrapper with a bounded, byte-oriented Bun subprocess. */
+/** Run the action binary with a bounded, byte-oriented Bun subprocess. */
 async function runCommand(
   cmd: string,
   args: string[],
@@ -35,7 +35,7 @@ async function runCommand(
     child = Bun.spawn({
       cmd: [cmd, ...args],
       // Passing bytes directly gives Bun ownership of the write and close. If
-      // the wrapper exits before consuming them, Bun absorbs the resulting
+      // the child process exits before consuming them, Bun absorbs the resulting
       // EPIPE instead of exposing an unhandled writable-stream error. The old
       // `child.stdin?.on("error", ...)` listener was needed only for Node's
       // manually written pipe.
@@ -70,9 +70,9 @@ async function runCommand(
       ? null
       : {
           code: exitCode,
-          ...(outputFailed ? { reason: "wrapper output could not be read" } : {}),
-          ...(terminated ? { reason: "wrapper process terminated" } : {}),
-          ...(outputLimited ? { reason: `wrapper output exceeded ${options.maxBuffer} bytes` } : {}),
+          ...(outputFailed ? { reason: "action output could not be read" } : {}),
+          ...(terminated ? { reason: "action process terminated" } : {}),
+          ...(outputLimited ? { reason: `action output exceeded ${options.maxBuffer} bytes` } : {}),
         },
     stdout,
     stderr,
@@ -96,36 +96,36 @@ const TIMEOUTS: Record<string, number> = {
 };
 const DEFAULT_TIMEOUT = 30_000;
 
-export interface WrapperResult<T = unknown> {
+export interface ActionResult<T = unknown> {
   ok: boolean;
   data?: T;
   error?: string;
 }
 
-function parseWrapperReply<T>(stdout: string): WrapperResult<T> | null {
+function parseActionReply<T>(stdout: string): ActionResult<T> | null {
   try {
     const reply: unknown = JSON.parse(stdout.trim());
     if (reply === null || typeof reply !== "object" || Array.isArray(reply)) return null;
     if (typeof (reply as { ok?: unknown }).ok !== "boolean") return null;
-    return reply as WrapperResult<T>;
+    return reply as ActionResult<T>;
   } catch {
     return null;
   }
 }
 
-export interface WrapperCallOptions {
+export interface ActionCallOptions {
   timeout?: number;
   maxBuffer?: number;
 }
 
-export async function callWrapper<T = unknown>(
+export async function callAction<T = unknown>(
   verb: string,
   args: string[],
   // On stdin rather than in argv, because the only value that ever needs this
   // is a password and argv is world-readable through /proc.
   input?: string,
-  options: WrapperCallOptions = {},
-): Promise<WrapperResult<T>> {
+  options: ActionCallOptions = {},
+): Promise<ActionResult<T>> {
   const argv = ["action", "stager", verb, ...args];
   const runningAsRoot = process.getuid?.() === 0;
   const binary = ACTION_TEST_BIN ?? ACTION_BIN;
@@ -142,7 +142,7 @@ export async function callWrapper<T = unknown>(
     input
   );
   if (error) {
-    // A policy rejection is a normal wrapper reply even though the wrapper
+    // A policy rejection is a normal reply from the action binary even though it
     // exits non-zero. A terminated or output-limited process may leave a
     // complete-looking JSON prefix behind, so only parse a normal non-zero
     // exit whose output was read to completion.
@@ -151,32 +151,34 @@ export async function callWrapper<T = unknown>(
       error.code !== undefined &&
       error.code !== null &&
       error.code !== 0;
-    const reply = normalNonzeroExit ? parseWrapperReply<T>(stdout) : null;
+    const reply = normalNonzeroExit ? parseActionReply<T>(stdout) : null;
     if (reply) {
-      if (stderr.trim()) console.error(`[wrapper:${verb}]`, stderr.trim());
+      if (stderr.trim()) console.error(`[action:${verb}]`, stderr.trim());
       return reply;
     }
 
     // Never log a subprocess error object: its message may contain the full
-    // argv. The wrapper's stderr is the useful, non-secret diagnostic channel.
-    const why = error.reason ?? (stderr.trim() || `wrapper ${verb} exited ${error.code ?? "abnormally"}`);
-    console.error(`[wrapper] ${verb} failed before a valid JSON reply:`, why);
+    // argv. The action binary's stderr is the useful, non-secret diagnostic
+    // channel.
+    const why = error.reason ?? (stderr.trim() || `action ${verb} exited ${error.code ?? "abnormally"}`);
+    console.error(`[action] ${verb} failed before a valid JSON reply:`, why);
     return { ok: false, error: why };
   }
 
-  if (stderr.trim()) console.error(`[wrapper:${verb}]`, stderr.trim());
+  if (stderr.trim()) console.error(`[action:${verb}]`, stderr.trim());
 
   // stdout is a contract: exactly one JSON object. Never scrape the prose on
   // stderr for meaning.
-  const reply = parseWrapperReply<T>(stdout);
+  const reply = parseActionReply<T>(stdout);
   if (reply) return reply;
-  console.error(`[wrapper] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
-  return { ok: false, error: "wrapper returned a malformed reply" };
+  console.error(`[action] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
+  return { ok: false, error: "action returned a malformed reply" };
 }
 
-// Mirrors the wrapper's own validation. Not a substitute for it: the wrapper is
-// the boundary and re-checks everything. This exists so the UI can reject bad
-// input with a useful message instead of a generic wrapper error.
+// Mirrors the action binary's own validation. Not a substitute for it: the
+// action binary is the boundary and re-checks everything. This exists so the
+// UI can reject bad input with a useful message instead of a generic error
+// from the action binary.
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const JOB_RE = /^\d{8}T\d{6}Z-[0-9a-f]{6}$/;
 
@@ -189,13 +191,13 @@ export function validateJobId(j: unknown): string | null {
 }
 
 /**
- * Expand the shorthand the original script accepted: a bare label becomes a
- * subdomain of the site being cloned.
+ * Expand the shorthand the original wrapper script accepted: a bare label
+ * becomes a subdomain of the site being cloned.
  *
- * Here rather than in the wrapper because it is a convenience, and the wrapper
- * must not rewrite its input -- a boundary that silently corrects a value is
- * one that eventually corrects it wrong. What crosses the boundary is always a
- * complete hostname.
+ * Here rather than in the action binary because it is a convenience, and the
+ * action binary must not rewrite its input -- a boundary that silently
+ * corrects a value is one that eventually corrects it wrong. What crosses the
+ * boundary is always a complete hostname.
  */
 export function expandTarget(input: string, source: string): string {
   const t = input.trim().toLowerCase().replace(/\.$/, "");
@@ -203,7 +205,8 @@ export function expandTarget(input: string, source: string): string {
   return t.includes(".") ? t : `${t}.${source}`;
 }
 
-/** The `site.type` values the wrapper will clone. Kept in step with CLONABLE_TYPES. */
+/** The `site.type` values the action binary will clone (CLONABLE_TYPES in
+ * addons/stager/action.ts). Kept in step with it. */
 export type SiteType = "php" | "static" | "reverse-proxy";
 
 export interface SiteSummary {
@@ -261,8 +264,9 @@ export interface JobView {
 }
 
 /**
- * `describe` is the one read that costs real work: the wrapper runs `du -sm`
- * over the source's whole document root as root, with a 120-second timeout.
+ * `describe` is the one read that costs real work: the action
+ * binary runs `du -sm` over the source's whole document root as root, with a
+ * 120-second timeout.
  * Measured on this box, one pass over ~18 GB took 22 seconds of wall time and 9
  * of system time. Nothing bounded how many could run at once, so a handful of
  * requests could keep root walking the disk indefinitely.
@@ -282,12 +286,12 @@ const DESCRIBE_QUEUE_MAX = 4;
 let describeRunning = 0;
 let describeQueued = 0;
 let describeChain: Promise<unknown> = Promise.resolve();
-const describeInFlight = new Map<string, Promise<WrapperResult<SiteDetail>>>();
+const describeInFlight = new Map<string, Promise<ActionResult<SiteDetail>>>();
 
 async function withDescribeSlot(
   domain: string,
-  work: () => Promise<WrapperResult<SiteDetail>>,
-): Promise<WrapperResult<SiteDetail>> {
+  work: () => Promise<ActionResult<SiteDetail>>,
+): Promise<ActionResult<SiteDetail>> {
   const shared = describeInFlight.get(domain);
   if (shared) return shared;
 
@@ -314,7 +318,7 @@ async function withDescribeSlot(
 
 export const stagerService = {
   async listSites(): Promise<SiteSummary[]> {
-    const res = await callWrapper<{ sites: SiteSummary[] }>("sites", []);
+    const res = await callAction<{ sites: SiteSummary[] }>("sites", []);
     if (!res.ok) {
       console.error("[stager] could not list sites:", res.error);
       return [];
@@ -322,23 +326,23 @@ export const stagerService = {
     return res.data?.sites ?? [];
   },
 
-  async describe(domain: string): Promise<WrapperResult<SiteDetail>> {
-    return withDescribeSlot(domain, () => callWrapper<SiteDetail>("describe", ["--domain", domain]));
+  async describe(domain: string): Promise<ActionResult<SiteDetail>> {
+    return withDescribeSlot(domain, () => callAction<SiteDetail>("describe", ["--domain", domain]));
   },
 
   /**
    * Start a clone.
    *
    * `instatic` is supplied only when the source is an Instatic site. Its port
-   * is allocated here rather than guessed by the wrapper: `getNextAvailablePort`
+   * is allocated here rather than guessed by the action binary: `getNextAvailablePort`
    * reads the panel snapshot both addons share, so the number that crosses the
-   * boundary is one the wrapper only has to re-validate.
+   * boundary is one the action binary only has to re-validate.
    *
    * Both secrets travel on stdin, one per line, and neither is ever an argument.
    * argv is readable out of `ps` by every account on the box, and worse than
-   * that: `sudo` journals this wrapper's whole COMMAND line, so an argument
+   * that: `sudo` journals this action binary's whole COMMAND line, so an argument
    * outlives the process entirely. The authentication code was in argv until
-   * that was measured against this box's own journal -- and the wrapper
+   * that was measured against this box's own journal -- and the action binary
    * deliberately accepts a *recovery* code there, which does not expire.
    */
   async startClone(
@@ -346,24 +350,24 @@ export const stagerService = {
     target: string,
     tls: boolean,
     instatic?: { port: number; email: string; password: string; mfaCode?: string }
-  ): Promise<WrapperResult<{ job: string }>> {
+  ): Promise<ActionResult<{ job: string }>> {
     const args = ["--source", source, "--target", target, "--tls", tls ? "yes" : "no"];
     if (instatic) args.push("--port", String(instatic.port), "--email", instatic.email);
     const input = instatic
       // Always two lines, even with no code. A channel whose field count
       // varies cannot tell a password containing a newline from a password
-      // followed by a code; a fixed count lets the wrapper refuse the first.
+      // followed by a code; a fixed count lets the action binary refuse the first.
       ? `${instatic.password}\n${instatic.mfaCode ?? ""}\n`
       : undefined;
-    return callWrapper<{ job: string }>("clone", args, input);
+    return callAction<{ job: string }>("clone", args, input);
   },
 
-  async getJob(id: string): Promise<WrapperResult<{ job: JobView; log: string }>> {
-    return callWrapper<{ job: JobView; log: string }>("job", ["--job", id]);
+  async getJob(id: string): Promise<ActionResult<{ job: JobView; log: string }>> {
+    return callAction<{ job: JobView; log: string }>("job", ["--job", id]);
   },
 
   async listJobs(): Promise<JobView[]> {
-    const res = await callWrapper<{ jobs: JobView[] }>("jobs", []);
+    const res = await callAction<{ jobs: JobView[] }>("jobs", []);
     if (!res.ok) {
       console.error("[stager] could not list jobs:", res.error);
       return [];
@@ -372,7 +376,7 @@ export const stagerService = {
   },
 
   /**
-   * The same list, but a wrapper failure is an error rather than an empty one.
+   * The same list, but a call failure is an error rather than an empty one.
    *
    * The dashboard can render "no clones yet" and be read by someone who knows
    * the difference. The port allocator cannot: an empty list means every
@@ -381,8 +385,8 @@ export const stagerService = {
    * readers ask different questions.
    */
   async listJobsOrThrow(): Promise<JobView[]> {
-    const res = await callWrapper<{ jobs: JobView[] }>("jobs", []);
-    if (!res.ok) throw new Error(res.error ?? "the stager wrapper could not list jobs");
+    const res = await callAction<{ jobs: JobView[] }>("jobs", []);
+    if (!res.ok) throw new Error(res.error ?? "the stager action could not list jobs");
     return res.data?.jobs ?? [];
   },
 

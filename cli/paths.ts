@@ -56,7 +56,6 @@ export interface AddonSpec {
   configFile: string;
   requiresUnits?: string[];
   stateDir: string;
-  maintenanceVerb?: string;
   targets: AddonTarget[];
 }
 
@@ -76,7 +75,6 @@ export const ADDONS: Record<string, AddonSpec> = {
     description: "Instant staging environments & site clones (WordPress, PHP, Node.js)",
     configFile: `${CONFIG_DIR}/stager.conf`,
     stateDir: `${STATE_DIR}/stager`,
-    maintenanceVerb: "prune",
     targets: STAGER_TARGETS,
   },
 };
