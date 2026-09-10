@@ -1,11 +1,10 @@
-import { randomBytes } from "node:crypto";
 import {
-  chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync,
 } from "node:fs";
 import {
-  ADDON_NAMES, ANCHOR_SERVICE, CONFIG_DIR, HMAC_KEY_PATH, LIBEXEC_DIR, LEGACY_UNITS,
+  ADDON_NAMES, ANCHOR_SERVICE, CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS,
   ADDONS, GH_PRIVATE, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT, PANEL_GROUP, RECONCILE_PATH, RECONCILE_SERVICE,
-  RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
+  RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
   SYSTEMD_DIR, TWIG_CACHE_DIR, type AddonSpec, templateWatchPaths,
 } from "./paths";
 import { findMasterVhost } from "./inject";
@@ -15,13 +14,23 @@ const LEGACY_MANAGER_AUTH = `${CONFIG_DIR}/manager-auth`;
 const LEGACY_PLATFORM_CONFIG = `${CONFIG_DIR}/platform.conf`;
 const LEGACY_SITE_MARKER = `${STATE_DIR}/.site-created-by-addons`;
 const LEGACY_LIBRARY_DIR = "/usr/local/lib/clp-addons";
+const BACKUP_DIR = "/var/backups/clp-addons";
 export const PANEL_IDENTITY_PATH = `${CONFIG_DIR}/panel-identity.conf`;
-export const SESSION_VALIDATOR_PATH = `${LIBEXEC_DIR}/clp-verify-session`;
 
 export interface ProvisionCommandRunner {
   run(command: string, args: string[]): string;
   tryRun(command: string, args: string[]): { ok: boolean; out: string };
 }
+
+interface DirectoryOperations {
+  mkdir(path: string, options: { recursive: true }): void;
+  exists(path: string): boolean;
+}
+
+const directoryOperations: DirectoryOperations = {
+  mkdir: (path, options) => { mkdirSync(path, options); },
+  exists: existsSync,
+};
 
 const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
 const HOSTNAME_RE = new RegExp(`^(?:${HOSTNAME_LABEL})(?:\\.${HOSTNAME_LABEL})+$`);
@@ -66,11 +75,12 @@ function installedAddonSpecs(): AddonSpec[] {
 
 export function sudoersCommandPaths(specs: AddonSpec[] = installedAddonSpecs()): string[] {
   const wrappers = specs.map((spec) => spec.wrapperPath).filter((path) => path !== GH_PRIVATE);
-  return [...new Set([SESSION_VALIDATOR_PATH, ...wrappers])].sort();
+  return [...new Set(wrappers)].sort();
 }
 
 export function sudoersRule(specs: AddonSpec[] = installedAddonSpecs()): string {
   const commands = sudoersCommandPaths(specs);
+  if (commands.length === 0) return "";
   if (commands.some((path) => !path.startsWith("/") || /[*?[\]]/.test(path))) {
     fatal("refusing to install sudoers configuration with a non-absolute or wildcard command path");
   }
@@ -230,43 +240,83 @@ function removeLegacySudoers(): void {
   for (const name of ADDON_NAMES) rmSync(`/etc/sudoers.d/clp-addon-${name}`, { force: true });
 }
 
-export function ensureDirs(specs: AddonSpec[] = []): void {
-  for (const path of [LIBEXEC_DIR, CONFIG_DIR, STATE_DIR, LOCK_DIR, SOCKET_DIR]) {
-    mkdirSync(path, { recursive: true });
-  }
-  for (const spec of specs) mkdirSync(spec.stateDir, { recursive: true });
+function panelUid(commands: ProvisionCommandRunner): number | null {
+  const result = commands.tryRun("getent", ["passwd", PANEL_GROUP]);
+  const uid = Number.parseInt(result.out.split(":")[2] ?? "", 10);
+  return result.ok && Number.isInteger(uid) && uid >= 0 ? uid : null;
+}
 
-  run("chown", ["root:root", LIBEXEC_DIR]);
-  run("chmod", ["755", LIBEXEC_DIR]);
-  run("chown", ["root:root", CONFIG_DIR]);
-  run("chmod", ["755", CONFIG_DIR]);
-  run("chown", [`root:${SHARED_GROUP}`, STATE_DIR]);
-  run("chmod", ["750", STATE_DIR]);
-  run("chown", [`${SERVICE_USER}:${SERVICE_GROUP}`, SOCKET_DIR]);
-  run("chmod", ["755", SOCKET_DIR]);
-  for (const spec of specs) {
-    run("chown", ["root:root", spec.stateDir]);
-    run("chmod", ["750", spec.stateDir]);
+export function ensurePanelSessionReadable(
+  commands: ProvisionCommandRunner = { run, tryRun },
+  sessionDir = SESSION_DIR,
+  expectedUid?: number,
+): void {
+  const uid = expectedUid ?? panelUid(commands);
+  if (uid === null || uid === undefined) {
+    fatal(`could not resolve the ${PANEL_GROUP} user required to read CloudPanel sessions`);
   }
 
-  const snapshot = `${STATE_DIR}/snapshot.json`;
-  if (existsSync(snapshot)) {
-    run("chown", [`root:${SHARED_GROUP}`, snapshot]);
-    run("chmod", ["640", snapshot]);
+  let entries: string[];
+  try {
+    entries = readdirSync(sessionDir);
+  } catch {
+    fatal(`CloudPanel session directory is not readable: ${sessionDir}`);
+  }
+
+  const candidate = entries
+    .filter((entry) => /^sess_[a-zA-Z0-9,-]+$/.test(entry))
+    .sort()
+    .map((entry) => `${sessionDir}/${entry}`)
+    .find((path) => {
+      try {
+        const stat = lstatSync(path);
+        return stat.isFile() && !stat.isSymbolicLink() && stat.uid === uid;
+      } catch {
+        return false;
+      }
+    });
+  if (!candidate) {
+    fatal(`could not find a regular CloudPanel session owned by ${PANEL_GROUP} in ${sessionDir}`);
+  }
+
+  const readable = commands.tryRun("runuser", ["--user", SERVICE_USER, "--", "/usr/bin/test", "-r", candidate]);
+  if (!readable.ok) {
+    fatal(`CloudPanel session ${candidate} is not readable by ${SERVICE_USER}; verify SupplementaryGroups=${PANEL_GROUP}`);
   }
 }
 
-export function ensureHmacKey(): void {
-  mkdirSync(SOCKET_DIR, { recursive: true });
-  let valid = false;
-  try {
-    valid = readFileSync(HMAC_KEY_PATH).length >= 32;
-  } catch {
-    valid = false;
+export function ensureDirs(
+  specs: AddonSpec[] = [],
+  verifySession = false,
+  commands: ProvisionCommandRunner = { run, tryRun },
+  fs: DirectoryOperations = directoryOperations,
+): void {
+  for (const path of [LIBEXEC_DIR, CONFIG_DIR, STATE_DIR, LOCK_DIR, SOCKET_DIR, BACKUP_DIR]) {
+    fs.mkdir(path, { recursive: true });
   }
-  if (!valid) writeAtomic(HMAC_KEY_PATH, randomBytes(32), 0o640);
-  run("chown", [`root:${SERVICE_GROUP}`, HMAC_KEY_PATH]);
-  run("chmod", ["640", HMAC_KEY_PATH]);
+  for (const spec of specs) fs.mkdir(spec.stateDir, { recursive: true });
+
+  commands.run("chown", ["root:root", LIBEXEC_DIR]);
+  commands.run("chmod", ["755", LIBEXEC_DIR]);
+  commands.run("chown", ["root:root", CONFIG_DIR]);
+  commands.run("chmod", ["755", CONFIG_DIR]);
+  commands.run("chown", [`root:${SHARED_GROUP}`, STATE_DIR]);
+  commands.run("chmod", ["750", STATE_DIR]);
+  commands.run("chown", [`${SERVICE_USER}:${SERVICE_GROUP}`, SOCKET_DIR]);
+  commands.run("chmod", ["755", SOCKET_DIR]);
+  commands.run("chown", ["root:root", BACKUP_DIR]);
+  commands.run("chmod", ["755", BACKUP_DIR]);
+  for (const spec of specs) {
+    commands.run("chown", ["root:root", spec.stateDir]);
+    commands.run("chmod", ["750", spec.stateDir]);
+  }
+
+  const snapshot = `${STATE_DIR}/snapshot.json`;
+  if (fs.exists(snapshot)) {
+    commands.run("chown", [`root:${SHARED_GROUP}`, snapshot]);
+    commands.run("chmod", ["640", snapshot]);
+  }
+  if (verifySession) ensurePanelSessionReadable(commands);
 }
 
 export function hardenBackups(spec: AddonSpec, quiet = false): void {
@@ -293,15 +343,13 @@ export function installWrapper(spec: AddonSpec, bytes: Buffer, quiet = false): v
   if (!quiet) log.ok(`installed ${spec.wrapperArtifact}`);
 }
 
-export function installSessionValidator(bytes: Buffer, quiet = false): void {
-  writeAtomic(SESSION_VALIDATOR_PATH, bytes, 0o755);
-  run("chown", ["root:root", SESSION_VALIDATOR_PATH]);
-  if (!quiet) log.ok("installed CloudPanel session validator");
-}
-
 export function installSudoers(quiet = false, specs: AddonSpec[] = installedAddonSpecs()): void {
   const file = "/etc/sudoers.d/clp-addons";
   const candidate = "/etc/sudoers.d/.clp-addons.candidate";
+  if (specs.length === 0) {
+    removeSudoers();
+    return;
+  }
   ensurePanelIdentity(quiet);
   const body =
     "# Managed by clp-addons.\n" +
@@ -377,8 +425,7 @@ ProtectHome=read-only
 PrivateTmp=yes
 ProtectKernelTunables=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadWritePaths=/etc/nginx /etc/letsencrypt /etc/php /home /run/clp-addons /run/lock/clp-addons /var/backups/clp-addons /var/lib/clp-addons
-ExecStartPre=+/usr/local/bin/clp-addons ensure-key
+ReadWritePaths=/etc/nginx -/etc/letsencrypt /etc/php /home /run/clp-addons /run/lock/clp-addons /var/backups/clp-addons /var/lib/clp-addons
 ExecStart=/usr/local/bin/clp-addons serve
 Restart=always
 RestartSec=5

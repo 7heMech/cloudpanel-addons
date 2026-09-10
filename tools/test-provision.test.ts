@@ -1,11 +1,14 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import {
   ADDONS, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
 } from "../cli/paths";
-import { serviceUnit } from "../cli/provision";
+import {
+  ensurePanelSessionReadable, serviceUnit, sudoersCommandPaths, sudoersRule,
+} from "../cli/provision";
 
 const REPO = join(import.meta.dir, "..");
 
@@ -123,7 +126,6 @@ test("fails clearly when docker membership cannot be removed", () => {
 
 function provisionProbe(): {
   identityPath: string;
-  validatorPath: string;
   paths: string[];
   ghPaths: string[];
   rule: string;
@@ -133,14 +135,13 @@ function provisionProbe(): {
   const script = `
     import { ADDONS } from "./cli/paths.ts";
     import {
-      PANEL_IDENTITY_PATH, SESSION_VALIDATOR_PATH,
+      PANEL_IDENTITY_PATH,
       panelIdentityFromVhost, sudoersCommandPaths, sudoersRule,
     } from "./cli/provision.ts";
     const specs = [ADDONS.instatic, ADDONS.stager];
     const ghSpec = { ...ADDONS.instatic, wrapperPath: "/usr/local/libexec/clp-addons/gh" };
     console.log(JSON.stringify({
       identityPath: PANEL_IDENTITY_PATH,
-      validatorPath: SESSION_VALIDATOR_PATH,
       paths: sudoersCommandPaths(specs),
       ghPaths: sudoersCommandPaths([...specs, ghSpec]),
       rule: sudoersRule(specs),
@@ -158,7 +159,7 @@ function provisionProbe(): {
   }));
 }
 
-test("sudoers names only the installed wrappers and session validator", () => {
+test("sudoers names only the installed action wrappers", () => {
   const result = provisionProbe();
   const paths = result.paths;
   const rule = result.rule;
@@ -166,28 +167,20 @@ test("sudoers names only the installed wrappers and session validator", () => {
   expect(paths).toEqual([
     "/usr/local/libexec/clp-addons/clp-action-instatic",
     "/usr/local/libexec/clp-addons/clp-action-stager",
-    "/usr/local/libexec/clp-addons/clp-verify-session",
   ].sort());
   expect(rule).toBe(
     `clp-addons ALL=(root) NOPASSWD: ${paths.join(", ")}`,
   );
   expect(rule).not.toContain("*");
   expect(rule).not.toContain("/usr/local/libexec/clp-addons/gh");
-  expect(rule).toContain("/usr/local/libexec/clp-addons/clp-verify-session");
   expect(rule).toContain("/usr/local/libexec/clp-addons/clp-action-instatic");
   expect(rule).toContain("/usr/local/libexec/clp-addons/clp-action-stager");
   expect(result.ghPaths).not.toContain("/usr/local/libexec/clp-addons/gh");
 });
 
-test("an empty installed set still grants the exact session validator", () => {
-  const result = execFileSync(process.execPath, [
-    "-e",
-    'import { sudoersCommandPaths, sudoersRule } from "./cli/provision.ts"; console.log(JSON.stringify({ paths: sudoersCommandPaths([]), rule: sudoersRule([]) }));',
-  ], { cwd: REPO, encoding: "utf8" });
-  expect(JSON.parse(result)).toEqual({
-    paths: ["/usr/local/libexec/clp-addons/clp-verify-session"],
-    rule: "clp-addons ALL=(root) NOPASSWD: /usr/local/libexec/clp-addons/clp-verify-session",
-  });
+test("an empty installed set grants no sudo commands", () => {
+  expect(sudoersCommandPaths([])).toEqual([]);
+  expect(sudoersRule([])).toBe("");
 });
 
 test("panel identity extraction normalizes exact, alias, and wildcard names", () => {
@@ -224,16 +217,56 @@ test("manager unit hardens its namespace without changing the sudo boundary", ()
   expect(unit).toContain("PrivateTmp=yes");
   expect(unit).toContain("ProtectKernelTunables=yes");
   expect(unit).toContain("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6");
-  expect(unit).toContain(
-    "ReadWritePaths=/etc/nginx /etc/letsencrypt /etc/php /home /run/clp-addons /run/lock/clp-addons /var/backups/clp-addons /var/lib/clp-addons",
-  );
+  const readWrite = unit.match(/^ReadWritePaths=(.*)$/m)?.[1]?.split(" ") ?? [];
+  expect(readWrite).toContain("-/etc/letsencrypt");
+  expect(readWrite).toContain("/var/backups/clp-addons");
+  expect(readWrite).not.toContain("/etc/letsencrypt");
 
   expect(unit).toContain("User=clp-addons");
   expect(unit).toContain("Group=clp-addons");
   expect(unit).toContain("SupplementaryGroups=clp");
   expect(unit).toContain("RuntimeDirectory=clp-addons");
-  expect(unit).toContain("ExecStartPre=+/usr/local/bin/clp-addons ensure-key");
   expect(unit).toContain("ExecStart=/usr/local/bin/clp-addons serve");
   expect(unit).toContain("Restart=always");
   expect(unit).not.toContain("NoNewPrivileges=");
+  expect(unit).not.toContain("ExecStartPre=+");
+  expect(unit).not.toContain("hmac");
+});
+
+test("provisioning creates every project-owned writable directory", () => {
+  const result = execFileSync(process.execPath, [
+    "-e",
+    `import { ADDONS } from "./cli/paths.ts";
+     import { ensureDirs } from "./cli/provision.ts";
+     const created = [];
+     const commands = { run: () => "", tryRun: () => ({ ok: true, out: "" }) };
+     const fs = { mkdir: (path) => created.push(path), exists: () => false };
+     ensureDirs([ADDONS.instatic, ADDONS.stager], false, commands, fs);
+     console.log(JSON.stringify(created));`,
+  ], { cwd: REPO, encoding: "utf8" });
+  const created = JSON.parse(result) as string[];
+  expect(created).toContain("/var/backups/clp-addons");
+  expect(created).toContain("/run/clp-addons");
+  expect(created).toContain("/run/lock/clp-addons");
+  expect(created).toContain("/var/lib/clp-addons");
+});
+
+test("provisioning verifies manager readability of a panel-owned session", () => {
+  const sessionDir = mkdtempSync(`${tmpdir()}/panel-session-`);
+  const sessionPath = `${sessionDir}/sess_probe`;
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  const calls: Array<{ command: string; args: string[] }> = [];
+  writeFileSync(sessionPath, "fixture");
+  try {
+    ensurePanelSessionReadable({
+      run: (command, args) => { calls.push({ command, args }); return ""; },
+      tryRun: (command, args) => { calls.push({ command, args }); return { ok: true, out: "" }; },
+    }, sessionDir, uid);
+    expect(calls).toContainEqual({
+      command: "runuser",
+      args: ["--user", SERVICE_USER, "--", "/usr/bin/test", "-r", sessionPath],
+    });
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true });
+  }
 });

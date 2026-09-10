@@ -28,7 +28,6 @@ import { tmpdir } from "node:os";
 import { ADDONS, ADDON_NAMES, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, SOCKET_PATH, SERVICE_USER } from "../cli/paths";
 import { mountPath, splitMount } from "../lib/mount";
 import { escJs } from "../lib/app-http";
-import { authCookie, verifyToken } from "../lib/sso-auth";
 import { getNextAvailablePort } from "../lib/snapshot-reader";
 import type { PanelSnapshot } from "../lib/snapshot-reader";
 
@@ -231,67 +230,12 @@ console.log("\n== the active layout has one binary and direct helpers ==");
   }
 }
 
-console.log("\n== CloudPanel SSO fails closed ==");
-check("the SSO cookie is scoped to the addons path",
-  authCookie("token").startsWith("clp_addons_token=token; Path=/addons; HttpOnly; SameSite=Lax"));
-check("the SSO cookie is short-lived and HTTPS-only",
-  authCookie("token").includes("Secure; Max-Age=300"));
-check("a malformed HMAC token is rejected", verifyToken("not-a-token") === null);
+console.log("\n== CloudPanel SSO is in-process and fail-closed ==");
 const ssoSource = readFileSync("lib/sso-auth.ts", "utf-8");
-check("HMAC verification compares the token to the current PHP session",
-  ssoSource.includes("value.sid !== sessionFingerprint(sessionId)"));
-check("the request gate passes PHPSESSID into token verification",
-  ssoSource.includes("verifyToken(token, sessionId ?? undefined)"));
-
-const validator = "libexec/clp-verify-session";
-check("the session validator is an executable release artifact",
-  existsSync(validator) && (statSync(validator).mode & 0o111) !== 0);
-const sessionDir = mkdtempSync(`${tmpdir()}/session-test-`);
-try {
-  const validatorSource = readFileSync(validator, "utf-8");
-  check("the validator uses the fixed CloudPanel session directory",
-    validatorSource.includes('readonly SESSION_DIR="/var/lib/php/sessions"'));
-  check("the validator has no caller-selected session directory",
-    !validatorSource.includes("CLP_ADDONS_PHP_SESSION_DIR") && !validatorSource.includes("/tmp"));
-  const testValidator = `${sessionDir}/clp-verify-session`;
-  writeFileSync(testValidator,
-    validatorSource.replace('readonly SESSION_DIR="/var/lib/php/sessions"',
-      `readonly SESSION_DIR="${sessionDir}"`), { mode: 0o755 });
-  const now = Math.floor(Date.now() / 1000);
-  const sessionData = (updated: number) =>
-    `_sf2_meta|a:3:{s:1:"u";i:${updated};s:1:"c";i:${updated};s:1:"l";i:300;}` +
-    `_security_main|s:12:"authenticated";b:1;s:4:"user";s:5:"admin";`;
-  writeFileSync(`${sessionDir}/sess_valid`, sessionData(now));
-  writeFileSync(`${sessionDir}/sess_expired`, sessionData(now - 301));
-  writeFileSync(`${sessionDir}/sess_not_authenticated`,
-    `_sf2_meta|a:3:{s:1:"u";i:${now};s:1:"c";i:${now};s:1:"l";i:300;}` +
-    `_security_main|s:13:"authenticated";b:0;s:4:"user";s:5:"admin";s:6:"remember";b:1;`);
-  writeFileSync(`${sessionDir}/sess_no_user`,
-    `_sf2_meta|a:3:{s:1:"u";i:${now};s:1:"c";i:${now};s:1:"l";i:300;}` +
-    `_security_main|s:12:"authenticated";b:1;s:8:"remember";b:1;`);
-  const runValidator = (cookie: string) => execFileSync(testValidator, [`--cookie=${cookie}`], {
-    encoding: "utf-8",
-  }).trim();
-  check("the validator accepts an authenticated live session",
-    runValidator("valid") === '{"valid":true,"user":"admin"}');
-  check("the validator rejects an expired session",
-    runValidator("expired") === '{"valid":false}');
-  check("the validator rejects an unauthenticated token",
-    runValidator("not_authenticated") === '{"valid":false}');
-  check("the validator fails closed when no username is present",
-    runValidator("no_user") === '{"valid":false}');
-  check("the validator rejects a traversal session ID",
-    runValidator("../etc/passwd") === '{"valid":false}');
-  let extraArg = "";
-  try {
-    execFileSync(testValidator, ["--cookie=valid", "extra"], { encoding: "utf-8" });
-  } catch {
-    extraArg = "process failed";
-  }
-  check("the validator rejects extra arguments", extraArg === "");
-} finally {
-  rmSync(sessionDir, { recursive: true, force: true });
-}
+check("SSO reads sessions with Bun.file", ssoSource.includes("Bun.file(path).arrayBuffer()"));
+check("SSO uses the fixed session directory", ssoSource.includes("SESSION_DIR") && ssoSource.includes("sess_"));
+check("SSO has no HMAC token exchange", !ssoSource.includes("issueToken") && !ssoSource.includes("verifyToken"));
+check("the external session validator is gone", !existsSync("libexec/clp-verify-session"));
 
 
 console.log("\n== the vhost comparison ignores what CloudPanel generates ==");

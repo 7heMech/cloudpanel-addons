@@ -1,7 +1,7 @@
 import { expect, mock, test } from "bun:test";
 import * as nodeFs from "node:fs";
 import {
-  ADDONS, ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, SESSION_VALIDATOR_ARTIFACT,
+  ADDONS, ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR,
 } from "../cli/paths";
 import * as realProvision from "../cli/provision";
 
@@ -13,7 +13,6 @@ const provisioning = {
   serviceUser: false,
   legacyInstall: true,
   dirs: false,
-  hmacKey: false,
   sudoers: false,
   legacyUnits: true,
   legacyUsers: true,
@@ -29,7 +28,6 @@ function resetProvisioning(): void {
     serviceUser: false,
     legacyInstall: true,
     dirs: false,
-    hmacKey: false,
     sudoers: false,
     legacyUnits: true,
     legacyUsers: true,
@@ -47,7 +45,6 @@ function record(name: string): (...args: unknown[]) => void {
 
 const installedArtifacts = [
   { name: CLI_ARTIFACT, path: CLI_BIN },
-  { name: SESSION_VALIDATOR_ARTIFACT, path: `${LIBEXEC_DIR}/clp-verify-session` },
   ...Object.values(ADDONS).map((spec) => ({ name: spec.wrapperArtifact, path: spec.wrapperPath })),
 ];
 const artifactBytes = new Map(installedArtifacts.map(({ path }) => [path, Buffer.from(path, "utf-8")]));
@@ -105,12 +102,9 @@ mock.module("../cli/release", () => ({
 mock.module("../cli/provision", () => ({
   ...realProvision,
   ensureDirs: () => { calls.push("ensureDirs"); provisioning.dirs = true; },
-  ensureHmacKey: () => { calls.push("ensureHmacKey"); provisioning.hmacKey = true; },
   ensureServiceUser: () => { calls.push("ensureServiceUser"); provisioning.serviceUser = true; },
   ensureTimerArmed: record("ensureTimerArmed"),
   hardenBackups: record("hardenBackups"),
-  installSessionValidator: record("installSessionValidator"),
-  SESSION_VALIDATOR_PATH: "/usr/local/libexec/clp-addons/clp-verify-session",
   installSudoers: () => { calls.push("installSudoers"); provisioning.sudoers = true; },
   installUnits: () => { calls.push("installUnits"); provisioning.units = true; },
   installWrapper: record("installWrapper"),
@@ -181,13 +175,11 @@ test("an up-to-date update still runs provisioning and reconciliation", async ()
 
   expect(calls).toContain("fetchVerified");
   expect(calls).toContain("verifyAttestation");
-  expect(calls).toContain("installSessionValidator");
   expect(calls.filter((call) => call === "installWrapper")).toHaveLength(2);
   for (const name of [
     "ensureServiceUser",
     "removeLegacyInstall",
     "ensureDirs",
-    "ensureHmacKey",
     "installSudoers",
     "removeLegacyUnits",
     "removeLegacyUsers",
@@ -205,7 +197,6 @@ test("an up-to-date update still runs provisioning and reconciliation", async ()
     serviceUser: true,
     legacyInstall: false,
     dirs: true,
-    hmacKey: true,
     sudoers: true,
     legacyUnits: false,
     legacyUsers: false,
@@ -228,7 +219,6 @@ test("an up-to-date update with no addons keeps the no-service branch", async ()
 
   expect(calls).toContain("fetchVerified");
   expect(calls).toContain("verifyAttestation");
-  expect(calls).toContain("installSessionValidator");
   expect(calls).not.toContain("installWrapper");
   expect(calls).toContain("ensureServiceUser");
   expect(calls).toContain("removeLegacyUnits");
@@ -251,7 +241,6 @@ test("a same-version update reuses verified installed artifacts", async () => {
 
   expect(calls).not.toContain("fetchVerified");
   expect(calls).not.toContain("verifyAttestation");
-  expect(calls).not.toContain("installSessionValidator");
   expect(calls).not.toContain("installWrapper");
   expect(calls).toContain("installUnits");
   expect(calls).toContain("reconcileNginxProxy");
@@ -269,7 +258,6 @@ test("a same-version update repairs a changed installed artifact", async () => {
 
   expect(calls).toContain("fetchVerified");
   expect(calls).toContain("verifyAttestation");
-  expect(calls).toContain("installSessionValidator");
   expect(calls.filter((call) => call === "installWrapper")).toHaveLength(2);
   artifactsAvailable = false;
   artifactTampered = false;

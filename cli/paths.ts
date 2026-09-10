@@ -5,7 +5,6 @@ export { mountPath } from "../lib/mount";
 
 export const REPO = "7heMech/cloudpanel-addons";
 export const CLI_ARTIFACT = "clp-addons-linux-x64";
-export const SESSION_VALIDATOR_ARTIFACT = "clp-verify-session";
 export const CLI_BIN = "/usr/local/bin/clp-addons";
 export const LIBEXEC_DIR = "/usr/local/libexec/clp-addons";
 export const GH_PRIVATE = `${LIBEXEC_DIR}/gh`;
@@ -17,7 +16,7 @@ export const SHARED_GROUP = SERVICE_GROUP;
 
 export const SOCKET_DIR = "/run/clp-addons";
 export const SOCKET_PATH = `${SOCKET_DIR}/manager.sock`;
-export const HMAC_KEY_PATH = `${SOCKET_DIR}/hmac.key`;
+export const SESSION_DIR = "/var/lib/php/sessions";
 
 export const MANAGER_UNIT = "clp-addons.service";
 export const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";

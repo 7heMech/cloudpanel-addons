@@ -1,14 +1,14 @@
 import { chmodSync, chownSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
-  ADDON_NAMES, ADDONS, ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, HMAC_KEY_PATH, LIBEXEC_DIR, MANAGER_UNIT, PANEL_GROUP,
-  SESSION_VALIDATOR_ARTIFACT, SOCKET_PATH, mountPath, type AddonSpec,
+  ADDON_NAMES, ADDONS, ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, MANAGER_UNIT, PANEL_GROUP,
+  SOCKET_PATH, mountPath, type AddonSpec,
 } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation, type FetchedArtifact } from "./release";
 import {
-  ensureDirs, ensureHmacKey, ensureServiceUser, ensureTimerArmed, hardenBackups, installSessionValidator,
+  ensureDirs, ensureServiceUser, ensureTimerArmed, hardenBackups,
   installSudoers, installUnits, installWrapper, installedConfig, purgeTwigCache, removeLegacyUnits,
-  removeLegacyInstall, removeLegacyUsers, removeSudoers, SESSION_VALIDATOR_PATH, startUnits, stopUnits, unitActive,
+  removeLegacyInstall, removeLegacyUsers, removeSudoers, startUnits, stopUnits, unitActive,
   unitPid, writeConfig,
 } from "./provision";
 import {
@@ -50,7 +50,6 @@ function installedAddons(): AddonSpec[] {
 function artifactNames(specs: AddonSpec[]): string[] {
   return [...new Set([
     CLI_ARTIFACT,
-    SESSION_VALIDATOR_ARTIFACT,
     ...specs.map((spec) => spec.wrapperArtifact),
   ])];
 }
@@ -64,7 +63,6 @@ function artifact(artifacts: FetchedArtifact[], name: string): Buffer {
 function artifactPaths(specs: AddonSpec[]): Map<string, string> {
   return new Map([
     [CLI_ARTIFACT, CLI_BIN],
-    [SESSION_VALIDATOR_ARTIFACT, SESSION_VALIDATOR_PATH],
     ...specs.map((spec) => [spec.wrapperArtifact, spec.wrapperPath] as const),
   ]);
 }
@@ -119,7 +117,6 @@ function writeArtifactManifest(tag: string, artifacts: FetchedArtifact[], specs:
 
 function installArtifacts(artifacts: FetchedArtifact[], specs: AddonSpec[], tag: string, quiet = false): void {
   for (const spec of specs) installWrapper(spec, artifact(artifacts, spec.wrapperArtifact), quiet);
-  installSessionValidator(artifact(artifacts, SESSION_VALIDATOR_ARTIFACT), quiet);
   writeAtomic(CLI_BIN, artifact(artifacts, CLI_ARTIFACT), 0o755);
   tryRun("chown", ["root:root", CLI_BIN]);
   writeArtifactManifest(tag, artifacts, specs);
@@ -223,8 +220,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
 
   ensureServiceUser();
   removeLegacyInstall();
-  ensureDirs(specs);
-  ensureHmacKey();
+  ensureDirs(specs, true);
   installArtifacts(artifacts, specs, artifactTag ?? CLI_VERSION.replace(/^v/, ""));
   for (const item of specs) writeConfig(item, true);
   installSudoers();
@@ -264,7 +260,6 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
   ensureServiceUser();
   removeLegacyInstall();
   ensureDirs(specs);
-  ensureHmacKey();
   if (artifacts) installArtifacts(artifacts, specs, target);
   for (const spec of specs) writeConfig(spec, true);
   installSudoers();
@@ -299,8 +294,7 @@ function cmdRepair(argv: string[]): void {
   const all = installedAddons();
   ensureServiceUser(quiet);
   removeLegacyInstall(quiet);
-  ensureDirs(all);
-  ensureHmacKey();
+  ensureDirs(all, true);
   for (const spec of all) {
     writeConfig(spec, true);
     hardenBackups(spec, quiet);
@@ -316,11 +310,6 @@ function cmdRepair(argv: string[]): void {
   reconcileAnchors(quiet);
   if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
   if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ")})`);
-}
-
-function cmdEnsureKey(): void {
-  requireRoot("ensure-key");
-  ensureHmacKey();
 }
 
 function statusValue(value: string, ok: boolean): string {
@@ -448,7 +437,6 @@ export function cmdUninstall(argv: string[]): void {
   stopUnits();
   rmSync(CLI_BIN, { force: true });
   rmSync(LIBEXEC_DIR, { recursive: true, force: true });
-  rmSync(HMAC_KEY_PATH, { force: true });
   log.ok(`${spec.name} removed`);
 }
 
@@ -489,7 +477,6 @@ async function cmdServe(): Promise<never> {
       if (hit) response = await MANAGERS[hit.addon]!(req, hit.rest, notice);
       else if (path === "/") response = indexPage(mounted, notice);
       else response = Response.json({ ok: false, error: "not found" }, { status: 404, headers: SECURITY_HEADERS });
-      if (gate.auth?.setCookie) response.headers.append("Set-Cookie", gate.auth.setCookie);
       return response;
     },
   });
@@ -557,7 +544,6 @@ async function main(): Promise<number> {
     case "update":
     case "upgrade": await cmdUpdate(rest); return 0;
     case "self-update": fatal("self-update is deprecated; use clp-addons update");
-    case "ensure-key": cmdEnsureKey(); return 0;
     case "repair": cmdRepair(rest); return 0;
     case "status": await cmdStatus(); return 0;
     case "uninstall": cmdUninstall(rest); return 0;
