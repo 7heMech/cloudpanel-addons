@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { Database } from "bun:sqlite";
 import {
   createActionContext,
@@ -527,6 +527,18 @@ async function cmdList(ctx: ActionContext): Promise<void> {
   ctx.emitOk({ instances });
 }
 
+function captureDockerLogs(name: string, tail = "200"): string {
+  try {
+    const res = spawnSync("docker", ["logs", "--tail", tail, name], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return (res.stdout || "") + (res.stderr || "");
+  } catch {
+    return "";
+  }
+}
+
 async function cmdCreate(
   domain: string,
   port: number,
@@ -552,7 +564,10 @@ async function cmdCreate(
   }
 
   let siteCreated = false;
+  let unwound = false;
   const unwind = () => {
+    if (unwound) return;
+    unwound = true;
     ctx.warn("create failed, unwinding");
     try {
       execFileSync("docker", ["rm", "-f", name], { stdio: ["ignore", 2, 2] });
@@ -568,11 +583,19 @@ async function cmdCreate(
     rmSync(dir, { recursive: true, force: true });
   };
 
+  const createCtx: ActionContext = {
+    ...ctx,
+    emitErr(msg: string, data?: unknown): never {
+      unwind();
+      ctx.emitErr(msg, data);
+    },
+  };
+
   try {
     if (panelSiteExists(domain)) {
       const proxyCheck = siteIsOurProxy(domain, port);
       if (!proxyCheck.ok) {
-        ctx.emitErr(
+        createCtx.emitErr(
           `a CloudPanel site for ${domain} already exists and cannot be adopted: ${proxyCheck.rejectReason}. Delete it, or use a hostname of its own for this instance`,
         );
       }
@@ -581,7 +604,7 @@ async function cmdCreate(
       ctx.log(`creating CloudPanel reverse-proxy site for ${domain}`);
       const siteUser = siteUserFor(domain);
       if (siteUserTaken(siteUser)) {
-        ctx.emitErr(
+        createCtx.emitErr(
           `the site user ${siteUser} already exists; a site for ${domain} may be half-created`,
         );
       }
@@ -599,7 +622,7 @@ async function cmdCreate(
         );
         siteCreated = true;
       } catch {
-        ctx.emitErr(`clpctl site:add:reverse-proxy failed for ${domain}`);
+        createCtx.emitErr(`clpctl site:add:reverse-proxy failed for ${domain}`);
       }
     }
 
@@ -617,20 +640,20 @@ async function cmdCreate(
         stdio: ["ignore", 2, 2],
       });
     } catch {
-      ctx.emitErr(`failed to pull ${REGISTRY_IMAGE}:${tag}`);
+      createCtx.emitErr(`failed to pull ${REGISTRY_IMAGE}:${tag}`);
     }
 
     ctx.log(`starting ${name} on 127.0.0.1:${port}`);
     try {
-      runContainer(name, port, tag, domain, dir, ctx);
+      runContainer(name, port, tag, domain, dir, createCtx);
     } catch {
-      ctx.emitErr(`failed to start container ${name}`);
+      createCtx.emitErr(`failed to start container ${name}`);
     }
 
     ctx.log("health checking");
-    const healthy = await healthCheck(port, domain, ctx);
+    const healthy = await healthCheck(port, domain, createCtx);
     if (!healthy) {
-      ctx.emitErr(`health check failed for ${domain}`);
+      createCtx.emitErr(`health check failed for ${domain}`);
     }
 
     const siteUser = siteUserOf(domain) || "";
@@ -646,6 +669,7 @@ async function cmdCreate(
     const tmpMeta = `${dir}/meta.json.tmp`;
     writeFileSync(tmpMeta, JSON.stringify(meta, null, 2) + "\n");
     renameSync(tmpMeta, `${dir}/meta.json`);
+    unwound = true;
 
     if (tls === "yes") {
       ctx.log(`requesting a Let's Encrypt certificate for ${domain}`);
@@ -758,13 +782,7 @@ async function cmdUpdate(domain: string, tag: string, ctx: ActionContext): Promi
   try {
     runContainer(name, curPort, tag, domain, dir, ctx);
   } catch {
-    let startLogs = "";
-    try {
-      startLogs = execFileSync("docker", ["logs", "--tail", "200", name], {
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch {}
+    const startLogs = captureDockerLogs(name, "200");
     rollback();
     ctx.emitErr(`failed to start ${tag}; rolled back to ${curTag}`, {
       failedTag: tag,
@@ -776,14 +794,10 @@ async function cmdUpdate(domain: string, tag: string, ctx: ActionContext): Promi
   const healthy = await healthCheck(curPort, domain, ctx);
   if (!healthy) {
     ctx.log("capturing failed container logs before rollback");
-    let failedLogs = "";
-    try {
-      failedLogs = execFileSync("docker", ["logs", "--tail", "200", name], {
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+    const failedLogs = captureDockerLogs(name, "200");
+    if (failedLogs) {
       process.stderr.write(failedLogs);
-    } catch {}
+    }
     rollback();
     ctx.emitErr(`health check failed on ${tag}; rolled back to ${curTag}`, {
       failedTag: tag,
@@ -860,13 +874,7 @@ async function cmdRecreate(domain: string, ctx: ActionContext): Promise<void> {
   try {
     runContainer(name, port, tag, domain, dir, ctx);
   } catch {
-    let startLogs = "";
-    try {
-      startLogs = execFileSync("docker", ["logs", "--tail", "200", name], {
-        encoding: "utf-8",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch {}
+    const startLogs = captureDockerLogs(name, "200");
     ctx.emitErr(`failed to recreate ${domain} at ${tag}`, { tag, logs: startLogs });
   }
 
@@ -898,21 +906,23 @@ async function cmdDelete(domain: string, confirm: string | undefined, ctx: Actio
     ctx.emitErr(`no such instance: ${domain}`);
   }
 
+  if (!existsSync(PANEL_DB)) {
+    ctx.emitErr("cannot read the panel database");
+  }
+
   let count = 0;
-  if (existsSync(PANEL_DB)) {
+  try {
+    const db = new Database(PANEL_DB, { readonly: true });
     try {
-      const db = new Database(PANEL_DB, { readonly: true });
-      try {
-        const row = db
-          .query("SELECT COUNT(*) as count FROM site WHERE domain_name = ?")
-          .get(domain) as { count: number } | null;
-        count = row?.count ?? 0;
-      } finally {
-        db.close();
-      }
-    } catch {
-      ctx.emitErr("cannot read CloudPanel sites; nothing was deleted");
+      const row = db
+        .query("SELECT COUNT(*) as count FROM site WHERE domain_name = ?")
+        .get(domain) as { count: number } | null;
+      count = row?.count ?? 0;
+    } finally {
+      db.close();
     }
+  } catch {
+    ctx.emitErr("cannot read the panel database");
   }
 
   if (count !== 0 && count !== 1) {
@@ -1010,16 +1020,15 @@ async function cmdLogs(domain: string, ctx: ActionContext): Promise<void> {
     ctx.emitErr(`no such container for ${domain}`);
   }
 
-  let body = "";
-  try {
-    body = execFileSync("docker", ["logs", "--tail", "200", name], {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch {
+  const res = spawnSync("docker", ["logs", "--tail", "200", name], {
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (res.error || (res.status !== 0 && !res.stdout && !res.stderr)) {
     ctx.emitErr(`failed to fetch logs for ${domain}`);
   }
 
+  const body = (res.stdout || "") + (res.stderr || "");
   ctx.emitOk({ domain, logs: body });
 }
 

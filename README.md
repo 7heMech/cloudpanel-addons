@@ -124,8 +124,8 @@ UNIX socket, and the manager dispatches `/addons/instatic/` and
 or reverse-proxy site.
 
 The service account is not a CloudPanel site user and has no login shell or
-Docker membership. It can invoke only the unified binary through
-`/etc/sudoers.d/clp-addons`. The actions validate their complete argument set
+Docker membership. It can invoke only the unified binary's `action` subcommand through
+`/etc/sudoers.d/clp-addons` (`/usr/local/bin/clp-addons action *`). The actions validate their complete argument set
 before reading input, deriving paths, or taking locks. Instatic containers run
 as their instance site users, and Stager work runs in transient systemd units so
 long clones survive a manager restart.

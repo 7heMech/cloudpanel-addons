@@ -91,7 +91,9 @@ never creates one.
 The periodic timer and template path unit invoke the same idempotent repair
 commands used by installation. Repair restores service-user, socket, sudoers,
 unit, snapshot, Twig, and Nginx invariants without a second login or manual
-domain configuration.
+domain configuration. Sudoers grants NOPASSWD strictly for
+`/usr/local/bin/clp-addons action *` so that unprivileged manager processes
+can never invoke root operations such as `uninstall --purge` or `install`.
 
 ## Historical design record
 
@@ -120,9 +122,10 @@ Rules, none negotiable:
 - **No free-form arguments.** No paths, no filenames, no registry host, no
   compose file location. One such argument and the verb list stops being closed.
 - **The registry is hardcoded.** Only the tag crosses the boundary.
-- **One wrapper per addon**, so a bug in one cannot be walked through to reach
-  another's verbs. `ALL=(root)`, one absolute path, no wildcards:
-  `NOPASSWD: /usr/bin/clpctl *` is equivalent to full root.
+- **Restricted action boundary**: Sudoers strictly restricts the command to
+  the `action` subcommand: `clp-addons ALL=(root) NOPASSWD: /usr/local/bin/clp-addons action *`.
+  Granting unrestricted `/usr/local/bin/clp-addons` is equivalent to full root
+  (allowing `uninstall --purge` or `install`), so the rule must restrict to `action *`.
 - **stdout is a contract**: exactly one JSON object. Progress goes to stderr.
   Never scrape prose for meaning.
 

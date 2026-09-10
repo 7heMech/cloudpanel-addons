@@ -94,15 +94,6 @@ jobs:
         # editing a version number into the README after every tag.
         run: install -m 0755 install.sh dist/install.sh
 
-      - name: Stage the wrapper scripts unchanged
-        # Never compiled (decision 2.13): the wrapper's security value is that
-        # a human can read it in one sitting.
-        run: |
-          set -euo pipefail
-          for w in addons/*/wrapper/*; do
-            install -m 0755 "$w" "dist/$(basename "$w")"
-          done
-
       - name: Generate SHA256SUMS
         run: |
           set -euo pipefail
@@ -138,8 +129,6 @@ jobs:
         with:
           subject-path: |
             dist/clp-addons-linux-x64
-            dist/clp-action-instatic
-            dist/clp-action-stager
             dist/install.sh
 
       - name: Publish the sigstore bundles alongside the artifacts
@@ -214,8 +203,6 @@ jobs:
             --title "$TAG" \
             "${notes_args[@]}" \
             dist/clp-addons-linux-x64 \
-            dist/clp-action-instatic \
-            dist/clp-action-stager \
             dist/install.sh \
             dist/attestations.jsonl \
             dist/SHA256SUMS

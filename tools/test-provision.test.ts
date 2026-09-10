@@ -159,19 +159,26 @@ function provisionProbe(): {
   }));
 }
 
-test("sudoers names only the single unified binary", () => {
+test("sudoers restricts permissions to the action subcommand only", () => {
   const result = provisionProbe();
   const paths = result.paths;
   const rule = result.rule;
 
-  expect(paths).toEqual(["/usr/local/bin/clp-addons"]);
+  expect(paths).toEqual(["/usr/local/bin/clp-addons action *"]);
   expect(rule).toBe(
     `clp-addons ALL=(root) NOPASSWD: ${paths.join(", ")}`,
   );
-  expect(rule).not.toContain("*");
+  expect(rule).toContain("/usr/local/bin/clp-addons action *");
   expect(rule).not.toContain("/usr/local/libexec/clp-addons/gh");
-  expect(rule).toContain("/usr/local/bin/clp-addons");
-  expect(result.ghPaths).toEqual(["/usr/local/bin/clp-addons"]);
+  expect(result.ghPaths).toEqual(["/usr/local/bin/clp-addons action *"]);
+
+  // Must not grant unrestricted clp-addons (which would allow root uninstall, install, etc.)
+  expect(rule).not.toBe("clp-addons ALL=(root) NOPASSWD: /usr/local/bin/clp-addons");
+  expect(rule).not.toContain("/usr/local/bin/clp-addons uninstall");
+  expect(rule).not.toContain("/usr/local/bin/clp-addons install");
+  expect(rule).not.toContain("/usr/local/bin/clp-addons repair");
+  expect(rule).not.toContain("/usr/local/bin/clp-addons status");
+  expect(rule).not.toContain("/usr/local/bin/clp-addons serve");
 });
 
 test("an empty installed set grants no sudo commands", () => {

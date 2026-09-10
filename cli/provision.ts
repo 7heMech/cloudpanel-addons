@@ -76,14 +76,14 @@ function installedAddonSpecs(): AddonSpec[] {
 export function sudoersCommandPaths(specs: AddonSpec[] = installedAddonSpecs()): string[] {
   const active = specs.filter((spec) => spec.wrapperPath !== GH_PRIVATE);
   if (active.length === 0) return [];
-  return [CLI_BIN];
+  return [`${CLI_BIN} action *`];
 }
 
 export function sudoersRule(specs: AddonSpec[] = installedAddonSpecs()): string {
   const commands = sudoersCommandPaths(specs);
   if (commands.length === 0) return "";
-  if (commands.some((path) => !path.startsWith("/") || /[*?[\]]/.test(path))) {
-    fatal("refusing to install sudoers configuration with a non-absolute or wildcard command path");
+  if (commands.some((cmd) => !cmd.startsWith(`${CLI_BIN} action `))) {
+    fatal("refusing to install sudoers configuration without action subcommand restriction");
   }
   return `${SERVICE_USER} ALL=(root) NOPASSWD: ${commands.join(", ")}`;
 }

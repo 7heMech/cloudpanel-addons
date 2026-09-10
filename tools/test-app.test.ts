@@ -36,6 +36,8 @@ import {
   applicationOk, vhostTemplateOk, vhostBodyOk, learnVhostMap, renderVhostBody,
   composeVhostBody, stripRedirectBlock, foldServerName, replaceHostname,
   panelUpdateSite, recoverCarriedVhosts,
+  rewriteWpConfig, rewriteDotenv, vhostTemplateExists, buildVhostTemplate,
+  carryVhost, instaticError, instaticLogin, instaticLogout, instaticStepUp, instaticSetup,
 } from "../addons/stager/action";
 import { validateFlag } from "../lib/action-common";
 
@@ -1602,4 +1604,94 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   const emptyRes = indexPage([]);
   const emptyHtml = await emptyRes.text();
   check("empty indexPage shows no addons notice", emptyHtml.includes("No addons are currently available."));
+}
+
+console.log("\n== stager remediation PR #20 unit tests ==");
+{
+  // Test rewriteWpConfig
+  const d = mkdtempSync(`${tmpdir()}/clp-wp-test-`);
+  try {
+    const wpConfigFile = `${d}/wp-config.php`;
+    const origContent = [
+      "<?php",
+      "define('DB_NAME', 'source_db');",
+      "define('DB_USER', 'source_user');",
+      "define('DB_PASSWORD', 'source_secret_pass');",
+      "define('DOMAIN_CURRENT_SITE', 'example.com');",
+      "$table_prefix = 'wp_';",
+    ].join("\n");
+    writeFileSync(wpConfigFile, origContent);
+
+    const stgDbPass = "consistent_staging_password_123";
+    rewriteWpConfig(wpConfigFile, "stg.example.com", "stg_dbname", "stg_dbuser", stgDbPass);
+    const updated = readFileSync(wpConfigFile, "utf8");
+
+    check("rewriteWpConfig sets the exact dbName", updated.includes("define('DB_NAME', 'stg_dbname');"));
+    check("rewriteWpConfig sets the exact dbUser", updated.includes("define('DB_USER', 'stg_dbuser');"));
+    check("rewriteWpConfig sets DB_PASSWORD matching the generated staging password (Finding 4)",
+      updated.includes(`define('DB_PASSWORD', '${stgDbPass}');`));
+    check("rewriteWpConfig inserts WP_HOME and WP_SITEURL",
+      updated.includes("define('WP_HOME', 'https://stg.example.com');") &&
+      updated.includes("define('WP_SITEURL', 'https://stg.example.com');"));
+    check("rewriteWpConfig updates DOMAIN_CURRENT_SITE for multisite",
+      updated.includes("define('DOMAIN_CURRENT_SITE', 'stg.example.com');"));
+
+    // Test rewriteWpConfig when WP_HOME is already present
+    const wpWithHome = [
+      "<?php",
+      "define('DB_NAME', 'old_db');",
+      "define('DB_USER', 'old_user');",
+      "define('DB_PASSWORD', 'old_pass');",
+      "define('WP_HOME', 'https://old.com');",
+      "define('WP_SITEURL', 'https://old.com');",
+    ].join("\n");
+    writeFileSync(wpConfigFile, wpWithHome);
+    rewriteWpConfig(wpConfigFile, "new.example.com", "new_db", "new_user", "new_pass");
+    const updatedWithHome = readFileSync(wpConfigFile, "utf8");
+    check("rewriteWpConfig replaces existing WP_HOME and WP_SITEURL",
+      updatedWithHome.includes("define('WP_HOME', 'https://new.example.com');") &&
+      updatedWithHome.includes("define('WP_SITEURL', 'https://new.example.com');") &&
+      !updatedWithHome.includes("https://old.com"));
+
+    // Test rewriteDotenv (Finding 6)
+    const envFile = `${d}/.env`;
+    const origEnv = [
+      "APP_NAME=Laravel",
+      "DB_CONNECTION=mysql",
+      "DB_HOST=127.0.0.1",
+      "DB_PORT=3306",
+      "DB_DATABASE=source_laravel_db",
+      "DB_USERNAME=source_laravel_user",
+      "DB_PASSWORD=source_secret_db_pass",
+    ].join("\n");
+    writeFileSync(envFile, origEnv);
+
+    rewriteDotenv(envFile, "stg_laravel_db", "stg_laravel_user", stgDbPass);
+    const updatedEnv = readFileSync(envFile, "utf8");
+    check("rewriteDotenv sets DB_DATABASE", updatedEnv.includes("DB_DATABASE=stg_laravel_db"));
+    check("rewriteDotenv sets DB_USERNAME", updatedEnv.includes("DB_USERNAME=stg_laravel_user"));
+    check("rewriteDotenv sets DB_PASSWORD with exact staging password (Finding 6)",
+      updatedEnv.includes(`DB_PASSWORD=${stgDbPass}`));
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+
+  // Test vhostTemplateExists
+  check("vhostTemplateExists returns false for invalid/injected name", !vhostTemplateExists("Generic'; DROP TABLE site; --"));
+  check("vhostTemplateExists returns false for empty name", !vhostTemplateExists(""));
+
+  // Test carryVhost returns error when clone conf does not exist
+  const carryRes = carryVhost("example.com", "nonexistent.example.com", "php", "Generic");
+  check("carryVhost returns ok: false when clone vhost file does not exist", !carryRes.ok && carryRes.reject.includes("vhost file"));
+
+  // Test instaticError returns readable response body or fallback
+  const d2 = mkdtempSync(`${tmpdir()}/clp-instatic-test-`);
+  try {
+    const errFile = `${d2}/err.txt`;
+    writeFileSync(errFile, '{"error":"Invalid credentials"}');
+    check("instaticError reads file content", instaticError(errFile) === '{"error":"Invalid credentials"}');
+    check("instaticError handles missing file", instaticError(`${d2}/missing.txt`) === "no response body");
+  } finally {
+    rmSync(d2, { recursive: true, force: true });
+  }
 }

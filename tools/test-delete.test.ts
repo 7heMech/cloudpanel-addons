@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 
 const REPO = join(import.meta.dir, "..");
-const SCENARIOS = ["missing", "present", "archive-fails", "database-fails", "docker-fails", "panel-fails", "changed-site"] as const;
+const SCENARIOS = ["missing", "present", "archive-fails", "database-fails", "missing-db", "docker-fails", "panel-fails", "changed-site"] as const;
 
 function outputText(value: unknown): string {
   if (typeof value === "string") return value;
@@ -46,7 +46,9 @@ exec /usr/bin/tar "$@"
     chmodSync(idPath, 0o600);
 
     const dbPath = `${root}/panel.db`;
-    if (scenario === "database-fails") {
+    if (scenario === "missing-db") {
+      // DB file does not exist; verify fail-closed behavior
+    } else if (scenario === "database-fails") {
       writeFileSync(dbPath, "NOT A SQLITE DATABASE");
     } else {
       const db = new Database(dbPath);
@@ -79,7 +81,10 @@ exec /usr/bin/tar "$@"
     expect(result.status === 0, `${scenario}: ${outputText(result.stdout)} ${outputText(result.stderr)}`).toBe(successful);
     expect(existsSync(data), `${scenario}: data retention`).toBe(!successful);
     const actions = existsSync(`${root}/actions`) ? outputText(readFileSync(`${root}/actions`, "utf8")) : "";
-    if (["archive-fails", "database-fails", "changed-site", "docker-fails"].includes(scenario)) expect(actions).toBe("");
+    if (["archive-fails", "database-fails", "missing-db", "changed-site", "docker-fails"].includes(scenario)) expect(actions).toBe("");
+    if (scenario === "missing-db") {
+      expect(outputText(result.stdout)).toContain("cannot read the panel database");
+    }
     if (scenario === "missing") expect(actions).toBe("docker-removed\n");
     if (scenario === "present") expect(actions).toBe("docker-removed\npanel-deleted\n");
     if (scenario === "panel-fails") expect(actions).toBe("docker-removed\npanel-deleted\n");

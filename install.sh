@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO="7heMech/cloudpanel-addons"
 CLI_ARTIFACT="clp-addons-linux-x64"
-ARTIFACTS=("${CLI_ARTIFACT}" "clp-action-instatic" "clp-action-stager")
+ARTIFACTS=("${CLI_ARTIFACT}")
 CLI_TARGET="/usr/local/bin/clp-addons"
 GH_PRIVATE="/usr/local/libexec/clp-addons/gh"
 AVAILABLE_ADDONS=("instatic" "stager")

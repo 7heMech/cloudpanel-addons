@@ -862,6 +862,392 @@ export function recoverCarriedVhosts(ctx: ActionContext): number {
   return recovered;
 }
 
+export function vhostTemplateExists(name: string): boolean {
+  if (!applicationOk(name)) return false;
+  const db = getPanelDb();
+  if (!db) return false;
+  try {
+    const row = db.query("SELECT COUNT(*) as cnt FROM vhost_template WHERE name = ?").get(name) as { cnt: number } | null;
+    return (row?.cnt ?? 0) > 0;
+  } catch {
+    return false;
+  } finally {
+    db.close();
+  }
+}
+
+export function buildVhostTemplate(
+  source: string,
+  target: string,
+): { ok: true; file: string; cleanup: () => void } | { ok: false; reject: string } {
+  const cand = vhostTemplateBody(source, target);
+  if (!cand || cand.trim().length === 0) {
+    return { ok: false, reject: "the stored vhost was empty once its generated parts were removed" };
+  }
+  const stage = makeClpStage();
+  if (!stage) {
+    return { ok: false, reject: "a staging directory could not be created" };
+  }
+  const file = join(stage, "vhost.tpl");
+  try {
+    writeFileSync(file, `${cand}\n`, { mode: 0o640 });
+    try { execFileSync("chown", ["root:clp", file], { stdio: "ignore" }); } catch {}
+    return {
+      ok: true,
+      file,
+      cleanup: () => {
+        try { rmSync(stage, { recursive: true, force: true }); } catch {}
+      },
+    };
+  } catch {
+    try { rmSync(stage, { recursive: true, force: true }); } catch {}
+    return { ok: false, reject: "could not write the candidate vhost template" };
+  }
+}
+
+export function carryVhost(
+  source: string,
+  target: string,
+  type: string,
+  application: string,
+  siteCreated = true,
+): { ok: true } | { ok: false; reject: string } {
+  const vhostDir = getNginxVhostDir();
+  const conf = join(vhostDir, `${target}.conf`);
+  if (!existsSync(conf)) {
+    return { ok: false, reject: "CloudPanel wrote no vhost file for the clone" };
+  }
+
+  const stage = makeClpStage();
+  if (!stage) {
+    return { ok: false, reject: "a staging directory could not be created" };
+  }
+
+  const stock = join(stage, "stock.tpl");
+  const body = join(stage, "body.tpl");
+  const rendered = join(stage, "rendered.conf");
+  const backup = join(vhostDir, `${target}.conf.clp-stager-bak`);
+
+  try {
+    const db = getPanelDb();
+    if (!db) {
+      return { ok: false, reject: "the panel database is not readable" };
+    }
+    let stockTpl = "";
+    try {
+      const row = db.query("SELECT vhost_template FROM site WHERE domain_name = ?").get(target) as { vhost_template: string } | null;
+      stockTpl = row?.vhost_template ?? "";
+    } finally {
+      db.close();
+    }
+    if (!stockTpl) {
+      return { ok: false, reject: "the clone's own stored vhost could not be read back" };
+    }
+
+    writeFileSync(stock, stockTpl, { mode: 0o640 });
+    try { execFileSync("chown", ["root:clp", stock], { stdio: "ignore" }); } catch {}
+
+    const confContent = readFileSync(conf, "utf8");
+    const mapRes = learnVhostMap(stockTpl, confContent);
+    if (!mapRes.ok) {
+      return { ok: false, reject: mapRes.reject };
+    }
+
+    const composedRes = composeVhostBody(source, target);
+    if (!composedRes.ok) {
+      return { ok: false, reject: composedRes.reject };
+    }
+
+    writeFileSync(body, composedRes.body, { mode: 0o640 });
+    try { execFileSync("chown", ["root:clp", body], { stdio: "ignore" }); } catch {}
+
+    const bodyOkRes = vhostBodyOk(body, source, target);
+    if (!bodyOkRes.ok) {
+      return { ok: false, reject: bodyOkRes.reject };
+    }
+
+    const rendRes = renderVhostBody(composedRes.body, mapRes.map);
+    if (!rendRes.ok) {
+      return { ok: false, reject: rendRes.reject };
+    }
+
+    const renderedBody = rendRes.body.endsWith("\n") ? rendRes.body : `${rendRes.body}\n`;
+    writeFileSync(rendered, renderedBody, { mode: 0o644 });
+
+    try {
+      copyFileSync(conf, backup);
+      try { chmodSync(backup, 0o600); } catch {}
+    } catch {
+      return { ok: false, reject: "the clone's vhost could not be backed up" };
+    }
+
+    const carryRestore = (restoreRow: boolean) => {
+      try {
+        copyFileSync(backup, conf);
+        try { execFileSync("chown", ["root:root", conf], { stdio: "ignore" }); } catch {}
+        try { chmodSync(conf, 0o644); } catch {}
+      } catch {}
+      try { unlinkSync(backup); } catch {}
+      if (restoreRow) {
+        panelUpdateSite(target, type, application, stock, siteCreated);
+      }
+    };
+
+    try {
+      copyFileSync(rendered, conf);
+      try { execFileSync("chown", ["root:root", conf], { stdio: "ignore" }); } catch {}
+      try { chmodSync(conf, 0o644); } catch {}
+    } catch {
+      carryRestore(false);
+      return { ok: false, reject: `the carried vhost could not be written to ${conf}` };
+    }
+
+    let nginxOk = false;
+    try {
+      execFileSync("nginx", ["-t"], { stdio: "pipe" });
+      nginxOk = true;
+    } catch {}
+
+    if (!nginxOk) {
+      carryRestore(false);
+      return { ok: false, reject: "nginx rejected the carried config, so the clone keeps the stock one" };
+    }
+
+    const updateRes = panelUpdateSite(target, type, application, body, siteCreated);
+    if (!updateRes.ok) {
+      carryRestore(true);
+      return { ok: false, reject: updateRes.reject };
+    }
+
+    let reloadOk = false;
+    try {
+      execFileSync("systemctl", ["reload", "nginx"], { stdio: "pipe" });
+      reloadOk = true;
+    } catch {}
+
+    if (!reloadOk) {
+      carryRestore(true);
+      try { execFileSync("systemctl", ["reload", "nginx"], { stdio: "ignore" }); } catch {}
+      return { ok: false, reject: "nginx would not reload the carried config, so the clone keeps the stock one" };
+    }
+
+    try { unlinkSync(backup); } catch {}
+    return { ok: true };
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
+}
+
+export function rewriteWpConfig(file: string, target: string, dbName: string, dbUser: string, dbPass: string): void {
+  let content = readFileSync(file, "utf8");
+  content = content.replace(/define\(\s*['"]DB_NAME['"],\s*['"][^'"]*['"]\s*\);/g, `define('DB_NAME', '${dbName}');`);
+  content = content.replace(/define\(\s*['"]DB_USER['"],\s*['"][^'"]*['"]\s*\);/g, `define('DB_USER', '${dbUser}');`);
+  content = content.replace(/define\(\s*['"]DB_PASSWORD['"],\s*['"][^'"]*['"]\s*\);/g, `define('DB_PASSWORD', '${dbPass}');`);
+  if (/['"]WP_HOME['"]/.test(content)) {
+    content = content.replace(/define\(\s*['"]WP_HOME['"],\s*['"][^'"]*['"]\s*\);/g, `define('WP_HOME', 'https://${target}');`);
+    content = content.replace(/define\(\s*['"]WP_SITEURL['"],\s*['"][^'"]*['"]\s*\);/g, `define('WP_SITEURL', 'https://${target}');`);
+  } else {
+    content = content.replace(
+      /(define\(\s*['"]DB_PASSWORD['"][^\n]*\n)/,
+      `$1define('WP_HOME', 'https://${target}');\ndefine('WP_SITEURL', 'https://${target}');\n`,
+    );
+  }
+  if (/['"]DOMAIN_CURRENT_SITE['"]/.test(content)) {
+    content = content.replace(/define\(\s*['"]DOMAIN_CURRENT_SITE['"],\s*['"][^'"]*['"]\s*\);/g, `define('DOMAIN_CURRENT_SITE', '${target}');`);
+  }
+  writeFileSync(file, content);
+}
+
+export function rewriteDotenv(file: string, dbName: string, dbUser: string, dbPass: string): void {
+  let content = readFileSync(file, "utf8");
+  content = content.replace(/^DB_DATABASE=.*/m, `DB_DATABASE=${dbName}`);
+  content = content.replace(/^DB_USERNAME=.*/m, `DB_USERNAME=${dbUser}`);
+  content = content.replace(/^DB_PASSWORD=.*/m, `DB_PASSWORD=${dbPass}`);
+  writeFileSync(file, content);
+}
+
+export function instaticError(outFile: string): string {
+  if (!existsSync(outFile)) return "no response body";
+  try {
+    const c = readFileSync(outFile, "utf8").slice(0, 400).replace(/[\x00-\x1F]/g, "");
+    return c || "no response body";
+  } catch {
+    return "no response body";
+  }
+}
+
+function newSecretFile(f: string): void {
+  try { unlinkSync(f); } catch {}
+  writeFileSync(f, "", { mode: 0o600 });
+}
+
+function instaticBody(file: string, json: string): void {
+  writeFileSync(file, json, { mode: 0o600 });
+}
+
+export function instaticPost(
+  port: number,
+  domain: string,
+  jar: string,
+  path: string,
+  ctype: string,
+  reqFile: string,
+  outFile: string,
+): string {
+  try {
+    writeFileSync(outFile, "", { mode: 0o600 });
+    const code = execFileSync("curl", [
+      "-sS",
+      "--max-time", "900",
+      "-o", outFile,
+      "-w", "%{http_code}",
+      "-c", jar,
+      "-b", jar,
+      "-X", "POST",
+      `http://127.0.0.1:${port}${path}`,
+      "-H", `Origin: https://${domain}`,
+      "-H", `Content-Type: ${ctype}`,
+      "--data-binary", `@${reqFile}`,
+    ], { encoding: "utf8" }).trim();
+    return code;
+  } catch {
+    return "000";
+  }
+}
+
+export function instaticGet(
+  port: number,
+  domain: string,
+  jar: string,
+  path: string,
+  outFile: string,
+): string {
+  try {
+    writeFileSync(outFile, "", { mode: 0o600 });
+    const code = execFileSync("curl", [
+      "-sS",
+      "--max-time", "900",
+      "-o", outFile,
+      "-w", "%{http_code}",
+      "-c", jar,
+      "-b", jar,
+      `http://127.0.0.1:${port}${path}`,
+      "-H", `Origin: https://${domain}`,
+    ], { encoding: "utf8" }).trim();
+    return code;
+  } catch {
+    return "000";
+  }
+}
+
+export function instaticLogin(
+  port: number,
+  domain: string,
+  jar: string,
+  email: string,
+  password: string,
+  mfa: string | undefined,
+  what: string,
+  jobDir: string,
+): { ok: true } | { ok: false; reject: string } {
+  const req = join(jobDir, ".api-req");
+  const out = join(jobDir, ".api-out");
+  newSecretFile(jar);
+  instaticBody(req, JSON.stringify({ email, password }));
+  const code = instaticPost(port, domain, jar, "/admin/api/cms/login", "application/json", req, out);
+  try { unlinkSync(req); } catch {}
+
+  if (code !== "200") {
+    const reject = `${what} refused the login (HTTP ${code}): ${instaticError(out)}`;
+    try { unlinkSync(out); } catch {}
+    return { ok: false, reject };
+  }
+
+  let outContent = "";
+  try { outContent = readFileSync(out, "utf8"); } catch {}
+  if (outContent.includes('"mfaRequired":true')) {
+    if (!mfa) {
+      try { unlinkSync(out); } catch {}
+      return { ok: false, reject: `${what} has multi-factor authentication enabled and no authentication code was supplied` };
+    }
+    instaticBody(req, JSON.stringify({ code: mfa }));
+    const mfaCode = instaticPost(port, domain, jar, "/admin/api/cms/auth/mfa/verify", "application/json", req, out);
+    try { unlinkSync(req); } catch {}
+    if (mfaCode !== "200") {
+      const reject = `${what} rejected the authentication code (HTTP ${mfaCode}): ${instaticError(out)}`;
+      try { unlinkSync(out); } catch {}
+      return { ok: false, reject };
+    }
+  }
+  try { unlinkSync(out); } catch {}
+  return { ok: true };
+}
+
+export function instaticLogout(
+  port: number,
+  domain: string,
+  jar: string,
+  jobDir: string,
+): void {
+  if (!existsSync(jar)) return;
+  const req = join(jobDir, ".api-req");
+  const out = join(jobDir, ".api-out");
+  instaticBody(req, "{}");
+  instaticPost(port, domain, jar, "/admin/api/cms/logout", "application/json", req, out);
+  try { unlinkSync(req); } catch {}
+  try { unlinkSync(out); } catch {}
+  try { unlinkSync(jar); } catch {}
+}
+
+export function instaticStepUp(
+  port: number,
+  domain: string,
+  jar: string,
+  password: string,
+  mfa: string | undefined,
+  jobDir: string,
+): { ok: true } | { ok: false; reject: string } {
+  const req = join(jobDir, ".api-req");
+  const out = join(jobDir, ".api-out");
+  const body: Record<string, string> = { password };
+  if (mfa) body.mfaCode = mfa;
+  instaticBody(req, JSON.stringify(body));
+  const code = instaticPost(port, domain, jar, "/admin/api/cms/auth/step-up", "application/json", req, out);
+  try { unlinkSync(req); } catch {}
+  if (code !== "200") {
+    const reject = `the clone refused to open a step-up window (HTTP ${code}): ${instaticError(out)}`;
+    try { unlinkSync(out); } catch {}
+    return { ok: false, reject };
+  }
+  try { unlinkSync(out); } catch {}
+  return { ok: true };
+}
+
+export function instaticSetup(
+  port: number,
+  domain: string,
+  jar: string,
+  email: string,
+  password: string,
+  siteName: string,
+  jobDir: string,
+): { ok: true } | { ok: false; reject: string } {
+  const req = join(jobDir, ".api-req");
+  const out = join(jobDir, ".api-out");
+  newSecretFile(jar);
+  instaticBody(req, JSON.stringify({ siteName, email, password }));
+  const code = instaticPost(port, domain, jar, "/admin/api/cms/setup", "application/json", req, out);
+  try { unlinkSync(req); } catch {}
+  if (code !== "201") {
+    const reject = `the clone would not bootstrap its owner (HTTP ${code}): ${instaticError(out)}`;
+    try { unlinkSync(out); } catch {}
+    return { ok: false, reject };
+  }
+  try { unlinkSync(out); } catch {}
+  return { ok: true };
+}
+
+
 export async function cmdSites(ctx: ActionContext): Promise<void> {
   const db = getPanelDb();
   if (!db) {
@@ -1233,7 +1619,7 @@ export async function cmdPrune(ctx: ActionContext): Promise<void> {
 export async function cmdRun(jobId: string, ctx: ActionContext): Promise<void> {
   const dir = jobDir(jobId);
   if (!existsSync(dir)) {
-    ctx.emitErr(`no such job: ${jobId}`);
+    return ctx.emitErr(`job ${jobId} not found`);
   }
 
   const logFile = join(dir, "log");
@@ -1244,15 +1630,23 @@ export async function cmdRun(jobId: string, ctx: ActionContext): Promise<void> {
     ctx.log(msg);
   };
 
-  const failJob = (reason: string): never => {
-    stepLog(`FAIL: ${reason}`);
-    jobSet(dir, "error", reason);
-    jobSet(dir, "state", "failed");
-    jobSet(dir, "finishedAt", new Date().toISOString().replace(/\.\d{3}Z$/, "Z"));
-    try { unlinkSync(join(dir, "srcPassword")); } catch {}
-    try { unlinkSync(join(dir, "mfa")); } catch {}
-    return ctx.emitErr(reason);
-  };
+  let siteCreated = false;
+  let siteViaInstatic = false;
+  let dbCreated = false;
+  let dumpFile = "";
+  let stgDbName = "";
+  let stgDbUser = "";
+  let stgDbPass = "";
+
+  let srcPort = 0;
+  let srcTag = "";
+  let exportZip = "";
+  let instEmail = "";
+  let instPass = "";
+  const cookiesSrc = join(dir, "cookies-src");
+  const cookiesDst = join(dir, "cookies-dst");
+
+  let templateName = "";
 
   let source = jobGet(dir, "source");
   let target = jobGet(dir, "target");
@@ -1260,6 +1654,64 @@ export async function cmdRun(jobId: string, ctx: ActionContext): Promise<void> {
   const portStr = jobGet(dir, "port");
   const email = jobGet(dir, "email");
   const mfa = jobGet(dir, "mfa");
+
+  const rollback = () => {
+    if (templateName) {
+      try {
+        execFileSync(CLPCTL, ["vhost-template:delete", `--name=${templateName}`], { stdio: "ignore" });
+      } catch {}
+      templateName = "";
+    }
+    if (exportZip) {
+      try { unlinkSync(exportZip); } catch {}
+      exportZip = "";
+    }
+    if (existsSync(cookiesSrc)) {
+      if (srcPort && source) {
+        try { instaticLogout(srcPort, source, cookiesSrc, dir); } catch {}
+      }
+      try { unlinkSync(cookiesSrc); } catch {}
+    }
+    if (existsSync(cookiesDst)) {
+      if (portStr && target) {
+        try { instaticLogout(parseInt(portStr, 10), target, cookiesDst, dir); } catch {}
+      }
+      try { unlinkSync(cookiesDst); } catch {}
+    }
+    if (dumpFile) {
+      try { unlinkSync(dumpFile); } catch {}
+      dumpFile = "";
+    }
+    if (dbCreated && stgDbName) {
+      try {
+        execFileSync(CLPCTL, ["db:delete", `--databaseName=${stgDbName}`, "--force"], { stdio: "ignore" });
+      } catch {}
+      dbCreated = false;
+    }
+    if (siteViaInstatic) {
+      const instaticCmd = getInstaticCmd();
+      try {
+        execFileSync(instaticCmd[0]!, [...instaticCmd.slice(1), "delete", `--domain=${target}`, `--confirm=${target}`], { stdio: "ignore" });
+      } catch {}
+      siteViaInstatic = false;
+    } else if (siteCreated) {
+      try {
+        execFileSync(CLPCTL, ["site:delete", `--domainName=${target}`, "--force"], { stdio: "ignore" });
+      } catch {}
+      siteCreated = false;
+    }
+  };
+
+  const failJob = (reason: string): never => {
+    stepLog(`FAIL: ${reason}`);
+    jobSet(dir, "error", reason);
+    jobSet(dir, "state", "failed");
+    jobSet(dir, "finishedAt", new Date().toISOString().replace(/\.\d{3}Z$/, "Z"));
+    try { unlinkSync(join(dir, "srcPassword")); } catch {}
+    try { unlinkSync(join(dir, "mfa")); } catch {}
+    rollback();
+    return ctx.emitErr(reason);
+  };
 
   if (!source || !target) {
     return failJob("job record is incomplete");
@@ -1282,12 +1734,6 @@ export async function cmdRun(jobId: string, ctx: ActionContext): Promise<void> {
     timeoutMs: 30_000,
     prefix: "stager-",
   });
-
-  let siteCreated = false;
-  let siteViaInstatic = false;
-  let dbCreated = false;
-  let dumpFile = "";
-  let stgDbName = "";
 
   try {
     if (siteExists(target)) {
@@ -1326,14 +1772,82 @@ export async function cmdRun(jobId: string, ctx: ActionContext): Promise<void> {
     const srcDb = databaseOf(source);
     const srcDir = `/home/${srcUser}/htdocs/${source}`;
 
-    let srcTag = "";
     if (srcType === "reverse-proxy") {
       const backend = instaticBackendOf(source);
       if (!backend.ok) return failJob(`${source} cannot be cloned: ${backend.reject}`);
+      srcPort = backend.port;
       srcTag = backend.tag;
+
+      if (!portStr) return failJob("no port was allocated for the clone's Instatic instance");
+      if (!email) return failJob("cloning an Instatic site needs the source instance's admin email address");
+      const srcPassFile = join(dir, "srcPassword");
+      if (!existsSync(srcPassFile) || statSync(srcPassFile).size === 0) {
+        return failJob("cloning an Instatic site needs the source instance's admin password");
+      }
+      let srcPassword = readFileSync(srcPassFile, "utf8").replace(/\n$/, "");
+
+      setStep(`signing in to ${source}`);
+      const loginRes = instaticLogin(srcPort, source, cookiesSrc, email, srcPassword, mfa, source, dir);
+      if (!loginRes.ok) return failJob(loginRes.reject);
+
+      srcPassword = "";
+      try { unlinkSync(srcPassFile); } catch {}
+      try { unlinkSync(join(dir, "mfa")); } catch {}
+
+      setStep(`exporting ${source}'s content`);
+      exportZip = join(dir, "site-bundle.zip");
+      let exportCode = instaticGet(srcPort, source, cookiesSrc, "/admin/api/cms/export?includeSite=1&includeMedia=1", exportZip);
+      if (exportCode === "404") {
+        exportCode = instaticGet(srcPort, source, cookiesSrc, "/admin/api/cms/export/archive", exportZip);
+      }
+      if (!exportCode.startsWith("2")) {
+        return failJob(`${source} refused the export (HTTP ${exportCode}): ${instaticError(exportZip)}`);
+      }
+      instaticLogout(srcPort, source, cookiesSrc, dir);
+      let exportSize = 0;
+      try { exportSize = statSync(exportZip).size; } catch {}
+      stepLog(`exported ${exportSize} bytes of site bundle`);
     } else {
       if (!existsSync(srcDir)) {
         return failJob(`source directory ${srcDir} does not exist`);
+      }
+    }
+
+    let baseTemplate = srcApp;
+    let baseMissing = false;
+    let templateRoute = false;
+    let templateReject = "";
+    let vhostTemplate = baseTemplate;
+
+    if (srcType === "php") {
+      if (!vhostTemplateExists(baseTemplate)) {
+        baseMissing = true;
+        baseTemplate = "Generic";
+        vhostTemplate = baseTemplate;
+      }
+      const tplRes = buildVhostTemplate(source, target);
+      if (tplRes.ok) {
+        try {
+          const chkRes = vhostTemplateOk(tplRes.file, source, target);
+          if (chkRes.ok) {
+            const candidate = `clp-stager-${jobId}`;
+            try {
+              execFileSync(CLPCTL, ["vhost-template:add", `--name=${candidate}`, `--file=${tplRes.file}`]);
+              templateName = candidate;
+              vhostTemplate = candidate;
+              templateRoute = true;
+              stepLog(`carrying ${source}'s vhost across through CloudPanel's own template mechanism`);
+            } catch {
+              templateReject = `CloudPanel would not accept a vhost template built from ${source}`;
+            }
+          } else {
+            templateReject = chkRes.reject;
+          }
+        } finally {
+          tplRes.cleanup();
+        }
+      } else {
+        templateReject = tplRes.reject;
       }
     }
 
@@ -1348,11 +1862,19 @@ export async function cmdRun(jobId: string, ctx: ActionContext): Promise<void> {
         "site:add:php",
         `--domainName=${target}`,
         `--phpVersion=${phpVersion}`,
-        `--vhostTemplate=${srcApp}`,
+        `--vhostTemplate=${vhostTemplate}`,
         `--siteUser=${stgUser}`,
         `--siteUserPassword=${stgPass}`,
       ]);
       siteCreated = true;
+      if (templateName) {
+        try {
+          execFileSync(CLPCTL, ["vhost-template:delete", `--name=${templateName}`]);
+        } catch {
+          ctx.warn(`could not remove the temporary vhost template ${templateName}`);
+        }
+        templateName = "";
+      }
     } else if (srcType === "static") {
       execFileSync(CLPCTL, [
         "site:add:static",
@@ -1386,8 +1908,8 @@ export async function cmdRun(jobId: string, ctx: ActionContext): Promise<void> {
     if (srcDb) {
       setStep("copying database");
       stgDbName = dbNameFor(target);
-      const stgDbUser = dbUserFor(target);
-      const stgDbPass = genDbPassword();
+      stgDbUser = dbUserFor(target);
+      stgDbPass = genDbPassword();
       dumpFile = join(dir, "dump.sql.gz");
 
       execFileSync(CLPCTL, ["db:export", `--databaseName=${srcDb}`, `--file=${dumpFile}`]);
@@ -1416,31 +1938,139 @@ export async function cmdRun(jobId: string, ctx: ActionContext): Promise<void> {
       }
     }
 
+    // Instatic content import
+    if (srcType === "reverse-proxy") {
+      instEmail = `admin@${target}`;
+      instPass = genPassword();
+      const targetPort = parseInt(portStr!, 10);
+
+      setStep("bootstrapping the clone's Instatic owner");
+      const setupRes = instaticSetup(targetPort, target, cookiesDst, instEmail, instPass, target, dir);
+      if (!setupRes.ok) return failJob(setupRes.reject);
+
+      setStep("signing in to the clone");
+      const loginDstRes = instaticLogin(targetPort, target, cookiesDst, instEmail, instPass, undefined, "the clone", dir);
+      if (!loginDstRes.ok) return failJob(loginDstRes.reject);
+
+      const stepUpDstRes = instaticStepUp(targetPort, target, cookiesDst, instPass, undefined, dir);
+      if (!stepUpDstRes.ok) return failJob(stepUpDstRes.reject);
+
+      setStep(`importing ${source}'s content into the clone`);
+      const apiOut = join(dir, ".api-out");
+      const importCode = instaticPost(
+        targetPort,
+        target,
+        cookiesDst,
+        "/admin/api/cms/import/archive?strategy=replace",
+        "application/zip",
+        exportZip,
+        apiOut,
+      );
+      if (!importCode.startsWith("2")) {
+        return failJob(`the clone refused the import (HTTP ${importCode}): ${instaticError(apiOut)}`);
+      }
+
+      let importTables = "?";
+      let importRows = "?";
+      let importMedia = "?";
+      try {
+        const outData = JSON.parse(readFileSync(apiOut, "utf8"));
+        if (outData.tablesAffected !== undefined) importTables = String(outData.tablesAffected);
+        if (outData.rowsInserted !== undefined) importRows = String(outData.rowsInserted);
+        if (outData.mediaImported !== undefined) importMedia = String(outData.mediaImported);
+      } catch {}
+      stepLog(`import: ${instaticError(apiOut)}`);
+      try { unlinkSync(apiOut); } catch {}
+      notes.push(`the import reported ${importTables} table(s), ${importRows} row(s) and ${importMedia} media file(s); that is everything the export contained, so check it against ${source} rather than against what you expect`);
+
+      instaticLogout(targetPort, target, cookiesDst, dir);
+      try { unlinkSync(exportZip); } catch {}
+      exportZip = "";
+
+      notes.push(`the clone's PUBLIC_ORIGIN is https://${target}, but absolute links typed into a page still name ${source}; the bundle carries content, not a URL rewrite`);
+      notes.push(`integration secrets such as API keys and TOTP seeds are encrypted under ${source}'s own key and are deliberately absent from the bundle; re-enter them on the clone`);
+      notes.push(`publish the clone in its own admin before using it: the site bundle carries content, not the runtime assets a publish produces, so /_instatic/assets/* on ${target} will 404 until it has been published once`);
+      notes.push(`plugins are not part of the site bundle, so any plugin installed on ${source} has to be installed again on the clone`);
+      notes.push(`the export contains only the rows the account you signed in as may see: without the content.manage capability Instatic exports that account's own rows and still answers 200, so compare the clone's pages against ${source}'s before trusting it`);
+    }
+
     // Rewrite application config if DB copied
     if (srcDb && existsSync(destDir)) {
       const wpConfig = join(destDir, "wp-config.php");
       const dotEnv = join(destDir, ".env");
       if (existsSync(wpConfig)) {
-        let content = readFileSync(wpConfig, "utf8");
-        content = content.replace(/define\(\s*'DB_NAME',\s*'[^']*'\s*\);/g, `define('DB_NAME', '${stgDbName}');`);
-        content = content.replace(/define\(\s*'DB_USER',\s*'[^']*'\s*\);/g, `define('DB_USER', '${dbUserFor(target)}');`);
-        content = content.replace(/define\(\s*'DB_PASSWORD',\s*'[^']*'\s*\);/g, `define('DB_PASSWORD', '${genDbPassword()}');`);
-        if (content.includes("WP_HOME")) {
-          content = content.replace(/define\(\s*'WP_HOME',\s*'[^']*'\s*\);/g, `define('WP_HOME', 'https://${target}');`);
-          content = content.replace(/define\(\s*'WP_SITEURL',\s*'[^']*'\s*\);/g, `define('WP_SITEURL', 'https://${target}');`);
+        rewriteWpConfig(wpConfig, target, stgDbName, stgDbUser, stgDbPass);
+        let hasWpCli = false;
+        try {
+          execFileSync("which", ["wp"], { stdio: "ignore" });
+          hasWpCli = true;
+        } catch {}
+
+        if (hasWpCli) {
+          setStep("rewriting URLs with wp-cli");
+          try {
+            const wpContent = readFileSync(wpConfig, "utf8");
+            const isMultisite = wpContent.includes("DOMAIN_CURRENT_SITE");
+            const wpArgs = [
+              "-u", stgUser, "--", "env", `HOME=/home/${stgUser}`, "wp",
+              `--path=${destDir}`, "--skip-plugins", "--skip-themes", "search-replace",
+            ];
+            if (isMultisite) {
+              wpArgs.push(source, target, "--network");
+            } else {
+              wpArgs.push(`https://${source}`, `https://${target}`);
+            }
+            execFileSync("runuser", wpArgs, { stdio: ["ignore", "ignore", "pipe"] });
+          } catch {
+            notes.push("wp-cli search-replace reported problems; check the log");
+          }
         } else {
-          content = content.replace(
-            /(define\(\s*'DB_PASSWORD'[^\n]*\n)/,
-            `$1define('WP_HOME', 'https://${target}');\ndefine('WP_SITEURL', 'https://${target}');\n`,
-          );
+          notes.push(`wp-cli is not installed, so URLs inside the database still name ${source}`);
         }
-        writeFileSync(wpConfig, content);
       } else if (existsSync(dotEnv)) {
-        let content = readFileSync(dotEnv, "utf8");
-        content = content.replace(/^DB_DATABASE=.*/m, `DB_DATABASE=${stgDbName}`);
-        content = content.replace(/^DB_USERNAME=.*/m, `DB_USERNAME=${dbUserFor(target)}`);
-        writeFileSync(dotEnv, content);
+        rewriteDotenv(dotEnv, stgDbName, stgDbUser, stgDbPass);
+      } else {
+        notes.push("no wp-config.php or .env found, so the database credentials were not written into the application; they are in this job's result");
       }
+    }
+
+    // Vhost handling
+    let vhostCarried = false;
+    let vhostBy: "template" | "rendered" | "stock" = "stock";
+    let cloneApp = applicationOf(target);
+    if (cloneApp && !applicationOk(cloneApp)) {
+      cloneApp = "";
+    }
+    cloneApp = cloneApp || "Generic";
+    if (srcType === "php") {
+      cloneApp = baseTemplate;
+    }
+
+    if (templateRoute) {
+      vhostCarried = true;
+      vhostBy = "template";
+      if (applicationOf(target) !== cloneApp) {
+        const updateRes = panelUpdateSite(target, srcType, cloneApp, undefined, siteCreated);
+        if (!updateRes.ok) {
+          notes.push(`the clone's Vhost tab still names the temporary template this job used: ${updateRes.reject}`);
+        }
+      }
+    } else {
+      setStep(`carrying ${source}'s vhost onto the clone`);
+      const carryRes = carryVhost(source, target, srcType, cloneApp, siteCreated);
+      if (carryRes.ok) {
+        vhostCarried = true;
+        vhostBy = "rendered";
+        stepLog(`carried ${source}'s vhost across by writing the clone's panel record and rendering its file`);
+      } else {
+        notes.push(`${source}'s vhost was not carried across: ${carryRes.reject}. The clone keeps the stock ${cloneApp} vhost; copy the edits across in Site -> Vhost`);
+        if (templateReject) {
+          notes.push(`CloudPanel's own template route was not taken either: ${templateReject}`);
+        }
+      }
+    }
+    if (baseMissing) {
+      notes.push(`${source} names a vhost template the panel no longer has, so ${baseTemplate} was used instead`);
     }
 
     // TLS Certificate if requested
@@ -1460,11 +2090,11 @@ export async function cmdRun(jobId: string, ctx: ActionContext): Promise<void> {
       siteType: srcType,
       siteUser: stgUser,
       phpVersion: phpVersion || null,
-      vhostTemplate: srcApp,
-      vhostCarried: false,
-      vhostCarriedBy: "",
-      database: srcDb ? { source: srcDb, name: stgDbName, user: dbUserFor(target) } : null,
-      instatic: srcType === "reverse-proxy" ? { port: parseInt(portStr || "0", 10), tag: srcTag } : null,
+      vhostTemplate: cloneApp,
+      vhostCarried,
+      vhostCarriedBy: vhostBy,
+      database: srcDb ? { source: srcDb, name: stgDbName, user: stgDbUser, password: stgDbPass } : null,
+      instatic: srcType === "reverse-proxy" ? { port: parseInt(portStr || "0", 10), tag: srcTag, email: instEmail, password: instPass } : null,
       notes,
     };
     writeFileSync(join(dir, "result.json"), JSON.stringify(resultObj, null, 2), { mode: 0o600 });
@@ -1473,24 +2103,7 @@ export async function cmdRun(jobId: string, ctx: ActionContext): Promise<void> {
     stepLog("job completed successfully");
     ctx.emitOk({ job: jobId, status: "done" });
   } catch (err: any) {
-    if (dumpFile) {
-      try { unlinkSync(dumpFile); } catch {}
-    }
-    if (dbCreated && stgDbName) {
-      try {
-        execFileSync(CLPCTL, ["db:delete", `--databaseName=${stgDbName}`, "--force"], { stdio: "ignore" });
-      } catch {}
-    }
-    if (siteViaInstatic) {
-      const instaticCmd = getInstaticCmd();
-      try {
-        execFileSync(instaticCmd[0]!, [...instaticCmd.slice(1), "delete", `--domain=${target}`, `--confirm=${target}`], { stdio: "ignore" });
-      } catch {}
-    } else if (siteCreated) {
-      try {
-        execFileSync(CLPCTL, ["site:delete", `--domainName=${target}`, "--force"], { stdio: "ignore" });
-      } catch {}
-    }
+    rollback();
     return failJob(err?.message || "clone job failed");
   } finally {
     lock.release();
