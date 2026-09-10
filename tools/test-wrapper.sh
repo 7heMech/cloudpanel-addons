@@ -13,12 +13,13 @@
 # Asserting that each verb emits *something* catches it; asserting only that
 # bad input is rejected does not.
 #
-# Usage: tools/test-wrapper.sh [path-to-wrapper]
+# Usage: tools/test-wrapper.sh [path-to-clp-addons-binary]
 
 set -uo pipefail
 
-W=${1:-/usr/local/libexec/clp-addons/clp-action-instatic}
-[[ -x $W ]] || { echo "not executable: $W" >&2; exit 2; }
+BIN=${1:-/usr/local/bin/clp-addons}
+ACTION=("$BIN" action instatic)
+[[ -x $BIN ]] || { echo "not executable: $BIN" >&2; exit 2; }
 [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 2; }
 
 pass=0 fail=0
@@ -27,7 +28,7 @@ pass=0 fail=0
 expect() {
   local label=$1 pattern=$2; shift 2
   local out
-  out=$("$W" "$@" 2>/dev/null | tail -1)
+  out=$("${ACTION[@]}" "$@" 2>/dev/null | tail -1)
   if [[ $out =~ $pattern ]]; then
     printf '  ok    %s\n' "$label"
     (( pass++ ))

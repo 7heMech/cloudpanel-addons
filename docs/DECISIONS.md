@@ -13,21 +13,21 @@ The implementation specification is
 ### Privilege boundary
 
 The manager runs as the locked `clp-addons` system user. It can invoke only the
-root-owned action wrappers named by `/etc/sudoers.d/clp-addons`:
+action namespace of the root-owned binary named by `/etc/sudoers.d/clp-addons`:
 
 ```text
-clp-addons ALL=(root) NOPASSWD: /usr/local/libexec/clp-addons/clp-action-instatic, /usr/local/libexec/clp-addons/clp-action-stager
+clp-addons ALL=(root) NOPASSWD: /usr/local/bin/clp-addons action *
 ```
 
-The generated rule contains exactly the wrapper paths for the installed addons.
-It deliberately does not grant a directory wildcard, so a new file placed in
-`/usr/local/libexec/clp-addons/` cannot become a passwordless root command
-without an explicit provisioning change. Session validation is performed by the
-manager itself and is not a privileged command.
+The generated rule contains one absolute binary path and matches only arguments
+under the literal `action` namespace. It does not match `install`, `update`,
+`repair`, `status`, `uninstall`, or `serve`; the binary also rejects unknown
+action addons and requires an installed addon configuration. Session validation
+is performed by the manager itself and is not a privileged command.
 
-Every wrapper validates its complete argument set before reading input,
+Every action validates its complete argument set before reading input,
 deriving paths, or taking a lock. Commands use argument arrays; no shell
-evaluation or caller-supplied paths cross the boundary. Wrapper stdout is one
+evaluation or caller-supplied paths cross the boundary. Action stdout is one
 JSON object and diagnostics go to stderr.
 
 ### Integrated manager and Nginx transport
@@ -71,9 +71,10 @@ username, and `mfaAuthenticated === true`. Invalid sessions redirect to
 
 ### Active artifact layout and updates
 
-There is one active binary at `/usr/local/bin/clp-addons`. Addon wrappers live
-directly in `/usr/local/libexec/clp-addons/`; the active installation has no
-release directory or `current` symlink. `clp-addons update`
+There is one active binary at `/usr/local/bin/clp-addons`; the compiled addon
+actions live inside it. The private release-verification helper, when needed,
+is the only separate file under `/usr/local/libexec/clp-addons/`; the active
+installation has no release directory or `current` symlink. `clp-addons update`
 resolves a release, verifies checksums and provenance when artifacts are needed,
 atomically replaces the CLI and installed helpers, restarts the service, and
 reconciles panel integration. A same-version update reuses artifacts only when
@@ -85,7 +86,7 @@ fetches and verifies them before reconciliation. `upgrade` is an alias;
 
 Root reconciliation reads non-secret site and port fields into the sanitized
 `/var/lib/clp-addons/snapshot.json`. Applications read that snapshot and use
-their root wrapper for privileged operations. Instance wrappers may create and
+their root action namespace for privileged operations. Instance actions may create and
 manage the CloudPanel sites that represent addon instances; the manager itself
 never creates one.
 
@@ -102,12 +103,12 @@ per-site Basic Auth, a TCP listener, release-tree storage, or custom manager
 credentials describe the superseded implementation. The current decisions
 above take precedence.
 
-## The wrapper is the whole security model
+## The root action is the whole security model
 
-`addons/*/wrapper/clp-action-*` runs as root via one sudoers line. Everything it
-permits, the unprivileged app account can do as root. The account's isolation is
-worth exactly as much as the wrapper's argument validation is strict, so that
-file is the one to review line by line.
+The `action` namespace runs as root via one sudoers line. Everything it permits,
+the unprivileged app account can do as root. The account's isolation is worth
+exactly as much as the action validation is strict, so those modules are the
+ones to review line by line.
 
 Rules, none negotiable:
 

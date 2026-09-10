@@ -14,12 +14,13 @@
 # Nothing here creates a site. Every case either fails validation or names a
 # domain that does not exist, so the wrapper answers before it reaches clpctl.
 #
-# Usage: tools/test-wrapper-stager.sh [path-to-wrapper]
+# Usage: tools/test-wrapper-stager.sh [path-to-clp-addons-binary]
 
 set -uo pipefail
 
-W=${1:-/usr/local/libexec/clp-addons/clp-action-stager}
-[[ -x $W ]] || { echo "not executable: $W" >&2; exit 2; }
+BIN=${1:-/usr/local/bin/clp-addons}
+ACTION=("$BIN" action stager)
+[[ -x $BIN ]] || { echo "not executable: $BIN" >&2; exit 2; }
 [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 2; }
 
 pass=0 fail=0
@@ -27,7 +28,7 @@ pass=0 fail=0
 expect() {
   local label=$1 pattern=$2; shift 2
   local out
-  out=$("$W" "$@" 2>/dev/null | tail -1)
+  out=$("${ACTION[@]}" "$@" 2>/dev/null | tail -1)
   if [[ $out =~ $pattern ]]; then
     printf '  ok    %s\n' "$label"
     (( pass++ ))

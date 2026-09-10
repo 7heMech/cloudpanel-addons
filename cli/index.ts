@@ -7,7 +7,7 @@ import {
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation, type FetchedArtifact } from "./release";
 import {
   ensureDirs, ensureServiceUser, ensureTimerArmed, hardenBackups,
-  installSudoers, installUnits, installWrapper, installedConfig, purgeTwigCache, removeLegacyUnits,
+  installSudoers, installUnits, installedConfig, purgeTwigCache, removeLegacyUnits,
   removeLegacyInstall, removeLegacyUsers, removeSudoers, startUnits, stopUnits, unitActive,
   unitPid, writeConfig,
 } from "./provision";
@@ -24,6 +24,8 @@ import { splitMount } from "../lib/mount";
 import { SECURITY_HEADERS, esc } from "../lib/app-http";
 import { renderLayout } from "../lib/app-ui";
 import { checkCliUpdate } from "../lib/update-check";
+import { runInstaticAction } from "../addons/instatic/action";
+import { runStagerAction } from "../addons/stager/action";
 
 type AddonHandler = (
   req: Request,
@@ -47,11 +49,8 @@ function installedAddons(): AddonSpec[] {
   return ADDON_NAMES.map((name) => ADDONS[name]!).filter(installedConfig);
 }
 
-function artifactNames(specs: AddonSpec[]): string[] {
-  return [...new Set([
-    CLI_ARTIFACT,
-    ...specs.map((spec) => spec.wrapperArtifact),
-  ])];
+function artifactNames(): string[] {
+  return [CLI_ARTIFACT];
 }
 
 function artifact(artifacts: FetchedArtifact[], name: string): Buffer {
@@ -60,11 +59,8 @@ function artifact(artifacts: FetchedArtifact[], name: string): Buffer {
   return found.bytes;
 }
 
-function artifactPaths(specs: AddonSpec[]): Map<string, string> {
-  return new Map([
-    [CLI_ARTIFACT, CLI_BIN],
-    ...specs.map((spec) => [spec.wrapperArtifact, spec.wrapperPath] as const),
-  ]);
+function artifactPaths(): Map<string, string> {
+  return new Map([[CLI_ARTIFACT, CLI_BIN]]);
 }
 
 function sha256(bytes: Buffer): string {
@@ -80,7 +76,7 @@ function secureRegularFile(path: string, executable = false): boolean {
   }
 }
 
-function currentArtifactsMatch(tag: string, specs: AddonSpec[]): boolean {
+function currentArtifactsMatch(tag: string): boolean {
   if (!secureRegularFile(ARTIFACT_MANIFEST_PATH)) return false;
 
   let manifest: unknown;
@@ -96,7 +92,7 @@ function currentArtifactsMatch(tag: string, specs: AddonSpec[]): boolean {
   }
 
   const checksums = record.artifacts as Record<string, unknown>;
-  for (const [name, path] of artifactPaths(specs)) {
+  for (const [name, path] of artifactPaths()) {
     const expected = checksums[name];
     if (typeof expected !== "string" || !/^[0-9a-f]{64}$/.test(expected) || !secureRegularFile(path, true)) return false;
     try {
@@ -108,18 +104,17 @@ function currentArtifactsMatch(tag: string, specs: AddonSpec[]): boolean {
   return true;
 }
 
-function writeArtifactManifest(tag: string, artifacts: FetchedArtifact[], specs: AddonSpec[]): void {
+function writeArtifactManifest(tag: string, artifacts: FetchedArtifact[]): void {
   const checksums: Record<string, string> = {};
-  for (const name of artifactPaths(specs).keys()) checksums[name] = sha256(artifact(artifacts, name));
+  for (const name of artifactPaths().keys()) checksums[name] = sha256(artifact(artifacts, name));
   writeAtomic(ARTIFACT_MANIFEST_PATH, JSON.stringify({ version: 1, tag, artifacts: checksums }) + "\n", 0o600);
   tryRun("chown", ["root:root", ARTIFACT_MANIFEST_PATH]);
 }
 
-function installArtifacts(artifacts: FetchedArtifact[], specs: AddonSpec[], tag: string, quiet = false): void {
-  for (const spec of specs) installWrapper(spec, artifact(artifacts, spec.wrapperArtifact), quiet);
+function installArtifacts(artifacts: FetchedArtifact[], tag: string): void {
   writeAtomic(CLI_BIN, artifact(artifacts, CLI_ARTIFACT), 0o755);
   tryRun("chown", ["root:root", CLI_BIN]);
-  writeArtifactManifest(tag, artifacts, specs);
+  writeArtifactManifest(tag, artifacts);
 }
 
 function installedInjections(exclude?: string): Injection[] {
@@ -203,7 +198,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
   }
 
   const specs = [...installedAddons().filter((item) => item.name !== spec.name), spec];
-  const names = artifactNames(specs);
+  const names = artifactNames();
   let artifacts: FetchedArtifact[];
   let artifactTag: string | undefined;
   if (typeof flags.local === "string") {
@@ -221,7 +216,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
   ensureServiceUser();
   removeLegacyInstall();
   ensureDirs(specs, true);
-  installArtifacts(artifacts, specs, artifactTag ?? CLI_VERSION.replace(/^v/, ""));
+  installArtifacts(artifacts, artifactTag ?? CLI_VERSION.replace(/^v/, ""));
   for (const item of specs) writeConfig(item, true);
   installSudoers();
   installUnits(specs);
@@ -250,17 +245,17 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
 
   const specs = installedAddons();
   const upToDate = current === target;
-  const artifactsCurrent = upToDate && currentArtifactsMatch(target, specs);
+  const artifactsCurrent = upToDate && currentArtifactsMatch(target);
   let artifacts: FetchedArtifact[] | undefined;
   if (!artifactsCurrent) {
-    artifacts = await fetchVerified(release, artifactNames(specs));
+    artifacts = await fetchVerified(release, artifactNames());
     await verifyAttestation(release, artifacts, flags["skip-attestation"] === true);
   }
 
   ensureServiceUser();
   removeLegacyInstall();
   ensureDirs(specs);
-  if (artifacts) installArtifacts(artifacts, specs, target);
+  if (artifacts) installArtifacts(artifacts, target);
   for (const spec of specs) writeConfig(spec, true);
   installSudoers();
   removeLegacyUnits(true);
@@ -358,12 +353,12 @@ async function cmdStatus(): Promise<void> {
   log.plain(`   • Anchors     ${anchorStatus()}`);
   log.plain();
   log.plain(" Installed Addons");
-  log.plain("   NAME       ROUTE              WRAPPER       STATE");
+  log.plain("   NAME       ROUTE              ACTION        STATE");
   if (specs.length === 0) log.plain("   (none)");
   for (const spec of specs) {
-    const wrapper = existsSync(spec.wrapperPath) ? "Verified ✓" : "Missing";
-    const state = active && existsSync(spec.wrapperPath) ? "● Ready" : "○ Not ready";
-    log.plain(`   ${spec.name.padEnd(10)} ${mountPath(spec.name).padEnd(18)} ${wrapper.padEnd(13)} ${state}`);
+    const action = secureRegularFile(CLI_BIN, true) ? "Verified ✓" : "Missing";
+    const state = active && action !== "Missing" ? "● Ready" : "○ Not ready";
+    log.plain(`   ${spec.name.padEnd(10)} ${mountPath(spec.name).padEnd(18)} ${action.padEnd(13)} ${state}`);
   }
   log.plain();
   log.plain(` Dashboard URL: ${dashboardUrl()}`);
@@ -393,7 +388,7 @@ export function cmdUninstall(argv: string[]): void {
       : "  - no instances found";
     fatal(
       `uninstall ${spec.name}\n` +
-      `  - ${spec.wrapperPath}\n` +
+      `  - ${CLI_BIN} action ${spec.name}\n` +
       `  - ${spec.configFile}\n` +
       `  - ${purge ? `${spec.stateDir} and its instances` : `${spec.stateDir} (kept)`}\n` +
       `${instanceText}\n` +
@@ -407,11 +402,13 @@ export function cmdUninstall(argv: string[]): void {
   purgeTwigCache();
   if (purge) {
     const failed: string[] = [];
-    for (const domain of instances) {
-      const result = tryRun(spec.wrapperPath, ["delete", "--domain", domain, "--confirm", domain]);
-      if (!result.ok) {
-        failed.push(domain);
-        log.warn(`could not remove ${domain}: ${result.out}`);
+    if (spec.name === "instatic") {
+      for (const domain of instances) {
+        const result = tryRun(CLI_BIN, ["action", "instatic", "delete", "--domain", domain, "--confirm", domain]);
+        if (!result.ok) {
+          failed.push(domain);
+          log.warn(`could not remove ${domain}: ${result.out}`);
+        }
       }
     }
     if (failed.length > 0) {
@@ -420,7 +417,6 @@ export function cmdUninstall(argv: string[]): void {
   }
   removeSudoers();
   if (purge) rmSync(spec.stateDir, { recursive: true, force: true });
-  rmSync(spec.wrapperPath, { force: true });
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
 
@@ -512,6 +508,8 @@ function usage(): void {
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status
   clp-addons uninstall <addon> --yes [--purge]
+  clp-addons action instatic <verb> [options]
+  clp-addons action stager <verb> [options]
   clp-addons serve
   clp-addons --version
 
@@ -519,6 +517,16 @@ Addons: ${ADDON_NAMES.join(", ")}
 
 The manager is served at ${mountPath("instatic").replace("/instatic", "")} through
 the CloudPanel master vhost and authenticates with the CloudPanel PHPSESSID.`);
+}
+
+async function cmdAction(argv: string[]): Promise<number> {
+  const [addon, ...rest] = argv;
+  if (addon === "instatic" || addon === "stager") {
+    if (!installedConfig(ADDONS[addon]!)) fatal(`the ${addon} addon is not installed`);
+    if (addon === "instatic") return runInstaticAction(rest);
+    return runStagerAction(rest);
+  }
+  fatal(`unknown action addon '${addon ?? ""}'`);
 }
 
 async function cmdOverview(): Promise<void> {
@@ -547,6 +555,7 @@ async function main(): Promise<number> {
     case "repair": cmdRepair(rest); return 0;
     case "status": await cmdStatus(); return 0;
     case "uninstall": cmdUninstall(rest); return 0;
+    case "action": return await cmdAction(rest);
     case "serve": return await cmdServe();
     case "help":
     case "--help":

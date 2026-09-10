@@ -1,7 +1,8 @@
 import { readSnapshot, snapshotAgeSeconds, type PanelSnapshot } from "../../../lib/snapshot-reader";
-// Every privileged action goes through the wrapper. The app has no clpctl
-// access, no database access and no write access to any site's files: it can
-// only ask for one of a closed set of verbs, with arguments the wrapper
+import { CLI_BIN } from "../../../cli/paths";
+// Every privileged action goes through the unified action binary. The app has
+// no clpctl access, no database access and no write access to any site's files:
+// it can only ask for one of a closed set of verbs, with arguments the binary
 // re-validates before acting.
 
 interface RunCommandOptions {
@@ -78,7 +79,11 @@ async function runCommand(
   };
 }
 
-const WRAPPER_BIN = process.env.STAGER_WRAPPER || "/usr/local/libexec/clp-addons/clp-action-stager";
+const ACTION_BIN = CLI_BIN;
+// Test-only command injection keeps the subprocess boundary tests hermetic;
+// production provisioning never sets this variable and the deployed path is
+// always the root-owned unified binary above.
+const ACTION_TEST_BIN = process.env.CLP_ADDONS_ACTION_TEST_BIN;
 const SUDO_BIN = "/usr/bin/sudo";
 
 // `clone` only writes a job record and hands the work to systemd, so it
@@ -121,10 +126,11 @@ export async function callWrapper<T = unknown>(
   input?: string,
   options: WrapperCallOptions = {},
 ): Promise<WrapperResult<T>> {
-  const argv = [verb, ...args];
+  const argv = ["action", "stager", verb, ...args];
   const runningAsRoot = process.getuid?.() === 0;
-  const cmd = runningAsRoot ? WRAPPER_BIN : SUDO_BIN;
-  const cmdArgs = runningAsRoot ? argv : ["-n", WRAPPER_BIN, ...argv];
+  const binary = ACTION_TEST_BIN ?? ACTION_BIN;
+  const cmd = runningAsRoot ? binary : SUDO_BIN;
+  const cmdArgs = runningAsRoot ? argv : ["-n", ACTION_BIN, ...argv];
 
   const { error, stdout, stderr } = await runCommand(
     cmd,

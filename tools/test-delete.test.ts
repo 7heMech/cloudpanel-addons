@@ -1,49 +1,92 @@
-// Exercise the production delete function with isolated paths and command doubles.
-// The .test.ts suffix keeps this suite in Bun's default discovery set.
 import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { spawnSync } from "node:child_process";
+import { join } from "node:path";
+import {
+  DEFAULT_INSTATIC_ACTION_PATHS, deleteInstaticInstance, type InstaticActionPaths,
+} from "../addons/instatic/action";
+import { ActionFailure } from "../cli/action-common";
 
-const source = readFileSync("addons/instatic/wrapper/clp-action-instatic", "utf8").split("# --- argument parsing")[0]!;
 const SCENARIOS = ["missing", "present", "archive-fails", "database-fails", "docker-fails", "panel-fails", "changed-site"] as const;
 
-function outputText(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value instanceof Uint8Array) return Buffer.from(value).toString("utf8");
-  return value == null ? "" : String(value);
+function executable(path: string, body: string): void {
+  writeFileSync(path, `#!/bin/sh\nset -eu\n${body}\n`, { mode: 0o755 });
+  chmodSync(path, 0o755);
 }
 
 for (const scenario of SCENARIOS) test.serial(`delete ${scenario}`, () => {
-  const root = mkdtempSync(`${tmpdir()}/delete-test-`);
+  const root = mkdtempSync(join(tmpdir(), "delete-test-"));
   try {
-    const data = `${root}/instances/example.com`;
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const actions = join(root, "actions");
+    const data = join(root, "instances", "example.com");
+    const panelDb = join(root, "panel.db");
+    const panel = join(bin, "clpctl");
+    const docker = join(bin, "docker");
     mkdirSync(data, { recursive: true });
-    writeFileSync(`${data}/meta.json`, "{}");
-    const isolated = source
-      .replace('readonly DATA_BASE_DIR="/var/lib/clp-addons/instatic"', `readonly DATA_BASE_DIR="${root}/instances"`)
-      .replace('readonly BACKUP_DIR="/var/backups/clp-addons/instatic"', `readonly BACKUP_DIR="${root}/backups"`)
-      .replace('readonly CLPCTL="/usr/bin/clpctl"', 'readonly CLPCTL="mock_panel"');
-    const script = isolated + `
-read_meta() { if [[ $1 == siteCreatedByAddon ]]; then echo true; else echo 39000; fi; }
-sqlite3() { [[ $SCENARIO != database-fails ]] || return 1; if [[ $SCENARIO == missing ]]; then echo 0; else echo 1; fi; }
-site_is_our_proxy() { [[ $SCENARIO != changed-site ]]; }
-make_snapshot() { [[ $SCENARIO != archive-fails ]] || return 1; touch "$2"; }
-docker() {
-  [[ $SCENARIO != docker-fails ]] || return 1
-  if [[ $1 == ps ]]; then echo instatic-example.com; else echo docker-removed >> "$TEST_ROOT/actions"; fi
-}
-mock_panel() { echo panel-deleted >> "$TEST_ROOT/actions"; [[ $SCENARIO != panel-fails ]]; }
-cmd_delete example.com example.com
-`;
-    const result = spawnSync("bash", [], { input: script, encoding: "utf8", env: { ...process.env, SCENARIO: scenario, TEST_ROOT: root } });
-    const successful = ["missing", "present"].includes(scenario);
-    expect(result.status === 0, `${scenario}: ${outputText(result.stdout)} ${outputText(result.stderr)}`).toBe(successful);
-    expect(existsSync(data), `${scenario}: data retention`).toBe(!successful);
-    const actions = existsSync(`${root}/actions`) ? outputText(readFileSync(`${root}/actions`, "utf8")) : "";
-    if (["archive-fails", "database-fails", "changed-site"].includes(scenario)) expect(actions).toBe("");
-    if (scenario === "missing") expect(actions).toBe("docker-removed\n");
-    if (scenario === "present") expect(actions).toBe("docker-removed\npanel-deleted\n");
+    writeFileSync(join(data, "meta.json"), JSON.stringify({
+      domain: "example.com", port: 39000, siteCreatedByAddon: true,
+    }));
+
+    if (scenario !== "database-fails") {
+      const db = new Database(panelDb);
+      db.run("CREATE TABLE site (domain_name TEXT, type TEXT, reverse_proxy_url TEXT, user TEXT);");
+      if (scenario !== "missing") {
+        const url = scenario === "changed-site" ? "http://127.0.0.1:39001" : "http://127.0.0.1:39000";
+        db.query("INSERT INTO site (domain_name, type, reverse_proxy_url, user) VALUES (?, 'reverse-proxy', ?, 'addon-user');")
+          .run("example.com", url);
+      }
+      db.close();
+    }
+
+    executable(docker, `
+if [ "$1" = ps ]; then
+  echo instatic-example.com
+  exit 0
+fi
+if [ "${scenario}" = docker-fails ]; then exit 1; fi
+printf 'docker-removed\\n' >> '${actions}'
+`);
+    executable(panel, `
+printf 'panel-deleted\\n' >> '${actions}'
+if [ "${scenario}" = panel-fails ]; then exit 1; fi
+`);
+
+    const backupDir = join(root, "backups");
+    if (scenario === "archive-fails") writeFileSync(backupDir, "not a directory");
+    const paths: InstaticActionPaths = {
+      ...DEFAULT_INSTATIC_ACTION_PATHS,
+      lockDir: join(root, "locks"),
+      dataBaseDir: join(root, "instances"),
+      backupDir,
+      panelDb,
+      clpctl: panel,
+      panelIdentityFile: join(root, "identity"),
+      sqlite3: "sqlite3",
+    };
+
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${bin}:${oldPath ?? ""}`;
+    let successful = false;
+    try {
+      deleteInstaticInstance({ domain: "example.com", confirm: "example.com" }, paths);
+      successful = true;
+    } catch (error) {
+      expect(error instanceof ActionFailure || error instanceof Error).toBe(true);
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+    }
+
+    const expectedSuccess = scenario === "missing" || scenario === "present";
+    expect(successful, scenario).toBe(expectedSuccess);
+    expect(existsSync(data), `${scenario}: data retention`).toBe(!expectedSuccess);
+    const actionLog = existsSync(actions) ? readFileSync(actions, "utf8") : "";
+    if (["archive-fails", "database-fails", "changed-site"].includes(scenario)) expect(actionLog).toBe("");
+    if (scenario === "missing") expect(actionLog).toBe("docker-removed\n");
+    if (scenario === "present") expect(actionLog).toBe("docker-removed\npanel-deleted\n");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
