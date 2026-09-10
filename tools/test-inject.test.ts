@@ -80,20 +80,86 @@ check("removing the last addon restores the original template", body() === ORIGI
 const leftover = existsSync(stateDir) ? readdirSync(stateDir) : [];
 check("no snapshot state is left behind", leftover.length === 0, leftover.join(", "));
 
-// The shipped header targets preserve native order and support either addon alone.
-const navOriginal = `<div class="nav-link-container w-100"><a>Dashboard</a>${headerTarget("Instatic").anchorAfter}</div>`;
+// The single manager header target preserves native order, uses Addons label, and includes update check.
+const navOriginal = `<div class="nav-link-container w-100"><a>Dashboard</a>${headerTarget("0.9.3").anchorAfter}</div>`;
 writeFileSync(file, navOriginal);
-const shipped = ["Instatic", "Stager"].map((name) => ({
-  addon: name.toLowerCase(), target: { ...headerTarget(name), template: TEMPLATE }, url: `https://addons.example.com/${name.toLowerCase()}`,
-}));
-reconcile(shipped, PATHS);
+
+const managerInjection: Injection = {
+  addon: "manager",
+  target: { ...headerTarget("0.9.3"), template: TEMPLATE },
+  url: "/addons/",
+};
+reconcile([managerInjection], PATHS);
 check("native links precede addon navigation", body().indexOf("Dashboard") < body().indexOf("clp_sites") && body().indexOf("clp_sites") < body().indexOf("clp-addon-nav"));
-check("addon navigation is alphabetical", body().indexOf(">Instatic</a>") < body().indexOf(">Stager</a>"));
-check("both shipped links are inline and have no Bootstrap nav-link class", body().includes(">Instatic</a>") && body().includes(">Stager</a>") && !body().includes('class="nav-link"'));
-reconcile([shipped[1]!], PATHS);
-check("Stager navigation remains when Instatic is removed", body().includes(">Stager</a>") && !body().includes(">Instatic</a>"));
-reconcile([], PATHS);
-check("removing shipped navigation restores native header", body() === navOriginal);
+check("manager link has Addons label and no Bootstrap nav-link class", body().includes(">Addons</a>") && !body().includes('class="nav-link"'));
+check("manager header target contains update badge and script", body().includes("clp-addon-update-badge") && body().includes("window.__clpAddonsUpdateInit"));
+
+// Repeated reconciliation does not duplicate the manager entry
+reconcile([managerInjection], PATHS);
+check("manager navigation is not duplicated on repeat reconciliation", (body().match(/class="clp-addon-nav"/g) ?? []).length === 1);
+
+// Manager injection and multi-addon install/uninstall lifecycle (1 addon and 2 addons).
+const instaticTemplate = "instatic.html.twig";
+const instaticFile = `${dir}/${instaticTemplate}`;
+const instaticOriginal = '<div class="site-list"><!-- instatic-anchor --></div>';
+writeFileSync(instaticFile, instaticOriginal);
+
+const stagerTemplate = "stager.html.twig";
+const stagerFile = `${dir}/${stagerTemplate}`;
+const stagerOriginal = '<div class="actions"><!-- stager-anchor --></div>';
+writeFileSync(stagerFile, stagerOriginal);
+
+function simulateInstalledInjections(installed: string[], exclude?: string): Injection[] {
+  const active = installed.filter((n) => n !== exclude);
+  const injs: Injection[] = [];
+  if (active.length > 0) {
+    injs.push({ addon: "manager", target: { ...headerTarget("0.9.3"), template: TEMPLATE }, url: "/addons/" });
+  }
+  for (const name of active) {
+    if (name === "instatic") {
+      injs.push({ addon: "instatic", target: { slug: "new-site", template: instaticTemplate, anchorAfter: "<!-- instatic-anchor -->", required: false, snippet: (url) => `<span>Instatic at ${url}</span>` }, url: "/addons/instatic" });
+    }
+    if (name === "stager") {
+      injs.push({ addon: "stager", target: { slug: "site-action", template: stagerTemplate, anchorAfter: "<!-- stager-anchor -->", required: false, snippet: (url) => `<span>Stager at ${url}</span>` }, url: "/addons/stager" });
+    }
+  }
+  return injs;
+}
+
+const readInstatic = () => readFileSync(instaticFile, "utf-8");
+const readStager = () => readFileSync(stagerFile, "utf-8");
+
+// 1 addon installed (instatic):
+reconcile(simulateInstalledInjections(["instatic"]), PATHS);
+check("1 addon installed: header has manager nav entry", body().includes(">Addons</a>"));
+check("1 addon installed: addon target is injected", readInstatic().includes("Instatic at /addons/instatic"));
+check("1 addon installed: uninstalled addon is untouched", readStager() === stagerOriginal);
+
+// 2 addons installed (instatic + stager):
+reconcile(simulateInstalledInjections(["instatic", "stager"]), PATHS);
+check("2 addons installed: header still has exactly 1 manager nav entry", (body().match(/class="clp-addon-nav"/g) ?? []).length === 1);
+check("2 addons installed: first addon target is present", readInstatic().includes("Instatic at /addons/instatic"));
+check("2 addons installed: second addon target is present", readStager().includes("Stager at /addons/stager"));
+
+// Uninstall 1 of 2 addons (instatic uninstalled with exclude="instatic"):
+reconcile(simulateInstalledInjections(["instatic", "stager"], "instatic"), PATHS);
+check("uninstall 1 of 2: manager nav entry is retained in header", body().includes(">Addons</a>"));
+check("uninstall 1 of 2: manager nav entry is not duplicated", (body().match(/class="clp-addon-nav"/g) ?? []).length === 1);
+check("uninstall 1 of 2: uninstalled addon target is removed and template restored", readInstatic() === instaticOriginal);
+check("uninstall 1 of 2: remaining addon target is preserved", readStager().includes("Stager at /addons/stager"));
+
+// Uninstall the remaining addon (stager uninstalled with exclude="stager"):
+reconcile(simulateInstalledInjections(["stager"], "stager"), PATHS);
+check("uninstall last addon: manager nav entry is removed and header restored", body() === navOriginal);
+check("uninstall last addon: remaining addon target is removed and restored", readStager() === stagerOriginal);
+
+// 1 addon alone installed and uninstalled:
+reconcile(simulateInstalledInjections(["stager"]), PATHS);
+check("single addon install: manager nav injected", body().includes(">Addons</a>"));
+check("single addon install: addon target injected", readStager().includes("Stager at /addons/stager"));
+reconcile(simulateInstalledInjections(["stager"], "stager"), PATHS);
+check("single addon uninstall: manager nav removed and header restored", body() === navOriginal);
+check("single addon uninstall: addon target removed and restored", readStager() === stagerOriginal);
 
 const nginxDir = mkdtempSync(`${tmpdir()}/nginx-test-`);
 const nginxSource = `${nginxDir}/cloudpanel.conf`;

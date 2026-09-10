@@ -1696,8 +1696,23 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   check("layout with updateNotice names current and latest versions", htmlWith.includes("v0.9.4") && htmlWith.includes("v0.9.3"));
   check("layout with updateNotice contains clp-addons update shortcut", htmlWith.includes("clp-addons update"));
 
-  const snip = headerTarget("Instatic", "0.9.3").snippet("https://addons.example.com/instatic");
+  const snip = headerTarget("0.9.3").snippet("https://addons.example.com/addons/");
   check("headerTarget includes update badge style", snip.includes("clp-addon-update-badge"));
   check("headerTarget includes update check script", snip.includes("window.__clpAddonsUpdateInit"));
   check("headerTarget embeds the configured version", snip.includes("\"0.9.3\""));
+  check("headerTarget uses Addons label", snip.includes(">Addons</a>"));
+  check("headerTarget points to manager URL", snip.includes('href="https://addons.example.com/addons/"'));
+
+  const { indexPage } = await import("../cli/index");
+  const pageRes = indexPage(["instatic"]);
+  const pageHtml = await pageRes.text();
+  check("indexPage renders addon card", pageHtml.includes("addon-card"));
+  check("indexPage includes addon title", pageHtml.includes("Instatic"));
+  check("indexPage includes mount path", pageHtml.includes("/addons/instatic"));
+  check("indexPage includes open button", pageHtml.includes("Open Instatic"));
+  check("indexPage does not hardcode false Live badge", !pageHtml.includes("badge state-running") && !pageHtml.includes("Live"));
+
+  const emptyRes = indexPage([]);
+  const emptyHtml = await emptyRes.text();
+  check("empty indexPage shows no addons notice", emptyHtml.includes("No addons are currently available."));
 }

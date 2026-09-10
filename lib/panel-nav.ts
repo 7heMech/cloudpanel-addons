@@ -1,12 +1,11 @@
 import type { AddonTarget } from "../cli/paths";
-import * as appHttp from "./app-http";
-const { esc } = appHttp;
+import { esc, escJs } from "./app-http";
 
 export function headerUpdateScript(version: string): string {
   return `(function() {
   if (window.__clpAddonsUpdateInit) return;
   window.__clpAddonsUpdateInit = true;
-  var currentVer = "${appHttp.escJs(version)}";
+  var currentVer = "${escJs(version)}";
   if (!currentVer || currentVer === "0.0.0-dev") return;
 
   function render(ver) {
@@ -28,7 +27,7 @@ export function headerUpdateScript(version: string): string {
         e.stopPropagation();
         try {
           localStorage.setItem("clp_addons_update_check", JSON.stringify({ time: Date.now() + 86400000, hasUpdate: false }));
-        } catch(err) {}
+        } catch(err) {}\
         el.remove();
       };
     }
@@ -64,20 +63,18 @@ export function headerUpdateScript(version: string): string {
       if (hasUpdate) render(latest);
     })
     .catch(function() {});
-  } catch(e) {}
+  } catch(e) {}\
 })();`;
 }
 
 /** Keep the single manager navigation entry after CloudPanel's native links. */
-export function headerTarget(versionOrLegacyLabel?: string, legacyVersion?: string): AddonTarget {
+export function headerTarget(version: string): AddonTarget {
   return {
     slug: "header-nav",
     template: "Frontend/Partial/header.html.twig",
     anchorAfter: `<a href="{{ path('clp_sites') }}" title="{% trans %}Sites{% endtrans %}">{% trans %}Sites{% endtrans %}</a>`,
     required: true,
-    snippet: (url) => {
-      const label = versionOrLegacyLabel === "Instatic" ? "Instatic" : versionOrLegacyLabel === "Stager" ? "Stager" : "Addons";
-      return `
+    snippet: (url) => `
       <style>
         .header .nav-link-container .clp-addon-nav { display:inline-block; border-left:1px solid var(--clp-border-color, #eaeaea); padding-left:45px; margin-left:20px; }
         .clp-addon-update-badge { display:inline-flex; align-items:center; gap:5px; margin-left:15px; padding:2px 10px; font-size:12px; font-weight:600; color:#10b981; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.35); border-radius:12px; text-decoration:none; vertical-align:middle; transition:all 0.15s ease; }
@@ -86,8 +83,7 @@ export function headerTarget(versionOrLegacyLabel?: string, legacyVersion?: stri
         .clp-addon-update-badge .close-btn { margin-left:4px; opacity:0.6; cursor:pointer; padding:0 2px; }
         .clp-addon-update-badge .close-btn:hover { opacity:1; }
       </style>
-      <a href="${label === "Addons" ? "/addons/" : esc(url)}" class="clp-addon-nav" title="${esc(label)}">${esc(label)}</a>
-      <script>${headerUpdateScript(legacyVersion || (label === "Addons" ? versionOrLegacyLabel : "") || process.env.CLP_ADDONS_VERSION || "")}</script>`;
-    },
+      <a href="${esc(url)}" class="clp-addon-nav" title="Addons">Addons</a>
+      <script>${headerUpdateScript(version || process.env.CLP_ADDONS_VERSION || "")}</script>`,
   };
 }

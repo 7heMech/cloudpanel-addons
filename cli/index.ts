@@ -123,7 +123,7 @@ function installArtifacts(artifacts: FetchedArtifact[], specs: AddonSpec[], tag:
   writeArtifactManifest(tag, artifacts, specs);
 }
 
-function installedInjections(exclude?: string): Injection[] {
+export function installedInjections(exclude?: string): Injection[] {
   const injections: Injection[] = [];
   const installed = ADDON_NAMES.filter((name) => name !== exclude && existsSync(ADDONS[name]!.configFile));
 
@@ -131,7 +131,7 @@ function installedInjections(exclude?: string): Injection[] {
   // outside the addon target lists so installing a second addon cannot emit a
   // second style/script block or replace the first one's marker.
   if (installed.length > 0) {
-    injections.push({ addon: "manager", target: headerTarget(CLI_VERSION), url: "/addons" });
+    injections.push({ addon: "manager", target: headerTarget(CLI_VERSION), url: "/addons/" });
   }
 
   for (const name of installed) {
@@ -330,7 +330,7 @@ function nginxStatus(status: NginxProxyStatus): string {
   return statusValue(status.detail ?? "Needs repair", false);
 }
 
-function anchorStatus(): string {
+export function anchorStatus(): string {
   const statuses = installedInjections().map((injection) => inspect(injection));
   if (statuses.length === 0) return "Not configured";
   const required = statuses.filter((status) => {
@@ -517,7 +517,7 @@ async function cmdServe(): Promise<never> {
   return new Promise<never>(() => {});
 }
 
-function indexPage(addons: string[], update?: { current: string; latest: string } | null): Response {
+export function indexPage(addons: string[], update?: { current: string; latest: string } | null): Response {
   const cards = addons.map((name) => {
     const spec = ADDONS[name];
     if (!spec) return "";
@@ -528,7 +528,6 @@ function indexPage(addons: string[], update?: { current: string; latest: string 
     return `<article class="card addon-card">
   <div class="page-heading">
     <div><h2>${esc(title)}</h2>${description}</div>
-    <span class="badge state-running">${esc("Live")}</span>
   </div>
   <p class="mono">Mount path: ${esc(route)}</p>
   <a class="btn btn-primary" href="${esc(`${route}/`)}">Open ${esc(title)}</a>
