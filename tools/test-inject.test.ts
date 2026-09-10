@@ -378,4 +378,61 @@ check("refusing a commented-out 8443 match makes no vhost changes",
 check("refusing a commented-out 8443 match creates no rollback state", !existsSync(commentedListenState));
 rmSync(commentedListenDir, { recursive: true, force: true });
 
+// A quoted string ending in an escaped backslash must still close at its own
+// closing quote. Getting this wrong is not a cosmetic parsing detail: if the
+// string is treated as still open, the next quote on the line looks like an
+// opener, and characters after it -- including a `}` -- leak out as if they
+// were real config. That truncates the server block mid-directive, so
+// `server_name` falls outside it and the proxy block gets spliced into the
+// middle of an `add_header` line.
+const escapedQuoteDir = mkdtempSync(`${tmpdir()}/nginx-escaped-quote-test-`);
+const escapedQuoteState = `${escapedQuoteDir}/state`;
+const escapedQuoteVhost = `${escapedQuoteDir}/cloudpanel.conf`;
+const escapedQuoteContent =
+  "server {\n    listen 8443 ssl;\n" +
+  '    add_header X-Note "C:\\\\" "}";\n' +
+  "    server_name panel.example.test;\n}\n";
+writeFileSync(escapedQuoteVhost, escapedQuoteContent);
+check("an escaped backslash before a closing quote does not leak a brace out of the string",
+  masterVhostHost({ vhostPath: escapedQuoteVhost }) === "panel.example.test");
+const escapedQuoteResult = reconcileNginxProxy({ vhostPath: escapedQuoteVhost, stateDir: escapedQuoteState, reload: false });
+check("an escaped backslash in a string still lets reconciliation inject at the real end of the block",
+  escapedQuoteResult.state === "ok" &&
+  readFileSync(escapedQuoteVhost, "utf-8") ===
+    `${escapedQuoteContent.slice(0, -2)}\n${NGINX_PROXY_BLOCK}\n}\n`);
+rmSync(escapedQuoteDir, { recursive: true, force: true });
+
+// An unterminated quote ending in a dangling backslash must not swallow the
+// rest of the file: the string ends at the newline, as Nginx treats it.
+const danglingEscapeDir = mkdtempSync(`${tmpdir()}/nginx-dangling-escape-test-`);
+const danglingEscapeVhost = `${danglingEscapeDir}/cloudpanel.conf`;
+writeFileSync(danglingEscapeVhost,
+  "server {\n    listen 8443 ssl;\n" +
+  '    add_header X-Broken "unterminated \\\\\n' +
+  "    server_name panel.example.test;\n}\n");
+check("an unterminated string ending in a backslash ends at the newline, not at the next quote",
+  masterVhostHost({ vhostPath: danglingEscapeVhost }) === "panel.example.test");
+rmSync(danglingEscapeDir, { recursive: true, force: true });
+
+// The masker also hides directive *text*, not just braces: a `listen 8443`
+// that only appears inside a quoted string is not a real listener, so the
+// vhost has zero real 8443 blocks and must fail closed.
+const quotedListenDir = mkdtempSync(`${tmpdir()}/nginx-quoted-listen-test-`);
+const quotedListenState = `${quotedListenDir}/state`;
+const quotedListenVhost = `${quotedListenDir}/cloudpanel.conf`;
+const quotedListenContent =
+  "server {\n    listen 80;\n" +
+  '    add_header X-Note "listen 8443 ssl";\n' +
+  "    server_name real.example.test;\n}\n";
+writeFileSync(quotedListenVhost, quotedListenContent);
+check("a listen 8443 that only exists inside a quoted string is not a match",
+  masterVhostHost({ vhostPath: quotedListenVhost }) === null);
+const quotedListenResult = reconcileNginxProxy({ vhostPath: quotedListenVhost, stateDir: quotedListenState, reload: false });
+check("a quoted listen 8443 leaves the vhost ambiguous and unchanged",
+  quotedListenResult.state === "ambiguous" &&
+  !quotedListenResult.changed &&
+  readFileSync(quotedListenVhost, "utf-8") === quotedListenContent &&
+  !existsSync(quotedListenState));
+rmSync(quotedListenDir, { recursive: true, force: true });
+
 rmSync(dir, { recursive: true, force: true });
