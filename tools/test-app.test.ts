@@ -912,8 +912,8 @@ console.log("\n== one request may not kill the manager ==");
   check("a megabyte on a pipe nothing reads does not kill the process", survived, out.slice(-400));
 
   const service = readFileSync("addons/stager/app/service.ts", "utf-8");
-  check("the write has an error listener rather than Node's default throw",
-    /child\.stdin\?\.on\("error"/.test(service));
+  check("the payload is handed to Bun.spawn's stdin option, so Bun owns the write and absorbs EPIPE",
+    /Bun\.spawn\(\{\s*cmd:\s*\[cmd,\s*\.\.\.args\],[\s\S]*?^\s*stdin,\s*$[\s\S]*?stdout:\s*"pipe",/m.test(service));
 
   const index = readFileSync("addons/stager/app/index.ts", "utf-8");
   check("and the field is bounded before the write is even attempted",
