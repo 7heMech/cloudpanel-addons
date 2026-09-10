@@ -40,6 +40,9 @@ check(
     implementation.includes("{ readonly: true }"),
 );
 check("the snapshot reader no longer invokes the sqlite3 CLI", !implementation.includes('"sqlite3"'));
+check("the snapshot reader creates a SQLite-consistent snapshot", implementation.includes('"VACUUM INTO ?"'));
+check("the snapshot reader validates snapshot integrity", implementation.includes('"PRAGMA integrity_check;"'));
+check("the snapshot reader does not copy live database sidecars", !implementation.includes("copyFileSync"));
 check("the snapshot reader closes its database connection", implementation.includes("db.close()"));
 check("the root-only snapshot guard remains", implementation.includes("process.getuid") && implementation.includes("must run as root"));
 
@@ -90,8 +93,17 @@ try {
 
   const malformedPath = join(fixtureDir, "malformed.sqlite");
   writeFileSync(malformedPath, "this is not a SQLite database\n");
-  const malformed = readPanelDatabase(malformedPath);
-  check("a malformed database is treated as empty", malformed.sites.length === 0 && malformed.allocatedPorts.length === 0);
+  let malformedError = "";
+  try {
+    readPanelDatabase(malformedPath);
+  } catch (error) {
+    malformedError = error instanceof Error ? error.message : String(error);
+  }
+  check(
+    "a malformed database fails loudly instead of becoming an empty snapshot",
+    malformedError.includes("unable to create panel database snapshot") && malformedError.includes("not a database"),
+    malformedError,
+  );
   check("a malformed database produces no WAL sidecars", sidecars(malformedPath).length === 0);
 
   const walPath = join(fixtureDir, "wal.sqlite");
@@ -122,19 +134,86 @@ try {
       mtimeMs: statSync(file).mtimeMs,
     }));
     check(
-      "a WAL database remains readable from the isolated copy",
+      "a WAL database remains readable from the consistent snapshot",
       wal.sites[0]?.domain === "wal.example" && wal.allocatedPorts.join(",") === "39003,39124",
       JSON.stringify(wal),
     );
     check(
-      "a WAL scan leaves the original database and sidecars byte-for-byte unchanged",
+      "a WAL scan leaves the original database and WAL bytes unchanged",
+      beforeWal[0] !== undefined && afterWal[0] !== undefined &&
+        beforeWal[1] !== undefined && afterWal[1] !== undefined &&
+        beforeWal[0].bytes.equals(afterWal[0].bytes) &&
+        beforeWal[0].mtimeMs === afterWal[0].mtimeMs &&
+        beforeWal[1].bytes.equals(afterWal[1].bytes) &&
+        beforeWal[1].mtimeMs === afterWal[1].mtimeMs,
+    );
+    check(
+      "a WAL scan does not create, remove, or resize SQLite sidecars",
       beforeWal.length === afterWal.length && beforeWal.every((before, index) => {
         const after = afterWal[index];
-        return after?.file === before.file && after.mtimeMs === before.mtimeMs && after.bytes.equals(before.bytes);
+        return after?.file === before.file && after.mtimeMs === before.mtimeMs && after.bytes.length === before.bytes.length;
       }),
     );
   } finally {
     walDb.close(true);
+  }
+
+  const concurrentPath = join(fixtureDir, "concurrent.sqlite");
+  const concurrentDb = new Database(concurrentPath);
+  concurrentDb.run("PRAGMA journal_mode=WAL");
+  concurrentDb.run("PRAGMA wal_autocheckpoint=0");
+  concurrentDb.run("CREATE TABLE site (domain_name TEXT, user TEXT, type TEXT, reverse_proxy_url TEXT)");
+  concurrentDb.query("INSERT INTO site VALUES (?, ?, ?, NULL)").run("v0.example", "writer", "php");
+  concurrentDb.run("CREATE TABLE php_settings (pool_port INTEGER)");
+  concurrentDb.query("INSERT INTO php_settings VALUES (?)").run(39000);
+  concurrentDb.close(false);
+
+  const writerScript = `
+    import { Database } from "bun:sqlite";
+    const db = new Database(process.argv[2]);
+    let version = 0;
+    try {
+      while (version < 1000) {
+        db.run("BEGIN IMMEDIATE");
+        try {
+          db.query("UPDATE site SET domain_name = ?, user = ?, type = ?").run(
+            "v" + version + ".example",
+            "writer",
+            "php",
+          );
+          db.query("UPDATE php_settings SET pool_port = ?").run(39000 + version);
+          db.run("COMMIT");
+          version++;
+        } catch (error) {
+          db.run("ROLLBACK");
+          throw error;
+        }
+      }
+    } finally {
+      db.close();
+    }
+  `;
+  const writer = Bun.spawn([process.execPath, "-e", writerScript, concurrentPath], {
+    stdout: "ignore",
+    stderr: "pipe",
+  });
+  try {
+    const consistentSnapshots: boolean[] = [];
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const snapshot = readPanelDatabase(concurrentPath);
+      const domain = snapshot.sites[0]?.domain;
+      const version = domain?.match(/^v(\d+)\.example$/)?.[1];
+      const port = snapshot.allocatedPorts.find((value) => value >= 39000 && value < 40000);
+      consistentSnapshots.push(version !== undefined && port !== undefined && Number(version) === port - 39000);
+    }
+    check(
+      "concurrent WAL writes produce internally consistent snapshots",
+      consistentSnapshots.length === 12 && consistentSnapshots.every(Boolean),
+      JSON.stringify(consistentSnapshots),
+    );
+  } finally {
+    writer.kill();
+    await writer.exited;
   }
 } finally {
   rmSync(fixtureDir, { recursive: true, force: true });

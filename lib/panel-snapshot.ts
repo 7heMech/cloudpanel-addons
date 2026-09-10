@@ -8,12 +8,14 @@
 
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ADDONS, PANEL_DB } from "../cli/paths";
 import { writeAtomic } from "../cli/util";
 import { PORT_RANGE, SNAPSHOT_FILE, type PanelSnapshot, type SanitizedSite } from "./snapshot-reader";
+
+const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 
 type SiteRow = {
   domain_name: string | number | null;
@@ -32,12 +34,36 @@ function emptyPanelDatabaseSnapshot(): PanelDatabaseSnapshot {
   return { allocatedPorts: [], sites: [] };
 }
 
-function queryRows<ReturnType>(db: Database, sql: string): ReturnType[] {
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  const code = error.code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function databaseExists(databasePath: string): boolean {
+  try {
+    statSync(databasePath);
+    return true;
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return false;
+    throw new Error(`cannot inspect panel database ${databasePath}: ${errorMessage(error)}`, { cause: error });
+  }
+}
+
+function queryRows<ReturnType>(db: Database, sql: string, optionalTable: string): ReturnType[] {
   try {
     return db.query<ReturnType, []>(sql).all();
-  } catch {
-    // A table that does not exist on this CloudPanel version contributes no data.
-    return [];
+  } catch (error) {
+    const message = errorMessage(error);
+    if (message === `no such table: ${optionalTable}` || message === `no such table: main.${optionalTable}`) {
+      // These tables vary between CloudPanel versions; an absent optional table contributes no data.
+      return [];
+    }
+    throw new Error(`querying panel table ${optionalTable} failed: ${message}`, { cause: error });
   }
 }
 
@@ -55,37 +81,64 @@ interface IsolatedDatabase {
   directory: string;
 }
 
-function openIsolatedDatabase(databasePath: string): IsolatedDatabase | null {
+function removeTemporaryDirectory(directory: string | undefined): void {
+  if (directory) rmSync(directory, { recursive: true, force: true });
+}
+
+function closeDatabase(db: Database | undefined): void {
+  if (!db) return;
+  try {
+    db.close();
+  } catch {
+    // The useful failure is the snapshot/open error; cleanup remains best effort.
+  }
+}
+
+function openConsistentSnapshot(databasePath: string): IsolatedDatabase {
   let directory: string | undefined;
+  let source: Database | undefined;
+  let snapshot: Database | undefined;
   try {
     directory = mkdtempSync(join(tmpdir(), "clp-panel-db-"));
-    const isolatedPath = join(directory, "panel.sqlite");
-    copyFileSync(databasePath, isolatedPath);
+    const snapshotPath = join(directory, "panel.sqlite");
 
-    // A WAL database's committed state can be split across all three files.
-    // Open only the copy so Bun cannot create sidecars beside the panel DB.
-    for (const suffix of ["-wal", "-shm"] as const) {
-      const sidecar = `${databasePath}${suffix}`;
-      if (existsSync(sidecar)) copyFileSync(sidecar, `${isolatedPath}${suffix}`);
+    // VACUUM INTO asks SQLite for one consistent view of the live database and
+    // folds any committed WAL pages into the new file. The source connection is
+    // read-only, so this cannot create or modify the panel database's sidecars.
+    source = new Database(databasePath, { readonly: true });
+    source.query(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`).run();
+    source.query("VACUUM INTO ?").run(snapshotPath);
+    source.close();
+    source = undefined;
+
+    snapshot = new Database(snapshotPath, { readonly: true });
+    const integrity = snapshot.query<{ integrity_check: string }, []>("PRAGMA integrity_check;").get();
+    if (integrity?.integrity_check !== "ok") {
+      throw new Error(`SQLite integrity check failed: ${integrity?.integrity_check ?? "no result"}`);
     }
 
-    return { db: new Database(isolatedPath, { readonly: true }), directory };
-  } catch {
-    if (directory) rmSync(directory, { recursive: true, force: true });
-    return null;
+    const result = snapshot;
+    snapshot = undefined;
+    return { db: result, directory };
+  } catch (error) {
+    closeDatabase(snapshot);
+    closeDatabase(source);
+    removeTemporaryDirectory(directory);
+    throw new Error(`unable to create panel database snapshot ${databasePath}: ${errorMessage(error)}`, {
+      cause: error,
+    });
   }
 }
 
 export function readPanelDatabase(databasePath = PANEL_DB): PanelDatabaseSnapshot {
-  if (!existsSync(databasePath)) return emptyPanelDatabaseSnapshot();
+  if (!databaseExists(databasePath)) return emptyPanelDatabaseSnapshot();
 
-  const isolated = openIsolatedDatabase(databasePath);
-  if (!isolated) return emptyPanelDatabaseSnapshot();
+  const isolated = openConsistentSnapshot(databasePath);
 
   const ports = new Set<number>();
   const sites: SanitizedSite[] = [];
   try {
-    for (const row of queryRows<SiteRow>(isolated.db, "SELECT domain_name, user, type FROM site;")) {
+    for (const row of queryRows<SiteRow>(isolated.db, "SELECT domain_name, user, type FROM site;", "site")) {
       const domain = asText(row.domain_name);
       if (domain) sites.push({ domain, user: asText(row.user), type: asText(row.type) });
     }
@@ -93,26 +146,30 @@ export function readPanelDatabase(databasePath = PANEL_DB): PanelDatabaseSnapsho
     for (const row of queryRows<ValueRow>(
       isolated.db,
       "SELECT pool_port AS value FROM php_settings WHERE pool_port IS NOT NULL;",
+      "php_settings",
     )) addPort(ports, row.value);
     for (const row of queryRows<ValueRow>(
       isolated.db,
       "SELECT port AS value FROM nodejs_settings WHERE port IS NOT NULL;",
+      "nodejs_settings",
     )) addPort(ports, row.value);
     for (const row of queryRows<ValueRow>(
       isolated.db,
       "SELECT port AS value FROM python_settings WHERE port IS NOT NULL;",
+      "python_settings",
     )) addPort(ports, row.value);
 
     for (const row of queryRows<ValueRow>(
       isolated.db,
       "SELECT reverse_proxy_url AS value FROM site WHERE reverse_proxy_url IS NOT NULL AND reverse_proxy_url != '';",
+      "site",
     )) {
       const m = asText(row.value).match(/:(\d{2,5})(?:\/|$)/);
       if (m) addPort(ports, m[1] ?? null);
     }
   } finally {
-    isolated.db.close();
-    rmSync(isolated.directory, { recursive: true, force: true });
+    closeDatabase(isolated.db);
+    removeTemporaryDirectory(isolated.directory);
   }
 
   return { allocatedPorts: [...ports].sort((a, b) => a - b), sites };
