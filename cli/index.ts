@@ -1,4 +1,4 @@
-import { chmodSync, chownSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
   ADDON_NAMES, ADDONS, ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, MANAGER_UNIT, PANEL_GROUP,
@@ -23,6 +23,7 @@ import { handle as handleStager } from "../addons/stager/app/index";
 import { splitMount } from "../lib/mount";
 import { SECURITY_HEADERS, esc } from "../lib/app-http";
 import { renderLayout } from "../lib/app-ui";
+import { headerTarget } from "../lib/panel-nav";
 import { checkCliUpdate } from "../lib/update-check";
 
 type AddonHandler = (
@@ -124,10 +125,17 @@ function installArtifacts(artifacts: FetchedArtifact[], specs: AddonSpec[], tag:
 
 function installedInjections(exclude?: string): Injection[] {
   const injections: Injection[] = [];
-  for (const name of ADDON_NAMES) {
-    if (name === exclude) continue;
+  const installed = ADDON_NAMES.filter((name) => name !== exclude && existsSync(ADDONS[name]!.configFile));
+
+  // The manager owns one navigation entry for the whole installation. Keep it
+  // outside the addon target lists so installing a second addon cannot emit a
+  // second style/script block or replace the first one's marker.
+  if (installed.length > 0) {
+    injections.push({ addon: "manager", target: headerTarget(CLI_VERSION), url: "/addons" });
+  }
+
+  for (const name of installed) {
     const spec = ADDONS[name]!;
-    if (!existsSync(spec.configFile)) continue;
     for (const target of spec.targets) injections.push({
       addon: name,
       target,
@@ -326,6 +334,7 @@ function anchorStatus(): string {
   const statuses = installedInjections().map((injection) => inspect(injection));
   if (statuses.length === 0) return "Not configured";
   const required = statuses.filter((status) => {
+    if (status.addon === "manager") return true;
     const spec = ADDONS[status.addon];
     return spec?.targets.find((target) => target.slug === status.slug)?.required;
   });
@@ -335,35 +344,50 @@ function anchorStatus(): string {
 }
 
 function socketStatus(): string {
-  if (!existsSync(SOCKET_PATH)) return statusValue(`UNIX Socket (${SOCKET_PATH}) — missing`, false);
-  const mode = statSync(SOCKET_PATH).mode & 0o777;
+  let socket: ReturnType<typeof lstatSync>;
+  try {
+    socket = lstatSync(SOCKET_PATH);
+  } catch {
+    return statusValue(`UNIX Socket (${SOCKET_PATH}) — missing`, false);
+  }
+
+  const mode = socket.mode & 0o777;
+  const modeText = mode.toString(8).padStart(4, "0");
+  const owner = `${socket.uid}:${socket.gid}`;
+  const details = `mode ${modeText}, owner ${owner}`;
+  if (!socket.isSocket()) {
+    return statusValue(`UNIX Socket (${SOCKET_PATH}) — not a socket (${details})`, false);
+  }
   return mode === 0o660
-    ? statusValue(`UNIX Socket (${SOCKET_PATH})`, true)
-    : statusValue(`UNIX Socket (${SOCKET_PATH}) — mode ${mode.toString(8)}`, false);
+    ? statusValue(`UNIX Socket (${SOCKET_PATH}) — ready (${details})`, true)
+    : statusValue(`UNIX Socket (${SOCKET_PATH}) — not ready (${details}; expected mode 0660)`, false);
 }
 
 async function cmdStatus(): Promise<void> {
   const specs = installedAddons();
-  const active = unitActive(MANAGER_UNIT) === "active";
+  const managerState = unitActive(MANAGER_UNIT);
+  const active = managerState === "active";
   const pid = unitPid(MANAGER_UNIT);
-  const daemon = active ? `● Active${pid ? ` (PID ${pid})` : ""}` : `○ ${unitActive(MANAGER_UNIT)}`;
   const line = "─".repeat(64);
 
   log.plain(` CloudPanel Addons  v${CLI_VERSION.replace(/^v/, "")}`);
   log.plain(line);
   log.plain(" Status");
-  log.plain(`   • Daemon      ${statusValue(daemon, active)}`);
-  log.plain(`   • Transport   ${socketStatus()}`);
+  log.plain(`   • Manager unit ${statusValue(managerState, active)}`);
+  log.plain(`   • Manager PID  ${statusValue(pid ?? "not available", active && pid !== null)}`);
+  log.plain(`   • Socket       ${socketStatus()}`);
   log.plain(`   • Nginx       ${nginxStatus(inspectNginxProxy())}`);
   log.plain(`   • Anchors     ${anchorStatus()}`);
   log.plain();
   log.plain(" Installed Addons");
-  log.plain("   NAME       ROUTE              WRAPPER       STATE");
+  log.plain("   NAME       MOUNT PATH              STATE");
   if (specs.length === 0) log.plain("   (none)");
   for (const spec of specs) {
-    const wrapper = existsSync(spec.wrapperPath) ? "Verified ✓" : "Missing";
-    const state = active && existsSync(spec.wrapperPath) ? "● Ready" : "○ Not ready";
-    log.plain(`   ${spec.name.padEnd(10)} ${mountPath(spec.name).padEnd(18)} ${wrapper.padEnd(13)} ${state}`);
+    const mounted = MANAGERS[spec.name] !== undefined;
+    const wrapper = existsSync(spec.wrapperPath);
+    const ready = active && mounted && wrapper;
+    const state = !mounted ? "not mounted" : !wrapper ? "wrapper missing" : ready ? "ready" : "manager inactive";
+    log.plain(`   ${spec.name.padEnd(10)} ${mountPath(spec.name).padEnd(22)} ${statusValue(state, ready)}`);
   }
   log.plain();
   log.plain(` Dashboard URL: ${dashboardUrl()}`);
@@ -494,8 +518,24 @@ async function cmdServe(): Promise<never> {
 }
 
 function indexPage(addons: string[], update?: { current: string; latest: string } | null): Response {
-  const links = addons.map((name) => `<li><a href="${esc(mountPath(name))}/">${esc(name)}</a></li>`).join("");
-  return new Response(renderLayout("CloudPanel Addons", `<div class="card"><ul>${links}</ul></div>`, {
+  const cards = addons.map((name) => {
+    const spec = ADDONS[name];
+    if (!spec) return "";
+
+    const title = spec.title ?? spec.name;
+    const route = mountPath(spec.name);
+    const description = spec.description ? `<p>${esc(spec.description)}</p>` : "";
+    return `<article class="card addon-card">
+  <div class="page-heading">
+    <div><h2>${esc(title)}</h2>${description}</div>
+    <span class="badge state-running">${esc("Live")}</span>
+  </div>
+  <p class="mono">Mount path: ${esc(route)}</p>
+  <a class="btn btn-primary" href="${esc(`${route}/`)}">Open ${esc(title)}</a>
+</article>`;
+  }).join("");
+  const content = cards || `<div class="card empty">${esc("No addons are currently available.")}</div>`;
+  return new Response(renderLayout("CloudPanel Addons", content, {
     brand: "CloudPanel Addons",
     base: "/addons",
     nav: [],
