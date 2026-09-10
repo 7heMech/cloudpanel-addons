@@ -182,7 +182,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
   log.plain(`  Dashboard URL: ${dashboardUrl()}`);
 }
 
-async function cmdUpdate(argv: string[]): Promise<void> {
+export async function cmdUpdate(argv: string[]): Promise<void> {
   requireRoot("update");
   const { flags } = parseFlags(argv);
   const release = await resolveRelease(
@@ -191,23 +191,28 @@ async function cmdUpdate(argv: string[]): Promise<void> {
   );
   const current = CLI_VERSION.replace(/^v/, "");
   const target = release.tag.replace(/^v/, "");
-  if (current === target) {
-    log.ok(`clp-addons ${current} is up to date`);
-    return;
-  }
 
   const specs = installedAddons();
-  const artifacts = await fetchVerified(release, artifactNames(specs));
-  await verifyAttestation(release, artifacts, flags["skip-attestation"] === true);
+  const upToDate = current === target;
+  let artifacts: FetchedArtifact[] | undefined;
+  if (!upToDate) {
+    artifacts = await fetchVerified(release, artifactNames(specs));
+    await verifyAttestation(release, artifacts, flags["skip-attestation"] === true);
+  }
+
   ensureServiceUser();
   removeLegacyInstall();
   ensureDirs(specs);
   ensureHmacKey();
-  installArtifacts(artifacts, specs);
+  if (artifacts) installArtifacts(artifacts, specs);
   for (const spec of specs) writeConfig(spec, true);
   installSudoers();
+  removeLegacyUnits(true);
+  removeLegacyUsers(true);
   if (specs.length === 0) {
-    log.ok(`clp-addons updated to ${target}; no addon service is configured`);
+    log.ok(upToDate
+      ? `clp-addons ${current} is up to date`
+      : `clp-addons updated to ${target}; no addon service is configured`);
     return;
   }
   installUnits(specs);
@@ -216,7 +221,7 @@ async function cmdUpdate(argv: string[]): Promise<void> {
   startUnits();
   reconcileAnchors(false);
   if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
-  log.ok(`clp-addons updated to ${target}`);
+  log.ok(upToDate ? `clp-addons ${current} is up to date; provisioning reconciled` : `clp-addons updated to ${target}`);
 }
 
 function cmdRepair(argv: string[]): void {
@@ -497,12 +502,14 @@ async function main(): Promise<number> {
   }
 }
 
-try {
-  process.exit(await main());
-} catch (error) {
-  if (error instanceof Fatal) {
-    log.err(error.message);
-    process.exit(1);
+if (import.meta.main) {
+  try {
+    process.exit(await main());
+  } catch (error) {
+    if (error instanceof Fatal) {
+      log.err(error.message);
+      process.exit(1);
+    }
+    throw error;
   }
-  throw error;
 }
