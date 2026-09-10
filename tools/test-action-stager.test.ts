@@ -6,8 +6,8 @@ import { tmpdir } from "node:os";
 
 const repo = join(import.meta.dir, "..");
 
-function runAction(paths: Record<string, string>, argv: string[]): string {
-  const script = `
+function runAction(paths: Record<string, string>, argv: string[], prelude = ""): string {
+  const script = `${prelude}
     Object.defineProperty(process, "getuid", { value: () => 0, configurable: true });
     const { runStagerAction } = await import("./addons/stager/action.ts");
     const code = await runStagerAction(${JSON.stringify(argv)}, { paths: ${JSON.stringify(paths)} });
@@ -81,6 +81,33 @@ test("Stager jobs are newest first and malformed results stay in one JSON reply"
     expect(reply.data.jobs[1]!.result).toBeNull();
     expect(reply.data.jobs[0]!.panelSite).toBeNull();
     expect(output.split("\n")).toHaveLength(1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("manual stager prune keeps its exact JSON stdout reply", () => {
+  const root = mkdtempSync(join(tmpdir(), "clp-stager-action-test-"));
+  const jobsDir = join(root, "jobs");
+  const vhostsDir = join(root, "vhosts");
+  const tempDir = join(root, "tmp");
+  mkdirSync(vhostsDir);
+  mkdirSync(tempDir);
+  try {
+    const prelude = `
+      import { mock } from "bun:test";
+      mock.module("./cli/action-common.ts", async () => {
+        const real = await import("./cli/action-common.ts?manual-prune-contract");
+        return { ...real, readPanelIdentity: () => ({ primary: "panel.example.test", aliases: [] }) };
+      });
+    `;
+    const output = runAction({
+      jobsDir,
+      lockDir: join(root, "locks"),
+      nginxVhostDir: vhostsDir,
+      tempDir,
+    }, ["prune"], prelude);
+    expect(output).toBe('{"ok":true,"data":{"removed":0,"stuck":0,"vhostsRecovered":0}}');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

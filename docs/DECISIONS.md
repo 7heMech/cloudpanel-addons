@@ -838,13 +838,17 @@ form. The pristine copy is snapshotted off the running box into
 Reconciliation is a systemd timer, not a dpkg hook: a hook catches apt-driven
 updates and misses manual ones, while a timer catches every path including
 unattended-upgrades at 6am. `clp-addons-reconcile.timer` fires
-`OnCalendar=*:0/15` (`cli/provision.ts:450`) and its service runs
-`clp-addons repair --quiet` (`cli/provision.ts:444`), so there is one
+`OnCalendar=*:0/15` (`cli/provision.ts:469`) and its service runs
+`clp-addons repair --quiet` (`cli/provision.ts:463`), so there is one
 implementation of "make the box match what should be installed": the service
 user, sudoers, systemd units, the panel snapshot, the Twig anchors and the
-Nginx proxy. **It does not run any addon's own maintenance verb.** See "Job
-records expire" and "Known gaps" below for what that means in practice for the
-Stager's `prune`.
+Nginx proxy. **It now also runs the Stager's own maintenance verb, `prune`**
+(`runStagerMaintenance`, `cli/index.ts:295-303`, called from `cmdRepair` after
+the Nginx proxy reconciliation above), gated on the Stager addon being
+installed and never allowed to fail the rest of `repair`. That wiring was
+missing for a long time; see "Job records expire" and "Known gaps" below for
+that history and for why the ordering (after, not before, the Nginx proxy
+step) matters.
 
 A 15-minute timer means up to 15 minutes with the nav entry missing, so a
 `.path` unit watches the two templates and repairs on change. Measured on a
@@ -1236,15 +1240,29 @@ interrupted clone (`recoverCarriedVhosts`, `addons/stager/action.ts:1170`).
 
 The plan on paper was that `repair` would run `prune` on every reconciliation,
 because the timer that runs `repair` every fifteen minutes already exists and
-giving the addon a timer of its own would be two answers to one question. **That
-wiring was never built.** A `maintenanceVerb: "prune"` field was declared on
-the Stager's `AddonSpec` for exactly this purpose, but nothing ever read it.
-A tree-wide grep across the whole repository turned up only its declaration
-and its one setting, so it has since been removed as dead code. `cmdRepair`
-(`cli/index.ts:286-315`) never calls `prune`; see the correction above.
-`prune` today is reachable only by an operator (or a script) explicitly
-running `clp-addons action stager prune`. See "Known gaps" for the
-consequence.
+giving the addon a timer of its own would be two answers to one question. **For
+a long time that wiring was not built.** A `maintenanceVerb: "prune"` field
+was declared on the Stager's `AddonSpec` for exactly this purpose, but nothing
+ever read it. A tree-wide grep across the whole repository turned up only its
+declaration and its one setting, so it has since been removed as dead code
+(it was not what closed the gap; see below). For as long as that was true,
+`cmdRepair` never called `prune`, and the only way to reach it was an
+operator (or a script) explicitly running `clp-addons action stager prune` --
+meaning none of the cleanup below ran automatically on any panel, ever, no
+matter how long it had been up. See "Known gaps" for how bad that got in
+practice (a killed clone permanently blocking re-clones of its target).
+
+**Resolved.** `cmdRepair` (`cli/index.ts:305-344`) now calls
+`runStagerMaintenance` (`cli/index.ts:295-303`), which runs `prune` through
+the same `runStagerAction` path `action stager prune` always used, gated on
+the Stager addon being installed. It runs after the Nginx proxy
+reconciliation in the same function, not before: `recoverCarriedVhosts` does
+its own `nginx -t` before reloading and skips the reload if that fails, so
+running it after the master vhost is already known-good gives a
+just-recovered site vhost its best chance of taking effect in the same
+15-minute cycle instead of the next one. A `prune` failure is caught and
+logged, never allowed to fail the rest of `repair`, since `repair` is the
+self-healing path and nginx/sudoers reconciliation must run regardless.
 
 **A custom root directory is not copied**, because `clpctl site:add:php` has no
 option for one. The job says when the clone's differs from the source's.
@@ -1659,10 +1677,10 @@ reconciliation step after it never ran: `writeConfig`, `hardenBackups`,
 `reconcileNginx`. This reproduced on every installed panel; every fifteen minutes, the
 self-healing pass silently did nothing. Only `clp-addons-anchor.path` ->
 `repair --anchors-only` kept working, because that branch returns before the session
-gate is ever reached (`cli/index.ts:291-294`).
+gate is ever reached (`cli/index.ts:309-311`).
 
 `repair` now calls `ensureDirs(all)` (no session check) and separately
-`warnIfPanelSessionUnreadable()` (`cli/provision.ts:298-311`). That wrapper runs the
+`warnIfPanelSessionUnreadable()` (`cli/provision.ts:298-309`). That wrapper runs the
 identical check but turns a failure into `log.warn` instead of `fatal`, so an
 unreadable session is recorded in the journal instead of aborting the run -- and it
 cannot itself abort, whether the session file is merely missing or the whole session
@@ -1722,24 +1740,33 @@ there a human is present to see it and act.
   is injected into the panel's own vhost rather than a new one being written
   per addon. See "Current architecture -> Integrated manager and Nginx
   transport".
-- **The Stager's `prune` verb is not wired into the maintenance cycle
-  (open).** `maintenanceVerb: "prune"` was declared on the Stager's `AddonSpec`
-  as the intended hook for the fifteen-minute timer described under
-  "Reconciliation: a timer plus a path unit" above, but `cmdRepair`
-  (`cli/index.ts:286-315`) never read that field and never called `prune`.
+- ~~The Stager's `prune` verb is not wired into the maintenance cycle
+  (open).~~ **Resolved.** `maintenanceVerb: "prune"` was declared on the
+  Stager's `AddonSpec` as the intended hook for the fifteen-minute timer
+  described under "Reconciliation: a timer plus a path unit" above, but
+  `cmdRepair` never read that field and never called `prune`.
   `maintenanceVerb` was dead code: its only two occurrences in the entire
-  tree were its own declaration and assignment. The field itself has since
-  been removed from `cli/paths.ts` as dead code; that removal does not
-  close this gap, because the wiring it was meant to support was never built
-  either. Concretely, this means none of the
-  cleanup `prune` performs (fourteen-day job-record expiry, stale-`running`
-  job recovery, orphaned-vhost-backup recovery via `recoverCarriedVhosts`) has
-  ever run automatically on any panel running this code: job records and their
-  staging database passwords accumulate under `/var/lib/clp-addons/stager`
-  until an operator runs `clp-addons action stager prune` by hand. Wiring
-  `prune` into `repair` (or giving it a timer of its own) is deliberately left
-  as future work here rather than folded into this cleanup pass, so that a
-  behavior change is not smuggled into a docs-only commit. The original intent
-  is still the right design: one fifteen-minute timer already exists, so hang
-  addon maintenance off it rather than adding a second timer per addon. It
-  just needs to actually be called.
+  tree were its own declaration and assignment. The field itself was removed
+  from `cli/paths.ts` as dead code during this repo's cleanup pass; that
+  removal did not close this gap by itself, because the wiring it was meant
+  to support still had not been built. Concretely, this meant that for the
+  entire time this gap was open, none of the cleanup `prune` performs
+  (fourteen-day job-record expiry, stale-`running` job recovery,
+  orphaned-vhost-backup recovery via `recoverCarriedVhosts`) ever ran
+  automatically on any panel running this code: job records and their staging
+  database passwords accumulated under `/var/lib/clp-addons/stager`, and,
+  more sharply, a clone killed by OOM, `systemctl stop`, or a reboot left its
+  job record stuck `running` forever -- and since `cmdClone` refuses to clone
+  into a target that already has a `queued` or `running` record, and only
+  `prune` clears a stuck `running` one, that permanently blocked re-cloning
+  the same hostname until an operator ran `clp-addons action stager prune`
+  by hand. Wiring `prune` into `repair` was deliberately left as future work
+  during that cleanup pass rather than folded into it, so that a behavior
+  change was not smuggled into a docs-only commit; this entry recorded that
+  gap so it would not be forgotten. It has since been wired: `cmdRepair`
+  (`cli/index.ts:305-344`) now calls `runStagerMaintenance`
+  (`cli/index.ts:295-303`), gated on the Stager addon being installed, after
+  the Nginx proxy reconciliation and with its own failure caught and logged
+  rather than allowed to fail the rest of `repair`. The original intent was
+  the right design all along: one fifteen-minute timer already exists, so
+  addon maintenance hangs off it rather than a second timer per addon.

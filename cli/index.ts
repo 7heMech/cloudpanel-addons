@@ -27,7 +27,7 @@ import { renderLayout } from "../lib/app-ui";
 import { headerTarget } from "../lib/panel-nav";
 import { checkCliUpdate } from "../lib/update-check";
 import { runInstaticAction } from "../addons/instatic/action";
-import { runStagerAction } from "../addons/stager/action";
+import { runStagerAction, type StagerActionOptions } from "../addons/stager/action";
 
 type AddonHandler = (
   req: Request,
@@ -284,7 +284,25 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
   log.ok(upToDate ? `clp-addons ${current} is up to date; provisioning reconciled` : `clp-addons updated to ${target}`);
 }
 
-export function cmdRepair(argv: string[]): void {
+// Stager's stale-job recovery, job-record expiry, and orphaned-vhost recovery
+// (cmdPrune, reached through this same runStagerAction path `action stager
+// prune` uses) never ran on their own; only an explicit CLI invocation
+// reached it. That let a killed clone (OOM, `systemctl stop`, a reboot) leave
+// a target stuck `running` forever, which permanently blocked re-cloning that
+// hostname since only prune clears a stuck `running` record. Gated on stager
+// being installed, and never allowed to fail the rest of repair: it is
+// self-healing upkeep, not a precondition for it.
+export async function runStagerMaintenance(installed: AddonSpec[], options?: StagerActionOptions): Promise<void> {
+  if (!installed.some((spec) => spec.name === "stager")) return;
+  try {
+    const result = await runStagerAction(["prune"], { ...(options ?? {}), emitReply: false });
+    if (result !== 0) log.warn(`stager maintenance (prune) returned exit code ${result}`);
+  } catch (error) {
+    log.warn(`stager maintenance (prune) failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+export async function cmdRepair(argv: string[]): Promise<void> {
   requireRoot("repair");
   const { positional, flags } = parseFlags(argv);
   const quiet = flags.quiet === true;
@@ -316,6 +334,12 @@ export function cmdRepair(argv: string[]): void {
   else ensureTimerArmed("clp-addons-reconcile.timer", quiet);
   reconcileAnchors(quiet);
   if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
+  // Runs after the master-vhost reconciliation above, not before: recovering
+  // a carried-over vhost also does its own `nginx -t` before reloading, and
+  // skips the reload if that check fails. Running prune first, while the
+  // master vhost might still be broken, would leave a just-restored site
+  // vhost on disk but unloaded until the next 15-minute cycle.
+  await runStagerMaintenance(all);
   if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ")})`);
 }
 
@@ -596,7 +620,7 @@ async function main(): Promise<number> {
     case "upgrade": await cmdUpdate(rest); return 0;
     case "self-update": fatal("self-update is deprecated; use clp-addons update");
     case "recon": await runRecon(); return 0;
-    case "repair": cmdRepair(rest); return 0;
+    case "repair": await cmdRepair(rest); return 0;
     case "status": await cmdStatus(); return 0;
     case "uninstall": cmdUninstall(rest); return 0;
     case "action": return await cmdAction(rest);
