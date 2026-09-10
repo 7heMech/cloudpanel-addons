@@ -18,6 +18,11 @@ const LEGACY_LIBRARY_DIR = "/usr/local/lib/clp-addons";
 export const PANEL_IDENTITY_PATH = `${CONFIG_DIR}/panel-identity.conf`;
 export const SESSION_VALIDATOR_PATH = `${LIBEXEC_DIR}/clp-verify-session`;
 
+export interface ProvisionCommandRunner {
+  run(command: string, args: string[]): string;
+  tryRun(command: string, args: string[]): { ok: boolean; out: string };
+}
+
 const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
 const HOSTNAME_RE = new RegExp(`^(?:${HOSTNAME_LABEL})(?:\\.${HOSTNAME_LABEL})+$`);
 const WILDCARD_HOSTNAME_RE = new RegExp(`^\\*\\.(?:${HOSTNAME_LABEL})(?:\\.${HOSTNAME_LABEL})+$`);
@@ -103,29 +108,82 @@ function ensurePanelIdentity(quiet = false): void {
   if (!quiet) log.ok(`panel identity recorded from ${vhostPath}`);
 }
 
-export function ensureServiceUser(quiet = false): void {
-  const userExists = tryRun("id", ["-u", SERVICE_USER]).ok;
+function groupNames(output: string): Set<string> {
+  return new Set(output.trim().split(/\s+/).filter(Boolean));
+}
+
+function dockerGroupHasUser(output: string): boolean {
+  const members = output.trim().split(":")[3] ?? "";
+  return members.split(",").map((member) => member.trim()).includes(SERVICE_USER);
+}
+
+function enforceNoDockerMembership(commands: ProvisionCommandRunner): void {
+  const docker = commands.tryRun("getent", ["group", "docker"]);
+  if (!docker.ok) return;
+
+  const before = commands.tryRun("id", ["-nG", SERVICE_USER]);
+  if (!before.ok) {
+    fatal(`could not inspect ${SERVICE_USER} group membership; refusing to continue`);
+  }
+  if (!groupNames(before.out).has("docker")) return;
+
+  const primary = commands.tryRun("id", ["-gn", SERVICE_USER]);
+  if (!primary.ok) {
+    fatal(`could not inspect ${SERVICE_USER}'s primary group; refusing to continue`);
+  }
+
+  if (primary.out.trim() === "docker") {
+    const moved = commands.tryRun("usermod", ["--gid", SERVICE_GROUP, SERVICE_USER]);
+    if (!moved.ok) {
+      fatal(`could not move ${SERVICE_USER} to its dedicated primary group: ${moved.out || "usermod failed"}`);
+    }
+  }
+
+  if (dockerGroupHasUser(docker.out)) {
+    const removed = commands.tryRun("gpasswd", ["--delete", SERVICE_USER, "docker"]);
+    if (!removed.ok) {
+      fatal(`could not remove ${SERVICE_USER} from the docker group: ${removed.out || "gpasswd failed"}`);
+    }
+  }
+
+  const after = commands.tryRun("id", ["-nG", SERVICE_USER]);
+  if (!after.ok || groupNames(after.out).has("docker")) {
+    fatal(`security invariant failed: ${SERVICE_USER} is still a member of the docker group`);
+  }
+}
+
+export function ensureServiceUser(
+  quiet = false,
+  commands: ProvisionCommandRunner = { run, tryRun },
+): void {
+  const userExists = commands.tryRun("id", ["-u", SERVICE_USER]).ok;
   if (!userExists) {
     const userArgs = ["--system", "--no-create-home", "--shell", "/usr/sbin/nologin"];
-    if (tryRun("getent", ["group", SERVICE_GROUP]).ok) userArgs.push("--gid", SERVICE_GROUP);
+    if (commands.tryRun("getent", ["group", SERVICE_GROUP]).ok) userArgs.push("--gid", SERVICE_GROUP);
     else userArgs.push("--user-group");
     userArgs.push(SERVICE_USER);
-    run("useradd", userArgs);
+    commands.run("useradd", userArgs);
     if (!quiet) log.ok(`created system user ${SERVICE_USER}`);
   }
-  if (!tryRun("getent", ["group", SERVICE_GROUP]).ok) run("groupadd", ["--system", SERVICE_GROUP]);
+  if (!commands.tryRun("getent", ["group", SERVICE_GROUP]).ok) {
+    commands.run("groupadd", ["--system", SERVICE_GROUP]);
+  }
 
-  const passwd = tryRun("getent", ["passwd", SERVICE_USER]).out.split(":");
-  if (passwd[6] !== "/usr/sbin/nologin") run("usermod", ["--shell", "/usr/sbin/nologin", SERVICE_USER]);
-  const status = tryRun("passwd", ["-S", SERVICE_USER]).out.split(/\s+/);
-  if (status[1] !== "L") tryRun("passwd", ["-l", SERVICE_USER]);
+  const passwd = commands.tryRun("getent", ["passwd", SERVICE_USER]).out.split(":");
+  if (passwd[6] !== "/usr/sbin/nologin") {
+    commands.run("usermod", ["--shell", "/usr/sbin/nologin", SERVICE_USER]);
+  }
+  const status = commands.tryRun("passwd", ["-S", SERVICE_USER]).out.split(/\s+/);
+  if (status[1] !== "L") commands.tryRun("passwd", ["-l", SERVICE_USER]);
 
-  if (!tryRun("getent", ["group", PANEL_GROUP]).ok) {
+  enforceNoDockerMembership(commands);
+
+  if (!commands.tryRun("getent", ["group", PANEL_GROUP]).ok) {
     fatal(`CloudPanel group '${PANEL_GROUP}' was not found`);
   }
-  const groups = tryRun("id", ["-nG", SERVICE_USER]).out.split(/\s+/).filter(Boolean);
+  const groups = [...groupNames(commands.tryRun("id", ["-nG", SERVICE_USER]).out)];
   if (!groups.includes(PANEL_GROUP)) {
-    run("usermod", ["-aG", PANEL_GROUP, SERVICE_USER]);
+    commands.run("usermod", ["-aG", PANEL_GROUP, SERVICE_USER]);
     if (!quiet) log.ok(`added ${SERVICE_USER} to ${PANEL_GROUP}`);
   }
 }

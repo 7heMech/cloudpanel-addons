@@ -2,8 +2,123 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import {
+  ADDONS, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
+} from "../cli/paths";
 
 const REPO = join(import.meta.dir, "..");
+
+function serviceUserProbe(options: {
+  dockerGroup: boolean;
+  groups?: string[];
+  primary?: string;
+  failedCommand?: string;
+}): { ok: boolean; error?: string; calls: Array<{ command: string; args: string[] }> } {
+  const script = `
+    import { PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "./cli/paths.ts";
+    import { ensureServiceUser } from "./cli/provision.ts";
+    const options = ${JSON.stringify(options)};
+    const calls = [];
+    const groups = new Set(options.groups ?? [SERVICE_GROUP, PANEL_GROUP]);
+    let primary = options.primary ?? SERVICE_GROUP;
+    const runner = {
+      run(command, args) {
+        calls.push({ command, args: [...args] });
+        return "";
+      },
+      tryRun(command, args) {
+        calls.push({ command, args: [...args] });
+        const invocation = command + " " + args.join(" ");
+        if (invocation === options.failedCommand) return { ok: false, out: "permission denied" };
+        if (command === "id" && args[0] === "-u") return { ok: true, out: "998" };
+        if (command === "id" && args[0] === "-gn") return { ok: true, out: primary };
+        if (command === "id" && args[0] === "-nG") return { ok: true, out: [...groups].join(" ") };
+        if (command === "getent" && args[0] === "passwd") {
+          return { ok: true, out: SERVICE_USER + ":x:998:998::/nonexistent:/usr/sbin/nologin" };
+        }
+        if (command === "getent" && args[0] === "group" && args[1] === SERVICE_GROUP) {
+          return { ok: true, out: SERVICE_GROUP + ":x:998:" + SERVICE_USER };
+        }
+        if (command === "getent" && args[0] === "group" && args[1] === PANEL_GROUP) {
+          return { ok: true, out: PANEL_GROUP + ":x:996:" + SERVICE_USER };
+        }
+        if (command === "getent" && args[0] === "group" && args[1] === "docker") {
+          if (!options.dockerGroup) return { ok: false, out: "" };
+          return { ok: true, out: "docker:x:999:" + (groups.has("docker") ? SERVICE_USER : "") };
+        }
+        if (command === "passwd" && args[0] === "-S") return { ok: true, out: SERVICE_USER + " L" };
+        if (command === "passwd" && args[0] === "-l") return { ok: true, out: "" };
+        if (command === "usermod" && args[0] === "--gid") {
+          primary = args[1];
+          groups.delete("docker");
+          return { ok: true, out: "" };
+        }
+        if (command === "gpasswd" && args[0] === "--delete") {
+          groups.delete("docker");
+          return { ok: true, out: "" };
+        }
+        return { ok: true, out: "" };
+      },
+    };
+    try {
+      ensureServiceUser(true, runner);
+      console.log(JSON.stringify({ ok: true, calls }));
+    } catch (error) {
+      console.log(JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        calls,
+      }));
+    }
+  `;
+  return JSON.parse(execFileSync(process.execPath, ["-e", script], {
+    cwd: REPO,
+    encoding: "utf8",
+  }));
+}
+
+test("removes an existing supplementary docker membership", () => {
+  const result = serviceUserProbe({
+    dockerGroup: true,
+    groups: [SERVICE_GROUP, PANEL_GROUP, "docker"],
+  });
+
+  expect(result.ok).toBe(true);
+
+  expect(result.calls).toContainEqual({
+    command: "gpasswd",
+    args: ["--delete", SERVICE_USER, "docker"],
+  });
+  expect(result.calls).not.toContainEqual({
+    command: "usermod",
+    args: ["--gid", SERVICE_GROUP, SERVICE_USER],
+  });
+});
+
+test("leaves systems without a docker group unchanged", () => {
+  const result = serviceUserProbe({ dockerGroup: false });
+
+  expect(result.ok).toBe(true);
+
+  expect(result.calls).not.toContainEqual({
+    command: "gpasswd",
+    args: ["--delete", SERVICE_USER, "docker"],
+  });
+  expect(result.calls.some(({ command, args }) => command === "id" && args[0] === "-gn")).toBe(false);
+});
+
+test("fails clearly when docker membership cannot be removed", () => {
+  const result = serviceUserProbe({
+    dockerGroup: true,
+    groups: [SERVICE_GROUP, PANEL_GROUP, "docker"],
+    failedCommand: `gpasswd --delete ${SERVICE_USER} docker`,
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe(
+    `could not remove ${SERVICE_USER} from the docker group: permission denied`,
+  );
+});
 
 function provisionProbe(): {
   identityPath: string;
