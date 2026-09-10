@@ -14,7 +14,7 @@
 import { expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, symlinkSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { findMasterVhost, NGINX_PROXY_BLOCK, inspectNginxProxy, reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
+import { findMasterVhost, masterVhostHost, NGINX_PROXY_BLOCK, inspectNginxProxy, reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
 import { headerTarget } from "../lib/panel-nav";
 import type { AddonTarget } from "../cli/paths";
 
@@ -291,5 +291,91 @@ else process.env.PATH = previousPath;
 check("Nginx disable failure restores the previously active proxy",
   nginxDisableFailure.state === "validation-failed" && readFileSync(nginxDisableFailureVhost, "utf-8") === nginxWithProxy);
 rmSync(nginxDisableFailureDir, { recursive: true, force: true });
+
+// Adversarial cases for the master-vhost server-block scanner: a `#` comment
+// or a quoted string can contain characters that look like Nginx structure
+// (braces, even the word "server") without being real config, and a whole
+// server block can itself be commented out. None of that may confuse block
+// discovery, brace matching, or the `listen 8443` / `server_name` checks that
+// pick the one real CloudPanel server block out of the file.
+
+// A `}` inside a `#` comment must not close the server block early -- the
+// content after it (here, `server_name`) is still inside the real block.
+const braceCommentDir = mkdtempSync(`${tmpdir()}/nginx-brace-comment-test-`);
+const braceCommentState = `${braceCommentDir}/state`;
+const braceCommentVhost = `${braceCommentDir}/cloudpanel.conf`;
+const braceCommentContent =
+  "server {\n    listen 8443 ssl;\n" +
+  "    # a stray closing brace in a comment: } must not end the block early\n" +
+  "    server_name panel.example.test;\n}\n";
+writeFileSync(braceCommentVhost, braceCommentContent);
+check("a closing brace inside a comment does not end the server block early",
+  masterVhostHost({ vhostPath: braceCommentVhost }) === "panel.example.test");
+const braceCommentResult = reconcileNginxProxy({ vhostPath: braceCommentVhost, stateDir: braceCommentState, reload: false });
+check("a brace inside a comment still lets reconciliation inject at the real end of the block",
+  braceCommentResult.state === "ok" &&
+  readFileSync(braceCommentVhost, "utf-8") ===
+    `${braceCommentContent.slice(0, -2)}\n${NGINX_PROXY_BLOCK}\n}\n`);
+rmSync(braceCommentDir, { recursive: true, force: true });
+
+// A `}` inside a quoted string must not close the server block early either.
+const braceQuoteDir = mkdtempSync(`${tmpdir()}/nginx-brace-quote-test-`);
+const braceQuoteState = `${braceQuoteDir}/state`;
+const braceQuoteVhost = `${braceQuoteDir}/cloudpanel.conf`;
+const braceQuoteContent =
+  "server {\n    listen 8443 ssl;\n    server_name panel.example.test;\n" +
+  '    add_header X-Note "a brace in a string: } does not close anything";\n}\n';
+writeFileSync(braceQuoteVhost, braceQuoteContent);
+check("a closing brace inside a quoted string does not end the server block early",
+  masterVhostHost({ vhostPath: braceQuoteVhost }) === "panel.example.test");
+const braceQuoteResult = reconcileNginxProxy({ vhostPath: braceQuoteVhost, stateDir: braceQuoteState, reload: false });
+check("a brace inside a quoted string still lets reconciliation inject at the real end of the block",
+  braceQuoteResult.state === "ok" &&
+  readFileSync(braceQuoteVhost, "utf-8") ===
+    `${braceQuoteContent.slice(0, -2)}\n${NGINX_PROXY_BLOCK}\n}\n`);
+rmSync(braceQuoteDir, { recursive: true, force: true });
+
+// Nested `location` blocks inside the server block must not be mistaken for
+// the server block's own closing brace.
+const nestedLocationDir = mkdtempSync(`${tmpdir()}/nginx-nested-location-test-`);
+const nestedLocationState = `${nestedLocationDir}/state`;
+const nestedLocationVhost = `${nestedLocationDir}/cloudpanel.conf`;
+const nestedLocationContent =
+  "server {\n    listen 8443 ssl;\n    server_name panel.example.test;\n" +
+  "    location / {\n        try_files $uri $uri/ =404;\n    }\n" +
+  "    location /api/ {\n        proxy_pass http://127.0.0.1:3000;\n    }\n}\n";
+writeFileSync(nestedLocationVhost, nestedLocationContent);
+check("nested location blocks do not truncate the enclosing server block",
+  masterVhostHost({ vhostPath: nestedLocationVhost }) === "panel.example.test");
+const nestedLocationResult = reconcileNginxProxy({ vhostPath: nestedLocationVhost, stateDir: nestedLocationState, reload: false });
+check("nested location blocks still let reconciliation inject at the real end of the server block",
+  nestedLocationResult.state === "ok" &&
+  readFileSync(nestedLocationVhost, "utf-8") ===
+    `${nestedLocationContent.slice(0, -2)}\n${NGINX_PROXY_BLOCK}\n}\n`);
+rmSync(nestedLocationDir, { recursive: true, force: true });
+
+// A `listen 8443` that only appears because the whole server block is
+// commented out must not count as a match: the master vhost has zero real
+// server blocks listening on 8443, which is ambiguous (fails closed), not a
+// false-positive single match on commented-out text.
+const commentedListenDir = mkdtempSync(`${tmpdir()}/nginx-commented-listen-test-`);
+const commentedListenState = `${commentedListenDir}/state`;
+const commentedListenVhost = `${commentedListenDir}/cloudpanel.conf`;
+const commentedListenContent =
+  "# server {\n#     listen 8443 ssl;\n#     server_name fake.example.test;\n# }\n" +
+  "server {\n    listen 80;\n    server_name real.example.test;\n}\n";
+writeFileSync(commentedListenVhost, commentedListenContent);
+const commentedListenBefore = readFileSync(commentedListenVhost, "utf-8");
+check("a listen 8443 that only exists inside a commented-out server block is not a match",
+  masterVhostHost({ vhostPath: commentedListenVhost }) === null);
+const commentedListenResult = reconcileNginxProxy({ vhostPath: commentedListenVhost, stateDir: commentedListenState, reload: false });
+check("a commented-out listen 8443 leaves the vhost ambiguous rather than falsely resolved",
+  commentedListenResult.state === "ambiguous" &&
+  !commentedListenResult.changed &&
+  commentedListenResult.detail?.includes("no server block listening on port 8443") === true);
+check("refusing a commented-out 8443 match makes no vhost changes",
+  readFileSync(commentedListenVhost, "utf-8") === commentedListenBefore);
+check("refusing a commented-out 8443 match creates no rollback state", !existsSync(commentedListenState));
+rmSync(commentedListenDir, { recursive: true, force: true });
 
 rmSync(dir, { recursive: true, force: true });

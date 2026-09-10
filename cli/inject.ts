@@ -397,9 +397,9 @@ function masterVhostPath(options: NginxPaths): { path: string } | { detail: stri
   return { path: normalizedDir ? `${normalizedDir}/cloudpanel.conf` : "/cloudpanel.conf" };
 }
 
-function listen8443Blocks(content: string): { start: number; end: number; body: string }[] {
+function listen8443Blocks(content: string): ServerBlock[] {
   return serverBlocks(stripNginxProxy(content))
-    .filter((block) => /\blisten\s+[^;]*\b8443\b/.test(block.body));
+    .filter((block) => /\blisten\s+[^;]*\b8443\b/.test(block.maskedBody));
 }
 
 function resolveMasterVhost(options: NginxPaths = {}): MasterVhostResolution {
@@ -447,7 +447,7 @@ export function masterVhostHost(options: NginxPaths = {}): string | null {
   const resolved = resolveMasterVhost(options);
   if (!("content" in resolved)) return null;
   const block = listen8443Blocks(resolved.content)[0];
-  const match = block?.body.match(/\bserver_name\s+([^;]+);/);
+  const match = block?.maskedBody.match(/\bserver_name\s+([^;]+);/);
   if (!match) return null;
   return match[1]!.split(/\s+/).find((name) => name !== "_" && name !== "localhost") ?? null;
 }
@@ -456,43 +456,104 @@ function stripNginxProxy(content: string): string {
   return content.replace(NGINX_PROXY_BLOCK_RE, "");
 }
 
-function matchingBrace(content: string, open: number): number | null {
-  let depth = 0;
+/**
+ * The one quote-, comment- and depth-aware pass every Nginx-config scanner
+ * below is built from.
+ *
+ * `#` comments and `'`/`"` quoted strings (with backslash escapes) can hide
+ * braces, and even hide the literal word "server" -- a `{` or a "server"
+ * that only appears because it sits inside one of those must never be
+ * mistaken for real config. This used to be handled by a brace-matcher that
+ * tracked quote/comment state itself while a separate, unaware regex went
+ * looking for "server {" starts -- two independent ideas of what counts as
+ * "real" text, which is exactly the gap a commented-out
+ * `# server { listen 8443; }` fell through: the regex has no notion of `#`,
+ * so it matched "server {" anyway, and the brace-matcher, starting its scan
+ * from that `{` rather than from the `#` before it, never saw the comment
+ * either. It ended up as one bogus, self-consistent "block" -- not caught,
+ * because both halves agreed with each other, just not with the truth.
+ *
+ * Masking closes that gap by making comment/quote tracking the *only* place
+ * that decides what is real: every character inside a comment or a quoted
+ * string is replaced with a space, one pass, before anything else looks at
+ * the text. Newlines are left alone, so masked text lines up
+ * character-for-character with the original -- offsets found in the masked
+ * copy can be used to slice the original directly -- and everything downstream
+ * (finding `server {`, matching its brace, reading `listen`/`server_name`
+ * out of a block) runs on the masked text and can no longer be fooled by
+ * something that only looks like config.
+ */
+function maskNginxNoise(content: string): string {
+  let masked = "";
   let quote = "";
-  let comment = false;
-  for (let i = open; i < content.length; i++) {
-    const ch = content[i];
-    if (comment) {
-      if (ch === "\n") comment = false;
+  let inComment = false;
+  for (let i = 0; i < content.length; i++) {
+    const ch = content[i]!;
+    if (ch === "\n") {
+      // Neither a line comment nor a quoted string survives past end of line.
+      quote = "";
+      inComment = false;
+      masked += ch;
+      continue;
+    }
+    if (inComment) {
+      masked += " ";
       continue;
     }
     if (quote) {
+      masked += " ";
       if (ch === quote && content[i - 1] !== "\\") quote = "";
       continue;
     }
     if (ch === "#") {
-      comment = true;
+      inComment = true;
+      masked += " ";
       continue;
     }
     if (ch === '"' || ch === "'") {
       quote = ch;
+      masked += " ";
       continue;
     }
-    if (ch === "{") depth++;
-    if (ch === "}" && --depth === 0) return i;
+    masked += ch;
+  }
+  return masked;
+}
+
+/** The `}` that closes the `{` at `open`. `masked` must already be noise-masked. */
+function matchingBrace(masked: string, open: number): number | null {
+  let depth = 0;
+  for (let i = open; i < masked.length; i++) {
+    if (masked[i] === "{") depth++;
+    else if (masked[i] === "}" && --depth === 0) return i;
   }
   return null;
 }
 
-function serverBlocks(content: string): { start: number; end: number; body: string }[] {
-  const blocks: { start: number; end: number; body: string }[] = [];
+interface ServerBlock {
+  start: number;
+  end: number;
+  /** Original text, for writing back to disk unchanged. */
+  body: string;
+  /** Same span with comments/strings blanked, for matching directives inside it. */
+  maskedBody: string;
+}
+
+function serverBlocks(content: string): ServerBlock[] {
+  const masked = maskNginxNoise(content);
+  const blocks: ServerBlock[] = [];
   const re = /\bserver\s*\{/g;
   let match: RegExpExecArray | null;
-  while ((match = re.exec(content))) {
-    const open = content.indexOf("{", match.index);
-    const end = matchingBrace(content, open);
+  while ((match = re.exec(masked))) {
+    const open = masked.indexOf("{", match.index);
+    const end = matchingBrace(masked, open);
     if (end === null) continue;
-    blocks.push({ start: match.index, end, body: content.slice(match.index, end + 1) });
+    blocks.push({
+      start: match.index,
+      end,
+      body: content.slice(match.index, end + 1),
+      maskedBody: masked.slice(match.index, end + 1),
+    });
     re.lastIndex = end + 1;
   }
   return blocks;
