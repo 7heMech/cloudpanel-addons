@@ -13,7 +13,8 @@
     "test:supplemental": "bun tools/test-panel-snapshot.ts && bun tools/test-phase1.ts && bun tools/test-builtins.ts && bun tools/test-stager-spawn.ts",
     "test:app": "bun test ./tools/test-app.test.ts",
     "test:delete": "bun test ./tools/test-delete.test.ts",
-    "test:inject": "bun test ./tools/test-inject.test.ts"
+    "test:inject": "bun test ./tools/test-inject.test.ts",
+    "test:installer": "bun tools/integration-installer-picker.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

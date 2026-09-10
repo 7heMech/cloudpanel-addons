@@ -16,6 +16,7 @@ import {
   reconcile, reconcileNginxProxy, type Injection, type NginxProxyStatus, type TargetStatus,
 } from "./inject";
 import { fatal, Fatal, log, parseFlags, requireRoot, tryRun, writeAtomic } from "./util";
+import { runRecon } from "./recon";
 import { generateSnapshot } from "../lib/panel-snapshot";
 import { authenticateRequest } from "../lib/sso-auth";
 import { handle as handleInstatic } from "../addons/instatic/app/index";
@@ -591,6 +592,7 @@ async function main(): Promise<number> {
     case "update":
     case "upgrade": await cmdUpdate(rest); return 0;
     case "self-update": fatal("self-update is deprecated; use clp-addons update");
+    case "recon": await runRecon(); return 0;
     case "repair": cmdRepair(rest); return 0;
     case "status": await cmdStatus(); return 0;
     case "uninstall": cmdUninstall(rest); return 0;
