@@ -59,7 +59,11 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
-          shellcheck -S warning addons/*/wrapper/* tools/*.sh install.sh
+          shopt -s nullglob
+          shellcheck_files=(addons/*/wrapper/* libexec/* tools/*.sh install.sh)
+          if ((${#shellcheck_files[@]})); then
+            shellcheck -S warning -- "${shellcheck_files[@]}"
+          fi
 
       - name: Resolve the version from the tag
         id: version

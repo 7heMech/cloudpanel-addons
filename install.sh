@@ -14,9 +14,9 @@ SKIP_ATTESTATION=0
 INSTALL_DOCKER=0
 
 if [[ -t 1 ]]; then
-  B=$'\033[1m'; DIM=$'\033[2m'; RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; N=$'\033[0m'
+  DIM=$'\033[2m'; RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; N=$'\033[0m'
 else
-  B=""; DIM=""; RED=""; GRN=""; YLW=""; N=""
+  DIM=""; RED=""; GRN=""; YLW=""; N=""
 fi
 
 say()  { printf '%s\n' "$*"; }
