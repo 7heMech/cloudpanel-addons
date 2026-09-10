@@ -515,7 +515,7 @@ export function makeSnapshot(dir: string, out: string, sqlite3 = "sqlite3"): boo
           }
         } else {
           try {
-            cpSync(source, join(stage, "data"), { recursive: true, preserveTimestamps: true });
+            cpSync(source, destination, { recursive: true, preserveTimestamps: true });
           } catch {
             cleanup();
             return false;

@@ -1,9 +1,10 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  parseInstaticAction, panelIdentityForInstatic, validateInstaticDomain,
+  makeSnapshot, parseInstaticAction, panelIdentityForInstatic, validateInstaticDomain,
 } from "../addons/instatic/action";
 import { ActionFailure, normalizeIdentityHostname, validateFlag, validatePort, validateTag } from "../cli/action-common";
 
@@ -62,4 +63,29 @@ test("the daemon invokes the unified binary action path", () => {
   const service = readFileSync(join(import.meta.dir, "../addons/instatic/app/service.ts"), "utf8");
   expect(service).toContain("const ACTION_BIN = CLI_BIN");
   expect(service).toContain('const argv = ["action", "instatic", verb, ...args]');
+});
+
+test("makeSnapshot archives non-SQLite regular data files", () => {
+  const root = mkdtempSync(join(tmpdir(), "instatic-snapshot-test-"));
+  try {
+    const instance = join(root, "instance");
+    const data = join(instance, "data");
+    const archive = join(root, "snapshot.tar.gz");
+    const restored = join(root, "restored");
+    const file = join(data, "notes.txt");
+    const mtime = new Date("2020-01-02T03:04:05.000Z");
+    mkdirSync(data, { recursive: true });
+    writeFileSync(file, "plain data\n");
+    utimesSync(file, mtime, mtime);
+
+    expect(makeSnapshot(instance, archive, "unused-sqlite3")).toBe(true);
+
+    mkdirSync(restored);
+    execFileSync("tar", ["-xzf", archive, "-C", restored]);
+    const restoredFile = join(restored, "data", "notes.txt");
+    expect(readFileSync(restoredFile, "utf8")).toBe("plain data\n");
+    expect(statSync(restoredFile).mtimeMs).toBeCloseTo(mtime.getTime(), -2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
