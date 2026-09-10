@@ -12,7 +12,6 @@
 // added here without checking.
 
 import type { AddonTarget } from "../../../cli/paths";
-import { headerTarget } from "../../../lib/panel-nav";
 
 /**
  * The site types the wrapper will clone, guarded here too so a Node.js or
@@ -31,7 +30,6 @@ import { headerTarget } from "../../../lib/panel-nav";
 const CLONABLE = "{% if site.type in ['php', 'static', 'reverse-proxy'] %}";
 
 export const STAGER_TARGETS: AddonTarget[] = [
-  headerTarget("Stager"),
   {
     slug: "site-list-action",
     template: "Frontend/Site/index.html.twig",
@@ -39,7 +37,7 @@ export const STAGER_TARGETS: AddonTarget[] = [
     required: false,
     snippet: (url) => `
         ${CLONABLE}
-          <a href="${url}/new?source={{ site.domainName|url_encode }}" target="_blank" rel="noopener" style="margin-left: 0.75rem;">Clone</a>
+          <a href="${url}/new?source={{ site.domainName|url_encode }}" style="margin-left: 0.75rem;">Clone</a>
         {% endif %}`,
   },
 ];
