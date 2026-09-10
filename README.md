@@ -94,8 +94,10 @@ clp-addons serve
 ```
 
 `clp-addons update` verifies and atomically installs the CLI, session validator,
-and wrappers for every installed addon, restarts `clp-addons.service`, and
-reconciles the Twig and Nginx integration. The active paths are always
+and wrappers for every installed addon when artifacts are missing or changed,
+restarts `clp-addons.service`, and reconciles the Twig and Nginx integration.
+Same-version updates reuse artifacts only when their root-owned manifest hashes
+match. The active paths are always
 `/usr/local/bin/clp-addons` and `/usr/local/libexec/clp-addons/`; there is no
 release directory or `current` symlink. `upgrade` is an alias. `self-update` is
 removed as an operation; invoking it reports that `update` should be used.
@@ -150,7 +152,7 @@ installation does not request or manage a separate certificate.
 ```bash
 bun install
 bun run typecheck
-bun tools/test-inject.ts
+bun run test:inject
 bun run test
 bun run lint:wrapper     # needs shellcheck
 bun run build            # dist/clp-addons-linux-x64

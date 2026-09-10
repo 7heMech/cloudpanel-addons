@@ -1,14 +1,15 @@
-import { chmodSync, chownSync, existsSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
-  ADDON_NAMES, ADDONS, CLI_ARTIFACT, CLI_BIN, HMAC_KEY_PATH, LIBEXEC_DIR, MANAGER_UNIT, PANEL_GROUP,
+  ADDON_NAMES, ADDONS, ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, HMAC_KEY_PATH, LIBEXEC_DIR, MANAGER_UNIT, PANEL_GROUP,
   SESSION_VALIDATOR_ARTIFACT, SOCKET_PATH, mountPath, type AddonSpec,
 } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation, type FetchedArtifact } from "./release";
 import {
   ensureDirs, ensureHmacKey, ensureServiceUser, ensureTimerArmed, hardenBackups, installSessionValidator,
   installSudoers, installUnits, installWrapper, installedConfig, purgeTwigCache, removeLegacyUnits,
-  removeLegacyInstall, removeLegacyUsers, removeSudoers, startUnits, stopUnits, unitActive, unitPid, writeConfig,
+  removeLegacyInstall, removeLegacyUsers, removeSudoers, SESSION_VALIDATOR_PATH, startUnits, stopUnits, unitActive,
+  unitPid, writeConfig,
 } from "./provision";
 import {
   KNOWN_GOOD_PANEL_VERSIONS, inspect, inspectNginxProxy, masterVhostHost, panelVersion, purgeTwigCache as purgeInjectCache,
@@ -60,11 +61,68 @@ function artifact(artifacts: FetchedArtifact[], name: string): Buffer {
   return found.bytes;
 }
 
-function installArtifacts(artifacts: FetchedArtifact[], specs: AddonSpec[], quiet = false): void {
+function artifactPaths(specs: AddonSpec[]): Map<string, string> {
+  return new Map([
+    [CLI_ARTIFACT, CLI_BIN],
+    [SESSION_VALIDATOR_ARTIFACT, SESSION_VALIDATOR_PATH],
+    ...specs.map((spec) => [spec.wrapperArtifact, spec.wrapperPath] as const),
+  ]);
+}
+
+function sha256(bytes: Buffer): string {
+  return Bun.CryptoHasher.hash("sha256", bytes, "hex");
+}
+
+function secureRegularFile(path: string, executable = false): boolean {
+  try {
+    const stat = lstatSync(path);
+    return stat.isFile() && stat.uid === 0 && (stat.mode & 0o022) === 0 && (!executable || (stat.mode & 0o111) !== 0);
+  } catch {
+    return false;
+  }
+}
+
+function currentArtifactsMatch(tag: string, specs: AddonSpec[]): boolean {
+  if (!secureRegularFile(ARTIFACT_MANIFEST_PATH)) return false;
+
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(readFileSync(ARTIFACT_MANIFEST_PATH, "utf-8"));
+  } catch {
+    return false;
+  }
+  if (typeof manifest !== "object" || manifest === null) return false;
+  const record = manifest as { version?: unknown; tag?: unknown; artifacts?: unknown };
+  if (record.version !== 1 || record.tag !== tag || typeof record.artifacts !== "object" || record.artifacts === null) {
+    return false;
+  }
+
+  const checksums = record.artifacts as Record<string, unknown>;
+  for (const [name, path] of artifactPaths(specs)) {
+    const expected = checksums[name];
+    if (typeof expected !== "string" || !/^[0-9a-f]{64}$/.test(expected) || !secureRegularFile(path, true)) return false;
+    try {
+      if (sha256(readFileSync(path)) !== expected) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function writeArtifactManifest(tag: string, artifacts: FetchedArtifact[], specs: AddonSpec[]): void {
+  const checksums: Record<string, string> = {};
+  for (const name of artifactPaths(specs).keys()) checksums[name] = sha256(artifact(artifacts, name));
+  writeAtomic(ARTIFACT_MANIFEST_PATH, JSON.stringify({ version: 1, tag, artifacts: checksums }) + "\n", 0o600);
+  tryRun("chown", ["root:root", ARTIFACT_MANIFEST_PATH]);
+}
+
+function installArtifacts(artifacts: FetchedArtifact[], specs: AddonSpec[], tag: string, quiet = false): void {
   for (const spec of specs) installWrapper(spec, artifact(artifacts, spec.wrapperArtifact), quiet);
   installSessionValidator(artifact(artifacts, SESSION_VALIDATOR_ARTIFACT), quiet);
   writeAtomic(CLI_BIN, artifact(artifacts, CLI_ARTIFACT), 0o755);
   tryRun("chown", ["root:root", CLI_BIN]);
+  writeArtifactManifest(tag, artifacts, specs);
 }
 
 function installedInjections(exclude?: string): Injection[] {
@@ -150,6 +208,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
   const specs = [...installedAddons().filter((item) => item.name !== spec.name), spec];
   const names = artifactNames(specs);
   let artifacts: FetchedArtifact[];
+  let artifactTag: string | undefined;
   if (typeof flags.local === "string") {
     artifacts = loadLocal(flags.local, names);
   } else {
@@ -157,6 +216,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
       typeof flags.version === "string" ? flags.version : "latest",
       flags["allow-prerelease"] === true,
     );
+    artifactTag = release.tag.replace(/^v/, "");
     artifacts = await fetchVerified(release, names);
     await verifyAttestation(release, artifacts, flags["skip-attestation"] === true);
   }
@@ -165,7 +225,7 @@ async function cmdInstall(argv: string[]): Promise<void> {
   removeLegacyInstall();
   ensureDirs(specs);
   ensureHmacKey();
-  installArtifacts(artifacts, specs);
+  installArtifacts(artifacts, specs, artifactTag ?? CLI_VERSION.replace(/^v/, ""));
   for (const item of specs) writeConfig(item, true);
   installSudoers();
   installUnits(specs);
@@ -194,8 +254,9 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
 
   const specs = installedAddons();
   const upToDate = current === target;
+  const artifactsCurrent = upToDate && currentArtifactsMatch(target, specs);
   let artifacts: FetchedArtifact[] | undefined;
-  if (!upToDate) {
+  if (!artifactsCurrent) {
     artifacts = await fetchVerified(release, artifactNames(specs));
     await verifyAttestation(release, artifacts, flags["skip-attestation"] === true);
   }
@@ -204,7 +265,7 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
   removeLegacyInstall();
   ensureDirs(specs);
   ensureHmacKey();
-  if (artifacts) installArtifacts(artifacts, specs);
+  if (artifacts) installArtifacts(artifacts, specs, target);
   for (const spec of specs) writeConfig(spec, true);
   installSudoers();
   removeLegacyUnits(true);

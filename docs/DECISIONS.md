@@ -16,8 +16,15 @@ Addon applications run as the locked `clp-addons` system user. They can invoke
 only the root-owned helpers named by `/etc/sudoers.d/clp-addons`:
 
 ```text
-clp-addons ALL=(root) NOPASSWD: /usr/local/libexec/clp-addons/*
+clp-addons ALL=(root) NOPASSWD: /usr/local/libexec/clp-addons/clp-verify-session, /usr/local/libexec/clp-addons/clp-action-instatic, /usr/local/libexec/clp-addons/clp-action-stager
 ```
+
+The generated rule contains the validator and exactly the wrapper paths for the
+installed addons. It deliberately does not grant a directory wildcard, so a
+new file placed in `/usr/local/libexec/clp-addons/` cannot become a passwordless
+root command without an explicit provisioning change. Earlier deployment notes
+refer to the wildcard that preceded this rule; those notes remain historical,
+not an authorization granted by the current installation.
 
 Every wrapper validates its complete argument set before reading input,
 deriving paths, or taking a lock. Commands use argument arrays; no shell
@@ -73,9 +80,12 @@ otherwise the manager redirects to `/login`.
 There is one active binary at `/usr/local/bin/clp-addons`. The session validator
 and addon wrappers live directly in `/usr/local/libexec/clp-addons/`; the active
 installation has no release directory or `current` symlink. `clp-addons update`
-resolves a release, verifies checksums and provenance, atomically replaces the
-CLI and installed helpers, restarts the service, and reconciles panel
-integration. `upgrade` is an alias; `self-update` is a deprecation error.
+resolves a release, verifies checksums and provenance when artifacts are needed,
+atomically replaces the CLI and installed helpers, restarts the service, and
+reconciles panel integration. A same-version update reuses artifacts only when
+the root-owned manifest and every installed file's SHA-256 match; otherwise it
+fetches and verifies them before reconciliation. `upgrade` is an alias;
+`self-update` is a deprecation error.
 
 ### CloudPanel data and maintenance
 
@@ -451,7 +461,7 @@ Three supporting choices:
   one anchor cannot swap places on each reconciliation and produce a file that
   never settles.
 
-`tools/test-inject.ts` runs the whole scenario against a throwaway template and
+`bun run test:inject` runs the whole scenario against a throwaway template and
 asserts what the old design got wrong: installing the second addon keeps the
 first, uninstalling one leaves the other, repeated reconciliation is idempotent
 and byte-stable, and removing the last addon restores the original exactly.

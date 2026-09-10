@@ -30,6 +30,7 @@ export const TWIG_CACHE_DIR = `${PANEL_APP}/var/cache`;
 
 export const CONFIG_DIR = "/etc/clp-addons";
 export const STATE_DIR = "/var/lib/clp-addons";
+export const ARTIFACT_MANIFEST_PATH = `${STATE_DIR}/artifacts.json`;
 export const TEMPLATE_STATE_DIR = `${STATE_DIR}/templates`;
 export const LOCK_DIR = "/run/lock/clp-addons";
 export const SYSTEMD_DIR = "/etc/systemd/system";

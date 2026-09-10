@@ -53,6 +53,23 @@ try {
   check("a missing panel database is treated as empty", missing.sites.length === 0 && missing.allocatedPorts.length === 0);
   check("a missing database is not created", !existsSync(missingPath));
 
+  const missingSitePath = join(fixtureDir, "missing-site.sqlite");
+  createDatabase(missingSitePath, (db) => {
+    db.run("CREATE TABLE php_settings (pool_port INTEGER)");
+    db.query("INSERT INTO php_settings VALUES (?)").run(39004);
+  });
+  let missingSiteError = "";
+  try {
+    readPanelDatabase(missingSitePath);
+  } catch (error) {
+    missingSiteError = error instanceof Error ? error.message : String(error);
+  }
+  check(
+    "a valid database without the required site table fails loudly",
+    missingSiteError.includes("required panel table site") && missingSiteError.includes("no such table"),
+    missingSiteError,
+  );
+
   const partialPath = join(fixtureDir, "partial.sqlite");
   createDatabase(partialPath, (db) => {
     db.run("CREATE TABLE site (domain_name TEXT, user TEXT, type TEXT, reverse_proxy_url TEXT)");

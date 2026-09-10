@@ -54,16 +54,17 @@ function databaseExists(databasePath: string): boolean {
   }
 }
 
-function queryRows<ReturnType>(db: Database, sql: string, optionalTable: string): ReturnType[] {
+function queryRows<ReturnType>(db: Database, sql: string, table: string, optional = false): ReturnType[] {
   try {
     return db.query<ReturnType, []>(sql).all();
   } catch (error) {
     const message = errorMessage(error);
-    if (message === `no such table: ${optionalTable}` || message === `no such table: main.${optionalTable}`) {
+    if (optional && (message === `no such table: ${table}` || message === `no such table: main.${table}`)) {
       // These tables vary between CloudPanel versions; an absent optional table contributes no data.
       return [];
     }
-    throw new Error(`querying panel table ${optionalTable} failed: ${message}`, { cause: error });
+    const requiredness = optional ? "optional" : "required";
+    throw new Error(`querying ${requiredness} panel table ${table} failed: ${message}`, { cause: error });
   }
 }
 
@@ -147,16 +148,19 @@ export function readPanelDatabase(databasePath = PANEL_DB): PanelDatabaseSnapsho
       isolated.db,
       "SELECT pool_port AS value FROM php_settings WHERE pool_port IS NOT NULL;",
       "php_settings",
+      true,
     )) addPort(ports, row.value);
     for (const row of queryRows<ValueRow>(
       isolated.db,
       "SELECT port AS value FROM nodejs_settings WHERE port IS NOT NULL;",
       "nodejs_settings",
+      true,
     )) addPort(ports, row.value);
     for (const row of queryRows<ValueRow>(
       isolated.db,
       "SELECT port AS value FROM python_settings WHERE port IS NOT NULL;",
       "python_settings",
+      true,
     )) addPort(ports, row.value);
 
     for (const row of queryRows<ValueRow>(

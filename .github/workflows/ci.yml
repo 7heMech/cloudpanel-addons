@@ -38,23 +38,11 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Unit checks for the client script and port allocation
-        # It lives in a TypeScript template literal, so a stray escape reaches
-        # the browser as a broken string and silently kills every button on the
-        # page. Nothing else notices: the server still renders and answers.
-        run: bun run test:app
-
-      - name: Two addons must be able to patch one panel template
-        # The scenario that is invisible with a single addon installed:
-        # installing the second used to delete the first's nav entry, and
-        # uninstalling either removed both.
-        run: bun run test:inject
+      - name: Full unit and supplemental regression suite
+        run: bun run test
 
       - name: Installer keyboard selection
         run: python3 tools/test-installer.py
-
-      - name: Deletion preserves data on failure
-        run: bun run test:delete
 
       - name: Lint the wrapper scripts
         # The wrapper is the privilege boundary. A shellcheck finding there is

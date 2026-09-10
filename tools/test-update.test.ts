@@ -1,7 +1,13 @@
 import { expect, mock, test } from "bun:test";
+import * as nodeFs from "node:fs";
+import {
+  ADDONS, ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, SESSION_VALIDATOR_ARTIFACT,
+} from "../cli/paths";
 
 const calls: string[] = [];
 let hasInstalledAddon = true;
+let artifactsAvailable = false;
+let artifactTampered = false;
 const provisioning = {
   serviceUser: false,
   legacyInstall: true,
@@ -38,15 +44,56 @@ function record(name: string): (...args: unknown[]) => void {
   return (..._args: unknown[]) => calls.push(name);
 }
 
+const installedArtifacts = [
+  { name: CLI_ARTIFACT, path: CLI_BIN },
+  { name: SESSION_VALIDATOR_ARTIFACT, path: `${LIBEXEC_DIR}/clp-verify-session` },
+  ...Object.values(ADDONS).map((spec) => ({ name: spec.wrapperArtifact, path: spec.wrapperPath })),
+];
+const artifactBytes = new Map(installedArtifacts.map(({ path }) => [path, Buffer.from(path, "utf-8")]));
+const artifactChecksums = Object.fromEntries(installedArtifacts.map(({ name, path }) => [
+  name,
+  Bun.CryptoHasher.hash("sha256", artifactBytes.get(path)!, "hex"),
+]));
+const artifactManifest = JSON.stringify({ version: 1, tag: "1.2.3", artifacts: artifactChecksums });
+const originalLstatSync = nodeFs.lstatSync;
+const originalReadFileSync = nodeFs.readFileSync;
+
+mock.module("node:fs", () => ({
+  ...nodeFs,
+  lstatSync(path: string | URL, ...rest: unknown[]) {
+    const key = String(path);
+    if (artifactsAvailable && (key === ARTIFACT_MANIFEST_PATH || artifactBytes.has(key))) {
+      return {
+        isFile: () => true,
+        uid: 0,
+        mode: key === ARTIFACT_MANIFEST_PATH ? 0o100600 : 0o100755,
+      } as ReturnType<typeof nodeFs.lstatSync>;
+    }
+    return originalLstatSync(path, ...(rest as Parameters<typeof originalLstatSync> extends [any, ...infer T] ? T : never));
+  },
+  readFileSync(path: string | URL | number, options?: any) {
+    const key = String(path);
+    if (artifactsAvailable && key === ARTIFACT_MANIFEST_PATH) {
+      return options === undefined || typeof options === "object" ? Buffer.from(artifactManifest) : artifactManifest;
+    }
+    const bytes = artifactsAvailable ? artifactBytes.get(key) : undefined;
+    if (bytes) {
+      const content = artifactTampered && key === CLI_BIN ? Buffer.from("tampered", "utf-8") : bytes;
+      return typeof options === "string" ? content.toString(options as BufferEncoding) : content;
+    }
+    return originalReadFileSync(path as any, options as any);
+  },
+}));
+
 mock.module("../cli/release", () => ({
   CLI_VERSION: "1.2.3",
   resolveRelease: async () => {
     calls.push("resolveRelease");
     return { tag: "v1.2.3", assets: new Map<string, string>() };
   },
-  fetchVerified: async () => {
+  fetchVerified: async (_release: unknown, names: string[] = []) => {
     calls.push("fetchVerified");
-    return [];
+    return names.map((name) => ({ name, bytes: Buffer.from(name, "utf-8") }));
   },
   verifyAttestation: async () => {
     calls.push("verifyAttestation");
@@ -61,6 +108,7 @@ mock.module("../cli/provision", () => ({
   ensureTimerArmed: record("ensureTimerArmed"),
   hardenBackups: record("hardenBackups"),
   installSessionValidator: record("installSessionValidator"),
+  SESSION_VALIDATOR_PATH: "/usr/local/libexec/clp-addons/clp-verify-session",
   installSudoers: () => { calls.push("installSudoers"); provisioning.sudoers = true; },
   installUnits: () => { calls.push("installUnits"); provisioning.units = true; },
   installWrapper: record("installWrapper"),
@@ -124,11 +172,15 @@ test("an up-to-date update still runs provisioning and reconciliation", async ()
   calls.length = 0;
   resetProvisioning();
   hasInstalledAddon = true;
+  artifactsAvailable = false;
+  artifactTampered = false;
 
   await cmdUpdate(["--version=v1.2.3"]);
 
-  expect(calls).not.toContain("fetchVerified");
-  expect(calls).not.toContain("verifyAttestation");
+  expect(calls).toContain("fetchVerified");
+  expect(calls).toContain("verifyAttestation");
+  expect(calls).toContain("installSessionValidator");
+  expect(calls.filter((call) => call === "installWrapper")).toHaveLength(2);
   for (const name of [
     "ensureServiceUser",
     "removeLegacyInstall",
@@ -167,10 +219,15 @@ test("an up-to-date update with no addons keeps the no-service branch", async ()
   calls.length = 0;
   resetProvisioning();
   hasInstalledAddon = false;
+  artifactsAvailable = false;
+  artifactTampered = false;
 
   await cmdUpdate(["--version=v1.2.3"]);
 
-  expect(calls).not.toContain("fetchVerified");
+  expect(calls).toContain("fetchVerified");
+  expect(calls).toContain("verifyAttestation");
+  expect(calls).toContain("installSessionValidator");
+  expect(calls).not.toContain("installWrapper");
   expect(calls).toContain("ensureServiceUser");
   expect(calls).toContain("removeLegacyUnits");
   expect(calls).toContain("removeLegacyUsers");
@@ -179,4 +236,39 @@ test("an up-to-date update with no addons keeps the no-service branch", async ()
   expect(calls).not.toContain("generateSnapshot");
   expect(calls).not.toContain("startUnits");
   expect(calls).not.toContain("reconcileNginxProxy");
+});
+
+test("a same-version update reuses verified installed artifacts", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  hasInstalledAddon = true;
+  artifactsAvailable = true;
+  artifactTampered = false;
+
+  await cmdUpdate(["--version=v1.2.3"]);
+
+  expect(calls).not.toContain("fetchVerified");
+  expect(calls).not.toContain("verifyAttestation");
+  expect(calls).not.toContain("installSessionValidator");
+  expect(calls).not.toContain("installWrapper");
+  expect(calls).toContain("installUnits");
+  expect(calls).toContain("reconcileNginxProxy");
+  artifactsAvailable = false;
+});
+
+test("a same-version update repairs a changed installed artifact", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  hasInstalledAddon = true;
+  artifactsAvailable = true;
+  artifactTampered = true;
+
+  await cmdUpdate(["--version=v1.2.3"]);
+
+  expect(calls).toContain("fetchVerified");
+  expect(calls).toContain("verifyAttestation");
+  expect(calls).toContain("installSessionValidator");
+  expect(calls.filter((call) => call === "installWrapper")).toHaveLength(2);
+  artifactsAvailable = false;
+  artifactTampered = false;
 });
