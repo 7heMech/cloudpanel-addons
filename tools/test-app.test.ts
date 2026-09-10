@@ -1164,7 +1164,7 @@ console.log("\n== no credential outlives the job that carried it ==");
 
   // execFile's error.message is "Command failed: <full argv>".
   const code = service.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
-  check("a wrapper failure is not logged with its own argv",
+  check("an action failure is not logged with its own argv",
     !code.includes("error.message"),
     code.split("\n").filter((l) => l.includes("error.message")).join(" | "));
 }

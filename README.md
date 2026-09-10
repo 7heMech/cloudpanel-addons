@@ -154,7 +154,7 @@ bun install
 bun run typecheck
 bun run test:inject
 bun run test
-bun run lint:wrapper     # needs shellcheck
+bun run lint:install     # needs shellcheck
 bun run build            # dist/clp-addons-linux-x64
 ```
 

@@ -400,8 +400,8 @@ export function jobView(
     ? `<div class="card secret">
         <h2 style="margin-top:0;font-size:1rem;">Staging Instatic instance</h2>
         <dl class="kv">
-          <!-- esc() even though the wrapper emits this as a JSON number and
-               validate_port bounds it: every other value on this page is
+          <!-- esc() even though the action binary emits this as a JSON number and
+               validatePort bounds it: every other value on this page is
                escaped, and the one that is not is the one nobody re-checks
                after the type it was declared with changes. -->
           <dt>Port</dt><dd>127.0.0.1:${esc(String(result.instatic.port))}</dd>

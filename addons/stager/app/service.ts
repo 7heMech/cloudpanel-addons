@@ -70,9 +70,9 @@ async function runCommand(
       ? null
       : {
           code: exitCode,
-          ...(outputFailed ? { reason: "wrapper output could not be read" } : {}),
-          ...(terminated ? { reason: "wrapper process terminated" } : {}),
-          ...(outputLimited ? { reason: `wrapper output exceeded ${options.maxBuffer} bytes` } : {}),
+          ...(outputFailed ? { reason: "action output could not be read" } : {}),
+          ...(terminated ? { reason: "action process terminated" } : {}),
+          ...(outputLimited ? { reason: `action output exceeded ${options.maxBuffer} bytes` } : {}),
         },
     stdout,
     stderr,
@@ -153,26 +153,26 @@ export async function callWrapper<T = unknown>(
       error.code !== 0;
     const reply = normalNonzeroExit ? parseWrapperReply<T>(stdout) : null;
     if (reply) {
-      if (stderr.trim()) console.error(`[wrapper:${verb}]`, stderr.trim());
+      if (stderr.trim()) console.error(`[action:${verb}]`, stderr.trim());
       return reply;
     }
 
     // Never log a subprocess error object: its message may contain the full
     // argv. The action binary's stderr is the useful, non-secret diagnostic
     // channel.
-    const why = error.reason ?? (stderr.trim() || `wrapper ${verb} exited ${error.code ?? "abnormally"}`);
-    console.error(`[wrapper] ${verb} failed before a valid JSON reply:`, why);
+    const why = error.reason ?? (stderr.trim() || `action ${verb} exited ${error.code ?? "abnormally"}`);
+    console.error(`[action] ${verb} failed before a valid JSON reply:`, why);
     return { ok: false, error: why };
   }
 
-  if (stderr.trim()) console.error(`[wrapper:${verb}]`, stderr.trim());
+  if (stderr.trim()) console.error(`[action:${verb}]`, stderr.trim());
 
   // stdout is a contract: exactly one JSON object. Never scrape the prose on
   // stderr for meaning.
   const reply = parseWrapperReply<T>(stdout);
   if (reply) return reply;
-  console.error(`[wrapper] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
-  return { ok: false, error: "wrapper returned a malformed reply" };
+  console.error(`[action] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
+  return { ok: false, error: "action returned a malformed reply" };
 }
 
 // Mirrors the action binary's own validation. Not a substitute for it: the
@@ -386,7 +386,7 @@ export const stagerService = {
    */
   async listJobsOrThrow(): Promise<JobView[]> {
     const res = await callWrapper<{ jobs: JobView[] }>("jobs", []);
-    if (!res.ok) throw new Error(res.error ?? "the stager wrapper could not list jobs");
+    if (!res.ok) throw new Error(res.error ?? "the stager action could not list jobs");
     return res.data?.jobs ?? [];
   },
 

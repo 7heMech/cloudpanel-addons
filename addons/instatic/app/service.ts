@@ -53,20 +53,20 @@ async function callWrapper<T = unknown>(verb: string, args: string[]): Promise<W
     if (!stdout.trim()) {
       // No JSON on stdout means the action binary never got far enough to answer.
       // Surface its stderr rather than a bare exec error.
-      console.error(`[wrapper] ${verb} failed without a JSON reply:`, stderr || e.message);
-      return { ok: false, error: stderr.trim() || e.message || `wrapper ${verb} failed` };
+      console.error(`[action] ${verb} failed without a JSON reply:`, stderr || e.message);
+      return { ok: false, error: stderr.trim() || e.message || `action ${verb} failed` };
     }
   }
 
-  if (stderr.trim()) console.error(`[wrapper:${verb}]`, stderr.trim());
+  if (stderr.trim()) console.error(`[action:${verb}]`, stderr.trim());
 
   // stdout is a contract: exactly one JSON object. Never scrape the prose on
   // stderr for meaning.
   try {
     return JSON.parse(stdout.trim()) as WrapperResult<T>;
   } catch {
-    console.error(`[wrapper] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
-    return { ok: false, error: "wrapper returned a malformed reply" };
+    console.error(`[action] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
+    return { ok: false, error: "action returned a malformed reply" };
   }
 }
 
@@ -141,7 +141,7 @@ export const instaticService = {
    */
   async listInstancesOrThrow(): Promise<InstanceView[]> {
     const res = await callWrapper<{ instances: InstanceView[] }>("list", []);
-    if (!res.ok) throw new Error(res.error ?? "the Instatic wrapper could not list instances");
+    if (!res.ok) throw new Error(res.error ?? "the Instatic action could not list instances");
     return res.data?.instances ?? [];
   },
 
