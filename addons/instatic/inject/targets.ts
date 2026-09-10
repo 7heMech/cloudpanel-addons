@@ -6,10 +6,8 @@
 // the patching machinery.
 
 import type { AddonTarget } from "../../../cli/paths";
-import { headerTarget } from "../../../lib/panel-nav";
 
 export const INSTATIC_TARGETS: AddonTarget[] = [
-  headerTarget("Instatic"),
   {
     slug: "new-site-card",
     template: "Frontend/Site/New/index.html.twig",
@@ -25,7 +23,7 @@ export const INSTATIC_TARGETS: AddonTarget[] = [
               </svg>
             </div>
             <div class="deploy-application-container">
-              <a href="${url}/new" class="btn btn-white" target="_blank" rel="noopener">Instatic Site</a>
+              <a href="${url}/new" class="btn btn-white">Instatic Site</a>
             </div>
           </div>`,
   },

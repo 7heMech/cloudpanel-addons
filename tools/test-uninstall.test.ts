@@ -155,7 +155,7 @@ mock.module("./lib/sso-auth.ts", () => ({ authenticateRequest: async () => ({ re
 mock.module("./addons/instatic/app/index.ts", () => ({ handle: async () => new Response() }));
 mock.module("./addons/stager/app/index.ts", () => ({ handle: async () => new Response() }));
 mock.module("./lib/mount.ts", () => ({ splitMount: () => null }));
-mock.module("./lib/app-http.ts", () => ({ SECURITY_HEADERS: {}, esc: (value) => value }));
+mock.module("./lib/app-http.ts", () => ({ SECURITY_HEADERS: {}, esc: (value) => value, escJs: (value) => value }));
 mock.module("./lib/app-ui.ts", () => ({ renderLayout: () => "" }));
 mock.module("./lib/update-check.ts", () => ({ checkCliUpdate: async () => null }));
 
