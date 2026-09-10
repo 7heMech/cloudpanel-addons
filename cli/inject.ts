@@ -457,67 +457,25 @@ function stripNginxProxy(content: string): string {
 }
 
 /**
- * The one quote-, comment- and depth-aware pass every Nginx-config scanner
- * below is built from.
+ * The one quote- and comment-aware pass every scanner below is built from.
  *
- * `#` comments and `'`/`"` quoted strings (with backslash escapes) can hide
- * braces, and even hide the literal word "server" -- a `{` or a "server"
- * that only appears because it sits inside one of those must never be
- * mistaken for real config. This used to be handled by a brace-matcher that
- * tracked quote/comment state itself while a separate, unaware regex went
- * looking for "server {" starts -- two independent ideas of what counts as
- * "real" text, which is exactly the gap a commented-out
- * `# server { listen 8443; }` fell through: the regex has no notion of `#`,
- * so it matched "server {" anyway, and the brace-matcher, starting its scan
- * from that `{` rather than from the `#` before it, never saw the comment
- * either. It ended up as one bogus, self-consistent "block" -- not caught,
- * because both halves agreed with each other, just not with the truth.
+ * `#` comments and `'`/`"` strings can hide braces, and even hide the literal
+ * word "server". This used to be split between a brace-matcher that tracked
+ * quote/comment state itself and a separate, unaware regex that decided where
+ * to start matching -- two ideas of what counts as real config, which is the
+ * gap a commented-out `# server { listen 8443; }` fell through: both halves
+ * agreed with each other, just not with the truth.
  *
- * Masking closes that gap by making comment/quote tracking the *only* place
- * that decides what is real: every character inside a comment or a quoted
- * string is replaced with a space, one pass, before anything else looks at
- * the text. Newlines are left alone, so masked text lines up
- * character-for-character with the original -- offsets found in the masked
- * copy can be used to slice the original directly -- and everything downstream
- * (finding `server {`, matching its brace, reading `listen`/`server_name`
- * out of a block) runs on the masked text and can no longer be fooled by
- * something that only looks like config.
+ * So masking is now the only place that decision lives. Every character
+ * inside a comment or a string becomes a space, once, before anything else
+ * reads the text. Newlines are never consumed, so the masked copy lines up
+ * character-for-character with the original and offsets found in one can
+ * slice the other. Neither construct survives end of line, matching Nginx.
  */
+const NGINX_NOISE_RE = /#[^\n]*|"(?:\\.|[^"\\\n])*(?:"|\\)?|'(?:\\.|[^'\\\n])*(?:'|\\)?/g;
+
 function maskNginxNoise(content: string): string {
-  let masked = "";
-  let quote = "";
-  let inComment = false;
-  for (let i = 0; i < content.length; i++) {
-    const ch = content[i]!;
-    if (ch === "\n") {
-      // Neither a line comment nor a quoted string survives past end of line.
-      quote = "";
-      inComment = false;
-      masked += ch;
-      continue;
-    }
-    if (inComment) {
-      masked += " ";
-      continue;
-    }
-    if (quote) {
-      masked += " ";
-      if (ch === quote && content[i - 1] !== "\\") quote = "";
-      continue;
-    }
-    if (ch === "#") {
-      inComment = true;
-      masked += " ";
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      masked += " ";
-      continue;
-    }
-    masked += ch;
-  }
-  return masked;
+  return content.replace(NGINX_NOISE_RE, (noise) => " ".repeat(noise.length));
 }
 
 /** The `}` that closes the `{` at `open`. `masked` must already be noise-masked. */
@@ -531,11 +489,9 @@ function matchingBrace(masked: string, open: number): number | null {
 }
 
 interface ServerBlock {
-  start: number;
+  /** Offset of the block's closing `}`, which is where the proxy block is spliced in. */
   end: number;
-  /** Original text, for writing back to disk unchanged. */
-  body: string;
-  /** Same span with comments/strings blanked, for matching directives inside it. */
+  /** The block with comments/strings blanked, for matching directives inside it. */
   maskedBody: string;
 }
 
@@ -545,15 +501,9 @@ function serverBlocks(content: string): ServerBlock[] {
   const re = /\bserver\s*\{/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(masked))) {
-    const open = masked.indexOf("{", match.index);
-    const end = matchingBrace(masked, open);
+    const end = matchingBrace(masked, re.lastIndex - 1);
     if (end === null) continue;
-    blocks.push({
-      start: match.index,
-      end,
-      body: content.slice(match.index, end + 1),
-      maskedBody: masked.slice(match.index, end + 1),
-    });
+    blocks.push({ end, maskedBody: masked.slice(match.index, end + 1) });
     re.lastIndex = end + 1;
   }
   return blocks;
