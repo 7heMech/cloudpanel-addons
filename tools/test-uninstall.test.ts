@@ -103,7 +103,15 @@ mock.module("./cli/release.ts", () => ({
   resolveRelease: async () => ({ tag: "v1.0.0", assets: new Map() }),
   verifyAttestation: async () => {},
 }));
+// Derived from the real module for the same reason as the cli/paths.ts mock
+// above: a hand-listed replacement silently turns any newly added export into
+// undefined for every consumer reached through cli/index.ts. Every function
+// below that touches the real system (users, sudoers, systemd units, the
+// filesystem outside the test fixture) stays explicitly overridden; only
+// exports the test does not care about are inherited from the real module.
+const realProvision = await import("./cli/provision.ts");
 mock.module("./cli/provision.ts", () => ({
+  ...realProvision,
   ensureDirs: () => {},
   ensureServiceUser: () => {},
   ensureTimerArmed: () => {},
