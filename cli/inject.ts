@@ -337,9 +337,13 @@ export interface NginxPaths {
   stateDir?: string;
 }
 
+/** The installed CloudPanel panel vhost, unless an operator supplies another absolute path. */
+export const CLOUDPANEL_MASTER_VHOST = `${NGINX_SITES_DIR}/cloudpanel.conf`;
+
 export type NginxProxyState =
   | "ok"
   | "missing"
+  | "ambiguous"
   | "stale-content"
   | "upstream-changed"
   | "conflict"
@@ -371,46 +375,79 @@ function readNginxFile(path: string): string | null {
   }
 }
 
-function candidateScore(path: string, content: string): number {
-  const name = path.split("/").pop()?.toLowerCase() ?? "";
-  let score = 0;
-  if (name === "cloudpanel.conf" || name.startsWith("cloudpanel")) score += 100;
-  if (name === "default" || name === "default.conf") score += 40;
-  if (/listen\s+[^;]*\b8443\b/.test(content)) score += 80;
-  if (/\/home\/clp\/htdocs/.test(content)) score += 30;
-  if (/server_name\s+[^;]+;/.test(content)) score += 10;
-  return score;
+type MasterVhostResolution =
+  | { path: string; content: string }
+  | { state: "missing" | "ambiguous"; path?: string; detail: string };
+
+function masterVhostPath(options: NginxPaths): { path: string } | { detail: string; path?: string } {
+  const explicit = options.vhostPath || process.env.CLP_ADDONS_NGINX_VHOST;
+  if (explicit) {
+    if (!explicit.startsWith("/")) {
+      return { path: explicit, detail: "CloudPanel master vhost path must be absolute" };
+    }
+    return { path: explicit };
+  }
+
+  if (options.sitesDir === undefined) return { path: CLOUDPANEL_MASTER_VHOST };
+  const sitesDir = options.sitesDir;
+  if (!sitesDir.startsWith("/")) {
+    return { path: `${sitesDir}/cloudpanel.conf`, detail: "CloudPanel Nginx sites directory must be absolute" };
+  }
+  const normalizedDir = sitesDir.replace(/\/+$/, "");
+  return { path: normalizedDir ? `${normalizedDir}/cloudpanel.conf` : "/cloudpanel.conf" };
+}
+
+function listen8443Blocks(content: string): { start: number; end: number; body: string }[] {
+  return serverBlocks(stripNginxProxy(content))
+    .filter((block) => /\blisten\s+[^;]*\b8443\b/.test(block.body));
+}
+
+function resolveMasterVhost(options: NginxPaths = {}): MasterVhostResolution {
+  const candidate = masterVhostPath(options);
+  if ("detail" in candidate) {
+    return { state: "missing", ...candidate };
+  }
+  if (!existsSync(candidate.path)) {
+    return {
+      state: "missing",
+      path: candidate.path,
+      detail: `CloudPanel master vhost does not exist: ${candidate.path}`,
+    };
+  }
+
+  const content = readNginxFile(candidate.path);
+  if (content === null) {
+    return {
+      state: "missing",
+      path: candidate.path,
+      detail: `CloudPanel master vhost could not be read: ${candidate.path}`,
+    };
+  }
+
+  const blocks = listen8443Blocks(content);
+  if (blocks.length !== 1) {
+    const reason = blocks.length === 0
+      ? "no server block listening on port 8443"
+      : `${blocks.length} server blocks listening on port 8443`;
+    return {
+      state: "ambiguous",
+      path: candidate.path,
+      detail: `CloudPanel master vhost is ambiguous: ${candidate.path} contains ${reason}`,
+    };
+  }
+  return { path: candidate.path, content };
 }
 
 export function findMasterVhost(options: NginxPaths = {}): string | null {
-  const explicit = options.vhostPath || process.env.CLP_ADDONS_NGINX_VHOST;
-  if (explicit) return existsSync(explicit) ? explicit : null;
-
-  const dir = options.sitesDir ?? NGINX_SITES_DIR;
-  if (!existsSync(dir)) return null;
-  let names: string[];
-  try {
-    names = readdirSync(dir).filter((name) => !name.startsWith("."));
-  } catch {
-    return null;
-  }
-
-  let best: { path: string; score: number } | null = null;
-  for (const name of names) {
-    const path = `${dir}/${name}`;
-    const content = readNginxFile(path);
-    if (content === null || !/\bserver\s*\{/.test(content)) continue;
-    const score = candidateScore(path, content);
-    if (!best || score > best.score) best = { path, score };
-  }
-  return best?.path ?? null;
+  const resolved = resolveMasterVhost(options);
+  return "content" in resolved ? resolved.path : null;
 }
 
 export function masterVhostHost(options: NginxPaths = {}): string | null {
-  const path = findMasterVhost(options);
-  if (!path) return null;
-  const content = readNginxFile(path);
-  const match = content?.match(/\bserver_name\s+([^;]+);/);
+  const resolved = resolveMasterVhost(options);
+  if (!("content" in resolved)) return null;
+  const block = listen8443Blocks(resolved.content)[0];
+  const match = block?.body.match(/\bserver_name\s+([^;]+);/);
   if (!match) return null;
   return match[1]!.split(/\s+/).find((name) => name !== "_" && name !== "localhost") ?? null;
 }
@@ -461,14 +498,19 @@ function serverBlocks(content: string): { start: number; end: number; body: stri
   return blocks;
 }
 
-function renderNginxProxy(content: string, enabled: boolean): { content?: string; state?: "conflict" } {
+function renderNginxProxy(content: string, enabled: boolean): { content?: string; state?: "ambiguous" | "conflict"; detail?: string } {
   if (!enabled) return { content: stripNginxProxy(content) };
   const upstream = stripNginxProxy(content);
   if (/\blocation\s+(?:=\s*)?\/addons\//.test(upstream)) return { state: "conflict" };
 
-  const blocks = serverBlocks(upstream);
-  const target = blocks.find((block) => /\blisten\s+[^;]*\b8443\b/.test(block.body)) ?? blocks[0];
-  if (!target) return { state: "conflict" };
+  const blocks = listen8443Blocks(upstream);
+  if (blocks.length !== 1) {
+    return {
+      state: "ambiguous",
+      detail: "CloudPanel master vhost must contain exactly one server block listening on port 8443",
+    };
+  }
+  const target = blocks[0]!;
   return {
     content: `${upstream.slice(0, target.end)}\n${NGINX_PROXY_BLOCK}\n${upstream.slice(target.end)}`,
   };
@@ -518,17 +560,56 @@ function removeNginxState(files: { pristine: string; hash: string; path: string 
   rmSync(files.path, { force: true });
 }
 
+function hasNginxState(files: { pristine: string; hash: string; path: string }): boolean {
+  return existsSync(files.pristine) || existsSync(files.hash) || existsSync(files.path);
+}
+
+function readNginxBaseline(files: { pristine: string; hash: string; path: string }): { pristine: string; hash: string } | null {
+  try {
+    const pristine = readFileSync(files.pristine, "utf-8");
+    const hash = readFileSync(files.hash, "utf-8").trim();
+    if (!hash || hash !== sha256(pristine)) return null;
+    return { pristine, hash };
+  } catch {
+    return null;
+  }
+}
+
+function upstreamChangedResult(
+  vhostPath: string,
+  expected: string,
+  found: string,
+  detail = "CloudPanel rewrote the master vhost; no changes were made",
+): NginxReconcileResult {
+  return {
+    state: "upstream-changed",
+    changed: false,
+    vhostPath,
+    detail: `${detail} (recorded ${expected.slice(0, 12)}, current ${found.slice(0, 12)})`,
+  };
+}
+
 export function inspectNginxProxy(options: NginxPaths = {}): NginxProxyStatus {
-  const path = findMasterVhost(options);
-  if (!path) return { state: "missing", detail: "CloudPanel master vhost was not found" };
-  const content = readNginxFile(path);
-  if (content === null) return { state: "missing", vhostPath: path, detail: "vhost could not be read" };
+  const resolved = resolveMasterVhost(options);
+  if (!("content" in resolved)) {
+    return { state: resolved.state, vhostPath: resolved.path, detail: resolved.detail };
+  }
+  const path = resolved.path;
+  const content = resolved.content;
   const files = nginxStateFiles(options.stateDir ?? NGINX_PROXY_STATE_DIR);
-  if (existsSync(files.hash)) {
-    const expected = readFileSync(files.hash, "utf-8").trim();
+  const baseline = readNginxBaseline(files);
+  if (hasNginxState(files) && baseline === null) {
+    return {
+      state: "upstream-changed",
+      vhostPath: path,
+      detail: "managed Nginx baseline is missing or invalid; no changes were made",
+    };
+  }
+  if (baseline) {
+    const expected = baseline.hash;
     const found = sha256(stripNginxProxy(content));
     if (expected !== found) {
-      return { state: "upstream-changed", vhostPath: path, detail: "CloudPanel rewrote the master vhost" };
+      return upstreamChangedResult(path, expected, found);
     }
   }
   if (!content.includes("# clp-addons:proxy:start")) {
@@ -543,10 +624,11 @@ export function inspectNginxProxy(options: NginxPaths = {}): NginxProxyStatus {
 export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; reload?: boolean } = {}): NginxReconcileResult {
   const { enabled = true, reload = true, ...paths } = options;
   const p = nginxPaths(paths);
-  const selectedPath = findMasterVhost(p);
-  if (!selectedPath) {
-    return { state: "missing", changed: false, detail: "CloudPanel master vhost was not found" };
+  const resolved = resolveMasterVhost(p);
+  if (!("content" in resolved)) {
+    return { state: resolved.state, changed: false, vhostPath: resolved.path, detail: resolved.detail };
   }
+  const selectedPath = resolved.path;
   const vhostPath = (() => {
     try {
       return realpathSync(selectedPath);
@@ -555,23 +637,26 @@ export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; r
     }
   })();
 
-  const onDisk = readNginxFile(selectedPath);
-  if (onDisk === null) return { state: "missing", changed: false, vhostPath: selectedPath, detail: "vhost could not be read" };
+  const onDisk = resolved.content;
 
   const files = nginxStateFiles(p.stateDir);
-  mkdirSync(p.stateDir, { recursive: true });
   const upstream = stripNginxProxy(onDisk);
   const found = sha256(upstream);
-  let pristine: string | null = null;
-  try {
-    const stored = readFileSync(files.pristine, "utf-8");
-    const recorded = readFileSync(files.hash, "utf-8").trim();
-    if (recorded === sha256(stored) && recorded === found) pristine = stored;
-  } catch {
-    pristine = null;
+  const baseline = readNginxBaseline(files);
+  if (hasNginxState(files) && baseline === null) {
+    return {
+      state: "upstream-changed",
+      changed: false,
+      vhostPath: selectedPath,
+      detail: "managed Nginx baseline is missing or invalid; no changes were made",
+    };
   }
-  if (pristine === null) {
-    pristine = upstream;
+  if (baseline && baseline.hash !== found) {
+    return upstreamChangedResult(selectedPath, baseline.hash, found);
+  }
+  if (!baseline) {
+    mkdirSync(p.stateDir, { recursive: true });
+    const pristine = upstream;
     writeAtomic(files.pristine, pristine, 0o600);
     writeAtomic(files.hash, `${found}\n`, 0o600);
     writeAtomic(files.path, `${vhostPath}\n`, 0o600);
@@ -579,7 +664,12 @@ export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; r
 
   const rendered = renderNginxProxy(onDisk, enabled);
   if (!rendered.content) {
-    return { state: "conflict", changed: false, vhostPath: selectedPath, detail: "an unmanaged /addons/ location already exists" };
+    return {
+      state: rendered.state ?? "conflict",
+      changed: false,
+      vhostPath: selectedPath,
+      detail: rendered.detail ?? "an unmanaged /addons/ location already exists",
+    };
   }
   if (rendered.content === onDisk) {
     if (!enabled) removeNginxState(files);

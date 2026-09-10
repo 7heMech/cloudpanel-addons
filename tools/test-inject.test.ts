@@ -14,7 +14,7 @@
 import { expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, symlinkSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { NGINX_PROXY_BLOCK, inspectNginxProxy, reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
+import { findMasterVhost, NGINX_PROXY_BLOCK, inspectNginxProxy, reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
 import { headerTarget } from "../lib/panel-nav";
 import type { AddonTarget } from "../cli/paths";
 
@@ -106,14 +106,89 @@ const nginxResult = reconcileNginxProxy({ vhostPath: nginxLink, stateDir: nginxS
 check("Nginx reconciliation injects the UNIX-socket proxy", nginxResult.state === "ok" && readFileSync(nginxSource, "utf-8").includes(NGINX_PROXY_BLOCK));
 check("Nginx reconciliation preserves enabled-site symlinks", lstatSync(nginxLink).isSymbolicLink());
 check("Nginx inspection accepts the managed block", inspectNginxProxy({ vhostPath: nginxLink, stateDir: nginxState }).state === "ok");
+const nginxManaged = readFileSync(nginxSource, "utf-8");
+const nginxPristineBeforeDrift = readFileSync(`${nginxState}/vhost.pristine`, "utf-8");
+const nginxHashBeforeDrift = readFileSync(`${nginxState}/vhost.sha256`, "utf-8");
+const nginxPathBeforeDrift = readFileSync(`${nginxState}/vhost.path`, "utf-8");
 const nginxUpdated = nginxOriginal.replace("panel.example.test", "panel-updated.example.test");
 writeFileSync(nginxSource, nginxUpdated);
-const nginxReinjected = reconcileNginxProxy({ vhostPath: nginxLink, stateDir: nginxState, reload: false });
-check("Nginx reconciliation recovers after a vhost regeneration", nginxReinjected.state === "ok" && readFileSync(nginxSource, "utf-8").includes("panel-updated.example.test"));
+const nginxDrift = reconcileNginxProxy({ vhostPath: nginxLink, stateDir: nginxState, reload: false });
+check("Nginx reconciliation refuses upstream drift", nginxDrift.state === "upstream-changed" && !nginxDrift.changed && nginxDrift.detail?.includes("no changes were made") === true);
+check("Nginx upstream drift leaves the vhost untouched", readFileSync(nginxSource, "utf-8") === nginxUpdated);
+check("Nginx upstream drift preserves the pristine baseline",
+  readFileSync(`${nginxState}/vhost.pristine`, "utf-8") === nginxPristineBeforeDrift &&
+  readFileSync(`${nginxState}/vhost.sha256`, "utf-8") === nginxHashBeforeDrift &&
+  readFileSync(`${nginxState}/vhost.path`, "utf-8") === nginxPathBeforeDrift);
+check("Nginx inspection exposes upstream drift", inspectNginxProxy({ vhostPath: nginxLink, stateDir: nginxState }).state === "upstream-changed");
+writeFileSync(nginxSource, nginxManaged);
 const nginxRemoved = reconcileNginxProxy({ vhostPath: nginxLink, stateDir: nginxState, enabled: false, reload: false });
-check("Nginx reconciliation can remove its managed block", nginxRemoved.changed && readFileSync(nginxSource, "utf-8") === nginxUpdated);
+check("Nginx reconciliation can remove its managed block", nginxRemoved.changed && readFileSync(nginxSource, "utf-8") === nginxOriginal);
 check("removing the Nginx proxy clears its rollback state", !existsSync(`${nginxState}/vhost.pristine`) && !existsSync(`${nginxState}/vhost.sha256`));
 rmSync(nginxDir, { recursive: true, force: true });
+
+const discoveryDir = mkdtempSync(`${tmpdir()}/nginx-discovery-test-`);
+const discoveryState = `${discoveryDir}/state`;
+const discoveryMaster = `${discoveryDir}/cloudpanel.conf`;
+const discoveryCustomer = `${discoveryDir}/customer.conf`;
+const discoveryMasterContent = `server {\n    listen 8443 ssl;\n    server_name panel.example.test;\n}\n`;
+const discoveryCustomerContent = `server {\n    listen 8443 ssl;\n    server_name customer.example.test;\n    root /home/clp/htdocs/customer;\n}\n`;
+writeFileSync(discoveryMaster, discoveryMasterContent);
+writeFileSync(discoveryCustomer, discoveryCustomerContent);
+const savedVhostOverride = process.env.CLP_ADDONS_NGINX_VHOST;
+delete process.env.CLP_ADDONS_NGINX_VHOST;
+try {
+  check("Nginx discovery uses the fixed CloudPanel vhost filename",
+    findMasterVhost({ sitesDir: discoveryDir }) === discoveryMaster);
+  const discoveryResult = reconcileNginxProxy({ sitesDir: discoveryDir, stateDir: discoveryState, reload: false });
+  check("fixed-vhost discovery ignores customer-vhost heuristics",
+    discoveryResult.state === "ok" && readFileSync(discoveryCustomer, "utf-8") === discoveryCustomerContent);
+} finally {
+  if (savedVhostOverride === undefined) delete process.env.CLP_ADDONS_NGINX_VHOST;
+  else process.env.CLP_ADDONS_NGINX_VHOST = savedVhostOverride;
+}
+rmSync(discoveryDir, { recursive: true, force: true });
+
+const ambiguousDir = mkdtempSync(`${tmpdir()}/nginx-ambiguous-test-`);
+const ambiguousState = `${ambiguousDir}/state`;
+const ambiguousVhost = `${ambiguousDir}/cloudpanel.conf`;
+const ambiguousCustomer = `${ambiguousDir}/customer.conf`;
+const ambiguousContent = `${discoveryMasterContent}\n${discoveryMasterContent.replace("panel.example.test", "panel-https.example.test")}`;
+writeFileSync(ambiguousVhost, ambiguousContent);
+writeFileSync(ambiguousCustomer, discoveryCustomerContent);
+const ambiguousBefore = readFileSync(ambiguousVhost, "utf-8");
+const ambiguousCustomerBefore = readFileSync(ambiguousCustomer, "utf-8");
+const savedAmbiguousOverride = process.env.CLP_ADDONS_NGINX_VHOST;
+delete process.env.CLP_ADDONS_NGINX_VHOST;
+try {
+  const ambiguousResult = reconcileNginxProxy({ sitesDir: ambiguousDir, stateDir: ambiguousState, reload: false });
+  check("Nginx discovery refuses an ambiguous master vhost", ambiguousResult.state === "ambiguous" && !ambiguousResult.changed && ambiguousResult.detail?.includes("2 server blocks") === true);
+  check("ambiguous master-vhost refusal makes no vhost changes", readFileSync(ambiguousVhost, "utf-8") === ambiguousBefore);
+  check("ambiguous master-vhost refusal leaves customer vhosts untouched", readFileSync(ambiguousCustomer, "utf-8") === ambiguousCustomerBefore);
+  check("ambiguous master-vhost refusal creates no rollback state", !existsSync(ambiguousState));
+} finally {
+  if (savedAmbiguousOverride === undefined) delete process.env.CLP_ADDONS_NGINX_VHOST;
+  else process.env.CLP_ADDONS_NGINX_VHOST = savedAmbiguousOverride;
+}
+rmSync(ambiguousDir, { recursive: true, force: true });
+
+const missingMasterDir = mkdtempSync(`${tmpdir()}/nginx-missing-master-test-`);
+const missingMasterState = `${missingMasterDir}/state`;
+const missingCustomer = `${missingMasterDir}/customer.conf`;
+writeFileSync(missingCustomer, discoveryCustomerContent);
+const missingCustomerBefore = readFileSync(missingCustomer, "utf-8");
+const savedMissingOverride = process.env.CLP_ADDONS_NGINX_VHOST;
+delete process.env.CLP_ADDONS_NGINX_VHOST;
+try {
+  const missingResult = reconcileNginxProxy({ sitesDir: missingMasterDir, stateDir: missingMasterState, reload: false });
+  check("Nginx discovery fails closed when the fixed master vhost is absent",
+    missingResult.state === "missing" && missingResult.detail?.includes("cloudpanel.conf") === true);
+  check("missing master-vhost refusal does not mutate customer vhosts", readFileSync(missingCustomer, "utf-8") === missingCustomerBefore);
+  check("missing master-vhost refusal creates no rollback state", !existsSync(missingMasterState));
+} finally {
+  if (savedMissingOverride === undefined) delete process.env.CLP_ADDONS_NGINX_VHOST;
+  else process.env.CLP_ADDONS_NGINX_VHOST = savedMissingOverride;
+}
+rmSync(missingMasterDir, { recursive: true, force: true });
 
 const nginxFailureDir = mkdtempSync(`${tmpdir()}/nginx-failure-test-`);
 const nginxFailureVhost = `${nginxFailureDir}/cloudpanel.conf`;
