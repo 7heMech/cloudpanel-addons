@@ -1,6 +1,8 @@
 import { INSTATIC_TARGETS } from "../addons/instatic/inject/targets";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 
+export { PANEL_IDENTITY_PATH } from "./action-constants";
+
 export { mountPath } from "../lib/mount";
 
 export const REPO = "7heMech/cloudpanel-addons";
@@ -51,8 +53,6 @@ export interface AddonSpec {
   name: string;
   title?: string;
   description?: string;
-  wrapperArtifact: string;
-  wrapperPath: string;
   configFile: string;
   requiresUnits?: string[];
   stateDir: string;
@@ -65,8 +65,6 @@ export const ADDONS: Record<string, AddonSpec> = {
     name: "instatic",
     title: "Instatic",
     description: "Instant static site hosting and staging on CloudPanel",
-    wrapperArtifact: "clp-action-instatic",
-    wrapperPath: `${LIBEXEC_DIR}/clp-action-instatic`,
     configFile: `${CONFIG_DIR}/instatic.conf`,
     requiresUnits: ["docker"],
     stateDir: `${STATE_DIR}/instatic`,
@@ -76,8 +74,6 @@ export const ADDONS: Record<string, AddonSpec> = {
     name: "stager",
     title: "Stager",
     description: "Instant staging environments & site clones (WordPress, PHP, Node.js)",
-    wrapperArtifact: "clp-action-stager",
-    wrapperPath: `${LIBEXEC_DIR}/clp-action-stager`,
     configFile: `${CONFIG_DIR}/stager.conf`,
     stateDir: `${STATE_DIR}/stager`,
     maintenanceVerb: "prune",

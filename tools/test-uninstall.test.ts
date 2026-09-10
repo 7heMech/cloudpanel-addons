@@ -6,19 +6,20 @@ import { tmpdir } from "node:os";
 
 const repo = join(import.meta.dir, "..");
 const root = mkdtempSync(`${tmpdir()}/uninstall-test-`);
-const libexecDir = `${root}/libexec`;
-const stateDir = `${root}/state`;
-const configFile = `${root}/instatic.conf`;
-const wrapperPath = `${libexecDir}/clp-action-instatic`;
-const identityPath = `${root}/panel-identity.conf`;
-const callsPath = `${root}/calls`;
-const identityReadsPath = `${root}/identity-reads`;
+const legacyActionDir = join(root, "legacy-actions");
+const stateDir = join(root, "state");
+const configFile = join(root, "instatic.conf");
+const actionBin = join(root, "clp-addons");
+const identityPath = join(root, "panel-identity.conf");
+const callsPath = join(root, "calls");
+const identityReadsPath = join(root, "identity-reads");
 const domains = ["alpha.example.test", "beta.example.test", "gamma.example.test"];
 let failureDomain: string | undefined;
 
-const wrapper = String.raw`#!/bin/sh
+const action = String.raw`#!/bin/sh
 set -eu
-domain="$3"
+[ "$1" = action ] && [ "$2" = instatic ] && [ "$3" = delete ]
+domain="$5"
 printf '%s\n' "$domain" >> "$CLP_TEST_CALLS"
 if [ ! -r "$CLP_TEST_IDENTITY" ]; then
   echo "panel identity is not readable" >&2
@@ -31,6 +32,7 @@ if [ "$CLP_TEST_FAIL_DOMAIN" = "$domain" ]; then
   echo "simulated delete failure" >&2
   exit 7
 fi
+printf '%s\n' '{"ok":true,"data":{"status":"deleted"}}'
 `;
 
 const childScript = String.raw`
@@ -41,10 +43,10 @@ import { spawnSync } from "node:child_process";
 const root = process.env.CLP_TEST_ROOT;
 const stateDir = process.env.CLP_TEST_STATE;
 const configFile = process.env.CLP_TEST_CONFIG;
-const wrapperPath = process.env.CLP_TEST_WRAPPER;
+const actionBin = process.env.CLP_TEST_ACTION_BIN;
 const identityPath = process.env.CLP_TEST_IDENTITY;
-const libexecDir = process.env.CLP_TEST_LIBEXEC;
-if (!root || !stateDir || !configFile || !wrapperPath || !identityPath || !libexecDir) {
+const legacyActionDir = process.env.CLP_TEST_LEGACY_ACTION_DIR;
+if (!root || !stateDir || !configFile || !actionBin || !identityPath || !legacyActionDir) {
   throw new Error("test fixture environment is incomplete");
 }
 
@@ -52,8 +54,6 @@ const spec = {
   name: "instatic",
   title: "Instatic",
   description: "test addon",
-  wrapperArtifact: "clp-action-instatic",
-  wrapperPath,
   configFile,
   requiresUnits: [],
   stateDir,
@@ -75,8 +75,8 @@ function parseFlags(argv) {
   return { positional, flags };
 }
 
-function tryWrapper(command, args) {
-  if (command !== wrapperPath) return { ok: true, out: "" };
+function tryAction(command, args) {
+  if (command !== actionBin) return { ok: true, out: "" };
   const result = spawnSync(command, args, { encoding: "utf8", env: process.env });
   const stderr = typeof result.stderr === "string" ? result.stderr : "";
   const stdout = typeof result.stdout === "string" ? result.stdout : "";
@@ -88,12 +88,10 @@ mock.module("./cli/paths.ts", () => ({
   ADDONS: { instatic: spec },
   ARTIFACT_MANIFEST_PATH: root + "/artifacts.json",
   CLI_ARTIFACT: "clp-addons-linux-x64",
-  CLI_BIN: root + "/clp-addons",
-  HMAC_KEY_PATH: root + "/hmac.key",
-  LIBEXEC_DIR: libexecDir,
+  CLI_BIN: actionBin,
+  LIBEXEC_DIR: legacyActionDir,
   MANAGER_UNIT: "clp-addons.service",
   PANEL_GROUP: "clp",
-  SESSION_VALIDATOR_ARTIFACT: "clp-verify-session",
   SOCKET_PATH: root + "/manager.sock",
   mountPath: (name) => "/addons/" + name,
 }));
@@ -106,14 +104,11 @@ mock.module("./cli/release.ts", () => ({
 }));
 mock.module("./cli/provision.ts", () => ({
   ensureDirs: () => {},
-  ensureHmacKey: () => {},
   ensureServiceUser: () => {},
   ensureTimerArmed: () => {},
   hardenBackups: () => {},
-  installSessionValidator: () => {},
   installSudoers: () => {},
   installUnits: () => {},
-  installWrapper: () => {},
   installedConfig: () => existsSync(configFile),
   purgeTwigCache: () => {},
   removeLegacyInstall: () => {},
@@ -123,7 +118,6 @@ mock.module("./cli/provision.ts", () => ({
     removeSudoersCalls++;
     rmSync(identityPath, { force: true });
   },
-  SESSION_VALIDATOR_PATH: root + "/clp-verify-session",
   startUnits: () => {},
   stopUnits: () => {},
   unitActive: () => "inactive",
@@ -147,7 +141,7 @@ mock.module("./cli/util.ts", () => ({
   log: { step: () => {}, ok: () => {}, warn: () => {}, err: () => {}, plain: () => {} },
   parseFlags,
   requireRoot: () => {},
-  tryRun: tryWrapper,
+  tryRun: tryAction,
   writeAtomic: () => {},
 }));
 mock.module("./lib/panel-snapshot.ts", () => ({ generateSnapshot: () => {} }));
@@ -175,15 +169,15 @@ try {
 function resetFixture(): void {
   rmSync(stateDir, { recursive: true, force: true });
   mkdirSync(stateDir, { recursive: true });
-  mkdirSync(libexecDir, { recursive: true });
+  mkdirSync(legacyActionDir, { recursive: true });
   for (const domain of domains) {
-    mkdirSync(`${stateDir}/${domain}`, { recursive: true });
-    writeFileSync(`${stateDir}/${domain}/meta.json`, "{}\n");
+    mkdirSync(join(stateDir, domain), { recursive: true });
+    writeFileSync(join(stateDir, domain, "meta.json"), "{}\n");
   }
   writeFileSync(configFile, "RUN_AS=clp-addons\n");
   writeFileSync(identityPath, "PRIMARY=panel.example.test\nALIASES=\n");
-  writeFileSync(wrapperPath, wrapper, { mode: 0o755 });
-  chmodSync(wrapperPath, 0o755);
+  writeFileSync(actionBin, action, { mode: 0o755 });
+  chmodSync(actionBin, 0o755);
   rmSync(callsPath, { force: true });
   rmSync(identityReadsPath, { force: true });
   failureDomain = undefined;
@@ -198,9 +192,9 @@ function runUninstall(): { ok: boolean; error?: string; removeSudoersCalls: numb
       CLP_TEST_ROOT: root,
       CLP_TEST_STATE: stateDir,
       CLP_TEST_CONFIG: configFile,
-      CLP_TEST_WRAPPER: wrapperPath,
+      CLP_TEST_ACTION_BIN: actionBin,
       CLP_TEST_IDENTITY: identityPath,
-      CLP_TEST_LIBEXEC: libexecDir,
+      CLP_TEST_LEGACY_ACTION_DIR: legacyActionDir,
       CLP_TEST_FAIL_DOMAIN: failureDomain ?? "",
       CLP_TEST_CALLS: callsPath,
       CLP_TEST_IDENTITY_READS: identityReadsPath,
@@ -239,9 +233,9 @@ test.serial("purge preserves state and identity when an instance delete fails", 
   }
   expect(existsSync(identityPath)).toBe(true);
   expect(existsSync(stateDir)).toBe(true);
-  expect(existsSync(`${stateDir}/${failureDomain}/meta.json`)).toBe(true);
+  expect(existsSync(join(stateDir, failureDomain ?? "", "meta.json"))).toBe(true);
   expect(existsSync(configFile)).toBe(true);
-  expect(existsSync(wrapperPath)).toBe(true);
+  expect(existsSync(actionBin)).toBe(true);
 });
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));

@@ -10,7 +10,7 @@
 
 set -uo pipefail
 
-W=/usr/local/libexec/clp-addons/clp-action-instatic
+ACTION=/usr/local/bin/clp-addons
 DOMAIN=${1:-interrupt-test.clp-stg.local}
 PANEL_DB=/home/clp/htdocs/app/data/db.sq3
 STATE=/var/lib/clp-addons/instatic/${DOMAIN}
@@ -35,8 +35,8 @@ rm -rf "$STATE"
 grep -q "$DOMAIN" /etc/hosts || echo "127.0.0.1 $DOMAIN" >> /etc/hosts
 
 echo "== starting create, then killing the container mid-run =="
-$W create --domain "$DOMAIN" --port 39100 --tag 0.0.18 > /tmp/create-out.json 2>/tmp/create-err.log &
-wrapper_pid=$!
+"$ACTION" action instatic create --domain "$DOMAIN" --port 39100 --tag 0.0.18 > /tmp/create-out.json 2>/tmp/create-err.log &
+action_pid=$!
 
 # Wait for the container to exist, then destroy it so the health check fails
 # the way a crashing image would.
@@ -52,12 +52,12 @@ for _ in $(seq 1 120); do
 done
 [[ $killed -eq 1 ]] || echo "  note: container never appeared; create failed earlier"
 
-wait $wrapper_pid; rc=$?
-echo "  wrapper exit code: $rc"
+wait $action_pid; rc=$?
+echo "  action exit code: $rc"
 echo "  reply: $(tail -1 /tmp/create-out.json)"
 
 echo "== nothing may be left behind =="
-check "wrapper reported failure" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "yes"
+check "action reported failure" "$([[ $rc -ne 0 ]] && echo yes || echo no)" "yes"
 check "no container" "$(docker ps -a --format '{{.Names}}' | grep -Fxc "$CONTAINER")" "0"
 check "no CloudPanel site row" \
   "$(sqlite3 -readonly "$PANEL_DB" "SELECT COUNT(*) FROM site WHERE domain_name='${DOMAIN}';")" "0"

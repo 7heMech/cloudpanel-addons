@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -127,7 +127,7 @@ test("fails clearly when docker membership cannot be removed", () => {
 function provisionProbe(): {
   identityPath: string;
   paths: string[];
-  ghPaths: string[];
+  extraPaths: string[];
   rule: string;
   identity: { primary: string; aliases: string[] } | null;
   unsafeIdentity: { primary: string; aliases: string[] } | null;
@@ -139,11 +139,10 @@ function provisionProbe(): {
       panelIdentityFromVhost, sudoersCommandPaths, sudoersRule,
     } from "./cli/provision.ts";
     const specs = [ADDONS.instatic, ADDONS.stager];
-    const ghSpec = { ...ADDONS.instatic, wrapperPath: "/usr/local/libexec/clp-addons/gh" };
     console.log(JSON.stringify({
       identityPath: PANEL_IDENTITY_PATH,
       paths: sudoersCommandPaths(specs),
-      ghPaths: sudoersCommandPaths([...specs, ghSpec]),
+      extraPaths: sudoersCommandPaths([...specs, { ...ADDONS.instatic, name: "unlisted" }]),
       rule: sudoersRule(specs),
       identity: panelIdentityFromVhost(
         "server { listen 8443 ssl; server_name PANEL.Example.Test. www.PANEL.Example.Test. *.panel.example.test; }",
@@ -159,23 +158,22 @@ function provisionProbe(): {
   }));
 }
 
-test("sudoers names only the installed action wrappers", () => {
+test("sudoers names only the unified action binary and action namespace", () => {
   const result = provisionProbe();
   const paths = result.paths;
   const rule = result.rule;
 
-  expect(paths).toEqual([
-    "/usr/local/libexec/clp-addons/clp-action-instatic",
-    "/usr/local/libexec/clp-addons/clp-action-stager",
-  ].sort());
-  expect(rule).toBe(
-    `clp-addons ALL=(root) NOPASSWD: ${paths.join(", ")}`,
-  );
-  expect(rule).not.toContain("*");
-  expect(rule).not.toContain("/usr/local/libexec/clp-addons/gh");
-  expect(rule).toContain("/usr/local/libexec/clp-addons/clp-action-instatic");
-  expect(rule).toContain("/usr/local/libexec/clp-addons/clp-action-stager");
-  expect(result.ghPaths).not.toContain("/usr/local/libexec/clp-addons/gh");
+  expect(paths).toEqual(["/usr/local/bin/clp-addons"]);
+  expect(rule).toBe("clp-addons ALL=(root) NOPASSWD: /usr/local/bin/clp-addons action *");
+  expect(rule).toContain("/usr/local/bin/clp-addons action *");
+  expect(rule).not.toMatch(/NOPASSWD: \/usr\/local\/bin\/clp-addons(?:,|$)/);
+  expect(rule).not.toContain(" install");
+  expect(rule).not.toContain(" update");
+  expect(rule).not.toContain(" repair");
+  expect(rule).not.toContain(" status");
+  expect(rule).not.toContain(" uninstall");
+  expect(rule).not.toContain(" serve");
+  expect(result.extraPaths).toEqual(["/usr/local/bin/clp-addons"]);
 });
 
 test("an empty installed set grants no sudo commands", () => {
@@ -197,16 +195,8 @@ test("panel identity extraction rejects missing or unsafe names", () => {
   expect(unsafeIdentity).toBeNull();
 });
 
-test("the identity file is a separate root-owned wrapper input", () => {
+test("the identity file is a separate root-owned action input", () => {
   expect(provisionProbe().identityPath).toBe("/etc/clp-addons/panel-identity.conf");
-  const stager = readFileSync(join(import.meta.dir, "../addons/stager/wrapper/clp-action-stager"), "utf8");
-  const instatic = readFileSync(join(import.meta.dir, "../addons/instatic/wrapper/clp-action-instatic"), "utf8");
-  expect(stager).toContain(
-    'PANEL_IDENTITY_FILE="/etc/clp-addons/panel-identity.conf"',
-  );
-  expect(instatic).toContain(
-    'PANEL_IDENTITY_FILE="/etc/clp-addons/panel-identity.conf"',
-  );
 });
 
 test("manager unit hardens its namespace without changing the sudo boundary", () => {

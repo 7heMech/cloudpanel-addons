@@ -4,8 +4,7 @@ Addons for [CloudPanel](https://www.cloudpanel.io/). Multi-addon from the start:
 `instatic` and `stager`.
 
 The design decisions, and the reasoning behind them, live in `docs/DECISIONS.md`.
-Read that before changing anything under `addons/*/wrapper/`. Those scripts are
-the privilege boundary.
+The compiled action modules are the privilege boundary.
 
 ## instatic
 
@@ -27,11 +26,11 @@ imported, and the application's own config rewritten to point at the copy.
 
 It is [clp-stager](https://github.com/7heMech/clp-stager) as an addon. The script
 is interactive and runs in a terminal as root; this runs the same steps from the
-panel, behind CloudPanel SSO, with the argument validation in
-`addons/stager/wrapper/clp-action-stager` between the web page and root.
+panel, behind CloudPanel SSO, with the argument validation in the compiled
+Stager action between the web page and root.
 
 A clone takes minutes on a real site, so it is a job rather than a request. The
-wrapper hands the work to a transient systemd unit and answers with a job id;
+action binary hands the work to a transient systemd unit and answers with a job id;
 the page polls it and shows the log as it goes. Putting the work in its own unit
 is not decoration: the manager is a systemd service with `Restart=always`, and
 anything it forked itself would be killed with it mid-clone.
@@ -94,8 +93,8 @@ clp-addons uninstall <addon> --yes [--purge]
 clp-addons serve
 ```
 
-`clp-addons update` verifies and atomically installs the CLI and wrappers for
-every installed addon when artifacts are missing or changed,
+`clp-addons update` verifies and atomically installs the unified CLI/action
+binary when the artifact is missing or changed,
 restarts `clp-addons.service`, and reconciles the Twig and Nginx integration.
 Same-version updates reuse artifacts only when their root-owned manifest hashes
 match. The active paths are always
@@ -108,9 +107,9 @@ permissions, sudoers, units, panel snapshot, Twig anchors, and Nginx proxy after
 reboots or CloudPanel updates. `status` is a compact dashboard for those
 invariants and prints the `/addons/` URL.
 
-Uninstalling an addon removes its wrapper, config, sudo permission, and panel
-anchors. Instance data remains unless `--purge` is supplied; purge archives it
-before asking the root wrapper to remove each instance. The manager itself never
+Uninstalling an addon removes its config, action permission, and panel anchors.
+Instance data remains unless `--purge` is supplied; purge archives it before
+asking the root action binary to remove each instance. The manager itself never
 creates a CloudPanel site. Instatic instances and Stager clones do create the
 CloudPanel sites they represent.
 
@@ -124,9 +123,9 @@ UNIX socket, and the manager dispatches `/addons/instatic/` and
 or reverse-proxy site.
 
 The service account is not a CloudPanel site user and has no login shell or
-Docker membership. It can invoke only the installed root-owned wrappers through
-`/etc/sudoers.d/clp-addons`. The wrappers validate their complete argument set
-before reading input, deriving paths, or taking locks. Instatic containers run
+Docker membership. It can invoke only the action namespace of the root-owned
+binary through `/etc/sudoers.d/clp-addons`. The action modules validate their
+complete argument set before reading input, deriving paths, or taking locks. Instatic containers run
 as their instance site users, and Stager work runs in transient systemd units so
 long clones survive a manager restart.
 
@@ -159,7 +158,7 @@ bun run lint:wrapper     # needs shellcheck
 bun run build            # dist/clp-addons-linux-x64
 ```
 
-The wrapper contract tests run as root against an installed wrapper and are not
+The action contract tests run as root against an installed binary and are not
 part of `bun run test`:
 
 ```bash
@@ -178,7 +177,6 @@ them to `/var/lib/clp-addons/templates` at runtime instead of vendoring them.
 
 ```bash
 bun run build
-for w in addons/*/wrapper/*; do install -m 0755 "$w" "dist/$(basename "$w")"; done
 (cd dist && sha256sum -- * > SHA256SUMS)
 ./dist/clp-addons-linux-x64 install instatic --local=dist
 ```

@@ -2,21 +2,21 @@ import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync,
 } from "node:fs";
 import {
-  ADDON_NAMES, ANCHOR_SERVICE, CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS,
-  ADDONS, GH_PRIVATE, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT, PANEL_GROUP, RECONCILE_PATH, RECONCILE_SERVICE,
+  ADDON_NAMES, ANCHOR_SERVICE, CLI_BIN, CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS,
+  ADDONS, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT, PANEL_GROUP, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
-  SYSTEMD_DIR, TWIG_CACHE_DIR, type AddonSpec, templateWatchPaths,
+  SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, type AddonSpec, templateWatchPaths,
 } from "./paths";
 import { findMasterVhost } from "./inject";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
+
+export { PANEL_IDENTITY_PATH } from "./paths";
 
 const LEGACY_MANAGER_AUTH = `${CONFIG_DIR}/manager-auth`;
 const LEGACY_PLATFORM_CONFIG = `${CONFIG_DIR}/platform.conf`;
 const LEGACY_SITE_MARKER = `${STATE_DIR}/.site-created-by-addons`;
 const LEGACY_LIBRARY_DIR = "/usr/local/lib/clp-addons";
 const BACKUP_DIR = "/var/backups/clp-addons";
-export const PANEL_IDENTITY_PATH = `${CONFIG_DIR}/panel-identity.conf`;
-
 export interface ProvisionCommandRunner {
   run(command: string, args: string[]): string;
   tryRun(command: string, args: string[]): { ok: boolean; out: string };
@@ -74,22 +74,21 @@ function installedAddonSpecs(): AddonSpec[] {
 }
 
 export function sudoersCommandPaths(specs: AddonSpec[] = installedAddonSpecs()): string[] {
-  const wrappers = specs.map((spec) => spec.wrapperPath).filter((path) => path !== GH_PRIVATE);
-  return [...new Set(wrappers)].sort();
+  return specs.length > 0 ? [CLI_BIN] : [];
 }
 
 export function sudoersRule(specs: AddonSpec[] = installedAddonSpecs()): string {
-  const commands = sudoersCommandPaths(specs);
-  if (commands.length === 0) return "";
-  if (commands.some((path) => !path.startsWith("/") || /[*?[\]]/.test(path))) {
-    fatal("refusing to install sudoers configuration with a non-absolute or wildcard command path");
-  }
-  return `${SERVICE_USER} ALL=(root) NOPASSWD: ${commands.join(", ")}`;
+  if (specs.length === 0) return "";
+  // The argument wildcard is confined to the action namespace. The binary
+  // rejects unknown addons and addons without a root-owned installed config,
+  // while this prefix keeps install/update/repair/status/uninstall/serve
+  // outside sudoers' match.
+  return `${SERVICE_USER} ALL=(root) NOPASSWD: ${CLI_BIN} action *`;
 }
 
 function ensurePanelIdentity(quiet = false): void {
   const vhostPath = findMasterVhost();
-  if (!vhostPath) fatal("CloudPanel master vhost was not found; refusing to install root wrappers");
+  if (!vhostPath) fatal("CloudPanel master vhost was not found; refusing to install privileged actions");
 
   let content: string;
   let rootOwned = false;
@@ -109,7 +108,7 @@ function ensurePanelIdentity(quiet = false): void {
 
   const aliases = identity.aliases.length ? identity.aliases.join(" ") : "";
   const body =
-    "# Managed by clp-addons; read by root action wrappers.\n" +
+    "# Managed by clp-addons; read by the root action binary.\n" +
     `PRIMARY=${identity.primary}\n` +
     `ALIASES=${aliases}\n`;
   writeAtomic(PANEL_IDENTITY_PATH, body, 0o600);
@@ -230,9 +229,14 @@ export function removeLegacyInstall(quiet = false): void {
     `${LEGACY_LIBRARY_DIR}/releases`,
     `${LEGACY_LIBRARY_DIR}/current`,
     `${LEGACY_LIBRARY_DIR}/gh`,
-    `${LEGACY_LIBRARY_DIR}/clp-action-instatic`,
-    `${LEGACY_LIBRARY_DIR}/clp-action-stager`,
   ]) rmSync(path, { recursive: true, force: true });
+  try {
+    for (const entry of readdirSync(LEGACY_LIBRARY_DIR)) {
+      if (entry.startsWith("clp-action-")) rmSync(`${LEGACY_LIBRARY_DIR}/${entry}`, { force: true });
+    }
+  } catch {
+    // The legacy directory is optional on a fresh installation.
+  }
   tryRun("rmdir", [LEGACY_LIBRARY_DIR]);
 }
 
@@ -337,12 +341,6 @@ export function hardenBackups(spec: AddonSpec, quiet = false): void {
   if (changed && !quiet) log.ok(`${dir}: tightened ${changed} path(s)`);
 }
 
-export function installWrapper(spec: AddonSpec, bytes: Buffer, quiet = false): void {
-  writeAtomic(spec.wrapperPath, bytes, 0o755);
-  run("chown", ["root:root", spec.wrapperPath]);
-  if (!quiet) log.ok(`installed ${spec.wrapperArtifact}`);
-}
-
 export function installSudoers(quiet = false, specs: AddonSpec[] = installedAddonSpecs()): void {
   const file = "/etc/sudoers.d/clp-addons";
   const candidate = "/etc/sudoers.d/.clp-addons.candidate";
@@ -369,7 +367,7 @@ export function installSudoers(quiet = false, specs: AddonSpec[] = installedAddo
     rmSync(file, { force: true });
     fatal(`sudoers validation failed after installation:\n${full.out}`);
   }
-  if (!quiet) log.ok(`sudoers allows ${SERVICE_USER} to run the managed helpers`);
+  if (!quiet) log.ok(`sudoers allows ${SERVICE_USER} to run the installed addon actions`);
 }
 
 export function removeSudoers(): void {
@@ -404,7 +402,6 @@ export function serviceUnit(specs: AddonSpec[]): string {
   const after = ["network-online.target", ...dependencies.map((unit) => `${unit}.service`)];
   const env = specs.flatMap((spec) => [
     `Environment=${spec.name.toUpperCase()}_APP_DATA=${spec.stateDir}`,
-    `Environment=${spec.name.toUpperCase()}_WRAPPER=${spec.wrapperPath}`,
   ]);
   return `[Unit]
 Description=CloudPanel Addons manager

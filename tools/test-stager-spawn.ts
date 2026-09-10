@@ -19,12 +19,12 @@ async function captureErrors<T>(work: () => Promise<T>): Promise<{ value: T; lin
 }
 
 const tempDir = mkdtempSync(join("/tmp", "clp-stager-spawn-"));
-const wrapperPath = join(tempDir, "wrapper");
+const actionProbePath = join(tempDir, "action-probe");
 const modePath = join(tempDir, "mode");
 const argvPath = join(tempDir, "argv");
 const stdinPath = join(tempDir, "stdin");
 const servicePath = join(dirname(fileURLToPath(import.meta.url)), "../addons/stager/app/service.ts");
-const previousWrapper = process.env.STAGER_WRAPPER;
+const previousActionTestBin = process.env.CLP_ADDONS_ACTION_TEST_BIN;
 const originalGetuid = Object.getOwnPropertyDescriptor(process, "getuid");
 const needsDirectWrapperForTest = process.getuid?.() !== 0;
 
@@ -69,11 +69,11 @@ esac
 `;
 
 try {
-  writeFileSync(wrapperPath, wrapper, { mode: 0o700 });
-  chmodSync(wrapperPath, 0o700);
+  writeFileSync(actionProbePath, wrapper, { mode: 0o700 });
+  chmodSync(actionProbePath, 0o700);
   writeFileSync(modePath, "success\n");
 
-  process.env.STAGER_WRAPPER = wrapperPath;
+  process.env.CLP_ADDONS_ACTION_TEST_BIN = actionProbePath;
   const { callWrapper, stagerService } = await import("../addons/stager/app/service.ts");
 
   const password = "secret password that must stay off argv";
@@ -90,6 +90,7 @@ try {
   });
   assert(success.lines.some((line) => line.includes("[wrapper:clone] wrapper diagnostic")));
   const argv = readFileSync(argvPath, "utf8");
+  assert(argv.startsWith("action\nstager\nclone\n"));
   assert(argv.includes("--email\nadmin@example.com\n"));
   assert(!argv.includes(password));
   assert(!argv.includes(mfaCode));
@@ -157,7 +158,7 @@ try {
   console.log("stager spawn tests: 7 passed, 0 failed");
 } finally {
   rmSync(tempDir, { recursive: true, force: true });
-  if (previousWrapper === undefined) delete process.env.STAGER_WRAPPER;
-  else process.env.STAGER_WRAPPER = previousWrapper;
+  if (previousActionTestBin === undefined) delete process.env.CLP_ADDONS_ACTION_TEST_BIN;
+  else process.env.CLP_ADDONS_ACTION_TEST_BIN = previousActionTestBin;
   if (originalGetuid) Object.defineProperty(process, "getuid", originalGetuid);
 }

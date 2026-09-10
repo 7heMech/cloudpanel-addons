@@ -151,13 +151,13 @@ CMD ["/lib/systemd/systemd"]
 ### Task 5: Single Binary Path & Unified `clp-addons update`
 1. **Filesystem Layout:**
    - Primary Binary: `/usr/local/bin/clp-addons` (Used by both CLI and systemd service).
-   - Wrapper Scripts: `/usr/local/libexec/clp-addons/clp-action-*`.
-   - Sudoers Drop-in: `/etc/sudoers.d/clp-addons` allowing `clp-addons ALL=(root) NOPASSWD: /usr/local/libexec/clp-addons/*`.
+   - Addon actions: compiled into `/usr/local/bin/clp-addons` under `action`.
+   - Sudoers Drop-in: `/etc/sudoers.d/clp-addons` allowing `clp-addons ALL=(root) NOPASSWD: /usr/local/bin/clp-addons action *`.
 2. **Unified `clp-addons update`:**
    - Step 1: Query GitHub releases API for latest release.
    - Step 2: If up to date, report and exit.
-   - Step 3: Fetch `clp-addons-linux-x64` and wrappers. Verify checksums and Sigstore attestations.
-   - Step 4: Atomic file write over `/usr/local/bin/clp-addons` and `/usr/local/libexec/clp-addons/*`.
+   - Step 3: Fetch `clp-addons-linux-x64`. Verify checksums and Sigstore attestations.
+   - Step 4: Atomically replace `/usr/local/bin/clp-addons`.
    - Step 5: `systemctl restart clp-addons`.
    - Step 6: Run `reconcile` on Twig templates and Nginx vhost.
    - Step 7: Deprecate `self-update`; make `upgrade` an alias to `update`.

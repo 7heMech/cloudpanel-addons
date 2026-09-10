@@ -1,8 +1,6 @@
 import { expect, mock, test } from "bun:test";
 import * as nodeFs from "node:fs";
-import {
-  ADDONS, ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR,
-} from "../cli/paths";
+import { ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN } from "../cli/paths";
 import * as realProvision from "../cli/provision";
 
 const calls: string[] = [];
@@ -45,7 +43,6 @@ function record(name: string): (...args: unknown[]) => void {
 
 const installedArtifacts = [
   { name: CLI_ARTIFACT, path: CLI_BIN },
-  ...Object.values(ADDONS).map((spec) => ({ name: spec.wrapperArtifact, path: spec.wrapperPath })),
 ];
 const artifactBytes = new Map(installedArtifacts.map(({ path }) => [path, Buffer.from(path, "utf-8")]));
 const artifactChecksums = Object.fromEntries(installedArtifacts.map(({ name, path }) => [
@@ -107,7 +104,6 @@ mock.module("../cli/provision", () => ({
   hardenBackups: record("hardenBackups"),
   installSudoers: () => { calls.push("installSudoers"); provisioning.sudoers = true; },
   installUnits: () => { calls.push("installUnits"); provisioning.units = true; },
-  installWrapper: record("installWrapper"),
   installedConfig: () => hasInstalledAddon,
   purgeTwigCache: record("purgeTwigCache"),
   removeLegacyInstall: () => { calls.push("removeLegacyInstall"); provisioning.legacyInstall = false; },
@@ -175,7 +171,6 @@ test("an up-to-date update still runs provisioning and reconciliation", async ()
 
   expect(calls).toContain("fetchVerified");
   expect(calls).toContain("verifyAttestation");
-  expect(calls.filter((call) => call === "installWrapper")).toHaveLength(2);
   for (const name of [
     "ensureServiceUser",
     "removeLegacyInstall",
@@ -219,7 +214,6 @@ test("an up-to-date update with no addons keeps the no-service branch", async ()
 
   expect(calls).toContain("fetchVerified");
   expect(calls).toContain("verifyAttestation");
-  expect(calls).not.toContain("installWrapper");
   expect(calls).toContain("ensureServiceUser");
   expect(calls).toContain("removeLegacyUnits");
   expect(calls).toContain("removeLegacyUsers");
@@ -241,7 +235,6 @@ test("a same-version update reuses verified installed artifacts", async () => {
 
   expect(calls).not.toContain("fetchVerified");
   expect(calls).not.toContain("verifyAttestation");
-  expect(calls).not.toContain("installWrapper");
   expect(calls).toContain("installUnits");
   expect(calls).toContain("reconcileNginxProxy");
   artifactsAvailable = false;
@@ -258,7 +251,6 @@ test("a same-version update repairs a changed installed artifact", async () => {
 
   expect(calls).toContain("fetchVerified");
   expect(calls).toContain("verifyAttestation");
-  expect(calls.filter((call) => call === "installWrapper")).toHaveLength(2);
   artifactsAvailable = false;
   artifactTampered = false;
 });
