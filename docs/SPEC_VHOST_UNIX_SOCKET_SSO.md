@@ -1,14 +1,14 @@
 # CloudPanel Addons: Core Modernization & Simplification Specification
 
-> **STATUS: SUPERSEDED — HISTORICAL IMPLEMENTATION BRIEF.** This document is
+> **STATUS: SUPERSEDED (HISTORICAL IMPLEMENTATION BRIEF).** This document is
 > not a live task brief. The migration it specifies has already landed, and in
 > at least one important place (Task 3, authentication) landed **differently
 > than specified here**. It is kept, unedited in substance, as the record of
-> what was planned and why — do not treat it as a description of the current
+> what was planned and why. Do not treat it as a description of the current
 > system, and do not resume work against it as if it were open.
 >
 > For current architecture, read
-> [`DECISIONS.md`](DECISIONS.md#current-architecture) — specifically "Current
+> [`DECISIONS.md`](DECISIONS.md#current-architecture), specifically "Current
 > architecture" at the top of that file, and "Authentication is CloudPanel's,
 > not ours (superseded)" for the full history of why Task 3 below was not what
 > shipped. Corrections are marked inline below where a specific claim needs
@@ -52,7 +52,7 @@ To allow two independent agents (or approaches) to execute this specification co
 | **Site Management** | Creates reverse-proxy site in CloudPanel SQLite (`db.sq3`) | **No CloudPanel site created** (zero footprint in `site` table) |
 | **Identity & Account** | Hacked site user (`addon-xxx`) with disabled SFTP shell | Clean system user (`clp-addons`) with no login |
 | **IPC Transport** | TCP loopback `127.0.0.1:38080` (open to all local tenants) | UNIX domain socket (`/run/clp-addons/manager.sock`, `0660`) |
-| **Authentication** | Custom scrypt credentials in `/etc/clp-addons/manager-auth` | SSO via CloudPanel `PHPSESSID` $\rightarrow$ internal HMAC cookie *(planned; **not** what shipped — no HMAC cookie exchange exists. What shipped is a direct, unprivileged, bounded parse of the `PHPSESSID` session on every request, with no token issuance and no caching cookie. See `DECISIONS.md` "Authentication is CloudPanel's, not ours (superseded)".)* |
+| **Authentication** | Custom scrypt credentials in `/etc/clp-addons/manager-auth` | SSO via CloudPanel `PHPSESSID` $\rightarrow$ internal HMAC cookie *(planned; **not** what shipped. No HMAC cookie exchange exists. What shipped is a direct, unprivileged, bounded parse of the `PHPSESSID` session on every request, with no token issuance and no caching cookie. See `DECISIONS.md` "Authentication is CloudPanel's, not ours (superseded)".)* |
 | **Binary Paths** | Multiple dirs (`/usr/local/bin/clp-addons` & `/releases/<tag>`) | Single active binary (`/usr/local/bin/clp-addons`) |
 | **Updates** | Disjointed `update`, `upgrade`, and `self-update` commands | Unified single-step `clp-addons update` |
 | **Status CLI** | 30+ lines of raw internal diagnostics | Clean, scannable terminal dashboard |
@@ -107,7 +107,7 @@ CMD ["/lib/systemd/systemd"]
    * Update `ExecStart=/usr/local/bin/clp-addons serve`.
 3. **Bun Server Binding:**
    * *(Correction: this landed in `cli/index.ts`, not
-     `addons/instatic/app/service.ts` — that file has no `Bun.serve`/socket
+     `addons/instatic/app/service.ts`: that file has no `Bun.serve`/socket
      code at all. The actual bind is `cmdServe()` at `cli/index.ts:469-502`,
      and it is shared by every installed addon, not per-addon; see
      `DECISIONS.md` "One compiled binary, not one per addon".)*
@@ -143,7 +143,7 @@ CMD ["/lib/systemd/systemd"]
    * Extend `cli/inject.ts` to manage this block.
    * **Mandatory Invariant:** Run `nginx -t` before reloading Nginx. If `nginx -t` fails, revert immediately to the pristine snapshot to ensure CloudPanel never goes down.
 
-### Task 3: Root Session Validation & Token Exchange — NOT WHAT SHIPPED
+### Task 3: Root Session Validation & Token Exchange (NOT WHAT SHIPPED)
 
 > **This task's design was superseded before implementation and was never
 > built as specified.** Nothing named `clp-verify-session` exists anywhere in
@@ -153,21 +153,21 @@ CMD ["/lib/systemd/systemd"]
 > as a regression guard against this design creeping back in.
 >
 > **What is still correct below, and carried forward into what shipped:**
-> a session cannot be trusted blindly — it has to be checked for expiry and
-> for an authenticated security token — and `mfaAuthenticated`/2FA has to be
+> a session cannot be trusted blindly. It has to be checked for expiry and
+> for an authenticated security token, and `mfaAuthenticated`/2FA has to be
 > checked explicitly, not assumed. Both of those requirements are enforced by
 > what actually shipped.
 >
 > **What shipped instead:** `lib/sso-auth.ts` parses the `PHPSESSID` session
 > file directly, **unprivileged**, in the same process that serves the
-> request — no `sudo`, no separate root helper binary, no HMAC token issuance
+> request: no `sudo`, no separate root helper binary, no HMAC token issuance
 > or caching cookie. It validates the session id against `^[a-zA-Z0-9,-]+$`,
 > `lstat`s the session file and rejects symlinks, requires the file be owned
 > by the panel user `clp`, and caps its size, before running a bounded custom
 > PHP-serialization scanner (explicit depth and node limits) that checks
 > `_sf2_meta` expiry, the `_security_main` token, and `mfaAuthenticated ===
-> true`. An invalid or missing session redirects to `/login` on every request
-> — there is no cached "already verified" fast path to invalidate on logout,
+> true`. An invalid or missing session redirects to `/login` on every request.
+> There is no cached "already verified" fast path to invalidate on logout,
 > because there is nothing cached. See `DECISIONS.md`, "Current architecture
 > -> CloudPanel SSO" for the mechanism with file and line citations, and
 > "Authentication is CloudPanel's, not ours (superseded)" for why an
