@@ -289,6 +289,25 @@ export function ensurePanelSessionReadable(
   }
 }
 
+/**
+ * Same check as ensurePanelSessionReadable, but for the unattended repair path: it must
+ * never abort the run. Unlike interactive install, nobody is watching the exit code, so a
+ * missing session (e.g. no operator currently logged into the panel) can't be fatal -- it
+ * can only be logged so the SSO-is-broken signal isn't lost entirely.
+ */
+export function warnIfPanelSessionUnreadable(
+  commands: ProvisionCommandRunner = { run, tryRun },
+  sessionDir = SESSION_DIR,
+  expectedUid?: number,
+): void {
+  try {
+    ensurePanelSessionReadable(commands, sessionDir, expectedUid);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn(`panel session check failed, continuing without it: ${message}`);
+  }
+}
+
 export function ensureDirs(
   specs: AddonSpec[] = [],
   verifySession = false,

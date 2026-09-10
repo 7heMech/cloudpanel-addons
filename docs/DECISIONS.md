@@ -1637,6 +1637,41 @@ written itself earlier in the same run.
 Pruning now belongs to the two verbs whose output directory really is a rolling
 window, `update` and `snapshot`. `make_snapshot` writes the archive and stops.
 
+## Unattended repair must not fail when no panel session exists
+
+`ensureDirs`'s second argument, `verifySession`, calls `ensurePanelSessionReadable`
+(`cli/provision.ts:253-290`), which requires a currently existing `sess_*` file under
+the PHP session directory, owned by the panel user and readable by the service
+account. The check exists for `install`: a human runs it, sees a clear failure, and
+can act on it -- an unreadable session there means the addon's CloudPanel SSO
+integration cannot work.
+
+`cmdRepair` called `ensureDirs(all, true)` unconditionally, the same hard-fail check
+`cmdInstall` uses. But `repair` is not only run by an operator -- it is also the body
+of `clp-addons-reconcile.service`, fired by `clp-addons-reconcile.timer` every fifteen
+minutes (`OnCalendar=*:0/15`, `cli/provision.ts:469`), with nobody watching its exit
+code. Whenever no operator happened to be logged into the panel UI at that moment --
+which is the common case, not the exception, on most boxes most of the time --
+`ensurePanelSessionReadable` found no session file, `fatal()` threw, and every
+reconciliation step after it never ran: `writeConfig`, `hardenBackups`,
+`removeLegacyUnits`, `removeLegacyUsers`, `installSudoers`, `installUnits`,
+`generateSnapshot`, `startUnits`/`ensureTimerArmed`, `reconcileAnchors` and
+`reconcileNginx`. This reproduced on every installed panel; every fifteen minutes, the
+self-healing pass silently did nothing. Only `clp-addons-anchor.path` ->
+`repair --anchors-only` kept working, because that branch returns before the session
+gate is ever reached (`cli/index.ts:291-294`).
+
+`repair` now calls `ensureDirs(all)` (no session check) and separately
+`warnIfPanelSessionUnreadable()` (`cli/provision.ts:298-311`). That wrapper runs the
+identical check but turns a failure into `log.warn` instead of `fatal`, so an
+unreadable session is recorded in the journal instead of aborting the run -- and it
+cannot itself abort, whether the session file is merely missing or the whole session
+directory does not exist. `log.warn` writes through `console.warn` unconditionally; it
+is not gated by `--quiet` anywhere in this codebase, so the warning still reaches the
+journal from the timer's `repair --quiet` invocation. `install` is unchanged: it still
+calls `ensureDirs(specs, true)` and still fails loudly when no session exists, because
+there a human is present to see it and act.
+
 ## Known gaps
 
 - `--local` installs skip provenance verification by construction. Staging only.

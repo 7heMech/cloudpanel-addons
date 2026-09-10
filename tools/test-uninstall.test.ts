@@ -123,6 +123,7 @@ mock.module("./cli/provision.ts", () => ({
   stopUnits: () => {},
   unitActive: () => "inactive",
   unitPid: () => null,
+  warnIfPanelSessionUnreadable: () => {},
   writeConfig: () => {},
 }));
 mock.module("./cli/inject.ts", () => ({
