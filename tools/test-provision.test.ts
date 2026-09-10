@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import {
   ADDONS, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
 } from "../cli/paths";
+import { serviceUnit } from "../cli/provision";
 
 const REPO = join(import.meta.dir, "..");
 
@@ -213,4 +214,26 @@ test("the identity file is a separate root-owned wrapper input", () => {
   expect(instatic).toContain(
     'PANEL_IDENTITY_FILE="/etc/clp-addons/panel-identity.conf"',
   );
+});
+
+test("manager unit hardens its namespace without changing the sudo boundary", () => {
+  const unit = serviceUnit([ADDONS.instatic!, ADDONS.stager!]);
+
+  expect(unit).toContain("ProtectSystem=full");
+  expect(unit).toContain("ProtectHome=read-only");
+  expect(unit).toContain("PrivateTmp=yes");
+  expect(unit).toContain("ProtectKernelTunables=yes");
+  expect(unit).toContain("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6");
+  expect(unit).toContain(
+    "ReadWritePaths=/etc/nginx /etc/letsencrypt /etc/php /home /run/clp-addons /run/lock/clp-addons /var/backups/clp-addons /var/lib/clp-addons",
+  );
+
+  expect(unit).toContain("User=clp-addons");
+  expect(unit).toContain("Group=clp-addons");
+  expect(unit).toContain("SupplementaryGroups=clp");
+  expect(unit).toContain("RuntimeDirectory=clp-addons");
+  expect(unit).toContain("ExecStartPre=+/usr/local/bin/clp-addons ensure-key");
+  expect(unit).toContain("ExecStart=/usr/local/bin/clp-addons serve");
+  expect(unit).toContain("Restart=always");
+  expect(unit).not.toContain("NoNewPrivileges=");
 });

@@ -351,7 +351,7 @@ export function installedConfig(spec: AddonSpec): boolean {
   return existsSync(spec.configFile);
 }
 
-function serviceUnit(specs: AddonSpec[]): string {
+export function serviceUnit(specs: AddonSpec[]): string {
   const dependencies = [...new Set(specs.flatMap((spec) => spec.requiresUnits ?? []))];
   const after = ["network-online.target", ...dependencies.map((unit) => `${unit}.service`)];
   const env = specs.flatMap((spec) => [
@@ -372,6 +372,12 @@ RuntimeDirectory=clp-addons
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
 ${env.join("\n")}
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/etc/nginx /etc/letsencrypt /etc/php /home /run/clp-addons /run/lock/clp-addons /var/backups/clp-addons /var/lib/clp-addons
 ExecStartPre=+/usr/local/bin/clp-addons ensure-key
 ExecStart=/usr/local/bin/clp-addons serve
 Restart=always
