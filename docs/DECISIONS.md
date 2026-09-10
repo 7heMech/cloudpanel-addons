@@ -206,7 +206,7 @@ in favor of TypeScript actions compiled into `clp-addons` (see "The two bash
 wrappers were replaced by in-binary actions" below), and TypeScript has no
 `set -e`/`pipefail` control-flow surface for this class of bug to hide in. It
 is kept because the shape of the bug — a function whose only failure path is
-silent — is a real lesson, and because `tools/test-wrapper.sh` still exists
+silent — is a real lesson, and because `tools/integration-action-instatic.ts` still exists
 and still encodes exactly this rationale in its own header comment, even
 though it now drives `clp-addons action instatic` rather than a bash script:
 it still asserts that every verb *emits something* on valid input, which is
@@ -230,7 +230,7 @@ The same applies to `pipefail`: `x=$(cmd | tr ...)` aborts the assignment when
 `cmd` exits non-zero, even though the pipeline produced the value you wanted.
 Add `|| true` where a non-zero exit is expected.
 
-`tools/test-wrapper.sh` asserts that every verb with valid input *emits
+`tools/integration-action-instatic.ts` asserts that every verb with valid input *emits
 something*, which is what catches this class. A rejection-only test suite does
 not — the bug lives on the success path.
 
@@ -319,7 +319,7 @@ and the site user has SFTP.
 Ownership is re-applied on every container start rather than only at create.
 The failure it prevents is quiet — a container that cannot write its database
 still answers `GET /`, so the health check passes and the instance looks fine
-until someone tries to save something. `tools/test-wrapper.sh` asserts the
+until someone tries to save something. `tools/integration-action-instatic.ts` asserts the
 running container's uid matches the panel's record and that it can actually
 write, because neither is visible from the outside.
 
