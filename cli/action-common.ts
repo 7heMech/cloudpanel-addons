@@ -41,8 +41,10 @@ export function failAction(message: string, data?: unknown): never {
 }
 
 function stripJsonControls(value: string): string {
-  // Match the wrappers' json_str helper: ESC and non-printing controls are
-  // removed, while newline/tab/CR are retained for JSON.stringify to escape.
+  // Strips ESC and other non-printing control characters while retaining
+  // newline/tab/CR for JSON.stringify to escape; this is the canonical
+  // encoding every action reply's JSON string values follow (originally
+  // duplicated per wrapper script's json_str, now implemented once here).
   return value
     .replaceAll("\u001b", "")
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
@@ -299,8 +301,9 @@ export interface FileLockHandle {
 
 export async function acquireFileLock(path: string, timeoutSeconds: number, onTimeout: string): Promise<FileLockHandle> {
   if (!libc) failAction("flock is unavailable; refusing to run a privileged action");
-  // `exec 200>...` in the wrapper creates the file with mode 0666 under the
-  // service umask; the lock directory itself is the access boundary.
+  // openSync(path, "w", 0o666) below creates the file with mode 0666 under the
+  // service umask, the same mode the original wrapper's `exec 200>...` used;
+  // the lock directory itself, not the file mode, is the access boundary.
   const fd = openSync(path, "w", 0o666);
   let locked = false;
   let handedOff = false;

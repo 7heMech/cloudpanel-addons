@@ -38,8 +38,8 @@ const MUTATING_VERBS = new Set(["start", "stop", "restart", "recreate", "delete"
 export async function handle(req: Request, path: string, updateNotice?: { current: string; latest: string } | null): Promise<Response> {
   const method = req.method;
 
-  // Liveness probe for systemd and the wrapper's health check. No auth
-  // implications: it reports nothing about instances.
+  // Liveness probe for systemd. No auth implications: it reports nothing about
+  // instances.
   if (path === "/health") {
     return json({ ok: true, service: "instatic-manager" });
   }
@@ -58,7 +58,8 @@ export async function handle(req: Request, path: string, updateNotice?: { curren
           snapshotAge = ageSeconds;
           snapshotTakenAt = snap.updatedAt;
         } catch {
-          // Snapshot missing or unreadable; fallback to wrapper live data
+          // Snapshot missing or unreadable; the action binary already supplied live
+          // instance data above
         }
         // The dashboard needs the registry listing too, not just /new. Without
         // it the page showed each instance's pinned tag with nothing to compare

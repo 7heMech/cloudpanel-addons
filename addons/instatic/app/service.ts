@@ -1,6 +1,6 @@
-// Every privileged action goes through the wrapper. The app deliberately has
-// no docker access of its own: membership in the docker group is equivalent to
-// root, which would make the wrapper's argument validation decorative.
+// Every privileged action goes through the action binary. The app deliberately
+// has no docker access of its own: membership in the docker group is equivalent
+// to root, which would make the action binary's argument validation decorative.
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -51,7 +51,7 @@ async function callWrapper<T = unknown>(verb: string, args: string[]): Promise<W
     stdout = e.stdout ?? "";
     stderr = e.stderr ?? "";
     if (!stdout.trim()) {
-      // No JSON on stdout means the wrapper never got far enough to answer.
+      // No JSON on stdout means the action binary never got far enough to answer.
       // Surface its stderr rather than a bare exec error.
       console.error(`[wrapper] ${verb} failed without a JSON reply:`, stderr || e.message);
       return { ok: false, error: stderr.trim() || e.message || `wrapper ${verb} failed` };
@@ -70,9 +70,10 @@ async function callWrapper<T = unknown>(verb: string, args: string[]): Promise<W
   }
 }
 
-// Mirrors the wrapper's own validation. Not a substitute for it: the wrapper
-// is the boundary and re-checks everything. This exists so the UI can reject
-// bad input with a useful message instead of a generic wrapper error.
+// Mirrors the action binary's own validation. Not a substitute for it: the
+// action binary is the boundary and re-checks everything. This exists so the
+// UI can reject bad input with a useful message instead of a generic error
+// from the action binary.
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const TAG_RE = /^\d+\.\d+\.\d+$/;
 
@@ -85,13 +86,13 @@ export function validateTag(t: unknown): string | null {
 }
 
 /**
- * An instance as the wrapper reports it.
+ * An instance as the action binary reports it.
  *
  * There is no second copy of this anywhere. The manager used to keep its own
- * SQLite table beside the wrapper's meta.json files, and the two drifted
+ * SQLite table beside the action binary's meta.json files, and the two drifted
  * whenever anything touched an instance without going through the manager --
- * an instance created by calling the wrapper directly never showed up here, and
- * a delete that failed part-way left a row describing something that no longer
+ * an instance created by calling the action binary directly never showed up
+ * here, and a delete that failed part-way left a row describing something that no longer
  * existed. The files on disk and the container are the state; this is a view of
  * them.
  */
@@ -116,7 +117,7 @@ export const instaticService = {
   async nextPort(): Promise<number> {
     // The snapshot is rewritten by the root CLI on install and repair, so
     // between reconciliation runs it does not know about instances created
-    // since. The wrapper does.
+    // since. The action binary does.
     const instances = await this.listInstancesOrThrow();
     return getNextAvailablePort(readSnapshot(), instances.map((i) => i.port));
   },
@@ -131,7 +132,7 @@ export const instaticService = {
   },
 
   /**
-   * The same list, but a wrapper failure is an error rather than an empty one.
+   * The same list, but a call failure is an error rather than an empty one.
    *
    * A dashboard can render "no instances" and be read by someone who knows the
    * difference. An allocator cannot: an empty list means every port in use
@@ -150,8 +151,8 @@ export const instaticService = {
       return { ok: false, error: `an instance for ${domain} already exists` };
     }
 
-    // Nothing is recorded afterwards: the wrapper writes meta.json, which is
-    // what the next list reads. The wrapper re-checks the port too, and holds
+    // Nothing is recorded afterwards: the action binary writes meta.json, which is
+    // what the next list reads. The action binary re-checks the port too, and holds
     // a lock while it does, so this allocation is a proposal rather than a
     // reservation.
     const port = getNextAvailablePort(readSnapshot(), existing.map((i) => i.port));
@@ -180,7 +181,7 @@ export const instaticService = {
   },
 
   async deleteInstance(domain: string): Promise<WrapperResult> {
-    // --confirm must equal --domain; the wrapper enforces it too.
+    // --confirm must equal --domain; the action binary enforces it too.
     return callWrapper("delete", ["--domain", domain, "--confirm", domain]);
   },
 

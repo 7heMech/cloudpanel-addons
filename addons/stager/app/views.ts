@@ -1,6 +1,7 @@
 import type { SanitizedSite } from "../../../lib/snapshot-reader";
 // Server-rendered HTML. Every interpolated value goes through esc() or escJs():
-// domains, job steps and wrapper notes all originate outside this process, and
+// domains, job steps and the action binary's notes all originate outside this
+// process, and
 // the page is served to an operator whose session can create CloudPanel sites.
 
 import { esc } from "../../../lib/app-http";
@@ -271,8 +272,8 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
 
   // Only for an Instatic source, because only there is there a second
   // application to sign into. The password is the source instance's own
-  // administrator credential: it is posted once, reaches the wrapper on stdin,
-  // and is deleted the moment the export it exists for has finished.
+  // administrator credential: it is posted once, reaches the action binary on
+  // stdin, and is deleted the moment the export it exists for has finished.
   const instaticFields = isInstatic
     ? `
       <div class="secret" style="margin-top:1.25rem;">

@@ -62,12 +62,28 @@ authentication key or privileged pre-start command is required.
 
 Each protected request reads the `PHPSESSID` file directly with Bun from the
 fixed CloudPanel session directory `/var/lib/php/sessions`. The session id must
-match `^[a-zA-Z0-9,-]+$`; the manager checks the file with `lstat` before reading,
-requires ownership by `clp`, rejects symlinks, caps its size, and warns when the
-stock world-writable parent is encountered. A bounded structural scanner then
-checks `_sf2_meta` expiry, the nested `_security_main` token, the authenticated
-username, and `mfaAuthenticated === true`. Invalid sessions redirect to
-`/login`.
+match `^[a-zA-Z0-9,-]+$` (`lib/sso-auth.ts:7`); the manager `lstat`s the file
+before reading, rejects symlinks, requires ownership by the panel user `clp`
+(`panelUserUid()`, `lib/sso-auth.ts:43-53`), and caps its size and warns when
+the stock world-writable parent is encountered (`readPanelSessionFile`,
+`lib/sso-auth.ts:68-98`). A bounded custom PHP-serialization scanner, with
+explicit depth and node caps (`lib/sso-auth.ts:113-264`), then checks
+`_sf2_meta` expiry, the nested `_security_main` token and the authenticated
+username, and `mfaAuthenticated === true` (`lib/sso-auth.ts:330-348`). Invalid
+sessions redirect to `/login` (`lib/sso-auth.ts:25-33`, `authenticateRequest`
+at `lib/sso-auth.ts:354-366`).
+
+This is a third design, and neither of the two that were written down first
+shipped — that history, and why this one is judged safe despite it, is kept in
+full under "Authentication is CloudPanel's, not ours" below. In short: the
+original objection to self-parsing was to a **root-privileged** parser for an
+undocumented, obfuscated-upstream format. `lib/sso-auth.ts` is unprivileged —
+it runs as the `clp-addons` account, the same as every other request handler —
+and the strict `lstat`/ownership/size/depth/node bounds are what turn "parse an
+undocumented format" from that feared root-privileged wildcard into a narrowly
+scoped, unprivileged, testable operation. `tools/test-app.test.ts` asserts this
+design's absence of the alternative that was speculatively planned instead: no
+HMAC token issuance/verification, and no `libexec/clp-verify-session` helper.
 
 ### Active artifact layout and updates
 
@@ -103,6 +119,51 @@ per-site Basic Auth, a TCP listener, release-tree storage, or custom manager
 credentials describe the superseded implementation. The current decisions
 above take precedence.
 
+Two more things changed partway through this historical record and are easy to
+misread if you don't know which era a given entry is from: the two bash
+wrappers described throughout the sections below were later deleted (see the
+next entry), and the authentication design changed twice more after the
+per-site Basic Auth section further down was written (see "Authentication is
+CloudPanel's, not ours (superseded)"). Where an entry below has not been
+marked superseded or historical, it is still describing current behavior —
+most of what follows is regression history for bugs that are still relevant,
+not architecture that has moved on.
+
+## The two bash wrappers were replaced by in-binary actions
+
+`addons/instatic/wrapper/clp-action-instatic` (1039 lines of bash) and
+`addons/stager/wrapper/clp-action-stager` (2827 lines of bash) are gone. Every
+verb they implemented is now a TypeScript action compiled into the single
+`clp-addons` binary, reached as `clp-addons action <addon> <verb>` — the
+sudoers rule at the top of this document names exactly that namespace.
+`addons/instatic/action.ts` and `addons/stager/action.ts` are what the root
+side now runs.
+
+**The privilege boundary did not move.** This is worth being exact about,
+because "the wrapper is gone" reads like it could mean the app now runs
+privileged code in-process, and it does not. The manager still crosses from
+the unprivileged `clp-addons` account to root the same way it always did: by
+`sudo`-spawning a *subprocess* — see "Privilege boundary" and "The root action
+is the whole security model" below, both of which are otherwise unchanged by
+this migration. What changed is the identity of the thing sudo spawns: it is
+now the same compiled `clp-addons` binary, invoked with an `action` argument
+prefix, rather than a separate standalone bash script. Argument validation,
+the "stdout is exactly one JSON object" contract, and the stdin-only secret
+channel (both credentials and MFA codes, per "Both of the source's credentials
+are on stdin, never in argv" above) are now implemented once, in TypeScript,
+instead of being maintained twice — once in each bash script, at nearly 4,000
+lines combined, with all the drift risk that implies for two files enforcing
+one security model.
+
+**`install.sh` stays bash, deliberately and permanently.** It is the one place
+in this project where "port it to TypeScript" is not the answer. It is fetched
+and executed as `curl -fsSL .../install.sh | bash` (`README.md:60`), and at
+that point in the bootstrap nothing capable of interpreting TypeScript exists
+on the target machine yet — the whole job of `install.sh` is to get the
+`clp-addons` binary (which embeds the Bun runtime) onto the box in the first
+place. A shell script is the only thing that can be the very first artifact
+fetched.
+
 ## The root action is the whole security model
 
 The `action` namespace runs as root via one sudoers line. Everything it permits,
@@ -124,11 +185,33 @@ Rules, none negotiable:
 - **The registry is hardcoded.** Only the tag crosses the boundary.
 - **One wrapper per addon**, so a bug in one cannot be walked through to reach
   another's verbs. `ALL=(root)`, one absolute path, no wildcards:
-  `NOPASSWD: /usr/bin/clpctl *` is equivalent to full root.
+  `NOPASSWD: /usr/bin/clpctl *` is equivalent to full root. *(One absolute
+  path with no wildcard on the path is still the rule the shipped sudoers line
+  follows — see "Privilege boundary" above. "One wrapper per addon" itself is
+  now carried by validation inside the one binary rather than by separate
+  binaries: the sudoers rule matches every addon's `action` verbs, and the
+  binary rejects an unknown or uninstalled addon name itself. The property
+  this bullet protects — that a bug in one addon's verbs cannot reach
+  another's — now rests on that in-binary check rather than on the OS-level
+  separation a second sudoers line used to give for free, which is a real
+  trade worth knowing about rather than assuming away.)*
 - **stdout is a contract**: exactly one JSON object. Progress goes to stderr.
   Never scrape prose for meaning.
 
-### `set -e` in the wrapper, specifically
+### `set -e` in the wrapper, specifically (historical only — no longer applicable)
+
+This subsection describes a bash failure mode, and no longer describes a live
+invariant of the code: the two bash wrappers it was written about were deleted
+in favor of TypeScript actions compiled into `clp-addons` (see "The two bash
+wrappers were replaced by in-binary actions" below), and TypeScript has no
+`set -e`/`pipefail` control-flow surface for this class of bug to hide in. It
+is kept because the shape of the bug — a function whose only failure path is
+silent — is a real lesson, and because `tools/test-wrapper.sh` still exists
+and still encodes exactly this rationale in its own header comment, even
+though it now drives `clp-addons action instatic` rather than a bash script:
+it still asserts that every verb *emits something* on valid input, which is
+what would catch this class of bug if TypeScript ever grew an equivalent
+foot-gun, and a rejection-only test suite still would not.
 
 Two silent failures have come from the same shape:
 
@@ -151,7 +234,20 @@ Add `|| true` where a non-zero exit is expected.
 something*, which is what catches this class. A rejection-only test suite does
 not — the bug lives on the success path.
 
-## Placement: the addon is its own CloudPanel site
+## Placement: the addon is its own CloudPanel site (superseded)
+
+**Superseded.** The manager no longer binds `127.0.0.1` or is reached through
+a CloudPanel site at all — it is reached over a UNIX socket via a path on the
+panel's own vhost, which is exactly the variant this entry describes as tried
+and removed. See "Current architecture -> Integrated manager and Nginx
+transport" and "-> Identity and socket permissions" for what replaced it and
+why the objections below no longer apply the same way (the socket transport
+does not go through `proxy_pass` blind to the PHP session the way the rejected
+`location /instatic/` variant did — see "Current architecture -> CloudPanel
+SSO" for how the session is actually checked today). Kept for the reasoning
+that led to the original per-site design, and because the specific
+`location /instatic/` variant it rejected is close to what was eventually
+built successfully once session validation was solved differently.
 
 The manager binds `127.0.0.1` and is reached through a stock CloudPanel
 reverse-proxy site, with per-site security in front. Not a path on the panel's
@@ -171,7 +267,19 @@ a `location /instatic/` block proxying to the app. It was removed because
 
 An own site gets SSL, backups and the panel's own security UI for free.
 
-## The manager runs as CloudPanel's site user
+## The manager runs as CloudPanel's site user (superseded)
+
+**Superseded.** The manager does not run as a CloudPanel site user any more —
+there is no manager site to have a user. It runs as the dedicated `clp-addons`
+system account, created by `ensureServiceUser()` (`cli/provision.ts:164-188`)
+with `useradd --system --no-create-home --shell /usr/sbin/nologin`, then
+locked with `passwd -l`. See "Current architecture -> Identity and socket
+permissions" for the account as it exists today. The reasoning below — that a
+login shell and SFTP password on the one account permitted to escalate is a
+liability CloudPanel would otherwise hand out by default — is exactly why the
+dedicated system account is created `nologin` and locked from the start rather
+than hardened after the fact; it is preserved as the history of *why* that
+matters, not as a description of the current account.
 
 Decision 2.4 says the addon runs as the site user CloudPanel creates. An earlier
 version created a dedicated `instatic-app` account instead, which meant two
@@ -267,7 +375,19 @@ position. A bundle is signed and bound to its subject's digest, so an attacker
 who can replace a release asset cannot produce one that verifies against the
 replacement -- the failure mode is a refused install, not a silent accept.
 
-## One CloudPanel site for every addon, routed by path
+## One CloudPanel site for every addon, routed by path (superseded twice over)
+
+**Superseded a second time.** This entry's own conclusion — "one site, one
+`clp-addons.service`, one account" — was itself superseded: the manager now
+creates **zero** CloudPanel sites and is served at `/addons/` off the panel's
+own vhost over a UNIX socket (see "Current architecture -> Integrated manager
+and Nginx transport"). The "routing is in the manager, not in nginx" argument
+below is still exactly why: nothing in `clpctl` grew a way to add per-path
+upstreams to an existing vhost, so the manager still does its own internal
+routing (`splitMount`/`MANAGERS`, `cli/index.ts:495-497`) — there is just no
+site left to mount it under any more. The two bulleted "consequences in the
+app" below, describing `lib/mount.ts`, are still exactly true today; only the
+"one site" framing around them is history.
 
 Each addon used to get a site of its own. That is a hostname, a certificate, a
 Basic Auth setup and a site user per addon, and the addon is unreachable until
@@ -333,9 +453,22 @@ stager-app-linux-x64         81,339,872   ->  24 KB
 runtime, and another 77.6 MB for each addon added. The runtime is not the part
 that varies.
 
-So there is one artifact. `clp-addons` is the CLI; `clp-addons serve <addon>` is
-that addon's manager, and the systemd unit ExecStarts that rather than a binary
-of its own. 81.4 MB total, and an addon now costs its wrapper script.
+So there is one artifact. `clp-addons` is the CLI, and `clp-addons serve`
+is the one manager for every installed addon — not one manager per addon. The
+systemd unit ExecStarts that rather than a binary of its own. 81.4 MB total,
+and an addon now costs an entry in one dispatch table, not a wrapper script.
+
+**This went further than the original one-binary decision anticipated, and is
+worth recording precisely (reversed from "`clp-addons serve <addon>`").**
+`cmdServe()` (`cli/index.ts:469`) takes no addon argument at all. It binds one
+shared UNIX socket — `Bun.serve({ unix: SOCKET_PATH, ... })`
+(`cli/index.ts:477-502`) — and dispatches every request to the right addon
+internally via `splitMount(path, mounted)` against the `MANAGERS[hit.addon]`
+table (`cli/index.ts:495-497`). There is one `clp-addons.service`
+(`cli/provision.ts:400`), running as the one dedicated `clp-addons` system
+account (`User=clp-addons`) — not any CloudPanel site account, because no
+addon site exists any more (see "Current architecture -> Identity and socket
+permissions").
 
 Two consequences worth stating, because both were load-bearing in how it was
 done:
@@ -350,9 +483,13 @@ done:
   unit file: a typo in `ExecStart` would start the wrong manager on the wrong
   port and look like it worked.
 
-`serve` is also the one verb that is deliberately not `requireRoot`. It runs as
-the addon site's own CloudPanel account; its single privileged path is sudo of
-its own wrapper.
+`serve` is also the one verb that is deliberately not `requireRoot` — that
+part is unchanged and still visible in the code: it is absent from the
+`requireRoot` call sites (`cli/index.ts:199,245,287,401`, covering `install`,
+`update`, `repair` and `uninstall`). The reason has moved on with the rest of
+this entry: `serve` now runs as the one `clp-addons` system account, not a
+CloudPanel site user, and its single privileged path is sudo-invoking its own
+`action` namespace (see "Privilege boundary" above), not "its own wrapper".
 
 ## `update` moves the CLI first, then hands over to it
 
@@ -468,29 +605,29 @@ pristine copy permanently. Snapshots from the old per-addon keying are deleted
 on sight: they have no `.path` sidecar, nothing reads them, and an operator
 would reasonably mistake them for current.
 
-## The wrapper's files are the only record of what exists
+## The action module's files are the only record of what exists
 
-The manager kept its own SQLite table of instances beside the wrapper's
-`meta.json` files. Two records of one fact drift, and these did: an instance
-created by calling the wrapper directly never appeared in the dashboard, and a
+The manager kept its own SQLite table of instances beside the action
+module's `meta.json` files. Two records of one fact drift, and these did: an instance
+created by calling the action module directly never appeared in the dashboard, and a
 delete that failed part-way left a row describing something that was already
 gone. The table was also the thing `nextPort` consulted, so a drifted row meant
 a port handed out twice or never reused.
 
-The files on disk and the running container are the state. The wrapper now has
-a `list` verb that walks its own data directory and reports each instance's
+The files on disk and the running container are the state. The action module
+has a `list` verb that walks its own data directory and reports each instance's
 recorded metadata with live container state, and the manager holds nothing of
 its own -- `app.db` and `db.ts` are gone, along with every write that kept them
 in step.
 
 It has to be one call rather than one per instance, because the manager cannot
-read those directories: each belongs to its instance's own site user. `list` is
+read those directories: each belongs to its instance's own identity. `list` is
 also the one verb exempt from the per-domain lock. It names no domain, so there
 is nothing to lock, and locking would mean the dashboard stops rendering
 whenever any instance is mid-update -- precisely when someone is looking at it.
 
 Port allocation is a proposal rather than a reservation: the manager picks the
-lowest free port and the wrapper re-checks it under the lock. That is the honest
+lowest free port and the action module re-checks it under the lock. That is the honest
 description of what was always happening, and it no longer depends on a record
 only the manager maintained.
 
@@ -515,7 +652,7 @@ instance does not exist and is not listening yet -- that window closes at
 `cmd_create`, which refuses by name rather than failing at `docker run`. So the
 residual case is a clear refusal, not a collision, and the two are not the same
 guarantee. And neither list may fail quietly on that path. `listInstances()` and `listJobs()` return an empty array
-when the wrapper cannot answer, which is right for a dashboard -- it renders
+when the action module cannot answer, which is right for a dashboard -- it renders
 "none" and an operator reads it as such -- and wrong for an allocator, where it
 means every port in use silently disappears from the calculation. The allocation
 path calls strict variants that throw instead.
@@ -548,12 +685,19 @@ They are both just sites this addon created; which one is the manager's is
 already recorded in `OWN_DOMAIN`, and encoding a role in the account name would
 be a second source of truth for something the config already answers.
 
-It is written twice -- once in `cli/provision.ts` and once in the wrapper,
-which is bash and cannot import TypeScript. Two implementations of one rule
-drift silently, and the failure would be the manager creating a site under one
-name while the wrapper looks for another, so `tools/test-app.ts` runs both over
-a list of domains and asserts they agree, including the pair that used to
-collide.
+It used to be written twice -- once in `cli/provision.ts` and once in the
+wrapper, which was bash and could not import TypeScript -- and `tools/test-app.ts`
+ran both implementations over a list of domains and asserted they agreed,
+including the pair that used to collide. **That dual-implementation risk is
+gone, not just tested for (reversed).** The scheme (`domainStem`, `domainHash`,
+`siteUserFor`) is implemented exactly once, in `cli/action-common.ts:220-230`,
+and both `addons/instatic/action.ts:13` and `addons/stager/action.ts:12` import
+`siteUserFor` from there; `cli/provision.ts` does not reimplement it or
+reference it at all. A single shared TypeScript module imported by both addons
+is a stronger guarantee than the cross-checking test the old two-implementation
+design needed — there is nothing left that could drift. The two-schemes
+history above is kept because it is still the reason a single source of truth
+matters here: it is what happens when there isn't one.
 
 Nothing migrates. The name is only ever used at creation; everywhere else the
 account is read back from the panel's `site` table, so sites created under the
@@ -612,22 +756,48 @@ the wrapper decorative.
 Container state and logs are wrapper verbs (`status`, `logs`) for this reason.
 `clp-addons status` reports the group if it reappears; `repair` removes it.
 
-## Systemd sandboxing is deliberately thin
+## Systemd sandboxing is real, with explicit carve-outs (reversed)
 
-`NoNewPrivileges` is left off, and the usual hardening directives are absent.
-This is not an oversight:
+An earlier revision of this entry said sandboxing was "deliberately thin" and
+that the usual hardening directives were absent entirely. That is no longer
+true, and reading it as current has already misled two reviews.
 
-- the app's only privileged path is `sudo <wrapper>`, and `NoNewPrivileges=yes`
-  blocks sudo outright. `ProtectKernel*`, `RestrictNamespaces`,
-  `RestrictAddressFamilies`, `SystemCallArchitectures`, `MemoryDenyWriteExecute`
-  and `RestrictSUIDSGID` all imply it;
-- namespace directives are inherited by children, so `ProtectSystem` and
-  `ProtectHome` would apply to the wrapper too — and the wrapper legitimately
-  needs `/home/clp` to read the panel database and `/etc` because `clpctl`
-  writes vhosts.
+The shipped unit (`serviceUnit()`, `cli/provision.ts:400-431`) sets, at
+`cli/provision.ts:420-425`:
 
-Sandboxing the unit would break the boundary rather than reinforce it. The
-isolation that holds is the unprivileged account plus a one-line sudoers rule.
+```
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/etc/nginx -/etc/letsencrypt /etc/php /home /run/clp-addons /run/lock/clp-addons /var/backups/clp-addons /var/lib/clp-addons
+```
+
+plus `UMask=0007` (`cli/provision.ts:429`).
+
+One sub-claim of the original entry does stay true: `NoNewPrivileges` is still
+off, and still on purpose. The service's only privileged path is sudo-spawning
+the same binary's `action` namespace as root (see "Privilege boundary" above,
+and the reversed migration entry below for what changed and what did not), and
+`NoNewPrivileges=yes` blocks sudo outright — that reasoning was never wrong and
+still holds.
+
+**What changed, kept as history.** The original entry argued that
+`ProtectSystem`/`ProtectHome` could not be applied at all, because "namespace
+directives are inherited by children" and "the wrapper legitimately needs
+`/home/clp` to read the panel database and `/etc` because `clpctl` writes
+vhosts" — so, in that reasoning, sandboxing the unit "would break the boundary
+rather than reinforce it." That was the read at the time and it was not
+unreasonable: a blanket `ProtectHome=yes`/`ProtectSystem=strict` really would
+have broken the sudo'd action's need to touch `/home` and `/etc`. What the
+entry missed is the middle path: `ReadWritePaths=` scopes exactly those holes
+back open — `/home`, `/etc/nginx`, `/etc/php`, and the addon's own state,
+lock, backup and runtime directories — while `ProtectSystem=full`,
+`ProtectHome=read-only`, `PrivateTmp=yes` and `ProtectKernelTunables=yes` still
+apply everywhere else. The isolation that holds today is that scoped set of
+directives plus the unprivileged account plus the one-line sudoers rule, not
+an unsandboxed unit.
 
 ## Panel state is a sanitized snapshot
 
@@ -667,8 +837,14 @@ form. The pristine copy is snapshotted off the running box into
 
 Reconciliation is a systemd timer, not a dpkg hook: a hook catches apt-driven
 updates and misses manual ones, while a timer catches every path including
-unattended-upgrades at 6am. It calls `clp-addons repair`, so there is one
-implementation of "make the box match what should be installed".
+unattended-upgrades at 6am. `clp-addons-reconcile.timer` fires
+`OnCalendar=*:0/15` (`cli/provision.ts:450`) and its service runs
+`clp-addons repair --quiet` (`cli/provision.ts:444`), so there is one
+implementation of "make the box match what should be installed": the service
+user, sudoers, systemd units, the panel snapshot, the Twig anchors and the
+Nginx proxy. **It does not run any addon's own maintenance verb** — see "Job
+records expire" and "Known gaps" below for what that means in practice for the
+Stager's `prune`.
 
 A 15-minute timer means up to 15 minutes with the nav entry missing, so a
 `.path` unit watches the two templates and repairs on change. Measured on a
@@ -854,12 +1030,21 @@ five more places where the second addon would have been the one to discover it.
 `repair`, `status` and `update` now act on every addon with a config file on
 disk, which is what "installed" means here.
 
-## Authentication is CloudPanel's, not ours
+## Authentication is CloudPanel's, not ours (superseded)
+
+**This section is history, not current behavior.** It documents two designs in
+sequence, neither of which is what shipped; the mechanism that actually ships
+is described in "Current architecture -> CloudPanel SSO" above, with file and
+line citations. Read what follows only for the rationale, not as a description
+of the running system.
 
 The manager can create and delete sites, so it must not be reachable without
-authentication, and the question of where that comes from keeps coming up.
-Reusing the panel's admin login was checked properly rather than assumed, and
-all three routes are closed:
+authentication, and the question of where that comes from kept coming up.
+Reusing the panel's admin login was checked properly rather than assumed. Two
+of the three routes considered are still closed for the reason found here; the
+third — "validate the session ourselves" — was the one this section rejected
+and a later change reopened, deliberately and narrowly. That rejection is kept
+verbatim because the design that shipped has to answer to it:
 
 - **Share the session cookie.** `session.name = PHPSESSID`, scoped to the
   panel's origin, so we would have to be served from the panel's vhost. That is
@@ -880,83 +1065,49 @@ all three routes are closed:
   admin". Wrong direction, and reading it means reading the panel database.
 
 The `user` table also carries `mfa` and `mfa_secret`, so anything reimplemented
-here would have to honour MFA or become the weakest door to the same box.
+here would have to honour MFA or become the weakest door to the same box — that
+constraint is the one thing every design discussed in this section, including
+the one that shipped, has had to satisfy.
 
-So authentication is nginx basic auth, and specifically **CloudPanel's own
-per-site Basic Auth feature**, not a mechanism of ours. `site.basic_auth_id`
-points at a `basic_auth` row, `is_active` is the toggle and `whitelisted_ips` is
-the IP allowlist, which covers both things the README asks for. Enabling it stays
-a panel action: `clpctl cloudpanel:enable:basic-auth` protects the panel's own
-login rather than a site, and writing `basic_auth` rows ourselves would mean
-writing an undocumented schema while the panel is running (decision 2.6).
+**What was built on top of that rejection, and later replaced.** Given the
+above, authentication became nginx Basic Auth — specifically **CloudPanel's own
+per-site Basic Auth feature** (`site.basic_auth_id` / `clpctl
+cloudpanel:enable:basic-auth`) — plus, once a loopback TCP transport turned out
+to let any local account reach the API directly (measured against a real box:
+every hosted site's PHP account could `curl 127.0.0.1:38080/...` and get a
+200), an application-level gate of its own: a `manager-auth` credential, the
+panel's Basic Auth password re-hashed with scrypt, checked on every request and
+failing closed with 503 when absent. **None of this exists today.**
+`lib/manager-auth.ts` does not exist; the only remnant is a cleanup constant,
+`LEGACY_MANAGER_AUTH` (`cli/provision.ts:15`), used solely to delete the old
+credential file during `repair`. The transport is a UNIX socket, not
+`127.0.0.1:38080` (see "Current architecture -> Identity and socket
+permissions"), which closes the "loopback has no permission model" problem at
+the transport layer instead of papering over it with an application-level
+credential.
 
-What the addon adds is a read. `status` reports whether the manager's own site is
-protected, because that is the precondition the README leads with and the one
-command an operator runs to check an install had nothing to say about it. It
-tells apart four states, including the one a real box was found in: `auth_basic`
-in the vhost with `basic_auth_id` NULL. That does protect the site and survives
-regeneration, since the panel rebuilds the vhost from the template the edit lives
-in, but the Security tab shows Basic Auth as off, so an operator reading the UI
-sees an unprotected site and toggling the switch can rewrite the edit away.
+**What was specified to replace it next, and also did not ship.**
+`docs/SPEC_VHOST_UNIX_SOCKET_SSO.md` Task 3 (now marked superseded at its own
+head) proposed a privileged `clp-verify-session` helper invoked via `sudo`,
+whose result would be cached behind an HMAC-signed `clp_addons_token` cookie so
+most requests needed no `sudo` call at all. Nothing named `clp-verify-session`
+was ever built, there is no `/run/clp-addons/hmac.key`, and no `Set-Cookie:
+clp_addons_token=...` is ever issued. Its rationale — sessions cannot be
+trusted blindly, and `mfaAuthenticated`/2FA must be checked — is still correct
+and is exactly what the shipped design also enforces; only the mechanism
+proposed to enforce it was dropped in favor of something simpler.
 
-The cost of not reusing the panel login is honest and worth stating: it is a
-second credential, not single sign-on.
-
-### nginx is not the only door, so the app checks too
-
-The reasoning above stopped one step short, and the step it missed was the
-important one. "The app binds 127.0.0.1, so everything reaching it came through
-the vhost" is false. A TCP port on loopback restricts which *machine* may
-connect, not which *user*: loopback has no permission model, and every account
-on the box is equally entitled to it. On a CloudPanel host those accounts are
-the PHP behind each hosted site.
-
-Measured rather than argued, on a box hosting real sites:
-
-    runuser -u kleros -- curl http://127.0.0.1:38080/instatic/api/instances
-    -> 200 {"ok":true,"instances":[...]}
-
-    runuser -u kleros -- curl -X POST -H 'Origin: http://127.0.0.1:38080' \
-      -H 'x-clp-addons-csrf: T' -H 'Cookie: clp_addons_csrf=T' \
-      http://127.0.0.1:38080/instatic/api/instances/x/stop
-    -> 400 {"ok":false,"error":"no such container for x"}
-
-The second is the root wrapper's own answer. The `Origin`/CSRF pair is not
-authentication and was never meant to be -- it compares `Origin` against `Host`,
-which stops a browser on another origin and does nothing to a caller who sets
-both headers. So one vulnerable WordPress plugin on any site on the box reached
-a root-equivalent API: create and delete sites, clone one (which `db:export`s
-the production database), then read the staging password back off the job.
-
-So the manager authenticates its own callers, on every route including GET, and
-**fails closed**: with no credential on disk it answers 503 and serves nothing.
-The ordering matters as much as the check. Install used to create the site,
-start the service and *then* advise adding Basic Auth, so every box whose
-operator did not act on the advice ran a live root-equivalent API. Provisioning
-now writes the credential before the unit starts.
-
-The credential is the panel's where the operator set one. CloudPanel keeps the
-Basic Auth password in the clear in `basic_auth.password`, so provisioning reads
-it as root and re-hashes it with scrypt -- one password for both gates. What is
-deliberately *not* reused is CloudPanel's hash: the file it writes into
-`/etc/nginx/basic-auth` holds a 13-character DES `crypt(3)`, which truncates the
-password at eight characters and is cheap to attack offline. A box with no panel
-Basic Auth gets a generated credential printed once. If a future CloudPanel
-starts hashing that column, the value stops looking like plaintext and
-provisioning declines to reuse it rather than hashing a hash.
-
-This does not replace Basic Auth in the vhost, which still keeps unauthenticated
-requests off the app entirely and carries the IP allowlist. It stops being the
-*only* gate, which is the part that was wrong.
-
-A unix socket was the other candidate, and it is the stronger answer in the
-abstract: a socket is a filesystem object with an owner and a mode, so it can
-express "only nginx" in a way a loopback port cannot. It was rejected because
-CloudPanel's stock reverse-proxy vhost has exactly one `{{reverse_proxy_url}}`
-and `site:add:reverse-proxy` takes a URL, so pointing nginx at a socket would
-mean hand-writing `site.vhost_template` on every install and re-asserting it
-after every regeneration. That makes a scoped, opt-in fallback into a mandatory
-step in everyone's install path -- a wider blast radius than the bug.
+**What shipped instead directly answers the "validate the session ourselves"
+rejection above.** `lib/sso-auth.ts` parses the session unprivileged, in the
+manager's own process, with no `sudo` and no HMAC exchange. The rejection above
+was specifically of a *root-privileged* parser for an undocumented format; the
+parser that shipped is not privileged, and the strict `lstat`, ownership, size,
+depth and node bounds are what make an unprivileged parse of an undocumented
+format a narrowly scoped, testable operation rather than the open-ended one the
+rejection feared. See "Current architecture -> CloudPanel SSO" for the
+mechanism and citations, and `tools/test-app.test.ts` / `tools/test-provision.test.ts`
+for the tests asserting neither superseded design (scrypt manager-auth, or
+root-helper-plus-HMAC) is present.
 
 ### The installer provisions gh rather than refusing without it
 
@@ -1072,13 +1223,26 @@ database in a world-readable directory under a name anyone can predict, and a
 path any local user can pre-create as a symlink for root to write through. Job
 directories are `0700 root` and the dump is deleted as soon as it is imported.
 
-**Job records expire.** A record holds the staging database password, which is
-the one credential in a clone that the panel cannot show again and that the
-operator needs whenever the application's config could not be rewritten. It is
-kept for fourteen days, and `repair` runs the addon's `prune` verb on every
-reconciliation -- the expiry has to be something that actually runs, and the
-timer that runs `repair` every fifteen minutes already exists. Giving the addon
-a timer of its own would be two answers to one question.
+**Job records expire — the intent, and the gap this has today.** A record
+holds the staging database password, which is the one credential in a clone
+that the panel cannot show again and that the operator needs whenever the
+application's config could not be rewritten. It is designed to be kept for
+fourteen days (`JOB_RETENTION_DAYS`, `addons/stager/action.ts:17`), and
+`prune` (`cmdPrune`, `addons/stager/action.ts:2186`) is what enforces that: it
+deletes job directories past retention, recovers a job stuck recording
+`"running"` after its unit has died, and recovers vhosts left carried by an
+interrupted clone (`recoverCarriedVhosts`, `addons/stager/action.ts:1170`).
+
+The plan on paper was that `repair` would run `prune` on every reconciliation,
+because the timer that runs `repair` every fifteen minutes already exists and
+giving the addon a timer of its own would be two answers to one question. **That
+wiring was never built.** `maintenanceVerb: "prune"` is declared on the
+Stager's `AddonSpec` (`cli/paths.ts:59,79`) but nothing reads that field — a
+tree-wide grep across the whole repository turns up only its declaration and
+its one setting. `cmdRepair` (`cli/index.ts:286-315`) never calls `prune`; see
+the correction above. `prune` today is reachable only by an operator (or a
+script) explicitly running `clp-addons action stager prune`. See "Known gaps"
+for the consequence.
 
 **A custom root directory is not copied**, because `clpctl site:add:php` has no
 option for one. The job says when the clone's differs from the source's.
@@ -1349,7 +1513,16 @@ have been deleted or renamed since. Falling back to one that is gone fails
 `site:add:php` with "does not exist", which is a confusing way to lose a clone;
 a missing one falls back to Generic and says so.
 
-## A release tree has to serve every installed addon
+## A release tree has to serve every installed addon (superseded)
+
+**Superseded.** The `current` symlink / `releases/<tag>` / `placeRelease`
+mechanism this entry describes is gone entirely: there are zero matches for
+`placeRelease`, `pruneReleases`, `releaseArtifacts` or `addonIsAtRelease`
+anywhere in the tree. See "Current architecture -> Active artifact layout and
+updates" — there is one active binary at `/usr/local/bin/clp-addons` and no
+release directory or `current` symlink in a live install. Kept for the
+`status=203/EXEC` failure mode it documents, which is the reason a shared
+release tree was worth removing rather than merely patching again.
 
 `current` is a symlink shared by every addon: each service unit ExecStarts the
 binary in `current`, and needs its own wrapper beside it. `install` fetched the
@@ -1373,16 +1546,21 @@ because every caller of it has the same obligation.
 ## One snapshot, one shared group
 
 `snapshot.json` is the panel's sanitized site list, written by root and read by
-the managers. It was `root:<that addon's site user>` 0640, which is right for one
-addon and silently wrong for two: installing the second chowned the file to its
-own user and the first addon's dashboard lost its site list.
+the manager. It was `root:<that addon's site user>` 0640, which was right for
+one addon and silently wrong for two: installing the second chowned the file to
+its own user and the first addon's dashboard lost its site list.
 
-There is now a `clp-addons` system group. Every addon's site user joins it, the
-file is `root:clp-addons` 0640, and each unit names `SupplementaryGroups=` rather
-than relying on how systemd treats an account's group list. `install` brings
-along the addons already installed rather than leaving them to the next timer
-tick, since otherwise installing one addon takes another one's site list away
-for up to fifteen minutes.
+**The permission facts below are still exactly true; only "every addon's site
+user joins it" is stale**, because there is no longer an addon site user to
+join anything — there is one service account whose primary group already is
+the shared group. `SHARED_GROUP` is `SERVICE_GROUP` is `"clp-addons"`
+(`cli/paths.ts:14-17`), `STATE_DIR` is `chown root:${SHARED_GROUP}`
+(`cli/provision.ts:307`), and `snapshot.json` is chowned the same way
+(`cli/provision.ts:320`) — see "Current architecture -> Identity and socket
+permissions" for the account. `install`/`repair` regenerate the snapshot for
+every installed addon rather than leaving it to the next timer tick, since
+otherwise installing one addon would take another one's site list away for up
+to fifteen minutes.
 
 The group is the smallest thing that fixes it. The file holds the panel's
 non-secret site list, which does not justify anything more elaborate.
@@ -1465,7 +1643,7 @@ window, `update` and `snapshot`. `make_snapshot` writes the archive and stops.
 - Snapshot archives written under an instance's `snapshots/` before the mode was
   set explicitly keep their old 0644. They are protected by the 0700 directory
   above them, so this is untidy rather than exposed, and `repair` deliberately
-  does not walk instance directories -- those belong to the wrapper.
+  does not walk instance directories -- those belong to the action module.
 - The Stager addon does not delete a staging site. CloudPanel already does, from
   Site -> Settings, and deleting a site is where a mistake costs the most; a
   second button for it would be a second way to get it wrong.
@@ -1497,7 +1675,32 @@ window, `update` and `snapshot`. `make_snapshot` writes the archive and stops.
   use instead. Mounting `/proc` with `hidepid=2` closes it at the host level and
   is the only real remedy; the addon does not make that change, because
   remounting `/proc` on someone else's panel host is not its call.
-- Each addon needs a hostname of its own, so two addons mean two DNS records,
-  two certificates and two Basic Auth setups. Serving both from one host would
-  mean either editing a vhost or adding a routing service, and the first is
-  forbidden while the second is a new component to keep alive.
+- ~~Each addon needs a hostname of its own, so two addons mean two DNS
+  records, two certificates and two Basic Auth setups. Serving both from one
+  host would mean either editing a vhost or adding a routing service, and the
+  first is forbidden while the second is a new component to keep alive.~~
+  **Resolved.** The manager itself is that routing service: one process
+  dispatches every installed addon by path (`splitMount`/`MANAGERS`,
+  `cli/index.ts:495-497`) and one marked, reconciled `location /addons/` block
+  is injected into the panel's own vhost rather than a new one being written
+  per addon. See "Current architecture -> Integrated manager and Nginx
+  transport".
+- **The Stager's `prune` verb is not wired into the maintenance cycle —
+  open.** `maintenanceVerb: "prune"` was declared on the Stager's `AddonSpec`
+  (`cli/paths.ts:59,79`) as the intended hook for the fifteen-minute timer
+  described under "Reconciliation: a timer plus a path unit" above, but
+  `cmdRepair` (`cli/index.ts:286-315`) never reads that field and never calls
+  `prune`. `maintenanceVerb` is dead code — its only two occurrences in the
+  entire tree are its own declaration and assignment — and is being removed as
+  part of this documentation cleanup. Concretely, this means none of the
+  cleanup `prune` performs (fourteen-day job-record expiry, stale-`running`
+  job recovery, orphaned-vhost-backup recovery via `recoverCarriedVhosts`) has
+  ever run automatically on any panel running this code: job records and their
+  staging database passwords accumulate under `/var/lib/clp-addons/stager`
+  until an operator runs `clp-addons action stager prune` by hand. Wiring
+  `prune` into `repair` (or giving it a timer of its own) is deliberately left
+  as future work here rather than folded into this cleanup pass, so that a
+  behavior change is not smuggled into a docs-only commit. The original intent
+  — one fifteen-minute timer already exists, so hang addon maintenance off it
+  rather than adding a second timer per addon — is still the right design; it
+  just needs to actually be called.

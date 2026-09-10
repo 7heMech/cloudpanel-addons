@@ -1434,8 +1434,9 @@ async function runTarCopy(source: string, destination: string): Promise<number> 
     if (senderStderr) diagnostic(senderStderr);
     if (receiverStdout) diagnostic(receiverStdout);
     if (receiverStderr) diagnostic(receiverStderr);
-    // Bash's pipefail path tolerates tar's exit 1 (a file changed while it was
-    // being read) but treats 2+ from either side as a real copy failure.
+    // tar itself uses exit 1 for a non-fatal warning (a file changed while it was
+    // being read); only 2 or higher is a real failure, so that -- not a plain
+    // nonzero check -- is the threshold here.
     if (senderCode >= 2) return senderCode;
     if (receiverCode >= 2) return receiverCode;
     return 0;
@@ -1478,9 +1479,10 @@ function callInstatic(
 
 export function parseCloneCredentials(input: string): { password: string; mfa: string } {
   let supplied = input;
-  // The service always frames the channel with a final newline. Match the
-  // wrapper's `supplied=${supplied%x}; supplied=${supplied%$'\n'}` exactly:
-  // remove only one final framing newline, then require one separator.
+  // The service always frames the channel with a final newline (see
+  // startClone in addons/stager/app/service.ts). Remove only that one final
+  // framing newline, then require exactly one separator between the password
+  // and the authentication code.
   if (supplied.endsWith("\n")) supplied = supplied.slice(0, -1);
   if ((supplied.match(/\n/g) ?? []).length !== 1) failAction("the credential channel takes exactly two lines");
   const separator = supplied.indexOf("\n");
@@ -1558,8 +1560,9 @@ function cmdDescribe(paths: StagerActionPaths, domain: string): void {
     try {
       php = phpVersionOf(paths, domain);
     } catch {
-      // The Bash path can terminate before a reply here under set -e. The
-      // binary keeps the synchronous JSON contract and reports the read error.
+      // The original bash wrapper terminated under `set -e` when this query
+      // failed, before ever printing a reply. This binary keeps the synchronous
+      // JSON contract instead, and reports the read error explicitly.
       failAction("cannot read the panel database");
     }
   }
@@ -1915,7 +1918,8 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
       });
       if (user) ctx.stgUser = user;
     } catch {
-      // The Bash path degrades this read-back to the derived account name.
+      // On failure this falls back to the derived account name computed earlier,
+      // the same degrade the original bash wrapper used.
     }
     const destination = `/home/${ctx.stgUser}/htdocs/${ctx.target}`;
     if (!isDirectory(destination)) failJob(ctx, `CloudPanel did not create ${destination}`);
@@ -2219,7 +2223,8 @@ function cmdPrune(paths: StagerActionPaths): void {
       if (isDirectory(path) && findOlderThan(path, 60 * 1000, 1440)) rmSync(path, { recursive: true, force: true });
     }
   } catch {
-    // Stale staging cleanup is best effort, as in the wrapper's `find ... || true`.
+    // Stale staging cleanup is best effort: a failure here must not fail the
+    // whole prune.
   }
   emitActionOk({ removed, stuck, vhostsRecovered });
 }

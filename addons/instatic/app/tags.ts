@@ -2,8 +2,8 @@
 //
 // Resolved from the registry rather than hardcoded, because a baked-in list
 // goes stale the moment upstream tags a release and then silently offers
-// versions that no longer exist. The registry is the same one the wrapper
-// pins; only the tag ever crosses the privilege boundary.
+// versions that no longer exist. The registry is the same one the action
+// binary pins; only the tag ever crosses the privilege boundary.
 
 const REGISTRY = "https://ghcr.io";
 const REPOSITORY = "corebunch/instatic";

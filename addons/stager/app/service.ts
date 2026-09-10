@@ -21,7 +21,7 @@ interface CommandResult {
   stderr: string;
 }
 
-/** Run the policy wrapper with a bounded, byte-oriented Bun subprocess. */
+/** Run the action binary with a bounded, byte-oriented Bun subprocess. */
 async function runCommand(
   cmd: string,
   args: string[],
@@ -35,7 +35,7 @@ async function runCommand(
     child = Bun.spawn({
       cmd: [cmd, ...args],
       // Passing bytes directly gives Bun ownership of the write and close. If
-      // the wrapper exits before consuming them, Bun absorbs the resulting
+      // the child process exits before consuming them, Bun absorbs the resulting
       // EPIPE instead of exposing an unhandled writable-stream error. The old
       // `child.stdin?.on("error", ...)` listener was needed only for Node's
       // manually written pipe.
@@ -142,7 +142,7 @@ export async function callWrapper<T = unknown>(
     input
   );
   if (error) {
-    // A policy rejection is a normal wrapper reply even though the wrapper
+    // A policy rejection is a normal reply from the action binary even though it
     // exits non-zero. A terminated or output-limited process may leave a
     // complete-looking JSON prefix behind, so only parse a normal non-zero
     // exit whose output was read to completion.
@@ -158,7 +158,8 @@ export async function callWrapper<T = unknown>(
     }
 
     // Never log a subprocess error object: its message may contain the full
-    // argv. The wrapper's stderr is the useful, non-secret diagnostic channel.
+    // argv. The action binary's stderr is the useful, non-secret diagnostic
+    // channel.
     const why = error.reason ?? (stderr.trim() || `wrapper ${verb} exited ${error.code ?? "abnormally"}`);
     console.error(`[wrapper] ${verb} failed before a valid JSON reply:`, why);
     return { ok: false, error: why };
@@ -174,9 +175,10 @@ export async function callWrapper<T = unknown>(
   return { ok: false, error: "wrapper returned a malformed reply" };
 }
 
-// Mirrors the wrapper's own validation. Not a substitute for it: the wrapper is
-// the boundary and re-checks everything. This exists so the UI can reject bad
-// input with a useful message instead of a generic wrapper error.
+// Mirrors the action binary's own validation. Not a substitute for it: the
+// action binary is the boundary and re-checks everything. This exists so the
+// UI can reject bad input with a useful message instead of a generic error
+// from the action binary.
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const JOB_RE = /^\d{8}T\d{6}Z-[0-9a-f]{6}$/;
 
@@ -189,13 +191,13 @@ export function validateJobId(j: unknown): string | null {
 }
 
 /**
- * Expand the shorthand the original script accepted: a bare label becomes a
- * subdomain of the site being cloned.
+ * Expand the shorthand the original wrapper script accepted: a bare label
+ * becomes a subdomain of the site being cloned.
  *
- * Here rather than in the wrapper because it is a convenience, and the wrapper
- * must not rewrite its input -- a boundary that silently corrects a value is
- * one that eventually corrects it wrong. What crosses the boundary is always a
- * complete hostname.
+ * Here rather than in the action binary because it is a convenience, and the
+ * action binary must not rewrite its input -- a boundary that silently
+ * corrects a value is one that eventually corrects it wrong. What crosses the
+ * boundary is always a complete hostname.
  */
 export function expandTarget(input: string, source: string): string {
   const t = input.trim().toLowerCase().replace(/\.$/, "");
@@ -203,7 +205,8 @@ export function expandTarget(input: string, source: string): string {
   return t.includes(".") ? t : `${t}.${source}`;
 }
 
-/** The `site.type` values the wrapper will clone. Kept in step with CLONABLE_TYPES. */
+/** The `site.type` values the action binary will clone (CLONABLE_TYPES in
+ * addons/stager/action.ts). Kept in step with it. */
 export type SiteType = "php" | "static" | "reverse-proxy";
 
 export interface SiteSummary {
@@ -261,8 +264,9 @@ export interface JobView {
 }
 
 /**
- * `describe` is the one read that costs real work: the wrapper runs `du -sm`
- * over the source's whole document root as root, with a 120-second timeout.
+ * `describe` is the one read that costs real work: the action
+ * binary runs `du -sm` over the source's whole document root as root, with a
+ * 120-second timeout.
  * Measured on this box, one pass over ~18 GB took 22 seconds of wall time and 9
  * of system time. Nothing bounded how many could run at once, so a handful of
  * requests could keep root walking the disk indefinitely.
@@ -336,9 +340,9 @@ export const stagerService = {
    *
    * Both secrets travel on stdin, one per line, and neither is ever an argument.
    * argv is readable out of `ps` by every account on the box, and worse than
-   * that: `sudo` journals this wrapper's whole COMMAND line, so an argument
+   * that: `sudo` journals this action binary's whole COMMAND line, so an argument
    * outlives the process entirely. The authentication code was in argv until
-   * that was measured against this box's own journal -- and the wrapper
+   * that was measured against this box's own journal -- and the action binary
    * deliberately accepts a *recovery* code there, which does not expire.
    */
   async startClone(
@@ -352,7 +356,7 @@ export const stagerService = {
     const input = instatic
       // Always two lines, even with no code. A channel whose field count
       // varies cannot tell a password containing a newline from a password
-      // followed by a code; a fixed count lets the wrapper refuse the first.
+      // followed by a code; a fixed count lets the action binary refuse the first.
       ? `${instatic.password}\n${instatic.mfaCode ?? ""}\n`
       : undefined;
     return callWrapper<{ job: string }>("clone", args, input);
@@ -372,7 +376,7 @@ export const stagerService = {
   },
 
   /**
-   * The same list, but a wrapper failure is an error rather than an empty one.
+   * The same list, but a call failure is an error rather than an empty one.
    *
    * The dashboard can render "no clones yet" and be read by someone who knows
    * the difference. The port allocator cannot: an empty list means every
