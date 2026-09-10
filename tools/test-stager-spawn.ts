@@ -74,7 +74,7 @@ try {
   writeFileSync(modePath, "success\n");
 
   process.env.CLP_ADDONS_ACTION_TEST_BIN = actionProbePath;
-  const { callWrapper, stagerService } = await import("../addons/stager/app/service.ts");
+  const { callAction, stagerService } = await import("../addons/stager/app/service.ts");
 
   const password = "secret password that must stay off argv";
   const mfaCode = "654321";
@@ -112,12 +112,12 @@ try {
   assert.deepEqual(jsonFailure, { ok: false, error: "policy rejected" });
 
   writeFileSync(modePath, "timeout\n");
-  const timedOut = await callWrapper("job", [], undefined, { timeout: 25 });
+  const timedOut = await callAction("job", [], undefined, { timeout: 25 });
   assert.equal(timedOut.ok, false);
   assert.equal(timedOut.error, "action process terminated");
 
   writeFileSync(modePath, "max-buffer\n");
-  const overLimit = await callWrapper("job", [], undefined, { maxBuffer: 256 });
+  const overLimit = await callAction("job", [], undefined, { maxBuffer: 256 });
   assert.equal(overLimit.ok, false);
   assert.equal(overLimit.error, "action output exceeded 256 bytes");
 

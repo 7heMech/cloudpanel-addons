@@ -96,36 +96,36 @@ const TIMEOUTS: Record<string, number> = {
 };
 const DEFAULT_TIMEOUT = 30_000;
 
-export interface WrapperResult<T = unknown> {
+export interface ActionResult<T = unknown> {
   ok: boolean;
   data?: T;
   error?: string;
 }
 
-function parseWrapperReply<T>(stdout: string): WrapperResult<T> | null {
+function parseActionReply<T>(stdout: string): ActionResult<T> | null {
   try {
     const reply: unknown = JSON.parse(stdout.trim());
     if (reply === null || typeof reply !== "object" || Array.isArray(reply)) return null;
     if (typeof (reply as { ok?: unknown }).ok !== "boolean") return null;
-    return reply as WrapperResult<T>;
+    return reply as ActionResult<T>;
   } catch {
     return null;
   }
 }
 
-export interface WrapperCallOptions {
+export interface ActionCallOptions {
   timeout?: number;
   maxBuffer?: number;
 }
 
-export async function callWrapper<T = unknown>(
+export async function callAction<T = unknown>(
   verb: string,
   args: string[],
   // On stdin rather than in argv, because the only value that ever needs this
   // is a password and argv is world-readable through /proc.
   input?: string,
-  options: WrapperCallOptions = {},
-): Promise<WrapperResult<T>> {
+  options: ActionCallOptions = {},
+): Promise<ActionResult<T>> {
   const argv = ["action", "stager", verb, ...args];
   const runningAsRoot = process.getuid?.() === 0;
   const binary = ACTION_TEST_BIN ?? ACTION_BIN;
@@ -151,7 +151,7 @@ export async function callWrapper<T = unknown>(
       error.code !== undefined &&
       error.code !== null &&
       error.code !== 0;
-    const reply = normalNonzeroExit ? parseWrapperReply<T>(stdout) : null;
+    const reply = normalNonzeroExit ? parseActionReply<T>(stdout) : null;
     if (reply) {
       if (stderr.trim()) console.error(`[action:${verb}]`, stderr.trim());
       return reply;
@@ -169,7 +169,7 @@ export async function callWrapper<T = unknown>(
 
   // stdout is a contract: exactly one JSON object. Never scrape the prose on
   // stderr for meaning.
-  const reply = parseWrapperReply<T>(stdout);
+  const reply = parseActionReply<T>(stdout);
   if (reply) return reply;
   console.error(`[action] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
   return { ok: false, error: "action returned a malformed reply" };
@@ -286,12 +286,12 @@ const DESCRIBE_QUEUE_MAX = 4;
 let describeRunning = 0;
 let describeQueued = 0;
 let describeChain: Promise<unknown> = Promise.resolve();
-const describeInFlight = new Map<string, Promise<WrapperResult<SiteDetail>>>();
+const describeInFlight = new Map<string, Promise<ActionResult<SiteDetail>>>();
 
 async function withDescribeSlot(
   domain: string,
-  work: () => Promise<WrapperResult<SiteDetail>>,
-): Promise<WrapperResult<SiteDetail>> {
+  work: () => Promise<ActionResult<SiteDetail>>,
+): Promise<ActionResult<SiteDetail>> {
   const shared = describeInFlight.get(domain);
   if (shared) return shared;
 
@@ -318,7 +318,7 @@ async function withDescribeSlot(
 
 export const stagerService = {
   async listSites(): Promise<SiteSummary[]> {
-    const res = await callWrapper<{ sites: SiteSummary[] }>("sites", []);
+    const res = await callAction<{ sites: SiteSummary[] }>("sites", []);
     if (!res.ok) {
       console.error("[stager] could not list sites:", res.error);
       return [];
@@ -326,8 +326,8 @@ export const stagerService = {
     return res.data?.sites ?? [];
   },
 
-  async describe(domain: string): Promise<WrapperResult<SiteDetail>> {
-    return withDescribeSlot(domain, () => callWrapper<SiteDetail>("describe", ["--domain", domain]));
+  async describe(domain: string): Promise<ActionResult<SiteDetail>> {
+    return withDescribeSlot(domain, () => callAction<SiteDetail>("describe", ["--domain", domain]));
   },
 
   /**
@@ -350,7 +350,7 @@ export const stagerService = {
     target: string,
     tls: boolean,
     instatic?: { port: number; email: string; password: string; mfaCode?: string }
-  ): Promise<WrapperResult<{ job: string }>> {
+  ): Promise<ActionResult<{ job: string }>> {
     const args = ["--source", source, "--target", target, "--tls", tls ? "yes" : "no"];
     if (instatic) args.push("--port", String(instatic.port), "--email", instatic.email);
     const input = instatic
@@ -359,15 +359,15 @@ export const stagerService = {
       // followed by a code; a fixed count lets the action binary refuse the first.
       ? `${instatic.password}\n${instatic.mfaCode ?? ""}\n`
       : undefined;
-    return callWrapper<{ job: string }>("clone", args, input);
+    return callAction<{ job: string }>("clone", args, input);
   },
 
-  async getJob(id: string): Promise<WrapperResult<{ job: JobView; log: string }>> {
-    return callWrapper<{ job: JobView; log: string }>("job", ["--job", id]);
+  async getJob(id: string): Promise<ActionResult<{ job: JobView; log: string }>> {
+    return callAction<{ job: JobView; log: string }>("job", ["--job", id]);
   },
 
   async listJobs(): Promise<JobView[]> {
-    const res = await callWrapper<{ jobs: JobView[] }>("jobs", []);
+    const res = await callAction<{ jobs: JobView[] }>("jobs", []);
     if (!res.ok) {
       console.error("[stager] could not list jobs:", res.error);
       return [];
@@ -385,7 +385,7 @@ export const stagerService = {
    * readers ask different questions.
    */
   async listJobsOrThrow(): Promise<JobView[]> {
-    const res = await callWrapper<{ jobs: JobView[] }>("jobs", []);
+    const res = await callAction<{ jobs: JobView[] }>("jobs", []);
     if (!res.ok) throw new Error(res.error ?? "the stager action could not list jobs");
     return res.data?.jobs ?? [];
   },

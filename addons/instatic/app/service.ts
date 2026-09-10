@@ -25,13 +25,13 @@ const TIMEOUTS: Record<string, number> = {
 };
 const DEFAULT_TIMEOUT = 60_000;
 
-export interface WrapperResult<T = unknown> {
+export interface ActionResult<T = unknown> {
   ok: boolean;
   data?: T;
   error?: string;
 }
 
-async function callWrapper<T = unknown>(verb: string, args: string[]): Promise<WrapperResult<T>> {
+async function callAction<T = unknown>(verb: string, args: string[]): Promise<ActionResult<T>> {
   const argv = ["action", "instatic", verb, ...args];
   const runningAsRoot = process.getuid?.() === 0;
   const cmd = runningAsRoot ? ACTION_BIN : SUDO_BIN;
@@ -63,7 +63,7 @@ async function callWrapper<T = unknown>(verb: string, args: string[]): Promise<W
   // stdout is a contract: exactly one JSON object. Never scrape the prose on
   // stderr for meaning.
   try {
-    return JSON.parse(stdout.trim()) as WrapperResult<T>;
+    return JSON.parse(stdout.trim()) as ActionResult<T>;
   } catch {
     console.error(`[action] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
     return { ok: false, error: "action returned a malformed reply" };
@@ -123,7 +123,7 @@ export const instaticService = {
   },
 
   async listInstances(): Promise<InstanceView[]> {
-    const res = await callWrapper<{ instances: InstanceView[] }>("list", []);
+    const res = await callAction<{ instances: InstanceView[] }>("list", []);
     if (!res.ok) {
       console.error("[instatic] could not list instances:", res.error);
       return [];
@@ -140,12 +140,12 @@ export const instaticService = {
    * that is already spoken for. So the two readers ask different questions.
    */
   async listInstancesOrThrow(): Promise<InstanceView[]> {
-    const res = await callWrapper<{ instances: InstanceView[] }>("list", []);
+    const res = await callAction<{ instances: InstanceView[] }>("list", []);
     if (!res.ok) throw new Error(res.error ?? "the Instatic action could not list instances");
     return res.data?.instances ?? [];
   },
 
-  async createInstance(domain: string, tag: string, tls = false): Promise<WrapperResult> {
+  async createInstance(domain: string, tag: string, tls = false): Promise<ActionResult> {
     const existing = await this.listInstancesOrThrow();
     if (existing.some((i) => i.domain === domain)) {
       return { ok: false, error: `an instance for ${domain} already exists` };
@@ -156,7 +156,7 @@ export const instaticService = {
     // a lock while it does, so this allocation is a proposal rather than a
     // reservation.
     const port = getNextAvailablePort(readSnapshot(), existing.map((i) => i.port));
-    return callWrapper<{ container: string; siteUser: string }>("create", [
+    return callAction<{ container: string; siteUser: string }>("create", [
       "--domain", domain,
       "--port", String(port),
       "--tag", tag,
@@ -164,8 +164,8 @@ export const instaticService = {
     ]);
   },
 
-  async updateInstance(domain: string, tag: string): Promise<WrapperResult> {
-    return callWrapper("update", ["--domain", domain, "--tag", tag]);
+  async updateInstance(domain: string, tag: string): Promise<ActionResult> {
+    return callAction("update", ["--domain", domain, "--tag", tag]);
   },
 
   /**
@@ -176,20 +176,20 @@ export const instaticService = {
    * restarts, and rebuilding is the only way to pick up a change such as the
    * uid the container runs as.
    */
-  async lifecycle(domain: string, verb: "start" | "stop" | "restart" | "recreate"): Promise<WrapperResult> {
-    return callWrapper(verb, ["--domain", domain]);
+  async lifecycle(domain: string, verb: "start" | "stop" | "restart" | "recreate"): Promise<ActionResult> {
+    return callAction(verb, ["--domain", domain]);
   },
 
-  async deleteInstance(domain: string): Promise<WrapperResult> {
+  async deleteInstance(domain: string): Promise<ActionResult> {
     // --confirm must equal --domain; the action binary enforces it too.
-    return callWrapper("delete", ["--domain", domain, "--confirm", domain]);
+    return callAction("delete", ["--domain", domain, "--confirm", domain]);
   },
 
-  async snapshotInstance(domain: string): Promise<WrapperResult> {
-    return callWrapper("snapshot", ["--domain", domain]);
+  async snapshotInstance(domain: string): Promise<ActionResult> {
+    return callAction("snapshot", ["--domain", domain]);
   },
 
-  async getLogs(domain: string): Promise<WrapperResult<{ logs: string }>> {
-    return callWrapper<{ logs: string }>("logs", ["--domain", domain]);
+  async getLogs(domain: string): Promise<ActionResult<{ logs: string }>> {
+    return callAction<{ logs: string }>("logs", ["--domain", domain]);
   },
 };
