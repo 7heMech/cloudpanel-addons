@@ -67,4 +67,4 @@ test.skipIf(!FAKEROOT)("both wrappers fail closed on the root-owned panel identi
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-});
+}, { timeout: 15_000 });

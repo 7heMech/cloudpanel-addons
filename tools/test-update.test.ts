@@ -3,6 +3,7 @@ import * as nodeFs from "node:fs";
 import {
   ADDONS, ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, SESSION_VALIDATOR_ARTIFACT,
 } from "../cli/paths";
+import * as realProvision from "../cli/provision";
 
 const calls: string[] = [];
 let hasInstalledAddon = true;
@@ -102,6 +103,7 @@ mock.module("../cli/release", () => ({
 }));
 
 mock.module("../cli/provision", () => ({
+  ...realProvision,
   ensureDirs: () => { calls.push("ensureDirs"); provisioning.dirs = true; },
   ensureHmacKey: () => { calls.push("ensureHmacKey"); provisioning.hmacKey = true; },
   ensureServiceUser: () => { calls.push("ensureServiceUser"); provisioning.serviceUser = true; },
