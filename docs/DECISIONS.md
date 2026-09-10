@@ -13,16 +13,15 @@ The implementation specification is
 ### Privilege boundary
 
 The manager runs as the locked `clp-addons` system user. It can invoke only the
-root-owned action wrappers named by `/etc/sudoers.d/clp-addons`:
+single unified binary named by `/etc/sudoers.d/clp-addons`:
 
 ```text
-clp-addons ALL=(root) NOPASSWD: /usr/local/libexec/clp-addons/clp-action-instatic, /usr/local/libexec/clp-addons/clp-action-stager
+clp-addons ALL=(root) NOPASSWD: /usr/local/bin/clp-addons
 ```
 
-The generated rule contains exactly the wrapper paths for the installed addons.
-It deliberately does not grant a directory wildcard, so a new file placed in
-`/usr/local/libexec/clp-addons/` cannot become a passwordless root command
-without an explicit provisioning change. Session validation is performed by the
+The generated rule contains exactly the single unified binary path.
+It deliberately does not grant a directory wildcard, so arbitrary binaries or files
+cannot become a passwordless root command without an explicit provisioning change. Session validation is performed by the
 manager itself and is not a privileged command.
 
 Every wrapper validates its complete argument set before reading input,

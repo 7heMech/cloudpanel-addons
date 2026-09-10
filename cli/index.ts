@@ -25,6 +25,8 @@ import { SECURITY_HEADERS, esc } from "../lib/app-http";
 import { renderLayout } from "../lib/app-ui";
 import { headerTarget } from "../lib/panel-nav";
 import { checkCliUpdate } from "../lib/update-check";
+import { handleInstaticAction } from "../addons/instatic/action";
+import { handleStagerAction } from "../addons/stager/action";
 
 type AddonHandler = (
   req: Request,
@@ -552,6 +554,7 @@ function usage(): void {
   clp-addons status
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons serve
+  clp-addons action <addon> <verb> [options]
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}
@@ -566,6 +569,24 @@ async function cmdOverview(): Promise<void> {
   const specs = installedAddons();
   log.plain(specs.length ? `Installed: ${specs.map((spec) => spec.name).join(", ")}` : "No addons installed");
   log.plain("Run 'clp-addons status' for service and integration details.");
+}
+
+async function cmdAction(args: string[]): Promise<number> {
+  const [addon, ...actionArgs] = args;
+  if (!addon) {
+    log.err("usage: clp-addons action <addon> <verb> [options]");
+    return 1;
+  }
+  if (addon === "instatic") {
+    await handleInstaticAction(actionArgs);
+    return 0;
+  }
+  if (addon === "stager") {
+    await handleStagerAction(actionArgs);
+    return 0;
+  }
+  log.err(`unknown addon '${addon}'`);
+  return 1;
 }
 
 async function main(): Promise<number> {
@@ -587,6 +608,7 @@ async function main(): Promise<number> {
     case "status": await cmdStatus(); return 0;
     case "uninstall": cmdUninstall(rest); return 0;
     case "serve": return await cmdServe();
+    case "action": return await cmdAction(rest);
     case "help":
     case "--help":
     case "-h": usage(); return 0;

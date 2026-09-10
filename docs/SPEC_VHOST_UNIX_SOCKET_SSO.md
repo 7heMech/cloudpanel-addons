@@ -152,7 +152,7 @@ CMD ["/lib/systemd/systemd"]
 1. **Filesystem Layout:**
    - Primary Binary: `/usr/local/bin/clp-addons` (Used by both CLI and systemd service).
    - Wrapper Scripts: `/usr/local/libexec/clp-addons/clp-action-*`.
-   - Sudoers Drop-in: `/etc/sudoers.d/clp-addons` allowing `clp-addons ALL=(root) NOPASSWD: /usr/local/libexec/clp-addons/*`.
+   - Sudoers Drop-in: `/etc/sudoers.d/clp-addons` allowing `clp-addons ALL=(root) NOPASSWD: /usr/local/bin/clp-addons`.
 2. **Unified `clp-addons update`:**
    - Step 1: Query GitHub releases API for latest release.
    - Step 2: If up to date, report and exit.

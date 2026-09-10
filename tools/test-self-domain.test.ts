@@ -1,59 +1,63 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-const STAGER = join(import.meta.dir, "../addons/stager/wrapper/clp-action-stager");
-const INSTATIC = join(import.meta.dir, "../addons/instatic/wrapper/clp-action-instatic");
-const IDENTITY_PATH = "/etc/clp-addons/panel-identity.conf";
 const FAKEROOT = Bun.which("fakeroot");
+const REPO = join(import.meta.dir, "..");
 
-function validationScript(wrapper: string, identityPath: string): string {
-  const source = readFileSync(wrapper, "utf8");
-  const marker = "\n# --- argument parsing";
-  const end = source.indexOf(marker);
-  if (end === -1) throw new Error(`${wrapper} has no argument-parsing boundary`);
-  return source.slice(0, end).replace(
-    `readonly PANEL_IDENTITY_FILE="${IDENTITY_PATH}"`,
-    `readonly PANEL_IDENTITY_FILE="${identityPath}"`,
-  );
-}
-
-function runIdentityScenarios(wrapper: string, identityPath: string): string {
+function runIdentityScenarios(wrapperName: string, identityPath: string): string {
   if (!FAKEROOT) throw new Error("fakeroot is required for root-ownership wrapper tests");
-  const script = `${validationScript(wrapper, identityPath)}
-run_validations() {
-  for candidate in "$@"; do
-    if ( validate_domain "$candidate" domain; printf 'ACCEPT:%s\\n' "$VALIDATED_DOMAIN" ); then
-      :
-    else
-      printf 'REJECTED\\n'
-    fi
-  done
+  const script = `
+import { validateDomain, createActionContext } from "./lib/action-common.ts";
+import { writeFileSync, chmodSync, unlinkSync } from "node:fs";
+
+const ctx = createActionContext("${wrapperName}");
+let out = "";
+ctx.emitErr = (msg) => {
+  out += msg + "\\n";
+  throw new Error(msg);
+};
+
+function run_validations(...candidates) {
+  for (const c of candidates) {
+    try {
+      const v = validateDomain(c, ctx, { identityPath: "${identityPath}" });
+      out += "ACCEPT:" + v + "\\n";
+    } catch {
+      out += "REJECTED\\n";
+    }
+  }
 }
 
-printf '%s\\n' 'PRIMARY=Panel.Example.Test.' 'ALIASES=WWW.Panel.Example.Test. *.panel.example.test' > "$PANEL_IDENTITY_FILE"
-chmod 600 "$PANEL_IDENTITY_FILE"
-run_validations PANEL.EXAMPLE.TEST. www.panel.example.test. tenant.PANEL.Example.Test. panel.example.test
-run_validations evilpanel.example.test panel.example.test.evil.test customer.example.test.
+writeFileSync("${identityPath}", "PRIMARY=Panel.Example.Test.\\nALIASES=WWW.Panel.Example.Test. *.panel.example.test\\n");
+chmodSync("${identityPath}", 0o600);
+run_validations("PANEL.EXAMPLE.TEST.", "www.panel.example.test.", "tenant.PANEL.Example.Test.", "panel.example.test");
+run_validations("evilpanel.example.test", "panel.example.test.evil.test", "customer.example.test.");
 
-printf '%s\\n' 'PRIMARY=panel.example.test' 'ALIASES=~^.+$' > "$PANEL_IDENTITY_FILE"
-run_validations customer.example.test
+writeFileSync("${identityPath}", "PRIMARY=panel.example.test\\nALIASES=~^.+$\\n");
+run_validations("customer.example.test");
 
-rm -f "$PANEL_IDENTITY_FILE"
-run_validations customer.example.test
+unlinkSync("${identityPath}");
+run_validations("customer.example.test");
 
-printf '%s\\n' 'PRIMARY=panel.example.test' 'ALIASES=www.panel.example.test' > "$PANEL_IDENTITY_FILE"
-chmod 620 "$PANEL_IDENTITY_FILE"
-run_validations customer.example.test`;
-  return execFileSync(FAKEROOT, ["bash", "-c", script, "_"], { encoding: "utf8" });
+writeFileSync("${identityPath}", "PRIMARY=panel.example.test\\nALIASES=www.panel.example.test\\n");
+chmodSync("${identityPath}", 0o620);
+run_validations("customer.example.test");
+
+process.stdout.write(out);
+`;
+  return execFileSync(FAKEROOT, [process.execPath, "-e", script], {
+    cwd: REPO,
+    encoding: "utf8",
+  });
 }
 
 test.skipIf(!FAKEROOT)("both wrappers fail closed on the root-owned panel identity", () => {
   const dir = mkdtempSync(join(tmpdir(), "clp-self-domain-test-"));
   const identity = join(dir, "panel-identity.conf");
-  const wrappers = [STAGER, INSTATIC];
+  const wrappers = ["stager", "instatic"];
   try {
     for (const wrapper of wrappers) {
       const result = runIdentityScenarios(wrapper, identity);

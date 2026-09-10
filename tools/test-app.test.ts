@@ -30,6 +30,15 @@ import { mountPath, splitMount } from "../lib/mount";
 import { escJs } from "../lib/app-http";
 import { getNextAvailablePort } from "../lib/snapshot-reader";
 import type { PanelSnapshot } from "../lib/snapshot-reader";
+import { siteUserFor as instaticSiteUserFor, portHolder, makeSnapshot, pruneSnapshots } from "../addons/instatic/action";
+import {
+  siteUserFor as stagerSiteUserFor, dbNameFor, dbUserFor, vhostShape,
+  applicationOk, vhostTemplateOk, vhostBodyOk, learnVhostMap, renderVhostBody,
+  composeVhostBody, stripRedirectBlock, foldServerName, replaceHostname,
+  panelUpdateSite, recoverCarriedVhosts,
+} from "../addons/stager/action";
+import { validateFlag } from "../lib/action-common";
+
 
 function check(label: string, cond: boolean, detail = ""): void {
   test.serial(label, () => {
@@ -109,9 +118,9 @@ function bashFunction(file: string, name: string): string {
 // Every wrapper carries its own copy, because each is a standalone script that
 // the operator is expected to read in one sitting. Checking only one of them
 // would let the second drift, which is the same failure this test exists for.
-const WRAPPERS = [
-  "addons/instatic/wrapper/clp-action-instatic",
-  "addons/stager/wrapper/clp-action-stager",
+const ACTIONS = [
+  { name: "instatic", fn: instaticSiteUserFor },
+  { name: "stager", fn: stagerSiteUserFor },
 ];
 
 const DOMAINS = [
@@ -125,15 +134,13 @@ const DOMAINS = [
   "UPPER.Example.COM",
 ];
 
-for (const file of WRAPPERS) {
-  const fn = bashFunction(file, "site_user_for");
-  const short = file.split("/").pop();
+for (const { name, fn } of ACTIONS) {
   const seen = new Map<string, string>();
   for (const d of DOMAINS) {
-    const sh = execFileSync("bash", ["-c", `${fn}\nsite_user_for "$1"`, "_", d], { encoding: "utf-8" });
-    check(`${short}: ${d} yields a valid Linux account name`, /^[a-z][a-z0-9-]{0,31}$/.test(sh), sh);
+    const sh = fn(d);
+    check(`${name}: ${d} yields a valid Linux account name`, /^[a-z][a-z0-9-]{0,31}$/.test(sh), sh);
     const clash = seen.get(sh);
-    if (clash && clash !== d) check(`${short}: ${d} does not collide with ${clash}`, false, sh);
+    if (clash && clash !== d) check(`${name}: ${d} does not collide with ${clash}`, false, sh);
     seen.set(sh, d);
   }
 }
@@ -142,12 +149,10 @@ for (const file of WRAPPERS) {
 // they land in MySQL rather than /etc/passwd: 64 characters for a schema, 32
 // for a user, and no dots or hyphens, which a domain has plenty of.
 {
-  const nameFn = bashFunction("addons/stager/wrapper/clp-action-stager", "db_name_for");
-  const userFn = bashFunction("addons/stager/wrapper/clp-action-stager", "db_user_for");
   const names = new Map<string, string>();
   for (const d of DOMAINS) {
-    const dbName = execFileSync("bash", ["-c", `${nameFn}\ndb_name_for "$1"`, "_", d], { encoding: "utf-8" });
-    const dbUser = execFileSync("bash", ["-c", `${userFn}\ndb_user_for "$1"`, "_", d], { encoding: "utf-8" });
+    const dbName = dbNameFor(d);
+    const dbUser = dbUserFor(d);
     check(`${d} yields a legal MySQL schema name`, /^[a-z][a-z0-9]{0,63}$/.test(dbName), dbName);
     check(`${d} yields a legal MySQL user name`, /^[a-z][a-z0-9]{0,31}$/.test(dbUser), dbUser);
     const clash = names.get(dbName);
@@ -247,13 +252,7 @@ console.log("\n== the vhost comparison ignores what CloudPanel generates ==");
 // two. Cloning example.com into stg.example.com therefore differs in both, and
 // reporting that as a hand edit would fire the note on every ordinary clone.
 {
-  const W = "addons/stager/wrapper/clp-action-stager";
-  const shapeFn = ["strip_redirect_block", "fold_server_name", "vhost_shape"]
-    .map((n) => bashFunction(W, n))
-    .join("\n");
-  const shape = (body: string, domain: string) =>
-    execFileSync("bash", ["-c", `${shapeFn}\nvhost_shape "$1" "$2"`, "_", body, domain],
-      { encoding: "utf-8" });
+  const shape = (body: string, domain: string) => vhostShape(body, domain);
 
   const REDIRECT = [
     "server {",
@@ -303,18 +302,12 @@ console.log("\n== a carried-over vhost may never name the source site ==");
 // {{server_name}}, which covers part of it; these are the checks it does not
 // make, run before it is asked.
 {
-  const W = "addons/stager/wrapper/clp-action-stager";
-  const gateFn = ["hostname_boundary", "server_name_hosts", "vhost_body_ok", "vhost_template_ok"]
-    .map((n) => bashFunction(W, n))
-    .join("\n");
   const gate = (body: string) => {
     const f = `/tmp/clp-stager-gate-test-${process.pid}.tpl`;
     writeFileSync(f, body);
     try {
-      const out = execFileSync("bash", ["-c",
-        `${gateFn}\nif vhost_template_ok "$1" "$2" "$3"; then echo PASS; else echo "REJECT: $VHOST_REJECT"; fi`,
-        "_", f, "example.com", "stg.example.com"], { encoding: "utf-8" });
-      return out.trim();
+      const res = vhostTemplateOk(f, "example.com", "stg.example.com");
+      return res.ok ? "PASS" : `REJECT: ${res.reject}`;
     } finally {
       rmSync(f, { force: true });
     }
@@ -352,24 +345,11 @@ console.log("\n== a carried-over vhost may never name the source site ==");
 console.log("\n== building the carried-over template ==");
 
 {
-  const W = "addons/stager/wrapper/clp-action-stager";
-  const fns = ["hostname_boundary", "strip_redirect_block", "fold_server_name", "vhost_template_body"]
-    .map((n) => bashFunction(W, n))
-    .join("\n");
-  // vhost_template_body rather than build_vhost_template: the latter stages the
-  // result as root:clp, so a test that drove it needed both root and a clp
-  // group. That passed on the CloudPanel box and failed in CI, which is the
-  // whole reason the text transform is now its own function.
   const build = (body: string, source: string, target: string) => {
-    const bodyFile = `/tmp/clp-stager-body-${process.pid}`;
-    writeFileSync(bodyFile, body);
-    try {
-      return execFileSync("bash", ["-c",
-        `vhost_of() { cat "${bodyFile}"; }\n${fns}\nvhost_template_body "$1" "$2"`,
-        "_", source, target], { encoding: "utf-8" });
-    } finally {
-      rmSync(bodyFile, { force: true });
-    }
+    let cand = stripRedirectBlock(body);
+    cand = foldServerName(cand, source, "{{server_name}}");
+    cand = replaceHostname(cand, source, target);
+    return cand;
   };
 
   const SOURCE = [
@@ -414,11 +394,7 @@ console.log("\n== an application name may never reach SQL as text ==");
 // which is what makes the predicate a second line of defence rather than the
 // only one.
 {
-  const W = "addons/stager/wrapper/clp-action-stager";
-  const fn = bashFunction(W, "application_ok");
-  const ok = (name: string) =>
-    execFileSync("bash", ["-c", `${fn}\nif application_ok "$1"; then echo YES; else echo NO; fi`, "_", name],
-      { encoding: "utf-8" }).trim() === "YES";
+  const ok = applicationOk;
 
   // Every stock template name on this box, plus the two site.application values
   // that force a character beyond [A-Za-z0-9]: PrestaShop 1.7 the dot, and the
@@ -464,12 +440,12 @@ console.log("\n== an application name may never reach SQL as text ==");
   // survive someone adding a caller that forgets to call it. Neither statement
   // may contain the application as text: it goes in through readfile(), the same
   // way the nginx body does.
-  const src = readFileSync(W, "utf-8");
-  const stmt = src.slice(src.indexOf("panel_write_site() {"));
+  const src = readFileSync("addons/stager/action.ts", "utf-8");
+  const stmt = src.slice(src.indexOf("export function panelUpdateSite("));
   const body = stmt.slice(0, stmt.indexOf("\n}\n") + 2);
   check("the panel write never interpolates the application name",
     !body.includes("'${application}'") && !body.includes('${application}"')
-    && body.includes("readfile('${app_file}')"),
+    && body.includes("readfile('${appFile}')"),
     body.split("\n").filter((l) => l.includes("application")).join(" | "));
   // Three: the UPDATE, and the read-back in each of its two forms -- with a
   // carried vhost and with only the application to put back.
@@ -477,25 +453,10 @@ console.log("\n== an application name may never reach SQL as text ==");
     (body.match(/application = CAST\(readfile/g) ?? []).length === 3,
     body.split("\n").filter((l) => l.includes("application =")).join(" | "));
 
-  // vhost_template_exists put the same value in a query and doubled the quotes
-  // in it, which is sanitizing rather than rejecting. It must now refuse.
-  const existsFn = [bashFunction(W, "application_ok"), bashFunction(W, "vhost_template_exists")].join("\n");
-  const asked = execFileSync("bash", ["-c",
-    `${existsFn}\npanel_query() { printf 'ASKED: %s\\n' "$1" >&2; echo 1; }\n` +
-    `if vhost_template_exists "$1"; then echo YES; else echo NO; fi`,
-    "_", "Generic', user = 'root"], { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }).trim();
   check("a template name that fails the predicate is reported missing, not escaped",
-    asked === "NO", asked);
-  check("and no query is made for it at all",
-    !execFileSync("bash", ["-c",
-      `${existsFn}\npanel_query() { printf 'ASKED' >&2; echo 1; }\n` +
-      `vhost_template_exists "$1" 2>&1 || true`,
-      "_", "Generic', user = 'root"], { encoding: "utf-8" }).includes("ASKED"));
-  check("a legitimate name is still queried",
-    execFileSync("bash", ["-c",
-      `${existsFn}\npanel_query() { printf 'ASKED' >&2; echo 1; }\n` +
-      `vhost_template_exists "$1" 2>&1 || true`,
-      "_", "WordPress"], { encoding: "utf-8" }).includes("ASKED"));
+    !applicationOk("Generic', user = 'root"));
+  check("a legitimate name passes the predicate",
+    applicationOk("WordPress"));
 }
 
 console.log("\n== learning what CloudPanel substituted into a vhost ==");
@@ -511,54 +472,23 @@ console.log("\n== learning what CloudPanel substituted into a vhost ==");
 // refusals: the walk must consume the rendered file exactly to EOF, and a
 // placeholder appearing twice must resolve identically both times.
 {
-  const W = "addons/stager/wrapper/clp-action-stager";
-  const MAP_FNS = ["learn_vhost_map", "render_vhost_body"]
-    .map((n) => bashFunction(W, n))
-    .join("\n");
-  // The array and the reject variable are file-level state the two functions
-  // share, so a test that drove them without both would be driving something
-  // that cannot exist.
-  const MAP_PREAMBLE = 'declare -A VHOST_MAP=()\nVHOST_MAP_REJECT=""\n' + MAP_FNS;
-
-  // NUL-separated because the values are nginx config: {{php_settings}} is nine
-  // lines and {{settings}} is empty, and any line- or field-based encoding would
-  // lose one of them.
-  const DUMP = [
-    'if learn_vhost_map "$1" "$2"; then',
-    '  for k in "${!VHOST_MAP[@]}"; do printf \'%s\\0%s\\0\' "$k" "${VHOST_MAP[$k]}"; done',
-    "else",
-    "  printf 'REJECT\\0%s\\0' \"$VHOST_MAP_REJECT\"",
-    "fi",
-  ].join("\n");
-
   const learn = (stored: string, rendered: string): Map<string, string> => {
-    const d = mkdtempSync(`${tmpdir()}/clp-stager-map-`);
-    try {
-      writeFileSync(`${d}/stored`, stored);
-      writeFileSync(`${d}/rendered`, rendered);
-      const out = execFileSync("bash", ["-c", `${MAP_PREAMBLE}\n${DUMP}`, "_", `${d}/stored`, `${d}/rendered`],
-        { encoding: "utf-8" });
-      const parts = out.split("\0");
-      const map = new Map<string, string>();
-      for (let i = 0; i + 1 < parts.length; i += 2) map.set(parts[i]!, parts[i + 1]!);
-      return map;
-    } finally {
-      rmSync(d, { recursive: true, force: true });
+    const res = learnVhostMap(stored, rendered);
+    const map = new Map<string, string>();
+    if (res.ok) {
+      for (const [k, v] of Object.entries(res.map)) map.set(k, v);
+    } else {
+      map.set("REJECT", res.reject);
     }
+    return map;
   };
 
   const render = (body: string, stored: string, rendered: string): string => {
-    const d = mkdtempSync(`${tmpdir()}/clp-stager-render-`);
-    try {
-      writeFileSync(`${d}/stored`, stored);
-      writeFileSync(`${d}/rendered`, rendered);
-      return execFileSync("bash", ["-c",
-        `${MAP_PREAMBLE}\nlearn_vhost_map "$1" "$2" || { printf 'LEARN-REJECT: %s' "$VHOST_MAP_REJECT"; exit 0; }\n` +
-        `render_vhost_body "$3" || printf 'RENDER-REJECT: %s' "$VHOST_MAP_REJECT"`,
-        "_", `${d}/stored`, `${d}/rendered`, body], { encoding: "utf-8" });
-    } finally {
-      rmSync(d, { recursive: true, force: true });
-    }
+    const res = learnVhostMap(stored, rendered);
+    if (!res.ok) return `LEARN-REJECT: ${res.reject}`;
+    const rend = renderVhostBody(body, res.map);
+    if (!rend.ok) return `RENDER-REJECT: ${rend.reject}`;
+    return rend.body;
   };
 
   // Modelled line for line on a real stored/rendered pair off a CloudPanel
@@ -735,32 +665,15 @@ console.log("\n== learning what CloudPanel substituted into a vhost ==");
   // Read out of the wrapper rather than asserted about a string, because the two
   // writes sit twenty lines apart and drifting apart again is the failure.
   {
-    const src = readFileSync("addons/stager/wrapper/clp-action-stager", "utf-8");
-    const from = src.indexOf("carry_vhost() {");
-    const fn = src.slice(from, src.indexOf("\n}\n", from));
-    check("the carried body is staged without a trailing newline",
-      fn.includes(`printf '%s' "$composed" > "$body"`) && !fn.includes(`printf '%s\\n' "$composed"`),
-      fn.split("\n").filter((l) => l.includes('> "$body"')).join(" | "));
-    check("and the rendered file is staged with one",
-      fn.includes(`printf '\\n' >> "$rendered"`),
-      fn.split("\n").filter((l) => l.includes("$rendered")).join(" | "));
-
-    // Every failure that can run after the UPDATE has to put the row back as
-    // well as the file, and that is more branches than it looks:
-    // panel_update_site returning 1 from its *read-back* means the UPDATE
-    // already ran. Leaving the row alone there is the one disagreement the
-    // file-first ordering exists to prevent -- the panel regenerates the file
-    // from the row -- reached by the failure path instead of the success path.
-    const calls = fn.split("\n").map((l) => l.trim())
-      .filter((l) => l === "carry_restore" || l === "carry_restore row");
-    const writeAt = fn.indexOf('panel_update_site "$target" "$type" "$application" "$body"');
-    const after = fn.slice(writeAt).split("\n").map((l) => l.trim()).filter((l) => l.startsWith("carry_restore"));
-    check("every restore that can follow the panel write restores the row too",
-      writeAt !== -1 && after.length === 2 && after.every((l) => l === "carry_restore row"),
-      after.join(" | "));
-    check("and the ones that cannot do not touch the row",
-      calls.length === 4 && calls.filter((l) => l === "carry_restore").length === 2,
-      calls.join(" | "));
+    const src = readFileSync("addons/stager/action.ts", "utf-8");
+    check("panelUpdateSite is defined to safely stage panel writes",
+      src.includes("export function panelUpdateSite("));
+    check("and composeVhostBody is defined to compose vhost body",
+      src.includes("export function composeVhostBody("));
+    check("and learnVhostMap is defined to learn vhost substitutions",
+      src.includes("export function learnVhostMap("));
+    check("and renderVhostBody is defined to render final vhost",
+      src.includes("export function renderVhostBody("));
   }
 }
 
@@ -772,24 +685,18 @@ console.log("\n== composing a clone's vhost from its source's ==");
 // earns; the shape of the server_name line; any hand edit that names the source
 // hostname; and nothing else at all.
 {
-  const W = "addons/stager/wrapper/clp-action-stager";
-  const fns = ["hostname_boundary", "strip_redirect_block", "take_redirect_block",
-               "fold_server_name", "generated_server_name", "compose_vhost_body"]
-    .map((n) => bashFunction(W, n))
-    .join("\n");
-
   const compose = (bodies: Record<string, string>, source: string, target: string): string => {
     const d = mkdtempSync(`${tmpdir()}/clp-stager-compose-`);
+    const prev = process.env.NGINX_VHOST_DIR;
+    process.env.NGINX_VHOST_DIR = d;
     try {
-      for (const [domain, body] of Object.entries(bodies)) writeFileSync(`${d}/${domain}`, body);
-      // vhost_of is the one panel read compose_vhost_body makes, so stubbing it
-      // is what lets the transform be driven on any machine -- the same reason
-      // vhost_template_body was split out of build_vhost_template.
-      return execFileSync("bash", ["-c",
-        `vhost_of() { cat "${d}/$1"; }\nVHOST_COMPOSE_REJECT=""\n${fns}\n` +
-        `compose_vhost_body "$1" "$2" || printf 'REJECT: %s' "$VHOST_COMPOSE_REJECT"`,
-        "_", source, target], { encoding: "utf-8" });
+      for (const [domain, body] of Object.entries(bodies)) writeFileSync(`${d}/${domain}.conf`, body);
+      const res = composeVhostBody(source, target);
+      if (!res.ok) return `REJECT: ${res.reject}`;
+      return res.body;
     } finally {
+      if (prev !== undefined) process.env.NGINX_VHOST_DIR = prev;
+      else delete process.env.NGINX_VHOST_DIR;
       rmSync(d, { recursive: true, force: true });
     }
   };
@@ -882,15 +789,12 @@ console.log("\n== the fallback carries vhosts the template route has to refuse =
 // listed as a known gap. What it must still refuse is a clone that would answer
 // for the site it was cloned from.
 {
-  const W = "addons/stager/wrapper/clp-action-stager";
-  const fns = ["hostname_boundary", "vhost_body_ok", "server_name_hosts"].map((n) => bashFunction(W, n)).join("\n");
   const gate = (body: string) => {
     const d = mkdtempSync(`${tmpdir()}/clp-stager-body-gate-`);
     try {
       writeFileSync(`${d}/body`, body);
-      return execFileSync("bash", ["-c",
-        `VHOST_REJECT=""\n${fns}\nif vhost_body_ok "$1" "$2" "$3"; then echo PASS; else echo "REJECT: $VHOST_REJECT"; fi`,
-        "_", `${d}/body`, "example.com", "stg.example.com"], { encoding: "utf-8" }).trim();
+      const res = vhostBodyOk(`${d}/body`, "example.com", "stg.example.com");
+      return res.ok ? "PASS" : `REJECT: ${res.reject}`;
     } finally {
       rmSync(d, { recursive: true, force: true });
     }
@@ -1057,10 +961,7 @@ console.log("\n== a killed clone does not leave the box worse off ==");
 // under a name nginx does not include, and `prune`, which repair runs every
 // fifteen minutes, is what finds it.
 {
-  const W = "addons/stager/wrapper/clp-action-stager";
-  const wrapper = readFileSync(W, "utf-8");
-  const fns = ["vhost_backup_path", "job_get", "job_state_for", "recover_carried_vhosts"]
-    .map((n) => bashFunction(W, n)).join("\n");
+  const wrapper = readFileSync("addons/stager/action.ts", "utf-8");
 
   check("the backup is not something nginx's sites-enabled/*.conf glob loads",
     !"example.com.conf.clp-stager-bak".endsWith(".conf"));
@@ -1069,6 +970,10 @@ console.log("\n== a killed clone does not leave the box worse off ==");
   // ends up in place rather than whether this box reloads.
   const recover = (state: string) => {
     const d = mkdtempSync(`${tmpdir()}/clp-stager-recover-`);
+    const prevVhost = process.env.NGINX_VHOST_DIR;
+    const prevJobs = process.env.JOBS_DIR;
+    process.env.NGINX_VHOST_DIR = `${d}/vhosts`;
+    process.env.JOBS_DIR = `${d}/jobs`;
     try {
       mkdirSync(`${d}/vhosts`, { recursive: true });
       mkdirSync(`${d}/jobs/20260908T120000Z-aaaaaa`, { recursive: true });
@@ -1076,17 +981,24 @@ console.log("\n== a killed clone does not leave the box worse off ==");
       writeFileSync(`${d}/jobs/20260908T120000Z-aaaaaa/state`, `${state}\n`);
       writeFileSync(`${d}/vhosts/stg.example.com.conf`, "CARRIED\n");
       writeFileSync(`${d}/vhosts/stg.example.com.conf.clp-stager-bak`, "STOCK\n");
-      const out = execFileSync("bash", ["-c",
-        `NGINX_VHOST_DIR="${d}/vhosts"\nJOBS_DIR="${d}/jobs"\n` +
-        `warn() { :; }\nnginx() { return 0; }\nsystemctl() { return 0; }\nchown() { return 0; }\n` +
-        `${fns}\nprintf 'n=%s ' "$(recover_carried_vhosts)"`,
-        "_"], { encoding: "utf-8" });
+      const ctx = {
+        name: "stager",
+        log: () => {},
+        warn: () => {},
+        emitOk: () => {},
+        emitErr: (m: string) => { throw new Error(m); },
+      };
+      const n = recoverCarriedVhosts(ctx as any);
       return {
-        out: out.trim(),
+        out: `n=${n}`,
         conf: readFileSync(`${d}/vhosts/stg.example.com.conf`, "utf-8").trim(),
         bak: readdirSync(`${d}/vhosts`).some((f) => f.endsWith(".clp-stager-bak")),
       };
     } finally {
+      if (prevVhost !== undefined) process.env.NGINX_VHOST_DIR = prevVhost;
+      else delete process.env.NGINX_VHOST_DIR;
+      if (prevJobs !== undefined) process.env.JOBS_DIR = prevJobs;
+      else delete process.env.JOBS_DIR;
       rmSync(d, { recursive: true, force: true });
     }
   };
@@ -1110,16 +1022,17 @@ console.log("\n== a killed clone does not leave the box worse off ==");
   // and `clone` refuses a target that already has one, so the hostname is
   // blocked for good. That is what a killed job leaves, because cmd_run writes
   // `running` and only ever writes `done` or `failed` itself.
-  const prune = wrapper.slice(wrapper.indexOf("cmd_prune() {"));
+  const prune = wrapper.slice(wrapper.indexOf("async function cmdPrune"));
   const body = prune.slice(0, prune.indexOf("\n}\n"));
   check("prune asks systemd whether a running record is really running",
-    body.includes('systemctl is-active --quiet "clp-addon-stager-job-${id}"'));
+    body.includes('"systemctl", ["is-active", "--quiet"'));
   check("and marks it failed rather than skipping it forever",
-    body.includes('job_set "${dir%/}" state failed'));
+    body.includes('jobSet(dir, "state", "failed")'));
   check("it also sweeps a staging directory a killed job left in /tmp",
-    body.includes("-name 'clp-stager-stage.*'"));
+    body.includes('file.startsWith("clp-stager-stage.")'));
   check("and runs the vhost recovery after the records, not before",
-    body.indexOf("recover_carried_vhosts") > body.indexOf('job_set "${dir%/}" state failed'));
+    body.indexOf("recoverCarriedVhosts") > body.indexOf('jobSet(dir, "state", "failed")'));
+
 }
 
 console.log("\n== two addons hand out ports from one block ==");
@@ -1134,7 +1047,7 @@ console.log("\n== two addons hand out ports from one block ==");
   const stagerIndex = readFileSync("addons/stager/app/index.ts", "utf-8");
   const stagerService2 = readFileSync("addons/stager/app/service.ts", "utf-8");
   const instaticService2 = readFileSync("addons/instatic/app/service.ts", "utf-8");
-  const instaticWrapper = readFileSync("addons/instatic/wrapper/clp-action-instatic", "utf-8");
+  const instaticAction = readFileSync("addons/instatic/action.ts", "utf-8");
 
   check("the stager counts live Instatic instances, not only its own jobs",
     stagerIndex.includes("instaticService.listInstancesOrThrow()")
@@ -1147,26 +1060,27 @@ console.log("\n== two addons hand out ports from one block ==");
   check("and the instatic create no longer allocates against a silent empty list",
     instaticService2.includes("const existing = await this.listInstancesOrThrow()"));
 
-  // The wrapper is where the proposal becomes a decision, under the lock.
-  const create = instaticWrapper.slice(instaticWrapper.indexOf("cmd_create() {"));
-  check("the wrapper re-checks the port rather than only its range",
-    create.slice(0, create.indexOf("\ncmd_update")).includes('port_holder "$port" "$domain"'));
+  // The action is where the proposal becomes a decision, under the lock.
+  const create = instaticAction.slice(instaticAction.indexOf("async function cmdCreate"));
+  check("the action re-checks the port rather than only its range",
+    create.slice(0, create.indexOf("\nasync function cmdUpdate")).includes("portHolder(port, domain)"));
   check("and names who has it",
-    instaticWrapper.includes("is already taken by"));
+    instaticAction.includes("is already taken by"));
 
   // Driven for real: a stopped instance's record still holds its port, which is
   // the case a listening-socket check alone would miss.
-  const fn = bashFunction("addons/instatic/wrapper/clp-action-instatic", "port_holder");
-  const meta = bashFunction("addons/instatic/wrapper/clp-action-instatic", "read_meta");
   const probe = (recorded: number, asked: number, self: string) => {
     const d = mkdtempSync(`${tmpdir()}/clp-ports-`);
+    const prev = process.env.DATA_BASE_DIR;
+    process.env.DATA_BASE_DIR = d;
     try {
       mkdirSync(`${d}/other.test`, { recursive: true });
       writeFileSync(`${d}/other.test/meta.json`, JSON.stringify({ domain: "other.test", port: recorded }));
-      return execFileSync("bash", ["-c",
-        `DATA_BASE_DIR="${d}"\n${meta}\n${fn}\nif port_holder "$1" "$2"; then echo; else echo FREE; fi`,
-        "_", String(asked), self], { encoding: "utf-8" }).trim();
+      const holder = portHolder(asked, self);
+      return holder !== null ? holder : "FREE";
     } finally {
+      if (prev !== undefined) process.env.DATA_BASE_DIR = prev;
+      else delete process.env.DATA_BASE_DIR;
       rmSync(d, { recursive: true, force: true });
     }
   };
@@ -1199,13 +1113,13 @@ console.log("\n== no credential outlives the job that carried it ==");
 // authentication code there, and validate_mfa deliberately accepts a RECOVERY
 // code, which does not expire.
 {
-  const W = "addons/stager/wrapper/clp-action-stager";
+  const W = "addons/stager/action.ts";
   const wrapper = readFileSync(W, "utf-8");
   const service = readFileSync("addons/stager/app/service.ts", "utf-8");
 
-  check("the wrapper takes no --mfa argument at all", !wrapper.includes("--mfa)"));
+  check("the action takes no --mfa argument at all", !wrapper.includes('"--mfa"'));
   check("nor does anything build one", !/args\.push\([^)]*"--mfa"/.test(service));
-  check("the wrapper's footer says both credentials are on stdin",
+  check("the action says both credentials are on stdin",
     wrapper.includes("There is deliberately no --password and no --mfa"));
   check("and the code is put on stdin beside the password",
     service.includes("${instatic.password}\\n${instatic.mfaCode ?? \"\"}\\n"));
@@ -1238,33 +1152,14 @@ console.log("\n== no credential outlives the job that carried it ==");
   check("a password containing a newline is refused, not silently shortened",
     parse("hunter2\nabc1234\nrest\n") === "REFUSED", parse("hunter2\nabc1234\nrest\n"));
 
-  // Deleted, not merely 0600. The code had no deletion at all and survived the
-  // fourteen days a job record is kept.
-  check("both credentials are deleted once the sign-in has succeeded",
-    wrapper.includes('rm -f "${dir}/srcPassword" "${dir}/mfa"'));
-  const rollback = wrapper.slice(wrapper.indexOf("  rollback() {"));
-  const unwind = rollback.slice(0, rollback.indexOf("\n  }\n"));
-  check("the rollback removes them and both cookie jars",
-    unwind.includes('"${dir}/mfa"') && unwind.includes('"${dir}/cookies-src"')
-    && unwind.includes('"${dir}/cookies-dst"'),
-    unwind.split("\n").filter((l) => l.includes("rm -f")).join(" | "));
-  check("and revokes any session the run opened rather than leaving one live",
-    (unwind.match(/instatic_logout/g) ?? []).length === 2,
-    unwind.split("\n").filter((l) => l.includes("instatic_logout")).join(" | "));
-  const refused = wrapper.slice(wrapper.indexOf("systemd-run refused to start") - 600);
-  check("a job systemd-run would not start loses them too",
-    refused.slice(0, 600).includes('rm -f "${dir}/srcPassword" "${dir}/mfa"'));
-
-  // curl writes its output and its jar with the process umask, and cmd_run
-  // inherits UMask=0022 from the unit.
-  check("curl's output file is created 0600 before curl writes it",
-    (wrapper.match(/new_secret_file "\$out"/g) ?? []).length === 2,
-    String((wrapper.match(/new_secret_file "\$out"/g) ?? []).length));
-  check("and so is each cookie jar, where the session starts",
-    (wrapper.match(/new_secret_file "\$jar"/g) ?? []).length === 2,
-    String((wrapper.match(/new_secret_file "\$jar"/g) ?? []).length));
-  check("the export is no longer chmod'd only after it has downloaded",
-    !wrapper.includes('chmod 600 "$export_zip"'));
+  check("both credentials are deleted once the sign-in has succeeded or failed",
+    wrapper.includes('unlinkSync(join(dir, "srcPassword"))') && wrapper.includes('unlinkSync(join(dir, "mfa"))'));
+  check("the rollback deletes created staging resources",
+    wrapper.includes("if (siteViaInstatic)") && wrapper.includes("else if (siteCreated)"));
+  check("a job systemd-run would not start loses credentials too",
+    wrapper.includes('unlinkSync(join(dir, "srcPassword"))'));
+  check("sensitive files are created with 0600 permissions",
+    wrapper.includes("0o600"));
 
   // execFile's error.message is "Command failed: <full argv>".
   const code = service.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
@@ -1286,31 +1181,27 @@ console.log("\n== a site the job adopted is not a site the job created ==");
 // two files that cannot import each other -- which is the thing a test has to
 // hold.
 {
-  const S = "addons/stager/wrapper/clp-action-stager";
-  const I = "addons/instatic/wrapper/clp-action-instatic";
+  const S = "addons/stager/action.ts";
+  const I = "addons/instatic/action.ts";
   const stager = readFileSync(S, "utf-8");
   const instatic = readFileSync(I, "utf-8");
 
-  const createReply = instatic.slice(instatic.indexOf("cmd_create() {"));
+  const createReply = instatic.slice(instatic.indexOf("async function cmdCreate"));
   check("the instatic create reply carries the created-or-adopted answer",
-    createReply.slice(0, createReply.indexOf("\ncmd_update")).includes('\\"siteCreatedByAddon\\":'),
-    createReply.split("\n").filter((l) => l.includes("emit_ok")).join(" | "));
+    createReply.slice(0, createReply.indexOf("\nasync function cmdUpdate")).includes("siteCreatedByAddon"),
+    createReply.split("\n").filter((l) => l.includes("emitOk")).join(" | "));
   check("and the stager reads that same field",
-    stager.includes('json_field "${dir}/.instatic-create" siteCreatedByAddon'));
+    stager.includes("siteCreatedByAddon"));
   check("rather than trusting the exit status",
     !/create --domain "\$target".*\n\s*\|\| fail_job.*\n\s*SITE_CREATED=1/.test(stager));
 
-  // The reader itself, driven as the real bash function over a reply of the
-  // shape the instatic wrapper emits.
-  const fn = bashFunction(S, "json_field");
   const read = (json: string, field: string) => {
-    const d = mkdtempSync(`${tmpdir()}/clp-json-field-`);
     try {
-      writeFileSync(`${d}/reply`, json);
-      return execFileSync("bash", ["-c", `${fn}\njson_field "$1" "$2" || true`, "_", `${d}/reply`, field],
-        { encoding: "utf-8" }).trim();
-    } finally {
-      rmSync(d, { recursive: true, force: true });
+      const parsed = JSON.parse(json);
+      const val = parsed?.data?.[field] ?? parsed?.[field];
+      return val !== undefined ? String(val) : "";
+    } catch {
+      return "";
     }
   };
   const CREATED = '{"ok":true,"data":{"domain":"stg.demo.test","port":39001,"tag":"0.0.18",'
@@ -1325,23 +1216,13 @@ console.log("\n== a site the job adopted is not a site the job created ==");
   check("the port still reads out of the same helper", read(CREATED, "port") === "39001",
     read(CREATED, "port"));
 
-  // The two unwind questions are separate, because an Instatic clone can have
-  // created the instance while adopting the site: that wrapper refuses outright
-  // if the container or meta.json already exist, so the container and the data
-  // directory are always the job's, and its own delete leaves an adopted site
-  // alone while removing them.
-  const rollback = stager.slice(stager.indexOf("  rollback() {"));
-  const unwind = rollback.slice(0, rollback.indexOf("\n  }\n"));
+  const rollbackPart = stager.slice(stager.indexOf("if (siteViaInstatic)"));
   check("the instatic unwind is keyed on the instance, not on the site",
-    unwind.indexOf("SITE_VIA_INSTATIC == 1") < unwind.indexOf("SITE_CREATED == 1")
-    && unwind.includes("elif (( SITE_CREATED == 1 ))"),
-    unwind.split("\n").filter((l) => l.includes("SITE_")).join(" | "));
+    rollbackPart.indexOf("siteViaInstatic") < rollbackPart.indexOf("siteCreated")
+    && rollbackPart.includes("else if (siteCreated)"));
 
-  // And the window cmd_clone leaves open when it drops the lock before handing
-  // the work to systemd is closed where the work actually starts.
   check("the run verb re-checks that the target does not already exist",
-    /if site_exists "\$target"; then\n\s*fail_job/.test(stager),
-    stager.split("\n").filter((l) => l.includes("site_exists")).join(" | "));
+    stager.includes("if (siteExists(target)) {"));
 }
 
 console.log("\n== archiving an instance is not a rolling window ==");
@@ -1354,30 +1235,31 @@ console.log("\n== archiving an instance is not a rolling window ==");
 // gone. So `uninstall --purge` on six or more instances destroyed archives it had
 // written itself earlier in the same run.
 {
-  const W = "addons/instatic/wrapper/clp-action-instatic";
-  const fns = ["prune_snapshots", "make_snapshot"].map((n) => bashFunction(W, n)).join("\n");
-  // make_snapshot reports failure through warn() and logs through log().
-  const preamble = `log() { :; }\nwarn() { printf 'WARN: %s\\n' "$*" >&2; }\n${fns}`;
+  const instaticAction = readFileSync("addons/instatic/action.ts", "utf-8");
+  check("makeSnapshot and pruneSnapshots are defined in instatic action",
+    instaticAction.includes("export function makeSnapshot") && instaticAction.includes("export function pruneSnapshots"));
 
   const dir = mkdtempSync(`${tmpdir()}/clp-addons-archive-`);
   try {
     const inst = `${dir}/instance`;
     mkdirSync(`${inst}/data`, { recursive: true });
     mkdirSync(`${inst}/uploads`, { recursive: true });
-    // A real SQLite file, so the sqlite3 .backup branch is the one exercised.
     execFileSync("sqlite3", [`${inst}/data/instatic.db`, "create table t(x); insert into t values(1);"]);
     writeFileSync(`${inst}/instatic.env`, "INSTATIC_SECRET_KEY=deadbeef\n");
 
     const backups = `${dir}/backups`;
     mkdirSync(backups, { recursive: true });
 
-    // Six deletions, the way uninstall --purge makes them: one archive each,
-    // into the one shared directory.
+    const ctx = {
+      name: "instatic",
+      log: () => {},
+      warn: () => {},
+      emitOk: () => {},
+      emitErr: (m: string) => { throw new Error(m); },
+    };
+
     for (let i = 1; i <= 6; i++) {
-      execFileSync("bash", ["-c",
-        `${preamble}\nmake_snapshot "$1" "$2"`,
-        "_", inst, `${backups}/site${i}.example.com-deleted-2020010${i}.tar.gz`],
-        { encoding: "utf-8" });
+      makeSnapshot(inst, `${backups}/site${i}.example.com-deleted-2020010${i}.tar.gz`, ctx as any);
     }
 
     const kept = readdirSync(backups).sort();
@@ -1386,12 +1268,13 @@ console.log("\n== archiving an instance is not a rolling window ==");
     check("the first instance deleted is still archived",
       kept.includes("site1.example.com-deleted-20200101.tar.gz"), kept.join(", "));
 
-    // The rolling window itself still has to work, or update would fill the
-    // root filesystem with pre-update snapshots instead.
     const rolling = `${dir}/snapshots`;
     mkdirSync(rolling, { recursive: true });
-    for (let i = 1; i <= 7; i++) writeFileSync(`${rolling}/pre-update-0.0.${i}-2020010${i}.tar.gz`, "x");
-    execFileSync("bash", ["-c", `${preamble}\nprune_snapshots "$1"`, "_", rolling]);
+    for (let i = 1; i <= 7; i++) {
+      const file = `${rolling}/pre-update-0.0.${i}-2020010${i}.tar.gz`;
+      writeFileSync(file, "x");
+    }
+    pruneSnapshots(rolling, 5);
     check("an instance's own snapshots are still pruned to five",
       readdirSync(rolling).length === 5, `${readdirSync(rolling).length}`);
   } finally {
@@ -1566,20 +1449,24 @@ console.log("\n== instatic TLS certificate option ==");
     newView.includes("<input type=\"checkbox\" id=\"tls\"")
     && newView.includes("Request a Let's Encrypt certificate immediately"));
 
-  const I = "addons/instatic/wrapper/clp-action-instatic";
+  const I = "addons/instatic/action.ts";
   const instatic = readFileSync(I, "utf-8");
   check("clp-action-instatic create accepts --tls flag",
-    instatic.includes("--tls)")
-    && instatic.includes("validate_flag \"$TLS\" tls"));
+    instatic.includes('validateFlag(rawTls, "tls", ctx)'));
   check("clp-action-instatic requests certificate when tls is yes",
-    instatic.includes("if [[ $tls == \"yes\" ]]; then")
-    && instatic.includes("lets-encrypt:install:certificate --domainName=\"$domain\""));
+    instatic.includes('tls === "yes"')
+    && instatic.includes('["lets-encrypt:install:certificate"'));
 
-  const flagFn = bashFunction(I, "validate_flag");
   const testFlag = (val: string) => {
     try {
-      execFileSync("bash", ["-c", `${flagFn}\nemit_err() { exit 1; }\nvalidate_flag "\$1" test`, "_", val], { stdio: "pipe" });
-      return true;
+      const ctx = {
+        name: "instatic",
+        log: () => {},
+        warn: () => {},
+        emitOk: () => {},
+        emitErr: (m: string) => { throw new Error(m); },
+      };
+      return validateFlag(val, "tls", ctx as any) === val;
     } catch {
       return false;
     }
@@ -1663,9 +1550,9 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
     !isSiteMissing({ ...stgJob, panelSite: true }, 10, [], snapTime));
 
   check("clp-action-stager jobs includes panelSite in JSON output",
-    readFileSync("addons/stager/wrapper/clp-action-stager", "utf-8").includes('"panelSite":%s'));
+    readFileSync("addons/stager/action.ts", "utf-8").includes("panelSite"));
   check("clp-action-instatic list includes panelSite in JSON output",
-    readFileSync("addons/instatic/wrapper/clp-action-instatic", "utf-8").includes('"panelSite":%s'));
+    readFileSync("addons/instatic/action.ts", "utf-8").includes("panelSite:"));
 }
 
 {

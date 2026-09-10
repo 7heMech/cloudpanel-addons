@@ -17,9 +17,20 @@
 
 set -uo pipefail
 
-W=${1:-/usr/local/libexec/clp-addons/clp-action-instatic}
+W=${1:-${INSTATIC_WRAPPER:-/usr/local/libexec/clp-addons/clp-action-instatic}}
+if [[ ! -x $W && -x "$(dirname "$0")/clp-action-instatic" ]]; then
+  W="$(dirname "$0")/clp-action-instatic"
+fi
 [[ -x $W ]] || { echo "not executable: $W" >&2; exit 2; }
 [[ $EUID -eq 0 ]] || { echo "must run as root" >&2; exit 2; }
+
+if [[ -z ${PANEL_IDENTITY_FILE:-} && ! -f /etc/clp-addons/panel-identity.conf ]]; then
+  TMP_ID_DIR=$(mktemp -d /tmp/clp-id-XXXXXX)
+  export PANEL_IDENTITY_FILE="$TMP_ID_DIR/panel-identity.conf"
+  printf "PRIMARY=panel.example.test\nALIASES=\n" > "$PANEL_IDENTITY_FILE"
+  chmod 600 "$PANEL_IDENTITY_FILE"
+  trap 'rm -rf "$TMP_ID_DIR"' EXIT
+fi
 
 pass=0 fail=0
 

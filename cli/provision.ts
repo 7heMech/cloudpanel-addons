@@ -2,7 +2,7 @@ import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync,
 } from "node:fs";
 import {
-  ADDON_NAMES, ANCHOR_SERVICE, CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS,
+  ADDON_NAMES, ANCHOR_SERVICE, CLI_BIN, CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS,
   ADDONS, GH_PRIVATE, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT, PANEL_GROUP, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
   SYSTEMD_DIR, TWIG_CACHE_DIR, type AddonSpec, templateWatchPaths,
@@ -74,8 +74,9 @@ function installedAddonSpecs(): AddonSpec[] {
 }
 
 export function sudoersCommandPaths(specs: AddonSpec[] = installedAddonSpecs()): string[] {
-  const wrappers = specs.map((spec) => spec.wrapperPath).filter((path) => path !== GH_PRIVATE);
-  return [...new Set(wrappers)].sort();
+  const active = specs.filter((spec) => spec.wrapperPath !== GH_PRIVATE);
+  if (active.length === 0) return [];
+  return [CLI_BIN];
 }
 
 export function sudoersRule(specs: AddonSpec[] = installedAddonSpecs()): string {
@@ -404,7 +405,6 @@ export function serviceUnit(specs: AddonSpec[]): string {
   const after = ["network-online.target", ...dependencies.map((unit) => `${unit}.service`)];
   const env = specs.flatMap((spec) => [
     `Environment=${spec.name.toUpperCase()}_APP_DATA=${spec.stateDir}`,
-    `Environment=${spec.name.toUpperCase()}_WRAPPER=${spec.wrapperPath}`,
   ]);
   return `[Unit]
 Description=CloudPanel Addons manager

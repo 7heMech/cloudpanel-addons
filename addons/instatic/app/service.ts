@@ -8,7 +8,6 @@ import { getNextAvailablePort, readSnapshot, snapshotAgeSeconds, type PanelSnaps
 
 const execFileAsync = promisify(execFile);
 
-const WRAPPER_BIN = process.env.INSTATIC_WRAPPER || "/usr/local/libexec/clp-addons/clp-action-instatic";
 const SUDO_BIN = "/usr/bin/sudo";
 
 // create pulls an image and waits on a health check, so it needs the longest
@@ -31,10 +30,22 @@ export interface WrapperResult<T = unknown> {
 }
 
 async function callWrapper<T = unknown>(verb: string, args: string[]): Promise<WrapperResult<T>> {
-  const argv = [verb, ...args];
   const runningAsRoot = process.getuid?.() === 0;
-  const cmd = runningAsRoot ? WRAPPER_BIN : SUDO_BIN;
-  const cmdArgs = runningAsRoot ? argv : ["-n", WRAPPER_BIN, ...argv];
+  const wrapperBin = process.env.INSTATIC_WRAPPER;
+  const cliBin = process.env.CLP_ADDONS_BIN || "/usr/local/bin/clp-addons";
+
+  let cmd: string;
+  let cmdArgs: string[];
+
+  if (wrapperBin) {
+    const argv = [verb, ...args];
+    cmd = runningAsRoot ? wrapperBin : SUDO_BIN;
+    cmdArgs = runningAsRoot ? argv : ["-n", wrapperBin, ...argv];
+  } else {
+    const argv = ["action", "instatic", verb, ...args];
+    cmd = runningAsRoot ? cliBin : SUDO_BIN;
+    cmdArgs = runningAsRoot ? argv : ["-n", cliBin, ...argv];
+  }
 
   let stdout = "";
   let stderr = "";

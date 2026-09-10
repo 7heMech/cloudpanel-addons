@@ -159,23 +159,19 @@ function provisionProbe(): {
   }));
 }
 
-test("sudoers names only the installed action wrappers", () => {
+test("sudoers names only the single unified binary", () => {
   const result = provisionProbe();
   const paths = result.paths;
   const rule = result.rule;
 
-  expect(paths).toEqual([
-    "/usr/local/libexec/clp-addons/clp-action-instatic",
-    "/usr/local/libexec/clp-addons/clp-action-stager",
-  ].sort());
+  expect(paths).toEqual(["/usr/local/bin/clp-addons"]);
   expect(rule).toBe(
     `clp-addons ALL=(root) NOPASSWD: ${paths.join(", ")}`,
   );
   expect(rule).not.toContain("*");
   expect(rule).not.toContain("/usr/local/libexec/clp-addons/gh");
-  expect(rule).toContain("/usr/local/libexec/clp-addons/clp-action-instatic");
-  expect(rule).toContain("/usr/local/libexec/clp-addons/clp-action-stager");
-  expect(result.ghPaths).not.toContain("/usr/local/libexec/clp-addons/gh");
+  expect(rule).toContain("/usr/local/bin/clp-addons");
+  expect(result.ghPaths).toEqual(["/usr/local/bin/clp-addons"]);
 });
 
 test("an empty installed set grants no sudo commands", () => {
@@ -199,13 +195,9 @@ test("panel identity extraction rejects missing or unsafe names", () => {
 
 test("the identity file is a separate root-owned wrapper input", () => {
   expect(provisionProbe().identityPath).toBe("/etc/clp-addons/panel-identity.conf");
-  const stager = readFileSync(join(import.meta.dir, "../addons/stager/wrapper/clp-action-stager"), "utf8");
-  const instatic = readFileSync(join(import.meta.dir, "../addons/instatic/wrapper/clp-action-instatic"), "utf8");
-  expect(stager).toContain(
-    'PANEL_IDENTITY_FILE="/etc/clp-addons/panel-identity.conf"',
-  );
-  expect(instatic).toContain(
-    'PANEL_IDENTITY_FILE="/etc/clp-addons/panel-identity.conf"',
+  const common = readFileSync(join(import.meta.dir, "../lib/action-common.ts"), "utf8");
+  expect(common).toContain(
+    'DEFAULT_PANEL_IDENTITY_FILE = process.env.PANEL_IDENTITY_FILE || "/etc/clp-addons/panel-identity.conf"',
   );
 });
 

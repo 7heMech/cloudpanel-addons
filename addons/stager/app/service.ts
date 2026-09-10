@@ -78,7 +78,6 @@ async function runCommand(
   };
 }
 
-const WRAPPER_BIN = process.env.STAGER_WRAPPER || "/usr/local/libexec/clp-addons/clp-action-stager";
 const SUDO_BIN = "/usr/bin/sudo";
 
 // `clone` only writes a job record and hands the work to systemd, so it
@@ -121,10 +120,22 @@ export async function callWrapper<T = unknown>(
   input?: string,
   options: WrapperCallOptions = {},
 ): Promise<WrapperResult<T>> {
-  const argv = [verb, ...args];
   const runningAsRoot = process.getuid?.() === 0;
-  const cmd = runningAsRoot ? WRAPPER_BIN : SUDO_BIN;
-  const cmdArgs = runningAsRoot ? argv : ["-n", WRAPPER_BIN, ...argv];
+  const wrapperBin = process.env.STAGER_WRAPPER;
+  const cliBin = process.env.CLP_ADDONS_BIN || "/usr/local/bin/clp-addons";
+
+  let cmd: string;
+  let cmdArgs: string[];
+
+  if (wrapperBin) {
+    const argv = [verb, ...args];
+    cmd = runningAsRoot ? wrapperBin : SUDO_BIN;
+    cmdArgs = runningAsRoot ? argv : ["-n", wrapperBin, ...argv];
+  } else {
+    const argv = ["action", "stager", verb, ...args];
+    cmd = runningAsRoot ? cliBin : SUDO_BIN;
+    cmdArgs = runningAsRoot ? argv : ["-n", cliBin, ...argv];
+  }
 
   const { error, stdout, stderr } = await runCommand(
     cmd,
