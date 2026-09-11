@@ -1082,11 +1082,11 @@ function carryVhost(ctx: RunContext, type: string, application: string): { ok: b
     return reason;
   };
 
-  const stockQuery = sqliteRead(ctx.paths,
-    `SELECT writefile(${sqlLiteral(stock)}, vhost_template) FROM site WHERE domain_name = ${sqlLiteral(ctx.target)};`);
-  if (!stockQuery.ok || !isRegularFile(stock) || statSync(stock).size === 0) {
+  const vhostTemplate = vhostOf(ctx.paths, ctx.target);
+  if (!vhostTemplate) {
     return { ok: false, reason: "the clone's own stored vhost could not be read back" };
   }
+  writeFileSync(stock, vhostTemplate, { mode: 0o640 });
   const stockOwner = runCommand("chown", ["root:clp", stock]);
   if (stockOwner.ok) chmodSync(stock, 0o640);
 

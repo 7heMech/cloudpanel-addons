@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
-  chmodSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync,
+  chmodSync, closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync,
   renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -288,7 +288,8 @@ function instanceDir(domain: string, paths: InstaticActionPaths): string {
 
 function isRegularFile(path: string): boolean {
   try {
-    return statSync(path).isFile();
+    const stat = lstatSync(path);
+    return stat.isFile() && !stat.isSymbolicLink();
   } catch {
     return false;
   }
@@ -296,7 +297,8 @@ function isRegularFile(path: string): boolean {
 
 function isDirectory(path: string): boolean {
   try {
-    return statSync(path).isDirectory();
+    const stat = lstatSync(path);
+    return stat.isDirectory() && !stat.isSymbolicLink();
   } catch {
     return false;
   }
@@ -644,7 +646,7 @@ export function makeSnapshot(dir: string, out: string, sqlite3 = "sqlite3"): boo
           }
         } else {
           try {
-            cpSync(source, destination, { recursive: true, preserveTimestamps: true });
+            cpSync(source, destination, { recursive: true, preserveTimestamps: true, dereference: false });
           } catch {
             cleanup();
             return false;
@@ -656,7 +658,7 @@ export function makeSnapshot(dir: string, out: string, sqlite3 = "sqlite3"): boo
     const uploads = join(dir, "uploads");
     if (isDirectory(uploads)) {
       try {
-        cpSync(uploads, join(stage, "uploads"), { recursive: true, preserveTimestamps: true });
+        cpSync(uploads, join(stage, "uploads"), { recursive: true, preserveTimestamps: true, dereference: false });
       } catch {
         cleanup();
         return false;
@@ -665,7 +667,7 @@ export function makeSnapshot(dir: string, out: string, sqlite3 = "sqlite3"): boo
     const env = join(dir, "instatic.env");
     if (isRegularFile(env)) {
       try {
-        cpSync(env, join(stage, "instatic.env"), { recursive: true, preserveTimestamps: true });
+        cpSync(env, join(stage, "instatic.env"), { recursive: true, preserveTimestamps: true, dereference: false });
       } catch {
         cleanup();
         return false;

@@ -29,7 +29,6 @@ export const INSTATIC_ALLOWED_VERBS = new Set([
   "logs",
   "job",
   "jobs",
-  "run",
 ]);
 
 /**

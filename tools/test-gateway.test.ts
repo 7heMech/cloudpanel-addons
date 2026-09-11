@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   parseGatewayRequest,
   type GatewayRequest,
+  INSTATIC_ALLOWED_VERBS,
 } from "../lib/gateway-protocol";
 import { callGatewayAuth } from "../lib/gateway-client";
 import { createAuthActionServer } from "../cli/auth-action";
@@ -123,6 +124,43 @@ describe("Gateway Protocol & Server", () => {
       // Non-existent session returns invalid
       const raw = await callGatewayAuth("nonexistentsession", sockPath, 2000);
       expect(raw.trim()).toBe('{"valid":false}');
+
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  test("INSTATIC_ALLOWED_VERBS excludes run and gateway rejects instatic run", async () => {
+    expect(INSTATIC_ALLOWED_VERBS.has("run")).toBe(false);
+
+    const dir = mkdtempSync(join(tmpdir(), "clp-gateway-instatic-run-"));
+    const sockPath = join(dir, "gateway.sock");
+
+    try {
+      const server = createAuthActionServer();
+      await new Promise<void>((resolve) => server.listen(sockPath, resolve));
+
+      let reply = "";
+      await new Promise<void>((resolve) => {
+        Bun.connect({
+          unix: sockPath,
+          socket: {
+            open(conn) {
+              conn.write('{"kind":"action","addon":"instatic","verb":"run"}\n');
+            },
+            data(_conn, chunk) {
+              reply += Buffer.from(chunk).toString("utf8");
+            },
+            close() {
+              resolve();
+            },
+          },
+        });
+      });
+
+      const parsed = JSON.parse(reply.trim());
+      expect(parsed.ok).toBe(false);
+      expect(parsed.error).toBe("invalid verb");
 
       await new Promise<void>((resolve) => server.close(() => resolve()));
     } finally {

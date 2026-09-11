@@ -120,6 +120,42 @@ check(
     },
   }))) === 403,
 );
+check(
+  "guardMutation rejects cross-port origin from tenant site (e.g. 443 against 8443)",
+  responseStatus(guardMutation(new Request("https://panel.example:8443/addons/stager/api/clones", {
+    method: "POST",
+    headers: {
+      Origin: "https://panel.example",
+      Host: "panel.example:8443",
+      Cookie: "clp_addons_csrf=csrf_token",
+      "x-clp-addons-csrf": "csrf_token",
+    },
+  }))) === 403,
+);
+check(
+  "guardMutation rejects cross-port origin from other ports (e.g. 3000 against 8443)",
+  responseStatus(guardMutation(new Request("https://panel.example:8443/addons/stager/api/clones", {
+    method: "POST",
+    headers: {
+      Origin: "https://panel.example:3000",
+      Host: "panel.example:8443",
+      Cookie: "clp_addons_csrf=csrf_token",
+      "x-clp-addons-csrf": "csrf_token",
+    },
+  }))) === 403,
+);
+check(
+  "guardMutation rejects plain HTTP origin on non-localhost",
+  responseStatus(guardMutation(new Request("https://panel.example:8443/addons/stager/api/clones", {
+    method: "POST",
+    headers: {
+      Origin: "http://panel.example:8443",
+      Host: "panel.example:8443",
+      Cookie: "clp_addons_csrf=csrf_token",
+      "x-clp-addons-csrf": "csrf_token",
+    },
+  }))) === 403,
+);
 
 console.log("== CloudPanel SSO validates reconstructed sessions structurally ==");
 const fixture = (name: string): Buffer => Buffer.from(
