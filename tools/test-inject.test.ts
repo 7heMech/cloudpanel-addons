@@ -165,7 +165,7 @@ check("single addon uninstall: addon target removed and restored", readStager() 
 // STAGER_TARGETS places the Clone button before the Manage button in Frontend/Site/index.html.twig
 const siteDir = `${dir}/Frontend/Site`;
 mkdirSync(siteDir, { recursive: true });
-const siteFile = `${dir}/${STAGER_TARGETS[0].template}`;
+const siteFile = `${dir}/${STAGER_TARGETS[0]!.template}`;
 const siteOriginal = `
                     <td class="text-end">
                       <a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>
@@ -175,7 +175,7 @@ writeFileSync(siteFile, siteOriginal);
 
 const stagerSiteInj: Injection = {
   addon: "stager",
-  target: STAGER_TARGETS[0],
+  target: STAGER_TARGETS[0]!,
   url: "/addons/stager",
 };
 

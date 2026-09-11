@@ -11,6 +11,8 @@ import {
   type GatewayRequest,
 } from "./gateway-protocol";
 
+export type { ActionResult } from "./gateway-protocol";
+
 export interface GatewayClientOptions {
   timeout?: number;
   maxBuffer?: number;
@@ -61,9 +63,17 @@ async function runCommandDirect<T>(
     return { ok: false, error: why };
   }
 
+  const stdoutPromise =
+    typeof child.stdout === "object" && child.stdout !== null
+      ? new Response(child.stdout as ReadableStream).text()
+      : Promise.resolve("");
+  const stderrPromise =
+    typeof child.stderr === "object" && child.stderr !== null
+      ? new Response(child.stderr as ReadableStream).text()
+      : Promise.resolve("");
   const [stdoutResult, stderrResult, exitResult] = await Promise.allSettled([
-    child.stdout.text(),
-    child.stderr.text(),
+    stdoutPromise,
+    stderrPromise,
     child.exited,
   ]);
   const stdout = stdoutResult.status === "fulfilled" ? stdoutResult.value : "";
@@ -176,11 +186,11 @@ async function callGatewaySocket<T>(
             });
           }
         },
-        error(err) {
-          finish({ ok: false, error: `gateway socket error: ${err.message}` });
+        error(_socket, err) {
+          finish({ ok: false, error: `gateway socket error: ${err ? err.message : "socket error"}` });
         },
-        connectError(err) {
-          finish({ ok: false, error: `gateway connection failed: ${err.message}` });
+        connectError(_socket, err) {
+          finish({ ok: false, error: `gateway connection failed: ${err ? err.message : "connect error"}` });
         },
       },
     }).catch((err) => {
