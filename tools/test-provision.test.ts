@@ -445,6 +445,9 @@ test("the root auth helper is reached by socket activation, not sudo", () => {
   expect(service).toContain("StandardOutput=socket");
   // The reply must never carry helper diagnostics back to the caller.
   expect(service).toContain("StandardError=journal");
+  // One instance per request; without this every page view logs a start and
+  // a stop line.
+  expect(service).toContain("LogLevelMax=warning");
   expect(service).not.toContain("User=clp-addons");
 
   // The manager must not reach the helper through sudo: its own unit implies

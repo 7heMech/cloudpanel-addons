@@ -81,7 +81,10 @@ jobs:
           #
           # recon showed avx2 on the target CPU, so the standard glibc x64
           # target applies rather than the baseline variant.
-          bun build --compile --target=bun-linux-x64 \
+          # --bytecode skips parse/compile on every run, which the socket-activated
+          # auth helper pays per request; --format=esm is what bytecode needs for an
+          # entry point using top-level await.
+          bun build --compile --target=bun-linux-x64 --bytecode --minify --format=esm \
             --define "process.env.CLP_ADDONS_VERSION=\"${VERSION}\"" \
             --outfile dist/clp-addons-linux-x64 cli/index.ts
 

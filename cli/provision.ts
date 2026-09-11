@@ -548,6 +548,10 @@ ExecStart=${CLI_BIN} action auth
 StandardInput=socket
 StandardOutput=socket
 StandardError=journal
+# One unit instance per request would otherwise log a start and a stop line
+# for every authenticated page view. Warnings and errors still reach the
+# journal; the routine lifecycle chatter does not.
+LogLevelMax=warning
 TimeoutStartSec=10
 NoNewPrivileges=yes
 PrivateTmp=yes
