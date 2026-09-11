@@ -76,7 +76,6 @@ export function headerTarget(version: string): AddonTarget {
     required: true,
     snippet: (url) => `
       <style>
-        .header .nav-link-container .clp-addon-nav { display:inline-block; border-left:1px solid var(--clp-border-color, #eaeaea); padding-left:45px; margin-left:20px; }
         .clp-addon-update-badge { display:inline-flex; align-items:center; gap:5px; margin-left:15px; padding:2px 10px; font-size:12px; font-weight:600; color:#10b981; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.35); border-radius:12px; text-decoration:none; vertical-align:middle; transition:all 0.15s ease; }
         .clp-addon-update-badge:hover { background:rgba(16,185,129,0.22); color:#10b981; text-decoration:none; }
         .clp-addon-update-badge .dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:#10b981; }

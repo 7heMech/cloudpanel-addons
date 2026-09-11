@@ -24,12 +24,22 @@ const STYLE = `
 .state-done { color: var(--ok); border-color: var(--ok); }
 .state-failed { color: var(--bad); border-color: var(--bad); }
 .notes { margin: 0; padding-left: 1.1rem; }
-.notes li { margin: 0.35rem 0; font-size: 0.88rem; color: var(--muted); }
-.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.4rem 1rem; align-items: baseline; }
-.kv dt { color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; }
-.kv dd { margin: 0; font-family: var(--mono); font-size: 0.85rem; word-break: break-all; }
-.secret { border: 1px dashed var(--warn); border-radius: 8px; padding: 0.8rem 1rem; }
-.step { color: var(--muted); font-size: 0.85rem; }
+.notes li { margin: 8px 0; font-size: 14px; color: var(--muted); }
+.kv { display: grid; grid-template-columns: minmax(110px, 180px) minmax(0, 1fr); gap: 12px 25px; align-items: baseline; margin: 0; }
+.kv dt { color: var(--muted); font-size: 14px; }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.kv + .hint { margin: 20px 0 0; }
+.secret .kv dd { font-family: var(--mono); font-size: 14px; }
+.credential-fields { border-top: 1px solid var(--border); padding-top: 25px; margin-top: 25px; }
+.credential-fields h2 { margin: 0 0 20px; }
+.step { color: var(--muted); font-size: 14px; }
+.job-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.job-summary .job-domain { overflow-wrap: anywhere; min-width: 0; }
+.job-summary #job-state { margin-left: auto; }
+.job-timing { margin-top: 25px; }
+@media (max-width: 760px) {
+  .kv { grid-template-columns: minmax(80px, 100px) minmax(0, 1fr); gap: 12px; }
+}
 `;
 
 /**
@@ -201,24 +211,24 @@ export function jobsView(
         return `
         <tr>
           <td>
-            <a href="${BASE}/jobs/${esc(j.id)}" class="mono">${esc(j.target)}</a>
+            <a href="${BASE}/jobs/${esc(j.id)}">${esc(j.target)}</a>
             ${missing ? '<div class="hint">CloudPanel site deleted</div>' : ""}
           </td>
-          <td class="mono">${esc(j.source)}</td>
+          <td>${esc(j.source)}</td>
           <td>${esc(j.result ? typeLabel(j.result.siteType) : "—")}</td>
           <td>
             <span class="badge ${stateClass(j.state)}">${esc(j.state)}</span>
             ${missing ? '<span class="badge" style="color:var(--bad);border-color:var(--bad);margin-left:0.25rem;">deleted</span>' : ""}
           </td>
           <td class="step">${esc(j.state === "done" ? "" : j.step)}</td>
-          <td class="mono">${esc(when(j.createdAt))}</td>
+          <td class="step">${esc(when(j.createdAt))}</td>
         </tr>`;
       }
     )
     .join("");
 
   return `
-    <div class="page-heading"><div><h2>Staging sites</h2><p>Clone a site to test changes before going live.</p></div><a class="btn btn-primary" href="${BASE}/new">New staging site</a></div>
+    <div class="page-heading"><div><h1>Staging sites</h1><p>Clone a site to test changes before going live.</p></div><a class="btn btn-primary" href="${BASE}/new">+ New staging site</a></div>
     ${staleNotice}
     <div class="card">
       <div class="stats">
@@ -226,12 +236,12 @@ export function jobsView(
         <div class="stat"><div class="label">In flight</div><div class="value">${active}</div></div>
       </div>
     </div>
-    <div class="card">
+    <div class="card card-table">
       ${
         jobs.length === 0
           ? `<div class="empty">No clones yet. Start one from the Sites list in CloudPanel, or with the button above.</div>`
           : `<table>
-        <thead><tr><th>Staging site</th><th>Cloned from</th><th>Type</th><th>State</th><th>Step</th><th>Started</th></tr></thead>
+        <thead><tr><th scope="col">Staging site</th><th scope="col">Cloned from</th><th scope="col">Type</th><th scope="col">State</th><th scope="col">Step</th><th scope="col">Started</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`
       }
@@ -249,19 +259,19 @@ function typeLabel(t: string): string {
 export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], error?: string): string {
   if (!source) {
     const options = sites
-      .map((s) => `<li><a href="${BASE}/new?source=${encodeURIComponent(s.domain)}" class="mono">${esc(s.domain)}</a>
-        <span class="hint" style="display:inline">${esc(typeLabel(s.siteType))}${
-          s.phpVersion ? ` ${esc(s.phpVersion)}` : ""
-        } · ${esc(s.application || "Generic")}</span></li>`)
+      .map((s) => `<tr><td><a href="${BASE}/new?source=${encodeURIComponent(s.domain)}">${esc(s.domain)}</a></td>
+        <td>${esc(typeLabel(s.siteType))}${s.phpVersion ? ` ${esc(s.phpVersion)}` : ""}</td>
+        <td>${esc(s.application || "Generic")}</td>
+        <td class="action-cell"><a href="${BASE}/new?source=${encodeURIComponent(s.domain)}">Clone</a></td></tr>`)
       .join("");
     return `
-      ${error ? `<div class="alert">${esc(error)}</div>` : ""}
-      <div class="card">
-        <h2 style="margin-top:0;font-size:1rem;">Which site should be cloned?</h2>
+      <div class="page-heading"><div><h1>New staging site</h1><p>Choose the site you want to clone.</p></div></div>
+      ${error ? `<div class="alert" role="alert">${esc(error)}</div>` : ""}
+      <div class="card card-table">
         ${
           sites.length === 0
             ? `<div class="empty">No clonable sites found in CloudPanel.</div>`
-            : `<ul class="notes">${options}</ul>`
+            : `<table><thead><tr><th scope="col">Domain</th><th scope="col">Type</th><th scope="col">Application</th><th scope="col" class="action-cell">Action</th></tr></thead><tbody>${options}</tbody></table>`
         }
       </div>`;
   }
@@ -276,13 +286,23 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
   // stdin, and is deleted the moment the export it exists for has finished.
   const instaticFields = isInstatic
     ? `
-      <div class="secret" style="margin-top:1.25rem;">
-        <label for="instatic-email">Instatic admin email on ${esc(source.domain)}</label>
-        <input id="instatic-email" type="email" autocomplete="off" placeholder="you@example.com">
-        <label for="instatic-password" style="margin-top:0.75rem;">Password</label>
-        <input id="instatic-password" type="password" autocomplete="new-password">
-        <label for="instatic-mfa" style="margin-top:0.75rem;">Authentication code (only if MFA is on)</label>
-        <input id="instatic-mfa" autocomplete="off" inputmode="numeric" placeholder="123456">
+      <div class="credential-fields">
+        <h2>Source Instatic Account</h2>
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="instatic-email" class="required">Admin Email</label>
+            <input id="instatic-email" type="email" required autocomplete="off" placeholder="you@example.com">
+          </div>
+          <div class="form-field">
+            <label for="instatic-password" class="required">Password</label>
+            <input id="instatic-password" type="password" required autocomplete="new-password">
+          </div>
+          <div class="form-field">
+            <label for="instatic-mfa">Authentication Code</label>
+            <input id="instatic-mfa" autocomplete="off" inputmode="numeric" placeholder="123456" aria-describedby="mfa-hint">
+            <div class="hint" id="mfa-hint">Required only if MFA is enabled.</div>
+          </div>
+        </div>
         <div class="hint">Used once, to export the source's content through Instatic's own site bundle.
           It is never stored: the clone gets an owner, a secret key and a container of its own.</div>
       </div>`
@@ -295,9 +315,11 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
        own nginx config where that can be done safely; when it cannot, the job says why.`;
 
   return `
-    ${error ? `<div class="alert">${esc(error)}</div>` : ""}
+    <div class="form-page">
+    <div class="page-heading"><h1>New staging site</h1></div>
+    ${error ? `<div class="alert" role="alert">${esc(error)}</div>` : ""}
     <div class="card">
-      <h2 style="margin-top:0;font-size:1rem;">Clone ${esc(source.domain)}</h2>
+      <div class="card-header"><h2>Source Site</h2></div>
       <dl class="kv">
         <dt>Source</dt><dd>${esc(source.domain)}</dd>
         <dt>Type</dt><dd>${esc(typeLabel(source.siteType))}</dd>
@@ -308,23 +330,29 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
       <p class="hint">${carriedNote}</p>
     </div>
     <div class="card">
+      <div class="card-header"><h2>Staging Site Settings</h2></div>
+      <form onsubmit="event.preventDefault(); startClone();">
       <input type="hidden" id="source-domain" value="${esc(source.domain)}">
-      <label for="target">Staging hostname</label>
-      <input id="target" autocomplete="off" placeholder="stg" oninput="previewTarget()">
-      <div class="hint" id="target-preview">A label such as stg becomes stg.${esc(source.domain)}</div>
+      <label for="target" class="required">Staging Hostname</label>
+      <input id="target" required autocomplete="off" placeholder="stg" oninput="previewTarget()" aria-describedby="target-preview">
+      <div class="hint" id="target-preview" aria-live="polite">A label such as stg becomes stg.${esc(source.domain)}</div>
       ${instaticFields}
 
-      <label for="tls" style="display:flex;align-items:center;gap:0.5rem;margin-top:1.25rem;">
-        <input type="checkbox" id="tls" style="width:auto;">
+      <div class="check-field">
+      <label for="tls" class="check-label">
+        <input type="checkbox" id="tls" aria-describedby="tls-hint">
         <span>Request a Let's Encrypt certificate when the clone finishes</span>
       </label>
-      <div class="hint">Only tick this once the hostname's DNS points at this server, or the request fails
+      <div class="hint" id="tls-hint">Only tick this once the hostname's DNS points at this server, or the request fails
         and you issue it later from Site → SSL/TLS.</div>
-
-      <div class="actions" style="margin-top:1.5rem;justify-content:flex-end;">
-        <button class="btn btn-primary" onclick="return startClone()">Create staging site</button>
       </div>
-    </div>`;
+
+      <div class="form-actions">
+        <a class="btn btn-lg" href="${BASE}/new">Back</a>
+        <button class="btn btn-primary btn-lg" type="submit">Create staging site</button>
+      </div>
+      </form>
+    </div></div>`;
 }
 
 export function jobView(
@@ -340,14 +368,14 @@ export function jobView(
 
   const notes = result?.notes?.length
     ? `<div class="card">
-        <h2 style="margin-top:0;font-size:1rem;">Worth knowing</h2>
+        <div class="card-header"><h2>Clone Notes</h2></div>
         <ul class="notes">${result.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>
       </div>`
     : "";
 
   const credentials = result?.database
     ? `<div class="card secret">
-        <h2 style="margin-top:0;font-size:1rem;">Staging database</h2>
+        <div class="card-header"><h2>Staging Database</h2></div>
         <dl class="kv">
           <dt>Name</dt><dd>${esc(result.database.name)}</dd>
           <dt>User</dt><dd>${esc(result.database.user)}</dd>
@@ -373,6 +401,7 @@ export function jobView(
 
   const site = result
     ? `<div class="card">
+        <div class="card-header"><h2>Staging Site</h2></div>
         <dl class="kv">
           <dt>Staging site</dt><dd>${
             missing
@@ -398,7 +427,7 @@ export function jobView(
   // clone's admin, and nothing can show it again once this record expires.
   const instatic = result?.instatic
     ? `<div class="card secret">
-        <h2 style="margin-top:0;font-size:1rem;">Staging Instatic instance</h2>
+        <div class="card-header"><h2>Staging Instatic Instance</h2></div>
         <dl class="kv">
           <!-- esc() even though the action binary emits this as a JSON number and
                validatePort bounds it: every other value on this page is
@@ -415,19 +444,20 @@ export function jobView(
     : "";
 
   return `
+    <div class="page-heading"><h1>Staging site details</h1><a class="btn" href="${BASE}/">Back to staging sites</a></div>
     <div class="card">
-      <div style="display:flex;align-items:center;gap:0.75rem;">
-        <span class="mono">${esc(job.source)}</span>
+      <div class="card-header"><h2>Clone Status</h2></div>
+      <div class="job-summary">
+        <span class="job-domain">${esc(job.source)}</span>
         <span class="hint" style="margin:0;">→</span>
-        <span class="mono">${esc(job.target)}</span>
-        <span class="spacer" style="flex:1;"></span>
+        <span class="job-domain">${esc(job.target)}</span>
         <span class="badge ${stateClass(job.state)}" id="job-state">${esc(job.state)}</span>
         ${missing ? '<span class="badge" style="color:var(--bad);border-color:var(--bad);">site deleted</span>' : ""}
       </div>
       <div class="step" id="job-step" style="margin-top:0.5rem;">${esc(finished ? "" : job.step)}</div>
       ${missing ? '<div class="alert" style="margin-top:0.75rem;">This staging site has been deleted from CloudPanel.</div>' : ""}
       ${job.error ? `<div class="alert" style="margin-top:0.75rem;">${esc(job.error)}</div>` : ""}
-      <dl class="kv" style="margin-top:1rem;">
+      <dl class="kv job-timing">
         <dt>Started</dt><dd>${esc(when(job.startedAt || job.createdAt))}</dd>
         <dt>Finished</dt><dd>${esc(when(job.finishedAt))}</dd>
       </dl>
@@ -437,7 +467,7 @@ export function jobView(
     ${credentials}
     ${notes}
     <div class="card">
-      <h2 style="margin-top:0;font-size:1rem;">Log</h2>
+      <div class="card-header"><h2>Log</h2></div>
       <pre id="job-log">${esc(logText || "(no output yet)")}</pre>
     </div>
     ${finished ? "" : `<div id="job-watch" data-job="${esc(job.id)}" hidden></div>`}`;

@@ -180,6 +180,14 @@ vendoring them.
 
 ### Testing a local build
 
+For UI work without a CloudPanel installation, run `bun run preview:ui` and open
+`http://localhost:4100/addons/`. This renders the real addon views with fictional
+data and rejects mutations. Add `?empty`, `?stale`, or `?update` to inspect those
+states; Stager also supports `?state=running` and `?state=failed`. The preview
+loads the two CloudPanel logos from the public demo. Use the header theme switch
+to review light and dark appearances; installed addons share CloudPanel's
+`theme` cookie.
+
 ```bash
 bun run build
 (cd dist && sha256sum -- * > SHA256SUMS)
