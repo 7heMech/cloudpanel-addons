@@ -81,7 +81,7 @@ jobs:
           #
           # recon showed avx2 on the target CPU, so the standard glibc x64
           # target applies rather than the baseline variant.
-          bun build --compile --target=bun-linux-x64 --bytecode --minify --format=esm \
+          bun build --compile --target=bun-linux-x64 --minify \
             --define "process.env.CLP_ADDONS_VERSION=\"${VERSION}\"" \
             --outfile dist/clp-addons-linux-x64 cli/index.ts
 
