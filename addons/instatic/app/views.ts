@@ -14,7 +14,7 @@ import { mountPath } from "../../../lib/mount";
  * name, so a link that forgets it is a bug at build time, not a routing choice.
  */
 const BASE = mountPath("instatic");
-import type { InstanceView } from "./service";
+import type { InstanceView, InstaticJobView } from "./service";
 import { isNewerThan, type AvailableTags } from "./tags";
 import type { SanitizedSite } from "../../../lib/snapshot-reader";
 
@@ -24,6 +24,21 @@ import type { SanitizedSite } from "../../../lib/snapshot-reader";
 const STYLE = `
 .behind { color: var(--warn); border-color: var(--warn); margin-left: 0.35rem; }
 .btn-update { border-color: var(--warn); color: var(--warn); }
+.state-queued { color: var(--muted); border-color: var(--border); }
+.state-running { color: var(--accent); border-color: var(--accent); }
+.state-done { color: var(--ok); border-color: var(--ok); }
+.state-failed { color: var(--bad); border-color: var(--bad); }
+.kv { display: grid; grid-template-columns: minmax(110px, 180px) minmax(0, 1fr); gap: 12px 25px; align-items: baseline; margin: 0; }
+.kv dt { color: var(--muted); font-size: 14px; }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.step { color: var(--muted); font-size: 14px; }
+.job-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.job-summary .job-domain { overflow-wrap: anywhere; min-width: 0; }
+.job-summary #job-state { margin-left: auto; }
+.job-timing { margin-top: 25px; }
+@media (max-width: 760px) {
+  .kv { grid-template-columns: minmax(80px, 100px) minmax(0, 1fr); gap: 12px; }
+}
 `;
 
 /**
@@ -37,6 +52,10 @@ const STYLE = `
  * meant for the browser must be doubled, and the test asserts they were.
  */
 export const CLIENT_JS = `
+let currentLogDomain = '';
+let currentLogPort = '';
+let currentLogMode = 'container';
+
 async function act(domain, verb) {
   busy(true);
   try {
@@ -65,22 +84,56 @@ async function takeSnapshot(domain) {
   }
 }
 
-async function showLogs(domain, port) {
-  const dlg = document.getElementById('logs-dialog');
+async function fetchLogContent() {
   const pre = document.getElementById('logs-body');
+  pre.textContent = 'Loading\\u2026';
+  try {
+    if (currentLogMode === 'creation') {
+      const body = await call('/api/instances/' + encodeURIComponent(currentLogDomain) + '/creation-log');
+      pre.textContent = (body && body.data && body.data.log) || '(no creation log recorded)';
+    } else {
+      const body = await call('/api/instances/' + encodeURIComponent(currentLogDomain) + '/logs');
+      pre.textContent = (body && body.data && body.data.logs) || '(no output)';
+    }
+  } catch (e) {
+    pre.textContent = 'Could not fetch logs: ' + e.message;
+  }
+}
+
+function switchLogs(mode) {
+  currentLogMode = mode;
+  const btnC = document.getElementById('btn-container-logs');
+  const btnCr = document.getElementById('btn-creation-logs');
+  if (btnC && btnCr) {
+    if (mode === 'creation') {
+      btnCr.classList.add('btn-primary');
+      btnC.classList.remove('btn-primary');
+    } else {
+      btnC.classList.add('btn-primary');
+      btnCr.classList.remove('btn-primary');
+    }
+  }
+  fetchLogContent();
+}
+
+async function showLogs(domain, port) {
+  currentLogDomain = domain;
+  currentLogPort = port;
+  currentLogMode = 'container';
+  const dlg = document.getElementById('logs-dialog');
   const portInfo = document.getElementById('logs-port-info');
   document.getElementById('logs-title').textContent = 'Logs \\u2014 ' + domain;
   if (portInfo) {
     portInfo.textContent = port ? 'Container listens on internal port 3001, mapped from host 127.0.0.1:' + port + ' for CloudPanel reverse proxy.' : '';
   }
-  pre.textContent = 'Loading\\u2026';
-  dlg.showModal();
-  try {
-    const body = await call('/api/instances/' + encodeURIComponent(domain) + '/logs');
-    pre.textContent = (body.data && body.data.logs) || '(no output)';
-  } catch (e) {
-    pre.textContent = 'Could not fetch logs: ' + e.message;
+  const btnC = document.getElementById('btn-container-logs');
+  const btnCr = document.getElementById('btn-creation-logs');
+  if (btnC && btnCr) {
+    btnC.classList.add('btn-primary');
+    btnCr.classList.remove('btn-primary');
   }
+  dlg.showModal();
+  fetchLogContent();
 }
 
 let pendingUpdate = null;
@@ -160,20 +213,96 @@ async function submitCreate(ev) {
   const tls = document.getElementById('tls').checked;
   const status = document.getElementById('create-status');
   busy(true);
-  status.textContent = 'Creating the site, pulling ' + tag + ' and waiting for a health check. This can take a couple of minutes\\u2026';
+  status.textContent = 'Submitting creation job\\u2026';
   try {
-    await call('/api/instances', {
+    const res = await call('/api/instances', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain: domain, tag: tag, tls: tls })
     });
-    location.href = CLP_BASE + '/';
+    if (res && res.data && res.data.job) {
+      location.href = CLP_BASE + '/jobs/' + encodeURIComponent(res.data.job);
+    } else {
+      location.href = CLP_BASE + '/';
+    }
   } catch (e) {
     busy(false);
     status.textContent = '';
     alert('Create failed: ' + e.message);
   }
   return false;
+}
+
+function updateJobUI(job, log) {
+  if (!job) return false;
+  const badge = document.getElementById('job-state');
+  if (badge) {
+    badge.className = 'badge state-' + (job.state || 'unknown');
+    badge.textContent = job.state || '';
+  }
+  const step = document.getElementById('job-step');
+  if (step) step.textContent = job.step || '';
+  const pre = document.getElementById('job-log');
+  if (pre && log !== undefined) {
+    pre.textContent = log || '(no output yet)';
+    pre.scrollTop = pre.scrollHeight;
+  }
+  return job.state === 'done' || job.state === 'failed';
+}
+
+function watchJob(id) {
+  if (typeof EventSource !== 'undefined') {
+    const es = new EventSource(CLP_BASE + '/api/jobs/' + encodeURIComponent(id) + '/events');
+    let reloaded = false;
+    es.onmessage = function (ev) {
+      if (reloaded) return;
+      try {
+        const payload = JSON.parse(ev.data);
+        const job = payload.job || (payload.data && payload.data.job);
+        const log = payload.log !== undefined ? payload.log : (payload.data && payload.data.log);
+        if (updateJobUI(job, log)) {
+          reloaded = true;
+          es.close();
+          setTimeout(function () { location.reload(); }, 1500);
+        }
+      } catch (err) {}
+    };
+    es.onerror = function () {
+      es.close();
+      pollJob(id);
+    };
+  } else {
+    pollJob(id);
+  }
+}
+
+function pollJob(id) {
+  let timer = null;
+  function tick() {
+    call('/api/jobs/' + encodeURIComponent(id)).then(function (res) {
+      const job = res && res.data && res.data.job;
+      const log = res && res.data && res.data.log;
+      if (updateJobUI(job, log)) {
+        clearInterval(timer);
+        setTimeout(function () { location.reload(); }, 1500);
+      }
+    }).catch(function () {});
+  }
+  timer = setInterval(tick, 2000);
+  tick();
+}
+
+function initInstatic() {
+  const watch = document.getElementById('job-watch');
+  if (watch && watch.dataset.job) {
+    watchJob(watch.dataset.job);
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initInstatic);
+} else {
+  initInstatic();
 }
 `;
 
@@ -196,7 +325,7 @@ export function layout(
 }
 
 function stateClass(state: string): string {
-  const known = ["running", "exited", "created", "paused", "absent", "unknown"];
+  const known = ["running", "exited", "created", "paused", "absent", "unknown", "queued", "done", "failed"];
   return known.includes(state) ? `state-${state}` : "state-unknown";
 }
 
@@ -342,6 +471,10 @@ export function dashboardView(
 <dialog id="logs-dialog" aria-labelledby="logs-title">
   <div class="dialog-header"><h2 id="logs-title"></h2></div>
   <p class="hint" id="logs-port-info" style="margin: 0 0 12px;"></p>
+  <div style="display:flex;gap:8px;margin-bottom:12px;">
+    <button type="button" class="btn btn-sm btn-primary" id="btn-container-logs" onclick="switchLogs('container')">Container Logs</button>
+    <button type="button" class="btn btn-sm" id="btn-creation-logs" onclick="switchLogs('creation')">Creation Log</button>
+  </div>
   <pre id="logs-body"></pre>
   <div class="actions dialog-actions">
     <button class="btn" onclick="document.getElementById('logs-dialog').close()">Close</button>
@@ -392,6 +525,57 @@ export function dashboardView(
     <button class="btn btn-danger" onclick="confirmDelete()">Delete</button>
   </div>
 </dialog>`;
+}
+
+export function jobView(job: InstaticJobView, logText: string): string {
+  const finished = job.state === "done" || job.state === "failed";
+
+  const site = job.state === "done"
+    ? `<div class="card">
+        <div class="card-header"><h2>Instance Site</h2></div>
+        <dl class="kv">
+          <dt>Domain</dt><dd><a href="https://${esc(job.domain)}" target="_blank" rel="noreferrer noopener">${esc(job.domain)}</a></dd>
+          <dt>Version</dt><dd>${esc(job.tag)}</dd>
+          <dt>Proxy target</dt><dd class="mono">127.0.0.1:${esc(String(job.port))}</dd>
+          <dt>TLS</dt><dd>${job.tls ? "Let's Encrypt certificate requested" : "Self-signed or custom SSL"}</dd>
+        </dl>
+        <p class="hint">Your Instatic instance is running. You can open its administration interface or view the site.</p>
+        <div style="margin-top: 1rem; display: flex; gap: 0.5rem;">
+          <a class="btn btn-primary" href="https://${esc(job.domain)}/admin" target="_blank" rel="noreferrer noopener">Open Admin</a>
+          <a class="btn" href="https://${esc(job.domain)}" target="_blank" rel="noreferrer noopener">Visit Site</a>
+        </div>
+      </div>`
+    : "";
+
+  return `
+    <div class="page-heading">
+      <div>
+        <h1>Instance creation</h1>
+        <p>Creating Instatic instance for ${esc(job.domain)}.</p>
+      </div>
+      <a class="btn" href="${BASE}/">Back to instances</a>
+    </div>
+    <div class="card">
+      <div class="card-header"><h2>Creation Status</h2></div>
+      <div class="job-summary">
+        <span class="job-domain">${esc(job.domain)}</span>
+        <span class="badge ${stateClass(job.state)}" id="job-state">${esc(job.state)}</span>
+      </div>
+      <div class="step" id="job-step" style="margin-top:0.5rem;">${esc(finished ? (job.state === "done" ? "Instance created successfully" : "Creation failed") : job.step)}</div>
+      ${job.error ? `<div class="alert" style="margin-top:0.75rem;">${esc(job.error)}</div>` : ""}
+      <dl class="kv job-timing" style="margin-top:0.75rem;">
+        <dt>Version</dt><dd>${esc(job.tag)}</dd>
+        <dt>Port</dt><dd class="mono">127.0.0.1:${esc(String(job.port))}</dd>
+        <dt>Started</dt><dd>${esc(job.startedAt || job.createdAt)}</dd>
+        ${job.finishedAt ? `<dt>Finished</dt><dd>${esc(job.finishedAt)}</dd>` : ""}
+      </dl>
+    </div>
+    ${site}
+    <div class="card">
+      <div class="card-header"><h2>Creation Log</h2></div>
+      <pre id="job-log">${esc(logText || "(no output yet)")}</pre>
+    </div>
+    ${finished ? "" : `<div id="job-watch" data-job="${esc(job.id)}" hidden></div>`}`;
 }
 
 export function newInstanceView(nextPort: number, available: AvailableTags): string {

@@ -1,9 +1,9 @@
 // Local UI review with fictional data. Never starts the manager, reads panel
 // state or invokes an action. Mutating requests are rejected deliberately.
 import { indexPage } from "../cli/index";
-import { dashboardView, layout as instaticLayout, newInstanceView } from "../addons/instatic/app/views";
+import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
 import { jobsView, jobView, layout as stagerLayout, newCloneView } from "../addons/stager/app/views";
-import type { InstanceView } from "../addons/instatic/app/service";
+import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
 import type { AvailableTags } from "../addons/instatic/app/tags";
 import { SECURITY_HEADERS } from "../lib/app-http";
@@ -31,6 +31,20 @@ const job: JobView = {
   },
 };
 const logs = "[09:30:02] Preparing staging site\n[09:30:16] Copying files\n[09:31:48] Importing database\n[09:32:10] Clone completed";
+
+const instaticCreationJob: InstaticJobView = {
+  id: "preview-instatic-job",
+  domain: "blog.example.com",
+  port: 39003,
+  tag: "0.0.19",
+  tls: true,
+  state: "done",
+  step: "instance created successfully",
+  createdAt: "2026-09-10T09:30:00Z",
+  startedAt: "2026-09-10T09:30:01Z",
+  finishedAt: "2026-09-10T09:31:15Z",
+};
+const instaticLogs = "[instatic] creating CloudPanel reverse-proxy site for blog.example.com\n[instatic] preparing instance storage\n[instatic] pulling ghcr.io/corebunch/instatic:0.0.19\n[instatic] starting instatic-blog.example.com on 127.0.0.1:39003\n[instatic] waiting for health check\n[instatic] requesting a Let's Encrypt certificate for blog.example.com\n[instatic] instance created successfully";
 
 const server = Bun.serve({
   hostname: "127.0.0.1",
@@ -64,8 +78,28 @@ const server = Bun.serve({
         sites.map((s) => ({ domain: s.domain, type: s.siteType, user: s.siteUser })), versions), notice);
     } else if (path === "/addons/instatic/new") {
       html = instaticLayout("New Instatic site", newInstanceView(39003, versions), notice);
+    } else if (path === "/addons/instatic/jobs/preview-instatic-job") {
+      html = instaticLayout("Creating blog.example.com", instaticJobView(instaticCreationJob, instaticLogs), notice);
+    } else if (path.startsWith("/addons/instatic/api/") && path.endsWith("/creation-log")) {
+      return Response.json({ ok: true, data: { domain: "pages.example.com", log: instaticLogs } });
     } else if (path.startsWith("/addons/instatic/api/") && path.endsWith("/logs")) {
       return Response.json({ ok: true, data: { logs: "Instatic listening on 127.0.0.1:39000\nReady to accept requests" } });
+    } else if (path === "/addons/instatic/api/jobs/preview-instatic-job/events" || (path === "/addons/instatic/api/jobs/preview-instatic-job" && req.headers.get("accept")?.includes("text/event-stream"))) {
+      if (server && typeof server.timeout === "function") {
+        try { server.timeout(req, 0); } catch {}
+      }
+      return new Response(
+        `data: ${JSON.stringify({ job: instaticCreationJob, log: instaticLogs })}\n\n`,
+        {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            ...SECURITY_HEADERS,
+          },
+        },
+      );
+    } else if (path === "/addons/instatic/api/jobs/preview-instatic-job") {
+      return Response.json({ ok: true, data: { job: instaticCreationJob, log: instaticLogs } });
     } else if (path === "/addons/stager/") {
       html = stagerLayout("Staging sites", jobsView(empty ? [] : [currentJob], age), notice);
     } else if (path === "/addons/stager/new") {

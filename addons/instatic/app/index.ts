@@ -2,8 +2,9 @@
 //
 // The manager router strips the /addons/ prefix before dispatching here.
 
-import { instaticService, validateDomain, validateTag } from "./service";
-import { layout, dashboardView, newInstanceView } from "./views";
+import type { Server } from "bun";
+import { instaticService, validateDomain, validateTag, validateJobId } from "./service";
+import { layout, dashboardView, newInstanceView, jobView } from "./views";
 import { guardMutation, newCsrfToken, csrfCookieHeader, SECURITY_HEADERS } from "../../../lib/app-http";
 import { listAvailableTags } from "./tags";
 import type { SanitizedSite } from "../../../lib/snapshot-reader";
@@ -27,6 +28,19 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+function sse(body: ReadableStream, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+      ...SECURITY_HEADERS,
+    },
+  });
+}
+
 const MUTATING_VERBS = new Set(["start", "stop", "restart", "recreate", "delete", "snapshot", "update"]);
 
 // The whole request surface, exported so the one manager process can mount it.
@@ -35,7 +49,12 @@ const MUTATING_VERBS = new Set(["start", "stop", "restart", "recreate", "delete"
 // router: a request for /addons/instatic/api/... arrives here as /api/... .
 // Taking it as an argument rather than reading req.url is what keeps every route
 // below written as though this addon owned the site, which it used to.
-export async function handle(req: Request, path: string, updateNotice?: { current: string; latest: string } | null): Promise<Response> {
+export async function handle(
+  req: Request,
+  path: string,
+  updateNotice?: { current: string; latest: string } | null,
+  server?: Server | null,
+): Promise<Response> {
   const method = req.method;
 
   // Liveness probe for systemd. No auth implications: it reports nothing about
@@ -82,6 +101,16 @@ export async function handle(req: Request, path: string, updateNotice?: { curren
     }
   }
 
+  const jobPage = path.match(/^\/jobs\/([^/]+)$/);
+  if (method === "GET" && jobPage) {
+    const id = validateJobId(decodeURIComponent(jobPage[1]!));
+    if (!id) return new Response("Not found", { status: 404 });
+    const res = await instaticService.getJob(id);
+    if (!res.ok || !res.data) return new Response("Job not found", { status: 404 });
+    const csrf = newCsrfToken();
+    return html(layout(`Creating ${res.data.job.domain}`, jobView(res.data.job, res.data.log), updateNotice), csrf);
+  }
+
   if (path === "/api/instances" && method === "GET") {
     return json({ ok: true, instances: await instaticService.listInstances() });
   }
@@ -102,18 +131,137 @@ export async function handle(req: Request, path: string, updateNotice?: { curren
     if (!domain) return json({ ok: false, error: "domain is not a valid hostname" }, 400);
     if (!tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
 
-    const res = await instaticService.createInstance(domain, tag, tls === true);
-    return json(res, res.ok ? 200 : 400);
+    const res = await instaticService.createInstance(domain, tag, tls === true, true);
+    return json(res, res.ok ? 202 : 400);
   }
 
-  const m = path.match(/^\/api\/instances\/([^/]+)\/([a-z]+)$/);
+  if (path === "/api/jobs" && method === "GET") {
+    return json({ ok: true, jobs: await instaticService.listJobs() });
+  }
+
+  const jobEvents = path.match(/^\/api\/jobs\/([^/]+)\/events$/);
+  const jobApi = path.match(/^\/api\/jobs\/([^/]+)$/);
+  if (method === "GET" && (jobEvents || (jobApi && req.headers.get("accept")?.includes("text/event-stream")))) {
+    const rawId = (jobEvents ?? jobApi)![1]!;
+    const id = validateJobId(decodeURIComponent(rawId));
+    if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
+
+    const initial = await instaticService.getJob(id);
+    if (!initial.ok || !initial.data) {
+      return json({ ok: false, error: initial.error ?? "job not found" }, 404);
+    }
+
+    if (server && typeof server.timeout === "function") {
+      try {
+        server.timeout(req, 0);
+      } catch {}
+    }
+
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let closed = false;
+    let inFlight = false;
+
+    let lastState = initial.data.job.state;
+    let lastStep = initial.data.job.step;
+    let lastLog = initial.data.log;
+
+    const stream = new ReadableStream({
+      start(controller) {
+        try {
+          controller.enqueue(`data: ${JSON.stringify({ job: initial.data!.job, log: initial.data!.log })}\n\n`);
+        } catch {
+          closed = true;
+          return;
+        }
+
+        if (initial.data!.job.state === "done" || initial.data!.job.state === "failed") {
+          closed = true;
+          try { controller.close(); } catch {}
+          return;
+        }
+
+        timer = setInterval(async () => {
+          if (closed || inFlight) return;
+          inFlight = true;
+          try {
+            const res = await instaticService.getJob(id);
+            if (closed) return;
+            if (!res.ok || !res.data) {
+              closed = true;
+              if (timer) clearInterval(timer);
+              try {
+                controller.enqueue(`event: error\ndata: ${JSON.stringify({ error: res.error ?? "job not found" })}\n\n`);
+                controller.close();
+              } catch {}
+              return;
+            }
+
+            const { job, log } = res.data;
+            if (job.state !== lastState || job.step !== lastStep || log !== lastLog) {
+              lastState = job.state;
+              lastStep = job.step;
+              lastLog = log;
+              try {
+                controller.enqueue(`data: ${JSON.stringify({ job, log })}\n\n`);
+              } catch {
+                closed = true;
+                if (timer) clearInterval(timer);
+                return;
+              }
+            } else {
+              try {
+                controller.enqueue(": keepalive\n\n");
+              } catch {
+                closed = true;
+                if (timer) clearInterval(timer);
+                return;
+              }
+            }
+
+            if (job.state === "done" || job.state === "failed") {
+              closed = true;
+              if (timer) clearInterval(timer);
+              try {
+                controller.close();
+              } catch {}
+            }
+          } catch {
+            // Transient read error
+          } finally {
+            inFlight = false;
+          }
+        }, 1000);
+      },
+      cancel() {
+        closed = true;
+        if (timer) clearInterval(timer);
+      },
+    });
+
+    return sse(stream);
+  }
+
+  if (method === "GET" && jobApi) {
+    const id = validateJobId(decodeURIComponent(jobApi[1]!));
+    if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
+    const res = await instaticService.getJob(id);
+    if (!res.ok) return json(res, 404);
+    return json(res);
+  }
+
+  const m = path.match(/^\/api\/instances\/([^/]+)\/([a-z-]+)$/);
   if (m) {
     const domain = validateDomain(decodeURIComponent(m[1]!));
-    const verb = m[2]! ;
+    const verb = m[2]!;
     if (!domain) return json({ ok: false, error: "domain is not a valid hostname" }, 400);
 
     if (verb === "logs" && method === "GET") {
       const res = await instaticService.getLogs(domain);
+      return json(res, res.ok ? 200 : 400);
+    }
+
+    if (verb === "creation-log" && method === "GET") {
+      const res = await instaticService.getInstanceCreationLog(domain);
       return json(res, res.ok ? 200 : 400);
     }
 

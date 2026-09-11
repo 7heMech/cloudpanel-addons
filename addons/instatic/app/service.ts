@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import { getNextAvailablePort, readSnapshot, snapshotAgeSeconds, type PanelSnapshot } from "../../../lib/snapshot-reader";
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 export { type ActionResult };
@@ -28,6 +29,7 @@ async function callAction<T = unknown>(verb: string, args: string[]): Promise<Ac
 // from the action binary.
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const TAG_RE = /^\d+\.\d+\.\d+$/;
+const JOB_RE = /^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$/;
 
 export function validateDomain(d: unknown): string | null {
   return typeof d === "string" && d.length <= 253 && DOMAIN_RE.test(d) ? d : null;
@@ -35,6 +37,10 @@ export function validateDomain(d: unknown): string | null {
 
 export function validateTag(t: unknown): string | null {
   return typeof t === "string" && TAG_RE.test(t) ? t : null;
+}
+
+export function validateJobId(id: unknown): string | null {
+  return typeof id === "string" && JOB_RE.test(id) ? id : null;
 }
 
 /**
@@ -59,12 +65,25 @@ export interface InstanceView {
   panelSite?: boolean | null;
 }
 
+export interface InstaticJobView {
+  id: string;
+  domain: string;
+  port: number;
+  tag: string;
+  tls: boolean;
+  state: "queued" | "running" | "done" | "failed" | "unknown";
+  step: string;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
+}
+
 export const instaticService = {
   snapshot(): { snap: PanelSnapshot; ageSeconds: number } {
     const snap = readSnapshot();
     return { snap, ageSeconds: snapshotAgeSeconds(snap) };
   },
-
 
   async nextPort(): Promise<number> {
     // The snapshot is rewritten by the root CLI on install and repair, so
@@ -97,7 +116,12 @@ export const instaticService = {
     return res.data?.instances ?? [];
   },
 
-  async createInstance(domain: string, tag: string, tls = false): Promise<ActionResult> {
+  async createInstance(
+    domain: string,
+    tag: string,
+    tls = false,
+    isAsync = false
+  ): Promise<ActionResult<{ job?: string; domain?: string; port?: number; container?: string; siteUser?: string }>> {
     const existing = await this.listInstancesOrThrow();
     if (existing.some((i) => i.domain === domain)) {
       return { ok: false, error: `an instance for ${domain} already exists` };
@@ -108,12 +132,48 @@ export const instaticService = {
     // a lock while it does, so this allocation is a proposal rather than a
     // reservation.
     const port = getNextAvailablePort(readSnapshot(), existing.map((i) => i.port));
-    return callAction<{ container: string; siteUser: string }>("create", [
+    const args = [
       "--domain", domain,
       "--port", String(port),
       "--tag", tag,
       "--tls", tls ? "yes" : "no",
-    ]);
+    ];
+    if (isAsync) args.push("--async");
+    return callAction<{ job?: string; domain?: string; port?: number; container?: string; siteUser?: string }>("create", args);
+  },
+
+  async getJob(id: string): Promise<ActionResult<{ job: InstaticJobView; log: string }>> {
+    return callAction<{ job: InstaticJobView; log: string }>("job", ["--job", id]);
+  },
+
+  async listJobs(): Promise<InstaticJobView[]> {
+    const res = await callAction<{ jobs: InstaticJobView[] }>("jobs", []);
+    if (!res.ok) {
+      console.error("[instatic] could not list jobs:", res.error);
+      return [];
+    }
+    return res.data?.jobs ?? [];
+  },
+
+  async getInstanceCreationLog(domain: string): Promise<ActionResult<{ domain: string; log: string }>> {
+    const valid = validateDomain(domain);
+    if (!valid) return { ok: false, error: "domain is not a valid hostname" };
+    try {
+      const path = `/var/lib/clp-addons/instatic/${valid}/create.log`;
+      if (existsSync(path)) {
+        return { ok: true, data: { domain: valid, log: readFileSync(path, "utf8") } };
+      }
+    } catch {}
+    // Fallback to searching jobs
+    const jobs = await this.listJobs();
+    const match = jobs.find((j) => j.domain === valid);
+    if (match) {
+      const jobRes = await this.getJob(match.id);
+      if (jobRes.ok && jobRes.data) {
+        return { ok: true, data: { domain: valid, log: jobRes.data.log } };
+      }
+    }
+    return { ok: true, data: { domain: valid, log: "" } };
   },
 
   async updateInstance(domain: string, tag: string): Promise<ActionResult> {
