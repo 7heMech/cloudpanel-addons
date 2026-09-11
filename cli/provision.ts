@@ -562,6 +562,9 @@ RestrictAddressFamilies=AF_UNIX
 RestrictNamespaces=yes
 MemoryDenyWriteExecute=no
 SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
 `,
   };
 }
@@ -642,7 +645,8 @@ export function startUnits(): void {
   // Before the manager: without it every authenticated request fails closed.
   run("systemctl", ["enable", AUTH_SOCKET_UNIT]);
   run("systemctl", ["restart", AUTH_SOCKET_UNIT]);
-  tryRun("systemctl", ["restart", AUTH_SERVICE_UNIT]);
+  run("systemctl", ["enable", AUTH_SERVICE_UNIT]);
+  run("systemctl", ["restart", AUTH_SERVICE_UNIT]);
   run("systemctl", ["enable", MANAGER_UNIT]);
   run("systemctl", ["restart", MANAGER_UNIT]);
   run("systemctl", ["enable", RECONCILE_TIMER]);
