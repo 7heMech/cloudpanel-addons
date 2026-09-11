@@ -26,7 +26,7 @@ import {
   type PruneJobsResult,
 } from "./job-store";
 import { ADDONS, ADDON_NAMES, CLI_BIN, STATE_DIR } from "./paths";
-import { Fatal, parseFlags, requireRoot } from "./util";
+import { Fatal, requireRoot } from "./util";
 
 /** Where the manager's own job records live, beside each addon's state. */
 export const MANAGER_STATE_DIR = `${STATE_DIR}/manager`;
@@ -62,6 +62,34 @@ export interface ManagerJobView {
   createdAt: string;
   startedAt: string;
   finishedAt: string;
+}
+
+/**
+ * Accept both flag spellings this action is reached by.
+ *
+ * The manager builds `--addon=stager` the way the CLI's own `parseFlags` reads
+ * it; the transient unit that runs a job is built by the shared `startJobUnit`,
+ * which spells it `--job <id>` the way every other action's parser reads it.
+ * This is the one entry point both forms arrive at, so it understands both
+ * rather than either side being made to spell it the other's way.
+ */
+export function parseManagerFlags(argv: string[]): Record<string, string> {
+  const flags: Record<string, string> = {};
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index]!;
+    if (!arg.startsWith("--")) continue;
+    const equals = arg.indexOf("=");
+    if (equals !== -1) {
+      flags[arg.slice(2, equals)] = arg.slice(equals + 1);
+      continue;
+    }
+    const next = argv[index + 1];
+    if (next !== undefined && !next.startsWith("--")) {
+      flags[arg.slice(2)] = next;
+      index++;
+    }
+  }
+  return flags;
 }
 
 function reply(body: unknown): number {
@@ -248,9 +276,9 @@ export async function runManagerJob(id: string, ops: ManagerOps, jobsDir = MANAG
 export async function runManagerAction(argv: string[], ops: ManagerOps): Promise<number> {
   requireRoot("manager");
   const [verb, ...rest] = argv;
-  const { flags } = parseFlags(rest);
-  const addon = typeof flags.addon === "string" ? flags.addon : "";
-  const id = typeof flags.job === "string" ? flags.job : typeof flags.id === "string" ? flags.id : "";
+  const flags = parseManagerFlags(rest);
+  const addon = flags.addon ?? "";
+  const id = flags.job ?? flags.id ?? "";
 
   try {
     switch (verb) {

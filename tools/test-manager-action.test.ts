@@ -11,8 +11,8 @@ import { join } from "node:path";
 import { MANAGER_ALLOWED_VERBS } from "../lib/gateway-protocol";
 import { createAuthActionServer } from "../cli/auth-action";
 import {
-  activeManagerJob, latestManagerJob, pruneManagerJobs, readManagerJob, runManagerJob,
-  type ManagerOps,
+  activeManagerJob, latestManagerJob, parseManagerFlags, pruneManagerJobs, readManagerJob,
+  runManagerJob, type ManagerOps,
 } from "../cli/manager-action";
 import { indexPage } from "../cli/index";
 
@@ -77,6 +77,23 @@ describe("the gateway's manager namespace", () => {
   test("will not be talked into an addon it does not know", async () => {
     const reply = await gatewayReply('{"kind":"action","addon":"constructor","verb":"enable"}\n');
     expect(JSON.parse(reply)).toEqual({ ok: false, error: "unknown addon" });
+  });
+});
+
+describe("the two spellings this action is reached by", () => {
+  // The manager builds `--addon=stager`; startJobUnit, shared with the addons,
+  // builds `--job <id>`. Reading only the first spelling meant every job the
+  // runner was handed arrived with no id at all.
+  test("reads the job id systemd's transient unit passes", () => {
+    expect(parseManagerFlags(["--job", "20260908T120000Z-aaaaaa"])).toEqual({ job: "20260908T120000Z-aaaaaa" });
+  });
+
+  test("reads the flags the manager builds", () => {
+    expect(parseManagerFlags(["--addon=stager"])).toEqual({ addon: "stager" });
+  });
+
+  test("does not swallow the next flag as a value", () => {
+    expect(parseManagerFlags(["--addon", "--id", "20260908T120000Z-aaaaaa"])).toEqual({ id: "20260908T120000Z-aaaaaa" });
   });
 });
 
