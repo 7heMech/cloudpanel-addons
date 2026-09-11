@@ -106,7 +106,7 @@ release directory or `current` symlink. `upgrade` is an alias. `self-update` is
 removed as an operation; invoking it reports that `update` should be used.
 
 `repair` is idempotent. Its timer reasserts the service account, socket
-permissions, sudoers, units, panel snapshot, Twig anchors, and Nginx proxy after
+permissions, panel identity, units, panel snapshot, Twig anchors, and Nginx proxy after
 reboots or CloudPanel updates. `status` is a compact dashboard for those
 invariants and prints the `/addons/` URL.
 
@@ -125,12 +125,26 @@ UNIX socket, and the manager dispatches `/addons/instatic/` and
 `lib/mount.ts`, so each addon remains isolated by path without another hostname
 or reverse-proxy site.
 
-The service account is not a CloudPanel site user and has no login shell or
-Docker membership. It can invoke only the action namespace of the root-owned
-binary through `/etc/sudoers.d/clp-addons`. The action modules validate their
-complete argument set before reading input, deriving paths, or taking locks. Instatic containers run
+The service account is not a CloudPanel site user and has no login shell,
+Docker membership, or sudo privileges of any kind. Every privileged operation is
+a request on the root gateway daemon's socket, which owns the list of addons and
+verbs it will run and spawns the action binary itself. The action modules
+validate their complete argument set before reading input, deriving paths, or
+taking locks. Instatic containers run
 as their instance site users, and Stager work runs in transient systemd units so
 long clones survive a manager restart.
+
+Every addon ships inside the binary, so the manager index lists the ones that
+are not configured under **Available** and can turn them on in place: enabling
+writes the addon's config, injects its Twig anchors and reinstalls the units,
+and disabling withdraws them while keeping the addon's data. Every addon may be
+disabled at once -- the manager keeps serving, and the panel keeps its Addons
+entry, so the page can always offer them back. The release notice
+carries an **Update now** button that runs the same verified `clp-addons update`
+path. All three are administrator-only, and none of them ever runs unattended --
+see `docs/DECISIONS.md`, "The manager enables addons and applies releases; it
+never updates itself". Each restarts the manager when it finishes, so each runs
+as a background job whose progress the page follows across the restart.
 
 Patching the panel's own templates belongs to `cli/inject.ts`. It snapshots the
 pristine file, reconciles all installed addon markers in one pass, preserves

@@ -20,11 +20,20 @@ import {
   DEFAULT_GATEWAY_TIMEOUT_MS,
   STAGER_ALLOWED_VERBS,
   INSTATIC_ALLOWED_VERBS,
+  MANAGER_ALLOWED_VERBS,
 } from "../lib/gateway-protocol";
 
 export const MAX_AUTH_INPUT_BYTES = MAX_SESSION_ID_LENGTH + 1;
 export const MAX_AUTH_REPLY_BYTES = 32 * 1024;
 const AUTH_STDIN_TIMEOUT_MS = 2_000;
+
+// A Map rather than an object literal: the key comes off the wire, and
+// `{}["constructor"]` is truthy.
+const ALLOWED_VERBS = new Map<string, Set<string>>([
+  ["stager", STAGER_ALLOWED_VERBS],
+  ["instatic", INSTATIC_ALLOWED_VERBS],
+  ["manager", MANAGER_ALLOWED_VERBS],
+]);
 
 const SESSION_ID_RE = /^[a-zA-Z0-9,-]+$/;
 const ROLE_RE = /^ROLE_[A-Z0-9_]{1,120}$/;
@@ -189,11 +198,15 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
         }
 
         if (request.kind === "action") {
-          if (request.addon !== "stager" && request.addon !== "instatic") {
+          // "manager" is not an addon; it is this project's own provisioning,
+          // reached through the same gateway because enabling an addon and
+          // replacing the binary are root work requested from an unprivileged
+          // web process.
+          const allowed = ALLOWED_VERBS.get(request.addon);
+          if (!allowed) {
             socket.end(JSON.stringify({ ok: false, error: "unknown addon" }) + "\n");
             return;
           }
-          const allowed = request.addon === "stager" ? STAGER_ALLOWED_VERBS : INSTATIC_ALLOWED_VERBS;
           if (!allowed.has(request.verb)) {
             socket.end(JSON.stringify({ ok: false, error: "invalid verb" }) + "\n");
             return;

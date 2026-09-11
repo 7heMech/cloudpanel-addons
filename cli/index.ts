@@ -3,12 +3,12 @@ import { chmodSync, chownSync, existsSync, lstatSync, readFileSync, readdirSync,
 import { execFileSync } from "node:child_process";
 import {
   ADDON_NAMES, ADDONS, ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, MANAGER_UNIT, PANEL_GROUP,
-  SOCKET_PATH, mountPath, type AddonSpec,
+  SOCKET_PATH, SYSTEMD_DIR, mountPath, type AddonSpec,
 } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation, type FetchedArtifact } from "./release";
 import {
   ensureDirs, ensureServiceUser, ensureTimerArmed, hardenBackups,
-  ensureAuthHelperReady, installSudoers, installUnits, installedConfig, purgeTwigCache, removeLegacyUnits,
+  ensureAuthHelperReady, reconcilePanelIdentity, installUnits, installedConfig, purgeTwigCache, removeLegacyUnits,
   removeLegacyInstall, removeLegacyUsers, removeSudoers, startUnits, stopUnits, unitActive,
   unitPid, warnIfPanelSessionUnreadable, writeConfig,
 } from "./provision";
@@ -23,13 +23,17 @@ import { authenticateRequest, type AuthenticatedRequest } from "../lib/sso-auth"
 import { handle as handleInstatic } from "../addons/instatic/app/index";
 import { handle as handleStager } from "../addons/stager/app/index";
 import { splitMount } from "../lib/mount";
-import { SECURITY_HEADERS, esc } from "../lib/app-http";
-import { renderLayout } from "../lib/app-ui";
+import { SECURITY_HEADERS, csrfCookieHeader, esc, escJs, guardMutation, newCsrfToken } from "../lib/app-http";
+import { JOB_STYLE, JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
 import { headerTarget } from "../lib/panel-nav";
 import { checkCliUpdate } from "../lib/update-check";
 import { pruneInstaticJobs, runInstaticAction } from "../addons/instatic/action";
 import { runStagerAction, type StagerActionOptions } from "../addons/stager/action";
 import { runAuthActionStdin } from "./auth-action";
+import { pruneManagerJobs, runManagerAction, type ManagerJobView, type ManagerOps } from "./manager-action";
+import { callGatewayAction, type ActionResult } from "../lib/gateway-client";
+import { jobEventStream } from "../lib/job-stream";
+import { JOB_ID_RE } from "./job-store";
 
 type AddonHandler = (
   req: Request,
@@ -122,14 +126,23 @@ function installArtifacts(artifacts: FetchedArtifact[], tag: string): void {
   writeArtifactManifest(tag, artifacts);
 }
 
-export function installedInjections(exclude?: string): Injection[] {
+/**
+ * `managerNav` is whether the panel keeps its "Addons" entry.
+ *
+ * It belongs to the manager, not to any addon, and it used to be derived from
+ * "at least one addon is enabled". That was the same thing right up until an
+ * addon could be disabled from the page the entry leads to: disabling the last
+ * one took the link away, and the only way back to the page that would offer
+ * the addons again was to know the URL. The entry now goes when the
+ * installation goes, which is `cmdUninstall`'s call to make, not this one's.
+ */
+export function installedInjections(exclude?: string, managerNav = true): Injection[] {
   const injections: Injection[] = [];
   const installed = ADDON_NAMES.filter((name) => name !== exclude && existsSync(ADDONS[name]!.configFile));
 
-  // The manager owns one navigation entry for the whole installation. Keep it
-  // outside the addon target lists so installing a second addon cannot emit a
-  // second style/script block or replace the first one's marker.
-  if (installed.length > 0) {
+  // Kept outside the addon target lists so installing a second addon cannot
+  // emit a second style/script block or replace the first one's marker.
+  if (managerNav) {
     injections.push({ addon: "manager", target: headerTarget(CLI_VERSION), url: "/addons/" });
   }
 
@@ -155,8 +168,8 @@ function describeTarget(status: TargetStatus): string {
   }
 }
 
-function reconcileAnchors(quiet: boolean, exclude?: string): boolean {
-  const injections = installedInjections(exclude);
+function reconcileAnchors(quiet: boolean, exclude?: string, managerNav = true): boolean {
+  const injections = installedInjections(exclude, managerNav);
   const wanted = new Map(injections.map((injection) => [`${injection.addon}:${injection.target.slug}`, injection]));
   const result = reconcile(injections);
   let blocked = false;
@@ -231,7 +244,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   installArtifacts(artifacts, artifactTag ?? CLI_VERSION.replace(/^v/, ""));
   ensureAuthHelperReady();
   for (const item of specs) writeConfig(item, true);
-  installSudoers();
+  reconcilePanelIdentity();
   installUnits(specs);
   removeLegacyUnits(true);
   removeLegacyUsers(true);
@@ -271,23 +284,93 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
   if (artifacts) installArtifacts(artifacts, target);
   ensureAuthHelperReady();
   for (const spec of specs) writeConfig(spec, true);
-  installSudoers();
+  reconcilePanelIdentity();
   removeLegacyUnits(true);
   removeLegacyUsers(true);
-  if (specs.length === 0) {
-    log.ok(upToDate
-      ? `clp-addons ${current} is up to date`
-      : `clp-addons updated to ${target}; no addon service is configured`);
-    return;
-  }
   installUnits(specs);
   generateSnapshot();
   ensureDirs(specs);
   startUnits();
   reconcileAnchors(false);
   if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
+  if (specs.length === 0) {
+    log.ok(upToDate
+      ? `clp-addons ${current} is up to date`
+      : `clp-addons updated to ${target}; no addon service is configured`);
+    return;
+  }
   log.ok(upToDate ? `clp-addons ${current} is up to date; provisioning reconciled` : `clp-addons updated to ${target}`);
 }
+
+/**
+ * Turn an addon that already ships in this binary on.
+ *
+ * This is `cmdInstall` with the download removed, because there is nothing to
+ * download: `ADDONS` is compiled in and so are its injection targets. What is
+ * left -- the config file, the state directory, the Twig anchors, the units --
+ * is the whole of what "installed" ever meant for an individual addon.
+ */
+export async function applyEnable(name: string): Promise<void> {
+  requireRoot("enable");
+  const spec = resolveAddon(name);
+  for (const unit of spec.requiresUnits ?? []) {
+    if (!tryRun("systemctl", ["is-active", unit]).ok) {
+      fatal(`${unit} is not active; install and start it before enabling ${spec.name}`);
+    }
+  }
+  const specs = [...installedAddons().filter((item) => item.name !== spec.name), spec];
+
+  ensureServiceUser();
+  ensureDirs(specs, true);
+  ensureAuthHelperReady();
+  for (const item of specs) writeConfig(item, true);
+  reconcilePanelIdentity();
+  installUnits(specs);
+  generateSnapshot();
+  ensureDirs(specs);
+  reconcileAnchors(false);
+  if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
+  startUnits();
+  log.ok(`${spec.name} enabled`);
+}
+
+/**
+ * Turn one addon off and leave everything it made behind.
+ *
+ * Deliberately not `cmdUninstall`: that removes the binary once the last addon
+ * goes, and may remove an addon's data. Disabling withdraws the addon from the
+ * panel -- its config, its units' knowledge of it, its Twig markup -- and keeps
+ * its state directory, so enabling it again returns the same instances.
+ */
+export function applyDisable(name: string): void {
+  requireRoot("disable");
+  const spec = resolveAddon(name);
+  const remaining = installedAddons().filter((item) => item.name !== spec.name);
+
+  reconcileAnchors(false, spec.name);
+  purgeTwigCache();
+  rmSync(spec.configFile, { force: true });
+  rmSync(`${spec.configFile}.new`, { force: true });
+  ensureDirs(remaining);
+  reconcilePanelIdentity();
+  installUnits(remaining);
+  startUnits();
+  log.ok(`${spec.name} disabled; its data under ${spec.stateDir} was kept`);
+}
+
+/**
+ * The privileged half of the three manager verbs.
+ *
+ * `update` is `clp-addons update` with no arguments -- the same resolver, the
+ * same checksum and provenance verification, the same installer. There is no
+ * second download path, which is the point: a button that fetched releases its
+ * own way would be a second thing to get right.
+ */
+export const MANAGER_OPS: ManagerOps = {
+  enable: applyEnable,
+  disable: applyDisable,
+  update: () => cmdUpdate([]),
+};
 
 // Stager's stale-job recovery, job-record expiry, and orphaned-vhost recovery
 // (cmdPrune, reached through this same runStagerAction path `action stager
@@ -322,6 +405,20 @@ export async function runInstaticMaintenance(installed: AddonSpec[]): Promise<vo
   }
 }
 
+/**
+ * The manager's own job records need the same upkeep the addons' do: a runner
+ * killed part-way (a reboot during an update) otherwise leaves a record that
+ * says "running" forever, and the index page would keep following it.
+ */
+export function runManagerMaintenance(): void {
+  try {
+    const { removed, stuck } = pruneManagerJobs();
+    if (removed || stuck) log.ok(`manager job records: ${removed} expired, ${stuck} marked failed`);
+  } catch (error) {
+    log.warn(`manager maintenance (prune) failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export async function cmdRepair(argv: string[]): Promise<void> {
   requireRoot("repair");
   const { positional, flags } = parseFlags(argv);
@@ -339,9 +436,15 @@ export async function cmdRepair(argv: string[]): Promise<void> {
     return;
   }
   const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
-  if (specs.length === 0) fatal("no addon is installed; run install first");
-
   const all = installedAddons();
+  // An installation with every addon disabled still needs its timer, its Nginx
+  // proxy and the panel's Addons entry reconciled -- that is the state the page
+  // offering them back is served from. Only a box with no manager at all has
+  // nothing to repair.
+  if (specs.length === 0 && !existsSync(`${SYSTEMD_DIR}/${MANAGER_UNIT}`)) {
+    fatal("clp-addons is not installed; run install first");
+  }
+
   ensureServiceUser(quiet);
   removeLegacyInstall(quiet);
   ensureDirs(all);
@@ -359,7 +462,7 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   }
   removeLegacyUnits(quiet);
   removeLegacyUsers(quiet);
-  installSudoers(quiet);
+  reconcilePanelIdentity(quiet);
   const unitChanged = installUnits(all);
   generateSnapshot();
   ensureDirs(all);
@@ -374,7 +477,8 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   // vhost on disk but unloaded until the next 15-minute cycle.
   await runStagerMaintenance(all);
   await runInstaticMaintenance(all);
-  if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ")})`);
+  runManagerMaintenance();
+  if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ") || "no addon enabled"})`);
 }
 
 function statusValue(value: string, ok: boolean): string {
@@ -484,7 +588,7 @@ export function cmdUninstall(argv: string[]): void {
 
   stopUnits(remaining.length > 0);
   removeLegacyInstall();
-  reconcileAnchors(true, spec.name);
+  reconcileAnchors(true, spec.name, remaining.length > 0);
   purgeTwigCache();
   if (purge) {
     const failed: string[] = [];
@@ -508,7 +612,7 @@ export function cmdUninstall(argv: string[]): void {
 
   if (remaining.length > 0) {
     ensureDirs(remaining.map((name) => ADDONS[name]!));
-    installSudoers();
+    reconcilePanelIdentity();
     installUnits(remaining.map((name) => ADDONS[name]!));
     startUnits();
     log.ok(`${spec.name} removed; remaining addons are still available`);
@@ -537,11 +641,85 @@ export function adminGate(auth: AuthenticatedRequest | null): Response | null {
   );
 }
 
+/** The manager's own privileged verbs go over the same gateway the addons use. */
+async function managerAction<T>(verb: string, args: string[] = []): Promise<ActionResult<T>> {
+  // The create verbs hand the work to systemd and return; nothing here waits
+  // for an enable or an update to finish.
+  return callGatewayAction<T>("manager", verb, args, undefined, { timeout: 30_000 });
+}
+
+async function latestManagerJobView(): Promise<ManagerJobView | null> {
+  const result = await managerAction<{ job: ManagerJobView; log: string } | null>("job");
+  return result.ok && result.data ? result.data.job : null;
+}
+
+function managerJson(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...SECURITY_HEADERS },
+  });
+}
+
+/**
+ * The manager's own API: enable, disable, update, and following the job each
+ * of them starts.
+ *
+ * Every route here is already behind the SSO gate and the administrator gate at
+ * the socket boundary; `guardMutation` adds the same origin and CSRF check the
+ * addons use, so a page on another origin cannot spend an administrator's
+ * session on a binary replacement.
+ *
+ * Returns null when the path is not one of these, so the caller can carry on.
+ */
+export function safeDecodePathSegment(segment: string): string | null {
+  try {
+    return decodeURIComponent(segment);
+  } catch (error) {
+    if (error instanceof URIError) return null;
+    throw error;
+  }
+}
+
+export async function handleManagerRoute(req: Request, path: string, server: Server<unknown>): Promise<Response | null> {
+  const addonRoute = path.match(/^\/api\/addons\/([^/]+)\/(enable|disable)$/);
+  if (addonRoute && req.method === "POST") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    const name = safeDecodePathSegment(addonRoute[1]!);
+    if (!name) return managerJson({ ok: false, error: "invalid addon name" }, 400);
+    if (!ADDON_NAMES.includes(name)) return managerJson({ ok: false, error: "unknown addon" }, 404);
+    const result = await managerAction(addonRoute[2]!, [`--addon=${name}`]);
+    return managerJson(result, result.ok ? 200 : 400);
+  }
+
+  if (path === "/api/update" && req.method === "POST") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    const result = await managerAction("update");
+    return managerJson(result, result.ok ? 200 : 400);
+  }
+
+  const jobRoute = path.match(/^\/api\/jobs\/([^/]+?)(\/events)?$/);
+  if (jobRoute && req.method === "GET") {
+    const id = safeDecodePathSegment(jobRoute[1]!);
+    if (!id || !JOB_ID_RE.test(id)) return managerJson({ ok: false, error: "not a valid job id" }, 400);
+    const getJob = (jobId: string) => managerAction<{ job: ManagerJobView; log: string }>("job", [`--id=${jobId}`]);
+    if (jobRoute[2] || req.headers.get("accept")?.includes("text/event-stream")) {
+      return jobEventStream({ id, req, server, getJob });
+    }
+    const result = await getJob(id);
+    return managerJson(result, result.ok ? 200 : 404);
+  }
+
+  return null;
+}
+
 async function cmdServe(): Promise<never> {
-  const specs = installedAddons();
-  if (specs.length === 0) fatal("no addon is installed; run install first");
-  const mounted = specs.map((spec) => spec.name).filter((name) => MANAGERS[name]);
-  if (mounted.length === 0) fatal("none of the installed addons have a manager in this binary");
+  // Serving nothing is a legitimate state, not a failed start. Every addon is
+  // compiled in, so a manager with none of them enabled still has a job: it is
+  // the page that offers them back. Exiting here instead meant disabling the
+  // last addon killed the only surface that could re-enable it.
+  const mounted = installedAddons().map((spec) => spec.name).filter((name) => MANAGERS[name]);
 
   const socketDir = SOCKET_PATH.slice(0, SOCKET_PATH.lastIndexOf("/"));
   if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH);
@@ -570,10 +748,25 @@ async function cmdServe(): Promise<never> {
 
       const update = await checkCliUpdate(CLI_VERSION);
       const notice = update?.hasUpdate ? { current: update.current, latest: update.latest } : null;
+
+      const managerRoute = await handleManagerRoute(req, path, server);
+      if (managerRoute) return managerRoute;
+
       const hit = splitMount(path, mounted);
       let response: Response;
       if (hit) response = await MANAGERS[hit.addon]!(req, hit.rest, notice, server);
-      else if (path === "/") response = indexPage(mounted, notice);
+      else if (path === "/") {
+        // Read at request time rather than from the startup snapshot: a job
+        // that has just finished enabling an addon has not yet restarted this
+        // process, and a page that still denied the addon existed would be
+        // wrong for exactly as long as anybody was likely to look at it.
+        const enabled = ADDON_NAMES.filter((name) => existsSync(ADDONS[name]!.configFile) && MANAGERS[name]);
+        response = indexPage(enabled, notice, {
+          available: ADDON_NAMES.filter((name) => !enabled.includes(name)),
+          job: await latestManagerJobView(),
+          csrf: newCsrfToken(),
+        });
+      }
       else response = Response.json({ ok: false, error: "not found" }, { status: 404, headers: SECURITY_HEADERS });
       return response;
     },
@@ -591,29 +784,156 @@ async function cmdServe(): Promise<never> {
   return new Promise<never>(() => {});
 }
 
-export function indexPage(addons: string[], update?: { current: string; latest: string } | null): Response {
-  const cards = addons.map((name) => {
-    const spec = ADDONS[name];
-    if (!spec) return "";
+const MANAGER_INDEX_CSS = `
+.addon-card .actions { margin-top: auto; }
+.addon-section { margin-top: 30px; }
+.addon-section h2 { margin: 0 0 20px; font-size: 20px; }
+#job-card pre { max-height: 300px; }
+`;
 
-    const title = spec.title ?? spec.name;
-    const route = mountPath(spec.name);
-    const description = spec.description ? `<p>${esc(spec.description)}</p>` : "";
-    return `<article class="card addon-card">
+const MANAGER_INDEX_JS = `
+function showJob(title) {
+  const card = document.getElementById('job-card');
+  if (!card) return;
+  card.hidden = false;
+  const heading = document.getElementById('job-title');
+  if (heading && title) heading.textContent = title;
+}
+
+// Every one of these restarts the manager, so the reply we are waiting for is
+// only ever a job id: the outcome arrives through the job record, which
+// survives the restart that kills this page's connection.
+async function startManagerJob(path, title) {
+  busy(true);
+  try {
+    const res = await call(path, { method: 'POST' });
+    const id = res.data && res.data.jobId;
+    if (!id) throw new Error('the manager did not start a job');
+    showJob(title);
+    watchJob(id);
+  } catch (err) {
+    busy(false);
+    alert(err.message);
+  }
+}
+
+function enableAddon(name) {
+  startManagerJob('/api/addons/' + encodeURIComponent(name) + '/enable', 'Enabling ' + name);
+}
+
+function disableAddon(name) {
+  if (!confirm('Disable ' + name + '? Its data is kept and it can be enabled again.')) return;
+  startManagerJob('/api/addons/' + encodeURIComponent(name) + '/disable', 'Disabling ' + name);
+}
+
+function updateNow() {
+  startManagerJob('/api/update', 'Updating clp-addons');
+}
+
+// A failure is worth showing once. Remembering the dismissal by job id keeps it
+// from reappearing on every visit without needing the server to record that
+// somebody has read it.
+function dismissFailure(id) {
+  try { localStorage.setItem('clp-addons-seen-job', id); } catch (e) {}
+  const alertBox = document.getElementById('job-failure');
+  if (alertBox) alertBox.remove();
+}
+
+(function () {
+  const alertBox = document.getElementById('job-failure');
+  if (!alertBox) return;
+  let seen = null;
+  try { seen = localStorage.getItem('clp-addons-seen-job'); } catch (e) {}
+  if (seen === alertBox.getAttribute('data-job')) alertBox.remove();
+})();
+`;
+
+function addonCard(name: string, enabled: boolean): string {
+  const spec = ADDONS[name];
+  if (!spec) return "";
+  const title = spec.title ?? spec.name;
+  const description = spec.description ? `<p>${esc(spec.description)}</p>` : "";
+  const actions = enabled
+    ? `<a class="btn btn-primary btn-lg" href="${esc(`${mountPath(spec.name)}/`)}">Open ${esc(title)}</a>
+    <button class="btn btn-danger btn-lg" type="button" onclick="disableAddon('${escJs(spec.name)}')">Disable</button>`
+    : `<button class="btn btn-primary btn-lg" type="button" onclick="enableAddon('${escJs(spec.name)}')">Enable ${esc(title)}</button>`;
+  return `<article class="card addon-card">
   <div class="card-header"><h2>${esc(title)}</h2></div>
   ${description}
-  <a class="btn btn-primary btn-lg" href="${esc(`${route}/`)}">Open ${esc(title)}</a>
+  <div class="actions">${actions}</div>
 </article>`;
-  }).join("");
+}
+
+/**
+ * The manager index: what is on, what is available, and what is happening.
+ *
+ * "Available" is not a catalogue of things to download. Every addon is already
+ * in this binary, so the section exists to make the binary self-describing --
+ * before it, an operator had to know from the install documentation that
+ * `--addons=instatic,stager` was even a choice.
+ */
+export function indexPage(
+  enabled: string[],
+  update?: { current: string; latest: string } | null,
+  options: { available?: string[]; job?: ManagerJobView | null; csrf?: string } = {},
+): Response {
+  const available = options.available ?? [];
+  const job = options.job ?? null;
+  const live = job && (job.state === "queued" || job.state === "running") ? job : null;
+  const failure = job && job.state === "failed" ? job : null;
+
+  const cards = enabled.map((name) => addonCard(name, true)).join("");
+  const availableCards = available.map((name) => addonCard(name, false)).join("");
+  const failureBlock = failure
+    ? `<div class="alert" id="job-failure" data-job="${esc(failure.id)}">
+  <strong>${esc(describeJob(failure))} failed.</strong> ${esc(failure.error || "No reason was recorded.")}
+  <button class="btn" type="button" onclick="dismissFailure('${escJs(failure.id)}')">Dismiss</button>
+</div>`
+    : "";
+  const jobBlock = `<article class="card" id="job-card"${live ? "" : " hidden"}>
+  <div class="job-summary">
+    <strong id="job-title">${esc(live ? describeJob(live) : "Working")}</strong>
+    <span class="badge state-${esc(live?.state ?? "queued")}" id="job-state">${esc(live?.state ?? "queued")}</span>
+  </div>
+  <p class="step" id="job-step">${esc(live?.step ?? "")}</p>
+  <pre id="job-log"></pre>
+</article>`;
+
   const content = `<div class="page-heading"><h1>Addons</h1></div>` +
-    (cards ? `<div class="addon-grid">${cards}</div>` : `<div class="card empty">${esc("No addons are currently available.")}</div>`);
+    failureBlock +
+    jobBlock +
+    (cards
+      ? `<div class="addon-grid">${cards}</div>`
+      : `<div class="card empty">${esc(available.length
+        ? "No addons are enabled. Enable one below to add it to CloudPanel."
+        : "No addons are currently available.")}</div>`) +
+    (availableCards
+      ? `<section class="addon-section"><h2>Available</h2><div class="addon-grid">${availableCards}</div></section>`
+      : "");
+
+  const headers: Record<string, string> = {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    ...SECURITY_HEADERS,
+  };
+  if (options.csrf) headers["Set-Cookie"] = csrfCookieHeader(options.csrf);
+
   return new Response(renderLayout("CloudPanel Addons", content, {
     brand: "CloudPanel Addons",
     base: "/addons",
     nav: [],
-    script: "",
+    css: JOB_STYLE + MANAGER_INDEX_CSS,
+    script: MANAGER_INDEX_JS + JOB_WATCH_JS + (live ? `\nwatchJob('${escJs(live.id)}');\n` : ""),
     updateNotice: update,
-  }), { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", ...SECURITY_HEADERS } });
+    updateAction: Boolean(update),
+  }), { headers });
+}
+
+/** How a job is named in the UI: "Enabling stager", "Updating clp-addons". */
+function describeJob(job: ManagerJobView): string {
+  if (job.kind === "update") return "Updating clp-addons";
+  const verb = job.kind === "disable" ? "Disabling" : "Enabling";
+  return `${verb} ${job.addon || "an addon"}`;
 }
 
 function usage(): void {
@@ -626,6 +946,7 @@ function usage(): void {
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons action instatic <verb> [options]
   clp-addons action stager <verb> [options]
+  clp-addons action manager <enable|disable|update|job> [--addon=<addon>] [--id=<job>]
   clp-addons action auth (session id on bounded stdin)
   clp-addons serve
   clp-addons --version
@@ -639,6 +960,7 @@ the CloudPanel master vhost and authenticates with the CloudPanel cloudpanel ses
 async function cmdAction(argv: string[]): Promise<number> {
   const [addon, ...rest] = argv;
   if (addon === "auth") return runAuthActionStdin(rest);
+  if (addon === "manager") return runManagerAction(rest, MANAGER_OPS);
   if (addon === "instatic" || addon === "stager") {
     if (!installedConfig(ADDONS[addon]!)) fatal(`the ${addon} addon is not installed`);
     if (addon === "instatic") return runInstaticAction(rest);

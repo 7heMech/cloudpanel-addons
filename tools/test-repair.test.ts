@@ -68,7 +68,7 @@ const PROBE = String.raw`
     ensureServiceUser: () => calls.push("ensureServiceUser"),
     ensureTimerArmed: () => calls.push("ensureTimerArmed"),
     hardenBackups: () => calls.push("hardenBackups"),
-    installSudoers: () => { calls.push("installSudoers"); provisioning.sudoers = true; },
+    reconcilePanelIdentity: () => { calls.push("reconcilePanelIdentity"); provisioning.sudoers = true; },
     installUnits: () => { calls.push("installUnits"); provisioning.units = true; return false; },
     installedConfig: () => hasInstalledAddon,
     purgeTwigCache: () => calls.push("purgeTwigCache"),
@@ -167,7 +167,7 @@ test("repair completes reconciliation even when no panel session exists", () => 
   expect(result.repairWithoutSession.calls).not.toContain("ensureDirs:verifySession");
   expect(result.repairWithoutSession.calls).toContain("ensureDirs");
   expect(result.repairWithoutSession.calls).toContain("warnIfPanelSessionUnreadable");
-  for (const name of ["installSudoers", "installUnits", "generateSnapshot", "reconcileNginxProxy"]) {
+  for (const name of ["reconcilePanelIdentity", "installUnits", "generateSnapshot", "reconcileNginxProxy"]) {
     expect(result.repairWithoutSession.calls).toContain(name);
   }
   expect(result.repairWithoutSession.provisioning).toEqual({
@@ -181,7 +181,7 @@ test("repair completes reconciliation even when no panel session exists", () => 
 
 test("repair still completes when a panel session is available", () => {
   expect(result.repairWithSession.threw).toBe(false);
-  for (const name of ["installSudoers", "installUnits", "generateSnapshot", "reconcileNginxProxy"]) {
+  for (const name of ["reconcilePanelIdentity", "installUnits", "generateSnapshot", "reconcileNginxProxy"]) {
     expect(result.repairWithSession.calls).toContain(name);
   }
 });
@@ -190,7 +190,7 @@ test("install proceeds when the fixed directory has no live panel session", () =
   expect(result.installWithoutSession.threw).toBe(false);
   expect(result.installWithoutSession.calls).toContain("ensureDirs:verifySession");
   expect(result.installWithoutSession.calls).toContain("ensureAuthHelperReady");
-  expect(result.installWithoutSession.calls).toContain("installSudoers");
+  expect(result.installWithoutSession.calls).toContain("reconcilePanelIdentity");
   expect(result.installWithoutSession.calls).toContain("installUnits");
   expect(result.installWithoutSession.calls).toContain("generateSnapshot");
 });

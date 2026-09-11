@@ -9,18 +9,26 @@ section, the current section wins.
 
 ### Privilege boundary
 
-The manager runs as the locked `clp-addons` system user. It can invoke only the
-action namespace of the root-owned binary named by `/etc/sudoers.d/clp-addons`:
+The manager runs as the locked `clp-addons` system user and holds **no sudo
+privileges at all**. Every privileged operation -- session validation, addon
+actions, and the manager's own enable/disable/update verbs -- is a request on
+the root gateway daemon's socket, `/run/clp-addons/auth.sock`. The daemon owns
+the allow-list (`STAGER_ALLOWED_VERBS`, `INSTATIC_ALLOWED_VERBS`,
+`MANAGER_ALLOWED_VERBS` in `lib/gateway-protocol.ts`) and spawns
+`clp-addons action <addon> <verb>` itself, so the boundary is a verb the daemon
+recognises rather than a command line a sudoers pattern has to match safely.
 
-```text
-clp-addons ALL=(root) NOPASSWD: /usr/local/bin/clp-addons action *
-```
+This replaced a sudoers drop-in that granted
+`clp-addons ALL=(root) NOPASSWD: /usr/local/bin/clp-addons action *`. The
+drop-in is gone, and `reconcilePanelIdentity` deletes any copy an older install
+left behind on every install, update and repair. Nothing in `cli/`, `lib/` or
+`addons/` writes one -- `tools/test-provision.test.ts` asserts that, because the
+function that removes them was called `installSudoers` for long enough that its
+name outlived the mechanism and misled a reader of its own log line.
 
-The generated rule contains one absolute binary path and matches only arguments
-under the literal `action` namespace. It does not match `install`, `update`,
-`repair`, `status`, `uninstall`, or `serve`; the binary also rejects unknown
-action addons and requires an installed addon configuration. Session validation
-is performed by the manager itself and is not a privileged command.
+The daemon also rejects unknown addons and verbs, and each action still requires
+an installed addon configuration. See "The root auth helper is reached by socket
+activation, not sudo" below.
 
 Every action validates its complete argument set before reading input,
 deriving paths, or taking a lock. Commands use argument arrays; no shell
@@ -113,7 +121,7 @@ manage the CloudPanel sites that represent addon instances; the manager itself
 never creates one.
 
 The periodic timer and template path unit invoke the same idempotent repair
-commands used by installation. Repair restores service-user, socket, sudoers,
+commands used by installation. Repair restores service-user, socket, panel identity,
 unit, snapshot, Twig, and Nginx invariants without a second login or manual
 domain configuration.
 
@@ -1787,10 +1795,89 @@ The client treats every failure -- connect error, timeout, oversized reply,
 unparseable reply -- as `unavailable`, which becomes 503. The one thing it
 never does is treat a failed lookup as an authenticated request.
 
-`sudo` is still used for addon actions (`clp-addons action instatic|stager`),
-where the caller is the manager acting on an operator's request and the
-sudoers rule confines it to the `action` namespace. Only the authentication
-path moved.
+When this was written, `sudo` was still used for addon actions
+(`clp-addons action instatic|stager`) and only the authentication path had
+moved. That is no longer true: the gateway grew an `action` request kind, the
+addons' verbs moved onto it, and the sudoers drop-in was removed outright. The
+manager now holds no sudo rule for anything. What remains of sudoers in this
+tree is the code that deletes a drop-in left by a version that predates the
+gateway.
+
+## The manager enables addons and applies releases; it never updates itself
+
+Three related questions came up together: should the manager update itself
+automatically, should the release notice grow a button, and should the addons an
+install does not have be visible at all. The answers are no, yes, and yes, and
+they are one decision because the first is what makes the other two safe to
+offer.
+
+**No automatic updates.** This project writes `/etc/nginx`, the panel's own Twig
+templates, systemd units, and installs a root gateway daemon. An unattended pull
+from GitHub means that whoever controls the release pipeline -- or a leaked
+token, or a force-pushed tag -- gets root on every install, silently, with
+nobody in the loop. The SHA-256 verification in `fetchVerified` does not help
+against that: the checksums are served from the same release the checksums are
+verifying, so an attacker who can publish a release can publish matching sums.
+`gh attestation` raises the bar, but the decision not to act unattended is not
+about how good the verification is; it is about who decided. Two supporting
+reasons: CloudPanel itself does not auto-update, and matching the panel's
+behaviour is an explicit goal of this project; and replacing the binary restarts
+the manager, which would drop in-flight requests on the manager socket at a
+moment nobody chose. So the manager notifies and stops there -- `checkCliUpdate`
+and the banner in `renderLayout`.
+
+**A button, once the page behind it is administrator-only.** With the
+administrator gate at the socket boundary (`adminGate` in `cmdServe`) every
+route the manager serves is already restricted to `ROLE_ADMIN`, so the banner's
+"Update now" is not a new trust boundary; it is the notice the manager already
+drew, with the command the operator would have typed attached to it. It reuses
+`cmdUpdate` outright rather than growing a second downloader: one verified
+download path, or eventually two that disagree about what verification means.
+`guardMutation` applies the same origin and CSRF checks the addons use, so
+another origin cannot spend an administrator's session on a binary replacement.
+
+**"Available" addons are enabled, not installed.** `ADDONS` in `cli/paths.ts` is
+a compile-time record and each addon's injection targets are imported TypeScript
+values, so every addon already ships inside the binary of every install. What
+`install.sh --addons=instatic,stager` selects is which of them are *configured*.
+Making that visible costs almost nothing -- the registry is already in memory --
+and it turns a binary that quietly contains an addon the operator has to read
+the install documentation to discover into one that describes itself. Enabling
+writes the config file, injects the Twig anchors and reinstalls the units;
+disabling withdraws all of that and keeps the addon's state directory, so
+enabling it again returns the same instances.
+
+Disabling *every* addon is allowed, and making it allowed took three changes.
+`serve` used to exit when nothing was configured, which meant the last disable
+killed the only surface that could undo it; serving nothing is now a legitimate
+state, because every addon is compiled in and a manager with none of them on is
+exactly the page that offers them back. `repair` used to refuse the same state,
+which would have left the timer, the Nginx proxy and the anchors unreconciled
+for as long as an install sat empty; it now refuses only when no manager is
+installed at all. And the panel's "Addons" entry used to be derived from "at
+least one addon is enabled" -- the same thing until that entry became the way
+back to the page, at which point disabling the last addon hid the link to the
+only place that could re-enable it. The entry now belongs to the installation
+and goes when `cmdUninstall` says the installation is going. Removing an install
+is still `clp-addons uninstall`, which runs from a shell that survives it.
+
+**All three are jobs, because all three restart the manager.** Enabling,
+disabling and updating end in `startUnits()`, which restarts the very process
+that asked for the work; none of them can answer the request that started them.
+So the create path writes a job record under `/var/lib/clp-addons/manager/jobs`,
+hands the work to a transient systemd unit that outlives the restart, and
+returns a job id. The record is the report: state, step and error are on disk
+before the runner exits, the page's poller tolerates the window where the
+manager is down, and when it comes back the index page reads the newest record
+and shows what happened. That is also what makes the buttons idempotent -- a
+second click finds the first click's job through `activeManagerJob` and follows
+it instead of starting a second enable. The job runner itself is deliberately
+absent from `MANAGER_ALLOWED_VERBS`: reaching it through the gateway would skip
+exactly that check.
+
+**No search.** Search across two addons is worse than a list: more chrome, no
+benefit. The signal to revisit it is the list feeling crowded, somewhere around
+eight or ten addons, not the feature being conceivable.
 
 ## Known gaps
 

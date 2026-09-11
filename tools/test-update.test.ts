@@ -7,6 +7,7 @@ const calls: string[] = [];
 let hasInstalledAddon = true;
 let artifactsAvailable = false;
 let artifactTampered = false;
+let resolvedReleaseTag = "v1.2.3";
 const provisioning = {
   serviceUser: false,
   legacyInstall: true,
@@ -22,6 +23,7 @@ const provisioning = {
 };
 
 function resetProvisioning(): void {
+  resolvedReleaseTag = "v1.2.3";
   Object.assign(provisioning, {
     serviceUser: false,
     legacyInstall: true,
@@ -84,7 +86,7 @@ mock.module("../cli/release", () => ({
   CLI_VERSION: "1.2.3",
   resolveRelease: async () => {
     calls.push("resolveRelease");
-    return { tag: "v1.2.3", assets: new Map<string, string>() };
+    return { tag: resolvedReleaseTag, assets: new Map<string, string>() };
   },
   fetchVerified: async (_release: unknown, names: string[] = []) => {
     calls.push("fetchVerified");
@@ -103,7 +105,7 @@ mock.module("../cli/provision", () => ({
   ensureServiceUser: () => { calls.push("ensureServiceUser"); provisioning.serviceUser = true; },
   ensureTimerArmed: record("ensureTimerArmed"),
   hardenBackups: record("hardenBackups"),
-  installSudoers: () => { calls.push("installSudoers"); provisioning.sudoers = true; },
+  reconcilePanelIdentity: () => { calls.push("reconcilePanelIdentity"); provisioning.sudoers = true; },
   installUnits: () => { calls.push("installUnits"); provisioning.units = true; },
   installedConfig: () => hasInstalledAddon,
   purgeTwigCache: record("purgeTwigCache"),
@@ -140,7 +142,7 @@ mock.module("../cli/inject", () => ({
 mock.module("../cli/util", () => ({
   Fatal: class Fatal extends Error {},
   fatal: (message: string): never => { throw new Error(message); },
-  log: { step: () => {}, ok: () => {}, warn: () => {}, err: () => {}, plain: () => {} },
+  log: { step: () => {}, ok: (msg: string) => { calls.push(`log.ok:${msg}`); }, warn: () => {}, err: () => {}, plain: () => {} },
   parseFlags: (argv: string[]) => {
     const flags: Record<string, string | true> = {};
     for (const arg of argv) {
@@ -176,7 +178,7 @@ test("an up-to-date update still runs provisioning and reconciliation", async ()
     "ensureServiceUser",
     "removeLegacyInstall",
     "ensureDirs",
-    "installSudoers",
+    "reconcilePanelIdentity",
     "removeLegacyUnits",
     "removeLegacyUsers",
     "installUnits",
@@ -210,6 +212,7 @@ test("an up-to-date update with no addons keeps the no-service branch", async ()
   hasInstalledAddon = false;
   artifactsAvailable = false;
   artifactTampered = false;
+  resolvedReleaseTag = "v1.2.3";
 
   await cmdUpdate(["--version=v1.2.3"]);
 
@@ -218,11 +221,65 @@ test("an up-to-date update with no addons keeps the no-service branch", async ()
   expect(calls).toContain("ensureServiceUser");
   expect(calls).toContain("removeLegacyUnits");
   expect(calls).toContain("removeLegacyUsers");
-  expect(calls).toContain("installSudoers");
-  expect(calls).not.toContain("installUnits");
-  expect(calls).not.toContain("generateSnapshot");
-  expect(calls).not.toContain("startUnits");
-  expect(calls).not.toContain("reconcileNginxProxy");
+  expect(calls).toContain("reconcilePanelIdentity");
+  expect(calls).toContain("installUnits");
+  expect(calls).toContain("generateSnapshot");
+  expect(calls).toContain("startUnits");
+  expect(calls).toContain("reconcile");
+  expect(calls).toContain("reconcileNginxProxy");
+  expect(calls.filter((c) => c.startsWith("writeConfig:"))).toHaveLength(0);
+  expect(calls).toContain("log.ok:clp-addons 1.2.3 is up to date");
+  expect(provisioning).toEqual({
+    serviceUser: true,
+    legacyInstall: false,
+    dirs: true,
+    sudoers: true,
+    legacyUnits: false,
+    legacyUsers: false,
+    units: true,
+    snapshot: true,
+    running: true,
+    anchors: true,
+    nginx: true,
+  });
+});
+
+test("updating from a fully disabled state to a new release reconciles and restarts manager", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  hasInstalledAddon = false;
+  artifactsAvailable = false;
+  artifactTampered = false;
+  resolvedReleaseTag = "v1.3.0";
+
+  await cmdUpdate(["--version=v1.3.0"]);
+
+  expect(calls).toContain("fetchVerified");
+  expect(calls).toContain("verifyAttestation");
+  expect(calls).toContain("ensureServiceUser");
+  expect(calls).toContain("removeLegacyUnits");
+  expect(calls).toContain("removeLegacyUsers");
+  expect(calls).toContain("reconcilePanelIdentity");
+  expect(calls).toContain("installUnits");
+  expect(calls).toContain("generateSnapshot");
+  expect(calls).toContain("startUnits");
+  expect(calls).toContain("reconcile");
+  expect(calls).toContain("reconcileNginxProxy");
+  expect(calls.filter((c) => c.startsWith("writeConfig:"))).toHaveLength(0);
+  expect(calls).toContain("log.ok:clp-addons updated to 1.3.0; no addon service is configured");
+  expect(provisioning).toEqual({
+    serviceUser: true,
+    legacyInstall: false,
+    dirs: true,
+    sudoers: true,
+    legacyUnits: false,
+    legacyUsers: false,
+    units: true,
+    snapshot: true,
+    running: true,
+    anchors: true,
+    nginx: true,
+  });
 });
 
 test("a same-version update reuses verified installed artifacts", async () => {
