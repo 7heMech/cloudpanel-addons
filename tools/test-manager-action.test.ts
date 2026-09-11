@@ -11,10 +11,12 @@ import { join } from "node:path";
 import { MANAGER_ALLOWED_VERBS } from "../lib/gateway-protocol";
 import { createAuthActionServer } from "../cli/auth-action";
 import {
-  activeManagerJob, latestManagerJob, parseManagerFlags, pruneManagerJobs, readManagerJob,
+  activeManagerJob, createJob, type CreateJobOptions, latestManagerJob, parseManagerFlags, pruneManagerJobs, readManagerJob,
   runManagerJob, type ManagerOps,
 } from "../cli/manager-action";
-import { indexPage, installedInjections } from "../cli/index";
+import { handleManagerRoute, indexPage, installedInjections, safeDecodePathSegment } from "../cli/index";
+import { listJobIds } from "../cli/job-store";
+import { csrfCookieHeader, newCsrfToken } from "../lib/app-http";
 
 function makeJobsDir(): string {
   return mkdtempSync(join(tmpdir(), "clp-manager-jobs-"));
@@ -208,6 +210,47 @@ describe("one click, one job", () => {
       rmSync(jobsDir, { recursive: true, force: true });
     }
   });
+
+  test("concurrent create requests serialize and only create and start one job", async () => {
+    const jobsDir = makeJobsDir();
+    const lockDir = makeJobsDir();
+    const startedUnits: any[] = [];
+    const replies: any[] = [];
+
+    try {
+      const options: CreateJobOptions = {
+        jobsDir,
+        lockDir,
+        startUnit: (opts) => {
+          startedUnits.push(opts);
+          return { ok: true, stdout: "", stderr: "" };
+        },
+        emitReply: false,
+        onReply: (data) => replies.push(data),
+      };
+
+      const results = await Promise.all([
+        createJob("enable", "stager", options),
+        createJob("enable", "stager", options),
+        createJob("enable", "stager", options),
+      ]);
+
+      expect(results).toEqual([0, 0, 0]);
+      expect(startedUnits).toHaveLength(1);
+      expect(listJobIds(jobsDir)).toHaveLength(1);
+      expect(replies).toHaveLength(3);
+
+      const created = replies.filter((r) => r.data?.existing === false);
+      const reused = replies.filter((r) => r.data?.existing === true);
+      expect(created).toHaveLength(1);
+      expect(reused).toHaveLength(2);
+      expect(reused[0].data.jobId).toBe(created[0].data.jobId);
+      expect(reused[1].data.jobId).toBe(created[0].data.jobId);
+    } finally {
+      rmSync(jobsDir, { recursive: true, force: true });
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("the panel's Addons entry", () => {
@@ -301,5 +344,69 @@ describe("the manager index", () => {
     const res = indexPage(["instatic"], null, { csrf: "token-value" });
     expect(res.headers.get("set-cookie")).toContain("clp_addons_csrf=token-value");
     expect(res.headers.get("set-cookie")).toContain("Secure");
+  });
+});
+
+describe("manager route decoding and safe segment decoder", () => {
+  test("safeDecodePathSegment decodes valid percent encodings and normal strings", () => {
+    expect(safeDecodePathSegment("stager")).toBe("stager");
+    expect(safeDecodePathSegment("20260908T120000Z-aaaaaa")).toBe("20260908T120000Z-aaaaaa");
+    expect(safeDecodePathSegment("hello%20world")).toBe("hello world");
+    expect(safeDecodePathSegment("foo%2Dbar")).toBe("foo-bar");
+  });
+
+  test("safeDecodePathSegment catches URIError and returns null for malformed percent encoding", () => {
+    expect(safeDecodePathSegment("%FF")).toBeNull();
+    expect(safeDecodePathSegment("%E0%A4")).toBeNull();
+    expect(safeDecodePathSegment("%c0%af")).toBeNull();
+    expect(safeDecodePathSegment("%2")).toBeNull();
+    expect(safeDecodePathSegment("%")).toBeNull();
+  });
+
+  test("handleManagerRoute returns HTTP 400 for malformed percent encoding in job routes", async () => {
+    const fakeServer = {} as any;
+    // Malformed job ID
+    const resJob = await handleManagerRoute(
+      new Request("http://localhost/api/jobs/%FF"),
+      "/api/jobs/%FF",
+      fakeServer,
+    );
+    expect(resJob).not.toBeNull();
+    expect(resJob!.status).toBe(400);
+    const bodyJob = (await resJob!.json()) as { ok: boolean; error: string };
+    expect(bodyJob.ok).toBe(false);
+    expect(bodyJob.error).toBe("not a valid job id");
+
+    // Malformed job ID with /events
+    const resEvents = await handleManagerRoute(
+      new Request("http://localhost/api/jobs/%FF/events"),
+      "/api/jobs/%FF/events",
+      fakeServer,
+    );
+    expect(resEvents).not.toBeNull();
+    expect(resEvents!.status).toBe(400);
+    const bodyEvents = (await resEvents!.json()) as { ok: boolean; error: string };
+    expect(bodyEvents.ok).toBe(false);
+    expect(bodyEvents.error).toBe("not a valid job id");
+  });
+
+  test("handleManagerRoute returns HTTP 400 for malformed percent encoding in addon routes", async () => {
+    const fakeServer = {} as any;
+    const token = newCsrfToken();
+    const req = new Request("http://localhost/api/addons/%FF/enable", {
+      method: "POST",
+      headers: {
+        host: "localhost",
+        origin: "http://localhost",
+        cookie: csrfCookieHeader(token),
+        "x-clp-addons-csrf": token,
+      },
+    });
+    const res = await handleManagerRoute(req, "/api/addons/%FF/enable", fakeServer);
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(400);
+    const body = (await res!.json()) as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe("invalid addon name");
   });
 });

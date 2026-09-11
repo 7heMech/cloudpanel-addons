@@ -287,18 +287,18 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
   reconcilePanelIdentity();
   removeLegacyUnits(true);
   removeLegacyUsers(true);
-  if (specs.length === 0) {
-    log.ok(upToDate
-      ? `clp-addons ${current} is up to date`
-      : `clp-addons updated to ${target}; no addon service is configured`);
-    return;
-  }
   installUnits(specs);
   generateSnapshot();
   ensureDirs(specs);
   startUnits();
   reconcileAnchors(false);
   if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
+  if (specs.length === 0) {
+    log.ok(upToDate
+      ? `clp-addons ${current} is up to date`
+      : `clp-addons updated to ${target}; no addon service is configured`);
+    return;
+  }
   log.ok(upToDate ? `clp-addons ${current} is up to date; provisioning reconciled` : `clp-addons updated to ${target}`);
 }
 
@@ -671,12 +671,22 @@ function managerJson(body: unknown, status = 200): Response {
  *
  * Returns null when the path is not one of these, so the caller can carry on.
  */
-async function handleManagerRoute(req: Request, path: string, server: Server<unknown>): Promise<Response | null> {
+export function safeDecodePathSegment(segment: string): string | null {
+  try {
+    return decodeURIComponent(segment);
+  } catch (error) {
+    if (error instanceof URIError) return null;
+    throw error;
+  }
+}
+
+export async function handleManagerRoute(req: Request, path: string, server: Server<unknown>): Promise<Response | null> {
   const addonRoute = path.match(/^\/api\/addons\/([^/]+)\/(enable|disable)$/);
   if (addonRoute && req.method === "POST") {
     const denied = guardMutation(req);
     if (denied) return denied;
-    const name = decodeURIComponent(addonRoute[1]!);
+    const name = safeDecodePathSegment(addonRoute[1]!);
+    if (!name) return managerJson({ ok: false, error: "invalid addon name" }, 400);
     if (!ADDON_NAMES.includes(name)) return managerJson({ ok: false, error: "unknown addon" }, 404);
     const result = await managerAction(addonRoute[2]!, [`--addon=${name}`]);
     return managerJson(result, result.ok ? 200 : 400);
@@ -691,8 +701,8 @@ async function handleManagerRoute(req: Request, path: string, server: Server<unk
 
   const jobRoute = path.match(/^\/api\/jobs\/([^/]+?)(\/events)?$/);
   if (jobRoute && req.method === "GET") {
-    const id = decodeURIComponent(jobRoute[1]!);
-    if (!JOB_ID_RE.test(id)) return managerJson({ ok: false, error: "not a valid job id" }, 400);
+    const id = safeDecodePathSegment(jobRoute[1]!);
+    if (!id || !JOB_ID_RE.test(id)) return managerJson({ ok: false, error: "not a valid job id" }, 400);
     const getJob = (jobId: string) => managerAction<{ job: ManagerJobView; log: string }>("job", [`--id=${jobId}`]);
     if (jobRoute[2] || req.headers.get("accept")?.includes("text/event-stream")) {
       return jobEventStream({ id, req, server, getJob });

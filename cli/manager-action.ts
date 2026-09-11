@@ -20,12 +20,14 @@
 // and reconnects once the manager is back.
 
 import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { withFileLock } from "./action-common";
 import {
   createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir, jobGet, jobSet,
   jobTimestamp, jobUnitIsActive, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
   type PruneJobsResult,
 } from "./job-store";
-import { ADDONS, ADDON_NAMES, CLI_BIN, STATE_DIR } from "./paths";
+import { ADDONS, ADDON_NAMES, CLI_BIN, LOCK_DIR, STATE_DIR } from "./paths";
 import { Fatal, requireRoot } from "./util";
 
 /** Where the manager's own job records live, beside each addon's state. */
@@ -92,13 +94,13 @@ export function parseManagerFlags(argv: string[]): Record<string, string> {
   return flags;
 }
 
-function reply(body: unknown): number {
-  process.stdout.write(`${JSON.stringify(body)}\n`);
+function reply(body: unknown, emit = true): number {
+  if (emit) process.stdout.write(`${JSON.stringify(body)}\n`);
   return 0;
 }
 
-function failReply(error: string): number {
-  process.stdout.write(`${JSON.stringify({ ok: false, error })}\n`);
+function failReply(error: string, data?: unknown, emit = true): number {
+  if (emit) process.stdout.write(`${JSON.stringify({ ok: false, error, ...(data !== undefined ? { data } : {}) })}\n`);
   return 1;
 }
 
@@ -185,38 +187,81 @@ function describe(kind: ManagerJobKind, addon: string): string {
  * whatever `clp-addons` prints, and systemd is what puts that in a file the
  * unprivileged manager can be shown through this action.
  */
-function createJob(kind: ManagerJobKind, addon: string): number {
+export interface CreateJobOptions {
+  jobsDir?: string;
+  stateDir?: string;
+  lockDir?: string;
+  startUnit?: typeof startJobUnit;
+  emitReply?: boolean;
+  onReply?: (res: any) => void;
+}
+
+export async function createJob(
+  kind: ManagerJobKind,
+  addon: string,
+  options: CreateJobOptions = {},
+): Promise<number> {
+  const jobsDir = options.jobsDir ?? MANAGER_JOBS_DIR;
+  const stateDir = options.stateDir ?? (options.jobsDir ? jobsDir : MANAGER_STATE_DIR);
+  const lockDir = options.lockDir ?? LOCK_DIR;
+  const startUnit = options.startUnit ?? startJobUnit;
+  const emit = options.emitReply !== false;
+
+  const emitOk = (data: unknown) => {
+    options.onReply?.(data);
+    return reply(data, emit);
+  };
+  const emitFail = (error: string, data?: unknown) => {
+    options.onReply?.({ ok: false, error, ...(data !== undefined ? { data } : {}) });
+    return failReply(error, data, emit);
+  };
+
   const refusal = rejectImpossible(kind, addon);
-  if (refusal) return failReply(refusal);
+  if (refusal) return emitFail(refusal);
 
-  const running = activeManagerJob();
+  const running = activeManagerJob(jobsDir);
   if (running) {
-    const existing = readManagerJob(running);
-    return reply({ ok: true, data: { jobId: running, existing: true, job: existing?.job } });
+    const existing = readManagerJob(running, jobsDir);
+    return emitOk({ ok: true, data: { jobId: running, existing: true, job: existing?.job } });
   }
 
-  mkdirSync(MANAGER_STATE_DIR, { recursive: true, mode: 0o700 });
-  const id = newJobId();
-  const dir = createJobDir(MANAGER_JOBS_DIR, id);
-  const logPath = createJobLog(dir);
-  jobSet(dir, "kind", kind);
-  jobSet(dir, "addon", kind === "update" ? "" : addon);
-  jobSet(dir, "createdAt", jobTimestamp());
-  jobSet(dir, "state", "queued");
-  jobSet(dir, "step", kind === "update" ? "queued" : `queued: ${kind} ${addon}`);
+  mkdirSync(lockDir, { recursive: true, mode: 0o700 });
+  const lockPath = join(lockDir, "manager.lock");
 
-  const started = startJobUnit({
-    addon: "manager",
-    id,
-    description: describe(kind, addon),
-    actionBinary: CLI_BIN,
-    properties: [`StandardOutput=append:${logPath}`, `StandardError=append:${logPath}`],
-  });
-  if (!started.ok) {
-    rmSync(dir, { recursive: true, force: true });
-    return failReply(started.stderr.trim() || started.stdout.trim() || "could not start the job");
+  try {
+    return await withFileLock(lockPath, 30, "another manager operation is already starting", async () => {
+      const lockedRunning = activeManagerJob(jobsDir);
+      if (lockedRunning) {
+        const existing = readManagerJob(lockedRunning, jobsDir);
+        return emitOk({ ok: true, data: { jobId: lockedRunning, existing: true, job: existing?.job } });
+      }
+
+      mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+      const id = newJobId();
+      const dir = createJobDir(jobsDir, id);
+      const logPath = createJobLog(dir);
+      jobSet(dir, "kind", kind);
+      jobSet(dir, "addon", kind === "update" ? "" : addon);
+      jobSet(dir, "createdAt", jobTimestamp());
+      jobSet(dir, "state", "queued");
+      jobSet(dir, "step", kind === "update" ? "queued" : `queued: ${kind} ${addon}`);
+
+      const started = startUnit({
+        addon: "manager",
+        id,
+        description: describe(kind, addon),
+        actionBinary: CLI_BIN,
+        properties: [`StandardOutput=append:${logPath}`, `StandardError=append:${logPath}`],
+      });
+      if (!started.ok) {
+        rmSync(dir, { recursive: true, force: true });
+        return emitFail(started.stderr.trim() || started.stdout.trim() || "could not start the job");
+      }
+      return emitOk({ ok: true, data: { jobId: id, existing: false } });
+    });
+  } catch (error) {
+    return emitFail(message(error));
   }
-  return reply({ ok: true, data: { jobId: id, existing: false } });
 }
 
 /**
@@ -269,7 +314,11 @@ export async function runManagerJob(id: string, ops: ManagerOps, jobsDir = MANAG
  * exactly that. The runner is the exception in spirit -- its output is the job
  * log -- but it still ends with a JSON line so a hand-run `run` behaves.
  */
-export async function runManagerAction(argv: string[], ops: ManagerOps): Promise<number> {
+export async function runManagerAction(
+  argv: string[],
+  ops: ManagerOps,
+  options: CreateJobOptions = {},
+): Promise<number> {
   requireRoot("manager");
   const [verb, ...rest] = argv;
   const flags = parseManagerFlags(rest);
@@ -280,29 +329,33 @@ export async function runManagerAction(argv: string[], ops: ManagerOps): Promise
     switch (verb) {
       case "enable":
       case "disable":
-        if (!addon) return failReply(`'${verb}' needs --addon`);
-        return createJob(verb, addon);
+        if (!addon) return failReply(`'${verb}' needs --addon`, undefined, options.emitReply !== false);
+        return await createJob(verb, addon, options);
       case "update":
-        return createJob("update", "");
+        return await createJob("update", "", options);
       case "job": {
         // Without --id, the newest record. The page that draws a job is the
         // one the manager restart reloads, and after that reload the browser
         // has no id to ask about -- but the record it was following is still
         // the newest one.
-        const wanted = id || latestManagerJob();
-        if (!wanted) return reply({ ok: true, data: null });
-        const found = readManagerJob(wanted);
-        return found ? reply({ ok: true, data: found }) : failReply(`no such job '${wanted}'`);
+        const jobsDir = options.jobsDir ?? MANAGER_JOBS_DIR;
+        const wanted = id || latestManagerJob(jobsDir);
+        if (!wanted) return reply({ ok: true, data: null }, options.emitReply !== false);
+        const found = readManagerJob(wanted, jobsDir);
+        return found
+          ? reply({ ok: true, data: found }, options.emitReply !== false)
+          : failReply(`no such job '${wanted}'`, undefined, options.emitReply !== false);
       }
       case "run": {
-        if (!id) return failReply("'run' needs --job");
-        const code = await runManagerJob(id, ops);
-        return code === 0 ? reply({ ok: true, data: { jobId: id } }) : code;
+        if (!id) return failReply("'run' needs --job", undefined, options.emitReply !== false);
+        const jobsDir = options.jobsDir ?? MANAGER_JOBS_DIR;
+        const code = await runManagerJob(id, ops, jobsDir);
+        return code === 0 ? reply({ ok: true, data: { jobId: id } }, options.emitReply !== false) : code;
       }
       default:
-        return failReply(`unknown manager verb '${verb ?? ""}'`);
+        return failReply(`unknown manager verb '${verb ?? ""}'`, undefined, options.emitReply !== false);
     }
   } catch (error) {
-    return failReply(message(error));
+    return failReply(message(error), undefined, options.emitReply !== false);
   }
 }
