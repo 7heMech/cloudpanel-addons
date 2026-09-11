@@ -1032,14 +1032,21 @@ console.log("\n== a killed clone does not leave the box worse off ==");
   // `running` and only ever writes `done` or `failed` itself.
   const prune = actionSource.slice(actionSource.indexOf("function cmdPrune"));
   const body = prune.slice(0, prune.indexOf("\nfunction dispatch"));
+  // The record sweep itself is shared; only the stager's own cleanup is here.
+  const store = readFileSync("cli/job-store.ts", "utf-8");
+  const sweep = store.slice(store.indexOf("export function pruneJobs"));
   check("prune asks systemd whether a running record is really running",
-    body.includes('runCommand("systemctl", ["is-active", "--quiet", `clp-addon-stager-job-${entry}`])'));
+    sweep.includes("jobUnitIsActive(addon, entry)")
+    && store.includes('runCommand("systemctl", ["is-active", "--quiet", jobUnitName(addon, id)])'));
   check("and marks it failed rather than skipping it forever",
-    body.includes('jobSet(dir, "state", "failed")'));
+    sweep.includes('jobSet(dir, "state", "failed")'));
+  check("the stager still asks for the sweep, with its own retention",
+    body.includes("pruneJobs({") && body.includes('addon: "stager"')
+    && body.includes("retentionDays: JOB_RETENTION_DAYS"));
   check("it also sweeps a staging directory a killed job left in /tmp",
     body.includes('entry.startsWith("clp-stager-stage.")'));
   check("and runs the vhost recovery after the records, not before",
-    body.indexOf("recoverCarriedVhosts(paths)") > body.indexOf('jobSet(dir, "state", "failed")'));
+    body.indexOf("recoverCarriedVhosts(paths)") > body.indexOf("pruneJobs({"));
 }
 
 console.log("\n== two addons hand out ports from one block ==");
@@ -1082,7 +1089,8 @@ console.log("\n== two addons hand out ports from one block ==");
       mkdirSync(`${d}/other.test`, { recursive: true });
       writeFileSync(`${d}/other.test/meta.json`, JSON.stringify({ domain: "other.test", port: recorded }));
       const paths = {
-        lockDir: `${d}/lock`, dataBaseDir: d, backupDir: `${d}/backups`, panelDb: `${d}/panel.db`,
+        lockDir: `${d}/lock`, dataBaseDir: d, backupDir: `${d}/backups`, jobsDir: `${d}/jobs`,
+        actionBinary: `${d}/clp-addons`, panelDb: `${d}/panel.db`,
         clpctl: `${d}/clpctl`, panelIdentityFile: `${d}/identity`, sqlite3: "sqlite3",
       };
       return portHolder(asked, self, paths) ?? "FREE";
@@ -1168,7 +1176,7 @@ console.log("\n== no credential outlives the job that carried it ==");
   check("and revokes any session the run opened rather than leaving one live",
     (unwind.match(/instaticLogout/g) ?? []).length === 2,
     unwind.split("\n").filter((l) => l.includes("instaticLogout")).join(" | "));
-  const refused = action.slice(action.indexOf('const started = runCommand("systemd-run"'));
+  const refused = action.slice(action.indexOf("const started = startJobUnit({"));
   const refusedCredentials = refused.slice(0, 900);
   check("a job systemd-run would not start loses them too",
     refusedCredentials.includes(`rmSync(join(dir, "srcPassword")`)

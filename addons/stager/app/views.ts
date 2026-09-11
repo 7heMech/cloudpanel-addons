@@ -5,7 +5,7 @@ import type { SanitizedSite } from "../../../lib/snapshot-reader";
 // the page is served to an operator whose session can create CloudPanel sites.
 
 import { esc } from "../../../lib/app-http";
-import { renderLayout } from "../../../lib/app-ui";
+import { JOB_STYLE, JOB_WATCH_JS, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 
 /**
@@ -19,27 +19,12 @@ import type { JobView, SiteDetail, SiteSummary } from "./service";
 
 // Only what the shared shell does not carry.
 const STYLE = `
-.state-queued { color: var(--muted); border-color: var(--border); }
-.state-running { color: var(--accent); border-color: var(--accent); }
-.state-done { color: var(--ok); border-color: var(--ok); }
-.state-failed { color: var(--bad); border-color: var(--bad); }
 .notes { margin: 0; padding-left: 1.1rem; }
 .notes li { margin: 8px 0; font-size: 14px; color: var(--muted); }
-.kv { display: grid; grid-template-columns: minmax(110px, 180px) minmax(0, 1fr); gap: 12px 25px; align-items: baseline; margin: 0; }
-.kv dt { color: var(--muted); font-size: 14px; }
-.kv dd { margin: 0; overflow-wrap: anywhere; }
 .kv + .hint { margin: 20px 0 0; }
 .secret .kv dd { font-family: var(--mono); font-size: 14px; }
 .credential-fields { border-top: 1px solid var(--border); padding-top: 25px; margin-top: 25px; }
 .credential-fields h2 { margin: 0 0 20px; }
-.step { color: var(--muted); font-size: 14px; }
-.job-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.job-summary .job-domain { overflow-wrap: anywhere; min-width: 0; }
-.job-summary #job-state { margin-left: auto; }
-.job-timing { margin-top: 25px; }
-@media (max-width: 760px) {
-  .kv { grid-template-columns: minmax(80px, 100px) minmax(0, 1fr); gap: 12px; }
-}
 `;
 
 /**
@@ -103,45 +88,19 @@ async function startClone() {
   return false;
 }
 
-// Poll while the job is in flight, then reload once so the finished record is
-// rendered by the server rather than assembled twice, here and there.
-function watchJob(id) {
-  let stopped = false;
-  async function tick() {
-    if (stopped) return;
-    try {
-      const body = await call('/api/jobs/' + encodeURIComponent(id));
-      const job = body.data.job;
-      document.getElementById('job-state').textContent = job.state;
-      document.getElementById('job-state').className = 'badge state-' + job.state;
-      document.getElementById('job-step').textContent = job.step || '';
-      const pre = document.getElementById('job-log');
-      if (pre) {
-        pre.textContent = body.data.log || '(no output yet)';
-        pre.scrollTop = pre.scrollHeight;
-      }
-      if (job.state === 'done' || job.state === 'failed') {
-        stopped = true;
-        location.reload();
-        return;
-      }
-    } catch (e) {
-      // A failed poll is not a failed clone. Keep trying: the job runs in its
-      // own systemd unit and does not care whether this page can reach it.
-    }
-    setTimeout(tick, 2000);
-  }
-  setTimeout(tick, 1500);
-}
-
 // Wired here rather than from an inline <script> inside the page body: the
 // shell puts this script after <main>, so a call written next to the markup
 // would run before any of these functions exist.
-document.addEventListener('DOMContentLoaded', function () {
+function initStager() {
   if (document.getElementById('target')) previewTarget();
   const watch = document.getElementById('job-watch');
   if (watch) watchJob(watch.getAttribute('data-job'));
-});
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initStager);
+} else {
+  initStager();
+}
 `;
 
 export function layout(
@@ -156,8 +115,8 @@ export function layout(
       { href: `${BASE}/`, label: "Clones" },
       { href: `${BASE}/new`, label: "New staging site" },
     ],
-    css: STYLE,
-    script: CLIENT_JS,
+    css: STYLE + JOB_STYLE,
+    script: JOB_WATCH_JS + CLIENT_JS,
     updateNotice,
   });
 }

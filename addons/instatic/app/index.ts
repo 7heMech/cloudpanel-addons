@@ -2,11 +2,13 @@
 //
 // The manager router strips the /addons/ prefix before dispatching here.
 
-import { instaticService, validateDomain, validateTag } from "./service";
-import { layout, dashboardView, newInstanceView } from "./views";
+import type { Server } from "bun";
+import { instaticService, validateDomain, validateTag, validateJobId } from "./service";
+import { layout, dashboardView, newInstanceView, jobView } from "./views";
 import { guardMutation, newCsrfToken, csrfCookieHeader, SECURITY_HEADERS } from "../../../lib/app-http";
 import { listAvailableTags } from "./tags";
 import type { SanitizedSite } from "../../../lib/snapshot-reader";
+import { jobEventStream } from "../../../lib/job-stream";
 
 function html(body: string, csrf: string, status = 200): Response {
   return new Response(body, {
@@ -35,7 +37,12 @@ const MUTATING_VERBS = new Set(["start", "stop", "restart", "recreate", "delete"
 // router: a request for /addons/instatic/api/... arrives here as /api/... .
 // Taking it as an argument rather than reading req.url is what keeps every route
 // below written as though this addon owned the site, which it used to.
-export async function handle(req: Request, path: string, updateNotice?: { current: string; latest: string } | null): Promise<Response> {
+export async function handle(
+  req: Request,
+  path: string,
+  updateNotice?: { current: string; latest: string } | null,
+  server?: Server<unknown> | null,
+): Promise<Response> {
   const method = req.method;
 
   // Liveness probe for systemd. No auth implications: it reports nothing about
@@ -82,6 +89,16 @@ export async function handle(req: Request, path: string, updateNotice?: { curren
     }
   }
 
+  const jobPage = path.match(/^\/jobs\/([^/]+)$/);
+  if (method === "GET" && jobPage) {
+    const id = validateJobId(decodeURIComponent(jobPage[1]!));
+    if (!id) return new Response("Not found", { status: 404 });
+    const res = await instaticService.getJob(id);
+    if (!res.ok || !res.data) return new Response("Job not found", { status: 404 });
+    const csrf = newCsrfToken();
+    return html(layout(`Creating ${res.data.job.domain}`, jobView(res.data.job, res.data.log), updateNotice), csrf);
+  }
+
   if (path === "/api/instances" && method === "GET") {
     return json({ ok: true, instances: await instaticService.listInstances() });
   }
@@ -102,18 +119,45 @@ export async function handle(req: Request, path: string, updateNotice?: { curren
     if (!domain) return json({ ok: false, error: "domain is not a valid hostname" }, 400);
     if (!tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
 
-    const res = await instaticService.createInstance(domain, tag, tls === true);
-    return json(res, res.ok ? 200 : 400);
+    const res = await instaticService.createInstance(domain, tag, tls === true, true);
+    return json(res, res.ok ? 202 : 400);
   }
 
-  const m = path.match(/^\/api\/instances\/([^/]+)\/([a-z]+)$/);
+  if (path === "/api/jobs" && method === "GET") {
+    return json({ ok: true, jobs: await instaticService.listJobs() });
+  }
+
+  const jobEvents = path.match(/^\/api\/jobs\/([^/]+)\/events$/);
+  const jobApi = path.match(/^\/api\/jobs\/([^/]+)$/);
+  if (method === "GET" && (jobEvents || (jobApi && req.headers.get("accept")?.includes("text/event-stream")))) {
+    const rawId = (jobEvents ?? jobApi)![1]!;
+    const id = validateJobId(decodeURIComponent(rawId));
+    if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
+
+    return jobEventStream({ id, req, server, getJob: (jobId) => instaticService.getJob(jobId) });
+  }
+
+  if (method === "GET" && jobApi) {
+    const id = validateJobId(decodeURIComponent(jobApi[1]!));
+    if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
+    const res = await instaticService.getJob(id);
+    if (!res.ok) return json(res, 404);
+    return json(res);
+  }
+
+  const m = path.match(/^\/api\/instances\/([^/]+)\/([a-z-]+)$/);
   if (m) {
     const domain = validateDomain(decodeURIComponent(m[1]!));
-    const verb = m[2]! ;
+    const verb = m[2]!;
     if (!domain) return json({ ok: false, error: "domain is not a valid hostname" }, 400);
 
     if (verb === "logs" && method === "GET") {
       const res = await instaticService.getLogs(domain);
+      return json(res, res.ok ? 200 : 400);
+    }
+
+    if (verb === "creation-log" && method === "GET") {
+      const res = await instaticService.getInstanceCreationLog(domain);
       return json(res, res.ok ? 200 : 400);
     }
 

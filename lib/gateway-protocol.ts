@@ -27,6 +27,9 @@ export const INSTATIC_ALLOWED_VERBS = new Set([
   "snapshot",
   "status",
   "logs",
+  "job",
+  "jobs",
+  "run",
 ]);
 
 export type GatewayRequest =
@@ -58,16 +61,21 @@ export function parseGatewayRequest(raw: string): GatewayRequest | null {
 
   if (trimmed.startsWith("{")) {
     try {
-      const obj = JSON.parse(trimmed) as Record<string, unknown>;
+      const obj = JSON.parse(trimmed);
+      if (typeof obj !== "object" || obj === null) return null;
       if (obj.kind === "auth" && typeof obj.sessionId === "string") {
         return { kind: "auth", sessionId: obj.sessionId };
       }
-      if (obj.kind === "action" && typeof obj.addon === "string" && typeof obj.verb === "string") {
+      if (
+        obj.kind === "action" &&
+        typeof obj.addon === "string" &&
+        typeof obj.verb === "string"
+      ) {
         return {
           kind: "action",
           addon: obj.addon,
           verb: obj.verb,
-          args: Array.isArray(obj.args) ? obj.args.map(String) : [],
+          args: Array.isArray(obj.args) ? obj.args.filter((a: unknown) => typeof a === "string") : undefined,
           input: typeof obj.input === "string" ? obj.input : undefined,
           timeoutMs: typeof obj.timeoutMs === "number" ? obj.timeoutMs : undefined,
         };
@@ -75,10 +83,9 @@ export function parseGatewayRequest(raw: string): GatewayRequest | null {
     } catch {
       return null;
     }
-    return null;
   }
 
-  // Legacy fallback: single line containing just a session ID
+  // Fallback: legacy raw sessionId line
   if (/^[a-zA-Z0-9,-]{1,128}$/.test(trimmed)) {
     return { kind: "auth", sessionId: trimmed };
   }

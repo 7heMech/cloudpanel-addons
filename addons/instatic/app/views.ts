@@ -4,7 +4,7 @@
 // delete sites.
 
 import { esc, escJs } from "../../../lib/app-http";
-import { renderLayout } from "../../../lib/app-ui";
+import { JOB_STYLE, JOB_WATCH_JS, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 
 /**
@@ -14,7 +14,7 @@ import { mountPath } from "../../../lib/mount";
  * name, so a link that forgets it is a bug at build time, not a routing choice.
  */
 const BASE = mountPath("instatic");
-import type { InstanceView } from "./service";
+import type { InstanceView, InstaticJobView } from "./service";
 import { isNewerThan, type AvailableTags } from "./tags";
 import type { SanitizedSite } from "../../../lib/snapshot-reader";
 
@@ -37,6 +37,10 @@ const STYLE = `
  * meant for the browser must be doubled, and the test asserts they were.
  */
 export const CLIENT_JS = `
+let currentLogDomain = '';
+let currentLogPort = '';
+let currentLogMode = 'container';
+
 async function act(domain, verb) {
   busy(true);
   try {
@@ -48,18 +52,73 @@ async function act(domain, verb) {
   }
 }
 
-async function showLogs(domain) {
-  const dlg = document.getElementById('logs-dialog');
-  const pre = document.getElementById('logs-body');
-  document.getElementById('logs-title').textContent = 'Logs \\u2014 ' + domain;
-  pre.textContent = 'Loading\\u2026';
-  dlg.showModal();
+async function takeSnapshot(domain) {
+  busy(true);
   try {
-    const body = await call('/api/instances/' + encodeURIComponent(domain) + '/logs');
-    pre.textContent = (body.data && body.data.logs) || '(no output)';
+    const res = await call('/api/instances/' + encodeURIComponent(domain) + '/snapshot', { method: 'POST' });
+    busy(false);
+    const snap = res && res.data && res.data.snapshot;
+    const snapFile = snap ? snap.split('/').pop() : '';
+    document.getElementById('snapshot-title').textContent = 'Snapshot Created \\u2014 ' + domain;
+    document.getElementById('snapshot-file').textContent = snapFile || 'Snapshot archive created';
+    document.getElementById('snapshot-path').textContent = snap || '(stored in instance snapshots directory)';
+    document.getElementById('snapshot-dialog').showModal();
+  } catch (e) {
+    busy(false);
+    alert('Snapshot failed: ' + e.message);
+  }
+}
+
+async function fetchLogContent() {
+  const pre = document.getElementById('logs-body');
+  pre.textContent = 'Loading\\u2026';
+  try {
+    if (currentLogMode === 'creation') {
+      const body = await call('/api/instances/' + encodeURIComponent(currentLogDomain) + '/creation-log');
+      pre.textContent = (body && body.data && body.data.log) || '(no creation log recorded)';
+    } else {
+      const body = await call('/api/instances/' + encodeURIComponent(currentLogDomain) + '/logs');
+      pre.textContent = (body && body.data && body.data.logs) || '(no output)';
+    }
   } catch (e) {
     pre.textContent = 'Could not fetch logs: ' + e.message;
   }
+}
+
+function switchLogs(mode) {
+  currentLogMode = mode;
+  const btnC = document.getElementById('btn-container-logs');
+  const btnCr = document.getElementById('btn-creation-logs');
+  if (btnC && btnCr) {
+    if (mode === 'creation') {
+      btnCr.classList.add('btn-primary');
+      btnC.classList.remove('btn-primary');
+    } else {
+      btnC.classList.add('btn-primary');
+      btnCr.classList.remove('btn-primary');
+    }
+  }
+  fetchLogContent();
+}
+
+async function showLogs(domain, port) {
+  currentLogDomain = domain;
+  currentLogPort = port;
+  currentLogMode = 'container';
+  const dlg = document.getElementById('logs-dialog');
+  const portInfo = document.getElementById('logs-port-info');
+  document.getElementById('logs-title').textContent = 'Logs \\u2014 ' + domain;
+  if (portInfo) {
+    portInfo.textContent = port ? 'Container listens on internal port 3001, mapped from host 127.0.0.1:' + port + ' for CloudPanel reverse proxy.' : '';
+  }
+  const btnC = document.getElementById('btn-container-logs');
+  const btnCr = document.getElementById('btn-creation-logs');
+  if (btnC && btnCr) {
+    btnC.classList.add('btn-primary');
+    btnCr.classList.remove('btn-primary');
+  }
+  dlg.showModal();
+  fetchLogContent();
 }
 
 let pendingUpdate = null;
@@ -137,22 +196,36 @@ async function submitCreate(ev) {
   const domain = document.getElementById('domain').value.trim().toLowerCase();
   const tag = document.getElementById('tag').value;
   const tls = document.getElementById('tls').checked;
-  const status = document.getElementById('create-status');
   busy(true);
-  status.textContent = 'Creating the site, pulling ' + tag + ' and waiting for a health check. This can take a couple of minutes\\u2026';
   try {
-    await call('/api/instances', {
+    const res = await call('/api/instances', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain: domain, tag: tag, tls: tls })
     });
-    location.href = CLP_BASE + '/';
+    if (res && res.data && res.data.job) {
+      location.href = CLP_BASE + '/jobs/' + encodeURIComponent(res.data.job);
+    } else {
+      location.href = CLP_BASE + '/';
+    }
   } catch (e) {
     busy(false);
-    status.textContent = '';
     alert('Create failed: ' + e.message);
   }
   return false;
+}
+
+function initInstatic() {
+  const watch = document.getElementById('job-watch');
+  if (watch && watch.dataset.job) {
+    watchJob(watch.dataset.job);
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initInstatic);
+} else {
+  initInstatic();
 }
 `;
 
@@ -168,14 +241,14 @@ export function layout(
       { href: `${BASE}/`, label: "Instances" },
       { href: `${BASE}/new`, label: "New site" },
     ],
-    css: STYLE,
-    script: CLIENT_JS,
+    css: STYLE + JOB_STYLE,
+    script: JOB_WATCH_JS + CLIENT_JS,
     updateNotice,
   });
 }
 
 function stateClass(state: string): string {
-  const known = ["running", "exited", "created", "paused", "absent", "unknown"];
+  const known = ["running", "exited", "created", "paused", "absent", "unknown", "queued", "done", "failed"];
   return known.includes(state) ? `state-${state}` : "state-unknown";
 }
 
@@ -252,9 +325,9 @@ export function dashboardView(
     }
     <button class="btn" onclick="act('${escJs(i.domain)}','restart')">Restart</button>
     <button class="btn${behind(i.tag) ? " btn-update" : ""}" onclick="askUpdate('${escJs(i.domain)}','${escJs(i.tag)}')">Update</button>
-    <button class="btn" onclick="act('${escJs(i.domain)}','snapshot')">Snapshot</button>
+    <button class="btn" onclick="takeSnapshot('${escJs(i.domain)}')" title="Create a backup snapshot of the SQLite database and instance data">Snapshot</button>
     <button class="btn" onclick="act('${escJs(i.domain)}','recreate')" title="Rebuild the container from the recorded version without touching the data">Recreate</button>
-    <button class="btn" onclick="showLogs('${escJs(i.domain)}')">Logs</button>
+    <button class="btn" onclick="showLogs('${escJs(i.domain)}', ${i.port})">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${escJs(i.domain)}')">Delete</button>
   </div></details></td>
 </tr>`;
@@ -320,9 +393,27 @@ export function dashboardView(
 
 <dialog id="logs-dialog" aria-labelledby="logs-title">
   <div class="dialog-header"><h2 id="logs-title"></h2></div>
+  <p class="hint" id="logs-port-info" style="margin: 0 0 12px;"></p>
+  <div style="display:flex;gap:8px;margin-bottom:12px;">
+    <button type="button" class="btn btn-sm btn-primary" id="btn-container-logs" onclick="switchLogs('container')">Container Logs</button>
+    <button type="button" class="btn btn-sm" id="btn-creation-logs" onclick="switchLogs('creation')">Creation Log</button>
+  </div>
   <pre id="logs-body"></pre>
   <div class="actions dialog-actions">
     <button class="btn" onclick="document.getElementById('logs-dialog').close()">Close</button>
+  </div>
+</dialog>
+
+<dialog id="snapshot-dialog" aria-labelledby="snapshot-title">
+  <div class="dialog-header"><h2 id="snapshot-title">Snapshot Created</h2></div>
+  <p class="hint">A backup snapshot of the SQLite database and instance files was created successfully:</p>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:12px 16px;margin-bottom:16px;">
+    <div style="font-weight:600;margin-bottom:4px;" id="snapshot-file"></div>
+    <div class="mono hint" id="snapshot-path" style="font-size:13px;word-break:break-all;"></div>
+  </div>
+  <p class="hint">Snapshots include a clean SQLite backup and instance data. They are stored under the instance's <span class="mono">snapshots/</span> directory and pruned to the 5 most recent versions for safe rollbacks.</p>
+  <div class="actions dialog-actions">
+    <button class="btn btn-primary" onclick="document.getElementById('snapshot-dialog').close()">Done</button>
   </div>
 </dialog>
 
@@ -357,6 +448,57 @@ export function dashboardView(
     <button class="btn btn-danger" onclick="confirmDelete()">Delete</button>
   </div>
 </dialog>`;
+}
+
+export function jobView(job: InstaticJobView, logText: string): string {
+  const finished = job.state === "done" || job.state === "failed";
+
+  const site = job.state === "done"
+    ? `<div class="card">
+        <div class="card-header"><h2>Instance Site</h2></div>
+        <dl class="kv">
+          <dt>Domain</dt><dd><a href="https://${esc(job.domain)}" target="_blank" rel="noreferrer noopener">${esc(job.domain)}</a></dd>
+          <dt>Version</dt><dd>${esc(job.tag)}</dd>
+          <dt>Proxy target</dt><dd class="mono">127.0.0.1:${esc(String(job.port))}</dd>
+          <dt>TLS</dt><dd>${job.tls ? "Let's Encrypt certificate requested" : "Self-signed or custom SSL"}</dd>
+        </dl>
+        <p class="hint">Your Instatic instance is running. You can open its administration interface or view the site.</p>
+        <div style="margin-top: 1rem; display: flex; gap: 0.5rem;">
+          <a class="btn btn-primary" href="https://${esc(job.domain)}/admin" target="_blank" rel="noreferrer noopener">Open Admin</a>
+          <a class="btn" href="https://${esc(job.domain)}" target="_blank" rel="noreferrer noopener">Visit Site</a>
+        </div>
+      </div>`
+    : "";
+
+  return `
+    <div class="page-heading">
+      <div>
+        <h1>Instance creation</h1>
+        <p>Creating Instatic instance for ${esc(job.domain)}.</p>
+      </div>
+      <a class="btn" href="${BASE}/">Back to instances</a>
+    </div>
+    <div class="card">
+      <div class="card-header"><h2>Creation Status</h2></div>
+      <div class="job-summary">
+        <span class="job-domain">${esc(job.domain)}</span>
+        <span class="badge ${stateClass(job.state)}" id="job-state">${esc(job.state)}</span>
+      </div>
+      <div class="step" id="job-step" style="margin-top:0.5rem;">${esc(finished ? (job.state === "done" ? "Instance created successfully" : "Creation failed") : job.step)}</div>
+      ${job.error ? `<div class="alert" style="margin-top:0.75rem;">${esc(job.error)}</div>` : ""}
+      <dl class="kv job-timing" style="margin-top:0.75rem;">
+        <dt>Version</dt><dd>${esc(job.tag)}</dd>
+        <dt>Port</dt><dd class="mono">127.0.0.1:${esc(String(job.port))}</dd>
+        <dt>Started</dt><dd>${esc(job.startedAt || job.createdAt)}</dd>
+        ${job.finishedAt ? `<dt>Finished</dt><dd>${esc(job.finishedAt)}</dd>` : ""}
+      </dl>
+    </div>
+    ${site}
+    <div class="card">
+      <div class="card-header"><h2>Creation Log</h2></div>
+      <pre id="job-log">${esc(logText || "(no output yet)")}</pre>
+    </div>
+    ${finished ? "" : `<div id="job-watch" data-job="${esc(job.id)}" hidden></div>`}`;
 }
 
 export function newInstanceView(nextPort: number, available: AvailableTags): string {
@@ -397,7 +539,7 @@ ${notice}<div class="card">
       <div class="form-field">
         <label for="port">Port</label>
         <input id="port" value="${esc(nextPort)}" readonly aria-describedby="port-hint">
-        <div class="hint" id="port-hint">Assigned automatically. Only accessible from this server.</div>
+        <div class="hint" id="port-hint">Host reverse proxy port (mapped to internal container port 3001). Accessible only from 127.0.0.1.</div>
       </div>
     </div>
     <div class="check-field">
@@ -411,7 +553,6 @@ ${notice}<div class="card">
       <a class="btn btn-lg" href="${BASE}/">Cancel</a>
       <button type="submit" class="btn btn-primary btn-lg">Create site</button>
     </div>
-    <div class="hint" id="create-status" role="status" aria-live="polite"></div>
   </form>
 </div></div>`;
 }

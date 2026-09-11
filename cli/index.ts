@@ -1,3 +1,4 @@
+import type { Server } from "bun";
 import { chmodSync, chownSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
@@ -26,7 +27,7 @@ import { SECURITY_HEADERS, esc } from "../lib/app-http";
 import { renderLayout } from "../lib/app-ui";
 import { headerTarget } from "../lib/panel-nav";
 import { checkCliUpdate } from "../lib/update-check";
-import { runInstaticAction } from "../addons/instatic/action";
+import { pruneInstaticJobs, runInstaticAction } from "../addons/instatic/action";
 import { runStagerAction, type StagerActionOptions } from "../addons/stager/action";
 import { runAuthActionStdin } from "./auth-action";
 
@@ -34,6 +35,7 @@ type AddonHandler = (
   req: Request,
   path: string,
   updateNotice?: { current: string; latest: string } | null,
+  server?: Server<unknown> | null,
 ) => Promise<Response>;
 
 const MANAGERS: Record<string, AddonHandler> = {
@@ -305,6 +307,21 @@ export async function runStagerMaintenance(installed: AddonSpec[], options?: Sta
   }
 }
 
+// Instatic's creation records are the same kind of upkeep, and had none: a job
+// killed part-way stayed `running` forever, which is what blocks a retry for
+// that hostname, and every record ever written stayed on disk.
+export async function runInstaticMaintenance(installed: AddonSpec[]): Promise<void> {
+  if (!installed.some((spec) => spec.name === "instatic")) return;
+  try {
+    // Called directly rather than through the verb: the verb prints its result
+    // as JSON for the manager, and repair speaks to a person.
+    const { removed, stuck } = pruneInstaticJobs();
+    if (removed || stuck) log.ok(`instatic job records: ${removed} expired, ${stuck} marked failed`);
+  } catch (error) {
+    log.warn(`instatic maintenance (prune) failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export async function cmdRepair(argv: string[]): Promise<void> {
   requireRoot("repair");
   const { positional, flags } = parseFlags(argv);
@@ -356,6 +373,7 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   // master vhost might still be broken, would leave a just-restored site
   // vhost on disk but unloaded until the next 15-minute cycle.
   await runStagerMaintenance(all);
+  await runInstaticMaintenance(all);
   if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ")})`);
 }
 
@@ -529,7 +547,7 @@ async function cmdServe(): Promise<never> {
   if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH);
   const server = Bun.serve({
     unix: SOCKET_PATH,
-    async fetch(req) {
+    async fetch(req, server) {
       const path = internalPath(new URL(req.url).pathname);
       if (path === "/health") {
         return Response.json({ ok: true, service: "clp-addons" }, { headers: SECURITY_HEADERS });
@@ -554,7 +572,7 @@ async function cmdServe(): Promise<never> {
       const notice = update?.hasUpdate ? { current: update.current, latest: update.latest } : null;
       const hit = splitMount(path, mounted);
       let response: Response;
-      if (hit) response = await MANAGERS[hit.addon]!(req, hit.rest, notice);
+      if (hit) response = await MANAGERS[hit.addon]!(req, hit.rest, notice, server);
       else if (path === "/") response = indexPage(mounted, notice);
       else response = Response.json({ ok: false, error: "not found" }, { status: 404, headers: SECURITY_HEADERS });
       return response;

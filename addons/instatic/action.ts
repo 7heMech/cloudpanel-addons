@@ -2,26 +2,93 @@ import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
   chmodSync, closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync,
-  renameSync, rmSync, statSync, writeFileSync,
+  renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ActionCommandFailure, ActionFailure, commandFailure, emitActionError, emitActionOk,
-  failAction, forwardCommandOutput, normalizeIdentityHostname,
+  failAction, forwardCommandOutput as defaultForwardCommandOutput, normalizeIdentityHostname,
   PANEL_IDENTITY_PATH,
   readable, runCommand, siteUserFor, validateDomain, validateFlag, validatePort, validateTag,
   withFileLock,
 } from "../../cli/action-common";
+import {
+  createJobDir, createJobLog, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet, jobTimestamp,
+  JOB_ID_RE, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, type PruneJobsResult,
+} from "../../cli/job-store";
 
 const REGISTRY_IMAGE = "ghcr.io/corebunch/instatic";
 const CONTAINER_PORT = 3001;
 const HEALTH_TIMEOUT = 60;
+// Creation records are kept as long as the stager's clone records, so the two
+// addons expire their history on the same schedule.
+const JOB_RETENTION_DAYS = 14;
+
+export interface InstaticJobView {
+  id: string;
+  domain: string;
+  port: number;
+  tag: string;
+  tls: boolean;
+  state: "queued" | "running" | "done" | "failed" | "unknown";
+  step: string;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
+}
+
+let activeTranscript: JobTranscript | null = null;
+
+class JobTranscript {
+  readonly path: string;
+  private fd = -1;
+
+  constructor(path: string) {
+    this.path = path;
+    this.fd = openSync(path, "a", 0o600);
+  }
+
+  write(text: string): void {
+    if (this.fd === -1) return;
+    const buf = Buffer.from(text);
+    let offset = 0;
+    while (offset < buf.length) {
+      try {
+        const written = writeSync(this.fd, buf, offset, buf.length - offset, null);
+        if (written <= 0) break;
+        offset += written;
+      } catch {
+        break;
+      }
+    }
+  }
+
+  close(): void {
+    if (this.fd !== -1) {
+      try { closeSync(this.fd); } catch {}
+      this.fd = -1;
+    }
+  }
+}
+
+function diagnostic(text: string): void {
+  if (activeTranscript) activeTranscript.write(text);
+  else process.stderr.write(text);
+}
+
+function forwardCommandOutput(result: { stdout: string; stderr: string }): void {
+  if (result.stdout) diagnostic(result.stdout);
+  if (result.stderr) diagnostic(result.stderr);
+}
 
 export interface InstaticActionPaths {
   lockDir: string;
   dataBaseDir: string;
   backupDir: string;
+  jobsDir: string;
+  actionBinary: string;
   panelDb: string;
   clpctl: string;
   panelIdentityFile: string;
@@ -32,13 +99,15 @@ export const DEFAULT_INSTATIC_ACTION_PATHS: InstaticActionPaths = {
   lockDir: "/run/lock/clp-addons",
   dataBaseDir: "/var/lib/clp-addons/instatic",
   backupDir: "/var/backups/clp-addons/instatic",
+  jobsDir: "/var/lib/clp-addons/instatic/jobs",
+  actionBinary: "/usr/local/bin/clp-addons",
   panelDb: "/home/clp/htdocs/app/data/db.sq3",
   clpctl: "/usr/bin/clpctl",
   panelIdentityFile: PANEL_IDENTITY_PATH,
   sqlite3: "sqlite3",
 };
 
-export type InstaticVerb = "list" | "create" | "update" | "start" | "stop" | "restart" | "recreate" | "snapshot" | "status" | "logs" | "delete";
+export type InstaticVerb = "list" | "create" | "update" | "start" | "stop" | "restart" | "recreate" | "snapshot" | "status" | "logs" | "delete" | "job" | "jobs" | "prune" | "run";
 
 export interface ParsedInstaticAction {
   verb: InstaticVerb;
@@ -47,6 +116,8 @@ export interface ParsedInstaticAction {
   tag: string;
   confirm: string;
   tls: string;
+  job: string;
+  isAsync: boolean;
 }
 
 export interface InstaticActionOptions {
@@ -71,9 +142,46 @@ function requireRoot(): void {
   if (process.getuid?.() !== 0) failAction("instatic actions must run as root");
 }
 
+function validateJobId(id: string): string {
+  if (!JOB_ID_RE.test(id)) failAction(`'${id}' is not a valid job id`);
+  return id;
+}
+
+// The job record itself lives in cli/job-store; this only supplies the addon's
+// jobs directory so the call sites can stay as they were.
+function jobDir(paths: InstaticActionPaths, id: string): string {
+  return storeJobDir(paths.jobsDir, id);
+}
+
+function jobJson(paths: InstaticActionPaths, dir: string, id: string): InstaticJobView {
+  const common = jobCommonFields(dir);
+  const state = (["queued", "running", "done", "failed"].includes(common.state)
+    ? common.state
+    : "unknown") as InstaticJobView["state"];
+  return {
+    id,
+    domain: jobGet(dir, "domain"),
+    port: Number(jobGet(dir, "port")) || 0,
+    tag: jobGet(dir, "tag"),
+    tls: jobGet(dir, "tls") === "yes",
+    state,
+    step: common.step,
+    createdAt: common.createdAt,
+    // Absent rather than empty: the UI renders a row per timestamp it has.
+    startedAt: common.startedAt || undefined,
+    finishedAt: common.finishedAt || undefined,
+    error: common.error || undefined,
+  };
+}
+
+function setStep(dir: string, step: string): void {
+  jobSet(dir, "step", step);
+  diagnostic(`[instatic] ${step}\n`);
+}
+
 function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstaticAction {
   if (argv.length === 0) {
-    failAction("usage: clp-addons action instatic {list|create|update|recreate|start|stop|restart|delete|snapshot|status|logs} [options]");
+    failAction("usage: clp-addons action instatic {list|create|update|recreate|start|stop|restart|delete|snapshot|status|logs|job|jobs|prune|run} [options]");
   }
 
   const verb = argv[0] as string;
@@ -82,16 +190,21 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
   let tag = "";
   let confirm = "";
   let tls = "no";
+  let job = "";
+  let isAsync = false;
 
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i];
-    if (flag === "--domain" || flag === "--port" || flag === "--tag" || flag === "--confirm" || flag === "--tls") {
+    if (flag === "--async") {
+      isAsync = true;
+    } else if (flag === "--domain" || flag === "--port" || flag === "--tag" || flag === "--confirm" || flag === "--tls" || flag === "--job") {
       if (i + 1 >= argv.length) failAction(`${flag} needs a value`);
       const value = argv[++i]!;
       if (flag === "--domain") domain = value;
       else if (flag === "--port") port = value;
       else if (flag === "--tag") tag = value;
       else if (flag === "--confirm") confirm = value;
+      else if (flag === "--job") job = value;
       else tls = value;
     } else {
       failAction(`unknown argument: '${flag}'`);
@@ -101,6 +214,13 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
   let normalizedDomain = domain;
   switch (verb) {
     case "list":
+    case "jobs":
+    case "prune":
+      break;
+    case "job":
+    case "run":
+      if (!job) failAction(`${verb} requires --job`);
+      validateJobId(job);
       break;
     case "create":
       normalizedDomain = validateDomain(domain, paths.panelIdentityFile);
@@ -130,9 +250,15 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
 
   switch (verb) {
     case "list":
+    case "jobs":
+    case "prune":
       // This intentionally omits --tls, preserving the original clp-action-instatic
       // wrapper's accepted-but-ignored option for compatibility.
-      if (domain || port || tag || confirm) failAction("list takes no arguments");
+      if (domain || port || tag || confirm || job) failAction(`${verb} takes no arguments`);
+      break;
+    case "job":
+    case "run":
+      if (domain || port || tag || confirm) failAction(`${verb} takes only --job`);
       break;
     case "update":
       if (port) failAction("update does not take --port");
@@ -145,11 +271,11 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
       // leniency here.
       break;
     default:
-      if (port || tag || confirm) failAction(`${verb} takes only --domain`);
+      if (port || tag || confirm || job) failAction(`${verb} takes only --domain`);
       break;
   }
 
-  return { verb: verb as InstaticVerb, domain: normalizedDomain, port, tag, confirm, tls };
+  return { verb: verb as InstaticVerb, domain: normalizedDomain, port, tag, confirm, tls, job, isAsync };
 }
 
 function containerName(domain: string): string {
@@ -300,7 +426,7 @@ function commandCombinedOutput(command: string, args: string[]): string {
 
 function containerExists(name: string): boolean {
   const result = runCommand("docker", ["ps", "-a", "--format", "{{.Names}}"]);
-  if (!result.ok && result.stderr) process.stderr.write(result.stderr);
+  if (!result.ok && result.stderr) diagnostic(result.stderr);
   return result.ok && result.stdout.split(/\r?\n/).some((line) => line === name);
 }
 
@@ -312,7 +438,7 @@ function runDiagnostic(command: string, args: string[]): boolean {
 
 function runStdoutAsDiagnostic(command: string, args: string[]): boolean {
   const result = runCommand(command, args);
-  if (result.stdout) process.stderr.write(result.stdout);
+  if (result.stdout) diagnostic(result.stdout);
   return result.ok;
 }
 
@@ -375,7 +501,7 @@ function ensureEnvFile(dir: string, port: number, domain: string): void {
     return;
   }
 
-  process.stderr.write(`[instatic] generating a master key for ${domain}\n`);
+  diagnostic(`[instatic] generating a master key for ${domain}\n`);
   writeEnvFile(file, randomBytes(32).toString("base64"), port, domain);
 }
 
@@ -436,31 +562,31 @@ async function healthCheck(port: number, domain: string): Promise<boolean> {
   let code = "";
   for (let i = 0; i < HEALTH_TIMEOUT; i++) {
     const result = runCommand("curl", ["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "3", `http://127.0.0.1:${port}/`]);
-    if (result.stderr) process.stderr.write(result.stderr);
+    if (result.stderr) diagnostic(result.stderr);
     code = result.stdout.trim();
     if (/^[23]/.test(code)) break;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   if (!/^[23]/.test(code)) {
-    process.stderr.write(`[instatic] WARN: container did not answer on 127.0.0.1:${port} (last: ${code || "none"})\n`);
+    diagnostic(`[instatic] WARN: container did not answer on 127.0.0.1:${port} (last: ${code || "none"})\n`);
     return false;
   }
 
   for (let i = 0; i < 15; i++) {
     const result = runCommand("curl", ["-sk", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "--resolve", `${domain}:443:127.0.0.1`, `https://${domain}/`]);
-    if (result.stderr) process.stderr.write(result.stderr);
+    if (result.stderr) diagnostic(result.stderr);
     code = result.stdout.trim();
     if (/^[23]/.test(code)) return true;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  process.stderr.write(`[instatic] WARN: container is up but nginx did not serve ${domain} (last: ${code || "none"})\n`);
+  diagnostic(`[instatic] WARN: container is up but nginx did not serve ${domain} (last: ${code || "none"})\n`);
   return false;
 }
 
 function sqliteBackup(source: string, destination: string, sqlite3 = "sqlite3"): boolean {
   const escaped = destination.replaceAll("'", "''");
   const result = runCommand(sqlite3, [source, `.backup '${escaped}'`]);
-  if (result.stderr) process.stderr.write(result.stderr);
+  if (result.stderr) diagnostic(result.stderr);
   return result.ok;
 }
 
@@ -512,7 +638,7 @@ export function makeSnapshot(dir: string, out: string, sqlite3 = "sqlite3"): boo
         }
         if (header === "SQLite format 3") {
           if (!sqliteBackup(source, destination, sqlite3)) {
-            process.stderr.write(`[instatic] WARN: sqlite backup failed for ${entry.name}\n`);
+            diagnostic(`[instatic] WARN: sqlite backup failed for ${entry.name}\n`);
             cleanup();
             return false;
           }
@@ -549,7 +675,7 @@ export function makeSnapshot(dir: string, out: string, sqlite3 = "sqlite3"): boo
     const result = withUmask(0o077, () => runCommand("tar", ["-czf", out, "-C", stage, "."]));
     forwardCommandOutput(result);
     if (!result.ok) {
-      process.stderr.write(`[instatic] WARN: tar failed writing ${out}\n`);
+      diagnostic(`[instatic] WARN: tar failed writing ${out}\n`);
       cleanup();
       rmSync(out, { force: true });
       return false;
@@ -582,16 +708,17 @@ export function pruneSnapshots(dir: string): void {
 }
 
 function dateStamp(utc = false): string {
-  const result = runCommand("date", utc ? ["-u", "+%Y-%m-%dT%H:%M:%SZ"] : ["+%Y%m%d%H%M%S"]);
+  if (utc) return jobTimestamp();
+  const result = runCommand("date", ["+%Y%m%d%H%M%S"]);
   if (!result.ok) throw commandFailure("date", result);
   return result.stdout.trim();
 }
 
 function cleanupCreate(name: string, dir: string, domain: string, siteCreated: boolean, paths: InstaticActionPaths): void {
-  process.stderr.write("[instatic] WARN: create failed, unwinding\n");
+  diagnostic("[instatic] WARN: create failed, unwinding\n");
   runStdoutAsDiagnostic("docker", ["rm", "-f", name]);
   if (siteCreated) {
-    process.stderr.write("[instatic] WARN: removing the CloudPanel site this run created\n");
+    diagnostic("[instatic] WARN: removing the CloudPanel site this run created\n");
     runStdoutAsDiagnostic(paths.clpctl, ["site:delete", `--domainName=${domain}`, "--force"]);
   }
   rmSync(dir, { recursive: true, force: true });
@@ -610,16 +737,60 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
 
   let siteCreated = false;
   let cleanupActive = true;
+
+  if (action.isAsync) {
+    for (const entry of listJobIds(paths.jobsDir)) {
+      const existing = jobDir(paths, entry);
+      if (jobGet(existing, "domain") !== domain) continue;
+      const state = jobGet(existing, "state");
+      if (state === "queued" || state === "running") {
+        failAction(`creation of ${domain} is already ${state}`);
+      }
+    }
+
+    const id = newJobId();
+    const jDir = createJobDir(paths.jobsDir, id);
+    jobSet(jDir, "domain", domain);
+    jobSet(jDir, "port", String(port));
+    jobSet(jDir, "tag", tag);
+    jobSet(jDir, "tls", tls);
+    jobSet(jDir, "createdAt", dateStamp(true));
+    jobSet(jDir, "step", "queued");
+    jobSet(jDir, "state", "queued");
+    createJobLog(jDir);
+
+    const started = startJobUnit({
+      addon: "instatic",
+      id,
+      description: `clp-addons: creating Instatic site ${domain}`,
+      actionBinary: paths.actionBinary,
+    });
+    forwardCommandOutput(started);
+    if (!started.ok) {
+      jobSet(jDir, "error", "could not start the creation job");
+      jobSet(jDir, "state", "failed");
+      failAction("systemd-run refused to start the creation job");
+    }
+
+    emitActionOk({ job: id, domain, port, tag, siteCreatedByAddon: siteCreated, status: "queued" });
+    return;
+  }
+
   try {
+    mkdirSync(dir, { recursive: true, mode: 0o750 });
+    const logPath = join(dir, "create.log");
+    writeFileSync(logPath, "", { mode: 0o640 });
+    activeTranscript = new JobTranscript(logPath);
+
     const existing = panelSiteExists(domain, paths);
     if (existing.ok && existing.exists) {
       const proxy = siteIsOurProxy(domain, port, paths);
       if (!proxy.ok) {
         failAction(`a CloudPanel site for ${domain} already exists and cannot be adopted: ${proxy.reason}. Delete it, or use a hostname of its own for this instance`);
       }
-      process.stderr.write(`[instatic] CloudPanel site ${domain} already exists as the right reverse proxy; adopting it\n`);
+      diagnostic(`[instatic] CloudPanel site ${domain} already exists as the right reverse proxy; adopting it\n`);
     } else {
-      process.stderr.write(`[instatic] creating CloudPanel reverse-proxy site for ${domain}\n`);
+      diagnostic(`[instatic] creating CloudPanel reverse-proxy site for ${domain}\n`);
       const siteUser = siteUserFor(domain);
       if (siteUserTaken(siteUser)) failAction(`the site user ${siteUser} already exists; a site for ${domain} may be half-created`);
       const password = generatedPassword();
@@ -635,7 +806,7 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
       siteCreated = true;
     }
 
-    process.stderr.write("[instatic] preparing instance storage\n");
+    diagnostic("[instatic] preparing instance storage\n");
     mkdirSync(join(dir, "data"), { recursive: true });
     mkdirSync(join(dir, "uploads"), { recursive: true });
     mkdirSync(join(dir, "snapshots"), { recursive: true });
@@ -644,12 +815,12 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
     chmodSync(join(dir, "uploads"), 0o750);
     chmodSync(join(dir, "snapshots"), 0o700);
 
-    process.stderr.write(`[instatic] pulling ${REGISTRY_IMAGE}:${tag}\n`);
+    diagnostic(`[instatic] pulling ${REGISTRY_IMAGE}:${tag}\n`);
     const pull = runCommand("docker", ["pull", `${REGISTRY_IMAGE}:${tag}`]);
     forwardCommandOutput(pull);
     if (!pull.ok) failAction(`failed to pull ${REGISTRY_IMAGE}:${tag}`);
 
-    process.stderr.write(`[instatic] starting ${name} on 127.0.0.1:${port}\n`);
+    diagnostic(`[instatic] starting ${name} on 127.0.0.1:${port}\n`);
     try {
       runContainer(name, port, tag, domain, dir, paths);
     } catch (error) {
@@ -657,7 +828,7 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
       failAction(`failed to start container ${name}`);
     }
 
-    process.stderr.write("[instatic] health checking\n");
+    diagnostic("[instatic] health checking\n");
     if (!(await healthCheck(port, domain))) failAction(`health check failed for ${domain}`);
 
     const siteUserFinal = siteUserOf(domain, paths) ?? "";
@@ -677,11 +848,11 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
     cleanupActive = false;
 
     if (tls === "yes") {
-      process.stderr.write(`[instatic] requesting a Let's Encrypt certificate for ${domain}\n`);
+      diagnostic(`[instatic] requesting a Let's Encrypt certificate for ${domain}\n`);
       const certificate = runCommand(paths.clpctl, ["lets-encrypt:install:certificate", `--domainName=${domain}`]);
       forwardCommandOutput(certificate);
       if (!certificate.ok) {
-        process.stderr.write(`[instatic] WARN: the certificate request failed; point ${domain} at this server and retry from Site -> SSL/TLS\n`);
+        diagnostic(`[instatic] WARN: the certificate request failed; point ${domain} at this server and retry from Site -> SSL/TLS\n`);
       }
     }
 
@@ -689,11 +860,16 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
   } catch (error) {
     if (cleanupActive) cleanupCreate(name, dir, domain, siteCreated, paths);
     throw error;
+  } finally {
+    if (activeTranscript) {
+      activeTranscript.close();
+      activeTranscript = null;
+    }
   }
 }
 
 function rollbackUpdate(name: string, dir: string, snapshot: string, owner: string, previousTag: string): void {
-  process.stderr.write(`[instatic] WARN: rolling back to ${previousTag}\n`);
+  diagnostic(`[instatic] WARN: rolling back to ${previousTag}\n`);
   runStdoutAsDiagnostic("docker", ["rm", "-f", name]);
   rmSync(join(dir, "data"), { recursive: true, force: true });
   rmSync(join(dir, "uploads"), { recursive: true, force: true });
@@ -707,7 +883,7 @@ function rollbackUpdate(name: string, dir: string, snapshot: string, owner: stri
   }
   runDiagnostic("docker", ["rename", `${name}-prev`, name]);
   const started = runDiagnostic("docker", ["start", name]);
-  if (!started) process.stderr.write("[instatic] WARN: could not restart the previous container\n");
+  if (!started) diagnostic("[instatic] WARN: could not restart the previous container\n");
 }
 
 async function cmdUpdate(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
@@ -725,14 +901,14 @@ async function cmdUpdate(action: ParsedInstaticAction, paths: InstaticActionPath
   const port = validatePort(curPort);
   if (curTag === tag) failAction(`already running tag ${tag}`);
 
-  process.stderr.write("[instatic] snapshotting before update\n");
+  diagnostic("[instatic] snapshotting before update\n");
   mkdirSync(join(dir, "snapshots"), { recursive: true });
   chmodSync(join(dir, "snapshots"), 0o700);
   const snapshot = join(dir, "snapshots", `pre-update-${curTag}-${dateStamp()}.tar.gz`);
   if (!makeSnapshot(dir, snapshot, paths.sqlite3)) failAction(`could not snapshot ${domain} before updating; refusing to continue`);
   pruneSnapshots(join(dir, "snapshots"));
 
-  process.stderr.write(`[instatic] pulling ${REGISTRY_IMAGE}:${tag}\n`);
+  diagnostic(`[instatic] pulling ${REGISTRY_IMAGE}:${tag}\n`);
   const pull = runCommand("docker", ["pull", `${REGISTRY_IMAGE}:${tag}`]);
   forwardCommandOutput(pull);
   if (!pull.ok) failAction(`failed to pull ${REGISTRY_IMAGE}:${tag}`);
@@ -753,9 +929,9 @@ async function cmdUpdate(action: ParsedInstaticAction, paths: InstaticActionPath
   }
 
   if (!(await healthCheck(port, domain))) {
-    process.stderr.write("[instatic] capturing failed container logs before rollback\n");
+    diagnostic("[instatic] capturing failed container logs before rollback\n");
     const failedLogs = commandCombinedOutput("docker", ["logs", "--tail", "200", name]);
-    process.stderr.write(`${failedLogs}\n`);
+    diagnostic(`${failedLogs}\n`);
     rollbackUpdate(name, dir, snapshot, owner, curTag);
     failAction(`health check failed on ${tag}; rolled back to ${curTag}`, { failedTag: tag, restoredTag: curTag, logs: failedLogs });
   }
@@ -796,7 +972,7 @@ async function cmdRecreate(action: ParsedInstaticAction, paths: InstaticActionPa
   const port = validatePort(readMeta("port", meta));
   const owner = resolveOwner(domain, paths);
 
-  process.stderr.write(`[instatic] recreating ${name} at ${tag} as uid ${owner}\n`);
+  diagnostic(`[instatic] recreating ${name} at ${tag} as uid ${owner}\n`);
   runStdoutAsDiagnostic("docker", ["rm", "-f", name]);
   try {
     runContainer(name, port, tag, domain, dir, paths);
@@ -840,14 +1016,14 @@ export function deleteInstaticInstance(
     if (!proxy.ok) failAction(`refusing to delete a changed CloudPanel site: ${proxy.reason}`);
   }
 
-  process.stderr.write("[instatic] archiving instance data before deletion\n");
+  diagnostic("[instatic] archiving instance data before deletion\n");
   mkdirSync(paths.backupDir, { recursive: true });
   chmodSync(paths.backupDir, 0o700);
   const backup = join(paths.backupDir, `${domain}-deleted-${dateStamp()}.tar.gz`);
   if (!makeSnapshot(dir, backup, paths.sqlite3)) failAction("final archive failed; nothing was deleted");
 
   const containers = runCommand("docker", ["ps", "-a", "--format", "{{.Names}}"]);
-  if (containers.stderr) process.stderr.write(containers.stderr);
+  if (containers.stderr) diagnostic(containers.stderr);
   if (!containers.ok) failAction("cannot query Docker; data preserved");
   if (containers.stdout.split(/\r?\n/).some((line) => line === name)) {
     const removed = runCommand("docker", ["rm", "-f", name]);
@@ -933,6 +1109,160 @@ function cmdLogs(action: ParsedInstaticAction): void {
   emitActionOk({ domain, logs });
 }
 
+async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
+  const id = action.job;
+  const jDir = jobDir(paths, id);
+  if (!isDirectory(jDir)) failAction(`no such job: ${id}`);
+  const domain = jobGet(jDir, "domain");
+  const port = Number(jobGet(jDir, "port"));
+  const tag = jobGet(jDir, "tag");
+  const tls = jobGet(jDir, "tls");
+  if (!domain || !port || !tag) failAction(`corrupted job record: ${id}`);
+
+  const name = containerName(domain);
+  const dir = instanceDir(domain, paths);
+  if (containerExists(name)) failAction(`container '${name}' already exists`);
+  if (existsSync(join(dir, "meta.json"))) failAction(`instance '${domain}' already exists`);
+
+  const holder = portHolder(port, domain, paths);
+  if (holder) failAction(`port ${port} is already taken by ${holder}`);
+
+  const logPath = join(jDir, "log");
+  activeTranscript = new JobTranscript(logPath);
+  jobSet(jDir, "state", "running");
+  jobSet(jDir, "startedAt", dateStamp(true));
+
+  let siteCreated = false;
+  let cleanupActive = true;
+  try {
+    const existing = panelSiteExists(domain, paths);
+    if (existing.ok && existing.exists) {
+      const proxy = siteIsOurProxy(domain, port, paths);
+      if (!proxy.ok) {
+        failAction(`a CloudPanel site for ${domain} already exists and cannot be adopted: ${proxy.reason}`);
+      }
+      diagnostic(`[instatic] CloudPanel site ${domain} already exists as the right reverse proxy; adopting it\n`);
+    } else {
+      setStep(jDir, `creating CloudPanel reverse-proxy site for ${domain}`);
+      const siteUser = siteUserFor(domain);
+      if (siteUserTaken(siteUser)) failAction(`the site user ${siteUser} already exists; a site for ${domain} may be half-created`);
+      const password = generatedPassword();
+      const result = runCommand(paths.clpctl, [
+        "site:add:reverse-proxy",
+        `--domainName=${domain}`,
+        `--reverseProxyUrl=http://127.0.0.1:${port}`,
+        `--siteUser=${siteUser}`,
+        `--siteUserPassword=${password}`,
+      ]);
+      forwardCommandOutput(result);
+      if (!result.ok) failAction(`clpctl site:add:reverse-proxy failed for ${domain}`);
+      siteCreated = true;
+    }
+
+    setStep(jDir, "preparing instance storage");
+    mkdirSync(join(dir, "data"), { recursive: true });
+    mkdirSync(join(dir, "uploads"), { recursive: true });
+    mkdirSync(join(dir, "snapshots"), { recursive: true });
+    chmodSync(dir, 0o750);
+    chmodSync(join(dir, "data"), 0o750);
+    chmodSync(join(dir, "uploads"), 0o750);
+    chmodSync(join(dir, "snapshots"), 0o700);
+
+    setStep(jDir, `pulling ${REGISTRY_IMAGE}:${tag}`);
+    const pull = runCommand("docker", ["pull", `${REGISTRY_IMAGE}:${tag}`]);
+    forwardCommandOutput(pull);
+    if (!pull.ok) failAction(`failed to pull ${REGISTRY_IMAGE}:${tag}`);
+
+    setStep(jDir, `starting ${name} on 127.0.0.1:${port}`);
+    try {
+      runContainer(name, port, tag, domain, dir, paths);
+    } catch (error) {
+      if (error instanceof ActionFailure) throw error;
+      failAction(`failed to start container ${name}`);
+    }
+
+    setStep(jDir, "waiting for health check");
+    if (!(await healthCheck(port, domain))) failAction(`health check failed for ${domain}`);
+
+    const siteUserFinal = siteUserOf(domain, paths) ?? "";
+    const meta = [
+      "{",
+      `  \"domain\": ${JSON.stringify(domain)},`,
+      `  \"port\": ${port},`,
+      `  \"tag\": ${JSON.stringify(tag)},`,
+      `  \"container\": ${JSON.stringify(name)},`,
+      `  \"siteUser\": ${JSON.stringify(siteUserFinal)},`,
+      `  \"siteCreatedByAddon\": ${siteCreated},`,
+      `  \"createdAt\": ${JSON.stringify(dateStamp(true))}`,
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(join(dir, "meta.json"), meta);
+    cleanupActive = false;
+
+    if (tls === "yes") {
+      setStep(jDir, `requesting a Let's Encrypt certificate for ${domain}`);
+      const certificate = runCommand(paths.clpctl, ["lets-encrypt:install:certificate", `--domainName=${domain}`]);
+      forwardCommandOutput(certificate);
+      if (!certificate.ok) {
+        diagnostic(`[instatic] WARN: the certificate request failed; point ${domain} at this server and retry from Site -> SSL/TLS\n`);
+      }
+    }
+
+    setStep(jDir, "instance created successfully");
+    jobSet(jDir, "state", "done");
+    jobSet(jDir, "finishedAt", dateStamp(true));
+    try {
+      cpSync(logPath, join(dir, "create.log"));
+    } catch {}
+
+    emitActionOk({ domain, port, tag, container: name, siteUser: siteUserFinal, siteCreatedByAddon: siteCreated, status: "running" });
+  } catch (error) {
+    if (cleanupActive) cleanupCreate(name, dir, domain, siteCreated, paths);
+    jobSet(jDir, "state", "failed");
+    jobSet(jDir, "finishedAt", dateStamp(true));
+    const msg = error instanceof Error ? error.message : String(error);
+    jobSet(jDir, "error", msg);
+    diagnostic(`[instatic] ERROR: ${msg}\n`);
+    throw error;
+  } finally {
+    if (activeTranscript) {
+      activeTranscript.close();
+      activeTranscript = null;
+    }
+  }
+}
+
+function cmdJob(paths: InstaticActionPaths, id: string): void {
+  const dir = jobDir(paths, id);
+  if (!isDirectory(dir)) failAction(`no such job: ${id}`);
+  emitActionOk({ job: jobJson(paths, dir, id), log: readJobLog(dir) });
+}
+
+function cmdJobs(paths: InstaticActionPaths): void {
+  const jobs = listJobIds(paths.jobsDir).map((id) => jobJson(paths, jobDir(paths, id), id));
+  emitActionOk({ jobs });
+}
+
+// Creation records accumulate one directory per attempt and nothing ever
+// removed them: the stager had this sweep from the start and Instatic, whose
+// job support was written by copying it, did not. Reached from repair, on the
+// reconciliation timer.
+export function pruneInstaticJobs(options?: InstaticActionOptions): PruneJobsResult {
+  return pruneJobs({
+    addon: "instatic",
+    jobsDir: pathsFor(options).jobsDir,
+    retentionDays: JOB_RETENTION_DAYS,
+    stuckMessage: "the creation job stopped without recording a result",
+    onStuck: (id, state) =>
+      diagnostic(`[instatic] WARN: job ${id} is recorded as ${state} but nothing is running it; marking it failed\n`),
+  });
+}
+
+function cmdPrune(paths: InstaticActionPaths): void {
+  emitActionOk(pruneInstaticJobs({ paths }));
+}
+
 async function dispatch(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
   switch (action.verb) {
     case "list": cmdList(paths); return;
@@ -946,6 +1276,10 @@ async function dispatch(action: ParsedInstaticAction, paths: InstaticActionPaths
     case "snapshot": cmdSnapshot(action, paths); return;
     case "status": cmdStatus(action); return;
     case "logs": cmdLogs(action); return;
+    case "job": cmdJob(paths, action.job); return;
+    case "jobs": cmdJobs(paths); return;
+    case "prune": cmdPrune(paths); return;
+    case "run": await cmdRun(action, paths); return;
   }
 }
 
@@ -970,8 +1304,16 @@ export async function runInstaticAction(argv: string[], options?: InstaticAction
     chmodSync(paths.lockDir, 0o700);
     mkdirSync(paths.dataBaseDir, { recursive: true });
 
-    if (action.verb === "list") {
+    // `job` is a read: it prints the record and the log file the running job is
+    // still appending to. It must never take the job lock -- `run` holds that
+    // for the whole creation, so a locked read blocked every log poll and every
+    // page load for the job until the create finished, which is the opposite of
+    // what a progress page is for.
+    if (action.verb === "list" || action.verb === "jobs" || action.verb === "job" || action.verb === "prune") {
       await dispatch(action, paths);
+    } else if (action.verb === "run") {
+      const lock = join(paths.lockDir, `job-${action.job}.lock`);
+      await withFileLock(lock, 300, `job ${action.job} is already active`, () => dispatch(action, paths));
     } else {
       const lock = join(paths.lockDir, `${action.domain}.lock`);
       await withFileLock(lock, 300, `another operation is already running for ${action.domain}`, () => dispatch(action, paths));
