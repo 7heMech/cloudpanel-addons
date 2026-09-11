@@ -56,19 +56,26 @@ export function guardMutation(req: Request): Response | null {
     return Response.json({ ok: false, error: "cross-origin request refused" }, { status: 403 });
   }
 
+  let hostUrl: URL;
+  try {
+    hostUrl = new URL(`https://${host}`);
+  } catch {
+    return Response.json({ ok: false, error: "cross-origin request refused" }, { status: 403 });
+  }
+
   // Cross-port Origin validation:
   // Cookies share domain scope across ports (RFC 6265). A tenant website hosted on
   // the same server (e.g. port 80/443) must not be allowed to forge mutations against
   // CloudPanel on port 8443.
   //
   // Exact match covers:
-  // - Host with explicit port: originUrl.host === host (e.g. "panel.example:8443")
-  // - Host with default port: originUrl.host === host (e.g. "panel.example")
+  // - Host with explicit port: originUrl.host === hostUrl.host (e.g. "panel.example:8443")
+  // - Host with default port: originUrl.host === hostUrl.host (e.g. "panel.example")
   //
   // If the reverse proxy stripped the :8443 port in the Host header, we accept
   // only if origin specifies :8443 and host is the bare hostname without port.
-  const exactMatch = originUrl.host === host;
-  const strippedPortProxy = !host.includes(":") && originUrl.port === "8443" && originUrl.hostname === host;
+  const exactMatch = originUrl.host === hostUrl.host;
+  const strippedPortProxy = hostUrl.port === "" && originUrl.port === "8443" && originUrl.hostname === hostUrl.hostname;
   if (!exactMatch && !strippedPortProxy) {
     return Response.json({ ok: false, error: "cross-origin request refused" }, { status: 403 });
   }
