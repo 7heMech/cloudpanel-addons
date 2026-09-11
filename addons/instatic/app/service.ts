@@ -1,16 +1,6 @@
-// Every privileged action goes through the action binary. The app deliberately
-// has no docker access of its own: membership in the docker group is equivalent
-// to root, which would make the action binary's argument validation decorative.
-
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { getNextAvailablePort, readSnapshot, snapshotAgeSeconds, type PanelSnapshot } from "../../../lib/snapshot-reader";
-import { CLI_BIN } from "../../../cli/paths";
-
-const execFileAsync = promisify(execFile);
-
-const ACTION_BIN = CLI_BIN;
-const SUDO_BIN = "/usr/bin/sudo";
+import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
+export { type ActionResult };
 
 // create pulls an image and waits on a health check, so it needs the longest
 // budget. Everything else is quick.
@@ -25,49 +15,11 @@ const TIMEOUTS: Record<string, number> = {
 };
 const DEFAULT_TIMEOUT = 60_000;
 
-export interface ActionResult<T = unknown> {
-  ok: boolean;
-  data?: T;
-  error?: string;
-}
-
 async function callAction<T = unknown>(verb: string, args: string[]): Promise<ActionResult<T>> {
-  const argv = ["action", "instatic", verb, ...args];
-  const runningAsRoot = process.getuid?.() === 0;
-  const cmd = runningAsRoot ? ACTION_BIN : SUDO_BIN;
-  const cmdArgs = runningAsRoot ? argv : ["-n", ACTION_BIN, ...argv];
-
-  let stdout = "";
-  let stderr = "";
-  try {
-    const r = await execFileAsync(cmd, cmdArgs, {
-      timeout: TIMEOUTS[verb] ?? DEFAULT_TIMEOUT,
-      maxBuffer: 8 * 1024 * 1024,
-    });
-    stdout = r.stdout;
-    stderr = r.stderr;
-  } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; message?: string };
-    stdout = e.stdout ?? "";
-    stderr = e.stderr ?? "";
-    if (!stdout.trim()) {
-      // No JSON on stdout means the action binary never got far enough to answer.
-      // Surface its stderr rather than a bare exec error.
-      console.error(`[action] ${verb} failed without a JSON reply:`, stderr || e.message);
-      return { ok: false, error: stderr.trim() || e.message || `action ${verb} failed` };
-    }
-  }
-
-  if (stderr.trim()) console.error(`[action:${verb}]`, stderr.trim());
-
-  // stdout is a contract: exactly one JSON object. Never scrape the prose on
-  // stderr for meaning.
-  try {
-    return JSON.parse(stdout.trim()) as ActionResult<T>;
-  } catch {
-    console.error(`[action] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
-    return { ok: false, error: "action returned a malformed reply" };
-  }
+  return callGatewayAction<T>("instatic", verb, args, undefined, {
+    timeout: TIMEOUTS[verb] ?? DEFAULT_TIMEOUT,
+    maxBuffer: 8 * 1024 * 1024,
+  });
 }
 
 // Mirrors the action binary's own validation. Not a substitute for it: the

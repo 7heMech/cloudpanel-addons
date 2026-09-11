@@ -139,12 +139,11 @@ try {
   );
   assert.deepEqual(earlyExit, { ok: false, error: "action returned a malformed reply" });
 
-  const service = readFileSync(servicePath, "utf8");
-  assert.match(service, /Bun\.spawn/);
-  assert.match(service, /new TextEncoder\(\)\.encode\(input \?\? ""\)/);
-  assert.match(service, /timeout: options\.timeout/);
-  assert.match(service, /maxBuffer: options\.maxBuffer/);
-  assert.doesNotMatch(service, /from "node:child_process"/);
+  const client = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../lib/gateway-client.ts"), "utf8");
+  assert.match(client, /Bun\.spawn/);
+  assert.match(client, /timeout: options\.timeout/);
+  assert.match(client, /maxBuffer/);
+  assert.doesNotMatch(client, /from "node:child_process"/);
 
   const timeoutProbe = Bun.spawn({
     cmd: ["bash", "-c", "sleep 1"],

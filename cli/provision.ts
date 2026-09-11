@@ -415,37 +415,19 @@ export function hardenBackups(spec: AddonSpec, quiet = false): void {
 }
 
 export function installSudoers(quiet = false, specs: AddonSpec[] = installedAddonSpecs()): void {
-  const file = "/etc/sudoers.d/clp-addons";
-  const candidate = "/etc/sudoers.d/.clp-addons.candidate";
-  if (specs.length === 0) {
-    removeSudoers();
-    return;
+  // With the root gateway daemon, clp-addons requires zero sudo privileges.
+  // We proactively remove any legacy sudoers file to maintain zero system pollution.
+  removeSudoers();
+  if (specs.length > 0) {
+    ensurePanelIdentity(quiet);
+  } else {
+    rmSync(PANEL_IDENTITY_PATH, { force: true });
   }
-  ensurePanelIdentity(quiet);
-  const body =
-    "# Managed by clp-addons.\n" +
-    `${sudoersRule(specs)}\n`;
-
-  writeAtomic(candidate, body, 0o440);
-  const check = tryRun("visudo", ["-c", "-f", candidate]);
-  if (!check.ok) {
-    rmSync(candidate, { force: true });
-    fatal(`refusing to install invalid sudoers configuration:\n${check.out}`);
-  }
-  run("chown", ["root:root", candidate]);
-  run("chmod", ["440", candidate]);
-  run("mv", [candidate, file]);
-  const full = tryRun("visudo", ["-c"]);
-  if (!full.ok) {
-    rmSync(file, { force: true });
-    fatal(`sudoers validation failed after installation:\n${full.out}`);
-  }
-  if (!quiet) log.ok(`sudoers allows ${SERVICE_USER} to run the installed addon actions`);
+  if (!quiet) log.ok("zero-sudo: manager dispatches via root gateway daemon; sudoers removed");
 }
 
 export function removeSudoers(): void {
   rmSync("/etc/sudoers.d/clp-addons", { force: true });
-  rmSync(PANEL_IDENTITY_PATH, { force: true });
   removeLegacySudoers();
 }
 
@@ -493,6 +475,9 @@ ${env.join("\n")}
 ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+NoNewPrivileges=yes
 ReadWritePaths=/etc/nginx -/etc/letsencrypt /etc/php /home /run/clp-addons /run/lock/clp-addons /var/backups/clp-addons /var/lib/clp-addons
 ExecStart=/usr/local/bin/clp-addons serve
 Restart=always
@@ -538,7 +523,7 @@ RuntimeDirectoryPreserve=yes
 WantedBy=sockets.target
 `,
     service: `[Unit]
-Description=CloudPanel Addons session authentication daemon
+Description=CloudPanel Addons root gateway daemon
 Requires=${AUTH_SOCKET_UNIT}
 After=${AUTH_SOCKET_UNIT}
 
@@ -549,17 +534,6 @@ StandardError=journal
 TimeoutStartSec=10
 Restart=always
 RestartSec=1
-NoNewPrivileges=yes
-PrivateTmp=yes
-PrivateDevices=yes
-ProtectSystem=strict
-ProtectHome=read-only
-ProtectKernelTunables=yes
-ProtectControlGroups=yes
-RestrictAddressFamilies=AF_UNIX
-RestrictNamespaces=yes
-MemoryDenyWriteExecute=no
-SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target

@@ -205,16 +205,15 @@ test("the identity file is a separate root-owned action input", () => {
   expect(provisionProbe().identityPath).toBe("/etc/clp-addons/panel-identity.conf");
 });
 
-test("manager unit hardens its namespace without changing the sudo boundary", () => {
+test("manager unit hardens its namespace with zero-sudo root gateway dispatch", () => {
   const unit = serviceUnit([ADDONS.instatic!, ADDONS.stager!]);
 
   expect(unit).toContain("ProtectSystem=full");
   expect(unit).toContain("ProtectHome=read-only");
   expect(unit).toContain("PrivateTmp=yes");
-  // ProtectKernelTunables and RestrictAddressFamilies imply NoNewPrivileges=yes in systemd,
-  // which breaks sudo for addon actions like stager and instatic.
-  expect(unit).not.toContain("ProtectKernelTunables=");
-  expect(unit).not.toContain("RestrictAddressFamilies=");
+  expect(unit).toContain("ProtectKernelTunables=yes");
+  expect(unit).toContain("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6");
+  expect(unit).toContain("NoNewPrivileges=yes");
   const readWrite = unit.match(/^ReadWritePaths=(.*)$/m)?.[1]?.split(" ") ?? [];
   expect(readWrite).toContain("-/etc/letsencrypt");
   expect(readWrite).toContain("/var/backups/clp-addons");
@@ -226,7 +225,6 @@ test("manager unit hardens its namespace without changing the sudo boundary", ()
   expect(unit).toContain("RuntimeDirectory=clp-addons");
   expect(unit).toContain("ExecStart=/usr/local/bin/clp-addons serve");
   expect(unit).toContain("Restart=always");
-  expect(unit).not.toContain("NoNewPrivileges=");
   expect(unit).not.toContain("ExecStartPre=+");
   expect(unit).not.toContain("hmac");
 });

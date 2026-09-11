@@ -1,117 +1,16 @@
 import { readSnapshot, snapshotAgeSeconds, type PanelSnapshot } from "../../../lib/snapshot-reader";
-import { CLI_BIN } from "../../../cli/paths";
-// Every privileged action goes through the unified action binary. The app has
-// no clpctl access, no database access and no write access to any site's files:
-// it can only ask for one of a closed set of verbs, with arguments the binary
-// re-validates before acting.
+import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
+export { type ActionResult };
 
-interface RunCommandOptions {
-  timeout: number;
-  maxBuffer: number;
-}
-
-interface CommandFailure {
-  code?: number | string | null;
-  reason?: string;
-}
-
-interface CommandResult {
-  error: CommandFailure | null;
-  stdout: string;
-  stderr: string;
-}
-
-/** Run the action binary with a bounded, byte-oriented Bun subprocess. */
-async function runCommand(
-  cmd: string,
-  args: string[],
-  options: RunCommandOptions,
-  input?: string
-): Promise<CommandResult> {
-  const stdin = new TextEncoder().encode(input ?? "");
-
-  let child: Bun.Subprocess<Uint8Array, "pipe", "pipe">;
-  try {
-    child = Bun.spawn({
-      cmd: [cmd, ...args],
-      // Passing bytes directly gives Bun ownership of the write and close. If
-      // the child process exits before consuming them, Bun absorbs the resulting
-      // EPIPE instead of exposing an unhandled writable-stream error. The old
-      // `child.stdin?.on("error", ...)` listener was needed only for Node's
-      // manually written pipe.
-      stdin,
-      stdout: "pipe",
-      stderr: "pipe",
-      env: process.env,
-      timeout: options.timeout,
-      maxBuffer: options.maxBuffer,
-    });
-  } catch (error) {
-    const failure = error as CommandFailure;
-    return { error: failure, stdout: "", stderr: "" };
-  }
-
-  const [stdoutResult, stderrResult, exitResult] = await Promise.allSettled([
-    child.stdout.text(),
-    child.stderr.text(),
-    child.exited,
-  ]);
-  const stdout = stdoutResult.status === "fulfilled" ? stdoutResult.value : "";
-  const stderr = stderrResult.status === "fulfilled" ? stderrResult.value : "";
-  const exitCode = exitResult.status === "fulfilled" ? exitResult.value : undefined;
-  const outputFailed = stdoutResult.status === "rejected" || stderrResult.status === "rejected";
-  const terminated = child.signalCode !== null;
-  const outputLimited =
-    Buffer.byteLength(stdout, "utf8") > options.maxBuffer ||
-    Buffer.byteLength(stderr, "utf8") > options.maxBuffer;
-
-  return {
-    error: exitCode === 0 && !outputFailed && !terminated && !outputLimited
-      ? null
-      : {
-          code: exitCode,
-          ...(outputFailed ? { reason: "action output could not be read" } : {}),
-          ...(terminated ? { reason: "action process terminated" } : {}),
-          ...(outputLimited ? { reason: `action output exceeded ${options.maxBuffer} bytes` } : {}),
-        },
-    stdout,
-    stderr,
-  };
-}
-
-const ACTION_BIN = CLI_BIN;
-// Test-only command injection keeps the subprocess boundary tests hermetic;
-// production provisioning never sets this variable and the deployed path is
-// always the root-owned unified binary above.
-const ACTION_TEST_BIN = process.env.CLP_ADDONS_ACTION_TEST_BIN;
-const SUDO_BIN = "/usr/bin/sudo";
-
-// `clone` only writes a job record and hands the work to systemd, so it
+// clone only writes a job record and hands the work to systemd, so it
 // answers immediately -- the long operation is the job itself, which nothing
-// here waits on. `describe` runs du over a whole site, which is the one read
+// here waits on. describe runs du over a whole site, which is the one read
 // that can genuinely take a while.
 const TIMEOUTS: Record<string, number> = {
   describe: 120_000,
   clone: 60_000,
 };
 const DEFAULT_TIMEOUT = 30_000;
-
-export interface ActionResult<T = unknown> {
-  ok: boolean;
-  data?: T;
-  error?: string;
-}
-
-function parseActionReply<T>(stdout: string): ActionResult<T> | null {
-  try {
-    const reply: unknown = JSON.parse(stdout.trim());
-    if (reply === null || typeof reply !== "object" || Array.isArray(reply)) return null;
-    if (typeof (reply as { ok?: unknown }).ok !== "boolean") return null;
-    return reply as ActionResult<T>;
-  } catch {
-    return null;
-  }
-}
 
 export interface ActionCallOptions {
   timeout?: number;
@@ -126,53 +25,10 @@ export async function callAction<T = unknown>(
   input?: string,
   options: ActionCallOptions = {},
 ): Promise<ActionResult<T>> {
-  const argv = ["action", "stager", verb, ...args];
-  const runningAsRoot = process.getuid?.() === 0;
-  const binary = ACTION_TEST_BIN ?? ACTION_BIN;
-  const cmd = runningAsRoot ? binary : SUDO_BIN;
-  const cmdArgs = runningAsRoot ? argv : ["-n", ACTION_BIN, ...argv];
-
-  const { error, stdout, stderr } = await runCommand(
-    cmd,
-    cmdArgs,
-    {
-      timeout: options.timeout ?? TIMEOUTS[verb] ?? DEFAULT_TIMEOUT,
-      maxBuffer: options.maxBuffer ?? 8 * 1024 * 1024,
-    },
-    input
-  );
-  if (error) {
-    // A policy rejection is a normal reply from the action binary even though it
-    // exits non-zero. A terminated or output-limited process may leave a
-    // complete-looking JSON prefix behind, so only parse a normal non-zero
-    // exit whose output was read to completion.
-    const normalNonzeroExit =
-      error.reason === undefined &&
-      error.code !== undefined &&
-      error.code !== null &&
-      error.code !== 0;
-    const reply = normalNonzeroExit ? parseActionReply<T>(stdout) : null;
-    if (reply) {
-      if (stderr.trim()) console.error(`[action:${verb}]`, stderr.trim());
-      return reply;
-    }
-
-    // Never log a subprocess error object: its message may contain the full
-    // argv. The action binary's stderr is the useful, non-secret diagnostic
-    // channel.
-    const why = error.reason ?? (stderr.trim() || `action ${verb} exited ${error.code ?? "abnormally"}`);
-    console.error(`[action] ${verb} failed before a valid JSON reply:`, why);
-    return { ok: false, error: why };
-  }
-
-  if (stderr.trim()) console.error(`[action:${verb}]`, stderr.trim());
-
-  // stdout is a contract: exactly one JSON object. Never scrape the prose on
-  // stderr for meaning.
-  const reply = parseActionReply<T>(stdout);
-  if (reply) return reply;
-  console.error(`[action] ${verb} produced unparseable stdout:`, stdout.slice(0, 500));
-  return { ok: false, error: "action returned a malformed reply" };
+  return callGatewayAction<T>("stager", verb, args, input, {
+    timeout: options.timeout ?? TIMEOUTS[verb] ?? DEFAULT_TIMEOUT,
+    maxBuffer: options.maxBuffer,
+  });
 }
 
 // Mirrors the action binary's own validation. Not a substitute for it: the

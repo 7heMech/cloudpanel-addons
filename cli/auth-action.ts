@@ -1,18 +1,24 @@
 // Root-only action used by the unprivileged manager to validate a CloudPanel
-// session file and authorize against CloudPanel's database. The CLI entrypoint
-// is the only production caller; the optional directory/owner/db/listen arguments
-// exist solely for hermetic unit tests and are never exposed through action argv.
+// session file, authorize against CloudPanel's database, and dispatch privileged
+// addon actions through the root gateway. The CLI entrypoint is the only
+// production caller; optional directory/owner/db/listen arguments exist solely
+// for hermetic unit tests and are never exposed through action argv.
 
 import net from "node:net";
 import { existsSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import { requireRoot } from "./util";
-import { PANEL_DB, SESSION_DIR } from "./paths";
+import { CLI_BIN, PANEL_DB, SESSION_DIR } from "./paths";
 import {
   MAX_SESSION_ID_LENGTH,
   parsePanelSession,
   readPanelSessionFile,
 } from "../lib/sso-auth";
+import {
+  parseGatewayRequest,
+  MAX_GATEWAY_INPUT_BYTES,
+  DEFAULT_GATEWAY_TIMEOUT_MS,
+} from "../lib/gateway-protocol";
 
 export const MAX_AUTH_INPUT_BYTES = MAX_SESSION_ID_LENGTH + 1;
 export const MAX_AUTH_REPLY_BYTES = 32 * 1024;
@@ -119,8 +125,9 @@ export async function runAuthAction(
 }
 
 /**
- * Create a socket server that handles authentication requests.
- * Each connection sends one line containing the session ID, gets a JSON reply, and closes.
+ * Create a socket server that handles authentication and privileged action requests.
+ * Each connection sends one line containing either a session ID or JSON action request,
+ * receives a JSON reply, and closes.
  */
 export function createAuthActionServer(options: AuthActionOptions = {}): net.Server {
   return net.createServer((socket) => {
@@ -128,18 +135,25 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
     let total = 0;
     let closed = false;
 
-    const timeout = setTimeout(() => {
+    let timeout: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
       if (!closed) {
         closed = true;
         socket.end(invalidReply());
       }
-    }, AUTH_STDIN_TIMEOUT_MS);
+    }, 10_000);
+
+    const cleanup = () => {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+    };
 
     socket.on("data", async (chunk: Buffer) => {
       if (closed) return;
-      if (total + chunk.byteLength > MAX_AUTH_INPUT_BYTES) {
+      if (total + chunk.byteLength > MAX_GATEWAY_INPUT_BYTES) {
         closed = true;
-        clearTimeout(timeout);
+        cleanup();
         socket.end(invalidReply());
         return;
       }
@@ -147,15 +161,84 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
       total += chunk.byteLength;
       if (chunk.includes(10)) {
         closed = true;
-        clearTimeout(timeout);
-        const full = Buffer.concat(chunks, total);
-        const reply = await runAuthAction(full, options);
-        socket.end(reply);
+        cleanup();
+        const full = Buffer.concat(chunks, total).toString("utf8");
+        const request = parseGatewayRequest(full);
+        if (!request) {
+          socket.end(invalidReply());
+          return;
+        }
+
+        if (request.kind === "auth") {
+          const reply = await runAuthAction(request.sessionId + "\n", options);
+          socket.end(reply);
+          return;
+        }
+
+        if (request.kind === "action") {
+          if (request.addon !== "stager" && request.addon !== "instatic") {
+            socket.end(JSON.stringify({ ok: false, error: "unknown addon" }) + "\n");
+            return;
+          }
+          if (!/^[a-zA-Z0-9_-]+$/.test(request.verb)) {
+            socket.end(JSON.stringify({ ok: false, error: "invalid verb" }) + "\n");
+            return;
+          }
+
+          const actionTimeout = request.timeoutMs ?? DEFAULT_GATEWAY_TIMEOUT_MS;
+          timeout = setTimeout(() => {
+            try {
+              socket.end(JSON.stringify({ ok: false, error: "action execution timed out" }) + "\n");
+            } catch {
+              // already closed
+            }
+          }, actionTimeout + 2_000);
+
+          try {
+            const stdin = request.input !== undefined ? new Blob([request.input]) : "ignore";
+            const proc = Bun.spawn(
+              [CLI_BIN, "action", request.addon, request.verb, ...(request.args ?? [])],
+              {
+                stdin,
+                stdout: "pipe",
+                stderr: "pipe",
+                env: process.env,
+                timeout: actionTimeout,
+                maxBuffer: 16 * 1024 * 1024,
+              },
+            );
+
+            const [stdout, stderr, exitCode] = await Promise.all([
+              proc.stdout.text(),
+              proc.stderr.text(),
+              proc.exited,
+            ]);
+            cleanup();
+
+            const trimmed = stdout.trim();
+            if (trimmed.startsWith("{")) {
+              socket.end(trimmed + "\n");
+            } else {
+              const err =
+                stderr.trim() ||
+                `action ${request.addon} ${request.verb} failed (exit ${exitCode ?? "unknown"})`;
+              socket.end(JSON.stringify({ ok: false, error: err }) + "\n");
+            }
+          } catch (err) {
+            cleanup();
+            socket.end(
+              JSON.stringify({
+                ok: false,
+                error: err instanceof Error ? err.message : String(err),
+              }) + "\n",
+            );
+          }
+        }
       }
     });
 
     socket.on("error", () => {
-      clearTimeout(timeout);
+      cleanup();
     });
   });
 }
