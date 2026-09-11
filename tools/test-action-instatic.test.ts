@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -84,6 +84,58 @@ test("makeSnapshot archives non-SQLite regular data files", () => {
     const restoredFile = join(restored, "data", "notes.txt");
     expect(readFileSync(restoredFile, "utf8")).toBe("plain data\n");
     expect(statSync(restoredFile).mtimeMs).toBeCloseTo(mtime.getTime(), -2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("makeSnapshot does not dereference symlinks or archive symlinked host files", () => {
+  const root = mkdtempSync(join(tmpdir(), "instatic-snapshot-symlink-test-"));
+  try {
+    const secretFile = join(root, "host-secret.txt");
+    writeFileSync(secretFile, "SUPER_SECRET_CONTENT\n");
+
+    const instance = join(root, "instance");
+    const data = join(instance, "data");
+    const uploads = join(instance, "uploads");
+    const archive = join(root, "snapshot.tar.gz");
+    const restored = join(root, "restored");
+
+    mkdirSync(data, { recursive: true });
+    mkdirSync(uploads, { recursive: true });
+
+    // 1. Regular file in data
+    writeFileSync(join(data, "normal.txt"), "normal content\n");
+
+    // 2. Symlink in data pointing to host secret
+    symlinkSync(secretFile, join(data, "leak-secret.txt"));
+
+    // 3. Symlink in uploads pointing to host secret
+    symlinkSync(secretFile, join(uploads, "upload-leak.txt"));
+
+    // 4. Symlink env file pointing to host secret
+    symlinkSync(secretFile, join(instance, "instatic.env"));
+
+    expect(makeSnapshot(instance, archive, "unused-sqlite3")).toBe(true);
+
+    mkdirSync(restored);
+    execFileSync("tar", ["-xzf", archive, "-C", restored]);
+
+    // Data should contain normal.txt
+    expect(readFileSync(join(restored, "data", "normal.txt"), "utf8")).toBe("normal content\n");
+
+    // Symlinks in data should not be archived
+    expect(existsSync(join(restored, "data", "leak-secret.txt"))).toBe(false);
+
+    // Symlink instatic.env should not be archived
+    expect(existsSync(join(restored, "instatic.env"))).toBe(false);
+
+    // In uploads, if tar extracted anything for upload-leak.txt, it must NOT be a dereferenced regular file
+    const restoredUploadLeak = join(restored, "uploads", "upload-leak.txt");
+    if (existsSync(restoredUploadLeak)) {
+      const stat = lstatSync(restoredUploadLeak);
+      expect(stat.isSymbolicLink()).toBe(true);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
