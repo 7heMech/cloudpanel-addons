@@ -211,8 +211,10 @@ test("manager unit hardens its namespace without changing the sudo boundary", ()
   expect(unit).toContain("ProtectSystem=full");
   expect(unit).toContain("ProtectHome=read-only");
   expect(unit).toContain("PrivateTmp=yes");
-  expect(unit).toContain("ProtectKernelTunables=yes");
-  expect(unit).toContain("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6");
+  // ProtectKernelTunables and RestrictAddressFamilies imply NoNewPrivileges=yes in systemd,
+  // which breaks sudo for addon actions like stager and instatic.
+  expect(unit).not.toContain("ProtectKernelTunables=");
+  expect(unit).not.toContain("RestrictAddressFamilies=");
   const readWrite = unit.match(/^ReadWritePaths=(.*)$/m)?.[1]?.split(" ") ?? [];
   expect(readWrite).toContain("-/etc/letsencrypt");
   expect(readWrite).toContain("/var/backups/clp-addons");

@@ -493,8 +493,6 @@ ${env.join("\n")}
 ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=yes
-ProtectKernelTunables=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/etc/nginx -/etc/letsencrypt /etc/php /home /run/clp-addons /run/lock/clp-addons /var/backups/clp-addons /var/lib/clp-addons
 ExecStart=/usr/local/bin/clp-addons serve
 Restart=always
