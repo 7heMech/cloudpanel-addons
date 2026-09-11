@@ -185,14 +185,14 @@ check("STAGER_TARGETS inspect reports missing-anchor before injection",
 reconcile([stagerSiteInj], PATHS);
 const readSite = () => readFileSync(siteFile, "utf-8");
 
-check("STAGER_TARGETS injects Clone button before Manage button",
+check("STAGER_TARGETS injects Clone button after Manage button",
   readSite().indexOf("Clone</a>") !== -1 &&
   readSite().indexOf("Manage{% endtrans %}</a>") !== -1 &&
-  readSite().indexOf("Clone</a>") < readSite().indexOf("Manage{% endtrans %}</a>"));
+  readSite().indexOf("Manage{% endtrans %}</a>") < readSite().indexOf("Clone</a>"));
 
-check("STAGER_TARGETS Clone button uses margin-right instead of margin-left",
-  readSite().includes("style=\"margin-right: 0.75rem;\"") &&
-  !readSite().includes("style=\"margin-left: 0.75rem;\""));
+check("STAGER_TARGETS Clone button uses margin-left instead of margin-right",
+  readSite().includes("style=\"margin-left: 0.75rem;\"") &&
+  !readSite().includes("style=\"margin-right: 0.75rem;\""));
 
 check("STAGER_TARGETS inspect reports ok after reconcile",
   inspect(stagerSiteInj, PATHS).state === "ok");
