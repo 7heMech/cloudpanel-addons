@@ -34,11 +34,11 @@ export const STAGER_TARGETS: AddonTarget[] = [
   {
     slug: "site-list-action",
     template: "Frontend/Site/index.html.twig",
-    anchorAfter: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
+    anchorBefore: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
     required: false,
     snippet: (url) => `
         ${CLONABLE}
-          <a href="${url}/new?source={{ site.domainName|url_encode }}" style="margin-left: 0.75rem;">Clone</a>
+          <a href="${url}/new?source={{ site.domainName|url_encode }}" style="margin-right: 0.75rem;">Clone</a>
         {% endif %}`,
   },
 ];

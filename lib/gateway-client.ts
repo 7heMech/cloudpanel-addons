@@ -4,12 +4,12 @@
 import { existsSync } from "node:fs";
 import {
   GATEWAY_SOCKET_PATH,
+  DEFAULT_CLI_BIN,
   DEFAULT_GATEWAY_TIMEOUT_MS,
   MAX_GATEWAY_INPUT_BYTES,
   type ActionResult,
   type GatewayRequest,
 } from "./gateway-protocol";
-import { CLI_BIN } from "../cli/paths";
 
 export interface GatewayClientOptions {
   timeout?: number;
@@ -234,5 +234,76 @@ export async function callGatewayAction<T = unknown>(
     timeoutMs,
   };
 
-  return callGatewaySocket<T>(request, socketPath, timeoutMs);
+  const clientTimeoutMs = timeoutMs + 2_500;
+  return callGatewaySocket<T>(request, socketPath, clientTimeoutMs);
+}
+
+/**
+ * Communicates with the root gateway daemon to validate a session.
+ * Used by SSO authentication.
+ */
+export async function callGatewayAuth(
+  sessionId: string,
+  socketPath: string = GATEWAY_SOCKET_PATH,
+  timeoutMs: number = 5_000,
+): Promise<string> {
+  return new Promise<string>((resolve) => {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let settled = false;
+    let socket: { end: () => void; write: (data: string) => void } | null = null;
+
+    const finish = (reply: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        socket?.end();
+      } catch {
+        // already closed
+      }
+      resolve(reply);
+    };
+
+    const timer = setTimeout(() => {
+      finish("");
+    }, timeoutMs);
+
+    const payload = JSON.stringify({ kind: "auth", sessionId }) + "\n";
+
+    Bun.connect({
+      unix: socketPath,
+      socket: {
+        open(connection) {
+          socket = connection;
+          connection.write(payload);
+        },
+        data(_connection, chunk) {
+          if (total + chunk.byteLength > 64 * 1024) {
+            finish("");
+            return;
+          }
+          chunks.push(chunk);
+          total += chunk.byteLength;
+        },
+        close() {
+          const bytes = new Uint8Array(total);
+          let offset = 0;
+          for (const chunk of chunks) {
+            bytes.set(chunk, offset);
+            offset += chunk.byteLength;
+          }
+          finish(new TextDecoder().decode(bytes));
+        },
+        error() {
+          finish("");
+        },
+        connectError() {
+          finish("");
+        },
+      },
+    }).catch(() => {
+      finish("");
+    });
+  });
 }

@@ -2,6 +2,7 @@ import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync } fro
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
 import { dirname } from "node:path";
 import { AUTH_SOCKET_PATH, PANEL_USER } from "../cli/paths";
+import { callGatewayAuth } from "./gateway-client";
 
 const SESSION_COOKIE = "cloudpanel";
 const SESSION_ID_RE = /^[a-zA-Z0-9,-]+$/;
@@ -116,53 +117,9 @@ async function callAuthHelper(sessionId: string, socketPath = AUTH_SOCKET_PATH):
   const release = await acquireAuthSlot();
   if (!release) return { kind: "unavailable" };
   try {
-    return await new Promise<AuthHelperReply>((resolve) => {
-      const chunks: Uint8Array[] = [];
-      let total = 0;
-      let settled = false;
-      let socket: { end: () => void } | null = null;
-      const finish = (reply: AuthHelperReply) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        try { socket?.end(); } catch { /* already closed */ }
-        resolve(reply);
-      };
-      const timer = setTimeout(() => finish({ kind: "unavailable" }), AUTH_HELPER_TIMEOUT_MS);
-
-      Bun.connect({
-        unix: socketPath,
-        socket: {
-          open(connection) {
-            socket = connection;
-            connection.write(`${sessionId}\n`);
-          },
-          data(_connection, chunk) {
-            if (total + chunk.byteLength > AUTH_HELPER_MAX_OUTPUT_BYTES) {
-              finish({ kind: "unavailable" });
-              return;
-            }
-            chunks.push(chunk);
-            total += chunk.byteLength;
-          },
-          close() {
-            const bytes = new Uint8Array(total);
-            let offset = 0;
-            for (const chunk of chunks) {
-              bytes.set(chunk, offset);
-              offset += chunk.byteLength;
-            }
-            finish(parseAuthHelperReply(new TextDecoder().decode(bytes)));
-          },
-          error() {
-            finish({ kind: "unavailable" });
-          },
-          connectError() {
-            finish({ kind: "unavailable" });
-          },
-        },
-      }).catch(() => finish({ kind: "unavailable" }));
-    });
+    const raw = await callGatewayAuth(sessionId, socketPath, AUTH_HELPER_TIMEOUT_MS);
+    if (!raw) return { kind: "unavailable" };
+    return parseAuthHelperReply(raw);
   } catch {
     return { kind: "unavailable" };
   } finally {

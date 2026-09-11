@@ -452,6 +452,8 @@ test("the root auth helper is reached by socket activation, not sudo", () => {
   // The manager must not reach the helper through sudo: its own unit implies
   // NoNewPrivileges, under which sudo cannot escalate.
   const client = readFileSync(join(import.meta.dir, "..", "lib/sso-auth.ts"), "utf8");
+  const gatewayClient = readFileSync(join(import.meta.dir, "..", "lib/gateway-client.ts"), "utf8");
   expect(client).not.toMatch(/Bun\.spawn|"\/usr\/bin\/sudo"/);
-  expect(client).toContain("Bun.connect");
+  expect(client).toContain("callGatewayAuth");
+  expect(gatewayClient).toContain("Bun.connect");
 });

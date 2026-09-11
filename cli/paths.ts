@@ -80,7 +80,8 @@ export const ANCHOR_SERVICE = "clp-addons-anchor.service";
 export interface AddonTarget {
   slug: string;
   template: string;
-  anchorAfter: string;
+  anchorAfter?: string;
+  anchorBefore?: string;
   snippet: (addonUrl: string) => string;
   required: boolean;
 }

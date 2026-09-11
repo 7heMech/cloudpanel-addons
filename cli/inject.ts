@@ -156,7 +156,8 @@ export function inspect(inj: Injection, paths?: Partial<InjectPaths>): TargetSta
     if (expected !== found) return { ...id, state: "upstream-changed", expected, found };
   }
 
-  if (!upstream.includes(target.anchorAfter)) return { ...id, state: "anchor-not-found-in-markup" };
+  const anchor = target.anchorBefore ?? target.anchorAfter;
+  if (!anchor || !upstream.includes(anchor)) return { ...id, state: "anchor-not-found-in-markup" };
 
   const present = blockOf(onDisk, addon, target.slug);
   if (present === null) return { ...id, state: "missing-anchor" };
@@ -267,17 +268,39 @@ function renderFile(
   let rendered = pristine;
 
   // Stable order, so two addons patching one anchor do not swap places on
-  // every reconciliation and produce a file that never settles. Insert in reverse
-  // order because each block lands immediately after the same original anchor.
-  for (const inj of [...list].sort((a, b) =>
-    b.addon.localeCompare(a.addon) || b.target.slug.localeCompare(a.target.slug)
+  // every reconciliation and produce a file that never settles. Injections with
+  // anchorBefore are applied before the anchor in ascending order, while
+  // injections with anchorAfter are applied after the anchor in reverse order.
+  const befores = list.filter((inj) => Boolean(inj.target.anchorBefore));
+  const afters = list.filter((inj) => !inj.target.anchorBefore);
+
+  for (const inj of [...befores].sort((a, b) =>
+    a.addon.localeCompare(b.addon) || a.target.slug.localeCompare(b.target.slug)
   )) {
-    const at = rendered.indexOf(inj.target.anchorAfter);
+    const anchor = inj.target.anchorBefore!;
+    const at = rendered.indexOf(anchor);
     if (at === -1) {
       statuses.push({ addon: inj.addon, slug: inj.target.slug, state: "anchor-not-found-in-markup" });
       continue;
     }
-    const cut = at + inj.target.anchorAfter.length;
+    rendered = rendered.slice(0, at) + wrap(inj) + rendered.slice(at);
+    statuses.push({ addon: inj.addon, slug: inj.target.slug, state: "ok" });
+  }
+
+  for (const inj of [...afters].sort((a, b) =>
+    b.addon.localeCompare(a.addon) || b.target.slug.localeCompare(a.target.slug)
+  )) {
+    const anchor = inj.target.anchorAfter;
+    if (!anchor) {
+      statuses.push({ addon: inj.addon, slug: inj.target.slug, state: "anchor-not-found-in-markup" });
+      continue;
+    }
+    const at = rendered.indexOf(anchor);
+    if (at === -1) {
+      statuses.push({ addon: inj.addon, slug: inj.target.slug, state: "anchor-not-found-in-markup" });
+      continue;
+    }
+    const cut = at + anchor.length;
     rendered = rendered.slice(0, cut) + wrap(inj) + rendered.slice(cut);
     statuses.push({ addon: inj.addon, slug: inj.target.slug, state: "ok" });
   }

@@ -14,7 +14,8 @@
 import { expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, symlinkSync, lstatSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { findMasterVhost, masterVhostHost, NGINX_PROXY_BLOCK, inspectNginxProxy, reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
+import { findMasterVhost, inspect, masterVhostHost, NGINX_PROXY_BLOCK, inspectNginxProxy, reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
+import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { headerTarget } from "../lib/panel-nav";
 import type { AddonTarget } from "../cli/paths";
 
@@ -120,7 +121,7 @@ function simulateInstalledInjections(installed: string[], exclude?: string): Inj
       injs.push({ addon: "instatic", target: { slug: "new-site", template: instaticTemplate, anchorAfter: "<!-- instatic-anchor -->", required: false, snippet: (url) => `<span>Instatic at ${url}</span>` }, url: "/addons/instatic" });
     }
     if (name === "stager") {
-      injs.push({ addon: "stager", target: { slug: "site-action", template: stagerTemplate, anchorAfter: "<!-- stager-anchor -->", required: false, snippet: (url) => `<span>Stager at ${url}</span>` }, url: "/addons/stager" });
+      injs.push({ addon: "stager", target: { slug: "site-action", template: stagerTemplate, anchorBefore: "<!-- stager-anchor -->", required: false, snippet: (url) => `<span>Stager at ${url}</span>` }, url: "/addons/stager" });
     }
   }
   return injs;
@@ -140,6 +141,7 @@ reconcile(simulateInstalledInjections(["instatic", "stager"]), PATHS);
 check("2 addons installed: header still has exactly 1 manager nav entry", (body().match(/class="clp-addon-nav"/g) ?? []).length === 1);
 check("2 addons installed: first addon target is present", readInstatic().includes("Instatic at /addons/instatic"));
 check("2 addons installed: second addon target is present", readStager().includes("Stager at /addons/stager"));
+check("2 addons installed: stager target placed before anchor", readStager().indexOf("Stager at /addons/stager") < readStager().indexOf("<!-- stager-anchor -->"));
 
 // Uninstall 1 of 2 addons (instatic uninstalled with exclude="instatic"):
 reconcile(simulateInstalledInjections(["instatic", "stager"], "instatic"), PATHS);
@@ -160,6 +162,88 @@ check("single addon install: addon target injected", readStager().includes("Stag
 reconcile(simulateInstalledInjections(["stager"], "stager"), PATHS);
 check("single addon uninstall: manager nav removed and header restored", body() === navOriginal);
 check("single addon uninstall: addon target removed and restored", readStager() === stagerOriginal);
+// STAGER_TARGETS places the Clone button before the Manage button in Frontend/Site/index.html.twig
+const siteDir = `${dir}/Frontend/Site`;
+mkdirSync(siteDir, { recursive: true });
+const siteFile = `${dir}/${STAGER_TARGETS[0].template}`;
+const siteOriginal = `
+                    <td class="text-end">
+                      <a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>
+                    </td>
+`;
+writeFileSync(siteFile, siteOriginal);
+
+const stagerSiteInj: Injection = {
+  addon: "stager",
+  target: STAGER_TARGETS[0],
+  url: "/addons/stager",
+};
+
+check("STAGER_TARGETS inspect reports missing-anchor before injection",
+  inspect(stagerSiteInj, PATHS).state === "missing-anchor");
+
+reconcile([stagerSiteInj], PATHS);
+const readSite = () => readFileSync(siteFile, "utf-8");
+
+check("STAGER_TARGETS injects Clone button before Manage button",
+  readSite().indexOf("Clone</a>") !== -1 &&
+  readSite().indexOf("Manage{% endtrans %}</a>") !== -1 &&
+  readSite().indexOf("Clone</a>") < readSite().indexOf("Manage{% endtrans %}</a>"));
+
+check("STAGER_TARGETS Clone button uses margin-right instead of margin-left",
+  readSite().includes("style=\"margin-right: 0.75rem;\"") &&
+  !readSite().includes("style=\"margin-left: 0.75rem;\""));
+
+check("STAGER_TARGETS inspect reports ok after reconcile",
+  inspect(stagerSiteInj, PATHS).state === "ok");
+
+// Idempotent reconciliation
+reconcile([stagerSiteInj], PATHS);
+check("repeated reconciliation of STAGER_TARGETS is idempotent",
+  (readSite().match(/Clone<\/a>/g) ?? []).length === 1);
+
+// Multiple anchorBefore targets preserve stable alphabetical order before anchor
+const multiBeforeTemplate = "multi-before.html.twig";
+const multiBeforeFile = `${dir}/${multiBeforeTemplate}`;
+const multiBeforeOriginal = `<div><!-- anchor --></div>\n`;
+writeFileSync(multiBeforeFile, multiBeforeOriginal);
+
+const multiA: Injection = {
+  addon: "alpha",
+  target: {
+    slug: "btn",
+    template: multiBeforeTemplate,
+    anchorBefore: "<!-- anchor -->",
+    required: false,
+    snippet: () => `<button>Alpha</button>`,
+  },
+  url: "/addons/alpha",
+};
+const multiB: Injection = {
+  addon: "bravo",
+  target: {
+    slug: "btn",
+    template: multiBeforeTemplate,
+    anchorBefore: "<!-- anchor -->",
+    required: false,
+    snippet: () => `<button>Bravo</button>`,
+  },
+  url: "/addons/bravo",
+};
+
+reconcile([multiB, multiA], PATHS);
+const readMultiBefore = () => readFileSync(multiBeforeFile, "utf-8");
+check("multiple anchorBefore injections place in alphabetical order before anchor",
+  readMultiBefore().indexOf("<button>Alpha</button>") !== -1 &&
+  readMultiBefore().indexOf("<button>Bravo</button>") !== -1 &&
+  readMultiBefore().indexOf("<button>Alpha</button>") < readMultiBefore().indexOf("<button>Bravo</button>") &&
+  readMultiBefore().indexOf("<button>Bravo</button>") < readMultiBefore().indexOf("<!-- anchor -->"));
+
+// Reconciling empty removes injection and restores pristine
+reconcile([], PATHS);
+check("uninstalling stager restores site list template exactly", readSite() === siteOriginal);
+check("uninstalling multiBefore restores template exactly", readMultiBefore() === multiBeforeOriginal);
+
 
 const nginxDir = mkdtempSync(`${tmpdir()}/nginx-test-`);
 const nginxSource = `${nginxDir}/cloudpanel.conf`;

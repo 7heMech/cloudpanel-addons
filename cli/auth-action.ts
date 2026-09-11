@@ -18,6 +18,8 @@ import {
   parseGatewayRequest,
   MAX_GATEWAY_INPUT_BYTES,
   DEFAULT_GATEWAY_TIMEOUT_MS,
+  STAGER_ALLOWED_VERBS,
+  INSTATIC_ALLOWED_VERBS,
 } from "../lib/gateway-protocol";
 
 export const MAX_AUTH_INPUT_BYTES = MAX_SESSION_ID_LENGTH + 1;
@@ -92,11 +94,22 @@ export async function runAuthAction(
     const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
     if (bytes.byteLength > MAX_AUTH_INPUT_BYTES) return invalidReply();
     const text = decodeInput(bytes);
+    let sessionId: string | null = null;
     const match = text?.match(/^([a-zA-Z0-9,-]{1,128})\n$/);
-    if (!match || !SESSION_ID_RE.test(match[1]!)) return invalidReply();
+    if (match) {
+      sessionId = match[1]!;
+    } else if (text?.trim().startsWith("{")) {
+      try {
+        const obj = JSON.parse(text.trim());
+        if (obj.kind === "auth" && typeof obj.sessionId === "string") {
+          sessionId = obj.sessionId;
+        }
+      } catch {}
+    }
+    if (!sessionId || !SESSION_ID_RE.test(sessionId)) return invalidReply();
 
     const sessionDir = options.sessionDir ?? SESSION_DIR;
-    const sessionPath = `${sessionDir}/sess_${match[1]}`;
+    const sessionPath = `${sessionDir}/sess_${sessionId}`;
     const sessionBytes = await readPanelSessionFile(sessionPath, {
       ownerUid: options.ownerUid,
       warn: () => {},
@@ -180,7 +193,8 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             socket.end(JSON.stringify({ ok: false, error: "unknown addon" }) + "\n");
             return;
           }
-          if (!/^[a-zA-Z0-9_-]+$/.test(request.verb)) {
+          const allowed = request.addon === "stager" ? STAGER_ALLOWED_VERBS : INSTATIC_ALLOWED_VERBS;
+          if (!allowed.has(request.verb)) {
             socket.end(JSON.stringify({ ok: false, error: "invalid verb" }) + "\n");
             return;
           }

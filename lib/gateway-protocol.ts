@@ -2,8 +2,31 @@
 // This module has zero imports and zero cyclical dependencies.
 
 export const GATEWAY_SOCKET_PATH = "/run/clp-addons/auth.sock";
+export const DEFAULT_CLI_BIN = "/usr/local/bin/clp-addons";
 export const MAX_GATEWAY_INPUT_BYTES = 1024 * 1024; // 1 MB max input (for clone credentials, etc.)
 export const DEFAULT_GATEWAY_TIMEOUT_MS = 60_000;
+
+export const STAGER_ALLOWED_VERBS = new Set([
+  "sites",
+  "clone",
+  "describe",
+  "jobs",
+  "prune",
+  "job",
+]);
+
+export const INSTATIC_ALLOWED_VERBS = new Set([
+  "list",
+  "create",
+  "delete",
+  "start",
+  "stop",
+  "restart",
+  "recreate",
+  "snapshot",
+  "status",
+  "logs",
+]);
 
 export type GatewayRequest =
   | { kind: "auth"; sessionId: string }

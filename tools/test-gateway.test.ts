@@ -6,6 +6,7 @@ import {
   parseGatewayRequest,
   type GatewayRequest,
 } from "../lib/gateway-protocol";
+import { callGatewayAuth } from "../lib/gateway-client";
 import { createAuthActionServer } from "../cli/auth-action";
 
 describe("Gateway Protocol & Server", () => {
@@ -68,6 +69,60 @@ describe("Gateway Protocol & Server", () => {
       const parsed = JSON.parse(reply.trim());
       expect(parsed.ok).toBe(false);
       expect(parsed.error).toContain("unknown addon");
+
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("createAuthActionServer rejects unwhitelisted verbs at the gateway perimeter", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clp-gateway-whitelist-"));
+    const sockPath = join(dir, "gateway.sock");
+
+    try {
+      const server = createAuthActionServer();
+      await new Promise<void>((resolve) => server.listen(sockPath, resolve));
+
+      let reply = "";
+      await new Promise<void>((resolve) => {
+        Bun.connect({
+          unix: sockPath,
+          socket: {
+            open(conn) {
+              conn.write('{"kind":"action","addon":"stager","verb":"evil_verb"}\n');
+            },
+            data(_conn, chunk) {
+              reply += Buffer.from(chunk).toString("utf8");
+            },
+            close() {
+              resolve();
+            },
+          },
+        });
+      });
+
+      const parsed = JSON.parse(reply.trim());
+      expect(parsed.ok).toBe(false);
+      expect(parsed.error).toBe("invalid verb");
+
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("callGatewayAuth dispatches structured auth requests over socket", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clp-gateway-auth-"));
+    const sockPath = join(dir, "gateway.sock");
+
+    try {
+      const server = createAuthActionServer();
+      await new Promise<void>((resolve) => server.listen(sockPath, resolve));
+
+      // Non-existent session returns invalid
+      const raw = await callGatewayAuth("nonexistentsession", sockPath, 2000);
+      expect(raw.trim()).toBe('{"valid":false}');
 
       await new Promise<void>((resolve) => server.close(() => resolve()));
     } finally {
