@@ -56,7 +56,9 @@ export function panelIdentityFromVhost(content: string): PanelIdentity | null {
   const uncommented = content.replace(/#[^\r\n]*/g, "");
   const directive = /(?:^|[;{}])\s*server_name\s+([^;]+);/gim;
   let match: RegExpExecArray | null;
+  let sawDirective = false;
   while ((match = directive.exec(uncommented))) {
+    sawDirective = true;
     for (const raw of match[1]!.trim().split(/\s+/)) {
       if (raw === "_" || raw.toLowerCase() === "localhost") continue;
       const name = normalizePanelHostname(raw);
@@ -66,7 +68,12 @@ export function panelIdentityFromVhost(content: string): PanelIdentity | null {
   }
 
   const exact = [...names].find((name) => HOSTNAME_RE.test(name));
-  if (!exact) return null;
+  // A stock CloudPanel serves the panel as `server_name _;` and only gains a
+  // hostname once an operator sets one. That is the catch-all panel, not an
+  // unparseable vhost: there is no panel domain, so nothing can collide with
+  // it, and the guard has nothing to refuse. A vhost with no server_name at
+  // all is still rejected -- it is not the file we think it is.
+  if (!exact) return sawDirective && names.size === 0 ? { primary: "", aliases: [] } : null;
   return { primary: exact, aliases: [...names].filter((name) => name !== exact).sort() };
 }
 
