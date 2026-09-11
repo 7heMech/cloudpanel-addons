@@ -211,9 +211,7 @@ async function submitCreate(ev) {
   const domain = document.getElementById('domain').value.trim().toLowerCase();
   const tag = document.getElementById('tag').value;
   const tls = document.getElementById('tls').checked;
-  const status = document.getElementById('create-status');
   busy(true);
-  status.textContent = 'Submitting creation job\\u2026';
   try {
     const res = await call('/api/instances', {
       method: 'POST',
@@ -227,7 +225,6 @@ async function submitCreate(ev) {
     }
   } catch (e) {
     busy(false);
-    status.textContent = '';
     alert('Create failed: ' + e.message);
   }
   return false;
@@ -630,7 +627,6 @@ ${notice}<div class="card">
       <a class="btn btn-lg" href="${BASE}/">Cancel</a>
       <button type="submit" class="btn btn-primary btn-lg">Create site</button>
     </div>
-    <div class="hint" id="create-status" role="status" aria-live="polite"></div>
   </form>
 </div></div>`;
 }

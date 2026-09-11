@@ -1317,9 +1317,14 @@ export async function runInstaticAction(argv: string[], options?: InstaticAction
     chmodSync(paths.lockDir, 0o700);
     mkdirSync(paths.dataBaseDir, { recursive: true });
 
-    if (action.verb === "list" || action.verb === "jobs") {
+    // `job` is a read: it prints the record and the log file the running job is
+    // still appending to. It must never take the job lock -- `run` holds that
+    // for the whole creation, so a locked read blocked every log poll and every
+    // page load for the job until the create finished, which is the opposite of
+    // what a progress page is for.
+    if (action.verb === "list" || action.verb === "jobs" || action.verb === "job") {
       await dispatch(action, paths);
-    } else if (action.verb === "job" || action.verb === "run") {
+    } else if (action.verb === "run") {
       const lock = join(paths.lockDir, `job-${action.job}.lock`);
       await withFileLock(lock, 300, `job ${action.job} is already active`, () => dispatch(action, paths));
     } else {
