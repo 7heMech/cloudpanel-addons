@@ -9,6 +9,7 @@ import {
   MAX_GATEWAY_INPUT_BYTES,
   type ActionResult,
   type GatewayRequest,
+  type PanelSnapshot,
 } from "./gateway-protocol";
 
 export type { ActionResult } from "./gateway-protocol";
@@ -246,6 +247,32 @@ export async function callGatewayAction<T = unknown>(
 
   const clientTimeoutMs = timeoutMs + 2_500;
   return callGatewaySocket<T>(request, socketPath, clientTimeoutMs);
+}
+
+/**
+ * Communicates with the root gateway daemon to fetch real-time panel information
+ * (database sites, allocated ports, and active listeners) without disk snapshots.
+ */
+export async function callGatewayPanelInfo(
+  options: GatewayClientOptions = {},
+): Promise<ActionResult<PanelSnapshot>> {
+  const socketPath = options.socketPath ?? GATEWAY_SOCKET_PATH;
+  const timeoutMs = options.timeout ?? 5_000;
+
+  // 1. Direct root execution fallback if socket is absent (e.g. offline execution as root)
+  if (process.getuid?.() === 0 && !existsSync(socketPath)) {
+    try {
+      const { getLivePanelInfo } = await import("./panel-snapshot");
+      const info = getLivePanelInfo();
+      return { ok: true, data: info };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  // 2. Dispatch over UNIX domain socket to root gateway daemon
+  const request: GatewayRequest = { kind: "panel-info" };
+  return callGatewaySocket<PanelSnapshot>(request, socketPath, timeoutMs);
 }
 
 /**

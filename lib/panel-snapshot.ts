@@ -58,13 +58,8 @@ function queryRows<ReturnType>(db: Database, sql: string, table: string, optiona
   try {
     return db.query<ReturnType, []>(sql).all();
   } catch (error) {
-    const message = errorMessage(error);
-    if (optional && (message === `no such table: ${table}` || message === `no such table: main.${table}`)) {
-      // These tables vary between CloudPanel versions; an absent optional table contributes no data.
-      return [];
-    }
-    const requiredness = optional ? "optional" : "required";
-    throw new Error(`querying ${requiredness} panel table ${table} failed: ${message}`, { cause: error });
+    if (optional) return [];
+    throw new Error(`cannot read required panel table ${table}: ${errorMessage(error)}`, { cause: error });
   }
 }
 
@@ -179,12 +174,12 @@ export function readPanelDatabase(databasePath = PANEL_DB): PanelDatabaseSnapsho
   return { allocatedPorts: [...ports].sort((a, b) => a - b), sites };
 }
 
-export function generateSnapshot(): PanelSnapshot {
-  if (process.getuid && process.getuid() !== 0) {
-    throw new Error("generateSnapshot must run as root; the app reads the snapshot file instead");
-  }
-
-  const panel = readPanelDatabase();
+/**
+ * Gather live panel information in real time directly from CloudPanel's
+ * SQLite database and active listeners.
+ */
+export function getLivePanelInfo(databasePath = PANEL_DB): PanelSnapshot {
+  const panel = readPanelDatabase(databasePath);
   const ports = new Set<number>(panel.allocatedPorts);
   const sites = panel.sites;
 
@@ -195,14 +190,18 @@ export function generateSnapshot(): PanelSnapshot {
   // still spoken for but is not listening -- invisible to the allocator.
   for (const spec of Object.values(ADDONS)) {
     if (!existsSync(spec.stateDir)) continue;
-    for (const entry of readdirSync(spec.stateDir)) {
-      const meta = `${spec.stateDir}/${entry}/meta.json`;
-      if (!existsSync(meta)) continue;
-      try {
-        addPort(ports, String(JSON.parse(readFileSync(meta, "utf-8")).port));
-      } catch {
-        // A half-written meta file should not abort the whole snapshot.
+    try {
+      for (const entry of readdirSync(spec.stateDir)) {
+        const meta = `${spec.stateDir}/${entry}/meta.json`;
+        if (!existsSync(meta)) continue;
+        try {
+          addPort(ports, String(JSON.parse(readFileSync(meta, "utf-8")).port));
+        } catch {
+          // A half-written meta file should not abort the whole snapshot.
+        }
       }
+    } catch {
+      // Ignore directory read errors
     }
   }
 
@@ -214,12 +213,20 @@ export function generateSnapshot(): PanelSnapshot {
     // ss absent is survivable; the database and disk scans still apply.
   }
 
-  const snapshot: PanelSnapshot = {
+  return {
     updatedAt: new Date().toISOString(),
     portRange: PORT_RANGE,
     allocatedPorts: [...ports].sort((a, b) => a - b),
     sites,
   };
+}
+
+export function generateSnapshot(): PanelSnapshot {
+  if (process.getuid && process.getuid() !== 0) {
+    throw new Error("generateSnapshot must run as root; the app reads the snapshot file instead");
+  }
+
+  const snapshot = getLivePanelInfo();
 
   // 0640 because the site list is customer data: the app's group may read it,
   // nobody else. writeAtomic's temp name carries the pid, which matters here --

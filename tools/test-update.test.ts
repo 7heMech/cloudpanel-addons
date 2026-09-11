@@ -159,6 +159,12 @@ mock.module("../cli/util", () => ({
 
 mock.module("../lib/panel-snapshot", () => ({
   generateSnapshot: () => { calls.push("generateSnapshot"); provisioning.snapshot = true; },
+  getLivePanelInfo: () => ({
+    updatedAt: new Date().toISOString(),
+    portRange: { min: 39000, max: 39999 },
+    allocatedPorts: [],
+    sites: [],
+  }),
 }));
 
 const { cmdUpdate } = await import("../cli/index");

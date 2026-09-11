@@ -7,7 +7,7 @@ import { stagerService, validateDomain, validateJobId, expandTarget } from "./se
 import type { JobView } from "./service";
 import { layout, jobsView, newCloneView, jobView } from "./views";
 import { guardMutation, newCsrfToken, csrfCookieHeader, SECURITY_HEADERS } from "../../../lib/app-http";
-import { getNextAvailablePort, readSnapshot, type SanitizedSite } from "../../../lib/snapshot-reader";
+import { getNextAvailablePort, type SanitizedSite } from "../../../lib/snapshot-reader";
 // The Stager already depends on the Instatic addon: cloning a reverse-proxy
 // site means driving its action binary, and this addon refuses one whose backend is
 // not an instance that addon manages. The dependency runs one way only -- the
@@ -106,7 +106,7 @@ export async function handle(
       let snapshotAge = Infinity;
       let snapshotTakenAt = "";
       try {
-        const { snap, ageSeconds } = stagerService.snapshot();
+        const { snap, ageSeconds } = await stagerService.snapshot();
         panelSites = snap.sites;
         snapshotAge = ageSeconds;
         snapshotTakenAt = snap.updatedAt;
@@ -173,7 +173,7 @@ export async function handle(
     let snapshotAge = Infinity;
     let snapshotTakenAt = "";
     try {
-      const { snap, ageSeconds } = stagerService.snapshot();
+      const { snap, ageSeconds } = await stagerService.snapshot();
       panelSites = snap.sites;
       snapshotAge = ageSeconds;
       snapshotTakenAt = snap.updatedAt;
@@ -315,10 +315,10 @@ async function postClone(req: Request): Promise<Response> {
     // on `docker run` failing to bind it. Neither list may fail quietly here:
     // an empty one reads as "nothing is using any port", which is the one
     // answer that produces a collision.
-    const snapshot = readSnapshot();
-    const [jobs, instances] = await Promise.all([
+    const [jobs, instances, { snap: snapshot }] = await Promise.all([
       stagerService.listJobsOrThrow(),
       instaticService.listInstancesOrThrow(),
+      stagerService.snapshot(),
     ]);
     instatic = {
       port: getNextAvailablePort(snapshot, [

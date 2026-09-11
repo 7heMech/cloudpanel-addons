@@ -60,7 +60,7 @@ export async function handle(
         let snapshotAge = Infinity;
         let snapshotTakenAt = "";
         try {
-          const { snap, ageSeconds } = instaticService.snapshot();
+          const { snap, ageSeconds } = await instaticService.snapshot();
           panelSites = snap.sites;
           snapshotAge = ageSeconds;
           snapshotTakenAt = snap.updatedAt;

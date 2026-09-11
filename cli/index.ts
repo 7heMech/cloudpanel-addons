@@ -723,8 +723,11 @@ async function cmdServe(): Promise<never> {
 
   const socketDir = SOCKET_PATH.slice(0, SOCKET_PATH.lastIndexOf("/"));
   if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH);
-  const server = Bun.serve({
-    unix: SOCKET_PATH,
+  const prevUmask = process.umask(0o007);
+  let server: ReturnType<typeof Bun.serve>;
+  try {
+    server = Bun.serve({
+      unix: SOCKET_PATH,
     async fetch(req, server) {
       const path = internalPath(new URL(req.url).pathname);
       if (path === "/health") {
@@ -771,6 +774,9 @@ async function cmdServe(): Promise<never> {
       return response;
     },
   });
+  } finally {
+    process.umask(prevUmask);
+  }
 
   chmodSync(SOCKET_PATH, 0o660);
   const groupId = Number.parseInt(execFileSync("getent", ["group", PANEL_GROUP], { encoding: "utf-8" }).split(":")[2] ?? "", 10);

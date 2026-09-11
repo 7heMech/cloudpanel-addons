@@ -47,8 +47,24 @@ export const MANAGER_ALLOWED_VERBS = new Set([
   "job",
 ]);
 
+export interface SanitizedSite {
+  domain: string;
+  user: string;
+  type: string;
+}
+
+export interface PanelSnapshot {
+  updatedAt: string;
+  portRange: { min: number; max: number };
+  allocatedPorts: number[];
+  sites: SanitizedSite[];
+}
+
+export type PanelInfo = PanelSnapshot;
+
 export type GatewayRequest =
   | { kind: "auth"; sessionId: string }
+  | { kind: "panel-info" }
   | {
       kind: "action";
       addon: string;
@@ -80,6 +96,9 @@ export function parseGatewayRequest(raw: string): GatewayRequest | null {
       if (typeof obj !== "object" || obj === null) return null;
       if (obj.kind === "auth" && typeof obj.sessionId === "string") {
         return { kind: "auth", sessionId: obj.sessionId };
+      }
+      if (obj.kind === "panel-info") {
+        return { kind: "panel-info" };
       }
       if (
         obj.kind === "action" &&

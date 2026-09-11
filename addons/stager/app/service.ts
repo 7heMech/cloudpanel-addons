@@ -1,4 +1,4 @@
-import { readSnapshot, snapshotAgeSeconds, type PanelSnapshot } from "../../../lib/snapshot-reader";
+import { fetchPanelInfo, snapshotAgeSeconds, type PanelSnapshot } from "../../../lib/snapshot-reader";
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 export { type ActionResult };
 
@@ -246,8 +246,8 @@ export const stagerService = {
     return res.data?.jobs ?? [];
   },
 
-  snapshot(): { snap: PanelSnapshot; ageSeconds: number } {
-    const snap = readSnapshot();
+  async snapshot(): Promise<{ snap: PanelSnapshot; ageSeconds: number }> {
+    const snap = await fetchPanelInfo();
     return { snap, ageSeconds: snapshotAgeSeconds(snap) };
   },
 };

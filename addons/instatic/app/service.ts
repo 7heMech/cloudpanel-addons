@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { getNextAvailablePort, readSnapshot, snapshotAgeSeconds, type PanelSnapshot } from "../../../lib/snapshot-reader";
+import { fetchPanelInfo, getNextAvailablePort, snapshotAgeSeconds, type PanelSnapshot } from "../../../lib/snapshot-reader";
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 export { type ActionResult };
 
@@ -80,17 +80,18 @@ export interface InstaticJobView {
 }
 
 export const instaticService = {
-  snapshot(): { snap: PanelSnapshot; ageSeconds: number } {
-    const snap = readSnapshot();
+  async snapshot(): Promise<{ snap: PanelSnapshot; ageSeconds: number }> {
+    const snap = await fetchPanelInfo();
     return { snap, ageSeconds: snapshotAgeSeconds(snap) };
   },
 
   async nextPort(): Promise<number> {
-    // The snapshot is rewritten by the root CLI on install and repair, so
-    // between reconciliation runs it does not know about instances created
-    // since. The action binary does.
-    const instances = await this.listInstancesOrThrow();
-    return getNextAvailablePort(readSnapshot(), instances.map((i) => i.port));
+    // The snapshot is queried in real time via root gateway IPC.
+    const [instances, { snap }] = await Promise.all([
+      this.listInstancesOrThrow(),
+      this.snapshot(),
+    ]);
+    return getNextAvailablePort(snap, instances.map((i) => i.port));
   },
 
   async listInstances(): Promise<InstanceView[]> {
@@ -131,7 +132,8 @@ export const instaticService = {
     // what the next list reads. The action binary re-checks the port too, and holds
     // a lock while it does, so this allocation is a proposal rather than a
     // reservation.
-    const port = getNextAvailablePort(readSnapshot(), existing.map((i) => i.port));
+    const { snap } = await this.snapshot();
+    const port = getNextAvailablePort(snap, existing.map((i) => i.port));
     const args = [
       "--domain", domain,
       "--port", String(port),

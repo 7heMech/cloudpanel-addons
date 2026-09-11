@@ -113,6 +113,12 @@ const PROBE = String.raw`
 
   mock.module("./lib/panel-snapshot.ts", () => ({
     generateSnapshot: () => { calls.push("generateSnapshot"); provisioning.snapshot = true; },
+    getLivePanelInfo: () => ({
+      updatedAt: new Date().toISOString(),
+      portRange: { min: 39000, max: 39999 },
+      allocatedPorts: [],
+      sites: [],
+    }),
   }));
 
   const { cmdInstall, cmdRepair } = await import("./cli/index.ts");
