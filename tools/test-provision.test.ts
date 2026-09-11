@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import {
-  ADDONS, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
+  ADDONS, nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
 } from "../cli/paths";
 import {
   ensurePanelSessionReadable, serviceUnit, sudoersCommandPaths, sudoersRule, warnIfPanelSessionUnreadable,
@@ -335,4 +335,33 @@ test("warnIfPanelSessionUnreadable never aborts, even when the session directory
   const result = panelSessionWarningProbe(missingDir);
   expect(result.threw).toBe(false);
   expect(result.warnings.some((line) => line.includes("panel session check failed"))).toBe(true);
+});
+
+test("the panel Nginx instance is detected from its tree, not a version string", () => {
+  const root = mkdtempSync(`${tmpdir()}/nginx-layout-`);
+  try {
+    const distro = nginxLayout(`${root}/absent`);
+    expect(distro).toEqual({
+      sitesDir: "/etc/nginx/sites-enabled",
+      configFile: null,
+      service: "nginx",
+      panelOwned: false,
+    });
+
+    const panelDir = `${root}/services/nginx`;
+    mkdirSync(`${panelDir}/sites-enabled`, { recursive: true });
+    // A sites-enabled directory alone is not the panel instance; its own
+    // nginx.conf is what makes the tree a separately served config root.
+    expect(nginxLayout(panelDir).service).toBe("nginx");
+
+    writeFileSync(`${panelDir}/nginx.conf`, "user clp;\n");
+    expect(nginxLayout(panelDir)).toEqual({
+      sitesDir: `${panelDir}/sites-enabled`,
+      configFile: `${panelDir}/nginx.conf`,
+      service: "clp-nginx",
+      panelOwned: true,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

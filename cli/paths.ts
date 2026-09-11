@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { INSTATIC_TARGETS } from "../addons/instatic/inject/targets";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 
@@ -22,7 +23,38 @@ export const SESSION_DIR = "/home/clp/htdocs/app/files/var/sessions";
 
 export const MANAGER_UNIT = "clp-addons.service";
 export const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";
-export const NGINX_SITES_DIR = "/etc/nginx/sites-enabled";
+const DISTRO_NGINX_SITES_DIR = "/etc/nginx/sites-enabled";
+const PANEL_NGINX_DIR = "/home/clp/services/nginx";
+
+export interface NginxLayout {
+  /** Directory holding the panel vhost. */
+  sitesDir: string;
+  /** Config root to hand `nginx -t -c`, when the instance has its own. */
+  configFile: string | null;
+  /** systemd unit that owns the resolved tree. */
+  service: string;
+  /** The resolved tree is owned by the panel user rather than by root. */
+  panelOwned: boolean;
+}
+
+/**
+ * CloudPanel 6 moved the panel onto its own Nginx instance under
+ * /home/clp/services/nginx, run by clp-nginx.service, and left the site vhosts
+ * with the distro instance. Detect on the tree and unit rather than a panel
+ * version string: both layouts are in the field, and the version does not say
+ * which one an install has.
+ */
+export function nginxLayout(panelDir = PANEL_NGINX_DIR): NginxLayout {
+  if (existsSync(`${panelDir}/nginx.conf`) && existsSync(`${panelDir}/sites-enabled`)) {
+    return {
+      sitesDir: `${panelDir}/sites-enabled`,
+      configFile: `${panelDir}/nginx.conf`,
+      service: "clp-nginx",
+      panelOwned: true,
+    };
+  }
+  return { sitesDir: DISTRO_NGINX_SITES_DIR, configFile: null, service: "nginx", panelOwned: false };
+}
 export const NGINX_PROXY_STATE_DIR = "/var/lib/clp-addons/nginx";
 
 const PANEL_APP = "/home/clp/htdocs/app/files";
