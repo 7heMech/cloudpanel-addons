@@ -408,6 +408,14 @@ export interface Chrome {
   script: string;
   /** Optional update notice if a newer clp-addons release is available. */
   updateNotice?: { current: string; latest: string } | null;
+  /**
+   * Draw the update notice with a button that applies the release.
+   *
+   * Only the manager index sets this. An addon page shows the same notice, but
+   * the action belongs where the operator can see what it will do to the whole
+   * installation, and the page's own script is what supplies `updateNow`.
+   */
+  updateAction?: boolean;
 }
 
 export function renderLayout(title: string, content: string, chrome: Chrome): string {
@@ -460,7 +468,9 @@ ${primaryNav}
 </header>
 <main>${contextualHeader}${chrome.updateNotice ? `  <div class="notice update-banner">
     <div><strong>Update available:</strong> clp-addons <code>v${esc(chrome.updateNotice.latest)}</code> is available (running v${esc(chrome.updateNotice.current)}).</div>
-    <code>clp-addons update</code>
+    ${chrome.updateAction
+      ? `<button class="btn" type="button" onclick="updateNow()">Update now</button>`
+      : `<code>clp-addons update</code>`}
   </div>\n` : ""}${content}</main>
 <footer class="clp-addon-footer">
   <a href="https://www.cloudpanel.io/blog/" target="_blank" rel="noopener noreferrer">Blog</a>

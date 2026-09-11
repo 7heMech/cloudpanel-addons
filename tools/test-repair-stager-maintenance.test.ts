@@ -101,8 +101,12 @@ const mockPrelude = String.raw`
   mock.module("./addons/instatic/app/index.ts", () => ({ handle: async () => new Response() }));
   mock.module("./addons/stager/app/index.ts", () => ({ handle: async () => new Response() }));
   mock.module("./lib/mount.ts", () => ({ splitMount: () => null }));
-  mock.module("./lib/app-http.ts", () => ({ SECURITY_HEADERS: {}, esc: (v) => v, escJs: (v) => v }));
-  mock.module("./lib/app-ui.ts", () => ({ renderLayout: () => "" }));
+  const appHttp = await import("./lib/app-http.ts");
+  const appUi = await import("./lib/app-ui.ts");
+  // Spread the real modules: these mocks exist to keep the page cheap to
+  // render, not to pin down what the manager is allowed to import from them.
+  mock.module("./lib/app-http.ts", () => ({ ...appHttp, SECURITY_HEADERS: {}, esc: (v) => v, escJs: (v) => v }));
+  mock.module("./lib/app-ui.ts", () => ({ ...appUi, renderLayout: () => "" }));
   mock.module("./lib/update-check.ts", () => ({ checkCliUpdate: async () => null }));
 `;
 

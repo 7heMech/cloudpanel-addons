@@ -72,7 +72,23 @@ const server = Bun.serve({
       ? { ...job, state, result: null, finishedAt: "", step: "Copying files", error: state === "failed" ? "Could not copy the source files. The staging site was removed." : "" }
       : job;
     let html: string;
-    if (path === "/addons/") return indexPage(empty ? [] : ["instatic", "stager"], notice);
+    if (path === "/addons/") {
+      // ?enabled= picks which addons are on, so the Available section and the
+      // enable/disable buttons can be reviewed without a CloudPanel install.
+      const enabled = empty ? [] : (url.searchParams.get("enabled") ?? "instatic,stager").split(",").filter(Boolean);
+      const previewJob = state && ["running", "queued", "failed"].includes(state)
+        ? {
+            id: "20260910T093000Z-abc123", kind: "enable", addon: "stager", state,
+            step: "enabling stager", error: state === "failed" ? "docker is not active; install and start it before enabling stager" : "",
+            createdAt: "2026-09-10T09:30:00Z", startedAt: "2026-09-10T09:30:01Z", finishedAt: "",
+          }
+        : null;
+      return indexPage(enabled, notice, {
+        available: ["instatic", "stager"].filter((name) => !enabled.includes(name)),
+        job: previewJob,
+        csrf: "preview-csrf-token",
+      });
+    }
     if (path === "/addons/instatic/") {
       html = instaticLayout("Instatic sites", dashboardView(empty ? [] : instances, 39003, age,
         sites.map((s) => ({ domain: s.domain, type: s.siteType, user: s.siteUser })), versions), notice);

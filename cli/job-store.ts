@@ -152,19 +152,25 @@ export function jobUnitName(addon: string, id: string): string {
  *
  * The caller must release any lock the runner will want before calling this,
  * or the job it just started will sit waiting for the process that started it.
+ *
+ * `properties` are extra systemd unit properties. A runner that writes its own
+ * transcript needs none; one whose progress is whatever it prints needs
+ * StandardOutput= pointed at the job's log.
  */
 export function startJobUnit(options: {
   addon: string;
   id: string;
   description: string;
   actionBinary: string;
+  properties?: string[];
 }): { ok: boolean; stdout: string; stderr: string } {
-  const { addon, id, description, actionBinary } = options;
+  const { addon, id, description, actionBinary, properties = [] } = options;
   return runCommand("systemd-run", [
     `--unit=${jobUnitName(addon, id)}`,
     `--description=${description}`,
     "--collect",
     "--property=Type=exec",
+    ...properties.map((property) => `--property=${property}`),
     "--",
     actionBinary, "action", addon, "run", "--job", id,
   ]);

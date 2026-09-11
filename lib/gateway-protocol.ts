@@ -32,6 +32,22 @@ export const INSTATIC_ALLOWED_VERBS = new Set([
   "run",
 ]);
 
+/**
+ * The manager's own privileged verbs: enabling and disabling an addon that
+ * already ships inside this binary, and replacing the binary itself.
+ *
+ * `run` is deliberately absent. It is the job runner, and the only thing
+ * allowed to start it is the transient systemd unit that the create path
+ * launches, which is what makes "one click, one job" enforceable: reaching
+ * `run` through the gateway would bypass the create path's duplicate check.
+ */
+export const MANAGER_ALLOWED_VERBS = new Set([
+  "enable",
+  "disable",
+  "update",
+  "job",
+]);
+
 export type GatewayRequest =
   | { kind: "auth"; sessionId: string }
   | {

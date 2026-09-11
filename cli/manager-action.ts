@@ -1,0 +1,284 @@
+// The manager's own privileged verbs, run as root and reached from the
+// unprivileged web process through the gateway.
+//
+// Every addon already ships inside this binary: `ADDONS` is a compile-time
+// record and each addon's injection targets are imported TypeScript values.
+// "Enabling" one therefore fetches no code. It writes the addon's config file,
+// injects its Twig anchors and reinstalls the units -- which is why it is root
+// work, and why the web UI cannot do it directly.
+//
+// Updating is the one verb that does fetch: it is `clp-addons update` with the
+// operator pressing the button instead of typing the command. Nothing here ever
+// runs unattended. A release is only ever installed because a logged-in
+// administrator asked for it, which is the whole reason this project notifies
+// about new releases rather than applying them.
+//
+// All three verbs end by restarting the manager, which is the process that
+// asked for them. So none of them answers the request that started it: the
+// create path writes a job record, hands the work to a transient systemd unit
+// that outlives the restart, and returns a job id. The browser follows that id
+// and reconnects once the manager is back.
+
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import {
+  createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir, jobGet, jobSet,
+  jobTimestamp, jobUnitIsActive, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
+  type PruneJobsResult,
+} from "./job-store";
+import { ADDONS, ADDON_NAMES, CLI_BIN, STATE_DIR } from "./paths";
+import { Fatal, parseFlags, requireRoot } from "./util";
+
+/** Where the manager's own job records live, beside each addon's state. */
+export const MANAGER_STATE_DIR = `${STATE_DIR}/manager`;
+export const MANAGER_JOBS_DIR = `${MANAGER_STATE_DIR}/jobs`;
+
+/** Long enough to look at the failure in the UI, short enough not to pile up. */
+const JOB_RETENTION_DAYS = 7;
+
+export type ManagerJobKind = "enable" | "disable" | "update";
+
+/**
+ * The privileged work itself, injected rather than imported.
+ *
+ * Enabling reinstalls units and reconciles Nginx and the Twig anchors, and
+ * updating downloads and verifies a release: all of that lives in cli/index.ts
+ * beside `cmdInstall` and `cmdUpdate`, which imports this module. Taking the
+ * three operations as an argument keeps the dependency pointing one way and
+ * lets the job plumbing be tested without provisioning anything.
+ */
+export interface ManagerOps {
+  enable(addon: string): Promise<void> | void;
+  disable(addon: string): Promise<void> | void;
+  update(): Promise<void>;
+}
+
+export interface ManagerJobView {
+  id: string;
+  kind: string;
+  addon: string;
+  state: string;
+  step: string;
+  error: string;
+  createdAt: string;
+  startedAt: string;
+  finishedAt: string;
+}
+
+function reply(body: unknown): number {
+  process.stdout.write(`${JSON.stringify(body)}\n`);
+  return 0;
+}
+
+function failReply(error: string): number {
+  process.stdout.write(`${JSON.stringify({ ok: false, error })}\n`);
+  return 1;
+}
+
+function message(error: unknown): string {
+  if (error instanceof Fatal || error instanceof Error) return error.message;
+  return String(error);
+}
+
+/**
+ * The job that is still going, if there is one.
+ *
+ * This is what makes the buttons idempotent: a second click finds the first
+ * click's job and follows it rather than starting a second enable. The
+ * "recently created" arm matches pruneJobs' stuck rule -- `systemd-run` returns
+ * before the unit is necessarily visible to `systemctl is-active`, so a job
+ * seconds old is treated as live even when its unit cannot be seen yet.
+ */
+export function activeManagerJob(jobsDir = MANAGER_JOBS_DIR): string | null {
+  for (const id of listJobIds(jobsDir)) {
+    const dir = jobDir(jobsDir, id);
+    const state = jobGet(dir, "state");
+    if (state !== "queued" && state !== "running") continue;
+    if (jobUnitIsActive("manager", id) || !findOlderThan(dir, 60 * 1000, 5)) return id;
+  }
+  return null;
+}
+
+/** The newest job record, whatever its state. */
+export function latestManagerJob(jobsDir = MANAGER_JOBS_DIR): string | null {
+  return listJobIds(jobsDir)[0] ?? null;
+}
+
+export function readManagerJob(id: string, jobsDir = MANAGER_JOBS_DIR): { job: ManagerJobView; log: string } | null {
+  const dir = jobDir(jobsDir, id);
+  if (!existsSync(dir)) return null;
+  return {
+    job: { id, kind: jobGet(dir, "kind"), addon: jobGet(dir, "addon"), ...jobCommonFields(dir) },
+    log: readJobLog(dir),
+  };
+}
+
+/** Expire old records and fail the ones whose runner died. Called by repair. */
+export function pruneManagerJobs(jobsDir = MANAGER_JOBS_DIR): PruneJobsResult {
+  return pruneJobs({
+    addon: "manager",
+    jobsDir,
+    retentionDays: JOB_RETENTION_DAYS,
+    stuckMessage: "the job's runner is gone; it may have completed or failed part-way",
+  });
+}
+
+function enabled(name: string): boolean {
+  return existsSync(ADDONS[name]!.configFile);
+}
+
+/**
+ * Reject what the runner would only discover after it had started.
+ *
+ * Disabling the last addon is refused outright rather than reported as a failed
+ * job: it would stop the manager for good, since `serve` exits when no addon is
+ * configured, and the button that could bring it back is served by the process
+ * it just stopped. Removing the installation is `clp-addons uninstall`, which
+ * runs from a shell that still exists afterwards.
+ */
+function rejectImpossible(kind: ManagerJobKind, addon: string): string | null {
+  if (kind === "update") return null;
+  if (!ADDON_NAMES.includes(addon)) return `unknown addon '${addon}'`;
+  const isEnabled = enabled(addon);
+  if (kind === "enable" && isEnabled) return `${addon} is already enabled`;
+  if (kind === "disable" && !isEnabled) return `${addon} is already disabled`;
+  if (kind === "disable" && ADDON_NAMES.filter(enabled).length <= 1) {
+    return `${addon} is the only enabled addon; disabling it here would leave nothing to serve this page. `
+      + "Remove the installation with 'clp-addons uninstall' instead.";
+  }
+  return null;
+}
+
+function describe(kind: ManagerJobKind, addon: string): string {
+  return kind === "update" ? "clp-addons update" : `clp-addons ${kind} ${addon}`;
+}
+
+/**
+ * Record the request, hand it to systemd and answer with the job id.
+ *
+ * The record is written before the unit is started so that a runner that begins
+ * immediately finds a complete record, and the log file is created here for the
+ * same reason the unit's StandardOutput= points at it: the runner's progress is
+ * whatever `clp-addons` prints, and systemd is what puts that in a file the
+ * unprivileged manager can be shown through this action.
+ */
+function createJob(kind: ManagerJobKind, addon: string): number {
+  const refusal = rejectImpossible(kind, addon);
+  if (refusal) return failReply(refusal);
+
+  const running = activeManagerJob();
+  if (running) {
+    const existing = readManagerJob(running);
+    return reply({ ok: true, data: { jobId: running, existing: true, job: existing?.job } });
+  }
+
+  mkdirSync(MANAGER_STATE_DIR, { recursive: true, mode: 0o700 });
+  const id = newJobId();
+  const dir = createJobDir(MANAGER_JOBS_DIR, id);
+  const logPath = createJobLog(dir);
+  jobSet(dir, "kind", kind);
+  jobSet(dir, "addon", kind === "update" ? "" : addon);
+  jobSet(dir, "createdAt", jobTimestamp());
+  jobSet(dir, "state", "queued");
+  jobSet(dir, "step", kind === "update" ? "queued" : `queued: ${kind} ${addon}`);
+
+  const started = startJobUnit({
+    addon: "manager",
+    id,
+    description: describe(kind, addon),
+    actionBinary: CLI_BIN,
+    properties: [`StandardOutput=append:${logPath}`, `StandardError=append:${logPath}`],
+  });
+  if (!started.ok) {
+    rmSync(dir, { recursive: true, force: true });
+    return failReply(started.stderr.trim() || started.stdout.trim() || "could not start the job");
+  }
+  return reply({ ok: true, data: { jobId: id, existing: false } });
+}
+
+/**
+ * The runner, started by systemd and by nothing else.
+ *
+ * It finishes by restarting the manager, so it cannot report back over the
+ * connection that asked for the work. The record is the report: whatever
+ * happens here, the state, the step and the error are on disk before this
+ * process exits, and the page that comes back after the restart reads them.
+ *
+ * `jobsDir` is a test-only override; production always uses MANAGER_JOBS_DIR.
+ */
+export async function runManagerJob(id: string, ops: ManagerOps, jobsDir = MANAGER_JOBS_DIR): Promise<number> {
+  const dir = jobDir(jobsDir, id);
+  if (!existsSync(dir)) return failReply(`no such job '${id}'`);
+  const kind = jobGet(dir, "kind");
+  const addon = jobGet(dir, "addon");
+
+  jobSet(dir, "startedAt", jobTimestamp());
+  jobSet(dir, "state", "running");
+  try {
+    if (kind === "enable") {
+      jobSet(dir, "step", `enabling ${addon}`);
+      await ops.enable(addon);
+    } else if (kind === "disable") {
+      jobSet(dir, "step", `disabling ${addon}`);
+      await ops.disable(addon);
+    } else if (kind === "update") {
+      jobSet(dir, "step", "installing the latest release");
+      await ops.update();
+    } else {
+      throw new Fatal(`job '${id}' has no kind this binary knows how to run`);
+    }
+  } catch (error) {
+    jobSet(dir, "error", message(error));
+    jobSet(dir, "finishedAt", jobTimestamp());
+    jobSet(dir, "state", "failed");
+    return 1;
+  }
+  jobSet(dir, "step", kind === "update" ? "updated" : `${kind}d ${addon}`);
+  jobSet(dir, "finishedAt", jobTimestamp());
+  jobSet(dir, "state", "done");
+  return 0;
+}
+
+/**
+ * `clp-addons action manager <verb>`.
+ *
+ * Every verb answers with one JSON object on stdout, because the gateway reads
+ * exactly that. The runner is the exception in spirit -- its output is the job
+ * log -- but it still ends with a JSON line so a hand-run `run` behaves.
+ */
+export async function runManagerAction(argv: string[], ops: ManagerOps): Promise<number> {
+  requireRoot("manager");
+  const [verb, ...rest] = argv;
+  const { flags } = parseFlags(rest);
+  const addon = typeof flags.addon === "string" ? flags.addon : "";
+  const id = typeof flags.job === "string" ? flags.job : typeof flags.id === "string" ? flags.id : "";
+
+  try {
+    switch (verb) {
+      case "enable":
+      case "disable":
+        if (!addon) return failReply(`'${verb}' needs --addon`);
+        return createJob(verb, addon);
+      case "update":
+        return createJob("update", "");
+      case "job": {
+        // Without --id, the newest record. The page that draws a job is the
+        // one the manager restart reloads, and after that reload the browser
+        // has no id to ask about -- but the record it was following is still
+        // the newest one.
+        const wanted = id || latestManagerJob();
+        if (!wanted) return reply({ ok: true, data: null });
+        const found = readManagerJob(wanted);
+        return found ? reply({ ok: true, data: found }) : failReply(`no such job '${wanted}'`);
+      }
+      case "run": {
+        if (!id) return failReply("'run' needs --job");
+        const code = await runManagerJob(id, ops);
+        return code === 0 ? reply({ ok: true, data: { jobId: id } }) : code;
+      }
+      default:
+        return failReply(`unknown manager verb '${verb ?? ""}'`);
+    }
+  } catch (error) {
+    return failReply(message(error));
+  }
+}

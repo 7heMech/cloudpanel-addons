@@ -1792,6 +1792,71 @@ where the caller is the manager acting on an operator's request and the
 sudoers rule confines it to the `action` namespace. Only the authentication
 path moved.
 
+## The manager enables addons and applies releases; it never updates itself
+
+Three related questions came up together: should the manager update itself
+automatically, should the release notice grow a button, and should the addons an
+install does not have be visible at all. The answers are no, yes, and yes, and
+they are one decision because the first is what makes the other two safe to
+offer.
+
+**No automatic updates.** This project writes `/etc/nginx`, the panel's own Twig
+templates, systemd units, and installs a root gateway daemon. An unattended pull
+from GitHub means that whoever controls the release pipeline -- or a leaked
+token, or a force-pushed tag -- gets root on every install, silently, with
+nobody in the loop. The SHA-256 verification in `fetchVerified` does not help
+against that: the checksums are served from the same release the checksums are
+verifying, so an attacker who can publish a release can publish matching sums.
+`gh attestation` raises the bar, but the decision not to act unattended is not
+about how good the verification is; it is about who decided. Two supporting
+reasons: CloudPanel itself does not auto-update, and matching the panel's
+behaviour is an explicit goal of this project; and replacing the binary restarts
+the manager, which would drop in-flight requests on the manager socket at a
+moment nobody chose. So the manager notifies and stops there -- `checkCliUpdate`
+and the banner in `renderLayout`.
+
+**A button, once the page behind it is administrator-only.** With the
+administrator gate at the socket boundary (`adminGate` in `cmdServe`) every
+route the manager serves is already restricted to `ROLE_ADMIN`, so the banner's
+"Update now" is not a new trust boundary; it is the notice the manager already
+drew, with the command the operator would have typed attached to it. It reuses
+`cmdUpdate` outright rather than growing a second downloader: one verified
+download path, or eventually two that disagree about what verification means.
+`guardMutation` applies the same origin and CSRF checks the addons use, so
+another origin cannot spend an administrator's session on a binary replacement.
+
+**"Available" addons are enabled, not installed.** `ADDONS` in `cli/paths.ts` is
+a compile-time record and each addon's injection targets are imported TypeScript
+values, so every addon already ships inside the binary of every install. What
+`install.sh --addons=instatic,stager` selects is which of them are *configured*.
+Making that visible costs almost nothing -- the registry is already in memory --
+and it turns a binary that quietly contains an addon the operator has to read
+the install documentation to discover into one that describes itself. Enabling
+writes the config file, injects the Twig anchors and reinstalls the units;
+disabling withdraws all of that and keeps the addon's state directory, so
+enabling it again returns the same instances. Disabling the last addon is
+refused: `serve` exits when nothing is configured, and the button that would
+bring it back is served by the process it just stopped. Removing an install is
+`clp-addons uninstall`, which runs from a shell that still exists afterwards.
+
+**All three are jobs, because all three restart the manager.** Enabling,
+disabling and updating end in `startUnits()`, which restarts the very process
+that asked for the work; none of them can answer the request that started them.
+So the create path writes a job record under `/var/lib/clp-addons/manager/jobs`,
+hands the work to a transient systemd unit that outlives the restart, and
+returns a job id. The record is the report: state, step and error are on disk
+before the runner exits, the page's poller tolerates the window where the
+manager is down, and when it comes back the index page reads the newest record
+and shows what happened. That is also what makes the buttons idempotent -- a
+second click finds the first click's job through `activeManagerJob` and follows
+it instead of starting a second enable. The job runner itself is deliberately
+absent from `MANAGER_ALLOWED_VERBS`: reaching it through the gateway would skip
+exactly that check.
+
+**No search.** Search across two addons is worse than a list: more chrome, no
+benefit. The signal to revisit it is the list feeling crowded, somewhere around
+eight or ten addons, not the feature being conceivable.
+
 ## Known gaps
 
 - `--local` installs skip provenance verification by construction. Staging only.

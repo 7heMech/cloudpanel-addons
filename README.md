@@ -132,6 +132,16 @@ complete argument set before reading input, deriving paths, or taking locks. Ins
 as their instance site users, and Stager work runs in transient systemd units so
 long clones survive a manager restart.
 
+Every addon ships inside the binary, so the manager index lists the ones that
+are not configured under **Available** and can turn them on in place: enabling
+writes the addon's config, injects its Twig anchors and reinstalls the units,
+and disabling withdraws them while keeping the addon's data. The release notice
+carries an **Update now** button that runs the same verified `clp-addons update`
+path. All three are administrator-only, and none of them ever runs unattended --
+see `docs/DECISIONS.md`, "The manager enables addons and applies releases; it
+never updates itself". Each restarts the manager when it finishes, so each runs
+as a background job whose progress the page follows across the restart.
+
 Patching the panel's own templates belongs to `cli/inject.ts`. It snapshots the
 pristine file, reconciles all installed addon markers in one pass, preserves
 native ordering, and restores the original when the last addon is removed.
