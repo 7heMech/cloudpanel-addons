@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
-  chmodSync, closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync,
+  chmodSync, closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, constants, openSync, readFileSync, readSync, readdirSync,
   renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -602,7 +602,7 @@ function withUmask<T>(mask: number, body: () => T): T {
 }
 
 function fileHeader(path: string): string {
-  const fd = openSync(path, "r");
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const buffer = Buffer.alloc(15);
     const length = readSync(fd, buffer, 0, buffer.length, null);

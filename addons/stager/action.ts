@@ -1082,13 +1082,22 @@ function carryVhost(ctx: RunContext, type: string, application: string): { ok: b
     return reason;
   };
 
-  const vhostTemplate = vhostOf(ctx.paths, ctx.target);
+  let vhostTemplate: string;
+  try {
+    vhostTemplate = vhostOf(ctx.paths, ctx.target);
+  } catch {
+    return { ok: false, reason: "the clone's own stored vhost could not be queried" };
+  }
   if (!vhostTemplate) {
     return { ok: false, reason: "the clone's own stored vhost could not be read back" };
   }
-  writeFileSync(stock, vhostTemplate, { mode: 0o640 });
-  const stockOwner = runCommand("chown", ["root:clp", stock]);
-  if (stockOwner.ok) chmodSync(stock, 0o640);
+  try {
+    writeFileSync(stock, vhostTemplate, { mode: 0o640 });
+    const stockOwner = runCommand("chown", ["root:clp", stock]);
+    if (stockOwner.ok) chmodSync(stock, 0o640);
+  } catch {
+    return { ok: false, reason: "the clone's stock vhost could not be written to disk" };
+  }
 
   const mapping = learnVhostMap(stock, conf);
   if (!mapping) return { ok: false, reason: "the clone's stored and rendered vhosts could not be matched" };
