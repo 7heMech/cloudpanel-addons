@@ -27,7 +27,7 @@ import { SECURITY_HEADERS, esc } from "../lib/app-http";
 import { renderLayout } from "../lib/app-ui";
 import { headerTarget } from "../lib/panel-nav";
 import { checkCliUpdate } from "../lib/update-check";
-import { runInstaticAction } from "../addons/instatic/action";
+import { pruneInstaticJobs, runInstaticAction } from "../addons/instatic/action";
 import { runStagerAction, type StagerActionOptions } from "../addons/stager/action";
 import { runAuthActionStdin } from "./auth-action";
 
@@ -307,6 +307,21 @@ export async function runStagerMaintenance(installed: AddonSpec[], options?: Sta
   }
 }
 
+// Instatic's creation records are the same kind of upkeep, and had none: a job
+// killed part-way stayed `running` forever, which is what blocks a retry for
+// that hostname, and every record ever written stayed on disk.
+export async function runInstaticMaintenance(installed: AddonSpec[]): Promise<void> {
+  if (!installed.some((spec) => spec.name === "instatic")) return;
+  try {
+    // Called directly rather than through the verb: the verb prints its result
+    // as JSON for the manager, and repair speaks to a person.
+    const { removed, stuck } = pruneInstaticJobs();
+    if (removed || stuck) log.ok(`instatic job records: ${removed} expired, ${stuck} marked failed`);
+  } catch (error) {
+    log.warn(`instatic maintenance (prune) failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export async function cmdRepair(argv: string[]): Promise<void> {
   requireRoot("repair");
   const { positional, flags } = parseFlags(argv);
@@ -358,6 +373,7 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   // master vhost might still be broken, would leave a just-restored site
   // vhost on disk but unloaded until the next 15-minute cycle.
   await runStagerMaintenance(all);
+  await runInstaticMaintenance(all);
   if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ")})`);
 }
 

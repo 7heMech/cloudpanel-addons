@@ -8,6 +8,7 @@ import { layout, dashboardView, newInstanceView, jobView } from "./views";
 import { guardMutation, newCsrfToken, csrfCookieHeader, SECURITY_HEADERS } from "../../../lib/app-http";
 import { listAvailableTags } from "./tags";
 import type { SanitizedSite } from "../../../lib/snapshot-reader";
+import { jobEventStream } from "../../../lib/job-stream";
 
 function html(body: string, csrf: string, status = 200): Response {
   return new Response(body, {
@@ -25,19 +26,6 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...SECURITY_HEADERS },
-  });
-}
-
-function sse(body: ReadableStream, status = 200): Response {
-  return new Response(body, {
-    status,
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no",
-      ...SECURITY_HEADERS,
-    },
   });
 }
 
@@ -146,99 +134,7 @@ export async function handle(
     const id = validateJobId(decodeURIComponent(rawId));
     if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
 
-    const initial = await instaticService.getJob(id);
-    if (!initial.ok || !initial.data) {
-      return json({ ok: false, error: initial.error ?? "job not found" }, 404);
-    }
-
-    if (server && typeof server.timeout === "function") {
-      try {
-        server.timeout(req, 0);
-      } catch {}
-    }
-
-    let timer: ReturnType<typeof setInterval> | null = null;
-    let closed = false;
-    let inFlight = false;
-
-    let lastState = initial.data.job.state;
-    let lastStep = initial.data.job.step;
-    let lastLog = initial.data.log;
-
-    const stream = new ReadableStream({
-      start(controller) {
-        try {
-          controller.enqueue(`data: ${JSON.stringify({ job: initial.data!.job, log: initial.data!.log })}\n\n`);
-        } catch {
-          closed = true;
-          return;
-        }
-
-        if (initial.data!.job.state === "done" || initial.data!.job.state === "failed") {
-          closed = true;
-          try { controller.close(); } catch {}
-          return;
-        }
-
-        timer = setInterval(async () => {
-          if (closed || inFlight) return;
-          inFlight = true;
-          try {
-            const res = await instaticService.getJob(id);
-            if (closed) return;
-            if (!res.ok || !res.data) {
-              closed = true;
-              if (timer) clearInterval(timer);
-              try {
-                controller.enqueue(`event: error\ndata: ${JSON.stringify({ error: res.error ?? "job not found" })}\n\n`);
-                controller.close();
-              } catch {}
-              return;
-            }
-
-            const { job, log } = res.data;
-            if (job.state !== lastState || job.step !== lastStep || log !== lastLog) {
-              lastState = job.state;
-              lastStep = job.step;
-              lastLog = log;
-              try {
-                controller.enqueue(`data: ${JSON.stringify({ job, log })}\n\n`);
-              } catch {
-                closed = true;
-                if (timer) clearInterval(timer);
-                return;
-              }
-            } else {
-              try {
-                controller.enqueue(": keepalive\n\n");
-              } catch {
-                closed = true;
-                if (timer) clearInterval(timer);
-                return;
-              }
-            }
-
-            if (job.state === "done" || job.state === "failed") {
-              closed = true;
-              if (timer) clearInterval(timer);
-              try {
-                controller.close();
-              } catch {}
-            }
-          } catch {
-            // Transient read error
-          } finally {
-            inFlight = false;
-          }
-        }, 1000);
-      },
-      cancel() {
-        closed = true;
-        if (timer) clearInterval(timer);
-      },
-    });
-
-    return sse(stream);
+    return jobEventStream({ id, req, server, getJob: (jobId) => instaticService.getJob(jobId) });
   }
 
   if (method === "GET" && jobApi) {

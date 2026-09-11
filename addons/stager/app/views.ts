@@ -5,7 +5,7 @@ import type { SanitizedSite } from "../../../lib/snapshot-reader";
 // the page is served to an operator whose session can create CloudPanel sites.
 
 import { esc } from "../../../lib/app-http";
-import { renderLayout } from "../../../lib/app-ui";
+import { JOB_STYLE, JOB_WATCH_JS, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 
 /**
@@ -19,27 +19,12 @@ import type { JobView, SiteDetail, SiteSummary } from "./service";
 
 // Only what the shared shell does not carry.
 const STYLE = `
-.state-queued { color: var(--muted); border-color: var(--border); }
-.state-running { color: var(--accent); border-color: var(--accent); }
-.state-done { color: var(--ok); border-color: var(--ok); }
-.state-failed { color: var(--bad); border-color: var(--bad); }
 .notes { margin: 0; padding-left: 1.1rem; }
 .notes li { margin: 8px 0; font-size: 14px; color: var(--muted); }
-.kv { display: grid; grid-template-columns: minmax(110px, 180px) minmax(0, 1fr); gap: 12px 25px; align-items: baseline; margin: 0; }
-.kv dt { color: var(--muted); font-size: 14px; }
-.kv dd { margin: 0; overflow-wrap: anywhere; }
 .kv + .hint { margin: 20px 0 0; }
 .secret .kv dd { font-family: var(--mono); font-size: 14px; }
 .credential-fields { border-top: 1px solid var(--border); padding-top: 25px; margin-top: 25px; }
 .credential-fields h2 { margin: 0 0 20px; }
-.step { color: var(--muted); font-size: 14px; }
-.job-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.job-summary .job-domain { overflow-wrap: anywhere; min-width: 0; }
-.job-summary #job-state { margin-left: auto; }
-.job-timing { margin-top: 25px; }
-@media (max-width: 760px) {
-  .kv { grid-template-columns: minmax(80px, 100px) minmax(0, 1fr); gap: 12px; }
-}
 `;
 
 /**
@@ -103,72 +88,6 @@ async function startClone() {
   return false;
 }
 
-function updateJobUI(job, log) {
-  if (!job) return false;
-  const stateEl = document.getElementById('job-state');
-  if (stateEl) {
-    stateEl.textContent = job.state;
-    stateEl.className = 'badge state-' + job.state;
-  }
-  const stepEl = document.getElementById('job-step');
-  if (stepEl) {
-    stepEl.textContent = job.step || '';
-  }
-  const pre = document.getElementById('job-log');
-  if (pre) {
-    pre.textContent = log || '(no output yet)';
-    pre.scrollTop = pre.scrollHeight;
-  }
-  return job.state === 'done' || job.state === 'failed';
-}
-
-// Stream job progress and logs via SSE, reloading when completed.
-function watchJob(id) {
-  if (typeof EventSource !== 'undefined') {
-    const es = new EventSource(CLP_BASE + '/api/jobs/' + encodeURIComponent(id) + '/events');
-    let reloaded = false;
-    es.onmessage = function (ev) {
-      if (reloaded) return;
-      try {
-        const payload = JSON.parse(ev.data);
-        const job = payload.job || (payload.data && payload.data.job);
-        const log = payload.log !== undefined ? payload.log : (payload.data && payload.data.log);
-        if (updateJobUI(job, log)) {
-          reloaded = true;
-          es.close();
-          location.reload();
-        }
-      } catch (e) {}
-    };
-    es.onerror = function () {
-      if (reloaded) return;
-      call('/api/jobs/' + encodeURIComponent(id)).then(function (body) {
-        if (body && body.data && updateJobUI(body.data.job, body.data.log)) {
-          reloaded = true;
-          es.close();
-          location.reload();
-        }
-      }).catch(function () {});
-    };
-    return;
-  }
-
-  let stopped = false;
-  async function tick() {
-    if (stopped) return;
-    try {
-      const body = await call('/api/jobs/' + encodeURIComponent(id));
-      if (body && body.data && updateJobUI(body.data.job, body.data.log)) {
-        stopped = true;
-        location.reload();
-        return;
-      }
-    } catch (e) {}
-    setTimeout(tick, 2000);
-  }
-  setTimeout(tick, 1500);
-}
-
 // Wired here rather than from an inline <script> inside the page body: the
 // shell puts this script after <main>, so a call written next to the markup
 // would run before any of these functions exist.
@@ -196,8 +115,8 @@ export function layout(
       { href: `${BASE}/`, label: "Clones" },
       { href: `${BASE}/new`, label: "New staging site" },
     ],
-    css: STYLE,
-    script: CLIENT_JS,
+    css: STYLE + JOB_STYLE,
+    script: JOB_WATCH_JS + CLIENT_JS,
     updateNotice,
   });
 }

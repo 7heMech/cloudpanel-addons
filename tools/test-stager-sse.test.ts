@@ -2,6 +2,7 @@ import { describe, it, expect } from "bun:test";
 import { handle } from "../addons/stager/app/index";
 import { stagerService, type JobView } from "../addons/stager/app/service";
 import { CLIENT_JS } from "../addons/stager/app/views";
+import { JOB_WATCH_JS } from "../lib/app-ui";
 
 function mockJob(overrides: Partial<JobView> = {}): JobView {
   return {
@@ -222,10 +223,17 @@ describe("Stager SSE job monitoring", () => {
     }
   });
 
-  it("CLIENT_JS uses EventSource with fallback and passes quote balance checks", () => {
-    expect(CLIENT_JS).toContain("EventSource");
-    expect(CLIENT_JS).toContain("/events");
-    for (const line of CLIENT_JS.split("\n")) {
+  it("the shared watcher uses EventSource with a polling fallback", () => {
+    // The watcher is shared with every other addon that runs jobs; the stager's
+    // own script only starts it.
+    expect(JOB_WATCH_JS).toContain("EventSource");
+    expect(JOB_WATCH_JS).toContain("/events");
+    expect(JOB_WATCH_JS).toContain("pollJob");
+    expect(CLIENT_JS).toContain("watchJob(");
+  });
+
+  it("both halves of the page script pass quote balance checks", () => {
+    for (const line of `${JOB_WATCH_JS}\n${CLIENT_JS}`.split("\n")) {
       const quotes = (line.match(/'/g) || []).length;
       expect(quotes % 2 === 1, `odd number of single quotes in: ${line}`).toBe(false);
     }

@@ -283,6 +283,118 @@ function busy(on) {
 }
 `;
 
+/**
+ * Styling for a job's progress page, used by every addon that runs work in the
+ * background. Appended after BASE_STYLE by the addon that needs it, so the
+ * state colours here override the container-state palette above only on the
+ * pages that draw a job.
+ */
+export const JOB_STYLE = `
+.kv { display: grid; grid-template-columns: minmax(110px, 180px) minmax(0, 1fr); gap: 12px 25px; align-items: baseline; margin: 0; }
+.kv dt { color: var(--muted); font-size: 14px; }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.state-queued { color: var(--muted); border-color: var(--border); }
+.state-running { color: var(--accent); border-color: var(--accent); }
+.state-done { color: var(--ok); border-color: var(--ok); }
+.state-failed { color: var(--bad); border-color: var(--bad); }
+.step { color: var(--muted); font-size: 14px; }
+.job-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.job-summary .job-domain { overflow-wrap: anywhere; min-width: 0; }
+.job-summary #job-state { margin-left: auto; }
+.job-timing { margin-top: 25px; }
+@media (max-width: 760px) {
+  .kv { grid-template-columns: minmax(80px, 100px) minmax(0, 1fr); gap: 12px; }
+}
+`;
+
+/**
+ * The client half of the job progress page: paint an update, and follow a job
+ * until it reaches a state that will not change again.
+ *
+ * Appended to an addon's own script, which calls `watchJob(id)` once the page
+ * announces a job to follow. The markup contract is four ids -- `job-state`,
+ * `job-step`, `job-log` and a hidden `job-watch` carrying `data-job` -- and an
+ * addon that draws only some of them still works: each element is optional.
+ *
+ * EventSource with a polling fallback rather than polling alone, because a log
+ * that appears a second after the line was written reads as a live console,
+ * and one that appears five seconds later reads as a hung page. The fallback
+ * covers a proxy that will not stream and a browser without EventSource.
+ */
+export const JOB_WATCH_JS = `
+function updateJobUI(job, log) {
+  if (!job) return false;
+  const state = document.getElementById('job-state');
+  if (state) {
+    state.textContent = job.state || '';
+    state.className = 'badge state-' + (job.state || 'unknown');
+  }
+  const step = document.getElementById('job-step');
+  if (step) step.textContent = job.step || '';
+  const pre = document.getElementById('job-log');
+  if (pre && log !== undefined) {
+    pre.textContent = log || '(no output yet)';
+    pre.scrollTop = pre.scrollHeight;
+  }
+  return job.state === 'done' || job.state === 'failed';
+}
+
+// The server sends {job, log}; tolerate the {data:{...}} envelope too, because
+// the polling fallback reads the JSON reply from that same route.
+function jobPayload(raw) {
+  const body = raw && raw.data ? raw.data : raw;
+  return body || {};
+}
+
+function watchJob(id) {
+  let finished = false;
+  // Reloading rather than patching the page: a finished job turns the progress
+  // view into a result view, and the server already knows how to draw that.
+  const done = function (close) {
+    if (finished) return true;
+    finished = true;
+    if (close) close();
+    location.reload();
+    return true;
+  };
+
+  if (typeof EventSource !== 'undefined') {
+    const es = new EventSource(CLP_BASE + '/api/jobs/' + encodeURIComponent(id) + '/events');
+    es.onmessage = function (ev) {
+      if (finished) return;
+      try {
+        const payload = jobPayload(JSON.parse(ev.data));
+        if (updateJobUI(payload.job, payload.log)) done(function () { es.close(); });
+      } catch (e) {}
+    };
+    es.onerror = function () {
+      if (finished) return;
+      es.close();
+      pollJob(id, done);
+    };
+    return;
+  }
+  pollJob(id, done);
+}
+
+function pollJob(id, done) {
+  let stopped = false;
+  async function tick() {
+    if (stopped) return;
+    try {
+      const payload = jobPayload(await call('/api/jobs/' + encodeURIComponent(id)));
+      if (updateJobUI(payload.job, payload.log)) {
+        stopped = true;
+        done(null);
+        return;
+      }
+    } catch (e) {}
+    setTimeout(tick, 2000);
+  }
+  tick();
+}
+`;
+
 export interface Chrome {
   /** Product name for the contextual navigation, e.g. "Instatic". */
   brand: string;

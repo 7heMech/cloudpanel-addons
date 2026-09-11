@@ -7,18 +7,20 @@ import {
 import { join } from "node:path";
 import { CLI_BIN } from "../../cli/paths";
 import {
+  createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet,
+  jobTimestamp, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
+} from "../../cli/job-store";
+import {
   ActionCommandFailure, ActionFailure, acquireFileLock, actionErrorJson, commandFailure, emitActionError, emitActionOk,
   dbNameFor, dbUserFor, failAction, normalizeIdentityHostname, PANEL_IDENTITY_PATH, readable, readPanelIdentity,
   runCommand, siteUserFor, validateDomain, validateEmail, validateFlag, validateJob, validateMfa, validatePort,
   type CommandResult, type FileLockHandle,
 } from "../../cli/action-common";
 
-const LOG_TAIL_LINES = 400;
 const JOB_RETENTION_DAYS = 14;
 const PORT_MIN = 39000;
 const PORT_MAX = 39999;
 const CLONABLE_TYPES = ["php", "static", "reverse-proxy"] as const;
-const JOB_RE = /^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$/;
 
 export type StagerVerb = "sites" | "jobs" | "prune" | "describe" | "clone" | "run" | "job";
 
@@ -246,35 +248,10 @@ function readFlatField(file: string, field: string): string {
   return "";
 }
 
+// The job record itself lives in cli/job-store; this only supplies the addon's
+// jobs directory so the call sites can stay as they were.
 function jobDir(paths: StagerActionPaths, id: string): string {
-  return join(paths.jobsDir, id);
-}
-
-function jobGet(dir: string, field: string): string {
-  try {
-    return readFileSync(join(dir, field)).subarray(0, 4096).toString("utf8").replaceAll("\n", "");
-  } catch {
-    return "";
-  }
-}
-
-function jobSet(dir: string, field: string, value: string): void {
-  const path = join(dir, field);
-  writeFileSync(path, `${value}\n`, { mode: 0o600 });
-  chmodSync(path, 0o600);
-}
-
-function utcTimestamp(): string {
-  const result = runCommand("date", ["-u", "+%Y-%m-%dT%H:%M:%SZ"]);
-  if (!result.ok) throw commandFailure("date", result);
-  return result.stdout.trim();
-}
-
-function newJobId(): string {
-  const date = runCommand("date", ["-u", "+%Y%m%dT%H%M%SZ"]);
-  const random = runCommand("openssl", ["rand", "-hex", "3"]);
-  if (!date.ok || !random.ok) throw commandFailure("openssl", random.ok ? date : random);
-  return `${date.stdout.trim()}-${random.stdout.trim()}`;
+  return storeJobDir(paths.jobsDir, id);
 }
 
 function generatedPassword(): string {
@@ -1659,9 +1636,7 @@ function cmdClone(action: ParsedStagerAction, paths: StagerActionPaths, releaseL
   }
 
   const id = newJobId();
-  const dir = jobDir(paths, id);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodSync(dir, 0o700);
+  const dir = createJobDir(paths.jobsDir, id);
   jobSet(dir, "source", source);
   jobSet(dir, "target", target);
   jobSet(dir, "tls", tls);
@@ -1669,24 +1644,20 @@ function cmdClone(action: ParsedStagerAction, paths: StagerActionPaths, releaseL
   if (email) jobSet(dir, "email", email);
   if (mfa) jobSet(dir, "mfa", mfa);
   if (password) jobSet(dir, "srcPassword", password);
-  jobSet(dir, "createdAt", utcTimestamp());
+  jobSet(dir, "createdAt", jobTimestamp());
   jobSet(dir, "step", "queued");
   jobSet(dir, "state", "queued");
-  const log = join(dir, "log");
-  writeFileSync(log, "", { mode: 0o600 });
-  chmodSync(log, 0o600);
+  createJobLog(dir);
 
-  // run acquires the same target lock. Releasing it before systemd-run is the
-  // deliberate handoff that prevents the child from waiting on its parent.
+  // run acquires the same target lock. Releasing it before the unit starts is
+  // the deliberate handoff that prevents the child from waiting on its parent.
   releaseLock();
-  const started = runCommand("systemd-run", [
-    `--unit=clp-addon-stager-job-${id}`,
-    `--description=clp-addons: cloning ${source} into ${target}`,
-    "--collect",
-    "--property=Type=exec",
-    "--",
-    paths.actionBinary, "action", "stager", "run", "--job", id,
-  ]);
+  const started = startJobUnit({
+    addon: "stager",
+    id,
+    description: `clp-addons: cloning ${source} into ${target}`,
+    actionBinary: paths.actionBinary,
+  });
   forwardCommandOutput(started);
   if (!started.ok) {
     jobSet(dir, "error", "could not start the clone job");
@@ -1800,7 +1771,7 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
     }
 
     jobSet(dir, "state", "running");
-    jobSet(dir, "startedAt", utcTimestamp());
+    jobSet(dir, "startedAt", jobTimestamp());
     ctx.rollbackActive = true;
 
     let row: SiteRow | null;
@@ -2105,7 +2076,7 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
     };
     writeFileSync(join(dir, "result.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
     chmodSync(join(dir, "result.json"), 0o600);
-    jobSet(dir, "finishedAt", utcTimestamp());
+    jobSet(dir, "finishedAt", jobTimestamp());
     jobSet(dir, "state", "done");
     ctx.rollbackActive = false;
     logLine(`clone complete: ${ctx.target}`);
@@ -2153,12 +2124,7 @@ function jobJson(paths: StagerActionPaths, dir: string, id: string, hasPanelDb: 
     source: jobGet(dir, "source"),
     target,
     port: /^\d+$/.test(portText) ? Number(portText) || 0 : 0,
-    state: jobGet(dir, "state"),
-    step: jobGet(dir, "step"),
-    error: jobGet(dir, "error"),
-    createdAt: jobGet(dir, "createdAt"),
-    startedAt: jobGet(dir, "startedAt"),
-    finishedAt: jobGet(dir, "finishedAt"),
+    ...jobCommonFields(dir),
     result: readJobResult(dir),
     panelSite,
   };
@@ -2168,71 +2134,25 @@ function cmdJob(paths: StagerActionPaths, id: string): void {
   const dir = jobDir(paths, id);
   if (!isDirectory(dir)) failAction(`no such job: ${id}`);
   const panel = panelDomains(paths);
-  const logResult = runCommand("tail", ["-n", String(LOG_TAIL_LINES), join(dir, "log")]);
-  const log = logResult.ok ? logResult.stdout.replace(/\n+$/g, "") : "";
-  emitStagerOk(paths, { job: jobJson(paths, dir, id, panel.readable, panel.domains), log });
+  emitStagerOk(paths, { job: jobJson(paths, dir, id, panel.readable, panel.domains), log: readJobLog(dir) });
 }
 
 function cmdJobs(paths: StagerActionPaths): void {
   const panel = panelDomains(paths);
-  let entries: string[] = [];
-  try {
-    entries = readdirSync(paths.jobsDir).sort().reverse();
-  } catch {
-    entries = [];
-  }
-  const jobs: JobView[] = [];
-  for (const entry of entries) {
-    if (!JOB_RE.test(entry)) continue;
-    const dir = jobDir(paths, entry);
-    if (!isDirectory(dir)) continue;
-    jobs.push(jobJson(paths, dir, entry, panel.readable, panel.domains));
-  }
+  const jobs = listJobIds(paths.jobsDir).map((id) =>
+    jobJson(paths, jobDir(paths, id), id, panel.readable, panel.domains));
   emitStagerOk(paths, { jobs });
 }
 
-function findOlderThan(path: string, unitMilliseconds: number, count: number): boolean {
-  try {
-    // Match GNU find's `-mmin +N`/`-mtime +N`: the age is truncated to whole
-    // units before the strict comparison, so `-mtime +14` retains a record
-    // until fifteen complete 24-hour periods have elapsed.
-    return Math.floor((Date.now() - statSync(path).mtimeMs) / unitMilliseconds) > count;
-  } catch {
-    return false;
-  }
-}
-
 function cmdPrune(paths: StagerActionPaths): void {
-  let entries: string[] = [];
-  try {
-    entries = readdirSync(paths.jobsDir);
-  } catch {
-    entries = [];
-  }
-  let removed = 0;
-  let stuck = 0;
-  for (const entry of entries) {
-    const dir = jobDir(paths, entry);
-    if (!isDirectory(dir)) continue;
-    const state = jobGet(dir, "state");
-    if (state === "queued" || state === "running") {
-      const active = runCommand("systemctl", ["is-active", "--quiet", `clp-addon-stager-job-${entry}`]);
-      if (!active.ok && findOlderThan(dir, 60 * 1000, 5)) {
-        warnLine(`job ${entry} is recorded as ${state} but nothing is running it; marking it failed`);
-        jobSet(dir, "error", "the clone job stopped without recording a result");
-        jobSet(dir, "state", "failed");
-        stuck++;
-      } else if (active.ok) {
-        continue;
-      } else {
-        continue;
-      }
-    }
-    if (findOlderThan(dir, 24 * 60 * 60 * 1000, JOB_RETENTION_DAYS)) {
-      rmSync(dir, { recursive: true, force: true });
-      removed++;
-    }
-  }
+  const { removed, stuck } = pruneJobs({
+    addon: "stager",
+    jobsDir: paths.jobsDir,
+    retentionDays: JOB_RETENTION_DAYS,
+    stuckMessage: "the clone job stopped without recording a result",
+    onStuck: (id, state) =>
+      warnLine(`job ${id} is recorded as ${state} but nothing is running it; marking it failed`),
+  });
 
   const vhostsRecovered = recoverCarriedVhosts(paths);
   try {

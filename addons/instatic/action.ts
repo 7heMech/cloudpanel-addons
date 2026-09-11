@@ -13,12 +13,17 @@ import {
   readable, runCommand, siteUserFor, validateDomain, validateFlag, validatePort, validateTag,
   withFileLock,
 } from "../../cli/action-common";
+import {
+  createJobDir, createJobLog, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet, jobTimestamp,
+  JOB_ID_RE, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, type PruneJobsResult,
+} from "../../cli/job-store";
 
 const REGISTRY_IMAGE = "ghcr.io/corebunch/instatic";
 const CONTAINER_PORT = 3001;
 const HEALTH_TIMEOUT = 60;
-const JOB_RE = /^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$/;
-const LOG_TAIL_LINES = 1000;
+// Creation records are kept as long as the stager's clone records, so the two
+// addons expire their history on the same schedule.
+const JOB_RETENTION_DAYS = 14;
 
 export interface InstaticJobView {
   id: string;
@@ -102,7 +107,7 @@ export const DEFAULT_INSTATIC_ACTION_PATHS: InstaticActionPaths = {
   sqlite3: "sqlite3",
 };
 
-export type InstaticVerb = "list" | "create" | "update" | "start" | "stop" | "restart" | "recreate" | "snapshot" | "status" | "logs" | "delete" | "job" | "jobs" | "run";
+export type InstaticVerb = "list" | "create" | "update" | "start" | "stop" | "restart" | "recreate" | "snapshot" | "status" | "logs" | "delete" | "job" | "jobs" | "prune" | "run";
 
 export interface ParsedInstaticAction {
   verb: InstaticVerb;
@@ -138,49 +143,35 @@ function requireRoot(): void {
 }
 
 function validateJobId(id: string): string {
-  if (!JOB_RE.test(id)) failAction(`'${id}' is not a valid job id`);
+  if (!JOB_ID_RE.test(id)) failAction(`'${id}' is not a valid job id`);
   return id;
 }
 
-function newJobId(): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const d = new Date();
-  const stamp = `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
-  return `${stamp}-${randomBytes(3).toString("hex")}`;
-}
-
+// The job record itself lives in cli/job-store; this only supplies the addon's
+// jobs directory so the call sites can stay as they were.
 function jobDir(paths: InstaticActionPaths, id: string): string {
-  return join(paths.jobsDir, id);
-}
-
-function jobSet(dir: string, key: string, value: string): void {
-  const file = join(dir, key);
-  const tmp = `${file}.tmp.${process.pid}`;
-  writeFileSync(tmp, `${value}\n`, { mode: 0o600 });
-  renameSync(tmp, file);
-}
-
-function jobGet(dir: string, key: string): string {
-  try {
-    return readFileSync(join(dir, key), "utf8").trim();
-  } catch {
-    return "";
-  }
+  return storeJobDir(paths.jobsDir, id);
 }
 
 function jobJson(paths: InstaticActionPaths, dir: string, id: string): InstaticJobView {
-  const domain = jobGet(dir, "domain");
-  const port = Number(jobGet(dir, "port")) || 0;
-  const tag = jobGet(dir, "tag");
-  const tls = jobGet(dir, "tls") === "yes";
-  const stateRaw = jobGet(dir, "state");
-  const state = (["queued", "running", "done", "failed"].includes(stateRaw) ? stateRaw : "unknown") as InstaticJobView["state"];
-  const step = jobGet(dir, "step");
-  const createdAt = jobGet(dir, "createdAt");
-  const startedAt = jobGet(dir, "startedAt") || undefined;
-  const finishedAt = jobGet(dir, "finishedAt") || undefined;
-  const error = jobGet(dir, "error") || undefined;
-  return { id, domain, port, tag, tls, state, step, createdAt, startedAt, finishedAt, error };
+  const common = jobCommonFields(dir);
+  const state = (["queued", "running", "done", "failed"].includes(common.state)
+    ? common.state
+    : "unknown") as InstaticJobView["state"];
+  return {
+    id,
+    domain: jobGet(dir, "domain"),
+    port: Number(jobGet(dir, "port")) || 0,
+    tag: jobGet(dir, "tag"),
+    tls: jobGet(dir, "tls") === "yes",
+    state,
+    step: common.step,
+    createdAt: common.createdAt,
+    // Absent rather than empty: the UI renders a row per timestamp it has.
+    startedAt: common.startedAt || undefined,
+    finishedAt: common.finishedAt || undefined,
+    error: common.error || undefined,
+  };
 }
 
 function setStep(dir: string, step: string): void {
@@ -190,7 +181,7 @@ function setStep(dir: string, step: string): void {
 
 function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstaticAction {
   if (argv.length === 0) {
-    failAction("usage: clp-addons action instatic {list|create|update|recreate|start|stop|restart|delete|snapshot|status|logs|job|jobs|run} [options]");
+    failAction("usage: clp-addons action instatic {list|create|update|recreate|start|stop|restart|delete|snapshot|status|logs|job|jobs|prune|run} [options]");
   }
 
   const verb = argv[0] as string;
@@ -224,6 +215,7 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
   switch (verb) {
     case "list":
     case "jobs":
+    case "prune":
       break;
     case "job":
     case "run":
@@ -259,6 +251,7 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
   switch (verb) {
     case "list":
     case "jobs":
+    case "prune":
       // This intentionally omits --tls, preserving the original clp-action-instatic
       // wrapper's accepted-but-ignored option for compatibility.
       if (domain || port || tag || confirm || job) failAction(`${verb} takes no arguments`);
@@ -715,7 +708,8 @@ export function pruneSnapshots(dir: string): void {
 }
 
 function dateStamp(utc = false): string {
-  const result = runCommand("date", utc ? ["-u", "+%Y-%m-%dT%H:%M:%SZ"] : ["+%Y%m%d%H%M%S"]);
+  if (utc) return jobTimestamp();
+  const result = runCommand("date", ["+%Y%m%d%H%M%S"]);
   if (!result.ok) throw commandFailure("date", result);
   return result.stdout.trim();
 }
@@ -745,26 +739,17 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
   let cleanupActive = true;
 
   if (action.isAsync) {
-    mkdirSync(paths.jobsDir, { recursive: true, mode: 0o700 });
-    let entries: string[] = [];
-    try {
-      entries = readdirSync(paths.jobsDir);
-    } catch {
-      entries = [];
-    }
-    for (const entry of entries) {
-      const jDir = jobDir(paths, entry);
-      if (!isDirectory(jDir) || jobGet(jDir, "domain") !== domain) continue;
-      const state = jobGet(jDir, "state");
+    for (const entry of listJobIds(paths.jobsDir)) {
+      const existing = jobDir(paths, entry);
+      if (jobGet(existing, "domain") !== domain) continue;
+      const state = jobGet(existing, "state");
       if (state === "queued" || state === "running") {
         failAction(`creation of ${domain} is already ${state}`);
       }
     }
 
     const id = newJobId();
-    const jDir = jobDir(paths, id);
-    mkdirSync(jDir, { recursive: true, mode: 0o700 });
-    chmodSync(jDir, 0o700);
+    const jDir = createJobDir(paths.jobsDir, id);
     jobSet(jDir, "domain", domain);
     jobSet(jDir, "port", String(port));
     jobSet(jDir, "tag", tag);
@@ -772,18 +757,14 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
     jobSet(jDir, "createdAt", dateStamp(true));
     jobSet(jDir, "step", "queued");
     jobSet(jDir, "state", "queued");
-    const log = join(jDir, "log");
-    writeFileSync(log, "", { mode: 0o600 });
-    chmodSync(log, 0o600);
+    createJobLog(jDir);
 
-    const started = runCommand("systemd-run", [
-      `--unit=clp-addon-instatic-job-${id}`,
-      `--description=clp-addons: creating Instatic site ${domain}`,
-      "--collect",
-      "--property=Type=exec",
-      "--",
-      paths.actionBinary, "action", "instatic", "run", "--job", id,
-    ]);
+    const started = startJobUnit({
+      addon: "instatic",
+      id,
+      description: `clp-addons: creating Instatic site ${domain}`,
+      actionBinary: paths.actionBinary,
+    });
     forwardCommandOutput(started);
     if (!started.ok) {
       jobSet(jDir, "error", "could not start the creation job");
@@ -1255,26 +1236,31 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
 function cmdJob(paths: InstaticActionPaths, id: string): void {
   const dir = jobDir(paths, id);
   if (!isDirectory(dir)) failAction(`no such job: ${id}`);
-  const logResult = runCommand("tail", ["-n", String(LOG_TAIL_LINES), join(dir, "log")]);
-  const log = logResult.ok ? logResult.stdout.replace(/\n+$/g, "") : "";
-  emitActionOk({ job: jobJson(paths, dir, id), log });
+  emitActionOk({ job: jobJson(paths, dir, id), log: readJobLog(dir) });
 }
 
 function cmdJobs(paths: InstaticActionPaths): void {
-  let entries: string[] = [];
-  try {
-    entries = readdirSync(paths.jobsDir).sort().reverse();
-  } catch {
-    entries = [];
-  }
-  const jobs: InstaticJobView[] = [];
-  for (const entry of entries) {
-    if (!JOB_RE.test(entry)) continue;
-    const dir = jobDir(paths, entry);
-    if (!isDirectory(dir)) continue;
-    jobs.push(jobJson(paths, dir, entry));
-  }
+  const jobs = listJobIds(paths.jobsDir).map((id) => jobJson(paths, jobDir(paths, id), id));
   emitActionOk({ jobs });
+}
+
+// Creation records accumulate one directory per attempt and nothing ever
+// removed them: the stager had this sweep from the start and Instatic, whose
+// job support was written by copying it, did not. Reached from repair, on the
+// reconciliation timer.
+export function pruneInstaticJobs(options?: InstaticActionOptions): PruneJobsResult {
+  return pruneJobs({
+    addon: "instatic",
+    jobsDir: pathsFor(options).jobsDir,
+    retentionDays: JOB_RETENTION_DAYS,
+    stuckMessage: "the creation job stopped without recording a result",
+    onStuck: (id, state) =>
+      diagnostic(`[instatic] WARN: job ${id} is recorded as ${state} but nothing is running it; marking it failed\n`),
+  });
+}
+
+function cmdPrune(paths: InstaticActionPaths): void {
+  emitActionOk(pruneInstaticJobs({ paths }));
 }
 
 async function dispatch(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
@@ -1292,6 +1278,7 @@ async function dispatch(action: ParsedInstaticAction, paths: InstaticActionPaths
     case "logs": cmdLogs(action); return;
     case "job": cmdJob(paths, action.job); return;
     case "jobs": cmdJobs(paths); return;
+    case "prune": cmdPrune(paths); return;
     case "run": await cmdRun(action, paths); return;
   }
 }
@@ -1322,7 +1309,7 @@ export async function runInstaticAction(argv: string[], options?: InstaticAction
     // for the whole creation, so a locked read blocked every log poll and every
     // page load for the job until the create finished, which is the opposite of
     // what a progress page is for.
-    if (action.verb === "list" || action.verb === "jobs" || action.verb === "job") {
+    if (action.verb === "list" || action.verb === "jobs" || action.verb === "job" || action.verb === "prune") {
       await dispatch(action, paths);
     } else if (action.verb === "run") {
       const lock = join(paths.lockDir, `job-${action.job}.lock`);
