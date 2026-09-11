@@ -250,8 +250,10 @@ console.log("\n== the active layout has one binary and direct helpers ==");
 
 console.log("\n== CloudPanel SSO is in-process and fail-closed ==");
 const ssoSource = readFileSync("lib/sso-auth.ts", "utf-8");
-check("SSO reads sessions with Bun.file", ssoSource.includes("Bun.file(path).arrayBuffer()"));
-check("SSO uses the fixed session directory", ssoSource.includes("SESSION_DIR") && ssoSource.includes("sess_"));
+const authActionSource = readFileSync("cli/auth-action.ts", "utf-8");
+check("SSO reads sessions through a bounded no-follow descriptor", ssoSource.includes("O_NOFOLLOW") && ssoSource.includes("fstatSync(fd)") && ssoSource.includes("readSync(fd"));
+check("the root auth action uses the fixed session directory", authActionSource.includes("SESSION_DIR") && authActionSource.includes("sess_"));
+check("SSO uses CloudPanel's native cookie name and session directory", ssoSource.includes('SESSION_COOKIE = "cloudpanel"') && readFileSync("cli/paths.ts", "utf8").includes('/home/clp/htdocs/app/files/var/sessions'));
 check("SSO has no HMAC token exchange", !ssoSource.includes("issueToken") && !ssoSource.includes("verifyToken"));
 check("the external session validator is gone", !existsSync("libexec/clp-verify-session"));
 
@@ -1609,6 +1611,15 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   check("headerTarget embeds the configured version", snip.includes("\"0.9.3\""));
   check("headerTarget uses Addons label", snip.includes(">Addons</a>"));
   check("headerTarget points to manager URL", snip.includes('href="https://addons.example.com/addons/"'));
+  const guardStart = snip.indexOf("{% if is_granted('ROLE_ADMIN') %}");
+  const guardEnd = snip.indexOf("{% endif %}");
+  check("headerTarget wraps the manager nav in the native admin guard", guardStart >= 0 && guardEnd > guardStart);
+  check("headerTarget keeps style, link, and update script inside the guard",
+    guardStart >= 0 && guardEnd > guardStart &&
+      ["<style>", 'class="clp-addon-nav"', "window.__clpAddonsUpdateInit"].every((needle) => {
+        const at = snip.indexOf(needle);
+        return at > guardStart && at < guardEnd;
+      }));
 
   const { indexPage } = await import("../cli/index");
   const pageRes = indexPage(["instatic"]);

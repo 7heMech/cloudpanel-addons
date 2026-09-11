@@ -244,48 +244,59 @@ function removeLegacySudoers(): void {
   for (const name of ADDON_NAMES) rmSync(`/etc/sudoers.d/clp-addon-${name}`, { force: true });
 }
 
-function panelUid(commands: ProvisionCommandRunner): number | null {
-  const result = commands.tryRun("getent", ["passwd", PANEL_GROUP]);
-  const uid = Number.parseInt(result.out.split(":")[2] ?? "", 10);
-  return result.ok && Number.isInteger(uid) && uid >= 0 ? uid : null;
-}
-
 export function ensurePanelSessionReadable(
   commands: ProvisionCommandRunner = { run, tryRun },
   sessionDir = SESSION_DIR,
   expectedUid?: number,
+  expectedGid?: number,
 ): void {
-  const uid = expectedUid ?? panelUid(commands);
-  if (uid === null || uid === undefined) {
-    fatal(`could not resolve the ${PANEL_GROUP} user required to read CloudPanel sessions`);
-  }
-
-  let entries: string[];
+  let directory: ReturnType<typeof lstatSync>;
   try {
-    entries = readdirSync(sessionDir);
+    directory = lstatSync(sessionDir);
   } catch {
-    fatal(`CloudPanel session directory is not readable: ${sessionDir}`);
+    fatal(`CloudPanel session directory is missing or unreadable: ${sessionDir}`);
+  }
+  if (directory.isSymbolicLink() || !directory.isDirectory()) {
+    fatal(`CloudPanel session path is not a regular directory: ${sessionDir}`);
   }
 
-  const candidate = entries
-    .filter((entry) => /^sess_[a-zA-Z0-9,-]+$/.test(entry))
-    .sort()
-    .map((entry) => `${sessionDir}/${entry}`)
-    .find((path) => {
-      try {
-        const stat = lstatSync(path);
-        return stat.isFile() && !stat.isSymbolicLink() && stat.uid === uid;
-      } catch {
-        return false;
-      }
-    });
-  if (!candidate) {
-    fatal(`could not find a regular CloudPanel session owned by ${PANEL_GROUP} in ${sessionDir}`);
+  const uidResult = expectedUid === undefined
+    ? commands.tryRun("getent", ["passwd", PANEL_GROUP])
+    : { ok: true, out: String(expectedUid) };
+  const uid = expectedUid ?? Number.parseInt(uidResult.out.split(":")[2] ?? "", 10);
+  const gidResult = expectedGid === undefined
+    ? commands.tryRun("getent", ["group", PANEL_GROUP])
+    : { ok: true, out: String(expectedGid) };
+  const gid = expectedGid ?? Number.parseInt(gidResult.out.split(":")[2] ?? "", 10);
+  if (!uidResult.ok || !Number.isInteger(uid) || !gidResult.ok || !Number.isInteger(gid)) {
+    fatal(`could not resolve the ${PANEL_GROUP} owner required for CloudPanel sessions`);
+  }
+  if (directory.uid !== uid || directory.gid !== gid || (directory.mode & 0o777) !== 0o770) {
+    fatal(`CloudPanel session directory must be owned by ${PANEL_GROUP}:${PANEL_GROUP} with mode 0770: ${sessionDir}`);
   }
 
-  const readable = commands.tryRun("runuser", ["--user", SERVICE_USER, "--", "/usr/bin/test", "-r", candidate]);
-  if (!readable.ok) {
-    fatal(`CloudPanel session ${candidate} is not readable by ${SERVICE_USER}; verify SupplementaryGroups=${PANEL_GROUP}`);
+  // A fresh install commonly has no live session file. The root helper checks
+  // each request's regular-file, owner, size, and expiry safeguards; this
+  // readiness check intentionally does not pretend the daemon can read 0600
+  // files directly through its supplementary group.
+}
+
+export function ensureAuthHelperReady(
+  commands: ProvisionCommandRunner = { run, tryRun },
+  helperPath = CLI_BIN,
+): void {
+  let helper: ReturnType<typeof lstatSync>;
+  try {
+    helper = lstatSync(helperPath);
+  } catch {
+    fatal(`CloudPanel auth helper is missing: ${helperPath}`);
+  }
+  if (!helper.isFile() || helper.uid !== 0 || (helper.mode & 0o022) !== 0 || (helper.mode & 0o111) === 0) {
+    fatal(`CloudPanel auth helper is not a root-owned, non-writable executable: ${helperPath}`);
+  }
+  const probe = commands.tryRun(helperPath, ["action", "auth"]);
+  if (!probe.ok || probe.out.trim() !== '{"valid":false}') {
+    fatal(`CloudPanel auth helper failed its invalid-session probe: ${helperPath}`);
   }
 }
 
@@ -299,9 +310,10 @@ export function warnIfPanelSessionUnreadable(
   commands: ProvisionCommandRunner = { run, tryRun },
   sessionDir = SESSION_DIR,
   expectedUid?: number,
+  expectedGid?: number,
 ): void {
   try {
-    ensurePanelSessionReadable(commands, sessionDir, expectedUid);
+    ensurePanelSessionReadable(commands, sessionDir, expectedUid, expectedGid);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.warn(`panel session check failed, continuing without it: ${message}`);

@@ -156,6 +156,7 @@ mock.module("./cli/util.ts", () => ({
 }));
 mock.module("./lib/panel-snapshot.ts", () => ({ generateSnapshot: () => {} }));
 mock.module("./lib/sso-auth.ts", () => ({ authenticateRequest: async () => ({ response: null }) }));
+mock.module("./cli/auth-action.ts", () => ({ runAuthActionStdin: async () => 0 }));
 mock.module("./addons/instatic/app/index.ts", () => ({ handle: async () => new Response() }));
 mock.module("./addons/stager/app/index.ts", () => ({ handle: async () => new Response() }));
 mock.module("./lib/mount.ts", () => ({ splitMount: () => null }));

@@ -18,7 +18,7 @@ export const SHARED_GROUP = SERVICE_GROUP;
 
 export const SOCKET_DIR = "/run/clp-addons";
 export const SOCKET_PATH = `${SOCKET_DIR}/manager.sock`;
-export const SESSION_DIR = "/var/lib/php/sessions";
+export const SESSION_DIR = "/home/clp/htdocs/app/files/var/sessions";
 
 export const MANAGER_UNIT = "clp-addons.service";
 export const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -9,6 +9,10 @@ import {
 import {
   ensurePanelSessionReadable, serviceUnit, sudoersCommandPaths, sudoersRule, warnIfPanelSessionUnreadable,
 } from "../cli/provision";
+// Other suites in this process mock.module("../cli/provision"); the query suffix keeps
+// these assertions bound to the real implementation regardless of file order.
+const realProvision = async (): Promise<typeof import("../cli/provision")> =>
+  await import("../cli/provision?provision-test-real" as "../cli/provision");
 
 const REPO = join(import.meta.dir, "..");
 
@@ -241,37 +245,57 @@ test("provisioning creates every project-owned writable directory", () => {
   expect(created).toContain("/var/lib/clp-addons");
 });
 
-test("provisioning verifies manager readability of a panel-owned session", () => {
+test("provisioning verifies the fixed session directory owner and mode", () => {
   const sessionDir = mkdtempSync(`${tmpdir()}/panel-session-`);
-  const sessionPath = `${sessionDir}/sess_probe`;
+  chmodSync(sessionDir, 0o770);
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  const gid = typeof process.getgid === "function" ? process.getgid() : 0;
   const calls: Array<{ command: string; args: string[] }> = [];
-  writeFileSync(sessionPath, "fixture");
   try {
     ensurePanelSessionReadable({
       run: (command, args) => { calls.push({ command, args }); return ""; },
       tryRun: (command, args) => { calls.push({ command, args }); return { ok: true, out: "" }; },
-    }, sessionDir, uid);
-    expect(calls).toContainEqual({
-      command: "runuser",
-      args: ["--user", SERVICE_USER, "--", "/usr/bin/test", "-r", sessionPath],
-    });
+    }, sessionDir, uid, gid);
+    expect(calls).toEqual([]);
   } finally {
     rmSync(sessionDir, { recursive: true, force: true });
   }
 });
 
-test("fails clearly when the session directory has no matching CloudPanel session", () => {
+test("does not fail when the session directory has no live session yet", () => {
   const sessionDir = mkdtempSync(`${tmpdir()}/panel-session-empty-`);
+  chmodSync(sessionDir, 0o770);
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  const gid = typeof process.getgid === "function" ? process.getgid() : 0;
   try {
     expect(() => ensurePanelSessionReadable({
       run: () => "",
       tryRun: () => ({ ok: true, out: "" }),
-    }, sessionDir, uid)).toThrow(/could not find a regular CloudPanel session/);
+    }, sessionDir, uid, gid)).not.toThrow();
   } finally {
     rmSync(sessionDir, { recursive: true, force: true });
   }
+});
+
+test("provisioning probes the root auth helper without exposing session data", async () => {
+  const { ensureAuthHelperReady } = await realProvision();
+  const calls: Array<{ command: string; args: string[] }> = [];
+  ensureAuthHelperReady({
+    run: () => "",
+    tryRun: (command, args) => {
+      calls.push({ command, args });
+      return { ok: true, out: '{"valid":false}\n' };
+    },
+  }, "/usr/bin/true");
+  expect(calls).toEqual([{ command: "/usr/bin/true", args: ["action", "auth"] }]);
+});
+
+test("provisioning rejects an auth helper with the wrong probe contract", async () => {
+  const { ensureAuthHelperReady } = await realProvision();
+  expect(() => ensureAuthHelperReady({
+    run: () => "",
+    tryRun: () => ({ ok: true, out: '{"valid":true}\n' }),
+  }, "/usr/bin/true")).toThrow(/invalid-session probe/);
 });
 
 // Run in a fresh subprocess (rather than in-process, like the tests above) so the
@@ -285,7 +309,7 @@ function panelSessionWarningProbe(sessionDir: string): { threw: boolean; warning
     const commands = { run: () => "", tryRun: () => ({ ok: true, out: "" }) };
     let threw = false;
     try {
-      warnIfPanelSessionUnreadable(commands, ${JSON.stringify(sessionDir)}, 0);
+      warnIfPanelSessionUnreadable(commands, ${JSON.stringify(sessionDir)}, process.getuid?.(), process.getgid?.());
     } catch {
       threw = true;
     }
@@ -294,12 +318,13 @@ function panelSessionWarningProbe(sessionDir: string): { threw: boolean; warning
   return JSON.parse(execFileSync(process.execPath, ["-e", script], { cwd: REPO, encoding: "utf8" }));
 }
 
-test("warnIfPanelSessionUnreadable logs and continues instead of aborting", () => {
+test("warnIfPanelSessionUnreadable stays quiet when the session directory is empty", () => {
   const sessionDir = mkdtempSync(`${tmpdir()}/panel-session-empty-`);
+  chmodSync(sessionDir, 0o770);
   try {
     const result = panelSessionWarningProbe(sessionDir);
     expect(result.threw).toBe(false);
-    expect(result.warnings.some((line) => line.includes("panel session check failed"))).toBe(true);
+    expect(result.warnings.some((line) => line.includes("panel session check failed"))).toBe(false);
   } finally {
     rmSync(sessionDir, { recursive: true, force: true });
   }

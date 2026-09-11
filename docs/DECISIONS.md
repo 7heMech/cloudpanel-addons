@@ -60,18 +60,27 @@ authentication key or privileged pre-start command is required.
 
 ### CloudPanel SSO
 
-Each protected request reads the `PHPSESSID` file directly with Bun from the
-fixed CloudPanel session directory `/var/lib/php/sessions`. The session id must
-match `^[a-zA-Z0-9,-]+$` (`lib/sso-auth.ts:7`); the manager `lstat`s the file
-before reading, rejects symlinks, requires ownership by the panel user `clp`
-(`panelUserUid()`, `lib/sso-auth.ts:43-53`), and caps its size and warns when
-the stock world-writable parent is encountered (`readPanelSessionFile`,
-`lib/sso-auth.ts:68-98`). A bounded custom PHP-serialization scanner, with
-explicit depth and node caps (`lib/sso-auth.ts:113-264`), then checks
-`_sf2_meta` expiry, the nested `_security_main` token and the authenticated
-username, and `mfaAuthenticated === true` (`lib/sso-auth.ts:330-348`). Invalid
-sessions redirect to `/login` (`lib/sso-auth.ts:25-33`, `authenticateRequest`
-at `lib/sso-auth.ts:354-366`).
+Each protected request sends only the bounded `cloudpanel` session ID over
+stdin to the root-only `clp-addons action auth` helper through the existing
+`clp-addons action *` sudo boundary. The helper uses only CloudPanel's fixed
+session directory `/home/clp/htdocs/app/files/var/sessions`; the session id
+must match `^[a-zA-Z0-9,-]{1,128}$`, followed by exactly one newline. The
+helper `lstat`s the file before reading, rejects symlinks, requires ownership
+by the panel user `clp`, caps its size, and emits only a validated principal
+or an invalid marker. A bounded custom PHP-serialization scanner then checks
+`_sf2_meta` expiry, the native five-slot `PostAuthenticationToken` state,
+active user status, the canonical typed role list, and CloudPanel's MFA
+marker/native-user agreement. `ROLE_ADMIN` is required at the shared manager
+boundary before update lookup, index rendering, or mounted addon dispatch.
+Invalid sessions redirect to `/login`; valid non-administrator sessions
+receive `403`.
+
+The token's role and status snapshot can remain stale if a user is demoted or
+disabled in the panel database while the Addons path bypasses a subsequent
+CloudPanel PHP request. The helper currently does not claim immediate
+revocation; a fixed readonly account revalidation can be added only after the
+installed User entity/schema contract is confirmed, without returning
+credentials or hashes to the daemon.
 
 This is a third design, and neither of the two that were written down first
 shipped. That history, and why this one is judged safe despite it, is kept in

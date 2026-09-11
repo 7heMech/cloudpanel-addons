@@ -76,11 +76,14 @@ connects through the CloudPanel `clp` group. The installer injects a marked
 before reloading it. If validation fails, the injector restores its pristine
 snapshot.
 
-CloudPanel SSO is automatic. The manager reads the `PHPSESSID` session file
-in-process with Bun, validates the `_security_main` token and completed
-`mfaAuthenticated` state, and requires the session file to be owned by `clp`.
-Requests without a valid session redirect to `/login`; authentication stays
-inside the manager with no separate helper process.
+CloudPanel SSO is automatic. For each request the unprivileged manager sends
+only the bounded `cloudpanel` session ID over stdin to the root-only
+`clp-addons action auth` helper. That helper reads CloudPanel's
+`/home/clp/htdocs/app/files/var/sessions` directory, validates the native
+`_security_main` token, canonical role list, active status, and MFA state, and
+returns only a validated principal. The manager is available only to sessions
+carrying `ROLE_ADMIN`; other authenticated panel users receive `403`, while
+requests without a valid session redirect to `/login`.
 
 ## Commands
 

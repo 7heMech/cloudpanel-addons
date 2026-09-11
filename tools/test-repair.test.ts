@@ -1,7 +1,8 @@
 // Regression coverage for the unattended repair path aborting whenever no CloudPanel
 // operator session exists. `repair` runs unattended every 15 minutes via
-// clp-addons-reconcile.timer; it must complete its reconciliation even when the panel
-// session check would fail, while the interactive `install` path must keep failing loudly.
+// clp-addons-reconcile.timer; it must complete its reconciliation even when no live
+// panel session exists. Readiness checks the fixed directory and helper contract, so a
+// live session file is not required for unattended repair or interactive install.
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -16,7 +17,6 @@ const PROBE = String.raw`
 
   const calls = [];
   let hasInstalledAddon = true;
-  let sessionAvailable = true;
   const provisioning = {
     dirs: false,
     sudoers: false,
@@ -59,13 +59,8 @@ const PROBE = String.raw`
     ensureDirs: (_specs, verifySession) => {
       calls.push(verifySession ? "ensureDirs:verifySession" : "ensureDirs");
       provisioning.dirs = true;
-      // Faithful to the real ensurePanelSessionReadable contract: asking ensureDirs to
-      // verify the session throws when none is available. This makes the pre-fix repair
-      // call fail before any reconciliation can run.
-      if (verifySession && !sessionAvailable) {
-        throw new TestFatal("could not find a regular CloudPanel session owned by clp in /var/lib/php/sessions");
-      }
     },
+    ensureAuthHelperReady: () => calls.push("ensureAuthHelperReady"),
     warnIfPanelSessionUnreadable: () => {
       // The real repair helper never throws; it only records a warning.
       calls.push("warnIfPanelSessionUnreadable");
@@ -122,11 +117,10 @@ const PROBE = String.raw`
 
   const { cmdInstall, cmdRepair } = await import("./cli/index.ts");
 
-  function repairResult(session) {
+  function repairResult() {
     calls.length = 0;
     resetProvisioning();
     hasInstalledAddon = true;
-    sessionAvailable = session;
     let threw = false;
     try {
       cmdRepair(["--quiet"]);
@@ -136,13 +130,12 @@ const PROBE = String.raw`
     return { threw, calls: [...calls], provisioning: { ...provisioning } };
   }
 
-  const repairWithoutSession = repairResult(false);
-  const repairWithSession = repairResult(true);
+  const repairWithoutSession = repairResult();
+  const repairWithSession = repairResult();
 
   calls.length = 0;
   resetProvisioning();
   hasInstalledAddon = false;
-  sessionAvailable = false;
   let installThrew = false;
   try {
     await cmdInstall(["stager", "--local=/tmp/does-not-matter"]);
@@ -193,10 +186,11 @@ test("repair still completes when a panel session is available", () => {
   }
 });
 
-test("install still fails loudly when no panel session exists (interactive path is unchanged)", () => {
-  expect(result.installWithoutSession.threw).toBe(true);
+test("install proceeds when the fixed directory has no live panel session", () => {
+  expect(result.installWithoutSession.threw).toBe(false);
   expect(result.installWithoutSession.calls).toContain("ensureDirs:verifySession");
-  expect(result.installWithoutSession.calls).not.toContain("installSudoers");
-  expect(result.installWithoutSession.calls).not.toContain("installUnits");
-  expect(result.installWithoutSession.calls).not.toContain("generateSnapshot");
+  expect(result.installWithoutSession.calls).toContain("ensureAuthHelperReady");
+  expect(result.installWithoutSession.calls).toContain("installSudoers");
+  expect(result.installWithoutSession.calls).toContain("installUnits");
+  expect(result.installWithoutSession.calls).toContain("generateSnapshot");
 });

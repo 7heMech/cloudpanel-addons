@@ -52,7 +52,7 @@ To allow two independent agents (or approaches) to execute this specification co
 | **Site Management** | Creates reverse-proxy site in CloudPanel SQLite (`db.sq3`) | **No CloudPanel site created** (zero footprint in `site` table) |
 | **Identity & Account** | Hacked site user (`addon-xxx`) with disabled SFTP shell | Clean system user (`clp-addons`) with no login |
 | **IPC Transport** | TCP loopback `127.0.0.1:38080` (open to all local tenants) | UNIX domain socket (`/run/clp-addons/manager.sock`, `0660`) |
-| **Authentication** | Custom scrypt credentials in `/etc/clp-addons/manager-auth` | SSO via CloudPanel `PHPSESSID` $\rightarrow$ internal HMAC cookie *(planned; **not** what shipped. No HMAC cookie exchange exists. What shipped is a direct, unprivileged, bounded parse of the `PHPSESSID` session on every request, with no token issuance and no caching cookie. See `DECISIONS.md` "Authentication is CloudPanel's, not ours (superseded)".)* |
+| **Authentication** | Custom scrypt credentials in `/etc/clp-addons/manager-auth` | SSO via CloudPanel `cloudpanel` session, with an unprivileged bounded parse on every request and a `ROLE_ADMIN` gate *(no HMAC cookie exchange or caching cookie)* |
 | **Binary Paths** | Multiple dirs (`/usr/local/bin/clp-addons` & `/releases/<tag>`) | Single active binary (`/usr/local/bin/clp-addons`) |
 | **Updates** | Disjointed `update`, `upgrade`, and `self-update` commands | Unified single-step `clp-addons update` |
 | **Status CLI** | 30+ lines of raw internal diagnostics | Clean, scannable terminal dashboard |
@@ -158,21 +158,20 @@ CMD ["/lib/systemd/systemd"]
 > checked explicitly, not assumed. Both of those requirements are enforced by
 > what actually shipped.
 >
-> **What shipped instead:** `lib/sso-auth.ts` parses the `PHPSESSID` session
-> file directly, **unprivileged**, in the same process that serves the
-> request: no `sudo`, no separate root helper binary, no HMAC token issuance
-> or caching cookie. It validates the session id against `^[a-zA-Z0-9,-]+$`,
-> `lstat`s the session file and rejects symlinks, requires the file be owned
-> by the panel user `clp`, and caps its size, before running a bounded custom
-> PHP-serialization scanner (explicit depth and node limits) that checks
-> `_sf2_meta` expiry, the `_security_main` token, and `mfaAuthenticated ===
-> true`. An invalid or missing session redirects to `/login` on every request.
-> There is no cached "already verified" fast path to invalidate on logout,
-> because there is nothing cached. See `DECISIONS.md`, "Current architecture
-> -> CloudPanel SSO" for the mechanism with file and line citations, and
-> "Authentication is CloudPanel's, not ours (superseded)" for why an
-> *unprivileged* parser answers the objection that ruled out a root-privileged
-> one.
+> **What shipped instead:** the unprivileged manager sends only a bounded
+> `cloudpanel` session ID over stdin to the root-only
+> `clp-addons action auth` helper through the existing `action *` sudo rule.
+> The helper validates the fixed session path, file ownership and type, size,
+> expiry, native `_security_main` token shape, active status, canonical roles,
+> and native MFA marker agreement, then returns only a validated principal or
+> an invalid marker. The shared manager boundary requires `ROLE_ADMIN`. An
+> invalid or missing session redirects to `/login` on every request, while a
+> valid non-administrator receives `403`. There is no cached "already
+> verified" fast path. Immediate revocation after a panel DB demotion remains
+> a documented limitation until a fixed readonly User entity/schema contract
+> is confirmed; no credential hashes are returned to the daemon. See
+> `DECISIONS.md`, "Current architecture -> CloudPanel SSO" for the current
+> mechanism and limitation.
 >
 > The original task text is preserved below for the record of what was
 > planned:
