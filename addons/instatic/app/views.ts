@@ -244,7 +244,7 @@ export function dashboardView(
     <span class="badge ${stateClass(i.state)}">${esc(i.state)}</span>
     ${missing ? '<span class="badge" style="color:var(--bad);border-color:var(--bad);margin-left:0.25rem;">deleted</span>' : ''}
   </td>
-  <td><details class="row-actions"><summary class="btn">Manage</summary><div class="actions">
+  <td class="action-cell"><details class="row-actions"><summary>Manage</summary><div class="actions">
     ${
       i.state === "running"
         ? `<button class="btn" onclick="act('${escJs(i.domain)}','stop')">Stop</button>`
@@ -283,30 +283,30 @@ export function dashboardView(
     <div class="hint">latest is ${esc(latest)}</div>
   </div>`;
 
-  return `<div class="page-heading"><div><h2>Instatic sites</h2><p>Create and manage your Instatic instances.</p></div><a class="btn btn-primary" href="${BASE}/new">New site</a></div>${staleNotice}${versionNotice}
+  return `<div class="page-heading"><div><h1>Instatic sites</h1><p>Create and manage your Instatic instances.</p></div><a class="btn btn-primary" href="${BASE}/new">+ New site</a></div>${staleNotice}${versionNotice}
 <div class="card stats">
   <div class="stat"><div class="label">Instances</div><div class="value">${instances.length}</div></div>
   <div class="stat"><div class="label">Running</div><div class="value" style="color:var(--ok)">${running}</div></div>
   ${updatesTile}
 </div>
 
-<div class="card">
+<div class="card card-table">
   ${
     instances.length === 0
       ? `<div class="empty">No Instatic instances yet. <a href="${BASE}/new">Create one</a>.</div>`
       : `<table>
-    <thead><tr><th>Site</th><th>Bound to</th><th>Version</th><th>State</th><th>Actions</th></tr></thead>
+    <thead><tr><th scope="col">Site</th><th scope="col">Bound to</th><th scope="col">Version</th><th scope="col">State</th><th scope="col" class="action-cell">Actions</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`
   }
 </div>
 
-<details class="card">
-  <summary style="cursor:pointer;color:var(--muted)">
+<details class="card site-inventory">
+  <summary>
     All CloudPanel sites on this server (${panelSites.length})
   </summary>
   <p class="hint">Check whether a hostname is already in use before creating an instance.</p>
-  <table style="margin-top:0.75rem">
+  <div class="table-scroll"><table>
     <thead><tr><th>Domain</th><th>Type</th><th>Site user</th></tr></thead>
     <tbody>${
       panelSites.length === 0
@@ -315,19 +315,19 @@ export function dashboardView(
             .map((s) => `<tr><td>${esc(s.domain)}</td><td><span class="badge">${esc(s.type)}</span></td><td class="mono">${esc(s.user)}</td></tr>`)
             .join("")
     }</tbody>
-  </table>
+  </table></div>
 </details>
 
-<dialog id="logs-dialog">
-  <h3 id="logs-title" style="margin-top:0"></h3>
+<dialog id="logs-dialog" aria-labelledby="logs-title">
+  <div class="dialog-header"><h2 id="logs-title"></h2></div>
   <pre id="logs-body"></pre>
-  <div class="actions" style="justify-content:flex-end">
+  <div class="actions dialog-actions">
     <button class="btn" onclick="document.getElementById('logs-dialog').close()">Close</button>
   </div>
 </dialog>
 
-<dialog id="update-dialog">
-  <h3 style="margin-top:0">Update <span id="update-domain" class="mono"></span></h3>
+<dialog id="update-dialog" aria-labelledby="update-title">
+  <div class="dialog-header"><h2 id="update-title">Update <span id="update-domain" class="mono"></span></h2></div>
   <p class="hint">Currently running <span id="update-current" class="mono"></span>.
     A snapshot is taken first; if the new version fails its health check the instance is rolled
     back to the current tag automatically.</p>
@@ -339,19 +339,20 @@ export function dashboardView(
       )
       .join("")
   }</select>
-  <div class="actions" style="justify-content:flex-end;margin-top:1rem">
+  <div class="actions dialog-actions">
     <button class="btn" onclick="document.getElementById('update-dialog').close()">Cancel</button>
     <button class="btn btn-primary" onclick="confirmUpdate()">Update</button>
   </div>
 </dialog>
 
-<dialog id="delete-dialog">
-  <h3 style="margin-top:0">Delete <span id="delete-domain" class="mono"></span></h3>
+<dialog id="delete-dialog" aria-labelledby="delete-title">
+  <div class="dialog-header"><h2 id="delete-title">Delete <span id="delete-domain" class="mono"></span></h2></div>
   <p class="hint">This removes the container, the CloudPanel site, and the instance data.
     A final archive is written to <span class="mono">/var/backups/clp-addons/instatic</span> first.
     Type the domain to confirm.</p>
+  <label for="delete-confirm">Confirm domain</label>
   <input id="delete-confirm" placeholder="type the domain" autocomplete="off">
-  <div class="actions" style="justify-content:flex-end;margin-top:1rem">
+  <div class="actions dialog-actions">
     <button class="btn" onclick="document.getElementById('delete-dialog').close()">Cancel</button>
     <button class="btn btn-danger" onclick="confirmDelete()">Delete</button>
   </div>
@@ -374,39 +375,43 @@ export function newInstanceView(nextPort: number, available: AvailableTags): str
             : ""
         }</div>`;
 
-  return `${notice}<div class="card">
-  <h2 style="margin-top:0;font-size:1.1rem">New Instatic site</h2>
-  <p class="hint">Creates a CloudPanel reverse-proxy site, starts a pinned Instatic container bound
-    to 127.0.0.1, and verifies the page is served through nginx before recording the instance.
-    Point DNS at this server first, or the health check will not pass.</p>
+  return `<div class="form-page">
+<div class="page-heading"><h1>New Instatic site</h1></div>
+${notice}<div class="card">
+  <p class="hint">Create an Instatic site with its own CloudPanel domain.
+    Point the domain's DNS at this server before continuing.</p>
 
   <form onsubmit="return submitCreate(event)">
-    <label for="domain">Domain</label>
-    <input id="domain" placeholder="pages.example.com" autocomplete="off" required
-      pattern="[a-z0-9]([a-z0-9\\-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9\\-]{0,61}[a-z0-9])?)+">
-    <div class="hint">Lowercase hostname. Must already resolve to this server.</div>
-
-    <label for="tag">Instatic version</label>
-    <select id="tag" required>${options}</select>
-    <div class="hint">Pinned exactly. Instatic is pre-1.0, so treat every bump as potentially breaking.</div>
-
-    <label for="port">Port</label>
-    <input id="port" value="${esc(nextPort)}" readonly>
-    <div class="hint">Allocated from the reserved range and bound to 127.0.0.1 only.
-      Changing an instance's port later is a manual edit in the panel's vhost editor.</div>
-
-    <label for="tls" style="display:flex;align-items:center;gap:0.5rem;margin-top:1.25rem;">
-      <input type="checkbox" id="tls" style="width:auto;">
-      Request a Let's Encrypt certificate immediately
-    </label>
-    <div class="hint">Works only if the domain already resolves to this server. Leave off if DNS is still propagating,
-      and you issue it later from Site → SSL/TLS.</div>
-
-    <div class="actions" style="margin-top:1.25rem">
-      <button type="submit" class="btn btn-primary">Create site</button>
-      <a class="btn" href="${BASE}/">Cancel</a>
+    <div class="form-grid">
+      <div class="form-field form-field-full">
+        <label for="domain" class="required">Domain Name</label>
+        <input id="domain" placeholder="pages.example.com" autocomplete="off" required aria-describedby="domain-hint"
+          pattern="[a-z0-9]([a-z0-9\\-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9\\-]{0,61}[a-z0-9])?)+">
+        <div class="hint" id="domain-hint">Lowercase hostname. Must already resolve to this server.</div>
+      </div>
+      <div class="form-field">
+        <label for="tag" class="required">Instatic Version</label>
+        <select id="tag" required aria-describedby="tag-hint">${options}</select>
+        <div class="hint" id="tag-hint">Versions are pinned. Review release changes before updating.</div>
+      </div>
+      <div class="form-field">
+        <label for="port">Port</label>
+        <input id="port" value="${esc(nextPort)}" readonly aria-describedby="port-hint">
+        <div class="hint" id="port-hint">Assigned automatically. Only accessible from this server.</div>
+      </div>
     </div>
-    <div class="hint" id="create-status" style="margin-top:0.75rem"></div>
+    <div class="check-field">
+      <label for="tls" class="check-label">
+        <input type="checkbox" id="tls" aria-describedby="tls-hint">
+        <span>Request a Let's Encrypt certificate immediately</span>
+      </label>
+      <div class="hint" id="tls-hint">The domain must resolve to this server. You can also issue a certificate later in Site → SSL/TLS.</div>
+    </div>
+    <div class="form-actions">
+      <a class="btn btn-lg" href="${BASE}/">Cancel</a>
+      <button type="submit" class="btn btn-primary btn-lg">Create site</button>
+    </div>
+    <div class="hint" id="create-status" role="status" aria-live="polite"></div>
   </form>
-</div>`;
+</div></div>`;
 }

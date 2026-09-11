@@ -9,153 +9,202 @@
 
 import { esc, escJs } from "./app-http";
 
+// Measured against CloudPanel 2.5.1's public demo: dashboard, sites, settings,
+// certificates, logs and new-site forms. Keep these rules independent of the
+// panel's private templates and versioned CSS bundles.
 export const BASE_STYLE = `
 :root {
   color-scheme: light;
-  --clp-addon-font-family: var(--bs-body-font-family, "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif);
-  --clp-addon-font-size: var(--bs-body-font-size, 16px);
-  --clp-addon-header-height: 75px;
-  --clp-addon-header-font-size: var(--bs-body-font-size, 16px);
-  --clp-addon-header-font-weight: 700;
-  --clp-addon-header-padding: 20px;
-  --clp-addon-page-bg: #f9fafb;
-  --clp-addon-panel-bg: #ffffff;
-  --clp-addon-header-bg: #ffffff;
-  --clp-addon-header-border: #e2e2e2;
-  --clp-addon-input-bg: #ffffff;
-  --clp-addon-border: #e2e2e2;
-  --clp-addon-brand-border: #eaeaea;
-  --clp-addon-text: #212529;
-  --clp-addon-muted: #6c757d;
-  --clp-addon-header-link: #aaaaaa;
-  --clp-addon-brand-text: #3c3c3c;
-  --clp-addon-accent: #0078d4;
-  --clp-addon-disabled: #838383;
-  --clp-addon-btn-bg: transparent;
-  --clp-addon-btn-text: var(--clp-addon-text);
-  --clp-addon-header-active-bg: transparent;
-  --clp-addon-header-hover-bg: transparent;
-  --clp-addon-logo: #0078d4;
-  --clp-addon-wordmark-accent: #0078d4;
-  --clp-addon-header-shadow: 0 2px 2px 0 hsl(0deg 0% 93% / 50%);
-  --on-accent: #fff; --bg: var(--clp-addon-page-bg); --panel: var(--clp-addon-panel-bg);
-  --border: var(--clp-addon-border); --text: var(--clp-addon-text); --muted: var(--clp-addon-muted);
-  --accent: var(--clp-addon-accent); --ok: #23774b; --warn: #936319; --bad: #bc3636;
+  --clp-addon-font-family: "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif;
+  --bg: #f9fafb; --panel: #fff; --surface: #fbfcfc;
+  --border: #e2e2e2; --card-border: #00000020; --row-border: #eaeaea;
+  --text: #212529; --heading: #2e2e2e; --muted: #6c757d; --table-heading: #9bacb6;
+  --link: #3c3c3c; --accent: #0078d4; --primary: #267ddd; --primary-hover: #2e87eb;
+  --header-bg: #fff; --header-link: #aaa; --tab-link: #666;
+  --input-bg: #fff; --input-border: #ced4da; --readonly-bg: #e9ecef;
+  --button-bg: #fff; --button-text: #777; --button-border: #d3d3d3; --button-hover: #e4e5e6;
+  --ok: #23774b; --warn: #936319; --bad: #bc3636;
+  --shadow: 0 2px 4px rgb(157 161 164 / 19%);
+  --header-shadow: 0 2px 2px rgb(237 237 237 / 50%);
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --clp-addon-page-bg: var(--clp-bg-primary, #0e1217);
-    --clp-addon-panel-bg: var(--clp-bg-secondary, #1c1f26);
-    --clp-addon-header-bg: var(--clp-bg-tertiary, #25282f);
-    --clp-addon-header-border: #a8b3cf80;
-    --clp-addon-input-bg: var(--clp-bg-input, #20242c);
-    --clp-addon-border: var(--clp-border-color, #a8b3cf33);
-    --clp-addon-text: var(--clp-text, #ffffff);
-    --clp-addon-muted: var(--clp-text-secondary, #9b9b9b);
-    --clp-addon-accent: var(--clp-text-hover, #0078d4);
-    --clp-addon-btn-bg: var(--clp-color-btn-bg, #21262d);
-    --clp-addon-btn-text: var(--clp-color-btn-text, #c9d1d9);
-    --clp-addon-brand-border: var(--clp-border-color, #a8b3cf33);
-    --clp-addon-header-link: var(--clp-text, #ffffff);
-    --clp-addon-brand-text: var(--clp-text, #ffffff);
-    --clp-addon-header-active-bg: transparent;
-    --clp-addon-header-hover-bg: transparent;
-    --clp-addon-logo: var(--clp-text-hover, #0078d4);
-    --clp-addon-wordmark-accent: #ffffff;
-    --clp-addon-header-shadow: none;
-    --on-accent: #fff; --bg: var(--clp-addon-page-bg); --panel: var(--clp-addon-panel-bg);
-    --border: var(--clp-addon-border); --text: var(--clp-addon-text); --muted: var(--clp-addon-muted);
-    --accent: var(--clp-addon-accent); --ok: #81c9a0; --warn: #e5bc76; --bad: #ef9999;
-  }
+html.dark {
+  color-scheme: dark;
+  --bg: #0e1217; --panel: #1c1f26; --surface: #25282f;
+  --border: #a8b3cf33; --card-border: #a8b3cf33; --row-border: #a8b3cf33;
+  --text: #fff; --heading: #fff; --muted: #9b9b9b; --table-heading: #9bacb6;
+  --link: #fff; --header-bg: #25282f; --header-link: #fff; --tab-link: #9b9b9b;
+  --input-bg: #20242c; --input-border: #a8b3cf33; --readonly-bg: #0e1217;
+  --button-bg: #21262d; --button-text: #c9d1d9; --button-border: #a8b3cf33; --button-hover: #1c1f26;
+  --ok: #81c9a0; --warn: #e5bc76; --bad: #ef9999;
+  --shadow: none; --header-shadow: none;
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--clp-addon-font-family);
-  font-size: var(--clp-addon-font-size); line-height: 1.5; }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-h2 { font-size: 1.5rem; letter-spacing: -0.025em; }
+body { margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+  background: var(--bg); color: var(--text); font-family: var(--clp-addon-font-family);
+  font-size: 16px; line-height: 1.5; }
+button, input, select { font: inherit; }
+a { color: var(--link); text-decoration: none; }
+a:hover { color: var(--accent); text-decoration: underline; }
+h1, h2, h3 { color: var(--heading); line-height: 1.2; font-weight: 600; }
+h1 { font-size: 30px; }
+h2, h3 { font-size: 18px; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.clp-addon-header { width: 100%; height: var(--clp-addon-header-height); background: var(--clp-addon-header-bg);
-  border-bottom: 1px solid var(--clp-addon-header-border); box-shadow: var(--clp-addon-header-shadow);
-  padding: 0; overflow-x: auto; scrollbar-width: thin; }
-.clp-addon-header-inner { width: max-content; min-width: 100%; height: 100%; margin: 0;
-  display: flex; align-items: stretch; }
-.clp-addon-header a { font-family: var(--clp-addon-font-family); font-size: var(--clp-addon-header-font-size); }
-.clp-addon-brand { flex: 0 0 235px; min-width: 235px; display: inline-flex; align-items: flex-start;
-  height: 100%; margin-right: 20px; padding: 20px 0 0 20px;
-  color: var(--clp-addon-brand-text); border-right: 1px solid var(--clp-addon-brand-border);
-  white-space: nowrap; }
-.clp-addon-brand:hover { color: var(--clp-addon-brand-text); text-decoration: none; }
-.clp-addon-logo { display: block; width: 155px; height: 31px; flex: 0 0 155px; }
-.clp-addon-logo img { display: block; width: 155px; height: 31px; }
-.clp-addon-primary-nav { display: block; flex: 0 0 auto; min-width: max-content;
-  height: 100%; line-height: var(--clp-addon-header-height); white-space: nowrap; }
-.clp-addon-primary-link { display: inline; height: var(--clp-addon-header-height);
-  margin-left: 10px; color: var(--clp-addon-header-link); padding: 0 15px; font-weight: var(--clp-addon-header-font-weight);
-  line-height: var(--clp-addon-header-height); white-space: nowrap; }
-.clp-addon-primary-link:hover { color: var(--clp-addon-accent); text-decoration: none; }
-.clp-addon-primary-link.is-active { color: var(--clp-addon-text); background: var(--clp-addon-header-active-bg);
-  font-weight: var(--clp-addon-header-font-weight); }
-.clp-addon-context { min-width: 0; margin-left: auto; display: flex; align-items: center; gap: 0.85rem;
-  padding: 0 var(--clp-addon-header-padding); }
-.clp-addon-context-divider { width: 1px; align-self: stretch; background: var(--clp-addon-border); opacity: 0.7; }
-.clp-addon-context nav { display: flex; align-items: center; gap: 0.25rem; min-width: 0; }
-.clp-addon-nav-link { color: var(--clp-addon-header-link); padding: 0.45rem 0.65rem; border-radius: 6px; white-space: nowrap; }
-.clp-addon-nav-link:hover { color: var(--clp-addon-accent); background: var(--clp-addon-header-hover-bg); text-decoration: none; }
-main { max-width: 1080px; margin: 0 auto; padding: 2rem 1.5rem; }
-.card { background: var(--panel); border: 1px solid var(--border);
-  border-radius: 8px; padding: 1.5rem; margin-bottom: 1.25rem; overflow-x: auto; }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; }
-.stat .label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase;
-  letter-spacing: 0.025em; }
-.stat .value { font-size: 1.6rem; font-weight: 600; }
+[hidden] { display: none !important; }
+.clp-addon-header { width: 100%; background: var(--header-bg); border-bottom: 1px solid var(--border);
+  box-shadow: var(--header-shadow); }
+.clp-addon-header-inner { display: flex; align-items: stretch; min-height: 74px; }
+.clp-addon-brand { flex: 0 0 235px; display: flex; align-items: center; padding: 0 20px;
+  margin-right: 20px; border-right: 1px solid var(--row-border); }
+.clp-addon-logo { display: block; width: 155px; height: 31px; }
+.clp-addon-logo-dark { display: none; }
+html.dark .clp-addon-logo-light { display: none; }
+html.dark .clp-addon-logo-dark { display: block; }
+.clp-addon-primary-nav { display: flex; align-items: stretch; gap: 14px; }
+.clp-addon-primary-link { display: flex; align-items: center; padding: 0 15px; margin-left: 0;
+  color: var(--header-link); font-size: 16px; font-weight: 700; white-space: nowrap; }
+.clp-addon-primary-nav .clp-addon-primary-link:first-child { margin-left: 10px; }
+.clp-addon-primary-link:hover { color: var(--accent); text-decoration: none; }
+.clp-addon-primary-link.is-active { color: var(--text); }
+.clp-addon-header-tools { display: flex; margin-left: auto; }
+.clp-addon-theme { border: 0; border-left: 1px solid var(--row-border); background: transparent;
+  color: var(--header-link); width: 70px; cursor: pointer; display: grid; place-items: center; }
+.clp-addon-theme:hover { color: var(--accent); }
+.clp-addon-theme svg { width: 20px; height: 20px; }
+.clp-addon-theme .sun { display: none; }
+html.dark .clp-addon-theme .sun { display: block; }
+html.dark .clp-addon-theme .moon { display: none; }
+main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 25px 24px 40px; flex: 1; min-width: 0; }
+.clp-addon-tabs { display: flex; overflow-x: auto; padding: 0 20px; margin-bottom: 30px;
+  background: var(--panel); border: 1px solid var(--border); scrollbar-width: thin; }
+.clp-addon-nav-link { flex: 0 0 auto; color: var(--tab-link); padding: 20px 15px 17px;
+  border-bottom: 3px solid transparent; white-space: nowrap; }
+.clp-addon-nav-link:hover { color: var(--accent); text-decoration: none; }
+.clp-addon-nav-link[aria-current="page"] { color: var(--text); border-bottom-color: var(--accent); }
+.page-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 20px; }
+.page-heading h1 { margin: 0; overflow-wrap: anywhere; }
+.page-heading p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
+.page-heading > .btn { flex-shrink: 0; }
+.card { min-width: 0; background: var(--panel); border: 1px solid var(--card-border);
+  border-radius: 4px; box-shadow: var(--shadow); padding: 25px; margin-bottom: 30px; }
+.card-header { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  font-size: 18px; font-weight: 600; line-height: 1.5; margin: -25px -25px 25px; padding: 25px;
+  border-bottom: 1px solid var(--border); border-radius: 3px 3px 0 0; }
+html.dark .card-header { background: var(--surface); }
+.card-header h2 { margin: 0; }
+.card-table { padding: 0; overflow-x: auto; }
+.card-table > .card-header { margin: 0; }
+.table-scroll { overflow-x: auto; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 30px; }
+.stat .label { font-size: 18px; font-weight: 500; margin-bottom: 5px; }
+.stat .value { font-size: 16px; }
 table { width: 100%; border-collapse: collapse; }
-th { text-align: left; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.025em;
-  color: var(--muted); padding: 0 0.6rem 0.6rem; font-weight: 600; }
-td { padding: 0.75rem 0.6rem; border-top: 1px solid var(--border); vertical-align: middle; }
-.mono { font-family: var(--mono); font-size: 0.85rem; }
-.badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px;
-  font-size: 0.72rem; font-family: var(--mono); border: 1px solid var(--border); }
-.state-running { color: var(--ok); border-color: var(--ok); }
-.state-exited, .state-created, .state-paused { color: var(--warn); border-color: var(--warn); }
-.state-absent, .state-unknown { color: var(--bad); border-color: var(--bad); }
-.btn { background: var(--clp-addon-btn-bg); color: var(--clp-addon-btn-text); border: 1px solid var(--border);
-  border-radius: 6px; padding: 0.35rem 0.7rem; font-size: 0.8rem; cursor: pointer; }
-.btn:hover { border-color: var(--accent); color: var(--accent); }
-.btn:disabled { color: var(--clp-addon-disabled); opacity: 0.5; cursor: not-allowed; }
-.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
-.btn-primary:hover { color: var(--on-accent); filter: brightness(0.95); text-decoration: none; }
-.btn-danger:hover { border-color: var(--bad); color: var(--bad); }
-.actions { display: flex; gap: 0.35rem; flex-wrap: wrap; }
-label { display: block; margin: 1rem 0 0.35rem; font-size: 0.8rem; color: var(--muted); }
-input, select { width: 100%; background: var(--clp-addon-input-bg); color: var(--text);
-  border: 1px solid var(--border); border-radius: 6px; padding: 0.55rem 0.7rem; font-size: 0.9rem; }
-input:read-only { color: var(--muted); }
-.hint { color: var(--muted); font-size: 0.78rem; margin-top: 0.3rem; }
-.alert { border: 1px solid var(--bad); color: var(--bad); background: rgba(248,113,113,0.08);
-  border-radius: 8px; padding: 0.7rem 0.9rem; margin-bottom: 1rem; font-size: 0.88rem; }
-.notice { border: 1px solid var(--warn); color: var(--warn); background: rgba(251,191,36,0.08);
-  border-radius: 8px; padding: 0.7rem 0.9rem; margin-bottom: 1rem; font-size: 0.88rem; }
-.empty { color: var(--muted); text-align: center; padding: 2rem 0; }
+th { text-align: left; font-size: 14px; text-transform: uppercase; color: var(--table-heading);
+  background: var(--surface); padding: 18px 32px; font-weight: 700; white-space: nowrap; }
+td { padding: 18px 32px; border-top: 1px solid var(--row-border); vertical-align: middle; }
+td a { color: var(--link); }
+td a:hover { color: var(--accent); }
+.action-cell { text-align: right; white-space: nowrap; }
+.mono { font-family: var(--mono); font-size: 14px; }
+.badge { display: inline-block; padding: 3px 7px; border-radius: 4px; font-size: 12px;
+  line-height: 1.25; border: 1px solid var(--border); white-space: nowrap; }
+.state-running, .state-done { color: var(--ok); border-color: currentColor; }
+.state-exited, .state-created, .state-paused { color: var(--warn); border-color: currentColor; }
+.state-absent, .state-unknown, .state-failed { color: var(--bad); border-color: currentColor; }
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-align: center;
+  background: var(--button-bg); color: var(--button-text); border: 1px solid var(--button-border);
+  border-radius: 4px; padding: 8px 20px; font-size: 14px; font-weight: 500; line-height: 1.5; cursor: pointer; }
+.btn:hover { background: var(--button-hover); color: var(--button-text); text-decoration: none; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: #fff; }
+.btn-lg, .page-heading > .btn { min-height: 50px; padding: 8px 30px; }
+.page-heading > .btn-primary { text-transform: uppercase; }
+.btn-danger { color: var(--bad); border-color: var(--bad); }
+.btn-danger:hover { background: var(--bad); color: var(--panel); }
+.actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.form-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 30px; }
+.form-actions > .btn:only-child { margin-left: auto; }
+.form-page { max-width: 770px; margin: 0 auto; }
+.form-page > .page-heading { justify-content: center; text-align: center; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.form-field { min-width: 0; }
+.form-field-full { grid-column: 1 / -1; }
+label { display: block; margin: 0 0 7px; color: var(--text); font-size: 16px; }
+label.required::after { content: " *"; color: var(--accent); }
+input:not([type="checkbox"]):not([type="hidden"]), select { width: 100%; background: var(--input-bg); color: var(--text);
+  border: 1px solid var(--input-border); border-radius: 4px; padding: 8px 16px; font-size: 16px; min-height: 42px; }
+input::placeholder { color: var(--muted); opacity: 1; }
+input:read-only:not([type="checkbox"]) { background: var(--readonly-bg); }
+input:focus, select:focus { border-color: #86b7fe; box-shadow: 0 0 0 3px rgb(38 125 221 / 15%); outline: 0; }
+.check-field { margin-top: 24px; }
+.check-label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; margin: 4px 0 0; accent-color: var(--primary); }
+.hint { color: var(--muted); font-size: 14px; margin-top: 5px; overflow-wrap: anywhere; }
+p.hint { margin: 0 0 20px; }
+.alert, .notice { border: 1px solid currentColor; border-radius: 4px; padding: 15px 20px; margin-bottom: 20px; font-size: 14px; }
+.alert { color: var(--bad); background: rgba(248,113,113,0.08); }
+.notice { color: var(--warn); background: rgba(251,191,36,0.08); }
+.update-banner { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 12px; color: var(--text); border-color: var(--accent); background: rgba(38,125,221,0.08); }
+.update-banner code { overflow-wrap: anywhere; }
+.empty { color: var(--muted); padding: 25px; }
+.card > .empty { padding: 0; }
+.card-table > .empty { padding: 25px; }
 dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border);
-  border-radius: 10px; padding: 1.25rem; max-width: 720px; width: 92%; }
-dialog::backdrop { background: rgba(3,7,18,0.72); }
-pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-  padding: 0.8rem; overflow: auto; max-height: 55vh; font-size: 0.78rem; }
-.page-heading { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin-bottom:1.5rem; }
-.page-heading h2 { margin:0; }
-.page-heading p { margin:0.25rem 0 0; color:var(--muted); font-size:0.88rem; }
-.row-actions { min-width:130px; }
-.row-actions summary { cursor:pointer; width:fit-content; }
-.row-actions[open] summary { margin-bottom:0.6rem; }
-@media (max-width: 640px) {
-  main { padding: 1rem; }
-  .card { padding: 1rem; }
-  td, th { min-width: 100px; }
+  border-radius: 5px; padding: 25px; max-width: 720px; width: calc(100% - 32px); max-height: calc(100vh - 40px); overflow: auto; }
+dialog::backdrop { background: rgba(0,0,0,0.5); }
+.dialog-header { margin: -25px -25px 25px; padding: 20px 25px; border-bottom: 1px solid var(--border); }
+.dialog-header h2 { margin: 0; overflow-wrap: anywhere; }
+.dialog-actions { justify-content: flex-end; margin: 25px -25px -25px; padding: 20px 25px; border-top: 1px solid var(--border); }
+pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 16px;
+  overflow: auto; max-height: 55vh; font-family: var(--mono); font-size: 13px; }
+.row-actions { min-width: 100px; }
+.row-actions summary { cursor: pointer; color: var(--link); list-style: none; }
+.row-actions summary::-webkit-details-marker { display: none; }
+.row-actions summary::after { content: ""; display: inline-block; margin: 0 0 3px 8px;
+  border: 4px solid transparent; border-top-color: currentColor; transform: translateY(3px); }
+.row-actions summary:hover { color: var(--accent); }
+.row-actions[open] summary { margin-bottom: 12px; }
+.row-actions .actions { max-width: 280px; justify-content: flex-end; margin-left: auto; }
+.row-actions .btn { padding: 5px 10px; }
+.site-inventory > summary { cursor: pointer; font-size: 18px; font-weight: 600; }
+.site-inventory[open] > summary { margin-bottom: 16px; }
+.addon-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 30px; }
+.addon-card { display: flex; flex-direction: column; align-items: flex-start; }
+.addon-card .card-header { width: calc(100% + 50px); align-self: stretch; }
+.addon-card p { color: var(--muted); margin: 0 0 25px; }
+.addon-card .btn { margin-top: auto; }
+.clp-addon-footer { background: var(--panel); border-top: 1px solid var(--border); padding: 15px 20px;
+  display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; color: var(--muted); font-size: 14px; }
+.clp-addon-footer a { color: var(--muted); }
+@media (max-width: 760px) {
+  .clp-addon-header-inner { flex-wrap: wrap; }
+  .clp-addon-brand { flex-basis: auto; border: 0; margin: 0; min-height: 64px; }
+  .clp-addon-header-tools { order: 1; }
+  .clp-addon-primary-nav { order: 2; width: 100%; overflow-x: auto; border-top: 1px solid var(--border); padding: 0 5px; gap: 0; }
+  .clp-addon-primary-link { min-height: 48px; }
+  main { padding: 20px 16px 30px; }
+  .clp-addon-tabs { padding: 0 5px; margin-bottom: 24px; }
+  .page-heading { flex-wrap: wrap; }
+  .page-heading h1 { font-size: 26px; }
+  .card { padding: 20px; }
+  .card-header { margin: -20px -20px 20px; padding: 20px; }
+  .card-table { padding: 0; }
+  .addon-card .card-header { width: calc(100% + 40px); }
+  .form-grid, .addon-grid { grid-template-columns: minmax(0, 1fr); }
+  th, td { padding: 16px 20px; }
+  .stats { gap: 20px; }
 }
+`;
 
+// CloudPanel uses a session cookie named "theme"; absence means light. Read it
+// before CSS is painted, so moving between the panel and an addon never flashes
+// or silently switches to the operating system's preferred theme.
+export const THEME_INIT_JS = `
+try {
+  document.documentElement.classList.toggle('dark', /(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie));
+} catch (e) {}
 `;
 
 /**
@@ -168,6 +217,35 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px
  * doubled, and tools/test-app.ts asserts they were.
  */
 export const BASE_CLIENT_JS = `
+function syncTheme() {
+  const dark = /(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie);
+  document.documentElement.classList.toggle('dark', dark);
+  const button = document.getElementById('theme-switch');
+  if (button) {
+    button.setAttribute('aria-pressed', String(dark));
+    button.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
+  }
+}
+function toggleTheme() {
+  const dark = !document.documentElement.classList.contains('dark');
+  document.cookie = dark ? 'theme=dark; Path=/; SameSite=Lax' : 'theme=; Path=/; Max-Age=0; SameSite=Lax';
+  syncTheme();
+}
+syncTheme();
+window.addEventListener('pageshow', syncTheme);
+window.addEventListener('focus', syncTheme);
+
+// Use the longest matching route so /new takes precedence over the list tab.
+const navLinks = Array.from(document.querySelectorAll('.clp-addon-nav-link'));
+const activeLink = navLinks.filter(function (link) {
+  const path = new URL(link.href).pathname.replace(/\\/$/, '');
+  return location.pathname === path || location.pathname.indexOf(path + '/') === 0;
+}).sort(function (a, b) { return b.href.length - a.href.length; })[0];
+navLinks.forEach(function (link) {
+  if (link === activeLink) link.setAttribute('aria-current', 'page');
+  else link.removeAttribute('aria-current');
+});
+
 // The CSRF cookie is readable by this page on purpose; echoing it back in a
 // header is what proves the request came from here and not another origin.
 function csrf() {
@@ -197,11 +275,11 @@ function busy(on) {
 `;
 
 export interface Chrome {
-  /** Product name in the header, e.g. "Instatic". */
+  /** Product name for the contextual navigation, e.g. "Instatic". */
   brand: string;
   /** Where this addon is mounted, e.g. "/addons/instatic". */
   base: string;
-  /** Contextual links for this addon's manager, beside the global shell nav. */
+  /** Contextual tabs for this addon's manager, below the global shell nav. */
   nav: { href: string; label: string }[];
   /** Rules appended after BASE_STYLE, for anything only this addon draws. */
   css?: string;
@@ -228,12 +306,9 @@ export function renderLayout(title: string, content: string, chrome: Chrome): st
     .map((n) => `        <a class="clp-addon-nav-link" href="${esc(n.href)}">${esc(n.label)}</a>`)
     .join("\n");
   const contextualHeader = contextualNav
-    ? `    <div class="clp-addon-context">
-      <span class="clp-addon-context-divider" aria-hidden="true"></span>
-      <nav aria-label="${esc(chrome.brand)} navigation">
+    ? `      <nav class="clp-addon-tabs" aria-label="${esc(chrome.brand)} navigation">
 ${contextualNav}
-      </nav>
-    </div>`
+      </nav>`
     : "";
   return `<!doctype html>
 <html lang="en">
@@ -241,27 +316,37 @@ ${contextualNav}
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
+<script>${THEME_INIT_JS}</script>
 <style>${BASE_STYLE}${chrome.css ?? ""}</style>
 </head>
 <body>
 <header class="clp-addon-header">
   <div class="clp-addon-header-inner">
     <a class="clp-addon-brand" href="${esc("/")}" aria-label="${esc("CloudPanel home")}">
-      <picture class="clp-addon-logo">
-        <source media="(prefers-color-scheme: dark)" srcset="/assets/images/logo-dark.svg">
-        <img src="/assets/images/logo.svg" alt="CloudPanel" width="155" height="31">
-      </picture>
+      <img class="clp-addon-logo clp-addon-logo-light" src="/assets/images/logo.svg" alt="CloudPanel" width="155" height="31">
+      <img class="clp-addon-logo clp-addon-logo-dark" src="/assets/images/logo-dark.svg" alt="CloudPanel" width="155" height="31">
     </a>
     <nav class="clp-addon-primary-nav" aria-label="${esc("CloudPanel navigation")}">
 ${primaryNav}
     </nav>
-${contextualHeader}
+    <div class="clp-addon-header-tools">
+      <button class="clp-addon-theme" id="theme-switch" type="button" onclick="toggleTheme()" aria-label="Switch to dark mode" aria-pressed="false">
+        <svg class="moon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.9 13.1A9 9 0 0 1 10.9 3.1 9 9 0 1 0 20.9 13.1Z"/></svg>
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 1v3m0 16v3M1 12h3m16 0h3M4.2 4.2l2.1 2.1m11.4 11.4 2.1 2.1M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>
+      </button>
+    </div>
   </div>
 </header>
-<main>${chrome.updateNotice ? `  <div class="notice update-banner" style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;background:rgba(59,130,246,0.08);border:1px solid var(--accent);color:var(--text);border-radius:8px;padding:0.75rem 1rem;">
+<main>${contextualHeader}${chrome.updateNotice ? `  <div class="notice update-banner">
     <div><strong>Update available:</strong> clp-addons <code>v${esc(chrome.updateNotice.latest)}</code> is available (running v${esc(chrome.updateNotice.current)}).</div>
-    <div><span class="mono" style="background:var(--panel);padding:0.25rem 0.5rem;border-radius:4px;border:1px solid var(--border);font-size:0.8rem;">clp-addons update</span></div>
+    <code>clp-addons update</code>
   </div>\n` : ""}${content}</main>
+<footer class="clp-addon-footer">
+  <a href="https://www.cloudpanel.io/blog/" target="_blank" rel="noopener noreferrer">Blog</a>
+  <a href="https://www.cloudpanel.io/docs/v2/" target="_blank" rel="noopener noreferrer">Docs</a>
+  <a href="https://github.com/7heMech/cloudpanel-addons/issues" target="_blank" rel="noopener noreferrer">Addon issues</a>
+  <a href="https://www.cloudpanel.io/" target="_blank" rel="noopener noreferrer">CloudPanel</a>
+</footer>
 <script>const CLP_BASE = "${escJs(chrome.base)}";
 ${BASE_CLIENT_JS}${chrome.script}</script>
 </body>

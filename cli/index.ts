@@ -550,14 +550,13 @@ export function indexPage(addons: string[], update?: { current: string; latest: 
     const route = mountPath(spec.name);
     const description = spec.description ? `<p>${esc(spec.description)}</p>` : "";
     return `<article class="card addon-card">
-  <div class="page-heading">
-    <div><h2>${esc(title)}</h2>${description}</div>
-  </div>
-  <p class="mono">Mount path: ${esc(route)}</p>
-  <a class="btn btn-primary" href="${esc(`${route}/`)}">Open ${esc(title)}</a>
+  <div class="card-header"><h2>${esc(title)}</h2></div>
+  ${description}
+  <a class="btn btn-primary btn-lg" href="${esc(`${route}/`)}">Open ${esc(title)}</a>
 </article>`;
   }).join("");
-  const content = cards || `<div class="card empty">${esc("No addons are currently available.")}</div>`;
+  const content = `<div class="page-heading"><h1>Addons</h1></div>` +
+    (cards ? `<div class="addon-grid">${cards}</div>` : `<div class="card empty">${esc("No addons are currently available.")}</div>`);
   return new Response(renderLayout("CloudPanel Addons", content, {
     brand: "CloudPanel Addons",
     base: "/addons",

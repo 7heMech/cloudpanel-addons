@@ -14,7 +14,7 @@
 // The .test.ts suffix keeps this suite in Bun's default discovery set.
 import { expect, test } from "bun:test";
 import { CLIENT_JS, dashboardView, isInstanceMissing, newInstanceView } from "../addons/instatic/app/views";
-import { BASE_CLIENT_JS, renderLayout } from "../lib/app-ui";
+import { BASE_CLIENT_JS, THEME_INIT_JS, renderLayout } from "../lib/app-ui";
 import { headerTarget, headerUpdateScript } from "../lib/panel-nav";
 import { isNewerVersion } from "../lib/update-check";
 import { CLIENT_JS as STAGER_CLIENT_JS, isSiteMissing, jobsView, jobView } from "../addons/stager/app/views";
@@ -51,6 +51,7 @@ function check(label: string, cond: boolean, detail = ""): void {
 // takes down every button on the page. Each addon is listed here; checking only
 // the addon half would leave lib/app-ui.ts unverified.
 const SCRIPTS: { name: string; source: string }[] = [
+  { name: "theme initialization", source: THEME_INIT_JS },
   { name: "instatic", source: BASE_CLIENT_JS + CLIENT_JS },
   { name: "stager", source: BASE_CLIENT_JS + STAGER_CLIENT_JS },
   { name: "clp header update notice", source: headerUpdateScript("0.9.3") },
@@ -74,6 +75,26 @@ for (const { name, source } of SCRIPTS) {
     }
   }
 }
+
+// Native CloudPanel defaults to light and stores only its explicit dark choice.
+// The early script must also recognize the cookie after another cookie and
+// avoid confusing similarly named cookies or values with that preference.
+test("addon theme follows CloudPanel's cookie before the page paints", () => {
+  for (const [cookie, expected] of [
+    ["", false], ["theme=dark", true], ["session=example; theme=dark; locale=en", true],
+    ["other_theme=dark", false], ["theme=darkened", false], ["theme=light", false],
+  ] as const) {
+    const classes = new Set<string>();
+    const document = {
+      cookie,
+      documentElement: { classList: { toggle(name: string, enabled: boolean) {
+        if (enabled) classes.add(name); else classes.delete(name);
+      } } },
+    };
+    new Function("document", THEME_INIT_JS)(document);
+    expect(classes.has("dark"), cookie).toBe(expected);
+  }
+});
 
 // Port allocation reads a snapshot the root CLI rewrites on install and
 // repair, so between reconciliation runs it does not know about instances
@@ -1569,7 +1590,7 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
     nav: [],
     script: "",
   });
-  check("layout without updateNotice does not render update banner", !htmlWithout.includes("update-banner"));
+  check("layout without updateNotice does not render update banner", !htmlWithout.includes('class="notice update-banner"'));
 
   const htmlWith = renderLayout("Test", "<p>Hello</p>", {
     brand: "Test",
@@ -1578,7 +1599,7 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
     script: "",
     updateNotice: { current: "0.9.3", latest: "0.9.4" },
   });
-  check("layout with updateNotice renders update banner", htmlWith.includes("update-banner"));
+  check("layout with updateNotice renders update banner", htmlWith.includes('class="notice update-banner"'));
   check("layout with updateNotice names current and latest versions", htmlWith.includes("v0.9.4") && htmlWith.includes("v0.9.3"));
   check("layout with updateNotice contains clp-addons update shortcut", htmlWith.includes("clp-addons update"));
 
