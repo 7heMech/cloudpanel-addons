@@ -217,7 +217,7 @@ export async function callGatewayAction<T = unknown>(
   // 2. Direct root execution fallback if socket is absent (e.g. offline testing as root)
   if (process.getuid?.() === 0 && !existsSync(socketPath)) {
     return runCommandDirect<T>(
-      CLI_BIN,
+      DEFAULT_CLI_BIN,
       ["action", addon, verb, ...args],
       options,
       input,

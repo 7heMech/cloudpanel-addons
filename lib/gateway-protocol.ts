@@ -18,6 +18,7 @@ export const STAGER_ALLOWED_VERBS = new Set([
 export const INSTATIC_ALLOWED_VERBS = new Set([
   "list",
   "create",
+  "update",
   "delete",
   "start",
   "stop",
