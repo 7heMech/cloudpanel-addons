@@ -24,7 +24,7 @@ export const SESSION_DIR = "/home/clp/htdocs/app/files/var/sessions";
 
 export const MANAGER_UNIT = "clp-addons.service";
 export const AUTH_SOCKET_UNIT = "clp-addons-auth.socket";
-export const AUTH_SERVICE_UNIT = "clp-addons-auth@.service";
+export const AUTH_SERVICE_UNIT = "clp-addons-auth.service";
 export const AUTH_SOCKET_PATH = `${SOCKET_DIR}/auth.sock`;
 export const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";
 const DISTRO_NGINX_SITES_DIR = "/etc/nginx/sites-enabled";
@@ -117,7 +117,11 @@ export const ADDONS: Record<string, AddonSpec> = {
 
 export const ADDON_NAMES = Object.keys(ADDONS);
 export const LEGACY_USERS = ["instatic-app"];
-export const LEGACY_UNITS = ["clp-addon-instatic.service", "clp-addon-stager.service"];
+export const LEGACY_UNITS = [
+  "clp-addon-instatic.service",
+  "clp-addon-stager.service",
+  "clp-addons-auth@.service",
+];
 
 export function templateWatchPaths(): string[] {
   const paths = new Set<string>();

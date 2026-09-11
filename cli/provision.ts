@@ -531,7 +531,7 @@ ListenStream=${AUTH_SOCKET_PATH}
 SocketUser=root
 SocketGroup=${SERVICE_GROUP}
 SocketMode=0660
-Accept=yes
+Accept=no
 RuntimeDirectory=clp-addons
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
@@ -540,19 +540,17 @@ RuntimeDirectoryPreserve=yes
 WantedBy=sockets.target
 `,
     service: `[Unit]
-Description=CloudPanel Addons session authentication
+Description=CloudPanel Addons session authentication daemon
+Requires=${AUTH_SOCKET_UNIT}
+After=${AUTH_SOCKET_UNIT}
 
 [Service]
 Type=simple
 ExecStart=${CLI_BIN} action auth
-StandardInput=socket
-StandardOutput=socket
 StandardError=journal
-# One unit instance per request would otherwise log a start and a stop line
-# for every authenticated page view. Warnings and errors still reach the
-# journal; the routine lifecycle chatter does not.
-LogLevelMax=warning
 TimeoutStartSec=10
+Restart=always
+RestartSec=1
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes
@@ -635,6 +633,7 @@ export function installUnits(specs: AddonSpec[]): boolean {
   const auth = authUnits();
   writeAtomic(`${SYSTEMD_DIR}/${AUTH_SOCKET_UNIT}`, auth.socket, 0o644);
   writeAtomic(`${SYSTEMD_DIR}/${AUTH_SERVICE_UNIT}`, auth.service, 0o644);
+  rmSync(`${SYSTEMD_DIR}/clp-addons-auth@.service`, { force: true });
   run("systemctl", ["daemon-reload"]);
   return changed;
 }
@@ -643,6 +642,7 @@ export function startUnits(): void {
   // Before the manager: without it every authenticated request fails closed.
   run("systemctl", ["enable", AUTH_SOCKET_UNIT]);
   run("systemctl", ["restart", AUTH_SOCKET_UNIT]);
+  tryRun("systemctl", ["restart", AUTH_SERVICE_UNIT]);
   run("systemctl", ["enable", MANAGER_UNIT]);
   run("systemctl", ["restart", MANAGER_UNIT]);
   run("systemctl", ["enable", RECONCILE_TIMER]);
@@ -654,11 +654,11 @@ export function startUnits(): void {
 
 export function stopUnits(keepShared = false): void {
   if (keepShared) return;
-  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, AUTH_SOCKET_UNIT]) {
+  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     tryRun("systemctl", ["disable", "--now", unit]);
   }
   for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE,
-    AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
+    AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, "clp-addons-auth@.service"]) {
     rmSync(`${SYSTEMD_DIR}/${unit}`, { force: true });
   }
   tryRun("systemctl", ["daemon-reload"]);

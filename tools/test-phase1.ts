@@ -6,7 +6,8 @@ import {
   authenticateRequest, MAX_SESSION_BYTES, parsePanelSession, readPanelSessionFile,
 } from "../lib/sso-auth";
 import { adminGate } from "../cli/index";
-import { MAX_AUTH_INPUT_BYTES, runAuthAction } from "../cli/auth-action";
+import { Database } from "bun:sqlite";
+import { MAX_AUTH_INPUT_BYTES, createAuthActionServer, runAuthAction } from "../cli/auth-action";
 
 let passed = 0;
 let failed = 0;
@@ -214,6 +215,62 @@ try {
   }
   check("auth action rejects a missing session file", (await runAuthAction("missing\n", { sessionDir: authDir, ownerUid: authOwnerUid })) === '{"valid":false}\n');
   check("auth action rejects an invalid file owner", (await runAuthAction("live\n", { sessionDir: authDir, ownerUid: authOwnerUid + 1 })) === '{"valid":false}\n');
+
+  // DB authorization check tests:
+  const dbPath = `${authDir}/panel.sqlite`;
+  const db = new Database(dbPath);
+  db.run("CREATE TABLE user (user_name TEXT, role TEXT, status INTEGER)");
+  db.query("INSERT INTO user VALUES (?, ?, ?)").run("redacted_user", "ROLE_ADMIN", 1);
+  db.close();
+
+  const dbAdminReply = JSON.parse(await runAuthAction("live\n", { sessionDir: authDir, ownerUid: authOwnerUid, panelDb: dbPath }));
+  check("auth action reads role from DB when database exists", dbAdminReply.valid === true && JSON.stringify(dbAdminReply.roles) === '["ROLE_ADMIN"]');
+
+  // Demotion in DB:
+  const db2 = new Database(dbPath);
+  db2.run("UPDATE user SET role = 'ROLE_SITE_MANAGER' WHERE user_name = 'redacted_user'");
+  db2.close();
+  const dbDemotedReply = JSON.parse(await runAuthAction("live\n", { sessionDir: authDir, ownerUid: authOwnerUid, panelDb: dbPath }));
+  check("auth action honors demotion in DB immediately", dbDemotedReply.valid === true && JSON.stringify(dbDemotedReply.roles) === '["ROLE_SITE_MANAGER"]');
+
+  // Inactive user in DB (status = 0):
+  const db3 = new Database(dbPath);
+  db3.run("UPDATE user SET status = 0 WHERE user_name = 'redacted_user'");
+  db3.close();
+  const dbInactiveReply = await runAuthAction("live\n", { sessionDir: authDir, ownerUid: authOwnerUid, panelDb: dbPath });
+  check("auth action rejects inactive user in DB", dbInactiveReply === '{"valid":false}\n');
+
+  // Deleted user from DB:
+  const db4 = new Database(dbPath);
+  db4.run("DELETE FROM user WHERE user_name = 'redacted_user'");
+  db4.close();
+  const dbDeletedReply = await runAuthAction("live\n", { sessionDir: authDir, ownerUid: authOwnerUid, panelDb: dbPath });
+  check("auth action rejects user missing from DB", dbDeletedReply === '{"valid":false}\n');
+
+  // Socket server mode test:
+  const sockPath = `${authDir}/test.sock`;
+  const server = createAuthActionServer({ sessionDir: authDir, ownerUid: authOwnerUid });
+  await new Promise<void>((resolve) => server.listen(sockPath, resolve));
+  let daemonReply = "";
+  await new Promise<void>((resolve) => {
+    Bun.connect({
+      unix: sockPath,
+      socket: {
+        open(conn) {
+          conn.write("live\n");
+        },
+        data(_conn, chunk) {
+          daemonReply += Buffer.from(chunk).toString("utf8");
+        },
+        close() {
+          resolve();
+        },
+      },
+    });
+  });
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  const parsedDaemon = JSON.parse(daemonReply);
+  check("auth action daemon answers over unix socket", parsedDaemon.valid === true && parsedDaemon.user === "redacted_user");
 } finally {
   rmSync(authDir, { recursive: true, force: true });
 }

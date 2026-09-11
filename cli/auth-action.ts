@@ -1,10 +1,13 @@
 // Root-only action used by the unprivileged manager to validate a CloudPanel
-// session file. The CLI entrypoint is the only production caller; the optional
-// directory/owner arguments exist solely for hermetic unit tests and are never
-// exposed through action argv or stdin.
+// session file and authorize against CloudPanel's database. The CLI entrypoint
+// is the only production caller; the optional directory/owner/db/listen arguments
+// exist solely for hermetic unit tests and are never exposed through action argv.
 
+import net from "node:net";
+import { existsSync } from "node:fs";
+import { Database } from "bun:sqlite";
 import { requireRoot } from "./util";
-import { SESSION_DIR } from "./paths";
+import { PANEL_DB, SESSION_DIR } from "./paths";
 import {
   MAX_SESSION_ID_LENGTH,
   parsePanelSession,
@@ -16,12 +19,17 @@ export const MAX_AUTH_REPLY_BYTES = 32 * 1024;
 const AUTH_STDIN_TIMEOUT_MS = 2_000;
 
 const SESSION_ID_RE = /^[a-zA-Z0-9,-]+$/;
+const ROLE_RE = /^ROLE_[A-Z0-9_]{1,120}$/;
 
 export interface AuthActionOptions {
   /** Test-only fixed-directory override; the CLI always uses SESSION_DIR. */
   sessionDir?: string;
   /** Test-only owner override; production uses readPanelSessionFile's clp UID. */
   ownerUid?: number | null;
+  /** Test-only database override; production uses PANEL_DB. */
+  panelDb?: string;
+  /** Test-only socket path override for daemon mode; production uses systemd FD 3. */
+  listenPath?: string;
 }
 
 function invalidReply(): string {
@@ -37,9 +45,38 @@ function decodeInput(input: Uint8Array): string | null {
 }
 
 /**
- * Validate one bounded stdin request and return the only stdout contract the
- * manager understands. Errors deliberately collapse to the same invalid
- * marker so no filesystem path or serialized session detail is disclosed.
+ * Look up a user's active role directly from CloudPanel's SQLite user table.
+ * Returns the role string if the user exists, is active (status = 1), and has a valid role.
+ * Returns null otherwise.
+ */
+export function lookupUserRole(dbPath: string, username: string): string | null {
+  try {
+    if (!existsSync(dbPath)) return null;
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      db.exec("PRAGMA busy_timeout = 5000;");
+      const row = db.query<{ role: string | null; status: number | boolean | null }, [string]>(
+        "SELECT role, status FROM user WHERE user_name = ?"
+      ).get(username);
+      if (!row) return null;
+      const status = typeof row.status === "boolean" ? (row.status ? 1 : 0) : Number(row.status);
+      if (status !== 1) return null;
+      const role = typeof row.role === "string" ? row.role : null;
+      if (!role || !ROLE_RE.test(role)) return null;
+      return role;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate one bounded request:
+ * 1. Read and structurally parse the CloudPanel session file to authenticate the user and expiry.
+ * 2. If CloudPanel's database exists, authoritatively check user status and role from the database.
+ * 3. Return the bounded JSON contract the manager understands.
  */
 export async function runAuthAction(
   input: Uint8Array | string,
@@ -61,16 +98,91 @@ export async function runAuthAction(
     const session = sessionBytes ? parsePanelSession(sessionBytes) : null;
     if (!session) return invalidReply();
 
+    const dbPath = options.panelDb ?? PANEL_DB;
+    let roles = session.roles;
+    if (existsSync(dbPath)) {
+      const dbRole = lookupUserRole(dbPath, session.user);
+      if (!dbRole) return invalidReply();
+      roles = [dbRole];
+    }
+
     const reply = JSON.stringify({
       valid: true,
       user: session.user,
-      roles: session.roles,
+      roles,
       expiresAt: session.expiresAt,
     }) + "\n";
     return Buffer.byteLength(reply, "utf8") <= MAX_AUTH_REPLY_BYTES ? reply : invalidReply();
   } catch {
     return invalidReply();
   }
+}
+
+/**
+ * Create a socket server that handles authentication requests.
+ * Each connection sends one line containing the session ID, gets a JSON reply, and closes.
+ */
+export function createAuthActionServer(options: AuthActionOptions = {}): net.Server {
+  return net.createServer((socket) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let closed = false;
+
+    const timeout = setTimeout(() => {
+      if (!closed) {
+        closed = true;
+        socket.end(invalidReply());
+      }
+    }, AUTH_STDIN_TIMEOUT_MS);
+
+    socket.on("data", async (chunk: Buffer) => {
+      if (closed) return;
+      if (total + chunk.byteLength > MAX_AUTH_INPUT_BYTES) {
+        closed = true;
+        clearTimeout(timeout);
+        socket.end(invalidReply());
+        return;
+      }
+      chunks.push(chunk);
+      total += chunk.byteLength;
+      if (chunk.includes(10)) {
+        closed = true;
+        clearTimeout(timeout);
+        const full = Buffer.concat(chunks, total);
+        const reply = await runAuthAction(full, options);
+        socket.end(reply);
+      }
+    });
+
+    socket.on("error", () => {
+      clearTimeout(timeout);
+    });
+  });
+}
+
+/**
+ * Run the long-lived daemon activated by systemd.
+ * When activated by systemd, systemd passes the listening socket as FD 3 (LISTEN_FDS=1).
+ */
+export async function runAuthActionDaemon(options: AuthActionOptions = {}): Promise<void> {
+  const server = createAuthActionServer(options);
+
+  return new Promise<void>((resolve, reject) => {
+    server.on("error", reject);
+    server.on("close", resolve);
+
+    const stop = () => {
+      server.close();
+    };
+    process.once("SIGTERM", stop);
+    process.once("SIGINT", stop);
+
+    if (options.listenPath) {
+      server.listen(options.listenPath);
+    } else {
+      server.listen({ fd: 3 });
+    }
+  });
 }
 
 async function readBoundedStdin(): Promise<Uint8Array | null> {
@@ -99,9 +211,6 @@ async function readBoundedStdin(): Promise<Uint8Array | null> {
         }
         chunks.push(chunk);
         total += chunk.byteLength;
-        // One request is one line. Stop at the newline rather than reading to
-        // EOF: under socket activation stdin is the connection, and the caller
-        // holds it open for the reply, so waiting for EOF would deadlock.
         if (chunk.includes(10)) break;
       }
       const bytes = new Uint8Array(total);
@@ -121,13 +230,17 @@ async function readBoundedStdin(): Promise<Uint8Array | null> {
 }
 
 /** CLI entrypoint for `clp-addons action auth`; it accepts no argv fields. */
-export async function runAuthActionStdin(argv: string[] = []): Promise<number> {
+export async function runAuthActionStdin(argv: string[] = [], options: AuthActionOptions = {}): Promise<number> {
   requireRoot("auth");
   if (argv.length !== 0) {
     process.stdout.write(invalidReply());
     return 1;
   }
+  if (process.env.LISTEN_FDS || options.listenPath) {
+    await runAuthActionDaemon(options);
+    return 0;
+  }
   const input = await readBoundedStdin();
-  process.stdout.write(await runAuthAction(input ?? new Uint8Array()));
+  process.stdout.write(await runAuthAction(input ?? new Uint8Array(), options));
   return 0;
 }

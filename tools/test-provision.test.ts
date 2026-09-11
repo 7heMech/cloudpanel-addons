@@ -436,18 +436,17 @@ test("the root auth helper is reached by socket activation, not sudo", () => {
   expect(socket).toContain("SocketUser=root");
   expect(socket).toContain("SocketGroup=clp-addons");
   expect(socket).toContain("SocketMode=0660");
-  // Accept=yes is what hands each connection to the helper as stdin/stdout,
-  // which is the contract `action auth` already speaks.
-  expect(socket).toContain("Accept=yes");
+  // Accept=no keeps the helper daemon resident to answer in ~1ms without
+  // process startup latency.
+  expect(socket).toContain("Accept=no");
 
   expect(service).toContain("ExecStart=/usr/local/bin/clp-addons action auth");
-  expect(service).toContain("StandardInput=socket");
-  expect(service).toContain("StandardOutput=socket");
+  expect(service).toContain("Requires=clp-addons-auth.socket");
+  expect(service).toContain("After=clp-addons-auth.socket");
+  expect(service).toContain("Restart=always");
+  expect(service).toContain("RestartSec=1");
   // The reply must never carry helper diagnostics back to the caller.
   expect(service).toContain("StandardError=journal");
-  // One instance per request; without this every page view logs a start and
-  // a stop line.
-  expect(service).toContain("LogLevelMax=warning");
   expect(service).not.toContain("User=clp-addons");
 
   // The manager must not reach the helper through sudo: its own unit implies
