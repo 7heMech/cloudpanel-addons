@@ -48,10 +48,31 @@ async function act(domain, verb) {
   }
 }
 
-async function showLogs(domain) {
+async function takeSnapshot(domain) {
+  busy(true);
+  try {
+    const res = await call('/api/instances/' + encodeURIComponent(domain) + '/snapshot', { method: 'POST' });
+    busy(false);
+    const snap = res && res.data && res.data.snapshot;
+    const snapFile = snap ? snap.split('/').pop() : '';
+    document.getElementById('snapshot-title').textContent = 'Snapshot Created \\u2014 ' + domain;
+    document.getElementById('snapshot-file').textContent = snapFile || 'Snapshot archive created';
+    document.getElementById('snapshot-path').textContent = snap || '(stored in instance snapshots directory)';
+    document.getElementById('snapshot-dialog').showModal();
+  } catch (e) {
+    busy(false);
+    alert('Snapshot failed: ' + e.message);
+  }
+}
+
+async function showLogs(domain, port) {
   const dlg = document.getElementById('logs-dialog');
   const pre = document.getElementById('logs-body');
+  const portInfo = document.getElementById('logs-port-info');
   document.getElementById('logs-title').textContent = 'Logs \\u2014 ' + domain;
+  if (portInfo) {
+    portInfo.textContent = port ? 'Container listens on internal port 3001, mapped from host 127.0.0.1:' + port + ' for CloudPanel reverse proxy.' : '';
+  }
   pre.textContent = 'Loading\\u2026';
   dlg.showModal();
   try {
@@ -252,9 +273,9 @@ export function dashboardView(
     }
     <button class="btn" onclick="act('${escJs(i.domain)}','restart')">Restart</button>
     <button class="btn${behind(i.tag) ? " btn-update" : ""}" onclick="askUpdate('${escJs(i.domain)}','${escJs(i.tag)}')">Update</button>
-    <button class="btn" onclick="act('${escJs(i.domain)}','snapshot')">Snapshot</button>
+    <button class="btn" onclick="takeSnapshot('${escJs(i.domain)}')" title="Create a backup snapshot of the SQLite database and instance data">Snapshot</button>
     <button class="btn" onclick="act('${escJs(i.domain)}','recreate')" title="Rebuild the container from the recorded version without touching the data">Recreate</button>
-    <button class="btn" onclick="showLogs('${escJs(i.domain)}')">Logs</button>
+    <button class="btn" onclick="showLogs('${escJs(i.domain)}', ${i.port})">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${escJs(i.domain)}')">Delete</button>
   </div></details></td>
 </tr>`;
@@ -320,9 +341,23 @@ export function dashboardView(
 
 <dialog id="logs-dialog" aria-labelledby="logs-title">
   <div class="dialog-header"><h2 id="logs-title"></h2></div>
+  <p class="hint" id="logs-port-info" style="margin: 0 0 12px;"></p>
   <pre id="logs-body"></pre>
   <div class="actions dialog-actions">
     <button class="btn" onclick="document.getElementById('logs-dialog').close()">Close</button>
+  </div>
+</dialog>
+
+<dialog id="snapshot-dialog" aria-labelledby="snapshot-title">
+  <div class="dialog-header"><h2 id="snapshot-title">Snapshot Created</h2></div>
+  <p class="hint">A backup snapshot of the SQLite database and instance files was created successfully:</p>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:12px 16px;margin-bottom:16px;">
+    <div style="font-weight:600;margin-bottom:4px;" id="snapshot-file"></div>
+    <div class="mono hint" id="snapshot-path" style="font-size:13px;word-break:break-all;"></div>
+  </div>
+  <p class="hint">Snapshots include a clean SQLite backup and instance data. They are stored under the instance's <span class="mono">snapshots/</span> directory and pruned to the 5 most recent versions for safe rollbacks.</p>
+  <div class="actions dialog-actions">
+    <button class="btn btn-primary" onclick="document.getElementById('snapshot-dialog').close()">Done</button>
   </div>
 </dialog>
 
@@ -397,7 +432,7 @@ ${notice}<div class="card">
       <div class="form-field">
         <label for="port">Port</label>
         <input id="port" value="${esc(nextPort)}" readonly aria-describedby="port-hint">
-        <div class="hint" id="port-hint">Assigned automatically. Only accessible from this server.</div>
+        <div class="hint" id="port-hint">Host reverse proxy port (mapped to internal container port 3001). Accessible only from 127.0.0.1.</div>
       </div>
     </div>
     <div class="check-field">

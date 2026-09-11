@@ -2,6 +2,7 @@
 //
 // The manager router strips the /addons/ prefix before dispatching here.
 
+import type { Server } from "bun";
 import { stagerService, validateDomain, validateJobId, expandTarget } from "./service";
 import type { JobView } from "./service";
 import { layout, jobsView, newCloneView, jobView } from "./views";
@@ -39,14 +40,13 @@ function portsSinceSnapshot(jobs: JobView[], snapshotTakenAt: string): number[] 
  * Bounds on the credential fields, because the action binary cannot be the one to
  * enforce them.
  *
- * Every verb of the action binary validates its arguments before it reads stdin, so the
- * ordinary rejection path exits with the pipe still unread. A body larger than
- * the 64 KiB pipe buffer then fails the write with EPIPE, on a stream tick
- * outside any request promise, where `Bun.serve` cannot turn it into a 500. One
- * 1 MiB password killed the process -- and since v0.7.0 that process serves
- * every addon, not just this one.
+ * The action binary receives them on a line-buffered stdin stream under a
+ * 120-second timeout; if the payload has an unescaped newline or exceeds the pipe
+ * buffer, the action binary fails after the child process has already started
+ * writing over the site. Validating here catches that before the action binary is
+ * invoked at all.
  *
- * The numbers are what the action binary would accept anyway: 254 is the longest legal
+ * Sized against RFC 5321 and what the fields actually carry: 254 is the longest
  * email address and what `validateEmail` allows, 32 is the top of
  * `validateMfa`'s range, and 256 is generous for a password while staying four
  * orders of magnitude clear of the buffer.
@@ -77,13 +77,31 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+function sse(body: ReadableStream, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+      ...SECURITY_HEADERS,
+    },
+  });
+}
+
 // The whole request surface, exported so the one manager process can mount it.
 //
 // `path` is this addon's own path, with the mount prefix already stripped by the
 // router: a request for /addons/stager/api/... arrives here as /api/... .
 // Taking it as an argument rather than reading req.url is what keeps every route
 // below written as though this addon owned the site, which it used to.
-export async function handle(req: Request, path: string, updateNotice?: { current: string; latest: string } | null): Promise<Response> {
+export async function handle(
+  req: Request,
+  path: string,
+  updateNotice?: { current: string; latest: string } | null,
+  server?: Server | null,
+): Promise<Response> {
   const url = new URL(req.url);
   const method = req.method;
 
@@ -186,7 +204,108 @@ export async function handle(req: Request, path: string, updateNotice?: { curren
     return json({ ok: true, sites: await stagerService.listSites() });
   }
 
+  const jobEvents = path.match(/^\/api\/jobs\/([^/]+)\/events$/);
   const jobApi = path.match(/^\/api\/jobs\/([^/]+)$/);
+  if (method === "GET" && (jobEvents || (jobApi && req.headers.get("accept")?.includes("text/event-stream")))) {
+    const rawId = (jobEvents ?? jobApi)![1]!;
+    const id = validateJobId(decodeURIComponent(rawId));
+    if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
+
+    const initial = await stagerService.getJob(id);
+    if (!initial.ok || !initial.data) {
+      return json({ ok: false, error: initial.error ?? "job not found" }, 404);
+    }
+
+    if (server && typeof server.timeout === "function") {
+      try {
+        server.timeout(req, 0);
+      } catch {}
+    }
+
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let closed = false;
+    let inFlight = false;
+
+    let lastState = initial.data.job.state;
+    let lastStep = initial.data.job.step;
+    let lastLog = initial.data.log;
+
+    const stream = new ReadableStream({
+      start(controller) {
+        try {
+          controller.enqueue(`data: ${JSON.stringify({ job: initial.data!.job, log: initial.data!.log })}\n\n`);
+        } catch {
+          closed = true;
+          return;
+        }
+
+        if (initial.data!.job.state === "done" || initial.data!.job.state === "failed") {
+          closed = true;
+          try { controller.close(); } catch {}
+          return;
+        }
+
+        timer = setInterval(async () => {
+          if (closed || inFlight) return;
+          inFlight = true;
+          try {
+            const res = await stagerService.getJob(id);
+            if (closed) return;
+            if (!res.ok || !res.data) {
+              closed = true;
+              if (timer) clearInterval(timer);
+              try {
+                controller.enqueue(`event: error\ndata: ${JSON.stringify({ error: res.error ?? "job not found" })}\n\n`);
+                controller.close();
+              } catch {}
+              return;
+            }
+
+            const { job, log } = res.data;
+            if (job.state !== lastState || job.step !== lastStep || log !== lastLog) {
+              lastState = job.state;
+              lastStep = job.step;
+              lastLog = log;
+              try {
+                controller.enqueue(`data: ${JSON.stringify({ job, log })}\n\n`);
+              } catch {
+                closed = true;
+                if (timer) clearInterval(timer);
+                return;
+              }
+            } else {
+              try {
+                controller.enqueue(": keepalive\n\n");
+              } catch {
+                closed = true;
+                if (timer) clearInterval(timer);
+                return;
+              }
+            }
+
+            if (job.state === "done" || job.state === "failed") {
+              closed = true;
+              if (timer) clearInterval(timer);
+              try {
+                controller.close();
+              } catch {}
+            }
+          } catch {
+            // Transient read error; retry on next tick
+          } finally {
+            inFlight = false;
+          }
+        }, 1000);
+      },
+      cancel() {
+        closed = true;
+        if (timer) clearInterval(timer);
+      },
+    });
+
+    return sse(stream);
+  }
+
   if (method === "GET" && jobApi) {
     const id = validateJobId(decodeURIComponent(jobApi[1]!));
     if (!id) return json({ ok: false, error: "not a valid job id" }, 400);

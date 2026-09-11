@@ -6,6 +6,7 @@ import { jobsView, jobView, layout as stagerLayout, newCloneView } from "../addo
 import type { InstanceView } from "../addons/instatic/app/service";
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
 import type { AvailableTags } from "../addons/instatic/app/tags";
+import { SECURITY_HEADERS } from "../lib/app-http";
 
 const versions: AvailableTags = { tags: ["0.0.19", "0.0.18"], latest: "0.0.19", source: "registry" };
 const instances: InstanceView[] = [
@@ -34,7 +35,7 @@ const logs = "[09:30:02] Preparing staging site\n[09:30:16] Copying files\n[09:3
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.PORT || 4100),
-  async fetch(req) {
+  async fetch(req, server) {
     const url = new URL(req.url);
     const path = url.pathname;
     if (req.method !== "GET") return Response.json({ ok: false, error: "UI preview only; no changes were made." }, { status: 409 });
@@ -76,6 +77,20 @@ const server = Bun.serve({
       html = stagerLayout("New staging site", newCloneView(detail, empty ? [] : sites), notice);
     } else if (path === "/addons/stager/jobs/preview-job") {
       html = stagerLayout("Staging site details", jobView(currentJob, logs), notice);
+    } else if (path === "/addons/stager/api/jobs/preview-job/events" || (path === "/addons/stager/api/jobs/preview-job" && req.headers.get("accept")?.includes("text/event-stream"))) {
+      if (server && typeof server.timeout === "function") {
+        try { server.timeout(req, 0); } catch {}
+      }
+      return new Response(
+        `data: ${JSON.stringify({ job: { ...currentJob, state: "running", result: null }, log: logs })}\n\n`,
+        {
+          headers: {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            ...SECURITY_HEADERS,
+          },
+        },
+      );
     } else if (path === "/addons/stager/api/jobs/preview-job") {
       return Response.json({ ok: true, data: { job: { ...currentJob, state: "running", result: null }, log: logs } });
     } else return new Response("Not found", { status: 404 });

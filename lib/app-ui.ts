@@ -136,6 +136,12 @@ label { display: block; margin: 0 0 7px; color: var(--text); font-size: 16px; }
 label.required::after { content: " *"; color: var(--accent); }
 input:not([type="checkbox"]):not([type="hidden"]), select { width: 100%; background: var(--input-bg); color: var(--text);
   border: 1px solid var(--input-border); border-radius: 4px; padding: 8px 16px; font-size: 16px; min-height: 42px; }
+select {
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2716%27 height=%2716%27 viewBox=%270 0 24 24%27 fill=%27none%27 stroke=%27%2394a3b8%27 stroke-width=%272%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27%3E%3Cpath d=%27m6 9 6 6 6-6%27/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 14px center;
+  background-size: 16px 16px; padding-right: 40px; cursor: pointer;
+}
 input::placeholder { color: var(--muted); opacity: 1; }
 input:read-only:not([type="checkbox"]) { background: var(--readonly-bg); }
 input:focus, select:focus { border-color: #86b7fe; box-shadow: 0 0 0 3px rgb(38 125 221 / 15%); outline: 0; }

@@ -1,3 +1,4 @@
+import type { Server } from "bun";
 import { chmodSync, chownSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
@@ -34,6 +35,7 @@ type AddonHandler = (
   req: Request,
   path: string,
   updateNotice?: { current: string; latest: string } | null,
+  server?: Server | null,
 ) => Promise<Response>;
 
 const MANAGERS: Record<string, AddonHandler> = {
@@ -529,7 +531,7 @@ async function cmdServe(): Promise<never> {
   if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH);
   const server = Bun.serve({
     unix: SOCKET_PATH,
-    async fetch(req) {
+    async fetch(req, server) {
       const path = internalPath(new URL(req.url).pathname);
       if (path === "/health") {
         return Response.json({ ok: true, service: "clp-addons" }, { headers: SECURITY_HEADERS });
@@ -554,7 +556,7 @@ async function cmdServe(): Promise<never> {
       const notice = update?.hasUpdate ? { current: update.current, latest: update.latest } : null;
       const hit = splitMount(path, mounted);
       let response: Response;
-      if (hit) response = await MANAGERS[hit.addon]!(req, hit.rest, notice);
+      if (hit) response = await MANAGERS[hit.addon]!(req, hit.rest, notice, server);
       else if (path === "/") response = indexPage(mounted, notice);
       else response = Response.json({ ok: false, error: "not found" }, { status: 404, headers: SECURITY_HEADERS });
       return response;

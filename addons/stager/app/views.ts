@@ -103,32 +103,67 @@ async function startClone() {
   return false;
 }
 
-// Poll while the job is in flight, then reload once so the finished record is
-// rendered by the server rather than assembled twice, here and there.
+function updateJobUI(job, log) {
+  if (!job) return false;
+  const stateEl = document.getElementById('job-state');
+  if (stateEl) {
+    stateEl.textContent = job.state;
+    stateEl.className = 'badge state-' + job.state;
+  }
+  const stepEl = document.getElementById('job-step');
+  if (stepEl) {
+    stepEl.textContent = job.step || '';
+  }
+  const pre = document.getElementById('job-log');
+  if (pre) {
+    pre.textContent = log || '(no output yet)';
+    pre.scrollTop = pre.scrollHeight;
+  }
+  return job.state === 'done' || job.state === 'failed';
+}
+
+// Stream job progress and logs via SSE, reloading when completed.
 function watchJob(id) {
+  if (typeof EventSource !== 'undefined') {
+    const es = new EventSource(CLP_BASE + '/api/jobs/' + encodeURIComponent(id) + '/events');
+    let reloaded = false;
+    es.onmessage = function (ev) {
+      if (reloaded) return;
+      try {
+        const payload = JSON.parse(ev.data);
+        const job = payload.job || (payload.data && payload.data.job);
+        const log = payload.log !== undefined ? payload.log : (payload.data && payload.data.log);
+        if (updateJobUI(job, log)) {
+          reloaded = true;
+          es.close();
+          location.reload();
+        }
+      } catch (e) {}
+    };
+    es.onerror = function () {
+      if (reloaded) return;
+      call('/api/jobs/' + encodeURIComponent(id)).then(function (body) {
+        if (body && body.data && updateJobUI(body.data.job, body.data.log)) {
+          reloaded = true;
+          es.close();
+          location.reload();
+        }
+      }).catch(function () {});
+    };
+    return;
+  }
+
   let stopped = false;
   async function tick() {
     if (stopped) return;
     try {
       const body = await call('/api/jobs/' + encodeURIComponent(id));
-      const job = body.data.job;
-      document.getElementById('job-state').textContent = job.state;
-      document.getElementById('job-state').className = 'badge state-' + job.state;
-      document.getElementById('job-step').textContent = job.step || '';
-      const pre = document.getElementById('job-log');
-      if (pre) {
-        pre.textContent = body.data.log || '(no output yet)';
-        pre.scrollTop = pre.scrollHeight;
-      }
-      if (job.state === 'done' || job.state === 'failed') {
+      if (body && body.data && updateJobUI(body.data.job, body.data.log)) {
         stopped = true;
         location.reload();
         return;
       }
-    } catch (e) {
-      // A failed poll is not a failed clone. Keep trying: the job runs in its
-      // own systemd unit and does not care whether this page can reach it.
-    }
+    } catch (e) {}
     setTimeout(tick, 2000);
   }
   setTimeout(tick, 1500);
@@ -137,11 +172,16 @@ function watchJob(id) {
 // Wired here rather than from an inline <script> inside the page body: the
 // shell puts this script after <main>, so a call written next to the markup
 // would run before any of these functions exist.
-document.addEventListener('DOMContentLoaded', function () {
+function initStager() {
   if (document.getElementById('target')) previewTarget();
   const watch = document.getElementById('job-watch');
   if (watch) watchJob(watch.getAttribute('data-job'));
-});
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initStager);
+} else {
+  initStager();
+}
 `;
 
 export function layout(
