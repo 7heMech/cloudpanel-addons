@@ -34,20 +34,24 @@ export function csrfCookieHeader(token: string): string {
 /** Returns null when the request may proceed, or a Response to send instead. */
 export function guardMutation(req: Request): Response | null {
   const origin = req.headers.get("origin");
-  const host = req.headers.get("host");
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
 
   // A same-origin fetch from our own page always sends Origin. Its absence on a
   // state-changing request means something other than that page is calling.
   if (!origin) {
     return Response.json({ ok: false, error: "missing Origin header" }, { status: 403 });
   }
-  let originHost: string;
+  let originUrl: URL;
   try {
-    originHost = new URL(origin).host;
+    originUrl = new URL(origin);
   } catch {
     return Response.json({ ok: false, error: "malformed Origin header" }, { status: 403 });
   }
-  if (!host || originHost !== host) {
+  const originHost = originUrl.host;
+  const originHostname = originUrl.hostname;
+  const hostWithoutPort = host ? host.replace(/:\d+$/, "") : "";
+
+  if (!host || (originHost !== host && originHostname !== hostWithoutPort)) {
     return Response.json({ ok: false, error: "cross-origin request refused" }, { status: 403 });
   }
 

@@ -320,7 +320,7 @@ export const NGINX_PROXY_BLOCK = `    # clp-addons:proxy:start
     location /addons/ {
         proxy_pass http://unix:/run/clp-addons/manager.sock:/;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -329,7 +329,7 @@ export const NGINX_PROXY_BLOCK = `    # clp-addons:proxy:start
     }
     # clp-addons:proxy:end`;
 
-const NGINX_PROXY_BLOCK_RE = /\n?[ \t]*# clp-addons:proxy:start[\s\S]*?[ \t]*# clp-addons:proxy:end\n?/g;
+const NGINX_PROXY_BLOCK_RE = /\r?\n?[ \t]*# clp-addons:proxy:start[\s\S]*?[ \t]*# clp-addons:proxy:end\r?\n?/g;
 
 export interface NginxPaths {
   vhostPath?: string;

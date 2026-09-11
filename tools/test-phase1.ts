@@ -84,6 +84,42 @@ check(
   readFileSync("lib/app-http.ts", "utf8").includes("new Bun.CookieMap") &&
     readFileSync("lib/sso-auth.ts", "utf8").includes("new Bun.CookieMap"),
 );
+check(
+  "guardMutation accepts same-origin with explicit port (e.g. 8443)",
+  guardMutation(new Request("https://panel.example:8443/addons/stager/api/clones", {
+    method: "POST",
+    headers: {
+      Origin: "https://panel.example:8443",
+      Host: "panel.example:8443",
+      Cookie: "clp_addons_csrf=csrf_token",
+      "x-clp-addons-csrf": "csrf_token",
+    },
+  })) === null,
+);
+check(
+  "guardMutation accepts same-origin when reverse proxy stripped the port in Host",
+  guardMutation(new Request("https://panel.example:8443/addons/stager/api/clones", {
+    method: "POST",
+    headers: {
+      Origin: "https://panel.example:8443",
+      Host: "panel.example",
+      Cookie: "clp_addons_csrf=csrf_token",
+      "x-clp-addons-csrf": "csrf_token",
+    },
+  })) === null,
+);
+check(
+  "guardMutation rejects cross-origin even when using the same port",
+  responseStatus(guardMutation(new Request("https://panel.example:8443/addons/stager/api/clones", {
+    method: "POST",
+    headers: {
+      Origin: "https://evil.example:8443",
+      Host: "panel.example:8443",
+      Cookie: "clp_addons_csrf=csrf_token",
+      "x-clp-addons-csrf": "csrf_token",
+    },
+  }))) === 403,
+);
 
 console.log("== CloudPanel SSO validates reconstructed sessions structurally ==");
 const fixture = (name: string): Buffer => Buffer.from(
