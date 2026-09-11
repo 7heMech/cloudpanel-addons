@@ -14,7 +14,7 @@ import {
   activeManagerJob, latestManagerJob, parseManagerFlags, pruneManagerJobs, readManagerJob,
   runManagerJob, type ManagerOps,
 } from "../cli/manager-action";
-import { indexPage } from "../cli/index";
+import { indexPage, installedInjections } from "../cli/index";
 
 function makeJobsDir(): string {
   return mkdtempSync(join(tmpdir(), "clp-manager-jobs-"));
@@ -210,6 +210,20 @@ describe("one click, one job", () => {
   });
 });
 
+describe("the panel's Addons entry", () => {
+  // It used to be derived from "at least one addon is enabled", which was the
+  // same thing until an addon could be disabled from the page the entry leads
+  // to. Disabling the last one then took the link away and left no way back to
+  // the page that would offer the addons again.
+  test("survives every addon being disabled", () => {
+    expect(installedInjections(undefined, true).some((injection) => injection.addon === "manager")).toBe(true);
+  });
+
+  test("goes when the installation itself goes", () => {
+    expect(installedInjections(undefined, false).some((injection) => injection.addon === "manager")).toBe(false);
+  });
+});
+
 describe("the manager index", () => {
   async function render(...args: Parameters<typeof indexPage>): Promise<string> {
     return indexPage(...args).text();
@@ -267,6 +281,20 @@ describe("the manager index", () => {
     expect(html).toContain("Updating clp-addons failed.");
     expect(html).toContain("checksum mismatch");
     expect(html).toContain("dismissFailure('20260908T120000Z-aaaaaa')");
+  });
+
+  // Serving nothing is a legitimate state now, so the page has to read as an
+  // offer rather than as a dead end.
+  test("offers the addons back when none is enabled", async () => {
+    const html = await render([], null, { available: ["instatic", "stager"] });
+    expect(html).toContain("No addons are enabled. Enable one below to add it to CloudPanel.");
+    expect(html).toContain("enableAddon('instatic')");
+    expect(html).toContain("enableAddon('stager')");
+  });
+
+  test("still says so plainly when this binary carries no addon at all", async () => {
+    const html = await render([], null, { available: [] });
+    expect(html).toContain("No addons are currently available.");
   });
 
   test("sets the CSRF cookie the buttons have to echo back", async () => {

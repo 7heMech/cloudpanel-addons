@@ -103,7 +103,7 @@ mock.module("../cli/provision", () => ({
   ensureServiceUser: () => { calls.push("ensureServiceUser"); provisioning.serviceUser = true; },
   ensureTimerArmed: record("ensureTimerArmed"),
   hardenBackups: record("hardenBackups"),
-  installSudoers: () => { calls.push("installSudoers"); provisioning.sudoers = true; },
+  reconcilePanelIdentity: () => { calls.push("reconcilePanelIdentity"); provisioning.sudoers = true; },
   installUnits: () => { calls.push("installUnits"); provisioning.units = true; },
   installedConfig: () => hasInstalledAddon,
   purgeTwigCache: record("purgeTwigCache"),
@@ -176,7 +176,7 @@ test("an up-to-date update still runs provisioning and reconciliation", async ()
     "ensureServiceUser",
     "removeLegacyInstall",
     "ensureDirs",
-    "installSudoers",
+    "reconcilePanelIdentity",
     "removeLegacyUnits",
     "removeLegacyUsers",
     "installUnits",
@@ -218,7 +218,7 @@ test("an up-to-date update with no addons keeps the no-service branch", async ()
   expect(calls).toContain("ensureServiceUser");
   expect(calls).toContain("removeLegacyUnits");
   expect(calls).toContain("removeLegacyUsers");
-  expect(calls).toContain("installSudoers");
+  expect(calls).toContain("reconcilePanelIdentity");
   expect(calls).not.toContain("installUnits");
   expect(calls).not.toContain("generateSnapshot");
   expect(calls).not.toContain("startUnits");

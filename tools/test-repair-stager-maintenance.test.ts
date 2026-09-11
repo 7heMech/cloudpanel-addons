@@ -53,7 +53,7 @@ const mockPrelude = String.raw`
     ensureServiceUser: () => {},
     ensureTimerArmed: () => {},
     hardenBackups: () => {},
-    installSudoers: () => {},
+    reconcilePanelIdentity: () => {},
     installUnits: () => false,
     installedConfig: (spec) => spec.name === "stager",
     purgeTwigCache: () => {},

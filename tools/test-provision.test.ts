@@ -7,7 +7,7 @@ import {
   ADDONS, nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
 } from "../cli/paths";
 import {
-  authUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit, sudoersCommandPaths, sudoersRule,
+  authUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit,
   vhostOwnerAccepted, warnIfPanelSessionUnreadable,
 } from "../cli/provision";
 import { panelUserUid } from "../lib/sso-auth";
@@ -132,9 +132,6 @@ test("fails clearly when docker membership cannot be removed", () => {
 
 function provisionProbe(): {
   identityPath: string;
-  paths: string[];
-  extraPaths: string[];
-  rule: string;
   identity: { primary: string; aliases: string[] } | null;
   unsafeIdentity: { primary: string; aliases: string[] } | null;
 } {
@@ -142,14 +139,10 @@ function provisionProbe(): {
     import { ADDONS } from "./cli/paths.ts";
     import {
       PANEL_IDENTITY_PATH,
-      panelIdentityFromVhost, sudoersCommandPaths, sudoersRule,
+      panelIdentityFromVhost,
     } from "./cli/provision.ts";
-    const specs = [ADDONS.instatic, ADDONS.stager];
     console.log(JSON.stringify({
       identityPath: PANEL_IDENTITY_PATH,
-      paths: sudoersCommandPaths(specs),
-      extraPaths: sudoersCommandPaths([...specs, { ...ADDONS.instatic, name: "unlisted" }]),
-      rule: sudoersRule(specs),
       identity: panelIdentityFromVhost(
         "server { listen 8443 ssl; server_name PANEL.Example.Test. www.PANEL.Example.Test. *.panel.example.test; }",
       ),
@@ -164,27 +157,25 @@ function provisionProbe(): {
   }));
 }
 
-test("sudoers names only the unified action binary and action namespace", () => {
-  const result = provisionProbe();
-  const paths = result.paths;
-  const rule = result.rule;
-
-  expect(paths).toEqual(["/usr/local/bin/clp-addons"]);
-  expect(rule).toBe("clp-addons ALL=(root) NOPASSWD: /usr/local/bin/clp-addons action *");
-  expect(rule).toContain("/usr/local/bin/clp-addons action *");
-  expect(rule).not.toMatch(/NOPASSWD: \/usr\/local\/bin\/clp-addons(?:,|$)/);
-  expect(rule).not.toContain(" install");
-  expect(rule).not.toContain(" update");
-  expect(rule).not.toContain(" repair");
-  expect(rule).not.toContain(" status");
-  expect(rule).not.toContain(" uninstall");
-  expect(rule).not.toContain(" serve");
-  expect(result.extraPaths).toEqual(["/usr/local/bin/clp-addons"]);
+// The rule builders these used to exercise were dead: the root gateway daemon
+// replaced sudo outright, and nothing but their own test had called them since.
+// What is worth asserting now is the absence, not the shape of a string.
+test("nothing in the tree grants the manager a sudo rule", () => {
+  // git grep exits 1 when nothing matches, which is the passing case here, so
+  // this cannot use execFileSync.
+  const granting = Bun.spawnSync(["git", "grep", "-l", "NOPASSWD", "--", "cli", "lib", "addons"], { cwd: REPO });
+  expect(granting.stdout.toString().trim()).toBe("");
 });
 
-test("an empty installed set grants no sudo commands", () => {
-  expect(sudoersCommandPaths([])).toEqual([]);
-  expect(sudoersRule([])).toBe("");
+test("every sudoers path the provisioner names is one it deletes", () => {
+  const provision = readFileSync(join(REPO, "cli/provision.ts"), "utf8");
+  const mentions = provision
+    .split("\n")
+    .filter((line) => line.includes("/etc/sudoers.d") && !line.trimStart().startsWith("*"));
+  expect(mentions.length).toBeGreaterThan(0);
+  // Removal has to keep happening for as long as an upgrade from a pre-gateway
+  // version is possible. Writing one must not come back with it.
+  for (const mention of mentions) expect(mention).toContain("rmSync");
 });
 
 test("panel identity extraction normalizes exact, alias, and wildcard names", () => {

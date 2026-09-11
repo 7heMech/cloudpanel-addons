@@ -9,18 +9,26 @@ section, the current section wins.
 
 ### Privilege boundary
 
-The manager runs as the locked `clp-addons` system user. It can invoke only the
-action namespace of the root-owned binary named by `/etc/sudoers.d/clp-addons`:
+The manager runs as the locked `clp-addons` system user and holds **no sudo
+privileges at all**. Every privileged operation -- session validation, addon
+actions, and the manager's own enable/disable/update verbs -- is a request on
+the root gateway daemon's socket, `/run/clp-addons/auth.sock`. The daemon owns
+the allow-list (`STAGER_ALLOWED_VERBS`, `INSTATIC_ALLOWED_VERBS`,
+`MANAGER_ALLOWED_VERBS` in `lib/gateway-protocol.ts`) and spawns
+`clp-addons action <addon> <verb>` itself, so the boundary is a verb the daemon
+recognises rather than a command line a sudoers pattern has to match safely.
 
-```text
-clp-addons ALL=(root) NOPASSWD: /usr/local/bin/clp-addons action *
-```
+This replaced a sudoers drop-in that granted
+`clp-addons ALL=(root) NOPASSWD: /usr/local/bin/clp-addons action *`. The
+drop-in is gone, and `reconcilePanelIdentity` deletes any copy an older install
+left behind on every install, update and repair. Nothing in `cli/`, `lib/` or
+`addons/` writes one -- `tools/test-provision.test.ts` asserts that, because the
+function that removes them was called `installSudoers` for long enough that its
+name outlived the mechanism and misled a reader of its own log line.
 
-The generated rule contains one absolute binary path and matches only arguments
-under the literal `action` namespace. It does not match `install`, `update`,
-`repair`, `status`, `uninstall`, or `serve`; the binary also rejects unknown
-action addons and requires an installed addon configuration. Session validation
-is performed by the manager itself and is not a privileged command.
+The daemon also rejects unknown addons and verbs, and each action still requires
+an installed addon configuration. See "The root auth helper is reached by socket
+activation, not sudo" below.
 
 Every action validates its complete argument set before reading input,
 deriving paths, or taking a lock. Commands use argument arrays; no shell
@@ -113,7 +121,7 @@ manage the CloudPanel sites that represent addon instances; the manager itself
 never creates one.
 
 The periodic timer and template path unit invoke the same idempotent repair
-commands used by installation. Repair restores service-user, socket, sudoers,
+commands used by installation. Repair restores service-user, socket, panel identity,
 unit, snapshot, Twig, and Nginx invariants without a second login or manual
 domain configuration.
 
@@ -1787,10 +1795,13 @@ The client treats every failure -- connect error, timeout, oversized reply,
 unparseable reply -- as `unavailable`, which becomes 503. The one thing it
 never does is treat a failed lookup as an authenticated request.
 
-`sudo` is still used for addon actions (`clp-addons action instatic|stager`),
-where the caller is the manager acting on an operator's request and the
-sudoers rule confines it to the `action` namespace. Only the authentication
-path moved.
+When this was written, `sudo` was still used for addon actions
+(`clp-addons action instatic|stager`) and only the authentication path had
+moved. That is no longer true: the gateway grew an `action` request kind, the
+addons' verbs moved onto it, and the sudoers drop-in was removed outright. The
+manager now holds no sudo rule for anything. What remains of sudoers in this
+tree is the code that deletes a drop-in left by a version that predates the
+gateway.
 
 ## The manager enables addons and applies releases; it never updates itself
 
@@ -1834,10 +1845,21 @@ and it turns a binary that quietly contains an addon the operator has to read
 the install documentation to discover into one that describes itself. Enabling
 writes the config file, injects the Twig anchors and reinstalls the units;
 disabling withdraws all of that and keeps the addon's state directory, so
-enabling it again returns the same instances. Disabling the last addon is
-refused: `serve` exits when nothing is configured, and the button that would
-bring it back is served by the process it just stopped. Removing an install is
-`clp-addons uninstall`, which runs from a shell that still exists afterwards.
+enabling it again returns the same instances.
+
+Disabling *every* addon is allowed, and making it allowed took three changes.
+`serve` used to exit when nothing was configured, which meant the last disable
+killed the only surface that could undo it; serving nothing is now a legitimate
+state, because every addon is compiled in and a manager with none of them on is
+exactly the page that offers them back. `repair` used to refuse the same state,
+which would have left the timer, the Nginx proxy and the anchors unreconciled
+for as long as an install sat empty; it now refuses only when no manager is
+installed at all. And the panel's "Addons" entry used to be derived from "at
+least one addon is enabled" -- the same thing until that entry became the way
+back to the page, at which point disabling the last addon hid the link to the
+only place that could re-enable it. The entry now belongs to the installation
+and goes when `cmdUninstall` says the installation is going. Removing an install
+is still `clp-addons uninstall`, which runs from a shell that survives it.
 
 **All three are jobs, because all three restart the manager.** Enabling,
 disabling and updating end in `startUnits()`, which restarts the very process

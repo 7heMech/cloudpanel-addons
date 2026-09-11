@@ -3,12 +3,12 @@ import { chmodSync, chownSync, existsSync, lstatSync, readFileSync, readdirSync,
 import { execFileSync } from "node:child_process";
 import {
   ADDON_NAMES, ADDONS, ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, MANAGER_UNIT, PANEL_GROUP,
-  SOCKET_PATH, mountPath, type AddonSpec,
+  SOCKET_PATH, SYSTEMD_DIR, mountPath, type AddonSpec,
 } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation, type FetchedArtifact } from "./release";
 import {
   ensureDirs, ensureServiceUser, ensureTimerArmed, hardenBackups,
-  ensureAuthHelperReady, installSudoers, installUnits, installedConfig, purgeTwigCache, removeLegacyUnits,
+  ensureAuthHelperReady, reconcilePanelIdentity, installUnits, installedConfig, purgeTwigCache, removeLegacyUnits,
   removeLegacyInstall, removeLegacyUsers, removeSudoers, startUnits, stopUnits, unitActive,
   unitPid, warnIfPanelSessionUnreadable, writeConfig,
 } from "./provision";
@@ -126,14 +126,23 @@ function installArtifacts(artifacts: FetchedArtifact[], tag: string): void {
   writeArtifactManifest(tag, artifacts);
 }
 
-export function installedInjections(exclude?: string): Injection[] {
+/**
+ * `managerNav` is whether the panel keeps its "Addons" entry.
+ *
+ * It belongs to the manager, not to any addon, and it used to be derived from
+ * "at least one addon is enabled". That was the same thing right up until an
+ * addon could be disabled from the page the entry leads to: disabling the last
+ * one took the link away, and the only way back to the page that would offer
+ * the addons again was to know the URL. The entry now goes when the
+ * installation goes, which is `cmdUninstall`'s call to make, not this one's.
+ */
+export function installedInjections(exclude?: string, managerNav = true): Injection[] {
   const injections: Injection[] = [];
   const installed = ADDON_NAMES.filter((name) => name !== exclude && existsSync(ADDONS[name]!.configFile));
 
-  // The manager owns one navigation entry for the whole installation. Keep it
-  // outside the addon target lists so installing a second addon cannot emit a
-  // second style/script block or replace the first one's marker.
-  if (installed.length > 0) {
+  // Kept outside the addon target lists so installing a second addon cannot
+  // emit a second style/script block or replace the first one's marker.
+  if (managerNav) {
     injections.push({ addon: "manager", target: headerTarget(CLI_VERSION), url: "/addons/" });
   }
 
@@ -159,8 +168,8 @@ function describeTarget(status: TargetStatus): string {
   }
 }
 
-function reconcileAnchors(quiet: boolean, exclude?: string): boolean {
-  const injections = installedInjections(exclude);
+function reconcileAnchors(quiet: boolean, exclude?: string, managerNav = true): boolean {
+  const injections = installedInjections(exclude, managerNav);
   const wanted = new Map(injections.map((injection) => [`${injection.addon}:${injection.target.slug}`, injection]));
   const result = reconcile(injections);
   let blocked = false;
@@ -235,7 +244,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   installArtifacts(artifacts, artifactTag ?? CLI_VERSION.replace(/^v/, ""));
   ensureAuthHelperReady();
   for (const item of specs) writeConfig(item, true);
-  installSudoers();
+  reconcilePanelIdentity();
   installUnits(specs);
   removeLegacyUnits(true);
   removeLegacyUsers(true);
@@ -275,7 +284,7 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
   if (artifacts) installArtifacts(artifacts, target);
   ensureAuthHelperReady();
   for (const spec of specs) writeConfig(spec, true);
-  installSudoers();
+  reconcilePanelIdentity();
   removeLegacyUnits(true);
   removeLegacyUsers(true);
   if (specs.length === 0) {
@@ -315,7 +324,7 @@ export async function applyEnable(name: string): Promise<void> {
   ensureDirs(specs, true);
   ensureAuthHelperReady();
   for (const item of specs) writeConfig(item, true);
-  installSudoers();
+  reconcilePanelIdentity();
   installUnits(specs);
   generateSnapshot();
   ensureDirs(specs);
@@ -337,16 +346,13 @@ export function applyDisable(name: string): void {
   requireRoot("disable");
   const spec = resolveAddon(name);
   const remaining = installedAddons().filter((item) => item.name !== spec.name);
-  if (remaining.length === 0) {
-    fatal(`${spec.name} is the only enabled addon; remove the installation with 'clp-addons uninstall' instead`);
-  }
 
   reconcileAnchors(false, spec.name);
   purgeTwigCache();
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
   ensureDirs(remaining);
-  installSudoers();
+  reconcilePanelIdentity();
   installUnits(remaining);
   startUnits();
   log.ok(`${spec.name} disabled; its data under ${spec.stateDir} was kept`);
@@ -430,9 +436,15 @@ export async function cmdRepair(argv: string[]): Promise<void> {
     return;
   }
   const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
-  if (specs.length === 0) fatal("no addon is installed; run install first");
-
   const all = installedAddons();
+  // An installation with every addon disabled still needs its timer, its Nginx
+  // proxy and the panel's Addons entry reconciled -- that is the state the page
+  // offering them back is served from. Only a box with no manager at all has
+  // nothing to repair.
+  if (specs.length === 0 && !existsSync(`${SYSTEMD_DIR}/${MANAGER_UNIT}`)) {
+    fatal("clp-addons is not installed; run install first");
+  }
+
   ensureServiceUser(quiet);
   removeLegacyInstall(quiet);
   ensureDirs(all);
@@ -450,7 +462,7 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   }
   removeLegacyUnits(quiet);
   removeLegacyUsers(quiet);
-  installSudoers(quiet);
+  reconcilePanelIdentity(quiet);
   const unitChanged = installUnits(all);
   generateSnapshot();
   ensureDirs(all);
@@ -466,7 +478,7 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   await runStagerMaintenance(all);
   await runInstaticMaintenance(all);
   runManagerMaintenance();
-  if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ")})`);
+  if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ") || "no addon enabled"})`);
 }
 
 function statusValue(value: string, ok: boolean): string {
@@ -576,7 +588,7 @@ export function cmdUninstall(argv: string[]): void {
 
   stopUnits(remaining.length > 0);
   removeLegacyInstall();
-  reconcileAnchors(true, spec.name);
+  reconcileAnchors(true, spec.name, remaining.length > 0);
   purgeTwigCache();
   if (purge) {
     const failed: string[] = [];
@@ -600,7 +612,7 @@ export function cmdUninstall(argv: string[]): void {
 
   if (remaining.length > 0) {
     ensureDirs(remaining.map((name) => ADDONS[name]!));
-    installSudoers();
+    reconcilePanelIdentity();
     installUnits(remaining.map((name) => ADDONS[name]!));
     startUnits();
     log.ok(`${spec.name} removed; remaining addons are still available`);
@@ -693,10 +705,11 @@ async function handleManagerRoute(req: Request, path: string, server: Server<unk
 }
 
 async function cmdServe(): Promise<never> {
-  const specs = installedAddons();
-  if (specs.length === 0) fatal("no addon is installed; run install first");
-  const mounted = specs.map((spec) => spec.name).filter((name) => MANAGERS[name]);
-  if (mounted.length === 0) fatal("none of the installed addons have a manager in this binary");
+  // Serving nothing is a legitimate state, not a failed start. Every addon is
+  // compiled in, so a manager with none of them enabled still has a job: it is
+  // the page that offers them back. Exiting here instead meant disabling the
+  // last addon killed the only surface that could re-enable it.
+  const mounted = installedAddons().map((spec) => spec.name).filter((name) => MANAGERS[name]);
 
   const socketDir = SOCKET_PATH.slice(0, SOCKET_PATH.lastIndexOf("/"));
   if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH);
@@ -879,7 +892,11 @@ export function indexPage(
   const content = `<div class="page-heading"><h1>Addons</h1></div>` +
     failureBlock +
     jobBlock +
-    (cards ? `<div class="addon-grid">${cards}</div>` : `<div class="card empty">${esc("No addons are currently available.")}</div>`) +
+    (cards
+      ? `<div class="addon-grid">${cards}</div>`
+      : `<div class="card empty">${esc(available.length
+        ? "No addons are enabled. Enable one below to add it to CloudPanel."
+        : "No addons are currently available.")}</div>`) +
     (availableCards
       ? `<section class="addon-section"><h2>Available</h2><div class="addon-grid">${availableCards}</div></section>`
       : "");

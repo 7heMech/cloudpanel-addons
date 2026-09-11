@@ -157,11 +157,11 @@ function enabled(name: string): boolean {
 /**
  * Reject what the runner would only discover after it had started.
  *
- * Disabling the last addon is refused outright rather than reported as a failed
- * job: it would stop the manager for good, since `serve` exits when no addon is
- * configured, and the button that could bring it back is served by the process
- * it just stopped. Removing the installation is `clp-addons uninstall`, which
- * runs from a shell that still exists afterwards.
+ * Disabling the last addon is not on this list. `serve` keeps running with none
+ * enabled, because every addon is compiled in and a manager with none of them
+ * on is still the page that offers them back; the panel's Addons entry is kept
+ * by `installedInjections` for the same reason. Taking the installation away
+ * altogether is still `clp-addons uninstall`.
  */
 function rejectImpossible(kind: ManagerJobKind, addon: string): string | null {
   if (kind === "update") return null;
@@ -169,10 +169,6 @@ function rejectImpossible(kind: ManagerJobKind, addon: string): string | null {
   const isEnabled = enabled(addon);
   if (kind === "enable" && isEnabled) return `${addon} is already enabled`;
   if (kind === "disable" && !isEnabled) return `${addon} is already disabled`;
-  if (kind === "disable" && ADDON_NAMES.filter(enabled).length <= 1) {
-    return `${addon} is the only enabled addon; disabling it here would leave nothing to serve this page. `
-      + "Remove the installation with 'clp-addons uninstall' instead.";
-  }
   return null;
 }
 

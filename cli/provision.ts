@@ -82,19 +82,6 @@ function installedAddonSpecs(): AddonSpec[] {
   return ADDON_NAMES.map((name) => ADDONS[name]!).filter((spec) => existsSync(spec.configFile));
 }
 
-export function sudoersCommandPaths(specs: AddonSpec[] = installedAddonSpecs()): string[] {
-  return specs.length > 0 ? [CLI_BIN] : [];
-}
-
-export function sudoersRule(specs: AddonSpec[] = installedAddonSpecs()): string {
-  if (specs.length === 0) return "";
-  // The argument wildcard is confined to the action namespace. The binary
-  // rejects unknown addons and addons without a root-owned installed config,
-  // while this prefix keeps install/update/repair/status/uninstall/serve
-  // outside sudoers' match.
-  return `${SERVICE_USER} ALL=(root) NOPASSWD: ${CLI_BIN} action *`;
-}
-
 /**
  * Who may own the panel vhost we read the identity from, and inject the proxy
  * into.
@@ -414,16 +401,26 @@ export function hardenBackups(spec: AddonSpec, quiet = false): void {
   if (changed && !quiet) log.ok(`${dir}: tightened ${changed} path(s)`);
 }
 
-export function installSudoers(quiet = false, specs: AddonSpec[] = installedAddonSpecs()): void {
-  // With the root gateway daemon, clp-addons requires zero sudo privileges.
-  // We proactively remove any legacy sudoers file to maintain zero system pollution.
+/**
+ * Record who the panel is, and scrub anything an older install left behind.
+ *
+ * This used to install a sudoers rule, and was called `installSudoers` long
+ * after it had stopped doing that: the root gateway daemon replaced sudo
+ * entirely, so the manager holds no sudo privileges at all and there is no rule
+ * to write. What is left is the panel identity file the root action binary
+ * reads to refuse operating on the panel's own hostname, plus the removal of
+ * any `/etc/sudoers.d` drop-in a pre-gateway version of this project installed.
+ * That removal has to keep happening for as long as an upgrade from one of
+ * those versions is possible; the name it was hiding under did not.
+ */
+export function reconcilePanelIdentity(quiet = false, specs: AddonSpec[] = installedAddonSpecs()): void {
   removeSudoers();
   if (specs.length > 0) {
     ensurePanelIdentity(quiet);
   } else {
     rmSync(PANEL_IDENTITY_PATH, { force: true });
   }
-  if (!quiet) log.ok("zero-sudo: manager dispatches via root gateway daemon; sudoers removed");
+  if (!quiet) log.ok("panel identity reconciled; the manager dispatches via the root gateway and holds no sudo rule");
 }
 
 export function removeSudoers(): void {
