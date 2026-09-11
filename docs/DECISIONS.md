@@ -1699,6 +1699,62 @@ journal from the timer's `repair --quiet` invocation. `install` is unchanged: it
 calls `ensureDirs(specs, true)` and still fails loudly when no session exists, because
 there a human is present to see it and act.
 
+## The panel vhost is panel-owned, and that is not a defect
+
+CloudPanel 6 runs the panel on a second Nginx instance: config root
+`/home/clp/services/nginx/nginx.conf`, vhost
+`/home/clp/services/nginx/sites-enabled/cloudpanel.conf`, unit `clp-nginx`,
+with the distro instance still serving the site vhosts out of
+`/etc/nginx/sites-enabled`. Earlier layouts put the panel vhost in the distro
+tree. `nginxLayout()` (`cli/paths.ts`) detects which one an install has by
+looking for the panel tree, not by parsing a version string -- both layouts are
+in the field and the version does not distinguish them -- and the resolved
+layout drives vhost discovery, `nginx -t -c`, and the reload target. Testing or
+reloading the wrong instance is silently wrong: the distro `nginx -t` never
+reads the panel's config, so it passes on a broken panel vhost.
+
+The whole panel tree, config root included, is `clp:clp 0770`. The installer
+used to require the vhost to be root-owned and refused to install because of
+it. That requirement is now "owned by root or the panel user, and not
+world-writable" (`vhostOwnerAccepted`, `cli/provision.ts`).
+
+The reason is that the requirement was never buying anything here. The panel
+user is already inside this project's trust boundary, twice over and by design:
+
+  - the manager socket is group `clp`, mode 0660, which is how Nginx reaches
+    the daemon -- so the panel user can talk to it directly and never touch the
+    vhost at all;
+  - the session files `action auth` reads to decide who a request is are
+    panel-owned, so the panel user can write a session that comes back
+    `ROLE_ADMIN`.
+
+An actor holding either of those does not need to rewrite a vhost. Refusing to
+install because the panel owns its own configuration would have cost every
+current CloudPanel an install to defend against nothing. What the check still
+refuses is the case it was really aimed at: a vhost any local user can rewrite.
+
+What replaces the ownership guarantee is not a permission but a reconciler.
+`reconcileNginxProxy` records the hash of the vhost with our block stripped, so
+it can tell the two drift cases apart: if only our block was removed the
+stripped content still matches, and it re-renders, writes, tests and reloads --
+the block comes back on its own. If the surrounding config also changed, the
+stripped hash differs, and it reports `upstream-changed` and writes nothing,
+because the recorded baseline no longer describes the file. A CloudPanel
+upgrade that rewrites the vhost is exactly that second case and wants a human.
+
+For the reinsertion to be prompt rather than up to fifteen minutes late, the
+resolved vhost joins the addon templates in the `.path` unit's watch set
+(`reconcileWatchPaths`, `cli/provision.ts`), and the watcher's
+`repair --anchors-only` fast path now reconciles the proxy as well as the Twig
+anchors. Both reconcilers no-op when nothing drifted, which is what keeps that
+safe to fire on every write during a package upgrade.
+
+Detection, not prevention, is the honest ambition: someone holding `clp` could
+rewrite the vhost, use it, and put it back inside the window. But prevention
+was never on the table against an actor that already has the socket and the
+session store, and continuous reconciliation is strictly more than the
+ownership check ever gave.
+
 ## Known gaps
 
 - `--local` installs skip provenance verification by construction. Staging only.

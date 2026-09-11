@@ -440,6 +440,15 @@ function resolveMasterVhost(options: NginxPaths = {}): MasterVhostResolution {
   return { path: candidate.path, content };
 }
 
+/**
+ * The vhost path the watcher follows. Unlike findMasterVhost this does not
+ * require the file to be readable or unambiguous: a `.path` unit has to name
+ * the file even while it is missing, so it can fire when it appears.
+ */
+export function panelVhostWatchPath(options: NginxPaths = {}): string | null {
+  return masterVhostPath(nginxPaths(options)).path ?? null;
+}
+
 export function findMasterVhost(options: NginxPaths = {}): string | null {
   const resolved = resolveMasterVhost(options);
   return "content" in resolved ? resolved.path : null;

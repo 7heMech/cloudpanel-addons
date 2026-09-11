@@ -3,11 +3,12 @@ import {
 } from "node:fs";
 import {
   ADDON_NAMES, ANCHOR_SERVICE, CLI_BIN, CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS,
-  ADDONS, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT, PANEL_GROUP, RECONCILE_PATH, RECONCILE_SERVICE,
+  ADDONS, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT, PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
   SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, type AddonSpec, templateWatchPaths,
 } from "./paths";
-import { findMasterVhost } from "./inject";
+import { findMasterVhost, panelVhostWatchPath } from "./inject";
+import { panelUserUid } from "../lib/sso-auth";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
 
 export { PANEL_IDENTITY_PATH } from "./paths";
@@ -86,20 +87,53 @@ export function sudoersRule(specs: AddonSpec[] = installedAddonSpecs()): string 
   return `${SERVICE_USER} ALL=(root) NOPASSWD: ${CLI_BIN} action *`;
 }
 
+/**
+ * Who may own the panel vhost we read the identity from, and inject the proxy
+ * into.
+ *
+ * This used to demand root ownership. On the CloudPanel layout that is
+ * unsatisfiable by design -- the panel owns its whole Nginx tree, config root
+ * included -- and demanding it bought nothing, because the panel user is
+ * already inside this project's trust boundary in two load-bearing ways: the
+ * manager socket is group `clp` mode 0660 so the panel can reach the daemon
+ * without going through Nginx at all, and the session files `action auth`
+ * trusts to decide who you are are panel-owned, so the panel user can mint a
+ * session that comes back ROLE_ADMIN. A vhost check cannot defend against an
+ * actor that already holds both.
+ *
+ * What is still worth refusing is a vhost any local user can rewrite. That is
+ * the check's remaining job; do not re-tighten this to root-only without
+ * reading docs/DECISIONS.md first, as it makes the installer refuse every
+ * current CloudPanel.
+ */
+export function vhostOwnerAccepted(uid: number, mode: number): boolean {
+  if ((mode & 0o002) !== 0) return false;
+  if (uid === 0) return true;
+  const panelUid = panelUserUid();
+  return panelUid !== null && uid === panelUid;
+}
+
 function ensurePanelIdentity(quiet = false): void {
   const vhostPath = findMasterVhost();
   if (!vhostPath) fatal("CloudPanel master vhost was not found; refusing to install privileged actions");
 
   let content: string;
-  let rootOwned = false;
+  let trustedOwner = false;
+  let panelOwned = false;
   try {
     const stat = statSync(vhostPath);
-    rootOwned = stat.isFile() && stat.uid === 0 && (stat.mode & 0o022) === 0;
+    trustedOwner = stat.isFile() && vhostOwnerAccepted(stat.uid, stat.mode);
+    panelOwned = stat.uid !== 0;
     content = readFileSync(vhostPath, "utf-8");
   } catch {
     fatal(`CloudPanel master vhost could not be read: ${vhostPath}`);
   }
-  if (!rootOwned) fatal(`CloudPanel master vhost is not a root-owned, non-writable file: ${vhostPath}`);
+  if (!trustedOwner) {
+    fatal(`CloudPanel master vhost must be owned by root or ${PANEL_USER} and not world-writable: ${vhostPath}`);
+  }
+  if (panelOwned && !quiet) {
+    log.warn(`${vhostPath} is owned by ${PANEL_USER}, not root: the panel can rewrite the /addons/ proxy at any time, and reconciliation is what restores it`);
+  }
 
   const identity = panelIdentityFromVhost(content);
   if (!identity) {
@@ -464,7 +498,7 @@ WantedBy=multi-user.target
 `;
 }
 
-function reconcileUnits(): { service: string; timer: string; path: string; anchor: string } {
+export function reconcileUnits(): { service: string; timer: string; path: string; anchor: string } {
   return {
     service: `[Unit]
 Description=CloudPanel Addons reconciliation
@@ -489,7 +523,7 @@ WantedBy=timers.target
 Description=CloudPanel Addons template watcher
 
 [Path]
-${templateWatchPaths().map((path) => `PathChanged=${path}`).join("\n")}
+${reconcileWatchPaths().map((path) => `PathChanged=${path}`).join("\n")}
 Unit=${ANCHOR_SERVICE}
 
 [Install]
@@ -504,6 +538,18 @@ ExecStartPre=/bin/sleep 2
 ExecStart=/usr/local/bin/clp-addons repair --anchors-only --quiet
 `,
   };
+}
+
+/**
+ * Everything the watcher reconciles: the addons' Twig anchors and the panel
+ * vhost carrying the /addons/ proxy. The vhost belongs here because on the
+ * CloudPanel layout it is owned by the panel user, so a panel action can
+ * rewrite it at any time; the reconciler puts the block back, but only once
+ * something tells it to look.
+ */
+function reconcileWatchPaths(): string[] {
+  const vhost = panelVhostWatchPath();
+  return [...templateWatchPaths(), ...(vhost ? [vhost] : [])];
 }
 
 export function installUnits(specs: AddonSpec[]): boolean {

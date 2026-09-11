@@ -310,7 +310,15 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   const { positional, flags } = parseFlags(argv);
   const quiet = flags.quiet === true;
   if (flags["anchors-only"] === true) {
+    // The watcher's fast path: reconcile only what this project injected into
+    // panel-owned files. The Nginx proxy belongs here as much as the Twig
+    // anchors do -- the vhost is owned by the panel user on the CloudPanel
+    // layout, so a panel action can drop the /addons/ block at any time, and
+    // waiting up to fifteen minutes for the timer would leave the manager
+    // unreachable in between. Both reconcilers no-op when nothing drifted, so
+    // this stays cheap enough to run on every template write during an upgrade.
     reconcileAnchors(quiet);
+    if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
     return;
   }
   const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();

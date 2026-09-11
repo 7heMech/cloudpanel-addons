@@ -1,7 +1,7 @@
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
 import { dirname } from "node:path";
-import { CLI_BIN } from "../cli/paths";
+import { CLI_BIN, PANEL_USER } from "../cli/paths";
 
 const SESSION_COOKIE = "cloudpanel";
 const SESSION_ID_RE = /^[a-zA-Z0-9,-]+$/;
@@ -9,7 +9,6 @@ const USER_RE = /^[a-zA-Z0-9_.@-]{1,128}$/;
 const ROLE_RE = /^ROLE_[A-Z0-9_]{1,120}$/;
 const TOKEN_CLASS = "Symfony\\Component\\Security\\Http\\Authenticator\\Token\\PostAuthenticationToken";
 const USER_CLASS = "App\\Entity\\User";
-const PANEL_USER = "clp";
 export const MAX_SESSION_BYTES = 256 * 1024;
 export const MAX_SESSION_ID_LENGTH = 128;
 const AUTH_HELPER_TIMEOUT_MS = 2_000;
@@ -178,7 +177,7 @@ function decodeUtf8(bytes: Uint8Array): string | null {
   }
 }
 
-function panelUserUid(): number | null {
+export function panelUserUid(): number | null {
   try {
     const line = readFileSync("/etc/passwd", "utf8")
       .split("\n")

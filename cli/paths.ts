@@ -14,6 +14,7 @@ export const GH_PRIVATE = `${LIBEXEC_DIR}/gh`;
 
 export const SERVICE_USER = "clp-addons";
 export const SERVICE_GROUP = "clp-addons";
+export const PANEL_USER = "clp";
 export const PANEL_GROUP = "clp";
 export const SHARED_GROUP = SERVICE_GROUP;
 

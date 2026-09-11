@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -7,8 +7,10 @@ import {
   ADDONS, nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
 } from "../cli/paths";
 import {
-  ensurePanelSessionReadable, serviceUnit, sudoersCommandPaths, sudoersRule, warnIfPanelSessionUnreadable,
+  ensurePanelSessionReadable, reconcileUnits, serviceUnit, sudoersCommandPaths, sudoersRule,
+  vhostOwnerAccepted, warnIfPanelSessionUnreadable,
 } from "../cli/provision";
+import { panelUserUid } from "../lib/sso-auth";
 // Other suites in this process mock.module("../cli/provision"); the query suffix keeps
 // these assertions bound to the real implementation regardless of file order.
 const realProvision = async (): Promise<typeof import("../cli/provision")> =>
@@ -363,5 +365,37 @@ test("the panel Nginx instance is detected from its tree, not a version string",
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the path unit watches the panel vhost as well as the addon templates", () => {
+  const unit = reconcileUnits().path;
+  const watched = unit.split("\n").filter((line) => line.startsWith("PathChanged=")).map((line) => line.slice(12));
+  expect(watched.some((path) => path.endsWith(".html.twig"))).toBe(true);
+  // The proxy block lives in a panel-owned file, so a panel action can remove
+  // it; the watcher is what makes the reconciler put it back promptly.
+  expect(watched.some((path) => path.endsWith("/cloudpanel.conf"))).toBe(true);
+});
+
+test("the watcher's fast path reconciles the proxy, not just the anchors", () => {
+  const source = readFileSync(join(import.meta.dir, "..", "cli/index.ts"), "utf8");
+  const branchStart = source.indexOf('flags["anchors-only"] === true');
+  const branch = source.slice(branchStart, source.indexOf("return;", branchStart));
+  expect(branch.includes("reconcileAnchors(quiet)")).toBe(true);
+  expect(branch.includes("reconcileNginx(quiet)")).toBe(true);
+});
+
+test("the panel vhost may be owned by root or the panel user, but never world-writable", () => {
+  const panelUid = panelUserUid();
+  expect(vhostOwnerAccepted(0, 0o644)).toBe(true);
+  expect(vhostOwnerAccepted(0, 0o666)).toBe(false);
+  // Group-writable is accepted: the CloudPanel tree is clp:clp 0770, and the
+  // panel user is already inside the trust boundary (socket group, session
+  // store). World-writable is the case that still means anyone can rewrite it.
+  expect(vhostOwnerAccepted(0, 0o660)).toBe(true);
+  if (panelUid !== null) {
+    expect(vhostOwnerAccepted(panelUid, 0o770)).toBe(true);
+    expect(vhostOwnerAccepted(panelUid, 0o777)).toBe(false);
+    expect(vhostOwnerAccepted(panelUid + 1000, 0o644)).toBe(false);
   }
 });
