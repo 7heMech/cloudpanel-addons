@@ -3,7 +3,8 @@ import {
 } from "node:fs";
 import {
   ADDON_NAMES, ANCHOR_SERVICE, CLI_BIN, CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS,
-  ADDONS, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT, PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
+  ADDONS, AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT,
+  PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
   SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, type AddonSpec, templateWatchPaths,
 } from "./paths";
@@ -505,6 +506,64 @@ WantedBy=multi-user.target
 `;
 }
 
+/**
+ * The root side of session authentication, as systemd units rather than sudo.
+ *
+ * The manager is sandboxed with RestrictAddressFamilies= and
+ * ProtectKernelTunables=, each of which implies NoNewPrivileges=yes, and
+ * systemd does not let a unit turn that back off. Under NoNewPrivileges sudo
+ * cannot escalate at all, so the daemon could never call the helper that way
+ * without giving up its own sandbox.
+ *
+ * Socket activation inverts it: the manager connects as itself, and systemd
+ * runs the helper as root on the other end. Accept=yes hands each connection
+ * to the helper as stdin/stdout, which is precisely the bounded one-shot
+ * contract `action auth` already speaks -- the same single binary, invoked by
+ * systemd instead of by sudo.
+ */
+export function authUnits(): { socket: string; service: string } {
+  return {
+    socket: `[Unit]
+Description=CloudPanel Addons session authentication socket
+
+[Socket]
+ListenStream=${AUTH_SOCKET_PATH}
+SocketUser=root
+SocketGroup=${SERVICE_GROUP}
+SocketMode=0660
+Accept=yes
+RuntimeDirectory=clp-addons
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+
+[Install]
+WantedBy=sockets.target
+`,
+    service: `[Unit]
+Description=CloudPanel Addons session authentication
+
+[Service]
+Type=simple
+ExecStart=${CLI_BIN} action auth
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+TimeoutStartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+MemoryDenyWriteExecute=no
+SystemCallArchitectures=native
+`,
+  };
+}
+
 export function reconcileUnits(): { service: string; timer: string; path: string; anchor: string } {
   return {
     service: `[Unit]
@@ -569,11 +628,17 @@ export function installUnits(specs: AddonSpec[]): boolean {
   writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_TIMER}`, units.timer, 0o644);
   writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_PATH}`, units.path, 0o644);
   writeAtomic(`${SYSTEMD_DIR}/${ANCHOR_SERVICE}`, units.anchor, 0o644);
+  const auth = authUnits();
+  writeAtomic(`${SYSTEMD_DIR}/${AUTH_SOCKET_UNIT}`, auth.socket, 0o644);
+  writeAtomic(`${SYSTEMD_DIR}/${AUTH_SERVICE_UNIT}`, auth.service, 0o644);
   run("systemctl", ["daemon-reload"]);
   return changed;
 }
 
 export function startUnits(): void {
+  // Before the manager: without it every authenticated request fails closed.
+  run("systemctl", ["enable", AUTH_SOCKET_UNIT]);
+  run("systemctl", ["restart", AUTH_SOCKET_UNIT]);
   run("systemctl", ["enable", MANAGER_UNIT]);
   run("systemctl", ["restart", MANAGER_UNIT]);
   run("systemctl", ["enable", RECONCILE_TIMER]);
@@ -585,10 +650,11 @@ export function startUnits(): void {
 
 export function stopUnits(keepShared = false): void {
   if (keepShared) return;
-  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH]) {
+  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, AUTH_SOCKET_UNIT]) {
     tryRun("systemctl", ["disable", "--now", unit]);
   }
-  for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE]) {
+  for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE,
+    AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     rmSync(`${SYSTEMD_DIR}/${unit}`, { force: true });
   }
   tryRun("systemctl", ["daemon-reload"]);

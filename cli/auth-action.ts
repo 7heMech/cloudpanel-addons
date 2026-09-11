@@ -99,6 +99,10 @@ async function readBoundedStdin(): Promise<Uint8Array | null> {
         }
         chunks.push(chunk);
         total += chunk.byteLength;
+        // One request is one line. Stop at the newline rather than reading to
+        // EOF: under socket activation stdin is the connection, and the caller
+        // holds it open for the reply, so waiting for EOF would deadlock.
+        if (chunk.includes(10)) break;
       }
       const bytes = new Uint8Array(total);
       let offset = 0;

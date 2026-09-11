@@ -23,6 +23,9 @@ export const SOCKET_PATH = `${SOCKET_DIR}/manager.sock`;
 export const SESSION_DIR = "/home/clp/htdocs/app/files/var/sessions";
 
 export const MANAGER_UNIT = "clp-addons.service";
+export const AUTH_SOCKET_UNIT = "clp-addons-auth.socket";
+export const AUTH_SERVICE_UNIT = "clp-addons-auth@.service";
+export const AUTH_SOCKET_PATH = `${SOCKET_DIR}/auth.sock`;
 export const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";
 const DISTRO_NGINX_SITES_DIR = "/etc/nginx/sites-enabled";
 const PANEL_NGINX_DIR = "/home/clp/services/nginx";

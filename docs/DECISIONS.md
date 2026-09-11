@@ -1755,6 +1755,47 @@ was never on the table against an actor that already has the socket and the
 session store, and continuous reconciliation is strictly more than the
 ownership check ever gave.
 
+## The root auth helper is reached by socket activation, not sudo
+
+The manager runs as `clp-addons` and the panel's session files are `clp:clp`
+0600, so it cannot read them: deciding who a request is has to happen in a root
+process. That process is the same single binary, invoked as
+`clp-addons action auth`, speaking one bounded line of stdin and one bounded
+JSON line of stdout. What changed is only how the daemon reaches it.
+
+sudo cannot be that path. The manager's unit sets `RestrictAddressFamilies=`
+and `ProtectKernelTunables=`, and each of those implies
+`NoNewPrivileges=yes`, which systemd does not allow a unit to turn back off.
+Under `NoNewPrivileges` sudo refuses to escalate at all -- it reports "the no
+new privileges flag is set" and exits 1. The first build shipped the sudo call
+and every authenticated request came back 503 on the test box, with the
+sandbox doing exactly what it was configured to do. Keeping sudo would have
+meant dropping both properties from an internet-facing daemon, and leaving a
+trap: re-adding either one later would silently break authentication again.
+
+So the connection is inverted. `clp-addons-auth.socket` listens on
+`/run/clp-addons/auth.sock` as `root:clp-addons` 0660 with `Accept=yes`; the
+manager connects as itself, and systemd starts `clp-addons-auth@.service` as
+root with that connection as the helper's stdin and stdout. `Accept=yes` is
+what makes this fit: the helper's existing one-shot stdin/stdout contract is
+already what a per-connection service speaks, so no protocol was added and no
+second artifact exists -- the socket unit's `ExecStart` is the same
+`/usr/local/bin/clp-addons`.
+
+One protocol detail this forces: the helper stops reading at the request's
+newline rather than at EOF. Under socket activation stdin is the connection,
+and the caller holds it open waiting for the reply, so reading to EOF
+deadlocks until the client's two-second timeout.
+
+The client treats every failure -- connect error, timeout, oversized reply,
+unparseable reply -- as `unavailable`, which becomes 503. The one thing it
+never does is treat a failed lookup as an authenticated request.
+
+`sudo` is still used for addon actions (`clp-addons action instatic|stager`),
+where the caller is the manager acting on an operator's request and the
+sudoers rule confines it to the `action` namespace. Only the authentication
+path moved.
+
 ## Known gaps
 
 - `--local` installs skip provenance verification by construction. Staging only.

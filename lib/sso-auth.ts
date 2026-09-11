@@ -1,7 +1,7 @@
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
 import { dirname } from "node:path";
-import { CLI_BIN, PANEL_USER } from "../cli/paths";
+import { AUTH_SOCKET_PATH, PANEL_USER } from "../cli/paths";
 
 const SESSION_COOKIE = "cloudpanel";
 const SESSION_ID_RE = /^[a-zA-Z0-9,-]+$/;
@@ -102,66 +102,67 @@ async function acquireAuthSlot(): Promise<(() => void) | null> {
   });
 }
 
-async function callAuthHelper(sessionId: string): Promise<AuthHelperReply> {
+/**
+ * Ask the root helper about one session over its socket.
+ *
+ * The transport is systemd socket activation rather than sudo: the manager's
+ * own unit implies NoNewPrivileges=yes, under which sudo cannot escalate at
+ * all. systemd accepts the connection, runs `clp-addons action auth` as root
+ * with the connection as its stdin/stdout, and this writes one bounded request
+ * and reads one bounded reply. Every failure is "unavailable", which the
+ * caller turns into 503 -- never into an authenticated request.
+ */
+async function callAuthHelper(sessionId: string, socketPath = AUTH_SOCKET_PATH): Promise<AuthHelperReply> {
   const release = await acquireAuthSlot();
   if (!release) return { kind: "unavailable" };
-  const runningAsRoot = process.getuid?.() === 0;
-  const command = runningAsRoot ? CLI_BIN : "/usr/bin/sudo";
-  const args = runningAsRoot ? ["action", "auth"] : ["-n", CLI_BIN, "action", "auth"];
   try {
-    const child = Bun.spawn({
-      cmd: [command, ...args],
-      stdin: new TextEncoder().encode(`${sessionId}\n`),
-      stdout: "pipe",
-      stderr: "pipe",
-      timeout: AUTH_HELPER_TIMEOUT_MS,
-      maxBuffer: AUTH_HELPER_MAX_OUTPUT_BYTES,
-    });
-    const readBounded = async (stream: ReadableStream<Uint8Array>): Promise<Uint8Array | null> => {
-      const reader = stream.getReader();
+    return await new Promise<AuthHelperReply>((resolve) => {
       const chunks: Uint8Array[] = [];
       let total = 0;
-      try {
-        while (true) {
-          const next = await reader.read();
-          if (next.done) break;
-          const chunk = next.value;
-          if (!(chunk instanceof Uint8Array) || total + chunk.byteLength > AUTH_HELPER_MAX_OUTPUT_BYTES) {
-            try { child.kill(); } catch { /* timeout/exit path will reap it */ }
-            await reader.cancel();
-            return null;
-          }
-          chunks.push(chunk);
-          total += chunk.byteLength;
-        }
-        const bytes = new Uint8Array(total);
-        let offset = 0;
-        for (const chunk of chunks) {
-          bytes.set(chunk, offset);
-          offset += chunk.byteLength;
-        }
-        return bytes;
-      } catch {
-        try { child.kill(); } catch { /* timeout/exit path will reap it */ }
-        return null;
-      } finally {
-        reader.releaseLock();
-      }
-    };
-    const [stdoutResult, stderrResult, exitResult] = await Promise.allSettled([
-      readBounded(child.stdout),
-      readBounded(child.stderr),
-      child.exited,
-    ]);
-    // Consume stderr to avoid a pipe backpressure deadlock, but never expose
-    // it: the helper's contract carries no session or credential details.
-    void stderrResult;
-    if (stdoutResult.status !== "fulfilled" || stdoutResult.value === null
-      || stderrResult.status !== "fulfilled" || stderrResult.value === null
-      || exitResult.status !== "fulfilled" || exitResult.value !== 0) {
-      return { kind: "unavailable" };
-    }
-    return parseAuthHelperReply(new TextDecoder().decode(stdoutResult.value));
+      let settled = false;
+      let socket: { end: () => void } | null = null;
+      const finish = (reply: AuthHelperReply) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { socket?.end(); } catch { /* already closed */ }
+        resolve(reply);
+      };
+      const timer = setTimeout(() => finish({ kind: "unavailable" }), AUTH_HELPER_TIMEOUT_MS);
+
+      Bun.connect({
+        unix: socketPath,
+        socket: {
+          open(connection) {
+            socket = connection;
+            connection.write(`${sessionId}\n`);
+          },
+          data(_connection, chunk) {
+            if (total + chunk.byteLength > AUTH_HELPER_MAX_OUTPUT_BYTES) {
+              finish({ kind: "unavailable" });
+              return;
+            }
+            chunks.push(chunk);
+            total += chunk.byteLength;
+          },
+          close() {
+            const bytes = new Uint8Array(total);
+            let offset = 0;
+            for (const chunk of chunks) {
+              bytes.set(chunk, offset);
+              offset += chunk.byteLength;
+            }
+            finish(parseAuthHelperReply(new TextDecoder().decode(bytes)));
+          },
+          error() {
+            finish({ kind: "unavailable" });
+          },
+          connectError() {
+            finish({ kind: "unavailable" });
+          },
+        },
+      }).catch(() => finish({ kind: "unavailable" }));
+    });
   } catch {
     return { kind: "unavailable" };
   } finally {
