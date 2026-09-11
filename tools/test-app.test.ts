@@ -1082,7 +1082,8 @@ console.log("\n== two addons hand out ports from one block ==");
       mkdirSync(`${d}/other.test`, { recursive: true });
       writeFileSync(`${d}/other.test/meta.json`, JSON.stringify({ domain: "other.test", port: recorded }));
       const paths = {
-        lockDir: `${d}/lock`, dataBaseDir: d, backupDir: `${d}/backups`, panelDb: `${d}/panel.db`,
+        lockDir: `${d}/lock`, dataBaseDir: d, backupDir: `${d}/backups`, jobsDir: `${d}/jobs`,
+        actionBinary: `${d}/clp-addons`, panelDb: `${d}/panel.db`,
         clpctl: `${d}/clpctl`, panelIdentityFile: `${d}/identity`, sqlite3: "sqlite3",
       };
       return portHolder(asked, self, paths) ?? "FREE";

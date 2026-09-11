@@ -35,7 +35,7 @@ type AddonHandler = (
   req: Request,
   path: string,
   updateNotice?: { current: string; latest: string } | null,
-  server?: Server | null,
+  server?: Server<unknown> | null,
 ) => Promise<Response>;
 
 const MANAGERS: Record<string, AddonHandler> = {

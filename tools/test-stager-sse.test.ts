@@ -35,7 +35,7 @@ describe("Stager SSE job monitoring", () => {
     const res = await handle(req, "/api/jobs/../events");
     expect(res.status).toBe(400);
     expect(res.headers.get("Content-Type")).toBe("application/json");
-    const body = await res.json();
+    const body = (await res.json()) as { ok: boolean; error?: string };
     expect(body.ok).toBe(false);
     expect(body.error).toContain("not a valid job id");
   });
@@ -48,7 +48,7 @@ describe("Stager SSE job monitoring", () => {
       const res = await handle(req, "/api/jobs/20260910T093000Z-000000/events");
       expect(res.status).toBe(404);
       expect(res.headers.get("Content-Type")).toBe("application/json");
-      const body = await res.json();
+      const body = (await res.json()) as { ok: boolean; error?: string };
       expect(body.ok).toBe(false);
       expect(body.error).toBe("job not found");
     } finally {

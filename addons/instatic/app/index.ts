@@ -53,7 +53,7 @@ export async function handle(
   req: Request,
   path: string,
   updateNotice?: { current: string; latest: string } | null,
-  server?: Server | null,
+  server?: Server<unknown> | null,
 ): Promise<Response> {
   const method = req.method;
 
