@@ -5,9 +5,6 @@ are recorded first; the historical notes below are retained for their rationale
 and regression history. Where old deployment details conflict with the current
 section, the current section wins.
 
-The implementation specification is
-[SPEC_VHOST_UNIX_SOCKET_SSO.md](SPEC_VHOST_UNIX_SOCKET_SSO.md).
-
 ## Current architecture
 
 ### Privilege boundary
@@ -1101,8 +1098,7 @@ the transport layer instead of papering over it with an application-level
 credential.
 
 **What was specified to replace it next, and also did not ship.**
-`docs/SPEC_VHOST_UNIX_SOCKET_SSO.md` Task 3 (now marked superseded at its own
-head) proposed a privileged `clp-verify-session` helper invoked via `sudo`,
+An earlier draft proposal explored a privileged `clp-verify-session` helper invoked via `sudo`,
 whose result would be cached behind an HMAC-signed `clp_addons_token` cookie so
 most requests needed no `sudo` call at all. Nothing named `clp-verify-session`
 was ever built, there is no `/run/clp-addons/hmac.key`, and no `Set-Cookie:
