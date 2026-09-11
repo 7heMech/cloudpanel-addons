@@ -7,7 +7,7 @@ import {
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation, type FetchedArtifact } from "./release";
 import {
   ensureDirs, ensureServiceUser, ensureTimerArmed, hardenBackups,
-  installSudoers, installUnits, installedConfig, purgeTwigCache, removeLegacyUnits,
+  ensureAuthHelperReady, installSudoers, installUnits, installedConfig, purgeTwigCache, removeLegacyUnits,
   removeLegacyInstall, removeLegacyUsers, removeSudoers, startUnits, stopUnits, unitActive,
   unitPid, warnIfPanelSessionUnreadable, writeConfig,
 } from "./provision";
@@ -18,7 +18,7 @@ import {
 import { fatal, Fatal, log, parseFlags, requireRoot, tryRun, writeAtomic } from "./util";
 import { runRecon } from "./recon";
 import { generateSnapshot } from "../lib/panel-snapshot";
-import { authenticateRequest } from "../lib/sso-auth";
+import { authenticateRequest, type AuthenticatedRequest } from "../lib/sso-auth";
 import { handle as handleInstatic } from "../addons/instatic/app/index";
 import { handle as handleStager } from "../addons/stager/app/index";
 import { splitMount } from "../lib/mount";
@@ -28,6 +28,7 @@ import { headerTarget } from "../lib/panel-nav";
 import { checkCliUpdate } from "../lib/update-check";
 import { runInstaticAction } from "../addons/instatic/action";
 import { runStagerAction, type StagerActionOptions } from "../addons/stager/action";
+import { runAuthActionStdin } from "./auth-action";
 
 type AddonHandler = (
   req: Request,
@@ -226,6 +227,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   removeLegacyInstall();
   ensureDirs(specs, true);
   installArtifacts(artifacts, artifactTag ?? CLI_VERSION.replace(/^v/, ""));
+  ensureAuthHelperReady();
   for (const item of specs) writeConfig(item, true);
   installSudoers();
   installUnits(specs);
@@ -265,6 +267,7 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
   removeLegacyInstall();
   ensureDirs(specs);
   if (artifacts) installArtifacts(artifacts, target);
+  ensureAuthHelperReady();
   for (const spec of specs) writeConfig(spec, true);
   installSudoers();
   removeLegacyUnits(true);
@@ -307,7 +310,15 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   const { positional, flags } = parseFlags(argv);
   const quiet = flags.quiet === true;
   if (flags["anchors-only"] === true) {
+    // The watcher's fast path: reconcile only what this project injected into
+    // panel-owned files. The Nginx proxy belongs here as much as the Twig
+    // anchors do -- the vhost is owned by the panel user on the CloudPanel
+    // layout, so a panel action can drop the /addons/ block at any time, and
+    // waiting up to fifteen minutes for the timer would leave the manager
+    // unreachable in between. Both reconcilers no-op when nothing drifted, so
+    // this stays cheap enough to run on every template write during an upgrade.
     reconcileAnchors(quiet);
+    if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
     return;
   }
   const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
@@ -320,6 +331,11 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   // Unattended (timer-driven) reconciliation must not abort just because nobody is
   // currently logged into the panel; unlike install, warn and keep repairing.
   warnIfPanelSessionUnreadable();
+  try {
+    ensureAuthHelperReady();
+  } catch (error) {
+    log.warn(`panel auth helper check failed, continuing without it: ${error instanceof Error ? error.message : String(error)}`);
+  }
   for (const spec of all) {
     writeConfig(spec, true);
     hardenBackups(spec, quiet);
@@ -494,6 +510,15 @@ function internalPath(path: string): string {
   return path.replace(/\/+$/, "") || "/";
 }
 
+/** Return the shared manager denial for an authenticated non-administrator. */
+export function adminGate(auth: AuthenticatedRequest | null): Response | null {
+  if (auth?.roles.includes("ROLE_ADMIN")) return null;
+  return Response.json(
+    { ok: false, error: "administrator role required" },
+    { status: 403, headers: SECURITY_HEADERS },
+  );
+}
+
 async function cmdServe(): Promise<never> {
   const specs = installedAddons();
   if (specs.length === 0) fatal("no addon is installed; run install first");
@@ -517,6 +542,13 @@ async function cmdServe(): Promise<never> {
           headers: { ...Object.fromEntries(gate.response.headers), ...SECURITY_HEADERS },
         });
       }
+
+      // The manager is an administrative surface. Keep this decision at the
+      // shared socket boundary so every mounted HTML and API route, including
+      // future handlers and the manager index, receives the same gate before
+      // update checks or addon code can run.
+      const denied = adminGate(gate.auth);
+      if (denied) return denied;
 
       const update = await checkCliUpdate(CLI_VERSION);
       const notice = update?.hasUpdate ? { current: update.current, latest: update.latest } : null;
@@ -576,17 +608,19 @@ function usage(): void {
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons action instatic <verb> [options]
   clp-addons action stager <verb> [options]
+  clp-addons action auth (session id on bounded stdin)
   clp-addons serve
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}
 
 The manager is served at ${mountPath("instatic").replace("/instatic", "")} through
-the CloudPanel master vhost and authenticates with the CloudPanel PHPSESSID.`);
+the CloudPanel master vhost and authenticates with the CloudPanel cloudpanel session.`);
 }
 
 async function cmdAction(argv: string[]): Promise<number> {
   const [addon, ...rest] = argv;
+  if (addon === "auth") return runAuthActionStdin(rest);
   if (addon === "instatic" || addon === "stager") {
     if (!installedConfig(ADDONS[addon]!)) fatal(`the ${addon} addon is not installed`);
     if (addon === "instatic") return runInstaticAction(rest);

@@ -1,14 +1,20 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import {
-  ADDONS, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
+  ADDONS, nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
 } from "../cli/paths";
 import {
-  ensurePanelSessionReadable, serviceUnit, sudoersCommandPaths, sudoersRule, warnIfPanelSessionUnreadable,
+  authUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit, sudoersCommandPaths, sudoersRule,
+  vhostOwnerAccepted, warnIfPanelSessionUnreadable,
 } from "../cli/provision";
+import { panelUserUid } from "../lib/sso-auth";
+// Other suites in this process mock.module("../cli/provision"); the query suffix keeps
+// these assertions bound to the real implementation regardless of file order.
+const realProvision = async (): Promise<typeof import("../cli/provision")> =>
+  await import("../cli/provision?provision-test-real" as "../cli/provision");
 
 const REPO = join(import.meta.dir, "..");
 
@@ -199,7 +205,7 @@ test("the identity file is a separate root-owned action input", () => {
   expect(provisionProbe().identityPath).toBe("/etc/clp-addons/panel-identity.conf");
 });
 
-test("manager unit hardens its namespace without changing the sudo boundary", () => {
+test("manager unit hardens its namespace with zero-sudo root gateway dispatch", () => {
   const unit = serviceUnit([ADDONS.instatic!, ADDONS.stager!]);
 
   expect(unit).toContain("ProtectSystem=full");
@@ -207,6 +213,7 @@ test("manager unit hardens its namespace without changing the sudo boundary", ()
   expect(unit).toContain("PrivateTmp=yes");
   expect(unit).toContain("ProtectKernelTunables=yes");
   expect(unit).toContain("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6");
+  expect(unit).toContain("NoNewPrivileges=yes");
   const readWrite = unit.match(/^ReadWritePaths=(.*)$/m)?.[1]?.split(" ") ?? [];
   expect(readWrite).toContain("-/etc/letsencrypt");
   expect(readWrite).toContain("/var/backups/clp-addons");
@@ -218,7 +225,6 @@ test("manager unit hardens its namespace without changing the sudo boundary", ()
   expect(unit).toContain("RuntimeDirectory=clp-addons");
   expect(unit).toContain("ExecStart=/usr/local/bin/clp-addons serve");
   expect(unit).toContain("Restart=always");
-  expect(unit).not.toContain("NoNewPrivileges=");
   expect(unit).not.toContain("ExecStartPre=+");
   expect(unit).not.toContain("hmac");
 });
@@ -241,37 +247,57 @@ test("provisioning creates every project-owned writable directory", () => {
   expect(created).toContain("/var/lib/clp-addons");
 });
 
-test("provisioning verifies manager readability of a panel-owned session", () => {
+test("provisioning verifies the fixed session directory owner and mode", () => {
   const sessionDir = mkdtempSync(`${tmpdir()}/panel-session-`);
-  const sessionPath = `${sessionDir}/sess_probe`;
+  chmodSync(sessionDir, 0o770);
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  const gid = typeof process.getgid === "function" ? process.getgid() : 0;
   const calls: Array<{ command: string; args: string[] }> = [];
-  writeFileSync(sessionPath, "fixture");
   try {
     ensurePanelSessionReadable({
       run: (command, args) => { calls.push({ command, args }); return ""; },
       tryRun: (command, args) => { calls.push({ command, args }); return { ok: true, out: "" }; },
-    }, sessionDir, uid);
-    expect(calls).toContainEqual({
-      command: "runuser",
-      args: ["--user", SERVICE_USER, "--", "/usr/bin/test", "-r", sessionPath],
-    });
+    }, sessionDir, uid, gid);
+    expect(calls).toEqual([]);
   } finally {
     rmSync(sessionDir, { recursive: true, force: true });
   }
 });
 
-test("fails clearly when the session directory has no matching CloudPanel session", () => {
+test("does not fail when the session directory has no live session yet", () => {
   const sessionDir = mkdtempSync(`${tmpdir()}/panel-session-empty-`);
+  chmodSync(sessionDir, 0o770);
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  const gid = typeof process.getgid === "function" ? process.getgid() : 0;
   try {
     expect(() => ensurePanelSessionReadable({
       run: () => "",
       tryRun: () => ({ ok: true, out: "" }),
-    }, sessionDir, uid)).toThrow(/could not find a regular CloudPanel session/);
+    }, sessionDir, uid, gid)).not.toThrow();
   } finally {
     rmSync(sessionDir, { recursive: true, force: true });
   }
+});
+
+test("provisioning probes the root auth helper without exposing session data", async () => {
+  const { ensureAuthHelperReady } = await realProvision();
+  const calls: Array<{ command: string; args: string[] }> = [];
+  ensureAuthHelperReady({
+    run: () => "",
+    tryRun: (command, args) => {
+      calls.push({ command, args });
+      return { ok: true, out: '{"valid":false}\n' };
+    },
+  }, "/usr/bin/true");
+  expect(calls).toEqual([{ command: "/usr/bin/true", args: ["action", "auth"] }]);
+});
+
+test("provisioning rejects an auth helper with the wrong probe contract", async () => {
+  const { ensureAuthHelperReady } = await realProvision();
+  expect(() => ensureAuthHelperReady({
+    run: () => "",
+    tryRun: () => ({ ok: true, out: '{"valid":true}\n' }),
+  }, "/usr/bin/true")).toThrow(/invalid-session probe/);
 });
 
 // Run in a fresh subprocess (rather than in-process, like the tests above) so the
@@ -285,7 +311,7 @@ function panelSessionWarningProbe(sessionDir: string): { threw: boolean; warning
     const commands = { run: () => "", tryRun: () => ({ ok: true, out: "" }) };
     let threw = false;
     try {
-      warnIfPanelSessionUnreadable(commands, ${JSON.stringify(sessionDir)}, 0);
+      warnIfPanelSessionUnreadable(commands, ${JSON.stringify(sessionDir)}, process.getuid?.(), process.getgid?.());
     } catch {
       threw = true;
     }
@@ -294,12 +320,13 @@ function panelSessionWarningProbe(sessionDir: string): { threw: boolean; warning
   return JSON.parse(execFileSync(process.execPath, ["-e", script], { cwd: REPO, encoding: "utf8" }));
 }
 
-test("warnIfPanelSessionUnreadable logs and continues instead of aborting", () => {
+test("warnIfPanelSessionUnreadable stays quiet when the session directory is empty", () => {
   const sessionDir = mkdtempSync(`${tmpdir()}/panel-session-empty-`);
+  chmodSync(sessionDir, 0o770);
   try {
     const result = panelSessionWarningProbe(sessionDir);
     expect(result.threw).toBe(false);
-    expect(result.warnings.some((line) => line.includes("panel session check failed"))).toBe(true);
+    expect(result.warnings.some((line) => line.includes("panel session check failed"))).toBe(false);
   } finally {
     rmSync(sessionDir, { recursive: true, force: true });
   }
@@ -310,4 +337,123 @@ test("warnIfPanelSessionUnreadable never aborts, even when the session directory
   const result = panelSessionWarningProbe(missingDir);
   expect(result.threw).toBe(false);
   expect(result.warnings.some((line) => line.includes("panel session check failed"))).toBe(true);
+});
+
+test("the panel Nginx instance is detected from its tree, not a version string", () => {
+  const root = mkdtempSync(`${tmpdir()}/nginx-layout-`);
+  try {
+    const distro = nginxLayout(`${root}/absent`);
+    expect(distro).toEqual({
+      sitesDir: "/etc/nginx/sites-enabled",
+      configFile: null,
+      service: "nginx",
+      panelOwned: false,
+    });
+
+    const panelDir = `${root}/services/nginx`;
+    mkdirSync(`${panelDir}/sites-enabled`, { recursive: true });
+    // A sites-enabled directory alone is not the panel instance; its own
+    // nginx.conf is what makes the tree a separately served config root.
+    expect(nginxLayout(panelDir).service).toBe("nginx");
+
+    writeFileSync(`${panelDir}/nginx.conf`, "user clp;\n");
+    expect(nginxLayout(panelDir)).toEqual({
+      sitesDir: `${panelDir}/sites-enabled`,
+      configFile: `${panelDir}/nginx.conf`,
+      service: "clp-nginx",
+      panelOwned: true,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the path unit watches the panel vhost as well as the addon templates", () => {
+  const unit = reconcileUnits().path;
+  const watched = unit.split("\n").filter((line) => line.startsWith("PathChanged=")).map((line) => line.slice(12));
+  expect(watched.some((path) => path.endsWith(".html.twig"))).toBe(true);
+  // The proxy block lives in a panel-owned file, so a panel action can remove
+  // it; the watcher is what makes the reconciler put it back promptly.
+  expect(watched.some((path) => path.endsWith("/cloudpanel.conf"))).toBe(true);
+});
+
+test("the watcher's fast path reconciles the proxy, not just the anchors", () => {
+  const source = readFileSync(join(import.meta.dir, "..", "cli/index.ts"), "utf8");
+  const branchStart = source.indexOf('flags["anchors-only"] === true');
+  const branch = source.slice(branchStart, source.indexOf("return;", branchStart));
+  expect(branch.includes("reconcileAnchors(quiet)")).toBe(true);
+  expect(branch.includes("reconcileNginx(quiet)")).toBe(true);
+});
+
+test("the panel vhost may be owned by root or the panel user, but never world-writable", () => {
+  const panelUid = panelUserUid();
+  expect(vhostOwnerAccepted(0, 0o644)).toBe(true);
+  expect(vhostOwnerAccepted(0, 0o666)).toBe(false);
+  // Group-writable is accepted: the CloudPanel tree is clp:clp 0770, and the
+  // panel user is already inside the trust boundary (socket group, session
+  // store). World-writable is the case that still means anyone can rewrite it.
+  expect(vhostOwnerAccepted(0, 0o660)).toBe(true);
+  if (panelUid !== null) {
+    expect(vhostOwnerAccepted(panelUid, 0o770)).toBe(true);
+    expect(vhostOwnerAccepted(panelUid, 0o777)).toBe(false);
+    expect(vhostOwnerAccepted(panelUid + 1000, 0o644)).toBe(false);
+  }
+});
+
+test("a stock catch-all panel vhost yields an empty identity, not an install failure", () => {
+  const script = `
+    import { panelIdentityFromVhost } from "./cli/provision.ts";
+    import { parsePanelIdentity, validateDomain } from "./cli/action-common.ts";
+    const catchAll = panelIdentityFromVhost("server { listen 8443 ssl; server_name _; }");
+    const named = panelIdentityFromVhost("server { listen 8443 ssl; server_name panel.example.test; }");
+    const noDirective = panelIdentityFromVhost("server { listen 8443 ssl; root /var/www; }");
+    let guardedCatchAll = "accepted";
+    try {
+      validateDomain("site.example.test", "");
+    } catch (error) {
+      guardedCatchAll = String(error);
+    }
+    console.log(JSON.stringify({
+      catchAll,
+      named,
+      noDirective,
+      roundTrip: parsePanelIdentity("PRIMARY=\\nALIASES=\\n"),
+      rejectsGarbage: parsePanelIdentity("PRIMARY=not a host\\nALIASES=\\n"),
+    }));
+  `;
+  const result = JSON.parse(execFileSync(process.execPath, ["-e", script], { cwd: join(import.meta.dir, ".."), encoding: "utf8" }));
+  expect(result.catchAll).toEqual({ primary: "", aliases: [] });
+  expect(result.named).toEqual({ primary: "panel.example.test", aliases: [] });
+  // A vhost with no server_name at all is not the file we think it is.
+  expect(result.noDirective).toBeNull();
+  expect(result.roundTrip).toEqual({ primary: "", aliases: [] });
+  expect(result.rejectsGarbage).toBeNull();
+});
+
+test("the root auth helper is reached by socket activation, not sudo", () => {
+  const { socket, service } = authUnits();
+  expect(socket).toContain("ListenStream=/run/clp-addons/auth.sock");
+  expect(socket).toContain("SocketUser=root");
+  expect(socket).toContain("SocketGroup=clp-addons");
+  expect(socket).toContain("SocketMode=0660");
+  // Accept=no keeps the helper daemon resident to answer in ~1ms without
+  // process startup latency.
+  expect(socket).toContain("Accept=no");
+
+  expect(service).toContain("ExecStart=/usr/local/bin/clp-addons action auth");
+  expect(service).toContain("Requires=clp-addons-auth.socket");
+  expect(service).toContain("After=clp-addons-auth.socket");
+  expect(service).toContain("Restart=always");
+  expect(service).toContain("RestartSec=1");
+  // The reply must never carry helper diagnostics back to the caller.
+  expect(service).toContain("StandardError=journal");
+  expect(service).not.toContain("User=clp-addons");
+
+  // The manager must not reach the helper through sudo: its own unit implies
+  // NoNewPrivileges, under which sudo cannot escalate.
+  const client = readFileSync(join(import.meta.dir, "..", "lib/sso-auth.ts"), "utf8");
+  const gatewayClient = readFileSync(join(import.meta.dir, "..", "lib/gateway-client.ts"), "utf8");
+  expect(client).not.toMatch(/Bun\.spawn|"\/usr\/bin\/sudo"/);
+  expect(client).toContain("callGatewayAuth");
+  expect(gatewayClient).toContain("Bun.connect");
 });

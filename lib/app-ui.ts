@@ -54,7 +54,9 @@ h2, h3 { font-size: 18px; }
 .clp-addon-header { width: 100%; background: var(--header-bg); border-bottom: 1px solid var(--border);
   box-shadow: var(--header-shadow); }
 .clp-addon-header-inner { display: flex; align-items: stretch; min-height: 74px; }
-.clp-addon-brand { flex: 0 0 235px; display: flex; align-items: center; padding: 0 20px;
+/* CloudPanel top-aligns its logo (.header .logo { padding: 20px 0 0 20px }) rather than
+   centring it, so centring here sits the logo ~1.5px lower than the panel's own header. */
+.clp-addon-brand { flex: 0 0 235px; display: flex; align-items: flex-start; padding: 20px 0 0 20px;
   margin-right: 20px; border-right: 1px solid var(--row-border); }
 .clp-addon-logo { display: block; width: 155px; height: 31px; }
 .clp-addon-logo-dark { display: none; }
@@ -180,7 +182,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .clp-addon-footer a { color: var(--muted); }
 @media (max-width: 760px) {
   .clp-addon-header-inner { flex-wrap: wrap; }
-  .clp-addon-brand { flex-basis: auto; border: 0; margin: 0; min-height: 64px; }
+  .clp-addon-brand { flex-basis: auto; border: 0; margin: 0; min-height: 64px;
+    align-items: center; padding: 0 20px; }
   .clp-addon-header-tools { order: 1; }
   .clp-addon-primary-nav { order: 2; width: 100%; overflow-x: auto; border-top: 1px solid var(--border); padding: 0 5px; gap: 0; }
   .clp-addon-primary-link { min-height: 48px; }

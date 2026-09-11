@@ -1,21 +1,29 @@
-import { lstatSync, readFileSync } from "node:fs";
+import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync } from "node:fs";
+import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
 import { dirname } from "node:path";
-import { SESSION_DIR } from "../cli/paths";
+import { AUTH_SOCKET_PATH, PANEL_USER } from "../cli/paths";
+import { callGatewayAuth } from "./gateway-client";
 
-const SESSION_COOKIE = "PHPSESSID";
-const SESSION_FILE_PREFIX = "sess_";
+const SESSION_COOKIE = "cloudpanel";
 const SESSION_ID_RE = /^[a-zA-Z0-9,-]+$/;
 const USER_RE = /^[a-zA-Z0-9_.@-]{1,128}$/;
+const ROLE_RE = /^ROLE_[A-Z0-9_]{1,120}$/;
 const TOKEN_CLASS = "Symfony\\Component\\Security\\Http\\Authenticator\\Token\\PostAuthenticationToken";
 const USER_CLASS = "App\\Entity\\User";
-const PANEL_USER = "clp";
 export const MAX_SESSION_BYTES = 256 * 1024;
+export const MAX_SESSION_ID_LENGTH = 128;
+const AUTH_HELPER_TIMEOUT_MS = 2_000;
+const AUTH_HELPER_MAX_OUTPUT_BYTES = 32 * 1024;
+const MAX_AUTH_HELPERS = 8;
+const MAX_AUTH_WAITERS = 16;
+const AUTH_WAIT_TIMEOUT_MS = 500;
 const MAX_SERIALIZATION_DEPTH = 64;
 const MAX_SERIALIZATION_NODES = 20_000;
 const MAX_ARRAY_ITEMS = 20_000;
 
 export interface AuthenticatedRequest {
   user: string;
+  roles: string[];
 }
 
 function readCookie(req: Request, name: string): string | null {
@@ -32,6 +40,93 @@ function redirectToLogin(): Response {
   });
 }
 
+type AuthHelperReply = { kind: "valid"; session: PanelSession } | { kind: "invalid" } | { kind: "unavailable" };
+
+function parseAuthHelperReply(stdout: string): AuthHelperReply {
+  try {
+    const value: unknown = JSON.parse(stdout.trim());
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return { kind: "unavailable" };
+    const reply = value as Record<string, unknown>;
+    if (reply.valid === false && Object.keys(reply).length === 1) return { kind: "invalid" };
+    if (reply.valid !== true || Object.keys(reply).length !== 4) return { kind: "unavailable" };
+    if (typeof reply.user !== "string" || !USER_RE.test(reply.user)) return { kind: "unavailable" };
+    if (!Array.isArray(reply.roles) || reply.roles.length > 128) return { kind: "unavailable" };
+    const roles: string[] = [];
+    const seen = new Set<string>();
+    for (const role of reply.roles) {
+      if (typeof role !== "string" || !ROLE_RE.test(role) || seen.has(role)) return { kind: "unavailable" };
+      seen.add(role);
+      roles.push(role);
+    }
+    if (typeof reply.expiresAt !== "number" || !Number.isSafeInteger(reply.expiresAt)) return { kind: "unavailable" };
+    if (Math.floor(Date.now() / 1000) >= reply.expiresAt) return { kind: "invalid" };
+    return { kind: "valid", session: { user: reply.user, roles, expiresAt: reply.expiresAt } };
+  } catch {
+    return { kind: "unavailable" };
+  }
+}
+
+let activeAuthHelpers = 0;
+const authWaiters: Array<() => void> = [];
+
+function releaseAuthSlot(): void {
+  activeAuthHelpers--;
+  const next = authWaiters.shift();
+  if (next) next();
+}
+
+async function acquireAuthSlot(): Promise<(() => void) | null> {
+  if (activeAuthHelpers < MAX_AUTH_HELPERS) {
+    activeAuthHelpers++;
+    return releaseAuthSlot;
+  }
+  if (authWaiters.length >= MAX_AUTH_WAITERS) return null;
+
+  return new Promise((resolve) => {
+    let waiting = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const grant = () => {
+      if (!waiting) return;
+      waiting = false;
+      if (timer !== undefined) clearTimeout(timer);
+      activeAuthHelpers++;
+      resolve(releaseAuthSlot);
+    };
+    authWaiters.push(grant);
+    timer = setTimeout(() => {
+      if (!waiting) return;
+      waiting = false;
+      const index = authWaiters.indexOf(grant);
+      if (index >= 0) authWaiters.splice(index, 1);
+      resolve(null);
+    }, AUTH_WAIT_TIMEOUT_MS);
+  });
+}
+
+/**
+ * Ask the root helper about one session over its socket.
+ *
+ * The transport is systemd socket activation rather than sudo: the manager's
+ * own unit implies NoNewPrivileges=yes, under which sudo cannot escalate at
+ * all. systemd accepts the connection, runs `clp-addons action auth` as root
+ * with the connection as its stdin/stdout, and this writes one bounded request
+ * and reads one bounded reply. Every failure is "unavailable", which the
+ * caller turns into 503 -- never into an authenticated request.
+ */
+async function callAuthHelper(sessionId: string, socketPath = AUTH_SOCKET_PATH): Promise<AuthHelperReply> {
+  const release = await acquireAuthSlot();
+  if (!release) return { kind: "unavailable" };
+  try {
+    const raw = await callGatewayAuth(sessionId, socketPath, AUTH_HELPER_TIMEOUT_MS);
+    if (!raw) return { kind: "unavailable" };
+    return parseAuthHelperReply(raw);
+  } catch {
+    return { kind: "unavailable" };
+  } finally {
+    release();
+  }
+}
+
 function decodeUtf8(bytes: Uint8Array): string | null {
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -40,7 +135,7 @@ function decodeUtf8(bytes: Uint8Array): string | null {
   }
 }
 
-function panelUserUid(): number | null {
+export function panelUserUid(): number | null {
   try {
     const line = readFileSync("/etc/passwd", "utf8")
       .split("\n")
@@ -65,17 +160,6 @@ export async function readPanelSessionFile(
   const maxBytes = options.maxBytes === undefined
     ? MAX_SESSION_BYTES
     : Math.min(MAX_SESSION_BYTES, Math.max(0, options.maxBytes));
-  let fileStat: ReturnType<typeof lstatSync>;
-  try {
-    fileStat = lstatSync(path);
-  } catch {
-    return null;
-  }
-
-  if (fileStat.isSymbolicLink() || !fileStat.isFile()) return null;
-  const ownerUid = options.ownerUid === undefined ? panelUserUid() : options.ownerUid;
-  if (ownerUid === null || fileStat.uid !== ownerUid) return null;
-
   let parentStat: ReturnType<typeof lstatSync>;
   try {
     parentStat = lstatSync(dirname(path));
@@ -88,13 +172,31 @@ export async function readPanelSessionFile(
       `CloudPanel session directory is writable by group/other; file ownership remains the trust boundary: ${dirname(path)}`,
     );
   }
-  if (!Number.isSafeInteger(fileStat.size) || fileStat.size < 0 || fileStat.size > maxBytes) return null;
-
+  const ownerUid = options.ownerUid === undefined ? panelUserUid() : options.ownerUid;
+  if (ownerUid === null) return null;
+  let fd: number | undefined;
   try {
-    const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
-    return bytes.byteLength <= maxBytes ? bytes : null;
+    // O_NOFOLLOW and fstat on the opened descriptor keep the privileged read
+    // bound to the object whose owner/type/size were checked. Read one extra
+    // byte so growth after the stat is rejected without an unbounded read.
+    fd = openSync(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW);
+    const fileStat = fstatSync(fd);
+    if (!fileStat.isFile() || fileStat.uid !== ownerUid
+      || !Number.isSafeInteger(fileStat.size) || fileStat.size < 0 || fileStat.size > maxBytes) return null;
+    const bytes = new Uint8Array(maxBytes + 1);
+    let total = 0;
+    while (total < bytes.byteLength) {
+      const count = readSync(fd, bytes, total, bytes.byteLength - total, total);
+      if (count === 0) break;
+      total += count;
+    }
+    return total <= maxBytes ? bytes.slice(0, total) : null;
   } catch {
     return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* already closed */ }
+    }
   }
 }
 
@@ -283,21 +385,72 @@ function uniqueIntegerEntry(
   return matches.length === 1 ? matches[0]!.value : null;
 }
 
-function usernameFromToken(token: PhpNode): string | null {
+function uniqueUserProperty(user: PhpNode, name: string): PhpNode | null {
+  if (user.type !== "object" || user.className !== USER_CLASS) return null;
+  const nativeKey = `\u0000${USER_CLASS}\u0000${name}`;
+  const matches = user.properties.filter((entry) => {
+    const key = keyText(entry.key);
+    // Any public or differently scoped property with this name is ambiguous,
+    // even when the native private property is also present. Only the exact
+    // private key CloudPanel serializes is trusted. The structured private-key
+    // check is used only to detect collisions; it never authorizes a value.
+    if (key === nativeKey || key === name) return true;
+    if (!key || key.charCodeAt(0) !== 0) return false;
+    const separator = key.indexOf("\u0000", 1);
+    return separator > 1 && key.slice(separator + 1) === name;
+  });
+  return matches.length === 1 && keyText(matches[0]!.key) === nativeKey ? matches[0]!.value : null;
+}
+
+function roleNamesFromTokenState(value: PhpNode): string[] | null {
+  if (value.type !== "array" || value.entries.length > 128) return null;
+  const roles: string[] = [];
+  const seen = new Set<string>();
+  for (let index = 0; index < value.entries.length; index++) {
+    const entry = value.entries[index]!;
+    if (entry.key.type !== "integer" || entry.key.value !== index || entry.value.type !== "string") return null;
+    const role = decodeUtf8(entry.value.value);
+    if (role === null || !ROLE_RE.test(role) || seen.has(role)) return null;
+    seen.add(role);
+    roles.push(role);
+  }
+  return roles;
+}
+
+interface TokenIdentity {
+  user: string;
+  roles: string[];
+  mfa: boolean;
+}
+
+function identityFromToken(token: PhpNode): TokenIdentity | null {
   if (token.type !== "object" || token.className !== TOKEN_CLASS) return null;
+  if (token.properties.length !== 2) return null;
   const firewall = uniqueIntegerEntry(token.properties, 0);
   const tokenAttributes = uniqueIntegerEntry(token.properties, 1);
   if (firewall?.type !== "string" || decodeUtf8(firewall.value) !== "main") return null;
   if (tokenAttributes?.type !== "array") return null;
+  if (tokenAttributes.entries.length !== 5) return null;
   const user = uniqueIntegerEntry(tokenAttributes.entries, 0);
+  const authenticated = uniqueIntegerEntry(tokenAttributes.entries, 1);
+  const provider = uniqueIntegerEntry(tokenAttributes.entries, 2);
+  const tokenAttributesMap = uniqueIntegerEntry(tokenAttributes.entries, 3);
+  const roleNames = uniqueIntegerEntry(tokenAttributes.entries, 4);
+  if (authenticated?.type !== "boolean" || authenticated.value !== true) return null;
+  if (provider?.type !== "null") return null;
+  if (tokenAttributesMap?.type !== "array") return null;
+  const roles = roleNamesFromTokenState(roleNames ?? { type: "null" });
+  if (roles === null) return null;
   if (user?.type !== "object" || user.className !== USER_CLASS) return null;
-  const usernames = user.properties.filter((entry) => {
-    const name = keyText(entry.key);
-    return name === "userName" || name?.endsWith("\u0000userName") === true;
-  });
-  if (usernames.length !== 1 || usernames[0]!.value.type !== "string") return null;
-  const username = decodeUtf8(usernames[0]!.value.value);
-  return username !== null && USER_RE.test(username) ? username : null;
+
+  const usernameNode = uniqueUserProperty(user, "userName");
+  const mfaNode = uniqueUserProperty(user, "mfa");
+  const statusNode = uniqueUserProperty(user, "status");
+  if (usernameNode?.type !== "string" || mfaNode?.type !== "boolean" || statusNode?.type !== "boolean" || !statusNode.value) return null;
+  const username = decodeUtf8(usernameNode.value);
+  return username !== null && USER_RE.test(username)
+    ? { user: username, roles, mfa: mfaNode.value }
+    : null;
 }
 
 function parseSerializedValue(bytes: Uint8Array): PhpNode | null {
@@ -313,7 +466,15 @@ function parseSerializedValue(bytes: Uint8Array): PhpNode | null {
 
 export interface PanelSession {
   user: string;
+  roles: string[];
   expiresAt: number;
+}
+
+function serviceUnavailableResponse(): Response {
+  return Response.json(
+    { ok: false, error: "authentication service unavailable" },
+    { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "1" } },
+  );
 }
 
 export function parsePanelSession(data: Uint8Array | string): PanelSession | null {
@@ -339,13 +500,29 @@ export function parsePanelSession(data: Uint8Array | string): PanelSession | nul
     const expiresAt = updated.value + seconds;
     if (Math.floor(Date.now() / 1000) >= expiresAt) return null;
 
-    const mfa = uniqueStringEntry(attributes.entries, "mfaAuthenticated");
     const security = uniqueStringEntry(attributes.entries, "_security_main");
-    if (mfa?.type !== "boolean" || mfa.value !== true) return null;
     if (security?.type !== "string") return null;
     const token = parseSerializedValue(security.value);
-    const user = usernameFromToken(token ?? { type: "null" });
-    return user ? { user, expiresAt } : null;
+    const identity = identityFromToken(token ?? { type: "null" });
+    if (!identity) return null;
+
+    // LoginListener writes `true` only after successful MFA, writes `false`
+    // while an MFA challenge is pending, and removes the marker for users who
+    // do not have MFA enabled. AutoLoginAuthenticator can skip that listener,
+    // so an absent marker is accepted only when the serialized native user
+    // explicitly says MFA is disabled. Every present marker is required to be
+    // the exact boolean true. It may remain true when the trusted native MFA
+    // value is either boolean.
+    const mfaEntries = attributes.entries.filter((entry) => keyText(entry.key) === "mfaAuthenticated");
+    if (mfaEntries.length > 1) return null;
+    if (mfaEntries.length === 1) {
+      const marker = mfaEntries[0]!.value;
+      if (marker.type !== "boolean" || marker.value !== true) return null;
+    } else if (identity.mfa) {
+      return null;
+    }
+
+    return { user: identity.user, roles: identity.roles, expiresAt };
   } catch {
     return null;
   }
@@ -356,11 +533,15 @@ export async function authenticateRequest(req: Request): Promise<{
   response?: Response;
 }> {
   const sessionId = readCookie(req, SESSION_COOKIE);
-  if (!sessionId || !SESSION_ID_RE.test(sessionId)) return { auth: null, response: redirectToLogin() };
-  const sessionPath = `${SESSION_DIR}/${SESSION_FILE_PREFIX}${sessionId}`;
-  const bytes = await readPanelSessionFile(sessionPath);
-  const session = bytes ? parsePanelSession(bytes) : null;
-  return session
-    ? { auth: { user: session.user } }
-    : { auth: null, response: redirectToLogin() };
+  if (!sessionId || sessionId.length > MAX_SESSION_ID_LENGTH || !SESSION_ID_RE.test(sessionId)) {
+    return { auth: null, response: redirectToLogin() };
+  }
+  const result = await callAuthHelper(sessionId);
+  if (result.kind === "valid") {
+    return { auth: { user: result.session.user, roles: result.session.roles } };
+  }
+  return {
+    auth: null,
+    response: result.kind === "unavailable" ? serviceUnavailableResponse() : redirectToLogin(),
+  };
 }

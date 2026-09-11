@@ -30,7 +30,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync, realpathSync } from "node:fs";
 import {
-  NGINX_PROXY_STATE_DIR, NGINX_SITES_DIR, TEMPLATE_STATE_DIR, TEMPLATES_DIR, TWIG_CACHE_DIR,
+  NGINX_PROXY_STATE_DIR, nginxLayout, TEMPLATE_STATE_DIR, TEMPLATES_DIR, TWIG_CACHE_DIR,
   type AddonTarget,
 } from "./paths";
 import { writeAtomic } from "./util";
@@ -156,7 +156,8 @@ export function inspect(inj: Injection, paths?: Partial<InjectPaths>): TargetSta
     if (expected !== found) return { ...id, state: "upstream-changed", expected, found };
   }
 
-  if (!upstream.includes(target.anchorAfter)) return { ...id, state: "anchor-not-found-in-markup" };
+  const anchor = target.anchorBefore ?? target.anchorAfter;
+  if (!anchor || !upstream.includes(anchor)) return { ...id, state: "anchor-not-found-in-markup" };
 
   const present = blockOf(onDisk, addon, target.slug);
   if (present === null) return { ...id, state: "missing-anchor" };
@@ -267,17 +268,39 @@ function renderFile(
   let rendered = pristine;
 
   // Stable order, so two addons patching one anchor do not swap places on
-  // every reconciliation and produce a file that never settles. Insert in reverse
-  // order because each block lands immediately after the same original anchor.
-  for (const inj of [...list].sort((a, b) =>
-    b.addon.localeCompare(a.addon) || b.target.slug.localeCompare(a.target.slug)
+  // every reconciliation and produce a file that never settles. Injections with
+  // anchorBefore are applied before the anchor in ascending order, while
+  // injections with anchorAfter are applied after the anchor in reverse order.
+  const befores = list.filter((inj) => Boolean(inj.target.anchorBefore));
+  const afters = list.filter((inj) => !inj.target.anchorBefore);
+
+  for (const inj of [...befores].sort((a, b) =>
+    a.addon.localeCompare(b.addon) || a.target.slug.localeCompare(b.target.slug)
   )) {
-    const at = rendered.indexOf(inj.target.anchorAfter);
+    const anchor = inj.target.anchorBefore!;
+    const at = rendered.indexOf(anchor);
     if (at === -1) {
       statuses.push({ addon: inj.addon, slug: inj.target.slug, state: "anchor-not-found-in-markup" });
       continue;
     }
-    const cut = at + inj.target.anchorAfter.length;
+    rendered = rendered.slice(0, at) + wrap(inj) + rendered.slice(at);
+    statuses.push({ addon: inj.addon, slug: inj.target.slug, state: "ok" });
+  }
+
+  for (const inj of [...afters].sort((a, b) =>
+    b.addon.localeCompare(a.addon) || b.target.slug.localeCompare(a.target.slug)
+  )) {
+    const anchor = inj.target.anchorAfter;
+    if (!anchor) {
+      statuses.push({ addon: inj.addon, slug: inj.target.slug, state: "anchor-not-found-in-markup" });
+      continue;
+    }
+    const at = rendered.indexOf(anchor);
+    if (at === -1) {
+      statuses.push({ addon: inj.addon, slug: inj.target.slug, state: "anchor-not-found-in-markup" });
+      continue;
+    }
+    const cut = at + anchor.length;
     rendered = rendered.slice(0, cut) + wrap(inj) + rendered.slice(cut);
     statuses.push({ addon: inj.addon, slug: inj.target.slug, state: "ok" });
   }
@@ -320,7 +343,7 @@ export const NGINX_PROXY_BLOCK = `    # clp-addons:proxy:start
     location /addons/ {
         proxy_pass http://unix:/run/clp-addons/manager.sock:/;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
@@ -329,7 +352,7 @@ export const NGINX_PROXY_BLOCK = `    # clp-addons:proxy:start
     }
     # clp-addons:proxy:end`;
 
-const NGINX_PROXY_BLOCK_RE = /\n?[ \t]*# clp-addons:proxy:start[\s\S]*?[ \t]*# clp-addons:proxy:end\n?/g;
+const NGINX_PROXY_BLOCK_RE = /\r?\n?[ \t]*# clp-addons:proxy:start[\s\S]*?[ \t]*# clp-addons:proxy:end\r?\n?/g;
 
 export interface NginxPaths {
   vhostPath?: string;
@@ -338,7 +361,9 @@ export interface NginxPaths {
 }
 
 /** The installed CloudPanel panel vhost, unless an operator supplies another absolute path. */
-export const CLOUDPANEL_MASTER_VHOST = `${NGINX_SITES_DIR}/cloudpanel.conf`;
+export function cloudpanelMasterVhost(): string {
+  return `${nginxLayout().sitesDir}/cloudpanel.conf`;
+}
 
 export type NginxProxyState =
   | "ok"
@@ -362,7 +387,7 @@ export interface NginxReconcileResult extends NginxProxyStatus {
 function nginxPaths(options: NginxPaths): Required<NginxPaths> {
   return {
     vhostPath: options.vhostPath ?? "",
-    sitesDir: options.sitesDir ?? NGINX_SITES_DIR,
+    sitesDir: options.sitesDir ?? nginxLayout().sitesDir,
     stateDir: options.stateDir ?? NGINX_PROXY_STATE_DIR,
   };
 }
@@ -388,7 +413,7 @@ function masterVhostPath(options: NginxPaths): { path: string } | { detail: stri
     return { path: explicit };
   }
 
-  if (options.sitesDir === undefined) return { path: CLOUDPANEL_MASTER_VHOST };
+  if (options.sitesDir === undefined) return { path: cloudpanelMasterVhost() };
   const sitesDir = options.sitesDir;
   if (!sitesDir.startsWith("/")) {
     return { path: `${sitesDir}/cloudpanel.conf`, detail: "CloudPanel Nginx sites directory must be absolute" };
@@ -436,6 +461,15 @@ function resolveMasterVhost(options: NginxPaths = {}): MasterVhostResolution {
     };
   }
   return { path: candidate.path, content };
+}
+
+/**
+ * The vhost path the watcher follows. Unlike findMasterVhost this does not
+ * require the file to be readable or unambiguous: a `.path` unit has to name
+ * the file even while it is missing, so it can fire when it appears.
+ */
+export function panelVhostWatchPath(options: NginxPaths = {}): string | null {
+  return masterVhostPath(nginxPaths(options)).path ?? null;
 }
 
 export function findMasterVhost(options: NginxPaths = {}): string | null {
@@ -694,13 +728,17 @@ export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; r
     return { state: enabled ? "ok" : "missing", changed: true, vhostPath: selectedPath };
   }
 
-  const tested = commandFailure("nginx", ["-t"]);
+  // Validate and reload the instance that actually owns the resolved tree: on
+  // CloudPanel 6 the panel runs a second Nginx whose config the distro `nginx -t`
+  // never reads, so testing the wrong one would pass on a broken vhost.
+  const layout = nginxLayout();
+  const tested = commandFailure("nginx", layout.configFile ? ["-t", "-c", layout.configFile] : ["-t"]);
   if (tested) {
     restoreNginxContent(vhostPath, onDisk);
     return { state: "validation-failed", changed: false, vhostPath: selectedPath, detail: `nginx -t failed: ${tested}` };
   }
 
-  const reloaded = commandFailure("systemctl", ["reload", "nginx"]);
+  const reloaded = commandFailure("systemctl", ["reload", layout.service]);
   if (reloaded) {
     restoreNginxContent(vhostPath, onDisk);
     return { state: "validation-failed", changed: false, vhostPath: selectedPath, detail: `nginx reload failed: ${reloaded}` };

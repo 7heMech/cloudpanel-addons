@@ -61,8 +61,7 @@ test("action stdout is one JSON object and strips control characters from string
 
 test("the daemon invokes the unified binary action path", () => {
   const service = readFileSync(join(import.meta.dir, "../addons/instatic/app/service.ts"), "utf8");
-  expect(service).toContain("const ACTION_BIN = CLI_BIN");
-  expect(service).toContain('const argv = ["action", "instatic", verb, ...args]');
+  expect(service).toContain('callGatewayAction<T>("instatic", verb, args');
 });
 
 test("makeSnapshot archives non-SQLite regular data files", () => {

@@ -5,9 +5,6 @@ are recorded first; the historical notes below are retained for their rationale
 and regression history. Where old deployment details conflict with the current
 section, the current section wins.
 
-The implementation specification is
-[SPEC_VHOST_UNIX_SOCKET_SSO.md](SPEC_VHOST_UNIX_SOCKET_SSO.md).
-
 ## Current architecture
 
 ### Privilege boundary
@@ -60,18 +57,27 @@ authentication key or privileged pre-start command is required.
 
 ### CloudPanel SSO
 
-Each protected request reads the `PHPSESSID` file directly with Bun from the
-fixed CloudPanel session directory `/var/lib/php/sessions`. The session id must
-match `^[a-zA-Z0-9,-]+$` (`lib/sso-auth.ts:7`); the manager `lstat`s the file
-before reading, rejects symlinks, requires ownership by the panel user `clp`
-(`panelUserUid()`, `lib/sso-auth.ts:43-53`), and caps its size and warns when
-the stock world-writable parent is encountered (`readPanelSessionFile`,
-`lib/sso-auth.ts:68-98`). A bounded custom PHP-serialization scanner, with
-explicit depth and node caps (`lib/sso-auth.ts:113-264`), then checks
-`_sf2_meta` expiry, the nested `_security_main` token and the authenticated
-username, and `mfaAuthenticated === true` (`lib/sso-auth.ts:330-348`). Invalid
-sessions redirect to `/login` (`lib/sso-auth.ts:25-33`, `authenticateRequest`
-at `lib/sso-auth.ts:354-366`).
+Each protected request sends only the bounded `cloudpanel` session ID over
+stdin to the root-only `clp-addons action auth` helper through the existing
+`clp-addons action *` sudo boundary. The helper uses only CloudPanel's fixed
+session directory `/home/clp/htdocs/app/files/var/sessions`; the session id
+must match `^[a-zA-Z0-9,-]{1,128}$`, followed by exactly one newline. The
+helper `lstat`s the file before reading, rejects symlinks, requires ownership
+by the panel user `clp`, caps its size, and emits only a validated principal
+or an invalid marker. A bounded custom PHP-serialization scanner then checks
+`_sf2_meta` expiry, the native five-slot `PostAuthenticationToken` state,
+active user status, the canonical typed role list, and CloudPanel's MFA
+marker/native-user agreement. `ROLE_ADMIN` is required at the shared manager
+boundary before update lookup, index rendering, or mounted addon dispatch.
+Invalid sessions redirect to `/login`; valid non-administrator sessions
+receive `403`.
+
+The token's role and status snapshot can remain stale if a user is demoted or
+disabled in the panel database while the Addons path bypasses a subsequent
+CloudPanel PHP request. The helper currently does not claim immediate
+revocation; a fixed readonly account revalidation can be added only after the
+installed User entity/schema contract is confirmed, without returning
+credentials or hashes to the daemon.
 
 This is a third design, and neither of the two that were written down first
 shipped. That history, and why this one is judged safe despite it, is kept in
@@ -1092,8 +1098,7 @@ the transport layer instead of papering over it with an application-level
 credential.
 
 **What was specified to replace it next, and also did not ship.**
-`docs/SPEC_VHOST_UNIX_SOCKET_SSO.md` Task 3 (now marked superseded at its own
-head) proposed a privileged `clp-verify-session` helper invoked via `sudo`,
+An earlier draft proposal explored a privileged `clp-verify-session` helper invoked via `sudo`,
 whose result would be cached behind an HMAC-signed `clp_addons_token` cookie so
 most requests needed no `sudo` call at all. Nothing named `clp-verify-session`
 was ever built, there is no `/run/clp-addons/hmac.key`, and no `Set-Cookie:
@@ -1689,6 +1694,103 @@ is not gated by `--quiet` anywhere in this codebase, so the warning still reache
 journal from the timer's `repair --quiet` invocation. `install` is unchanged: it still
 calls `ensureDirs(specs, true)` and still fails loudly when no session exists, because
 there a human is present to see it and act.
+
+## The panel vhost is panel-owned, and that is not a defect
+
+CloudPanel 6 runs the panel on a second Nginx instance: config root
+`/home/clp/services/nginx/nginx.conf`, vhost
+`/home/clp/services/nginx/sites-enabled/cloudpanel.conf`, unit `clp-nginx`,
+with the distro instance still serving the site vhosts out of
+`/etc/nginx/sites-enabled`. Earlier layouts put the panel vhost in the distro
+tree. `nginxLayout()` (`cli/paths.ts`) detects which one an install has by
+looking for the panel tree, not by parsing a version string -- both layouts are
+in the field and the version does not distinguish them -- and the resolved
+layout drives vhost discovery, `nginx -t -c`, and the reload target. Testing or
+reloading the wrong instance is silently wrong: the distro `nginx -t` never
+reads the panel's config, so it passes on a broken panel vhost.
+
+The whole panel tree, config root included, is `clp:clp 0770`. The installer
+used to require the vhost to be root-owned and refused to install because of
+it. That requirement is now "owned by root or the panel user, and not
+world-writable" (`vhostOwnerAccepted`, `cli/provision.ts`).
+
+The reason is that the requirement was never buying anything here. The panel
+user is already inside this project's trust boundary, twice over and by design:
+
+  - the manager socket is group `clp`, mode 0660, which is how Nginx reaches
+    the daemon -- so the panel user can talk to it directly and never touch the
+    vhost at all;
+  - the session files `action auth` reads to decide who a request is are
+    panel-owned, so the panel user can write a session that comes back
+    `ROLE_ADMIN`.
+
+An actor holding either of those does not need to rewrite a vhost. Refusing to
+install because the panel owns its own configuration would have cost every
+current CloudPanel an install to defend against nothing. What the check still
+refuses is the case it was really aimed at: a vhost any local user can rewrite.
+
+What replaces the ownership guarantee is not a permission but a reconciler.
+`reconcileNginxProxy` records the hash of the vhost with our block stripped, so
+it can tell the two drift cases apart: if only our block was removed the
+stripped content still matches, and it re-renders, writes, tests and reloads --
+the block comes back on its own. If the surrounding config also changed, the
+stripped hash differs, and it reports `upstream-changed` and writes nothing,
+because the recorded baseline no longer describes the file. A CloudPanel
+upgrade that rewrites the vhost is exactly that second case and wants a human.
+
+For the reinsertion to be prompt rather than up to fifteen minutes late, the
+resolved vhost joins the addon templates in the `.path` unit's watch set
+(`reconcileWatchPaths`, `cli/provision.ts`), and the watcher's
+`repair --anchors-only` fast path now reconciles the proxy as well as the Twig
+anchors. Both reconcilers no-op when nothing drifted, which is what keeps that
+safe to fire on every write during a package upgrade.
+
+Detection, not prevention, is the honest ambition: someone holding `clp` could
+rewrite the vhost, use it, and put it back inside the window. But prevention
+was never on the table against an actor that already has the socket and the
+session store, and continuous reconciliation is strictly more than the
+ownership check ever gave.
+
+## The root auth helper is reached by socket activation, not sudo
+
+The manager runs as `clp-addons` and the panel's session files are `clp:clp`
+0600, so it cannot read them: deciding who a request is has to happen in a root
+process. That process is the same single binary, invoked as
+`clp-addons action auth`, speaking one bounded line of stdin and one bounded
+JSON line of stdout. What changed is only how the daemon reaches it.
+
+sudo cannot be that path. The manager's unit sets `RestrictAddressFamilies=`
+and `ProtectKernelTunables=`, and each of those implies
+`NoNewPrivileges=yes`, which systemd does not allow a unit to turn back off.
+Under `NoNewPrivileges` sudo refuses to escalate at all -- it reports "the no
+new privileges flag is set" and exits 1. The first build shipped the sudo call
+and every authenticated request came back 503 on the test box, with the
+sandbox doing exactly what it was configured to do. Keeping sudo would have
+meant dropping both properties from an internet-facing daemon, and leaving a
+trap: re-adding either one later would silently break authentication again.
+
+So the connection is inverted. `clp-addons-auth.socket` listens on
+`/run/clp-addons/auth.sock` as `root:clp-addons` 0660 with `Accept=yes`; the
+manager connects as itself, and systemd starts `clp-addons-auth@.service` as
+root with that connection as the helper's stdin and stdout. `Accept=yes` is
+what makes this fit: the helper's existing one-shot stdin/stdout contract is
+already what a per-connection service speaks, so no protocol was added and no
+second artifact exists -- the socket unit's `ExecStart` is the same
+`/usr/local/bin/clp-addons`.
+
+One protocol detail this forces: the helper stops reading at the request's
+newline rather than at EOF. Under socket activation stdin is the connection,
+and the caller holds it open waiting for the reply, so reading to EOF
+deadlocks until the client's two-second timeout.
+
+The client treats every failure -- connect error, timeout, oversized reply,
+unparseable reply -- as `unavailable`, which becomes 503. The one thing it
+never does is treat a failed lookup as an authenticated request.
+
+`sudo` is still used for addon actions (`clp-addons action instatic|stager`),
+where the caller is the manager acting on an operator's request and the
+sudoers rule confines it to the `action` namespace. Only the authentication
+path moved.
 
 ## Known gaps
 

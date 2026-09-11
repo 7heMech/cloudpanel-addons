@@ -3,11 +3,13 @@ import {
 } from "node:fs";
 import {
   ADDON_NAMES, ANCHOR_SERVICE, CLI_BIN, CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS,
-  ADDONS, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT, PANEL_GROUP, RECONCILE_PATH, RECONCILE_SERVICE,
+  ADDONS, AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT,
+  PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
   SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, type AddonSpec, templateWatchPaths,
 } from "./paths";
-import { findMasterVhost } from "./inject";
+import { findMasterVhost, panelVhostWatchPath } from "./inject";
+import { panelUserUid } from "../lib/sso-auth";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
 
 export { PANEL_IDENTITY_PATH } from "./paths";
@@ -55,7 +57,9 @@ export function panelIdentityFromVhost(content: string): PanelIdentity | null {
   const uncommented = content.replace(/#[^\r\n]*/g, "");
   const directive = /(?:^|[;{}])\s*server_name\s+([^;]+);/gim;
   let match: RegExpExecArray | null;
+  let sawDirective = false;
   while ((match = directive.exec(uncommented))) {
+    sawDirective = true;
     for (const raw of match[1]!.trim().split(/\s+/)) {
       if (raw === "_" || raw.toLowerCase() === "localhost") continue;
       const name = normalizePanelHostname(raw);
@@ -65,7 +69,12 @@ export function panelIdentityFromVhost(content: string): PanelIdentity | null {
   }
 
   const exact = [...names].find((name) => HOSTNAME_RE.test(name));
-  if (!exact) return null;
+  // A stock CloudPanel serves the panel as `server_name _;` and only gains a
+  // hostname once an operator sets one. That is the catch-all panel, not an
+  // unparseable vhost: there is no panel domain, so nothing can collide with
+  // it, and the guard has nothing to refuse. A vhost with no server_name at
+  // all is still rejected -- it is not the file we think it is.
+  if (!exact) return sawDirective && names.size === 0 ? { primary: "", aliases: [] } : null;
   return { primary: exact, aliases: [...names].filter((name) => name !== exact).sort() };
 }
 
@@ -86,20 +95,53 @@ export function sudoersRule(specs: AddonSpec[] = installedAddonSpecs()): string 
   return `${SERVICE_USER} ALL=(root) NOPASSWD: ${CLI_BIN} action *`;
 }
 
+/**
+ * Who may own the panel vhost we read the identity from, and inject the proxy
+ * into.
+ *
+ * This used to demand root ownership. On the CloudPanel layout that is
+ * unsatisfiable by design -- the panel owns its whole Nginx tree, config root
+ * included -- and demanding it bought nothing, because the panel user is
+ * already inside this project's trust boundary in two load-bearing ways: the
+ * manager socket is group `clp` mode 0660 so the panel can reach the daemon
+ * without going through Nginx at all, and the session files `action auth`
+ * trusts to decide who you are are panel-owned, so the panel user can mint a
+ * session that comes back ROLE_ADMIN. A vhost check cannot defend against an
+ * actor that already holds both.
+ *
+ * What is still worth refusing is a vhost any local user can rewrite. That is
+ * the check's remaining job; do not re-tighten this to root-only without
+ * reading docs/DECISIONS.md first, as it makes the installer refuse every
+ * current CloudPanel.
+ */
+export function vhostOwnerAccepted(uid: number, mode: number): boolean {
+  if ((mode & 0o002) !== 0) return false;
+  if (uid === 0) return true;
+  const panelUid = panelUserUid();
+  return panelUid !== null && uid === panelUid;
+}
+
 function ensurePanelIdentity(quiet = false): void {
   const vhostPath = findMasterVhost();
   if (!vhostPath) fatal("CloudPanel master vhost was not found; refusing to install privileged actions");
 
   let content: string;
-  let rootOwned = false;
+  let trustedOwner = false;
+  let panelOwned = false;
   try {
     const stat = statSync(vhostPath);
-    rootOwned = stat.isFile() && stat.uid === 0 && (stat.mode & 0o022) === 0;
+    trustedOwner = stat.isFile() && vhostOwnerAccepted(stat.uid, stat.mode);
+    panelOwned = stat.uid !== 0;
     content = readFileSync(vhostPath, "utf-8");
   } catch {
     fatal(`CloudPanel master vhost could not be read: ${vhostPath}`);
   }
-  if (!rootOwned) fatal(`CloudPanel master vhost is not a root-owned, non-writable file: ${vhostPath}`);
+  if (!trustedOwner) {
+    fatal(`CloudPanel master vhost must be owned by root or ${PANEL_USER} and not world-writable: ${vhostPath}`);
+  }
+  if (panelOwned && !quiet) {
+    log.warn(`${vhostPath} is owned by ${PANEL_USER}, not root: the panel can rewrite the /addons/ proxy at any time, and reconciliation is what restores it`);
+  }
 
   const identity = panelIdentityFromVhost(content);
   if (!identity) {
@@ -244,48 +286,59 @@ function removeLegacySudoers(): void {
   for (const name of ADDON_NAMES) rmSync(`/etc/sudoers.d/clp-addon-${name}`, { force: true });
 }
 
-function panelUid(commands: ProvisionCommandRunner): number | null {
-  const result = commands.tryRun("getent", ["passwd", PANEL_GROUP]);
-  const uid = Number.parseInt(result.out.split(":")[2] ?? "", 10);
-  return result.ok && Number.isInteger(uid) && uid >= 0 ? uid : null;
-}
-
 export function ensurePanelSessionReadable(
   commands: ProvisionCommandRunner = { run, tryRun },
   sessionDir = SESSION_DIR,
   expectedUid?: number,
+  expectedGid?: number,
 ): void {
-  const uid = expectedUid ?? panelUid(commands);
-  if (uid === null || uid === undefined) {
-    fatal(`could not resolve the ${PANEL_GROUP} user required to read CloudPanel sessions`);
-  }
-
-  let entries: string[];
+  let directory: ReturnType<typeof lstatSync>;
   try {
-    entries = readdirSync(sessionDir);
+    directory = lstatSync(sessionDir);
   } catch {
-    fatal(`CloudPanel session directory is not readable: ${sessionDir}`);
+    fatal(`CloudPanel session directory is missing or unreadable: ${sessionDir}`);
+  }
+  if (directory.isSymbolicLink() || !directory.isDirectory()) {
+    fatal(`CloudPanel session path is not a regular directory: ${sessionDir}`);
   }
 
-  const candidate = entries
-    .filter((entry) => /^sess_[a-zA-Z0-9,-]+$/.test(entry))
-    .sort()
-    .map((entry) => `${sessionDir}/${entry}`)
-    .find((path) => {
-      try {
-        const stat = lstatSync(path);
-        return stat.isFile() && !stat.isSymbolicLink() && stat.uid === uid;
-      } catch {
-        return false;
-      }
-    });
-  if (!candidate) {
-    fatal(`could not find a regular CloudPanel session owned by ${PANEL_GROUP} in ${sessionDir}`);
+  const uidResult = expectedUid === undefined
+    ? commands.tryRun("getent", ["passwd", PANEL_GROUP])
+    : { ok: true, out: String(expectedUid) };
+  const uid = expectedUid ?? Number.parseInt(uidResult.out.split(":")[2] ?? "", 10);
+  const gidResult = expectedGid === undefined
+    ? commands.tryRun("getent", ["group", PANEL_GROUP])
+    : { ok: true, out: String(expectedGid) };
+  const gid = expectedGid ?? Number.parseInt(gidResult.out.split(":")[2] ?? "", 10);
+  if (!uidResult.ok || !Number.isInteger(uid) || !gidResult.ok || !Number.isInteger(gid)) {
+    fatal(`could not resolve the ${PANEL_GROUP} owner required for CloudPanel sessions`);
+  }
+  if (directory.uid !== uid || directory.gid !== gid || (directory.mode & 0o777) !== 0o770) {
+    fatal(`CloudPanel session directory must be owned by ${PANEL_GROUP}:${PANEL_GROUP} with mode 0770: ${sessionDir}`);
   }
 
-  const readable = commands.tryRun("runuser", ["--user", SERVICE_USER, "--", "/usr/bin/test", "-r", candidate]);
-  if (!readable.ok) {
-    fatal(`CloudPanel session ${candidate} is not readable by ${SERVICE_USER}; verify SupplementaryGroups=${PANEL_GROUP}`);
+  // A fresh install commonly has no live session file. The root helper checks
+  // each request's regular-file, owner, size, and expiry safeguards; this
+  // readiness check intentionally does not pretend the daemon can read 0600
+  // files directly through its supplementary group.
+}
+
+export function ensureAuthHelperReady(
+  commands: ProvisionCommandRunner = { run, tryRun },
+  helperPath = CLI_BIN,
+): void {
+  let helper: ReturnType<typeof lstatSync>;
+  try {
+    helper = lstatSync(helperPath);
+  } catch {
+    fatal(`CloudPanel auth helper is missing: ${helperPath}`);
+  }
+  if (!helper.isFile() || helper.uid !== 0 || (helper.mode & 0o022) !== 0 || (helper.mode & 0o111) === 0) {
+    fatal(`CloudPanel auth helper is not a root-owned, non-writable executable: ${helperPath}`);
+  }
+  const probe = commands.tryRun(helperPath, ["action", "auth"]);
+  if (!probe.ok || probe.out.trim() !== '{"valid":false}') {
+    fatal(`CloudPanel auth helper failed its invalid-session probe: ${helperPath}`);
   }
 }
 
@@ -299,9 +352,10 @@ export function warnIfPanelSessionUnreadable(
   commands: ProvisionCommandRunner = { run, tryRun },
   sessionDir = SESSION_DIR,
   expectedUid?: number,
+  expectedGid?: number,
 ): void {
   try {
-    ensurePanelSessionReadable(commands, sessionDir, expectedUid);
+    ensurePanelSessionReadable(commands, sessionDir, expectedUid, expectedGid);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.warn(`panel session check failed, continuing without it: ${message}`);
@@ -361,37 +415,19 @@ export function hardenBackups(spec: AddonSpec, quiet = false): void {
 }
 
 export function installSudoers(quiet = false, specs: AddonSpec[] = installedAddonSpecs()): void {
-  const file = "/etc/sudoers.d/clp-addons";
-  const candidate = "/etc/sudoers.d/.clp-addons.candidate";
-  if (specs.length === 0) {
-    removeSudoers();
-    return;
+  // With the root gateway daemon, clp-addons requires zero sudo privileges.
+  // We proactively remove any legacy sudoers file to maintain zero system pollution.
+  removeSudoers();
+  if (specs.length > 0) {
+    ensurePanelIdentity(quiet);
+  } else {
+    rmSync(PANEL_IDENTITY_PATH, { force: true });
   }
-  ensurePanelIdentity(quiet);
-  const body =
-    "# Managed by clp-addons.\n" +
-    `${sudoersRule(specs)}\n`;
-
-  writeAtomic(candidate, body, 0o440);
-  const check = tryRun("visudo", ["-c", "-f", candidate]);
-  if (!check.ok) {
-    rmSync(candidate, { force: true });
-    fatal(`refusing to install invalid sudoers configuration:\n${check.out}`);
-  }
-  run("chown", ["root:root", candidate]);
-  run("chmod", ["440", candidate]);
-  run("mv", [candidate, file]);
-  const full = tryRun("visudo", ["-c"]);
-  if (!full.ok) {
-    rmSync(file, { force: true });
-    fatal(`sudoers validation failed after installation:\n${full.out}`);
-  }
-  if (!quiet) log.ok(`sudoers allows ${SERVICE_USER} to run the installed addon actions`);
+  if (!quiet) log.ok("zero-sudo: manager dispatches via root gateway daemon; sudoers removed");
 }
 
 export function removeSudoers(): void {
   rmSync("/etc/sudoers.d/clp-addons", { force: true });
-  rmSync(PANEL_IDENTITY_PATH, { force: true });
   removeLegacySudoers();
 }
 
@@ -441,6 +477,7 @@ ProtectHome=read-only
 PrivateTmp=yes
 ProtectKernelTunables=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+NoNewPrivileges=yes
 ReadWritePaths=/etc/nginx -/etc/letsencrypt /etc/php /home /run/clp-addons /run/lock/clp-addons /var/backups/clp-addons /var/lib/clp-addons
 ExecStart=/usr/local/bin/clp-addons serve
 Restart=always
@@ -452,7 +489,59 @@ WantedBy=multi-user.target
 `;
 }
 
-function reconcileUnits(): { service: string; timer: string; path: string; anchor: string } {
+/**
+ * The root side of session authentication, as systemd units rather than sudo.
+ *
+ * The manager is sandboxed with RestrictAddressFamilies= and
+ * ProtectKernelTunables=, each of which implies NoNewPrivileges=yes, and
+ * systemd does not let a unit turn that back off. Under NoNewPrivileges sudo
+ * cannot escalate at all, so the daemon could never call the helper that way
+ * without giving up its own sandbox.
+ *
+ * Socket activation inverts it: the manager connects as itself, and systemd
+ * runs the helper as root on the other end. Accept=yes hands each connection
+ * to the helper as stdin/stdout, which is precisely the bounded one-shot
+ * contract `action auth` already speaks -- the same single binary, invoked by
+ * systemd instead of by sudo.
+ */
+export function authUnits(): { socket: string; service: string } {
+  return {
+    socket: `[Unit]
+Description=CloudPanel Addons session authentication socket
+
+[Socket]
+ListenStream=${AUTH_SOCKET_PATH}
+SocketUser=root
+SocketGroup=${SERVICE_GROUP}
+SocketMode=0660
+Accept=no
+RuntimeDirectory=clp-addons
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+
+[Install]
+WantedBy=sockets.target
+`,
+    service: `[Unit]
+Description=CloudPanel Addons root gateway daemon
+Requires=${AUTH_SOCKET_UNIT}
+After=${AUTH_SOCKET_UNIT}
+
+[Service]
+Type=simple
+ExecStart=${CLI_BIN} action auth
+StandardError=journal
+TimeoutStartSec=10
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
+`,
+  };
+}
+
+export function reconcileUnits(): { service: string; timer: string; path: string; anchor: string } {
   return {
     service: `[Unit]
 Description=CloudPanel Addons reconciliation
@@ -477,7 +566,7 @@ WantedBy=timers.target
 Description=CloudPanel Addons template watcher
 
 [Path]
-${templateWatchPaths().map((path) => `PathChanged=${path}`).join("\n")}
+${reconcileWatchPaths().map((path) => `PathChanged=${path}`).join("\n")}
 Unit=${ANCHOR_SERVICE}
 
 [Install]
@@ -494,6 +583,18 @@ ExecStart=/usr/local/bin/clp-addons repair --anchors-only --quiet
   };
 }
 
+/**
+ * Everything the watcher reconciles: the addons' Twig anchors and the panel
+ * vhost carrying the /addons/ proxy. The vhost belongs here because on the
+ * CloudPanel layout it is owned by the panel user, so a panel action can
+ * rewrite it at any time; the reconciler puts the block back, but only once
+ * something tells it to look.
+ */
+function reconcileWatchPaths(): string[] {
+  const vhost = panelVhostWatchPath();
+  return [...templateWatchPaths(), ...(vhost ? [vhost] : [])];
+}
+
 export function installUnits(specs: AddonSpec[]): boolean {
   const units = reconcileUnits();
   const servicePath = `${SYSTEMD_DIR}/${MANAGER_UNIT}`;
@@ -504,11 +605,20 @@ export function installUnits(specs: AddonSpec[]): boolean {
   writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_TIMER}`, units.timer, 0o644);
   writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_PATH}`, units.path, 0o644);
   writeAtomic(`${SYSTEMD_DIR}/${ANCHOR_SERVICE}`, units.anchor, 0o644);
+  const auth = authUnits();
+  writeAtomic(`${SYSTEMD_DIR}/${AUTH_SOCKET_UNIT}`, auth.socket, 0o644);
+  writeAtomic(`${SYSTEMD_DIR}/${AUTH_SERVICE_UNIT}`, auth.service, 0o644);
+  rmSync(`${SYSTEMD_DIR}/clp-addons-auth@.service`, { force: true });
   run("systemctl", ["daemon-reload"]);
   return changed;
 }
 
 export function startUnits(): void {
+  // Before the manager: without it every authenticated request fails closed.
+  run("systemctl", ["enable", AUTH_SOCKET_UNIT]);
+  run("systemctl", ["restart", AUTH_SOCKET_UNIT]);
+  run("systemctl", ["enable", AUTH_SERVICE_UNIT]);
+  run("systemctl", ["restart", AUTH_SERVICE_UNIT]);
   run("systemctl", ["enable", MANAGER_UNIT]);
   run("systemctl", ["restart", MANAGER_UNIT]);
   run("systemctl", ["enable", RECONCILE_TIMER]);
@@ -520,10 +630,11 @@ export function startUnits(): void {
 
 export function stopUnits(keepShared = false): void {
   if (keepShared) return;
-  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH]) {
+  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     tryRun("systemctl", ["disable", "--now", unit]);
   }
-  for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE]) {
+  for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE,
+    AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, "clp-addons-auth@.service"]) {
     rmSync(`${SYSTEMD_DIR}/${unit}`, { force: true });
   }
   tryRun("systemctl", ["daemon-reload"]);

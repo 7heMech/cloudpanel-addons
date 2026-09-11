@@ -75,6 +75,7 @@ export function headerTarget(version: string): AddonTarget {
     anchorAfter: `<a href="{{ path('clp_sites') }}" title="{% trans %}Sites{% endtrans %}">{% trans %}Sites{% endtrans %}</a>`,
     required: true,
     snippet: (url) => `
+      {% if is_granted('ROLE_ADMIN') %}
       <style>
         .clp-addon-update-badge { display:inline-flex; align-items:center; gap:5px; margin-left:15px; padding:2px 10px; font-size:12px; font-weight:600; color:#10b981; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.35); border-radius:12px; text-decoration:none; vertical-align:middle; transition:all 0.15s ease; }
         .clp-addon-update-badge:hover { background:rgba(16,185,129,0.22); color:#10b981; text-decoration:none; }
@@ -83,6 +84,7 @@ export function headerTarget(version: string): AddonTarget {
         .clp-addon-update-badge .close-btn:hover { opacity:1; }
       </style>
       <a href="${esc(url)}" class="clp-addon-nav" title="Addons">Addons</a>
-      <script>${headerUpdateScript(version || process.env.CLP_ADDONS_VERSION || "")}</script>`,
+      <script>${headerUpdateScript(version || process.env.CLP_ADDONS_VERSION || "")}</script>
+      {% endif %}`,
   };
 }

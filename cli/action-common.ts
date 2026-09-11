@@ -97,6 +97,15 @@ export function parsePanelIdentity(content: string): PanelIdentity | null {
     const value = line.slice(separator + 1);
     if (key === "PRIMARY") {
       if (seenPrimary) return null;
+      // An empty PRIMARY is the catch-all panel: CloudPanel ships the vhost as
+      // `server_name _;` and only gains a hostname when an operator sets one.
+      // There is then no panel domain for a site to collide with, which is a
+      // real state to record rather than a parse failure.
+      if (value.trim() === "") {
+        primary = "";
+        seenPrimary = true;
+        continue;
+      }
       const host = normalizeIdentityHostname(value);
       if (!host || !matchesEntire(HOSTNAME_RE, host)) return null;
       primary = host;
@@ -135,7 +144,7 @@ export function readPanelIdentity(path = PANEL_IDENTITY_PATH): PanelIdentity | n
 }
 
 function panelIdentityMatches(candidate: string, identity: PanelIdentity): boolean {
-  if (candidate === identity.primary) return true;
+  if (identity.primary !== "" && candidate === identity.primary) return true;
   for (const alias of identity.aliases) {
     if (alias.startsWith("*.")) {
       const suffix = alias.slice(2);

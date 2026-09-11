@@ -99,6 +99,7 @@ mock.module("../cli/release", () => ({
 mock.module("../cli/provision", () => ({
   ...realProvision,
   ensureDirs: () => { calls.push("ensureDirs"); provisioning.dirs = true; },
+  ensureAuthHelperReady: () => calls.push("ensureAuthHelperReady"),
   ensureServiceUser: () => { calls.push("ensureServiceUser"); provisioning.serviceUser = true; },
   ensureTimerArmed: record("ensureTimerArmed"),
   hardenBackups: record("hardenBackups"),
