@@ -31,12 +31,14 @@ function json(body: unknown, status = 200): Response {
 
 const MUTATING_VERBS = new Set(["start", "stop", "restart", "recreate", "delete", "snapshot", "update"]);
 
-// The whole request surface, exported so the one manager process can mount it.
-//
-// `path` is this addon's own path, with the mount prefix already stripped by the
-// router: a request for /addons/instatic/api/... arrives here as /api/... .
-// Taking it as an argument rather than reading req.url is what keeps every route
-// below written as though this addon owned the site, which it used to.
+/**
+ * The whole request surface, exported so the one manager process can mount it.
+ *
+ * `path` is this addon's own path, with the mount prefix already stripped by the
+ * router: a request for /addons/instatic/api/... arrives here as /api/... .
+ * Taking it as an argument rather than reading req.url is what keeps every route
+ * below written as though this addon owned the site, which it used to.
+ */
 export async function handle(
   req: Request,
   path: string,
@@ -60,7 +62,7 @@ export async function handle(
         let snapshotAge = Infinity;
         let snapshotTakenAt = "";
         try {
-          const { snap, ageSeconds } = instaticService.snapshot();
+          const { snap, ageSeconds } = await instaticService.snapshot();
           panelSites = snap.sites;
           snapshotAge = ageSeconds;
           snapshotTakenAt = snap.updatedAt;

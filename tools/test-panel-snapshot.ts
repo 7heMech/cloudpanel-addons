@@ -108,6 +108,24 @@ try {
     `${beforeSidecars.join(",")} -> ${sidecars(partialPath).join(",")}`,
   );
 
+  const brokenOptionalPath = join(fixtureDir, "broken-optional.sqlite");
+  createDatabase(brokenOptionalPath, (db) => {
+    db.run("CREATE TABLE site (domain_name TEXT, user TEXT, type TEXT, reverse_proxy_url TEXT)");
+    db.query("INSERT INTO site VALUES (?, ?, ?, ?)").run("test.example", "test-user", "php", "");
+    db.run("CREATE VIEW python_settings AS SELECT * FROM undefined_table");
+  });
+  let brokenOptionalError = "";
+  try {
+    readPanelDatabase(brokenOptionalPath);
+  } catch (error) {
+    brokenOptionalError = error instanceof Error ? error.message : String(error);
+  }
+  check(
+    "query errors on optional tables other than missing-table are rethrown",
+    brokenOptionalError.includes("cannot read optional panel table python_settings"),
+    brokenOptionalError,
+  );
+
   const malformedPath = join(fixtureDir, "malformed.sqlite");
   writeFileSync(malformedPath, "this is not a SQLite database\n");
   let malformedError = "";

@@ -349,6 +349,11 @@ export function warnIfPanelSessionUnreadable(
   }
 }
 
+/**
+ * Creates and permissions shared and addon state directories, removes the
+ * obsolete panel snapshot file when present, and optionally verifies access to
+ * CloudPanel sessions.
+ */
 export function ensureDirs(
   specs: AddonSpec[] = [],
   verifySession = false,
@@ -377,8 +382,9 @@ export function ensureDirs(
 
   const snapshot = `${STATE_DIR}/snapshot.json`;
   if (fs.exists(snapshot)) {
-    commands.run("chown", [`root:${SHARED_GROUP}`, snapshot]);
-    commands.run("chmod", ["640", snapshot]);
+    try {
+      rmSync(snapshot, { force: true });
+    } catch {}
   }
   if (verifySession) ensurePanelSessionReadable(commands);
 }

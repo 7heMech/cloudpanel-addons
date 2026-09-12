@@ -2,9 +2,10 @@
 //
 // The port-collision check needs the panel's site list, but the panel database
 // also holds password hashes and site credentials, and the app's site user
-// cannot read /home/clp at all. So this runs as root, reads non-secret columns
-// only, and writes a sanitized JSON snapshot that the app consumes. The app
-// must never import this file.
+// cannot read /home/clp at all. So the root gateway daemon queries the panel
+// database directly in real time, reads non-secret columns only, and returns
+// sanitized data over the UNIX domain socket without writing disk snapshots.
+// The app must never import this file.
 
 import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
@@ -12,8 +13,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ADDONS, PANEL_DB } from "../cli/paths";
-import { writeAtomic } from "../cli/util";
-import { PORT_RANGE, SNAPSHOT_FILE, type PanelSnapshot, type SanitizedSite } from "./snapshot-reader";
+import { PORT_RANGE, type PanelSnapshot, type SanitizedSite } from "./snapshot-reader";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;
 
@@ -54,6 +54,10 @@ function databaseExists(databasePath: string): boolean {
   }
 }
 
+/**
+ * Runs a panel query, treating an absent optional table as empty while wrapping
+ * every other query failure with table context.
+ */
 function queryRows<ReturnType>(db: Database, sql: string, table: string, optional = false): ReturnType[] {
   try {
     return db.query<ReturnType, []>(sql).all();
@@ -64,7 +68,7 @@ function queryRows<ReturnType>(db: Database, sql: string, table: string, optiona
       return [];
     }
     const requiredness = optional ? "optional" : "required";
-    throw new Error(`querying ${requiredness} panel table ${table} failed: ${message}`, { cause: error });
+    throw new Error(`cannot read ${requiredness} panel table ${table}: ${message}`, { cause: error });
   }
 }
 
@@ -179,12 +183,22 @@ export function readPanelDatabase(databasePath = PANEL_DB): PanelDatabaseSnapsho
   return { allocatedPorts: [...ports].sort((a, b) => a - b), sites };
 }
 
-export function generateSnapshot(): PanelSnapshot {
-  if (process.getuid && process.getuid() !== 0) {
-    throw new Error("generateSnapshot must run as root; the app reads the snapshot file instead");
+/**
+ * Returns sanitized panel state from a consistent database copy, addon metadata,
+ * and active TCP listeners.
+ *
+ * Unreadable addon metadata and unavailable listener inspection contribute no
+ * ports. Reading the default panel database requires root privileges.
+ *
+ * @throws If the caller is not root when using the default database, or the
+ * panel database cannot be inspected, copied, or queried.
+ */
+export function getLivePanelInfo(databasePath = PANEL_DB): PanelSnapshot {
+  if (process.getuid && process.getuid() !== 0 && databasePath === PANEL_DB) {
+    throw new Error("getLivePanelInfo must run as root; consumers query the root gateway daemon instead");
   }
 
-  const panel = readPanelDatabase();
+  const panel = readPanelDatabase(databasePath);
   const ports = new Set<number>(panel.allocatedPorts);
   const sites = panel.sites;
 
@@ -195,14 +209,19 @@ export function generateSnapshot(): PanelSnapshot {
   // still spoken for but is not listening -- invisible to the allocator.
   for (const spec of Object.values(ADDONS)) {
     if (!existsSync(spec.stateDir)) continue;
-    for (const entry of readdirSync(spec.stateDir)) {
-      const meta = `${spec.stateDir}/${entry}/meta.json`;
-      if (!existsSync(meta)) continue;
-      try {
-        addPort(ports, String(JSON.parse(readFileSync(meta, "utf-8")).port));
-      } catch {
-        // A half-written meta file should not abort the whole snapshot.
+    try {
+      for (const entry of readdirSync(spec.stateDir)) {
+        const meta = `${spec.stateDir}/${entry}/meta.json`;
+        if (!existsSync(meta)) continue;
+        try {
+          addPort(ports, String(JSON.parse(readFileSync(meta, "utf-8")).port));
+        } catch {
+          // A half-written meta file should not abort the whole snapshot.
+        }
       }
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") continue;
+      throw new Error(`cannot read addon state directory ${spec.stateDir}: ${errorMessage(error)}`, { cause: error });
     }
   }
 
@@ -214,18 +233,10 @@ export function generateSnapshot(): PanelSnapshot {
     // ss absent is survivable; the database and disk scans still apply.
   }
 
-  const snapshot: PanelSnapshot = {
+  return {
     updatedAt: new Date().toISOString(),
     portRange: PORT_RANGE,
     allocatedPorts: [...ports].sort((a, b) => a - b),
     sites,
   };
-
-  // 0640 because the site list is customer data: the app's group may read it,
-  // nobody else. writeAtomic's temp name carries the pid, which matters here --
-  // a manual repair and the timer can run at the same moment, and a shared
-  // fixed name lets one publish the other's half-written file.
-  writeAtomic(SNAPSHOT_FILE, JSON.stringify(snapshot, null, 2), 0o640);
-
-  return snapshot;
 }

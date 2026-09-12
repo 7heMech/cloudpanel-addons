@@ -7,13 +7,16 @@ import {
   type GatewayRequest,
   INSTATIC_ALLOWED_VERBS,
 } from "../lib/gateway-protocol";
-import { callGatewayAuth } from "../lib/gateway-client";
+import { callGatewayAuth, callGatewayPanelInfo } from "../lib/gateway-client";
 import { createAuthActionServer } from "../cli/auth-action";
 
 describe("Gateway Protocol & Server", () => {
   test("parseGatewayRequest parses structured JSON requests", () => {
     const authReq = parseGatewayRequest('{"kind":"auth","sessionId":"abc123"}\n');
     expect(authReq).toEqual({ kind: "auth", sessionId: "abc123" });
+
+    const panelReq = parseGatewayRequest('{"kind":"panel-info"}\n');
+    expect(panelReq).toEqual({ kind: "panel-info" });
 
     const actionReq = parseGatewayRequest(
       '{"kind":"action","addon":"stager","verb":"sites","args":["--domain","foo.com"]}\n'
@@ -130,6 +133,29 @@ describe("Gateway Protocol & Server", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("callGatewayPanelInfo returns real-time panel info over socket", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clp-gateway-panel-info-"));
+    const sockPath = join(dir, "gateway.sock");
+    const fakeDb = join(dir, "panel.sqlite");
+
+    try {
+      const server = createAuthActionServer({ panelDb: fakeDb });
+      await new Promise<void>((resolve) => server.listen(sockPath, resolve));
+
+      const res = await callGatewayPanelInfo({ socketPath: sockPath, timeout: 2000 });
+      expect(res.ok).toBe(true);
+      expect(res.data).toBeDefined();
+      expect(Array.isArray(res.data?.sites)).toBe(true);
+      expect(Array.isArray(res.data?.allocatedPorts)).toBe(true);
+      expect(res.data?.portRange).toEqual({ min: 39000, max: 39999 });
+
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("INSTATIC_ALLOWED_VERBS excludes run and gateway rejects instatic run", async () => {
     expect(INSTATIC_ALLOWED_VERBS.has("run")).toBe(false);
 

@@ -22,6 +22,7 @@ import {
   INSTATIC_ALLOWED_VERBS,
   MANAGER_ALLOWED_VERBS,
 } from "../lib/gateway-protocol";
+import { getLivePanelInfo } from "../lib/panel-snapshot";
 
 export const MAX_AUTH_INPUT_BYTES = MAX_SESSION_ID_LENGTH + 1;
 export const MAX_AUTH_REPLY_BYTES = 32 * 1024;
@@ -147,9 +148,9 @@ export async function runAuthAction(
 }
 
 /**
- * Create a socket server that handles authentication and privileged action requests.
- * Each connection sends one line containing either a session ID or JSON action request,
- * receives a JSON reply, and closes.
+ * Creates a socket server for authentication, live panel information, and
+ * privileged action requests. Each connection sends one line containing either
+ * a session ID or a JSON request, receives a JSON reply, and closes.
  */
 export function createAuthActionServer(options: AuthActionOptions = {}): net.Server {
   return net.createServer((socket) => {
@@ -194,6 +195,21 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
         if (request.kind === "auth") {
           const reply = await runAuthAction(request.sessionId + "\n", options);
           socket.end(reply);
+          return;
+        }
+
+        if (request.kind === "panel-info") {
+          try {
+            const info = getLivePanelInfo(options.panelDb);
+            socket.end(JSON.stringify({ ok: true, data: info }) + "\n");
+          } catch (error) {
+            socket.end(
+              JSON.stringify({
+                ok: false,
+                error: error instanceof Error ? error.message : String(error),
+              }) + "\n",
+            );
+          }
           return;
         }
 
@@ -248,7 +264,9 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             } else {
               const err =
                 stderr.trim() ||
-                `action ${request.addon} ${request.verb} failed (exit ${exitCode ?? "unknown"})`;
+                (exitCode !== 0
+                  ? `action process exited with code ${exitCode}`
+                  : "action returned non-json output");
               socket.end(JSON.stringify({ ok: false, error: err }) + "\n");
             }
           } catch (err) {
@@ -266,6 +284,11 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
 
     socket.on("error", () => {
       cleanup();
+      try {
+        socket.destroy();
+      } catch {
+        // ignore
+      }
     });
   });
 }

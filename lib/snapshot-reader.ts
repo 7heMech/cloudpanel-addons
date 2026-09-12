@@ -1,58 +1,50 @@
-// App side of decision 2.7. Reads the sanitized snapshot and nothing else:
-// no panel database, no /home/clp, no shelling out. Kept in its own file so
-// that "the app cannot read the panel database" is visible in the imports
-// rather than being a convention someone has to remember.
+// App side of decision 2.7.
+// Consumers query the root gateway daemon over UNIX socket for real-time
+// panel state (CloudPanel sites, allocated ports, and active listeners)
+// without periodic snapshot staleness or unnecessary disk writes.
 
-import { existsSync, readFileSync } from "node:fs";
-
-export const SNAPSHOT_FILE = "/var/lib/clp-addons/snapshot.json";
+import { callGatewayPanelInfo, type GatewayClientOptions } from "./gateway-client";
+import {
+  type SanitizedSite,
+  type PanelSnapshot,
+  type PanelInfo,
+} from "./gateway-protocol";
 
 // Decision 2.11: a reserved block well clear of where CloudPanel hands out
 // app ports, so a collision needs someone to deliberately type one of these
 // into the panel.
 export const PORT_RANGE = { min: 39000, max: 39999 } as const;
 
-export interface SanitizedSite {
-  domain: string;
-  user: string;
-  type: string;
-}
+export type { SanitizedSite, PanelSnapshot, PanelInfo };
 
-export interface PanelSnapshot {
-  updatedAt: string;
-  portRange: { min: number; max: number };
-  allocatedPorts: number[];
-  sites: SanitizedSite[];
-}
-
-export function readSnapshot(): PanelSnapshot {
-  if (!existsSync(SNAPSHOT_FILE)) {
-    throw new Error(
-      `panel snapshot missing at ${SNAPSHOT_FILE}; run 'clp-addons repair' as root to regenerate it`
-    );
+/**
+ * Returns current panel data from the gateway client.
+ *
+ * @throws If the gateway request fails or returns no panel data.
+ */
+export async function fetchPanelInfo(
+  options?: GatewayClientOptions,
+): Promise<PanelSnapshot> {
+  const result = await callGatewayPanelInfo(options);
+  if (result.ok && result.data) {
+    return result.data;
   }
-  return JSON.parse(readFileSync(SNAPSHOT_FILE, "utf-8")) as PanelSnapshot;
+  throw new Error(result.error ?? "failed to fetch real-time panel info from gateway");
 }
 
-// Age of the snapshot, for surfacing staleness in the UI instead of silently
-// allocating against a stale port list.
+// Age of the panel data in seconds. For real-time gateway data this is 0.
 export function snapshotAgeSeconds(snap: PanelSnapshot): number {
   return Math.max(0, Math.round((Date.now() - new Date(snap.updatedAt).getTime()) / 1000));
 }
 
 /**
- * The lowest free port in the reserved range.
+ * Returns the lowest port in the snapshot's reserved range that is absent from
+ * both its allocations and `alsoTaken`.
  *
- * `alsoTaken` exists because the snapshot is not live: it is rewritten by the
- * root CLI on install and repair, so between reconciliation runs it does not
- * know about instances created since. Two instances created in the same
- * fifteen-minute window would otherwise both be offered the same port, and the
- * second create would die on `docker run` failing to bind it. Callers pass the
- * ports they have already handed out, which is exactly what the snapshot is
- * stale about.
+ * @throws If every port in the reserved range is taken.
  */
 export function getNextAvailablePort(
-  snap: PanelSnapshot = readSnapshot(),
+  snap: PanelSnapshot,
   alsoTaken: Iterable<number> = []
 ): number {
   const taken = new Set([...snap.allocatedPorts, ...alsoTaken]);

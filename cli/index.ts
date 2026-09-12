@@ -18,7 +18,6 @@ import {
 } from "./inject";
 import { fatal, Fatal, log, parseFlags, requireRoot, tryRun, writeAtomic } from "./util";
 import { runRecon } from "./recon";
-import { generateSnapshot } from "../lib/panel-snapshot";
 import { authenticateRequest, type AuthenticatedRequest } from "../lib/sso-auth";
 import { handle as handleInstatic } from "../addons/instatic/app/index";
 import { handle as handleStager } from "../addons/stager/app/index";
@@ -212,6 +211,10 @@ function dashboardUrl(): string {
   return `https://${host}/addons/`;
 }
 
+/**
+ * Installs one addon from local or verified release artifacts and reconciles
+ * the shared manager, authentication, and CloudPanel integration.
+ */
 export async function cmdInstall(argv: string[]): Promise<void> {
   requireRoot("install");
   const { positional, flags } = parseFlags(argv);
@@ -248,7 +251,6 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   installUnits(specs);
   removeLegacyUnits(true);
   removeLegacyUsers(true);
-  generateSnapshot();
   ensureDirs(specs);
   reconcileAnchors(false);
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
@@ -259,6 +261,10 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   log.plain(`  Dashboard URL: ${dashboardUrl()}`);
 }
 
+/**
+ * Updates release artifacts when necessary and reconciles provisioning for all
+ * currently enabled addons.
+ */
 export async function cmdUpdate(argv: string[]): Promise<void> {
   requireRoot("update");
   const { flags } = parseFlags(argv);
@@ -288,7 +294,6 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
   removeLegacyUnits(true);
   removeLegacyUsers(true);
   installUnits(specs);
-  generateSnapshot();
   ensureDirs(specs);
   startUnits();
   reconcileAnchors(false);
@@ -326,7 +331,6 @@ export async function applyEnable(name: string): Promise<void> {
   for (const item of specs) writeConfig(item, true);
   reconcilePanelIdentity();
   installUnits(specs);
-  generateSnapshot();
   ensureDirs(specs);
   reconcileAnchors(false);
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
@@ -419,6 +423,10 @@ export function runManagerMaintenance(): void {
   }
 }
 
+/**
+ * Reconciles manager provisioning and enabled addon state, or only injected
+ * CloudPanel anchors and the Nginx proxy when `--anchors-only` is supplied.
+ */
 export async function cmdRepair(argv: string[]): Promise<void> {
   requireRoot("repair");
   const { positional, flags } = parseFlags(argv);
@@ -464,7 +472,6 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   removeLegacyUsers(quiet);
   reconcilePanelIdentity(quiet);
   const unitChanged = installUnits(all);
-  generateSnapshot();
   ensureDirs(all);
   if (unitChanged || unitActive(MANAGER_UNIT) !== "active") startUnits();
   else ensureTimerArmed("clp-addons-reconcile.timer", quiet);
@@ -714,6 +721,11 @@ export async function handleManagerRoute(req: Request, path: string, server: Ser
   return null;
 }
 
+/**
+ * Starts the manager on its Unix socket and remains pending for the process
+ * lifetime. The restrictive socket-creation umask is restored before setup
+ * continues or an error escapes.
+ */
 async function cmdServe(): Promise<never> {
   // Serving nothing is a legitimate state, not a failed start. Every addon is
   // compiled in, so a manager with none of them enabled still has a job: it is
@@ -723,8 +735,11 @@ async function cmdServe(): Promise<never> {
 
   const socketDir = SOCKET_PATH.slice(0, SOCKET_PATH.lastIndexOf("/"));
   if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH);
-  const server = Bun.serve({
-    unix: SOCKET_PATH,
+  const prevUmask = process.umask(0o007);
+  let server: ReturnType<typeof Bun.serve>;
+  try {
+    server = Bun.serve({
+      unix: SOCKET_PATH,
     async fetch(req, server) {
       const path = internalPath(new URL(req.url).pathname);
       if (path === "/health") {
@@ -771,6 +786,9 @@ async function cmdServe(): Promise<never> {
       return response;
     },
   });
+  } finally {
+    process.umask(prevUmask);
+  }
 
   chmodSync(SOCKET_PATH, 0o660);
   const groupId = Number.parseInt(execFileSync("getent", ["group", PANEL_GROUP], { encoding: "utf-8" }).split(":")[2] ?? "", 10);
