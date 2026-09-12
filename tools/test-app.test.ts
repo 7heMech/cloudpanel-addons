@@ -1123,7 +1123,7 @@ console.log("\n== two addons hand out ports from one block ==");
       const paths = {
         lockDir: `${d}/lock`, dataBaseDir: d, backupDir: `${d}/backups`, jobsDir: `${d}/jobs`,
         actionBinary: `${d}/clp-addons`, panelDb: `${d}/panel.db`,
-        clpctl: `${d}/clpctl`, panelIdentityFile: `${d}/identity`, sqlite3: "sqlite3",
+        clpctl: `${d}/clpctl`, panelIdentityFile: `${d}/identity`, sqlite3: "sqlite3", homeDir: `${d}/home`,
       };
       return portHolder(asked, self, paths) ?? "FREE";
     } finally {

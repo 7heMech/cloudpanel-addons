@@ -5,7 +5,7 @@ import {
   renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   ActionCommandFailure, ActionFailure, commandFailure, emitActionError, emitActionOk,
   failAction, forwardCommandOutput as defaultForwardCommandOutput, normalizeIdentityHostname,
@@ -93,6 +93,7 @@ export interface InstaticActionPaths {
   clpctl: string;
   panelIdentityFile: string;
   sqlite3: string;
+  homeDir: string;
 }
 
 export const DEFAULT_INSTATIC_ACTION_PATHS: InstaticActionPaths = {
@@ -105,9 +106,10 @@ export const DEFAULT_INSTATIC_ACTION_PATHS: InstaticActionPaths = {
   clpctl: "/usr/bin/clpctl",
   panelIdentityFile: PANEL_IDENTITY_PATH,
   sqlite3: "sqlite3",
+  homeDir: "/home",
 };
 
-export type InstaticVerb = "list" | "create" | "update" | "start" | "stop" | "restart" | "recreate" | "snapshot" | "status" | "logs" | "delete" | "job" | "jobs" | "prune" | "run";
+export type InstaticVerb = "list" | "create" | "update" | "start" | "stop" | "restart" | "recreate" | "snapshot" | "backup" | "status" | "logs" | "delete" | "job" | "jobs" | "prune" | "run";
 
 export interface ParsedInstaticAction {
   verb: InstaticVerb;
@@ -118,6 +120,7 @@ export interface ParsedInstaticAction {
   tls: string;
   job: string;
   isAsync: boolean;
+  fromBackup?: boolean;
 }
 
 export interface InstaticActionOptions {
@@ -180,8 +183,10 @@ function setStep(dir: string, step: string): void {
 }
 
 function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstaticAction {
+  argv = argv.flatMap((arg) => /^--(?:domain|port|tag|confirm|tls|job)=/.test(arg)
+    ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)] : [arg]);
   if (argv.length === 0) {
-    failAction("usage: clp-addons action instatic {list|create|update|recreate|start|stop|restart|delete|snapshot|status|logs|job|jobs|prune|run} [options]");
+    failAction("usage: clp-addons action instatic {list|create|update|recreate|start|stop|restart|delete|snapshot|backup|status|logs|job|jobs|prune|run} [options]");
   }
 
   const verb = argv[0] as string;
@@ -192,10 +197,13 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
   let tls = "no";
   let job = "";
   let isAsync = false;
+  let fromBackup = false;
 
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i];
-    if (flag === "--async") {
+    if (flag === "--from-backup") {
+      fromBackup = true;
+    } else if (flag === "--async") {
       isAsync = true;
     } else if (flag === "--domain" || flag === "--port" || flag === "--tag" || flag === "--confirm" || flag === "--tls" || flag === "--job") {
       if (i + 1 >= argv.length) failAction(`${flag} needs a value`);
@@ -212,10 +220,14 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
   }
 
   let normalizedDomain = domain;
+  if (fromBackup && verb !== "recreate") failAction("--from-backup is only valid with recreate");
   switch (verb) {
     case "list":
     case "jobs":
     case "prune":
+      break;
+    case "backup":
+      if (domain) normalizedDomain = validateDomain(domain, paths.panelIdentityFile);
       break;
     case "job":
     case "run":
@@ -275,7 +287,8 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
       break;
   }
 
-  return { verb: verb as InstaticVerb, domain: normalizedDomain, port, tag, confirm, tls, job, isAsync };
+  if (verb === "backup" && (isAsync || tls !== "no")) failAction("backup takes only --domain");
+  return { verb: verb as InstaticVerb, domain: normalizedDomain, port, tag, confirm, tls, job, isAsync, fromBackup };
 }
 
 function containerName(domain: string): string {
@@ -284,6 +297,78 @@ function containerName(domain: string): string {
 
 function instanceDir(domain: string, paths: InstaticActionPaths): string {
   return join(paths.dataBaseDir, domain);
+}
+
+export interface InstanceStorage extends SnapshotSources {
+  legacy: boolean;
+}
+
+// CloudPanel archives the whole site home. Keep private application state out
+// of the document root; only media belongs in the File Manager's htdocs tree.
+export function homeStorage(domain: string, paths: InstaticActionPaths): InstanceStorage {
+  const metaFile = join(instanceDir(domain, paths), "meta.json");
+  const user = siteUserOf(domain, paths) ?? readMeta("siteUser", metaFile);
+  if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(user) || user.trim() !== user || user === "clp") {
+    failAction(`no valid CloudPanel site user for ${domain}`);
+  }
+  const home = join(paths.homeDir, user);
+  return {
+    legacy: false,
+    dataDir: join(home, "instatic", domain, "data"),
+    envFile: join(home, "instatic", domain, ".instatic.env"),
+    uploadsDir: join(home, "htdocs", domain, "uploads"),
+    metaFile,
+  };
+}
+
+export function instanceStorage(domain: string, paths: InstaticActionPaths): InstanceStorage {
+  const dir = instanceDir(domain, paths);
+  const metaFile = join(dir, "meta.json");
+  if (readMeta("storage", metaFile) === "site-home") return homeStorage(domain, paths);
+  // Old instances keep working until their next recreate/update. Native
+  // backups refuse these until migration puts uploads in the site home too.
+  return { legacy: true, dataDir: join(dir, "data"), uploadsDir: join(dir, "uploads"), envFile: join(dir, "instatic.env"), metaFile };
+}
+
+function assertSafePath(path: string): void {
+  for (let part = path; ; part = dirname(part)) {
+    try {
+      if (lstatSync(part).isSymbolicLink()) failAction(`refusing symlinked storage path: ${part}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (dirname(part) === part) break;
+  }
+}
+
+function checkStorage(storage: SnapshotSources): void {
+  for (const path of [storage.dataDir, storage.uploadsDir, storage.envFile]) assertSafePath(path);
+}
+
+function removeStorage(storage: SnapshotSources): void {
+  checkStorage(storage);
+  rmSync(storage.dataDir, { recursive: true, force: true });
+  rmSync(storage.uploadsDir, { recursive: true, force: true });
+  rmSync(storage.envFile, { force: true });
+}
+
+function requireEmptyStorage(storage: SnapshotSources): void {
+  checkStorage(storage);
+  for (const path of [storage.dataDir, storage.uploadsDir, storage.envFile]) {
+    if (existsSync(path)) failAction(`storage already exists at ${path}; refusing to overwrite it`);
+  }
+}
+
+function rejectOrphanedLegacyStorage(dir: string): void {
+  for (const entry of ["data", "uploads", "instatic.env"]) {
+    if (existsSync(join(dir, entry))) failAction(`existing application data at ${dir} has no metadata; restore its meta.json before recreating`);
+  }
+}
+
+function writeMetaFile(file: string, content: string): void {
+  const temporary = `${file}.${randomBytes(8).toString("hex")}.tmp`;
+  writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
+  renameSync(temporary, file);
 }
 
 function isRegularFile(path: string): boolean {
@@ -472,7 +557,8 @@ function generatedPassword(): string {
 }
 
 function writeEnvFile(file: string, key: string, port: number, domain: string): void {
-  const temporary = `${file}.tmp`;
+  assertSafePath(file);
+  const temporary = `${file}.${randomBytes(8).toString("hex")}.tmp`;
   const content = [
     `PORT=${CONTAINER_PORT}`,
     "NODE_ENV=production",
@@ -483,26 +569,30 @@ function writeEnvFile(file: string, key: string, port: number, domain: string): 
     `VITE_ALLOWED_ORIGIN=https://${domain}`,
     "",
   ].join("\n");
-  withUmask(0o077, () => writeFileSync(temporary, content, { mode: 0o600 }));
+  withUmask(0o077, () => writeFileSync(temporary, content, { mode: 0o600, flag: "wx" }));
   chmodSync(temporary, 0o600);
   renameSync(temporary, file);
 }
 
-function ensureEnvFile(dir: string, port: number, domain: string): void {
-  const file = join(dir, "instatic.env");
+function secretKey(file: string): string {
+  if (!isRegularFile(file)) failAction(`missing encryption key file: ${file}; restore the original key before starting`);
+  const key = readFileSync(file, "utf8").split(/\r?\n/)
+    .find((line) => line.startsWith("INSTATIC_SECRET_KEY="))?.slice("INSTATIC_SECRET_KEY=".length) ?? "";
+  if (!key.trim()) failAction(`${file} has no INSTATIC_SECRET_KEY; refusing to generate a new one over existing data`);
+  return key;
+}
+
+function ensureEnvFile(storage: SnapshotSources, port: number, domain: string, fresh = false): void {
+  const file = storage.envFile;
+  checkStorage(storage);
+  mkdirSync(dirname(file), { recursive: true, mode: 0o750 });
   if (isRegularFile(file)) {
-    let key = "";
-    try {
-      key = readFileSync(file, "utf8").split(/\r?\n/)
-        .find((line) => line.startsWith("INSTATIC_SECRET_KEY="))?.slice("INSTATIC_SECRET_KEY=".length) ?? "";
-    } catch {
-      key = "";
-    }
-    if (!key) failAction(`instatic.env for ${domain} has no INSTATIC_SECRET_KEY; refusing to generate a new one over existing data`);
-    writeEnvFile(file, key, port, domain);
+    writeEnvFile(file, secretKey(file), port, domain);
     return;
   }
-
+  if (!fresh || (isDirectory(storage.dataDir) && readdirSync(storage.dataDir).length > 0)) {
+    failAction(`missing encryption key for ${domain}; restore the original .instatic.env before starting`);
+  }
   diagnostic(`[instatic] generating a master key for ${domain}\n`);
   writeEnvFile(file, randomBytes(32).toString("base64"), port, domain);
 }
@@ -524,26 +614,27 @@ function resolveOwner(domain: string, paths: InstaticActionPaths): string {
   return `${uid}:${gid}`;
 }
 
-function enforceOwnership(dir: string, owner: string): void {
-  mkdirSync(join(dir, "data"), { recursive: true });
-  mkdirSync(join(dir, "uploads"), { recursive: true });
-  if (!runDiagnostic("chown", ["-R", owner, join(dir, "data"), join(dir, "uploads")])) {
+function enforceOwnership(storage: SnapshotSources, owner: string): void {
+  checkStorage(storage);
+  mkdirSync(storage.dataDir, { recursive: true, mode: 0o750 });
+  mkdirSync(storage.uploadsDir, { recursive: true, mode: 0o750 });
+  if (!runDiagnostic("chown", ["-hR", owner, storage.dataDir, storage.uploadsDir])) {
     throw new ActionCommandFailure("chown");
   }
-  if (!runDiagnostic("chmod", ["750", join(dir, "data"), join(dir, "uploads")])) {
+  if (!runDiagnostic("chmod", ["750", storage.dataDir, storage.uploadsDir])) {
     throw new ActionCommandFailure("chmod");
   }
-  const env = join(dir, "instatic.env");
+  const env = storage.envFile;
   if (isRegularFile(env)) {
-    if (!runDiagnostic("chown", ["root:root", env])) throw new ActionCommandFailure("chown");
+    if (!runDiagnostic("chown", [`root:${owner.split(":")[1]}`, env])) throw new ActionCommandFailure("chown");
     if (!runDiagnostic("chmod", ["600", env])) throw new ActionCommandFailure("chmod");
   }
 }
 
-function runContainer(name: string, port: number, tag: string, domain: string, dir: string, paths: InstaticActionPaths): void {
+function runContainer(name: string, port: number, tag: string, domain: string, storage: SnapshotSources, paths: InstaticActionPaths, fresh = false): void {
   const owner = resolveOwner(domain, paths);
-  ensureEnvFile(dir, port, domain);
-  enforceOwnership(dir, owner);
+  ensureEnvFile(storage, port, domain, fresh);
+  enforceOwnership(storage, owner);
   const result = runCommand("docker", [
     "run", "-d",
     "--name", name,
@@ -551,9 +642,9 @@ function runContainer(name: string, port: number, tag: string, domain: string, d
     "--restart", "unless-stopped",
     "--label", "clp-addon=instatic",
     "-p", `127.0.0.1:${port}:${CONTAINER_PORT}`,
-    "--env-file", join(dir, "instatic.env"),
-    "-v", `${join(dir, "data")}:/app/data`,
-    "-v", `${join(dir, "uploads")}:/app/uploads`,
+    "--env-file", storage.envFile,
+    "-v", `${storage.dataDir}:/app/data`,
+    "-v", `${storage.uploadsDir}:/app/uploads`,
     `${REGISTRY_IMAGE}:${tag}`,
   ]);
   forwardCommandOutput(result);
@@ -586,10 +677,16 @@ async function healthCheck(port: number, domain: string): Promise<boolean> {
 }
 
 function sqliteBackup(source: string, destination: string, sqlite3 = "sqlite3"): boolean {
-  const escaped = destination.replaceAll("'", "''");
-  const result = runCommand(sqlite3, [source, `.backup '${escaped}'`]);
+  // Dot commands use C-style quoting, not SQL string escaping. Readonly also
+  // prevents a missing source from silently becoming a successful empty backup.
+  const result = runCommand(sqlite3, ["-batch", "-readonly", "-cmd", ".timeout 5000", source, `.backup ${JSON.stringify(destination)}`]);
   if (result.stderr) diagnostic(result.stderr);
-  return result.ok;
+  if (!result.ok) return false;
+  // The backup inherits WAL mode. Make the detached destination a standalone
+  // rollback-journal database before publishing it; no sidecars are required.
+  const check = runCommand(sqlite3, ["-batch", destination, "PRAGMA journal_mode=DELETE; PRAGMA quick_check;"]);
+  if (check.stderr) diagnostic(check.stderr);
+  return check.ok && check.stdout.trim().replaceAll("\r", "") === "delete\nok";
 }
 
 function withUmask<T>(mask: number, body: () => T): T {
@@ -612,83 +709,90 @@ function fileHeader(path: string): string {
   }
 }
 
-export function makeSnapshot(dir: string, out: string, sqlite3 = "sqlite3"): boolean {
+export interface SnapshotSources {
+  dataDir: string;
+  uploadsDir: string;
+  envFile: string;
+  metaFile?: string;
+  includeUploads?: boolean;
+}
+
+export function makeSnapshot(dir: string, out: string, sqlite3 = "sqlite3", sources?: SnapshotSources): boolean {
   let stage: string;
   try {
-    stage = mkdtempSync(join(dir, ".snap.XXXXXX"));
+    stage = mkdtempSync(join(dirname(out), ".instatic-snapshot-"));
   } catch {
     return false;
   }
 
   const cleanup = () => rmSync(stage, { recursive: true, force: true });
   try {
-    mkdirSync(join(stage, "data"), { recursive: true });
-    const dataDir = join(dir, "data");
+    const payload = join(stage, "payload");
+    mkdirSync(join(payload, "data"), { recursive: true });
+    const dataDir = sources?.dataDir ?? join(dir, "data");
     if (isDirectory(dataDir)) {
       for (const entry of readdirSync(dataDir, { withFileTypes: true })) {
         if (entry.name.startsWith(".")) continue;
         if (!isRegularFile(join(dataDir, entry.name))) continue;
         if (entry.name.endsWith("-wal") || entry.name.endsWith("-shm")) continue;
         const source = join(dataDir, entry.name);
-        const destination = join(stage, "data", entry.name);
+        const destination = join(payload, "data", entry.name);
         let header = "";
         try {
           header = fileHeader(source);
         } catch {
-          cleanup();
           return false;
         }
         if (header === "SQLite format 3") {
           if (!sqliteBackup(source, destination, sqlite3)) {
             diagnostic(`[instatic] WARN: sqlite backup failed for ${entry.name}\n`);
-            cleanup();
             return false;
           }
         } else {
           try {
             cpSync(source, destination, { recursive: true, preserveTimestamps: true, dereference: false });
           } catch {
-            cleanup();
             return false;
           }
         }
       }
     }
 
-    const uploads = join(dir, "uploads");
-    if (isDirectory(uploads)) {
+    const uploads = sources?.uploadsDir ?? join(dir, "uploads");
+    if (sources?.includeUploads !== false && isDirectory(uploads)) {
       try {
-        cpSync(uploads, join(stage, "uploads"), { recursive: true, preserveTimestamps: true, dereference: false });
+        cpSync(uploads, join(payload, "uploads"), { recursive: true, preserveTimestamps: true, dereference: false });
       } catch {
-        cleanup();
         return false;
       }
     }
-    const env = join(dir, "instatic.env");
+    const env = sources?.envFile ?? join(dir, "instatic.env");
     if (isRegularFile(env)) {
       try {
-        cpSync(env, join(stage, "instatic.env"), { recursive: true, preserveTimestamps: true, dereference: false });
+        cpSync(env, join(payload, "instatic.env"), { recursive: true, preserveTimestamps: true, dereference: false });
       } catch {
-        cleanup();
         return false;
       }
     }
 
-    const result = withUmask(0o077, () => runCommand("tar", ["-czf", out, "-C", stage, "."]));
+    if (sources?.metaFile) {
+      if (!isRegularFile(sources.metaFile)) return false;
+      cpSync(sources.metaFile, join(payload, "meta.json"), { dereference: false });
+    }
+    const temporary = join(stage, "snapshot.tar.gz");
+    const result = withUmask(0o077, () => runCommand("tar", ["-czf", temporary, "-C", payload, "."]));
     forwardCommandOutput(result);
     if (!result.ok) {
       diagnostic(`[instatic] WARN: tar failed writing ${out}\n`);
-      cleanup();
-      rmSync(out, { force: true });
       return false;
     }
-    chmodSync(out, 0o600);
-    cleanup();
+    chmodSync(temporary, 0o600);
+    renameSync(temporary, out);
     return true;
   } catch {
-    cleanup();
-    rmSync(out, { force: true });
     return false;
+  } finally {
+    cleanup();
   }
 }
 
@@ -716,9 +820,13 @@ function dateStamp(utc = false): string {
   return result.stdout.trim();
 }
 
-function cleanupCreate(name: string, dir: string, domain: string, siteCreated: boolean, paths: InstaticActionPaths): void {
+function cleanupCreate(name: string, dir: string, domain: string, siteCreated: boolean, paths: InstaticActionPaths, storage?: SnapshotSources): void {
   diagnostic("[instatic] WARN: create failed, unwinding\n");
-  runStdoutAsDiagnostic("docker", ["rm", "-f", name]);
+  if (containerExists(name) && !runStdoutAsDiagnostic("docker", ["rm", "-f", name])) {
+    diagnostic("[instatic] WARN: could not remove failed container; site and storage preserved\n");
+    return;
+  }
+  if (storage) removeStorage(storage);
   if (siteCreated) {
     diagnostic("[instatic] WARN: removing the CloudPanel site this run created\n");
     runStdoutAsDiagnostic(paths.clpctl, ["site:delete", `--domainName=${domain}`, "--force"]);
@@ -733,12 +841,14 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
   const dir = instanceDir(domain, paths);
   if (containerExists(name)) failAction(`container '${name}' already exists`);
   if (existsSync(join(dir, "meta.json"))) failAction(`instance '${domain}' already exists`);
+  rejectOrphanedLegacyStorage(dir);
 
   const holder = portHolder(port, domain, paths);
   if (holder) failAction(`port ${port} is already taken by ${holder}; retry, or pick a hostname whose instance can have a port of its own`);
 
   let siteCreated = false;
   let cleanupActive = true;
+  let storage: InstanceStorage | undefined;
 
   if (action.isAsync) {
     for (const entry of listJobIds(paths.jobsDir)) {
@@ -809,12 +919,11 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
     }
 
     diagnostic("[instatic] preparing instance storage\n");
-    mkdirSync(join(dir, "data"), { recursive: true });
-    mkdirSync(join(dir, "uploads"), { recursive: true });
+    const destination = homeStorage(domain, paths);
+    requireEmptyStorage(destination);
+    storage = destination;
     mkdirSync(join(dir, "snapshots"), { recursive: true });
     chmodSync(dir, 0o750);
-    chmodSync(join(dir, "data"), 0o750);
-    chmodSync(join(dir, "uploads"), 0o750);
     chmodSync(join(dir, "snapshots"), 0o700);
 
     diagnostic(`[instatic] pulling ${REGISTRY_IMAGE}:${tag}\n`);
@@ -824,7 +933,7 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
 
     diagnostic(`[instatic] starting ${name} on 127.0.0.1:${port}\n`);
     try {
-      runContainer(name, port, tag, domain, dir, paths);
+      runContainer(name, port, tag, domain, storage, paths, true);
     } catch (error) {
       if (error instanceof ActionFailure) throw error;
       failAction(`failed to start container ${name}`);
@@ -841,13 +950,15 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
       `  \"tag\": ${JSON.stringify(tag)},`,
       `  \"container\": ${JSON.stringify(name)},`,
       `  \"siteUser\": ${JSON.stringify(siteUserFinal)},`,
+      '  "storage": "site-home",',
       `  \"siteCreatedByAddon\": ${siteCreated},`,
       `  \"createdAt\": ${JSON.stringify(dateStamp(true))}`,
       "}",
       "",
     ].join("\n");
-    writeFileSync(join(dir, "meta.json"), meta);
+    writeMetaFile(join(dir, "meta.json"), meta);
     cleanupActive = false;
+    initialNativeBackup(domain, paths);
 
     if (tls === "yes") {
       diagnostic(`[instatic] requesting a Let's Encrypt certificate for ${domain}\n`);
@@ -860,7 +971,7 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
 
     emitActionOk({ domain, port, tag, container: name, siteUser: siteUserFinal, siteCreatedByAddon: siteCreated, status: "running" });
   } catch (error) {
-    if (cleanupActive) cleanupCreate(name, dir, domain, siteCreated, paths);
+    if (cleanupActive) cleanupCreate(name, dir, domain, siteCreated, paths, storage);
     throw error;
   } finally {
     if (activeTranscript) {
@@ -870,93 +981,138 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
   }
 }
 
-function rollbackUpdate(name: string, dir: string, snapshot: string, owner: string, previousTag: string): void {
-  diagnostic(`[instatic] WARN: rolling back to ${previousTag}\n`);
-  runStdoutAsDiagnostic("docker", ["rm", "-f", name]);
-  rmSync(join(dir, "data"), { recursive: true, force: true });
-  rmSync(join(dir, "uploads"), { recursive: true, force: true });
-  const restored = runCommand("tar", ["-xzf", snapshot, "-C", dir]);
-  forwardCommandOutput(restored);
-  try {
-    enforceOwnership(dir, owner);
-  } catch {
-    // This rollback continues even if ownership repair fails; the old
-    // container is still renamed back and restarted below.
+function copyStorage(source: SnapshotSources, destination: SnapshotSources, uploads = true): void {
+  checkStorage(source);
+  checkStorage(destination);
+  for (const [from, to] of [
+    [source.dataDir, destination.dataDir],
+    ...(uploads ? [[source.uploadsDir, destination.uploadsDir]] : []),
+    [source.envFile, destination.envFile],
+  ] as Array<[string, string]>) {
+    mkdirSync(dirname(to), { recursive: true, mode: 0o750 });
+    if (existsSync(from)) cpSync(from, to, { recursive: true, preserveTimestamps: true, dereference: false, force: false, errorOnExist: true });
   }
-  runDiagnostic("docker", ["rename", `${name}-prev`, name]);
-  const started = runDiagnostic("docker", ["start", name]);
-  if (!started) diagnostic("[instatic] WARN: could not restart the previous container\n");
 }
 
-async function cmdUpdate(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
-  const { domain, tag } = action;
+function restoreLocalSnapshot(snapshot: string, storage: SnapshotSources, dir: string): void {
+  const stage = mkdtempSync(join(dir, ".rollback-"));
+  try {
+    const restored = runCommand("tar", ["-xzf", snapshot, "-C", stage]);
+    if (!restored.ok) throw commandFailure("tar", restored);
+    removeStorage(storage);
+    copyStorage({ dataDir: join(stage, "data"), uploadsDir: join(stage, "uploads"), envFile: join(stage, "instatic.env") }, storage);
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
+}
+
+async function replaceInstance(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
+  const { domain } = action;
+  const updating = action.verb === "update";
   const name = containerName(domain);
   const dir = instanceDir(domain, paths);
   const meta = join(dir, "meta.json");
   if (!isRegularFile(meta)) failAction(`no such instance: ${domain}`);
-
+  const previousTag = validateTag(readMeta("tag", meta));
+  const tag = updating ? action.tag : previousTag;
+  const port = validatePort(readMeta("port", meta));
   const owner = resolveOwner(domain, paths);
-  const curTag = readMeta("tag", meta);
-  const curPort = readMeta("port", meta);
-  if (!curTag || !curPort) failAction(`instance metadata is corrupt for ${domain}`);
-  validateTag(curTag);
-  const port = validatePort(curPort);
-  if (curTag === tag) failAction(`already running tag ${tag}`);
+  const proxy = siteIsOurProxy(domain, port, paths);
+  if (!proxy.ok) failAction(`cannot run ${domain}: ${proxy.reason}`);
+  if (updating && tag === previousTag) failAction(`already running tag ${tag}`);
 
-  diagnostic("[instatic] snapshotting before update\n");
-  mkdirSync(join(dir, "snapshots"), { recursive: true });
-  chmodSync(join(dir, "snapshots"), 0o700);
-  const snapshot = join(dir, "snapshots", `pre-update-${curTag}-${dateStamp()}.tar.gz`);
-  if (!makeSnapshot(dir, snapshot, paths.sqlite3)) failAction(`could not snapshot ${domain} before updating; refusing to continue`);
-  pruneSnapshots(join(dir, "snapshots"));
+  const storage = instanceStorage(domain, paths);
+  const destination = storage.legacy ? homeStorage(domain, paths) : storage;
+  checkStorage(storage);
+  secretKey(storage.envFile);
+  if (storage.legacy) requireEmptyStorage(destination);
+  const present = containerExists(name);
+  const wasRunning = present && containerState(name) === "running";
+  if (containerExists(`${name}-prev`)) failAction(`previous container ${name}-prev still exists; resolve the earlier operation before retrying`);
 
-  diagnostic(`[instatic] pulling ${REGISTRY_IMAGE}:${tag}\n`);
-  const pull = runCommand("docker", ["pull", `${REGISTRY_IMAGE}:${tag}`]);
-  forwardCommandOutput(pull);
-  if (!pull.ok) failAction(`failed to pull ${REGISTRY_IMAGE}:${tag}`);
+  if (updating) {
+    diagnostic(`[instatic] pulling ${REGISTRY_IMAGE}:${tag}\n`);
+    const pull = runCommand("docker", ["pull", `${REGISTRY_IMAGE}:${tag}`]);
+    forwardCommandOutput(pull);
+    if (!pull.ok) failAction(`failed to pull ${REGISTRY_IMAGE}:${tag}`);
+  }
 
-  runDiagnostic("docker", ["stop", name]);
-  runStdoutAsDiagnostic("docker", ["rm", "-f", `${name}-prev`]);
-  const renamed = runCommand("docker", ["rename", name, `${name}-prev`]);
-  forwardCommandOutput(renamed);
-  if (!renamed.ok) throw commandFailure("docker", renamed);
-
+  let snapshot = "";
+  let renamed = false;
+  let candidate = false;
+  let copied = false;
   try {
-    runContainer(name, port, tag, domain, dir, paths);
+    if (present) {
+      const stopped = runCommand("docker", ["stop", name]);
+      if (!stopped.ok) throw commandFailure("docker stop", stopped);
+    }
+    if (updating || storage.legacy) {
+      diagnostic("[instatic] snapshotting stopped instance before replacement\n");
+      const snapshots = join(dir, "snapshots");
+      mkdirSync(snapshots, { recursive: true, mode: 0o700 });
+      chmodSync(snapshots, 0o700);
+      snapshot = join(snapshots, `pre-${updating ? "update" : "migration"}-${previousTag}-${dateStamp()}.tar.gz`);
+      if (!makeSnapshot(dir, snapshot, paths.sqlite3, storage)) failAction(`could not snapshot ${domain}; refusing to continue`);
+    }
+    if (present) {
+      const result = runCommand("docker", ["rename", name, `${name}-prev`]);
+      if (!result.ok) throw commandFailure("docker rename", result);
+      renamed = true;
+    }
+    if (storage.legacy) {
+      diagnostic("[instatic] migrating application data into the CloudPanel site home\n");
+      copied = true;
+      copyStorage(storage, destination);
+    }
+    candidate = true;
+    runContainer(name, port, tag, domain, destination, paths);
+    if (!(await healthCheck(port, domain))) failAction(`health check failed for ${domain} at ${tag}`);
+    const recorded = JSON.parse(readFileSync(meta, "utf8"));
+    writeMetaFile(meta, JSON.stringify({ ...recorded, tag, storage: "site-home", siteUser: siteUserOf(domain, paths) }, null, 2) + "\n");
   } catch (error) {
-    if (error instanceof ActionFailure) throw error;
-    const startLogs = commandCombinedOutput("docker", ["logs", "--tail", "200", name]);
-    rollbackUpdate(name, dir, snapshot, owner, curTag);
-    failAction(`failed to start ${tag}; rolled back to ${curTag}`, { failedTag: tag, restoredTag: curTag, logs: startLogs });
+    const logs = candidate ? commandCombinedOutput("docker", ["logs", "--tail", "200", name]) : "";
+    if (candidate && !runDiagnostic("docker", ["rm", "-f", name])) {
+      failAction(`replacement failed and the new container could not be removed; data and ${snapshot || "the previous container"} preserved`, { logs });
+    }
+    try {
+      if (copied) removeStorage(destination);
+      else if (candidate && updating && snapshot) {
+        restoreLocalSnapshot(snapshot, storage, dir);
+        enforceOwnership(storage, owner);
+      }
+      if (renamed && !runDiagnostic("docker", ["rename", `${name}-prev`, name])) throw new Error("could not rename previous container");
+      if (wasRunning && !runDiagnostic("docker", ["start", name])) throw new Error("could not restart previous container");
+    } catch (rollbackError) {
+      failAction(`replacement failed; recovery failed: ${String(rollbackError)}; snapshot: ${snapshot}`, { logs });
+    }
+    failAction(`${error instanceof Error ? error.message : String(error)}; previous instance preserved`, { failedTag: tag, restoredTag: previousTag, logs });
   }
 
-  if (!(await healthCheck(port, domain))) {
-    diagnostic("[instatic] capturing failed container logs before rollback\n");
-    const failedLogs = commandCombinedOutput("docker", ["logs", "--tail", "200", name]);
-    diagnostic(`${failedLogs}\n`);
-    rollbackUpdate(name, dir, snapshot, owner, curTag);
-    failAction(`health check failed on ${tag}; rolled back to ${curTag}`, { failedTag: tag, restoredTag: curTag, logs: failedLogs });
+  const removed = !renamed || runDiagnostic("docker", ["rm", `${name}-prev`]);
+  if (storage.legacy && removed) {
+    try { removeStorage(storage); }
+    catch (error) { diagnostic(`[instatic] WARN: migrated successfully but could not remove old storage: ${String(error)}\n`); }
   }
+  else if (!removed) diagnostic("[instatic] WARN: previous container retained; remove it before the next replacement\n");
+  pruneSnapshots(join(dir, "snapshots"));
+  initialNativeBackup(domain, paths);
+  emitActionOk(updating
+    ? { domain, previousTag, newTag: tag, status: "running" }
+    : { domain, tag, port, owner, status: "running" });
+}
 
-  runStdoutAsDiagnostic("docker", ["rm", "-f", `${name}-prev`]);
-  const temporary = `${dir}/.meta.${process.pid}.${randomBytes(6).toString("hex")}`;
-  const original = readFileSync(meta, "utf8");
-  const rewritten = original.replace(/"tag"\s*:\s*"[^"]*"/, `"tag": "${tag}"`);
-  writeFileSync(temporary, rewritten, { mode: 0o600 });
-  chmodSync(temporary, 0o600);
-  renameSync(temporary, meta);
-
-  emitActionOk({ domain, previousTag: curTag, newTag: tag, status: "running" });
+async function cmdUpdate(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
+  await replaceInstance(action, paths);
 }
 
 async function cmdLifecycle(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
   const { verb, domain } = action;
   const name = containerName(domain);
-  const dir = instanceDir(domain, paths);
   if (!containerExists(name)) failAction(`no such container for ${domain}`);
-  if (verb !== "stop" && isDirectory(dir)) {
-    const owner = resolveOwner(domain, paths);
-    enforceOwnership(dir, owner);
+  if (verb !== "stop") {
+    const storage = instanceStorage(domain, paths);
+    secretKey(storage.envFile);
+    enforceOwnership(storage, resolveOwner(domain, paths));
   }
   const result = runCommand("docker", [verb, name]);
   forwardCommandOutput(result);
@@ -965,26 +1121,8 @@ async function cmdLifecycle(action: ParsedInstaticAction, paths: InstaticActionP
 }
 
 async function cmdRecreate(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
-  const { domain } = action;
-  const name = containerName(domain);
-  const dir = instanceDir(domain, paths);
-  const meta = join(dir, "meta.json");
-  if (!isRegularFile(meta)) failAction(`no such instance: ${domain}`);
-  const tag = validateTag(readMeta("tag", meta));
-  const port = validatePort(readMeta("port", meta));
-  const owner = resolveOwner(domain, paths);
-
-  diagnostic(`[instatic] recreating ${name} at ${tag} as uid ${owner}\n`);
-  runStdoutAsDiagnostic("docker", ["rm", "-f", name]);
-  try {
-    runContainer(name, port, tag, domain, dir, paths);
-  } catch (error) {
-    if (error instanceof ActionFailure) throw error;
-    const logs = commandCombinedOutput("docker", ["logs", "--tail", "200", name]);
-    failAction(`failed to recreate ${domain} at ${tag}`, { tag, logs });
-  }
-  if (!(await healthCheck(port, domain))) failAction(`health check failed after recreating ${domain}`);
-  emitActionOk({ domain, tag, port, owner, status: "running" });
+  if (action.fromBackup) await restoreNativeBackup(action, paths);
+  else await replaceInstance(action, paths);
 }
 
 export function deleteInstaticInstance(
@@ -1022,7 +1160,10 @@ export function deleteInstaticInstance(
   mkdirSync(paths.backupDir, { recursive: true });
   chmodSync(paths.backupDir, 0o700);
   const backup = join(paths.backupDir, `${domain}-deleted-${dateStamp()}.tar.gz`);
-  if (!makeSnapshot(dir, backup, paths.sqlite3)) failAction("final archive failed; nothing was deleted");
+  const storage = instanceStorage(domain, paths);
+  checkStorage(storage);
+  const nativeArchive = storage.legacy ? null : nativeBackupPath(domain, paths);
+  if (!makeSnapshot(dir, backup, paths.sqlite3, storage)) failAction("final archive failed; nothing was deleted");
 
   const containers = runCommand("docker", ["ps", "-a", "--format", "{{.Names}}"]);
   if (containers.stderr) diagnostic(containers.stderr);
@@ -1037,6 +1178,11 @@ export function deleteInstaticInstance(
     const removed = runCommand(paths.clpctl, ["site:delete", `--domainName=${domain}`, "--force"]);
     forwardCommandOutput(removed);
     if (!removed.ok) failAction("CloudPanel site deletion failed; archive and instance data preserved; retry Delete");
+  }
+  removeStorage(storage);
+  if (nativeArchive) {
+    assertSafePath(nativeArchive);
+    rmSync(nativeArchive, { force: true });
   }
   rmSync(dir, { recursive: true, force: true });
 }
@@ -1053,9 +1199,176 @@ function cmdSnapshot(action: ParsedInstaticAction, paths: InstaticActionPaths): 
   mkdirSync(join(dir, "snapshots"), { recursive: true });
   chmodSync(join(dir, "snapshots"), 0o700);
   const out = join(dir, "snapshots", `snapshot-${dateStamp()}.tar.gz`);
-  if (!makeSnapshot(dir, out, paths.sqlite3)) failAction(`snapshot failed for ${domain}`);
+  const storage = instanceStorage(domain, paths);
+  checkStorage(storage);
+  if (!makeSnapshot(dir, out, paths.sqlite3, storage)) failAction(`snapshot failed for ${domain}`);
   pruneSnapshots(join(dir, "snapshots"));
   emitActionOk({ domain, snapshot: out });
+}
+
+export function nativeBackupPath(domain: string, paths: InstaticActionPaths): string {
+  const storage = homeStorage(domain, paths);
+  const home = dirname(dirname(dirname(storage.dataDir)));
+  return join(home, "backups", "databases", `instatic-${domain}.tar.gz`);
+}
+
+export function makeNativeBackup(domain: string, paths: InstaticActionPaths): string {
+  const dir = instanceDir(domain, paths);
+  const storage = instanceStorage(domain, paths);
+  if (storage.legacy) failAction(`recreate ${domain} to migrate its storage before enabling native backups`);
+  checkStorage(storage);
+  secretKey(storage.envFile);
+  if (readMeta("domain", storage.metaFile!) !== domain) failAction(`instance metadata does not match ${domain}; previous backup preserved`);
+  validateTag(readMeta("tag", storage.metaFile!));
+  validatePort(readMeta("port", storage.metaFile!));
+  const dbFile = join(storage.dataDir, "instatic.db");
+  if (!isRegularFile(dbFile) || fileHeader(dbFile) !== "SQLite format 3") failAction(`no SQLite database to back up for ${domain}`);
+  const backup = nativeBackupPath(domain, paths);
+  assertSafePath(backup);
+  mkdirSync(dirname(backup), { recursive: true, mode: 0o750 });
+  if (!makeSnapshot(dir, backup, paths.sqlite3, { ...storage, includeUploads: false })) failAction(`native backup failed for ${domain}; previous backup preserved`);
+  return backup;
+}
+
+function initialNativeBackup(domain: string, paths: InstaticActionPaths): void {
+  try {
+    makeNativeBackup(domain, paths);
+  } catch (error) {
+    diagnostic(`[instatic] WARN: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
+}
+
+async function cmdBackup(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
+  const domains = action.domain ? [action.domain] : readdirSync(paths.dataBaseDir)
+    .filter((entry) => isRegularFile(join(paths.dataBaseDir, entry, "meta.json"))).sort();
+  const backups: Array<{ domain: string; snapshot: string }> = [];
+  const failures: Array<{ domain: string; error: string }> = [];
+  for (const entry of domains) {
+    try {
+      const domain = validateDomain(entry, paths.panelIdentityFile);
+      await withFileLock(join(paths.lockDir, `${domain}.lock`), 300, `another operation is running for ${domain}`, async () => {
+        backups.push({ domain, snapshot: makeNativeBackup(domain, paths) });
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push({ domain: entry, error: message });
+      diagnostic(`[instatic] backup failed for ${entry}: ${message}\n`);
+    }
+  }
+  if (failures.length) failAction("some Instatic backups failed", { backups, failures });
+  emitActionOk({ backups });
+}
+
+// Extract only fixed members to root-owned files via stdout. Never let an
+// externally restored tar archive choose filesystem paths, symlinks or owners.
+function extractRecoveryMember(archive: string, member: string, destination: string): void {
+  const fd = openSync(destination, "wx", 0o600);
+  try {
+    const result = Bun.spawnSync(["tar", "-xOzf", archive, "--", member], { stdin: "ignore", stdout: fd, stderr: "pipe" });
+    if (!result.success) failAction(`recovery archive is missing ${member}`);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+async function restoreNativeBackup(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
+  const { domain } = action;
+  const storage = homeStorage(domain, paths);
+  const owner = resolveOwner(domain, paths);
+  const archive = nativeBackupPath(domain, paths);
+  assertSafePath(archive);
+  if (!isRegularFile(archive)) failAction(`no recovery archive at ${archive}; restore it from CloudPanel first`);
+  checkStorage(storage);
+  if (!isDirectory(storage.uploadsDir)) failAction(`restore uploads to ${storage.uploadsDir} before recreating from backup`);
+  const dir = instanceDir(domain, paths);
+  mkdirSync(dir, { recursive: true, mode: 0o750 });
+  const meta = join(dir, "meta.json");
+  if (isRegularFile(meta) && instanceStorage(domain, paths).legacy) failAction("migrate the existing instance before restoring a site-home backup");
+  const stage = mkdtempSync(join(dir, ".restore-"));
+  const name = containerName(domain);
+  let recovery = "";
+  try {
+    const incoming = { dataDir: join(stage, "data"), envFile: join(stage, "instatic.env"), uploadsDir: storage.uploadsDir };
+    mkdirSync(incoming.dataDir);
+    extractRecoveryMember(archive, "./meta.json", join(stage, "meta.json"));
+    extractRecoveryMember(archive, "./instatic.env", incoming.envFile);
+    extractRecoveryMember(archive, "./data/instatic.db", join(stage, "database"));
+    const recorded = JSON.parse(readFileSync(join(stage, "meta.json"), "utf8"));
+    if (recorded.domain !== domain || recorded.storage !== "site-home") failAction("recovery archive does not match this site or storage layout");
+    const tag = validateTag(String(recorded.tag ?? ""));
+    const port = validatePort(String(recorded.port ?? ""));
+    const proxy = siteIsOurProxy(domain, port, paths);
+    if (!proxy.ok) failAction(`restore the CloudPanel reverse proxy for port ${port} first: ${proxy.reason}`);
+    secretKey(incoming.envFile);
+    if (fileHeader(join(stage, "database")) !== "SQLite format 3"
+      || !sqliteBackup(join(stage, "database"), join(incoming.dataDir, "instatic.db"), paths.sqlite3)) {
+      failAction("recovery database is invalid; current data preserved");
+    }
+    const present = containerExists(name);
+    const wasRunning = present && containerState(name) === "running";
+    if (containerExists(`${name}-prev`)) failAction(`previous container ${name}-prev still exists; resolve it before restoring`);
+    const pull = runCommand("docker", ["pull", `${REGISTRY_IMAGE}:${tag}`]);
+    forwardCommandOutput(pull);
+    if (!pull.ok) failAction(`could not pull the backed-up version ${tag}; current data preserved`);
+    const previous = { dataDir: join(stage, "previous", "data"), envFile: join(stage, "previous", "instatic.env"), uploadsDir: join(stage, "previous", "uploads") };
+    const oldMeta = isRegularFile(meta) ? readFileSync(meta, "utf8") : "";
+    let renamed = false;
+    let changed = false;
+    let candidate = false;
+    try {
+      if (present && !runDiagnostic("docker", ["stop", name])) failAction("could not stop container; current data preserved");
+      copyStorage(storage, previous);
+      if (present) {
+        if (!runDiagnostic("docker", ["rename", name, `${name}-prev`])) failAction("could not preserve previous container");
+        renamed = true;
+      }
+      changed = true;
+      rmSync(storage.dataDir, { recursive: true, force: true });
+      rmSync(storage.envFile, { force: true });
+      copyStorage(incoming, storage, false);
+      candidate = true;
+      runContainer(name, port, tag, domain, storage, paths);
+      if (!(await healthCheck(port, domain))) failAction("health check failed after restoring backup");
+      writeMetaFile(meta, JSON.stringify({
+        domain, port, tag, container: name, siteUser: siteUserOf(domain, paths), storage: "site-home",
+        // A home archive cannot confer authority to delete a CloudPanel site.
+        siteCreatedByAddon: oldMeta ? JSON.parse(oldMeta).siteCreatedByAddon === true : false,
+        createdAt: typeof recorded.createdAt === "string" ? recorded.createdAt : dateStamp(true),
+      }, null, 2) + "\n");
+    } catch (error) {
+      if (candidate && !runDiagnostic("docker", ["rm", "-f", name])) {
+        recovery = stage;
+        failAction(`restore failed; could not remove candidate container. Previous data retained at ${stage}/previous`);
+      }
+      try {
+        if (changed) {
+          removeStorage(storage);
+          copyStorage(previous, storage);
+          enforceOwnership(storage, owner);
+        }
+        if (renamed && !runDiagnostic("docker", ["rename", `${name}-prev`, name])) throw new Error("could not rename previous container");
+        if (wasRunning && !runDiagnostic("docker", ["start", name])) throw new Error("could not restart previous container");
+      } catch (rollbackError) {
+        recovery = stage;
+        failAction(`restore failed; rollback failed: ${String(rollbackError)}. Previous data retained at ${stage}/previous`);
+      }
+      throw error;
+    }
+    if (renamed && !runDiagnostic("docker", ["rm", `${name}-prev`])) diagnostic("[instatic] WARN: previous stopped container retained\n");
+    if (existsSync(previous.dataDir) || existsSync(previous.envFile)) {
+      recovery = stage;
+      try {
+        const retained = join(dir, `pre-restore-${dateStamp()}-${randomBytes(4).toString("hex")}`);
+        renameSync(dirname(previous.dataDir), retained);
+        recovery = retained;
+      } catch {
+        diagnostic(`[instatic] WARN: previous data retained at ${stage}/previous\n`);
+      }
+    }
+    emitActionOk({ domain, port, tag, owner, status: "running", restoredFrom: archive, ...(recovery ? { previousData: recovery === stage ? join(stage, "previous") : recovery } : {}) });
+  } finally {
+    if (recovery !== stage) rmSync(stage, { recursive: true, force: true });
+  }
 }
 
 function containerState(name: string): string {
@@ -1125,6 +1438,7 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
   const dir = instanceDir(domain, paths);
   if (containerExists(name)) failAction(`container '${name}' already exists`);
   if (existsSync(join(dir, "meta.json"))) failAction(`instance '${domain}' already exists`);
+  rejectOrphanedLegacyStorage(dir);
 
   const holder = portHolder(port, domain, paths);
   if (holder) failAction(`port ${port} is already taken by ${holder}`);
@@ -1136,6 +1450,7 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
 
   let siteCreated = false;
   let cleanupActive = true;
+  let storage: InstanceStorage | undefined;
   try {
     const existing = panelSiteExists(domain, paths);
     if (existing.ok && existing.exists) {
@@ -1162,12 +1477,11 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
     }
 
     setStep(jDir, "preparing instance storage");
-    mkdirSync(join(dir, "data"), { recursive: true });
-    mkdirSync(join(dir, "uploads"), { recursive: true });
+    const destination = homeStorage(domain, paths);
+    requireEmptyStorage(destination);
+    storage = destination;
     mkdirSync(join(dir, "snapshots"), { recursive: true });
     chmodSync(dir, 0o750);
-    chmodSync(join(dir, "data"), 0o750);
-    chmodSync(join(dir, "uploads"), 0o750);
     chmodSync(join(dir, "snapshots"), 0o700);
 
     setStep(jDir, `pulling ${REGISTRY_IMAGE}:${tag}`);
@@ -1177,7 +1491,7 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
 
     setStep(jDir, `starting ${name} on 127.0.0.1:${port}`);
     try {
-      runContainer(name, port, tag, domain, dir, paths);
+      runContainer(name, port, tag, domain, storage, paths, true);
     } catch (error) {
       if (error instanceof ActionFailure) throw error;
       failAction(`failed to start container ${name}`);
@@ -1194,13 +1508,15 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
       `  \"tag\": ${JSON.stringify(tag)},`,
       `  \"container\": ${JSON.stringify(name)},`,
       `  \"siteUser\": ${JSON.stringify(siteUserFinal)},`,
+      '  "storage": "site-home",',
       `  \"siteCreatedByAddon\": ${siteCreated},`,
       `  \"createdAt\": ${JSON.stringify(dateStamp(true))}`,
       "}",
       "",
     ].join("\n");
-    writeFileSync(join(dir, "meta.json"), meta);
+    writeMetaFile(join(dir, "meta.json"), meta);
     cleanupActive = false;
+    initialNativeBackup(domain, paths);
 
     if (tls === "yes") {
       setStep(jDir, `requesting a Let's Encrypt certificate for ${domain}`);
@@ -1220,7 +1536,7 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
 
     emitActionOk({ domain, port, tag, container: name, siteUser: siteUserFinal, siteCreatedByAddon: siteCreated, status: "running" });
   } catch (error) {
-    if (cleanupActive) cleanupCreate(name, dir, domain, siteCreated, paths);
+    if (cleanupActive) cleanupCreate(name, dir, domain, siteCreated, paths, storage);
     jobSet(jDir, "state", "failed");
     jobSet(jDir, "finishedAt", dateStamp(true));
     const msg = error instanceof Error ? error.message : String(error);
@@ -1276,6 +1592,7 @@ async function dispatch(action: ParsedInstaticAction, paths: InstaticActionPaths
     case "recreate": await cmdRecreate(action, paths); return;
     case "delete": cmdDelete(action, paths); return;
     case "snapshot": cmdSnapshot(action, paths); return;
+    case "backup": await cmdBackup(action, paths); return;
     case "status": cmdStatus(action); return;
     case "logs": cmdLogs(action); return;
     case "job": cmdJob(paths, action.job); return;
@@ -1311,11 +1628,19 @@ export async function runInstaticAction(argv: string[], options?: InstaticAction
     // for the whole creation, so a locked read blocked every log poll and every
     // page load for the job until the create finished, which is the opposite of
     // what a progress page is for.
-    if (action.verb === "list" || action.verb === "jobs" || action.verb === "job" || action.verb === "prune") {
+    if (action.verb === "list" || action.verb === "jobs" || action.verb === "job" || action.verb === "prune" || action.verb === "backup") {
       await dispatch(action, paths);
     } else if (action.verb === "run") {
       const lock = join(paths.lockDir, `job-${action.job}.lock`);
-      await withFileLock(lock, 300, `job ${action.job} is already active`, () => dispatch(action, paths));
+      await withFileLock(lock, 300, `job ${action.job} is already active`, async () => {
+        const dir = jobDir(paths, action.job);
+        if (!isDirectory(dir)) failAction(`no such job: ${action.job}`);
+        const domain = validateDomain(jobGet(dir, "domain"), paths.panelIdentityFile);
+        // The job lock prevents duplicate runners; the domain lock also
+        // serializes its initial backup with update, restore and deletion.
+        await withFileLock(join(paths.lockDir, `${domain}.lock`), 300,
+          `another operation is already running for ${domain}`, () => dispatch(action, paths));
+      });
     } else {
       const lock = join(paths.lockDir, `${action.domain}.lock`);
       await withFileLock(lock, 300, `another operation is already running for ${action.domain}`, () => dispatch(action, paths));

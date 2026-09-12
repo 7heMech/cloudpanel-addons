@@ -130,6 +130,22 @@ commands used by installation. Repair restores service-user, socket, panel ident
 unit, snapshot, Twig, and Nginx invariants without a second login or manual
 domain configuration.
 
+### Instatic native backups
+
+Instatic's authoritative metadata stays under `/var/lib/clp-addons/instatic`.
+New or migrated instances keep the database and env file outside the document
+root under `/home/<siteUser>/instatic/<domain>`, and expose uploads under
+`htdocs/<domain>/uploads`. CloudPanel includes the entire home directory in
+Remote Backups, so private application data need not be under the web root.
+
+A scheduled recovery archive contains a clean SQLite backup, its encryption
+key, and instance metadata. It is published by atomic rename and kept separate
+from the live SQLite/WAL copy. Recovery is explicit (`recreate --from-backup`)
+and rebuilds missing metadata; ordinary recreate preserves live data. See
+[Instatic backup setup and recovery](instatic-backups.md) for the schedule,
+migration, permissions, and consistency limits. These paths supersede the
+historical storage descriptions below.
+
 ## Historical design record
 
 The sections that follow are preserved from the pre-socket design. They are

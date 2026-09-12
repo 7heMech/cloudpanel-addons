@@ -19,6 +19,26 @@ const LEGACY_PLATFORM_CONFIG = `${CONFIG_DIR}/platform.conf`;
 const LEGACY_SITE_MARKER = `${STATE_DIR}/.site-created-by-addons`;
 const LEGACY_LIBRARY_DIR = "/usr/local/lib/clp-addons";
 const BACKUP_DIR = "/var/backups/clp-addons";
+const INSTATIC_BACKUP_CRON = "/etc/cron.d/clp-addons-instatic-backup";
+
+export function instaticBackupCron(): string {
+  return `# Instatic recovery snapshots for CloudPanel Remote Backups.
+# Adjust this schedule to precede your Remote Backup schedule.
+# CloudPanel's 04:15 create_backup.sh backs up the panel application itself.
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+30 3 * * * root ${CLI_BIN} action instatic backup
+`;
+}
+
+export function reconcileInstaticBackupCron(enabled: boolean, path = INSTATIC_BACKUP_CRON): void {
+  if (!enabled) {
+    rmSync(path, { force: true });
+  } else if (!existsSync(path)) {
+    // Preserve an operator's schedule across update/repair.
+    writeAtomic(path, instaticBackupCron(), 0o644);
+  }
+}
 export interface ProvisionCommandRunner {
   run(command: string, args: string[]): string;
   tryRun(command: string, args: string[]): { ok: boolean; out: string };
@@ -605,6 +625,7 @@ function reconcileWatchPaths(): string[] {
 }
 
 export function installUnits(specs: AddonSpec[]): boolean {
+  reconcileInstaticBackupCron(specs.some((spec) => spec.name === "instatic"));
   const units = reconcileUnits();
   const servicePath = `${SYSTEMD_DIR}/${MANAGER_UNIT}`;
   const desired = serviceUnit(specs);
@@ -639,6 +660,7 @@ export function startUnits(): void {
 
 export function stopUnits(keepShared = false): void {
   if (keepShared) return;
+  reconcileInstaticBackupCron(false);
   for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     tryRun("systemctl", ["disable", "--now", unit]);
   }

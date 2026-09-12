@@ -318,7 +318,7 @@ export function dashboardView(
     <button class="btn" onclick="act('${escJs(i.domain)}','restart')">Restart</button>
     <button class="btn${behind(i.tag) ? " btn-update" : ""}" onclick="askUpdate('${escJs(i.domain)}','${escJs(i.tag)}')">Update</button>
     <button class="btn" onclick="takeSnapshot('${escJs(i.domain)}')" title="Create a backup snapshot of the SQLite database and instance data">Snapshot</button>
-    <button class="btn" onclick="act('${escJs(i.domain)}','recreate')" title="Rebuild the container from the recorded version without touching the data">Recreate</button>
+    <button class="btn" onclick="act('${escJs(i.domain)}','recreate')" title="Rebuild the recorded version, preserving data and enabling native backups for older instances">Recreate</button>
     <button class="btn" onclick="showLogs('${escJs(i.domain)}', '${escJs(String(i.port ?? ""))}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${escJs(i.domain)}')">Delete</button>
   </div></details></td>
