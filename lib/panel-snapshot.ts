@@ -219,8 +219,9 @@ export function getLivePanelInfo(databasePath = PANEL_DB): PanelSnapshot {
           // A half-written meta file should not abort the whole snapshot.
         }
       }
-    } catch {
-      // Ignore directory read errors
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") continue;
+      throw new Error(`cannot read addon state directory ${spec.stateDir}: ${errorMessage(error)}`, { cause: error });
     }
   }
 
