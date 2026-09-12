@@ -170,6 +170,8 @@ export function startJobUnit(options: {
     `--description=${description}`,
     "--collect",
     "--property=Type=exec",
+    "--property=CPUWeight=50",
+    "--property=IOWeight=50",
     ...properties.map((property) => `--property=${property}`),
     "--",
     actionBinary, "action", addon, "run", "--job", id,

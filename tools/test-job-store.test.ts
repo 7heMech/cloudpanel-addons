@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createJobDir, createJobLog, jobCommonFields, jobDir, jobGet, jobSet, jobTimestamp,
-  JOB_ID_RE, listJobIds, newJobId, pruneJobs,
+  JOB_ID_RE, listJobIds, newJobId, pruneJobs, startJobUnit,
 } from "../cli/job-store";
 
 function withJobsDir<T>(fn: (jobsDir: string) => T): T {
@@ -144,5 +144,31 @@ describe("pruning job records", () => {
       expect(existsSync(scratch)).toBe(true);
       expect(existsSync(jobDir(jobsDir, "README"))).toBe(true);
     });
+  });
+});
+
+describe("starting transient job units", () => {
+  it("configures background resource limits via systemd properties", () => {
+    const origSpawnSync = Bun.spawnSync;
+    let capturedArgs: string[] = [];
+    try {
+      // @ts-expect-error test mock
+      Bun.spawnSync = (args: string[]) => {
+        capturedArgs = args;
+        return { success: true, stdout: "", stderr: "", exitCode: 0 };
+      };
+      startJobUnit({
+        addon: "stager",
+        id: "20260911T160031Z-35e759",
+        description: "test job",
+        actionBinary: "/usr/local/bin/clp-addons",
+      });
+      expect(capturedArgs).toContain("--property=CPUWeight=50");
+      expect(capturedArgs).toContain("--property=IOWeight=50");
+      expect(capturedArgs).toContain("--property=Type=exec");
+      expect(capturedArgs).toContain("--collect");
+    } finally {
+      Bun.spawnSync = origSpawnSync;
+    }
   });
 });

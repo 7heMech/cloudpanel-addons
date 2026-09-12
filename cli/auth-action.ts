@@ -48,6 +48,8 @@ export interface AuthActionOptions {
   panelDb?: string;
   /** Test-only socket path override for daemon mode; production uses systemd FD 3. */
   listenPath?: string;
+  /** Test-only panel info reader override. */
+  getPanelInfo?: (panelDb?: string) => import("../lib/gateway-protocol").PanelSnapshot;
 }
 
 function invalidReply(): string {
@@ -200,13 +202,15 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
 
         if (request.kind === "panel-info") {
           try {
-            const info = getLivePanelInfo(options.panelDb);
+            const fetchInfo = options.getPanelInfo ?? getLivePanelInfo;
+            const info = fetchInfo(options.panelDb);
             socket.end(JSON.stringify({ ok: true, data: info }) + "\n");
           } catch (error) {
+            console.error("[gateway] panel-info failed:", error);
             socket.end(
               JSON.stringify({
                 ok: false,
-                error: error instanceof Error ? error.message : String(error),
+                error: "failed to retrieve panel information",
               }) + "\n",
             );
           }
