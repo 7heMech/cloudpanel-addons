@@ -180,11 +180,13 @@ artifacts again if they differ. Ordinary addon activation does not re-attest
 the already-running binary.
 
 The root gateway's socket permissions restrict clients to root and the
-`clp-addons` service account/group. It dispatches only allowed verbs through
-the fixed `/usr/local/bin/clp-addons` path. It does not authenticate a client's
-executable, pin the running manager's identity, or pin the action binary's hash:
-any process with socket access can submit allowed requests, and each dispatched
-action executes the binary currently installed at that path.
+`clp-addons` service account/group. In production socket-activation mode it also
+checks Linux peer credentials and requires the connecting PID to be that account
+running the root-owned `/usr/local/bin/clp-addons` executable. It dispatches
+only allowed verbs through that fixed path. This is an executable identity
+check, not a persistent hash pin: root-owned installation permissions and
+same-version manifest checks protect replacement, and a manager restart is
+required before an atomically replaced binary becomes the accepted peer.
 
 ## Reaching the manager
 

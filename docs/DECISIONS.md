@@ -60,8 +60,13 @@ entrypoint is:
 ```
 
 The service creates `/run/clp-addons/manager.sock` with mode `0660`, owned by
-`clp-addons:clp`, so Nginx can connect without exposing a TCP listener. No
-authentication key or privileged pre-start command is required.
+`clp-addons:clp`, so Nginx can connect without exposing a TCP listener. The
+root gateway additionally checks Linux `SO_PEERCRED` and `/proc/<pid>/exe` in
+production socket-activation mode: the peer must be the `clp-addons` account
+running the root-owned `/usr/local/bin/clp-addons` binary. It still dispatches
+only the allow-listed verbs and fixed binary path. This is an executable
+identity check rather than a permanent hash pin; the root-owned artifact
+manifest and restart-on-update preserve the replacement boundary.
 
 ### CloudPanel SSO
 

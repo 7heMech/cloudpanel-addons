@@ -5,10 +5,11 @@
 // for hermetic unit tests and are never exposed through action argv.
 
 import net from "node:net";
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import { dlopen, FFIType } from "bun:ffi";
 import { Database } from "bun:sqlite";
 import { requireRoot } from "./util";
-import { CLI_BIN, PANEL_DB, SESSION_DIR } from "./paths";
+import { CLI_BIN, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR } from "./paths";
 import {
   MAX_SESSION_ID_LENGTH,
   parsePanelSession,
@@ -50,6 +51,63 @@ export interface AuthActionOptions {
   listenPath?: string;
   /** Test-only panel info reader override. */
   getPanelInfo?: (panelDb?: string) => import("../lib/gateway-protocol").PanelSnapshot;
+  /** Test-only override; production socket activation always enforces the peer check. */
+  enforcePeer?: boolean;
+}
+
+const SOL_SOCKET = 1;
+const SO_PEERCRED = 17;
+const PEER_CREDENTIAL_BYTES = 12;
+
+const peerCredLibc = process.platform === "linux"
+  ? dlopen("libc.so.6", {
+      getsockopt: {
+        args: [FFIType.i32, FFIType.i32, FFIType.i32, FFIType.pointer, FFIType.pointer],
+        returns: FFIType.i32,
+      },
+    })
+  : null;
+
+function accountId(path: string, name: string, field: number): number | null {
+  try {
+    const line = readFileSync(path, "utf-8").split("\n").find((entry) => entry.startsWith(`${name}:`));
+    const value = Number.parseInt(line?.split(":")[field] ?? "", 10);
+    return Number.isInteger(value) && value >= 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check the process at the other end of a gateway connection. Socket mode and
+ * group membership keep ordinary users out, but every process running as
+ * clp-addons would otherwise be able to submit an allowed root action. Linux
+ * exposes the peer PID/UID/GID through SO_PEERCRED; bind that credential to the
+ * root-owned executable that systemd starts for the manager. A copied or
+ * unrelated process under the same account therefore fails closed.
+ */
+export function trustedManagerPeer(socket: net.Socket): boolean {
+  if (!peerCredLibc) return false;
+  const fd = Number((socket as unknown as { _handle?: { fd?: unknown } })._handle?.fd);
+  if (!Number.isInteger(fd) || fd < 0) return false;
+  const credentials = new Int32Array(3);
+  const length = new Uint32Array([PEER_CREDENTIAL_BYTES]);
+  try {
+    if (peerCredLibc.symbols.getsockopt(fd, SOL_SOCKET, SO_PEERCRED, credentials, length) !== 0
+      || length[0]! < PEER_CREDENTIAL_BYTES) return false;
+    const [pid, uid, gid] = credentials;
+    const expectedUid = accountId("/etc/passwd", SERVICE_USER, 2);
+    const expectedGid = accountId("/etc/group", SERVICE_GROUP, 2);
+    if (pid === undefined || uid === undefined || gid === undefined
+      || expectedUid === null || expectedGid === null
+      || uid !== expectedUid || gid !== expectedGid || pid <= 0) return false;
+
+    const binary = lstatSync(CLI_BIN);
+    if (!binary.isFile() || binary.uid !== 0 || (binary.mode & 0o022) !== 0 || (binary.mode & 0o111) === 0) return false;
+    return readlinkSync(`/proc/${pid}/exe`) === realpathSync(CLI_BIN);
+  } catch {
+    return false;
+  }
 }
 
 function invalidReply(): string {
@@ -155,7 +213,18 @@ export async function runAuthAction(
  * a session ID or a JSON request, receives a JSON reply, and closes.
  */
 export function createAuthActionServer(options: AuthActionOptions = {}): net.Server {
+  // Direct path listeners are test-only; socket activation is the production
+  // path and always requests the executable-bound peer check.
+  const enforcePeer = options.enforcePeer ?? Boolean(process.env.LISTEN_FDS);
   return net.createServer((socket) => {
+    if (enforcePeer && !trustedManagerPeer(socket)) {
+      // Bun's net implementation may keep an accepted socket alive after an
+      // early `end()` when no data listener was attached. Explicitly destroy
+      // after the bounded failure reply so rejected peers cannot hold gateway
+      // connections open until the idle timeout.
+      socket.end(invalidReply(), () => socket.destroy());
+      return;
+    }
     const chunks: Buffer[] = [];
     let total = 0;
     let closed = false;
@@ -302,7 +371,7 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
  * When activated by systemd, systemd passes the listening socket as FD 3 (LISTEN_FDS=1).
  */
 export async function runAuthActionDaemon(options: AuthActionOptions = {}): Promise<void> {
-  const server = createAuthActionServer(options);
+  const server = createAuthActionServer({ ...options, enforcePeer: true });
 
   return new Promise<void>((resolve, reject) => {
     server.on("error", reject);
