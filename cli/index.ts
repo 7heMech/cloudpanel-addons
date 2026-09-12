@@ -262,7 +262,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   removeLegacyUnits(true);
   removeLegacyUsers(true);
   ensureDirs(specs);
-  reconcileAnchors(false);
+  if (!reconcileAnchors(false)) fatal("could not safely patch the required CloudPanel templates");
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
   startUnits();
 
@@ -345,7 +345,7 @@ export async function applyEnable(name: string): Promise<void> {
   removeLegacyUnits(true);
   removeLegacyUsers(true);
   ensureDirs(specs);
-  reconcileAnchors(false);
+  if (!reconcileAnchors(false)) fatal("could not safely patch the required CloudPanel templates");
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
   startUnits();
   log.ok(`${spec.name} enabled`);
