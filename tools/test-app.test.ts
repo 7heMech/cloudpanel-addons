@@ -77,13 +77,18 @@ for (const { name, source } of SCRIPTS) {
   }
 }
 
-// Native CloudPanel defaults to light and stores only its explicit dark choice.
-// The early script must also recognize the cookie after another cookie and
-// avoid confusing similarly named cookies or values with that preference.
+// A saved `theme` cookie always wins; with no saved choice the device
+// preference is the default so a first visit on a dark device does not paint
+// white. The early script must also recognize the cookie after another cookie
+// and avoid confusing similarly named cookies or values with that preference.
 test("addon theme follows CloudPanel's cookie before the page paints", () => {
-  for (const [cookie, expected] of [
-    ["", false], ["theme=dark", true], ["session=example; theme=dark; locale=en", true],
-    ["other_theme=dark", false], ["theme=darkened", false], ["theme=light", false],
+  for (const [cookie, deviceDark, expected] of [
+    ["", false, false], ["", true, true],
+    ["theme=dark", false, true], ["theme=light", true, false],
+    ["session=example; theme=dark; locale=en", false, true],
+    ["other_theme=dark", false, false], ["other_theme=dark", true, true],
+    ["theme=darkened", false, false], ["theme=darkened", true, false],
+    ["theme=light", false, false],
   ] as const) {
     const classes = new Set<string>();
     const document = {
@@ -92,8 +97,9 @@ test("addon theme follows CloudPanel's cookie before the page paints", () => {
         if (enabled) classes.add(name); else classes.delete(name);
       } } },
     };
-    new Function("document", THEME_INIT_JS)(document);
-    expect(classes.has("dark"), cookie).toBe(expected);
+    const window = { matchMedia: () => ({ matches: deviceDark }) };
+    new Function("document", "window", THEME_INIT_JS)(document, window);
+    expect(classes.has("dark"), `${cookie} device=${deviceDark}`).toBe(expected);
   }
 });
 
@@ -1679,9 +1685,12 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
 
   const loginTarget = LOGIN_THEME_TARGETS[0]!;
   const loginSnippet = loginTarget.snippet("/addons/login-theme");
-  check("login-theme targets CloudPanel's login template", loginTarget.template === "Frontend/Login/login.html.twig");
+  check("login-theme targets CloudPanel's login layout", loginTarget.template === "Frontend/Login/layout.html.twig");
   check("login-theme follows device dark-mode changes",
     loginSnippet.includes("prefers-color-scheme: dark") &&
-    loginSnippet.includes('classList.toggle("dark", media.matches)') &&
-    loginSnippet.includes('addEventListener("change", syncDeviceTheme)'));
+    loginSnippet.includes('classList.toggle("dark", dark)') &&
+    loginSnippet.includes('addEventListener("change", onDeviceChange)'));
+  check("login-theme lets a saved theme choice win over the device",
+    loginSnippet.includes("savedTheme()") &&
+    loginSnippet.includes('saved !== null ? saved === "dark"'));
 }

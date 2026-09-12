@@ -213,12 +213,19 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 }
 `;
 
-// CloudPanel uses a session cookie named "theme"; absence means light. Read it
-// before CSS is painted, so moving between the panel and an addon never flashes
-// or silently switches to the operating system's preferred theme.
+// CloudPanel uses a session cookie named "theme"; absence means no saved
+// choice. Read it before CSS is painted, so moving between the panel and an
+// addon never flashes or silently switches to the operating system's
+// preferred theme. With no saved choice the device preference is the default,
+// so a first visit on a dark device does not paint white.
 export const THEME_INIT_JS = `
 try {
-  document.documentElement.classList.toggle('dark', /(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie));
+  var themeMatch = document.cookie.match(/(?:^|;\\s*)theme=([^;]*)/);
+  var themeDark;
+  if (themeMatch) themeDark = themeMatch[1] === 'dark';
+  else if (window.matchMedia) themeDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  else themeDark = false;
+  document.documentElement.classList.toggle('dark', themeDark);
 } catch (e) {}
 `;
 
@@ -232,8 +239,14 @@ try {
  * doubled, and tools/test-app.ts asserts they were.
  */
 export const BASE_CLIENT_JS = `
+function themePreference() {
+  const m = document.cookie.match(/(?:^|;\\s*)theme=([^;]*)/);
+  if (m) return m[1] === 'dark';
+  if (window.matchMedia) return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  return false;
+}
 function syncTheme() {
-  const dark = /(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie);
+  const dark = themePreference();
   document.documentElement.classList.toggle('dark', dark);
   const button = document.getElementById('theme-switch');
   if (button) {
@@ -241,14 +254,39 @@ function syncTheme() {
     button.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
   }
 }
+function themeCookieFlags() {
+  var flags = '; Path=/; SameSite=Lax';
+  try {
+    if (window.location && window.location.protocol === 'https:') flags += '; Secure';
+  } catch (e) {}
+  return flags;
+}
 function toggleTheme() {
   const dark = !document.documentElement.classList.contains('dark');
-  document.cookie = dark ? 'theme=dark; Path=/; SameSite=Lax' : 'theme=; Path=/; Max-Age=0; SameSite=Lax';
+  // Set and clear must carry the same flags (including Secure on HTTPS): the
+  // panel stores a Secure cookie there, and a clear without Secure is ignored,
+  // silently resurrecting the previous choice on the next visit.
+  document.cookie = dark
+    ? 'theme=dark; Max-Age=15552000' + themeCookieFlags()
+    : 'theme=; Max-Age=0' + themeCookieFlags();
   syncTheme();
 }
 syncTheme();
 window.addEventListener('pageshow', syncTheme);
 window.addEventListener('focus', syncTheme);
+// With no saved choice the page follows the device; an explicit saved choice
+// wins and device switches are ignored.
+try {
+  const media = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  const followDevice = function () {
+    if (/(?:^|;\\s*)theme=([^;]*)/.test(document.cookie)) return;
+    syncTheme();
+  };
+  if (media) {
+    if (media.addEventListener) media.addEventListener('change', followDevice);
+    else if (media.addListener) media.addListener(followDevice);
+  }
+} catch (e) {}
 
 // Use the longest matching route so /new takes precedence over the list tab.
 const navLinks = Array.from(document.querySelectorAll('.clp-addon-nav-link'));

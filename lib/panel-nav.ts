@@ -123,8 +123,69 @@ const PANEL_UPDATE_STYLE = UPDATE_STYLE + `
 
 function updateSnippet(version: string, url: string): string {
   return `<style>${PANEL_UPDATE_STYLE}</style>
-      <script>${headerUpdateScript(version || process.env.CLP_ADDONS_VERSION || "", url)}</script>`;
+      <script>${headerUpdateScript(version || process.env.CLP_ADDONS_VERSION || "", url)}</script>
+      <script>${THEME_PERSIST_SCRIPT}</script>`;
 }
+
+/**
+ * Keep the panel's `theme` cookie readable and deletable on every page.
+ *
+ * The panel stores it with the Secure flag on HTTPS but its own toggle clears
+ * it without that flag, and a clear whose flags do not match the stored cookie
+ * is ignored: switching back to light looks instant yet the dark cookie
+ * survives, so the next visit (including after logout) renders dark again.
+ * Re-persisting the outcome of every toggle with matching flags makes the
+ * saved choice the one the login page and the next session actually see.
+ */
+export const THEME_PERSIST_SCRIPT = `(function() {
+  function isHttps() {
+    try { return window.location && window.location.protocol === "https:"; } catch (e) { return false; }
+  }
+  function flags() {
+    return "; Path=/; SameSite=Lax" + (isHttps() ? "; Secure" : "");
+  }
+  function setDark() {
+    try { document.cookie = "theme=dark; Max-Age=15552000" + flags(); } catch (e) {}
+  }
+  function clearDark() {
+    // Expire the Path=/ cookie the panel uses, plus a copy at this page's own
+    // directory in case an older write scoped it there: a same-named cookie on
+    // a more specific path would otherwise keep shadowing the cleared one.
+    var paths = ["/"];
+    try {
+      var here = window.location.pathname || "/";
+      var dir = here.slice(0, here.lastIndexOf("/") + 1) || "/";
+      if (paths.indexOf(dir) === -1) paths.push(dir);
+    } catch (e) {}
+    for (var i = 0; i < paths.length; i++) {
+      try { document.cookie = "theme=; Max-Age=0" + "; Path=" + paths[i] + "; SameSite=Lax" + (isHttps() ? "; Secure" : ""); } catch (e) {}
+    }
+  }
+  try {
+    var cookies = document.cookie.match(/theme=/g) || [];
+    if (cookies.length === 1) {
+      var m = document.cookie.match(/(?:^|;\\s*)theme=([^;]*)/);
+      if (m && m[1] === "dark") setDark();
+    }
+  } catch (e) {}
+  function mirrorToggle() {
+    // The panel flips the class synchronously inside its own click handler, so
+    // read the outcome on the next tick and persist it with matching flags.
+    window.setTimeout(function () {
+      try {
+        if (document.documentElement.classList.contains("dark")) setDark();
+        else clearDark();
+      } catch (e) {}
+    }, 0);
+  }
+  try {
+    var el = document.getElementById("theme-switch");
+    if (el) {
+      if (el.addEventListener) el.addEventListener("click", mirrorToggle);
+      else if (el.attachEvent) el.attachEvent("onclick", mirrorToggle);
+    }
+  } catch (e) {}
+})();`;
 
 /** Keep the single manager navigation entry after CloudPanel's native links. */
 export function headerTarget(version: string): AddonTarget {
