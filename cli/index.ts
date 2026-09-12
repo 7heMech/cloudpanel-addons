@@ -211,6 +211,10 @@ function dashboardUrl(): string {
   return `https://${host}/addons/`;
 }
 
+/**
+ * Installs one addon from local or verified release artifacts and reconciles
+ * the shared manager, authentication, and CloudPanel integration.
+ */
 export async function cmdInstall(argv: string[]): Promise<void> {
   requireRoot("install");
   const { positional, flags } = parseFlags(argv);
@@ -257,6 +261,10 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   log.plain(`  Dashboard URL: ${dashboardUrl()}`);
 }
 
+/**
+ * Updates release artifacts when necessary and reconciles provisioning for all
+ * currently enabled addons.
+ */
 export async function cmdUpdate(argv: string[]): Promise<void> {
   requireRoot("update");
   const { flags } = parseFlags(argv);
@@ -415,6 +423,10 @@ export function runManagerMaintenance(): void {
   }
 }
 
+/**
+ * Reconciles manager provisioning and enabled addon state, or only injected
+ * CloudPanel anchors and the Nginx proxy when `--anchors-only` is supplied.
+ */
 export async function cmdRepair(argv: string[]): Promise<void> {
   requireRoot("repair");
   const { positional, flags } = parseFlags(argv);
@@ -709,6 +721,11 @@ export async function handleManagerRoute(req: Request, path: string, server: Ser
   return null;
 }
 
+/**
+ * Starts the manager on its Unix socket and remains pending for the process
+ * lifetime. The restrictive socket-creation umask is restored before setup
+ * continues or an error escapes.
+ */
 async function cmdServe(): Promise<never> {
   // Serving nothing is a legitimate state, not a failed start. Every addon is
   // compiled in, so a manager with none of them enabled still has a job: it is

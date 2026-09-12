@@ -246,6 +246,7 @@ export const stagerService = {
     return res.data?.jobs ?? [];
   },
 
+  /** Fetches current panel information and reports its age at receipt. */
   async snapshot(): Promise<{ snap: PanelSnapshot; ageSeconds: number }> {
     const snap = await fetchPanelInfo();
     return { snap, ageSeconds: snapshotAgeSeconds(snap) };

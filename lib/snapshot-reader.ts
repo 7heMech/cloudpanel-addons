@@ -18,7 +18,9 @@ export const PORT_RANGE = { min: 39000, max: 39999 } as const;
 export type { SanitizedSite, PanelSnapshot, PanelInfo };
 
 /**
- * Fetch live panel data directly from the root gateway daemon over UNIX domain socket.
+ * Returns current panel data from the gateway client.
+ *
+ * @throws If the gateway request fails or returns no panel data.
  */
 export async function fetchPanelInfo(
   options?: GatewayClientOptions,
@@ -36,7 +38,10 @@ export function snapshotAgeSeconds(snap: PanelSnapshot): number {
 }
 
 /**
- * The lowest free port in the reserved range.
+ * Returns the lowest port in the snapshot's reserved range that is absent from
+ * both its allocations and `alsoTaken`.
+ *
+ * @throws If every port in the reserved range is taken.
  */
 export function getNextAvailablePort(
   snap: PanelSnapshot,

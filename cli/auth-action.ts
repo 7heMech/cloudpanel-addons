@@ -148,9 +148,9 @@ export async function runAuthAction(
 }
 
 /**
- * Create a socket server that handles authentication and privileged action requests.
- * Each connection sends one line containing either a session ID or JSON action request,
- * receives a JSON reply, and closes.
+ * Creates a socket server for authentication, live panel information, and
+ * privileged action requests. Each connection sends one line containing either
+ * a session ID or a JSON request, receives a JSON reply, and closes.
  */
 export function createAuthActionServer(options: AuthActionOptions = {}): net.Server {
   return net.createServer((socket) => {

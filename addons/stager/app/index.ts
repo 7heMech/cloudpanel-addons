@@ -78,12 +78,14 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-// The whole request surface, exported so the one manager process can mount it.
-//
-// `path` is this addon's own path, with the mount prefix already stripped by the
-// router: a request for /addons/stager/api/... arrives here as /api/... .
-// Taking it as an argument rather than reading req.url is what keeps every route
-// below written as though this addon owned the site, which it used to.
+/**
+ * The whole request surface, exported so the one manager process can mount it.
+ *
+ * `path` is this addon's own path, with the mount prefix already stripped by the
+ * router: a request for /addons/stager/api/... arrives here as /api/... .
+ * Taking it as an argument rather than reading req.url is what keeps every route
+ * below written as though this addon owned the site, which it used to.
+ */
 export async function handle(
   req: Request,
   path: string,
@@ -228,6 +230,11 @@ export async function handle(
   return json({ ok: false, error: "not found" }, 404);
 }
 
+/**
+ * Validates a clone request and forwards it to the Stager action process.
+ * Reverse-proxy clones receive a port selected from live panel, clone-job, and
+ * Instatic instance data.
+ */
 async function postClone(req: Request): Promise<Response> {
   const blocked = guardMutation(req);
   if (blocked) return blocked;
