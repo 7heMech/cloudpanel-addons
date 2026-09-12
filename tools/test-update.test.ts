@@ -52,6 +52,7 @@ const artifactChecksums = Object.fromEntries(installedArtifacts.map(({ name, pat
 const artifactManifest = JSON.stringify({ version: 1, tag: "1.2.3", artifacts: artifactChecksums });
 const originalLstatSync = nodeFs.lstatSync;
 const originalReadFileSync = nodeFs.readFileSync;
+class TestFatal extends Error {}
 
 mock.module("node:fs", () => ({
   ...nodeFs,
@@ -141,7 +142,7 @@ mock.module("../cli/inject", () => ({
 }));
 
 mock.module("../cli/util", () => ({
-  Fatal: class Fatal extends Error {},
+  Fatal: TestFatal,
   fatal: (message: string): never => { throw new Error(message); },
   log: { step: () => {}, ok: (msg: string) => { calls.push(`log.ok:${msg}`); }, warn: () => {}, err: () => {}, plain: () => {} },
   parseFlags: (argv: string[]) => {

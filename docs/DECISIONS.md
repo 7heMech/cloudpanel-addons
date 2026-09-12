@@ -70,9 +70,9 @@ manifest and restart-on-update preserve the replacement boundary.
 
 ### CloudPanel SSO
 
-Each protected request sends only the bounded `cloudpanel` session ID over
-stdin to the root-only `clp-addons action auth` helper through the existing
-`clp-addons action *` sudo boundary. The helper uses only CloudPanel's fixed
+Each protected request sends only the bounded `cloudpanel` session ID over the
+root gateway's `/run/clp-addons/auth.sock` Unix socket to the root-only
+`clp-addons action auth` helper. The helper uses only CloudPanel's fixed
 session directory `/home/clp/htdocs/app/files/var/sessions`; the session id
 must match `^[a-zA-Z0-9,-]{1,128}$`, followed by exactly one newline. The
 helper `lstat`s the file before reading, rejects symlinks, requires ownership
