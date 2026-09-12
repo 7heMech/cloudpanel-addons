@@ -178,13 +178,21 @@ export const THEME_PERSIST_SCRIPT = `(function() {
       } catch (e) {}
     }, 0);
   }
+  function bindToggle() {
+    // This script is injected near the top of the header, before the toggle
+    // exists in the document, so binding immediately finds nothing.
+    try {
+      var el = document.getElementById("theme-switch");
+      if (el) {
+        if (el.addEventListener) el.addEventListener("click", mirrorToggle);
+        else if (el.attachEvent) el.attachEvent("onclick", mirrorToggle);
+      }
+    } catch (e) {}
+  }
   try {
-    var el = document.getElementById("theme-switch");
-    if (el) {
-      if (el.addEventListener) el.addEventListener("click", mirrorToggle);
-      else if (el.attachEvent) el.attachEvent("onclick", mirrorToggle);
-    }
-  } catch (e) {}
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bindToggle);
+    else bindToggle();
+  } catch (e) { bindToggle(); }
 })();`;
 
 /** Keep the single manager navigation entry after CloudPanel's native links. */

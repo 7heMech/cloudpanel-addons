@@ -34,7 +34,13 @@ function runPersist(cookie: string, dark: boolean, protocol = "https:", pathname
   const classes = new Set<string>(dark ? ["dark"] : []);
   let click: (() => void) | null = null;
   const timeouts: (() => void)[] = [];
+  // The injection sits above the toggle in the header, so at parse time the
+  // button does not exist yet; it appears by DOMContentLoaded.
+  let parsed = false;
+  let ready: (() => void) | null = null;
   const document = {
+    readyState: "loading",
+    addEventListener: (event: string, fn: () => void) => { if (event === "DOMContentLoaded") ready = fn; },
     get cookie() { return currentCookie; },
     set cookie(value: string) { writes.push(value); },
     documentElement: {
@@ -47,7 +53,7 @@ function runPersist(cookie: string, dark: boolean, protocol = "https:", pathname
       },
     },
     getElementById: (id: string) =>
-      id === "theme-switch"
+      id === "theme-switch" && parsed
         ? { addEventListener: (_event: string, fn: () => void) => { click = fn; } }
         : null,
   };
@@ -56,6 +62,9 @@ function runPersist(cookie: string, dark: boolean, protocol = "https:", pathname
     setTimeout: (fn: () => void) => { timeouts.push(fn); return 0; },
   };
   new Function("document", "window", THEME_PERSIST_SCRIPT)(document, window);
+  expect(click, "no binding at parse time").toBe(null);
+  parsed = true;
+  ready!();
   return {
     writes,
     click,
