@@ -58,8 +58,13 @@ function queryRows<ReturnType>(db: Database, sql: string, table: string, optiona
   try {
     return db.query<ReturnType, []>(sql).all();
   } catch (error) {
-    if (optional) return [];
-    throw new Error(`cannot read required panel table ${table}: ${errorMessage(error)}`, { cause: error });
+    const message = errorMessage(error);
+    if (optional && (message === `no such table: ${table}` || message === `no such table: main.${table}`)) {
+      // These tables vary between CloudPanel versions; an absent optional table contributes no data.
+      return [];
+    }
+    const requiredness = optional ? "optional" : "required";
+    throw new Error(`cannot read ${requiredness} panel table ${table}: ${message}`, { cause: error });
   }
 }
 
