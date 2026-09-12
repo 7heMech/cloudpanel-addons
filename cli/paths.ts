@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { INSTATIC_TARGETS } from "../addons/instatic/inject/targets";
+import { LOGIN_THEME_TARGETS } from "../addons/login-theme/inject/targets";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 
 export { PANEL_IDENTITY_PATH } from "./action-constants";
@@ -113,6 +114,14 @@ export const ADDONS: Record<string, AddonSpec> = {
     configFile: `${CONFIG_DIR}/stager.conf`,
     stateDir: `${STATE_DIR}/stager`,
     targets: STAGER_TARGETS,
+  },
+  "login-theme": {
+    name: "login-theme",
+    title: "Login theme",
+    description: "Make the CloudPanel login page follow your device's light or dark theme",
+    configFile: `${CONFIG_DIR}/login-theme.conf`,
+    stateDir: `${STATE_DIR}/login-theme`,
+    targets: LOGIN_THEME_TARGETS,
   },
 };
 

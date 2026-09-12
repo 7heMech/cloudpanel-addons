@@ -8,6 +8,7 @@
 // any extra rules; everything else is shared.
 
 import { esc, escJs } from "./app-http";
+import { UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
 
 // Measured against CloudPanel 2.5.1's public demo: dashboard, sites, settings,
 // certificates, logs and new-site forms. Keep these rules independent of the
@@ -53,7 +54,7 @@ h2, h3 { font-size: 18px; }
 [hidden] { display: none !important; }
 .clp-addon-header { width: 100%; background: var(--header-bg); border-bottom: 1px solid var(--border);
   box-shadow: var(--header-shadow); }
-.clp-addon-header-inner { display: flex; align-items: stretch; min-height: 74px; }
+.clp-addon-header-inner { display: flex; flex-wrap: wrap; align-items: stretch; min-height: 74px; }
 /* CloudPanel top-aligns its logo (.header .logo { padding: 20px 0 0 20px }) rather than
    centring it, so centring here sits the logo ~1.5px lower than the panel's own header. */
 .clp-addon-brand { flex: 0 0 235px; display: flex; align-items: flex-start; padding: 20px 0 0 20px;
@@ -62,13 +63,15 @@ h2, h3 { font-size: 18px; }
 .clp-addon-logo-dark { display: none; }
 html.dark .clp-addon-logo-light { display: none; }
 html.dark .clp-addon-logo-dark { display: block; }
-.clp-addon-primary-nav { display: flex; align-items: stretch; gap: 14px; }
+.clp-addon-primary-nav { display: flex; flex-shrink: 0; align-items: stretch; gap: 14px; }
 .clp-addon-primary-link { display: flex; align-items: center; padding: 0 15px; margin-left: 0;
   color: var(--header-link); font-size: 16px; font-weight: 700; white-space: nowrap; }
 .clp-addon-primary-nav .clp-addon-primary-link:first-child { margin-left: 10px; }
 .clp-addon-primary-link:hover { color: var(--accent); text-decoration: none; }
 .clp-addon-primary-link.is-active { color: var(--text); }
 .clp-addon-header-tools { display: flex; margin-left: auto; }
+.clp-addon-header-inner > #clp-addons-update-notice { margin: 0 20px 0 auto; }
+.clp-addon-header-inner > #clp-addons-update-notice + .clp-addon-header-tools { margin-left: 0; }
 .clp-addon-theme { border: 0; border-left: 1px solid var(--row-border); background: transparent;
   color: var(--header-link); width: 70px; cursor: pointer; display: grid; place-items: center; }
 .clp-addon-theme:hover { color: var(--accent); }
@@ -153,9 +156,6 @@ p.hint { margin: 0 0 20px; }
 .alert, .notice { border: 1px solid currentColor; border-radius: 4px; padding: 15px 20px; margin-bottom: 20px; font-size: 14px; }
 .alert { color: var(--bad); background: rgba(248,113,113,0.08); }
 .notice { color: var(--warn); background: rgba(251,191,36,0.08); }
-.update-banner { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
-  gap: 12px; color: var(--text); border-color: var(--accent); background: rgba(38,125,221,0.08); }
-.update-banner code { overflow-wrap: anywhere; }
 .empty { color: var(--muted); padding: 25px; }
 .card > .empty { padding: 0; }
 .card-table > .empty { padding: 25px; }
@@ -186,6 +186,11 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .clp-addon-footer { background: var(--panel); border-top: 1px solid var(--border); padding: 15px 20px;
   display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; color: var(--muted); font-size: 14px; }
 .clp-addon-footer a { color: var(--muted); }
+@media (max-width: 1100px) {
+  .clp-addon-header-inner > #clp-addons-update-notice { order: 3; flex: 1 0 100%; margin: 0;
+    padding: 10px 20px; justify-content: flex-end; border-top: 1px solid var(--border); }
+  .clp-addon-header-inner > #clp-addons-update-notice + .clp-addon-header-tools { margin-left: auto; }
+}
 @media (max-width: 760px) {
   .clp-addon-header-inner { flex-wrap: wrap; }
   .clp-addon-brand { flex-basis: auto; border: 0; margin: 0; min-height: 64px;
@@ -193,6 +198,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .clp-addon-header-tools { order: 1; }
   .clp-addon-primary-nav { order: 2; width: 100%; overflow-x: auto; border-top: 1px solid var(--border); padding: 0 5px; gap: 0; }
   .clp-addon-primary-link { min-height: 48px; }
+  .clp-addon-header-inner > #clp-addons-update-notice { justify-content: center; padding: 10px 16px; }
   main { padding: 20px 16px 30px; }
   .clp-addon-tabs { padding: 0 5px; margin-bottom: 24px; }
   .page-heading { flex-wrap: wrap; }
@@ -406,16 +412,8 @@ export interface Chrome {
   css?: string;
   /** The addon's own script. BASE_CLIENT_JS is prepended. */
   script: string;
-  /** Optional update notice if a newer clp-addons release is available. */
+  /** Optional header controls if a newer clp-addons release is available. */
   updateNotice?: { current: string; latest: string } | null;
-  /**
-   * Draw the update notice with a button that applies the release.
-   *
-   * Only the manager index sets this. An addon page shows the same notice, but
-   * the action belongs where the operator can see what it will do to the whole
-   * installation, and the page's own script is what supplies `updateNow`.
-   */
-  updateAction?: boolean;
 }
 
 export function renderLayout(title: string, content: string, chrome: Chrome): string {
@@ -446,7 +444,7 @@ ${contextualNav}
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
 <script>${THEME_INIT_JS}</script>
-<style>${BASE_STYLE}${chrome.css ?? ""}</style>
+<style>${BASE_STYLE}${UPDATE_STYLE}${chrome.css ?? ""}</style>
 </head>
 <body>
 <header class="clp-addon-header">
@@ -458,6 +456,7 @@ ${contextualNav}
     <nav class="clp-addon-primary-nav" aria-label="${esc("CloudPanel navigation")}">
 ${primaryNav}
     </nav>
+    ${chrome.updateNotice ? updateNoticeHtml(chrome.updateNotice.latest) : ""}
     <div class="clp-addon-header-tools">
       <button class="clp-addon-theme" id="theme-switch" type="button" onclick="toggleTheme()" aria-label="Switch to dark mode" aria-pressed="false">
         <svg class="moon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.9 13.1A9 9 0 0 1 10.9 3.1 9 9 0 1 0 20.9 13.1Z"/></svg>
@@ -466,12 +465,7 @@ ${primaryNav}
     </div>
   </div>
 </header>
-<main>${contextualHeader}${chrome.updateNotice ? `  <div class="notice update-banner">
-    <div><strong>Update available:</strong> clp-addons <code>v${esc(chrome.updateNotice.latest)}</code> is available (running v${esc(chrome.updateNotice.current)}).</div>
-    ${chrome.updateAction
-      ? `<button class="btn" type="button" onclick="updateNow()">Update now</button>`
-      : `<code>clp-addons update</code>`}
-  </div>\n` : ""}${content}</main>
+<main>${contextualHeader}${content}</main>
 <footer class="clp-addon-footer">
   <a href="https://www.cloudpanel.io/blog/" target="_blank" rel="noopener noreferrer">Blog</a>
   <a href="https://www.cloudpanel.io/docs/v2/" target="_blank" rel="noopener noreferrer">Docs</a>

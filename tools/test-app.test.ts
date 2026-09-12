@@ -39,6 +39,7 @@ import {
   vhostTemplateBodyFromContent,
 } from "../addons/stager/action";
 import { makeSnapshot, portHolder, pruneSnapshots } from "../addons/instatic/action";
+import { LOGIN_THEME_TARGETS } from "../addons/login-theme/inject/targets";
 
 function check(label: string, cond: boolean, detail = ""): void {
   test.serial(label, () => {
@@ -93,6 +94,37 @@ test("addon theme follows CloudPanel's cookie before the page paints", () => {
     };
     new Function("document", THEME_INIT_JS)(document);
     expect(classes.has("dark"), cookie).toBe(expected);
+  }
+});
+
+test("native header rechecks cached releases against the installed version", () => {
+  for (const [current, latest, expected] of [
+    ["1.0.0", "1.1.0", true], ["1.1.0", "1.1.0", false],
+    ["1.2.0", "1.1.0", false], ["1.0.0+build.7", "1.0.1", true],
+    ["1.0.0-rc.1", "1.0.0", true], ["1.0.0", "1.0.0-rc.1", false],
+    ["1.0.0-rc.1", "1.0.0-rc.2", true], ["1.0.0-alpha.2", "1.0.0-alpha.10", true],
+    ["0.0.0-dev", "1.1.0", false], ["1.0.0", "<script>bad</script>", false],
+  ] as const) {
+    let rendered = false;
+    let fetched = false;
+    const element = { querySelector: () => ({ textContent: "", title: "" }) };
+    const header = {
+      querySelector: () => ({ insertAdjacentElement: () => { rendered = true; } }),
+      classList: { add() {} },
+    };
+    const document = {
+      readyState: "complete",
+      getElementById: () => null,
+      querySelector: () => header,
+      createElement: () => ({ innerHTML: "", firstElementChild: element }),
+    };
+    // The old hasUpdate flag may have been computed before an installation.
+    const storage = { getItem: () => JSON.stringify({ time: Date.now(), latest, hasUpdate: !expected }) };
+    new Function("window", "document", "localStorage", "fetch", headerUpdateScript(current))(
+      {}, document, storage, () => { fetched = true; },
+    );
+    expect(rendered, `${current} -> ${latest}`).toBe(expected);
+    expect(fetched).toBe(false);
   }
 });
 
@@ -1327,7 +1359,7 @@ console.log("\n== addons are told apart by the path they are mounted at ==");
 // hands it a sub-path of "-notes", which is a 404 from somewhere unexpected
 // rather than from the router.
 {
-  const all = ["instatic", "stager"];
+  const all = ["instatic", "stager", "login-theme"];
   const hit = (p: string) => {
     const m = splitMount(p, all);
     return m ? `${m.addon}:${m.rest}` : "none";
@@ -1609,9 +1641,10 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
     script: "",
     updateNotice: { current: "0.9.3", latest: "0.9.4" },
   });
-  check("layout with updateNotice renders update banner", htmlWith.includes('class="notice update-banner"'));
-  check("layout with updateNotice names current and latest versions", htmlWith.includes("v0.9.4") && htmlWith.includes("v0.9.3"));
-  check("layout with updateNotice contains clp-addons update shortcut", htmlWith.includes("clp-addons update"));
+  const header = htmlWith.slice(htmlWith.indexOf("<header"), htmlWith.indexOf("</header>"));
+  check("layout with updateNotice shows the release in its header", header.includes("v0.9.4 available"));
+  check("header separates changelog from the update page", header.includes('href="/addons/update"') && header.includes(">Changelog</a>"));
+  check("layout with updateNotice has no duplicate content banner", !htmlWith.includes('class="notice update-banner"'));
 
   const snip = headerTarget("0.9.3").snippet("https://addons.example.com/addons/");
   check("headerTarget includes update badge style", snip.includes("clp-addon-update-badge"));
@@ -1619,6 +1652,8 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   check("headerTarget embeds the configured version", snip.includes("\"0.9.3\""));
   check("headerTarget uses Addons label", snip.includes(">Addons</a>"));
   check("headerTarget points to manager URL", snip.includes('href="https://addons.example.com/addons/"'));
+  check("native header offers separate changelog and update links",
+    snip.includes("https://addons.example.com/addons/update") && snip.includes("github.com/7heMech/cloudpanel-addons/releases/latest"));
   const guardStart = snip.indexOf("{% if is_granted('ROLE_ADMIN') %}");
   const guardEnd = snip.indexOf("{% endif %}");
   check("headerTarget wraps the manager nav in the native admin guard", guardStart >= 0 && guardEnd > guardStart);
@@ -1641,4 +1676,12 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   const emptyRes = indexPage([]);
   const emptyHtml = await emptyRes.text();
   check("empty indexPage shows no addons notice", emptyHtml.includes("No addons are currently available."));
+
+  const loginTarget = LOGIN_THEME_TARGETS[0]!;
+  const loginSnippet = loginTarget.snippet("/addons/login-theme");
+  check("login-theme targets CloudPanel's login template", loginTarget.template === "Frontend/Security/login.html.twig");
+  check("login-theme follows device dark-mode changes",
+    loginSnippet.includes("prefers-color-scheme: dark") &&
+    loginSnippet.includes('classList.toggle("dark", media.matches)') &&
+    loginSnippet.includes('addEventListener("change", syncDeviceTheme)'));
 }

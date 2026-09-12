@@ -1,6 +1,7 @@
 // Local UI review with fictional data. Never starts the manager, reads panel
 // state or invokes an action. Mutating requests are rejected deliberately.
-import { indexPage } from "../cli/index";
+import { indexPage, updatePage } from "../cli/index";
+import { handle as loginThemePage } from "../addons/login-theme/app/index";
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
 import { jobsView, jobView, layout as stagerLayout, newCloneView } from "../addons/stager/app/views";
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
@@ -65,13 +66,27 @@ const server = Bun.serve({
     }
     if (["/", "/dashboard"].includes(path)) return Response.redirect("/addons/");
     const empty = url.searchParams.has("empty");
-    const notice = url.searchParams.has("update") ? { current: "0.9.3", latest: "0.9.4" } : null;
+    const notice = url.searchParams.has("update") || path === "/addons/update" ? { current: "0.9.3", latest: "0.9.4" } : null;
     const age = url.searchParams.has("stale") ? 7200 : 30;
     const state = url.searchParams.get("state");
     const currentJob: JobView = state && ["running", "failed", "queued"].includes(state)
       ? { ...job, state, result: null, finishedAt: "", step: "Copying files", error: state === "failed" ? "Could not copy the source files. The staging site was removed." : "" }
       : job;
     let html: string;
+    if (path === "/addons/update") {
+      const jobState = state && ["running", "queued", "failed"].includes(state) ? state : null;
+      return updatePage(url.searchParams.has("offline") ? null : {
+        current: "0.9.3", latest: url.searchParams.has("current") ? "0.9.3" : "0.9.4", hasUpdate: !url.searchParams.has("current"),
+      }, "0.9.3", {
+        csrf: "preview-csrf-token",
+        job: jobState ? {
+          id: "20260910T093000Z-abc123", kind: "update", addon: "", state: jobState,
+          step: "Downloading release", error: jobState === "failed" ? "Could not download the release. Try again later." : "",
+          createdAt: "2026-09-10T09:30:00Z", startedAt: "2026-09-10T09:30:01Z", finishedAt: "",
+        } : null,
+      });
+    }
+    if (path === "/addons/login-theme/") return loginThemePage(req, "/", notice);
     if (path === "/addons/") {
       // ?enabled= picks which addons are on, so the Available section and the
       // enable/disable buttons can be reviewed without a CloudPanel install.
@@ -84,7 +99,7 @@ const server = Bun.serve({
           }
         : null;
       return indexPage(enabled, notice, {
-        available: ["instatic", "stager"].filter((name) => !enabled.includes(name)),
+        available: ["instatic", "stager", "login-theme"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
