@@ -16,7 +16,6 @@ const provisioning = {
   legacyUnits: true,
   legacyUsers: true,
   units: false,
-  snapshot: false,
   running: false,
   anchors: false,
   nginx: false,
@@ -32,7 +31,6 @@ function resetProvisioning(): void {
     legacyUnits: true,
     legacyUsers: true,
     units: false,
-    snapshot: false,
     running: false,
     anchors: false,
     nginx: false,
@@ -158,7 +156,6 @@ mock.module("../cli/util", () => ({
 }));
 
 mock.module("../lib/panel-snapshot", () => ({
-  generateSnapshot: () => { calls.push("generateSnapshot"); provisioning.snapshot = true; },
   getLivePanelInfo: () => ({
     updatedAt: new Date().toISOString(),
     portRange: { min: 39000, max: 39999 },
@@ -188,7 +185,6 @@ test("an up-to-date update still runs provisioning and reconciliation", async ()
     "removeLegacyUnits",
     "removeLegacyUsers",
     "installUnits",
-    "generateSnapshot",
     "startUnits",
     "reconcile",
     "reconcileNginxProxy",
@@ -205,7 +201,6 @@ test("an up-to-date update still runs provisioning and reconciliation", async ()
     legacyUnits: false,
     legacyUsers: false,
     units: true,
-    snapshot: true,
     running: true,
     anchors: true,
     nginx: true,
@@ -229,7 +224,6 @@ test("an up-to-date update with no addons keeps the no-service branch", async ()
   expect(calls).toContain("removeLegacyUsers");
   expect(calls).toContain("reconcilePanelIdentity");
   expect(calls).toContain("installUnits");
-  expect(calls).toContain("generateSnapshot");
   expect(calls).toContain("startUnits");
   expect(calls).toContain("reconcile");
   expect(calls).toContain("reconcileNginxProxy");
@@ -243,7 +237,6 @@ test("an up-to-date update with no addons keeps the no-service branch", async ()
     legacyUnits: false,
     legacyUsers: false,
     units: true,
-    snapshot: true,
     running: true,
     anchors: true,
     nginx: true,
@@ -267,7 +260,6 @@ test("updating from a fully disabled state to a new release reconciles and resta
   expect(calls).toContain("removeLegacyUsers");
   expect(calls).toContain("reconcilePanelIdentity");
   expect(calls).toContain("installUnits");
-  expect(calls).toContain("generateSnapshot");
   expect(calls).toContain("startUnits");
   expect(calls).toContain("reconcile");
   expect(calls).toContain("reconcileNginxProxy");
@@ -281,7 +273,6 @@ test("updating from a fully disabled state to a new release reconciles and resta
     legacyUnits: false,
     legacyUsers: false,
     units: true,
-    snapshot: true,
     running: true,
     anchors: true,
     nginx: true,

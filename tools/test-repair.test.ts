@@ -21,12 +21,11 @@ const PROBE = String.raw`
     dirs: false,
     sudoers: false,
     units: false,
-    snapshot: false,
     nginx: false,
   };
 
   function resetProvisioning() {
-    Object.assign(provisioning, { dirs: false, sudoers: false, units: false, snapshot: false, nginx: false });
+    Object.assign(provisioning, { dirs: false, sudoers: false, units: false, nginx: false });
   }
 
   class TestFatal extends Error {}
@@ -112,8 +111,7 @@ const PROBE = String.raw`
   }));
 
   mock.module("./lib/panel-snapshot.ts", () => ({
-    generateSnapshot: () => { calls.push("generateSnapshot"); provisioning.snapshot = true; },
-    getLivePanelInfo: () => ({
+        getLivePanelInfo: () => ({
       updatedAt: new Date().toISOString(),
       portRange: { min: 39000, max: 39999 },
       allocatedPorts: [],
@@ -173,21 +171,20 @@ test("repair completes reconciliation even when no panel session exists", () => 
   expect(result.repairWithoutSession.calls).not.toContain("ensureDirs:verifySession");
   expect(result.repairWithoutSession.calls).toContain("ensureDirs");
   expect(result.repairWithoutSession.calls).toContain("warnIfPanelSessionUnreadable");
-  for (const name of ["reconcilePanelIdentity", "installUnits", "generateSnapshot", "reconcileNginxProxy"]) {
+  for (const name of ["reconcilePanelIdentity", "installUnits", "reconcileNginxProxy"]) {
     expect(result.repairWithoutSession.calls).toContain(name);
   }
   expect(result.repairWithoutSession.provisioning).toEqual({
     dirs: true,
     sudoers: true,
     units: true,
-    snapshot: true,
     nginx: true,
   });
 });
 
 test("repair still completes when a panel session is available", () => {
   expect(result.repairWithSession.threw).toBe(false);
-  for (const name of ["reconcilePanelIdentity", "installUnits", "generateSnapshot", "reconcileNginxProxy"]) {
+  for (const name of ["reconcilePanelIdentity", "installUnits", "reconcileNginxProxy"]) {
     expect(result.repairWithSession.calls).toContain(name);
   }
 });
@@ -198,5 +195,4 @@ test("install proceeds when the fixed directory has no live panel session", () =
   expect(result.installWithoutSession.calls).toContain("ensureAuthHelperReady");
   expect(result.installWithoutSession.calls).toContain("reconcilePanelIdentity");
   expect(result.installWithoutSession.calls).toContain("installUnits");
-  expect(result.installWithoutSession.calls).toContain("generateSnapshot");
 });

@@ -377,8 +377,9 @@ export function ensureDirs(
 
   const snapshot = `${STATE_DIR}/snapshot.json`;
   if (fs.exists(snapshot)) {
-    commands.run("chown", [`root:${SHARED_GROUP}`, snapshot]);
-    commands.run("chmod", ["640", snapshot]);
+    try {
+      rmSync(snapshot, { force: true });
+    } catch {}
   }
   if (verifySession) ensurePanelSessionReadable(commands);
 }

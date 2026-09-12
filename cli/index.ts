@@ -18,7 +18,6 @@ import {
 } from "./inject";
 import { fatal, Fatal, log, parseFlags, requireRoot, tryRun, writeAtomic } from "./util";
 import { runRecon } from "./recon";
-import { generateSnapshot } from "../lib/panel-snapshot";
 import { authenticateRequest, type AuthenticatedRequest } from "../lib/sso-auth";
 import { handle as handleInstatic } from "../addons/instatic/app/index";
 import { handle as handleStager } from "../addons/stager/app/index";
@@ -248,7 +247,6 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   installUnits(specs);
   removeLegacyUnits(true);
   removeLegacyUsers(true);
-  generateSnapshot();
   ensureDirs(specs);
   reconcileAnchors(false);
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
@@ -288,7 +286,6 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
   removeLegacyUnits(true);
   removeLegacyUsers(true);
   installUnits(specs);
-  generateSnapshot();
   ensureDirs(specs);
   startUnits();
   reconcileAnchors(false);
@@ -326,7 +323,6 @@ export async function applyEnable(name: string): Promise<void> {
   for (const item of specs) writeConfig(item, true);
   reconcilePanelIdentity();
   installUnits(specs);
-  generateSnapshot();
   ensureDirs(specs);
   reconcileAnchors(false);
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
@@ -464,7 +460,6 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   removeLegacyUsers(quiet);
   reconcilePanelIdentity(quiet);
   const unitChanged = installUnits(all);
-  generateSnapshot();
   ensureDirs(all);
   if (unitChanged || unitActive(MANAGER_UNIT) !== "active") startUnits();
   else ensureTimerArmed("clp-addons-reconcile.timer", quiet);
