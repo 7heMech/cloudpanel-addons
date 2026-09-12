@@ -215,3 +215,7 @@ bun run build
 
 `--local` still verifies checksums but cannot verify provenance. Use it only for
 staging or local development.
+
+## Acknowledgments
+
+Special thanks to **[@ccMatrix](https://github.com/ccMatrix)** for the idea and inspiration behind the native CloudPanel SSO and Nginx reverse proxy integration.
