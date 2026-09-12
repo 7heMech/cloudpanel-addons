@@ -163,10 +163,14 @@ describe("starting transient job units", () => {
         description: "test job",
         actionBinary: "/usr/local/bin/clp-addons",
       });
-      expect(capturedArgs).toContain("--property=CPUWeight=50");
-      expect(capturedArgs).toContain("--property=IOWeight=50");
-      expect(capturedArgs).toContain("--property=Type=exec");
       expect(capturedArgs).toContain("--collect");
+      expect(capturedArgs).toContain("--property=Type=exec");
+      expect(capturedArgs).toContain("--property=CPUWeight=20");
+      expect(capturedArgs).toContain("--property=Nice=19");
+      expect(capturedArgs).toContain("--property=IOWeight=20");
+      expect(capturedArgs).toContain("--property=IOSchedulingClass=best-effort");
+      expect(capturedArgs).toContain("--property=IOSchedulingPriority=7");
+      expect(capturedArgs).toContain("--property=OOMScoreAdjust=500");
     } finally {
       Bun.spawnSync = origSpawnSync;
     }

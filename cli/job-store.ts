@@ -157,6 +157,19 @@ export function jobUnitName(addon: string, id: string): string {
  * transcript needs none; one whose progress is whatever it prints needs
  * StandardOutput= pointed at the job's log.
  */
+export const BACKGROUND_JOB_PROPERTIES = [
+  "Type=exec",
+  // 1. CPU: Let the job run fast when idle, but yield immediately to web traffic
+  "CPUWeight=20",
+  "Nice=19",
+  // 2. Disk I/O: Prevent disk saturation from blocking MySQL/Nginx without starvation
+  "IOWeight=20",
+  "IOSchedulingClass=best-effort",
+  "IOSchedulingPriority=7",
+  // 3. Memory: Never kill with hard caps, but sacrifice first if host RAM exhausts
+  "OOMScoreAdjust=500",
+];
+
 export function startJobUnit(options: {
   addon: string;
   id: string;
@@ -169,9 +182,7 @@ export function startJobUnit(options: {
     `--unit=${jobUnitName(addon, id)}`,
     `--description=${description}`,
     "--collect",
-    "--property=Type=exec",
-    "--property=CPUWeight=50",
-    "--property=IOWeight=50",
+    ...BACKGROUND_JOB_PROPERTIES.map((property) => `--property=${property}`),
     ...properties.map((property) => `--property=${property}`),
     "--",
     actionBinary, "action", addon, "run", "--job", id,
