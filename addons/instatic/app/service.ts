@@ -80,12 +80,18 @@ export interface InstaticJobView {
 }
 
 export const instaticService = {
-  /** Fetch current panel state and report how many seconds ago it was collected. */
+  /** Fetches current panel information and reports its age at receipt. */
   async snapshot(): Promise<{ snap: PanelSnapshot; ageSeconds: number }> {
     const snap = await fetchPanelInfo();
     return { snap, ageSeconds: snapshotAgeSeconds(snap) };
   },
 
+  /**
+   * Returns the lowest reserved port absent from both panel data and the
+   * current Instatic instance list.
+   *
+   * @throws If either allocation source is unavailable or the range is full.
+   */
   async nextPort(): Promise<number> {
     // The snapshot is queried in real time via root gateway IPC.
     const [instances, { snap }] = await Promise.all([
@@ -118,6 +124,15 @@ export const instaticService = {
     return res.data?.instances ?? [];
   },
 
+  /**
+   * Proposes a live-data-checked port and asks the action process to create an
+   * instance, optionally as a background job.
+   *
+   * A duplicate domain is returned as a failed action result.
+   *
+   * @throws If existing instances or panel allocations cannot be read, or no
+   * reserved port is free.
+   */
   async createInstance(
     domain: string,
     tag: string,

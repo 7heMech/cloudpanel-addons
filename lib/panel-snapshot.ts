@@ -55,8 +55,8 @@ function databaseExists(databasePath: string): boolean {
 }
 
 /**
- * Run a panel-table query, treating an absent optional table as an empty result.
- * Other query failures throw an error that identifies the table and its requiredness.
+ * Runs a panel query, treating an absent optional table as empty while wrapping
+ * every other query failure with table context.
  */
 function queryRows<ReturnType>(db: Database, sql: string, table: string, optional = false): ReturnType[] {
   try {
@@ -184,11 +184,14 @@ export function readPanelDatabase(databasePath = PANEL_DB): PanelDatabaseSnapsho
 }
 
 /**
- * Collect current sites and occupied ports from CloudPanel, addon state, and TCP listeners.
+ * Returns sanitized panel state from a consistent database copy, addon metadata,
+ * and active TCP listeners.
  *
- * Reading the default CloudPanel database requires root. Failures to inspect or query
- * that database are thrown; unreadable addon directories and unavailable listener data
- * are omitted from the result.
+ * Unreadable addon metadata and unavailable listener inspection contribute no
+ * ports. Reading the default panel database requires root privileges.
+ *
+ * @throws If the caller is not root when using the default database, or the
+ * panel database cannot be inspected, copied, or queried.
  */
 export function getLivePanelInfo(databasePath = PANEL_DB): PanelSnapshot {
   if (process.getuid && process.getuid() !== 0 && databasePath === PANEL_DB) {
@@ -216,8 +219,9 @@ export function getLivePanelInfo(databasePath = PANEL_DB): PanelSnapshot {
           // A half-written meta file should not abort the whole snapshot.
         }
       }
-    } catch {
-      // Ignore directory read errors
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") continue;
+      throw new Error(`cannot read addon state directory ${spec.stateDir}: ${errorMessage(error)}`, { cause: error });
     }
   }
 

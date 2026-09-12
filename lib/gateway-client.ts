@@ -250,11 +250,9 @@ export async function callGatewayAction<T = unknown>(
 }
 
 /**
- * Request current panel sites and occupied ports without using a disk snapshot.
- *
- * The request normally uses the root gateway socket. A root process falls back to
- * collecting the data locally when that socket is absent. Operational failures are
- * returned as unsuccessful action results rather than thrown.
+ * Fetches current panel information through the root gateway socket, or directly
+ * in a root process when the configured socket is absent. Failures are returned
+ * as unsuccessful action results.
  */
 export async function callGatewayPanelInfo(
   options: GatewayClientOptions = {},
