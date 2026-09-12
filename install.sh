@@ -202,6 +202,8 @@ for artifact in "${ARTIFACTS[@]}"; do
 done
 ok "checksums verified"
 
+# This verifier must be bootstrapped before the downloaded binary can run as
+# root. Once installed, clp-addons also maintains gh for later release updates.
 gh_can_attest() {
   local candidate=$1
   [[ -x $candidate || -n $(command -v "$candidate" 2>/dev/null || true) ]] || return 1
@@ -218,7 +220,7 @@ find_gh() {
 }
 
 install_gh() {
-  local json tag base tarball
+  local json tag base tarball destination staged
   json=$(api "https://api.github.com/repos/cli/cli/releases/latest") || return 1
   tag=$(printf '%s' "$json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
   [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
@@ -228,9 +230,16 @@ install_gh() {
   curl -fsSL -o "${TMP}/${tarball}" "${base}/${tarball}" || return 1
   curl -fsSL -o "${TMP}/gh_checksums.txt" "${base}/gh_${tag#v}_checksums.txt" || return 1
   ( cd "$TMP" && grep " ${tarball}\$" gh_checksums.txt | sha256sum -c --status - ) || return 1
-  tar -xzf "${TMP}/${tarball}" -C "$TMP" || return 1
-  install -o root -g root -m 0755 -D "${TMP}/gh_${tag#v}_linux_amd64/bin/gh" "$GH_PRIVATE" || return 1
-  gh_can_attest "$GH_PRIVATE" || return 1
+  tar -xzf "${TMP}/${tarball}" -C "$TMP" --no-same-owner --no-same-permissions -- "gh_${tag#v}_linux_amd64/bin/gh" || return 1
+  destination=$(dirname "$GH_PRIVATE")
+  install -d -o root -g root -m 0755 "$destination" || return 1
+  staged=$(mktemp -d "${destination}/.gh-XXXXXX") || return 1
+  if ! install -o root -g root -m 0755 "${TMP}/gh_${tag#v}_linux_amd64/bin/gh" "${staged}/gh" ||
+     ! gh_can_attest "${staged}/gh" || ! mv -fT "${staged}/gh" "$GH_PRIVATE"; then
+    rm -rf "$staged"
+    return 1
+  fi
+  rm -rf "$staged"
   printf '%s' "$tag"
 }
 
@@ -257,8 +266,12 @@ else
 fi
 
 install -o root -g root -m 0755 "${TMP}/${CLI_ARTIFACT}" "$CLI_TARGET"
-for addon in "${ADDON_LIST[@]}"; do
-  "$CLI_TARGET" install "$addon" --local="$TMP"
+for i in "${!ADDON_LIST[@]}"; do
+  if (( i == 0 )); then
+    "$CLI_TARGET" install "${ADDON_LIST[i]}" --local="$TMP"
+  else
+    "$CLI_TARGET" install "${ADDON_LIST[i]}"
+  fi
 done
 
 say ""

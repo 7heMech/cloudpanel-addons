@@ -1879,6 +1879,43 @@ exactly that check.
 benefit. The signal to revisit it is the list feeling crowded, somewhere around
 eight or ten addons, not the feature being conceivable.
 
+## Bundled addon activation and the release trust bootstrap
+
+The default CLI `install <addon>` now follows the same bundled activation path
+as Enable in the UI. Every addon already ships in the binary, so configuring
+one must not fetch the latest release or require GitHub CLI. This also restores
+CLI activation after every addon has been disabled. Explicit `install --version`
+and `update` still verify downloaded artifacts; `install --local` still checks
+the caller's local checksums. Disable and uninstall do not fetch releases.
+
+GitHub CLI has two installation paths for a reason. The shell bootstrap needs
+it before the downloaded `clp-addons` executable can safely run as root. The
+binary's `ensureGh` also owns recovery during subsequent artifact verification:
+prefer the private helper, then an attestation-capable PATH helper, otherwise
+download the official CLI tarball and verify its published checksum. Probe the
+candidate in a private directory on the destination filesystem before an atomic
+rename, preserving the old verifier if any step fails. Attestation of the addon
+release remains mandatory unless explicitly skipped.
+
+## Session readiness and startup after a reboot
+
+Session readiness no longer requires an exact `clp:clp 0770` directory. A
+reported `clp:clp 0755` directory was rejected even though the root gateway can
+read it. Accept root or panel ownership and modes whose writers are restricted
+to root and the panel group; retain rejection of symlinks and untrusted writers.
+Do not chmod CloudPanel's tree or require a live session. The per-request file,
+owner, size, expiry and authentication checks remain in the root helper. This
+supersedes the earlier directory/readability assumptions in this document.
+
+The reported reboot 502 was a systemd `226/NAMESPACE` failure: the manager's
+`ReadWritePaths` listed `/run/lock/clp-addons`, which only provisioning had
+created and reboot removed. The manager never uses those locks; the root action
+processes create the directory when they need it. Remove it from the manager's
+namespace requirements. The manager's `RuntimeDirectory` creates its own socket
+directory at every start. Order it after the authentication socket, whose
+`DirectoryMode` creates the parent without competing for its runtime ownership
+or lifetime. These rules apply to an empty manager as well as an enabled one.
+
 ## Known gaps
 
 - `--local` installs skip provenance verification by construction. Staging only.

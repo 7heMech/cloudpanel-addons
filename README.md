@@ -96,6 +96,13 @@ clp-addons uninstall <addon> --yes [--purge]
 clp-addons serve
 ```
 
+`clp-addons install <addon>` enables the code bundled in the installed binary,
+just like Enable in the UI. It works with every addon disabled and does not
+contact GitHub, check release checksums, or require `gh`. `install --version`
+explicitly downloads and verifies a release; `--local` installs caller-verified
+artifacts with a local checksum check. Disabling or uninstalling an addon does
+not download or verify release artifacts either.
+
 `clp-addons update` verifies and atomically installs the unified CLI/action
 binary when the artifact is missing or changed,
 restarts `clp-addons.service`, and reconciles the Twig and Nginx integration.
@@ -154,8 +161,30 @@ native ordering, and restores the original when the last addon is removed.
 
 Release artifacts carry `SHA256SUMS` and a build provenance attestation. The
 checksum catches corruption; the attestation catches substitution. Verification
-is enabled by default, and `--skip-attestation` is an explicit checksum-only
-exception for staging.
+is enabled by default when installing downloaded artifacts, and
+`--skip-attestation` is an explicit checksum-only exception for staging.
+
+`install.sh` bootstraps GitHub CLI before verifying and executing the first
+`clp-addons` binary as root. The binary also maintains this verifier for later
+release installations and updates: it uses an attestation-capable
+`/usr/local/libexec/clp-addons/gh`, then a suitable `gh` on PATH, or downloads
+the official GitHub CLI tarball, verifies its published SHA-256 checksum, and
+installs it atomically. A missing or outdated `gh` is repaired when verification
+is needed.
+
+This verification covers the artifact being installed. A version label alone
+does not establish integrity, and a running executable cannot reliably verify
+itself after compromise. The installed binary and artifact manifest are
+root-owned; same-version updates compare their saved hashes and fetch verified
+artifacts again if they differ. Ordinary addon activation does not re-attest
+the already-running binary.
+
+The root gateway's socket permissions restrict clients to root and the
+`clp-addons` service account/group. It dispatches only allowed verbs through
+the fixed `/usr/local/bin/clp-addons` path. It does not authenticate a client's
+executable, pin the running manager's identity, or pin the action binary's hash:
+any process with socket access can submit allowed requests, and each dispatched
+action executes the binary currently installed at that path.
 
 ## Reaching the manager
 
@@ -163,6 +192,24 @@ Open the CloudPanel master URL at `https://<cloudpanel-host>/addons/` while
 logged in to CloudPanel. The injected navigation entries point to the same
 origin. The panel's own TLS configuration protects the connection; addon
 installation does not request or manage a separate certificate.
+
+The root authentication helper supports safe root- or `clp`-owned session
+directories, including CloudPanel's `clp:clp 0755` layout. Installation does not
+change the session directory permissions or require an active login session.
+
+On older builds, a reboot can leave the manager failing with `226/NAMESPACE`
+and `/run/lock/clp-addons: No such file or directory`, causing an Nginx 502.
+To restore that service temporarily, run as root:
+
+```bash
+mkdir -p /run/lock/clp-addons
+systemctl restart clp-addons.service
+```
+
+After installing a fixed binary, run `clp-addons repair` to replace the old
+unit. The manager no longer depends on that volatile root-action lock directory;
+systemd creates its socket directory on startup and starts the authentication
+socket before the manager, including when no addons are enabled.
 
 ![CloudPanel Addons Manager](docs/screenshots/addons-empty.png)
 

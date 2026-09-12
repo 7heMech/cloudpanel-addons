@@ -1,7 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { dirname } from "node:path";
 import { GH_PRIVATE, REPO } from "./paths";
-import { fatal, have, log, tryRun } from "./util";
+import { fatal, log, requireRoot, run, tryRun } from "./util";
 
 const API = "https://api.github.com";
 const VERSION_TAG_RE = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
@@ -99,12 +100,62 @@ export async function fetchVerified(rel: ResolvedRelease, names: string[]): Prom
   return artifacts;
 }
 
-function attestingGh(): string | null {
-  for (const candidate of [GH_PRIVATE, "gh"]) {
-    if (candidate !== "gh" && !existsSync(candidate)) continue;
+/** Recover the verifier before any downloaded addon binary is trusted. */
+export async function ensureGh(privatePath = GH_PRIVATE): Promise<string> {
+  for (const candidate of [privatePath, Bun.which("gh", { PATH: process.env.PATH })]) {
+    if (!candidate) continue;
     if (tryRun(candidate, ["attestation", "--help"]).ok) return candidate;
   }
-  return null;
+
+  requireRoot("install GitHub CLI");
+  const arch = process.arch === "x64" ? "amd64" : process.arch === "arm64" ? "arm64" : null;
+  if (process.platform !== "linux" || !arch) fatal(`GitHub CLI bootstrap does not support ${process.platform}/${process.arch}`);
+  log.step("installing GitHub CLI for provenance verification");
+  const release = await github("/repos/cli/cli/releases/latest") as GithubRelease;
+  if (!/^v\d+\.\d+\.\d+$/.test(release.tag_name) || release.draft || release.prerelease) {
+    fatal("GitHub CLI did not return a stable release tag");
+  }
+  const version = release.tag_name.slice(1);
+  const folder = `gh_${version}_linux_${arch}`;
+  const tarball = `${folder}.tar.gz`;
+  const base = `https://github.com/cli/cli/releases/download/${release.tag_name}`;
+  const sums = parseSums((await download(`${base}/gh_${version}_checksums.txt`)).toString("utf-8"));
+  const expected = sums.get(tarball);
+  if (!expected) fatal(`GitHub CLI checksums do not list ${tarball}`);
+  const bytes = await download(`${base}/${tarball}`);
+  if (sha256(bytes) !== expected) fatal(`checksum mismatch for ${tarball}`);
+  log.ok(`${tarball} checksum verified`);
+
+  const directory = mkdtempSync(`${tmpdir()}/clp-addons-gh-`);
+  let staging: string | undefined;
+  try {
+    const archive = `${directory}/${tarball}`;
+    writeFileSync(archive, bytes, { mode: 0o600 });
+    run("tar", ["-xzf", archive, "-C", directory, "--no-same-owner", "--no-same-permissions", "--", `${folder}/bin/gh`]);
+    const extracted = `${directory}/${folder}/bin/gh`;
+    if (!lstatSync(extracted).isFile()) fatal("GitHub CLI archive does not contain a regular gh executable");
+
+    const destination = dirname(privatePath);
+    mkdirSync(destination, { recursive: true, mode: 0o755 });
+    const parent = lstatSync(destination);
+    if (!parent.isDirectory() || parent.uid !== 0 || (parent.mode & 0o022) !== 0) {
+      fatal(`GitHub CLI installation directory must be root-owned and not writable by group or others: ${destination}`);
+    }
+    // Stage on the destination filesystem, also allowing /tmp to be noexec.
+    // A failed download or capability probe must leave the previous gh intact.
+    staging = mkdtempSync(`${destination}/.gh-`);
+    const staged = `${staging}/gh`;
+    writeFileSync(staged, readFileSync(extracted), { mode: 0o755 });
+    chownSync(staged, 0, 0);
+    chmodSync(staged, 0o755);
+    if (!tryRun(staged, ["attestation", "--help"]).ok) fatal("downloaded GitHub CLI does not support attestation");
+    renameSync(staged, privatePath);
+    log.ok(`gh ${release.tag_name} installed`);
+    return privatePath;
+  } finally {
+    if (staging) rmSync(staging, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 export async function verifyAttestation(
@@ -116,16 +167,9 @@ export async function verifyAttestation(
     log.warn("provenance verification skipped; checksums alone cannot detect substitution");
     return;
   }
-  const gh = attestingGh();
-  if (!gh) {
-    fatal(
-      have("gh")
-        ? "the installed GitHub CLI does not support `gh attestation`"
-        : "provenance verification needs the GitHub CLI (gh)",
-    );
-  }
   const bundlesUrl = rel.assets.get(BUNDLES_ASSET);
   if (!bundlesUrl) fatal(`release ${rel.tag} has no ${BUNDLES_ASSET} asset`);
+  const gh = await ensureGh();
 
   const directory = mkdtempSync(`${tmpdir()}/clp-addons-attest-`);
   try {

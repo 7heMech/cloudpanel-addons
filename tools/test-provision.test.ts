@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -238,9 +238,27 @@ test("provisioning creates every project-owned writable directory", () => {
   expect(created).toContain("/var/lib/clp-addons");
 });
 
-test("provisioning verifies the fixed session directory owner and mode", () => {
+test("manager startup does not require lock directories erased by reboot, even with all addons disabled", () => {
+  for (const specs of [[], [ADDONS.instatic!, ADDONS.stager!]]) {
+    const unit = serviceUnit(specs);
+    const runtime = unit.match(/^RuntimeDirectory=(.*)$/m)![1]!.split(" ").map((path) => `/run/${path}`);
+    const writable = unit.match(/^ReadWritePaths=(.*)$/m)![1]!.split(" ");
+    for (const path of writable.filter((path) => path.startsWith("/run/"))) {
+      expect(runtime).toContain(path);
+    }
+    expect(writable).not.toContain("/run/lock/clp-addons");
+    for (const directive of ["After", "Wants"]) {
+      expect(unit.match(new RegExp(`^${directive}=(.*)$`, "m"))![1]!.split(" ")).toContain("clp-addons-auth.socket");
+    }
+  }
+  const socket = authUnits().socket;
+  expect(socket).toContain("DirectoryMode=0755");
+  expect(socket).not.toContain("RuntimeDirectory=");
+});
+
+test.each([0o700, 0o750, 0o755, 0o770, 0o2750, 0o2770])("provisioning accepts safe panel session permissions %o without changing them", (mode) => {
   const sessionDir = mkdtempSync(`${tmpdir()}/panel-session-`);
-  chmodSync(sessionDir, 0o770);
+  chmodSync(sessionDir, mode);
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
   const gid = typeof process.getgid === "function" ? process.getgid() : 0;
   const calls: Array<{ command: string; args: string[] }> = [];
@@ -250,8 +268,45 @@ test("provisioning verifies the fixed session directory owner and mode", () => {
       tryRun: (command, args) => { calls.push({ command, args }); return { ok: true, out: "" }; },
     }, sessionDir, uid, gid);
     expect(calls).toEqual([]);
+    expect(lstatSync(sessionDir).mode & 0o7777).toBe(mode);
   } finally {
     rmSync(sessionDir, { recursive: true, force: true });
+  }
+});
+
+test("provisioning accepts a root-owned session directory readable by the root helper", () => {
+  expect(() => ensurePanelSessionReadable({
+    run: () => "",
+    tryRun: () => ({ ok: true, out: "" }),
+  }, "/usr", 12345, 12345)).not.toThrow();
+});
+
+test("provisioning rejects untrusted session directory writers and symlinks", () => {
+  const directory = mkdtempSync(`${tmpdir()}/panel-session-unsafe-`);
+  const sessionDir = join(directory, "sessions");
+  mkdirSync(sessionDir);
+  const uid = process.getuid!();
+  const gid = process.getgid!();
+  const commands = { run: () => "", tryRun: () => ({ ok: true, out: "" }) };
+  try {
+    chmodSync(sessionDir, 0o777);
+    expect(() => ensurePanelSessionReadable(commands, sessionDir, uid, gid)).toThrow(/writable only/);
+    chmodSync(sessionDir, 0o770);
+    if (gid !== 0) {
+      expect(() => ensurePanelSessionReadable(commands, sessionDir, uid, gid + 1)).toThrow(/writable only/);
+    }
+    chmodSync(sessionDir, 0o700);
+    if (uid !== 0) {
+      expect(() => ensurePanelSessionReadable(commands, sessionDir, uid + 1, gid)).toThrow(/owned by root or clp/);
+    }
+    const link = join(directory, "link");
+    symlinkSync(sessionDir, link);
+    expect(() => ensurePanelSessionReadable(commands, link, uid, gid)).toThrow(/not a regular directory/);
+    const file = join(directory, "file");
+    writeFileSync(file, "");
+    expect(() => ensurePanelSessionReadable(commands, file, uid, gid)).toThrow(/not a regular directory/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
