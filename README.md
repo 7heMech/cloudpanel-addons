@@ -37,8 +37,11 @@ panel URL. Access requires a CloudPanel administrator session.
 
 ## Management
 
-Use the manager to enable or disable addons and apply updates. Updates are
-applied only when requested.
+Use the manager to enable or disable addons. When a release is available, the
+header on CloudPanel and addon pages shows **Changelog** and **Update** links.
+**Update** opens `/addons/update`, where you can review the installed and latest
+versions, choose **Install update**, and follow its progress. Updates are applied
+only when requested; you can also open this page from **Updates** in the manager.
 
 For command-line management, run as root:
 

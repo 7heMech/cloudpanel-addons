@@ -25,8 +25,9 @@ import { handle as handleStager } from "../addons/stager/app/index";
 import { splitMount } from "../lib/mount";
 import { SECURITY_HEADERS, csrfCookieHeader, esc, escJs, guardMutation, newCsrfToken } from "../lib/app-http";
 import { JOB_STYLE, JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
-import { headerTarget } from "../lib/panel-nav";
-import { checkCliUpdate } from "../lib/update-check";
+import { adminHeaderTarget, headerTarget } from "../lib/panel-nav";
+import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
+import { CHANGELOG_URL, UPDATE_PATH } from "../lib/update-ui";
 import { pruneInstaticJobs, runInstaticAction } from "../addons/instatic/action";
 import { runStagerAction, type StagerActionOptions } from "../addons/stager/action";
 import { runAuthActionStdin } from "./auth-action";
@@ -145,6 +146,7 @@ export function installedInjections(exclude?: string, managerNav = true): Inject
   // emit a second style/script block or replace the first one's marker.
   if (managerNav) {
     injections.push({ addon: "manager", target: headerTarget(CLI_VERSION), url: "/addons/" });
+    injections.push({ addon: "manager", target: adminHeaderTarget(CLI_VERSION), url: "/addons/" });
   }
 
   for (const name of installed) {
@@ -781,6 +783,9 @@ async function cmdServe(): Promise<never> {
       const hit = splitMount(path, mounted);
       let response: Response;
       if (hit) response = await MANAGERS[hit.addon]!(req, hit.rest, notice, server);
+      else if (path === "/update" && req.method === "GET") {
+        response = updatePage(update, CLI_VERSION, { job: await latestManagerJobView(), csrf: newCsrfToken() });
+      }
       else if (path === "/") {
         // Read at request time rather than from the startup snapshot: a job
         // that has just finished enabling an addon has not yet restarted this
@@ -819,6 +824,15 @@ const MANAGER_INDEX_CSS = `
 .addon-section { margin-top: 30px; }
 .addon-section h2 { margin: 0 0 20px; font-size: 20px; }
 #job-card pre { max-height: 300px; }
+.update-page { max-width: 800px; margin: 0 auto; }
+.update-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin: 0 0 25px; }
+.update-versions dt { color: var(--muted); font-size: 14px; margin-bottom: 8px; }
+.update-versions dd { margin: 0; font-family: var(--mono); font-size: 22px; overflow-wrap: anywhere; }
+.update-page .card-header { flex-wrap: wrap; }
+.update-page .update-actions { border-top: 1px solid var(--border); padding-top: 20px; margin-top: 25px; }
+@media (max-width: 480px) {
+  .update-versions { grid-template-columns: minmax(0, 1fr); }
+}
 `;
 
 const MANAGER_INDEX_JS = `
@@ -895,26 +909,10 @@ function addonCard(name: string, enabled: boolean): string {
 </article>`;
 }
 
-/**
- * The manager index: what is on, what is available, and what is happening.
- *
- * "Available" is not a catalogue of things to download. Every addon is already
- * in this binary, so the section exists to make the binary self-describing --
- * before it, an operator had to know from the install documentation that
- * `--addons=instatic,stager` was even a choice.
- */
-export function indexPage(
-  enabled: string[],
-  update?: { current: string; latest: string } | null,
-  options: { available?: string[]; job?: ManagerJobView | null; csrf?: string } = {},
-): Response {
-  const available = options.available ?? [];
-  const job = options.job ?? null;
+/** Shared progress and failure details survive navigation between manager pages. */
+function managerJobBlock(job: ManagerJobView | null): string {
   const live = job && (job.state === "queued" || job.state === "running") ? job : null;
   const failure = job && job.state === "failed" ? job : null;
-
-  const cards = enabled.map((name) => addonCard(name, true)).join("");
-  const availableCards = available.map((name) => addonCard(name, false)).join("");
   const failureBlock = failure
     ? `<div class="alert" id="job-failure" data-job="${esc(failure.id)}">
   <strong>${esc(describeJob(failure))} failed.</strong> ${esc(failure.error || "No reason was recorded.")}
@@ -929,10 +927,23 @@ export function indexPage(
   <p class="step" id="job-step">${esc(live?.step ?? "")}</p>
   <pre id="job-log"></pre>
 </article>`;
+  return failureBlock + jobBlock;
+}
 
-  const content = `<div class="page-heading"><h1>Addons</h1></div>` +
-    failureBlock +
-    jobBlock +
+type ManagerPageOptions = { job?: ManagerJobView | null; csrf?: string };
+
+/** The manager index: enabled addons, bundled addons available to enable, and progress. */
+export function indexPage(
+  enabled: string[],
+  update?: { current: string; latest: string } | null,
+  options: ManagerPageOptions & { available?: string[] } = {},
+): Response {
+  const available = options.available ?? [];
+  const cards = enabled.map((name) => addonCard(name, true)).join("");
+  const availableCards = available.map((name) => addonCard(name, false)).join("");
+
+  const content = `<div class="page-heading"><h1>Addons</h1><a class="btn" href="${UPDATE_PATH}">Updates</a></div>` +
+    managerJobBlock(options.job ?? null) +
     (cards
       ? `<div class="addon-grid">${cards}</div>`
       : `<div class="card empty">${esc(available.length
@@ -942,6 +953,52 @@ export function indexPage(
       ? `<section class="addon-section"><h2>Available</h2><div class="addon-grid">${availableCards}</div></section>`
       : "");
 
+  return managerPage("CloudPanel Addons", content, update, options);
+}
+
+/** A GET only shows the release; installation still requires a guarded POST. */
+export function updatePage(
+  info: CliUpdateInfo | null,
+  currentVersion = CLI_VERSION,
+  options: ManagerPageOptions = {},
+): Response {
+  const update = info?.hasUpdate ? info : null;
+  const live = options.job?.state === "queued" || options.job?.state === "running";
+  const development = currentVersion === "0.0.0-dev";
+  const status = update ? "Update available" : info ? "Up to date" : development ? "Development build" : "Unable to check";
+  const message = update
+    ? "Install the latest release of CloudPanel Addons. The Addons manager will restart briefly during the update."
+    : info ? "No newer release is available for this installation."
+    : development ? "Update checks are disabled for development builds."
+    : "We could not check for a new release. Try again later or view the changelog on GitHub.";
+  const content = `<div class="update-page">
+  <div class="page-heading"><h1>Update Addons</h1><a class="btn" href="/addons/">Back to Addons</a></div>
+  ${managerJobBlock(options.job ?? null)}
+  <article class="card">
+    <div class="card-header"><h2>CloudPanel Addons</h2><span class="badge ${update ? "state-queued" : info ? "state-done" : "state-unknown"}">${status}</span></div>
+    <dl class="update-versions">
+      <div><dt>Installed version</dt><dd>v${esc((info?.current ?? currentVersion).replace(/^v/, ""))}</dd></div>
+      <div><dt>Latest release</dt><dd>${info ? `v${esc(info.latest)}` : "Unavailable"}</dd></div>
+    </dl>
+    <p>${message}</p>
+    ${live ? '<p class="hint">An Addons operation is in progress. Its status is shown above.</p>' : ""}
+    <div class="actions update-actions">
+      <a class="btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener noreferrer">Changelog</a>
+      ${update ? `<button class="btn btn-primary" type="button" onclick="updateNow()"${live ? " disabled" : ""}>Install update</button>` : ""}
+    </div>
+  </article>
+</div>`;
+  return managerPage("Update Addons", content, update, options);
+}
+
+function managerPage(
+  title: string,
+  content: string,
+  update: { current: string; latest: string } | null | undefined,
+  options: ManagerPageOptions,
+): Response {
+  const job = options.job;
+  const live = job && (job.state === "queued" || job.state === "running") ? job : null;
   const headers: Record<string, string> = {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
@@ -949,14 +1006,13 @@ export function indexPage(
   };
   if (options.csrf) headers["Set-Cookie"] = csrfCookieHeader(options.csrf);
 
-  return new Response(renderLayout("CloudPanel Addons", content, {
+  return new Response(renderLayout(title, content, {
     brand: "CloudPanel Addons",
     base: "/addons",
     nav: [],
     css: JOB_STYLE + MANAGER_INDEX_CSS,
     script: MANAGER_INDEX_JS + JOB_WATCH_JS + (live ? `\nwatchJob('${escJs(live.id)}');\n` : ""),
     updateNotice: update,
-    updateAction: Boolean(update),
   }), { headers });
 }
 

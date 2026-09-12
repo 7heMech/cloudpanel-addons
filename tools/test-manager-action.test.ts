@@ -14,7 +14,7 @@ import {
   activeManagerJob, createJob, type CreateJobOptions, latestManagerJob, parseManagerFlags, pruneManagerJobs, readManagerJob,
   runManagerJob, type ManagerOps,
 } from "../cli/manager-action";
-import { handleManagerRoute, indexPage, installedInjections, safeDecodePathSegment } from "../cli/index";
+import { handleManagerRoute, indexPage, installedInjections, safeDecodePathSegment, updatePage } from "../cli/index";
 import { listJobIds } from "../cli/job-store";
 import { csrfCookieHeader, newCsrfToken } from "../lib/app-http";
 
@@ -259,7 +259,10 @@ describe("the panel's Addons entry", () => {
   // to. Disabling the last one then took the link away and left no way back to
   // the page that would offer the addons again.
   test("survives every addon being disabled", () => {
-    expect(installedInjections(undefined, true).some((injection) => injection.addon === "manager")).toBe(true);
+    const templates = installedInjections(undefined, true)
+      .filter((injection) => injection.addon === "manager").map((injection) => injection.target.template);
+    expect(templates).toContain("Frontend/Partial/header.html.twig");
+    expect(templates).toContain("Admin/Partial/header.html.twig");
   });
 
   test("goes when the installation itself goes", () => {
@@ -287,15 +290,14 @@ describe("the manager index", () => {
     expect(html).not.toContain("enableAddon('");
   });
 
-  // The notice is what this project offers instead of unattended updates, so
-  // the action on it has to be a deliberate press, not a background task.
-  test("turns the release notice into a button only here", async () => {
+  test("takes the operator to the update page without installing from the index", async () => {
     const withUpdate = await render(["instatic"], { current: "1.0.0", latest: "1.1.0" });
-    expect(withUpdate).toContain('onclick="updateNow()"');
+    expect(withUpdate).toContain('href="/addons/update"');
+    expect(withUpdate).not.toContain('onclick="updateNow()"');
     expect(withUpdate).toContain("1.1.0");
-    // No notice, no button: the page never offers to replace the binary when
-    // there is nothing newer to replace it with.
     const withoutUpdate = await render(["instatic"], null);
+    expect(withoutUpdate).toContain('href="/addons/update"');
+    expect(withoutUpdate).not.toContain('id="clp-addons-update-notice"');
     expect(withoutUpdate).not.toContain('onclick="updateNow()"');
   });
 
@@ -344,6 +346,52 @@ describe("the manager index", () => {
     const res = indexPage(["instatic"], null, { csrf: "token-value" });
     expect(res.headers.get("set-cookie")).toContain("clp_addons_csrf=token-value");
     expect(res.headers.get("set-cookie")).toContain("Secure");
+  });
+});
+
+describe("the dedicated update page", () => {
+  const release = { current: "1.0.0", latest: "1.1.0", hasUpdate: true };
+
+  test("shows both versions and requires an explicit installation action", async () => {
+    const response = updatePage(release, "1.0.0", { csrf: "update-token" });
+    const html = await response.text();
+    expect(html).toContain("v1.0.0");
+    expect(html).toContain("v1.1.0");
+    expect(html).toContain('onclick="updateNow()">Install update</button>');
+    expect(html).toContain("/releases/latest");
+    expect(response.headers.get("set-cookie")).toContain(csrfCookieHeader("update-token"));
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    for (const script of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
+      expect(() => new Function(script[1]!)).not.toThrow();
+    }
+  });
+
+  test("distinguishes up-to-date, offline, and development states without offering installation", async () => {
+    const cases = [
+      { info: { ...release, latest: "1.0.0", hasUpdate: false }, version: "1.0.0", message: "Up to date" },
+      { info: null, version: "1.0.0", message: "Unable to check" },
+      { info: null, version: "0.0.0-dev", message: "Development build" },
+    ];
+    for (const { info, version, message } of cases) {
+      const html = await updatePage(info, version).text();
+      expect(html).toContain(message);
+      expect(html).not.toContain('onclick="updateNow()"');
+      expect(html).not.toContain('id="clp-addons-update-notice"');
+    }
+  });
+
+  test("resumes progress after navigation and prevents a second installation while a job runs", async () => {
+    const job = {
+      id: "20260908T120000Z-aaaaaa", kind: "update", addon: "", state: "running",
+      step: "Downloading release", error: "", createdAt: "", startedAt: "", finishedAt: "",
+    };
+    const html = await updatePage(release, "1.0.0", { job }).text();
+    expect(html).toContain("watchJob('20260908T120000Z-aaaaaa')");
+    expect(html).toContain('onclick="updateNow()" disabled');
+    expect(html).not.toContain('id="job-card" hidden');
+    const failure = await updatePage(release, "1.0.0", { job: { ...job, state: "failed", error: "checksum mismatch" } }).text();
+    expect(failure).toContain("checksum mismatch");
+    expect(failure).toContain('onclick="updateNow()">Install update</button>');
   });
 });
 

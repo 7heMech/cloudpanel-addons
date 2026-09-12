@@ -1829,13 +1829,15 @@ reasons: CloudPanel itself does not auto-update, and matching the panel's
 behaviour is an explicit goal of this project; and replacing the binary restarts
 the manager, which would drop in-flight requests on the manager socket at a
 moment nobody chose. So the manager notifies and stops there -- `checkCliUpdate`
-and the banner in `renderLayout`.
+and the shared header controls in `renderLayout`.
 
 **A button, once the page behind it is administrator-only.** With the
 administrator gate at the socket boundary (`adminGate` in `cmdServe`) every
-route the manager serves is already restricted to `ROLE_ADMIN`, so the banner's
-"Update now" is not a new trust boundary; it is the notice the manager already
-drew, with the command the operator would have typed attached to it. It reuses
+route the manager serves is already restricted to `ROLE_ADMIN`. The header's
+"Changelog" link opens the release notes; "Update" opens `/addons/update` for
+version details and an explicit "Install update" action. The update page is not
+a new trust boundary; it is the notice the manager already drew, with the
+command the operator would have typed attached to it. It reuses
 `cmdUpdate` outright rather than growing a second downloader: one verified
 download path, or eventually two that disagree about what verification means.
 `guardMutation` applies the same origin and CSRF checks the addons use, so
