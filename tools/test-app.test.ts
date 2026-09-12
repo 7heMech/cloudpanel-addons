@@ -39,6 +39,7 @@ import {
   vhostTemplateBodyFromContent,
 } from "../addons/stager/action";
 import { makeSnapshot, portHolder, pruneSnapshots } from "../addons/instatic/action";
+import { LOGIN_THEME_TARGETS } from "../addons/login-theme/inject/targets";
 
 function check(label: string, cond: boolean, detail = ""): void {
   test.serial(label, () => {
@@ -1327,7 +1328,7 @@ console.log("\n== addons are told apart by the path they are mounted at ==");
 // hands it a sub-path of "-notes", which is a 404 from somewhere unexpected
 // rather than from the router.
 {
-  const all = ["instatic", "stager"];
+  const all = ["instatic", "stager", "login-theme"];
   const hit = (p: string) => {
     const m = splitMount(p, all);
     return m ? `${m.addon}:${m.rest}` : "none";
@@ -1619,6 +1620,10 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   check("headerTarget embeds the configured version", snip.includes("\"0.9.3\""));
   check("headerTarget uses Addons label", snip.includes(">Addons</a>"));
   check("headerTarget points to manager URL", snip.includes('href="https://addons.example.com/addons/"'));
+  check("header update badge points to the manager, not GitHub releases",
+    snip.includes('var addonsUrl = "https://addons.example.com/addons/"') && !snip.includes("github.com/7heMech/cloudpanel-addons/releases"));
+  check("header update badge is constrained and compact",
+    snip.includes("max-width:min(240px, calc(100% - 20px))") && snip.includes("text-overflow:ellipsis") && snip.includes('"Update v" + ver'));
   const guardStart = snip.indexOf("{% if is_granted('ROLE_ADMIN') %}");
   const guardEnd = snip.indexOf("{% endif %}");
   check("headerTarget wraps the manager nav in the native admin guard", guardStart >= 0 && guardEnd > guardStart);
@@ -1641,4 +1646,12 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   const emptyRes = indexPage([]);
   const emptyHtml = await emptyRes.text();
   check("empty indexPage shows no addons notice", emptyHtml.includes("No addons are currently available."));
+
+  const loginTarget = LOGIN_THEME_TARGETS[0]!;
+  const loginSnippet = loginTarget.snippet("/addons/login-theme");
+  check("login-theme targets CloudPanel's login template", loginTarget.template === "Frontend/Security/login.html.twig");
+  check("login-theme follows device dark-mode changes",
+    loginSnippet.includes("prefers-color-scheme: dark") &&
+    loginSnippet.includes('classList.toggle("dark", media.matches)') &&
+    loginSnippet.includes('addEventListener("change", syncDeviceTheme)'));
 }

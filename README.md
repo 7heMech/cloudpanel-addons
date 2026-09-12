@@ -11,6 +11,7 @@ Deploy Instatic instances and create staging sites directly in
 | --- | --- |
 | [Instatic](https://github.com/CoreBunch/Instatic) | Deploy and manage Docker-based Instatic instances with pinned versions, status, logs, and updates. |
 | Stager | Clone PHP, static, and reverse-proxy sites with background jobs and live logs. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
+| Login theme | Make the CloudPanel login page follow the browser or operating system's light/dark preference. |
 
 ## Installation
 
@@ -24,7 +25,7 @@ The installer prompts you to select addons and verifies release checksums and
 build provenance. Instatic requires Docker; the installer offers to install it
 when needed.
 
-For unattended installation of both addons, including Docker if needed:
+For unattended installation of Instatic and Stager, including Docker if needed:
 
 ```bash
 curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download/install.sh \
@@ -49,8 +50,9 @@ For command-line management, run as root:
 | `clp-addons repair` | Restore service configuration and panel integration. |
 | `clp-addons uninstall <addon> --yes` | Remove an addon while preserving its instance data. |
 
-Replace `<addon>` with `instatic` or `stager`. Use `clp-addons --help` for all
-options, including version selection and data removal.
+Replace `<addon>` with `instatic`, `stager`, or `login-theme`. Use
+`clp-addons --help` for all options, including version selection and data
+removal.
 
 ## Development
 

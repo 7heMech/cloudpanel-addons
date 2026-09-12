@@ -1,11 +1,12 @@
 import type { AddonTarget } from "../cli/paths";
 import { esc, escJs } from "./app-http";
 
-export function headerUpdateScript(version: string): string {
+export function headerUpdateScript(version: string, addonsUrl = "/addons/"): string {
   return `(function() {
   if (window.__clpAddonsUpdateInit) return;
   window.__clpAddonsUpdateInit = true;
   var currentVer = "${escJs(version)}";
+  var addonsUrl = "${escJs(addonsUrl)}";
   if (!currentVer || currentVer === "0.0.0-dev") return;
 
   function render(ver) {
@@ -13,12 +14,10 @@ export function headerUpdateScript(version: string): string {
     var el = document.createElement("a");
     el.id = "clp-addons-update-notice";
     el.className = "clp-addon-update-badge";
-    el.href = "https://github.com/7heMech/cloudpanel-addons/releases";
-    el.target = "_blank";
-    el.rel = "noopener";
-    el.title = "clp-addons v" + ver + " available! Run 'clp-addons update' as root to upgrade.";
+    el.href = addonsUrl;
+    el.title = "clp-addons v" + ver + " available. Open Addons to update.";
     el.innerHTML = '<span class="dot"></span><span class="update-label"></span><span class="close-btn" title="Dismiss">×</span>';
-    el.querySelector(".update-label").textContent = "Update clp-addons: v" + ver;
+    el.querySelector(".update-label").textContent = "Update v" + ver;
 
     var close = el.querySelector(".close-btn");
     if (close) {
@@ -77,14 +76,15 @@ export function headerTarget(version: string): AddonTarget {
     snippet: (url) => `
       {% if is_granted('ROLE_ADMIN') %}
       <style>
-        .clp-addon-update-badge { display:inline-flex; align-items:center; gap:5px; margin-left:15px; padding:2px 10px; font-size:12px; font-weight:600; color:#10b981; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.35); border-radius:12px; text-decoration:none; vertical-align:middle; transition:all 0.15s ease; }
-        .clp-addon-update-badge:hover { background:rgba(16,185,129,0.22); color:#10b981; text-decoration:none; }
-        .clp-addon-update-badge .dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:#10b981; }
-        .clp-addon-update-badge .close-btn { margin-left:4px; opacity:0.6; cursor:pointer; padding:0 2px; }
-        .clp-addon-update-badge .close-btn:hover { opacity:1; }
+        .header .nav-link-container a.clp-addon-update-badge { display:inline-flex; flex:0 1 auto; min-width:0; align-items:center; gap:5px; box-sizing:border-box; max-width:min(240px, calc(100% - 20px)); height:28px; margin:0 0 0 10px; padding:0 8px; overflow:hidden; color:#10b981; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.35); border-radius:12px; font-size:12px; font-weight:600; line-height:1.2; text-decoration:none; white-space:nowrap; vertical-align:middle; transition:all 0.15s ease; }
+        .header .nav-link-container a.clp-addon-update-badge:hover { background:rgba(16,185,129,0.22); color:#10b981; text-decoration:none; }
+        .header .nav-link-container a.clp-addon-update-badge .dot { display:inline-block; flex:0 0 7px; width:7px; height:7px; border-radius:50%; background:#10b981; }
+        .header .nav-link-container a.clp-addon-update-badge .update-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .header .nav-link-container a.clp-addon-update-badge .close-btn { flex:0 0 auto; margin-left:2px; opacity:0.6; cursor:pointer; padding:0 2px; line-height:1; }
+        .header .nav-link-container a.clp-addon-update-badge .close-btn:hover { opacity:1; }
       </style>
       <a href="${esc(url)}" class="clp-addon-nav" title="Addons">Addons</a>
-      <script>${headerUpdateScript(version || process.env.CLP_ADDONS_VERSION || "")}</script>
+      <script>${headerUpdateScript(version || process.env.CLP_ADDONS_VERSION || "", url)}</script>
       {% endif %}`,
   };
 }

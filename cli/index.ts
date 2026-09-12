@@ -20,6 +20,7 @@ import { fatal, Fatal, log, parseFlags, requireRoot, tryRun, writeAtomic } from 
 import { runRecon } from "./recon";
 import { authenticateRequest, type AuthenticatedRequest } from "../lib/sso-auth";
 import { handle as handleInstatic } from "../addons/instatic/app/index";
+import { handle as handleLoginTheme } from "../addons/login-theme/app/index";
 import { handle as handleStager } from "../addons/stager/app/index";
 import { splitMount } from "../lib/mount";
 import { SECURITY_HEADERS, csrfCookieHeader, esc, escJs, guardMutation, newCsrfToken } from "../lib/app-http";
@@ -43,6 +44,7 @@ type AddonHandler = (
 
 const MANAGERS: Record<string, AddonHandler> = {
   instatic: handleInstatic,
+  "login-theme": handleLoginTheme,
   stager: handleStager,
 };
 
@@ -784,7 +786,7 @@ async function cmdServe(): Promise<never> {
         // that has just finished enabling an addon has not yet restarted this
         // process, and a page that still denied the addon existed would be
         // wrong for exactly as long as anybody was likely to look at it.
-        const enabled = ADDON_NAMES.filter((name) => existsSync(ADDONS[name]!.configFile) && MANAGERS[name]);
+        const enabled = ADDON_NAMES.filter((name) => existsSync(ADDONS[name]!.configFile));
         response = indexPage(enabled, notice, {
           available: ADDON_NAMES.filter((name) => !enabled.includes(name)),
           job: await latestManagerJobView(),
@@ -813,6 +815,7 @@ async function cmdServe(): Promise<never> {
 
 const MANAGER_INDEX_CSS = `
 .addon-card .actions { margin-top: auto; }
+.addon-card .addon-status { align-self: center; }
 .addon-section { margin-top: 30px; }
 .addon-section h2 { margin: 0 0 20px; font-size: 20px; }
 #job-card pre { max-height: 300px; }
@@ -880,8 +883,9 @@ function addonCard(name: string, enabled: boolean): string {
   if (!spec) return "";
   const title = spec.title ?? spec.name;
   const description = spec.description ? `<p>${esc(spec.description)}</p>` : "";
+  const mounted = MANAGERS[spec.name] !== undefined;
   const actions = enabled
-    ? `<a class="btn btn-primary btn-lg" href="${esc(`${mountPath(spec.name)}/`)}">Open ${esc(title)}</a>
+    ? `${mounted ? `<a class="btn btn-primary btn-lg" href="${esc(`${mountPath(spec.name)}/`)}">Open ${esc(title)}</a>` : '<span class="badge state-running addon-status">Enabled</span>'}
     <button class="btn btn-danger btn-lg" type="button" onclick="disableAddon('${escJs(spec.name)}')">Disable</button>`
     : `<button class="btn btn-primary btn-lg" type="button" onclick="enableAddon('${escJs(spec.name)}')">Enable ${esc(title)}</button>`;
   return `<article class="card addon-card">

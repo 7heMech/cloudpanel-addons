@@ -84,7 +84,7 @@ const server = Bun.serve({
           }
         : null;
       return indexPage(enabled, notice, {
-        available: ["instatic", "stager"].filter((name) => !enabled.includes(name)),
+        available: ["instatic", "stager", "login-theme"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
