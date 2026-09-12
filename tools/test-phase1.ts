@@ -156,6 +156,19 @@ check(
     },
   }))) === 403,
 );
+check(
+  "guardMutation rejects spoofed X-Forwarded-Host header",
+  responseStatus(guardMutation(new Request("https://panel.example:8443/addons/stager/api/clones", {
+    method: "POST",
+    headers: {
+      Origin: "https://evil.example:8443",
+      Host: "panel.example:8443",
+      "X-Forwarded-Host": "evil.example:8443",
+      Cookie: "clp_addons_csrf=csrf_token",
+      "x-clp-addons-csrf": "csrf_token",
+    },
+  }))) === 403,
+);
 
 console.log("== CloudPanel SSO validates reconstructed sessions structurally ==");
 const fixture = (name: string): Buffer => Buffer.from(

@@ -158,11 +158,6 @@ export function jobsView(
   snapshotTakenAt = ""
 ): string {
   const active = jobs.filter((j) => j.state === "queued" || j.state === "running").length;
-  const staleNotice =
-    snapshotAge > 3600 && snapshotAge !== Infinity
-      ? `<div class="notice">The panel snapshot is ${Math.floor(snapshotAge / 60)} minutes old.
-         Run <span class="mono">clp-addons repair</span> as root to refresh it.</div>`
-      : "";
   const rows = jobs
     .map(
       (j) => {
@@ -188,7 +183,6 @@ export function jobsView(
 
   return `
     <div class="page-heading"><div><h1>Staging sites</h1><p>Clone a site to test changes before going live.</p></div><a class="btn btn-primary" href="${BASE}/new">+ New staging site</a></div>
-    ${staleNotice}
     <div class="card">
       <div class="stats">
         <div class="stat"><div class="label">Clones on record</div><div class="value">${jobs.length}</div></div>

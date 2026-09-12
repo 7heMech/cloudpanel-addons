@@ -288,14 +288,6 @@ export function dashboardView(
   const behind = (tag: string) => latest !== null && isNewerThan(latest, tag);
   const outdated = instances.filter((i) => behind(i.tag)).length;
 
-  // A stale snapshot means the port list the allocator is working from may no
-  // longer match the panel. Say so rather than quietly allocating against it.
-  const staleNotice =
-    snapshotAge > 3600
-      ? `<div class="notice">The panel snapshot is ${Math.floor(snapshotAge / 60)} minutes old.
-         Run <span class="mono">clp-addons repair</span> as root to refresh it before creating a site.</div>`
-      : "";
-
   const rows = instances
     .map((i) => {
       const missing = isInstanceMissing(i, snapshotAge, panelSites, snapshotTakenAt);
@@ -327,7 +319,7 @@ export function dashboardView(
     <button class="btn${behind(i.tag) ? " btn-update" : ""}" onclick="askUpdate('${escJs(i.domain)}','${escJs(i.tag)}')">Update</button>
     <button class="btn" onclick="takeSnapshot('${escJs(i.domain)}')" title="Create a backup snapshot of the SQLite database and instance data">Snapshot</button>
     <button class="btn" onclick="act('${escJs(i.domain)}','recreate')" title="Rebuild the container from the recorded version without touching the data">Recreate</button>
-    <button class="btn" onclick="showLogs('${escJs(i.domain)}', ${i.port})">Logs</button>
+    <button class="btn" onclick="showLogs('${escJs(i.domain)}', '${escJs(String(i.port ?? ""))}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${escJs(i.domain)}')">Delete</button>
   </div></details></td>
 </tr>`;
@@ -356,7 +348,7 @@ export function dashboardView(
     <div class="hint">latest is ${esc(latest)}</div>
   </div>`;
 
-  return `<div class="page-heading"><div><h1>Instatic sites</h1><p>Create and manage your Instatic instances.</p></div><a class="btn btn-primary" href="${BASE}/new">+ New site</a></div>${staleNotice}${versionNotice}
+  return `<div class="page-heading"><div><h1>Instatic sites</h1><p>Create and manage your Instatic instances.</p></div><a class="btn btn-primary" href="${BASE}/new">+ New site</a></div>${versionNotice}
 <div class="card stats">
   <div class="stat"><div class="label">Instances</div><div class="value">${instances.length}</div></div>
   <div class="stat"><div class="label">Running</div><div class="value" style="color:var(--ok)">${running}</div></div>

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -149,6 +149,28 @@ describe("Gateway Protocol & Server", () => {
       expect(Array.isArray(res.data?.sites)).toBe(true);
       expect(Array.isArray(res.data?.allocatedPorts)).toBe(true);
       expect(res.data?.portRange).toEqual({ min: 39000, max: 39999 });
+
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("callGatewayPanelInfo masks internal sqlite or path errors", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clp-gateway-panel-err-"));
+    const sockPath = join(dir, "gateway.sock");
+
+    try {
+      const server = createAuthActionServer({
+        getPanelInfo: () => {
+          throw new Error("unable to create panel database snapshot /home/clp/data/db.sq3: disk I/O error");
+        },
+      });
+      await new Promise<void>((resolve) => server.listen(sockPath, resolve));
+
+      const res = await callGatewayPanelInfo({ socketPath: sockPath, timeout: 2000 });
+      expect(res.ok).toBe(false);
+      expect(res.error).toBe("failed to retrieve panel information");
 
       await new Promise<void>((resolve) => server.close(() => resolve()));
     } finally {
