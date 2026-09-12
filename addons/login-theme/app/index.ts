@@ -48,8 +48,8 @@ export async function handle(
       </div>
       <div class="card">
         <div class="card-header"><h2>Device theme enabled</h2></div>
-        <p>The CloudPanel login page now follows your device theme automatically. It updates if the device switches between light and dark mode while the page is open.</p>
-        <p class="hint">This addon uses CloudPanel's existing dark-mode stylesheet and only adds the device-preference detection needed on the login page.</p>
+        <p>The first time a browser reaches the CloudPanel login page, the panel's theme is set from that device's light or dark preference. From then on the theme switch in the header owns the setting, exactly as it does without this addon.</p>
+        <p class="hint">This addon adds no styling of its own: it uses CloudPanel's dark-mode stylesheet and writes the same theme cookie the panel's own switch writes.</p>
         <a class="btn btn-primary" href="/addons/">Back to Addons</a>
       </div>
     </div>`, newCsrfToken(), 200, updateNotice);

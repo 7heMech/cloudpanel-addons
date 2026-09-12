@@ -39,7 +39,6 @@ import {
   vhostTemplateBodyFromContent,
 } from "../addons/stager/action";
 import { makeSnapshot, portHolder, pruneSnapshots } from "../addons/instatic/action";
-import { LOGIN_THEME_TARGETS } from "../addons/login-theme/inject/targets";
 
 function check(label: string, cond: boolean, detail = ""): void {
   test.serial(label, () => {
@@ -1676,12 +1675,4 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   const emptyRes = indexPage([]);
   const emptyHtml = await emptyRes.text();
   check("empty indexPage shows no addons notice", emptyHtml.includes("No addons are currently available."));
-
-  const loginTarget = LOGIN_THEME_TARGETS[0]!;
-  const loginSnippet = loginTarget.snippet("/addons/login-theme");
-  check("login-theme targets CloudPanel's login template", loginTarget.template === "Frontend/Login/login.html.twig");
-  check("login-theme follows device dark-mode changes",
-    loginSnippet.includes("prefers-color-scheme: dark") &&
-    loginSnippet.includes('classList.toggle("dark", media.matches)') &&
-    loginSnippet.includes('addEventListener("change", syncDeviceTheme)'));
 }
