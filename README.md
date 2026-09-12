@@ -164,6 +164,8 @@ logged in to CloudPanel. The injected navigation entries point to the same
 origin. The panel's own TLS configuration protects the connection; addon
 installation does not request or manage a separate certificate.
 
+![CloudPanel Addons Manager](docs/screenshots/addons-empty.png)
+
 ## Development
 
 ```bash

@@ -22,3 +22,7 @@ recon*.txt
 *.pem
 *.key
 SHA256SUMS
+
+# Session logs & scratch notes
+codex-session*
+last-session*
