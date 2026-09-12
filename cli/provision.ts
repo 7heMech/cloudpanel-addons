@@ -349,6 +349,12 @@ export function warnIfPanelSessionUnreadable(
   }
 }
 
+/**
+ * Create the manager's runtime and state directories and enforce their permissions.
+ *
+ * Removes the obsolete disk snapshot when present and, when requested, also
+ * verifies that the fixed CloudPanel session directory is safe to use.
+ */
 export function ensureDirs(
   specs: AddonSpec[] = [],
   verifySession = false,

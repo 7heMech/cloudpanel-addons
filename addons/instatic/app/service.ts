@@ -80,6 +80,7 @@ export interface InstaticJobView {
 }
 
 export const instaticService = {
+  /** Fetch current panel state and report how many seconds ago it was collected. */
   async snapshot(): Promise<{ snap: PanelSnapshot; ageSeconds: number }> {
     const snap = await fetchPanelInfo();
     return { snap, ageSeconds: snapshotAgeSeconds(snap) };

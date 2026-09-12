@@ -250,8 +250,11 @@ export async function callGatewayAction<T = unknown>(
 }
 
 /**
- * Communicates with the root gateway daemon to fetch real-time panel information
- * (database sites, allocated ports, and active listeners) without disk snapshots.
+ * Request current panel sites and occupied ports without using a disk snapshot.
+ *
+ * The request normally uses the root gateway socket. A root process falls back to
+ * collecting the data locally when that socket is absent. Operational failures are
+ * returned as unsuccessful action results rather than thrown.
  */
 export async function callGatewayPanelInfo(
   options: GatewayClientOptions = {},

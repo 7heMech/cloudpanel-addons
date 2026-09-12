@@ -709,6 +709,12 @@ export async function handleManagerRoute(req: Request, path: string, server: Ser
   return null;
 }
 
+/**
+ * Serve the manager and enabled addons over the shared UNIX socket.
+ *
+ * The socket is created under a restrictive temporary umask before its final
+ * ownership and mode are applied. The returned promise intentionally never settles.
+ */
 async function cmdServe(): Promise<never> {
   // Serving nothing is a legitimate state, not a failed start. Every addon is
   // compiled in, so a manager with none of them enabled still has a job: it is

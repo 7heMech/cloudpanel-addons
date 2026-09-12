@@ -54,6 +54,10 @@ function databaseExists(databasePath: string): boolean {
   }
 }
 
+/**
+ * Run a panel-table query, treating an absent optional table as an empty result.
+ * Other query failures throw an error that identifies the table and its requiredness.
+ */
 function queryRows<ReturnType>(db: Database, sql: string, table: string, optional = false): ReturnType[] {
   try {
     return db.query<ReturnType, []>(sql).all();
@@ -180,8 +184,11 @@ export function readPanelDatabase(databasePath = PANEL_DB): PanelDatabaseSnapsho
 }
 
 /**
- * Gather live panel information in real time directly from CloudPanel's
- * SQLite database and active listeners.
+ * Collect current sites and occupied ports from CloudPanel, addon state, and TCP listeners.
+ *
+ * Reading the default CloudPanel database requires root. Failures to inspect or query
+ * that database are thrown; unreadable addon directories and unavailable listener data
+ * are omitted from the result.
  */
 export function getLivePanelInfo(databasePath = PANEL_DB): PanelSnapshot {
   if (process.getuid && process.getuid() !== 0 && databasePath === PANEL_DB) {
