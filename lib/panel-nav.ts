@@ -11,12 +11,36 @@ export function headerUpdateScript(version: string, addonsUrl = "/addons/"): str
   if (!currentVer || currentVer === "0.0.0-dev") return;
 
   function isNewer(latest) {
-    if (typeof latest !== "string" || !/^v?[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/.test(latest)) return false;
-    var pa = latest.replace(/^v/, "").split(/[-+]/)[0].split(".").map(Number);
-    var pb = currentVer.replace(/^v/, "").split(/[-+]/)[0].split(".").map(Number);
+    function parse(ver) {
+      var match = ver.match(/^v?([0-9]+)\\.([0-9]+)\\.([0-9]+)(?:-([0-9A-Za-z.-]+))?(?:\\+[0-9A-Za-z.-]+)?$/);
+      if (!match) return null;
+      return { core: [Number(match[1]), Number(match[2]), Number(match[3])], pre: match[4] ? match[4].split(".") : null };
+    }
+    var a = parse(latest);
+    var b = parse(currentVer);
+    if (!a || !b) return false;
+    var pa = a.core;
+    var pb = b.core;
     for (var i = 0; i < 3; i++) {
       var diff = (pa[i] || 0) - (pb[i] || 0);
       if (diff !== 0) return diff > 0;
+    }
+    if (!a.pre && !b.pre) return false;
+    if (!a.pre) return true;
+    if (!b.pre) return false;
+    for (var j = 0; j < Math.max(a.pre.length, b.pre.length); j++) {
+      if (a.pre[j] === undefined) return true;
+      if (b.pre[j] === undefined) return false;
+      var aNumeric = /^[0-9]+$/.test(a.pre[j]);
+      var bNumeric = /^[0-9]+$/.test(b.pre[j]);
+      if (aNumeric && bNumeric) {
+        var preDiff = Number(a.pre[j]) - Number(b.pre[j]);
+        if (preDiff !== 0) return preDiff > 0;
+      } else if (aNumeric !== bNumeric) {
+        return !aNumeric;
+      } else if (a.pre[j] !== b.pre[j]) {
+        return a.pre[j] > b.pre[j];
+      }
     }
     return false;
   }

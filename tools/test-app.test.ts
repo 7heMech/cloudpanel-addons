@@ -101,6 +101,8 @@ test("native header rechecks cached releases against the installed version", () 
   for (const [current, latest, expected] of [
     ["1.0.0", "1.1.0", true], ["1.1.0", "1.1.0", false],
     ["1.2.0", "1.1.0", false], ["1.0.0+build.7", "1.0.1", true],
+    ["1.0.0-rc.1", "1.0.0", true], ["1.0.0", "1.0.0-rc.1", false],
+    ["1.0.0-rc.1", "1.0.0-rc.2", true], ["1.0.0-alpha.2", "1.0.0-alpha.10", true],
     ["0.0.0-dev", "1.1.0", false], ["1.0.0", "<script>bad</script>", false],
   ] as const) {
     let rendered = false;
