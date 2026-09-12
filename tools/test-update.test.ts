@@ -52,6 +52,7 @@ const artifactChecksums = Object.fromEntries(installedArtifacts.map(({ name, pat
 const artifactManifest = JSON.stringify({ version: 1, tag: "1.2.3", artifacts: artifactChecksums });
 const originalLstatSync = nodeFs.lstatSync;
 const originalReadFileSync = nodeFs.readFileSync;
+class TestFatal extends Error {}
 
 mock.module("node:fs", () => ({
   ...nodeFs,
@@ -93,7 +94,10 @@ mock.module("../cli/release", () => ({
   verifyAttestation: async () => {
     calls.push("verifyAttestation");
   },
-  loadLocal: () => [],
+  loadLocal: (_dir: string, names: string[]) => {
+    calls.push("loadLocal");
+    return names.map((name) => ({ name, bytes: Buffer.from(name, "utf-8") }));
+  },
 }));
 
 mock.module("../cli/provision", () => ({
@@ -138,7 +142,7 @@ mock.module("../cli/inject", () => ({
 }));
 
 mock.module("../cli/util", () => ({
-  Fatal: class Fatal extends Error {},
+  Fatal: TestFatal,
   fatal: (message: string): never => { throw new Error(message); },
   log: { step: () => {}, ok: (msg: string) => { calls.push(`log.ok:${msg}`); }, warn: () => {}, err: () => {}, plain: () => {} },
   parseFlags: (argv: string[]) => {
@@ -148,11 +152,11 @@ mock.module("../cli/util", () => ({
       const equal = arg.indexOf("=");
       flags[arg.slice(2, equal === -1 ? undefined : equal)] = equal === -1 ? true : arg.slice(equal + 1);
     }
-    return { positional: [], flags };
+    return { positional: argv.filter((arg) => !arg.startsWith("--")), flags };
   },
   requireRoot: () => {},
   tryRun: () => ({ ok: true, out: "" }),
-  writeAtomic: () => {},
+  writeAtomic: (path: string) => calls.push(`writeAtomic:${path}`),
 }));
 
 mock.module("../lib/panel-snapshot", () => ({
@@ -164,7 +168,54 @@ mock.module("../lib/panel-snapshot", () => ({
   }),
 }));
 
-const { cmdUpdate } = await import("../cli/index");
+const { cmdInstall, cmdUpdate } = await import("../cli/index");
+
+test("install enables bundled addons with no release checks or gh, even when all addons were disabled", async () => {
+  for (const enabled of [true, false]) {
+    calls.length = 0;
+    resetProvisioning();
+    hasInstalledAddon = enabled;
+    artifactsAvailable = false;
+    await cmdInstall(["stager"]);
+    expect(calls).not.toContain("resolveRelease");
+    expect(calls).not.toContain("fetchVerified");
+    expect(calls).not.toContain("verifyAttestation");
+    expect(calls).not.toContain("loadLocal");
+    expect(calls).not.toContain(`writeAtomic:${CLI_BIN}`);
+    for (const name of ["ensureDirs", "ensureAuthHelperReady", "writeConfig:stager", "installUnits", "startUnits", "reconcile", "reconcileNginxProxy"]) {
+      expect(calls).toContain(name);
+    }
+  }
+});
+
+test("install with an explicit release verifies artifacts before replacing the binary", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  hasInstalledAddon = false;
+  await cmdInstall(["stager", "--version=v1.2.3"]);
+  expect(calls).toContain("resolveRelease");
+  expect(calls).toContain("fetchVerified");
+  expect(calls).toContain("verifyAttestation");
+  expect(calls.indexOf(`writeAtomic:${CLI_BIN}`)).toBeGreaterThan(calls.indexOf("verifyAttestation"));
+  expect(calls).toContain("startUnits");
+});
+
+test("bootstrap local artifacts are checked without invoking the remote verifier", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  await cmdInstall(["stager", "--local=/tmp/bootstrap"]);
+  expect(calls).toContain("loadLocal");
+  expect(calls).not.toContain("resolveRelease");
+  expect(calls).not.toContain("verifyAttestation");
+  expect(calls).toContain(`writeAtomic:${CLI_BIN}`);
+  expect(calls).toContain("startUnits");
+});
+
+test.each([{ flags: ["--version"] }, { flags: ["--local"] }, { flags: ["--version=v1.2.3", "--local=/tmp/bootstrap"] }])("install refuses incomplete or conflicting artifact flags %j", async ({ flags }) => {
+  calls.length = 0;
+  await expect(cmdInstall(["stager", ...flags])).rejects.toThrow();
+  expect(calls).not.toContain("writeConfig:stager");
+});
 
 test("an up-to-date update still runs provisioning and reconciliation", async () => {
   calls.length = 0;

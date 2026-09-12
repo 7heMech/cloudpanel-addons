@@ -116,6 +116,26 @@ describe("Gateway Protocol & Server", () => {
     }
   });
 
+  test("production gateway mode rejects a peer that is not the installed manager binary", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clp-gateway-peer-"));
+    const sockPath = join(dir, "gateway.sock");
+
+    try {
+      // The test runner is Bun, not /usr/local/bin/clp-addons. Enforcing the
+      // production policy must therefore fail closed even though this process
+      // can create and connect to the test socket.
+      const server = createAuthActionServer({ enforcePeer: true });
+      await new Promise<void>((resolve) => server.listen(sockPath, resolve));
+
+      const result = await callGatewayPanelInfo({ socketPath: sockPath, timeout: 1000 });
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("valid");
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("callGatewayAuth dispatches structured auth requests over socket", async () => {
     const dir = mkdtempSync(join(tmpdir(), "clp-gateway-auth-"));
     const sockPath = join(dir, "gateway.sock");

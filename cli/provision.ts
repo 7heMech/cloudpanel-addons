@@ -290,7 +290,7 @@ export function ensurePanelSessionReadable(
   }
 
   const uidResult = expectedUid === undefined
-    ? commands.tryRun("getent", ["passwd", PANEL_GROUP])
+    ? commands.tryRun("getent", ["passwd", PANEL_USER])
     : { ok: true, out: String(expectedUid) };
   const uid = expectedUid ?? Number.parseInt(uidResult.out.split(":")[2] ?? "", 10);
   const gidResult = expectedGid === undefined
@@ -300,14 +300,19 @@ export function ensurePanelSessionReadable(
   if (!uidResult.ok || !Number.isInteger(uid) || !gidResult.ok || !Number.isInteger(gid)) {
     fatal(`could not resolve the ${PANEL_GROUP} owner required for CloudPanel sessions`);
   }
-  if (directory.uid !== uid || directory.gid !== gid || (directory.mode & 0o777) !== 0o770) {
-    fatal(`CloudPanel session directory must be owned by ${PANEL_GROUP}:${PANEL_GROUP} with mode 0770: ${sessionDir}`);
+  const trustedOwner = directory.uid === uid || directory.uid === 0;
+  const untrustedGroupWrite = (directory.mode & 0o020) !== 0 && directory.gid !== gid && directory.gid !== 0;
+  if (!trustedOwner || untrustedGroupWrite || (directory.mode & 0o002) !== 0) {
+    const mode = (directory.mode & 0o7777).toString(8).padStart(4, "0");
+    fatal(`CloudPanel session directory must be owned by root or ${PANEL_USER} and writable only by root or ${PANEL_GROUP}: ${sessionDir} (found ${directory.uid}:${directory.gid} mode ${mode})`);
   }
 
   // A fresh install commonly has no live session file. The root helper checks
   // each request's regular-file, owner, size, and expiry safeguards; this
   // readiness check intentionally does not pretend the daemon can read 0600
-  // files directly through its supplementary group.
+  // files directly through its supplementary group. Root can also traverse
+  // 0700/0750/0755 directories; requiring exactly clp:clp 0770 broke safe panel
+  // layouts. Leave CloudPanel's permissions and live sessions untouched.
 }
 
 export function ensureAuthHelperReady(
@@ -457,10 +462,13 @@ export function installedConfig(spec: AddonSpec): boolean {
 
 export function serviceUnit(specs: AddonSpec[]): string {
   const dependencies = [...new Set(specs.flatMap((spec) => spec.requiresUnits ?? []))];
-  const after = ["network-online.target", ...dependencies.map((unit) => `${unit}.service`)];
+  const after = ["network-online.target", AUTH_SOCKET_UNIT, ...dependencies.map((unit) => `${unit}.service`)];
   const env = specs.flatMap((spec) => [
     `Environment=${spec.name.toUpperCase()}_APP_DATA=${spec.stateDir}`,
   ]);
+  // Only the root actions use /run/lock/clp-addons, creating it on demand.
+  // Binding it into this service's namespace prevented startup after /run was
+  // cleared by a reboot, before serve could create the manager socket.
   return `[Unit]
 Description=CloudPanel Addons manager
 After=${after.join(" ")}
@@ -481,7 +489,7 @@ PrivateTmp=yes
 ProtectKernelTunables=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 NoNewPrivileges=yes
-ReadWritePaths=/etc/nginx -/etc/letsencrypt /etc/php /home /run/clp-addons /run/lock/clp-addons /var/backups/clp-addons /var/lib/clp-addons
+ReadWritePaths=/etc/nginx -/etc/letsencrypt /etc/php /home /run/clp-addons /var/backups/clp-addons /var/lib/clp-addons
 ExecStart=/usr/local/bin/clp-addons serve
 Restart=always
 RestartSec=5
@@ -502,10 +510,10 @@ WantedBy=multi-user.target
  * without giving up its own sandbox.
  *
  * Socket activation inverts it: the manager connects as itself, and systemd
- * runs the helper as root on the other end. Accept=yes hands each connection
- * to the helper as stdin/stdout, which is precisely the bounded one-shot
- * contract `action auth` already speaks -- the same single binary, invoked by
- * systemd instead of by sudo.
+ * passes the listening socket to the resident root gateway with Accept=no.
+ * The socket creates its parent directory before the manager takes ownership
+ * through RuntimeDirectory; it must not independently manage that directory's
+ * ownership or lifetime.
  */
 export function authUnits(): { socket: string; service: string } {
   return {
@@ -518,9 +526,7 @@ SocketUser=root
 SocketGroup=${SERVICE_GROUP}
 SocketMode=0660
 Accept=no
-RuntimeDirectory=clp-addons
-RuntimeDirectoryMode=0755
-RuntimeDirectoryPreserve=yes
+DirectoryMode=0755
 
 [Install]
 WantedBy=sockets.target

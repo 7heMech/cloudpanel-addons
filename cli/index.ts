@@ -212,13 +212,19 @@ function dashboardUrl(): string {
 }
 
 /**
- * Installs one addon from local or verified release artifacts and reconciles
- * the shared manager, authentication, and CloudPanel integration.
+ * Enables bundled code by default. Explicit --version/--local requests also
+ * replace the binary with verified artifacts before reconciling provisioning.
  */
 export async function cmdInstall(argv: string[]): Promise<void> {
   requireRoot("install");
   const { positional, flags } = parseFlags(argv);
   const spec = resolveAddon(positional[0]);
+  if (flags.version === undefined && flags.local === undefined) {
+    await applyEnable(spec.name);
+    return;
+  }
+  if (flags.version === true || flags.local === true) fatal("--version and --local require a value");
+  if (flags.version !== undefined && flags.local !== undefined) fatal("use either --version or --local, not both");
   for (const unit of spec.requiresUnits ?? []) {
     if (!tryRun("systemctl", ["is-active", unit]).ok) {
       fatal(`${unit} is not active; install and start it before installing ${spec.name}`);
@@ -326,11 +332,14 @@ export async function applyEnable(name: string): Promise<void> {
   const specs = [...installedAddons().filter((item) => item.name !== spec.name), spec];
 
   ensureServiceUser();
+  removeLegacyInstall();
   ensureDirs(specs, true);
   ensureAuthHelperReady();
   for (const item of specs) writeConfig(item, true);
   reconcilePanelIdentity();
   installUnits(specs);
+  removeLegacyUnits(true);
+  removeLegacyUsers(true);
   ensureDirs(specs);
   reconcileAnchors(false);
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
@@ -957,7 +966,7 @@ function describeJob(job: ManagerJobView): string {
 function usage(): void {
   log.plain(`clp-addons ${CLI_VERSION} — CloudPanel Addons
 
-  clp-addons install <addon> [--version=vX.Y.Z] [--skip-attestation]
+  clp-addons install <addon> [--version=vX.Y.Z] [--skip-attestation] [--local=DIR]
   clp-addons update [--version=vX.Y.Z] [--skip-attestation]   (alias: upgrade)
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status
@@ -970,6 +979,9 @@ function usage(): void {
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}
+
+Install enables bundled addon code without downloading a release. Use update
+to upgrade the binary, or install --version to explicitly select a release.
 
 The manager is served at ${mountPath("instatic").replace("/instatic", "")} through
 the CloudPanel master vhost and authenticates with the CloudPanel cloudpanel session.`);

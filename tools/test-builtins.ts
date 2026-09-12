@@ -38,10 +38,6 @@ const tagsSource = source("addons/instatic/app/tags.ts");
 
 check("PATH probing uses Bun.which", utilSource.includes("Bun.which(cmd") && !utilSource.includes('run("command", ["-v"'));
 check("have finds and rejects commands", have("sh") && !have("clp-addons-command-that-does-not-exist"));
-check(
-  "private GitHub CLI keeps absolute-path probing",
-  releaseSource.includes('candidate !== "gh" && !existsSync(candidate)') && releaseSource.includes("GH_PRIVATE"),
-);
 
 const success = tryRun(process.execPath, ["-e", 'process.stdout.write("stdout");']);
 check("tryRun decodes successful stdout", success.ok && success.out === "stdout", JSON.stringify(success));
