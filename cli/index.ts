@@ -185,6 +185,13 @@ function reconcileAnchors(quiet: boolean, exclude?: string, managerNav = true): 
     }
     if (status.state === "template-absent") {
       if (!quiet) log.warn(`${status.addon}/${status.slug}: ${describeTarget(status)}`);
+      // Left non-fatal for repair/update, which run unattended and may catch
+      // the panel mid-upgrade while cloudpanel.postinst has the app directory
+      // moved aside; the next periodic reconcile heals it. install/enable
+      // check this return value and abort, so a target whose template is
+      // simply absent on this panel build (wrong path, unsupported version)
+      // still surfaces as a failure there instead of a silent no-op.
+      if (injection.target.required) blocked = true;
       continue;
     }
     log.err(`${status.addon}/${status.slug}: ${describeTarget(status)}`);
@@ -262,7 +269,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   removeLegacyUnits(true);
   removeLegacyUsers(true);
   ensureDirs(specs);
-  reconcileAnchors(false);
+  if (!reconcileAnchors(false)) fatal("could not safely patch the required CloudPanel templates");
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
   startUnits();
 
@@ -345,7 +352,7 @@ export async function applyEnable(name: string): Promise<void> {
   removeLegacyUnits(true);
   removeLegacyUsers(true);
   ensureDirs(specs);
-  reconcileAnchors(false);
+  if (!reconcileAnchors(false)) fatal("could not safely patch the required CloudPanel templates");
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
   startUnits();
   log.ok(`${spec.name} enabled`);

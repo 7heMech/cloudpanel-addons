@@ -25,7 +25,7 @@ const DEVICE_THEME_SCRIPT = `
 export const LOGIN_THEME_TARGETS: AddonTarget[] = [
   {
     slug: "login-device-theme",
-    template: "Frontend/Security/login.html.twig",
+    template: "Frontend/Login/login.html.twig",
     // This is the login page's top-level wrapper. Placing the script before it
     // applies the class before the form is painted, avoiding a light flash when
     // the device is already using dark mode.

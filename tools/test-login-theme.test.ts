@@ -3,7 +3,7 @@ import { LOGIN_THEME_TARGETS } from "../addons/login-theme/inject/targets";
 
 test("login theme injects device preference detection into the login wrapper", () => {
   const target = LOGIN_THEME_TARGETS[0]!;
-  expect(target.template).toBe("Frontend/Security/login.html.twig");
+  expect(target.template).toBe("Frontend/Login/login.html.twig");
   expect(target.anchorBefore).toBe('<div class="login-container">');
 
   const snippet = target.snippet("/addons/login-theme");

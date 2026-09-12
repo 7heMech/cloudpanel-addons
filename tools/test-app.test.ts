@@ -1679,7 +1679,7 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
 
   const loginTarget = LOGIN_THEME_TARGETS[0]!;
   const loginSnippet = loginTarget.snippet("/addons/login-theme");
-  check("login-theme targets CloudPanel's login template", loginTarget.template === "Frontend/Security/login.html.twig");
+  check("login-theme targets CloudPanel's login template", loginTarget.template === "Frontend/Login/login.html.twig");
   check("login-theme follows device dark-mode changes",
     loginSnippet.includes("prefers-color-scheme: dark") &&
     loginSnippet.includes('classList.toggle("dark", media.matches)') &&
