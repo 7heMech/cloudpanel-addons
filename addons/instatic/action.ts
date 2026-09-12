@@ -1317,7 +1317,9 @@ async function restoreNativeBackup(action: ParsedInstaticAction, paths: Instatic
     let candidate = false;
     try {
       if (present && !runDiagnostic("docker", ["stop", name])) failAction("could not stop container; current data preserved");
-      copyStorage(storage, previous);
+      // Restores replace only the private database and key. Uploads remain in
+      // htdocs and are already covered by CloudPanel's site-home archive.
+      copyStorage(storage, previous, false);
       if (present) {
         if (!runDiagnostic("docker", ["rename", name, `${name}-prev`])) failAction("could not preserve previous container");
         renamed = true;
@@ -1342,8 +1344,10 @@ async function restoreNativeBackup(action: ParsedInstaticAction, paths: Instatic
       }
       try {
         if (changed) {
-          removeStorage(storage);
-          copyStorage(previous, storage);
+          checkStorage(storage);
+          rmSync(storage.dataDir, { recursive: true, force: true });
+          rmSync(storage.envFile, { force: true });
+          copyStorage(previous, storage, false);
           enforceOwnership(storage, owner);
         }
         if (renamed && !runDiagnostic("docker", ["rename", `${name}-prev`, name])) throw new Error("could not rename previous container");

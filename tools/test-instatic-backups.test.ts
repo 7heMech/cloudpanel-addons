@@ -157,7 +157,7 @@ if (command === 'docker') {
     }
     if (process.env.FAIL_RUN) {
       db.run("UPDATE content SET body='bad migration'");
-      writeFileSync(join(uploads, 'photo.txt'), 'bad media');
+      if (process.env.FAIL_RUN_UPLOADS) writeFileSync(join(uploads, 'photo.txt'), 'bad media');
     }
     db.close();
     writeFileSync(file, JSON.stringify(state));
@@ -237,7 +237,7 @@ test("failed update rolls back the database, uploads and metadata in the site ho
   const f = fixture();
   try {
     f.db.close();
-    const result = action(f, ["update", "--domain", domain, "--tag", "0.0.19"], { FAIL_RUN: "1" });
+    const result = action(f, ["update", "--domain", domain, "--tag", "0.0.19"], { FAIL_RUN: "1", FAIL_RUN_UPLOADS: "1" });
     expect(result.reply.ok).toBe(false);
     expect(rows(f.dbFile)).toEqual(["committed in WAL"]);
     expect(readFileSync(join(f.storage.uploadsDir, "photo.txt"), "utf8")).toBe("original media");
@@ -270,6 +270,7 @@ test("restore rebuilds missing metadata and key from the clean backup instead of
     expect(JSON.parse(readFileSync(f.meta, "utf8"))).toMatchObject({ domain, tag: "0.0.18", port: 39000, storage: "site-home", siteCreatedByAddon: false });
     expect(readFileSync(join(f.storage.uploadsDir, "photo.txt"), "utf8")).toBe("original media");
     expect(existsSync(result.reply.data.previousData)).toBe(true);
+    expect(existsSync(join(result.reply.data.previousData, "uploads"))).toBe(false);
   } finally { f.cleanup(); }
 });
 
@@ -298,12 +299,14 @@ test("failed restore returns to the newer live database and its existing metadat
     f.db.run("INSERT INTO content VALUES ('newer live data')");
     f.db.close();
     const meta = readFileSync(f.meta, "utf8");
+    const uploadInode = statSync(join(f.storage.uploadsDir, "photo.txt")).ino;
     const result = action(f, ["recreate", "--domain", domain, "--from-backup"], { FAIL_RUN: "1" });
     expect(result.reply.ok).toBe(false);
     expect(rows(f.dbFile)).toEqual(["committed in WAL", "newer live data"]);
     expect(readFileSync(f.meta, "utf8")).toBe(meta);
     expect(readFileSync(f.storage.envFile, "utf8")).toBe(key);
     expect(readFileSync(join(f.storage.uploadsDir, "photo.txt"), "utf8")).toBe("original media");
+    expect(statSync(join(f.storage.uploadsDir, "photo.txt")).ino).toBe(uploadInode);
     expect(result.containers).toEqual({ [`instatic-${domain}`]: "running" });
   } finally { f.cleanup(); }
 });
