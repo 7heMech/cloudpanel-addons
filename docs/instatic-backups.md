@@ -104,8 +104,9 @@ capturing both parts.
    ```
 
 This explicit recovery command validates the archive's domain, version, port,
-key and database before replacing data. It restores the clean database instead
-of trusting a file copy of the live SQLite/WAL files, removes stale sidecars,
+key, expected Instatic schema, and database before replacing data. It restores
+the clean database instead of trusting a file copy of the live SQLite/WAL
+files, removes stale sidecars,
 rebuilds missing `/var/lib` metadata, fixes ownership for the current site user,
 pulls the recorded image, and checks the new container's health. Uploads must
 already have been restored. A recovered metadata file does not grant permission

@@ -698,6 +698,43 @@ function sqliteBackup(source: string, destination: string): boolean {
   }
 }
 
+const REQUIRED_INSTATIC_TABLES = [
+  "schema_migrations", "roles", "users", "data_tables", "data_rows", "data_row_versions", "media_assets",
+] as const;
+
+const REQUIRED_INSTATIC_SEEDS = [
+  ["schema_migrations", "001_baseline"],
+  ["roles", "owner"],
+  ["data_tables", "posts"],
+  ["data_tables", "pages"],
+  ["data_tables", "components"],
+] as const;
+
+function hasInstaticSchema(databasePath: string): boolean {
+  let db: Database | undefined;
+  try {
+    db = new Database(databasePath, { readonly: true });
+    const placeholders = REQUIRED_INSTATIC_TABLES.map(() => "?").join(", ");
+    const tables = db.query(`
+      SELECT name FROM sqlite_master
+       WHERE type = 'table' AND name IN (${placeholders});
+    `).all(...REQUIRED_INSTATIC_TABLES) as Array<{ name?: unknown }>;
+    const present = new Set(tables.map((row) => row.name).filter((name): name is string => typeof name === "string"));
+    if (REQUIRED_INSTATIC_TABLES.some((table) => !present.has(table))) return false;
+
+    // These rows are seeded by Instatic's baseline migration. Their presence
+    // separates an actual migrated application database from an arbitrary
+    // SQLite file that merely happens to have similarly named tables.
+    return REQUIRED_INSTATIC_SEEDS.every(([table, id]) =>
+      db!.query(`SELECT 1 FROM ${table} WHERE id = ? LIMIT 1;`).get(id) !== null,
+    );
+  } catch {
+    return false;
+  } finally {
+    try { db?.close(); } catch {}
+  }
+}
+
 function withUmask<T>(mask: number, body: () => T): T {
   const previous = process.umask(mask);
   try {
@@ -1309,8 +1346,10 @@ async function restoreNativeBackup(action: ParsedInstaticAction, paths: Instatic
     const proxy = siteIsOurProxy(domain, port, paths);
     if (!proxy.ok) failAction(`restore the CloudPanel reverse proxy for port ${port} first: ${proxy.reason}`);
     secretKey(incoming.envFile);
-    if (fileHeader(join(stage, "database")) !== "SQLite format 3"
-      || !sqliteBackup(join(stage, "database"), join(incoming.dataDir, "instatic.db"))) {
+    const stagedDatabase = join(stage, "database");
+    if (fileHeader(stagedDatabase) !== "SQLite format 3"
+      || !hasInstaticSchema(stagedDatabase)
+      || !sqliteBackup(stagedDatabase, join(incoming.dataDir, "instatic.db"))) {
       failAction("recovery database is invalid; current data preserved");
     }
     const present = containerExists(name);

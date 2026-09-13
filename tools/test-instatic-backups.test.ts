@@ -41,6 +41,19 @@ function fixture(legacy = false) {
   const db = new Database(dbFile);
   db.run("PRAGMA journal_mode=WAL");
   db.run("PRAGMA wal_autocheckpoint=0");
+  // Keep the fixture structurally close enough to an Instatic database for
+  // restore schema validation, while retaining a tiny content table for the
+  // backup assertions below.
+  db.run("CREATE TABLE schema_migrations (id TEXT PRIMARY KEY)");
+  db.run("INSERT INTO schema_migrations VALUES ('001_baseline')");
+  db.run("CREATE TABLE roles (id TEXT PRIMARY KEY)");
+  db.run("INSERT INTO roles VALUES ('owner')");
+  db.run("CREATE TABLE users (id TEXT PRIMARY KEY)");
+  db.run("CREATE TABLE data_tables (id TEXT PRIMARY KEY)");
+  db.run("INSERT INTO data_tables VALUES ('posts'), ('pages'), ('components')");
+  db.run("CREATE TABLE data_rows (id TEXT PRIMARY KEY)");
+  db.run("CREATE TABLE data_row_versions (id TEXT PRIMARY KEY)");
+  db.run("CREATE TABLE media_assets (id TEXT PRIMARY KEY)");
   db.run("CREATE TABLE content (body TEXT)");
   db.run("INSERT INTO content VALUES ('committed in WAL')");
   return { root, paths, state, meta, storage, dbFile, db, cleanup() { db.close(); rmSync(root, { recursive: true, force: true }); } };
@@ -464,13 +477,16 @@ test("a restored site-home archive recovers on a fresh instance with a different
   } finally { f.cleanup(); }
 });
 
-test("an empty recovery database is rejected before stopping the live container", () => {
+test("a valid SQLite database with the wrong schema is rejected before stopping the live container", () => {
   const f = fixture();
   try {
     const archive = makeNativeBackup(domain, f.paths);
     f.db.close();
     const out = extract(archive, f.root);
-    writeFileSync(join(out, "data", "instatic.db"), "");
+    const replacement = join(out, "data", "instatic.db");
+    rmSync(replacement);
+    const empty = new Database(replacement);
+    empty.close(true);
     execFileSync("tar", ["-czf", archive, "-C", out, "."]);
     const result = action(f, ["recreate", "--domain", domain, "--from-backup"]);
     expect(result.reply.error).toContain("recovery database is invalid");

@@ -942,6 +942,10 @@ backstop and also refreshes the snapshot and the sudoers drop-in.
   live file**, which can capture a database mid-write. The `-wal`/`-shm` pair
   is skipped; `VACUUM INTO` folds committed WAL pages into a standalone file,
   and copying the sidecars alongside it would restore a torn pair.
+- **Restore checks the Instatic schema before stopping the container.** A
+  readable, internally consistent SQLite file with the wrong tables or missing
+  baseline seed rows is still not an application backup and must leave current
+  storage untouched.
 - **Update is snapshot, pull, restart, health check, auto rollback.** The health
   check polls the container, then confirms nginx actually serves the hostname.
   On failure the container logs are captured before rolling back. Auto-update is
