@@ -22,6 +22,7 @@ import {
   STAGER_ALLOWED_VERBS,
   INSTATIC_ALLOWED_VERBS,
   MAINTENANCE_ALLOWED_VERBS,
+  CLOUDFLARE_IPS_ALLOWED_VERBS,
   MANAGER_ALLOWED_VERBS,
 } from "../lib/gateway-protocol";
 import { getLivePanelInfo } from "../lib/panel-snapshot";
@@ -36,6 +37,7 @@ const ALLOWED_VERBS = new Map<string, Set<string>>([
   ["stager", STAGER_ALLOWED_VERBS],
   ["instatic", INSTATIC_ALLOWED_VERBS],
   ["maintenance", MAINTENANCE_ALLOWED_VERBS],
+  ["cloudflare-ips", CLOUDFLARE_IPS_ALLOWED_VERBS],
   ["manager", MANAGER_ALLOWED_VERBS],
 ]);
 

@@ -7,7 +7,7 @@ import {
   ADDON_NAMES, ADDONS, nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
 } from "../cli/paths";
 import {
-  authUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit,
+  authUnits, cloudflareReconcileUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit,
   vhostOwnerAccepted, warnIfPanelSessionUnreadable,
 } from "../cli/provision";
 import { panelUserUid } from "../lib/sso-auth";
@@ -15,6 +15,20 @@ import { panelUserUid } from "../lib/sso-auth";
 // these assertions bound to the real implementation regardless of file order.
 const realProvision = async (): Promise<typeof import("../cli/provision")> =>
   await import("../cli/provision?provision-test-real" as "../cli/provision");
+
+test("Cloudflare new-site reconciliation runs once a minute through the root action", () => {
+  const units = cloudflareReconcileUnits();
+  expect(units.service).toContain("ConditionPathExists=/etc/clp-addons/cloudflare-ips.conf");
+  expect(units.service).toContain("ExecStart=/usr/local/bin/clp-addons action cloudflare-ips reconcile");
+  expect(units.timer).toContain("OnUnitActiveSec=1min");
+});
+
+test("hyphenated addon names produce valid systemd environment variables", () => {
+  const unit = serviceUnit([ADDONS["cloudflare-ips"]!, ADDONS["login-theme"]!]);
+  expect(unit).toContain("Environment=CLOUDFLARE_IPS_APP_DATA=/var/lib/clp-addons/cloudflare-ips");
+  expect(unit).toContain("Environment=LOGIN_THEME_APP_DATA=/var/lib/clp-addons/login-theme");
+  expect(unit).not.toContain("Environment=CLOUDFLARE-IPS_APP_DATA");
+});
 
 const REPO = join(import.meta.dir, "..");
 

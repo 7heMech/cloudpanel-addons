@@ -1426,7 +1426,7 @@ console.log("\n== addons are told apart by the path they are mounted at ==");
 // hands it a sub-path of "-notes", which is a 404 from somewhere unexpected
 // rather than from the router.
 {
-  const all = ["instatic", "stager", "maintenance", "login-theme"];
+  const all = ["cloudflare-ips", "instatic", "stager", "maintenance", "login-theme"];
   const hit = (p: string) => {
     const m = splitMount(p, all);
     return m ? `${m.addon}:${m.rest}` : "none";
@@ -1437,6 +1437,8 @@ console.log("\n== addons are told apart by the path they are mounted at ==");
   check("a sub-path keeps its leading slash", hit("/instatic/api/instances") === "instatic:/api/instances",
     hit("/instatic/api/instances"));
   check("the second addon is reached too", hit("/stager/jobs/abc") === "stager:/jobs/abc", hit("/stager/jobs/abc"));
+  check("the Cloudflare addon is reached too", hit("/cloudflare-ips/api/sites") === "cloudflare-ips:/api/sites",
+    hit("/cloudflare-ips/api/sites"));
   check("a query-free deep path survives", hit("/stager/new") === "stager:/new", hit("/stager/new"));
 
   check("the site root belongs to no addon", hit("/") === "none", hit("/"));

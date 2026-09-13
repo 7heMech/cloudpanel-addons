@@ -6,6 +6,7 @@ import {
   parseGatewayRequest,
   type GatewayRequest,
   INSTATIC_ALLOWED_VERBS,
+  CLOUDFLARE_IPS_ALLOWED_VERBS,
 } from "../lib/gateway-protocol";
 import { callGatewayAuth, callGatewayPanelInfo } from "../lib/gateway-client";
 import { createAuthActionServer } from "../cli/auth-action";
@@ -234,5 +235,10 @@ describe("Gateway Protocol & Server", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("the Cloudflare dashboard cannot invoke the timer-only reconcile verb", () => {
+    expect(CLOUDFLARE_IPS_ALLOWED_VERBS).toEqual(new Set(["list", "set", "policy"]));
+    expect(CLOUDFLARE_IPS_ALLOWED_VERBS.has("reconcile")).toBe(false);
   });
 });

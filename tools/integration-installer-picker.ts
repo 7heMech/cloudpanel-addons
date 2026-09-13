@@ -89,7 +89,7 @@ function extractPicker(source: string): string {
 
 function buildHarness(picker: string): string {
   return `set -euo pipefail
-AVAILABLE_ADDONS=(instatic stager login-theme)
+AVAILABLE_ADDONS=(cloudflare-ips instatic stager login-theme)
 SELECTED=""
 ASSUME_YES=0
 say() { printf '%s\\n' "$*"; }
@@ -108,13 +108,13 @@ interface Case {
 }
 
 const CASES: Case[] = [
-  { name: "all by default", keys: "\n", expected: "instatic,stager,login-theme", term: "xterm" },
-  { name: "arrow and space", keys: "\x1b[B \n", expected: "instatic,login-theme", term: "xterm" },
-  { name: "clear and choose", keys: "n \n", expected: "instatic", term: "xterm" },
-  { name: "select all hotkey", keys: "na\n", expected: "instatic,stager,login-theme", term: "xterm" },
-  { name: "empty cannot submit", keys: "n\na\n", expected: "instatic,stager,login-theme", term: "xterm" },
+  { name: "all by default", keys: "\n", expected: "cloudflare-ips,instatic,stager,login-theme", term: "xterm" },
+  { name: "arrow and space", keys: "\x1b[B \n", expected: "cloudflare-ips,stager,login-theme", term: "xterm" },
+  { name: "clear and choose", keys: "n \n", expected: "cloudflare-ips", term: "xterm" },
+  { name: "select all hotkey", keys: "na\n", expected: "cloudflare-ips,instatic,stager,login-theme", term: "xterm" },
+  { name: "empty cannot submit", keys: "n\na\n", expected: "cloudflare-ips,instatic,stager,login-theme", term: "xterm" },
   { name: "cancel", keys: "q", expected: null, term: "xterm" },
-  { name: "plain terminal", keys: "2\n", expected: "stager", term: "dumb" },
+  { name: "plain terminal", keys: "2\n", expected: "instatic", term: "dumb" },
 ];
 
 interface CaseResult {
