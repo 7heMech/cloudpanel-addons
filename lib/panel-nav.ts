@@ -39,8 +39,12 @@ export function headerUpdateScript(addonsUrl = "/addons/"): string {
   }
 
   var checking = false;
+  var checkAgain = false;
   function check() {
-    if (checking) return;
+    if (checking) {
+      checkAgain = true;
+      return;
+    }
     checking = true;
     fetch("${escJs(statusUrl)}", {
       cache: "no-store",
@@ -48,10 +52,16 @@ export function headerUpdateScript(addonsUrl = "/addons/"): string {
     })
     .then(function(response) { return response.ok ? response.json() : null; })
     .then(function(body) {
-      if (body && body.ok !== false) render(body.data);
+      render(body && body.ok !== false ? body.data : null);
     })
-    .catch(function() {})
-    .finally(function() { checking = false; });
+    .catch(function() { hide(); })
+    .finally(function() {
+      checking = false;
+      if (checkAgain) {
+        checkAgain = false;
+        check();
+      }
+    });
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", check, { once: true });
   else check();

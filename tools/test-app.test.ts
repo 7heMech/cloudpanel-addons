@@ -99,9 +99,15 @@ test("addon theme follows CloudPanel's cookie before the page paints", () => {
 
 test("native header follows the manager's update state and clears a restored stale notice", async () => {
   const listeners: Record<string, (event?: { persisted?: boolean }) => void> = {};
-  let info = { current: "1.0.0", latest: "1.1.0", hasUpdate: true };
+  type UpdateInfo = { current: string; latest: string; hasUpdate: boolean };
+  type FakeResponse = { ok: boolean; json: () => Promise<{ ok: true; data: UpdateInfo }> };
+  let info: UpdateInfo = { current: "1.0.0", latest: "1.1.0", hasUpdate: true };
   let notice: any = null;
   let fetchedUrl = "";
+  let fetchCount = 0;
+  let failure: "http" | "network" | null = null;
+  let holdNext = false;
+  let releaseHeld: ((response: FakeResponse) => void) | null = null;
   const label = { textContent: "" };
   const badge = { title: "" };
   const element = {
@@ -123,9 +129,20 @@ test("native header follows the manager's update state and clears a restored sta
     createElement: () => ({ innerHTML: "", firstElementChild: element }),
   };
   const window = { addEventListener: (name: string, listener: (event?: { persisted?: boolean }) => void) => { listeners[name] = listener; } };
+  const responseFor = (data: UpdateInfo): FakeResponse => ({
+    ok: true,
+    json: async () => ({ ok: true, data }),
+  });
   const fetch = async (url: string) => {
     fetchedUrl = url;
-    return { ok: true, json: async () => ({ ok: true, data: info }) };
+    fetchCount++;
+    if (holdNext) {
+      holdNext = false;
+      return new Promise<FakeResponse>((resolve) => { releaseHeld = resolve; });
+    }
+    if (failure === "network") throw new Error("manager unavailable");
+    if (failure === "http") return { ok: false, json: async () => ({ ok: true, data: info }) };
+    return responseFor(info);
   };
 
   new Function("window", "document", "fetch", headerUpdateScript())(window, document, fetch);
@@ -135,8 +152,39 @@ test("native header follows the manager's update state and clears a restored sta
   expect(classes.has("clp-addons-has-update")).toBe(true);
 
   info = { current: "1.1.0", latest: "1.1.0", hasUpdate: false };
-  listeners.pageshow!({ persisted: true });
+  listeners.focus!();
   await Bun.sleep(0);
+  expect(notice).toBeNull();
+  expect(classes.has("clp-addons-has-update")).toBe(false);
+
+  for (const mode of ["http", "network"] as const) {
+    info = { current: "1.0.0", latest: "1.1.0", hasUpdate: true };
+    listeners.focus!();
+    await Bun.sleep(0);
+    expect(notice).not.toBeNull();
+
+    failure = mode;
+    listeners.focus!();
+    await Bun.sleep(0);
+    expect(notice).toBeNull();
+    expect(classes.has("clp-addons-has-update")).toBe(false);
+    failure = null;
+  }
+
+  listeners.focus!();
+  await Bun.sleep(0);
+  expect(notice).not.toBeNull();
+
+  const beforeQueuedCheck = fetchCount;
+  holdNext = true;
+  listeners.pageshow!({ persisted: true });
+  info = { current: "1.1.0", latest: "1.1.0", hasUpdate: false };
+  listeners.focus!();
+  expect(releaseHeld).not.toBeNull();
+  releaseHeld!(responseFor({ current: "1.0.0", latest: "1.1.0", hasUpdate: true }));
+  await Bun.sleep(0);
+  await Bun.sleep(0);
+  expect(fetchCount).toBe(beforeQueuedCheck + 2);
   expect(notice).toBeNull();
   expect(classes.has("clp-addons-has-update")).toBe(false);
 });
