@@ -208,6 +208,7 @@ function typeLabel(t: string): string {
   return t;
 }
 
+/** Renders either the source picker or the configuration form for a new clone. */
 export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], error?: string): string {
   if (!source) {
     const options = sites
@@ -307,6 +308,7 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
     </div></div>`;
 }
 
+/** Renders a clone job's progress, result, credentials, and reconciliation state. */
 export function jobView(
   job: JobView,
   logText: string,

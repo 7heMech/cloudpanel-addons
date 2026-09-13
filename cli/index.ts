@@ -899,6 +899,7 @@ function dismissFailure(id) {
 })();
 `;
 
+/** Renders the manager card for a known addon, or nothing for an unknown name. */
 function addonCard(name: string, enabled: boolean): string {
   const spec = ADDONS[name];
   if (!spec) return "";

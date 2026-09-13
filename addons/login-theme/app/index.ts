@@ -4,6 +4,7 @@ import { mountPath } from "../../../lib/mount";
 
 const BASE = mountPath("login-theme");
 
+/** Wraps login-theme content in the shared manager page and response headers. */
 function page(content: string, csrf: string, status = 200, updateNotice?: { current: string; latest: string } | null): Response {
   return new Response(
     renderLayout("Device theme on first visit", content, {

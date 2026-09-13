@@ -229,6 +229,7 @@ if (document.readyState === 'loading') {
 }
 `;
 
+/** Renders Instatic content inside the shared addon manager chrome. */
 export function layout(
   title: string,
   content: string,
@@ -271,6 +272,7 @@ export function isInstanceMissing(
   return !panelSites.some((s) => s.domain === instance.domain);
 }
 
+/** Renders the Instatic dashboard from instance and current panel inventory. */
 export function dashboardView(
   instances: InstanceView[],
   nextPort: number,
@@ -442,6 +444,7 @@ export function dashboardView(
 </dialog>`;
 }
 
+/** Renders the progress and result of an Instatic site creation job. */
 export function jobView(job: InstaticJobView, logText: string): string {
   const finished = job.state === "done" || job.state === "failed";
 
@@ -493,6 +496,7 @@ export function jobView(job: InstaticJobView, logText: string): string {
     ${finished ? "" : `<div id="job-watch" data-job="${esc(job.id)}" hidden></div>`}`;
 }
 
+/** Renders the new-site form with the allocated port and available versions. */
 export function newInstanceView(nextPort: number, available: AvailableTags): string {
   const options = available.tags.map((t, idx) =>
     `<option value="${esc(t)}"${idx === 0 ? " selected" : ""}>${esc(t)}${idx === 0 ? " (latest)" : ""}</option>`

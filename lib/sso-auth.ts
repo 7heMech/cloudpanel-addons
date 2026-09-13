@@ -75,6 +75,7 @@ function releaseAuthSlot(): void {
   if (next) next();
 }
 
+/** Reserves auth-helper capacity, waiting briefly unless the queue is full. */
 async function acquireAuthSlot(): Promise<(() => void) | null> {
   if (activeAuthHelpers < MAX_AUTH_HELPERS) {
     activeAuthHelpers++;
