@@ -8,6 +8,7 @@ let hasInstalledAddon = true;
 let artifactsAvailable = false;
 let artifactTampered = false;
 let resolvedReleaseTag = "v1.2.3";
+let handoffFailure = false;
 const provisioning = {
   serviceUser: false,
   legacyInstall: true,
@@ -23,6 +24,7 @@ const provisioning = {
 
 function resetProvisioning(): void {
   resolvedReleaseTag = "v1.2.3";
+  handoffFailure = false;
   Object.assign(provisioning, {
     serviceUser: false,
     legacyInstall: true,
@@ -155,6 +157,11 @@ mock.module("../cli/util", () => ({
     return { positional: argv.filter((arg) => !arg.startsWith("--")), flags };
   },
   requireRoot: () => {},
+  run: (cmd: string, args: string[]) => {
+    calls.push(`run:${cmd} ${args.join(" ")}`);
+    if (handoffFailure && cmd === CLI_BIN && args[0] === "update") throw new Error("target handoff failed");
+    return "";
+  },
   tryRun: () => ({ ok: true, out: "" }),
   writeAtomic: (path: string) => calls.push(`writeAtomic:${path}`),
 }));
@@ -169,6 +176,8 @@ mock.module("../lib/panel-snapshot", () => ({
 }));
 
 const { cmdInstall, cmdUpdate } = await import("../cli/index");
+const handoffCall = (tag: string, ...args: string[]) =>
+  `run:${CLI_BIN} ${["update", ...args, `--version=${tag}`, "--no-self-update", "--updated-from=1.2.3"].join(" ")}`;
 
 test("install enables bundled addons with no release checks or gh, even when all addons were disabled", async () => {
   for (const enabled of [true, false]) {
@@ -217,7 +226,7 @@ test.each([{ flags: ["--version"] }, { flags: ["--local"] }, { flags: ["--versio
   expect(calls).not.toContain("writeConfig:stager");
 });
 
-test("an up-to-date update still runs provisioning and reconciliation", async () => {
+test("an update hands provisioning to the installed target binary", async () => {
   calls.length = 0;
   resetProvisioning();
   hasInstalledAddon = true;
@@ -228,6 +237,63 @@ test("an up-to-date update still runs provisioning and reconciliation", async ()
 
   expect(calls).toContain("fetchVerified");
   expect(calls).toContain("verifyAttestation");
+  expect(calls).toContain(handoffCall("v1.2.3", "--version=v1.2.3"));
+  expect(calls.indexOf(handoffCall("v1.2.3", "--version=v1.2.3"))).toBeGreaterThan(calls.indexOf(`writeAtomic:${CLI_BIN}`));
+  expect(calls).not.toContain("reconcile");
+  expect(calls).not.toContain("startUnits");
+  expect(provisioning).toEqual({
+    serviceUser: false,
+    legacyInstall: true,
+    dirs: false,
+    sudoers: false,
+    legacyUnits: true,
+    legacyUsers: true,
+    units: false,
+    running: false,
+    anchors: false,
+    nginx: false,
+  });
+});
+
+test("the update handoff pins a latest release to the version it installed", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  artifactsAvailable = false;
+  resolvedReleaseTag = "v1.3.0";
+
+  await cmdUpdate([]);
+
+  expect(calls).toContain(handoffCall("v1.3.0"));
+  expect(calls).not.toContain("reconcile");
+  expect(calls).not.toContain("startUnits");
+});
+
+test("a failed target-binary handoff fails without outgoing-process provisioning", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  artifactsAvailable = false;
+  resolvedReleaseTag = "v1.3.0";
+  handoffFailure = true;
+
+  try {
+    await expect(cmdUpdate([])).rejects.toThrow("target handoff failed");
+  } finally {
+    handoffFailure = false;
+  }
+
+  expect(calls).toContain(handoffCall("v1.3.0"));
+  expect(calls).not.toContain("reconcile");
+  expect(calls).not.toContain("startUnits");
+});
+
+test("the handed-off target binary finalizes all provisioning before restarting services", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  hasInstalledAddon = true;
+  artifactsAvailable = true;
+
+  await cmdUpdate(["--version=v1.2.3", "--no-self-update", "--updated-from=1.1.0"]);
+
   for (const name of [
     "ensureServiceUser",
     "removeLegacyInstall",
@@ -236,14 +302,18 @@ test("an up-to-date update still runs provisioning and reconciliation", async ()
     "removeLegacyUnits",
     "removeLegacyUsers",
     "installUnits",
-    "startUnits",
     "reconcile",
     "reconcileNginxProxy",
+    "startUnits",
   ]) {
     expect(calls).toContain(name);
   }
   expect(calls).toContain("writeConfig:instatic");
   expect(calls).toContain("writeConfig:stager");
+  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
+  expect(calls).toContain("log.ok:clp-addons updated from 1.1.0 to 1.2.3");
+  expect(calls.indexOf("startUnits")).toBeGreaterThan(calls.indexOf("reconcile"));
+  expect(calls.indexOf("startUnits")).toBeGreaterThan(calls.indexOf("reconcileNginxProxy"));
   expect(provisioning).toEqual({
     serviceUser: true,
     legacyInstall: false,
@@ -256,28 +326,37 @@ test("an up-to-date update still runs provisioning and reconciliation", async ()
     anchors: true,
     nginx: true,
   });
+  artifactsAvailable = false;
+});
+
+test("the update handoff refuses to provision from the outgoing process", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  artifactsAvailable = false;
+  resolvedReleaseTag = "v1.3.0";
+
+  await expect(cmdUpdate(["--version=v1.3.0", "--no-self-update"])).rejects.toThrow(
+    "update handoff expected 1.3.0 but the running process is 1.2.3",
+  );
+  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
+  expect(calls).not.toContain("startUnits");
 });
 
 test("an up-to-date update with no addons keeps the no-service branch", async () => {
   calls.length = 0;
   resetProvisioning();
   hasInstalledAddon = false;
-  artifactsAvailable = false;
+  artifactsAvailable = true;
   artifactTampered = false;
   resolvedReleaseTag = "v1.2.3";
 
   await cmdUpdate(["--version=v1.2.3"]);
 
-  expect(calls).toContain("fetchVerified");
-  expect(calls).toContain("verifyAttestation");
-  expect(calls).toContain("ensureServiceUser");
-  expect(calls).toContain("removeLegacyUnits");
-  expect(calls).toContain("removeLegacyUsers");
-  expect(calls).toContain("reconcilePanelIdentity");
-  expect(calls).toContain("installUnits");
-  expect(calls).toContain("startUnits");
+  expect(calls).not.toContain("fetchVerified");
+  expect(calls).not.toContain("verifyAttestation");
+  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
   expect(calls).toContain("reconcile");
-  expect(calls).toContain("reconcileNginxProxy");
+  expect(calls).toContain("startUnits");
   expect(calls.filter((c) => c.startsWith("writeConfig:"))).toHaveLength(0);
   expect(calls).toContain("log.ok:clp-addons 1.2.3 is up to date");
   expect(provisioning).toEqual({
@@ -292,9 +371,10 @@ test("an up-to-date update with no addons keeps the no-service branch", async ()
     anchors: true,
     nginx: true,
   });
+  artifactsAvailable = false;
 });
 
-test("updating from a fully disabled state to a new release reconciles and restarts manager", async () => {
+test("updating from a fully disabled state still hands off to the target binary", async () => {
   calls.length = 0;
   resetProvisioning();
   hasInstalledAddon = false;
@@ -306,27 +386,20 @@ test("updating from a fully disabled state to a new release reconciles and resta
 
   expect(calls).toContain("fetchVerified");
   expect(calls).toContain("verifyAttestation");
-  expect(calls).toContain("ensureServiceUser");
-  expect(calls).toContain("removeLegacyUnits");
-  expect(calls).toContain("removeLegacyUsers");
-  expect(calls).toContain("reconcilePanelIdentity");
-  expect(calls).toContain("installUnits");
-  expect(calls).toContain("startUnits");
-  expect(calls).toContain("reconcile");
-  expect(calls).toContain("reconcileNginxProxy");
+  expect(calls).toContain(handoffCall("v1.3.0", "--version=v1.3.0"));
   expect(calls.filter((c) => c.startsWith("writeConfig:"))).toHaveLength(0);
-  expect(calls).toContain("log.ok:clp-addons updated to 1.3.0; no addon service is configured");
+  expect(calls.some((call) => call.startsWith("log.ok:clp-addons updated"))).toBe(false);
   expect(provisioning).toEqual({
-    serviceUser: true,
-    legacyInstall: false,
-    dirs: true,
-    sudoers: true,
-    legacyUnits: false,
-    legacyUsers: false,
-    units: true,
-    running: true,
-    anchors: true,
-    nginx: true,
+    serviceUser: false,
+    legacyInstall: true,
+    dirs: false,
+    sudoers: false,
+    legacyUnits: true,
+    legacyUsers: true,
+    units: false,
+    running: false,
+    anchors: false,
+    nginx: false,
   });
 });
 
@@ -341,8 +414,9 @@ test("a same-version update reuses verified installed artifacts", async () => {
 
   expect(calls).not.toContain("fetchVerified");
   expect(calls).not.toContain("verifyAttestation");
-  expect(calls).toContain("installUnits");
-  expect(calls).toContain("reconcileNginxProxy");
+  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
+  expect(calls).toContain("reconcile");
+  expect(calls).toContain("startUnits");
   artifactsAvailable = false;
 });
 
@@ -357,6 +431,7 @@ test("a same-version update repairs a changed installed artifact", async () => {
 
   expect(calls).toContain("fetchVerified");
   expect(calls).toContain("verifyAttestation");
+  expect(calls).toContain(handoffCall("v1.2.3", "--version=v1.2.3"));
   artifactsAvailable = false;
   artifactTampered = false;
 });

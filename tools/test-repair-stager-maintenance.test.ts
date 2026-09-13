@@ -92,6 +92,7 @@ const mockPrelude = String.raw`
     },
     parseFlags,
     requireRoot: () => {},
+    run: () => "",
     tryRun: () => ({ ok: true, out: "" }),
     writeAtomic: () => {},
   }));

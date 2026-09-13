@@ -151,6 +151,7 @@ mock.module("./cli/util.ts", () => ({
   log: { step: () => {}, ok: () => {}, warn: () => {}, err: () => {}, plain: () => {} },
   parseFlags,
   requireRoot: () => {},
+  run: () => "",
   tryRun: tryAction,
   writeAtomic: () => {},
 }));

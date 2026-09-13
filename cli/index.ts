@@ -16,7 +16,7 @@ import {
   KNOWN_GOOD_PANEL_VERSIONS, inspect, inspectNginxProxy, masterVhostHost, panelVersion, purgeTwigCache as purgeInjectCache,
   reconcile, reconcileNginxProxy, type Injection, type NginxProxyStatus, type TargetStatus,
 } from "./inject";
-import { fatal, Fatal, log, parseFlags, requireRoot, tryRun, writeAtomic } from "./util";
+import { fatal, Fatal, log, parseFlags, requireRoot, run, tryRun, writeAtomic } from "./util";
 import { runRecon } from "./recon";
 import { authenticateRequest, type AuthenticatedRequest } from "../lib/sso-auth";
 import { handle as handleInstatic } from "../addons/instatic/app/index";
@@ -279,8 +279,30 @@ export async function cmdInstall(argv: string[]): Promise<void> {
 }
 
 /**
- * Updates release artifacts when necessary and reconciles provisioning for all
- * currently enabled addons.
+ * Reconcile all provisioning from the binary that owns the definitions.
+ * Services restart last, after every generated file reflects this process.
+ */
+function finalizeUpdate(): AddonSpec[] {
+  const specs = installedAddons();
+  ensureServiceUser();
+  removeLegacyInstall();
+  ensureDirs(specs);
+  ensureAuthHelperReady();
+  for (const spec of specs) writeConfig(spec, true);
+  reconcilePanelIdentity();
+  removeLegacyUnits(true);
+  removeLegacyUsers(true);
+  installUnits(specs);
+  ensureDirs(specs);
+  reconcileAnchors(false);
+  if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
+  startUnits();
+  return specs;
+}
+
+/**
+ * Updates release artifacts when necessary. If the binary moves, re-run this
+ * same command as the installed copy and let only that process provision.
  */
 export async function cmdUpdate(argv: string[]): Promise<void> {
   requireRoot("update");
@@ -292,7 +314,6 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
   const current = CLI_VERSION.replace(/^v/, "");
   const target = release.tag.replace(/^v/, "");
 
-  const specs = installedAddons();
   const upToDate = current === target;
   const artifactsCurrent = upToDate && currentArtifactsMatch(target);
   let artifacts: FetchedArtifact[] | undefined;
@@ -301,27 +322,41 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
     await verifyAttestation(release, artifacts, flags["skip-attestation"] === true);
   }
 
-  ensureServiceUser();
-  removeLegacyInstall();
-  ensureDirs(specs);
-  if (artifacts) installArtifacts(artifacts, target);
-  ensureAuthHelperReady();
-  for (const spec of specs) writeConfig(spec, true);
-  reconcilePanelIdentity();
-  removeLegacyUnits(true);
-  removeLegacyUsers(true);
-  installUnits(specs);
-  ensureDirs(specs);
-  startUnits();
-  reconcileAnchors(false);
-  if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
+  if (artifacts) {
+    installArtifacts(artifacts, target);
+    if (flags["no-self-update"] !== true) {
+      // Re-enter the stable public command rather than a new private command:
+      // an explicit downgrade can target a release from before this handoff
+      // existed. Such a binary still knows how to update itself. The internal
+      // flag bounds the handoff in current releases and is ignored safely by
+      // older ones, whose installed version already equals the requested tag.
+      run(CLI_BIN, [
+        "update",
+        ...argv,
+        `--version=${release.tag}`,
+        "--no-self-update",
+        `--updated-from=${current}`,
+      ], { stdio: "inherit" });
+      return;
+    }
+  }
+  if (current !== target) {
+    fatal(`update handoff expected ${target} but the running process is ${current}`);
+  }
+  const updatedFrom = flags["no-self-update"] === true && typeof flags["updated-from"] === "string"
+    ? flags["updated-from"].replace(/^v/, "")
+    : current;
+  const versionChanged = updatedFrom !== target;
+  const specs = finalizeUpdate();
   if (specs.length === 0) {
-    log.ok(upToDate
-      ? `clp-addons ${current} is up to date`
-      : `clp-addons updated to ${target}; no addon service is configured`);
+    log.ok(versionChanged
+      ? `clp-addons updated from ${updatedFrom} to ${target}; no addon service is configured`
+      : `clp-addons ${current} is up to date`);
     return;
   }
-  log.ok(upToDate ? `clp-addons ${current} is up to date; provisioning reconciled` : `clp-addons updated to ${target}`);
+  log.ok(versionChanged
+    ? `clp-addons updated from ${updatedFrom} to ${target}`
+    : `clp-addons ${current} is up to date; provisioning reconciled`);
 }
 
 /**
