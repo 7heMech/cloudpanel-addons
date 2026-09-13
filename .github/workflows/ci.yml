@@ -9,8 +9,20 @@ name: ci
 
 on:
   pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+
+# A newer commit on the same branch contains the earlier one, so finishing both
+# runs only delays feedback and consumes another runner.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions: {}
 
@@ -50,10 +62,9 @@ jobs:
         # customer runs via `curl ... | bash` before any binary exists on the
         # box, so there is no compiler or test suite standing between a bug
         # in it and that customer's shell.
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
-          shellcheck -S warning install.sh
+        # ubuntu-24.04 already includes ShellCheck. Refreshing the entire apt
+        # index to reinstall it was consistently the slowest setup operation.
+        run: bun run lint:install
 
       - name: Build
         # Compiling is part of the check: a type error the checker tolerates

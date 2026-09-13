@@ -126,6 +126,22 @@ interface CaseResult {
   sawNumberedFallback: boolean;
 }
 
+async function withTimeout<T>(work: Promise<T>, milliseconds: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), milliseconds);
+      }),
+    ]);
+  } finally {
+    // Most reads finish immediately. Leaving every losing deadline scheduled
+    // kept Bun alive until the five-second case deadline after all tests passed.
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 async function runCase(c: Case): Promise<CaseResult> {
   const proc = Bun.spawn({
     cmd: ["script", "-qec", `bash ${TMP_SCRIPT}`, "/dev/null"],
@@ -147,12 +163,7 @@ async function runCase(c: Case): Promise<CaseResult> {
     while (Date.now() < deadline) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
-      const chunk = await Promise.race([
-        reader.read(),
-        new Promise<{ done: true; value: undefined }>((resolve) =>
-          setTimeout(() => resolve({ done: true, value: undefined }), remaining),
-        ),
-      ]);
+      const chunk = await withTimeout(reader.read(), remaining, { done: true, value: undefined });
       if (chunk.done) {
         if (!sent) {
           // Timed out (or stream closed) before the render marker appeared.
@@ -188,22 +199,12 @@ async function runCase(c: Case): Promise<CaseResult> {
     while (Date.now() < deadline) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
-      const chunk = await Promise.race([
-        reader.read(),
-        new Promise<{ done: true; value: undefined }>((resolve) =>
-          setTimeout(() => resolve({ done: true, value: undefined }), remaining),
-        ),
-      ]);
+      const chunk = await withTimeout(reader.read(), remaining, { done: true, value: undefined });
       if (chunk.done) break;
       output += decoder.decode(chunk.value, { stream: true });
     }
 
-    const exitCode = await Promise.race([
-      proc.exited,
-      new Promise<number>((resolve) =>
-        setTimeout(() => resolve(-1), Math.max(0, deadline - Date.now()) + 200),
-      ),
-    ]);
+    const exitCode = await withTimeout(proc.exited, Math.max(0, deadline - Date.now()) + 200, -1);
 
     if (exitCode === -1) {
       return {

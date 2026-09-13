@@ -59,10 +59,9 @@ jobs:
         # customer runs via `curl ... | bash` before any binary exists on the
         # box, so there is no compiler or test suite standing between a bug
         # in it and that customer's shell.
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
-          shellcheck -S warning install.sh
+        # ubuntu-24.04 already includes ShellCheck. Refreshing the entire apt
+        # index to reinstall it was consistently the slowest setup operation.
+        run: bun run lint:install
 
       - name: Resolve the version from the tag
         id: version
@@ -101,7 +100,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Upload the build for the release job
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
           path: dist/
@@ -117,7 +116,7 @@ jobs:
       attestations: write  # record it
     steps:
       - name: Download the build
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: dist
           path: dist
