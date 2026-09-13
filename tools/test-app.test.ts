@@ -19,6 +19,7 @@ import { BASE_CLIENT_JS, THEME_INIT_JS, renderLayout } from "../lib/app-ui";
 import { headerTarget, headerUpdateScript } from "../lib/panel-nav";
 import { isNewerVersion } from "../lib/update-check";
 import { CLIENT_JS as STAGER_CLIENT_JS, isSiteMissing, jobsView, jobView } from "../addons/stager/app/views";
+import { CLIENT_JS as MAINTENANCE_CLIENT_JS } from "../addons/maintenance/app/views";
 import type { JobView } from "../addons/stager/app/service";
 import { expandTarget } from "../addons/stager/app/service";
 import { isNewerThan } from "../addons/instatic/app/tags";
@@ -55,6 +56,7 @@ const SCRIPTS: { name: string; source: string }[] = [
   { name: "theme initialization", source: THEME_INIT_JS },
   { name: "instatic", source: BASE_CLIENT_JS + CLIENT_JS },
   { name: "stager", source: BASE_CLIENT_JS + STAGER_CLIENT_JS },
+  { name: "maintenance", source: BASE_CLIENT_JS + MAINTENANCE_CLIENT_JS },
   { name: "clp header update notice", source: headerUpdateScript() },
 ];
 
@@ -1424,7 +1426,7 @@ console.log("\n== addons are told apart by the path they are mounted at ==");
 // hands it a sub-path of "-notes", which is a 404 from somewhere unexpected
 // rather than from the router.
 {
-  const all = ["instatic", "stager", "login-theme"];
+  const all = ["instatic", "stager", "maintenance", "login-theme"];
   const hit = (p: string) => {
     const m = splitMount(p, all);
     return m ? `${m.addon}:${m.rest}` : "none";

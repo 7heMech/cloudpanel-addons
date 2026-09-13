@@ -1,8 +1,8 @@
 # CloudPanel Addons
 
-Host Instatic CMS sites, create staging copies, and set the initial login theme
-from the device preference in [CloudPanel](https://www.cloudpanel.io/). Access
-uses your existing administrator login.
+Host Instatic CMS sites, create staging copies, manage per-site maintenance
+pages, and set the initial login theme in [CloudPanel](https://www.cloudpanel.io/).
+Access uses your existing administrator login.
 
 ![CloudPanel Addons Manager](docs/screenshots/addons.png)
 
@@ -12,6 +12,7 @@ uses your existing administrator login.
 | --- | --- |
 | [Instatic CMS](https://github.com/CoreBunch/Instatic) | Instant static site hosting and staging on CloudPanel. |
 | Stager | Create staging copies of WordPress, PHP, static, and Instatic sites. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
+| Maintenance Mode | Serve a customizable 503 page per site with instant toggles and IP bypasses. |
 | Device theme on first visit | Follow the device's light or dark preference on the first visit to the CloudPanel login page. |
 
 ## Install
@@ -43,9 +44,10 @@ can access it.
 | `clp-addons install <addon>` | Enable a bundled addon. |
 | `clp-addons update` | Install the latest verified release. |
 | `clp-addons repair` | Restore managed services and CloudPanel integration. |
+| `clp-addons maintenance <domain> [on\|off\|status]` | Control or inspect maintenance mode for a site. |
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
-Addon names are `instatic`, `stager`, and `login-theme`. Run
+Addon names are `instatic`, `stager`, `maintenance`, and `login-theme`. Run
 `clp-addons --help` for version selection and data removal options.
 
 See [Instatic backup and restore](docs/instatic-backups.md) for CloudPanel Remote

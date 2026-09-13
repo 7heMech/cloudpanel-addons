@@ -12,6 +12,12 @@ The gateway accepts only fixed addon and verb combinations and starts
 arguments again before deriving paths, locking, or changing the host. Unknown
 addons, verbs, free-form paths, and malformed action replies are rejected.
 
+Maintenance actions also require the normalized domain to exist in
+CloudPanel's site database. The public maintenance directories allow traversal
+without directory listing; flag files remain root-only and HTML files are
+readable by Nginx. Custom pages are size-bounded, stripped of active markup,
+and served with a restrictive content security policy.
+
 ## CloudPanel authentication
 
 The gateway reads the bounded `cloudpanel` session file without following

@@ -19,6 +19,11 @@ restores the original vhost if validation or reload fails. If CloudPanel changes
 the surrounding file, reconciliation stops instead of applying a patch against
 unknown markup.
 
+Maintenance Mode also owns a marked block in `/etc/nginx/global_settings`.
+That block is reconciled from a hashed pristine copy and validated with the
+customer-site Nginx configuration before reload. Runtime site toggles only
+create or remove flag files, so they do not reload Nginx.
+
 A path unit repairs managed blocks after CloudPanel rewrites watched files. A
 15-minute timer repairs service, socket, permissions, and integration drift.
 CloudPanel's legacy distro Nginx layout and its separate panel Nginx layout are

@@ -4,6 +4,8 @@ import { indexPage, updatePage } from "../cli/index";
 import { handle as loginThemePage } from "../addons/login-theme/app/index";
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
 import { jobsView, jobView, layout as stagerLayout, newCloneView } from "../addons/stager/app/views";
+import { fleetView as maintenanceFleetView, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
+import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
 import type { AvailableTags } from "../addons/instatic/app/tags";
@@ -90,7 +92,7 @@ const server = Bun.serve({
     if (path === "/addons/") {
       // ?enabled= picks which addons are on, so the Available section and the
       // enable/disable buttons can be reviewed without a CloudPanel install.
-      const enabled = empty ? [] : (url.searchParams.get("enabled") ?? "instatic,stager").split(",").filter(Boolean);
+      const enabled = empty ? [] : (url.searchParams.get("enabled") ?? "instatic,stager,maintenance").split(",").filter(Boolean);
       const previewJob = state && ["running", "queued", "failed"].includes(state)
         ? {
             id: "20260910T093000Z-abc123", kind: "enable", addon: "stager", state,
@@ -99,12 +101,26 @@ const server = Bun.serve({
           }
         : null;
       return indexPage(enabled, notice, {
-        available: ["instatic", "stager", "login-theme"].filter((name) => !enabled.includes(name)),
+        available: ["instatic", "stager", "maintenance", "login-theme"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
     }
-    if (path === "/addons/instatic/") {
+    if (path === "/addons/maintenance/" || path === "/addons/maintenance") {
+      const maintenanceSites = sites.map((site, index) => ({
+        domain: site.domain, type: site.siteType, user: site.siteUser,
+        enabled: index === 0, customTemplate: index === 1, bypasses: index === 0 ? ["203.0.113.8"] : [],
+      }));
+      const selected = url.searchParams.get("domain");
+      const site = maintenanceSites.find((candidate) => candidate.domain === selected);
+      html = maintenanceLayout(
+        site ? `Maintenance — ${site.domain}` : "Maintenance Mode",
+        site
+          ? maintenanceSiteView(site, { domain: site.domain, custom: site.customTemplate, html: DEFAULT_MAINTENANCE_TEMPLATE }, "203.0.113.8")
+          : maintenanceFleetView(empty ? [] : maintenanceSites),
+        notice,
+      );
+    } else if (path === "/addons/instatic/") {
       html = instaticLayout("Instatic sites", dashboardView(empty ? [] : instances, age,
         sites.map((s) => ({ domain: s.domain, type: s.siteType, user: s.siteUser })), versions), notice);
     } else if (path === "/addons/instatic/new") {

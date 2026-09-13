@@ -71,11 +71,13 @@ const mockPrelude = String.raw`
   mock.module("./cli/inject.ts", () => ({
     KNOWN_GOOD_PANEL_VERSIONS: [],
     inspect: () => ({ state: "ok" }),
+    inspectNginxMaintenance: () => ({ state: "ok" }),
     inspectNginxProxy: () => ({ state: "ok" }),
     masterVhostHost: () => null,
     panelVersion: () => "test",
     purgeTwigCache: () => {},
     reconcile: () => ({ statuses: [], changed: false }),
+    reconcileNginxMaintenance: () => ({ state: "missing", changed: false }),
     reconcileNginxProxy: () => ({ state: "ok", changed: false }),
   }));
   globalThis.__repairLog = [];
