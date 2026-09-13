@@ -106,6 +106,7 @@ const PROBE = String.raw`
     log: { step: () => {}, ok: () => {}, warn: () => {}, err: () => {}, plain: () => {} },
     parseFlags,
     requireRoot: () => {},
+    run: () => "",
     tryRun: () => ({ ok: true, out: "" }),
     writeAtomic: () => {},
   }));

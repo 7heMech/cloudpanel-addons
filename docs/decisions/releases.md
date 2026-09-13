@@ -22,5 +22,14 @@ The installed binary and helper checksums are recorded in a root-owned
 manifest. Reapplying the same version reuses files only when every checksum
 still matches; otherwise the release is downloaded and verified again.
 
+After replacement, the outgoing process performs no provisioning. It re-runs
+the same update command through the installed binary with an internal flag that
+bounds the handoff. That process generates configuration, units and panel
+integrations from its own definitions, then restarts services last. Re-entering
+the stable update command also preserves explicit downgrades to releases from
+before the handoff existed. Merely moving the restart would not be sufficient:
+the old process could still write old Twig or unit definitions after installing
+a new release.
+
 Published releases are immutable in the workflow. A failed draft can be
 recreated, but an existing published tag is rejected.

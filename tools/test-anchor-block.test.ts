@@ -91,6 +91,7 @@ function probeFor(state: "anchor-not-found-in-markup" | "template-absent"): stri
     log: { step: () => {}, ok: () => {}, warn: () => {}, err: () => {}, plain: () => {} },
     parseFlags,
     requireRoot: () => {},
+    run: () => "",
     tryRun: () => ({ ok: true, out: "" }),
     writeAtomic: () => {},
   }));
