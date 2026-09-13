@@ -77,7 +77,7 @@ export async function handle(
         const available = await listAvailableTags();
         return html(
           layout("Instatic instances",
-            dashboardView(instances, await instaticService.nextPort(), snapshotAge, panelSites, available, snapshotTakenAt),
+            dashboardView(instances, snapshotAge, panelSites, available, snapshotTakenAt),
             updateNotice
           ),
           csrf

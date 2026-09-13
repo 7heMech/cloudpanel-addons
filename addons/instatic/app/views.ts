@@ -275,7 +275,6 @@ export function isInstanceMissing(
 /** Renders the Instatic dashboard from instance and current panel inventory. */
 export function dashboardView(
   instances: InstanceView[],
-  nextPort: number,
   snapshotAge: number,
   panelSites: SanitizedSite[] = [],
   available: AvailableTags = { tags: [], source: "fallback", latest: null },

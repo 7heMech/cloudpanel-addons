@@ -248,11 +248,11 @@ const emptySnap: PanelSnapshot = {
 
 const live = (latest: string) => ({ tags: [latest], source: "registry" as const, latest });
 
-const behindHtml = dashboardView([instance("0.0.17")], 39001, 0, emptySnap.sites, live("0.0.18"));
+const behindHtml = dashboardView([instance("0.0.17")], 0, emptySnap.sites, live("0.0.18"));
 check("an out-of-date instance is badged", behindHtml.includes("0.0.18 available"));
 check("and counted in the updates tile", /Updates available<\/div>\s*<div class="value"[^>]*>1</.test(behindHtml));
 
-const currentHtml = dashboardView([instance("0.0.18")], 39001, 0, emptySnap.sites, live("0.0.18"));
+const currentHtml = dashboardView([instance("0.0.18")], 0, emptySnap.sites, live("0.0.18"));
 check("a current instance is not badged", !currentHtml.includes("available</span>"));
 check("and the tile reads zero", /Updates available<\/div>\s*<div class="value"[^>]*>0</.test(currentHtml));
 
@@ -260,7 +260,7 @@ check("and the tile reads zero", /Updates available<\/div>\s*<div class="value"[
 // updates that do not exist, and claim an instance is behind a version that may
 // long since have been superseded.
 const offlineHtml = dashboardView(
-  [instance("0.0.17")], 39001, 0, emptySnap.sites,
+  [instance("0.0.17")], 0, emptySnap.sites,
   { tags: ["0.0.18"], source: "fallback", latest: null }
 );
 check("the offline fallback never claims an update", !offlineHtml.includes("0.0.18 available"));
@@ -1581,7 +1581,7 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   // dashboardView rendering:
   const missingHtml = dashboardView(
     [{ ...instBase, panelSite: false }],
-    39002, 120, snapSites, { tags: ["0.0.18"], source: "registry", latest: "0.0.18" }, snapTime
+    120, snapSites, { tags: ["0.0.18"], source: "registry", latest: "0.0.18" }, snapTime
   );
   check("dashboardView renders CloudPanel site deleted hint and deleted badge for missing instances",
     missingHtml.includes("CloudPanel site deleted. Delete here to archive and clean up the instance.")
@@ -1590,7 +1590,7 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
 
   const presentHtml = dashboardView(
     [{ ...instBase, panelSite: true }],
-    39002, 120, snapSites, { tags: ["0.0.18"], source: "registry", latest: "0.0.18" }, snapTime
+    120, snapSites, { tags: ["0.0.18"], source: "registry", latest: "0.0.18" }, snapTime
   );
   check("dashboardView does not show deleted notice when site is present",
     !presentHtml.includes("CloudPanel site deleted")

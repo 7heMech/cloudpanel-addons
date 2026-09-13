@@ -105,7 +105,7 @@ const server = Bun.serve({
       });
     }
     if (path === "/addons/instatic/") {
-      html = instaticLayout("Instatic sites", dashboardView(empty ? [] : instances, 39003, age,
+      html = instaticLayout("Instatic sites", dashboardView(empty ? [] : instances, age,
         sites.map((s) => ({ domain: s.domain, type: s.siteType, user: s.siteUser })), versions), notice);
     } else if (path === "/addons/instatic/new") {
       html = instaticLayout("New Instatic site", newInstanceView(39003, versions), notice);
