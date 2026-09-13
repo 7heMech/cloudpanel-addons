@@ -59,8 +59,7 @@ async function startClone() {
   if (!target) { alert('Enter a hostname for the staging site.'); return false; }
   const payload = { source: source, target: target, tls: tls };
   // Present only when the source is an Instatic site. Read straight into the
-  // request and never stored anywhere, because the password belongs to the
-  // administrator of another running application.
+  // request. The root job keeps it only until the source login succeeds.
   const email = document.getElementById('instatic-email');
   if (email) {
     const password = document.getElementById('instatic-password');
@@ -240,10 +239,10 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
   const instaticFields = isInstatic
     ? `
       <div class="credential-fields">
-        <h2>Source Instatic Account</h2>
+        <h2>Source Instatic account</h2>
         <div class="form-grid">
           <div class="form-field">
-            <label for="instatic-email" class="required">Admin Email</label>
+            <label for="instatic-email" class="required">Admin email</label>
             <input id="instatic-email" type="email" required autocomplete="off" placeholder="you@example.com">
           </div>
           <div class="form-field">
@@ -251,13 +250,13 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
             <input id="instatic-password" type="password" required autocomplete="new-password">
           </div>
           <div class="form-field">
-            <label for="instatic-mfa">Authentication Code</label>
+            <label for="instatic-mfa">Authentication code</label>
             <input id="instatic-mfa" autocomplete="off" inputmode="numeric" placeholder="123456" aria-describedby="mfa-hint">
             <div class="hint" id="mfa-hint">Required only if MFA is enabled.</div>
           </div>
         </div>
-        <div class="hint">Used once, to export the source's content through Instatic's own site bundle.
-          It is never stored: the clone gets an owner, a secret key and a container of its own.</div>
+        <div class="hint">Used by the local clone job to export the source's content, then removed after authentication.
+          The clone gets its own owner, secret key, and container.</div>
       </div>`
     : "";
 
@@ -272,7 +271,7 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
     <div class="page-heading"><h1>New staging site</h1></div>
     ${error ? `<div class="alert" role="alert">${esc(error)}</div>` : ""}
     <div class="card">
-      <div class="card-header"><h2>Source Site</h2></div>
+      <div class="card-header"><h2>Source site</h2></div>
       <dl class="kv">
         <dt>Source</dt><dd>${esc(source.domain)}</dd>
         <dt>Type</dt><dd>${esc(typeLabel(source.siteType))}</dd>
@@ -283,10 +282,10 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
       <p class="hint">${carriedNote}</p>
     </div>
     <div class="card">
-      <div class="card-header"><h2>Staging Site Settings</h2></div>
+      <div class="card-header"><h2>Staging site settings</h2></div>
       <form onsubmit="event.preventDefault(); startClone();">
       <input type="hidden" id="source-domain" value="${esc(source.domain)}">
-      <label for="target" class="required">Staging Hostname</label>
+      <label for="target" class="required">Staging hostname</label>
       <input id="target" required autocomplete="off" placeholder="stg" oninput="previewTarget()" aria-describedby="target-preview">
       <div class="hint" id="target-preview" aria-live="polite">A label such as stg becomes stg.${esc(source.domain)}</div>
       ${instaticFields}
@@ -296,8 +295,8 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
         <input type="checkbox" id="tls" aria-describedby="tls-hint">
         <span>Request a Let's Encrypt certificate when the clone finishes</span>
       </label>
-      <div class="hint" id="tls-hint">Only tick this once the hostname's DNS points at this server, or the request fails
-        and you issue it later from Site → SSL/TLS.</div>
+      <div class="hint" id="tls-hint">Select this only after the hostname resolves to this server.
+        You can issue the certificate later from Site → SSL/TLS.</div>
       </div>
 
       <div class="form-actions">
@@ -321,14 +320,14 @@ export function jobView(
 
   const notes = result?.notes?.length
     ? `<div class="card">
-        <div class="card-header"><h2>Clone Notes</h2></div>
+        <div class="card-header"><h2>Clone notes</h2></div>
         <ul class="notes">${result.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>
       </div>`
     : "";
 
   const credentials = result?.database
     ? `<div class="card secret">
-        <div class="card-header"><h2>Staging Database</h2></div>
+        <div class="card-header"><h2>Staging database</h2></div>
         <dl class="kv">
           <dt>Name</dt><dd>${esc(result.database.name)}</dd>
           <dt>User</dt><dd>${esc(result.database.user)}</dd>
@@ -354,7 +353,7 @@ export function jobView(
 
   const site = result
     ? `<div class="card">
-        <div class="card-header"><h2>Staging Site</h2></div>
+        <div class="card-header"><h2>Staging site</h2></div>
         <dl class="kv">
           <dt>Staging site</dt><dd>${
             missing
@@ -380,7 +379,7 @@ export function jobView(
   // clone's admin, and nothing can show it again once this record expires.
   const instatic = result?.instatic
     ? `<div class="card secret">
-        <div class="card-header"><h2>Staging Instatic Instance</h2></div>
+        <div class="card-header"><h2>Staging Instatic instance</h2></div>
         <dl class="kv">
           <!-- esc() even though the action binary emits this as a JSON number and
                validatePort bounds it: every other value on this page is
@@ -399,7 +398,7 @@ export function jobView(
   return `
     <div class="page-heading"><h1>Staging site details</h1><a class="btn" href="${BASE}/">Back to staging sites</a></div>
     <div class="card">
-      <div class="card-header"><h2>Clone Status</h2></div>
+      <div class="card-header"><h2>Clone status</h2></div>
       <div class="job-summary">
         <span class="job-domain">${esc(job.source)}</span>
         <span class="hint" style="margin:0;">→</span>

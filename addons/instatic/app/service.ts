@@ -92,7 +92,7 @@ export const instaticService = {
    * @throws If either allocation source is unavailable or the range is full.
    */
   async nextPort(): Promise<number> {
-    // The snapshot is queried in real time via root gateway IPC.
+    // Panel data is queried in real time through the root gateway.
     const [instances, { snap }] = await Promise.all([
       this.listInstancesOrThrow(),
       this.snapshot(),

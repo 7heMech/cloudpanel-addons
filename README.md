@@ -1,7 +1,8 @@
 # CloudPanel Addons
 
-Deploy Instatic instances and create staging sites directly in
-[CloudPanel](https://www.cloudpanel.io/), using your existing administrator login.
+Host Instatic CMS sites, create staging copies, and set the initial login theme
+from the device preference in [CloudPanel](https://www.cloudpanel.io/). Access
+uses your existing administrator login.
 
 ![CloudPanel Addons Manager](docs/screenshots/addons-empty.png)
 
@@ -9,59 +10,50 @@ Deploy Instatic instances and create staging sites directly in
 
 | Addon | Description |
 | --- | --- |
-| [Instatic](https://github.com/CoreBunch/Instatic) | Deploy and manage Docker-based Instatic instances with pinned versions, status, logs, and updates. |
-| Stager | Clone PHP, static, and reverse-proxy sites with background jobs and live logs. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
-| Login theme | Make the CloudPanel login page follow the browser or operating system's light/dark preference. |
+| [Instatic CMS](https://github.com/CoreBunch/Instatic) | Instant static site hosting and staging on CloudPanel. |
+| Stager | Create staging copies of WordPress, PHP, static, and Instatic sites. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
+| Device theme on first visit | Follow the device's light or dark preference on the first visit to the CloudPanel login page. |
 
-## Installation
+## Install
 
-Run as **root** on an **x86-64 Linux host with CloudPanel installed**:
+Run as **root** on an **x86-64 CloudPanel host**:
 
 ```bash
 curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download/install.sh | bash
 ```
 
-The installer prompts you to select addons and verifies release checksums and
-build provenance. Instatic requires Docker; the installer offers to install it
-when needed.
+The installer asks which addons to enable. It verifies checksums and build
+provenance, and can install Docker when Instatic needs it.
 
-For unattended installation of Instatic and Stager, including Docker if needed:
+For an unattended Instatic and Stager installation:
 
 ```bash
 curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download/install.sh \
   | bash -s -- --addons=instatic,stager --yes --install-docker
 ```
 
-After installation, open **Addons** in CloudPanel or append `/addons/` to your
-panel URL. Access requires a CloudPanel administrator session.
+Open **Addons** in CloudPanel after installation. Only CloudPanel administrators
+can access it.
 
-## Management
-
-Use the manager to enable or disable addons. When a release is available, the
-header on CloudPanel and addon pages shows **Changelog** and **Update** links.
-**Update** opens `/addons/update`, where you can review the installed and latest
-versions, choose **Install update**, and follow its progress. Updates are applied
-only when requested; you can also open this page from **Updates** in the manager.
-
-For command-line management, run as root:
+## Manage
 
 | Command | Purpose |
 | --- | --- |
-| `clp-addons status` | Check services and panel integration. |
+| `clp-addons status` | Check services and CloudPanel integration. |
 | `clp-addons install <addon>` | Enable a bundled addon. |
-| `clp-addons update` | Download, verify, and apply the latest release. |
-| `clp-addons repair` | Restore service configuration and panel integration. |
-| `clp-addons uninstall <addon> --yes` | Remove an addon while preserving its instance data. |
+| `clp-addons update` | Install the latest verified release. |
+| `clp-addons repair` | Restore managed services and CloudPanel integration. |
+| `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
-Replace `<addon>` with `instatic`, `stager`, or `login-theme`. Use
-`clp-addons --help` for all options, including version selection and data
-removal.
+Addon names are `instatic`, `stager`, and `login-theme`. Run
+`clp-addons --help` for version selection and data removal options.
 
-Instatic supports CloudPanel Remote Backups. See [backup setup and restoration](docs/instatic-backups.md).
+See [Instatic backup and restore](docs/instatic-backups.md) for CloudPanel Remote
+Backups.
 
-## Development
+## Develop
 
-Requires Bun. The installer lint check also requires ShellCheck.
+Requires Bun and ShellCheck.
 
 ```bash
 bun install
@@ -71,14 +63,11 @@ bun run lint:install
 bun run build
 ```
 
-The build produces `dist/clp-addons-linux-x64`.
+Run `bun run preview:ui` to preview the interface at
+`http://localhost:4100/addons/` with sample data.
 
-To preview the interface, run `bun run preview:ui` and open
-`http://localhost:4100/addons/`. The preview uses sample data and does not require
-CloudPanel.
-
-See the [design documentation](docs/DECISIONS.md) for architecture, security
-details, and known limitations.
+Architecture and security choices are indexed in
+[Decisions](docs/DECISIONS.md).
 
 ## Acknowledgments
 

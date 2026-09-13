@@ -6,8 +6,8 @@ const BASE = mountPath("login-theme");
 
 function page(content: string, csrf: string, status = 200, updateNotice?: { current: string; latest: string } | null): Response {
   return new Response(
-    renderLayout("Login theme", content, {
-      brand: "Login theme",
+    renderLayout("Device theme on first visit", content, {
+      brand: "Device theme on first visit",
       base: BASE,
       nav: [],
       script: "",
@@ -44,12 +44,12 @@ export async function handle(
   return page(`
     <div class="form-page">
       <div class="page-heading">
-        <div><h1>Login theme</h1><p>Follow the browser or operating system's light/dark preference.</p></div>
+        <div><h1>Device theme on first visit</h1><p>Use this device's light or dark preference as the initial CloudPanel theme.</p></div>
       </div>
       <div class="card">
-        <div class="card-header"><h2>Device theme enabled</h2></div>
-        <p>The first time a browser reaches the CloudPanel login page, the panel's theme is set from that device's light or dark preference. From then on the theme switch in the header owns the setting, exactly as it does without this addon.</p>
-        <p class="hint">This addon adds no styling of its own: it uses CloudPanel's dark-mode stylesheet and writes the same theme cookie the panel's own switch writes.</p>
+        <div class="card-header"><h2>Enabled</h2></div>
+        <p>On the first visit to the CloudPanel login page, the theme follows this device's preference. After that, CloudPanel keeps the theme selected with its own switch.</p>
+        <p class="hint">The addon uses CloudPanel's built-in light and dark themes.</p>
         <a class="btn btn-primary" href="/addons/">Back to Addons</a>
       </div>
     </div>`, newCsrfToken(), 200, updateNotice);

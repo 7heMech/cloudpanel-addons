@@ -794,7 +794,7 @@ async function cmdServe(): Promise<never> {
         response = updatePage(update, CLI_VERSION, { job: await latestManagerJobView(), csrf: newCsrfToken() });
       }
       else if (path === "/") {
-        // Read at request time rather than from the startup snapshot: a job
+        // Read at request time rather than from the startup addon list: a job
         // that has just finished enabling an addon has not yet restarted this
         // process, and a page that still denied the addon existed would be
         // wrong for exactly as long as anybody was likely to look at it.
@@ -906,7 +906,7 @@ function addonCard(name: string, enabled: boolean): string {
   const description = spec.description ? `<p>${esc(spec.description)}</p>` : "";
   const mounted = MANAGERS[spec.name] !== undefined;
   const actions = enabled
-    ? `${mounted ? `<a class="btn btn-primary btn-lg" href="${esc(`${mountPath(spec.name)}/`)}">Open ${esc(title)}</a>` : '<span class="badge state-running addon-status">Enabled</span>'}
+    ? `${mounted ? `<a class="btn btn-primary btn-lg" href="${esc(`${mountPath(spec.name)}/`)}" aria-label="Open ${esc(title)}">Open</a>` : '<span class="badge state-running addon-status">Enabled</span>'}
     <button class="btn btn-danger btn-lg" type="button" onclick="disableAddon('${escJs(spec.name)}')">Disable</button>`
     : `<button class="btn btn-primary btn-lg" type="button" onclick="enableAddon('${escJs(spec.name)}')">Enable ${esc(title)}</button>`;
   return `<article class="card addon-card">
@@ -979,7 +979,7 @@ export function updatePage(
     : development ? "Update checks are disabled for development builds."
     : "We could not check for a new release. Try again later or view the changelog on GitHub.";
   const content = `<div class="update-page">
-  <div class="page-heading"><h1>Update Addons</h1><a class="btn" href="/addons/">Back to Addons</a></div>
+  <div class="page-heading"><h1>Update CloudPanel Addons</h1><a class="btn" href="/addons/">Back to Addons</a></div>
   ${managerJobBlock(options.job ?? null)}
   <article class="card">
     <div class="card-header"><h2>CloudPanel Addons</h2><span class="badge ${update ? "state-queued" : info ? "state-done" : "state-unknown"}">${status}</span></div>
@@ -988,14 +988,14 @@ export function updatePage(
       <div><dt>Latest release</dt><dd>${info ? `v${esc(info.latest)}` : "Unavailable"}</dd></div>
     </dl>
     <p>${message}</p>
-    ${live ? '<p class="hint">An Addons operation is in progress. Its status is shown above.</p>' : ""}
+    ${live ? '<p class="hint">Another addon operation is in progress. Its status is shown above.</p>' : ""}
     <div class="actions update-actions">
       <a class="btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener noreferrer">Changelog</a>
       ${update ? `<button class="btn btn-primary" type="button" onclick="updateNow()"${live ? " disabled" : ""}>Install update</button>` : ""}
     </div>
   </article>
 </div>`;
-  return managerPage("Update Addons", content, update, options);
+  return managerPage("Update CloudPanel Addons", content, update, options);
 }
 
 function managerPage(

@@ -1,132 +1,64 @@
-# Instatic and CloudPanel Remote Backups
+# Back up and restore Instatic
 
-Instatic stores application files in the CloudPanel site user's home. CloudPanel
-[Remote Backups](https://www.cloudpanel.io/docs/v2/admin-area/backups/) include the
-whole site home by default, excluding `.ssh`, `logs`, and `tmp`. Application data
-does not need to be inside the web root to be backed up. Custom exclusions can
-change this coverage.
+CloudPanel Remote Backups include an Instatic site's uploads and its recovery
+archive when the site's full home directory is included. Check any custom backup
+exclusions before relying on this.
 
-| File or directory | Location |
+The files needed for recovery are:
+
+| Content | Location |
 | --- | --- |
-| Live SQLite database | `/home/<siteUser>/instatic/<domain>/data/instatic.db` |
-| Encryption key and container environment | `/home/<siteUser>/instatic/<domain>/.instatic.env` |
-| Uploads and media | `/home/<siteUser>/htdocs/<domain>/uploads/` |
-| Authoritative instance metadata | `/var/lib/clp-addons/instatic/<domain>/meta.json` |
-| Clean database, key, and metadata recovery archive | `/home/<siteUser>/backups/databases/instatic-<domain>.tar.gz` |
+| Uploads | `/home/<site-user>/htdocs/<domain>/uploads/` |
+| Database, encryption key, and metadata | `/home/<site-user>/backups/databases/instatic-<domain>.tar.gz` |
 
-The container runs as the CloudPanel site's numeric UID/GID. `data/` and
-`uploads/` belong to that account with mode `0750`. The env file belongs to
-`root:<siteGroup>` with mode `0600`: only root reads the file; Docker passes its
-values into the container. Recovery archives are root-owned, mode `0600`.
-CloudPanel's Remote Backup archive command uses `sudo tar`, which can read these
-files. Copying or extracting the recovery archive requires root access.
+## Existing sites
 
-Stager continues to discover instances through the original `meta.json` path and
-clone through Instatic's HTTP API. Uploads are available through the site's File
-Manager and SFTP.
-
-## Enable backups for an existing instance
-
-This applies to Instatic instances created with an addon version before **1.1.3**.
-Instances created with 1.1.3 or later use this layout immediately. After updating
-the addon, migrate each legacy instance:
+Sites created with CloudPanel Addons 1.1.3 or later use the backup-compatible
+layout. Migrate a site created by an earlier release with:
 
 ```sh
 clp-addons action instatic recreate --domain example.com
 ```
 
-An image update also migrates legacy storage. Ordinary start/stop/restart keeps
-the existing container's mounts. Migration stops the container, takes a recovery
-snapshot, copies the data and original key, and checks the replacement's health.
-The original data is removed only after the replacement succeeds. Failed starts
-restore the previous container. Conflicting destination files or symlinked
-storage paths stop the operation without overwriting those paths.
+Updating the site's Instatic version also migrates it. The operation keeps the
+existing data and encryption key and rolls back if the replacement fails its
+health check.
 
-Legacy instances are reported as failures by the native backup command until
-migrated; their existing manual Snapshot command remains available. The command
-continues backing up other instances when one fails. Use the CLI for migrations
-with large uploads that may exceed the manager's five-minute request timeout.
+## Schedule
 
-## Scheduling and consistency
+Enabling Instatic creates `/etc/cron.d/clp-addons-instatic-backup` with a daily
+03:30 schedule in the server's timezone. Set it to run before the site's
+CloudPanel Remote Backup. Updates and repairs preserve a changed schedule.
 
-Installation and repair install `/etc/cron.d/clp-addons-instatic-backup`, initially
-scheduled for **03:30 in the server's timezone**. Edit its schedule to run before
-your configured Remote Backup job; repair preserves that edit. Disabling or
-uninstalling Instatic removes the cron entry.
-
-**03:30 is a schedule, not a CloudPanel pre-backup hook.** In the CloudPanel
-2.5.4-2 package, `/home/clp/scripts/create_backup.sh` at 04:15 backs up the panel
-application and its database. Site Remote Backups are separate. Changing that
-panel job does not establish ordering for site backups.
-
-Take a fresh recovery snapshot before a manual Remote Backup:
+Create recovery archives immediately with:
 
 ```sh
-# Every migrated instance; nonzero exit status if any backup fails.
+# All Instatic sites
 clp-addons action instatic backup
 
-# One instance.
+# One site
 clp-addons action instatic backup --domain example.com
 ```
 
-The snapshot opens SQLite through Bun's native driver and uses SQLite's
-consistency-preserving `VACUUM INTO` operation, including committed WAL
-transactions. It checks the result as a read-only database and packages the
-standalone copy with the key and metadata, then renames the completed archive
-into place on the same filesystem. Instatic does not require the `sqlite3`
-executable for backups. Failure preserves the previous complete archive. It
-takes the same per-domain operation lock as update/recreate/delete, and does
-not stop the live container. SQLite can take short read locks; this is not a
-zero-lock guarantee.
+The command returns a nonzero status if any requested backup fails. Check that
+the archive timestamp is newer than the last successful run before restoring.
 
-The recovery archive omits uploads because CloudPanel already captures them
-from `htdocs`. Its database reflects the snapshot time; uploads reflect the
-later Remote Backup time. This is not a single point-in-time snapshot of both
-the database and media. A scheduled snapshot can be stale if it failed or the
-Remote Backup ran first. Check command failures and the archive's modification
-time. An application-wide point-in-time backup requires quiescing writes while
-capturing both parts.
+## Restore
 
-## Restore a CloudPanel backup
-
-1. Restore or create the CloudPanel reverse-proxy site for the same domain and
-   recorded loopback port. Install/enable the Instatic addon and Docker on the
-   destination server. The recovery archive's `meta.json` records its version
-   and port; root can inspect it with `tar -xOzf <archive> ./meta.json`.
-2. Stop any existing Instatic container **before replacing files from the site
-   backup**. Restore the site's home files, including `htdocs/<domain>/uploads`
-   and `backups/databases/instatic-<domain>.tar.gz`, under the current site user.
-   Follow CloudPanel's file-restoration procedure; its archive preserves the
-   home-directory layout and is not simply an archive of `htdocs`.
-3. As root, run:
+1. Restore or create the CloudPanel reverse proxy site for the same domain and
+   port. Install CloudPanel Addons with Instatic enabled and make sure Docker is
+   running.
+2. Restore the site's home directory, including its `uploads/` directory and
+   recovery archive. Stop an existing Instatic container before replacing
+   files.
+3. Run as root:
 
    ```sh
    clp-addons action instatic recreate --domain example.com --from-backup
    ```
 
-This explicit recovery command validates the archive's domain, version, port,
-key, expected Instatic schema, and database before replacing data. It restores
-the clean database instead of trusting a file copy of the live SQLite/WAL
-files, removes stale sidecars,
-rebuilds missing `/var/lib` metadata, fixes ownership for the current site user,
-pulls the recorded image, and checks the new container's health. Uploads must
-already have been restored. A recovered metadata file does not grant permission
-to delete an adopted CloudPanel site.
-
-On successful recovery, any previous local data is kept in the `previousData`
-directory reported by the command. Review and remove that directory when no
-longer needed. A failed startup attempts to restore the previous local data and
-container; if rollback itself fails, the command reports where recovery files
-remain. An interrupted migration likewise retains its original data and
-pre-migration snapshot; resolve any `-prev` container or incomplete destination
-before retrying.
-
-Ordinary `recreate` keeps live data and never substitutes a scheduled backup.
-It refuses to generate a new encryption key for an existing instance with a
-missing key. The original key is required to decrypt that instance's data.
-
-The Snapshot button, update rollback, and final deletion archive continue to
-include the database, key, metadata, and uploads. Their private local archives
-remain under `/var/lib/clp-addons/instatic/<domain>/snapshots/` or
-`/var/backups/clp-addons/instatic/`; the scheduled recovery archive is the one
-placed in the site home for CloudPanel.
+The command validates the archive, restores the database and key, fixes
+ownership for the current site user, starts the recorded version, and runs a
+health check. Uploads must already be present. On success, the command reports a
+`previousData` directory when older local data was preserved; remove it after
+you verify the restored site.

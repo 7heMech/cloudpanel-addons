@@ -279,7 +279,7 @@ describe("the manager index", () => {
     const html = await render(["instatic"], null, { available: ["stager"] });
     expect(html).toContain("<h2>Available</h2>");
     expect(html).toContain("enableAddon('stager')");
-    expect(html).toContain("Open Instatic");
+    expect(html).toContain('aria-label="Open Instatic CMS">Open</a>');
     expect(html).toContain("disableAddon('instatic')");
   });
 
