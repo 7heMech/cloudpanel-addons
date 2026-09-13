@@ -80,7 +80,9 @@ test("failed SQLite backup preserves the last complete archive and cleans stagin
   try {
     const archive = makeNativeBackup(domain, f.paths);
     const original = readFileSync(archive);
-    expect(() => makeNativeBackup(domain, { ...f.paths, sqlite3: "/bin/false" })).toThrow("previous backup preserved");
+    f.db.close();
+    writeFileSync(f.dbFile, "SQLite format 3\0");
+    expect(() => makeNativeBackup(domain, f.paths)).toThrow("previous backup preserved");
     expect(readFileSync(archive)).toEqual(original);
     expect(readdirSync(dirname(archive))).toEqual([`instatic-${domain}.tar.gz`]);
     rmSync(f.storage.envFile);
@@ -420,7 +422,7 @@ test("restore rejects a backup for a different domain before altering the contai
     writeFileSync(f.meta, recorded.replace(domain, "different.example.com"));
     expect(() => makeNativeBackup(domain, f.paths)).toThrow("metadata does not match");
     // Simulate an externally restored archive, bypassing publication guards.
-    expect(makeSnapshot(f.state, archive, f.paths.sqlite3, { ...f.storage, includeUploads: false })).toBe(true);
+    expect(makeSnapshot(f.state, archive, { ...f.storage, includeUploads: false })).toBe(true);
     writeFileSync(f.meta, recorded);
     const result = action(f, ["recreate", "--domain", domain, "--from-backup"]);
     expect(result.reply.error).toContain("does not match this site");

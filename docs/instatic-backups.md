@@ -68,13 +68,15 @@ clp-addons action instatic backup
 clp-addons action instatic backup --domain example.com
 ```
 
-The snapshot uses SQLite's [online backup API](https://sqlite.org/backup.html),
-including committed WAL transactions. It checks the result and converts the
-detached copy to a standalone database. It packages that database with the key
-and metadata, then renames the completed archive into place on the same
-filesystem. Failure preserves the previous complete archive. It takes the same
-per-domain operation lock as update/recreate/delete, and does not stop the live
-container. SQLite can take short read locks; this is not a zero-lock guarantee.
+The snapshot opens SQLite through Bun's native driver and uses SQLite's
+consistency-preserving `VACUUM INTO` operation, including committed WAL
+transactions. It checks the result as a read-only database and packages the
+standalone copy with the key and metadata, then renames the completed archive
+into place on the same filesystem. Instatic does not require the `sqlite3`
+executable for backups. Failure preserves the previous complete archive. It
+takes the same per-domain operation lock as update/recreate/delete, and does
+not stop the live container. SQLite can take short read locks; this is not a
+zero-lock guarantee.
 
 The recovery archive omits uploads because CloudPanel already captures them
 from `htdocs`. Its database reflects the snapshot time; uploads reflect the

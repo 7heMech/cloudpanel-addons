@@ -938,9 +938,10 @@ backstop and also refreshes the snapshot and the sudoers drop-in.
   passed by `--env-file`, not `-e`, so it never appears in `ps` output, and it
   travels inside snapshots, because a restored database without it has
   unreadable secret columns.
-- **Snapshot with `sqlite3 .backup`, not `cp` or `tar` over the live file**,
-  which can capture a database mid-write. The `-wal`/`-shm` pair is skipped;
-  `.backup` folds it in, and copying it alongside would restore a torn pair.
+- **Snapshot with Bun's native SQLite `VACUUM INTO`, not `cp` or `tar` over the
+  live file**, which can capture a database mid-write. The `-wal`/`-shm` pair
+  is skipped; `VACUUM INTO` folds committed WAL pages into a standalone file,
+  and copying the sidecars alongside it would restore a torn pair.
 - **Update is snapshot, pull, restart, health check, auto rollback.** The health
   check polls the container, then confirms nginx actually serves the hostname.
   On failure the container logs are captured before rolling back. Auto-update is

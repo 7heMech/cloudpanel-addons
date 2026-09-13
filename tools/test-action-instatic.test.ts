@@ -77,7 +77,7 @@ test("makeSnapshot archives non-SQLite regular data files", () => {
     writeFileSync(file, "plain data\n");
     utimesSync(file, mtime, mtime);
 
-    expect(makeSnapshot(instance, archive, "unused-sqlite3")).toBe(true);
+    expect(makeSnapshot(instance, archive)).toBe(true);
 
     mkdirSync(restored);
     execFileSync("tar", ["-xzf", archive, "-C", restored]);
@@ -116,7 +116,7 @@ test("makeSnapshot does not dereference symlinks or archive symlinked host files
     // 4. Symlink env file pointing to host secret
     symlinkSync(secretFile, join(instance, "instatic.env"));
 
-    expect(makeSnapshot(instance, archive, "unused-sqlite3")).toBe(true);
+    expect(makeSnapshot(instance, archive)).toBe(true);
 
     mkdirSync(restored);
     execFileSync("tar", ["-xzf", archive, "-C", restored]);

@@ -13,6 +13,7 @@
 
 // The .test.ts suffix keeps this suite in Bun's default discovery set.
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { CLIENT_JS, dashboardView, isInstanceMissing, newInstanceView } from "../addons/instatic/app/views";
 import { BASE_CLIENT_JS, THEME_INIT_JS, renderLayout } from "../lib/app-ui";
 import { headerTarget, headerUpdateScript } from "../lib/panel-nav";
@@ -1123,7 +1124,7 @@ console.log("\n== two addons hand out ports from one block ==");
       const paths = {
         lockDir: `${d}/lock`, dataBaseDir: d, backupDir: `${d}/backups`, jobsDir: `${d}/jobs`,
         actionBinary: `${d}/clp-addons`, panelDb: `${d}/panel.db`,
-        clpctl: `${d}/clpctl`, panelIdentityFile: `${d}/identity`, sqlite3: "sqlite3", homeDir: `${d}/home`,
+        clpctl: `${d}/clpctl`, panelIdentityFile: `${d}/identity`, homeDir: `${d}/home`,
       };
       return portHolder(asked, self, paths) ?? "FREE";
     } finally {
@@ -1319,8 +1320,10 @@ console.log("\n== archiving an instance is not a rolling window ==");
     const inst = `${dir}/instance`;
     mkdirSync(`${inst}/data`, { recursive: true });
     mkdirSync(`${inst}/uploads`, { recursive: true });
-    // A real SQLite file, so the sqlite3 .backup branch is the one exercised.
-    execFileSync("sqlite3", [`${inst}/data/instatic.db`, "create table t(x); insert into t values(1);"]);
+    // A real SQLite file, so the native backup branch is exercised.
+    const db = new Database(`${inst}/data/instatic.db`);
+    db.run("create table t(x); insert into t values(1);");
+    db.close();
     writeFileSync(`${inst}/instatic.env`, "INSTATIC_SECRET_KEY=deadbeef\n");
 
     const backups = `${dir}/backups`;

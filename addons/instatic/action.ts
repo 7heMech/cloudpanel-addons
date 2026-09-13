@@ -92,7 +92,6 @@ export interface InstaticActionPaths {
   panelDb: string;
   clpctl: string;
   panelIdentityFile: string;
-  sqlite3: string;
   homeDir: string;
 }
 
@@ -105,7 +104,6 @@ export const DEFAULT_INSTATIC_ACTION_PATHS: InstaticActionPaths = {
   panelDb: "/home/clp/htdocs/app/data/db.sq3",
   clpctl: "/usr/bin/clpctl",
   panelIdentityFile: PANEL_IDENTITY_PATH,
-  sqlite3: "sqlite3",
   homeDir: "/home",
 };
 
@@ -676,17 +674,32 @@ async function healthCheck(port: number, domain: string): Promise<boolean> {
   return false;
 }
 
-function sqliteBackup(source: string, destination: string, sqlite3 = "sqlite3"): boolean {
-  // Dot commands use C-style quoting, not SQL string escaping. Readonly also
-  // prevents a missing source from silently becoming a successful empty backup.
-  const result = runCommand(sqlite3, ["-batch", "-readonly", "-cmd", ".timeout 5000", source, `.backup ${JSON.stringify(destination)}`]);
-  if (result.stderr) diagnostic(result.stderr);
-  if (!result.ok) return false;
-  // The backup inherits WAL mode. Make the detached destination a standalone
-  // rollback-journal database before publishing it; no sidecars are required.
-  const check = runCommand(sqlite3, ["-batch", destination, "PRAGMA journal_mode=DELETE; PRAGMA quick_check;"]);
-  if (check.stderr) diagnostic(check.stderr);
-  return check.ok && check.stdout.trim().replaceAll("\r", "") === "delete\nok";
+function sqliteLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function sqliteBackup(source: string, destination: string): boolean {
+  let db: Database | undefined;
+  let check: Database | undefined;
+  try {
+    // VACUUM INTO is SQLite's native consistent-backup operation. Opening the
+    // live source read-only keeps the action from writing application state;
+    // SQLite includes committed WAL pages in the resulting standalone file.
+    db = new Database(source, { readonly: true });
+    db.run("PRAGMA busy_timeout=5000");
+    db.run(`VACUUM INTO ${sqliteLiteral(destination)}`);
+    db.close(true);
+    db = undefined;
+
+    check = new Database(destination, { readonly: true });
+    const result = check.query("PRAGMA quick_check").get() as { quick_check?: string } | null;
+    return result?.quick_check === "ok";
+  } catch {
+    return false;
+  } finally {
+    try { db?.close(); } catch {}
+    try { check?.close(); } catch {}
+  }
 }
 
 function withUmask<T>(mask: number, body: () => T): T {
@@ -717,7 +730,7 @@ export interface SnapshotSources {
   includeUploads?: boolean;
 }
 
-export function makeSnapshot(dir: string, out: string, sqlite3 = "sqlite3", sources?: SnapshotSources): boolean {
+export function makeSnapshot(dir: string, out: string, sources?: SnapshotSources): boolean {
   let stage: string;
   try {
     stage = mkdtempSync(join(dirname(out), ".instatic-snapshot-"));
@@ -744,7 +757,7 @@ export function makeSnapshot(dir: string, out: string, sqlite3 = "sqlite3", sour
           return false;
         }
         if (header === "SQLite format 3") {
-          if (!sqliteBackup(source, destination, sqlite3)) {
+          if (!sqliteBackup(source, destination)) {
             diagnostic(`[instatic] WARN: sqlite backup failed for ${entry.name}\n`);
             return false;
           }
@@ -1052,7 +1065,7 @@ async function replaceInstance(action: ParsedInstaticAction, paths: InstaticActi
       mkdirSync(snapshots, { recursive: true, mode: 0o700 });
       chmodSync(snapshots, 0o700);
       snapshot = join(snapshots, `pre-${updating ? "update" : "migration"}-${previousTag}-${dateStamp()}.tar.gz`);
-      if (!makeSnapshot(dir, snapshot, paths.sqlite3, storage)) failAction(`could not snapshot ${domain}; refusing to continue`);
+      if (!makeSnapshot(dir, snapshot, storage)) failAction(`could not snapshot ${domain}; refusing to continue`);
     }
     if (present) {
       const result = runCommand("docker", ["rename", name, `${name}-prev`]);
@@ -1163,7 +1176,7 @@ export function deleteInstaticInstance(
   const storage = instanceStorage(domain, paths);
   checkStorage(storage);
   const nativeArchive = storage.legacy ? null : nativeBackupPath(domain, paths);
-  if (!makeSnapshot(dir, backup, paths.sqlite3, storage)) failAction("final archive failed; nothing was deleted");
+  if (!makeSnapshot(dir, backup, storage)) failAction("final archive failed; nothing was deleted");
 
   const containers = runCommand("docker", ["ps", "-a", "--format", "{{.Names}}"]);
   if (containers.stderr) diagnostic(containers.stderr);
@@ -1201,7 +1214,7 @@ function cmdSnapshot(action: ParsedInstaticAction, paths: InstaticActionPaths): 
   const out = join(dir, "snapshots", `snapshot-${dateStamp()}.tar.gz`);
   const storage = instanceStorage(domain, paths);
   checkStorage(storage);
-  if (!makeSnapshot(dir, out, paths.sqlite3, storage)) failAction(`snapshot failed for ${domain}`);
+  if (!makeSnapshot(dir, out, storage)) failAction(`snapshot failed for ${domain}`);
   pruneSnapshots(join(dir, "snapshots"));
   emitActionOk({ domain, snapshot: out });
 }
@@ -1226,7 +1239,7 @@ export function makeNativeBackup(domain: string, paths: InstaticActionPaths): st
   const backup = nativeBackupPath(domain, paths);
   assertSafePath(backup);
   mkdirSync(dirname(backup), { recursive: true, mode: 0o750 });
-  if (!makeSnapshot(dir, backup, paths.sqlite3, { ...storage, includeUploads: false })) failAction(`native backup failed for ${domain}; previous backup preserved`);
+  if (!makeSnapshot(dir, backup, { ...storage, includeUploads: false })) failAction(`native backup failed for ${domain}; previous backup preserved`);
   return backup;
 }
 
@@ -1301,7 +1314,7 @@ async function restoreNativeBackup(action: ParsedInstaticAction, paths: Instatic
     if (!proxy.ok) failAction(`restore the CloudPanel reverse proxy for port ${port} first: ${proxy.reason}`);
     secretKey(incoming.envFile);
     if (fileHeader(join(stage, "database")) !== "SQLite format 3"
-      || !sqliteBackup(join(stage, "database"), join(incoming.dataDir, "instatic.db"), paths.sqlite3)) {
+      || !sqliteBackup(join(stage, "database"), join(incoming.dataDir, "instatic.db"))) {
       failAction("recovery database is invalid; current data preserved");
     }
     const present = containerExists(name);

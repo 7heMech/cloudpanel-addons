@@ -64,7 +64,7 @@ for scheduling and the explicit recovery command.
 
 ## Development
 
-Requires Bun and the SQLite CLI (`sqlite3`). The installer lint check also requires ShellCheck.
+Requires Bun. The installer lint check also requires ShellCheck.
 
 ```bash
 bun install
