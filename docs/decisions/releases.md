@@ -18,6 +18,12 @@ verified update path as `clp-addons update` only after an administrator selects
 **Install update**. The work runs in a transient systemd job because replacing
 the binary restarts the manager.
 
+The native CloudPanel header asks the manager for update state; it does not
+depend on the updater process's compile-time version. That process can reconcile
+Twig after replacing the binary, so the version-independent header reads
+`GET /addons/api/update` and rechecks restored or refocused pages. The running
+manager is the source of truth.
+
 The installed binary and helper checksums are recorded in a root-owned
 manifest. Reapplying the same version reuses files only when every checksum
 still matches; otherwise the release is downloaded and verified again.

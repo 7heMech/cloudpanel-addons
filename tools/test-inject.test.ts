@@ -82,12 +82,12 @@ const leftover = existsSync(stateDir) ? readdirSync(stateDir) : [];
 check("no snapshot state is left behind", leftover.length === 0, leftover.join(", "));
 
 // The single manager header target preserves native order, uses Addons label, and includes update check.
-const navOriginal = `<div class="nav-link-container w-100"><a>Dashboard</a>${headerTarget("0.9.3").anchorAfter}</div>`;
+const navOriginal = `<div class="nav-link-container w-100"><a>Dashboard</a>${headerTarget().anchorAfter}</div>`;
 writeFileSync(file, navOriginal);
 
 const managerInjection: Injection = {
   addon: "manager",
-  target: { ...headerTarget("0.9.3"), template: TEMPLATE },
+  target: { ...headerTarget(), template: TEMPLATE },
   url: "/addons/",
 };
 reconcile([managerInjection], PATHS);
@@ -114,7 +114,7 @@ function simulateInstalledInjections(installed: string[], exclude?: string): Inj
   const active = installed.filter((n) => n !== exclude);
   const injs: Injection[] = [];
   if (active.length > 0) {
-    injs.push({ addon: "manager", target: { ...headerTarget("0.9.3"), template: TEMPLATE }, url: "/addons/" });
+    injs.push({ addon: "manager", target: { ...headerTarget(), template: TEMPLATE }, url: "/addons/" });
   }
   for (const name of active) {
     if (name === "instatic") {

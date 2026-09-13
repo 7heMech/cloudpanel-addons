@@ -2,89 +2,71 @@ import type { AddonTarget } from "../cli/paths";
 import { esc, escJs } from "./app-http";
 import { UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
 
-export function headerUpdateScript(version: string, addonsUrl = "/addons/"): string {
-  const updateUrl = `${addonsUrl.replace(/\/+$/, "")}/update`;
+export function headerUpdateScript(addonsUrl = "/addons/"): string {
+  const baseUrl = addonsUrl.replace(/\/+$/, "");
+  const updateUrl = `${baseUrl}/update`;
+  const statusUrl = `${baseUrl}/api/update`;
   return `(function() {
   if (window.__clpAddonsUpdateInit) return;
   window.__clpAddonsUpdateInit = true;
-  var currentVer = "${escJs(version)}";
-  if (!currentVer || currentVer === "0.0.0-dev") return;
 
-  function isNewer(latest) {
-    function parse(ver) {
-      var match = ver.match(/^v?([0-9]+)\\.([0-9]+)\\.([0-9]+)(?:-([0-9A-Za-z.-]+))?(?:\\+[0-9A-Za-z.-]+)?$/);
-      if (!match) return null;
-      return { core: [Number(match[1]), Number(match[2]), Number(match[3])], pre: match[4] ? match[4].split(".") : null };
-    }
-    var a = parse(latest);
-    var b = parse(currentVer);
-    if (!a || !b) return false;
-    var pa = a.core;
-    var pb = b.core;
-    for (var i = 0; i < 3; i++) {
-      var diff = (pa[i] || 0) - (pb[i] || 0);
-      if (diff !== 0) return diff > 0;
-    }
-    if (!a.pre && !b.pre) return false;
-    if (!a.pre) return true;
-    if (!b.pre) return false;
-    for (var j = 0; j < Math.max(a.pre.length, b.pre.length); j++) {
-      if (a.pre[j] === undefined) return true;
-      if (b.pre[j] === undefined) return false;
-      var aNumeric = /^[0-9]+$/.test(a.pre[j]);
-      var bNumeric = /^[0-9]+$/.test(b.pre[j]);
-      if (aNumeric && bNumeric) {
-        var preDiff = Number(a.pre[j]) - Number(b.pre[j]);
-        if (preDiff !== 0) return preDiff > 0;
-      } else if (aNumeric !== bNumeric) {
-        return !aNumeric;
-      } else if (a.pre[j] !== b.pre[j]) {
-        return a.pre[j] > b.pre[j];
-      }
-    }
-    return false;
+  function hide() {
+    var notice = document.getElementById("clp-addons-update-notice");
+    if (notice) notice.remove();
+    var header = document.querySelector(".header");
+    if (header) header.classList.remove("clp-addons-has-update");
   }
 
-  function render(latest) {
-    // Recompare cached releases against the installed version so the tag goes
-    // away immediately after an update, even within the cache lifetime.
-    if (!isNewer(latest) || document.getElementById("clp-addons-update-notice")) return;
+  function render(info) {
+    if (!info || info.hasUpdate !== true || typeof info.latest !== "string") {
+      hide();
+      return;
+    }
+    var latest = info.latest.replace(/^v/, "");
     var header = document.querySelector(".header");
     var tools = header && header.querySelector(".navbar-right");
     if (!tools) return;
-    var holder = document.createElement("div");
-    holder.innerHTML = "${escJs(updateNoticeHtml("", updateUrl))}";
-    var el = holder.firstElementChild;
-    var ver = latest.replace(/^v/, "");
-    el.querySelector(".update-label").textContent = "Addons · v" + ver + " available";
-    el.querySelector(".clp-addon-update-badge").title = "clp-addons v" + ver + " available";
-    tools.insertAdjacentElement("beforebegin", el);
+    var notice = document.getElementById("clp-addons-update-notice");
+    if (!notice) {
+      var holder = document.createElement("div");
+      holder.innerHTML = "${escJs(updateNoticeHtml("", updateUrl))}";
+      notice = holder.firstElementChild;
+      tools.insertAdjacentElement("beforebegin", notice);
+    }
+    notice.querySelector(".update-label").textContent = "Addons · v" + latest + " available";
+    notice.querySelector(".clp-addon-update-badge").title = "clp-addons v" + latest + " available";
     header.classList.add("clp-addons-has-update");
   }
 
-  function init() {
-    var key = "clp_addons_update_check";
-    var cache = null;
-    var now = Date.now();
-    try { cache = JSON.parse(localStorage.getItem(key) || "null"); } catch(e) {}
-    if (cache && typeof cache.latest === "string" && now >= cache.time && now - cache.time < 15 * 60 * 1000) {
-      render(cache.latest);
+  var checking = false;
+  var checkAgain = false;
+  function check() {
+    if (checking) {
+      checkAgain = true;
       return;
     }
-    fetch("https://api.github.com/repos/7heMech/cloudpanel-addons/releases/latest", {
-      headers: { Accept: "application/vnd.github+json" }
+    checking = true;
+    fetch("${escJs(statusUrl)}", {
+      cache: "no-store",
+      headers: { Accept: "application/json" }
     })
-    .then(function(r) { return r.ok ? r.json() : null; })
-    .then(function(data) {
-      if (!data || typeof data.tag_name !== "string") return;
-      var latest = data.tag_name.replace(/^v/, "");
-      try { localStorage.setItem(key, JSON.stringify({ time: now, latest: latest })); } catch(e) {}
-      render(latest);
+    .then(function(response) { return response.ok ? response.json() : null; })
+    .then(function(body) {
+      render(body && body.ok !== false ? body.data : null);
     })
-    .catch(function() {});
+    .catch(function() { hide(); })
+    .finally(function() {
+      checking = false;
+      if (checkAgain) {
+        checkAgain = false;
+        check();
+      }
+    });
   }
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init, { once: true });
-  else init();
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", check, { once: true });
+  else check();
+  window.addEventListener("pageshow", function(event) { if (event.persisted) check(); });
+  window.addEventListener("focus", check);
 })();`;
 }
 
@@ -121,13 +103,13 @@ const PANEL_UPDATE_STYLE = UPDATE_STYLE + `
 }
 `;
 
-function updateSnippet(version: string, url: string): string {
+function updateSnippet(url: string): string {
   return `<style>${PANEL_UPDATE_STYLE}</style>
-      <script>${headerUpdateScript(version || process.env.CLP_ADDONS_VERSION || "", url)}</script>`;
+      <script>${headerUpdateScript(url)}</script>`;
 }
 
 /** Keep the single manager navigation entry after CloudPanel's native links. */
-export function headerTarget(version: string): AddonTarget {
+export function headerTarget(): AddonTarget {
   return {
     slug: "header-nav",
     template: "Frontend/Partial/header.html.twig",
@@ -136,13 +118,13 @@ export function headerTarget(version: string): AddonTarget {
     snippet: (url) => `
       {% if is_granted('ROLE_ADMIN') %}
       <a href="${esc(url)}" class="clp-addon-nav" title="Addons">Addons</a>
-      ${updateSnippet(version, url)}
+      ${updateSnippet(url)}
       {% endif %}`,
   };
 }
 
 /** The Admin Area uses its own header without the frontend navigation. */
-export function adminHeaderTarget(version: string): AddonTarget {
+export function adminHeaderTarget(): AddonTarget {
   return {
     slug: "admin-header-update",
     template: "Admin/Partial/header.html.twig",
@@ -150,7 +132,7 @@ export function adminHeaderTarget(version: string): AddonTarget {
     required: false,
     snippet: (url) => `
       {% if is_granted('ROLE_ADMIN') %}
-      ${updateSnippet(version, url)}
+      ${updateSnippet(url)}
       {% endif %}`,
   };
 }

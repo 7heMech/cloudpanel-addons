@@ -396,6 +396,20 @@ describe("the dedicated update page", () => {
 });
 
 describe("manager route decoding and safe segment decoder", () => {
+  test("GET update status exposes the manager process's version comparison", async () => {
+    const info = { current: "1.0.0", latest: "1.1.0", hasUpdate: true };
+    const response = await handleManagerRoute(
+      new Request("http://localhost/api/update"),
+      "/api/update",
+      {} as any,
+      info,
+    );
+    expect(response).not.toBeNull();
+    expect(response!.status).toBe(200);
+    expect(response!.headers.get("cache-control")).toBe("no-store");
+    expect(await response!.json()).toEqual({ ok: true, data: info });
+  });
+
   test("safeDecodePathSegment decodes valid percent encodings and normal strings", () => {
     expect(safeDecodePathSegment("stager")).toBe("stager");
     expect(safeDecodePathSegment("20260908T120000Z-aaaaaa")).toBe("20260908T120000Z-aaaaaa");
