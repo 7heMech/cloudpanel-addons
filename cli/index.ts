@@ -330,7 +330,13 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
       // existed. Such a binary still knows how to update itself. The internal
       // flag bounds the handoff in current releases and is ignored safely by
       // older ones, whose installed version already equals the requested tag.
-      run(CLI_BIN, ["update", ...argv, "--no-self-update", `--updated-from=${current}`], { stdio: "inherit" });
+      run(CLI_BIN, [
+        "update",
+        ...argv,
+        `--version=${release.tag}`,
+        "--no-self-update",
+        `--updated-from=${current}`,
+      ], { stdio: "inherit" });
       return;
     }
   }
