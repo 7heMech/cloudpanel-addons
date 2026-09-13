@@ -20,7 +20,7 @@ html.dark #clp-addons-update-notice {
   --update-link: #c9d1d9; --update-link-border: #444c59; --update-hover: #303640;
 }
 #clp-addons-update-notice .clp-addon-update-badge {
-  display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 160px;
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 220px;
   height: 28px; padding: 0 9px; box-sizing: border-box; border-radius: 999px;
   background: var(--update-bg); color: var(--update-text); border: 1px solid var(--update-border);
   font-size: 12px; font-weight: 600; line-height: 1.25; white-space: nowrap;
@@ -45,7 +45,7 @@ export function updateNoticeHtml(latest: string, updateUrl = UPDATE_PATH): strin
   const version = latest.replace(/^v/, "");
   return `<div id="clp-addons-update-notice" role="group" aria-label="CloudPanel Addons update">
   <span class="clp-addon-update-badge" title="clp-addons v${esc(version)} available">
-    <span class="dot" aria-hidden="true"></span><span class="update-label">v${esc(version)} available</span>
+    <span class="dot" aria-hidden="true"></span><span class="update-label">Addons · v${esc(version)} available</span>
   </span>
   <a class="clp-addon-changelog-link" href="${CHANGELOG_URL}" target="_blank" rel="noopener noreferrer" aria-label="Changelog (opens in a new tab)">Changelog</a>
   <a class="clp-addon-update-link" href="${esc(updateUrl)}">Update</a>

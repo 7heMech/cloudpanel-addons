@@ -1641,7 +1641,7 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
     updateNotice: { current: "0.9.3", latest: "0.9.4" },
   });
   const header = htmlWith.slice(htmlWith.indexOf("<header"), htmlWith.indexOf("</header>"));
-  check("layout with updateNotice shows the release in its header", header.includes("v0.9.4 available"));
+  check("layout with updateNotice identifies the Addons release in its header", header.includes("Addons · v0.9.4 available"));
   check("header separates changelog from the update page", header.includes('href="/addons/update"') && header.includes(">Changelog</a>"));
   check("layout with updateNotice has no duplicate content banner", !htmlWith.includes('class="notice update-banner"'));
 
