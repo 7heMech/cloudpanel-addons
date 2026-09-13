@@ -981,10 +981,6 @@ function sqlLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-function sqliteRead(paths: StagerActionPaths, statement: string): CommandResult {
-  return runCommand(paths.sqlite3, ["-readonly", paths.panelDb, statement]);
-}
-
 let panelWriteReject = "";
 
 function panelUpdateSite(ctx: RunContext, type: string, application: string, bodyFile = ""): boolean {
@@ -1026,6 +1022,10 @@ function panelUpdateSite(ctx: RunContext, type: string, application: string, bod
       "       updated_at = datetime('now')",
       ` WHERE domain_name = ${sqlLiteral(ctx.target)} AND type = ${sqlLiteral(type)};`,
     ].join("\n");
+    // Keep the mutation in CloudPanel's clp-owned sqlite process. The panel
+    // database uses rollback journals; a root-owned journal left by a crash
+    // can prevent the clp-owned panel from recovering it. Readback below is
+    // native Bun SQLite, so the CLI is needed only for this ownership boundary.
     const updated = runCommand("runuser", ["-u", "clp", "--", ctx.paths.sqlite3, ctx.paths.panelDb, statement]);
     if (updated.stderr) diagnostic(updated.stderr);
     if (!updated.ok) {
@@ -1033,11 +1033,16 @@ function panelUpdateSite(ctx: RunContext, type: string, application: string, bod
       return false;
     }
 
-    const checkStatement = bodyFile
-      ? `SELECT CASE WHEN vhost_template = CAST(readfile(${sqlLiteral(bodyFile)}) AS TEXT) AND application = CAST(readfile(${sqlLiteral(appFile)}) AS TEXT) THEN 1 ELSE 0 END FROM site WHERE domain_name = ${sqlLiteral(ctx.target)};`
-      : `SELECT CASE WHEN application = CAST(readfile(${sqlLiteral(appFile)}) AS TEXT) THEN 1 ELSE 0 END FROM site WHERE domain_name = ${sqlLiteral(ctx.target)};`;
-    const check = sqliteRead(ctx.paths, checkStatement);
-    if (!check.ok || check.stdout.trim() !== "1") {
+    const expectedVhost = bodyFile ? readFileSync(bodyFile, "utf8") : "";
+    const check = queryPanel(ctx.paths, (db) => {
+      const row = db.query(
+        "SELECT application, vhost_template FROM site WHERE domain_name = ? AND type = ?;",
+      ).get(ctx.target, type) as { application?: unknown; vhost_template?: unknown } | null;
+      return row !== null
+        && row.application === application
+        && (!bodyFile || row.vhost_template === expectedVhost);
+    });
+    if (!check) {
       panelWriteReject = "the panel record does not read back as it was written";
       return false;
     }

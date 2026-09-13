@@ -64,7 +64,6 @@ if [ "${scenario}" = panel-fails ]; then exit 1; fi
       panelDb,
       clpctl: panel,
       panelIdentityFile: join(root, "identity"),
-      sqlite3: "sqlite3",
     };
 
     const oldPath = process.env.PATH;

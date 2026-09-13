@@ -8,9 +8,8 @@ export { type ActionResult };
 const TIMEOUTS: Record<string, number> = {
   create: 300_000,
   update: 300_000,
-  // recreate does not pull, but it does chown the instance's data and then
-  // wait on the same health check as create.
-  recreate: 180_000,
+  // Recreate may snapshot and migrate a legacy instance into its site home.
+  recreate: 300_000,
   delete: 180_000,
   snapshot: 120_000,
 };

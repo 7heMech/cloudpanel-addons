@@ -13,6 +13,7 @@
 
 // The .test.ts suffix keeps this suite in Bun's default discovery set.
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { CLIENT_JS, dashboardView, isInstanceMissing, newInstanceView } from "../addons/instatic/app/views";
 import { BASE_CLIENT_JS, THEME_INIT_JS, renderLayout } from "../lib/app-ui";
 import { headerTarget, headerUpdateScript } from "../lib/panel-nav";
@@ -423,7 +424,9 @@ console.log("\n== an application name may never reach SQL as text ==");
 // into site.application verbatim, and /etc/sudoers.d/cloudpanel lets every
 // local account run clpctlWrapper. Interpolating it was a SQL injection that
 // escalated to an arbitrary root write, because the read-back runs `sqlite3
-// -readonly` as root and writefile() is compiled in even there.
+// -readonly` as root and writefile() is compiled in even there. The write is
+// still deliberately performed as clp, while the current read-back uses a
+// fixed native Bun query instead of executing another shell SQL statement.
 //
 // Two things are pinned. The predicate, driven as the real bash function; and
 // the structural property that the statement holds no application text at all,
@@ -473,9 +476,10 @@ console.log("\n== an application name may never reach SQL as text ==");
   }
 
   // The predicate is not the whole answer, and this is the half that would
-  // survive someone adding a caller that forgets to call it. Neither statement
-  // may contain the application as text: it goes in through readfile(), the same
-  // way the nginx body does.
+  // survive someone adding a caller that forgets to call it. The write
+  // statement may not contain the application as text: it enters through
+  // readfile(), the same way the nginx body does. Readback is a parameterized
+  // native query and must not reintroduce shell SQL.
   const src = readFileSync("addons/stager/action.ts", "utf-8");
   const stmt = src.slice(src.indexOf("function panelUpdateSite"));
   const body = stmt.slice(0, stmt.indexOf("\n}\n") + 2);
@@ -483,11 +487,10 @@ console.log("\n== an application name may never reach SQL as text ==");
   check("the panel write never interpolates the application name",
     !sql.includes("${application}") && sql.includes("readfile(${sqlLiteral(appFile)})"),
     body.split("\n").filter((l) => l.includes("application")).join(" | "));
-  // Three: the UPDATE, and the read-back in each of its two forms -- with a
-  // carried vhost and with only the application to put back.
-  check("and neither form of the read-back does either",
-    (body.match(/application = CAST\(readfile/g) ?? []).length === 3,
-    body.split("\n").filter((l) => l.includes("application =")).join(" | "));
+  check("panel readback uses native parameterized SQLite",
+    body.includes("const check = queryPanel(ctx.paths") &&
+      body.includes("SELECT application, vhost_template FROM site WHERE domain_name = ? AND type = ?;"),
+    body.split("\n").filter((l) => l.includes("queryPanel") || l.includes("SELECT application")).join(" | "));
 
   // vhost_template_exists put the same value in a query and doubled the quotes
   // in it, which is sanitizing rather than rejecting. It must now refuse.
@@ -1122,7 +1125,7 @@ console.log("\n== two addons hand out ports from one block ==");
       const paths = {
         lockDir: `${d}/lock`, dataBaseDir: d, backupDir: `${d}/backups`, jobsDir: `${d}/jobs`,
         actionBinary: `${d}/clp-addons`, panelDb: `${d}/panel.db`,
-        clpctl: `${d}/clpctl`, panelIdentityFile: `${d}/identity`, sqlite3: "sqlite3",
+        clpctl: `${d}/clpctl`, panelIdentityFile: `${d}/identity`, homeDir: `${d}/home`,
       };
       return portHolder(asked, self, paths) ?? "FREE";
     } finally {
@@ -1318,8 +1321,10 @@ console.log("\n== archiving an instance is not a rolling window ==");
     const inst = `${dir}/instance`;
     mkdirSync(`${inst}/data`, { recursive: true });
     mkdirSync(`${inst}/uploads`, { recursive: true });
-    // A real SQLite file, so the sqlite3 .backup branch is the one exercised.
-    execFileSync("sqlite3", [`${inst}/data/instatic.db`, "create table t(x); insert into t values(1);"]);
+    // A real SQLite file, so the native backup branch is exercised.
+    const db = new Database(`${inst}/data/instatic.db`);
+    db.run("create table t(x); insert into t values(1);");
+    db.close();
     writeFileSync(`${inst}/instatic.env`, "INSTATIC_SECRET_KEY=deadbeef\n");
 
     const backups = `${dir}/backups`;

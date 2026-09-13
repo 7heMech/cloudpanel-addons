@@ -130,6 +130,22 @@ commands used by installation. Repair restores service-user, socket, panel ident
 unit, snapshot, Twig, and Nginx invariants without a second login or manual
 domain configuration.
 
+### Instatic native backups
+
+Instatic's authoritative metadata stays under `/var/lib/clp-addons/instatic`.
+New or migrated instances keep the database and env file outside the document
+root under `/home/<siteUser>/instatic/<domain>`, and expose uploads under
+`htdocs/<domain>/uploads`. CloudPanel includes the entire home directory in
+Remote Backups, so private application data need not be under the web root.
+
+A scheduled recovery archive contains a clean SQLite backup, its encryption
+key, and instance metadata. It is published by atomic rename and kept separate
+from the live SQLite/WAL copy. Recovery is explicit (`recreate --from-backup`)
+and rebuilds missing metadata; ordinary recreate preserves live data. See
+[Instatic backup setup and recovery](instatic-backups.md) for the schedule,
+migration, permissions, and consistency limits. These paths supersede the
+historical storage descriptions below.
+
 ## Historical design record
 
 The sections that follow are preserved from the pre-socket design. They are
@@ -922,9 +938,14 @@ backstop and also refreshes the snapshot and the sudoers drop-in.
   passed by `--env-file`, not `-e`, so it never appears in `ps` output, and it
   travels inside snapshots, because a restored database without it has
   unreadable secret columns.
-- **Snapshot with `sqlite3 .backup`, not `cp` or `tar` over the live file**,
-  which can capture a database mid-write. The `-wal`/`-shm` pair is skipped;
-  `.backup` folds it in, and copying it alongside would restore a torn pair.
+- **Snapshot with Bun's native SQLite `VACUUM INTO`, not `cp` or `tar` over the
+  live file**, which can capture a database mid-write. The `-wal`/`-shm` pair
+  is skipped; `VACUUM INTO` folds committed WAL pages into a standalone file,
+  and copying the sidecars alongside it would restore a torn pair.
+- **Restore checks the Instatic schema before stopping the container.** A
+  readable, internally consistent SQLite file with the wrong tables or missing
+  baseline seed rows is still not an application backup and must leave current
+  storage untouched.
 - **Update is snapshot, pull, restart, health check, auto rollback.** The health
   check polls the container, then confirms nginx actually serves the hostname.
   On failure the container logs are captured before rolling back. Auto-update is
@@ -1384,7 +1405,10 @@ touch rather than by good intentions:
   `Generic', user = 'root` rewrote `site.user` to `root`. Worse, the read-back
   runs `sqlite3 -readonly` **as root** and this build has `fileio` compiled in,
   so `SELECT writefile('/tmp/x', ...)` under `-readonly` created a root-owned
-  file -- an arbitrary root write reachable from a template name.
+  file -- an arbitrary root write reachable from a template name. The
+  read-back now uses a fixed, parameterized Bun SQLite query. The mutation
+  remains in a `runuser -u clp` sqlite process so a rollback journal cannot be
+  left root-owned if the write is interrupted.
 
   So `application_ok` refuses any name outside `[A-Za-z0-9 ._-]` (measured, not
   guessed: every stock template name on this box and every `site.application`

@@ -18,6 +18,33 @@ const realProvision = async (): Promise<typeof import("../cli/provision")> =>
 
 const REPO = join(import.meta.dir, "..");
 
+test("native backup cron is installed, preserves custom schedules, and is removed on disable", () => {
+  const root = mkdtempSync(join(tmpdir(), "instatic-cron-"));
+  const path = join(root, "instatic-backup");
+  try {
+    // Other suites mock cli/util.writeAtomic; exercise real provisioning in
+    // its own process so this checks the actual cron file lifecycle.
+    const output = execFileSync(process.execPath, ["-e", `
+      import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+      import { reconcileInstaticBackupCron } from './cli/provision.ts';
+      const path = ${JSON.stringify(path)};
+      reconcileInstaticBackupCron(true, path);
+      const original = readFileSync(path, 'utf8');
+      const mode = statSync(path).mode & 0o777;
+      writeFileSync(path, 'custom schedule');
+      reconcileInstaticBackupCron(true, path);
+      const preserved = readFileSync(path, 'utf8');
+      reconcileInstaticBackupCron(false, path);
+      console.log(JSON.stringify({ original, mode, preserved, removed: !existsSync(path) }));
+    `], { cwd: REPO, encoding: "utf8" });
+    const result = JSON.parse(output);
+    expect(result.original).toContain("30 3 * * * root /usr/local/bin/clp-addons action instatic backup");
+    expect(result.mode).toBe(0o644);
+    expect(result.preserved).toBe("custom schedule");
+    expect(result.removed).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 function serviceUserProbe(options: {
   dockerGroup: boolean;
   groups?: string[];

@@ -57,9 +57,17 @@ Replace `<addon>` with `instatic`, `stager`, or `login-theme`. Use
 `clp-addons --help` for all options, including version selection and data
 removal.
 
+Instatic supports CloudPanel Remote Backups with private database/key storage,
+uploads in the site's `htdocs`, and daily SQLite recovery archives. Existing
+instances migrate when recreated or updated. See [backup setup and restoration](docs/instatic-backups.md)
+for scheduling and the explicit recovery command.
+
 ## Development
 
-Requires Bun. The installer lint check also requires ShellCheck.
+Requires Bun. Stager's panel mutation runs through CloudPanel's `sqlite3`
+client as `clp` to preserve database journal ownership; Instatic backups and
+read-only panel queries use Bun's native SQLite API. The installer lint check
+also requires ShellCheck.
 
 ```bash
 bun install
