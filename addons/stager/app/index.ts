@@ -17,13 +17,12 @@ import { instaticService } from "../../instatic/app/service";
 import { jobEventStream } from "../../../lib/job-stream";
 
 /**
- * Ports this addon has handed out that the panel snapshot cannot know about.
+ * Ports this addon has handed out that a panel-data request can race with.
  *
- * The snapshot is rewritten by the root CLI on repair, so it is authoritative
- * only for instances that existed when it was written. Two windows are not
- * covered by it: a clone still in flight, whose instance does not exist yet,
- * and a clone that finished after the snapshot was taken. Both are added here.
- * A failed clone is not -- its instance was rolled back, so its port is free.
+ * The gateway responds with live panel and addon data, but a clone may reserve
+ * a port while that request is running. Include active jobs and jobs completed
+ * after the response timestamp. A failed clone was rolled back, so its port is
+ * free.
  */
 function portsSinceSnapshot(jobs: JobView[], snapshotTakenAt: string): number[] {
   const taken = Date.parse(snapshotTakenAt);
@@ -113,7 +112,7 @@ export async function handle(
         snapshotAge = ageSeconds;
         snapshotTakenAt = snap.updatedAt;
       } catch {
-        // Snapshot missing or unreadable; render without site presence checks
+        // Panel inventory unavailable; render without site-presence checks
       }
       return html(
         layout(
@@ -213,10 +212,8 @@ export async function handle(
 
   if (method === "POST" && path === "/api/clones") {
     // The one mutating route, and the only one that had no try/catch while
-    // every GET branch has one. `readSnapshot()` throws when the snapshot is
-    // missing, `getNextAvailablePort()` throws when the range is exhausted, and
-    // the two strict list calls below throw when the action
-    // binary cannot answer --
+    // every GET branch has one. A panel-data request or port allocation can
+    // fail, and the strict list calls below throw when an action cannot answer --
     // all of which surfaced as a bare 500 with nothing said.
     try {
       return await postClone(req);
@@ -310,18 +307,12 @@ async function postClone(req: Request): Promise<Response> {
     if (mfa.length > MAX_MFA) {
       return json({ ok: false, error: "that authentication code is too long" }, 400);
     }
-    // Allocated here because the app is the side that can read the panel
-    // snapshot both addons share; the action binary re-checks the number under
-    // its own lock, so this is a proposal rather than a reservation.
+    // Allocated here because the app combines panel data with both addons'
+    // active jobs. The action binary re-checks the number under its own lock,
+    // so this is a proposal rather than a reservation.
     //
-    // Both sources, because the snapshot is stale about both and each side was
-    // only compensating for its own. `listInstances` is what the Instatic
-    // addon already asks before it creates one; an instance made from its
-    // dashboard inside the fifteen-minute window is invisible to the snapshot,
-    // and without this both sides offered the same number and the clone died
-    // on `docker run` failing to bind it. Neither list may fail quietly here:
-    // an empty one reads as "nothing is using any port", which is the one
-    // answer that produces a collision.
+    // Neither list may fail quietly here: an empty result would mean "nothing
+    // is using any port" and could produce a collision.
     const [jobs, instances, { snap: snapshot }] = await Promise.all([
       stagerService.listJobsOrThrow(),
       instaticService.listInstancesOrThrow(),

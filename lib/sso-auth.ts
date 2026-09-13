@@ -75,6 +75,7 @@ function releaseAuthSlot(): void {
   if (next) next();
 }
 
+/** Reserves auth-helper capacity, waiting briefly unless the queue is full. */
 async function acquireAuthSlot(): Promise<(() => void) | null> {
   if (activeAuthHelpers < MAX_AUTH_HELPERS) {
     activeAuthHelpers++;
@@ -106,12 +107,10 @@ async function acquireAuthSlot(): Promise<(() => void) | null> {
 /**
  * Ask the root helper about one session over its socket.
  *
- * The transport is systemd socket activation rather than sudo: the manager's
- * own unit implies NoNewPrivileges=yes, under which sudo cannot escalate at
- * all. systemd accepts the connection, runs `clp-addons action auth` as root
- * with the connection as its stdin/stdout, and this writes one bounded request
- * and reads one bounded reply. Every failure is "unavailable", which the
- * caller turns into 503 -- never into an authenticated request.
+ * The manager connects to the root gateway activated by
+ * `clp-addons-auth.socket`, writes one bounded request, and reads one bounded
+ * reply. Every transport failure is "unavailable", which the caller turns into
+ * 503 -- never into an authenticated request.
  */
 async function callAuthHelper(sessionId: string, socketPath = AUTH_SOCKET_PATH): Promise<AuthHelperReply> {
   const release = await acquireAuthSlot();

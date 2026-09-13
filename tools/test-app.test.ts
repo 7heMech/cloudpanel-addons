@@ -1674,7 +1674,10 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   check("indexPage renders addon card", pageHtml.includes("addon-card"));
   check("indexPage includes addon title", pageHtml.includes("Instatic"));
   check("indexPage includes mount path", pageHtml.includes("/addons/instatic"));
-  check("indexPage includes open button", pageHtml.includes("Open Instatic"));
+  check(
+    "indexPage includes an accessible open button",
+    pageHtml.includes('aria-label="Open Instatic CMS">Open</a>'),
+  );
   check("indexPage does not hardcode false Live badge", !pageHtml.includes("badge state-running") && !pageHtml.includes("Live"));
 
   const emptyRes = indexPage([]);

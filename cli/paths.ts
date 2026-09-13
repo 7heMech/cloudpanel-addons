@@ -100,8 +100,8 @@ export interface AddonSpec {
 export const ADDONS: Record<string, AddonSpec> = {
   instatic: {
     name: "instatic",
-    title: "Instatic",
-    description: "Instant static site hosting and staging on CloudPanel",
+    title: "Instatic CMS",
+    description: "Instant static site hosting and staging on CloudPanel.",
     configFile: `${CONFIG_DIR}/instatic.conf`,
     requiresUnits: ["docker"],
     stateDir: `${STATE_DIR}/instatic`,
@@ -110,15 +110,15 @@ export const ADDONS: Record<string, AddonSpec> = {
   stager: {
     name: "stager",
     title: "Stager",
-    description: "Instant staging environments & site clones (WordPress, PHP, Node.js)",
+    description: "Create staging copies of WordPress, PHP, static, and Instatic sites.",
     configFile: `${CONFIG_DIR}/stager.conf`,
     stateDir: `${STATE_DIR}/stager`,
     targets: STAGER_TARGETS,
   },
   "login-theme": {
     name: "login-theme",
-    title: "Login theme",
-    description: "Make the CloudPanel login page follow your device's light or dark theme",
+    title: "Device theme on first visit",
+    description: "Follow the device's light or dark preference on the first visit.",
     configFile: `${CONFIG_DIR}/login-theme.conf`,
     stateDir: `${STATE_DIR}/login-theme`,
     targets: LOGIN_THEME_TARGETS,

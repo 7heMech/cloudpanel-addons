@@ -67,8 +67,8 @@ export async function handle(
           snapshotAge = ageSeconds;
           snapshotTakenAt = snap.updatedAt;
         } catch {
-          // Snapshot missing or unreadable; the action binary already supplied live
-          // instance data above
+          // Panel inventory unavailable; the action binary already supplied
+          // live instance data above.
         }
         // The dashboard needs the registry listing too, not just /new. Without
         // it the page showed each instance's pinned tag with nothing to compare

@@ -59,7 +59,7 @@ async function takeSnapshot(domain) {
     busy(false);
     const snap = res && res.data && res.data.snapshot;
     const snapFile = snap ? snap.split('/').pop() : '';
-    document.getElementById('snapshot-title').textContent = 'Snapshot Created \\u2014 ' + domain;
+    document.getElementById('snapshot-title').textContent = 'Snapshot created \\u2014 ' + domain;
     document.getElementById('snapshot-file').textContent = snapFile || 'Snapshot archive created';
     document.getElementById('snapshot-path').textContent = snap || '(stored in instance snapshots directory)';
     document.getElementById('snapshot-dialog').showModal();
@@ -229,13 +229,14 @@ if (document.readyState === 'loading') {
 }
 `;
 
+/** Renders Instatic content inside the shared addon manager chrome. */
 export function layout(
   title: string,
   content: string,
   updateNotice?: { current: string; latest: string } | null
 ): string {
   return renderLayout(title, content, {
-    brand: "Instatic",
+    brand: "Instatic CMS",
     base: BASE,
     nav: [
       { href: `${BASE}/`, label: "Instances" },
@@ -271,6 +272,7 @@ export function isInstanceMissing(
   return !panelSites.some((s) => s.domain === instance.domain);
 }
 
+/** Renders the Instatic dashboard from instance and current panel inventory. */
 export function dashboardView(
   instances: InstanceView[],
   nextPort: number,
@@ -348,9 +350,9 @@ export function dashboardView(
     <div class="hint">latest is ${esc(latest)}</div>
   </div>`;
 
-  return `<div class="page-heading"><div><h1>Instatic sites</h1><p>Create and manage your Instatic instances.</p></div><a class="btn btn-primary" href="${BASE}/new">+ New site</a></div>${versionNotice}
+  return `<div class="page-heading"><div><h1>Instatic sites</h1><p>Host and manage static sites on CloudPanel.</p></div><a class="btn btn-primary" href="${BASE}/new">+ New site</a></div>${versionNotice}
 <div class="card stats">
-  <div class="stat"><div class="label">Instances</div><div class="value">${instances.length}</div></div>
+  <div class="stat"><div class="label">Sites</div><div class="value">${instances.length}</div></div>
   <div class="stat"><div class="label">Running</div><div class="value" style="color:var(--ok)">${running}</div></div>
   ${updatesTile}
 </div>
@@ -360,7 +362,7 @@ export function dashboardView(
     instances.length === 0
       ? `<div class="empty">No Instatic instances yet. <a href="${BASE}/new">Create one</a>.</div>`
       : `<table>
-    <thead><tr><th scope="col">Site</th><th scope="col">Bound to</th><th scope="col">Version</th><th scope="col">State</th><th scope="col" class="action-cell">Actions</th></tr></thead>
+    <thead><tr><th scope="col">Site</th><th scope="col">Local port</th><th scope="col">Version</th><th scope="col">State</th><th scope="col" class="action-cell">Actions</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`
   }
@@ -375,7 +377,7 @@ export function dashboardView(
     <thead><tr><th>Domain</th><th>Type</th><th>Site user</th></tr></thead>
     <tbody>${
       panelSites.length === 0
-        ? `<tr><td colspan="3" class="empty">Snapshot is empty. Run <span class="mono">clp-addons repair</span> as root.</td></tr>`
+        ? `<tr><td colspan="3" class="empty">${snapshotAge > 3600 ? "Site inventory is unavailable." : "No CloudPanel sites found."}</td></tr>`
         : panelSites
             .map((s) => `<tr><td>${esc(s.domain)}</td><td><span class="badge">${esc(s.type)}</span></td><td class="mono">${esc(s.user)}</td></tr>`)
             .join("")
@@ -387,8 +389,8 @@ export function dashboardView(
   <div class="dialog-header"><h2 id="logs-title"></h2></div>
   <p class="hint" id="logs-port-info" style="margin: 0 0 12px;"></p>
   <div style="display:flex;gap:8px;margin-bottom:12px;">
-    <button type="button" class="btn btn-sm btn-primary" id="btn-container-logs" onclick="switchLogs('container')">Container Logs</button>
-    <button type="button" class="btn btn-sm" id="btn-creation-logs" onclick="switchLogs('creation')">Creation Log</button>
+    <button type="button" class="btn btn-sm btn-primary" id="btn-container-logs" onclick="switchLogs('container')">Container logs</button>
+    <button type="button" class="btn btn-sm" id="btn-creation-logs" onclick="switchLogs('creation')">Creation log</button>
   </div>
   <pre id="logs-body"></pre>
   <div class="actions dialog-actions">
@@ -397,13 +399,13 @@ export function dashboardView(
 </dialog>
 
 <dialog id="snapshot-dialog" aria-labelledby="snapshot-title">
-  <div class="dialog-header"><h2 id="snapshot-title">Snapshot Created</h2></div>
-  <p class="hint">A backup snapshot of the SQLite database and instance files was created successfully:</p>
+  <div class="dialog-header"><h2 id="snapshot-title">Snapshot created</h2></div>
+  <p class="hint">The database and instance files were saved to:</p>
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:12px 16px;margin-bottom:16px;">
     <div style="font-weight:600;margin-bottom:4px;" id="snapshot-file"></div>
     <div class="mono hint" id="snapshot-path" style="font-size:13px;word-break:break-all;"></div>
   </div>
-  <p class="hint">Snapshots include a clean SQLite backup and instance data. They are stored under the instance's <span class="mono">snapshots/</span> directory and pruned to the 5 most recent versions for safe rollbacks.</p>
+  <p class="hint">Snapshots include a clean SQLite backup and instance data. Only the five most recent snapshots are kept.</p>
   <div class="actions dialog-actions">
     <button class="btn btn-primary" onclick="document.getElementById('snapshot-dialog').close()">Done</button>
   </div>
@@ -442,12 +444,13 @@ export function dashboardView(
 </dialog>`;
 }
 
+/** Renders the progress and result of an Instatic site creation job. */
 export function jobView(job: InstaticJobView, logText: string): string {
   const finished = job.state === "done" || job.state === "failed";
 
   const site = job.state === "done"
     ? `<div class="card">
-        <div class="card-header"><h2>Instance Site</h2></div>
+        <div class="card-header"><h2>Instatic site</h2></div>
         <dl class="kv">
           <dt>Domain</dt><dd><a href="https://${esc(job.domain)}" target="_blank" rel="noreferrer noopener">${esc(job.domain)}</a></dd>
           <dt>Version</dt><dd>${esc(job.tag)}</dd>
@@ -456,8 +459,8 @@ export function jobView(job: InstaticJobView, logText: string): string {
         </dl>
         <p class="hint">Your Instatic instance is running. You can open its administration interface or view the site.</p>
         <div style="margin-top: 1rem; display: flex; gap: 0.5rem;">
-          <a class="btn btn-primary" href="https://${esc(job.domain)}/admin" target="_blank" rel="noreferrer noopener">Open Admin</a>
-          <a class="btn" href="https://${esc(job.domain)}" target="_blank" rel="noreferrer noopener">Visit Site</a>
+          <a class="btn btn-primary" href="https://${esc(job.domain)}/admin" target="_blank" rel="noreferrer noopener">Open admin</a>
+          <a class="btn" href="https://${esc(job.domain)}" target="_blank" rel="noreferrer noopener">Visit site</a>
         </div>
       </div>`
     : "";
@@ -466,12 +469,12 @@ export function jobView(job: InstaticJobView, logText: string): string {
     <div class="page-heading">
       <div>
         <h1>Instance creation</h1>
-        <p>Creating Instatic instance for ${esc(job.domain)}.</p>
+        <p>Creating an Instatic site at ${esc(job.domain)}.</p>
       </div>
       <a class="btn" href="${BASE}/">Back to instances</a>
     </div>
     <div class="card">
-      <div class="card-header"><h2>Creation Status</h2></div>
+      <div class="card-header"><h2>Creation status</h2></div>
       <div class="job-summary">
         <span class="job-domain">${esc(job.domain)}</span>
         <span class="badge ${stateClass(job.state)}" id="job-state">${esc(job.state)}</span>
@@ -487,12 +490,13 @@ export function jobView(job: InstaticJobView, logText: string): string {
     </div>
     ${site}
     <div class="card">
-      <div class="card-header"><h2>Creation Log</h2></div>
+      <div class="card-header"><h2>Creation log</h2></div>
       <pre id="job-log">${esc(logText || "(no output yet)")}</pre>
     </div>
     ${finished ? "" : `<div id="job-watch" data-job="${esc(job.id)}" hidden></div>`}`;
 }
 
+/** Renders the new-site form with the allocated port and available versions. */
 export function newInstanceView(nextPort: number, available: AvailableTags): string {
   const options = available.tags.map((t, idx) =>
     `<option value="${esc(t)}"${idx === 0 ? " selected" : ""}>${esc(t)}${idx === 0 ? " (latest)" : ""}</option>`
@@ -518,13 +522,13 @@ ${notice}<div class="card">
   <form onsubmit="return submitCreate(event)">
     <div class="form-grid">
       <div class="form-field form-field-full">
-        <label for="domain" class="required">Domain Name</label>
+        <label for="domain" class="required">Domain name</label>
         <input id="domain" placeholder="pages.example.com" autocomplete="off" required aria-describedby="domain-hint"
           pattern="[a-z0-9]([a-z0-9\\-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9\\-]{0,61}[a-z0-9])?)+">
         <div class="hint" id="domain-hint">Lowercase hostname. Must already resolve to this server.</div>
       </div>
       <div class="form-field">
-        <label for="tag" class="required">Instatic Version</label>
+        <label for="tag" class="required">Instatic version</label>
         <select id="tag" required aria-describedby="tag-hint">${options}</select>
         <div class="hint" id="tag-hint">Versions are pinned. Review release changes before updating.</div>
       </div>

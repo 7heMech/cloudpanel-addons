@@ -190,16 +190,14 @@ export const stagerService = {
    * Start a clone.
    *
    * `instatic` is supplied only when the source is an Instatic site. Its port
-   * is allocated here rather than guessed by the action binary: `getNextAvailablePort`
-   * reads the panel snapshot both addons share, so the number that crosses the
-   * boundary is one the action binary only has to re-validate.
+   * is allocated here rather than guessed by the action binary:
+   * `getNextAvailablePort` combines current panel and addon data, so the number
+   * that crosses the boundary is one the action binary only has to re-validate.
    *
-   * Both secrets travel on stdin, one per line, and neither is ever an argument.
-   * argv is readable out of `ps` by every account on the box, and worse than
-   * that: `sudo` journals this action binary's whole COMMAND line, so an argument
-   * outlives the process entirely. The authentication code was in argv until
-   * that was measured against this box's own journal -- and the action binary
-   * deliberately accepts a *recovery* code there, which does not expire.
+   * Both secrets travel on stdin, one per line, and neither is ever an
+   * argument. Process arguments are visible to other accounts while the action
+   * runs, and the authentication field may contain a recovery code that does
+   * not expire.
    */
   async startClone(
     source: string,

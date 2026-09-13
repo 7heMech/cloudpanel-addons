@@ -58,10 +58,18 @@ test("a dark device with no saved theme gets the panel's dark setting", () => {
   expect(result.store.get("clp_addons_device_theme")).toBe("1");
 });
 
-test("a light device is left alone, matching the panel's cookie-less default", () => {
+test("a light first visit records the default without setting a cookie", () => {
   const result = run({ deviceDark: false });
   expect(result.dark).toBe(false);
   expect(result.cookies).toHaveLength(0);
+  expect(result.store.get("clp_addons_device_theme")).toBe("1");
+});
+
+test("a later device change does not replace the first-visit default", () => {
+  const first = run({ deviceDark: false });
+  const later = run({ deviceDark: true, store: first.store });
+  expect(later.dark).toBe(false);
+  expect(later.cookies).toHaveLength(0);
 });
 
 test("the cookie carries the same attributes as the panel's own theme switch", () => {
@@ -79,14 +87,22 @@ test("the cookie carries the same attributes as the panel's own theme switch", (
 
 test("a saved choice wins over the device preference", () => {
   // The panel renders html.dark from the cookie itself, so the script has
-  // nothing left to do once one exists, whichever way the device leans.
+  // nothing left to do once one exists, whichever way the device leans. The
+  // visit is still recorded so a later switch to light remains authoritative.
   for (const cookie of ["theme=dark", "PHPSESSID=x; theme=dark; n=1", "theme="]) {
     for (const deviceDark of [true, false]) {
       const result = run({ cookie, deviceDark });
       expect(result.cookies).toHaveLength(0);
-      expect(result.store.size).toBe(0);
+      expect(result.store.get("clp_addons_device_theme")).toBe("1");
     }
   }
+});
+
+test("switching a pre-existing dark choice to light is not overridden", () => {
+  const first = run({ cookie: "theme=dark", deviceDark: true });
+  const afterSwitch = run({ deviceDark: true, store: first.store });
+  expect(afterSwitch.dark).toBe(false);
+  expect(afterSwitch.cookies).toHaveLength(0);
 });
 
 test("switching to light survives a return to the login page on a dark device", () => {
