@@ -27,8 +27,9 @@ Manager and SFTP.
 
 ## Enable backups for an existing instance
 
-New instances use this layout immediately. After installing an addon release
-with this support, migrate each older instance:
+This applies to Instatic instances created with an addon version before **1.1.3**.
+Instances created with 1.1.3 or later use this layout immediately. After updating
+the addon, migrate each legacy instance:
 
 ```sh
 clp-addons action instatic recreate --domain example.com
