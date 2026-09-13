@@ -12,6 +12,10 @@ const repo = join(import.meta.dir, "..");
 const domain = "example.com";
 const key = "INSTATIC_SECRET_KEY=the-original-encryption-key\n";
 
+const implementation = readFileSync(join(repo, "addons/instatic/action.ts"), "utf8");
+expect(implementation).toContain('"VACUUM INTO ?"');
+expect(implementation).toContain('"PRAGMA integrity_check;"');
+
 function fixture(legacy = false) {
   const root = mkdtempSync(join(tmpdir(), "instatic-backup-"));
   const paths = {

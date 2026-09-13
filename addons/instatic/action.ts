@@ -688,8 +688,8 @@ function sqliteBackup(source: string, destination: string): boolean {
     db = undefined;
 
     check = new Database(destination, { readonly: true });
-    const result = check.query("PRAGMA quick_check").get() as { quick_check?: string } | null;
-    return result?.quick_check === "ok";
+    const result = check.query("PRAGMA integrity_check;").get() as { integrity_check?: string } | null;
+    return result?.integrity_check === "ok";
   } catch {
     return false;
   } finally {
