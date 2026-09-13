@@ -22,5 +22,13 @@ The installed binary and helper checksums are recorded in a root-owned
 manifest. Reapplying the same version reuses files only when every checksum
 still matches; otherwise the release is downloaded and verified again.
 
+The native CloudPanel header asks the manager for update state; it does not
+embed the installed version or implement its own GitHub cache and semver
+comparison. An update is performed by the old process, which can reconcile
+Twig once more after replacing and restarting the binary. Embedding that
+process's compile-time version made the notice linger until periodic repair.
+The version-independent header now reads `GET /addons/api/update` and rechecks
+restored or refocused pages, making the new manager process the source of truth.
+
 Published releases are immutable in the workflow. A failed draft can be
 recreated, but an existing published tag is rejected.

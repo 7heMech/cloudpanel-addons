@@ -145,8 +145,8 @@ export function installedInjections(exclude?: string, managerNav = true): Inject
   // Kept outside the addon target lists so installing a second addon cannot
   // emit a second style/script block or replace the first one's marker.
   if (managerNav) {
-    injections.push({ addon: "manager", target: headerTarget(CLI_VERSION), url: "/addons/" });
-    injections.push({ addon: "manager", target: adminHeaderTarget(CLI_VERSION), url: "/addons/" });
+    injections.push({ addon: "manager", target: headerTarget(), url: "/addons/" });
+    injections.push({ addon: "manager", target: adminHeaderTarget(), url: "/addons/" });
   }
 
   for (const name of installed) {
@@ -688,8 +688,8 @@ function managerJson(body: unknown, status = 200): Response {
 }
 
 /**
- * The manager's own API: enable, disable, update, and following the job each
- * of them starts.
+ * The manager's own API: update status, enable, disable, update, and following
+ * the job each mutation starts.
  *
  * Every route here is already behind the SSO gate and the administrator gate at
  * the socket boundary; `guardMutation` adds the same origin and CSRF check the
@@ -707,7 +707,16 @@ export function safeDecodePathSegment(segment: string): string | null {
   }
 }
 
-export async function handleManagerRoute(req: Request, path: string, server: Server<unknown>): Promise<Response | null> {
+export async function handleManagerRoute(
+  req: Request,
+  path: string,
+  server: Server<unknown>,
+  update: CliUpdateInfo | null = null,
+): Promise<Response | null> {
+  if (path === "/api/update" && req.method === "GET") {
+    return managerJson({ ok: true, data: update });
+  }
+
   const addonRoute = path.match(/^\/api\/addons\/([^/]+)\/(enable|disable)$/);
   if (addonRoute && req.method === "POST") {
     const denied = guardMutation(req);
@@ -784,7 +793,7 @@ async function cmdServe(): Promise<never> {
       const update = await checkCliUpdate(CLI_VERSION);
       const notice = update?.hasUpdate ? { current: update.current, latest: update.latest } : null;
 
-      const managerRoute = await handleManagerRoute(req, path, server);
+      const managerRoute = await handleManagerRoute(req, path, server, update);
       if (managerRoute) return managerRoute;
 
       const hit = splitMount(path, mounted);

@@ -55,7 +55,7 @@ const SCRIPTS: { name: string; source: string }[] = [
   { name: "theme initialization", source: THEME_INIT_JS },
   { name: "instatic", source: BASE_CLIENT_JS + CLIENT_JS },
   { name: "stager", source: BASE_CLIENT_JS + STAGER_CLIENT_JS },
-  { name: "clp header update notice", source: headerUpdateScript("0.9.3") },
+  { name: "clp header update notice", source: headerUpdateScript() },
 ];
 
 for (const { name, source } of SCRIPTS) {
@@ -97,35 +97,48 @@ test("addon theme follows CloudPanel's cookie before the page paints", () => {
   }
 });
 
-test("native header rechecks cached releases against the installed version", () => {
-  for (const [current, latest, expected] of [
-    ["1.0.0", "1.1.0", true], ["1.1.0", "1.1.0", false],
-    ["1.2.0", "1.1.0", false], ["1.0.0+build.7", "1.0.1", true],
-    ["1.0.0-rc.1", "1.0.0", true], ["1.0.0", "1.0.0-rc.1", false],
-    ["1.0.0-rc.1", "1.0.0-rc.2", true], ["1.0.0-alpha.2", "1.0.0-alpha.10", true],
-    ["0.0.0-dev", "1.1.0", false], ["1.0.0", "<script>bad</script>", false],
-  ] as const) {
-    let rendered = false;
-    let fetched = false;
-    const element = { querySelector: () => ({ textContent: "", title: "" }) };
-    const header = {
-      querySelector: () => ({ insertAdjacentElement: () => { rendered = true; } }),
-      classList: { add() {} },
-    };
-    const document = {
-      readyState: "complete",
-      getElementById: () => null,
-      querySelector: () => header,
-      createElement: () => ({ innerHTML: "", firstElementChild: element }),
-    };
-    // The old hasUpdate flag may have been computed before an installation.
-    const storage = { getItem: () => JSON.stringify({ time: Date.now(), latest, hasUpdate: !expected }) };
-    new Function("window", "document", "localStorage", "fetch", headerUpdateScript(current))(
-      {}, document, storage, () => { fetched = true; },
-    );
-    expect(rendered, `${current} -> ${latest}`).toBe(expected);
-    expect(fetched).toBe(false);
-  }
+test("native header follows the manager's update state and clears a restored stale notice", async () => {
+  const listeners: Record<string, (event?: { persisted?: boolean }) => void> = {};
+  let info = { current: "1.0.0", latest: "1.1.0", hasUpdate: true };
+  let notice: any = null;
+  let fetchedUrl = "";
+  const label = { textContent: "" };
+  const badge = { title: "" };
+  const element = {
+    querySelector: (selector: string) => selector === ".update-label" ? label : badge,
+    remove: () => { notice = null; },
+  };
+  const classes = new Set<string>();
+  const header = {
+    querySelector: () => ({ insertAdjacentElement: (_where: string, inserted: unknown) => { notice = inserted; } }),
+    classList: {
+      add: (name: string) => classes.add(name),
+      remove: (name: string) => classes.delete(name),
+    },
+  };
+  const document = {
+    readyState: "complete",
+    getElementById: () => notice,
+    querySelector: () => header,
+    createElement: () => ({ innerHTML: "", firstElementChild: element }),
+  };
+  const window = { addEventListener: (name: string, listener: (event?: { persisted?: boolean }) => void) => { listeners[name] = listener; } };
+  const fetch = async (url: string) => {
+    fetchedUrl = url;
+    return { ok: true, json: async () => ({ ok: true, data: info }) };
+  };
+
+  new Function("window", "document", "fetch", headerUpdateScript())(window, document, fetch);
+  await Bun.sleep(0);
+  expect(fetchedUrl).toBe("/addons/api/update");
+  expect(label.textContent).toBe("Addons · v1.1.0 available");
+  expect(classes.has("clp-addons-has-update")).toBe(true);
+
+  info = { current: "1.1.0", latest: "1.1.0", hasUpdate: false };
+  listeners.pageshow!({ persisted: true });
+  await Bun.sleep(0);
+  expect(notice).toBeNull();
+  expect(classes.has("clp-addons-has-update")).toBe(false);
 });
 
 // Port allocation reads a snapshot the root CLI rewrites on install and
@@ -1650,10 +1663,11 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   check("header separates changelog from the update page", header.includes('href="/addons/update"') && header.includes(">Changelog</a>"));
   check("layout with updateNotice has no duplicate content banner", !htmlWith.includes('class="notice update-banner"'));
 
-  const snip = headerTarget("0.9.3").snippet("https://addons.example.com/addons/");
+  const snip = headerTarget().snippet("https://addons.example.com/addons/");
   check("headerTarget includes update badge style", snip.includes("clp-addon-update-badge"));
   check("headerTarget includes update check script", snip.includes("window.__clpAddonsUpdateInit"));
-  check("headerTarget embeds the configured version", snip.includes("\"0.9.3\""));
+  check("headerTarget reads update state from the manager", snip.includes("https://addons.example.com/addons/api/update"));
+  check("headerTarget does not embed a version", !snip.includes("0.9.3"));
   check("headerTarget uses Addons label", snip.includes(">Addons</a>"));
   check("headerTarget points to manager URL", snip.includes('href="https://addons.example.com/addons/"'));
   check("native header offers separate changelog and update links",
