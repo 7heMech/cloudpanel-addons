@@ -1401,7 +1401,10 @@ touch rather than by good intentions:
   `Generic', user = 'root` rewrote `site.user` to `root`. Worse, the read-back
   runs `sqlite3 -readonly` **as root** and this build has `fileio` compiled in,
   so `SELECT writefile('/tmp/x', ...)` under `-readonly` created a root-owned
-  file -- an arbitrary root write reachable from a template name.
+  file -- an arbitrary root write reachable from a template name. The
+  read-back now uses a fixed, parameterized Bun SQLite query. The mutation
+  remains in a `runuser -u clp` sqlite process so a rollback journal cannot be
+  left root-owned if the write is interrupted.
 
   So `application_ok` refuses any name outside `[A-Za-z0-9 ._-]` (measured, not
   guessed: every stock template name on this box and every `site.application`

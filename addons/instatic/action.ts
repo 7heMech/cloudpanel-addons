@@ -674,10 +674,6 @@ async function healthCheck(port: number, domain: string): Promise<boolean> {
   return false;
 }
 
-function sqliteLiteral(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
 function sqliteBackup(source: string, destination: string): boolean {
   let db: Database | undefined;
   let check: Database | undefined;
@@ -687,7 +683,7 @@ function sqliteBackup(source: string, destination: string): boolean {
     // SQLite includes committed WAL pages in the resulting standalone file.
     db = new Database(source, { readonly: true });
     db.run("PRAGMA busy_timeout=5000");
-    db.run(`VACUUM INTO ${sqliteLiteral(destination)}`);
+    db.query("VACUUM INTO ?").run(destination);
     db.close(true);
     db = undefined;
 
