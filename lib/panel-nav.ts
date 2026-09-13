@@ -56,7 +56,7 @@ export function headerUpdateScript(version: string, addonsUrl = "/addons/"): str
     holder.innerHTML = "${escJs(updateNoticeHtml("", updateUrl))}";
     var el = holder.firstElementChild;
     var ver = latest.replace(/^v/, "");
-    el.querySelector(".update-label").textContent = "v" + ver + " available";
+    el.querySelector(".update-label").textContent = "Addons · v" + ver + " available";
     el.querySelector(".clp-addon-update-badge").title = "clp-addons v" + ver + " available";
     tools.insertAdjacentElement("beforebegin", el);
     header.classList.add("clp-addons-has-update");
