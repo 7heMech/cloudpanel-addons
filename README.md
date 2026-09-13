@@ -4,7 +4,7 @@ Host Instatic CMS sites, create staging copies, and set the initial login theme
 from the device preference in [CloudPanel](https://www.cloudpanel.io/). Access
 uses your existing administrator login.
 
-![CloudPanel Addons Manager](docs/screenshots/addons-empty.png)
+![CloudPanel Addons Manager](docs/screenshots/addons.png)
 
 ## Addons
 
