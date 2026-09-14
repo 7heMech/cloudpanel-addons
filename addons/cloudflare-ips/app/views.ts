@@ -45,7 +45,7 @@ function selectAllSites(checked) {
 }
 
 async function setDomains(domains, enabled) {
-  if (!domains.length) { alert('Select at least one site.'); return; }
+  if (!domains.length) { alert('Select at least one site.'); return false; }
   busy(true);
   try {
     await call('/api/sites', {
@@ -54,9 +54,11 @@ async function setDomains(domains, enabled) {
       body: JSON.stringify({ domains: domains, enabled: enabled }),
     });
     location.reload();
+    return true;
   } catch (error) {
     busy(false);
     alert('Could not update the Cloudflare setting: ' + error.message);
+    return false;
   }
 }
 
@@ -64,10 +66,14 @@ function setSelected(enabled) {
   setDomains(selectedDomains(), enabled);
 }
 
-function setOne(input) {
+async function setOne(input) {
   const domain = input.getAttribute('data-domain');
+  const enabled = input.checked;
   input.disabled = true;
-  setDomains(domain ? [domain] : [], input.checked);
+  if (!await setDomains(domain ? [domain] : [], enabled)) {
+    input.checked = !enabled;
+    input.disabled = false;
+  }
 }
 
 async function setAutomatic(input) {

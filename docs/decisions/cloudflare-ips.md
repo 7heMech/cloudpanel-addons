@@ -13,7 +13,8 @@ Bulk changes take one exclusive addon lock and one immediate SQLite transaction.
 Every affected vhost must be a trusted regular file. The action stages all
 changes, runs `nginx -t`, reloads Nginx once, and commits the database only when
 the reload succeeds. On failure it rolls back the database and restores the
-original vhosts.
+original vhosts. If any recovery step fails, the action attempts the remaining
+steps and reports each failure with the original operation error.
 
 ## New-site policy
 

@@ -73,6 +73,20 @@ function addSite(db: Database, paths: CloudflareActionPaths, domain: string, use
 
 const successCommand = (): CommandResult => ({ ok: true, stdout: "", stderr: "", exitCode: 0 });
 
+async function captureActionFailure(action: () => Promise<number>): Promise<{ code: number; stderr: string }> {
+  let stderr = "";
+  const originalWrite = process.stderr.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    stderr += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    return { code: await action(), stderr };
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+}
+
 test("dashboard renders bulk, per-site, and automatic controls with escaped site data", () => {
   const html = dashboardView({
     autoEnableNewSites: true,
@@ -84,6 +98,38 @@ test("dashboard renders bulk, per-site, and automatic controls with escaped site
   expect(html).toContain("Excluded from automatic enabling");
   expect(html).not.toContain("<script>alert(1)</script>");
   expect(() => new Function(CLIENT_JS)).not.toThrow();
+});
+
+test("a failed per-site update restores the control for retry", async () => {
+  const busyStates: boolean[] = [];
+  const alerts: string[] = [];
+  const loadClient = new Function(
+    "call", "busy", "alert", "location",
+    `${CLIENT_JS}\nreturn { setOne };`,
+  ) as (
+    call: () => Promise<never>,
+    busy: (state: boolean) => void,
+    alert: (message: string) => void,
+    location: { reload(): void },
+  ) => { setOne(input: { checked: boolean; disabled: boolean; getAttribute(name: string): string | null }): Promise<void> };
+  const client = loadClient(
+    async () => { throw new Error("request failed"); },
+    (state) => busyStates.push(state),
+    (message) => alerts.push(message),
+    { reload() {} },
+  );
+  const input = {
+    checked: true,
+    disabled: false,
+    getAttribute: (name: string) => name === "data-domain" ? "retry.example.test" : null,
+  };
+
+  await client.setOne(input);
+
+  expect(input.checked).toBe(false);
+  expect(input.disabled).toBe(false);
+  expect(busyStates).toEqual([true, false]);
+  expect(alerts).toEqual(["Could not update the Cloudflare setting: request failed"]);
 });
 
 test("vhost transformation mirrors CloudPanel and is reversible", () => {
@@ -146,6 +192,137 @@ test("failed Nginx validation rolls the database and vhost back", async () => {
     expect(verify.query<{ enabled: number }, []>("SELECT allow_traffic_from_cloudflare_only AS enabled FROM site;").get()!.enabled).toBe(0);
     verify.close();
     expect(readFileSync(join(f.paths.nginxVhostDir, "rollback.example.test.conf"), "utf8")).toBe(original);
+  } finally {
+    try { f.db.close(); } catch {}
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test.serial("database rollback failures are reported with the original update error", async () => {
+  const f = fixture();
+  try {
+    addSite(f.db, f.paths, "database-rollback.example.test", "database-rollback");
+    f.db.exec(`CREATE TRIGGER force_transaction_rollback
+      BEFORE UPDATE OF allow_traffic_from_cloudflare_only ON site
+      BEGIN SELECT RAISE(ROLLBACK, 'forced update rollback'); END;`);
+    f.db.close();
+
+    const result = await captureActionFailure(() => runCloudflareAction(["set", "--enabled", "yes"], {
+      paths: f.paths,
+      input: JSON.stringify({ domains: ["database-rollback.example.test"] }),
+      emitReply: false,
+      run: successCommand,
+    }));
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("forced update rollback");
+    expect(result.stderr).toContain("rollback failed: database transaction:");
+    const verify = new Database(f.paths.panelDb, { readonly: true });
+    expect(verify.query<{ enabled: number }, []>(
+      "SELECT allow_traffic_from_cloudflare_only AS enabled FROM site;",
+    ).get()!.enabled).toBe(0);
+    verify.close();
+  } finally {
+    try { f.db.close(); } catch {}
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test.serial("vhost and validation recovery failures are collected while every vhost is attempted", async () => {
+  const f = fixture();
+  let checks = 0;
+  try {
+    addSite(f.db, f.paths, "broken.example.test", "broken");
+    addSite(f.db, f.paths, "restored.example.test", "restored");
+    f.db.close();
+    const broken = join(f.paths.nginxVhostDir, "broken.example.test.conf");
+    const restored = join(f.paths.nginxVhostDir, "restored.example.test.conf");
+    const restoredOriginal = readFileSync(restored, "utf8");
+
+    const result = await captureActionFailure(() => runCloudflareAction(["set", "--enabled", "yes"], {
+      paths: f.paths,
+      input: JSON.stringify({ domains: ["broken.example.test", "restored.example.test"] }),
+      emitReply: false,
+      run(command) {
+        if (command !== "nginx-test") return successCommand();
+        if (checks++ === 0) {
+          rmSync(broken);
+          mkdirSync(broken);
+          return { ok: false, stdout: "", stderr: "initial config invalid", exitCode: 1 };
+        }
+        return { ok: false, stdout: "", stderr: "restored config invalid", exitCode: 1 };
+      },
+    }));
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Nginx validation failed: initial config invalid");
+    expect(result.stderr).toContain("rollback failed: vhost");
+    expect(result.stderr).toContain("broken.example.test.conf");
+    expect(result.stderr).toContain("Nginx rollback validation failed: restored config invalid");
+    expect(readFileSync(restored, "utf8")).toBe(restoredOriginal);
+    const verify = new Database(f.paths.panelDb, { readonly: true });
+    expect(verify.query<{ total: number }, []>(
+      "SELECT SUM(allow_traffic_from_cloudflare_only) AS total FROM site;",
+    ).get()!.total).toBe(0);
+    verify.close();
+  } finally {
+    try { f.db.close(); } catch {}
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test.serial("a failed rollback reload is reported after the original reload error", async () => {
+  const f = fixture();
+  let reloads = 0;
+  try {
+    addSite(f.db, f.paths, "reload-rollback.example.test", "reload-rollback");
+    f.db.close();
+    const original = readFileSync(join(f.paths.nginxVhostDir, "reload-rollback.example.test.conf"), "utf8");
+
+    const result = await captureActionFailure(() => runCloudflareAction(["set", "--enabled", "yes"], {
+      paths: f.paths,
+      input: JSON.stringify({ domains: ["reload-rollback.example.test"] }),
+      emitReply: false,
+      run(command) {
+        if (command === "nginx-test") return successCommand();
+        return reloads++ === 0
+          ? { ok: false, stdout: "", stderr: "initial reload failed", exitCode: 1 }
+          : { ok: false, stdout: "", stderr: "rollback reload failed", exitCode: 1 };
+      },
+    }));
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Nginx reload failed: initial reload failed");
+    expect(result.stderr).toContain("rollback failed: Nginx rollback reload failed: rollback reload failed");
+    expect(readFileSync(join(f.paths.nginxVhostDir, "reload-rollback.example.test.conf"), "utf8")).toBe(original);
+  } finally {
+    try { f.db.close(); } catch {}
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test.serial("policy rollback failures are reported with the site update error", async () => {
+  const f = fixture();
+  let checks = 0;
+  try {
+    addSite(f.db, f.paths, "policy-rollback.example.test", "policy-rollback");
+    f.db.close();
+
+    const result = await captureActionFailure(() => runCloudflareAction(["set", "--enabled", "yes"], {
+      paths: f.paths,
+      input: JSON.stringify({ domains: ["policy-rollback.example.test"] }),
+      emitReply: false,
+      run(command) {
+        if (command !== "nginx-test" || checks++ > 0) return successCommand();
+        rmSync(f.paths.policyFile);
+        mkdirSync(f.paths.policyFile);
+        return { ok: false, stdout: "", stderr: "site update invalid", exitCode: 1 };
+      },
+    }));
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Nginx validation failed: site update invalid");
+    expect(result.stderr).toContain("policy rollback failed:");
   } finally {
     try { f.db.close(); } catch {}
     rmSync(f.root, { recursive: true, force: true });

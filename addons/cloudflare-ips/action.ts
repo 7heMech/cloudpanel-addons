@@ -248,10 +248,28 @@ function commandError(label: string, result: CommandResult): string {
   return `${label} failed: ${(result.stderr || result.stdout || `exit ${result.exitCode ?? "unknown"}`).trim()}`;
 }
 
-function restoreVhosts(backups: VhostBackup[]): void {
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function withRecoveryFailures(primary: unknown, label: string, failures: string[]): Error {
+  const original = primary instanceof Error ? primary : new Error(String(primary));
+  if (failures.length === 0) return original;
+  const message = `${original.message}; ${label}: ${failures.join("; ")}`;
+  if (original instanceof ActionFailure) return new ActionFailure(message, original.data);
+  return new Error(message, { cause: original });
+}
+
+function restoreVhosts(backups: VhostBackup[]): string[] {
+  const failures: string[] = [];
   for (const backup of backups) {
-    writeAtomicOwned(backup.path, backup.content, backup.mode, backup.uid, backup.gid);
+    try {
+      writeAtomicOwned(backup.path, backup.content, backup.mode, backup.uid, backup.gid);
+    } catch (error) {
+      failures.push(`vhost ${backup.path}: ${errorMessage(error)}`);
+    }
   }
+  return failures;
 }
 
 /** Updates selected DB rows and rendered vhosts, validating and reloading once. */
@@ -304,15 +322,32 @@ async function updateSites(
         : site),
     };
   } catch (error) {
-    try { db.exec("ROLLBACK;"); } catch {}
-    if (wroteVhosts) {
-      try {
-        restoreVhosts(backups);
-        const restored = command(paths.nginx, ["-t"]);
-        if (restored.ok && attemptedReload) command(paths.systemctl, ["reload", "nginx"]);
-      } catch {}
+    const rollbackFailures: string[] = [];
+    try {
+      db.exec("ROLLBACK;");
+    } catch (rollbackError) {
+      rollbackFailures.push(`database transaction: ${errorMessage(rollbackError)}`);
     }
-    throw error;
+    if (wroteVhosts) {
+      rollbackFailures.push(...restoreVhosts(backups));
+      let restoredConfigIsValid = false;
+      try {
+        const restored = command(paths.nginx, ["-t"]);
+        restoredConfigIsValid = restored.ok;
+        if (!restored.ok) rollbackFailures.push(commandError("Nginx rollback validation", restored));
+      } catch (validationError) {
+        rollbackFailures.push(`Nginx rollback validation failed: ${errorMessage(validationError)}`);
+      }
+      if (restoredConfigIsValid && attemptedReload) {
+        try {
+          const reloaded = command(paths.systemctl, ["reload", "nginx"]);
+          if (!reloaded.ok) rollbackFailures.push(commandError("Nginx rollback reload", reloaded));
+        } catch (reloadError) {
+          rollbackFailures.push(`Nginx rollback reload failed: ${errorMessage(reloadError)}`);
+        }
+      }
+    }
+    throw withRecoveryFailures(error, "rollback failed", rollbackFailures);
   } finally {
     db.close();
   }
@@ -384,14 +419,17 @@ async function setSelected(
       const result = await updateSites(paths, domains, enabled, command);
       return { changed: result.changed };
     } catch (error) {
+      const rollbackFailures: string[] = [];
       try {
         if (before === null) rmSync(paths.policyFile, { force: true });
         else {
           const stat = lstatSync(paths.policyFile);
           writeAtomicOwned(paths.policyFile, before, 0o600, stat.uid, stat.gid);
         }
-      } catch {}
-      throw error;
+      } catch (rollbackError) {
+        rollbackFailures.push(errorMessage(rollbackError));
+      }
+      throw withRecoveryFailures(error, "policy rollback failed", rollbackFailures);
     }
   });
 }

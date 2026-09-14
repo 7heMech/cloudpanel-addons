@@ -798,6 +798,11 @@ export function timerNextElapse(unit: string): string | null {
 }
 
 export function ensureTimerArmed(unit: string, quiet = false): void {
+  const enabled = tryRun("systemctl", ["is-enabled", unit]);
+  if (!enabled.ok || enabled.out.trim() !== "enabled") {
+    if (!quiet) log.warn(`${unit} is not enabled; enabling it`);
+    run("systemctl", ["enable", unit]);
+  }
   if (timerNextElapse(unit)) return;
   if (!quiet) log.warn(`${unit} has no scheduled run; restarting it`);
   tryRun("systemctl", ["restart", unit]);

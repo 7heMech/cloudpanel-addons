@@ -65,7 +65,7 @@ const PROBE = String.raw`
       calls.push("warnIfPanelSessionUnreadable");
     },
     ensureServiceUser: () => calls.push("ensureServiceUser"),
-    ensureTimerArmed: () => calls.push("ensureTimerArmed"),
+    ensureTimerArmed: (unit) => calls.push("ensureTimerArmed:" + unit),
     hardenBackups: () => calls.push("hardenBackups"),
     reconcilePanelIdentity: () => { calls.push("reconcilePanelIdentity"); provisioning.sudoers = true; },
     installUnits: () => { calls.push("installUnits"); provisioning.units = true; return false; },
@@ -188,6 +188,11 @@ test("repair still completes when a panel session is available", () => {
   for (const name of ["reconcilePanelIdentity", "installUnits", "reconcileNginxProxy"]) {
     expect(result.repairWithSession.calls).toContain(name);
   }
+});
+
+test("repair checks persistent enablement for every installed timer", () => {
+  expect(result.repairWithoutSession.calls).toContain("ensureTimerArmed:clp-addons-reconcile.timer");
+  expect(result.repairWithoutSession.calls).toContain("ensureTimerArmed:clp-addons-cloudflare-ips-reconcile.timer");
 });
 
 test("install proceeds when the fixed directory has no live panel session", () => {

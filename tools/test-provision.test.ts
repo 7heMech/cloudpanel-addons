@@ -32,6 +32,45 @@ test("hyphenated addon names produce valid systemd environment variables", () =>
 
 const REPO = join(import.meta.dir, "..");
 
+test("timer repair persistently enables a disabled timer without restarting an armed timer", () => {
+  const root = mkdtempSync(join(tmpdir(), "timer-enable-test-"));
+  const bin = join(root, "bin");
+  const calls = join(root, "systemctl.calls");
+  mkdirSync(bin);
+  const systemctl = join(bin, "systemctl");
+  writeFileSync(systemctl, `#!/bin/sh
+printf '%s\n' "$*" >> "$SYSTEMCTL_CALLS"
+if [ "$1" = "is-enabled" ]; then
+  echo disabled
+  exit 1
+fi
+if [ "$1" = "show" ]; then
+  echo soon
+fi
+`);
+  chmodSync(systemctl, 0o755);
+  try {
+    execFileSync(process.execPath, ["-e", `
+      import { ensureTimerArmed } from "./cli/provision.ts";
+      ensureTimerArmed("test-reconcile.timer", true);
+    `], {
+      cwd: REPO,
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        SYSTEMCTL_CALLS: calls,
+      },
+    });
+    expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+      "is-enabled test-reconcile.timer",
+      "enable test-reconcile.timer",
+      "show -p NextElapseUSecRealtime --value test-reconcile.timer",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("native backup cron is installed, preserves custom schedules, and is removed on disable", () => {
   const root = mkdtempSync(join(tmpdir(), "instatic-cron-"));
   const path = join(root, "instatic-backup");
