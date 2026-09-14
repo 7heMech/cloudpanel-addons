@@ -314,8 +314,9 @@ export async function executeMaintenanceAction(
   assertDirectory(paths.lockDir);
   mkdirSync(paths.lockDir, { recursive: true, mode: 0o700 });
   chmodSync(paths.lockDir, 0o700);
+  const lockKey = Bun.CryptoHasher.hash("sha256", domain, "hex");
   return withFileLock(
-    join(paths.lockDir, `maintenance-${domain}.lock`),
+    join(paths.lockDir, `maintenance-${lockKey}.lock`),
     10,
     `another maintenance update is running for ${domain}`,
     async () => {

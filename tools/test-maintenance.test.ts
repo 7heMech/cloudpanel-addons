@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
-  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
+  existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -18,12 +18,12 @@ import {
 } from "../cli/inject";
 import { MAINTENANCE_ALLOWED_VERBS } from "../lib/gateway-protocol";
 
-function fixture(): { root: string; paths: MaintenanceActionPaths } {
+function fixture(domain = "example.com"): { root: string; paths: MaintenanceActionPaths } {
   const root = mkdtempSync(join(tmpdir(), "clp-maintenance-"));
   const panelDb = join(root, "panel.db");
   const db = new Database(panelDb);
   db.run("CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT)");
-  db.query("INSERT INTO site (domain_name) VALUES (?)").run("example.com");
+  db.query("INSERT INTO site (domain_name) VALUES (?)").run(domain);
   db.close();
   const identity = join(root, "panel-identity.conf");
   writeFileSync(identity, "PRIMARY=panel.example.test\nALIASES=\n", { mode: 0o600 });
@@ -88,6 +88,23 @@ test("maintenance actions reject unknown sites and oversized templates", async (
     await expect(executeMaintenanceAction(["set-template", "--domain=example.com"], actionOptions(paths, {
       input: "x".repeat(MAX_TEMPLATE_BYTES + 1),
     }))).rejects.toThrow("at most");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("maximum-length domains use bounded bypass lock filenames", async () => {
+  const domain = ["a".repeat(63), "b".repeat(63), "c".repeat(63), "d".repeat(61)].join(".");
+  expect(domain.length).toBe(253);
+  const { root, paths } = fixture(domain);
+  try {
+    await executeMaintenanceAction(["set-bypass", `--domain=${domain}`], actionOptions(paths, {
+      input: JSON.stringify({ ips: ["203.0.113.8"] }),
+    }));
+    const lockFiles = readdirSync(paths.lockDir);
+    expect(lockFiles).toHaveLength(1);
+    expect(lockFiles[0]).toMatch(/^maintenance-[0-9a-f]{64}\.lock$/);
+    expect(Buffer.byteLength(lockFiles[0]!, "utf8")).toBeLessThanOrEqual(255);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
