@@ -80,6 +80,8 @@ export const RECONCILE_SERVICE = "clp-addons-reconcile.service";
 export const RECONCILE_TIMER = "clp-addons-reconcile.timer";
 export const RECONCILE_PATH = "clp-addons-anchor.path";
 export const ANCHOR_SERVICE = "clp-addons-anchor.service";
+export const CLOUDFLARE_RECONCILE_SERVICE = "clp-addons-cloudflare-ips-reconcile.service";
+export const CLOUDFLARE_RECONCILE_TIMER = "clp-addons-cloudflare-ips-reconcile.timer";
 
 export interface AddonTarget {
   slug: string;
@@ -101,6 +103,14 @@ export interface AddonSpec {
 }
 
 export const ADDONS: Record<string, AddonSpec> = {
+  "cloudflare-ips": {
+    name: "cloudflare-ips",
+    title: "Cloudflare IP Access",
+    description: "Manage CloudPanel's Cloudflare-only traffic setting across every site.",
+    configFile: `${CONFIG_DIR}/cloudflare-ips.conf`,
+    stateDir: `${STATE_DIR}/cloudflare-ips`,
+    targets: [],
+  },
   instatic: {
     name: "instatic",
     title: "Instatic CMS",

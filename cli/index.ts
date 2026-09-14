@@ -2,7 +2,8 @@ import type { Server } from "bun";
 import { chmodSync, chownSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
-  ADDON_NAMES, ADDONS, ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, MANAGER_UNIT, PANEL_GROUP,
+  ADDON_NAMES, ADDONS, ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, CLOUDFLARE_RECONCILE_TIMER,
+  LIBEXEC_DIR, MANAGER_UNIT, PANEL_GROUP,
   SOCKET_PATH, SYSTEMD_DIR, mountPath, type AddonSpec,
 } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation, type FetchedArtifact } from "./release";
@@ -24,6 +25,7 @@ import { handle as handleInstatic } from "../addons/instatic/app/index";
 import { handle as handleLoginTheme } from "../addons/login-theme/app/index";
 import { handle as handleMaintenance } from "../addons/maintenance/app/index";
 import { handle as handleStager } from "../addons/stager/app/index";
+import { handle as handleCloudflareIps } from "../addons/cloudflare-ips/app/index";
 import { splitMount } from "../lib/mount";
 import { SECURITY_HEADERS, csrfCookieHeader, esc, escJs, guardMutation, newCsrfToken } from "../lib/app-http";
 import { JOB_STYLE, JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
@@ -33,6 +35,7 @@ import { CHANGELOG_URL, UPDATE_PATH } from "../lib/update-ui";
 import { pruneInstaticJobs, runInstaticAction } from "../addons/instatic/action";
 import { runStagerAction, type StagerActionOptions } from "../addons/stager/action";
 import { ensureMaintenanceData, executeMaintenanceAction, runMaintenanceAction } from "../addons/maintenance/action";
+import { runCloudflareAction } from "../addons/cloudflare-ips/action";
 import { runAuthActionStdin } from "./auth-action";
 import { pruneManagerJobs, runManagerAction, type ManagerJobView, type ManagerOps } from "./manager-action";
 import { callGatewayAction, type ActionResult } from "../lib/gateway-client";
@@ -47,6 +50,7 @@ type AddonHandler = (
 ) => Promise<Response>;
 
 const MANAGERS: Record<string, AddonHandler> = {
+  "cloudflare-ips": handleCloudflareIps,
   instatic: handleInstatic,
   "login-theme": handleLoginTheme,
   maintenance: handleMaintenance,
@@ -543,7 +547,12 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   const unitChanged = installUnits(all);
   ensureDirs(all);
   if (unitChanged || unitActive(MANAGER_UNIT) !== "active") startUnits();
-  else ensureTimerArmed("clp-addons-reconcile.timer", quiet);
+  else {
+    ensureTimerArmed("clp-addons-reconcile.timer", quiet);
+    if (all.some((spec) => spec.name === "cloudflare-ips")) {
+      ensureTimerArmed(CLOUDFLARE_RECONCILE_TIMER, quiet);
+    }
+  }
   reconcileAnchors(quiet);
   if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; run repair after checking global_settings");
   if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
@@ -1110,6 +1119,7 @@ function usage(): void {
   clp-addons status
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons maintenance <domain> [on|off|status]
+  clp-addons action cloudflare-ips <list|set|policy|reconcile> [options]
   clp-addons action instatic <verb> [options]
   clp-addons action stager <verb> [options]
   clp-addons action maintenance <verb> --domain=<domain>
@@ -1131,6 +1141,10 @@ async function cmdAction(argv: string[]): Promise<number> {
   const [addon, ...rest] = argv;
   if (addon === "auth") return runAuthActionStdin(rest);
   if (addon === "manager") return runManagerAction(rest, MANAGER_OPS);
+  if (addon === "cloudflare-ips") {
+    if (!installedConfig(ADDONS[addon]!)) fatal(`the ${addon} addon is not installed`);
+    return runCloudflareAction(rest);
+  }
   if (addon === "instatic" || addon === "stager" || addon === "maintenance") {
     if (!installedConfig(ADDONS[addon]!)) fatal(`the ${addon} addon is not installed`);
     if (addon === "instatic") return runInstaticAction(rest);

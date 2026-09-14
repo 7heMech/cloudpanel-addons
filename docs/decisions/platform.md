@@ -29,6 +29,10 @@ A path unit repairs managed blocks after CloudPanel rewrites watched files. A
 CloudPanel's legacy distro Nginx layout and its separate panel Nginx layout are
 detected from their files and services rather than a version string.
 
+When Cloudflare IP Access is enabled, a separate one-minute timer applies its
+new-site policy. Disabling the addon removes that timer while keeping the policy
+state for a later re-enable.
+
 ## Live panel data
 
 The manager requests current site and port information from the root gateway.

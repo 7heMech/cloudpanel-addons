@@ -2,6 +2,7 @@
 // state or invokes an action. Mutating requests are rejected deliberately.
 import { indexPage, updatePage } from "../cli/index";
 import { handle as loginThemePage } from "../addons/login-theme/app/index";
+import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } from "../addons/cloudflare-ips/app/views";
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
 import { jobsView, jobView, layout as stagerLayout, newCloneView } from "../addons/stager/app/views";
 import { fleetView as maintenanceFleetView, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
@@ -48,6 +49,14 @@ const instaticCreationJob: InstaticJobView = {
   finishedAt: "2026-09-10T09:31:15Z",
 };
 const instaticLogs = "[instatic] creating CloudPanel reverse-proxy site for blog.example.com\n[instatic] preparing instance storage\n[instatic] pulling ghcr.io/corebunch/instatic:0.0.19\n[instatic] starting instatic-blog.example.com on 127.0.0.1:39003\n[instatic] waiting for health check\n[instatic] requesting a Let's Encrypt certificate for blog.example.com\n[instatic] instance created successfully";
+const cloudflareState = {
+  autoEnableNewSites: true,
+  sites: [
+    { domain: "www.example.com", type: "php", enabled: true, excludedFromAutomatic: false },
+    { domain: "static.example.com", type: "static", enabled: false, excludedFromAutomatic: true },
+    { domain: "pages.example.com", type: "reverse-proxy", enabled: true, excludedFromAutomatic: false },
+  ],
+};
 
 const server = Bun.serve({
   hostname: "127.0.0.1",
@@ -92,7 +101,7 @@ const server = Bun.serve({
     if (path === "/addons/") {
       // ?enabled= picks which addons are on, so the Available section and the
       // enable/disable buttons can be reviewed without a CloudPanel install.
-      const enabled = empty ? [] : (url.searchParams.get("enabled") ?? "instatic,stager,maintenance").split(",").filter(Boolean);
+      const enabled = empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance").split(",").filter(Boolean);
       const previewJob = state && ["running", "queued", "failed"].includes(state)
         ? {
             id: "20260910T093000Z-abc123", kind: "enable", addon: "stager", state,
@@ -101,7 +110,7 @@ const server = Bun.serve({
           }
         : null;
       return indexPage(enabled, notice, {
-        available: ["instatic", "stager", "maintenance", "login-theme"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "login-theme"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
@@ -120,6 +129,9 @@ const server = Bun.serve({
           : maintenanceFleetView(empty ? [] : maintenanceSites),
         notice,
       );
+    } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
+      html = cloudflareLayout("Cloudflare IP access", cloudflareDashboardView(empty
+        ? { ...cloudflareState, sites: [] } : cloudflareState), notice);
     } else if (path === "/addons/instatic/") {
       html = instaticLayout("Instatic sites", dashboardView(empty ? [] : instances, age,
         sites.map((s) => ({ domain: s.domain, type: s.siteType, user: s.siteUser })), versions), notice);

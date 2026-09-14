@@ -44,6 +44,12 @@ export const MAINTENANCE_ALLOWED_VERBS = new Set([
   "global-disable",
 ]);
 
+export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
+  "list",
+  "set",
+  "policy",
+]);
+
 /**
  * The manager's own privileged verbs: enabling and disabling an addon that
  * already ships inside this binary, and replacing the binary itself.

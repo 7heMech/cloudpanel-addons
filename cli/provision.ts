@@ -4,7 +4,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  ADDON_NAMES, ANCHOR_SERVICE, CLI_BIN, CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS,
+  ADDON_NAMES, ANCHOR_SERVICE, CLI_BIN, CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER,
+  CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS,
   ADDONS, AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT,
   PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
@@ -536,10 +537,10 @@ export function serviceUnit(specs: AddonSpec[]): string {
   const dependencies = [...new Set(specs.flatMap((spec) => spec.requiresUnits ?? []))];
   const after = ["network-online.target", AUTH_SOCKET_UNIT, ...dependencies.map((unit) => `${unit}.service`)];
   const env = specs.flatMap((spec) => [
-    // systemd environment variable names may not contain a hyphen (rejected
-    // with "Invalid environment assignment, ignoring"), which `login-theme`'s
-    // own name does.
-    `Environment=${spec.name.toUpperCase().replace(/-/g, "_")}_APP_DATA=${spec.stateDir}`,
+    // systemd environment variable names may not contain punctuation
+    // (rejected with "Invalid environment assignment, ignoring"), so normalize
+    // every non-alphanumeric character in the addon name.
+    `Environment=${spec.name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_APP_DATA=${spec.stateDir}`,
   ]);
   // Only the root actions use /run/lock/clp-addons, creating it on demand.
   // Binding it into this service's namespace prevented startup after /run was
@@ -667,6 +668,31 @@ ExecStart=/usr/local/bin/clp-addons repair --anchors-only --quiet
   };
 }
 
+export function cloudflareReconcileUnits(): { service: string; timer: string } {
+  return {
+    service: `[Unit]
+Description=Apply Cloudflare-only access to new CloudPanel sites
+After=nginx.service
+ConditionPathExists=${ADDONS["cloudflare-ips"]!.configFile}
+
+[Service]
+Type=oneshot
+ExecStart=${CLI_BIN} action cloudflare-ips reconcile
+`,
+    timer: `[Unit]
+Description=Check for new CloudPanel sites that require Cloudflare-only access
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
+`,
+  };
+}
+
 /**
  * Everything the watcher reconciles: the addons' Twig anchors and the panel
  * vhost carrying the /addons/ proxy. The vhost belongs here because on the
@@ -690,12 +716,31 @@ export function installUnits(specs: AddonSpec[]): boolean {
   writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_TIMER}`, units.timer, 0o644);
   writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_PATH}`, units.path, 0o644);
   writeAtomic(`${SYSTEMD_DIR}/${ANCHOR_SERVICE}`, units.anchor, 0o644);
+  const cloudflareEnabled = specs.some((spec) => spec.name === "cloudflare-ips");
+  const cloudflareUnits = cloudflareReconcileUnits();
+  const cloudflareServicePath = `${SYSTEMD_DIR}/${CLOUDFLARE_RECONCILE_SERVICE}`;
+  const cloudflareTimerPath = `${SYSTEMD_DIR}/${CLOUDFLARE_RECONCILE_TIMER}`;
+  const cloudflareChanged = cloudflareEnabled
+    ? !existsSync(cloudflareServicePath) || !existsSync(cloudflareTimerPath) ||
+      readFileSync(cloudflareServicePath, "utf8") !== cloudflareUnits.service ||
+      readFileSync(cloudflareTimerPath, "utf8") !== cloudflareUnits.timer
+    : existsSync(cloudflareServicePath) || existsSync(cloudflareTimerPath);
+  if (cloudflareEnabled) {
+    writeAtomic(cloudflareServicePath, cloudflareUnits.service, 0o644);
+    writeAtomic(cloudflareTimerPath, cloudflareUnits.timer, 0o644);
+  } else {
+    if (existsSync(`${SYSTEMD_DIR}/${CLOUDFLARE_RECONCILE_TIMER}`)) {
+      tryRun("systemctl", ["disable", "--now", CLOUDFLARE_RECONCILE_TIMER]);
+    }
+    rmSync(cloudflareServicePath, { force: true });
+    rmSync(cloudflareTimerPath, { force: true });
+  }
   const auth = authUnits();
   writeAtomic(`${SYSTEMD_DIR}/${AUTH_SOCKET_UNIT}`, auth.socket, 0o644);
   writeAtomic(`${SYSTEMD_DIR}/${AUTH_SERVICE_UNIT}`, auth.service, 0o644);
   rmSync(`${SYSTEMD_DIR}/clp-addons-auth@.service`, { force: true });
   run("systemctl", ["daemon-reload"]);
-  return changed;
+  return changed || cloudflareChanged;
 }
 
 export interface StartUnitsOptions {
@@ -716,16 +761,22 @@ export function startUnits(options: StartUnitsOptions = {}): void {
   run("systemctl", ["restart", RECONCILE_TIMER]);
   run("systemctl", ["enable", RECONCILE_PATH]);
   run("systemctl", ["restart", RECONCILE_PATH]);
+  if (existsSync(`${SYSTEMD_DIR}/${CLOUDFLARE_RECONCILE_TIMER}`)) {
+    run("systemctl", ["enable", CLOUDFLARE_RECONCILE_TIMER]);
+    run("systemctl", ["restart", CLOUDFLARE_RECONCILE_TIMER]);
+  }
   ensureTimerArmed(RECONCILE_TIMER);
 }
 
 export function stopUnits(keepShared = false): void {
   if (keepShared) return;
   reconcileInstaticBackupCron(false);
-  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
+  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, CLOUDFLARE_RECONCILE_TIMER,
+    AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     tryRun("systemctl", ["disable", "--now", unit]);
   }
   for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE,
+    CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, "clp-addons-auth@.service"]) {
     rmSync(`${SYSTEMD_DIR}/${unit}`, { force: true });
   }
@@ -742,11 +793,18 @@ export function unitPid(unit: string): string | null {
 }
 
 export function timerNextElapse(unit: string): string | null {
-  const value = tryRun("systemctl", ["show", "-p", "NextElapseUSecRealtime", "--value", unit]).out.trim();
-  return value && value !== "0" && value !== "infinity" && value !== "n/a" ? value : null;
+  const values = tryRun("systemctl", [
+    "show", "-p", "NextElapseUSecRealtime", "-p", "NextElapseUSecMonotonic", "--value", unit,
+  ]).out.split(/\r?\n/).map((value) => value.trim());
+  return values.find((value) => value && value !== "0" && value !== "infinity" && value !== "n/a") ?? null;
 }
 
 export function ensureTimerArmed(unit: string, quiet = false): void {
+  const enabled = tryRun("systemctl", ["is-enabled", unit]);
+  if (!enabled.ok || enabled.out.trim() !== "enabled") {
+    if (!quiet) log.warn(`${unit} is not enabled; enabling it`);
+    run("systemctl", ["enable", unit]);
+  }
   if (timerNextElapse(unit)) return;
   if (!quiet) log.warn(`${unit} has no scheduled run; restarting it`);
   tryRun("systemctl", ["restart", unit]);

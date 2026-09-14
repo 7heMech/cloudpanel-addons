@@ -7,7 +7,7 @@ import {
   ADDON_NAMES, ADDONS, nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
 } from "../cli/paths";
 import {
-  authUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit,
+  authUnits, cloudflareReconcileUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit,
   vhostOwnerAccepted, warnIfPanelSessionUnreadable,
 } from "../cli/provision";
 import { panelUserUid } from "../lib/sso-auth";
@@ -16,7 +16,60 @@ import { panelUserUid } from "../lib/sso-auth";
 const realProvision = async (): Promise<typeof import("../cli/provision")> =>
   await import("../cli/provision?provision-test-real" as "../cli/provision");
 
+test("Cloudflare new-site reconciliation runs once a minute through the root action", () => {
+  const units = cloudflareReconcileUnits();
+  expect(units.service).toContain("ConditionPathExists=/etc/clp-addons/cloudflare-ips.conf");
+  expect(units.service).toContain("ExecStart=/usr/local/bin/clp-addons action cloudflare-ips reconcile");
+  expect(units.timer).toContain("OnUnitActiveSec=1min");
+});
+
+test("hyphenated addon names produce valid systemd environment variables", () => {
+  const unit = serviceUnit([ADDONS["cloudflare-ips"]!, ADDONS["login-theme"]!]);
+  expect(unit).toContain("Environment=CLOUDFLARE_IPS_APP_DATA=/var/lib/clp-addons/cloudflare-ips");
+  expect(unit).toContain("Environment=LOGIN_THEME_APP_DATA=/var/lib/clp-addons/login-theme");
+  expect(unit).not.toContain("Environment=CLOUDFLARE-IPS_APP_DATA");
+});
+
 const REPO = join(import.meta.dir, "..");
+
+test("timer repair persistently enables a disabled timer without restarting an armed timer", () => {
+  const root = mkdtempSync(join(tmpdir(), "timer-enable-test-"));
+  const bin = join(root, "bin");
+  const calls = join(root, "systemctl.calls");
+  mkdirSync(bin);
+  const systemctl = join(bin, "systemctl");
+  writeFileSync(systemctl, `#!/bin/sh
+printf '%s\n' "$*" >> "$SYSTEMCTL_CALLS"
+if [ "$1" = "is-enabled" ]; then
+  echo disabled
+  exit 1
+fi
+if [ "$1" = "show" ]; then
+  echo soon
+fi
+`);
+  chmodSync(systemctl, 0o755);
+  try {
+    execFileSync(process.execPath, ["-e", `
+      import { ensureTimerArmed } from "./cli/provision.ts";
+      ensureTimerArmed("test-reconcile.timer", true);
+    `], {
+      cwd: REPO,
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        SYSTEMCTL_CALLS: calls,
+      },
+    });
+    expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+      "is-enabled test-reconcile.timer",
+      "enable test-reconcile.timer",
+      "show -p NextElapseUSecRealtime -p NextElapseUSecMonotonic --value test-reconcile.timer",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("native backup cron is installed, preserves custom schedules, and is removed on disable", () => {
   const root = mkdtempSync(join(tmpdir(), "instatic-cron-"));
