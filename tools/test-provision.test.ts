@@ -64,7 +64,7 @@ fi
     expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
       "is-enabled test-reconcile.timer",
       "enable test-reconcile.timer",
-      "show -p NextElapseUSecRealtime --value test-reconcile.timer",
+      "show -p NextElapseUSecRealtime -p NextElapseUSecMonotonic --value test-reconcile.timer",
     ]);
   } finally {
     rmSync(root, { recursive: true, force: true });

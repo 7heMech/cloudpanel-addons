@@ -793,8 +793,10 @@ export function unitPid(unit: string): string | null {
 }
 
 export function timerNextElapse(unit: string): string | null {
-  const value = tryRun("systemctl", ["show", "-p", "NextElapseUSecRealtime", "--value", unit]).out.trim();
-  return value && value !== "0" && value !== "infinity" && value !== "n/a" ? value : null;
+  const values = tryRun("systemctl", [
+    "show", "-p", "NextElapseUSecRealtime", "-p", "NextElapseUSecMonotonic", "--value", unit,
+  ]).out.split(/\r?\n/).map((value) => value.trim());
+  return values.find((value) => value && value !== "0" && value !== "infinity" && value !== "n/a") ?? null;
 }
 
 export function ensureTimerArmed(unit: string, quiet = false): void {
