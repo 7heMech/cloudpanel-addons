@@ -98,7 +98,7 @@ main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 25px 24px 40px; 
 html.dark .card-header { background: var(--surface); }
 .card-header h2 { margin: 0; }
 .card-table { padding: 0; overflow-x: auto; }
-.card-table > .card-header { margin: 0; }
+.card-table > .card-header { margin: 0; padding: 25px 32px; }
 .table-scroll { overflow-x: auto; }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 30px; }
 .stat .label { font-size: 18px; font-weight: 500; margin-bottom: 5px; }
@@ -206,6 +206,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .card { padding: 20px; }
   .card-header { margin: -20px -20px 20px; padding: 20px; }
   .card-table { padding: 0; }
+  .card-table > .card-header { margin: 0; padding: 20px; }
   .addon-card .card-header { width: calc(100% + 40px); }
   .form-grid, .addon-grid { grid-template-columns: minmax(0, 1fr); }
   th, td { padding: 16px 20px; }
