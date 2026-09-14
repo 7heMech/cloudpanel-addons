@@ -16,7 +16,8 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync,
 import { tmpdir } from "node:os";
 import { findMasterVhost, inspect, masterVhostHost, NGINX_PROXY_BLOCK, inspectNginxProxy, reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
-import { headerTarget } from "../lib/panel-nav";
+import { headerTarget, siteLayoutTarget } from "../lib/panel-nav";
+import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import type { AddonTarget } from "../cli/paths";
 
 function check(label: string, cond: boolean, detail = ""): void {
@@ -519,5 +520,41 @@ check("a quoted listen 8443 leaves the vhost ambiguous and unchanged",
   readFileSync(quotedListenVhost, "utf-8") === quotedListenContent &&
   !existsSync(quotedListenState));
 rmSync(quotedListenDir, { recursive: true, force: true });
+
+// The site tab strip carries two blocks from two owners: the addon's tab, and
+// the manager's rule that keeps the strip on one row once that tab is there.
+const tabTemplate = "tab-container.html.twig";
+const tabFile = `${dir}/${tabTemplate}`;
+const tabOriginal = `<div class="tab-container">
+  <ul>
+    <li>
+      <a href="{{ path('clp_site_logs', {'domainName': site.domainName}) }}">{% trans %}Logs{% endtrans %}</a>
+    </li>
+  </ul>
+</div>
+`;
+writeFileSync(tabFile, tabOriginal);
+
+const tabInjections: Injection[] = [
+  { addon: "manager", target: { ...siteLayoutTarget(), template: tabTemplate }, url: "/addons/" },
+  { addon: "maintenance", target: { ...MAINTENANCE_TARGETS[0]!, template: tabTemplate }, url: "/addons/maintenance" },
+];
+reconcile(tabInjections, PATHS);
+const tabBody = () => readFileSync(tabFile, "utf-8");
+check("the one-row rule and the addon tab both land in the strip",
+  tabBody().includes("flex-wrap: nowrap") && tabBody().includes(">Maintenance</a>"), tabBody());
+check("the one-row rule is applied before the strip it styles",
+  tabBody().indexOf("flex-wrap: nowrap") < tabBody().indexOf('<div class="tab-container">'), tabBody());
+check("the addon tab stays inside the panel's own admin guard",
+  tabBody().indexOf("{% if is_granted('ROLE_ADMIN') %}") < tabBody().indexOf(">Maintenance</a>"), tabBody());
+
+reconcile(tabInjections, PATHS);
+check("the strip settles without duplicating either block",
+  (tabBody().match(/flex-wrap: nowrap/g) ?? []).length === 1 &&
+  (tabBody().match(/>Maintenance<\/a>/g) ?? []).length === 1, tabBody());
+
+// Removing the addon removes the rule that only existed for its tab.
+reconcile([], PATHS);
+check("removing the addon restores CloudPanel's own strip", tabBody() === tabOriginal, JSON.stringify(tabBody()));
 
 rmSync(dir, { recursive: true, force: true });

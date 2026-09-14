@@ -68,6 +68,8 @@ export const NGINX_MAINTENANCE_STATE_DIR = "/var/lib/clp-addons/nginx-maintenanc
 const PANEL_APP = "/home/clp/htdocs/app/files";
 export const TEMPLATES_DIR = `${PANEL_APP}/templates`;
 export const TWIG_CACHE_DIR = `${PANEL_APP}/var/cache`;
+/** Where Symfony's filesystem cache pool keeps the panel's own cached values. */
+export const PANEL_CACHE_POOL_DIR = `${PANEL_APP}/var/cache/prod/pools/app`;
 
 export const CONFIG_DIR = "/etc/clp-addons";
 export const STATE_DIR = "/var/lib/clp-addons";

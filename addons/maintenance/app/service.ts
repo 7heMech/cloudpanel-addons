@@ -1,5 +1,6 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 import { fetchPanelInfo, type SanitizedSite } from "../../../lib/snapshot-reader";
+import type { SiteContext } from "../../../lib/site-context";
 import type { MaintenanceStatus } from "../action";
 
 const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
@@ -14,6 +15,12 @@ export interface MaintenanceSiteView extends MaintenanceStatus {
   type: string;
   user: string;
   error?: string;
+}
+
+/** A site's status together with the panel context its page is drawn in. */
+export interface MaintenanceSitePage {
+  site: MaintenanceSiteView;
+  context: SiteContext;
 }
 
 export interface MaintenanceTemplateView {
@@ -75,11 +82,25 @@ export const maintenanceService = {
     return statuses.sort((a, b) => a.domain.localeCompare(b.domain));
   },
 
-  async site(domain: string): Promise<MaintenanceSiteView> {
-    const site = (await this.panelSites()).find((candidate) => candidate.domain.toLowerCase() === domain);
+  /**
+   * One site's maintenance status, with what the shell needs to keep drawing
+   * the panel's own site information and tab strip around it.
+   */
+  async site(domain: string): Promise<MaintenanceSitePage> {
+    const panel = await fetchPanelInfo();
+    const site = panel.sites.find((candidate) => candidate.domain.toLowerCase() === domain);
     if (!site) throw new Error(`CloudPanel site not found: ${domain}`);
     const status = await requireResult(await action<MaintenanceStatus>("status", domain), "maintenance status unavailable");
-    return { ...status, type: site.type, user: site.user };
+    return {
+      site: { ...status, type: site.type, user: site.user },
+      context: {
+        domain: site.domain,
+        user: site.user,
+        type: site.type,
+        varnishCache: site.varnishCache,
+        ...(panel.publicIp ? { publicIp: panel.publicIp } : {}),
+      },
+    };
   },
 
   status(domain: string): Promise<ActionResult<MaintenanceStatus>> {

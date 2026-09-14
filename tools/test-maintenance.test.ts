@@ -11,7 +11,7 @@ import {
 } from "../addons/maintenance/action";
 import { handle as handleMaintenance } from "../addons/maintenance/app/index";
 import { maintenanceService } from "../addons/maintenance/app/service";
-import { fleetView, siteView } from "../addons/maintenance/app/views";
+import { fleetView, layout, siteView } from "../addons/maintenance/app/views";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import {
   inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance,
@@ -229,68 +229,87 @@ test("fleet overview separates unavailable sites from the live count", () => {
   expect(rendered).toContain('<div class="label">Live</div><div class="value">1</div>');
 });
 
-test("fleet overview renders global maintenance toggle and badges according to global and individual state", () => {
-  // globalEnabled = true: bulk toggle is checked, In maintenance = 2, Live = 0, individual badges reflect state
+test("fleet overview renders the global override and badges according to global and individual state", () => {
+  // globalEnabled = true: the override reads On, In maintenance = 2, Live = 0.
   const globalOn = fleetView([
     { domain: "one.example.com", type: "php", user: "one", enabled: true, customTemplate: false, bypasses: [] },
     { domain: "two.example.com", type: "static", user: "two", enabled: false, customTemplate: false, bypasses: [] },
   ], true);
-  expect(globalOn).toContain('<div class="bulk-toggle">');
-  expect(globalOn).toContain('<label for="bulk-toggle">All sites</label>');
-  expect(globalOn).toContain('<input type="checkbox" id="bulk-toggle" checked');
+  expect(globalOn).toContain("<h2>Global maintenance</h2>");
+  expect(globalOn).toContain('<span class="switch-state" id="global-state">On</span>');
+  expect(globalOn).toContain('<input type="checkbox" id="global-toggle" checked');
   expect(globalOn).toContain('<div class="label">In maintenance</div><div class="value">2</div>');
   expect(globalOn).toContain('<div class="label">Live</div><div class="value">0</div>');
   expect(globalOn).toContain('<span class="badge state-maintenance" data-status-domain="one.example.com">Maintenance Mode (503)</span>');
   expect(globalOn).toContain('<span class="badge state-maintenance" data-status-domain="two.example.com">Maintenance (Global)</span>');
   expect(globalOn).toContain('data-global-maintenance="true"');
+  // The saved per-site setting is named as such, separately from what visitors get.
+  expect(globalOn).toContain("<th scope=\"col\">Effective status</th>");
+  expect(globalOn).toContain("Site setting</th>");
 
-  // globalEnabled = false: bulk toggle is not checked, In maintenance = 1, Live = 1
+  // globalEnabled = false: the override reads Off, In maintenance = 1, Live = 1.
   const globalOff = fleetView([
     { domain: "one.example.com", type: "php", user: "one", enabled: true, customTemplate: false, bypasses: [] },
     { domain: "two.example.com", type: "static", user: "two", enabled: false, customTemplate: false, bypasses: [] },
   ], false);
-  expect(globalOff).toContain('<input type="checkbox" id="bulk-toggle"');
-  expect(globalOff).not.toContain('id="bulk-toggle" checked');
+  expect(globalOff).toContain('<span class="switch-state" id="global-state">Off</span>');
+  expect(globalOff).not.toContain('id="global-toggle" checked');
   expect(globalOff).toContain('<div class="label">In maintenance</div><div class="value">1</div>');
   expect(globalOff).toContain('<div class="label">Live</div><div class="value">1</div>');
   expect(globalOff).toContain('<span class="badge state-maintenance" data-status-domain="one.example.com">Maintenance Mode (503)</span>');
   expect(globalOff).toContain('<span class="badge state-live" data-status-domain="two.example.com">Live</span>');
   expect(globalOff).toContain('data-global-maintenance="false"');
 
-  // Empty fleet -> bulk toggle is disabled
-  const emptyFleet = fleetView([]);
-  expect(emptyFleet).toContain('<input type="checkbox" id="bulk-toggle"');
-  expect(emptyFleet).toContain('disabled');
-
-  // Only unavailable sites -> bulk toggle is disabled
-  const unavailableOnly = fleetView([
+  // No site at all -> nothing for the override to cover.
+  expect(fleetView([])).toContain('id="global-toggle"  disabled');
+  // One Nginx flag covers a site whose own status could not be read, so an
+  // unreadable status must not take the override away.
+  expect(fleetView([
     { domain: "err.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [], error: "unavailable" },
-  ]);
-  expect(unavailableOnly).toContain('<input type="checkbox" id="bulk-toggle"');
-  expect(unavailableOnly).toContain('disabled');
+  ])).not.toContain('id="global-toggle"  disabled');
 });
 
-test("siteView renders global maintenance state and notice banner correctly", () => {
+test("siteView explains that the global override outranks this site's saved setting", () => {
   const site = { domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] };
-  const template = { ok: true, data: { domain: "one.example.com", custom: false, html: "<h1>Maintenance</h1>" } };
+  const template = { domain: "one.example.com", custom: false, html: "<h1>Maintenance</h1>" };
 
-  // When global is true and site is false: badge is Maintenance (Global) and notice is visible
-  const globalOn = siteView(site, template.data, "1.2.3.4", true);
+  // Global on, site saved off: the site is in maintenance and the page says why.
+  const globalOn = siteView(site, template, "1.2.3.4", true);
   expect(globalOn).toContain('data-global-maintenance="true"');
-  expect(globalOn).toContain('Maintenance (Global)');
-  expect(globalOn).toContain('id="global-notice"');
-  expect(globalOn).not.toContain('id="global-notice" class="alert" style="margin-bottom:20px; background:var(--surface); border-left:4px solid var(--accent);" hidden');
+  expect(globalOn).toContain("Maintenance (Global)");
+  expect(globalOn).toContain('<div id="global-notice" class="notice">');
+  expect(globalOn).toContain("Turning the setting below off does not take this site out of global maintenance.");
 
-  // When global is false and site is false: badge is Live and notice is hidden
-  const globalOff = siteView(site, template.data, "1.2.3.4", false);
+  // Global off, site saved off: the site is live and the explanation is hidden.
+  const globalOff = siteView(site, template, "1.2.3.4", false);
   expect(globalOff).toContain('data-global-maintenance="false"');
-  expect(globalOff).toContain('Live');
-  expect(globalOff).toContain('id="global-notice" class="alert" style="margin-bottom:20px; background:var(--surface); border-left:4px solid var(--accent);" hidden');
+  expect(globalOff).toContain("Live");
+  expect(globalOff).toContain('<div id="global-notice" class="notice" hidden>');
 
-  // When site is enabled: badge is Maintenance Mode (503) and notice is hidden even if global is true
-  const siteEnabled = siteView({ ...site, enabled: true }, template.data, "1.2.3.4", true);
-  expect(siteEnabled).toContain('Maintenance Mode (503)');
-  expect(siteEnabled).toContain('id="global-notice" class="alert" style="margin-bottom:20px; background:var(--surface); border-left:4px solid var(--accent);" hidden');
+  // Site saved on: its own setting already explains the status.
+  const siteEnabled = siteView({ ...site, enabled: true }, template, "1.2.3.4", true);
+  expect(siteEnabled).toContain("Maintenance Mode (503)");
+  expect(siteEnabled).toContain('<div id="global-notice" class="notice" hidden>');
+});
+
+test("a site-scoped page keeps CloudPanel's site navigation rather than a back link", () => {
+  const site = { domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] };
+  const content = siteView(site, { domain: site.domain, custom: false, html: "" }, "", false);
+
+  const withContext = layout("Maintenance", content, null, {
+    domain: "one.example.com", user: "one", type: "php", varnishCache: true, publicIp: "203.0.113.10",
+  });
+  expect(withContext).toContain('href="/site/one.example.com/settings"');
+  expect(withContext).toContain('href="/site/one.example.com/varnish-cache"');
+  expect(withContext).toContain('aria-label="Site navigation"');
+  expect(withContext).toContain("203.0.113.10");
+  // The addon's own single "Sites" tab would only compete with the site strip.
+  expect(withContext).not.toContain('aria-label="Maintenance Mode navigation"');
+  expect(withContext).not.toContain("Back to site");
+
+  const fleet = layout("Maintenance", fleetView([]), null);
+  expect(fleet).toContain('aria-label="Maintenance Mode navigation"');
+  expect(fleet).not.toContain('aria-label="Site navigation"');
 });
 
 test("global toggle API guards mutations and toggles fleet-wide maintenance mode", async () => {

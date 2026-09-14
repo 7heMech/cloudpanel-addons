@@ -29,7 +29,7 @@ import { handle as handleCloudflareIps } from "../addons/cloudflare-ips/app/inde
 import { splitMount } from "../lib/mount";
 import { SECURITY_HEADERS, csrfCookieHeader, esc, escJs, guardMutation, newCsrfToken } from "../lib/app-http";
 import { JOB_STYLE, JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
-import { adminHeaderTarget, headerTarget } from "../lib/panel-nav";
+import { adminHeaderTarget, headerTarget, siteLayoutTarget, SITE_TAB_TEMPLATE } from "../lib/panel-nav";
 import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
 import { CHANGELOG_URL, UPDATE_PATH } from "../lib/update-ui";
 import { pruneInstaticJobs, runInstaticAction } from "../addons/instatic/action";
@@ -155,6 +155,12 @@ export function installedInjections(exclude?: string, managerNav = true): Inject
   if (managerNav) {
     injections.push({ addon: "manager", target: headerTarget(), url: "/addons/" });
     injections.push({ addon: "manager", target: adminHeaderTarget(), url: "/addons/" });
+  }
+
+  // The site tab strip only needs its one-row rule once some installed addon is
+  // actually adding a tab to it, and it needs it exactly once however many do.
+  if (installed.some((name) => ADDONS[name]!.targets.some((target) => target.template === SITE_TAB_TEMPLATE))) {
+    injections.push({ addon: "manager", target: siteLayoutTarget(), url: "/addons/" });
   }
 
   for (const name of installed) {

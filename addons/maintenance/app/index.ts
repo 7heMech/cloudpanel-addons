@@ -64,9 +64,17 @@ export async function handle(
       if (!selected) return html(layout("Maintenance Mode", fleetView(await maintenanceService.listSites(), globalEnabled), updateNotice), csrf);
       const domain = validateDomain(selected);
       if (!domain) return html(layout("Invalid site", '<div class="alert">That is not a valid hostname.</div>', updateNotice), csrf, 400);
-      const [site, template] = await Promise.all([maintenanceService.site(domain), maintenanceService.template(domain)]);
+      const [page, template] = await Promise.all([maintenanceService.site(domain), maintenanceService.template(domain)]);
       if (!template.ok || !template.data) throw new Error(template.error ?? "maintenance template unavailable");
-      return html(layout(`Maintenance — ${domain}`, siteView(site, template.data, clientIp(req), globalEnabled), updateNotice), csrf);
+      return html(
+        layout(
+          `Maintenance — ${domain}`,
+          siteView(page.site, template.data, clientIp(req), globalEnabled),
+          updateNotice,
+          page.context,
+        ),
+        csrf,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const status = /not found/i.test(message) ? 404 : 500;

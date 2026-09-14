@@ -1,4 +1,9 @@
 import type { AddonTarget } from "../../../cli/paths";
+import { ADDON_SITE_TABS } from "../../../lib/site-context";
+
+// The label the panel's strip shows and the label the addon's own reproduction
+// of that strip shows are the same string, from lib/site-context.
+const LABEL = ADDON_SITE_TABS.find((tab) => tab.slug === "maintenance")!.label;
 
 export const MAINTENANCE_TARGETS: AddonTarget[] = [
   {
@@ -10,7 +15,7 @@ export const MAINTENANCE_TARGETS: AddonTarget[] = [
     snippet: (url) => `
         {% if is_granted('ROLE_ADMIN') %}
           <li>
-            <a href="${url}?domain={{ site.domainName|url_encode }}">Maintenance</a>
+            <a href="${url}?domain={{ site.domainName|url_encode }}">${LABEL}</a>
           </li>
         {% endif %}`,
   },
