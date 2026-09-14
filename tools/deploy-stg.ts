@@ -1,0 +1,27 @@
+// Builds the binary and installs it on the staging CloudPanel box. The services
+// hold the installed binary open, so upload to a scratch path, stop them, then
+// install and let `clp-addons repair` start everything again.
+//
+//   bun tools/deploy-stg.ts
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
+
+const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
+const host = process.env.STG_HOST || "root@46.225.93.37";
+const key = process.env.STG_KEY || join(homedir(), ".ssh/cloudpanel-addons-dev-0bad61aa9144");
+const sshOptions = ["-o", "BatchMode=yes", "-i", key];
+
+async function run(cmd: string[]): Promise<void> {
+  const proc = Bun.spawn(cmd, { cwd: repo, stdout: "inherit", stderr: "inherit" });
+  if ((await proc.exited) !== 0) throw new Error(`${cmd.join(" ")} failed`);
+}
+
+await run(["bun", "run", "build"]);
+await run(["scp", ...sshOptions, join(repo, "dist/clp-addons-linux-x64"), `${host}:/root/clp-addons-new`]);
+await run(["ssh", ...sshOptions, host, [
+  "set -e",
+  "systemctl stop clp-addons.service clp-addons-auth.service clp-addons-auth.socket",
+  "install -m 0755 -o root -g root /root/clp-addons-new /usr/local/bin/clp-addons",
+  "clp-addons repair",
+].join("\n")]);
