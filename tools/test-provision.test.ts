@@ -160,7 +160,7 @@ test("fails clearly when docker membership cannot be removed", () => {
 function requiredUnitsProbe(options: {
   unit?: string;
   active?: boolean;
-  dockerPresent?: boolean;
+  dockerUnitLoaded?: boolean;
   downloadOk?: boolean;
   installOk?: boolean;
   enableOk?: boolean;
@@ -177,7 +177,9 @@ function requiredUnitsProbe(options: {
         if (command === "systemctl" && args[0] === "is-active") {
           return { ok: options.active ?? false, out: options.active ? "active" : "inactive" };
         }
-        if (command === "which") return { ok: options.dockerPresent ?? false, out: "" };
+        if (command === "systemctl" && args[0] === "show") {
+          return { ok: true, out: options.dockerUnitLoaded ?? false ? "loaded" : "not-found" };
+        }
         if (command === "curl") return { ok: options.downloadOk ?? true, out: options.downloadOk === false ? "could not resolve host" : "" };
         if (command === "sh") return { ok: options.installOk ?? true, out: options.installOk === false ? "get-docker.sh exited 1" : "" };
         if (command === "systemctl" && args[0] === "enable") return { ok: options.enableOk ?? true, out: "" };
@@ -209,19 +211,19 @@ test("a required unit already active needs no Docker provisioning", () => {
   expect(result.calls).toEqual([{ command: "systemctl", args: ["is-active", "docker"] }]);
 });
 
-test("installs Docker via get.docker.com when the binary is missing, then starts it", () => {
-  const result = requiredUnitsProbe({ active: false, dockerPresent: false });
+test("installs Docker via get.docker.com when its unit is not loaded, then starts it", () => {
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: false });
 
   expect(result.ok).toBe(true);
-  expect(result.calls).toContainEqual({ command: "which", args: ["docker"] });
+  expect(result.calls).toContainEqual({ command: "systemctl", args: ["show", "docker", "--property=LoadState", "--value"] });
   expect(result.calls.some(({ command, args }) =>
     command === "curl" && args.includes("https://get.docker.com"))).toBe(true);
   expect(result.calls.some(({ command }) => command === "sh")).toBe(true);
   expect(result.calls).toContainEqual({ command: "systemctl", args: ["enable", "--now", "docker"] });
 });
 
-test("starts Docker without reinstalling when the binary is already present", () => {
-  const result = requiredUnitsProbe({ active: false, dockerPresent: true });
+test("starts Docker without reinstalling when its unit is already loaded (an orphaned CLI is not enough to skip provisioning)", () => {
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: true });
 
   expect(result.ok).toBe(true);
   expect(result.calls.some(({ command }) => command === "curl" || command === "sh")).toBe(false);
@@ -229,21 +231,21 @@ test("starts Docker without reinstalling when the binary is already present", ()
 });
 
 test("fails clearly when the Docker installer cannot be downloaded", () => {
-  const result = requiredUnitsProbe({ active: false, dockerPresent: false, downloadOk: false });
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: false, downloadOk: false });
 
   expect(result.ok).toBe(false);
   expect(result.error).toBe("could not download Docker: could not resolve host");
 });
 
 test("fails clearly when the Docker installer itself fails", () => {
-  const result = requiredUnitsProbe({ active: false, dockerPresent: false, installOk: false });
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: false, installOk: false });
 
   expect(result.ok).toBe(false);
   expect(result.error).toBe("Docker installation failed: get-docker.sh exited 1");
 });
 
 test("fails clearly when Docker still is not active after installing it", () => {
-  const result = requiredUnitsProbe({ active: false, dockerPresent: true, enableOk: false });
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: true, enableOk: false });
 
   expect(result.ok).toBe(false);
   expect(result.error).toBe("docker is not active; installing it did not bring the service up");

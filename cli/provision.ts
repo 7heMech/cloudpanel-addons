@@ -245,7 +245,11 @@ export function ensureRequiredUnits(
     if (unit !== "docker") {
       fatal(`${unit} is not active; install and start it before enabling ${spec.name}`);
     }
-    if (!commands.tryRun("which", ["docker"]).ok) {
+    // `which docker` would pass for an orphaned CLI with no daemon behind
+    // it -- the unit's load state is what actually decides whether
+    // `enable --now` below has anything to start.
+    const loadState = commands.tryRun("systemctl", ["show", "docker", "--property=LoadState", "--value"]);
+    if (loadState.out.trim() !== "loaded") {
       log.step("installing Docker");
       installDocker(commands);
     }
