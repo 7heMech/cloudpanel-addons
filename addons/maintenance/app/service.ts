@@ -38,6 +38,13 @@ function action<T>(verb: string, domain: string, input?: string): Promise<Action
   });
 }
 
+function globalAction<T>(verb: string): Promise<ActionResult<T>> {
+  return callGatewayAction<T>("maintenance", verb, [], undefined, {
+    timeout: 30_000,
+    maxBuffer: 1024 * 1024,
+  });
+}
+
 async function requireResult<T>(result: ActionResult<T>, fallback: string): Promise<T> {
   if (!result.ok || result.data === undefined) throw new Error(result.error ?? fallback);
   return result.data;
@@ -81,6 +88,15 @@ export const maintenanceService = {
 
   setEnabled(domain: string, enabled: boolean): Promise<ActionResult<MaintenanceStatus>> {
     return action(enabled ? "enable" : "disable", domain);
+  },
+
+  async globalStatus(): Promise<boolean> {
+    const res = await globalAction<{ global: boolean }>("global-status");
+    return res.ok && res.data ? res.data.global : false;
+  },
+
+  async setGlobalEnabled(enabled: boolean): Promise<ActionResult<{ global: boolean }>> {
+    return globalAction<{ global: boolean }>(enabled ? "global-enable" : "global-disable");
   },
 
   async setAllEnabled(enabled: boolean, domains?: string[]): Promise<BulkToggleResult> {

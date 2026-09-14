@@ -40,6 +40,30 @@ const actionOptions = <T extends Record<string, unknown>>(paths: MaintenanceActi
   ...(extra ?? {}),
 });
 
+test("global maintenance actions enable, report status, and disable fleet-wide maintenance mode", async () => {
+  const { root, paths } = fixture();
+  try {
+    const initial = await executeMaintenanceAction(["global-status"], actionOptions(paths)) as { global: boolean };
+    expect(initial).toEqual({ global: false });
+
+    const enabled = await executeMaintenanceAction(["global-enable"], actionOptions(paths)) as { ok: boolean; global: boolean };
+    expect(enabled).toEqual({ ok: true, global: true });
+    expect(lstatSync(join(paths.dataDir, "_global", "on")).isFile()).toBe(true);
+
+    const statusAfterEnable = await executeMaintenanceAction(["global-status"], actionOptions(paths)) as { global: boolean };
+    expect(statusAfterEnable).toEqual({ global: true });
+
+    const disabled = await executeMaintenanceAction(["global-disable"], actionOptions(paths)) as { ok: boolean; global: boolean };
+    expect(disabled).toEqual({ ok: true, global: false });
+    expect(existsSync(join(paths.dataDir, "_global", "on"))).toBe(false);
+
+    const finalStatus = await executeMaintenanceAction(["global-status"], actionOptions(paths)) as { global: boolean };
+    expect(finalStatus).toEqual({ global: false });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("maintenance actions toggle atomically, manage a passive template, and replace IP bypasses", async () => {
   const { root, paths } = fixture();
   try {
@@ -205,35 +229,33 @@ test("fleet overview separates unavailable sites from the live count", () => {
   expect(rendered).toContain('<div class="label">Live</div><div class="value">1</div>');
 });
 
-test("fleet overview renders global maintenance toggle with aggregate state", () => {
-  // All enabled -> bulk toggle is checked and not disabled
-  const allEnabled = fleetView([
-    { domain: "one.example.com", type: "php", user: "one", enabled: true, customTemplate: false, bypasses: [] },
-    { domain: "two.example.com", type: "static", user: "two", enabled: true, customTemplate: false, bypasses: [] },
-  ]);
-  expect(allEnabled).toContain('<div class="bulk-toggle">');
-  expect(allEnabled).toContain('<label for="bulk-toggle">All sites</label>');
-  expect(allEnabled).toContain('<input type="checkbox" id="bulk-toggle" checked');
-  expect(allEnabled).not.toContain('<input type="checkbox" id="bulk-toggle" checked disabled');
-
-  // None enabled -> bulk toggle is not checked and not disabled
-  const noneEnabled = fleetView([
-    { domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] },
-    { domain: "two.example.com", type: "static", user: "two", enabled: false, customTemplate: false, bypasses: [] },
-  ]);
-  expect(noneEnabled).toContain('<input type="checkbox" id="bulk-toggle"');
-  expect(noneEnabled).not.toContain('id="bulk-toggle" checked');
-  expect(noneEnabled).not.toContain('id="bulk-toggle" disabled');
-
-  // Mixed state -> bulk toggle is not checked and not disabled
-  const mixed = fleetView([
+test("fleet overview renders global maintenance toggle and badges according to global and individual state", () => {
+  // globalEnabled = true: bulk toggle is checked, In maintenance = 2, Live = 0, individual badges reflect state
+  const globalOn = fleetView([
     { domain: "one.example.com", type: "php", user: "one", enabled: true, customTemplate: false, bypasses: [] },
     { domain: "two.example.com", type: "static", user: "two", enabled: false, customTemplate: false, bypasses: [] },
-    { domain: "err.example.com", type: "php", user: "three", enabled: false, customTemplate: false, bypasses: [], error: "unavailable" },
-  ]);
-  expect(mixed).toContain('<input type="checkbox" id="bulk-toggle"');
-  expect(mixed).not.toContain('id="bulk-toggle" checked');
-  expect(mixed).not.toContain('id="bulk-toggle" disabled');
+  ], true);
+  expect(globalOn).toContain('<div class="bulk-toggle">');
+  expect(globalOn).toContain('<label for="bulk-toggle">All sites</label>');
+  expect(globalOn).toContain('<input type="checkbox" id="bulk-toggle" checked');
+  expect(globalOn).toContain('<div class="label">In maintenance</div><div class="value">2</div>');
+  expect(globalOn).toContain('<div class="label">Live</div><div class="value">0</div>');
+  expect(globalOn).toContain('<span class="badge state-maintenance" data-status-domain="one.example.com">Maintenance Mode (503)</span>');
+  expect(globalOn).toContain('<span class="badge state-maintenance" data-status-domain="two.example.com">Maintenance (Global)</span>');
+  expect(globalOn).toContain('data-global-maintenance="true"');
+
+  // globalEnabled = false: bulk toggle is not checked, In maintenance = 1, Live = 1
+  const globalOff = fleetView([
+    { domain: "one.example.com", type: "php", user: "one", enabled: true, customTemplate: false, bypasses: [] },
+    { domain: "two.example.com", type: "static", user: "two", enabled: false, customTemplate: false, bypasses: [] },
+  ], false);
+  expect(globalOff).toContain('<input type="checkbox" id="bulk-toggle"');
+  expect(globalOff).not.toContain('id="bulk-toggle" checked');
+  expect(globalOff).toContain('<div class="label">In maintenance</div><div class="value">1</div>');
+  expect(globalOff).toContain('<div class="label">Live</div><div class="value">1</div>');
+  expect(globalOff).toContain('<span class="badge state-maintenance" data-status-domain="one.example.com">Maintenance Mode (503)</span>');
+  expect(globalOff).toContain('<span class="badge state-live" data-status-domain="two.example.com">Live</span>');
+  expect(globalOff).toContain('data-global-maintenance="false"');
 
   // Empty fleet -> bulk toggle is disabled
   const emptyFleet = fleetView([]);
@@ -246,6 +268,58 @@ test("fleet overview renders global maintenance toggle with aggregate state", ()
   ]);
   expect(unavailableOnly).toContain('<input type="checkbox" id="bulk-toggle"');
   expect(unavailableOnly).toContain('disabled');
+});
+
+test("global toggle API guards mutations and toggles fleet-wide maintenance mode", async () => {
+  const token = "global-test-csrf-token";
+  const request = (body: unknown, headers?: Record<string, string>) => new Request("https://panel.example.test:8443/addons/maintenance/api/global-toggle", {
+    method: "POST",
+    body: typeof body === "string" ? body : JSON.stringify(body),
+    headers: {
+      "content-type": "application/json",
+      cookie: `clp_addons_csrf=${token}`,
+      host: "panel.example.test:8443",
+      origin: "https://panel.example.test:8443",
+      "x-clp-addons-csrf": token,
+      ...headers,
+    },
+  });
+
+  // Rejects mutations without CSRF
+  const noCsrf = await handleMaintenance(new Request("https://panel.example.test:8443/addons/maintenance/api/global-toggle", {
+    method: "POST",
+    body: JSON.stringify({ enabled: true }),
+    headers: { "content-type": "application/json" },
+  }), "/api/global-toggle");
+  expect(noCsrf.status).toBe(403);
+
+  // Rejects non-boolean enabled
+  const badBody = await handleMaintenance(request({ enabled: "yes" }), "/api/global-toggle");
+  expect(badBody.status).toBe(400);
+  expect(await badBody.json()).toMatchObject({ ok: false, error: "enabled must be a boolean" });
+
+  // Rejects invalid JSON
+  const badJson = await handleMaintenance(request("{invalid"), "/api/global-toggle");
+  expect(badJson.status).toBe(400);
+
+  // Mock setGlobalEnabled
+  const origSetGlobal = maintenanceService.setGlobalEnabled;
+  try {
+    let lastEnabled: boolean | undefined;
+    maintenanceService.setGlobalEnabled = async (enabled) => {
+      lastEnabled = enabled;
+      return { ok: true, data: { global: enabled } };
+    };
+
+    const res = await handleMaintenance(request({ enabled: true }), "/api/global-toggle");
+    expect(res.status).toBe(200);
+    const data = await res.json() as { ok: boolean; data: { global: boolean } };
+    expect(lastEnabled).toBe(true);
+    expect(data.ok).toBe(true);
+    expect(data.data.global).toBe(true);
+  } finally {
+    maintenanceService.setGlobalEnabled = origSetGlobal;
+  }
 });
 
 test("bulk toggle API guards mutations and toggles all available sites", async () => {
@@ -379,6 +453,7 @@ test("maintenanceService.setAllEnabled toggles domains and captures partial fail
 test("maintenance integration preserves ACME and normalizes non-GET errors through an internal URI", () => {
   expect(NGINX_MAINTENANCE_BLOCK).toContain("$uri ~ ^/\\.well-known/acme-challenge/");
   expect(NGINX_MAINTENANCE_BLOCK).toContain("$uri = /__clp_addons_maintenance");
+  expect(NGINX_MAINTENANCE_BLOCK).toContain("maintenance/_global/on");
   expect(NGINX_MAINTENANCE_BLOCK).toContain("maintenance/$server_name/on");
   expect(NGINX_MAINTENANCE_BLOCK).not.toContain("maintenance/$host/on");
   expect(NGINX_MAINTENANCE_BLOCK).toContain("return 418;");
@@ -394,6 +469,7 @@ test("maintenance integration preserves ACME and normalizes non-GET errors throu
   expect(MAINTENANCE_TARGETS[0]!.snippet("/addons/maintenance")).toContain("site.domainName|url_encode");
   expect(MAINTENANCE_ALLOWED_VERBS).toEqual(new Set([
     "status", "enable", "disable", "get-template", "set-template", "reset-template", "set-bypass",
+    "global-status", "global-enable", "global-disable",
   ]));
 });
 
