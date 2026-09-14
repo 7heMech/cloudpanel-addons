@@ -378,7 +378,7 @@ test("maintenance integration preserves ACME and normalizes non-GET errors throu
 
 test("purgeVarnish sends PURGE requests for domain and www/bare aliases and handles failures safely", async () => {
   const purges: { url: string; method: string; host: string }[] = [];
-  const mockFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const mockFetch = async (input: unknown, init?: RequestInit): Promise<Response> => {
     purges.push({
       url: String(input),
       method: init?.method ?? "GET",
