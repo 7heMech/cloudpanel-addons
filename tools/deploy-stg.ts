@@ -21,7 +21,13 @@ await run(["bun", "run", "build"]);
 await run(["scp", ...sshOptions, join(repo, "dist/clp-addons-linux-x64"), `${host}:/root/clp-addons-new`]);
 await run(["ssh", ...sshOptions, host, [
   "set -e",
+  // Keep the running binary so a failed install or repair can be put back
+  // instead of leaving staging with its services stopped.
+  "cp -a /usr/local/bin/clp-addons /root/clp-addons-previous",
   "systemctl stop clp-addons.service clp-addons-auth.service clp-addons-auth.socket",
-  "install -m 0755 -o root -g root /root/clp-addons-new /usr/local/bin/clp-addons",
-  "clp-addons repair",
+  "if ! (install -m 0755 -o root -g root /root/clp-addons-new /usr/local/bin/clp-addons && clp-addons repair); then",
+  "  cp -a /root/clp-addons-previous /usr/local/bin/clp-addons",
+  "  systemctl start clp-addons-auth.socket clp-addons-auth.service clp-addons.service",
+  "  exit 1",
+  "fi",
 ].join("\n")]);

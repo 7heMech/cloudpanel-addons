@@ -40,6 +40,23 @@ async function run(cmd: string[], options: { cwd?: string; quiet?: boolean } = {
   return stdout;
 }
 
+let sandboxless = false;
+
+async function screenshot(chrome: string, url: string, file: string): Promise<void> {
+  const args = ["--hide-scrollbars", `--window-size=${windowSize}`, `--screenshot=${file}`, url];
+  const attempt = (extra: string[]) => run([chrome, ...extra, ...args], { quiet: true });
+  if (sandboxless) return void (await attempt(["--no-sandbox"]));
+  try {
+    await attempt([]);
+  } catch {
+    // Distributions that restrict unprivileged user namespaces leave Chromium
+    // with no usable sandbox. Only render pages you trust in that case.
+    console.error("warning: Chromium has no usable sandbox here; rendering without it");
+    sandboxless = true;
+    await attempt(["--no-sandbox"]);
+  }
+}
+
 function findChrome(): string | null {
   const pattern = ".cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell";
   const matches = [...new Glob(pattern).scanSync({ cwd: homedir(), absolute: true })].sort();
@@ -113,9 +130,16 @@ await ensureRuntimeLibraries(chrome);
 if (targets.some((target) => !/^https?:\/\//.test(target))) await ensurePreview();
 mkdirSync(outDir, { recursive: true });
 
+const taken = new Set<string>();
 for (const target of targets) {
   const url = /^https?:\/\//.test(target) ? target : `http://127.0.0.1:${port}${target}`;
-  const file = join(outDir, `${target.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "")}.png`);
-  await run([chrome, "--no-sandbox", "--hide-scrollbars", `--window-size=${windowSize}`, `--screenshot=${file}`, url], { quiet: true });
+  // Two targets can normalize to the same name (`/a/b` and `/a?b`), so number
+  // the repeats rather than overwriting the earlier screenshot.
+  const name = target.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "") || "page";
+  let unique = name;
+  for (let n = 2; taken.has(unique); n++) unique = `${name}-${n}`;
+  taken.add(unique);
+  const file = join(outDir, `${unique}.png`);
+  await screenshot(chrome, url, file);
   console.log(file);
 }
