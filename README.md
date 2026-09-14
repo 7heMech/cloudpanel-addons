@@ -41,7 +41,7 @@ can access it.
 | Command | Purpose |
 | --- | --- |
 | `clp-addons status` | Check services and CloudPanel integration. |
-| `clp-addons install <addon>` | Enable a bundled addon. |
+| `clp-addons install <addon>` | Enable a bundled addon; installs Docker automatically if it's not active yet and the addon needs it. |
 | `clp-addons update` | Install the latest verified release. |
 | `clp-addons repair` | Restore managed services and CloudPanel integration. |
 | `clp-addons maintenance <domain> [on\|off\|status]` | Control or inspect maintenance mode for a site. |

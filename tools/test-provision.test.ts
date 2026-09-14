@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import {
-  ADDONS, nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
+  ADDON_NAMES, ADDONS, nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
 } from "../cli/paths";
 import {
   authUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit,
@@ -157,6 +157,108 @@ test("fails clearly when docker membership cannot be removed", () => {
   );
 });
 
+function requiredUnitsProbe(options: {
+  unit?: string;
+  active?: boolean;
+  dockerUnitLoaded?: boolean;
+  downloadOk?: boolean;
+  installOk?: boolean;
+  enableOk?: boolean;
+} = {}): { ok: boolean; error?: string; calls: Array<{ command: string; args: string[] }> } {
+  const script = `
+    import { ensureRequiredUnits } from "./cli/provision.ts";
+    const options = ${JSON.stringify(options)};
+    const spec = { name: "instatic", configFile: "", stateDir: "", targets: [], requiresUnits: [options.unit ?? "docker"] };
+    const calls = [];
+    const runner = {
+      run(command, args) { calls.push({ command, args: [...args] }); return ""; },
+      tryRun(command, args) {
+        calls.push({ command, args: [...args] });
+        if (command === "systemctl" && args[0] === "is-active") {
+          return { ok: options.active ?? false, out: options.active ? "active" : "inactive" };
+        }
+        if (command === "systemctl" && args[0] === "show") {
+          return { ok: true, out: options.dockerUnitLoaded ?? false ? "loaded" : "not-found" };
+        }
+        if (command === "curl") return { ok: options.downloadOk ?? true, out: options.downloadOk === false ? "could not resolve host" : "" };
+        if (command === "sh") return { ok: options.installOk ?? true, out: options.installOk === false ? "get-docker.sh exited 1" : "" };
+        if (command === "systemctl" && args[0] === "enable") return { ok: options.enableOk ?? true, out: "" };
+        return { ok: true, out: "" };
+      },
+    };
+    try {
+      ensureRequiredUnits(spec, runner);
+      console.log(JSON.stringify({ ok: true, calls }));
+    } catch (error) {
+      console.log(JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        calls,
+      }));
+    }
+  `;
+  // ensureRequiredUnits logs through the real cli/util.ts (unmocked here, to
+  // exercise the genuine Docker-provisioning code path), so stdout carries
+  // those step/ok lines ahead of the JSON result; only the last line is it.
+  const output = execFileSync(process.execPath, ["-e", script], { cwd: REPO, encoding: "utf8" });
+  return JSON.parse(output.trim().split("\n").pop() ?? "");
+}
+
+test("a required unit already active needs no Docker provisioning", () => {
+  const result = requiredUnitsProbe({ active: true });
+
+  expect(result.ok).toBe(true);
+  expect(result.calls).toEqual([{ command: "systemctl", args: ["is-active", "docker"] }]);
+});
+
+test("installs Docker via get.docker.com when its unit is not loaded, then starts it", () => {
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: false });
+
+  expect(result.ok).toBe(true);
+  expect(result.calls).toContainEqual({ command: "systemctl", args: ["show", "docker", "--property=LoadState", "--value"] });
+  expect(result.calls.some(({ command, args }) =>
+    command === "curl" && args.includes("https://get.docker.com"))).toBe(true);
+  expect(result.calls.some(({ command }) => command === "sh")).toBe(true);
+  expect(result.calls).toContainEqual({ command: "systemctl", args: ["enable", "--now", "docker"] });
+});
+
+test("starts Docker without reinstalling when its unit is already loaded (an orphaned CLI is not enough to skip provisioning)", () => {
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: true });
+
+  expect(result.ok).toBe(true);
+  expect(result.calls.some(({ command }) => command === "curl" || command === "sh")).toBe(false);
+  expect(result.calls).toContainEqual({ command: "systemctl", args: ["enable", "--now", "docker"] });
+});
+
+test("fails clearly when the Docker installer cannot be downloaded", () => {
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: false, downloadOk: false });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("could not download Docker: could not resolve host");
+});
+
+test("fails clearly when the Docker installer itself fails", () => {
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: false, installOk: false });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("Docker installation failed: get-docker.sh exited 1");
+});
+
+test("fails clearly when Docker still is not active after installing it", () => {
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: true, enableOk: false });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("docker is not active; installing it did not bring the service up");
+});
+
+test("a non-docker required unit still fails fast with no provisioning attempt", () => {
+  const result = requiredUnitsProbe({ unit: "postgresql", active: false });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("postgresql is not active; install and start it before enabling instatic");
+  expect(result.calls).toEqual([{ command: "systemctl", args: ["is-active", "postgresql"] }]);
+});
+
 function provisionProbe(): {
   identityPath: string;
   identity: { primary: string; aliases: string[] } | null;
@@ -245,6 +347,17 @@ test("manager unit hardens its namespace with zero-sudo root gateway dispatch", 
   expect(unit).toContain("Restart=always");
   expect(unit).not.toContain("ExecStartPre=+");
   expect(unit).not.toContain("hmac");
+});
+
+test("every addon's APP_DATA environment assignment is a name systemd accepts", () => {
+  // systemd silently ignores (and warns on) an Environment= line whose name
+  // contains a character outside [A-Za-z0-9_], which "login-theme" produced
+  // via a bare toUpperCase() before it was sanitized.
+  const specs = ADDON_NAMES.map((name) => ADDONS[name]!);
+  const unit = serviceUnit(specs);
+  const assignments = [...unit.matchAll(/^Environment=([^=]+)=/gm)].map((match) => match[1]);
+  expect(assignments.length).toBe(specs.length);
+  for (const name of assignments) expect(name).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
 });
 
 test("provisioning creates every project-owned writable directory", () => {

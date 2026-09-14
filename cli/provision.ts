@@ -1,6 +1,8 @@
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   ADDON_NAMES, ANCHOR_SERVICE, CLI_BIN, CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS,
   ADDONS, AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT,
@@ -207,6 +209,54 @@ function enforceNoDockerMembership(commands: ProvisionCommandRunner): void {
   const after = commands.tryRun("id", ["-nG", SERVICE_USER]);
   if (!after.ok || groupNames(after.out).has("docker")) {
     fatal(`security invariant failed: ${SERVICE_USER} is still a member of the docker group`);
+  }
+}
+
+const DOCKER_INSTALL_SCRIPT_URL = "https://get.docker.com";
+
+function installDocker(commands: ProvisionCommandRunner): void {
+  const tmpDir = mkdtempSync(join(tmpdir(), "clp-addons-docker-"));
+  try {
+    const script = join(tmpDir, "get-docker.sh");
+    const download = commands.tryRun("curl", ["-fsSL", DOCKER_INSTALL_SCRIPT_URL, "-o", script]);
+    if (!download.ok) fatal(`could not download Docker: ${download.out || "curl failed"}`);
+    const install = commands.tryRun("sh", [script]);
+    if (!install.ok) fatal(`Docker installation failed: ${install.out || "get-docker.sh failed"}`);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * `applyEnable`/`cmdInstall` gate on `requiresUnits` before touching any
+ * addon state. Docker is the only unit any addon currently requires, and the
+ * installer already knows how to bring it up on a fresh host
+ * (`install.sh --install-docker`, via get.docker.com). Enabling instatic
+ * later -- from the UI or `clp-addons install instatic` -- should follow the
+ * same path instead of just telling the operator to go run that installer's
+ * logic by hand.
+ */
+export function ensureRequiredUnits(
+  spec: AddonSpec,
+  commands: ProvisionCommandRunner = { run, tryRun },
+): void {
+  for (const unit of spec.requiresUnits ?? []) {
+    if (commands.tryRun("systemctl", ["is-active", unit]).ok) continue;
+    if (unit !== "docker") {
+      fatal(`${unit} is not active; install and start it before enabling ${spec.name}`);
+    }
+    // `which docker` would pass for an orphaned CLI with no daemon behind
+    // it -- the unit's load state is what actually decides whether
+    // `enable --now` below has anything to start.
+    const loadState = commands.tryRun("systemctl", ["show", "docker", "--property=LoadState", "--value"]);
+    if (loadState.out.trim() !== "loaded") {
+      log.step("installing Docker");
+      installDocker(commands);
+    }
+    if (!commands.tryRun("systemctl", ["enable", "--now", "docker"]).ok) {
+      fatal("docker is not active; installing it did not bring the service up");
+    }
+    log.ok("Docker installed and started");
   }
 }
 
@@ -486,7 +536,10 @@ export function serviceUnit(specs: AddonSpec[]): string {
   const dependencies = [...new Set(specs.flatMap((spec) => spec.requiresUnits ?? []))];
   const after = ["network-online.target", AUTH_SOCKET_UNIT, ...dependencies.map((unit) => `${unit}.service`)];
   const env = specs.flatMap((spec) => [
-    `Environment=${spec.name.toUpperCase()}_APP_DATA=${spec.stateDir}`,
+    // systemd environment variable names may not contain a hyphen (rejected
+    // with "Invalid environment assignment, ignoring"), which `login-theme`'s
+    // own name does.
+    `Environment=${spec.name.toUpperCase().replace(/-/g, "_")}_APP_DATA=${spec.stateDir}`,
   ]);
   // Only the root actions use /run/lock/clp-addons, creating it on demand.
   // Binding it into this service's namespace prevented startup after /run was
