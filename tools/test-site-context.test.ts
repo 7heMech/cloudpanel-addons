@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ADDON_SITE_TABS, siteInfoHtml, siteTabs } from "../lib/site-context";
+import { ADDON_SITE_TABS, SITE_CONTEXT_STYLE, siteInfoHtml, siteTabs } from "../lib/site-context";
 import { renderLayout } from "../lib/app-ui";
 import { siteLayoutTarget, SITE_TAB_TEMPLATE } from "../lib/panel-nav";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
@@ -93,6 +93,21 @@ test("the shell ships one confirmation dialog and one notice holder for every ad
   expect(html.match(/id="clp-confirm"/g)).toHaveLength(1);
   expect(html.match(/id="clp-flash"/g)).toHaveLength(1);
   expect(html).toContain('id="clp-confirm-accept"');
+});
+
+test("the reproduced site information carries the panel's own measurements", () => {
+  // CloudPanel's assets/css/frontend/site.css. A reproduction that only looks
+  // approximately right is what makes an addon page read as a different page:
+  // the columns have to start where the panel starts them.
+  expect(SITE_CONTEXT_STYLE).toContain("min-width: 200px");
+  expect(SITE_CONTEXT_STYLE).toContain("margin: 0 60px 0 0");
+  expect(SITE_CONTEXT_STYLE).toContain("font-size: 14px; font-weight: 500; color: #aaa");
+  expect(SITE_CONTEXT_STYLE).toContain(".clp-addon-site-value { font-size: 18px");
+  // The panel's own strip keeps that column too; only a narrow screen gives it up.
+  const snippet = siteLayoutTarget().snippet("/addons/");
+  expect(snippet).toContain(".site-info-box { max-width: 100%; }");
+  expect(snippet.split("@media")[0]).not.toContain("min-width");
+  expect(snippet).toContain("min-width: 0; margin-right: 30px");
 });
 
 test("the site layout rule targets the same partial an addon adds its tab to", () => {

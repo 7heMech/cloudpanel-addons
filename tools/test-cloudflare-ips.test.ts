@@ -116,6 +116,17 @@ test("dashboard summarises how many sites allow Cloudflare only", () => {
   expect(rendered).toContain('id="disable-selected" type="button" disabled');
 });
 
+test("the switch column ends where the table ends, as the Maintenance table does", () => {
+  const html = dashboardView({
+    autoEnableNewSites: true,
+    sites: [{ domain: "a.example.test", type: "php", enabled: true, excludedFromAutomatic: false }],
+  });
+  // .action-cell is the shared right-aligned column; without it the switches
+  // sat in the middle of the row with the rest of the table empty beside them.
+  expect(html).toContain('<th scope="col" class="action-cell">Cloudflare only</th>');
+  expect(html).toContain('<td class="action-cell">');
+});
+
 interface FakeElement {
   textContent: string;
   className: string;

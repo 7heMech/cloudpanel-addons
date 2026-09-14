@@ -141,11 +141,11 @@ const SITE_LAYOUT_STYLE = `
 .tab-container ul li { flex: 0 0 auto; white-space: nowrap; }
 .tab-container ul li a:focus-visible { outline: 2px solid #0078d4; outline-offset: -4px; }
 .site-info-container { flex-wrap: wrap; }
-.site-info-box { min-width: 0; max-width: 100%; }
+.site-info-box { max-width: 100%; }
 .site-info-value { overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .site-info-container { margin: 20px 0; gap: 20px 0; }
-  .site-info-box { margin-right: 30px; }
+  .site-info-box { min-width: 0; margin-right: 30px; }
 }
 `;
 

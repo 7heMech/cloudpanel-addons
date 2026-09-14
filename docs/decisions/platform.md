@@ -45,7 +45,10 @@ shows CloudPanel's site information and the applicable site tabs with the addon'
 tab active, and the page belongs to Sites rather than to Addons. `lib/site-context.ts`
 is the only description of that strip -- order, per-type conditions and routes
 mirror `Frontend/Site/Partial/tab-container.html.twig` -- and both the shell and
-the injected Twig snippet read it, so a tab cannot be labelled two ways.
+the injected Twig snippet read it, so a tab cannot be labelled two ways. The
+reproduced site information takes its column width, gutter and label styling
+from the panel's own `assets/css/frontend/site.css`, so the blocks land where
+the panel puts them.
 
 CloudPanel sizes that strip for the tabs it ships, so an addon's tab wrapped it
 onto a second row. The manager injects one rule making the strip a single

@@ -279,7 +279,7 @@ export function dashboardView(state: CloudflareState): string {
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
       <td class="site-cell">${esc(site.domain)}<div class="hint site-exception"${site.excludedFromAutomatic && state.autoEnableNewSites ? "" : " hidden"}>Excluded from automatic enabling</div></td>
       <td>${esc(siteTypeLabel(site.type))}</td>
-      <td>
+      <td class="action-cell">
         <span class="switch-field"><span class="site-state ${site.enabled ? "is-on" : "is-off"}">${site.enabled ? "On" : "Off"}</span>
           <label class="switch"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
         </span>
@@ -323,7 +323,7 @@ export function dashboardView(state: CloudflareState): string {
           <table>
             <thead><tr>
               <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
-              <th scope="col">Site</th><th scope="col">Type</th><th scope="col">Cloudflare only</th>
+              <th scope="col">Site</th><th scope="col">Type</th><th scope="col" class="action-cell">Cloudflare only</th>
             </tr></thead>
             <tbody>${rows}</tbody>
           </table>`}

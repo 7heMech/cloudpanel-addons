@@ -80,7 +80,7 @@ html.dark .clp-addon-logo-dark { display: block; }
 .clp-addon-theme .sun { display: none; }
 html.dark .clp-addon-theme .sun { display: block; }
 html.dark .clp-addon-theme .moon { display: none; }
-main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 25px 24px 40px; flex: 1; min-width: 0; }
+main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 25px 12px 40px; flex: 1; min-width: 0; }
 .clp-addon-tabs { display: flex; overflow-x: auto; padding: 0 20px; margin-bottom: 30px;
   background: var(--panel); border: 1px solid var(--border); scrollbar-width: thin; }
 .clp-addon-nav-link { flex: 0 0 auto; color: var(--tab-link); padding: 20px 15px 17px;
@@ -161,11 +161,11 @@ p.hint { margin: 0 0 20px; }
 .card > .empty { padding: 0; }
 .card-table > .empty { padding: 25px; }
 dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border);
-  border-radius: 5px; padding: 25px; max-width: 720px; width: calc(100% - 32px); max-height: calc(100vh - 40px); overflow: auto; }
+  border-radius: 5px; padding: 30px; max-width: 720px; width: calc(100% - 32px); max-height: calc(100vh - 40px); overflow: auto; }
 dialog::backdrop { background: rgba(0,0,0,0.5); }
-.dialog-header { margin: -25px -25px 25px; padding: 20px 25px; border-bottom: 1px solid var(--border); }
+.dialog-header { margin: -30px -30px 25px; padding: 25px 30px; border-bottom: 1px solid var(--border); }
 .dialog-header h2 { margin: 0; overflow-wrap: anywhere; }
-.dialog-actions { justify-content: flex-end; margin: 25px -25px -25px; padding: 20px 25px; border-top: 1px solid var(--border); }
+.dialog-actions { justify-content: flex-end; margin: 25px -30px -30px; padding: 25px 30px; border-top: 1px solid var(--border); }
 pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 16px;
   overflow: auto; max-height: 55vh; font-family: var(--mono); font-size: 13px; }
 .row-actions { min-width: 100px; }
@@ -224,7 +224,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .clp-addon-primary-nav { order: 2; width: 100%; overflow-x: auto; border-top: 1px solid var(--border); padding: 0 5px; gap: 0; }
   .clp-addon-primary-link { min-height: 48px; }
   .clp-addon-header-inner > #clp-addons-update-notice { justify-content: center; padding: 10px 16px; }
-  main { padding: 20px 16px 30px; }
+  main { padding: 20px 12px 30px; }
   .clp-addon-tabs { padding: 0 5px; margin-bottom: 24px; }
   .page-heading { flex-wrap: wrap; }
   .page-heading h1 { font-size: 26px; }

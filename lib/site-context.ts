@@ -101,14 +101,26 @@ export function siteTabs(site: SiteContext, activeSlug = ""): SiteTab[] {
   return [...native, ...addons];
 }
 
-/** CloudPanel's own site-information block, above the tab strip. */
+/**
+ * CloudPanel's own site-information block, above the tab strip.
+ *
+ * The numbers are the panel's, from assets/css/frontend/site.css: a 200px
+ * minimum column with a 60px gutter, so the second and third blocks line up
+ * where the panel puts them, a 14px/500 label in #aaa and an 18px value. Only
+ * the top margin differs -- the panel's own 30px, less the 25px `main` already
+ * contributes above the first element on an addon page.
+ */
 export const SITE_CONTEXT_STYLE = `
-.clp-addon-site-info { display: flex; flex-wrap: wrap; gap: 20px 60px; margin: 5px 0 30px; }
-.clp-addon-site-box { min-width: 0; }
-.clp-addon-site-box h3 { font-size: 14px; font-weight: 400; color: var(--muted); margin: 0 0 5px; }
+.clp-addon-site-info { display: flex; flex-wrap: wrap; row-gap: 20px; margin: 5px 0 30px; }
+.clp-addon-site-box { min-width: 200px; max-width: 100%; margin: 0 60px 0 0; }
+.clp-addon-site-box h3 { font-size: 14px; font-weight: 500; color: #aaa; margin: 0 0 5px; }
 .clp-addon-site-value { font-size: 18px; overflow-wrap: anywhere; }
-.clp-addon-site-value svg { width: 12px; height: 12px; margin-left: 2px; fill: var(--muted); }
+.clp-addon-site-value svg { width: 12px; height: 12px; margin-left: 2px; fill: #aaa; }
 .clp-addon-site-value a:hover svg { fill: var(--accent); }
+@media (max-width: 760px) {
+  .clp-addon-site-info { margin: 0 0 24px; }
+  .clp-addon-site-box { min-width: 0; margin-right: 30px; }
+}
 `;
 
 const EXTERNAL_LINK_ICON =
@@ -117,7 +129,7 @@ const EXTERNAL_LINK_ICON =
 export function siteInfoHtml(site: SiteContext): string {
   const boxes = [
     `<div class="clp-addon-site-box"><h3>Domain</h3><div class="clp-addon-site-value">` +
-      `<a href="https://${esc(site.domain)}" target="_blank" rel="noopener noreferrer">${esc(site.domain)}${EXTERNAL_LINK_ICON}</a></div></div>`,
+      `<a href="https://${esc(site.domain)}" target="_blank" rel="noopener noreferrer">${esc(site.domain)} ${EXTERNAL_LINK_ICON}</a></div></div>`,
     `<div class="clp-addon-site-box"><h3>Site User</h3><div class="clp-addon-site-value">${esc(site.user)}</div></div>`,
   ];
   // Only when the panel itself has an address recorded; an empty box is
