@@ -136,6 +136,31 @@ describe("the manager's job record", () => {
     }
   });
 
+  test("marks the manager restart before handing an update to the service restart", async () => {
+    const jobsDir = makeJobsDir();
+    try {
+      const id = "20260908T120000Z-eeeeee";
+      writeJob(jobsDir, id, { kind: "update", state: "queued" });
+      let markerSeen = "";
+      let eventSeen = "";
+      const code = await runManagerJob(id, {
+        ...NOOP_OPS,
+        update: async (beforeManagerRestart) => {
+          beforeManagerRestart?.();
+          markerSeen = readManagerJob(id, jobsDir)?.job.step ?? "";
+          eventSeen = readManagerJob(id, jobsDir)?.job.event ?? "";
+        },
+      }, jobsDir);
+      expect(code).toBe(0);
+      expect(markerSeen).toBe("restarting background services");
+      expect(eventSeen).toBe("restarting");
+      expect(readManagerJob(id, jobsDir)?.job.state).toBe("done");
+      expect(readManagerJob(id, jobsDir)?.job.event).toBe("");
+    } finally {
+      rmSync(jobsDir, { recursive: true, force: true });
+    }
+  });
+
   test("refuses a record whose kind this binary cannot run", async () => {
     const jobsDir = makeJobsDir();
     try {

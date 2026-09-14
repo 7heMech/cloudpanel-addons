@@ -115,6 +115,8 @@ export interface JobView {
   createdAt: string;
   startedAt: string;
   finishedAt: string;
+  /** Optional one-shot event emitted by the job runner. */
+  event?: string;
   result: JobResult | null;
   panelSite?: boolean | null;
 }

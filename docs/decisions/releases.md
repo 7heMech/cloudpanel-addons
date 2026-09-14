@@ -35,7 +35,12 @@ integrations from its own definitions, then restarts services last. Re-entering
 the stable update command also preserves explicit downgrades to releases from
 before the handoff existed. Merely moving the restart would not be sufficient:
 the old process could still write old Twig or unit definitions after installing
-a new release.
+a new release. The manager job records `restarting background services`
+immediately before the manager service is restarted. The browser treats the
+expected SSE disconnect as a reconnecting state, waits for `/addons/health` to
+recover, and then resumes from the on-disk job record. The job log therefore
+remains available across the restart instead of making the update appear to
+stop at binary verification.
 
 Published releases are immutable in the workflow. A failed draft can be
 recreated, but an existing published tag is rejected.

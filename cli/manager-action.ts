@@ -51,7 +51,7 @@ export type ManagerJobKind = "enable" | "disable" | "update";
 export interface ManagerOps {
   enable(addon: string): Promise<void> | void;
   disable(addon: string): Promise<void> | void;
-  update(): Promise<void>;
+  update(beforeManagerRestart?: () => void): Promise<void>;
 }
 
 export interface ManagerJobView {
@@ -64,6 +64,7 @@ export interface ManagerJobView {
   createdAt: string;
   startedAt: string;
   finishedAt: string;
+  event?: string;
 }
 
 /**
@@ -137,7 +138,13 @@ export function readManagerJob(id: string, jobsDir = MANAGER_JOBS_DIR): { job: M
   const dir = jobDir(jobsDir, id);
   if (!existsSync(dir)) return null;
   return {
-    job: { id, kind: jobGet(dir, "kind"), addon: jobGet(dir, "addon"), ...jobCommonFields(dir) },
+    job: {
+      id,
+      kind: jobGet(dir, "kind"),
+      addon: jobGet(dir, "addon"),
+      ...jobCommonFields(dir),
+      event: jobGet(dir, "event"),
+    },
     log: readJobLog(dir),
   };
 }
@@ -291,16 +298,21 @@ export async function runManagerJob(id: string, ops: ManagerOps, jobsDir = MANAG
       await ops.disable(addon);
     } else if (kind === "update") {
       jobSet(dir, "step", "installing the latest release");
-      await ops.update();
+      await ops.update(() => {
+        jobSet(dir, "step", "restarting background services");
+        jobSet(dir, "event", "restarting");
+      });
     } else {
       throw new Fatal(`job '${id}' has no kind this binary knows how to run`);
     }
   } catch (error) {
+    jobSet(dir, "event", "");
     jobSet(dir, "error", message(error));
     jobSet(dir, "finishedAt", jobTimestamp());
     jobSet(dir, "state", "failed");
     return 1;
   }
+  jobSet(dir, "event", "");
   jobSet(dir, "step", kind === "update" ? "updated" : `${kind}d ${addon}`);
   jobSet(dir, "finishedAt", jobTimestamp());
   jobSet(dir, "state", "done");

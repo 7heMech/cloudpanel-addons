@@ -645,13 +645,19 @@ export function installUnits(specs: AddonSpec[]): boolean {
   return changed;
 }
 
-export function startUnits(): void {
+export interface StartUnitsOptions {
+  /** Called after unit files are ready and immediately before manager restart. */
+  beforeManagerRestart?: () => void;
+}
+
+export function startUnits(options: StartUnitsOptions = {}): void {
   // Before the manager: without it every authenticated request fails closed.
   run("systemctl", ["enable", AUTH_SOCKET_UNIT]);
   run("systemctl", ["restart", AUTH_SOCKET_UNIT]);
   run("systemctl", ["enable", AUTH_SERVICE_UNIT]);
   run("systemctl", ["restart", AUTH_SERVICE_UNIT]);
   run("systemctl", ["enable", MANAGER_UNIT]);
+  options.beforeManagerRestart?.();
   run("systemctl", ["restart", MANAGER_UNIT]);
   run("systemctl", ["enable", RECONCILE_TIMER]);
   run("systemctl", ["restart", RECONCILE_TIMER]);

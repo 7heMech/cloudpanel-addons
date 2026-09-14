@@ -298,7 +298,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
  * Reconcile all provisioning from the binary that owns the definitions.
  * Services restart last, after every generated file reflects this process.
  */
-function finalizeUpdate(): AddonSpec[] {
+function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   const specs = installedAddons();
   ensureServiceUser();
   removeLegacyInstall();
@@ -313,7 +313,7 @@ function finalizeUpdate(): AddonSpec[] {
   reconcileAnchors(false);
   if (!reconcileMaintenanceNginx(false)) log.warn("Nginx maintenance check needs manual repair");
   if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
-  startUnits();
+  startUnits({ beforeManagerRestart });
   return specs;
 }
 
@@ -321,7 +321,7 @@ function finalizeUpdate(): AddonSpec[] {
  * Updates release artifacts when necessary. If the binary moves, re-run this
  * same command as the installed copy and let only that process provision.
  */
-export async function cmdUpdate(argv: string[]): Promise<void> {
+export async function cmdUpdate(argv: string[], options: { beforeManagerRestart?: () => void } = {}): Promise<void> {
   requireRoot("update");
   const { flags } = parseFlags(argv);
   const release = await resolveRelease(
@@ -364,7 +364,7 @@ export async function cmdUpdate(argv: string[]): Promise<void> {
     ? flags["updated-from"].replace(/^v/, "")
     : current;
   const versionChanged = updatedFrom !== target;
-  const specs = finalizeUpdate();
+  const specs = finalizeUpdate(options.beforeManagerRestart);
   if (specs.length === 0) {
     log.ok(versionChanged
       ? `clp-addons updated from ${updatedFrom} to ${target}; no addon service is configured`
@@ -449,7 +449,7 @@ export function applyDisable(name: string): void {
 export const MANAGER_OPS: ManagerOps = {
   enable: applyEnable,
   disable: applyDisable,
-  update: () => cmdUpdate([]),
+  update: (beforeManagerRestart) => cmdUpdate([], { beforeManagerRestart }),
 };
 
 // Stager's stale-job recovery, job-record expiry, and orphaned-vhost recovery

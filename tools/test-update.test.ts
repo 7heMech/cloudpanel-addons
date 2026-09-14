@@ -117,7 +117,11 @@ mock.module("../cli/provision", () => ({
   removeLegacyUnits: () => { calls.push("removeLegacyUnits"); provisioning.legacyUnits = false; },
   removeLegacyUsers: () => { calls.push("removeLegacyUsers"); provisioning.legacyUsers = false; },
   removeSudoers: record("removeSudoers"),
-  startUnits: () => { calls.push("startUnits"); provisioning.running = true; },
+  startUnits: (options?: { beforeManagerRestart?: () => void }) => {
+    options?.beforeManagerRestart?.();
+    calls.push("startUnits");
+    provisioning.running = true;
+  },
   stopUnits: record("stopUnits"),
   unitActive: () => "inactive",
   unitPid: () => null,
@@ -326,6 +330,23 @@ test("the handed-off target binary finalizes all provisioning before restarting 
     anchors: true,
     nginx: true,
   });
+  artifactsAvailable = false;
+});
+
+test("the update calls its restart marker immediately before service restart", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  hasInstalledAddon = true;
+  artifactsAvailable = true;
+  let markerCalls = 0;
+
+  await cmdUpdate(
+    ["--version=v1.2.3", "--no-self-update", "--updated-from=1.1.0"],
+    { beforeManagerRestart: () => { markerCalls++; calls.push("beforeManagerRestart"); } },
+  );
+
+  expect(markerCalls).toBe(1);
+  expect(calls.indexOf("beforeManagerRestart")).toBeLessThan(calls.indexOf("startUnits"));
   artifactsAvailable = false;
 });
 

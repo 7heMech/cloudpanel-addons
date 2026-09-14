@@ -20,6 +20,8 @@ const POLL_INTERVAL_MS = 1000;
 export interface JobProgress {
   state: string;
   step: string;
+  /** Optional one-shot SSE event name for client-side state transitions. */
+  event?: string;
 }
 
 export interface JobSnapshot<J extends JobProgress = JobProgress> {
@@ -63,6 +65,16 @@ function sse(body: ReadableStream): Response {
   });
 }
 
+function eventName<J extends JobProgress>(job: J): string | null {
+  return typeof job.event === "string" && /^[A-Za-z][A-Za-z0-9_.-]*$/.test(job.event)
+    ? job.event
+    : null;
+}
+
+function eventData<J extends JobProgress>(job: J, log: string, event: string | null): string {
+  return `${event ? `event: ${event}\n` : ""}data: ${JSON.stringify({ job, log })}\n\n`;
+}
+
 /**
  * Stream one job's state, step and log as server-sent events.
  *
@@ -97,6 +109,7 @@ export async function jobEventStream<J extends JobProgress>(options: {
   let lastState = first.job.state;
   let lastStep = first.job.step;
   let lastLog = first.log;
+  let lastEvent = eventName(first.job);
 
   const stream = new ReadableStream({
     start(controller) {
@@ -122,7 +135,7 @@ export async function jobEventStream<J extends JobProgress>(options: {
         } catch {}
       };
 
-      if (!send(`data: ${JSON.stringify({ job: first.job, log: first.log })}\n\n`)) return;
+      if (!send(eventData(first.job, first.log, lastEvent))) return;
       if (isTerminalJobState(first.job.state)) {
         finish();
         return;
@@ -144,11 +157,14 @@ export async function jobEventStream<J extends JobProgress>(options: {
           }
 
           const { job, log } = res.data;
-          if (job.state !== lastState || job.step !== lastStep || log !== lastLog) {
+          const nextEvent = eventName(job);
+          if (job.state !== lastState || job.step !== lastStep || log !== lastLog || nextEvent !== lastEvent) {
+            const emittedEvent = nextEvent !== lastEvent ? nextEvent : null;
             lastState = job.state;
             lastStep = job.step;
             lastLog = log;
-            if (!send(`data: ${JSON.stringify({ job, log })}\n\n`)) return;
+            lastEvent = nextEvent;
+            if (!send(eventData(job, log, emittedEvent))) return;
           } else if (!send(": keepalive\n\n")) {
             return;
           }

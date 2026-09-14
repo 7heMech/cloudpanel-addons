@@ -105,6 +105,25 @@ describe("Stager SSE job monitoring", () => {
     }
   });
 
+  it("emits a named reconnect event when a job requests a manager restart", async () => {
+    const origGetJob = stagerService.getJob;
+    stagerService.getJob = async (id: string) => ({
+      ok: true,
+      data: { job: mockJob({ id, event: "restarting" }), log: "verified" },
+    });
+
+    try {
+      const req = new Request("http://localhost/api/jobs/20260910T093000Z-a1b2c3/events");
+      const res = await handle(req, "/api/jobs/20260910T093000Z-a1b2c3/events");
+      const reader = res.body!.getReader();
+      const first = await reader.read();
+      expect(toText(first.value)).toContain("event: restarting\n");
+      await reader.cancel();
+    } finally {
+      stagerService.getJob = origGetJob;
+    }
+  });
+
   it("emits initial event and closes immediately when job is already done", async () => {
     const origGetJob = stagerService.getJob;
     stagerService.getJob = async (id: string) => ({
@@ -229,6 +248,10 @@ describe("Stager SSE job monitoring", () => {
     expect(JOB_WATCH_JS).toContain("EventSource");
     expect(JOB_WATCH_JS).toContain("/events");
     expect(JOB_WATCH_JS).toContain("pollJob");
+    expect(JOB_WATCH_JS).toContain("waitForManager");
+    expect(JOB_WATCH_JS).toContain("/health");
+    expect(JOB_WATCH_JS).toContain("reconnecting");
+    expect(JOB_WATCH_JS).toContain("addEventListener('restarting'");
     expect(CLIENT_JS).toContain("watchJob(");
   });
 
