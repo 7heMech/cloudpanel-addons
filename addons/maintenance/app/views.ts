@@ -25,13 +25,18 @@ const STYLE = `
 #template-editor { width:100%; min-height:420px; resize:vertical; font:13px/1.55 var(--mono); tab-size:2; }
 #template-preview { width:100%; min-height:420px; border:1px solid var(--border); border-radius:8px; background:#fff; }
 .template-mode { display:flex; align-items:center; gap:10px; margin-bottom:18px; }
-.bypass-grid { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:end; }
-.bypass-grid textarea { min-height:110px; resize:vertical; }
+.bypass-grid { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:end; }
+.bypass-field { min-width:0; margin:0; }
+.bypass-field span, .bypass-field textarea { display:block; }
+.bypass-field span { margin-bottom:7px; }
+.bypass-field textarea { min-height:110px; resize:vertical; font-family:var(--mono); }
+.bypass-actions { justify-content:flex-end; }
 .fleet-site { font-weight:600; }
 .fleet-site a { overflow-wrap:anywhere; }
 @media (max-width:700px) {
   .maintenance-summary .badge { margin-left:0; }
   .bypass-grid { grid-template-columns:1fr; }
+  .bypass-actions { justify-content:flex-start; }
 }
 `;
 
@@ -232,8 +237,8 @@ export function siteView(
     <label class="switch"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label>
   </div></article>
   <article class="card"><div class="card-header"><div><h2>IP bypasses</h2><p class="hint">One IPv4 or IPv6 address per line. Requests from these addresses skip maintenance mode.</p></div></div>
-    <div class="bypass-grid"><label>Allowed IP addresses<textarea id="bypass-ips" spellcheck="false">${esc(site.bypasses.join("\n"))}</textarea></label>
-      <div class="actions">${currentIp ? `<button class="btn" type="button" onclick="addCurrentIp('${escJs(currentIp)}')">Add my IP (${esc(currentIp)})</button>` : ""}<button class="btn btn-primary" type="button" onclick="saveBypasses('${escJs(site.domain)}')">Save bypasses</button></div></div>
+    <div class="bypass-grid"><label class="bypass-field" for="bypass-ips"><span>Allowed IP addresses</span><textarea id="bypass-ips" spellcheck="false">${esc(site.bypasses.join("\n"))}</textarea></label>
+      <div class="actions bypass-actions">${currentIp ? `<button class="btn" type="button" onclick="addCurrentIp('${escJs(currentIp)}')">Add my IP (${esc(currentIp)})</button>` : ""}<button class="btn btn-primary" type="button" onclick="saveBypasses('${escJs(site.domain)}')">Save bypasses</button></div></div>
   </article>
   <article class="card"><div class="card-header"><div><h2>Maintenance page</h2><p class="hint">Custom HTML and CSS are stored for this site. Active scripts and form controls are removed.</p></div></div>
     <label class="template-mode"><input id="custom-template" type="checkbox" ${template.custom ? "checked" : ""} onchange="changeTemplateMode('${escJs(site.domain)}', this.checked)"> Use a custom template</label>
