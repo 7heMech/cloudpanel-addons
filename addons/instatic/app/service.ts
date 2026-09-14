@@ -76,6 +76,8 @@ export interface InstaticJobView {
   startedAt?: string;
   finishedAt?: string;
   error?: string;
+  /** Optional one-shot event emitted by the job runner. */
+  event?: string;
 }
 
 export const instaticService = {

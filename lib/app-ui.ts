@@ -345,6 +345,16 @@ function updateJobUI(job, log) {
   return job.state === 'done' || job.state === 'failed';
 }
 
+function showJobReconnecting() {
+  const state = document.getElementById('job-state');
+  if (state) {
+    state.textContent = 'reconnecting';
+    state.className = 'badge state-queued';
+  }
+  const step = document.getElementById('job-step');
+  if (step) step.textContent = 'The manager is restarting; waiting for it to come back…';
+}
+
 // The server sends {job, log}; tolerate the {data:{...}} envelope too, because
 // the polling fallback reads the JSON reply from that same route.
 function jobPayload(raw) {
@@ -373,14 +383,35 @@ function watchJob(id) {
         if (updateJobUI(payload.job, payload.log)) done(function () { es.close(); });
       } catch (e) {}
     };
+    es.addEventListener('restarting', function () {
+      if (!finished) showJobReconnecting();
+    });
     es.onerror = function () {
       if (finished) return;
       es.close();
-      pollJob(id, done);
+      showJobReconnecting();
+      waitForManager(id, done);
     };
     return;
   }
   pollJob(id, done);
+}
+
+function waitForManager(id, done) {
+  let stopped = false;
+  async function tick() {
+    if (stopped) return;
+    try {
+      const res = await fetch(CLP_BASE + '/health', { cache: 'no-store' });
+      if (res.ok) {
+        stopped = true;
+        pollJob(id, done);
+        return;
+      }
+    } catch (e) {}
+    setTimeout(tick, 1000);
+  }
+  tick();
 }
 
 function pollJob(id, done) {
