@@ -60,16 +60,56 @@ export async function handle(
     const csrf = newCsrfToken();
     const selected = url.searchParams.get("domain");
     try {
-      if (!selected) return html(layout("Maintenance Mode", fleetView(await maintenanceService.listSites()), updateNotice), csrf);
+      const globalEnabled = await maintenanceService.globalStatus();
+      if (!selected) return html(layout("Maintenance Mode", fleetView(await maintenanceService.listSites(), globalEnabled), updateNotice), csrf);
       const domain = validateDomain(selected);
       if (!domain) return html(layout("Invalid site", '<div class="alert">That is not a valid hostname.</div>', updateNotice), csrf, 400);
       const [site, template] = await Promise.all([maintenanceService.site(domain), maintenanceService.template(domain)]);
       if (!template.ok || !template.data) throw new Error(template.error ?? "maintenance template unavailable");
-      return html(layout(`Maintenance — ${domain}`, siteView(site, template.data, clientIp(req)), updateNotice), csrf);
+      return html(layout(`Maintenance — ${domain}`, siteView(site, template.data, clientIp(req), globalEnabled), updateNotice), csrf);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const status = /not found/i.test(message) ? 404 : 500;
       return html(layout("Maintenance Mode", `<div class="alert">${Bun.escapeHTML(message)}</div>`, updateNotice), csrf, status);
+    }
+  }
+
+  if (method === "POST" && path === "/api/global-toggle") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    try {
+      const body = await jsonBody(req, 1024);
+      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
+      const result = await maintenanceService.setGlobalEnabled(body.enabled);
+      if (!result.ok) return json({ ok: false, error: result.error ?? "failed to toggle global maintenance" }, 500);
+      return json({ ok: true, data: { global: body.enabled } }, 200);
+    } catch (error) {
+      const message = error instanceof SyntaxError ? "body must be valid JSON" : error instanceof Error ? error.message : String(error);
+      return json({ ok: false, error: message }, 400);
+    }
+  }
+
+  if (method === "POST" && (path === "/api/sites/toggle" || path === "/api/toggle-all" || path === "/api/bulk-toggle")) {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    try {
+      const body = await jsonBody(req, 16 * 1024);
+      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
+      let domains: string[] | undefined;
+      if (body.domains !== undefined) {
+        if (!Array.isArray(body.domains)) return json({ ok: false, error: "domains must be an array" }, 400);
+        domains = [];
+        for (const raw of body.domains) {
+          const decoded = typeof raw === "string" ? decodedDomain(raw) : null;
+          if (decoded === null) return json({ ok: false, error: `invalid domain in domains list: ${raw}` }, 400);
+          domains.push(decoded);
+        }
+      }
+      const result = await maintenanceService.setAllEnabled(body.enabled, domains);
+      return json(result, 200);
+    } catch (error) {
+      const message = error instanceof SyntaxError ? "body must be valid JSON" : error instanceof Error ? error.message : String(error);
+      return json({ ok: false, error: message }, 400);
     }
   }
 

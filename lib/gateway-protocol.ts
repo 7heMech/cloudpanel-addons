@@ -39,6 +39,9 @@ export const MAINTENANCE_ALLOWED_VERBS = new Set([
   "set-template",
   "reset-template",
   "set-bypass",
+  "global-status",
+  "global-enable",
+  "global-disable",
 ]);
 
 /**

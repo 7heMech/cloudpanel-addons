@@ -40,6 +40,8 @@ export interface MaintenanceActionOptions {
   domainValidator?: (value: string) => string;
   /** Test-only write override used to exercise replacement failure handling. */
   writeAtomicFn?: typeof writeAtomic;
+  varnishPort?: number;
+  fetchFn?: typeof fetch;
 }
 
 export const DEFAULT_MAINTENANCE_ACTION_PATHS: MaintenanceActionPaths = {
@@ -56,7 +58,10 @@ type MaintenanceVerb =
   | "get-template"
   | "set-template"
   | "reset-template"
-  | "set-bypass";
+  | "set-bypass"
+  | "global-status"
+  | "global-enable"
+  | "global-disable";
 
 interface ParsedAction {
   verb: MaintenanceVerb;
@@ -76,11 +81,18 @@ function parseAction(argv: string[], paths: MaintenanceActionPaths, options: Mai
     ? ["--domain", arg.slice("--domain=".length)]
     : [arg]);
   const verb = argv[0] as MaintenanceVerb | undefined;
-  const allowed: MaintenanceVerb[] = [
+  const siteAllowed: MaintenanceVerb[] = [
     "status", "enable", "disable", "get-template", "set-template", "reset-template", "set-bypass",
   ];
-  if (!verb || !allowed.includes(verb)) {
-    failAction("usage: clp-addons action maintenance {status|enable|disable|get-template|set-template|reset-template|set-bypass} --domain <domain>");
+  const globalAllowed: MaintenanceVerb[] = [
+    "global-status", "global-enable", "global-disable",
+  ];
+  if (verb && globalAllowed.includes(verb)) {
+    if (argv.length > 1) failAction(`action ${verb} takes no arguments`);
+    return { verb, domain: "" };
+  }
+  if (!verb || !siteAllowed.includes(verb)) {
+    failAction("usage: clp-addons action maintenance {status|enable|disable|get-template|set-template|reset-template|set-bypass} --domain <domain> | {global-status|global-enable|global-disable}");
   }
   let domain = "";
   for (let i = 1; i < argv.length; i++) {
@@ -199,6 +211,45 @@ export function maintenanceStatus(paths: MaintenanceActionPaths, domain: string)
 }
 
 /**
+ * Invalidate CloudPanel's Varnish cache (if running on port 6081) for the domain.
+ * Purges both the root host and its www/bare alias so visitors do not see stale
+ * 200 responses when entering maintenance or stale 503 responses when leaving.
+ */
+export async function purgeVarnish(
+  domain: string,
+  port = 6081,
+  fetchFn: typeof fetch = fetch,
+): Promise<boolean> {
+  const hosts = [domain];
+  if (domain.startsWith("www.")) {
+    const bare = domain.slice(4);
+    if (bare) hosts.push(bare);
+  } else {
+    hosts.push(`www.${domain}`);
+  }
+
+  const results = await Promise.all(
+    hosts.map(async (host) => {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 1000);
+        const res = await fetchFn(`http://127.0.0.1:${port}/`, {
+          method: "PURGE",
+          headers: { Host: host },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        return res.ok;
+      } catch {
+        return false;
+      }
+    }),
+  );
+
+  return results.some(Boolean);
+}
+
+/**
  * Keep custom pages passive. Nginx also sends a restrictive CSP, but removing
  * active markup here makes the stored file safe if an operator serves it by
  * another path later.
@@ -264,6 +315,71 @@ export async function executeMaintenanceAction(
   requireRoot(options);
   const paths = pathsFor(options);
   const { verb, domain } = parseAction(argv, paths, options);
+
+  if (verb === "global-status") {
+    const onPath = join(paths.dataDir, "_global", "on");
+    return { global: existsSync(onPath) && safeRegularFile(onPath) };
+  }
+
+  if (verb === "global-enable" || verb === "global-disable") {
+    ensureDataDir(paths);
+    const globalDir = join(paths.dataDir, "_global");
+    assertDirectory(globalDir);
+    mkdirSync(globalDir, { recursive: true, mode: 0o711 });
+    chmodSync(globalDir, 0o711);
+    mkdirSync(paths.lockDir, { recursive: true, mode: 0o755 });
+    const onPath = join(globalDir, "on");
+
+    const enabled = verb === "global-enable";
+    await withFileLock(
+      join(paths.lockDir, "maintenance-_global.lock"),
+      10,
+      "another maintenance update is running for global fleet",
+      async () => {
+        if (enabled) {
+          writeAtomic(onPath, "", 0o644);
+        } else {
+          if (existsSync(onPath)) rmSync(onPath, { force: true });
+        }
+      },
+    );
+
+    try {
+      const db = new Database(paths.panelDb, { readonly: true });
+      let domainNames: string[] = [];
+      try {
+        db.exec("PRAGMA busy_timeout = 5000;");
+        domainNames = db.query<{ domain_name: string }, []>(
+          "SELECT domain_name FROM site",
+        ).all().map((r) => r.domain_name);
+      } finally {
+        db.close();
+      }
+
+      const CONCURRENCY = 8;
+      const PURGE_BUDGET_MS = 8_000;
+      const start = Date.now();
+      let idx = 0;
+
+      const worker = async () => {
+        while (idx < domainNames.length && Date.now() - start < PURGE_BUDGET_MS) {
+          const domain = domainNames[idx++];
+          if (domain) {
+            await purgeVarnish(domain, options.varnishPort, options.fetchFn);
+          }
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, domainNames.length) }, () => worker()),
+      );
+    } catch {
+      // panelDb may not exist in some unit tests or mock environments
+    }
+
+    return { ok: true, global: enabled };
+  }
+
   assertPanelSite(paths, domain);
 
   if (verb === "status") return maintenanceStatus(paths, domain);
@@ -273,6 +389,7 @@ export async function executeMaintenanceAction(
     const flag = join(dir, "on");
     if (verb === "enable") writeAtomic(flag, "", 0o600);
     else rmSync(flag, { force: true });
+    await purgeVarnish(domain, options.varnishPort, options.fetchFn);
     return maintenanceStatus(paths, domain);
   }
 

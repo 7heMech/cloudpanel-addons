@@ -758,6 +758,9 @@ export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; r
 // before Nginx selects the site's /.well-known location.
 export const NGINX_MAINTENANCE_BLOCK = `# clp-addons:maintenance:start
 set $clp_maintenance 0;
+if (-f /var/lib/clp-addons/maintenance/_global/on) {
+    set $clp_maintenance 1;
+}
 if (-f /var/lib/clp-addons/maintenance/$server_name/on) {
     set $clp_maintenance 1;
 }

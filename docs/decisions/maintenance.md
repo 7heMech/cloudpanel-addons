@@ -5,13 +5,20 @@
 Maintenance Mode is available from the Addons overview and from an
 administrator-only tab in every CloudPanel site view. The overview reads the
 live CloudPanel site inventory and shows each site's status, template choice,
-and bypass count. A domain query opens the focused editor and links back to the
+and bypass count. A global toggle in the card header activates fleet-wide maintenance mode
+at once with confirmation naming the count. When global maintenance is active, all sites serve
+503 maintenance responses while preserving each site's individual toggle state. Individual site
+toggles can still be managed independently; turning the global toggle off restores only sites
+whose individual toggle was off to Live, while sites configured for maintenance remain in maintenance.
+Sites serving maintenance due to the global toggle display a "Maintenance (Global)" status badge.
+Turning global maintenance on or off purges Varnish cache across the fleet. A domain query opens the focused editor and links back to the
 site's Settings page.
 
 ## Request handling
 
 The addon installs one marked block in `/etc/nginx/global_settings`, which all
 customer site templates include. Nginx checks
+`/var/lib/clp-addons/maintenance/_global/on` and
 `/var/lib/clp-addons/maintenance/$server_name/on` on every request and clears
 the maintenance decision when a matching `bypass_$remote_addr` file exists.
 CloudPanel writes the database domain first in `server_name`, so aliases share
