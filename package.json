@@ -6,6 +6,8 @@
   "license": "Apache-2.0",
   "scripts": {
     "preview:ui": "bun --watch tools/preview-ui.ts",
+    "preview:shot": "bun tools/ui-shot.ts",
+    "deploy:stg": "bun tools/deploy-stg.ts",
     "typecheck": "tsc --noEmit --project tsconfig.tools.json",
     "typecheck:tools": "tsc --noEmit --project tsconfig.tools.json",
     "build": "bun build --compile --target=bun-linux-x64 --bytecode --minify --format=esm --outfile dist/clp-addons-linux-x64 cli/index.ts",
