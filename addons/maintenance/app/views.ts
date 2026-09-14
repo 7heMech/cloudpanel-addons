@@ -56,15 +56,16 @@ function updateStats(inMaintenance, live) {
 }
 
 function isGlobalActive() {
-  const tbody = document.querySelector('tbody[data-global-maintenance]');
-  if (tbody) return tbody.dataset.globalMaintenance === 'true';
+  const el = document.querySelector('[data-global-maintenance]');
+  if (el) return el.dataset.globalMaintenance === 'true';
   const bulk = document.getElementById('bulk-toggle');
   return bulk ? bulk.checked : false;
 }
 
 function syncGlobalUI(globalActive) {
-  const tbody = document.querySelector('tbody[data-global-maintenance]');
-  if (tbody) tbody.dataset.globalMaintenance = String(globalActive);
+  document.querySelectorAll('[data-global-maintenance]').forEach(function (el) {
+    el.dataset.globalMaintenance = String(globalActive);
+  });
 
   const bulk = document.getElementById('bulk-toggle');
   if (bulk) bulk.checked = globalActive;
@@ -114,6 +115,11 @@ function paintStatus(domain, siteEnabled) {
   document.querySelectorAll('[data-toggle-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
     node.checked = siteEnabled;
   });
+
+  const notice = document.getElementById('global-notice');
+  if (notice) {
+    notice.hidden = !(globalActive && !siteEnabled);
+  }
 
   const available = Array.from(document.querySelectorAll('input[data-toggle-domain][data-available="true"]'));
   if (available.length > 0) {
@@ -318,7 +324,7 @@ export function fleetView(sites: MaintenanceSiteView[], globalEnabled = false): 
     <td>${site.bypasses.length}</td>
     <td class="action-cell"><label class="switch" title="Toggle maintenance mode"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" data-available="${!site.error}" ${site.enabled ? "checked" : ""} ${site.error ? "disabled" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label></td>
   </tr>`).join("");
-  return `<div class="page-heading"><div><h1>Maintenance Mode</h1><p>Switch sites to a 503 maintenance page without reloading Nginx.</p></div></div>
+  return `<div class="page-heading" data-global-maintenance="${globalEnabled}"><div><h1>Maintenance Mode</h1><p>Switch sites to a 503 maintenance page without reloading Nginx.</p></div></div>
   <div class="card stats">
     <div class="stat"><div class="label">CloudPanel sites</div><div class="value">${sites.length}</div></div>
     <div class="stat"><div class="label">In maintenance</div><div class="value">${inMaintenanceCount}</div></div>
@@ -336,10 +342,8 @@ export function siteView(
   globalEnabled = false,
 ): string {
   const settingsUrl = `/site/${encodeURIComponent(site.domain)}/settings`;
-  const globalNotice = globalEnabled && !site.enabled
-    ? `<div class="alert" style="margin-bottom:20px; background:var(--surface); border-left:4px solid var(--accent);">Global maintenance mode is currently active. Visitors receive 503 maintenance responses fleet-wide.</div>`
-    : "";
-  return `<div class="page-heading"><div><h1>${esc(site.domain)}</h1><p>Maintenance mode applies to HTTP and HTTPS traffic for this site.</p></div>
+  const globalNotice = `<div id="global-notice" class="alert" style="margin-bottom:20px; background:var(--surface); border-left:4px solid var(--accent);"${globalEnabled && !site.enabled ? "" : " hidden"}>Global maintenance mode is currently active. Visitors receive 503 maintenance responses fleet-wide.</div>`;
+  return `<div class="page-heading" data-global-maintenance="${globalEnabled}"><div><h1>${esc(site.domain)}</h1><p>Maintenance mode applies to HTTP and HTTPS traffic for this site.</p></div>
     <div class="actions">${statusBadge(site, globalEnabled)}<a class="btn" href="${settingsUrl}">Back to site</a></div></div>
   ${globalNotice}
   <div class="card"><div class="switch-row"><div><h2>Maintenance response</h2><p class="hint">Visitors receive HTTP 503 with a five-minute Retry-After header. ACME certificate challenges and bypassed IPs remain live.</p></div>

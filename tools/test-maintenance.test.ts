@@ -11,7 +11,7 @@ import {
 } from "../addons/maintenance/action";
 import { handle as handleMaintenance } from "../addons/maintenance/app/index";
 import { maintenanceService } from "../addons/maintenance/app/service";
-import { fleetView } from "../addons/maintenance/app/views";
+import { fleetView, siteView } from "../addons/maintenance/app/views";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import {
   inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance,
@@ -268,6 +268,29 @@ test("fleet overview renders global maintenance toggle and badges according to g
   ]);
   expect(unavailableOnly).toContain('<input type="checkbox" id="bulk-toggle"');
   expect(unavailableOnly).toContain('disabled');
+});
+
+test("siteView renders global maintenance state and notice banner correctly", () => {
+  const site = { domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] };
+  const template = { ok: true, data: { domain: "one.example.com", custom: false, html: "<h1>Maintenance</h1>" } };
+
+  // When global is true and site is false: badge is Maintenance (Global) and notice is visible
+  const globalOn = siteView(site, template.data, "1.2.3.4", true);
+  expect(globalOn).toContain('data-global-maintenance="true"');
+  expect(globalOn).toContain('Maintenance (Global)');
+  expect(globalOn).toContain('id="global-notice"');
+  expect(globalOn).not.toContain('id="global-notice" class="alert" style="margin-bottom:20px; background:var(--surface); border-left:4px solid var(--accent);" hidden');
+
+  // When global is false and site is false: badge is Live and notice is hidden
+  const globalOff = siteView(site, template.data, "1.2.3.4", false);
+  expect(globalOff).toContain('data-global-maintenance="false"');
+  expect(globalOff).toContain('Live');
+  expect(globalOff).toContain('id="global-notice" class="alert" style="margin-bottom:20px; background:var(--surface); border-left:4px solid var(--accent);" hidden');
+
+  // When site is enabled: badge is Maintenance Mode (503) and notice is hidden even if global is true
+  const siteEnabled = siteView({ ...site, enabled: true }, template.data, "1.2.3.4", true);
+  expect(siteEnabled).toContain('Maintenance Mode (503)');
+  expect(siteEnabled).toContain('id="global-notice" class="alert" style="margin-bottom:20px; background:var(--surface); border-left:4px solid var(--accent);" hidden');
 });
 
 test("global toggle API guards mutations and toggles fleet-wide maintenance mode", async () => {

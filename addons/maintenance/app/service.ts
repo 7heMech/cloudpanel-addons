@@ -92,7 +92,8 @@ export const maintenanceService = {
 
   async globalStatus(): Promise<boolean> {
     const res = await globalAction<{ global: boolean }>("global-status");
-    return res.ok && res.data ? res.data.global : false;
+    const data = await requireResult(res, "global maintenance status unavailable");
+    return data.global;
   },
 
   async setGlobalEnabled(enabled: boolean): Promise<ActionResult<{ global: boolean }>> {

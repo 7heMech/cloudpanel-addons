@@ -330,38 +330,54 @@ export async function executeMaintenanceAction(
     mkdirSync(paths.lockDir, { recursive: true, mode: 0o755 });
     const onPath = join(globalDir, "on");
 
-    return await withFileLock(
+    const enabled = verb === "global-enable";
+    await withFileLock(
       join(paths.lockDir, "maintenance-_global.lock"),
       10,
       "another maintenance update is running for global fleet",
       async () => {
-        const enabled = verb === "global-enable";
         if (enabled) {
           writeAtomic(onPath, "", 0o644);
         } else {
           if (existsSync(onPath)) rmSync(onPath, { force: true });
         }
-
-        try {
-          const db = new Database(paths.panelDb, { readonly: true });
-          try {
-            db.exec("PRAGMA busy_timeout = 5000;");
-            const rows = db.query<{ domain_name: string }, []>(
-              "SELECT domain_name FROM site",
-            ).all();
-            for (const row of rows) {
-              await purgeVarnish(row.domain_name, options.varnishPort, options.fetchFn);
-            }
-          } finally {
-            db.close();
-          }
-        } catch {
-          // panelDb may not exist in some unit tests or mock environments
-        }
-
-        return { ok: true, global: enabled };
       },
     );
+
+    try {
+      const db = new Database(paths.panelDb, { readonly: true });
+      let domainNames: string[] = [];
+      try {
+        db.exec("PRAGMA busy_timeout = 5000;");
+        domainNames = db.query<{ domain_name: string }, []>(
+          "SELECT domain_name FROM site",
+        ).all().map((r) => r.domain_name);
+      } finally {
+        db.close();
+      }
+
+      const CONCURRENCY = 8;
+      const PURGE_BUDGET_MS = 8_000;
+      const start = Date.now();
+      let idx = 0;
+
+      const worker = async () => {
+        while (idx < domainNames.length && Date.now() - start < PURGE_BUDGET_MS) {
+          const domain = domainNames[idx++];
+          if (domain) {
+            await purgeVarnish(domain, options.varnishPort, options.fetchFn);
+          }
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, domainNames.length) }, () => worker()),
+      );
+    } catch {
+      // panelDb may not exist in some unit tests or mock environments
+    }
+
+    return { ok: true, global: enabled };
   }
 
   assertPanelSite(paths, domain);
