@@ -84,7 +84,7 @@ export const maintenanceService = {
   },
 
   async setAllEnabled(enabled: boolean, domains?: string[]): Promise<BulkToggleResult> {
-    const targetDomains = domains && domains.length > 0
+    const targetDomains = domains !== undefined
       ? domains
       : (await this.panelSites()).map((s) => s.domain);
     const updated: string[] = [];

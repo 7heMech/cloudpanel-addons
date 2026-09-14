@@ -126,7 +126,12 @@ async function toggleAllMaintenance(targetEnabled) {
     const reply = await call('/api/sites/toggle', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: targetEnabled })
+      body: JSON.stringify({
+        enabled: targetEnabled,
+        domains: available.map(function (input) {
+          return input.dataset.toggleDomain;
+        }).filter(Boolean)
+      })
     });
     const updated = (reply.data && reply.data.updated) || [];
     updated.forEach(function (domain) {

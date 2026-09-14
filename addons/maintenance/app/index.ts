@@ -79,9 +79,16 @@ export async function handle(
     try {
       const body = await jsonBody(req, 16 * 1024);
       if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
-      const domains = Array.isArray(body.domains)
-        ? body.domains.map(decodedDomain).filter((d): d is string => d !== null)
-        : undefined;
+      let domains: string[] | undefined;
+      if (body.domains !== undefined) {
+        if (!Array.isArray(body.domains)) return json({ ok: false, error: "domains must be an array" }, 400);
+        domains = [];
+        for (const raw of body.domains) {
+          const decoded = typeof raw === "string" ? decodedDomain(raw) : null;
+          if (decoded === null) return json({ ok: false, error: `invalid domain in domains list: ${raw}` }, 400);
+          domains.push(decoded);
+        }
+      }
       const result = await maintenanceService.setAllEnabled(body.enabled, domains);
       return json(result, 200);
     } catch (error) {

@@ -280,6 +280,16 @@ test("bulk toggle API guards mutations and toggles all available sites", async (
   const badJson = await handleMaintenance(request("/api/sites/toggle", "{invalid"), "/api/sites/toggle");
   expect(badJson.status).toBe(400);
 
+  // Rejects domains if not an array
+  const badDomains = await handleMaintenance(request("/api/sites/toggle", { enabled: true, domains: "not-an-array" }), "/api/sites/toggle");
+  expect(badDomains.status).toBe(400);
+  expect(await badDomains.json()).toMatchObject({ ok: false, error: "domains must be an array" });
+
+  // Rejects domains if any entry is invalid
+  const invalidDomain = await handleMaintenance(request("/api/sites/toggle", { enabled: true, domains: ["good.example.com", "bad..domain/"] }), "/api/sites/toggle");
+  expect(invalidDomain.status).toBe(400);
+  expect(await invalidDomain.json()).toMatchObject({ ok: false, error: "invalid domain in domains list: bad..domain/" });
+
   // Mock setAllEnabled to verify successful bulk toggle
   const origSetAll = maintenanceService.setAllEnabled;
   try {
@@ -349,6 +359,17 @@ test("maintenanceService.setAllEnabled toggles domains and captures partial fail
     expect(result.data.enabled).toBe(true);
     expect(result.data.updated).toEqual(["good.example.com"]);
     expect(result.data.failed).toEqual([{ domain: "bad.example.com", error: "root action failed" }]);
+
+    // Explicit empty array does not query panelSites
+    let panelSitesCalled = false;
+    maintenanceService.panelSites = async () => {
+      panelSitesCalled = true;
+      return [];
+    };
+    const emptyResult = await maintenanceService.setAllEnabled(true, []);
+    expect(emptyResult.ok).toBe(true);
+    expect(emptyResult.data.updated).toEqual([]);
+    expect(panelSitesCalled).toBe(false);
   } finally {
     maintenanceService.setEnabled = origSetEnabled;
     maintenanceService.panelSites = origPanelSites;
