@@ -6,13 +6,10 @@ import type { MaintenanceSiteView, MaintenanceTemplateView } from "./service";
 const BASE = mountPath("maintenance");
 
 const STYLE = `
-.maintenance-summary { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-.maintenance-summary h1 { margin:0; overflow-wrap:anywhere; }
-.maintenance-summary .badge { margin-left:auto; }
+.page-heading .actions { align-items:center; flex-shrink:0; }
 .state-live { color:var(--ok); border-color:var(--ok); }
 .state-maintenance { color:var(--bad); border-color:var(--bad); }
 .state-unavailable { color:var(--muted); }
-.site-back { display:inline-block; margin-bottom:18px; }
 .switch-row { display:flex; align-items:center; justify-content:space-between; gap:20px; }
 .switch { position:relative; display:inline-flex; width:50px; height:28px; flex:none; }
 .switch input { position:absolute; opacity:0; }
@@ -34,7 +31,6 @@ const STYLE = `
 .fleet-site { font-weight:600; }
 .fleet-site a { overflow-wrap:anywhere; }
 @media (max-width:700px) {
-  .maintenance-summary .badge { margin-left:0; }
   .bypass-grid { grid-template-columns:1fr; }
   .bypass-actions { justify-content:flex-start; }
 }
@@ -214,15 +210,15 @@ export function fleetView(sites: MaintenanceSiteView[]): string {
     <td>${site.bypasses.length}</td>
     <td class="action-cell"><label class="switch" title="Toggle maintenance mode"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" ${site.enabled ? "checked" : ""} ${site.error ? "disabled" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label></td>
   </tr>`).join("");
-  return `<section class="page-head"><div><h1>Maintenance Mode</h1><p>Switch sites to a 503 maintenance page without reloading Nginx.</p></div></section>
-  <section class="stat-grid">
-    <article class="stat"><div class="label">CloudPanel sites</div><div class="value">${sites.length}</div></article>
-    <article class="stat"><div class="label">In maintenance</div><div class="value">${maintenance}</div></article>
-    <article class="stat"><div class="label">Live</div><div class="value">${available.length - maintenance}</div></article>
-  </section>
-  <article class="card"><div class="card-header"><h2>Sites</h2></div>
-  ${sites.length ? `<div class="table-wrap"><table><thead><tr><th>Site</th><th>Type</th><th>Status</th><th>Page</th><th>Bypasses</th><th class="action-cell">Toggle</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="empty">No CloudPanel sites were found.</p>'}
-  </article>`;
+  return `<div class="page-heading"><div><h1>Maintenance Mode</h1><p>Switch sites to a 503 maintenance page without reloading Nginx.</p></div></div>
+  <div class="card stats">
+    <div class="stat"><div class="label">CloudPanel sites</div><div class="value">${sites.length}</div></div>
+    <div class="stat"><div class="label">In maintenance</div><div class="value">${maintenance}</div></div>
+    <div class="stat"><div class="label">Live</div><div class="value">${available.length - maintenance}</div></div>
+  </div>
+  <div class="card card-table"><div class="card-header"><h2>Sites</h2></div>
+  ${sites.length ? `<table><thead><tr><th scope="col">Site</th><th scope="col">Type</th><th scope="col">Status</th><th scope="col">Page</th><th scope="col">Bypasses</th><th scope="col" class="action-cell">Toggle</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">No CloudPanel sites were found.</div>'}
+  </div>`;
 }
 
 export function siteView(
@@ -231,20 +227,20 @@ export function siteView(
   currentIp: string,
 ): string {
   const settingsUrl = `/site/${encodeURIComponent(site.domain)}/settings`;
-  return `<a class="site-back" href="${settingsUrl}">← Back to ${esc(site.domain)}</a>
-  <section class="page-head maintenance-summary"><div><h1>${esc(site.domain)}</h1><p>Maintenance mode applies to HTTP and HTTPS traffic for this site.</p></div>${statusBadge(site)}</section>
-  <article class="card"><div class="switch-row"><div><h2>Maintenance response</h2><p class="hint">Visitors receive HTTP 503 with a five-minute Retry-After header. ACME certificate challenges and bypassed IPs remain live.</p></div>
+  return `<div class="page-heading"><div><h1>${esc(site.domain)}</h1><p>Maintenance mode applies to HTTP and HTTPS traffic for this site.</p></div>
+    <div class="actions">${statusBadge(site)}<a class="btn" href="${settingsUrl}">Back to site</a></div></div>
+  <div class="card"><div class="switch-row"><div><h2>Maintenance response</h2><p class="hint">Visitors receive HTTP 503 with a five-minute Retry-After header. ACME certificate challenges and bypassed IPs remain live.</p></div>
     <label class="switch"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label>
-  </div></article>
-  <article class="card"><div class="card-header"><div><h2>IP bypasses</h2><p class="hint">One IPv4 or IPv6 address per line. Requests from these addresses skip maintenance mode.</p></div></div>
+  </div></div>
+  <div class="card"><div class="card-header"><div><h2>IP bypasses</h2><p class="hint">One IPv4 or IPv6 address per line. Requests from these addresses skip maintenance mode.</p></div></div>
     <div class="bypass-grid"><label class="bypass-field" for="bypass-ips"><span>Allowed IP addresses</span><textarea id="bypass-ips" spellcheck="false">${esc(site.bypasses.join("\n"))}</textarea></label>
       <div class="actions bypass-actions">${currentIp ? `<button class="btn" type="button" onclick="addCurrentIp('${escJs(currentIp)}')">Add my IP (${esc(currentIp)})</button>` : ""}<button class="btn btn-primary" type="button" onclick="saveBypasses('${escJs(site.domain)}')">Save bypasses</button></div></div>
-  </article>
-  <article class="card"><div class="card-header"><div><h2>Maintenance page</h2><p class="hint">Custom HTML and CSS are stored for this site. Active scripts and form controls are removed.</p></div></div>
+  </div>
+  <div class="card"><div class="card-header"><div><h2>Maintenance page</h2><p class="hint">Custom HTML and CSS are stored for this site. Active scripts and form controls are removed.</p></div></div>
     <label class="template-mode"><input id="custom-template" type="checkbox" ${template.custom ? "checked" : ""} onchange="changeTemplateMode('${escJs(site.domain)}', this.checked)"> Use a custom template</label>
     <div class="editor-tabs" role="tablist"><button class="btn" type="button" data-editor-tab="editor" aria-selected="true" onclick="showEditorTab('editor')">HTML / CSS</button><button class="btn" type="button" data-editor-tab="preview" aria-selected="false" onclick="showEditorTab('preview')">Preview</button></div>
     <textarea id="template-editor" aria-label="Maintenance page HTML" spellcheck="false">${esc(template.html)}</textarea>
     <iframe id="template-preview" title="Maintenance page preview" sandbox hidden></iframe>
     <div class="form-actions"><button class="btn btn-danger" type="button" onclick="resetTemplate('${escJs(site.domain)}', false)">Reset to default</button><button class="btn btn-primary" id="save-template" type="button" onclick="saveTemplate('${escJs(site.domain)}')">Save template</button></div>
-  </article>`;
+  </div>`;
 }
