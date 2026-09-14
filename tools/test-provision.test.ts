@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import {
-  ADDONS, nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
+  ADDON_NAMES, ADDONS, nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
 } from "../cli/paths";
 import {
   authUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit,
@@ -345,6 +345,17 @@ test("manager unit hardens its namespace with zero-sudo root gateway dispatch", 
   expect(unit).toContain("Restart=always");
   expect(unit).not.toContain("ExecStartPre=+");
   expect(unit).not.toContain("hmac");
+});
+
+test("every addon's APP_DATA environment assignment is a name systemd accepts", () => {
+  // systemd silently ignores (and warns on) an Environment= line whose name
+  // contains a character outside [A-Za-z0-9_], which "login-theme" produced
+  // via a bare toUpperCase() before it was sanitized.
+  const specs = ADDON_NAMES.map((name) => ADDONS[name]!);
+  const unit = serviceUnit(specs);
+  const assignments = [...unit.matchAll(/^Environment=([^=]+)=/gm)].map((match) => match[1]);
+  expect(assignments.length).toBe(specs.length);
+  for (const name of assignments) expect(name).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
 });
 
 test("provisioning creates every project-owned writable directory", () => {

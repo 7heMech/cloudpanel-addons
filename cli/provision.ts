@@ -532,7 +532,10 @@ export function serviceUnit(specs: AddonSpec[]): string {
   const dependencies = [...new Set(specs.flatMap((spec) => spec.requiresUnits ?? []))];
   const after = ["network-online.target", AUTH_SOCKET_UNIT, ...dependencies.map((unit) => `${unit}.service`)];
   const env = specs.flatMap((spec) => [
-    `Environment=${spec.name.toUpperCase()}_APP_DATA=${spec.stateDir}`,
+    // systemd environment variable names may not contain a hyphen (rejected
+    // with "Invalid environment assignment, ignoring"), which `login-theme`'s
+    // own name does.
+    `Environment=${spec.name.toUpperCase().replace(/-/g, "_")}_APP_DATA=${spec.stateDir}`,
   ]);
   // Only the root actions use /run/lock/clp-addons, creating it on demand.
   // Binding it into this service's namespace prevented startup after /run was
