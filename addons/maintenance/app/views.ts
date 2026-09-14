@@ -17,6 +17,9 @@ const STYLE = `
 .switch span::after { content:""; display:block; width:22px; height:22px; margin:3px; border-radius:50%; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.25); transition:.15s; }
 .switch input:checked + span { background:var(--bad); }
 .switch input:checked + span::after { transform:translateX(22px); }
+.bulk-toggle { display:flex; align-items:center; gap:10px; font-size:14px; font-weight:400; color:var(--muted); }
+.bulk-toggle input:indeterminate + span { background:var(--warn); }
+.bulk-toggle input:indeterminate + span::after { transform:translateX(11px); }
 .editor-tabs { display:flex; gap:8px; margin-bottom:12px; }
 .editor-tabs button[aria-selected="true"] { color:var(--accent); border-color:var(--accent); }
 #template-editor { width:100%; min-height:420px; resize:vertical; font:13px/1.55 var(--mono); tab-size:2; }
@@ -43,6 +46,43 @@ function siteEndpoint(domain, suffix) {
   return '/api/sites/' + encodeURIComponent(domain) + suffix;
 }
 
+function updateStats(inMaintenance, live) {
+  document.querySelectorAll('.card.stats .stat').forEach(function (stat) {
+    const label = stat.querySelector('.label');
+    const value = stat.querySelector('.value');
+    if (!label || !value) return;
+    const text = label.textContent.trim();
+    if (text === 'In maintenance') value.textContent = String(inMaintenance);
+    if (text === 'Live') value.textContent = String(live);
+  });
+}
+
+function syncBulkToggle() {
+  const bulk = document.getElementById('bulk-toggle');
+  if (!bulk) return;
+  const available = Array.from(document.querySelectorAll('input[data-toggle-domain][data-available="true"]'));
+  if (available.length === 0) {
+    bulk.disabled = true;
+    bulk.checked = false;
+    bulk.indeterminate = false;
+    updateStats(0, 0);
+    return;
+  }
+  bulk.disabled = false;
+  const enabledCount = available.filter(function (input) { return input.checked; }).length;
+  if (enabledCount === 0) {
+    bulk.checked = false;
+    bulk.indeterminate = false;
+  } else if (enabledCount === available.length) {
+    bulk.checked = true;
+    bulk.indeterminate = false;
+  } else {
+    bulk.checked = false;
+    bulk.indeterminate = true;
+  }
+  updateStats(enabledCount, available.length - enabledCount);
+}
+
 function paintStatus(domain, enabled) {
   document.querySelectorAll('[data-status-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
     node.textContent = enabled ? 'Maintenance Mode (503)' : 'Live';
@@ -63,7 +103,46 @@ async function toggleMaintenance(domain, enabled) {
   } catch (error) {
     paintStatus(domain, !enabled);
     alert('Could not change maintenance mode: ' + error.message);
-  } finally { busy(false); }
+  } finally {
+    busy(false);
+    syncBulkToggle();
+  }
+}
+
+async function toggleAllMaintenance(targetEnabled) {
+  const bulk = document.getElementById('bulk-toggle');
+  const available = Array.from(document.querySelectorAll('input[data-toggle-domain][data-available="true"]'));
+  const count = available.length;
+  if (count === 0) return;
+  const siteWord = count === 1 ? 'site' : 'sites';
+  const target = targetEnabled ? 'into maintenance mode?' : 'out of maintenance mode?';
+  const message = 'Switch all ' + count + ' ' + siteWord + ' ' + target;
+  if (!confirm(message)) {
+    syncBulkToggle();
+    return;
+  }
+  busy(true);
+  try {
+    const reply = await call('/api/sites/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: targetEnabled })
+    });
+    const updated = (reply.data && reply.data.updated) || [];
+    updated.forEach(function (domain) {
+      paintStatus(domain, targetEnabled);
+    });
+    const failed = (reply.data && reply.data.failed) || [];
+    const failedDomains = failed.map(function (f) { return typeof f === 'string' ? f : f.domain; });
+    if (failedDomains.length > 0) {
+      alert('Could not change maintenance mode for: ' + failedDomains.join(', '));
+    }
+  } catch (error) {
+    alert('Could not change maintenance mode: ' + error.message);
+  } finally {
+    busy(false);
+    syncBulkToggle();
+  }
 }
 
 function showEditorTab(tab) {
@@ -174,6 +253,7 @@ function initMaintenance() {
     const custom = document.getElementById('custom-template');
     setTemplateMode(Boolean(custom && custom.checked));
   }
+  syncBulkToggle();
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initMaintenance);
 else initMaintenance();
@@ -202,13 +282,15 @@ function statusBadge(site: MaintenanceSiteView): string {
 export function fleetView(sites: MaintenanceSiteView[]): string {
   const available = sites.filter((site) => !site.error);
   const maintenance = available.filter((site) => site.enabled).length;
+  const allEnabled = available.length > 0 && maintenance === available.length;
+  const isBulkDisabled = available.length === 0;
   const rows = sites.map((site) => `<tr>
     <td class="fleet-site"><a href="${BASE}?domain=${encodeURIComponent(site.domain)}">${esc(site.domain)}</a>${site.error ? `<div class="hint">${esc(site.error)}</div>` : ""}</td>
     <td>${esc(site.type)}</td>
     <td>${statusBadge(site)}</td>
     <td>${site.customTemplate ? "Custom" : "Default"}</td>
     <td>${site.bypasses.length}</td>
-    <td class="action-cell"><label class="switch" title="Toggle maintenance mode"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" ${site.enabled ? "checked" : ""} ${site.error ? "disabled" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label></td>
+    <td class="action-cell"><label class="switch" title="Toggle maintenance mode"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" data-available="${!site.error}" ${site.enabled ? "checked" : ""} ${site.error ? "disabled" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label></td>
   </tr>`).join("");
   return `<div class="page-heading"><div><h1>Maintenance Mode</h1><p>Switch sites to a 503 maintenance page without reloading Nginx.</p></div></div>
   <div class="card stats">
@@ -216,7 +298,7 @@ export function fleetView(sites: MaintenanceSiteView[]): string {
     <div class="stat"><div class="label">In maintenance</div><div class="value">${maintenance}</div></div>
     <div class="stat"><div class="label">Live</div><div class="value">${available.length - maintenance}</div></div>
   </div>
-  <div class="card card-table"><div class="card-header"><h2>Sites</h2></div>
+  <div class="card card-table"><div class="card-header"><h2>Sites</h2><div class="bulk-toggle"><label for="bulk-toggle">All sites</label><label class="switch" title="Toggle all sites"><input type="checkbox" id="bulk-toggle" ${allEnabled ? "checked" : ""} ${isBulkDisabled ? "disabled" : ""} onchange="toggleAllMaintenance(this.checked)"><span></span></label></div></div>
   ${sites.length ? `<table><thead><tr><th scope="col">Site</th><th scope="col">Type</th><th scope="col">Status</th><th scope="col">Page</th><th scope="col">Bypasses</th><th scope="col" class="action-cell">Toggle</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="empty">No CloudPanel sites were found.</div>'}
   </div>`;
 }

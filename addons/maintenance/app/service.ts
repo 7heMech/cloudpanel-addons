@@ -22,6 +22,15 @@ export interface MaintenanceTemplateView {
   html: string;
 }
 
+export interface BulkToggleResult {
+  ok: boolean;
+  data: {
+    enabled: boolean;
+    updated: string[];
+    failed: { domain: string; error: string }[];
+  };
+}
+
 function action<T>(verb: string, domain: string, input?: string): Promise<ActionResult<T>> {
   return callGatewayAction<T>("maintenance", verb, [`--domain=${domain}`], input, {
     timeout: 10_000,
@@ -72,6 +81,39 @@ export const maintenanceService = {
 
   setEnabled(domain: string, enabled: boolean): Promise<ActionResult<MaintenanceStatus>> {
     return action(enabled ? "enable" : "disable", domain);
+  },
+
+  async setAllEnabled(enabled: boolean, domains?: string[]): Promise<BulkToggleResult> {
+    const targetDomains = domains && domains.length > 0
+      ? domains
+      : (await this.panelSites()).map((s) => s.domain);
+    const updated: string[] = [];
+    const failed: { domain: string; error: string }[] = [];
+
+    for (let offset = 0; offset < targetDomains.length; offset += 8) {
+      const batch = targetDomains.slice(offset, offset + 8);
+      await Promise.all(batch.map(async (domain) => {
+        try {
+          const res = await this.setEnabled(domain, enabled);
+          if (res.ok) {
+            updated.push(domain);
+          } else {
+            failed.push({ domain, error: res.error ?? "failed to toggle" });
+          }
+        } catch (err) {
+          failed.push({ domain, error: err instanceof Error ? err.message : String(err) });
+        }
+      }));
+    }
+
+    return {
+      ok: true,
+      data: {
+        enabled,
+        updated: updated.sort((a, b) => a.localeCompare(b)),
+        failed: failed.sort((a, b) => a.domain.localeCompare(b.domain)),
+      },
+    };
   },
 
   template(domain: string): Promise<ActionResult<MaintenanceTemplateView>> {

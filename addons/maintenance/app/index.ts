@@ -73,6 +73,23 @@ export async function handle(
     }
   }
 
+  if (method === "POST" && (path === "/api/sites/toggle" || path === "/api/toggle-all" || path === "/api/bulk-toggle")) {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    try {
+      const body = await jsonBody(req, 16 * 1024);
+      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
+      const domains = Array.isArray(body.domains)
+        ? body.domains.map(decodedDomain).filter((d): d is string => d !== null)
+        : undefined;
+      const result = await maintenanceService.setAllEnabled(body.enabled, domains);
+      return json(result, 200);
+    } catch (error) {
+      const message = error instanceof SyntaxError ? "body must be valid JSON" : error instanceof Error ? error.message : String(error);
+      return json({ ok: false, error: message }, 400);
+    }
+  }
+
   const route = path.match(/^\/api\/sites\/([^/]+)\/(toggle|template|bypasses)$/);
   if (route && ["POST", "PUT", "DELETE"].includes(method)) {
     const denied = guardMutation(req);

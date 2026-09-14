@@ -5,7 +5,10 @@
 Maintenance Mode is available from the Addons overview and from an
 administrator-only tab in every CloudPanel site view. The overview reads the
 live CloudPanel site inventory and shows each site's status, template choice,
-and bypass count. A domain query opens the focused editor and links back to the
+and bypass count. A global toggle in the card header switches every available site into
+or out of maintenance mode at once with confirmation naming the count, reflects aggregate fleet
+state (checked, unchecked, or indeterminate), and reports partial failures while preserving row
+states. A domain query opens the focused editor and links back to the
 site's Settings page.
 
 ## Request handling

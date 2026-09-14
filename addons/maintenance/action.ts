@@ -40,6 +40,8 @@ export interface MaintenanceActionOptions {
   domainValidator?: (value: string) => string;
   /** Test-only write override used to exercise replacement failure handling. */
   writeAtomicFn?: typeof writeAtomic;
+  varnishPort?: number;
+  fetchFn?: typeof fetch;
 }
 
 export const DEFAULT_MAINTENANCE_ACTION_PATHS: MaintenanceActionPaths = {
@@ -199,6 +201,45 @@ export function maintenanceStatus(paths: MaintenanceActionPaths, domain: string)
 }
 
 /**
+ * Invalidate CloudPanel's Varnish cache (if running on port 6081) for the domain.
+ * Purges both the root host and its www/bare alias so visitors do not see stale
+ * 200 responses when entering maintenance or stale 503 responses when leaving.
+ */
+export async function purgeVarnish(
+  domain: string,
+  port = 6081,
+  fetchFn: typeof fetch = fetch,
+): Promise<boolean> {
+  const hosts = [domain];
+  if (domain.startsWith("www.")) {
+    const bare = domain.slice(4);
+    if (bare) hosts.push(bare);
+  } else {
+    hosts.push(`www.${domain}`);
+  }
+
+  const results = await Promise.all(
+    hosts.map(async (host) => {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 1000);
+        const res = await fetchFn(`http://127.0.0.1:${port}/`, {
+          method: "PURGE",
+          headers: { Host: host },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        return res.ok;
+      } catch {
+        return false;
+      }
+    }),
+  );
+
+  return results.some(Boolean);
+}
+
+/**
  * Keep custom pages passive. Nginx also sends a restrictive CSP, but removing
  * active markup here makes the stored file safe if an operator serves it by
  * another path later.
@@ -273,6 +314,7 @@ export async function executeMaintenanceAction(
     const flag = join(dir, "on");
     if (verb === "enable") writeAtomic(flag, "", 0o600);
     else rmSync(flag, { force: true });
+    await purgeVarnish(domain, options.varnishPort, options.fetchFn);
     return maintenanceStatus(paths, domain);
   }
 

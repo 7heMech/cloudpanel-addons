@@ -6,7 +6,7 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  DEFAULT_MAINTENANCE_TEMPLATE, executeMaintenanceAction, MAX_TEMPLATE_BYTES,
+  DEFAULT_MAINTENANCE_TEMPLATE, executeMaintenanceAction, MAX_TEMPLATE_BYTES, purgeVarnish,
   type MaintenanceActionPaths, type MaintenanceStatus,
 } from "../addons/maintenance/action";
 import { handle as handleMaintenance } from "../addons/maintenance/app/index";
@@ -205,6 +205,156 @@ test("fleet overview separates unavailable sites from the live count", () => {
   expect(rendered).toContain('<div class="label">Live</div><div class="value">1</div>');
 });
 
+test("fleet overview renders global maintenance toggle with aggregate state", () => {
+  // All enabled -> bulk toggle is checked and not disabled
+  const allEnabled = fleetView([
+    { domain: "one.example.com", type: "php", user: "one", enabled: true, customTemplate: false, bypasses: [] },
+    { domain: "two.example.com", type: "static", user: "two", enabled: true, customTemplate: false, bypasses: [] },
+  ]);
+  expect(allEnabled).toContain('<div class="bulk-toggle">');
+  expect(allEnabled).toContain('<label for="bulk-toggle">All sites</label>');
+  expect(allEnabled).toContain('<input type="checkbox" id="bulk-toggle" checked');
+  expect(allEnabled).not.toContain('<input type="checkbox" id="bulk-toggle" checked disabled');
+
+  // None enabled -> bulk toggle is not checked and not disabled
+  const noneEnabled = fleetView([
+    { domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] },
+    { domain: "two.example.com", type: "static", user: "two", enabled: false, customTemplate: false, bypasses: [] },
+  ]);
+  expect(noneEnabled).toContain('<input type="checkbox" id="bulk-toggle"');
+  expect(noneEnabled).not.toContain('id="bulk-toggle" checked');
+  expect(noneEnabled).not.toContain('id="bulk-toggle" disabled');
+
+  // Mixed state -> bulk toggle is not checked and not disabled
+  const mixed = fleetView([
+    { domain: "one.example.com", type: "php", user: "one", enabled: true, customTemplate: false, bypasses: [] },
+    { domain: "two.example.com", type: "static", user: "two", enabled: false, customTemplate: false, bypasses: [] },
+    { domain: "err.example.com", type: "php", user: "three", enabled: false, customTemplate: false, bypasses: [], error: "unavailable" },
+  ]);
+  expect(mixed).toContain('<input type="checkbox" id="bulk-toggle"');
+  expect(mixed).not.toContain('id="bulk-toggle" checked');
+  expect(mixed).not.toContain('id="bulk-toggle" disabled');
+
+  // Empty fleet -> bulk toggle is disabled
+  const emptyFleet = fleetView([]);
+  expect(emptyFleet).toContain('<input type="checkbox" id="bulk-toggle"');
+  expect(emptyFleet).toContain('disabled');
+
+  // Only unavailable sites -> bulk toggle is disabled
+  const unavailableOnly = fleetView([
+    { domain: "err.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [], error: "unavailable" },
+  ]);
+  expect(unavailableOnly).toContain('<input type="checkbox" id="bulk-toggle"');
+  expect(unavailableOnly).toContain('disabled');
+});
+
+test("bulk toggle API guards mutations and toggles all available sites", async () => {
+  const token = "bulk-test-csrf-token";
+  const request = (path: string, body: unknown, headers?: Record<string, string>) => new Request(`https://panel.example.test:8443/addons/maintenance${path}`, {
+    method: "POST",
+    body: typeof body === "string" ? body : JSON.stringify(body),
+    headers: {
+      "content-type": "application/json",
+      cookie: `clp_addons_csrf=${token}`,
+      host: "panel.example.test:8443",
+      origin: "https://panel.example.test:8443",
+      "x-clp-addons-csrf": token,
+      ...headers,
+    },
+  });
+
+  // Rejects mutations without CSRF
+  const noCsrf = await handleMaintenance(new Request("https://panel.example.test:8443/addons/maintenance/api/sites/toggle", {
+    method: "POST",
+    body: JSON.stringify({ enabled: true }),
+    headers: { "content-type": "application/json" },
+  }), "/api/sites/toggle");
+  expect(noCsrf.status).toBe(403);
+
+  // Rejects non-boolean enabled
+  const badBody = await handleMaintenance(request("/api/sites/toggle", { enabled: "yes" }), "/api/sites/toggle");
+  expect(badBody.status).toBe(400);
+  expect(await badBody.json()).toMatchObject({ ok: false, error: "enabled must be a boolean" });
+
+  // Rejects invalid JSON
+  const badJson = await handleMaintenance(request("/api/sites/toggle", "{invalid"), "/api/sites/toggle");
+  expect(badJson.status).toBe(400);
+
+  // Mock setAllEnabled to verify successful bulk toggle
+  const origSetAll = maintenanceService.setAllEnabled;
+  try {
+    let lastEnabled: boolean | undefined;
+    maintenanceService.setAllEnabled = async (enabled) => {
+      lastEnabled = enabled;
+      return {
+        ok: true,
+        data: {
+          enabled,
+          updated: ["site-a.example.com", "site-b.example.com"],
+          failed: [],
+        },
+      };
+    };
+
+    const res = await handleMaintenance(request("/api/sites/toggle", { enabled: true }), "/api/sites/toggle");
+    expect(res.status).toBe(200);
+    const data = await res.json() as { ok: boolean; data: { enabled: boolean; updated: string[]; failed: unknown[] } };
+    expect(lastEnabled).toBe(true);
+    expect(data.ok).toBe(true);
+    expect(data.data.enabled).toBe(true);
+    expect(data.data.updated).toEqual(["site-a.example.com", "site-b.example.com"]);
+    expect(data.data.failed).toEqual([]);
+
+    // Also supports /api/toggle-all
+    const resToggleAll = await handleMaintenance(request("/api/toggle-all", { enabled: false }), "/api/toggle-all");
+    expect(resToggleAll.status).toBe(200);
+    expect(lastEnabled).toBe(false);
+
+    // Partial failure returns 200 with failed domains listed
+    maintenanceService.setAllEnabled = async (enabled) => ({
+      ok: true,
+      data: {
+        enabled,
+        updated: ["site-a.example.com"],
+        failed: [{ domain: "site-b.example.com", error: "permission denied" }],
+      },
+    });
+    const partialRes = await handleMaintenance(request("/api/sites/toggle", { enabled: true }), "/api/sites/toggle");
+    expect(partialRes.status).toBe(200);
+    const partialData = await partialRes.json() as { ok: boolean; data: { updated: string[]; failed: { domain: string; error: string }[] } };
+    expect(partialData.data.updated).toEqual(["site-a.example.com"]);
+    expect(partialData.data.failed).toEqual([{ domain: "site-b.example.com", error: "permission denied" }]);
+  } finally {
+    maintenanceService.setAllEnabled = origSetAll;
+  }
+});
+
+test("maintenanceService.setAllEnabled toggles domains and captures partial failures", async () => {
+  const origSetEnabled = maintenanceService.setEnabled;
+  const origPanelSites = maintenanceService.panelSites;
+  try {
+    maintenanceService.panelSites = async () => [
+      { domain: "good.example.com", type: "php", user: "user1" } as any,
+      { domain: "bad.example.com", type: "static", user: "user2" } as any,
+    ];
+    maintenanceService.setEnabled = async (domain, enabled) => {
+      if (domain === "bad.example.com") {
+        return { ok: false, error: "root action failed" };
+      }
+      return { ok: true, data: { domain, enabled, customTemplate: false, bypasses: [] } };
+    };
+
+    const result = await maintenanceService.setAllEnabled(true);
+    expect(result.ok).toBe(true);
+    expect(result.data.enabled).toBe(true);
+    expect(result.data.updated).toEqual(["good.example.com"]);
+    expect(result.data.failed).toEqual([{ domain: "bad.example.com", error: "root action failed" }]);
+  } finally {
+    maintenanceService.setEnabled = origSetEnabled;
+    maintenanceService.panelSites = origPanelSites;
+  }
+});
+
 test("maintenance integration preserves ACME and normalizes non-GET errors through an internal URI", () => {
   expect(NGINX_MAINTENANCE_BLOCK).toContain("$uri ~ ^/\\.well-known/acme-challenge/");
   expect(NGINX_MAINTENANCE_BLOCK).toContain("$uri = /__clp_addons_maintenance");
@@ -224,4 +374,49 @@ test("maintenance integration preserves ACME and normalizes non-GET errors throu
   expect(MAINTENANCE_ALLOWED_VERBS).toEqual(new Set([
     "status", "enable", "disable", "get-template", "set-template", "reset-template", "set-bypass",
   ]));
+});
+
+test("purgeVarnish sends PURGE requests for domain and www/bare aliases and handles failures safely", async () => {
+  const purges: { url: string; method: string; host: string }[] = [];
+  const mockFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    purges.push({
+      url: String(input),
+      method: init?.method ?? "GET",
+      host: (init?.headers as Record<string, string>)?.Host ?? "",
+    });
+    return new Response("Purged", { status: 200 });
+  };
+
+  const success = await purgeVarnish("example.com", 6081, mockFetch as any);
+  expect(success).toBe(true);
+  expect(purges).toEqual([
+    { url: "http://127.0.0.1:6081/", method: "PURGE", host: "example.com" },
+    { url: "http://127.0.0.1:6081/", method: "PURGE", host: "www.example.com" },
+  ]);
+
+  // Strip www if starting with www
+  purges.length = 0;
+  const wwwSuccess = await purgeVarnish("www.example.com", 6081, mockFetch as any);
+  expect(wwwSuccess).toBe(true);
+  expect(purges).toEqual([
+    { url: "http://127.0.0.1:6081/", method: "PURGE", host: "www.example.com" },
+    { url: "http://127.0.0.1:6081/", method: "PURGE", host: "example.com" },
+  ]);
+
+  // Network/connection error returns false without throwing
+  const throwingFetch = async (): Promise<Response> => {
+    throw new Error("connect ECONNREFUSED 127.0.0.1:6081");
+  };
+  const failResult = await purgeVarnish("example.com", 6081, throwingFetch as any);
+  expect(failResult).toBe(false);
+
+  // executeMaintenanceAction enable/disable triggers purgeVarnish
+  const { paths } = fixture("wp.example.com");
+  purges.length = 0;
+  await executeMaintenanceAction(["enable", "--domain=wp.example.com"], actionOptions(paths, { fetchFn: mockFetch as any }));
+  expect(purges.some((p) => p.method === "PURGE" && p.host === "wp.example.com")).toBe(true);
+
+  purges.length = 0;
+  await executeMaintenanceAction(["disable", "--domain=wp.example.com"], actionOptions(paths, { fetchFn: mockFetch as any }));
+  expect(purges.some((p) => p.method === "PURGE" && p.host === "wp.example.com")).toBe(true);
 });
