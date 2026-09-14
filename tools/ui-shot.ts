@@ -51,7 +51,7 @@ async function screenshot(chrome: string, url: string, file: string): Promise<vo
   } catch {
     // Distributions that restrict unprivileged user namespaces leave Chromium
     // with no usable sandbox. Only render pages you trust in that case.
-    console.error("warning: Chromium has no usable sandbox here; rendering without it");
+    console.error("warning: Chromium has no usable sandbox here; rendering without it — only pass targets you trust");
     sandboxless = true;
     await attempt(["--no-sandbox"]);
   }
