@@ -86,8 +86,11 @@ export async function handle(
         if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
         result = await maintenanceService.setEnabled(domain, body.enabled);
       } else if (route[2] === "template" && method === "PUT") {
-        const body = await jsonBody(req, MAX_TEMPLATE_BYTES + 1024);
+        const body = await jsonBody(req, MAX_TEMPLATE_BYTES * 6 + 1024);
         if (typeof body.html !== "string") return json({ ok: false, error: "html must be a string" }, 400);
+        if (Buffer.byteLength(body.html, "utf8") > MAX_TEMPLATE_BYTES) {
+          return json({ ok: false, error: `html may be at most ${MAX_TEMPLATE_BYTES} bytes` }, 400);
+        }
         result = await maintenanceService.setTemplate(domain, body.html);
       } else if (route[2] === "template" && method === "DELETE") {
         result = await maintenanceService.resetTemplate(domain);

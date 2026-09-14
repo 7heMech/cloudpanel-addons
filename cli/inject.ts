@@ -767,11 +767,14 @@ if (-f /var/lib/clp-addons/maintenance/$server_name/bypass_$remote_addr) {
 if ($uri ~ ^/\\.well-known/acme-challenge/) {
     set $clp_maintenance 0;
 }
+if ($uri = /__clp_addons_maintenance) {
+    set $clp_maintenance 0;
+}
 if ($clp_maintenance = 1) {
     return 418;
 }
-error_page 418 =503 @clp_maintenance;
-location @clp_maintenance {
+error_page 418 =503 /__clp_addons_maintenance;
+location = /__clp_addons_maintenance {
     internal;
     root /var/lib/clp-addons/maintenance;
     add_header Retry-After 300 always;
@@ -845,6 +848,10 @@ export function inspectNginxMaintenance(options: MaintenanceNginxPaths = {}): Ma
   const files = maintenanceNginxFiles(stateDir);
   const hasState = hasNginxState(files);
   const baseline = maintenanceBaseline(files);
+  const hasMarker = content.includes("# clp-addons:maintenance:start") || content.includes("# clp-addons:maintenance:end");
+  if (!baseline && hasMarker) {
+    return { state: "conflict", settingsPath, detail: "an unverified maintenance marker exists" };
+  }
   if (hasState && !baseline) {
     return { state: "upstream-changed", settingsPath, detail: "managed global-settings baseline is missing or invalid" };
   }
@@ -880,13 +887,17 @@ export function reconcileNginxMaintenance(
     try { return realpathSync(selectedPath); } catch { return selectedPath; }
   })();
   const files = maintenanceNginxFiles(stateDir);
-  const upstream = stripMaintenanceNginx(read);
-  const found = sha256(upstream);
   const hasState = hasNginxState(files);
   const baseline = maintenanceBaseline(files);
+  const hasMarker = read.includes("# clp-addons:maintenance:start") || read.includes("# clp-addons:maintenance:end");
+  if (!baseline && hasMarker) {
+    return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unverified maintenance marker exists; no changes were made" };
+  }
   if (hasState && !baseline) {
     return { state: "upstream-changed", changed: false, settingsPath: selectedPath, detail: "managed global-settings baseline is missing or invalid; no changes were made" };
   }
+  const upstream = stripMaintenanceNginx(read);
+  const found = sha256(upstream);
   if (baseline && baseline.hash !== found) {
     return {
       state: "upstream-changed",
@@ -895,7 +906,7 @@ export function reconcileNginxMaintenance(
       detail: `Nginx global settings changed; no changes were made (recorded ${baseline.hash.slice(0, 12)}, current ${found.slice(0, 12)})`,
     };
   }
-  if (enabled && /(?:location\s+@clp_maintenance|\$clp_maintenance\b|error_page\s+[^;]*\b418\b)/m.test(upstream)) {
+  if (enabled && /(?:location\s+(?:@clp_maintenance|=\s*\/__clp_addons_maintenance)|\$clp_maintenance\b|error_page\s+[^;]*\b418\b)/m.test(upstream)) {
     return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unmanaged maintenance variable or location already exists" };
   }
   if (!baseline && (enabled || read.includes("# clp-addons:maintenance:start"))) {

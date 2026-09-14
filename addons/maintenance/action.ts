@@ -1,11 +1,11 @@
 import { Database } from "bun:sqlite";
 import { isIP } from "node:net";
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync,
 } from "node:fs";
 import { join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, PANEL_IDENTITY_PATH,
+  ActionFailure, emitActionError, emitActionOk, failAction, PANEL_IDENTITY_PATH, withFileLock,
   validateDomain,
 } from "../../cli/action-common";
 import { writeAtomic } from "../../cli/util";
@@ -25,6 +25,7 @@ export interface MaintenanceStatus {
 
 export interface MaintenanceActionPaths {
   dataDir: string;
+  lockDir: string;
   panelDb: string;
   panelIdentityFile: string;
 }
@@ -37,10 +38,13 @@ export interface MaintenanceActionOptions {
   rootUid?: number;
   /** Test-only validator override for fixtures that cannot create root-owned identity files. */
   domainValidator?: (value: string) => string;
+  /** Test-only write override used to exercise replacement failure handling. */
+  writeAtomicFn?: typeof writeAtomic;
 }
 
 export const DEFAULT_MAINTENANCE_ACTION_PATHS: MaintenanceActionPaths = {
   dataDir: "/var/lib/clp-addons/maintenance",
+  lockDir: "/run/lock/clp-addons",
   panelDb: "/home/clp/htdocs/app/data/db.sq3",
   panelIdentityFile: PANEL_IDENTITY_PATH,
 };
@@ -307,11 +311,28 @@ export async function executeMaintenanceAction(
   if (values.length > MAX_BYPASS_IPS) failAction(`at most ${MAX_BYPASS_IPS} bypass addresses are allowed`);
   const ips = [...new Set(values.map(normalizeIp))].sort((a, b) => a.localeCompare(b));
   const dir = siteDir(paths, domain, true);
-  for (const name of readdirSync(dir)) {
-    if (name.startsWith("bypass_")) rmSync(join(dir, name), { force: true });
-  }
-  for (const ip of ips) writeAtomic(join(dir, `bypass_${ip}`), "", 0o600);
-  return maintenanceStatus(paths, domain);
+  assertDirectory(paths.lockDir);
+  mkdirSync(paths.lockDir, { recursive: true, mode: 0o700 });
+  chmodSync(paths.lockDir, 0o700);
+  return withFileLock(
+    join(paths.lockDir, `maintenance-${domain}.lock`),
+    10,
+    `another maintenance update is running for ${domain}`,
+    async () => {
+      const stage = mkdtempSync(join(dir, ".bypass-stage-"));
+      try {
+        // Complete every fallible write before changing the active set.
+        for (const ip of ips) (options.writeAtomicFn ?? writeAtomic)(join(stage, ip), "", 0o600);
+        for (const name of readdirSync(dir)) {
+          if (name.startsWith("bypass_")) rmSync(join(dir, name), { force: true });
+        }
+        for (const ip of ips) renameSync(join(stage, ip), join(dir, `bypass_${ip}`));
+      } finally {
+        rmSync(stage, { recursive: true, force: true });
+      }
+      return maintenanceStatus(paths, domain);
+    },
+  );
 }
 
 export async function runMaintenanceAction(

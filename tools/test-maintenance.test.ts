@@ -9,6 +9,9 @@ import {
   DEFAULT_MAINTENANCE_TEMPLATE, executeMaintenanceAction, MAX_TEMPLATE_BYTES,
   type MaintenanceActionPaths, type MaintenanceStatus,
 } from "../addons/maintenance/action";
+import { handle as handleMaintenance } from "../addons/maintenance/app/index";
+import { maintenanceService } from "../addons/maintenance/app/service";
+import { fleetView } from "../addons/maintenance/app/views";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import {
   inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance,
@@ -26,7 +29,7 @@ function fixture(): { root: string; paths: MaintenanceActionPaths } {
   writeFileSync(identity, "PRIMARY=panel.example.test\nALIASES=\n", { mode: 0o600 });
   return {
     root,
-    paths: { dataDir: join(root, "data"), panelDb, panelIdentityFile: identity },
+    paths: { dataDir: join(root, "data"), lockDir: join(root, "locks"), panelDb, panelIdentityFile: identity },
   };
 }
 
@@ -59,6 +62,13 @@ test("maintenance actions toggle atomically, manage a passive template, and repl
     })) as MaintenanceStatus;
     expect(bypassed.bypasses).toEqual(["2001:db8::1", "203.0.113.8"]);
     expect(existsSync(join(paths.dataDir, "example.com", "bypass_2001:db8::1"))).toBe(true);
+
+    await expect(executeMaintenanceAction(["set-bypass", "--domain=example.com"], actionOptions(paths, {
+      input: JSON.stringify({ ips: ["198.51.100.9"] }),
+      writeAtomicFn: () => { throw new Error("simulated staging failure"); },
+    }))).rejects.toThrow("simulated staging failure");
+    const preserved = await executeMaintenanceAction(["status", "--domain=example.com"], actionOptions(paths)) as MaintenanceStatus;
+    expect(preserved.bypasses).toEqual(["2001:db8::1", "203.0.113.8"]);
 
     const reset = await executeMaintenanceAction(["reset-template", "--domain=example.com"], actionOptions(paths)) as { custom: boolean; html: string };
     expect(reset.custom).toBe(false);
@@ -111,12 +121,82 @@ test("global-settings reconciliation is idempotent, drift-gated, and reversible"
   }
 });
 
-test("maintenance integration preserves ACME and uses the per-site CloudPanel tab", () => {
+test("global-settings reconciliation never adopts an unverified marked block", () => {
+  const root = mkdtempSync(join(tmpdir(), "clp-maintenance-unowned-"));
+  const settingsPath = join(root, "global_settings");
+  const stateDir = join(root, "state");
+  const unowned = "client_max_body_size 128m;\n# clp-addons:maintenance:start\nreturn 503;\n# clp-addons:maintenance:end\n";
+  writeFileSync(settingsPath, unowned);
+  try {
+    expect(reconcileNginxMaintenance({ settingsPath, stateDir, reload: false })).toMatchObject({
+      state: "conflict", changed: false,
+    });
+    expect(reconcileNginxMaintenance({ settingsPath, stateDir, enabled: false, reload: false })).toMatchObject({
+      state: "conflict", changed: false,
+    });
+    expect(inspectNginxMaintenance({ settingsPath, stateDir }).state).toBe("conflict");
+    expect(readFileSync(settingsPath, "utf8")).toBe(unowned);
+    expect(existsSync(stateDir)).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("template API accepts JSON escaping overhead and enforces the decoded UTF-8 limit", async () => {
+  const token = "maintenance-test-token";
+  const original = maintenanceService.setTemplate;
+  let received = "";
+  maintenanceService.setTemplate = async (domain, html) => {
+    received = html;
+    return { ok: true, data: { domain, custom: true, html } };
+  };
+  const request = (template: string) => new Request("https://panel.example.test:8443/addons/maintenance/api/sites/example.com/template", {
+    method: "PUT",
+    body: JSON.stringify({ html: template }),
+    headers: {
+      "content-type": "application/json",
+      cookie: `clp_addons_csrf=${token}`,
+      host: "panel.example.test:8443",
+      origin: "https://panel.example.test:8443",
+      "x-clp-addons-csrf": token,
+    },
+  });
+  try {
+    const escaped = "\n".repeat(MAX_TEMPLATE_BYTES);
+    const accepted = await handleMaintenance(request(escaped), "/api/sites/example.com/template");
+    expect(accepted.status).toBe(200);
+    expect(received).toBe(escaped);
+
+    received = "";
+    const rejected = await handleMaintenance(request("x".repeat(MAX_TEMPLATE_BYTES + 1)), "/api/sites/example.com/template");
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({ ok: false, error: `html may be at most ${MAX_TEMPLATE_BYTES} bytes` });
+    expect(received).toBe("");
+  } finally {
+    maintenanceService.setTemplate = original;
+  }
+});
+
+test("fleet overview separates unavailable sites from the live count", () => {
+  const rendered = fleetView([
+    { domain: "maintenance.example.com", type: "php", user: "one", enabled: true, customTemplate: false, bypasses: [] },
+    { domain: "live.example.com", type: "static", user: "two", enabled: false, customTemplate: false, bypasses: [] },
+    { domain: "unknown.example.com", type: "nodejs", user: "three", enabled: false, customTemplate: false, bypasses: [], error: "status unavailable" },
+  ]);
+  expect(rendered).toContain(">Unavailable</span>");
+  expect(rendered).toContain('<div class="label">In maintenance</div><div class="value">1</div>');
+  expect(rendered).toContain('<div class="label">Live</div><div class="value">1</div>');
+});
+
+test("maintenance integration preserves ACME and normalizes non-GET errors through an internal URI", () => {
   expect(NGINX_MAINTENANCE_BLOCK).toContain("$uri ~ ^/\\.well-known/acme-challenge/");
+  expect(NGINX_MAINTENANCE_BLOCK).toContain("$uri = /__clp_addons_maintenance");
   expect(NGINX_MAINTENANCE_BLOCK).toContain("maintenance/$server_name/on");
   expect(NGINX_MAINTENANCE_BLOCK).not.toContain("maintenance/$host/on");
   expect(NGINX_MAINTENANCE_BLOCK).toContain("return 418;");
-  expect(NGINX_MAINTENANCE_BLOCK).toContain("error_page 418 =503 @clp_maintenance;");
+  expect(NGINX_MAINTENANCE_BLOCK).toContain("error_page 418 =503 /__clp_addons_maintenance;");
+  expect(NGINX_MAINTENANCE_BLOCK).toContain("location = /__clp_addons_maintenance");
+  expect(NGINX_MAINTENANCE_BLOCK).not.toContain("location @clp_maintenance");
   expect(NGINX_MAINTENANCE_BLOCK).not.toContain("error_page 503");
   expect(MAINTENANCE_TARGETS[0]).toMatchObject({
     slug: "site-tab",

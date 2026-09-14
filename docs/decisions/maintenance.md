@@ -23,7 +23,7 @@ public 503 maintenance response. An application's own 503 response therefore
 keeps its own error handling. `/.well-known/acme-challenge/` is exempted before
 the return so certificate issuance and renewal remain available.
 
-The named maintenance location serves a site's `maintenance.html` when present
+The internal maintenance location serves a site's `maintenance.html` when present
 and otherwise serves the managed `default.html`. Responses include
 `Retry-After: 300`, disable caching, and apply a content security policy that
 blocks scripts, forms, frames, and cross-origin assets.

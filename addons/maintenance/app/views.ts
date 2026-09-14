@@ -11,6 +11,7 @@ const STYLE = `
 .maintenance-summary .badge { margin-left:auto; }
 .state-live { color:var(--ok); border-color:var(--ok); }
 .state-maintenance { color:var(--bad); border-color:var(--bad); }
+.state-unavailable { color:var(--muted); }
 .site-back { display:inline-block; margin-bottom:18px; }
 .switch-row { display:flex; align-items:center; justify-content:space-between; gap:20px; }
 .switch { position:relative; display:inline-flex; width:50px; height:28px; flex:none; }
@@ -189,13 +190,17 @@ export function layout(title: string, content: string, updateNotice?: { current:
 }
 
 function statusBadge(site: MaintenanceSiteView): string {
+  if (site.error) {
+    return `<span class="badge state-unavailable" data-status-domain="${esc(site.domain)}">Unavailable</span>`;
+  }
   const text = site.enabled ? "Maintenance Mode (503)" : "Live";
   const state = site.enabled ? "state-maintenance" : "state-live";
   return `<span class="badge ${state}" data-status-domain="${esc(site.domain)}">${text}</span>`;
 }
 
 export function fleetView(sites: MaintenanceSiteView[]): string {
-  const maintenance = sites.filter((site) => site.enabled).length;
+  const available = sites.filter((site) => !site.error);
+  const maintenance = available.filter((site) => site.enabled).length;
   const rows = sites.map((site) => `<tr>
     <td class="fleet-site"><a href="${BASE}?domain=${encodeURIComponent(site.domain)}">${esc(site.domain)}</a>${site.error ? `<div class="hint">${esc(site.error)}</div>` : ""}</td>
     <td>${esc(site.type)}</td>
@@ -208,7 +213,7 @@ export function fleetView(sites: MaintenanceSiteView[]): string {
   <section class="stat-grid">
     <article class="stat"><div class="label">CloudPanel sites</div><div class="value">${sites.length}</div></article>
     <article class="stat"><div class="label">In maintenance</div><div class="value">${maintenance}</div></article>
-    <article class="stat"><div class="label">Live</div><div class="value">${sites.length - maintenance}</div></article>
+    <article class="stat"><div class="label">Live</div><div class="value">${available.length - maintenance}</div></article>
   </section>
   <article class="card"><div class="card-header"><h2>Sites</h2></div>
   ${sites.length ? `<div class="table-wrap"><table><thead><tr><th>Site</th><th>Type</th><th>Status</th><th>Page</th><th>Bypasses</th><th class="action-cell">Toggle</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="empty">No CloudPanel sites were found.</p>'}
