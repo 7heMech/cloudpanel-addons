@@ -50,6 +50,7 @@ const mockPrelude = String.raw`
   mock.module("./cli/provision.ts", () => ({
     ensureDirs: () => {},
     ensureAuthHelperReady: () => {},
+    ensureRequiredUnits: () => {},
     ensureServiceUser: () => {},
     ensureTimerArmed: () => {},
     hardenBackups: () => {},

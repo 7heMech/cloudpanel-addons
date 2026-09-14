@@ -157,6 +157,106 @@ test("fails clearly when docker membership cannot be removed", () => {
   );
 });
 
+function requiredUnitsProbe(options: {
+  unit?: string;
+  active?: boolean;
+  dockerPresent?: boolean;
+  downloadOk?: boolean;
+  installOk?: boolean;
+  enableOk?: boolean;
+} = {}): { ok: boolean; error?: string; calls: Array<{ command: string; args: string[] }> } {
+  const script = `
+    import { ensureRequiredUnits } from "./cli/provision.ts";
+    const options = ${JSON.stringify(options)};
+    const spec = { name: "instatic", configFile: "", stateDir: "", targets: [], requiresUnits: [options.unit ?? "docker"] };
+    const calls = [];
+    const runner = {
+      run(command, args) { calls.push({ command, args: [...args] }); return ""; },
+      tryRun(command, args) {
+        calls.push({ command, args: [...args] });
+        if (command === "systemctl" && args[0] === "is-active") {
+          return { ok: options.active ?? false, out: options.active ? "active" : "inactive" };
+        }
+        if (command === "which") return { ok: options.dockerPresent ?? false, out: "" };
+        if (command === "curl") return { ok: options.downloadOk ?? true, out: options.downloadOk === false ? "could not resolve host" : "" };
+        if (command === "sh") return { ok: options.installOk ?? true, out: options.installOk === false ? "get-docker.sh exited 1" : "" };
+        if (command === "systemctl" && args[0] === "enable") return { ok: options.enableOk ?? true, out: "" };
+        return { ok: true, out: "" };
+      },
+    };
+    try {
+      ensureRequiredUnits(spec, runner);
+      console.log(JSON.stringify({ ok: true, calls }));
+    } catch (error) {
+      console.log(JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        calls,
+      }));
+    }
+  `;
+  // ensureRequiredUnits logs through the real cli/util.ts (unmocked here, to
+  // exercise the genuine Docker-provisioning code path), so stdout carries
+  // those step/ok lines ahead of the JSON result; only the last line is it.
+  const output = execFileSync(process.execPath, ["-e", script], { cwd: REPO, encoding: "utf8" });
+  return JSON.parse(output.trim().split("\n").pop() ?? "");
+}
+
+test("a required unit already active needs no Docker provisioning", () => {
+  const result = requiredUnitsProbe({ active: true });
+
+  expect(result.ok).toBe(true);
+  expect(result.calls).toEqual([{ command: "systemctl", args: ["is-active", "docker"] }]);
+});
+
+test("installs Docker via get.docker.com when the binary is missing, then starts it", () => {
+  const result = requiredUnitsProbe({ active: false, dockerPresent: false });
+
+  expect(result.ok).toBe(true);
+  expect(result.calls).toContainEqual({ command: "which", args: ["docker"] });
+  expect(result.calls.some(({ command, args }) =>
+    command === "curl" && args.includes("https://get.docker.com"))).toBe(true);
+  expect(result.calls.some(({ command }) => command === "sh")).toBe(true);
+  expect(result.calls).toContainEqual({ command: "systemctl", args: ["enable", "--now", "docker"] });
+});
+
+test("starts Docker without reinstalling when the binary is already present", () => {
+  const result = requiredUnitsProbe({ active: false, dockerPresent: true });
+
+  expect(result.ok).toBe(true);
+  expect(result.calls.some(({ command }) => command === "curl" || command === "sh")).toBe(false);
+  expect(result.calls).toContainEqual({ command: "systemctl", args: ["enable", "--now", "docker"] });
+});
+
+test("fails clearly when the Docker installer cannot be downloaded", () => {
+  const result = requiredUnitsProbe({ active: false, dockerPresent: false, downloadOk: false });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("could not download Docker: could not resolve host");
+});
+
+test("fails clearly when the Docker installer itself fails", () => {
+  const result = requiredUnitsProbe({ active: false, dockerPresent: false, installOk: false });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("Docker installation failed: get-docker.sh exited 1");
+});
+
+test("fails clearly when Docker still is not active after installing it", () => {
+  const result = requiredUnitsProbe({ active: false, dockerPresent: true, enableOk: false });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("docker is not active; installing it did not bring the service up");
+});
+
+test("a non-docker required unit still fails fast with no provisioning attempt", () => {
+  const result = requiredUnitsProbe({ unit: "postgresql", active: false });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("postgresql is not active; install and start it before enabling instatic");
+  expect(result.calls).toEqual([{ command: "systemctl", args: ["is-active", "postgresql"] }]);
+});
+
 function provisionProbe(): {
   identityPath: string;
   identity: { primary: string; aliases: string[] } | null;

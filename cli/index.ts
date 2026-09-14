@@ -7,7 +7,7 @@ import {
 } from "./paths";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation, type FetchedArtifact } from "./release";
 import {
-  ensureDirs, ensureServiceUser, ensureTimerArmed, hardenBackups,
+  ensureDirs, ensureRequiredUnits, ensureServiceUser, ensureTimerArmed, hardenBackups,
   ensureAuthHelperReady, reconcilePanelIdentity, installUnits, installedConfig, purgeTwigCache, removeLegacyUnits,
   removeLegacyInstall, removeLegacyUsers, removeSudoers, startUnits, stopUnits, unitActive,
   unitPid, warnIfPanelSessionUnreadable, writeConfig,
@@ -251,11 +251,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   }
   if (flags.version === true || flags.local === true) fatal("--version and --local require a value");
   if (flags.version !== undefined && flags.local !== undefined) fatal("use either --version or --local, not both");
-  for (const unit of spec.requiresUnits ?? []) {
-    if (!tryRun("systemctl", ["is-active", unit]).ok) {
-      fatal(`${unit} is not active; install and start it before installing ${spec.name}`);
-    }
-  }
+  ensureRequiredUnits(spec);
 
   const specs = [...installedAddons().filter((item) => item.name !== spec.name), spec];
   const names = artifactNames();
@@ -387,11 +383,7 @@ export async function cmdUpdate(argv: string[], options: { beforeManagerRestart?
 export async function applyEnable(name: string): Promise<void> {
   requireRoot("enable");
   const spec = resolveAddon(name);
-  for (const unit of spec.requiresUnits ?? []) {
-    if (!tryRun("systemctl", ["is-active", unit]).ok) {
-      fatal(`${unit} is not active; install and start it before enabling ${spec.name}`);
-    }
-  }
+  ensureRequiredUnits(spec);
   const specs = [...installedAddons().filter((item) => item.name !== spec.name), spec];
 
   ensureServiceUser();
