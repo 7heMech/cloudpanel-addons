@@ -13,14 +13,16 @@ import {
   unitPid, warnIfPanelSessionUnreadable, writeConfig,
 } from "./provision";
 import {
-  KNOWN_GOOD_PANEL_VERSIONS, inspect, inspectNginxProxy, masterVhostHost, panelVersion, purgeTwigCache as purgeInjectCache,
-  reconcile, reconcileNginxProxy, type Injection, type NginxProxyStatus, type TargetStatus,
+  KNOWN_GOOD_PANEL_VERSIONS, inspect, inspectNginxMaintenance, inspectNginxProxy, masterVhostHost, panelVersion,
+  purgeTwigCache as purgeInjectCache, reconcile, reconcileNginxMaintenance, reconcileNginxProxy,
+  type Injection, type MaintenanceNginxStatus, type NginxProxyStatus, type TargetStatus,
 } from "./inject";
 import { fatal, Fatal, log, parseFlags, requireRoot, run, tryRun, writeAtomic } from "./util";
 import { runRecon } from "./recon";
 import { authenticateRequest, type AuthenticatedRequest } from "../lib/sso-auth";
 import { handle as handleInstatic } from "../addons/instatic/app/index";
 import { handle as handleLoginTheme } from "../addons/login-theme/app/index";
+import { handle as handleMaintenance } from "../addons/maintenance/app/index";
 import { handle as handleStager } from "../addons/stager/app/index";
 import { splitMount } from "../lib/mount";
 import { SECURITY_HEADERS, csrfCookieHeader, esc, escJs, guardMutation, newCsrfToken } from "../lib/app-http";
@@ -30,6 +32,7 @@ import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
 import { CHANGELOG_URL, UPDATE_PATH } from "../lib/update-ui";
 import { pruneInstaticJobs, runInstaticAction } from "../addons/instatic/action";
 import { runStagerAction, type StagerActionOptions } from "../addons/stager/action";
+import { ensureMaintenanceData, executeMaintenanceAction, runMaintenanceAction } from "../addons/maintenance/action";
 import { runAuthActionStdin } from "./auth-action";
 import { pruneManagerJobs, runManagerAction, type ManagerJobView, type ManagerOps } from "./manager-action";
 import { callGatewayAction, type ActionResult } from "../lib/gateway-client";
@@ -46,6 +49,7 @@ type AddonHandler = (
 const MANAGERS: Record<string, AddonHandler> = {
   instatic: handleInstatic,
   "login-theme": handleLoginTheme,
+  maintenance: handleMaintenance,
   stager: handleStager,
 };
 
@@ -217,6 +221,17 @@ function reconcileNginx(quiet: boolean, enabled = true): boolean {
   return false;
 }
 
+function reconcileMaintenanceNginx(quiet: boolean, enabled = existsSync(ADDONS.maintenance!.configFile)): boolean {
+  if (enabled) ensureMaintenanceData(ADDONS.maintenance!.stateDir);
+  const result = reconcileNginxMaintenance({ enabled });
+  if (result.state === "ok" || (!enabled && result.state === "missing")) {
+    if (result.changed && !quiet) log.ok(enabled ? "Nginx maintenance check injected and verified" : "Nginx maintenance check removed and verified");
+    return true;
+  }
+  log.err(`Nginx maintenance check: ${result.detail ?? result.state}`);
+  return false;
+}
+
 function dashboardUrl(): string {
   const host = masterVhostHost() ?? "<cloudpanel-host>";
   return `https://${host}/addons/`;
@@ -270,6 +285,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   removeLegacyUsers(true);
   ensureDirs(specs);
   if (!reconcileAnchors(false)) fatal("could not safely patch the required CloudPanel templates");
+  if (!reconcileMaintenanceNginx(false)) fatal("could not safely inject the Nginx maintenance check");
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
   startUnits();
 
@@ -295,6 +311,7 @@ function finalizeUpdate(): AddonSpec[] {
   installUnits(specs);
   ensureDirs(specs);
   reconcileAnchors(false);
+  if (!reconcileMaintenanceNginx(false)) log.warn("Nginx maintenance check needs manual repair");
   if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
   startUnits();
   return specs;
@@ -388,6 +405,7 @@ export async function applyEnable(name: string): Promise<void> {
   removeLegacyUsers(true);
   ensureDirs(specs);
   if (!reconcileAnchors(false)) fatal("could not safely patch the required CloudPanel templates");
+  if (!reconcileMaintenanceNginx(false)) fatal("could not safely inject the Nginx maintenance check");
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
   startUnits();
   log.ok(`${spec.name} enabled`);
@@ -407,6 +425,9 @@ export function applyDisable(name: string): void {
   const remaining = installedAddons().filter((item) => item.name !== spec.name);
 
   reconcileAnchors(false, spec.name);
+  if (!reconcileMaintenanceNginx(false, remaining.some((item) => item.name === "maintenance"))) {
+    fatal("could not safely update the Nginx maintenance check");
+  }
   purgeTwigCache();
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
@@ -495,6 +516,7 @@ export async function cmdRepair(argv: string[]): Promise<void> {
     // unreachable in between. Both reconcilers no-op when nothing drifted, so
     // this stays cheap enough to run on every template write during an upgrade.
     reconcileAnchors(quiet);
+    if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; run repair after checking global_settings");
     if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
     return;
   }
@@ -531,6 +553,7 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   if (unitChanged || unitActive(MANAGER_UNIT) !== "active") startUnits();
   else ensureTimerArmed("clp-addons-reconcile.timer", quiet);
   reconcileAnchors(quiet);
+  if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; run repair after checking global_settings");
   if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
   // Runs after the master-vhost reconciliation above, not before: recovering
   // a carried-over vhost also does its own `nginx -t` before reloading, and
@@ -550,6 +573,12 @@ function statusValue(value: string, ok: boolean): string {
 
 function nginxStatus(status: NginxProxyStatus): string {
   if (status.state === "ok") return statusValue("VHost Injected & Verified ✓", true);
+  return statusValue(status.detail ?? "Needs repair", false);
+}
+
+function maintenanceNginxStatus(status: MaintenanceNginxStatus): string {
+  if (!existsSync(ADDONS.maintenance!.configFile)) return "Not enabled";
+  if (status.state === "ok") return statusValue("Global Check Injected & Verified ✓", true);
   return statusValue(status.detail ?? "Needs repair", false);
 }
 
@@ -600,6 +629,7 @@ async function cmdStatus(): Promise<void> {
   log.plain(`   • Manager PID  ${statusValue(pid ?? "not available", active && pid !== null)}`);
   log.plain(`   • Socket       ${socketStatus()}`);
   log.plain(`   • Nginx       ${nginxStatus(inspectNginxProxy())}`);
+  log.plain(`   • Maintenance ${maintenanceNginxStatus(inspectNginxMaintenance())}`);
   log.plain(`   • Anchors     ${anchorStatus()}`);
   log.plain();
   log.plain(" Installed Addons");
@@ -646,6 +676,10 @@ export function cmdUninstall(argv: string[]): void {
       `${instanceText}\n` +
       "Re-run with --yes to proceed.",
     );
+  }
+
+  if (!reconcileMaintenanceNginx(true, remaining.includes("maintenance"))) {
+    fatal("could not safely update the Nginx maintenance check; no addon files were removed");
   }
 
   stopUnits(remaining.length > 0);
@@ -1083,8 +1117,10 @@ function usage(): void {
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status
   clp-addons uninstall <addon> --yes [--purge]
+  clp-addons maintenance <domain> [on|off|status]
   clp-addons action instatic <verb> [options]
   clp-addons action stager <verb> [options]
+  clp-addons action maintenance <verb> --domain=<domain>
   clp-addons action manager <enable|disable|update|job> [--addon=<addon>] [--id=<job>]
   clp-addons action auth (session id on bounded stdin)
   clp-addons serve
@@ -1103,12 +1139,37 @@ async function cmdAction(argv: string[]): Promise<number> {
   const [addon, ...rest] = argv;
   if (addon === "auth") return runAuthActionStdin(rest);
   if (addon === "manager") return runManagerAction(rest, MANAGER_OPS);
-  if (addon === "instatic" || addon === "stager") {
+  if (addon === "instatic" || addon === "stager" || addon === "maintenance") {
     if (!installedConfig(ADDONS[addon]!)) fatal(`the ${addon} addon is not installed`);
     if (addon === "instatic") return runInstaticAction(rest);
+    if (addon === "maintenance") return runMaintenanceAction(rest);
     return runStagerAction(rest);
   }
   fatal(`unknown action addon '${addon ?? ""}'`);
+}
+
+async function cmdMaintenance(argv: string[]): Promise<void> {
+  requireRoot("maintenance");
+  if (!installedConfig(ADDONS.maintenance!)) fatal("the maintenance addon is not installed");
+  const [rawDomain, operation = "status", ...extra] = argv;
+  if (!rawDomain || extra.length > 0 || !["on", "off", "status"].includes(operation)) {
+    fatal("usage: clp-addons maintenance <domain> [on|off|status]");
+  }
+  const verb = operation === "on" ? "enable" : operation === "off" ? "disable" : "status";
+  try {
+    const result = await executeMaintenanceAction([verb, `--domain=${rawDomain}`]) as {
+      domain: string; enabled: boolean; customTemplate: boolean; bypasses: string[];
+    };
+    if (operation === "status") {
+      log.plain(`${result.domain}: ${result.enabled ? "maintenance (503)" : "live"}`);
+      log.plain(`Template: ${result.customTemplate ? "custom" : "default"}`);
+      log.plain(`IP bypasses: ${result.bypasses.length ? result.bypasses.join(", ") : "none"}`);
+    } else {
+      log.ok(`${result.domain}: maintenance mode ${result.enabled ? "enabled" : "disabled"}`);
+    }
+  } catch (error) {
+    fatal(error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function cmdOverview(): Promise<void> {
@@ -1137,6 +1198,7 @@ async function main(): Promise<number> {
     case "recon": await runRecon(); return 0;
     case "repair": await cmdRepair(rest); return 0;
     case "status": await cmdStatus(); return 0;
+    case "maintenance": await cmdMaintenance(rest); return 0;
     case "uninstall": cmdUninstall(rest); return 0;
     case "action": return await cmdAction(rest);
     case "serve": return await cmdServe();

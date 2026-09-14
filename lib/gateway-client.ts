@@ -206,7 +206,7 @@ async function callGatewaySocket<T>(
  * invokes directly. Otherwise dispatches securely through the root gateway daemon over UNIX socket.
  */
 export async function callGatewayAction<T = unknown>(
-  addon: "stager" | "instatic" | "manager",
+  addon: "stager" | "instatic" | "maintenance" | "manager",
   verb: string,
   args: string[] = [],
   input?: string,

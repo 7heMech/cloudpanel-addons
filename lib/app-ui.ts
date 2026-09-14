@@ -44,7 +44,7 @@ html.dark {
 body { margin: 0; min-height: 100vh; display: flex; flex-direction: column;
   background: var(--bg); color: var(--text); font-family: var(--clp-addon-font-family);
   font-size: 16px; line-height: 1.5; }
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 a { color: var(--link); text-decoration: none; }
 a:hover { color: var(--accent); text-decoration: underline; }
 h1, h2, h3 { color: var(--heading); line-height: 1.2; font-weight: 600; }
@@ -137,7 +137,7 @@ td a:hover { color: var(--accent); }
 .form-field-full { grid-column: 1 / -1; }
 label { display: block; margin: 0 0 7px; color: var(--text); font-size: 16px; }
 label.required::after { content: " *"; color: var(--accent); }
-input:not([type="checkbox"]):not([type="hidden"]), select { width: 100%; background: var(--input-bg); color: var(--text);
+input:not([type="checkbox"]):not([type="hidden"]), select, textarea { width: 100%; background: var(--input-bg); color: var(--text);
   border: 1px solid var(--input-border); border-radius: 4px; padding: 8px 16px; font-size: 16px; min-height: 42px; }
 select {
   appearance: none; -webkit-appearance: none; -moz-appearance: none;
@@ -145,9 +145,9 @@ select {
   background-repeat: no-repeat; background-position: right 14px center;
   background-size: 16px 16px; padding-right: 40px; cursor: pointer;
 }
-input::placeholder { color: var(--muted); opacity: 1; }
+input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
 input:read-only:not([type="checkbox"]) { background: var(--readonly-bg); }
-input:focus, select:focus { border-color: #86b7fe; box-shadow: 0 0 0 3px rgb(38 125 221 / 15%); outline: 0; }
+input:focus, select:focus, textarea:focus { border-color: #86b7fe; box-shadow: 0 0 0 3px rgb(38 125 221 / 15%); outline: 0; }
 .check-field { margin-top: 24px; }
 .check-label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
 input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; margin: 4px 0 0; accent-color: var(--primary); }

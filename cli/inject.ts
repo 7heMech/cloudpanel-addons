@@ -30,7 +30,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync, realpathSync } from "node:fs";
 import {
-  NGINX_PROXY_STATE_DIR, nginxLayout, TEMPLATE_STATE_DIR, TEMPLATES_DIR, TWIG_CACHE_DIR,
+  NGINX_GLOBAL_SETTINGS, NGINX_MAINTENANCE_STATE_DIR, NGINX_PROXY_STATE_DIR, nginxLayout,
+  TEMPLATE_STATE_DIR, TEMPLATES_DIR, TWIG_CACHE_DIR,
   type AddonTarget,
 } from "./paths";
 import { writeAtomic } from "./util";
@@ -749,4 +750,194 @@ export function reconcileNginxProxy(options: NginxPaths & { enabled?: boolean; r
     removeNginxState(files);
   }
   return { state: enabled ? "ok" : "missing", changed: true, vhostPath: selectedPath };
+}
+
+// A sentinel response code keeps an application's own 503 page intact. The
+// internal redirect changes only maintenance-generated 418 responses to 503.
+// ACME is exempted explicitly because rewrite directives in server context run
+// before Nginx selects the site's /.well-known location.
+export const NGINX_MAINTENANCE_BLOCK = `# clp-addons:maintenance:start
+set $clp_maintenance 0;
+if (-f /var/lib/clp-addons/maintenance/$server_name/on) {
+    set $clp_maintenance 1;
+}
+if (-f /var/lib/clp-addons/maintenance/$server_name/bypass_$remote_addr) {
+    set $clp_maintenance 0;
+}
+if ($uri ~ ^/\\.well-known/acme-challenge/) {
+    set $clp_maintenance 0;
+}
+if ($uri = /__clp_addons_maintenance) {
+    set $clp_maintenance 0;
+}
+if ($clp_maintenance = 1) {
+    return 418;
+}
+error_page 418 =503 /__clp_addons_maintenance;
+location = /__clp_addons_maintenance {
+    internal;
+    root /var/lib/clp-addons/maintenance;
+    add_header Retry-After 300 always;
+    add_header Cache-Control "no-store" always;
+    add_header Content-Security-Policy "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    try_files /$server_name/maintenance.html /default.html =503;
+}
+# clp-addons:maintenance:end`;
+
+const NGINX_MAINTENANCE_BLOCK_RE = /\r?\n?[ \t]*# clp-addons:maintenance:start[\s\S]*?[ \t]*# clp-addons:maintenance:end\r?\n?/g;
+
+export interface MaintenanceNginxPaths {
+  settingsPath?: string;
+  stateDir?: string;
+}
+
+export type MaintenanceNginxState =
+  | "ok"
+  | "missing"
+  | "stale-content"
+  | "upstream-changed"
+  | "conflict"
+  | "validation-failed";
+
+export interface MaintenanceNginxStatus {
+  state: MaintenanceNginxState;
+  settingsPath: string;
+  detail?: string;
+}
+
+export interface MaintenanceNginxResult extends MaintenanceNginxStatus {
+  changed: boolean;
+}
+
+function maintenanceNginxFiles(stateDir: string): { pristine: string; hash: string; path: string } {
+  return {
+    pristine: `${stateDir}/global-settings.pristine`,
+    hash: `${stateDir}/global-settings.sha256`,
+    path: `${stateDir}/global-settings.path`,
+  };
+}
+
+function stripMaintenanceNginx(content: string): string {
+  return content.replace(NGINX_MAINTENANCE_BLOCK_RE, "");
+}
+
+function maintenanceBaseline(
+  files: { pristine: string; hash: string; path: string },
+): { pristine: string; hash: string } | null {
+  try {
+    const pristine = readFileSync(files.pristine, "utf8");
+    const hash = readFileSync(files.hash, "utf8").trim();
+    return hash && hash === sha256(pristine) ? { pristine, hash } : null;
+  } catch {
+    return null;
+  }
+}
+
+function maintenancePath(options: MaintenanceNginxPaths): { settingsPath: string; stateDir: string } {
+  return {
+    settingsPath: options.settingsPath ?? NGINX_GLOBAL_SETTINGS,
+    stateDir: options.stateDir ?? NGINX_MAINTENANCE_STATE_DIR,
+  };
+}
+
+export function inspectNginxMaintenance(options: MaintenanceNginxPaths = {}): MaintenanceNginxStatus {
+  const { settingsPath, stateDir } = maintenancePath(options);
+  const content = readNginxFile(settingsPath);
+  if (content === null) return { state: "missing", settingsPath, detail: `Nginx global settings do not exist: ${settingsPath}` };
+  const files = maintenanceNginxFiles(stateDir);
+  const hasState = hasNginxState(files);
+  const baseline = maintenanceBaseline(files);
+  const hasMarker = content.includes("# clp-addons:maintenance:start") || content.includes("# clp-addons:maintenance:end");
+  if (!baseline && hasMarker) {
+    return { state: "conflict", settingsPath, detail: "an unverified maintenance marker exists" };
+  }
+  if (hasState && !baseline) {
+    return { state: "upstream-changed", settingsPath, detail: "managed global-settings baseline is missing or invalid" };
+  }
+  if (baseline) {
+    const found = sha256(stripMaintenanceNginx(content));
+    if (found !== baseline.hash) {
+      return {
+        state: "upstream-changed",
+        settingsPath,
+        detail: `Nginx global settings changed (recorded ${baseline.hash.slice(0, 12)}, current ${found.slice(0, 12)})`,
+      };
+    }
+  }
+  if (!content.includes("# clp-addons:maintenance:start")) {
+    return { state: "missing", settingsPath, detail: "maintenance block is not installed" };
+  }
+  if (!content.includes(NGINX_MAINTENANCE_BLOCK)) {
+    return { state: "stale-content", settingsPath, detail: "maintenance block differs from the managed definition" };
+  }
+  return { state: "ok", settingsPath };
+}
+
+export function reconcileNginxMaintenance(
+  options: MaintenanceNginxPaths & { enabled?: boolean; reload?: boolean } = {},
+): MaintenanceNginxResult {
+  const { enabled = true, reload = true, ...pathOptions } = options;
+  const { settingsPath: selectedPath, stateDir } = maintenancePath(pathOptions);
+  const read = readNginxFile(selectedPath);
+  if (read === null) {
+    return { state: "missing", changed: false, settingsPath: selectedPath, detail: `Nginx global settings do not exist: ${selectedPath}` };
+  }
+  const settingsPath = (() => {
+    try { return realpathSync(selectedPath); } catch { return selectedPath; }
+  })();
+  const files = maintenanceNginxFiles(stateDir);
+  const hasState = hasNginxState(files);
+  const baseline = maintenanceBaseline(files);
+  const hasMarker = read.includes("# clp-addons:maintenance:start") || read.includes("# clp-addons:maintenance:end");
+  if (!baseline && hasMarker) {
+    return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unverified maintenance marker exists; no changes were made" };
+  }
+  if (hasState && !baseline) {
+    return { state: "upstream-changed", changed: false, settingsPath: selectedPath, detail: "managed global-settings baseline is missing or invalid; no changes were made" };
+  }
+  const upstream = stripMaintenanceNginx(read);
+  const found = sha256(upstream);
+  if (baseline && baseline.hash !== found) {
+    return {
+      state: "upstream-changed",
+      changed: false,
+      settingsPath: selectedPath,
+      detail: `Nginx global settings changed; no changes were made (recorded ${baseline.hash.slice(0, 12)}, current ${found.slice(0, 12)})`,
+    };
+  }
+  if (enabled && /(?:location\s+(?:@clp_maintenance|=\s*\/__clp_addons_maintenance)|\$clp_maintenance\b|error_page\s+[^;]*\b418\b)/m.test(upstream)) {
+    return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unmanaged maintenance variable or location already exists" };
+  }
+  if (!baseline && (enabled || read.includes("# clp-addons:maintenance:start"))) {
+    mkdirSync(stateDir, { recursive: true });
+    writeAtomic(files.pristine, upstream, 0o600);
+    writeAtomic(files.hash, `${found}\n`, 0o600);
+    writeAtomic(files.path, `${settingsPath}\n`, 0o600);
+  }
+  const rendered = enabled
+    ? `${upstream}\n${NGINX_MAINTENANCE_BLOCK}\n`
+    : upstream;
+  if (rendered === read) {
+    if (!enabled) removeNginxState(files);
+    return { state: enabled ? "ok" : "missing", changed: false, settingsPath: selectedPath };
+  }
+  const mode = statSync(settingsPath).mode & 0o777;
+  writeAtomic(settingsPath, rendered, mode);
+  if (!reload) {
+    if (!enabled) removeNginxState(files);
+    return { state: enabled ? "ok" : "missing", changed: true, settingsPath: selectedPath };
+  }
+  const tested = commandFailure("nginx", ["-t"]);
+  if (tested) {
+    restoreNginxContent(settingsPath, read);
+    return { state: "validation-failed", changed: false, settingsPath: selectedPath, detail: `nginx -t failed: ${tested}` };
+  }
+  const reloaded = commandFailure("systemctl", ["reload", "nginx"]);
+  if (reloaded) {
+    restoreNginxContent(settingsPath, read);
+    return { state: "validation-failed", changed: false, settingsPath: selectedPath, detail: `nginx reload failed: ${reloaded}` };
+  }
+  if (!enabled) removeNginxState(files);
+  return { state: enabled ? "ok" : "missing", changed: true, settingsPath: selectedPath };
 }

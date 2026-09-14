@@ -6,7 +6,7 @@ import {
   ADDONS, AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT,
   PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
-  SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, type AddonSpec, templateWatchPaths,
+  SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, type AddonSpec, templateWatchPaths,
 } from "./paths";
 import { findMasterVhost, panelVhostWatchPath } from "./inject";
 import { panelUserUid } from "../lib/sso-auth";
@@ -395,14 +395,16 @@ export function ensureDirs(
   commands.run("chown", ["root:root", CONFIG_DIR]);
   commands.run("chmod", ["755", CONFIG_DIR]);
   commands.run("chown", [`root:${SHARED_GROUP}`, STATE_DIR]);
-  commands.run("chmod", ["750", STATE_DIR]);
+  // Nginx workers need traversal (but not listing) to stat maintenance flags
+  // and read the public HTML files. Addon directories retain their own modes.
+  commands.run("chmod", [specs.some((spec) => spec.name === "maintenance") ? "751" : "750", STATE_DIR]);
   commands.run("chown", [`${SERVICE_USER}:${SERVICE_GROUP}`, SOCKET_DIR]);
   commands.run("chmod", ["755", SOCKET_DIR]);
   commands.run("chown", ["root:root", BACKUP_DIR]);
   commands.run("chmod", ["755", BACKUP_DIR]);
   for (const spec of specs) {
     commands.run("chown", ["root:root", spec.stateDir]);
-    commands.run("chmod", ["750", spec.stateDir]);
+    commands.run("chmod", [spec.name === "maintenance" ? "711" : "750", spec.stateDir]);
   }
 
   const snapshot = `${STATE_DIR}/snapshot.json`;
@@ -621,7 +623,7 @@ ExecStart=/usr/local/bin/clp-addons repair --anchors-only --quiet
  */
 function reconcileWatchPaths(): string[] {
   const vhost = panelVhostWatchPath();
-  return [...templateWatchPaths(), ...(vhost ? [vhost] : [])];
+  return [...templateWatchPaths(), ...(vhost ? [vhost] : []), NGINX_GLOBAL_SETTINGS];
 }
 
 export function installUnits(specs: AddonSpec[]): boolean {

@@ -21,6 +21,7 @@ import {
   DEFAULT_GATEWAY_TIMEOUT_MS,
   STAGER_ALLOWED_VERBS,
   INSTATIC_ALLOWED_VERBS,
+  MAINTENANCE_ALLOWED_VERBS,
   MANAGER_ALLOWED_VERBS,
 } from "../lib/gateway-protocol";
 import { getLivePanelInfo } from "../lib/panel-snapshot";
@@ -34,6 +35,7 @@ const AUTH_STDIN_TIMEOUT_MS = 2_000;
 const ALLOWED_VERBS = new Map<string, Set<string>>([
   ["stager", STAGER_ALLOWED_VERBS],
   ["instatic", INSTATIC_ALLOWED_VERBS],
+  ["maintenance", MAINTENANCE_ALLOWED_VERBS],
   ["manager", MANAGER_ALLOWED_VERBS],
 ]);
 

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { INSTATIC_TARGETS } from "../addons/instatic/inject/targets";
 import { LOGIN_THEME_TARGETS } from "../addons/login-theme/inject/targets";
+import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 
 export { PANEL_IDENTITY_PATH } from "./action-constants";
@@ -61,6 +62,8 @@ export function nginxLayout(panelDir = PANEL_NGINX_DIR): NginxLayout {
   return { sitesDir: DISTRO_NGINX_SITES_DIR, configFile: null, service: "nginx", panelOwned: false };
 }
 export const NGINX_PROXY_STATE_DIR = "/var/lib/clp-addons/nginx";
+export const NGINX_GLOBAL_SETTINGS = "/etc/nginx/global_settings";
+export const NGINX_MAINTENANCE_STATE_DIR = "/var/lib/clp-addons/nginx-maintenance";
 
 const PANEL_APP = "/home/clp/htdocs/app/files";
 export const TEMPLATES_DIR = `${PANEL_APP}/templates`;
@@ -114,6 +117,14 @@ export const ADDONS: Record<string, AddonSpec> = {
     configFile: `${CONFIG_DIR}/stager.conf`,
     stateDir: `${STATE_DIR}/stager`,
     targets: STAGER_TARGETS,
+  },
+  maintenance: {
+    name: "maintenance",
+    title: "Maintenance Mode",
+    description: "Show a per-site maintenance page with instant toggles and IP bypasses.",
+    configFile: `${CONFIG_DIR}/maintenance.conf`,
+    stateDir: `${STATE_DIR}/maintenance`,
+    targets: MAINTENANCE_TARGETS,
   },
   "login-theme": {
     name: "login-theme",

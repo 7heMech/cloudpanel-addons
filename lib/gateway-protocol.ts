@@ -31,6 +31,16 @@ export const INSTATIC_ALLOWED_VERBS = new Set([
   "jobs",
 ]);
 
+export const MAINTENANCE_ALLOWED_VERBS = new Set([
+  "status",
+  "enable",
+  "disable",
+  "get-template",
+  "set-template",
+  "reset-template",
+  "set-bypass",
+]);
+
 /**
  * The manager's own privileged verbs: enabling and disabling an addon that
  * already ships inside this binary, and replacing the binary itself.
