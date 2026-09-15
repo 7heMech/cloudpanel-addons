@@ -53,8 +53,9 @@ test("the loader mounts into a shadow root and runs the script at global scope",
   expect(script).toContain('document.createElement("script")');
   expect(script).not.toContain("new Function(");
   expect(script).toContain("window.CLP_MOUNT = root");
-  // One document, one mount: the script declares its helpers once.
-  expect(script).toContain("if (mounted) return;");
+  // One document, one mount, held from before the fetch rather than after it.
+  expect(script).toContain("if (mounted || mounting) return;");
+  expect(script).toContain("mounting = true;");
   expect(script).toContain('history[push ? "pushState" : "replaceState"]');
   // Anything it cannot do falls back to the standalone page. Falling back to
   // the tab link would bounce through the redirect and land here again.
@@ -124,4 +125,120 @@ test("the fragment route answers with the page and the CSRF cookie its actions e
   } finally {
     Object.assign(maintenanceService, original);
   }
+});
+
+/**
+ * Just enough of CloudPanel's site page to run the injected loader: the two
+ * elements it looks for, the tab link it binds, and the places it writes to.
+ * Kept here rather than pulled in as a browser environment because these tests
+ * are about what the loader decides, not about rendering.
+ */
+function runLoader(options: {
+  strip?: boolean;
+  content?: boolean;
+  link?: boolean;
+  landed?: string;
+  fetchReply?: () => Promise<unknown>;
+} = {}) {
+  const warnings: string[] = [];
+  const navigations: string[] = [];
+  const fetched: string[] = [];
+  const scripts: string[] = [];
+  const clicks: ((event: unknown) => void)[] = [];
+
+  const link = {
+    getAttribute: () => "/addons/maintenance?domain=shop.example.test",
+    addEventListener: (_name: string, handler: (event: unknown) => void) => clicks.push(handler),
+    parentNode: null,
+    scrollIntoView: () => {},
+  };
+  const strip = {
+    querySelector: (selector: string) => (selector === "ul" ? null : options.link === false ? null : link),
+    querySelectorAll: () => [] as unknown[],
+  };
+  const content = { textContent: "x", appendChild: () => {} };
+  const head = { appendChild: (el: { textContent: string }) => scripts.push(el.textContent) };
+  const document = {
+    title: "",
+    head,
+    documentElement: { classList: { contains: () => false } },
+    createElement: (tag: string) => (tag === "script"
+      ? { textContent: "" }
+      : { classList: { toggle: () => {} }, attachShadow: () => ({ innerHTML: "" }) }),
+    querySelector: (selector: string) => {
+      if (selector === ".tab-container") return options.strip === false ? null : strip;
+      if (selector === ".site-content") return options.content === false ? null : content;
+      return null;
+    },
+  };
+  const location = {
+    pathname: "/site/shop.example.test/settings",
+    search: options.landed ? `?${EMBED_MARKER}=${options.landed}` : "",
+    set href(value: string) { navigations.push(value); },
+    get href() { return navigations[navigations.length - 1] ?? ""; },
+  };
+  const win: Record<string, unknown> = {
+    console: { warn: (message: string) => warnings.push(message) },
+    addEventListener: () => {},
+  };
+  const body = new Function(
+    "document", "location", "window", "console", "fetch", "Element", "history", "MutationObserver",
+    SITE_EMBED_SCRIPT,
+  );
+  body(
+    document,
+    location,
+    win,
+    { warn: (message: string) => warnings.push(message) },
+    (url: string) => { fetched.push(url); return (options.fetchReply ?? (() => new Promise(() => {})))(); },
+    { prototype: { attachShadow: () => {} } },
+    { pushState: () => {}, replaceState: () => {} },
+    class { observe() {} },
+  );
+  return { warnings, navigations, fetched, scripts, clicks };
+}
+
+test("a second click while a mount is in flight is ignored", async () => {
+  let release: (value: unknown) => void = () => {};
+  const pending = new Promise((resolve) => { release = resolve; });
+  const loader = runLoader({
+    fetchReply: () => pending.then(() => ({
+      json: async () => ({ ok: true, title: "Maintenance", css: "", html: "", script: "const CLP_BASE = 'x';" }),
+    })),
+  });
+
+  const event = { button: 0, preventDefault: () => {} };
+  loader.clicks[0]!(event);
+  loader.clicks[0]!(event);
+  // The fragment's script declares CLP_BASE and CLP_ROOT with const at global
+  // scope, so a second mount would throw on its own script and leave the
+  // visible root pointing at the one it replaced.
+  expect(loader.fetched).toHaveLength(1);
+
+  release(null);
+  await pending;
+  await Bun.sleep(1);
+  expect(loader.scripts).toHaveLength(1);
+
+  // The mount is finished, so a further click is still a no-op.
+  loader.clicks[0]!(event);
+  expect(loader.fetched).toHaveLength(1);
+});
+
+test("a panel page the loader does not recognise says so and hands the page over", () => {
+  // A deep link was redirected here, so the operator asked for the addon page;
+  // leaving them on CloudPanel's settings page would look like nothing happened.
+  const landed = runLoader({ content: false, landed: "maintenance" });
+  expect(landed.warnings[0]).toContain("no tab strip or content area");
+  expect(landed.navigations).toEqual(["/addons/maintenance?domain=shop.example.test&embed=0"]);
+
+  // Nobody asked for anything here, so the panel's own page is what they wanted.
+  const browsing = runLoader({ strip: false });
+  expect(browsing.warnings).toHaveLength(1);
+  expect(browsing.navigations).toEqual([]);
+
+  // The strip is there but the addon's tab is not.
+  const noTab = runLoader({ link: false, landed: "maintenance" });
+  expect(noTab.warnings[0]).toContain("maintenance tab is not in this site's tab strip");
+  expect(noTab.navigations).toEqual(["/addons/maintenance?domain=shop.example.test&embed=0"]);
 });

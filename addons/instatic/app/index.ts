@@ -5,7 +5,7 @@
 import type { Server } from "bun";
 import { instaticService, validateDomain, validateTag, validateJobId } from "./service";
 import { layout, dashboardView, newInstanceView, jobView } from "./views";
-import { guardMutation, newCsrfToken, csrfCookieHeader, SECURITY_HEADERS } from "../../../lib/app-http";
+import { guardMutation, newCsrfToken, withCsrfCookie, SECURITY_HEADERS } from "../../../lib/app-http";
 import { listAvailableTags } from "./tags";
 import type { SanitizedSite } from "../../../lib/snapshot-reader";
 import { jobEventStream } from "../../../lib/job-stream";
@@ -13,12 +13,11 @@ import { jobEventStream } from "../../../lib/job-stream";
 function html(body: string, csrf: string, status = 200): Response {
   return new Response(body, {
     status,
-    headers: {
+    headers: withCsrfCookie({
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
-      "Set-Cookie": csrfCookieHeader(csrf),
       ...SECURITY_HEADERS,
-    },
+    }, csrf),
   });
 }
 

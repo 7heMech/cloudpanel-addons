@@ -1,16 +1,15 @@
-import { csrfCookieHeader, guardMutation, newCsrfToken, SECURITY_HEADERS } from "../../../lib/app-http";
+import { guardMutation, newCsrfToken, withCsrfCookie, SECURITY_HEADERS } from "../../../lib/app-http";
 import { cloudflareService } from "./service";
 import { dashboardView, layout } from "./views";
 
 function html(body: string, csrf: string, status = 200): Response {
   return new Response(body, {
     status,
-    headers: {
+    headers: withCsrfCookie({
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
-      "Set-Cookie": csrfCookieHeader(csrf),
       ...SECURITY_HEADERS,
-    },
+    }, csrf),
   });
 }
 

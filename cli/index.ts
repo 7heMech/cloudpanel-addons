@@ -27,7 +27,7 @@ import { handle as handleMaintenance } from "../addons/maintenance/app/index";
 import { handle as handleStager } from "../addons/stager/app/index";
 import { handle as handleCloudflareIps } from "../addons/cloudflare-ips/app/index";
 import { splitMount } from "../lib/mount";
-import { SECURITY_HEADERS, csrfCookieHeader, esc, escJs, guardMutation, newCsrfToken } from "../lib/app-http";
+import { SECURITY_HEADERS, esc, escJs, guardMutation, newCsrfToken, withCsrfCookie } from "../lib/app-http";
 import { JOB_STYLE, JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
 import { adminHeaderTarget, headerTarget, siteLayoutTarget, SITE_TAB_TEMPLATE } from "../lib/panel-nav";
 import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
@@ -1092,12 +1092,12 @@ function managerPage(
 ): Response {
   const job = options.job;
   const live = job && (job.state === "queued" || job.state === "running") ? job : null;
-  const headers: Record<string, string> = {
+  const base: Record<string, string> = {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
     ...SECURITY_HEADERS,
   };
-  if (options.csrf) headers["Set-Cookie"] = csrfCookieHeader(options.csrf);
+  const headers = options.csrf ? withCsrfCookie(base, options.csrf) : new Headers(base);
 
   return new Response(renderLayout(title, content, {
     brand: "CloudPanel Addons",

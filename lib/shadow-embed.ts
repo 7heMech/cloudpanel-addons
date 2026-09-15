@@ -65,9 +65,9 @@ const EMBED_TABS = JSON.stringify(ADDON_SITE_TABS.map((tab) => ({ slug: tab.slug
  */
 export const SITE_EMBED_SCRIPT = `
   var TABS = ${EMBED_TABS};
-  var strip = document.querySelector(".tab-container");
-  var content = document.querySelector(".site-content");
-  if (!strip || !content) return;
+  var landed = new URLSearchParams(location.search).get("${EMBED_MARKER}");
+  var mounted = false;
+  var mounting = false;
 
   // Every way this can fail ends at the standalone page, which answers without
   // redirecting here again. Sending a failure back to the tab link would bounce
@@ -76,19 +76,41 @@ export const SITE_EMBED_SCRIPT = `
     location.href = href + (href.indexOf("?") === -1 ? "?" : "&") + "embed=0";
   }
 
-  var landed = new URLSearchParams(location.search).get("${EMBED_MARKER}");
-  var mounted = false;
+  // This reads markup CloudPanel owns, so a panel release can take it away.
+  // Say so once, and when the operator asked for a page -- a deep link was
+  // redirected here -- hand them the addon's own copy rather than leave them
+  // looking at the settings page they never asked for.
+  function unavailable(reason) {
+    if (window.console && console.warn) {
+      console.warn("clp-addons: " + reason + "; addon pages open on their own instead.");
+    }
+    if (!landed) return;
+    var domain = decodeURIComponent(location.pathname.split("/")[2] || "");
+    for (var i = 0; i < TABS.length; i++) {
+      if (TABS[i].slug === landed && domain) {
+        standalone(TABS[i].url + "?domain=" + encodeURIComponent(domain));
+        return;
+      }
+    }
+  }
+
+  var strip = document.querySelector(".tab-container");
+  var content = document.querySelector(".site-content");
+  if (!strip || !content) return unavailable("this CloudPanel site page has no tab strip or content area");
 
   TABS.forEach(function (tab) {
     var link = strip.querySelector('a[href^="' + tab.url + '?"]');
-    if (!link) return;
+    if (!link) {
+      if (landed === tab.slug) unavailable("the " + tab.slug + " tab is not in this site's tab strip");
+      return;
+    }
     link.addEventListener("click", function (event) {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
       // Clicking the tab of the page already shown is a no-op, which also keeps
       // one document to one mount: the fragment's script runs at global scope
       // and declares its helpers once.
-      if (mounted) return;
+      if (mounted || mounting) return;
       mount(tab, link, true);
     });
     if (landed === tab.slug) mount(tab, link, false);
@@ -112,9 +134,14 @@ export const SITE_EMBED_SCRIPT = `
     new MutationObserver(sync).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
   }
 
+  // Held from here, not from the reply: the fragment's script runs at global
+  // scope and declares CLP_BASE and CLP_ROOT with const, so a second mount that
+  // started while this one was in flight would throw on its own script and
+  // leave the visible root pointing at the one this replaced.
   function mount(tab, link, push) {
     var href = link.getAttribute("href");
     if (!Element.prototype.attachShadow) return standalone(href);
+    mounting = true;
     var query = href.indexOf("?") === -1 ? "" : href.slice(href.indexOf("?") + 1);
     fetch(tab.url + "/fragment?" + query, { credentials: "same-origin", headers: { Accept: "application/json" } })
       .then(function (res) { return res.json(); })
@@ -138,9 +165,10 @@ export const SITE_EMBED_SCRIPT = `
         markActive(link);
         if (payload.title) document.title = payload.title;
         mounted = true;
+        mounting = false;
         history[push ? "pushState" : "replaceState"]({ clpAddon: tab.slug }, "", href);
       })
-      .catch(function () { standalone(href); });
+      .catch(function () { mounting = false; standalone(href); });
   }
 
   // Leaving the addon means going back to a page the panel renders, and its own

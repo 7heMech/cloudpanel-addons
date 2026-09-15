@@ -59,7 +59,14 @@ no document -- and mounts it in a shadow root inside the panel's content area,
 so the panel's Bootstrap cannot reach the addon's markup and the addon's rules
 cannot reach the panel. The fragment's script runs at global scope, because the
 markup calls it from inline handlers, and learns which root its element lookups
-are relative to from `CLP_MOUNT`. A direct visit to the addon's own URL
+are relative to from `CLP_MOUNT`. Shared client code therefore reaches elements
+through `CLP_ROOT`, which is that root when mounted and the document otherwise;
+a lookup written against `document` searches the panel's page instead and finds
+nothing. One page is mounted at a time, held from before the fetch rather than
+after it, because that script declares its bindings once per document. A panel
+page without the markup the loader reads says so in the console, and hands over
+to the addon's own page when a deep link is what brought the operator there.
+A direct visit to the addon's own URL
 redirects to the panel's site page carrying `clp-addon`, which the loader reads
 on landing, so the address bar still names the page and a refresh still works.
 `?embed=0` renders the standalone page instead. Maintenance is the only addon

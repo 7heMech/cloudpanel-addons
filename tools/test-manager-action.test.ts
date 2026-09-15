@@ -377,6 +377,15 @@ describe("the manager index", () => {
     // be refused as a mismatch.
     expect(res.headers.get("set-cookie")).toContain("Path=/;");
     expect(res.headers.get("set-cookie")).toContain("SameSite=Strict");
+
+    // A cookie's identity is its name, domain and path, so the panel-wide one
+    // does not replace the /addons-scoped cookie an older release set. Both
+    // would be sent under /addons, longest path first, and the server reads the
+    // first -- the stale one -- while a mounted page can only see the new one.
+    const cookies = res.headers.getSetCookie();
+    expect(cookies).toHaveLength(2);
+    expect(cookies[0]).toContain("clp_addons_csrf=token-value");
+    expect(cookies[1]).toBe("clp_addons_csrf=; Path=/addons; Max-Age=0; SameSite=Strict; Secure");
   });
 });
 

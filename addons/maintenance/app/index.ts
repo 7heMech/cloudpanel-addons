@@ -1,5 +1,5 @@
 import { isIP } from "node:net";
-import { csrfCookieHeader, guardMutation, newCsrfToken, SECURITY_HEADERS } from "../../../lib/app-http";
+import { guardMutation, newCsrfToken, withCsrfCookie, SECURITY_HEADERS } from "../../../lib/app-http";
 import { fleetView, fragment, layout, siteView } from "./views";
 import { embedLandingUrl } from "../../../lib/shadow-embed";
 import ACE_MODE_HTML from "./ace-mode-html.js" with { type: "text" };
@@ -11,13 +11,12 @@ const PREVIEW_CSP = SECURITY_HEADERS["Content-Security-Policy"] + "; frame-src '
 function html(body: string, csrf: string, status = 200): Response {
   return new Response(body, {
     status,
-    headers: {
+    headers: withCsrfCookie({
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
-      "Set-Cookie": csrfCookieHeader(csrf),
       ...SECURITY_HEADERS,
       "Content-Security-Policy": PREVIEW_CSP,
-    },
+    }, csrf),
   });
 }
 
@@ -33,12 +32,11 @@ function json(body: unknown, status = 200): Response {
 function fragmentJson(body: unknown, csrf: string, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: {
+    headers: withCsrfCookie({
       "Content-Type": "application/json",
       "Cache-Control": "no-store",
-      "Set-Cookie": csrfCookieHeader(csrf),
       ...SECURITY_HEADERS,
-    },
+    }, csrf),
   });
 }
 

@@ -13,7 +13,7 @@ import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { ty
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
 import type { AvailableTags } from "../addons/instatic/app/tags";
-import { csrfCookieHeader, SECURITY_HEADERS } from "../lib/app-http";
+import { withCsrfCookie, SECURITY_HEADERS } from "../lib/app-http";
 
 const versions: AvailableTags = { tags: ["0.0.19", "0.0.18"], latest: "0.0.19", source: "registry" };
 const instances: InstanceView[] = [
@@ -210,7 +210,7 @@ const server = Bun.serve({
           `Maintenance — ${domain}`,
           maintenanceSiteView(view, { domain, custom: false, html: DEFAULT_MAINTENANCE_TEMPLATE }, "203.0.113.8", url.searchParams.has("global")),
         ),
-        { headers: { "Set-Cookie": csrfCookieHeader("preview-token") } },
+        { headers: withCsrfCookie({}, "preview-token") },
       );
     }
     const empty = url.searchParams.has("empty");
