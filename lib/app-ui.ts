@@ -81,8 +81,14 @@ html.dark .clp-addon-logo-dark { display: block; }
 html.dark .clp-addon-theme .sun { display: block; }
 html.dark .clp-addon-theme .moon { display: none; }
 main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 25px 12px 40px; flex: 1; min-width: 0; }
-.clp-addon-tabs { display: flex; overflow-x: auto; padding: 0 20px; margin-bottom: 30px;
-  background: var(--panel); border: 1px solid var(--border); scrollbar-width: thin; }
+/* The strip scrolls when the tabs outgrow it, but never shows a bar: overflow-x
+   alone also turns overflow-y into auto, and a 16px overflow at desktop width
+   drew a scrollbar that ate 10px of the strip's height. The active tab is
+   revealed on load and focus reveals the rest, so nothing becomes unreachable. */
+.clp-addon-tabs { display: flex; overflow-x: auto; overflow-y: hidden; padding: 0 20px;
+  margin-bottom: 30px; background: var(--panel); border: 1px solid var(--border);
+  scrollbar-width: none; }
+.clp-addon-tabs::-webkit-scrollbar { display: none; }
 .clp-addon-nav-link { flex: 0 0 auto; color: var(--tab-link); padding: 20px 15px 17px;
   border-bottom: 3px solid transparent; white-space: nowrap; }
 .clp-addon-nav-link:hover { color: var(--accent); text-decoration: none; }

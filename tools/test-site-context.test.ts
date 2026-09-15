@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ADDON_SITE_TABS, SITE_CONTEXT_STYLE, siteInfoHtml, siteTabs } from "../lib/site-context";
-import { renderLayout } from "../lib/app-ui";
+import { BASE_STYLE, renderLayout } from "../lib/app-ui";
 import { siteLayoutTarget, SITE_TAB_TEMPLATE } from "../lib/panel-nav";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import { readPanelPublicIp } from "../lib/panel-snapshot";
@@ -119,6 +119,13 @@ test("the site layout rule targets the same partial an addon adds its tab to", (
   const snippet = layout.snippet("/addons/");
   expect(snippet).toContain("flex-wrap: nowrap");
   expect(snippet).toContain("overflow-x: auto");
+  // A strip that scrolls must not draw a bar: overflow-x alone also makes
+  // overflow-y auto, and the bar itself ate 10px of the strip's height.
+  expect(snippet).toContain("overflow-y: hidden");
+  expect(snippet).toContain("scrollbar-width: none");
+  expect(snippet).toContain("::-webkit-scrollbar { display: none; }");
+  expect(BASE_STYLE).toContain(".clp-addon-tabs::-webkit-scrollbar { display: none; }");
+  expect(BASE_STYLE.split(".clp-addon-tabs {")[1]!.split("}")[0]).toContain("overflow-y: hidden");
   expect(snippet).toContain("scrollIntoView");
   // Widening the panel's own limited-width container is what this rule avoids.
   expect(snippet).not.toContain(".container-limited-width");

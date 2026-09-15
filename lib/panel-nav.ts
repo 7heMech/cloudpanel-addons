@@ -137,7 +137,9 @@ export const SITE_TAB_TEMPLATE = "Frontend/Site/Partial/tab-container.html.twig"
 // 200px-minimum boxes, which overflows the page on a phone whatever the tabs
 // do.
 const SITE_LAYOUT_STYLE = `
-.tab-container ul { display: flex; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+.tab-container ul { display: flex; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; }
+.tab-container ul::-webkit-scrollbar { display: none; }
 .tab-container ul li { flex: 0 0 auto; white-space: nowrap; }
 .tab-container ul li a:focus-visible { outline: 2px solid #0078d4; outline-offset: -4px; }
 .site-info-container { flex-wrap: wrap; }
