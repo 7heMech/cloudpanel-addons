@@ -584,11 +584,19 @@ test("the template editor borrows CloudPanel's own Ace and works without it", ()
   // The panel edits vhosts with the copy it ships at this path; bundling a
   // second editor would add a megabyte to do what the panel already does.
   expect(CLIENT_JS).toContain("'/assets/js/ace.min.js'");
-  // That copy carries only mode/text and theme/textmate, so asking for a
-  // richer mode would send Ace looking for files the panel does not ship.
+  // That copy carries the core but no modes, so the HTML mode is served from
+  // here, pinned to the version the panel serves. Text mode is set first, so a
+  // mode that will not load leaves a working editor rather than none.
   expect(CLIENT_JS).toContain("ace/mode/text");
-  expect(CLIENT_JS).not.toContain("ace/mode/html");
+  expect(CLIENT_JS).toContain("ace.config.setModuleUrl('ace/mode/html', CLP_BASE + '/ace/mode-html.js')");
+  expect(CLIENT_JS.indexOf("'ace/mode/text'")).toBeLessThan(CLIENT_JS.indexOf("'ace/mode/html'"));
+  // The bundled theme is the only one there is; dark mode recolours it here.
   expect(CLIENT_JS).not.toContain("ace/theme/");
+  const dark = layout("t", siteView(
+    { domain: "a.test", type: "php", user: "a", enabled: false, customTemplate: true, bypasses: [] },
+    { domain: "a.test", custom: true, html: "<p>x</p>" }, "203.0.113.8", false));
+  expect(dark).toContain("html.dark #template-ace .ace_tag");
+  expect(dark).toContain("html.dark #template-ace .ace_string");
 
   // A panel release that stops shipping it must leave a working textarea.
   expect(CLIENT_JS).toContain("script.onerror = function () { resolve(null); }");
@@ -613,4 +621,23 @@ test("the editor markup keeps the textarea beside the editor that replaces it", 
   expect(html).toContain('<textarea id="template-editor"');
   expect(html).toContain('<div id="template-ace" hidden></div>');
   expect(html.indexOf("template-editor")).toBeLessThan(html.indexOf("template-ace"));
+});
+
+test("the addon serves the Ace mode the panel does not ship", async () => {
+  const res = await handleMaintenance(
+    new Request("https://panel.example.test:8443/addons/maintenance/ace/mode-html.js"),
+    "/ace/mode-html.js",
+  );
+  expect(res.status).toBe(200);
+  expect(res.headers.get("Content-Type")).toContain("text/javascript");
+  const body = await res.text();
+  // Pinned to the 1.4.2 core CloudPanel serves, and self-contained: it brings
+  // the css and javascript modes the HTML mode needs, so nothing else is
+  // fetched from a path the panel does not have.
+  expect(body).toContain('ace.define("ace/mode/html"');
+  expect(body).toContain('ace.define("ace/mode/css"');
+  expect(body).toContain('ace.define("ace/mode/javascript"');
+  // Vendored third-party code keeps its licence.
+  expect(body).toContain("BEGIN LICENSE BLOCK");
+  expect(body).toContain("Copyright (c) 2010, Ajax.org B.V.");
 });

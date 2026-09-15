@@ -32,6 +32,23 @@ html.dark #template-ace .ace_gutter-active-line { background:#ffffff14; }
 html.dark #template-ace .ace_cursor { color:var(--text); }
 html.dark #template-ace .ace_marker-layer .ace_active-line { background:#ffffff0d; }
 html.dark #template-ace .ace_marker-layer .ace_selection { background:#2f5b8c; }
+/* Ace's light theme colours its tokens for a white page; on the tinted
+   background they would be navy on near-black. */
+html.dark #template-ace .ace_tag,
+html.dark #template-ace .ace_tag-name,
+html.dark #template-ace .ace_meta.ace_tag,
+html.dark #template-ace .ace_doctype,
+html.dark #template-ace .ace_xml-pe { color:#6cb6ff; }
+html.dark #template-ace .ace_attribute-name,
+html.dark #template-ace .ace_support,
+html.dark #template-ace .ace_fonts,
+html.dark #template-ace .ace_keyword { color:#e5bc76; }
+html.dark #template-ace .ace_string,
+html.dark #template-ace .ace_attribute-value { color:#81c9a0; }
+html.dark #template-ace .ace_constant,
+html.dark #template-ace .ace_numeric,
+html.dark #template-ace .ace_entity { color:#d9a9ff; }
+html.dark #template-ace .ace_comment { color:#93a1ad; }
 .template-mode { display:flex; align-items:center; gap:10px; margin-bottom:18px; }
 .bypass-grid { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:end; }
 .bypass-field { min-width:0; margin:0; }
@@ -110,10 +127,14 @@ async function setupTemplateEditor() {
   const ace = await loadPanelAce();
   if (!ace) return;
   templateAce = ace.edit(holder);
-  // The same options and mode the panel uses for a vhost: its copy of Ace
-  // bundles only mode/text and theme/textmate, so asking for more would send it
-  // looking for files the panel does not ship.
+  // Text first, so a mode that will not load leaves a working editor rather
+  // than none. The panel ships the Ace core but no modes, so the HTML mode is
+  // served from here, pinned to the version the panel serves.
   templateAce.session.setMode('ace/mode/text');
+  try {
+    ace.config.setModuleUrl('ace/mode/html', CLP_BASE + '/ace/mode-html.js');
+    templateAce.session.setMode('ace/mode/html');
+  } catch (error) { /* the template stays readable without colour */ }
   templateAce.setOptions({ minLines: 24, maxLines: Infinity, showPrintMargin: false, useWorker: false });
   templateAce.setAutoScrollEditorIntoView(true);
   templateAce.setValue(area.value, -1);

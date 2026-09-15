@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import { csrfCookieHeader, guardMutation, newCsrfToken, SECURITY_HEADERS } from "../../../lib/app-http";
 import { fleetView, fragment, layout, siteView } from "./views";
 import { embedLandingUrl } from "../../../lib/shadow-embed";
+import ACE_MODE_HTML from "./ace-mode-html.js" with { type: "text" };
 import { maintenanceService, validateDomain } from "./service";
 import { MAX_BYPASS_IPS, MAX_TEMPLATE_BYTES } from "../action";
 
@@ -70,6 +71,18 @@ export async function handle(
   const url = new URL(req.url);
 
   if (path === "/health") return json({ ok: true, service: "maintenance-manager" });
+
+  // The Ace module the panel does not ship, matching the core that it does.
+  // Immutable: it is one pinned file, and the editor asks for it on every open.
+  if (method === "GET" && path === "/ace/mode-html.js") {
+    return new Response(ACE_MODE_HTML, {
+      headers: {
+        "Content-Type": "text/javascript; charset=utf-8",
+        "Cache-Control": "public, max-age=31536000, immutable",
+        ...SECURITY_HEADERS,
+      },
+    });
+  }
 
   if (method === "GET" && path === "/") {
     const csrf = newCsrfToken();

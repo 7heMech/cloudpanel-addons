@@ -9,6 +9,7 @@ import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, lay
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
+import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { type: "text" };
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
 import type { AvailableTags } from "../addons/instatic/app/tags";
@@ -190,6 +191,9 @@ const server = Bun.serve({
         ),
         { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
       );
+    }
+    if (path === "/addons/maintenance/ace/mode-html.js") {
+      return new Response(ACE_MODE_HTML, { headers: { "Content-Type": "text/javascript; charset=utf-8" } });
     }
     if (path === "/addons/maintenance/fragment") {
       const domain = url.searchParams.get("domain") ?? sites[0]!.domain;
