@@ -22,6 +22,11 @@ and Settings remains one click away; it says explicitly when the global override
 is what is serving the maintenance page, because changing the saved setting
 there does not lift it.
 
+The template opens read-only. An Edit switch above the editor turns editing on
+and nothing else: turning it off restores what is saved, asking first only when
+there is an unsaved change, and never removes a saved template. Removing one is
+the reset button alone.
+
 The custom template is edited with CloudPanel's own Ace build, the editor the
 panel uses for a vhost, loaded from the panel at `/assets/js/ace.min.js`. That
 copy is the 1.4.2 core with no modes and only the light theme, so the addon

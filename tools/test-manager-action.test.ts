@@ -371,6 +371,12 @@ describe("the manager index", () => {
     const res = indexPage(["instatic"], null, { csrf: "token-value" });
     expect(res.headers.get("set-cookie")).toContain("clp_addons_csrf=token-value");
     expect(res.headers.get("set-cookie")).toContain("Secure");
+    // Scoped to the whole panel, not to /addons: an addon page mounted into
+    // one of CloudPanel's own site pages runs at that page's path, and could
+    // not read a cookie scoped to /addons, so every mutation from there would
+    // be refused as a mismatch.
+    expect(res.headers.get("set-cookie")).toContain("Path=/;");
+    expect(res.headers.get("set-cookie")).toContain("SameSite=Strict");
   });
 });
 

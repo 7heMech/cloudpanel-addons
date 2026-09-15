@@ -76,8 +76,12 @@ let maintenancePreviewUrl = '';
 // the source of truth and stays the editor when the script is not there, which
 // is also what happens if a panel release stops shipping it.
 let templateAce = null;
+// What the server last confirmed. Editing is a local mode, so this is the only
+// way to tell an untouched template from an edited one.
+let templateSaved = '';
 
 function templateArea() { return CLP_ROOT.getElementById('template-editor'); }
+function templateToggle() { return CLP_ROOT.getElementById('edit-template'); }
 
 function templateValue() {
   const area = templateArea();
@@ -150,9 +154,9 @@ async function setupTemplateEditor() {
       if (!CLP_ROOT.getElementById(style.id)) CLP_ROOT.appendChild(style.cloneNode(true));
     });
   }
-  const custom = CLP_ROOT.getElementById('custom-template');
+  const editing = templateToggle();
   setTemplateHidden(false);
-  setTemplateEditable(Boolean(custom && custom.checked));
+  setTemplateEditable(Boolean(editing && editing.checked));
 }
 
 function siteEndpoint(domain, suffix) {
@@ -351,26 +355,30 @@ function updateTemplatePreview() {
   preview.src = maintenancePreviewUrl;
 }
 
-function setTemplateMode(custom) {
+function setTemplateMode(editing) {
   const save = CLP_ROOT.getElementById('save-template');
-  setTemplateEditable(custom);
-  if (save) save.disabled = !custom;
+  setTemplateEditable(editing);
+  if (save) save.disabled = !editing;
 }
 
-async function changeTemplateMode(domain, custom) {
-  if (custom) { setTemplateMode(true); return; }
-  const checkbox = CLP_ROOT.getElementById('custom-template');
+// Editing is a local mode and nothing else: leaving it never touches what is
+// saved. Removing a template is what the reset button is for.
+async function changeTemplateMode(domain, editing) {
+  if (editing || templateValue() === templateSaved) { setTemplateMode(editing); return; }
   const accepted = await confirmAction({
-    title: 'Use the default maintenance page?',
-    text: 'The custom template saved for ' + domain + ' is removed and cannot be recovered from here.',
-    confirmLabel: 'Remove template',
+    title: 'Discard the unsaved changes?',
+    text: 'The maintenance page for ' + domain + ' goes back to the version that is saved.',
+    confirmLabel: 'Discard',
     danger: true,
   });
+  const toggle = templateToggle();
   if (!accepted) {
-    if (checkbox) checkbox.checked = true;
+    if (toggle) toggle.checked = true;
     return;
   }
-  resetTemplate(domain, true);
+  setTemplateValue(templateSaved);
+  updateTemplatePreview();
+  setTemplateMode(false);
 }
 
 async function saveTemplate(domain) {
@@ -383,6 +391,7 @@ async function saveTemplate(domain) {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ html: templateValue() })
     });
     setTemplateValue(reply.data.html);
+    templateSaved = reply.data.html;
     updateTemplatePreview();
     notify('Custom maintenance page saved.', 'ok');
   } catch (error) { notify('Could not save the template: ' + error.message, 'error'); }
@@ -403,20 +412,18 @@ async function resetTemplate(domain, confirmed) {
   busy(true);
   try {
     const reply = await call(siteEndpoint(domain, '/template'), { method: 'DELETE' });
-    const custom = CLP_ROOT.getElementById('custom-template');
+    const toggle = templateToggle();
     setTemplateValue(reply.data.html);
-    if (custom) custom.checked = false;
-    setTemplateMode(false);
+    templateSaved = reply.data.html;
+    if (toggle) toggle.checked = false;
     updateTemplatePreview();
     notify('Reset to the default maintenance page.', 'ok');
   } catch (error) {
-    const custom = CLP_ROOT.getElementById('custom-template');
-    if (custom) custom.checked = true;
     notify('Could not reset the template: ' + error.message, 'error');
   } finally {
     busy(false);
-    const custom = CLP_ROOT.getElementById('custom-template');
-    setTemplateMode(Boolean(custom && custom.checked));
+    const toggle = templateToggle();
+    setTemplateMode(Boolean(toggle && toggle.checked));
   }
 }
 
@@ -450,8 +457,9 @@ function initMaintenance() {
       const preview = CLP_ROOT.getElementById('template-preview');
       if (preview && !preview.hidden) updateTemplatePreview();
     });
-    const custom = CLP_ROOT.getElementById('custom-template');
-    setTemplateMode(Boolean(custom && custom.checked));
+    templateSaved = editor.value;
+    const editing = templateToggle();
+    setTemplateMode(Boolean(editing && editing.checked));
     setupTemplateEditor();
   }
 }
@@ -574,7 +582,7 @@ export function siteView(
   <div class="card"><div class="card-header"><div><h2>Maintenance page</h2><p class="hint">Custom HTML and CSS are stored for this site. Active scripts and form controls are removed.</p></div></div>
     <div class="toolbar editor-toolbar">
       <div class="editor-tabs" role="tablist"><button class="btn" type="button" data-editor-tab="editor" aria-selected="true" onclick="showEditorTab('editor')">HTML / CSS</button><button class="btn" type="button" data-editor-tab="preview" aria-selected="false" onclick="showEditorTab('preview')">Preview</button></div>
-      <label class="switch-field toolbar-end" for="custom-template">Custom<span class="switch"><input id="custom-template" type="checkbox" ${template.custom ? "checked" : ""} onchange="changeTemplateMode('${escJs(site.domain)}', this.checked)"><span></span></span></label>
+      <label class="switch-field toolbar-end" for="edit-template">Edit<span class="switch"><input id="edit-template" type="checkbox" onchange="changeTemplateMode('${escJs(site.domain)}', this.checked)"><span></span></span></label>
     </div>
     <textarea id="template-editor" aria-label="Maintenance page HTML" spellcheck="false">${esc(template.html)}</textarea>
     <div id="template-ace" hidden></div>

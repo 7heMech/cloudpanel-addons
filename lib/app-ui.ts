@@ -169,6 +169,9 @@ p.hint { margin: 0 0 20px; }
 .card-table > .empty { padding: 25px; }
 dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border);
   border-radius: 5px; padding: 30px; max-width: 720px; width: calc(100% - 32px); max-height: calc(100vh - 40px); overflow: auto; }
+/* The visual viewport, so a phone's collapsing address bar cannot push the
+   buttons under it. Ignored where dvh is unknown, which leaves the line above. */
+dialog { max-height: calc(100dvh - 40px); }
 dialog::backdrop { background: rgba(0,0,0,0.5); }
 .dialog-header { margin: -30px -30px 25px; padding: 25px 30px; border-bottom: 1px solid var(--border); }
 .dialog-header h2 { margin: 0; overflow-wrap: anywhere; }
@@ -196,7 +199,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .clp-addon-footer a { color: var(--muted); }
 /* The on/off control every addon uses. The checkbox keeps its role, its label
    and the keyboard; the span is only paint, so focus and state stay real. */
-.switch { position: relative; display: inline-flex; width: 50px; height: 28px; flex: none; }
+.switch { position: relative; display: inline-flex; width: 50px; height: 28px; margin: 0; flex: none; }
 .switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .switch span { width: 100%; border-radius: 99px; background: var(--border); transition: background-color .15s; pointer-events: none; }
 .switch span::after { content: ""; display: block; width: 22px; height: 22px; margin: 3px; border-radius: 50%;
@@ -208,7 +211,10 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .switch input:disabled + span { opacity: .5; }
 /* For a switch whose "on" state is the disruptive one, such as maintenance. */
 .switch-danger input:checked + span { background: var(--bad); }
-.switch-field { display: inline-flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; }
+/* Both are labels, so both inherit the gap a field label leaves above its
+   input. Nothing sits under a switch, and that margin is what pushes it off
+   the centre line of the buttons or cell text it is aligned with. */
+.switch-field { display: inline-flex; align-items: center; gap: 10px; margin: 0; font-size: 14px; font-weight: 600; }
 .switch-field .switch-state { min-width: 26px; }
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
@@ -243,6 +249,14 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .form-grid, .addon-grid { grid-template-columns: minmax(0, 1fr); }
   th, td { padding: 16px 20px; }
   .stats { gap: 20px; }
+  /* A phone has no width to give away: the frame tightens and the buttons take
+     the row, so a long label wraps inside a button rather than off the edge. */
+  dialog { padding: 20px; width: calc(100% - 20px); max-height: calc(100vh - 20px); }
+  dialog { max-height: calc(100dvh - 20px); }
+  .dialog-header { margin: -20px -20px 20px; padding: 16px 20px; }
+  .dialog-header h2 { font-size: 20px; }
+  .dialog-actions { margin: 20px -20px -20px; padding: 16px 20px; }
+  .dialog-actions .btn { flex: 1 1 auto; }
 }
 `;
 

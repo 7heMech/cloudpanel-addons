@@ -38,7 +38,9 @@ state for a later re-enable.
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
 badges, switches, toolbars, one confirmation dialog and one inline notice per
 page. An addon supplies its brand, its own tabs, its script and any rule only it
-draws.
+draws. Below 760px the shell tightens: a dialog gives up its desktop padding and
+its buttons take the row, and it is bounded by the visual viewport so a phone's
+collapsing address bar cannot cover them.
 
 A page reached from a site's tab strip is drawn in site mode instead: the shell
 shows CloudPanel's site information and the applicable site tabs with the addon's

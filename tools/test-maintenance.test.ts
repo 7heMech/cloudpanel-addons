@@ -623,6 +623,29 @@ test("the editor markup keeps the textarea beside the editor that replaces it", 
   expect(html.indexOf("template-editor")).toBeLessThan(html.indexOf("template-ace"));
 });
 
+test("editing the template is a local mode that never removes what is saved", () => {
+  const html = siteView(
+    { domain: "shop.example.test", type: "php", user: "shop", enabled: false, customTemplate: true, bypasses: [] },
+    { domain: "shop.example.test", custom: true, html: "<p>hi</p>" },
+    "203.0.113.8",
+    false,
+  );
+  // Read-only until asked for, on a site that already has a custom template:
+  // the switch opens the editor, it does not choose which page is served.
+  expect(html).toContain('<label class="switch-field toolbar-end" for="edit-template">Edit');
+  expect(html).toContain('<input id="edit-template" type="checkbox" onchange=');
+  // Removing a template is what the reset button does, and only that.
+  expect(html).toContain('onclick="resetTemplate(');
+  const mode = CLIENT_JS.slice(CLIENT_JS.indexOf("async function changeTemplateMode"));
+  const body = mode.slice(0, mode.indexOf("\nasync function"));
+  expect(body).not.toContain("resetTemplate");
+  // No confirmation for a template nobody touched.
+  expect(body).toContain("templateValue() === templateSaved");
+  expect(body).toContain("Discard the unsaved changes?");
+  // Declining leaves the operator in the editor with the edits still there.
+  expect(body).toContain("toggle.checked = true");
+});
+
 test("the addon serves the Ace mode the panel does not ship", async () => {
   const res = await handleMaintenance(
     new Request("https://panel.example.test:8443/addons/maintenance/ace/mode-html.js"),

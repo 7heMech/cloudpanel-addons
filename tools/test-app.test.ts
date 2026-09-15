@@ -15,7 +15,7 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { CLIENT_JS, dashboardView, isInstanceMissing, newInstanceView } from "../addons/instatic/app/views";
-import { BASE_CLIENT_JS, THEME_INIT_JS, renderLayout } from "../lib/app-ui";
+import { BASE_CLIENT_JS, BASE_STYLE, THEME_INIT_JS, renderLayout } from "../lib/app-ui";
 import { headerTarget, headerUpdateScript } from "../lib/panel-nav";
 import { isNewerVersion } from "../lib/update-check";
 import { CLIENT_JS as STAGER_CLIENT_JS, isSiteMissing, jobsView, jobView } from "../addons/stager/app/views";
@@ -97,6 +97,25 @@ test("addon theme follows CloudPanel's cookie before the page paints", () => {
     new Function("document", THEME_INIT_JS)(document);
     expect(classes.has("dark"), cookie).toBe(expected);
   }
+});
+
+test("a switch sits on the line of whatever it is beside", () => {
+  // Both are labels, so both inherit the gap a field label leaves above its
+  // input. Nothing sits under a switch, and that margin is what pushed every
+  // one of them above the centre of its toolbar row or table cell.
+  expect(BASE_STYLE).toContain(".switch-field { display: inline-flex; align-items: center; gap: 10px; margin: 0;");
+  expect(BASE_STYLE).toContain(".switch { position: relative; display: inline-flex; width: 50px; height: 28px; margin: 0;");
+});
+
+test("a dialog is usable on a phone", () => {
+  const mobile = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 760px)"));
+  // The frame gives up its desktop padding, and the buttons take the row so a
+  // confirmation label wraps inside its button rather than off the edge.
+  expect(mobile).toContain("dialog { padding: 20px; width: calc(100% - 20px);");
+  expect(mobile).toContain(".dialog-actions .btn { flex: 1 1 auto; }");
+  // The visual viewport, so a collapsing address bar cannot cover the buttons.
+  expect(mobile).toContain("dialog { max-height: calc(100dvh - 20px); }");
+  expect(BASE_STYLE).toContain("dialog { max-height: calc(100dvh - 40px); }");
 });
 
 test("native header follows the manager's update state and clears a restored stale notice", async () => {

@@ -28,7 +28,14 @@ export function csrfCookieHeader(token: string): string {
   // Not HttpOnly on purpose: the page's own script has to read it to echo it
   // back in the header. That is what makes the double-submit check work, and
   // it is safe because a cross-origin page cannot read another origin's cookie.
-  return `${CSRF_COOKIE}=${token}; Path=/addons; SameSite=Strict; Secure`;
+  //
+  // Path is the whole panel, not /addons: an addon page mounted into one of
+  // CloudPanel's own site pages runs at that page's path, and a cookie scoped
+  // to /addons is invisible to it, so every mutation from there would be
+  // refused. Path scoping is not what protects this cookie -- the panel is one
+  // origin, so any panel page could read it at any path -- SameSite and the
+  // same-origin check are.
+  return `${CSRF_COOKIE}=${token}; Path=/; SameSite=Strict; Secure`;
 }
 
 /** Returns null when the request may proceed, or a Response to send instead. */
