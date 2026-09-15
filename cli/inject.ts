@@ -340,8 +340,12 @@ export function panelVersion(): string {
   }
 }
 
+// `^~` rather than a plain prefix: CloudPanel's own vhost has a regex location
+// for static file extensions, and nginx tests regex locations before a prefix
+// match wins. Without it every addon URL ending in .js, .css, .svg or an image
+// extension is taken by that rule and served from the filesystem as a 404.
 export const NGINX_PROXY_BLOCK = `    # clp-addons:proxy:start
-    location /addons/ {
+    location ^~ /addons/ {
         proxy_pass http://unix:/run/clp-addons/manager.sock:/;
         proxy_http_version 1.1;
         proxy_set_header Host $http_host;
