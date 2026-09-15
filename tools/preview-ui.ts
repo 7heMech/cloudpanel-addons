@@ -147,6 +147,8 @@ ${tabs}
 </html>`;
 }
 
+let panelAce: string | null = null;
+
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.PORT || 4100),
@@ -162,6 +164,17 @@ const server = Bun.serve({
       return new Response(await upstream.arrayBuffer(), {
         status: upstream.status,
         headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=3600" },
+      });
+    }
+    // CloudPanel serves its own Ace build here, which the maintenance editor
+    // uses. Only this development preview borrows it from the public demo.
+    if (path === "/assets/js/ace.min.js") {
+      // PREVIEW_NO_ACE stands in for a panel release that stopped shipping it,
+      // which has to leave a working textarea behind.
+      if (process.env.PREVIEW_NO_ACE) return new Response("Not found", { status: 404 });
+      panelAce ??= await (await fetch(`https://demo.cloudpanel.io${path}`)).text();
+      return new Response(panelAce, {
+        headers: { "Content-Type": "text/javascript", "Cache-Control": "public, max-age=3600" },
       });
     }
     if (["/", "/dashboard"].includes(path)) return Response.redirect("/addons/");

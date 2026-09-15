@@ -17,6 +17,9 @@ test("the stylesheet is rewritten for a shadow root", () => {
   // The document belongs to CloudPanel on an embedded page.
   expect(css).not.toMatch(/(^|\n)body \{/);
   expect(css).toContain(":host { display: block;");
+  // Rules an addon adds are rewritten too, including the editor's dark tint.
+  expect(shadowStyle(BASE_STYLE + "\nhtml.dark #template-ace { background:#000; }"))
+    .toContain(":host(.dark) #template-ace");
   // Everything else is the shell unchanged.
   expect(css).toContain(".switch input:checked + span");
   expect(css).toContain(".card {");

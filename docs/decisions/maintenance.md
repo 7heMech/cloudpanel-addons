@@ -22,6 +22,13 @@ and Settings remains one click away; it says explicitly when the global override
 is what is serving the maintenance page, because changing the saved setting
 there does not lift it.
 
+The custom template is edited with CloudPanel's own Ace build, the editor the
+panel uses for a vhost, loaded from the panel at `/assets/js/ace.min.js`. That
+copy carries only `mode/text` and the light theme, so the editor asks for
+nothing else and dark mode tints it rather than fetch a theme the panel does not
+ship. The textarea underneath stays the value every other path reads, and stays
+the editor if a panel release stops serving Ace.
+
 ## Request handling
 
 The addon installs one marked block in `/etc/nginx/global_settings`, which all

@@ -11,7 +11,7 @@ import {
 } from "../addons/maintenance/action";
 import { handle as handleMaintenance } from "../addons/maintenance/app/index";
 import { maintenanceService } from "../addons/maintenance/app/service";
-import { fleetView, layout, siteView } from "../addons/maintenance/app/views";
+import { CLIENT_JS, fleetView, layout, siteView } from "../addons/maintenance/app/views";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import {
   inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance,
@@ -578,4 +578,39 @@ test("purgeVarnish sends PURGE requests for domain and www/bare aliases and hand
   purges.length = 0;
   await executeMaintenanceAction(["disable", "--domain=wp.example.com"], actionOptions(paths, { fetchFn: mockFetch as any }));
   expect(purges.some((p) => p.method === "PURGE" && p.host === "wp.example.com")).toBe(true);
+});
+
+test("the template editor borrows CloudPanel's own Ace and works without it", () => {
+  // The panel edits vhosts with the copy it ships at this path; bundling a
+  // second editor would add a megabyte to do what the panel already does.
+  expect(CLIENT_JS).toContain("'/assets/js/ace.min.js'");
+  // That copy carries only mode/text and theme/textmate, so asking for a
+  // richer mode would send Ace looking for files the panel does not ship.
+  expect(CLIENT_JS).toContain("ace/mode/text");
+  expect(CLIENT_JS).not.toContain("ace/mode/html");
+  expect(CLIENT_JS).not.toContain("ace/theme/");
+
+  // A panel release that stops shipping it must leave a working textarea.
+  expect(CLIENT_JS).toContain("script.onerror = function () { resolve(null); }");
+  expect(CLIENT_JS).toContain("if (!ace) return;");
+
+  // Ace writes its stylesheet into the document head, which a shadow root
+  // cannot see.
+  expect(CLIENT_JS).toContain("style[id^=\"ace\"]");
+
+  // The textarea stays the value every other path reads and writes.
+  expect(CLIENT_JS).toContain("area.value = templateAce.getValue();");
+  expect(CLIENT_JS).toContain("function templateValue()");
+});
+
+test("the editor markup keeps the textarea beside the editor that replaces it", () => {
+  const html = siteView(
+    { domain: "shop.example.test", type: "php", user: "shop", enabled: false, customTemplate: true, bypasses: [] },
+    { domain: "shop.example.test", custom: true, html: "<p>hi</p>" },
+    "203.0.113.8",
+    false,
+  );
+  expect(html).toContain('<textarea id="template-editor"');
+  expect(html).toContain('<div id="template-ace" hidden></div>');
+  expect(html.indexOf("template-editor")).toBeLessThan(html.indexOf("template-ace"));
 });
