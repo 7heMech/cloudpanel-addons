@@ -1,0 +1,149 @@
+// Mounting an addon page inside CloudPanel's own site page.
+//
+// A site-scoped addon page reached from the panel's tab strip used to redraw
+// the panel's chrome from lib/site-context: a reproduction that has to be kept
+// in step with markup we do not own. Here the panel draws its own header, site
+// information and tab strip, and only the content below them comes from the
+// addon -- mounted in a shadow root, so the panel's Bootstrap cannot reach our
+// markup and our stylesheet cannot reach theirs.
+//
+// The addon serves that content as a fragment: stylesheet, markup and script,
+// with no document around it. A direct visit to the addon's own URL redirects
+// into the panel page instead, so the address bar still names the page and a
+// refresh still works.
+
+import { ADDON_SITE_TABS } from "./site-context";
+
+/** Query parameter that tells the loader to mount as soon as the page lands. */
+export const EMBED_MARKER = "clp-addon";
+
+/** The panel route a deep link is sent to; any site route draws the chrome. */
+export function embedLandingUrl(domain: string, slug: string): string {
+  return `/site/${encodeURIComponent(domain)}/settings?${EMBED_MARKER}=${encodeURIComponent(slug)}`;
+}
+
+/**
+ * The shell's stylesheet, rewritten for a shadow root.
+ *
+ * Inside a shadow tree a selector cannot reach the document, so `:root` and
+ * `html.dark` match nothing; the host element carries both instead. The page
+ * rules that style the document itself are dropped, because in the panel the
+ * document belongs to CloudPanel.
+ */
+export function shadowStyle(css: string): string {
+  return css
+    .replace(/(^|\n)html\.dark /g, "$1:host(.dark) ")
+    .replace(/(^|\n):root \{/g, "$1:host {")
+    .replace(
+      /(^|\n)body \{[^}]*\}/g,
+      "$1:host { display: block; color: var(--text); font-family: var(--clp-addon-font-family);\n  font-size: 16px; line-height: 1.5; }",
+    );
+}
+
+/** What an addon returns for a page that mounts inside the panel. */
+export interface EmbedFragment {
+  ok: true;
+  title: string;
+  css: string;
+  html: string;
+  script: string;
+}
+
+const EMBED_TABS = JSON.stringify(ADDON_SITE_TABS.map((tab) => ({ slug: tab.slug, url: tab.url })));
+
+/**
+ * The loader injected into the panel's site pages next to the tab strip.
+ *
+ * The body of a function, not a whole script: the caller runs it once the
+ * document has been parsed, because the block sits ahead of the markup it
+ * reads.
+ *
+ * It replaces the panel's content area with the addon's fragment when its tab
+ * is clicked, and on landing when a deep link redirected here. Anything it
+ * cannot do -- a failed fetch, a modified click, a browser without shadow DOM
+ * -- falls through to following the link, which the addon still answers.
+ */
+export const SITE_EMBED_SCRIPT = `
+  var TABS = ${EMBED_TABS};
+  var strip = document.querySelector(".tab-container");
+  var content = document.querySelector(".site-content");
+  if (!strip || !content) return;
+
+  // Every way this can fail ends at the standalone page, which answers without
+  // redirecting here again. Sending a failure back to the tab link would bounce
+  // through the redirect and land right back on this loader.
+  function standalone(href) {
+    location.href = href + (href.indexOf("?") === -1 ? "?" : "&") + "embed=0";
+  }
+
+  var landed = new URLSearchParams(location.search).get("${EMBED_MARKER}");
+  var mounted = false;
+
+  TABS.forEach(function (tab) {
+    var link = strip.querySelector('a[href^="' + tab.url + '?"]');
+    if (!link) return;
+    link.addEventListener("click", function (event) {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      // Clicking the tab of the page already shown is a no-op, which also keeps
+      // one document to one mount: the fragment's script runs at global scope
+      // and declares its helpers once.
+      if (mounted) return;
+      mount(tab, link, true);
+    });
+    if (landed === tab.slug) mount(tab, link, false);
+  });
+
+  function markActive(link) {
+    var items = strip.querySelectorAll("ul li");
+    for (var i = 0; i < items.length; i++) items[i].classList.remove("active");
+    var item = link.parentNode;
+    if (item && item.tagName === "LI") item.classList.add("active");
+    // The strip was scrolled to whichever tab was active when the page loaded,
+    // which is no longer the tab being shown.
+    var list = strip.querySelector("ul");
+    if (list && list.scrollWidth > list.clientWidth) link.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  // The panel owns the theme; the host mirrors it so :host(.dark) applies.
+  function followTheme(host) {
+    function sync() { host.classList.toggle("dark", document.documentElement.classList.contains("dark")); }
+    sync();
+    new MutationObserver(sync).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+  }
+
+  function mount(tab, link, push) {
+    var href = link.getAttribute("href");
+    if (!Element.prototype.attachShadow) return standalone(href);
+    var query = href.indexOf("?") === -1 ? "" : href.slice(href.indexOf("?") + 1);
+    fetch(tab.url + "/fragment?" + query, { credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(function (res) { return res.json(); })
+      .then(function (payload) {
+        if (!payload || payload.ok !== true) throw new Error("fragment unavailable");
+        var host = document.createElement("div");
+        var root = host.attachShadow({ mode: "open" });
+        root.innerHTML = "<style>" + payload.css + "</style>" + payload.html;
+        content.textContent = "";
+        content.appendChild(host);
+        followTheme(host);
+        // Run the fragment's script at global scope, not in a closure: the
+        // markup calls its functions from inline handlers, and those resolve
+        // against the global scope. A script element inserted as HTML never
+        // executes, so it is created here. CLP_MOUNT is how the script learns
+        // which root its element lookups are relative to.
+        window.CLP_MOUNT = root;
+        var script = document.createElement("script");
+        script.textContent = payload.script;
+        document.head.appendChild(script);
+        markActive(link);
+        if (payload.title) document.title = payload.title;
+        mounted = true;
+        history[push ? "pushState" : "replaceState"]({ clpAddon: tab.slug }, "", href);
+      })
+      .catch(function () { standalone(href); });
+  }
+
+  // Leaving the addon means going back to a page the panel renders, and its own
+  // scripts bound to content this replaced, so hand the navigation back.
+  window.addEventListener("popstate", function () { if (mounted) location.reload(); });
+`;

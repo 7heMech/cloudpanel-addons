@@ -5,7 +5,9 @@ import { handle as loginThemePage } from "../addons/login-theme/app/index";
 import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } from "../addons/cloudflare-ips/app/views";
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
 import { jobsView, jobView, layout as stagerLayout, newCloneView } from "../addons/stager/app/views";
-import { fleetView as maintenanceFleetView, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
+import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
+import { siteLayoutTarget } from "../lib/panel-nav";
+import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
@@ -73,6 +75,78 @@ function cloudflarePreviewState(url: URL) {
   };
 }
 
+// A stand-in for a CloudPanel site page, so the block the manager injects into
+// the panel can be exercised without a panel. The markup mirrors
+// Frontend/Site/settings.html.twig and the rules are the panel's own, from
+// assets/css/style.css and assets/css/frontend/site.css.
+const PANEL_STUB_STYLE = `
+/* Bootstrap, which the panel loads and this stub does not, sets this globally. */
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; font-family: 'Helvetica Neue','Segoe UI',Helvetica,Arial,sans-serif; font-size: 16px;
+  background: #f9fafb; color: #212529; }
+a { color: #3c3c3c; text-decoration: none; }
+html.dark body { background: #0e1217; color: #fff; }
+.main-container { padding: 0 0 60px; }
+.container-fluid { width: 100%; padding: 0 12px; margin: 0 auto; }
+.container-limited-width { max-width: 1200px; }
+.site-info-container { display: flex; margin: 30px 0; }
+.site-info-box { margin: 0 60px 0 0; min-width: 200px; }
+.site-info-box h3 { font-size: 14px; color: #aaa; margin: 0 0 5px; font-weight: 500; }
+.site-info-value { font-size: 18px; }
+.tab-container { border: 1px solid #e2e2e2; background: #fff; margin: 0 0 30px; }
+html.dark .tab-container { background: #25282f; border-color: #a8b3cf33; }
+.tab-container ul { padding: 0 20px; margin: 0; list-style: none; }
+.tab-container ul li { display: inline-block; padding: 20px 0; }
+.tab-container ul li a { padding: 20px 15px; color: #666; text-decoration: none; }
+html.dark .tab-container ul li a { color: #9b9b9b; }
+.tab-container ul li.active a { color: #000; border-bottom: 3px solid #0078d4; }
+html.dark .tab-container ul li.active a { color: #fff; }
+.preview-banner { background: #936319; color: #fff; padding: 6px 12px; font-size: 13px; text-align: center; }
+.preview-banner button { margin-left: 12px; }
+`;
+
+function panelSiteStub(site: SiteContext, activeSlug: string): string {
+  const tabs = siteTabs(site, activeSlug)
+    .map((tab) => `      <li${tab.active ? ' class="active"' : ""}><a href="${tab.href}">${tab.label}</a></li>`)
+    .join("\n");
+  return `<!doctype html>
+<html id="html" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${site.domain}</title>
+<script>document.documentElement.classList.toggle('dark', /(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie));</script>
+<style>${PANEL_STUB_STYLE}</style>
+</head>
+<body>
+<div class="preview-banner">Stand-in for a CloudPanel site page
+  <button type="button" onclick="document.documentElement.classList.toggle('dark')">Toggle panel theme</button>
+</div>
+<main id="main-container" class="main-container">
+  <div class="container-fluid container-limited-width">
+    <div class="site-container">
+      <div class="site-info-container">
+        <div class="site-info-box"><h3>Domain</h3><div class="site-info-value"><a href="https://${site.domain}">${site.domain}</a></div></div>
+        <div class="site-info-box"><h3>Site User</h3><div class="site-info-value">${site.user}</div></div>
+        <div class="site-info-box"><h3>IP Address</h3><div class="site-info-value">${PREVIEW_PUBLIC_IP}</div></div>
+      </div>
+      <div class="site-content-container">
+${siteLayoutTarget().snippet("/addons/")}<div class="tab-container">
+    <ul>
+${tabs}
+    </ul>
+  </div>
+        <div class="site-content">
+          <p>This is whatever CloudPanel would render for the ${activeSlug} tab.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>`;
+}
+
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.PORT || 4100),
@@ -91,6 +165,32 @@ const server = Bun.serve({
       });
     }
     if (["/", "/dashboard"].includes(path)) return Response.redirect("/addons/");
+    // /site/{domain}/{tab} stands in for the panel's own site page.
+    const panelSite = /^\/site\/([^/]+)\/([^/]+)$/.exec(path);
+    if (panelSite) {
+      const domain = decodeURIComponent(panelSite[1]!);
+      const site = sites.find((candidate) => candidate.domain === domain) ?? sites[0]!;
+      return new Response(
+        panelSiteStub(
+          { domain: site.domain, user: site.siteUser, type: site.siteType, varnishCache: siteVarnish[site.domain] === true },
+          panelSite[2]!,
+        ),
+        { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
+      );
+    }
+    if (path === "/addons/maintenance/fragment") {
+      const domain = url.searchParams.get("domain") ?? sites[0]!.domain;
+      const site = sites.find((candidate) => candidate.domain === domain);
+      if (!site) return Response.json({ ok: false, error: "no such site" }, { status: 404 });
+      const view = {
+        domain: site.domain, type: site.siteType, user: site.siteUser,
+        enabled: site.domain === sites[0]!.domain, customTemplate: false, bypasses: ["203.0.113.8"],
+      };
+      return Response.json(maintenanceFragment(
+        `Maintenance — ${domain}`,
+        maintenanceSiteView(view, { domain, custom: false, html: DEFAULT_MAINTENANCE_TEMPLATE }, "203.0.113.8", url.searchParams.has("global")),
+      ));
+    }
     const empty = url.searchParams.has("empty");
     const notice = url.searchParams.has("update") || path === "/addons/update" ? { current: "0.9.3", latest: "0.9.4" } : null;
     const age = url.searchParams.has("stale") ? 7200 : 30;

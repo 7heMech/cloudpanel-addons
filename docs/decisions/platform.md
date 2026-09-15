@@ -50,6 +50,20 @@ reproduced site information takes its column width, gutter and label styling
 from the panel's own `assets/css/frontend/site.css`, so the blocks land where
 the panel puts them.
 
+A site-scoped page can also be mounted into the panel's own site page instead
+of reproducing it. The manager injects a loader next to the tab strip: clicking
+an addon's tab fetches that page as a fragment -- stylesheet, markup and script,
+no document -- and mounts it in a shadow root inside the panel's content area,
+so the panel's Bootstrap cannot reach the addon's markup and the addon's rules
+cannot reach the panel. The fragment's script runs at global scope, because the
+markup calls it from inline handlers, and learns which root its element lookups
+are relative to from `CLP_MOUNT`. A direct visit to the addon's own URL
+redirects to the panel's site page carrying `clp-addon`, which the loader reads
+on landing, so the address bar still names the page and a refresh still works.
+`?embed=0` renders the standalone page instead. Maintenance is the only addon
+mounted this way while the approach is being evaluated; the reproduction above
+is what it would replace.
+
 CloudPanel sizes that strip for the tabs it ships, so an addon's tab wrapped it
 onto a second row. The manager injects one rule making the strip a single
 scrollable row and letting the site-information blocks wrap, rather than

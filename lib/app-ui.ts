@@ -8,6 +8,7 @@
 // any extra rules; everything else is shared.
 
 import { esc, escJs } from "./app-http";
+import { shadowStyle, type EmbedFragment } from "./shadow-embed";
 import { SITE_CONTEXT_STYLE, siteInfoHtml, siteTabs, type SiteContext } from "./site-context";
 import { UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
 
@@ -264,10 +265,16 @@ try {
  * doubled, and tools/test-app.ts asserts they were.
  */
 export const BASE_CLIENT_JS = `
+// Where the elements of this page live: the document on a standalone addon
+// page, and a shadow root on a page mounted into a CloudPanel site page, so
+// that Bootstrap in the panel cannot reach this markup and these rules cannot
+// reach the panel. Element lookups go through this; document APIs do not.
+const CLP_ROOT = typeof CLP_MOUNT === 'undefined' ? document : CLP_MOUNT;
+
 function syncTheme() {
   const dark = /(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie);
   document.documentElement.classList.toggle('dark', dark);
-  const button = document.getElementById('theme-switch');
+  const button = CLP_ROOT.getElementById('theme-switch');
   if (button) {
     button.setAttribute('aria-pressed', String(dark));
     button.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
@@ -286,7 +293,7 @@ window.addEventListener('focus', syncTheme);
 // Only the addon's own tabs: a site strip reproduces CloudPanel's navigation,
 // whose active entry the server already knows and most of whose routes this
 // page could never match.
-const navLinks = Array.from(document.querySelectorAll('[data-auto-active] .clp-addon-nav-link'));
+const navLinks = Array.from(CLP_ROOT.querySelectorAll('[data-auto-active] .clp-addon-nav-link'));
 const activeLink = navLinks.filter(function (link) {
   const path = new URL(link.href).pathname.replace(/\\/$/, '');
   return location.pathname === path || location.pathname.indexOf(path + '/') === 0;
@@ -322,7 +329,7 @@ async function call(path, options) {
 // handed back the switch of a site whose status could not be read and the bulk
 // buttons of an empty selection.
 function busy(on) {
-  document.querySelectorAll('button, input[type="checkbox"]').forEach(function (el) {
+  CLP_ROOT.querySelectorAll('button, input[type="checkbox"]').forEach(function (el) {
     if (on) {
       if (el.dataset.clpHeld === undefined) el.dataset.clpHeld = el.disabled ? '1' : '0';
       el.disabled = true;
@@ -338,7 +345,7 @@ function busy(on) {
 // reports a failed toggle with alert() loses the row it was talking about.
 let clpFlashTimer = 0;
 function notify(message, kind) {
-  const holder = document.getElementById('clp-flash');
+  const holder = CLP_ROOT.getElementById('clp-flash');
   if (!holder) {
     if (kind === 'error') alert(message);
     return;
@@ -352,7 +359,7 @@ function notify(message, kind) {
 }
 
 function clearNotice() {
-  const holder = document.getElementById('clp-flash');
+  const holder = CLP_ROOT.getElementById('clp-flash');
   if (holder) holder.hidden = true;
 }
 
@@ -363,7 +370,7 @@ function clearNotice() {
  */
 function confirmAction(options) {
   const opts = options || {};
-  const dialog = document.getElementById('clp-confirm');
+  const dialog = CLP_ROOT.getElementById('clp-confirm');
   if (!dialog || typeof dialog.showModal !== 'function') {
     return Promise.resolve(confirm([opts.title, opts.text].concat(opts.details || []).filter(Boolean).join('\\n\\n')));
   }
@@ -397,7 +404,7 @@ function confirmAction(options) {
 // A strip wider than its container scrolls; keep the tab the page is on and the
 // tab the keyboard has reached in view. 'nearest' scrolls the strip, not the page.
 (function () {
-  const strip = document.querySelector('.clp-addon-tabs');
+  const strip = CLP_ROOT.querySelector('.clp-addon-tabs');
   if (!strip) return;
   function reveal(el) {
     if (el && strip.scrollWidth > strip.clientWidth) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -448,14 +455,14 @@ export const JOB_STYLE = `
 export const JOB_WATCH_JS = `
 function updateJobUI(job, log) {
   if (!job) return false;
-  const state = document.getElementById('job-state');
+  const state = CLP_ROOT.getElementById('job-state');
   if (state) {
     state.textContent = job.state || '';
     state.className = 'badge state-' + (job.state || 'unknown');
   }
-  const step = document.getElementById('job-step');
+  const step = CLP_ROOT.getElementById('job-step');
   if (step) step.textContent = job.step || '';
-  const pre = document.getElementById('job-log');
+  const pre = CLP_ROOT.getElementById('job-log');
   if (pre && log !== undefined) {
     pre.textContent = log || '(no output yet)';
     pre.scrollTop = pre.scrollHeight;
@@ -464,12 +471,12 @@ function updateJobUI(job, log) {
 }
 
 function showJobReconnecting() {
-  const state = document.getElementById('job-state');
+  const state = CLP_ROOT.getElementById('job-state');
   if (state) {
     state.textContent = 'reconnecting';
     state.className = 'badge state-queued';
   }
-  const step = document.getElementById('job-step');
+  const step = CLP_ROOT.getElementById('job-step');
   if (step) step.textContent = 'The manager is restarting; waiting for it to come back…';
 }
 
@@ -571,6 +578,38 @@ export interface Chrome {
   site?: SiteContext & { activeSlug: string };
 }
 
+/** The inline notice holder every page carries, above its content. */
+const FLASH_HTML = '<div id="clp-flash" hidden></div>';
+
+/** The one confirmation dialog every page carries. */
+const CONFIRM_HTML = `<dialog id="clp-confirm" aria-labelledby="clp-confirm-title">
+  <div class="dialog-header"><h2 id="clp-confirm-title">Are you sure?</h2></div>
+  <p id="clp-confirm-text"></p>
+  <ul id="clp-confirm-details" hidden></ul>
+  <form method="dialog" class="actions dialog-actions">
+    <button class="btn" value="cancel" type="submit">Cancel</button>
+    <button class="btn btn-primary" id="clp-confirm-accept" type="button">Continue</button>
+  </form>
+</dialog>`;
+
+/**
+ * The same page as `renderLayout`, without a document around it, for mounting
+ * into CloudPanel's own site page.
+ *
+ * No header, no footer, no site strip: the panel is already drawing those. The
+ * stylesheet is rewritten for a shadow root, and the script is handed back
+ * unrun so the loader can give it the root its lookups are relative to.
+ */
+export function renderFragment(title: string, content: string, chrome: Chrome): EmbedFragment {
+  return {
+    ok: true,
+    title,
+    css: shadowStyle(`${BASE_STYLE}${chrome.css ?? ""}`),
+    html: `${FLASH_HTML}${content}${CONFIRM_HTML}`,
+    script: `const CLP_BASE = "${escJs(chrome.base)}";\n${BASE_CLIENT_JS}${chrome.script}`,
+  };
+}
+
 export function renderLayout(title: string, content: string, chrome: Chrome): string {
   const isAddonsRoute = chrome.base === "/addons" || chrome.base.startsWith("/addons/");
   // A site-scoped page belongs to the site, so it highlights Sites; it is not
@@ -630,16 +669,8 @@ ${primaryNav}
     </div>
   </div>
 </header>
-<main>${contextualHeader}<div id="clp-flash" hidden></div>${content}</main>
-<dialog id="clp-confirm" aria-labelledby="clp-confirm-title">
-  <div class="dialog-header"><h2 id="clp-confirm-title">Are you sure?</h2></div>
-  <p id="clp-confirm-text"></p>
-  <ul id="clp-confirm-details" hidden></ul>
-  <form method="dialog" class="actions dialog-actions">
-    <button class="btn" value="cancel" type="submit">Cancel</button>
-    <button class="btn btn-primary" id="clp-confirm-accept" type="button">Continue</button>
-  </form>
-</dialog>
+<main>${contextualHeader}${FLASH_HTML}${content}</main>
+${CONFIRM_HTML}
 <footer class="clp-addon-footer">
   <a href="https://www.cloudpanel.io/blog/" target="_blank" rel="noopener noreferrer">Blog</a>
   <a href="https://www.cloudpanel.io/docs/v2/" target="_blank" rel="noopener noreferrer">Docs</a>

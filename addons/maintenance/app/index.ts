@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
 import { csrfCookieHeader, guardMutation, newCsrfToken, SECURITY_HEADERS } from "../../../lib/app-http";
-import { fleetView, layout, siteView } from "./views";
+import { fleetView, fragment, layout, siteView } from "./views";
+import { embedLandingUrl } from "../../../lib/shadow-embed";
 import { maintenanceService, validateDomain } from "./service";
 import { MAX_BYPASS_IPS, MAX_TEMPLATE_BYTES } from "../action";
 
@@ -23,6 +24,20 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...SECURITY_HEADERS },
+  });
+}
+
+// A fragment is the first thing an operator who came straight from a site page
+// loads from this addon, so it carries the CSRF cookie its own actions echo.
+function fragmentJson(body: unknown, csrf: string, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+      "Set-Cookie": csrfCookieHeader(csrf),
+      ...SECURITY_HEADERS,
+    },
   });
 }
 
@@ -59,6 +74,19 @@ export async function handle(
   if (method === "GET" && path === "/") {
     const csrf = newCsrfToken();
     const selected = url.searchParams.get("domain");
+    // A site-scoped page belongs to the panel's site page. Send a direct visit
+    // there and let the injected loader pull this page into it; ?embed=0 keeps
+    // the standalone page. Deciding this needs no panel state, so it happens
+    // before anything is read.
+    if (selected && url.searchParams.get("embed") !== "0") {
+      const target = validateDomain(selected);
+      if (target) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: embedLandingUrl(target, "maintenance"), "Cache-Control": "no-store", ...SECURITY_HEADERS },
+        });
+      }
+    }
     try {
       const globalEnabled = await maintenanceService.globalStatus();
       if (!selected) return html(layout("Maintenance Mode", fleetView(await maintenanceService.listSites(), globalEnabled), updateNotice), csrf);
@@ -79,6 +107,26 @@ export async function handle(
       const message = error instanceof Error ? error.message : String(error);
       const status = /not found/i.test(message) ? 404 : 500;
       return html(layout("Maintenance Mode", `<div class="alert">${Bun.escapeHTML(message)}</div>`, updateNotice), csrf, status);
+    }
+  }
+
+  // The same page as GET /?domain=, without a document around it, for the
+  // loader injected into CloudPanel's site pages.
+  if (method === "GET" && path === "/fragment") {
+    const csrf = newCsrfToken();
+    const domain = validateDomain(url.searchParams.get("domain") ?? "");
+    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    try {
+      const globalEnabled = await maintenanceService.globalStatus();
+      const [page, template] = await Promise.all([maintenanceService.site(domain), maintenanceService.template(domain)]);
+      if (!template.ok || !template.data) throw new Error(template.error ?? "maintenance template unavailable");
+      return fragmentJson(
+        fragment(`Maintenance — ${domain}`, siteView(page.site, template.data, clientIp(req), globalEnabled)),
+        csrf,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return json({ ok: false, error: message }, /not found/i.test(message) ? 404 : 500);
     }
   }
 

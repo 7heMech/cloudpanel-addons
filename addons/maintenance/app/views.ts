@@ -1,5 +1,6 @@
 import { esc, escJs } from "../../../lib/app-http";
-import { renderLayout } from "../../../lib/app-ui";
+import { renderFragment, renderLayout } from "../../../lib/app-ui";
+import type { EmbedFragment } from "../../../lib/shadow-embed";
 import { mountPath } from "../../../lib/mount";
 import { siteTypeLabel, type SiteContext } from "../../../lib/site-context";
 import type { MaintenanceSiteView, MaintenanceTemplateView } from "./service";
@@ -9,7 +10,8 @@ const BASE = mountPath("maintenance");
 // Switches, toolbars, the confirmation dialog and the inline notice are in
 // lib/app-ui; only what this addon alone draws is here.
 const STYLE = `
-.page-heading .actions { align-items:center; flex-shrink:0; }
+/* Shrinkable, so the badge and the button wrap rather than overflow a phone. */
+.page-heading .actions { align-items:center; }
 .state-live { color:var(--ok); border-color:var(--ok); }
 .state-maintenance { color:var(--bad); border-color:var(--bad); }
 .state-unavailable { color:var(--muted); }
@@ -44,7 +46,7 @@ function siteEndpoint(domain, suffix) {
 }
 
 function updateStats(inMaintenance, live) {
-  document.querySelectorAll('.card.stats .stat').forEach(function (stat) {
+  CLP_ROOT.querySelectorAll('.card.stats .stat').forEach(function (stat) {
     const label = stat.querySelector('.label');
     const value = stat.querySelector('.value');
     if (!label || !value) return;
@@ -55,19 +57,19 @@ function updateStats(inMaintenance, live) {
 }
 
 function isGlobalActive() {
-  const el = document.querySelector('[data-global-maintenance]');
+  const el = CLP_ROOT.querySelector('[data-global-maintenance]');
   if (el) return el.dataset.globalMaintenance === 'true';
-  const global = document.getElementById('global-toggle');
+  const global = CLP_ROOT.getElementById('global-toggle');
   return global ? global.checked : false;
 }
 
 function paintGlobalState(globalActive) {
-  document.querySelectorAll('[data-global-maintenance]').forEach(function (el) {
+  CLP_ROOT.querySelectorAll('[data-global-maintenance]').forEach(function (el) {
     el.dataset.globalMaintenance = String(globalActive);
   });
-  const global = document.getElementById('global-toggle');
+  const global = CLP_ROOT.getElementById('global-toggle');
   if (global) global.checked = globalActive;
-  const state = document.getElementById('global-state');
+  const state = CLP_ROOT.getElementById('global-state');
   if (state) state.textContent = globalActive ? 'On' : 'Off';
 }
 
@@ -76,7 +78,7 @@ function syncGlobalUI(globalActive) {
 
   // Every row, not only the readable ones: the override covers a site whose
   // saved setting could not be read just as it covers the rest.
-  const rows = Array.from(document.querySelectorAll('input[data-toggle-domain]'));
+  const rows = Array.from(CLP_ROOT.querySelectorAll('input[data-toggle-domain]'));
   let readableCount = 0;
   let siteEnabledCount = 0;
 
@@ -87,7 +89,7 @@ function syncGlobalUI(globalActive) {
     const isSiteEnabled = readable && input.checked;
     if (isSiteEnabled) siteEnabledCount++;
 
-    const badge = document.querySelector('[data-status-domain="' + CSS.escape(domain) + '"]');
+    const badge = CLP_ROOT.querySelector('[data-status-domain="' + CSS.escape(domain) + '"]');
     if (!badge) return;
 
     if (isSiteEnabled) {
@@ -112,7 +114,7 @@ function syncGlobalUI(globalActive) {
 
 function paintStatus(domain, siteEnabled) {
   const globalActive = isGlobalActive();
-  document.querySelectorAll('[data-status-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
+  CLP_ROOT.querySelectorAll('[data-status-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
     if (siteEnabled) {
       node.textContent = 'Maintenance Mode (503)';
       node.className = 'badge state-maintenance';
@@ -124,14 +126,14 @@ function paintStatus(domain, siteEnabled) {
       node.className = 'badge state-live';
     }
   });
-  document.querySelectorAll('[data-toggle-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
+  CLP_ROOT.querySelectorAll('[data-toggle-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
     node.checked = siteEnabled;
   });
 
-  const notice = document.getElementById('global-notice');
+  const notice = CLP_ROOT.getElementById('global-notice');
   if (notice) notice.hidden = !(globalActive && !siteEnabled);
 
-  const available = Array.from(document.querySelectorAll('input[data-toggle-domain][data-available="true"]'));
+  const available = Array.from(CLP_ROOT.querySelectorAll('input[data-toggle-domain][data-available="true"]'));
   if (available.length > 0) {
     const siteEnabledCount = available.filter(function (i) { return i.checked; }).length;
     const maintenanceCount = globalActive ? available.length : siteEnabledCount;
@@ -164,10 +166,10 @@ async function toggleMaintenance(domain, enabled) {
 // The global switch is an override, not a bulk edit: it changes what visitors
 // get without touching what each site has saved. Say so before it is used.
 async function toggleGlobalMaintenance(targetEnabled) {
-  const toggle = document.getElementById('global-toggle');
+  const toggle = CLP_ROOT.getElementById('global-toggle');
   // One Nginx flag covers every CloudPanel site, including any whose own
   // status could not be read, so the scope is the whole inventory.
-  const all = Array.from(document.querySelectorAll('input[data-toggle-domain]'));
+  const all = Array.from(CLP_ROOT.querySelectorAll('input[data-toggle-domain]'));
   const known = all.filter(function (input) { return input.dataset.available === 'true'; });
   const count = all.length;
   const savedOff = known.filter(function (input) { return !input.checked; }).length;
@@ -214,21 +216,21 @@ async function toggleGlobalMaintenance(targetEnabled) {
 }
 
 function showEditorTab(tab) {
-  const editor = document.getElementById('template-editor');
-  const preview = document.getElementById('template-preview');
+  const editor = CLP_ROOT.getElementById('template-editor');
+  const preview = CLP_ROOT.getElementById('template-preview');
   if (!editor || !preview) return;
   const showingPreview = tab === 'preview';
   editor.hidden = showingPreview;
   preview.hidden = !showingPreview;
-  document.querySelectorAll('[data-editor-tab]').forEach(function (button) {
+  CLP_ROOT.querySelectorAll('[data-editor-tab]').forEach(function (button) {
     button.setAttribute('aria-selected', String(button.getAttribute('data-editor-tab') === tab));
   });
   if (showingPreview) updateTemplatePreview();
 }
 
 function updateTemplatePreview() {
-  const editor = document.getElementById('template-editor');
-  const preview = document.getElementById('template-preview');
+  const editor = CLP_ROOT.getElementById('template-editor');
+  const preview = CLP_ROOT.getElementById('template-preview');
   if (!editor || !preview) return;
   if (maintenancePreviewUrl) URL.revokeObjectURL(maintenancePreviewUrl);
   maintenancePreviewUrl = URL.createObjectURL(new Blob([editor.value], { type: 'text/html' }));
@@ -236,15 +238,15 @@ function updateTemplatePreview() {
 }
 
 function setTemplateMode(custom) {
-  const editor = document.getElementById('template-editor');
-  const save = document.getElementById('save-template');
+  const editor = CLP_ROOT.getElementById('template-editor');
+  const save = CLP_ROOT.getElementById('save-template');
   if (editor) editor.disabled = !custom;
   if (save) save.disabled = !custom;
 }
 
 async function changeTemplateMode(domain, custom) {
   if (custom) { setTemplateMode(true); return; }
-  const checkbox = document.getElementById('custom-template');
+  const checkbox = CLP_ROOT.getElementById('custom-template');
   const accepted = await confirmAction({
     title: 'Use the default maintenance page?',
     text: 'The custom template saved for ' + domain + ' is removed and cannot be recovered from here.',
@@ -259,7 +261,7 @@ async function changeTemplateMode(domain, custom) {
 }
 
 async function saveTemplate(domain) {
-  const editor = document.getElementById('template-editor');
+  const editor = CLP_ROOT.getElementById('template-editor');
   if (!editor) return;
   clearNotice();
   busy(true);
@@ -288,26 +290,26 @@ async function resetTemplate(domain, confirmed) {
   busy(true);
   try {
     const reply = await call(siteEndpoint(domain, '/template'), { method: 'DELETE' });
-    const editor = document.getElementById('template-editor');
-    const custom = document.getElementById('custom-template');
+    const editor = CLP_ROOT.getElementById('template-editor');
+    const custom = CLP_ROOT.getElementById('custom-template');
     if (editor) editor.value = reply.data.html;
     if (custom) custom.checked = false;
     setTemplateMode(false);
     updateTemplatePreview();
     notify('Reset to the default maintenance page.', 'ok');
   } catch (error) {
-    const custom = document.getElementById('custom-template');
+    const custom = CLP_ROOT.getElementById('custom-template');
     if (custom) custom.checked = true;
     notify('Could not reset the template: ' + error.message, 'error');
   } finally {
     busy(false);
-    const custom = document.getElementById('custom-template');
+    const custom = CLP_ROOT.getElementById('custom-template');
     setTemplateMode(Boolean(custom && custom.checked));
   }
 }
 
 async function saveBypasses(domain) {
-  const field = document.getElementById('bypass-ips');
+  const field = CLP_ROOT.getElementById('bypass-ips');
   const ips = String(field && field.value || '').split(/[\\n,]+/).map(function (ip) { return ip.trim(); }).filter(Boolean);
   clearNotice();
   busy(true);
@@ -322,7 +324,7 @@ async function saveBypasses(domain) {
 }
 
 function addCurrentIp(ip) {
-  const field = document.getElementById('bypass-ips');
+  const field = CLP_ROOT.getElementById('bypass-ips');
   if (!field || !ip) return;
   const values = field.value.split(/[\\n,]+/).map(function (value) { return value.trim(); }).filter(Boolean);
   if (values.indexOf(ip) === -1) values.push(ip);
@@ -330,13 +332,13 @@ function addCurrentIp(ip) {
 }
 
 function initMaintenance() {
-  const editor = document.getElementById('template-editor');
+  const editor = CLP_ROOT.getElementById('template-editor');
   if (editor) {
     editor.addEventListener('input', function () {
-      const preview = document.getElementById('template-preview');
+      const preview = CLP_ROOT.getElementById('template-preview');
       if (preview && !preview.hidden) updateTemplatePreview();
     });
-    const custom = document.getElementById('custom-template');
+    const custom = CLP_ROOT.getElementById('custom-template');
     setTemplateMode(Boolean(custom && custom.checked));
   }
 }
@@ -360,6 +362,20 @@ export function layout(
     script: CLIENT_JS,
     updateNotice,
     ...(site ? { site: { ...site, activeSlug: "maintenance" } } : {}),
+  });
+}
+
+/**
+ * The same page as `layout`, as a fragment for mounting inside CloudPanel's own
+ * site page. No site context: the panel is already drawing it.
+ */
+export function fragment(title: string, content: string): EmbedFragment {
+  return renderFragment(title, content, {
+    brand: "Maintenance Mode",
+    base: BASE,
+    nav: [],
+    css: STYLE,
+    script: CLIENT_JS,
   });
 }
 
