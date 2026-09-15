@@ -35,6 +35,12 @@ and otherwise serves the managed `default.html`. Responses include
 `Retry-After: 300`, disable caching, and apply a content security policy that
 blocks scripts, forms, frames, and cross-origin assets.
 
+The shared default is an unbranded, responsive page with neutral colors and
+automatic light and dark themes. It uses system fonts, inline CSS, and a static
+decorative SVG, so it needs no scripts or external assets and works under the
+maintenance response's content security policy. Its copy describes maintenance
+without assuming it was scheduled or promising a recovery time.
+
 ## State and privileges
 
 Only the root gateway changes maintenance state. It accepts a fixed verb set,
