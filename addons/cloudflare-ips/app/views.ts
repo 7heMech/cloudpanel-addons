@@ -11,9 +11,6 @@ const BASE = mountPath("cloudflare-ips");
 const STYLE = `
 .site-select { width: 42px; text-align: center; }
 .site-select input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); }
-.site-state { min-width: 26px; font-weight: 600; }
-.site-state.is-on { color: var(--ok); }
-.site-state.is-off { color: var(--muted); }
 .fleet-card, .policy-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
 .fleet-card h2, .policy-card h2 { margin: 0 0 8px; }
 .fleet-card p, .policy-card p { margin: 0; }
@@ -96,18 +93,11 @@ function applyState(state) {
     row.dataset.excluded = String(site.excludedFromAutomatic);
     const input = row.querySelector('.site-switch');
     if (input) input.checked = site.enabled;
-    const label = row.querySelector('.site-state');
-    if (label) {
-      label.textContent = site.enabled ? 'On' : 'Off';
-      label.className = 'site-state ' + (site.enabled ? 'is-on' : 'is-off');
-    }
     const hint = row.querySelector('.site-exception');
     if (hint) hint.hidden = !(site.excludedFromAutomatic && state.autoEnableNewSites);
   });
   const policy = document.getElementById('automatic-policy');
   if (policy) policy.checked = Boolean(state.autoEnableNewSites);
-  const policyState = document.getElementById('automatic-state');
-  if (policyState) policyState.textContent = state.autoEnableNewSites ? 'On' : 'Off';
   paintSummary();
 }
 
@@ -280,9 +270,7 @@ export function dashboardView(state: CloudflareState): string {
       <td class="site-cell">${esc(site.domain)}<div class="hint site-exception"${site.excludedFromAutomatic && state.autoEnableNewSites ? "" : " hidden"}>Excluded from automatic enabling</div></td>
       <td>${esc(siteTypeLabel(site.type))}</td>
       <td class="action-cell">
-        <span class="switch-field"><span class="site-state ${site.enabled ? "is-on" : "is-off"}">${site.enabled ? "On" : "Off"}</span>
-          <label class="switch"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
-        </span>
+        <label class="switch"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
       </td>
     </tr>`).join("");
 
@@ -307,9 +295,7 @@ export function dashboardView(state: CloudflareState): string {
         <p>Apply the setting automatically within about one minute after a site is created.</p>
         <p class="hint">This never changes a site that already exists. A site turned off above stays excluded.</p>
       </div>
-      <label class="switch-field" for="automatic-policy"><span class="switch-state" id="automatic-state">${state.autoEnableNewSites ? "On" : "Off"}</span>
-        <span class="switch"><input id="automatic-policy" type="checkbox" ${state.autoEnableNewSites ? "checked" : ""} onchange="setAutomatic(this)"><span></span></span>
-      </label>
+      <label class="switch"><input id="automatic-policy" type="checkbox" aria-label="Enable Cloudflare-only access on new sites" ${state.autoEnableNewSites ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
     </div>
     <div class="card card-table">
       ${total === 0

@@ -140,7 +140,7 @@ interface FakeElement {
 interface FakeRow {
   dataset: { domain: string; enabled: string; excluded: string };
   querySelector: (selector: string) => FakeElement | null;
-  parts: { checkbox: FakeElement; toggle: FakeElement; state: FakeElement; exception: FakeElement };
+  parts: { checkbox: FakeElement; toggle: FakeElement; exception: FakeElement };
 }
 
 /**
@@ -160,20 +160,19 @@ function fakeDashboard(
     "cf-summary": el(), "cf-selection": el(), "select-all": el(),
     "enable-selected": el({ disabled: true }), "disable-selected": el({ disabled: true }),
     "enable-all": el(), "disable-all": el(),
-    "automatic-policy": el({ checked: auto }), "automatic-state": el({ textContent: auto ? "On" : "Off" }),
+    "automatic-policy": el({ checked: auto }),
   };
   const rows: FakeRow[] = sites.map((site) => {
     const parts = {
       checkbox: el({ checked: Boolean(site.selected) }),
       toggle: el({ checked: site.enabled }),
-      state: el({ textContent: site.enabled ? "On" : "Off" }),
       exception: el({ hidden: !(site.excluded && auto) }),
     };
     const row: FakeRow = {
       dataset: { domain: site.domain, enabled: String(site.enabled), excluded: String(site.excluded) },
       querySelector: (selector) => ({
         ".site-checkbox": parts.checkbox, ".site-switch": parts.toggle,
-        ".site-state": parts.state, ".site-exception": parts.exception,
+        ".site-exception": parts.exception,
       }[selector] ?? null),
       parts,
     };
@@ -245,7 +244,7 @@ test("a failed per-site update reports inline and repaints from the server", asy
   expect(messages).toEqual([{ message: "Could not update the Cloudflare setting: request failed", kind: "error" }]);
   expect(input.checked).toBe(false);
   expect(input.disabled).toBe(false);
-  expect(dom.rows[0]!.parts.state.textContent).toBe("Off");
+  expect(dom.rows[0]!.parts.toggle.checked).toBe(false);
 });
 
 test("an all-sites confirmation names the sites it turns on and the exceptions it clears", async () => {
