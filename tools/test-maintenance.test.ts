@@ -323,12 +323,13 @@ test("a site-scoped page keeps CloudPanel's site navigation rather than a back l
   expect(withContext).toContain('href="/site/one.example.com/varnish-cache"');
   expect(withContext).toContain('aria-label="Site navigation"');
   expect(withContext).toContain("203.0.113.10");
-  // The addon's own single "Sites" tab would only compete with the site strip.
-  expect(withContext).not.toContain('aria-label="Maintenance Mode navigation"');
   expect(withContext).not.toContain("Back to site");
 
+  // The addon has one page of its own, so it carries no tab strip anywhere:
+  // the only tab it could hold is the page already being read.
+  expect(withContext).not.toContain('aria-label="Maintenance Mode navigation"');
   const fleet = layout("Maintenance", fleetView([]), null);
-  expect(fleet).toContain('aria-label="Maintenance Mode navigation"');
+  expect(fleet).not.toContain('aria-label="Maintenance Mode navigation"');
   expect(fleet).not.toContain('aria-label="Site navigation"');
 });
 

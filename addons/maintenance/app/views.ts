@@ -476,9 +476,10 @@ export function layout(
   return renderLayout(title, content, {
     brand: "Maintenance Mode",
     base: BASE,
-    // A site-scoped page draws CloudPanel's own site tabs instead, so this
-    // addon's single "Sites" tab would only compete with them.
-    nav: site ? [] : [{ href: `${BASE}/`, label: "Sites" }],
+    // No tab strip: this addon has one page of its own, so the strip could only
+    // hold a tab for the page already being read. A site-scoped page draws
+    // CloudPanel's own site tabs, which come from the site context below.
+    nav: [],
     css: STYLE,
     script: CLIENT_JS,
     updateNotice,
