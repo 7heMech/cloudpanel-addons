@@ -11,8 +11,9 @@ The global override is a card of its own labelled "Global maintenance", not a
 switch in the table header: it decides what visitors get for every site at once
 and changes nothing a site has saved. Its confirmation names the site count and
 how many have maintenance saved off. While it is on, every site serves 503 and a
-site whose own setting is off shows a "Maintenance (Global)" badge; turning it
-off returns each site to its saved setting. Turning it on or off purges Varnish
+site whose own setting is off, or could not be read, shows a "Maintenance
+(Global)" badge and is counted as in maintenance; turning it off returns each
+site to its saved setting. Turning it on or off purges Varnish
 cache across the fleet.
 
 A domain query opens the focused editor for that site. That page is drawn in the

@@ -207,6 +207,7 @@ function loadDashboard(
     call: (path: string, options?: unknown) => Promise<unknown>;
     confirmAction?: (options: { details?: string[] }) => Promise<boolean>;
     notify?: (message: string, kind: string) => void;
+    busy?: (on: boolean) => void;
     reload?: () => void;
   },
 ): DashboardClient {
@@ -217,7 +218,7 @@ function loadDashboard(
   return factory(
     dom.document,
     handlers.call,
-    () => {},
+    handlers.busy ?? (() => {}),
     handlers.notify ?? (() => {}),
     () => {},
     handlers.confirmAction ?? (async () => true),
@@ -245,6 +246,36 @@ test("a failed per-site update reports inline and repaints from the server", asy
   expect(input.checked).toBe(false);
   expect(input.disabled).toBe(false);
   expect(dom.rows[0]!.parts.toggle.checked).toBe(false);
+});
+
+test("a change is not called done while the page could not be refreshed", async () => {
+  const dom = fakeDashboard([
+    { domain: "one.example.test", enabled: false, excluded: false },
+    { domain: "two.example.test", enabled: false, excluded: false },
+  ]);
+  const messages: { message: string; kind: string }[] = [];
+  const order: string[] = [];
+  const client = loadDashboard(dom, {
+    // The write lands; reading the new state back does not.
+    call: async (path, options) => {
+      if (options) { order.push("write"); return { ok: true }; }
+      order.push("read");
+      throw new Error("gateway unavailable");
+    },
+    busy: (on) => order.push(on ? "held" : "released"),
+    notify: (message, kind) => messages.push({ message, kind }),
+  });
+
+  await client.runBulk(dom.rows.map((row) => client.rowState(row)), true, "all");
+
+  // The controls stay held across the read, so a second click cannot start a
+  // change whose reply arrives first and paints the older state over it.
+  expect(order).toEqual(["held", "write", "read", "released"]);
+  // The change did happen; what failed is knowing whether the rows still match.
+  expect(messages).toEqual([{
+    message: "2 sites now allow Cloudflare traffic only. The page may be out of date: gateway unavailable",
+    kind: "warn",
+  }]);
 });
 
 test("an all-sites confirmation names the sites it turns on and the exceptions it clears", async () => {

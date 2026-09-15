@@ -229,6 +229,26 @@ test("fleet overview separates unavailable sites from the live count", () => {
   expect(rendered).toContain('<div class="label">Live</div><div class="value">1</div>');
 });
 
+test("the global override covers a site whose own setting could not be read", () => {
+  const sites = [
+    { domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] },
+    { domain: "unknown.example.com", type: "nodejs", user: "two", enabled: false, customTemplate: false, bypasses: [], error: "status unavailable" },
+  ];
+  // Nginx serves the override from one file for every site, so an unreadable
+  // saved setting changes what the page knows, not what visitors are getting.
+  const globalOn = fleetView(sites, true);
+  expect(globalOn).toContain('<span class="badge state-maintenance" data-status-domain="unknown.example.com">Maintenance (Global)</span>');
+  expect(globalOn).toContain('<div class="label">In maintenance</div><div class="value">2</div>');
+  expect(globalOn).toContain('<div class="label">Live</div><div class="value">0</div>');
+  // What could not be read is still said, beside the site it belongs to.
+  expect(globalOn).toContain('<div class="hint">status unavailable</div>');
+
+  const globalOff = fleetView(sites, false);
+  expect(globalOff).toContain('<span class="badge state-unavailable" data-status-domain="unknown.example.com">Unavailable</span>');
+  expect(globalOff).toContain('<div class="label">In maintenance</div><div class="value">0</div>');
+  expect(globalOff).toContain('<div class="label">Live</div><div class="value">1</div>');
+});
+
 test("fleet overview renders the global override and badges according to global and individual state", () => {
   // globalEnabled = true: the override reads On, In maintenance = 2, Live = 0.
   const globalOn = fleetView([

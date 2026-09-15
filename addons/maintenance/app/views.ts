@@ -74,12 +74,17 @@ function paintGlobalState(globalActive) {
 function syncGlobalUI(globalActive) {
   paintGlobalState(globalActive);
 
-  const available = Array.from(document.querySelectorAll('input[data-toggle-domain][data-available="true"]'));
+  // Every row, not only the readable ones: the override covers a site whose
+  // saved setting could not be read just as it covers the rest.
+  const rows = Array.from(document.querySelectorAll('input[data-toggle-domain]'));
+  let readableCount = 0;
   let siteEnabledCount = 0;
 
-  available.forEach(function (input) {
+  rows.forEach(function (input) {
     const domain = input.dataset.toggleDomain;
-    const isSiteEnabled = input.checked;
+    const readable = input.dataset.available === 'true';
+    if (readable) readableCount++;
+    const isSiteEnabled = readable && input.checked;
     if (isSiteEnabled) siteEnabledCount++;
 
     const badge = document.querySelector('[data-status-domain="' + CSS.escape(domain) + '"]');
@@ -91,14 +96,17 @@ function syncGlobalUI(globalActive) {
     } else if (globalActive) {
       badge.className = 'badge state-maintenance';
       badge.textContent = 'Maintenance (Global)';
+    } else if (!readable) {
+      badge.className = 'badge state-unavailable';
+      badge.textContent = 'Unavailable';
     } else {
       badge.className = 'badge state-live';
       badge.textContent = 'Live';
     }
   });
 
-  const maintenanceCount = globalActive ? available.length : siteEnabledCount;
-  const liveCount = globalActive ? 0 : available.length - siteEnabledCount;
+  const maintenanceCount = globalActive ? rows.length : siteEnabledCount;
+  const liveCount = globalActive ? 0 : readableCount - siteEnabledCount;
   updateStats(maintenanceCount, liveCount);
 }
 
@@ -356,10 +364,13 @@ export function layout(
 }
 
 function statusBadge(site: MaintenanceSiteView, globalEnabled = false): string {
-  if (site.error) {
+  // A site whose saved setting could not be read is still behind the global
+  // override, which Nginx serves from one file for every site. Unavailable is
+  // what is unknown about the site, not what its visitors are getting.
+  if (site.error && !globalEnabled) {
     return `<span class="badge state-unavailable" data-status-domain="${esc(site.domain)}">Unavailable</span>`;
   }
-  if (site.enabled) {
+  if (site.enabled && !site.error) {
     return `<span class="badge state-maintenance" data-status-domain="${esc(site.domain)}">Maintenance Mode (503)</span>`;
   }
   if (globalEnabled) {
@@ -391,7 +402,8 @@ function globalCard(globalEnabled: boolean, disabled: boolean): string {
 export function fleetView(sites: MaintenanceSiteView[], globalEnabled = false): string {
   const available = sites.filter((site) => !site.error);
   const siteMaintenanceCount = available.filter((site) => site.enabled).length;
-  const inMaintenanceCount = globalEnabled ? available.length : siteMaintenanceCount;
+  // The override covers the fleet, including the sites this page could not read.
+  const inMaintenanceCount = globalEnabled ? sites.length : siteMaintenanceCount;
   const liveCount = globalEnabled ? 0 : available.length - siteMaintenanceCount;
   const rows = sites.map((site) => `<tr>
     <td class="fleet-site"><a href="${BASE}?domain=${encodeURIComponent(site.domain)}">${esc(site.domain)}</a>${site.error ? `<div class="hint">${esc(site.error)}</div>` : ""}</td>

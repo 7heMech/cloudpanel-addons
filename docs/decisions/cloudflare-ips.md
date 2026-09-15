@@ -33,6 +33,9 @@ the ordinary correction after a fleet-wide change.
 After any change the page repaints from a fresh read rather than from what was
 requested, keeping selection and scroll, and does the same after a failure so
 the displayed state is the server's. A changed site inventory reloads instead.
+That read is part of the change: the controls stay disabled until it returns, so
+a second action cannot overtake the first, and a change whose read failed is
+reported as done but possibly out of date rather than as plain success.
 
 ## New-site policy
 

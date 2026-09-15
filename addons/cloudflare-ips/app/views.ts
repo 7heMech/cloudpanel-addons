@@ -101,22 +101,26 @@ function applyState(state) {
   paintSummary();
 }
 
-async function reconcile() {
+/** The state the server holds now, or why it could not be read. */
+async function readState() {
   try {
-    const reply = await call('/api/sites');
-    applyState(reply.data);
+    return { ok: true, data: (await call('/api/sites')).data };
   } catch (error) {
-    notify('The page may be out of date: ' + error.message, 'warn');
+    return { ok: false, error: error.message };
   }
 }
 
-// Repainting happens after busy() has released, because busy() restores every
-// control to what it was disabled as, which would undo the new row state.
+// Reading the new state is part of the change, not something after it: the
+// controls stay disabled until it is in hand, so a second click cannot start a
+// change whose reply arrives first and paints the older state over the newer
+// one. Painting waits for busy() to release, because busy() restores every
+// control to what it was disabled as, which would undo what the paint decided.
 async function setDomains(domains, enabled) {
   if (!domains.length) return false;
   clearNotice();
   busy(true);
   let failure = '';
+  let state;
   try {
     await call('/api/sites', {
       method: 'POST',
@@ -125,15 +129,21 @@ async function setDomains(domains, enabled) {
     });
   } catch (error) {
     failure = error.message;
+  }
+  try {
+    state = await readState();
   } finally {
     busy(false);
   }
-  await reconcile();
+  if (state.ok) applyState(state.data);
   if (failure) {
     notify('Could not update the Cloudflare setting: ' + failure, 'error');
     return false;
   }
-  notify(plural(domains.length, 'site') + (enabled ? ' now allow' : ' no longer allow') + ' Cloudflare traffic only.', 'ok');
+  const done = plural(domains.length, 'site') + (enabled ? ' now allow' : ' no longer allow') + ' Cloudflare traffic only.';
+  // The change landed; what is on screen is what could not be refreshed, and
+  // saying only that it worked would hide rows that are no longer true.
+  notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');
   return true;
 }
 
@@ -225,6 +235,7 @@ async function setAutomatic(input) {
   clearNotice();
   busy(true);
   let failure = '';
+  let state;
   try {
     await call('/api/policy', {
       method: 'POST',
@@ -233,17 +244,21 @@ async function setAutomatic(input) {
     });
   } catch (error) {
     failure = error.message;
+  }
+  try {
+    state = await readState();
   } finally {
     busy(false);
   }
-  await reconcile();
+  if (state.ok) applyState(state.data);
   if (failure) {
     notify('Could not update the automatic policy: ' + failure, 'error');
     return;
   }
-  notify(enabled
+  const done = enabled
     ? 'New sites will allow Cloudflare only. Existing sites are unchanged.'
-    : 'New sites are left alone. Existing sites are unchanged.', 'ok');
+    : 'New sites are left alone. Existing sites are unchanged.';
+  notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', paintSummary);
