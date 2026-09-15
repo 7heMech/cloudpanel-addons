@@ -92,6 +92,8 @@ test("dashboard renders bulk, per-site, and automatic controls with escaped site
     autoEnableNewSites: true,
     sites: [{ domain: '"><script>alert(1)</script>.example.test', type: "php", enabled: false, excludedFromAutomatic: true }],
   });
+  expect(html).toContain("Enable all sites");
+  expect(html).toContain("Disable all sites");
   expect(html).toContain("Enable selected");
   expect(html).toContain('id="select-all"');
   expect(html).toContain('id="automatic-policy"');
@@ -100,36 +102,304 @@ test("dashboard renders bulk, per-site, and automatic controls with escaped site
   expect(() => new Function(CLIENT_JS)).not.toThrow();
 });
 
-test("a failed per-site update restores the control for retry", async () => {
-  const busyStates: boolean[] = [];
-  const alerts: string[] = [];
-  const loadClient = new Function(
-    "call", "busy", "alert", "location",
-    `${CLIENT_JS}\nreturn { setOne };`,
-  ) as (
-    call: () => Promise<never>,
-    busy: (state: boolean) => void,
-    alert: (message: string) => void,
-    location: { reload(): void },
-  ) => { setOne(input: { checked: boolean; disabled: boolean; getAttribute(name: string): string | null }): Promise<void> };
-  const client = loadClient(
-    async () => { throw new Error("request failed"); },
-    (state) => busyStates.push(state),
-    (message) => alerts.push(message),
-    { reload() {} },
-  );
-  const input = {
-    checked: true,
-    disabled: false,
-    getAttribute: (name: string) => name === "data-domain" ? "retry.example.test" : null,
-  };
+test("dashboard summarises how many sites allow Cloudflare only", () => {
+  const sites = [
+    { domain: "a.example.test", type: "php", enabled: true, excludedFromAutomatic: false },
+    { domain: "b.example.test", type: "php", enabled: false, excludedFromAutomatic: true },
+    { domain: "c.example.test", type: "static", enabled: true, excludedFromAutomatic: false },
+  ];
+  expect(dashboardView({ autoEnableNewSites: true, sites })).toContain("2 of 3 sites allow Cloudflare only.");
+  expect(dashboardView({ autoEnableNewSites: true, sites: [] })).toContain("No sites found in CloudPanel.");
+  // Selected-scope actions start unavailable because nothing is selected yet.
+  const rendered = dashboardView({ autoEnableNewSites: true, sites });
+  expect(rendered).toContain('id="enable-selected" type="button" disabled');
+  expect(rendered).toContain('id="disable-selected" type="button" disabled');
+});
 
+test("the switch column ends where the table ends, as the Maintenance table does", () => {
+  const html = dashboardView({
+    autoEnableNewSites: true,
+    sites: [{ domain: "a.example.test", type: "php", enabled: true, excludedFromAutomatic: false }],
+  });
+  // .action-cell is the shared right-aligned column; without it the switches
+  // sat in the middle of the row with the rest of the table empty beside them.
+  expect(html).toContain('<th scope="col" class="action-cell">Cloudflare only</th>');
+  expect(html).toContain('<td class="action-cell">');
+});
+
+interface FakeElement {
+  textContent: string;
+  className: string;
+  hidden: boolean;
+  disabled: boolean;
+  checked: boolean;
+  indeterminate: boolean;
+  closest?: (selector: string) => unknown;
+}
+
+interface FakeRow {
+  dataset: { domain: string; enabled: string; excluded: string };
+  querySelector: (selector: string) => FakeElement | null;
+  parts: { checkbox: FakeElement; toggle: FakeElement; exception: FakeElement };
+}
+
+/**
+ * Just enough DOM for the dashboard's own script: the rows it counts, the
+ * controls it enables and the labels it repaints. Kept here rather than pulled
+ * in as a browser environment because these tests are about the addon's rules,
+ * not about rendering.
+ */
+function fakeDashboard(
+  sites: { domain: string; enabled: boolean; excluded: boolean; selected?: boolean }[],
+  auto = true,
+) {
+  const el = (over: Partial<FakeElement> = {}): FakeElement => ({
+    textContent: "", className: "", hidden: false, disabled: false, checked: false, indeterminate: false, ...over,
+  });
+  const byId: Record<string, FakeElement> = {
+    "cf-summary": el(), "cf-selection": el(), "select-all": el(),
+    "enable-selected": el({ disabled: true }), "disable-selected": el({ disabled: true }),
+    "enable-all": el(), "disable-all": el(),
+    "automatic-policy": el({ checked: auto }),
+  };
+  const rows: FakeRow[] = sites.map((site) => {
+    const parts = {
+      checkbox: el({ checked: Boolean(site.selected) }),
+      toggle: el({ checked: site.enabled }),
+      exception: el({ hidden: !(site.excluded && auto) }),
+    };
+    const row: FakeRow = {
+      dataset: { domain: site.domain, enabled: String(site.enabled), excluded: String(site.excluded) },
+      querySelector: (selector) => ({
+        ".site-checkbox": parts.checkbox, ".site-switch": parts.toggle,
+        ".site-exception": parts.exception,
+      }[selector] ?? null),
+      parts,
+    };
+    parts.checkbox.closest = parts.toggle.closest = (selector) => (selector === "tr[data-domain]" ? row : null);
+    return row;
+  });
+  const document = {
+    readyState: "complete",
+    addEventListener() {},
+    getElementById: (id: string) => byId[id] ?? null,
+    querySelectorAll: (selector: string) => {
+      if (selector === "tr[data-domain]") return rows;
+      if (selector === ".site-checkbox") return rows.map((row) => row.parts.checkbox);
+      return [];
+    },
+  };
+  return { document, rows, byId };
+}
+
+interface DashboardClient {
+  setOne(input: unknown): Promise<void>;
+  setAllSites(enabled: boolean): void;
+  runBulk(rows: unknown[], enabled: boolean, scope: string): Promise<void>;
+  siteRows(): unknown[];
+  rowState(row: unknown): unknown;
+  paintSummary(): void;
+}
+
+function loadDashboard(
+  dom: ReturnType<typeof fakeDashboard>,
+  handlers: {
+    call: (path: string, options?: unknown) => Promise<unknown>;
+    confirmAction?: (options: { details?: string[] }) => Promise<boolean>;
+    notify?: (message: string, kind: string) => void;
+    busy?: (on: boolean) => void;
+    reload?: () => void;
+  },
+): DashboardClient {
+  const factory = new Function(
+    "document", "call", "busy", "notify", "clearNotice", "confirmAction", "location",
+    `${CLIENT_JS}\nreturn { setOne, setAllSites, runBulk, siteRows, rowState, paintSummary };`,
+  ) as (...args: unknown[]) => DashboardClient;
+  return factory(
+    dom.document,
+    handlers.call,
+    handlers.busy ?? (() => {}),
+    handlers.notify ?? (() => {}),
+    () => {},
+    handlers.confirmAction ?? (async () => true),
+    { reload: handlers.reload ?? (() => {}) },
+  );
+}
+
+test("a failed per-site update reports inline and repaints from the server", async () => {
+  const dom = fakeDashboard([{ domain: "retry.example.test", enabled: false, excluded: true }]);
+  const messages: { message: string; kind: string }[] = [];
+  const client = loadDashboard(dom, {
+    // The write fails; the follow-up read still reports the real server state.
+    call: async (path, options) => {
+      if (options) throw new Error("request failed");
+      return { ok: true, data: { autoEnableNewSites: true, sites: [{ domain: "retry.example.test", type: "php", enabled: false, excludedFromAutomatic: true }] } };
+    },
+    notify: (message, kind) => messages.push({ message, kind }),
+  });
+
+  const input = dom.rows[0]!.parts.toggle;
+  input.checked = true;
   await client.setOne(input);
 
+  expect(messages).toEqual([{ message: "Could not update the Cloudflare setting: request failed", kind: "error" }]);
   expect(input.checked).toBe(false);
   expect(input.disabled).toBe(false);
-  expect(busyStates).toEqual([true, false]);
-  expect(alerts).toEqual(["Could not update the Cloudflare setting: request failed"]);
+  expect(dom.rows[0]!.parts.toggle.checked).toBe(false);
+});
+
+test("a change is not called done while the page could not be refreshed", async () => {
+  const dom = fakeDashboard([
+    { domain: "one.example.test", enabled: false, excluded: false },
+    { domain: "two.example.test", enabled: false, excluded: false },
+  ]);
+  const messages: { message: string; kind: string }[] = [];
+  const order: string[] = [];
+  const client = loadDashboard(dom, {
+    // The write lands; reading the new state back does not.
+    call: async (path, options) => {
+      if (options) { order.push("write"); return { ok: true }; }
+      order.push("read");
+      throw new Error("gateway unavailable");
+    },
+    busy: (on) => order.push(on ? "held" : "released"),
+    notify: (message, kind) => messages.push({ message, kind }),
+  });
+
+  await client.runBulk(dom.rows.map((row) => client.rowState(row)), true, "all");
+
+  // The controls stay held across the read, so a second click cannot start a
+  // change whose reply arrives first and paints the older state over it.
+  expect(order).toEqual(["held", "write", "read", "released"]);
+  // The change did happen; what failed is knowing whether the rows still match.
+  expect(messages).toEqual([{
+    message: "2 sites now allow Cloudflare traffic only. The page may be out of date: gateway unavailable",
+    kind: "warn",
+  }]);
+});
+
+test("an all-sites confirmation names the sites it turns on and the exceptions it clears", async () => {
+  const dom = fakeDashboard([
+    { domain: "on.example.test", enabled: true, excluded: false },
+    { domain: "off.example.test", enabled: false, excluded: true },
+    { domain: "also-off.example.test", enabled: false, excluded: false },
+  ]);
+  let offered: string[] = [];
+  const requests: unknown[] = [];
+  const client = loadDashboard(dom, {
+    call: async (path, options) => {
+      if (options) { requests.push(JSON.parse((options as { body: string }).body)); return { ok: true }; }
+      return { ok: true, data: { autoEnableNewSites: true, sites: [
+        { domain: "on.example.test", type: "php", enabled: true, excludedFromAutomatic: false },
+        { domain: "off.example.test", type: "php", enabled: true, excludedFromAutomatic: false },
+        { domain: "also-off.example.test", type: "php", enabled: true, excludedFromAutomatic: false },
+      ] } };
+    },
+    confirmAction: async (options) => { offered = options.details ?? []; return true; },
+  });
+
+  await client.runBulk(dom.rows.map((row) => client.rowState(row)), true, "all");
+
+  expect(offered[0]).toBe("2 sites currently off are turned on.");
+  expect(offered[1]).toBe("1 site stops being excluded from automatic enabling.");
+  expect(offered[2]).toBe("These choices replace what is set now and are not restored afterwards.");
+  expect(requests).toEqual([{ domains: ["on.example.test", "off.example.test", "also-off.example.test"], enabled: true }]);
+  expect(dom.byId["cf-summary"]!.textContent).toBe("3 of 3 sites allow Cloudflare only.");
+});
+
+test("cancelling an all-sites action changes nothing", async () => {
+  const dom = fakeDashboard([{ domain: "one.example.test", enabled: false, excluded: false }]);
+  let called = false;
+  const client = loadDashboard(dom, {
+    call: async () => { called = true; return { ok: true }; },
+    confirmAction: async () => false,
+  });
+
+  await client.runBulk(dom.rows.map((row) => client.rowState(row)), true, "all");
+
+  expect(called).toBe(false);
+  expect(dom.rows[0]!.dataset.enabled).toBe("false");
+});
+
+test("an all-sites action with nothing to change asks for no confirmation and sends no request", async () => {
+  const dom = fakeDashboard([{ domain: "one.example.test", enabled: true, excluded: false }]);
+  let confirmed = false;
+  let called = false;
+  const messages: string[] = [];
+  const client = loadDashboard(dom, {
+    call: async () => { called = true; return { ok: true }; },
+    confirmAction: async () => { confirmed = true; return true; },
+    notify: (message) => messages.push(message),
+  });
+
+  await client.runBulk(dom.rows.map((row) => client.rowState(row)), true, "all");
+
+  expect(confirmed).toBe(false);
+  expect(called).toBe(false);
+  expect(messages).toEqual(["Every site is already on; nothing to change."]);
+});
+
+test("a site turned off after an enable-all stays off when the page repaints", async () => {
+  const dom = fakeDashboard([
+    { domain: "keep.example.test", enabled: true, excluded: false },
+    { domain: "exception.example.test", enabled: true, excluded: false },
+  ]);
+  const client = loadDashboard(dom, {
+    call: async (path, options) => {
+      if (options) return { ok: true };
+      // What the action records: the flag off and the automatic exception set.
+      return { ok: true, data: { autoEnableNewSites: true, sites: [
+        { domain: "keep.example.test", type: "php", enabled: true, excludedFromAutomatic: false },
+        { domain: "exception.example.test", type: "php", enabled: false, excludedFromAutomatic: true },
+      ] } };
+    },
+  });
+
+  const input = dom.rows[1]!.parts.toggle;
+  input.checked = false;
+  await client.setOne(input);
+
+  expect(dom.rows[1]!.dataset.enabled).toBe("false");
+  expect(dom.rows[1]!.dataset.excluded).toBe("true");
+  expect(dom.rows[1]!.parts.exception.hidden).toBe(false);
+  expect(dom.byId["cf-summary"]!.textContent).toBe("1 of 2 sites allow Cloudflare only.");
+});
+
+test("a changed site inventory reloads instead of repainting rows that are not there", async () => {
+  const dom = fakeDashboard([{ domain: "gone.example.test", enabled: true, excluded: false }]);
+  let reloaded = false;
+  const client = loadDashboard(dom, {
+    call: async (path, options) => {
+      if (options) return { ok: true };
+      return { ok: true, data: { autoEnableNewSites: true, sites: [
+        { domain: "new.example.test", type: "php", enabled: true, excludedFromAutomatic: false },
+      ] } };
+    },
+    reload: () => { reloaded = true; },
+  });
+
+  await client.setOne(dom.rows[0]!.parts.toggle);
+
+  expect(reloaded).toBe(true);
+});
+
+test("selection actions stay unavailable until sites are selected", () => {
+  const dom = fakeDashboard([
+    { domain: "a.example.test", enabled: true, excluded: false },
+    { domain: "b.example.test", enabled: false, excluded: false, selected: true },
+  ]);
+  const client = loadDashboard(dom, { call: async () => ({ ok: true }) });
+
+  client.paintSummary();
+  expect(dom.byId["cf-selection"]!.textContent).toBe("1 site selected");
+  expect(dom.byId["enable-selected"]!.disabled).toBe(false);
+  expect(dom.byId["select-all"]!.indeterminate).toBe(true);
+
+  dom.rows[1]!.parts.checkbox.checked = false;
+  client.paintSummary();
+  expect(dom.byId["cf-selection"]!.textContent).toBe("No sites selected");
+  expect(dom.byId["enable-selected"]!.disabled).toBe(true);
+  expect(dom.byId["disable-selected"]!.disabled).toBe(true);
 });
 
 test("vhost transformation mirrors CloudPanel and is reversible", () => {

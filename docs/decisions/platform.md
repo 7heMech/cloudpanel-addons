@@ -33,10 +33,40 @@ When Cloudflare IP Access is enabled, a separate one-minute timer applies its
 new-site policy. Disabling the addon removes that timer while keeping the policy
 state for a later re-enable.
 
+## Shared interface
+
+Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
+badges, switches, toolbars, one confirmation dialog and one inline notice per
+page. An addon supplies its brand, its own tabs, its script and any rule only it
+draws.
+
+A page reached from a site's tab strip is drawn in site mode instead: the shell
+shows CloudPanel's site information and the applicable site tabs with the addon's
+tab active, and the page belongs to Sites rather than to Addons. `lib/site-context.ts`
+is the only description of that strip -- order, per-type conditions and routes
+mirror `Frontend/Site/Partial/tab-container.html.twig` -- and both the shell and
+the injected Twig snippet read it, so a tab cannot be labelled two ways. The
+reproduced site information takes its column width, gutter and label styling
+from the panel's own `assets/css/frontend/site.css`, so the blocks land where
+the panel puts them.
+
+CloudPanel sizes that strip for the tabs it ships, so an addon's tab wrapped it
+onto a second row. The manager injects one rule making the strip a single
+scrollable row and letting the site-information blocks wrap, rather than
+widening the panel's limited-width container, which would only postpone the
+break until the next addon. The rule is injected once, and only while an
+installed addon patches that partial.
+
 ## Live panel data
 
 The manager requests current site and port information from the root gateway.
 The gateway reads a consistent copy of CloudPanel's SQLite database and adds
-ports recorded by addons or active listeners. Only domain, site user, site type,
-and allocated ports cross the socket; no panel database snapshot is stored on
-disk.
+ports recorded by addons or active listeners. Domain, site user, site type,
+Varnish capability, and allocated ports cross the socket; no panel database
+snapshot is stored on disk.
+
+A site-scoped page also shows the instance address CloudPanel shows. There is no
+column for it: the panel asks an external service and caches the answer for an
+hour, so the gateway reads that cached value and reports nothing when it is
+absent or expired. The addon then leaves the field out rather than print an
+address the panel itself would not.

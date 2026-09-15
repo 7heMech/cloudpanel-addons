@@ -8,6 +8,7 @@
 // any extra rules; everything else is shared.
 
 import { esc, escJs } from "./app-http";
+import { SITE_CONTEXT_STYLE, siteInfoHtml, siteTabs, type SiteContext } from "./site-context";
 import { UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
 
 // Measured against CloudPanel 2.5.1's public demo: dashboard, sites, settings,
@@ -79,9 +80,15 @@ html.dark .clp-addon-logo-dark { display: block; }
 .clp-addon-theme .sun { display: none; }
 html.dark .clp-addon-theme .sun { display: block; }
 html.dark .clp-addon-theme .moon { display: none; }
-main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 25px 24px 40px; flex: 1; min-width: 0; }
-.clp-addon-tabs { display: flex; overflow-x: auto; padding: 0 20px; margin-bottom: 30px;
-  background: var(--panel); border: 1px solid var(--border); scrollbar-width: thin; }
+main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 25px 12px 40px; flex: 1; min-width: 0; }
+/* The strip scrolls when the tabs outgrow it, but never shows a bar: overflow-x
+   alone also turns overflow-y into auto, and a 16px overflow at desktop width
+   drew a scrollbar that ate 10px of the strip's height. The active tab is
+   revealed on load and focus reveals the rest, so nothing becomes unreachable. */
+.clp-addon-tabs { display: flex; overflow-x: auto; overflow-y: hidden; padding: 0 20px;
+  margin-bottom: 30px; background: var(--panel); border: 1px solid var(--border);
+  scrollbar-width: none; }
+.clp-addon-tabs::-webkit-scrollbar { display: none; }
 .clp-addon-nav-link { flex: 0 0 auto; color: var(--tab-link); padding: 20px 15px 17px;
   border-bottom: 3px solid transparent; white-space: nowrap; }
 .clp-addon-nav-link:hover { color: var(--accent); text-decoration: none; }
@@ -151,7 +158,7 @@ input:focus, select:focus, textarea:focus { border-color: #86b7fe; box-shadow: 0
 .check-field { margin-top: 24px; }
 .check-label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
 input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; margin: 4px 0 0; accent-color: var(--primary); }
-.hint { color: var(--muted); font-size: 14px; margin-top: 5px; overflow-wrap: anywhere; }
+.hint { color: var(--muted); font-size: 14px; font-weight: 400; margin-top: 5px; overflow-wrap: anywhere; }
 p.hint { margin: 0 0 20px; }
 .alert, .notice { border: 1px solid currentColor; border-radius: 4px; padding: 15px 20px; margin-bottom: 20px; font-size: 14px; }
 .alert { color: var(--bad); background: rgba(248,113,113,0.08); }
@@ -160,11 +167,11 @@ p.hint { margin: 0 0 20px; }
 .card > .empty { padding: 0; }
 .card-table > .empty { padding: 25px; }
 dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border);
-  border-radius: 5px; padding: 25px; max-width: 720px; width: calc(100% - 32px); max-height: calc(100vh - 40px); overflow: auto; }
+  border-radius: 5px; padding: 30px; max-width: 720px; width: calc(100% - 32px); max-height: calc(100vh - 40px); overflow: auto; }
 dialog::backdrop { background: rgba(0,0,0,0.5); }
-.dialog-header { margin: -25px -25px 25px; padding: 20px 25px; border-bottom: 1px solid var(--border); }
+.dialog-header { margin: -30px -30px 25px; padding: 25px 30px; border-bottom: 1px solid var(--border); }
 .dialog-header h2 { margin: 0; overflow-wrap: anywhere; }
-.dialog-actions { justify-content: flex-end; margin: 25px -25px -25px; padding: 20px 25px; border-top: 1px solid var(--border); }
+.dialog-actions { justify-content: flex-end; margin: 25px -30px -30px; padding: 25px 30px; border-top: 1px solid var(--border); }
 pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 16px;
   overflow: auto; max-height: 55vh; font-family: var(--mono); font-size: 13px; }
 .row-actions { min-width: 100px; }
@@ -186,6 +193,30 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .clp-addon-footer { background: var(--panel); border-top: 1px solid var(--border); padding: 15px 20px;
   display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; color: var(--muted); font-size: 14px; }
 .clp-addon-footer a { color: var(--muted); }
+/* The on/off control every addon uses. The checkbox keeps its role, its label
+   and the keyboard; the span is only paint, so focus and state stay real. */
+.switch { position: relative; display: inline-flex; width: 50px; height: 28px; flex: none; }
+.switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.switch span { width: 100%; border-radius: 99px; background: var(--border); transition: background-color .15s; pointer-events: none; }
+.switch span::after { content: ""; display: block; width: 22px; height: 22px; margin: 3px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / 25%); transition: transform .15s; }
+.switch input:checked + span { background: var(--primary); }
+.switch input:checked + span::after { transform: translateX(22px); }
+.switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 3px; }
+.switch input:disabled { cursor: not-allowed; }
+.switch input:disabled + span { opacity: .5; }
+/* For a switch whose "on" state is the disruptive one, such as maintenance. */
+.switch-danger input:checked + span { background: var(--bad); }
+.switch-field { display: inline-flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; }
+.switch-field .switch-state { min-width: 26px; }
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.toolbar .toolbar-end { margin-left: auto; }
+.toolbar-note { color: var(--muted); font-size: 14px; font-weight: 400; }
+.alert-ok { color: var(--ok); background: rgb(35 119 75 / 8%); }
+#clp-flash { margin-bottom: 20px; }
+#clp-confirm-details { margin: 12px 0 0; padding-left: 20px; color: var(--muted); font-size: 14px; }
+#clp-confirm-text { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 1100px) {
   .clp-addon-header-inner > #clp-addons-update-notice { order: 3; flex: 1 0 100%; margin: 0;
     padding: 10px 20px; justify-content: flex-end; border-top: 1px solid var(--border); }
@@ -199,7 +230,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .clp-addon-primary-nav { order: 2; width: 100%; overflow-x: auto; border-top: 1px solid var(--border); padding: 0 5px; gap: 0; }
   .clp-addon-primary-link { min-height: 48px; }
   .clp-addon-header-inner > #clp-addons-update-notice { justify-content: center; padding: 10px 16px; }
-  main { padding: 20px 16px 30px; }
+  main { padding: 20px 12px 30px; }
   .clp-addon-tabs { padding: 0 5px; margin-bottom: 24px; }
   .page-heading { flex-wrap: wrap; }
   .page-heading h1 { font-size: 26px; }
@@ -252,7 +283,10 @@ window.addEventListener('pageshow', syncTheme);
 window.addEventListener('focus', syncTheme);
 
 // Use the longest matching route so /new takes precedence over the list tab.
-const navLinks = Array.from(document.querySelectorAll('.clp-addon-nav-link'));
+// Only the addon's own tabs: a site strip reproduces CloudPanel's navigation,
+// whose active entry the server already knows and most of whose routes this
+// page could never match.
+const navLinks = Array.from(document.querySelectorAll('[data-auto-active] .clp-addon-nav-link'));
 const activeLink = navLinks.filter(function (link) {
   const path = new URL(link.href).pathname.replace(/\\/$/, '');
   return location.pathname === path || location.pathname.indexOf(path + '/') === 0;
@@ -284,10 +318,93 @@ async function call(path, options) {
   return body;
 }
 
+// Remember what was already unavailable. Restoring every control to "enabled"
+// handed back the switch of a site whose status could not be read and the bulk
+// buttons of an empty selection.
 function busy(on) {
-  document.querySelectorAll('button').forEach(function (b) { b.disabled = on; });
+  document.querySelectorAll('button, input[type="checkbox"]').forEach(function (el) {
+    if (on) {
+      if (el.dataset.clpHeld === undefined) el.dataset.clpHeld = el.disabled ? '1' : '0';
+      el.disabled = true;
+    } else if (el.dataset.clpHeld !== undefined) {
+      el.disabled = el.dataset.clpHeld === '1';
+      delete el.dataset.clpHeld;
+    }
+  });
   document.body.style.cursor = on ? 'progress' : '';
 }
+
+// Feedback in the page rather than in a modal the browser owns: an addon that
+// reports a failed toggle with alert() loses the row it was talking about.
+let clpFlashTimer = 0;
+function notify(message, kind) {
+  const holder = document.getElementById('clp-flash');
+  if (!holder) {
+    if (kind === 'error') alert(message);
+    return;
+  }
+  clearTimeout(clpFlashTimer);
+  holder.textContent = message;
+  holder.className = kind === 'error' ? 'alert' : kind === 'warn' ? 'notice' : 'alert alert-ok';
+  holder.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  holder.hidden = false;
+  if (kind !== 'error') clpFlashTimer = setTimeout(function () { holder.hidden = true; }, 6000);
+}
+
+function clearNotice() {
+  const holder = document.getElementById('clp-flash');
+  if (holder) holder.hidden = true;
+}
+
+/**
+ * The shared confirmation. Takes {title, text, details, confirmLabel, danger}
+ * and resolves true only if the operator accepted. Every value is written with
+ * textContent, so a domain name in the summary stays a domain name.
+ */
+function confirmAction(options) {
+  const opts = options || {};
+  const dialog = document.getElementById('clp-confirm');
+  if (!dialog || typeof dialog.showModal !== 'function') {
+    return Promise.resolve(confirm([opts.title, opts.text].concat(opts.details || []).filter(Boolean).join('\\n\\n')));
+  }
+  dialog.querySelector('#clp-confirm-title').textContent = opts.title || 'Are you sure?';
+  dialog.querySelector('#clp-confirm-text').textContent = opts.text || '';
+  const list = dialog.querySelector('#clp-confirm-details');
+  list.textContent = '';
+  (opts.details || []).forEach(function (item) {
+    const entry = document.createElement('li');
+    entry.textContent = item;
+    list.appendChild(entry);
+  });
+  list.hidden = list.childElementCount === 0;
+  const accept = dialog.querySelector('#clp-confirm-accept');
+  accept.textContent = opts.confirmLabel || 'Continue';
+  accept.className = opts.danger ? 'btn btn-danger' : 'btn btn-primary';
+  return new Promise(function (resolve) {
+    function onClose() {
+      dialog.removeEventListener('close', onClose);
+      accept.removeEventListener('click', onAccept);
+      resolve(dialog.returnValue === 'accept');
+    }
+    function onAccept() { dialog.close('accept'); }
+    dialog.addEventListener('close', onClose);
+    accept.addEventListener('click', onAccept);
+    dialog.returnValue = '';
+    dialog.showModal();
+  });
+}
+
+// A strip wider than its container scrolls; keep the tab the page is on and the
+// tab the keyboard has reached in view. 'nearest' scrolls the strip, not the page.
+(function () {
+  const strip = document.querySelector('.clp-addon-tabs');
+  if (!strip) return;
+  function reveal(el) {
+    if (el && strip.scrollWidth > strip.clientWidth) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  reveal(strip.querySelector('[aria-current="page"]'));
+  strip.addEventListener('focusin', function (event) { reveal(event.target); });
+})();
 `;
 
 /**
@@ -446,14 +563,22 @@ export interface Chrome {
   script: string;
   /** Optional header controls if a newer clp-addons release is available. */
   updateNotice?: { current: string; latest: string } | null;
+  /**
+   * Draw CloudPanel's site information and site tab strip instead of this
+   * addon's own tabs, for a page reached from that strip. `activeSlug` is the
+   * tab this page is; see lib/site-context for the list.
+   */
+  site?: SiteContext & { activeSlug: string };
 }
 
 export function renderLayout(title: string, content: string, chrome: Chrome): string {
   const isAddonsRoute = chrome.base === "/addons" || chrome.base.startsWith("/addons/");
+  // A site-scoped page belongs to the site, so it highlights Sites; it is not
+  // somewhere else in the panel just because an addon renders it.
   const primaryNav = [
     { href: "/dashboard", label: "Dashboard", active: false },
-    { href: "/", label: "Sites", active: false },
-    { href: "/addons/", label: "Addons", title: "All addons", active: isAddonsRoute },
+    { href: "/", label: "Sites", active: Boolean(chrome.site) },
+    { href: "/addons/", label: "Addons", title: "All addons", active: isAddonsRoute && !chrome.site },
   ]
     .map((n) => {
       const active = n.active ? ' aria-current="page"' : "";
@@ -461,14 +586,22 @@ export function renderLayout(title: string, content: string, chrome: Chrome): st
       return `      <a class="clp-addon-primary-link${n.active ? " is-active" : ""}" href="${esc(n.href)}"${active}${titleAttr}>${esc(n.label)}</a>`;
     })
     .join("\n");
+  const siteHeader = chrome.site
+    ? `      ${siteInfoHtml(chrome.site)}
+      <nav class="clp-addon-tabs" aria-label="Site navigation">
+${siteTabs(chrome.site, chrome.site.activeSlug)
+  .map((tab) => `        <a class="clp-addon-nav-link" href="${esc(tab.href)}"${tab.active ? ' aria-current="page"' : ""}>${esc(tab.label)}</a>`)
+  .join("\n")}
+      </nav>`
+    : "";
   const contextualNav = chrome.nav
     .map((n) => `        <a class="clp-addon-nav-link" href="${esc(n.href)}">${esc(n.label)}</a>`)
     .join("\n");
-  const contextualHeader = contextualNav
-    ? `      <nav class="clp-addon-tabs" aria-label="${esc(chrome.brand)} navigation">
+  const contextualHeader = chrome.site || !contextualNav
+    ? siteHeader
+    : `      <nav class="clp-addon-tabs" data-auto-active aria-label="${esc(chrome.brand)} navigation">
 ${contextualNav}
-      </nav>`
-    : "";
+      </nav>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -476,7 +609,7 @@ ${contextualNav}
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
 <script>${THEME_INIT_JS}</script>
-<style>${BASE_STYLE}${UPDATE_STYLE}${chrome.css ?? ""}</style>
+<style>${BASE_STYLE}${SITE_CONTEXT_STYLE}${UPDATE_STYLE}${chrome.css ?? ""}</style>
 </head>
 <body>
 <header class="clp-addon-header">
@@ -497,7 +630,16 @@ ${primaryNav}
     </div>
   </div>
 </header>
-<main>${contextualHeader}${content}</main>
+<main>${contextualHeader}<div id="clp-flash" hidden></div>${content}</main>
+<dialog id="clp-confirm" aria-labelledby="clp-confirm-title">
+  <div class="dialog-header"><h2 id="clp-confirm-title">Are you sure?</h2></div>
+  <p id="clp-confirm-text"></p>
+  <ul id="clp-confirm-details" hidden></ul>
+  <form method="dialog" class="actions dialog-actions">
+    <button class="btn" value="cancel" type="submit">Cancel</button>
+    <button class="btn btn-primary" id="clp-confirm-accept" type="button">Continue</button>
+  </form>
+</dialog>
 <footer class="clp-addon-footer">
   <a href="https://www.cloudpanel.io/blog/" target="_blank" rel="noopener noreferrer">Blog</a>
   <a href="https://www.cloudpanel.io/docs/v2/" target="_blank" rel="noopener noreferrer">Docs</a>

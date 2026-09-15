@@ -100,6 +100,26 @@ try {
     site?.domain === "pipe|domain.example" && site.user === "clp|customer" && site.type === "php|fpm",
     JSON.stringify(site),
   );
+  check(
+    "a panel without the Varnish column reports no Varnish sites instead of failing",
+    site?.varnishCache === false,
+    JSON.stringify(site),
+  );
+
+  const varnishPath = join(fixtureDir, "varnish.sqlite");
+  createDatabase(varnishPath, (db) => {
+    db.run("CREATE TABLE site (domain_name TEXT, user TEXT, type TEXT, varnish_cache BOOLEAN NOT NULL, reverse_proxy_url TEXT)");
+    db.query("INSERT INTO site VALUES (?, ?, ?, ?, NULL)").run("cached.example", "cached", "php", 1);
+    db.query("INSERT INTO site VALUES (?, ?, ?, ?, NULL)").run("plain.example", "plain", "php", 0);
+  });
+  const varnish = readPanelDatabase(varnishPath);
+  check(
+    "Varnish capability crosses the gateway per site",
+    varnish.sites.find((s) => s.domain === "cached.example")?.varnishCache === true &&
+      varnish.sites.find((s) => s.domain === "plain.example")?.varnishCache === false,
+    JSON.stringify(varnish.sites),
+  );
+
   check("a read-only scan leaves database bytes unchanged", readFileSync(partialPath).equals(beforeBytes));
   check("a read-only scan leaves database mtime unchanged", statSync(partialPath).mtimeMs === beforeMtime);
   check(

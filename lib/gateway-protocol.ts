@@ -70,6 +70,13 @@ export interface SanitizedSite {
   domain: string;
   user: string;
   type: string;
+  /**
+   * Whether CloudPanel has Varnish enabled for this site. Optional because it
+   * decides only whether a site-scoped addon page draws the panel's Varnish
+   * Cache tab, and an older gateway that does not send it should leave the tab
+   * out rather than guess it into the strip.
+   */
+  varnishCache?: boolean;
 }
 
 export interface PanelSnapshot {
@@ -77,6 +84,12 @@ export interface PanelSnapshot {
   portRange: { min: number; max: number };
   allocatedPorts: number[];
   sites: SanitizedSite[];
+  /**
+   * The instance address CloudPanel shows in its own site information, when the
+   * panel has one recorded. Optional for the same reason: an addon omits the
+   * field rather than print an address the panel itself would not.
+   */
+  publicIp?: string;
 }
 
 export type PanelInfo = PanelSnapshot;

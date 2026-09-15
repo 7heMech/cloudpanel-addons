@@ -123,6 +123,72 @@ export function headerTarget(): AddonTarget {
   };
 }
 
+
+/** The panel partial whose tab strip an addon adds a site-scoped tab to. */
+export const SITE_TAB_TEMPLATE = "Frontend/Site/Partial/tab-container.html.twig";
+
+// CloudPanel lays its site tabs out as inline blocks inside a 1200px-limited
+// container, sized for exactly the tabs it ships. An addon's tab is the
+// eleventh, and at 1280px it wrapped onto a second row.
+//
+// Widening the container only moves the break to the next addon, so the strip
+// becomes one row that scrolls instead. The site-information blocks above it
+// are the other half of the same problem: they are a non-wrapping flex row of
+// 200px-minimum boxes, which overflows the page on a phone whatever the tabs
+// do.
+const SITE_LAYOUT_STYLE = `
+.tab-container ul { display: flex; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: none; }
+.tab-container ul::-webkit-scrollbar { display: none; }
+.tab-container ul li { flex: 0 0 auto; white-space: nowrap; }
+.tab-container ul li a:focus-visible { outline: 2px solid #0078d4; outline-offset: -4px; }
+.site-info-container { flex-wrap: wrap; }
+.site-info-box { max-width: 100%; }
+.site-info-value { overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .site-info-container { margin: 20px 0; gap: 20px 0; }
+  .site-info-box { min-width: 0; margin-right: 30px; }
+}
+`;
+
+// A scrolled strip can hide the tab the page is on and the tab the keyboard has
+// reached, which are the two tabs an operator needs to see. Nothing else about
+// the strip changes; "nearest" scrolls the strip only, never the page.
+const SITE_LAYOUT_SCRIPT = `(function () {
+  // This block is injected ahead of the strip it reads, so wait for the
+  // document rather than querying markup the parser has not reached yet.
+  function start() {
+    var strip = document.querySelector(".tab-container ul");
+    if (!strip) return;
+    function reveal(el) {
+      if (el && strip.scrollWidth > strip.clientWidth) el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+    reveal(strip.querySelector("li.active a"));
+    strip.addEventListener("focusin", function (event) { reveal(event.target); });
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
+  else start();
+})();`;
+
+/**
+ * Keeps CloudPanel's site tab strip on one row once an addon has added a tab
+ * to it, and lets the site-information blocks above it wrap on a narrow screen.
+ *
+ * Injected by the manager rather than by the addon that adds the tab, so two
+ * addons adding tabs cannot emit these rules twice.
+ */
+export function siteLayoutTarget(): AddonTarget {
+  return {
+    slug: "site-layout",
+    template: SITE_TAB_TEMPLATE,
+    anchorBefore: '<div class="tab-container">',
+    required: true,
+    snippet: () => `<style>${SITE_LAYOUT_STYLE}</style>
+<script>${SITE_LAYOUT_SCRIPT}</script>
+`,
+  };
+}
+
 /** The Admin Area uses its own header without the frontend navigation. */
 export function adminHeaderTarget(): AddonTarget {
   return {

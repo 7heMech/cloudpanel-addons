@@ -4,15 +4,23 @@
 
 Maintenance Mode is available from the Addons overview and from an
 administrator-only tab in every CloudPanel site view. The overview reads the
-live CloudPanel site inventory and shows each site's status, template choice,
-and bypass count. A global toggle in the card header activates fleet-wide maintenance mode
-at once with confirmation naming the count. When global maintenance is active, all sites serve
-503 maintenance responses while preserving each site's individual toggle state. Individual site
-toggles can still be managed independently; turning the global toggle off restores only sites
-whose individual toggle was off to Live, while sites configured for maintenance remain in maintenance.
-Sites serving maintenance due to the global toggle display a "Maintenance (Global)" status badge.
-Turning global maintenance on or off purges Varnish cache across the fleet. A domain query opens the focused editor and links back to the
-site's Settings page.
+live CloudPanel site inventory and shows each site's effective status, saved
+setting, template choice, and bypass count.
+
+The global override is a card of its own labelled "Global maintenance", not a
+switch in the table header: it decides what visitors get for every site at once
+and changes nothing a site has saved. Its confirmation names the site count and
+how many have maintenance saved off. While it is on, every site serves 503 and a
+site whose own setting is off, or could not be read, shows a "Maintenance
+(Global)" badge and is counted as in maintenance; turning it off returns each
+site to its saved setting. Turning it on or off purges Varnish
+cache across the fleet.
+
+A domain query opens the focused editor for that site. That page is drawn in the
+shell's site mode, so CloudPanel's site information and site tabs stay above it
+and Settings remains one click away; it says explicitly when the global override
+is what is serving the maintenance page, because changing the saved setting
+there does not lift it.
 
 ## Request handling
 

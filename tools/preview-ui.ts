@@ -23,6 +23,11 @@ const sites: SiteSummary[] = [
   { domain: "static.example.com", siteType: "static", siteUser: "static", phpVersion: "", application: "Static HTML", databases: 0 },
   { domain: "pages.example.com", siteType: "reverse-proxy", siteUser: "pages", phpVersion: "", application: "Instatic", databases: 0 },
 ];
+// Which native site tabs a site-scoped addon page draws depends on the site's
+// type and Varnish setting, so the preview carries both. www has Varnish, which
+// is the widest strip a site can have.
+const siteVarnish: Record<string, boolean> = { "www.example.com": true };
+const PREVIEW_PUBLIC_IP = "203.0.113.10";
 const job: JobView = {
   id: "preview-job", source: "www.example.com", target: "stg.example.com", port: 0,
   state: "done", step: "", error: "", panelSite: true,
@@ -49,14 +54,24 @@ const instaticCreationJob: InstaticJobView = {
   finishedAt: "2026-09-10T09:31:15Z",
 };
 const instaticLogs = "[instatic] creating CloudPanel reverse-proxy site for blog.example.com\n[instatic] preparing instance storage\n[instatic] pulling ghcr.io/corebunch/instatic:0.0.19\n[instatic] starting instatic-blog.example.com on 127.0.0.1:39003\n[instatic] waiting for health check\n[instatic] requesting a Let's Encrypt certificate for blog.example.com\n[instatic] instance created successfully";
-const cloudflareState = {
-  autoEnableNewSites: true,
-  sites: [
-    { domain: "www.example.com", type: "php", enabled: true, excludedFromAutomatic: false },
-    { domain: "static.example.com", type: "static", enabled: false, excludedFromAutomatic: true },
-    { domain: "pages.example.com", type: "reverse-proxy", enabled: true, excludedFromAutomatic: false },
-  ],
-};
+const cloudflareSites = [
+  { domain: "www.example.com", type: "php", enabled: true, excludedFromAutomatic: false },
+  { domain: "static.example.com", type: "static", enabled: false, excludedFromAutomatic: true },
+  { domain: "pages.example.com", type: "reverse-proxy", enabled: true, excludedFromAutomatic: false },
+  { domain: "a-rather-long-customer-hostname.staging.example.com", type: "nodejs", enabled: false, excludedFromAutomatic: false },
+];
+
+/** ?sites=all|none|mixed and ?auto=off cover the states the controls describe. */
+function cloudflarePreviewState(url: URL) {
+  const all = url.searchParams.get("sites");
+  const sites = cloudflareSites.map((site) => all === "all"
+    ? { ...site, enabled: true }
+    : all === "none" ? { ...site, enabled: false } : site);
+  return {
+    autoEnableNewSites: url.searchParams.get("auto") !== "off",
+    sites: url.searchParams.has("empty") ? [] : sites,
+  };
+}
 
 const server = Bun.serve({
   hostname: "127.0.0.1",
@@ -119,19 +134,31 @@ const server = Bun.serve({
       const maintenanceSites = sites.map((site, index) => ({
         domain: site.domain, type: site.siteType, user: site.siteUser,
         enabled: index === 0, customTemplate: index === 1, bypasses: index === 0 ? ["203.0.113.8"] : [],
+        ...(index === 2 ? { error: "status unavailable" } : {}),
       }));
+      // ?global=1 shows the override active, which is the state whose wording
+      // has to distinguish effective status from each site's saved setting.
+      const globalEnabled = url.searchParams.has("global");
       const selected = url.searchParams.get("domain");
       const site = maintenanceSites.find((candidate) => candidate.domain === selected);
       html = maintenanceLayout(
         site ? `Maintenance — ${site.domain}` : "Maintenance Mode",
         site
-          ? maintenanceSiteView(site, { domain: site.domain, custom: site.customTemplate, html: DEFAULT_MAINTENANCE_TEMPLATE }, "203.0.113.8")
-          : maintenanceFleetView(empty ? [] : maintenanceSites),
+          ? maintenanceSiteView(site, { domain: site.domain, custom: site.customTemplate, html: DEFAULT_MAINTENANCE_TEMPLATE }, "203.0.113.8", globalEnabled)
+          : maintenanceFleetView(empty ? [] : maintenanceSites, globalEnabled),
         notice,
+        site
+          ? {
+              domain: site.domain,
+              user: site.user,
+              type: site.type,
+              varnishCache: siteVarnish[site.domain] === true,
+              ...(url.searchParams.has("no-ip") ? {} : { publicIp: PREVIEW_PUBLIC_IP }),
+            }
+          : undefined,
       );
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
-      html = cloudflareLayout("Cloudflare IP access", cloudflareDashboardView(empty
-        ? { ...cloudflareState, sites: [] } : cloudflareState), notice);
+      html = cloudflareLayout("Cloudflare IP access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {
       html = instaticLayout("Instatic sites", dashboardView(empty ? [] : instances, age,
         sites.map((s) => ({ domain: s.domain, type: s.siteType, user: s.siteUser })), versions), notice);

@@ -1,108 +1,269 @@
 import { esc } from "../../../lib/app-http";
 import { renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
+import { siteTypeLabel } from "../../../lib/site-context";
 import type { CloudflareState } from "./service";
 
 const BASE = mountPath("cloudflare-ips");
 
+// Switches, the toolbar, the confirmation dialog and the inline notice come
+// from lib/app-ui so this addon looks like the rest of the manager.
 const STYLE = `
-.bulk-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .site-select { width: 42px; text-align: center; }
-.site-select input, .site-toggle input { width: 18px; height: 18px; margin: 0; }
-.site-toggle { display: inline-flex; align-items: center; gap: 9px; font-weight: 600; }
-.site-toggle input { accent-color: var(--primary); }
-.policy-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
-.policy-card h2 { margin: 0 0 8px; }
-.policy-card p { margin: 0; }
-.policy-switch { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; font-weight: 600; }
-.policy-switch input { width: 20px; height: 20px; accent-color: var(--primary); }
-.status-on { color: var(--ok); }
-.status-off { color: var(--muted); }
-@media (max-width: 600px) {
-  .policy-card { flex-direction: column; }
+.site-select input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); }
+.fleet-card, .policy-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
+.fleet-card h2, .policy-card h2 { margin: 0 0 8px; }
+.fleet-card p, .policy-card p { margin: 0; }
+.fleet-card .actions { flex-shrink: 0; }
+.site-cell { font-weight: 600; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .fleet-card, .policy-card { flex-direction: column; }
 }
 `;
 
 export const CLIENT_JS = `
-function selectedDomains() {
-  return Array.from(document.querySelectorAll('.site-checkbox:checked')).map(function (box) {
-    return box.getAttribute('data-domain');
-  }).filter(Boolean);
+function siteRows() {
+  return Array.from(document.querySelectorAll('tr[data-domain]'));
 }
 
-function syncSelectAll() {
-  const boxes = Array.from(document.querySelectorAll('.site-checkbox'));
+function rowState(row) {
+  return {
+    domain: row.dataset.domain,
+    enabled: row.dataset.enabled === 'true',
+    excluded: row.dataset.excluded === 'true',
+    selected: Boolean(row.querySelector('.site-checkbox') && row.querySelector('.site-checkbox').checked),
+  };
+}
+
+function automaticOn() {
+  const policy = document.getElementById('automatic-policy');
+  return Boolean(policy && policy.checked);
+}
+
+function plural(count, word) {
+  return count + ' ' + word + (count === 1 ? '' : 's');
+}
+
+function paintSummary() {
+  const rows = siteRows().map(rowState);
+  const on = rows.filter(function (row) { return row.enabled; }).length;
+  const summary = document.getElementById('cf-summary');
+  if (summary) {
+    summary.textContent = rows.length === 0
+      ? 'No sites found in CloudPanel.'
+      : on + ' of ' + plural(rows.length, 'site') + ' allow Cloudflare only.';
+  }
+  const selected = rows.filter(function (row) { return row.selected; }).length;
+  const note = document.getElementById('cf-selection');
+  if (note) note.textContent = selected === 0 ? 'No sites selected' : plural(selected, 'site') + ' selected';
+  ['enable-selected', 'disable-selected'].forEach(function (id) {
+    const button = document.getElementById(id);
+    if (button) button.disabled = selected === 0;
+  });
+  ['enable-all', 'disable-all'].forEach(function (id) {
+    const button = document.getElementById(id);
+    if (button) button.disabled = rows.length === 0;
+  });
   const all = document.getElementById('select-all');
-  if (!all) return;
-  const selected = boxes.filter(function (box) { return box.checked; }).length;
-  all.checked = boxes.length > 0 && selected === boxes.length;
-  all.indeterminate = selected > 0 && selected < boxes.length;
+  if (all) {
+    all.checked = rows.length > 0 && selected === rows.length;
+    all.indeterminate = selected > 0 && selected < rows.length;
+  }
 }
 
 function selectAllSites(checked) {
   document.querySelectorAll('.site-checkbox').forEach(function (box) { box.checked = checked; });
-  syncSelectAll();
+  paintSummary();
 }
 
+// Repaint from the server's answer rather than from what was asked for: the
+// row that failed, the row somebody else changed and the exception bookkeeping
+// all come back in the same reply.
+function applyState(state) {
+  const rows = new Map(siteRows().map(function (row) { return [row.dataset.domain, row]; }));
+  const domains = (state.sites || []).map(function (site) { return site.domain; });
+  if (domains.length !== rows.size || domains.some(function (domain) { return !rows.has(domain); })) {
+    // The inventory itself moved; only a reload can draw rows that are not here.
+    location.reload();
+    return;
+  }
+  state.sites.forEach(function (site) {
+    const row = rows.get(site.domain);
+    row.dataset.enabled = String(site.enabled);
+    row.dataset.excluded = String(site.excludedFromAutomatic);
+    const input = row.querySelector('.site-switch');
+    if (input) input.checked = site.enabled;
+    const hint = row.querySelector('.site-exception');
+    if (hint) hint.hidden = !(site.excludedFromAutomatic && state.autoEnableNewSites);
+  });
+  const policy = document.getElementById('automatic-policy');
+  if (policy) policy.checked = Boolean(state.autoEnableNewSites);
+  paintSummary();
+}
+
+/** The state the server holds now, or why it could not be read. */
+async function readState() {
+  try {
+    return { ok: true, data: (await call('/api/sites')).data };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+}
+
+// Reading the new state is part of the change, not something after it: the
+// controls stay disabled until it is in hand, so a second click cannot start a
+// change whose reply arrives first and paints the older state over the newer
+// one. Painting waits for busy() to release, because busy() restores every
+// control to what it was disabled as, which would undo what the paint decided.
 async function setDomains(domains, enabled) {
-  if (!domains.length) { alert('Select at least one site.'); return false; }
+  if (!domains.length) return false;
+  clearNotice();
   busy(true);
+  let failure = '';
+  let state;
   try {
     await call('/api/sites', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ domains: domains, enabled: enabled }),
     });
-    location.reload();
-    return true;
   } catch (error) {
+    failure = error.message;
+  }
+  try {
+    state = await readState();
+  } finally {
     busy(false);
-    alert('Could not update the Cloudflare setting: ' + error.message);
+  }
+  if (state.ok) applyState(state.data);
+  if (failure) {
+    notify('Could not update the Cloudflare setting: ' + failure, 'error');
     return false;
   }
+  const done = plural(domains.length, 'site') + (enabled ? ' now allow' : ' no longer allow') + ' Cloudflare traffic only.';
+  // The change landed; what is on screen is what could not be refreshed, and
+  // saying only that it worked would hide rows that are no longer true.
+  notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');
+  return true;
 }
 
-function setSelected(enabled) {
-  setDomains(selectedDomains(), enabled);
+/** What an operation actually changes, counted from what is on screen. */
+function planFor(rows, enabled) {
+  const flagChanges = rows.filter(function (row) { return row.enabled !== enabled; });
+  // Turning a site on clears its automatic exception; turning one off adds one.
+  const exceptionChanges = rows.filter(function (row) { return enabled ? row.excluded : !row.excluded; });
+  return { rows: rows, flagChanges: flagChanges, exceptionChanges: exceptionChanges };
 }
 
-async function setOne(input) {
-  const domain = input.getAttribute('data-domain');
-  const enabled = input.checked;
-  input.disabled = true;
-  if (!await setDomains(domain ? [domain] : [], enabled)) {
-    input.checked = !enabled;
-    input.disabled = false;
+function planDetails(plan, enabled) {
+  const details = [];
+  const off = plan.flagChanges.length;
+  // The request rewrites the automatic exception list as well as the site flag,
+  // so a site already on the wanted setting is not always a no-op. Say which
+  // part of the change each count refers to.
+  const later = automaticOn() ? '.' : ' if automatic enabling is turned on later.';
+  if (enabled) {
+    details.push(off === 0
+      ? 'Every site here is already on.'
+      : plural(off, 'site') + ' currently off ' + (off === 1 ? 'is' : 'are') + ' turned on.');
+    if (plan.exceptionChanges.length) {
+      details.push(plural(plan.exceptionChanges.length, 'site') + ' stop' + (plan.exceptionChanges.length === 1 ? 's' : '') +
+        ' being excluded from automatic enabling' + later);
+    }
+  } else {
+    details.push(off === 0
+      ? 'Every site here is already off.'
+      : plural(off, 'site') + ' currently on ' + (off === 1 ? 'is' : 'are') + ' turned off.');
+    if (plan.exceptionChanges.length) {
+      details.push(plural(plan.exceptionChanges.length, 'site') + ' become' + (plan.exceptionChanges.length === 1 ? 's' : '') +
+        ' excluded from automatic enabling' + later);
+    }
   }
+  details.push('These choices replace what is set now and are not restored afterwards.');
+  return details;
+}
+
+async function runBulk(rows, enabled, scope) {
+  const plan = planFor(rows, enabled);
+  if (plan.flagChanges.length === 0 && plan.exceptionChanges.length === 0) {
+    notify(scope === 'all'
+      ? 'Every site is already ' + (enabled ? 'on' : 'off') + '; nothing to change.'
+      : 'The selected sites are already ' + (enabled ? 'on' : 'off') + '; nothing to change.', 'ok');
+    return;
+  }
+  const subject = scope === 'all'
+    ? 'all ' + plural(rows.length, 'site')
+    : 'the ' + plural(rows.length, 'selected site');
+  const accepted = await confirmAction({
+    title: enabled
+      ? 'Allow Cloudflare traffic only for ' + subject + '?'
+      : 'Stop restricting ' + subject + ' to Cloudflare?',
+    text: enabled
+      ? 'Visitors reaching these sites from outside Cloudflare are blocked.'
+      : 'These sites accept traffic from any address again.',
+    details: planDetails(plan, enabled),
+    confirmLabel: enabled ? 'Enable' : 'Disable',
+    danger: !enabled,
+  });
+  if (!accepted) return;
+  await setDomains(rows.map(function (row) { return row.domain; }), enabled);
+}
+
+function setAllSites(enabled) {
+  runBulk(siteRows().map(rowState), enabled, 'all');
+}
+
+function setSelectedSites(enabled) {
+  const rows = siteRows().map(rowState).filter(function (row) { return row.selected; });
+  if (!rows.length) {
+    notify('Select at least one site first.', 'warn');
+    return;
+  }
+  runBulk(rows, enabled, 'selection');
+}
+
+// A single row is the common correction after a fleet-wide change, so it acts
+// at once rather than behind a confirmation.
+async function setOne(input) {
+  const row = input.closest('tr[data-domain]');
+  if (!row) return;
+  await setDomains([row.dataset.domain], input.checked);
 }
 
 async function setAutomatic(input) {
-  input.disabled = true;
+  const enabled = input.checked;
+  clearNotice();
   busy(true);
+  let failure = '';
+  let state;
   try {
     await call('/api/policy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: input.checked }),
+      body: JSON.stringify({ enabled: enabled }),
     });
-    location.reload();
   } catch (error) {
-    input.checked = !input.checked;
-    input.disabled = false;
-    busy(false);
-    alert('Could not update the automatic policy: ' + error.message);
+    failure = error.message;
   }
+  try {
+    state = await readState();
+  } finally {
+    busy(false);
+  }
+  if (state.ok) applyState(state.data);
+  if (failure) {
+    notify('Could not update the automatic policy: ' + failure, 'error');
+    return;
+  }
+  const done = enabled
+    ? 'New sites will allow Cloudflare only. Existing sites are unchanged.'
+    : 'New sites are left alone. Existing sites are unchanged.';
+  notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');
 }
-`;
 
-function typeLabel(type: string): string {
-  if (type === "php") return "PHP";
-  if (type === "static") return "Static";
-  if (type === "reverse-proxy") return "Reverse proxy";
-  if (type === "nodejs") return "Node.js";
-  if (type === "python") return "Python";
-  return type;
-}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', paintSummary);
+else paintSummary();
+`;
 
 export function layout(title: string, content: string, updateNotice?: { current: string; latest: string } | null): string {
   return renderLayout(title, content, {
@@ -117,17 +278,14 @@ export function layout(title: string, content: string, updateNotice?: { current:
 
 export function dashboardView(state: CloudflareState): string {
   const enabled = state.sites.filter((site) => site.enabled).length;
+  const total = state.sites.length;
   const rows = state.sites.map((site) => `
-    <tr>
-      <td class="site-select"><input class="site-checkbox" type="checkbox" data-domain="${esc(site.domain)}" onchange="syncSelectAll()" aria-label="Select ${esc(site.domain)}"></td>
-      <td><strong>${esc(site.domain)}</strong>${site.excludedFromAutomatic && state.autoEnableNewSites
-        ? '<div class="hint">Excluded from automatic enabling</div>' : ""}</td>
-      <td>${esc(typeLabel(site.type))}</td>
-      <td>
-        <label class="site-toggle ${site.enabled ? "status-on" : "status-off"}">
-          <input type="checkbox" data-domain="${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)">
-          <span>${site.enabled ? "On" : "Off"}</span>
-        </label>
+    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}">
+      <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
+      <td class="site-cell">${esc(site.domain)}<div class="hint site-exception"${site.excludedFromAutomatic && state.autoEnableNewSites ? "" : " hidden"}>Excluded from automatic enabling</div></td>
+      <td>${esc(siteTypeLabel(site.type))}</td>
+      <td class="action-cell">
+        <label class="switch"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
       </td>
     </tr>`).join("");
 
@@ -135,34 +293,38 @@ export function dashboardView(state: CloudflareState): string {
     <div class="page-heading">
       <div><h1>Cloudflare IP access</h1><p>Control CloudPanel's “Allow traffic from Cloudflare only” setting for every site.</p></div>
     </div>
-    <div class="card">
-      <div class="stats">
-        <div class="stat"><div class="label">Sites</div><div class="value">${state.sites.length}</div></div>
-        <div class="stat"><div class="label">Cloudflare only</div><div class="value">${enabled}</div></div>
+    <div class="card fleet-card">
+      <div>
+        <h2>All sites</h2>
+        <p id="cf-summary">${total === 0 ? "No sites found in CloudPanel." : `${enabled} of ${total} ${total === 1 ? "site" : "sites"} allow Cloudflare only.`}</p>
+        <p class="hint">A one-time change to the sites that exist now. Turning a single site off afterwards keeps it off.</p>
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" id="enable-all" type="button" ${total === 0 ? "disabled" : ""} onclick="setAllSites(true)">Enable all sites</button>
+        <button class="btn" id="disable-all" type="button" ${total === 0 ? "disabled" : ""} onclick="setAllSites(false)">Disable all sites</button>
       </div>
     </div>
     <div class="card policy-card">
       <div>
         <h2>Enable on new sites</h2>
         <p>Apply the setting automatically within about one minute after a site is created.</p>
-        <p class="hint">Existing sites stay unchanged. A site you turn off here remains excluded.</p>
+        <p class="hint">This never changes a site that already exists. A site turned off above stays excluded.</p>
       </div>
-      <label class="policy-switch">
-        <input id="automatic-policy" type="checkbox" ${state.autoEnableNewSites ? "checked" : ""} onchange="setAutomatic(this)">
-        <span>${state.autoEnableNewSites ? "On" : "Off"}</span>
-      </label>
+      <label class="switch"><input id="automatic-policy" type="checkbox" aria-label="Enable Cloudflare-only access on new sites" ${state.autoEnableNewSites ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
     </div>
     <div class="card card-table">
-      ${state.sites.length === 0
+      ${total === 0
         ? '<div class="empty">No sites found in CloudPanel.</div>'
-        : `<div class="card-header bulk-actions">
-            <button class="btn btn-primary" type="button" onclick="setSelected(true)">Enable selected</button>
-            <button class="btn" type="button" onclick="setSelected(false)">Disable selected</button>
+        : `<div class="card-header toolbar">
+            <h2>Sites</h2>
+            <span class="toolbar-note" id="cf-selection">No sites selected</span>
+            <button class="btn toolbar-end" id="enable-selected" type="button" disabled onclick="setSelectedSites(true)">Enable selected</button>
+            <button class="btn" id="disable-selected" type="button" disabled onclick="setSelectedSites(false)">Disable selected</button>
           </div>
           <table>
             <thead><tr>
               <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
-              <th scope="col">Site</th><th scope="col">Type</th><th scope="col">Cloudflare only</th>
+              <th scope="col">Site</th><th scope="col">Type</th><th scope="col" class="action-cell">Cloudflare only</th>
             </tr></thead>
             <tbody>${rows}</tbody>
           </table>`}
