@@ -15,7 +15,8 @@ const STYLE = `
 .state-live { color:var(--ok); border-color:var(--ok); }
 .state-maintenance { color:var(--bad); border-color:var(--bad); }
 .state-unavailable { color:var(--muted); }
-.editor-tabs { display:flex; gap:8px; margin-bottom:12px; }
+.editor-toolbar { margin-bottom:12px; }
+.editor-tabs { display:flex; gap:8px; }
 .editor-tabs button[aria-selected="true"] { color:var(--accent); border-color:var(--accent); }
 #template-editor { width:100%; min-height:420px; resize:vertical; font:13px/1.55 var(--mono); tab-size:2; }
 #template-preview { width:100%; min-height:420px; border:1px solid var(--border); border-radius:8px; background:#fff; }
@@ -49,7 +50,6 @@ html.dark #template-ace .ace_constant,
 html.dark #template-ace .ace_numeric,
 html.dark #template-ace .ace_entity { color:#d9a9ff; }
 html.dark #template-ace .ace_comment { color:#93a1ad; }
-.template-mode { display:flex; align-items:center; gap:10px; margin-bottom:18px; }
 .bypass-grid { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:end; }
 .bypass-field { min-width:0; margin:0; }
 .bypass-field span, .bypass-field textarea { display:block; }
@@ -572,8 +572,10 @@ export function siteView(
       <div class="actions bypass-actions">${currentIp ? `<button class="btn" type="button" onclick="addCurrentIp('${escJs(currentIp)}')">Add my IP (${esc(currentIp)})</button>` : ""}<button class="btn btn-primary" type="button" onclick="saveBypasses('${escJs(site.domain)}')">Save bypasses</button></div></div>
   </div>
   <div class="card"><div class="card-header"><div><h2>Maintenance page</h2><p class="hint">Custom HTML and CSS are stored for this site. Active scripts and form controls are removed.</p></div></div>
-    <label class="template-mode"><input id="custom-template" type="checkbox" ${template.custom ? "checked" : ""} onchange="changeTemplateMode('${escJs(site.domain)}', this.checked)"> Use a custom template</label>
-    <div class="editor-tabs" role="tablist"><button class="btn" type="button" data-editor-tab="editor" aria-selected="true" onclick="showEditorTab('editor')">HTML / CSS</button><button class="btn" type="button" data-editor-tab="preview" aria-selected="false" onclick="showEditorTab('preview')">Preview</button></div>
+    <div class="toolbar editor-toolbar">
+      <div class="editor-tabs" role="tablist"><button class="btn" type="button" data-editor-tab="editor" aria-selected="true" onclick="showEditorTab('editor')">HTML / CSS</button><button class="btn" type="button" data-editor-tab="preview" aria-selected="false" onclick="showEditorTab('preview')">Preview</button></div>
+      <label class="switch-field toolbar-end" for="custom-template">Custom<span class="switch"><input id="custom-template" type="checkbox" ${template.custom ? "checked" : ""} onchange="changeTemplateMode('${escJs(site.domain)}', this.checked)"><span></span></span></label>
+    </div>
     <textarea id="template-editor" aria-label="Maintenance page HTML" spellcheck="false">${esc(template.html)}</textarea>
     <div id="template-ace" hidden></div>
     <iframe id="template-preview" title="Maintenance page preview" sandbox hidden></iframe>
