@@ -256,6 +256,10 @@ symlinkSync(nginxSource, nginxLink);
 const nginxResult = reconcileNginxProxy({ vhostPath: nginxLink, stateDir: nginxState, reload: false });
 check("Nginx reconciliation injects the UNIX-socket proxy", nginxResult.state === "ok" && readFileSync(nginxSource, "utf-8").includes(NGINX_PROXY_BLOCK));
 check("NGINX_PROXY_BLOCK explicitly sanitizes X-Forwarded-Host", NGINX_PROXY_BLOCK.includes("proxy_set_header X-Forwarded-Host $http_host;"));
+// CloudPanel's vhost has a regex location for static file extensions, and nginx
+// tests regex locations before a prefix match wins. Without ^~ every addon URL
+// ending in .js or .css is served from the filesystem as a 404.
+check("NGINX_PROXY_BLOCK outranks the panel's static-file regex", NGINX_PROXY_BLOCK.includes("location ^~ /addons/ {"));
 check("Nginx reconciliation preserves enabled-site symlinks", lstatSync(nginxLink).isSymbolicLink());
 check("Nginx inspection accepts the managed block", inspectNginxProxy({ vhostPath: nginxLink, stateDir: nginxState }).state === "ok");
 const nginxManaged = readFileSync(nginxSource, "utf-8");

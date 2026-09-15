@@ -22,6 +22,21 @@ and Settings remains one click away; it says explicitly when the global override
 is what is serving the maintenance page, because changing the saved setting
 there does not lift it.
 
+The template opens read-only. An Edit switch above the editor turns editing on
+and nothing else: turning it off restores what is saved, asking first only when
+there is an unsaved change, and never removes a saved template. Removing one is
+the reset button alone.
+
+The custom template is edited with CloudPanel's own Ace build, the editor the
+panel uses for a vhost, loaded from the panel at `/assets/js/ace.min.js`. That
+copy is the 1.4.2 core with no modes and only the light theme, so the addon
+serves `ace/mode/html` itself from `ace/mode-html.js`, vendored unmodified from
+the same 1.4.2 release and self-contained, and recolours the theme for dark mode
+rather than fetch one the panel does not have. The editor is put in text mode
+before the HTML mode is requested, so a mode that will not load leaves a working
+editor. The textarea underneath stays the value every other path reads, and
+stays the editor if a panel release stops serving Ace.
+
 ## Request handling
 
 The addon installs one marked block in `/etc/nginx/global_settings`, which all

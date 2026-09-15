@@ -1,4 +1,4 @@
-import { csrfCookieHeader, esc, newCsrfToken, SECURITY_HEADERS } from "../../../lib/app-http";
+import { esc, newCsrfToken, withCsrfCookie, SECURITY_HEADERS } from "../../../lib/app-http";
 import { renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 
@@ -16,12 +16,11 @@ function page(content: string, csrf: string, status = 200, updateNotice?: { curr
     }),
     {
       status,
-      headers: {
+      headers: withCsrfCookie({
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
-        "Set-Cookie": csrfCookieHeader(csrf),
         ...SECURITY_HEADERS,
-      },
+      }, csrf),
     },
   );
 }

@@ -38,7 +38,9 @@ state for a later re-enable.
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
 badges, switches, toolbars, one confirmation dialog and one inline notice per
 page. An addon supplies its brand, its own tabs, its script and any rule only it
-draws.
+draws. Below 760px the shell tightens: a dialog gives up its desktop padding and
+its buttons take the row, and it is bounded by the visual viewport so a phone's
+collapsing address bar cannot cover them.
 
 A page reached from a site's tab strip is drawn in site mode instead: the shell
 shows CloudPanel's site information and the applicable site tabs with the addon's
@@ -49,6 +51,27 @@ the injected Twig snippet read it, so a tab cannot be labelled two ways. The
 reproduced site information takes its column width, gutter and label styling
 from the panel's own `assets/css/frontend/site.css`, so the blocks land where
 the panel puts them.
+
+A site-scoped page can also be mounted into the panel's own site page instead
+of reproducing it. The manager injects a loader next to the tab strip: clicking
+an addon's tab fetches that page as a fragment -- stylesheet, markup and script,
+no document -- and mounts it in a shadow root inside the panel's content area,
+so the panel's Bootstrap cannot reach the addon's markup and the addon's rules
+cannot reach the panel. The fragment's script runs at global scope, because the
+markup calls it from inline handlers, and learns which root its element lookups
+are relative to from `CLP_MOUNT`. Shared client code therefore reaches elements
+through `CLP_ROOT`, which is that root when mounted and the document otherwise;
+a lookup written against `document` searches the panel's page instead and finds
+nothing. One page is mounted at a time, held from before the fetch rather than
+after it, because that script declares its bindings once per document. A panel
+page without the markup the loader reads says so in the console, and hands over
+to the addon's own page when a deep link is what brought the operator there.
+A direct visit to the addon's own URL
+redirects to the panel's site page carrying `clp-addon`, which the loader reads
+on landing, so the address bar still names the page and a refresh still works.
+`?embed=0` renders the standalone page instead. Maintenance is the only addon
+mounted this way while the approach is being evaluated; the reproduction above
+is what it would replace.
 
 CloudPanel sizes that strip for the tabs it ships, so an addon's tab wrapped it
 onto a second row. The manager injects one rule making the strip a single

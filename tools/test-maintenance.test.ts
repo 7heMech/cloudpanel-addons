@@ -11,7 +11,7 @@ import {
 } from "../addons/maintenance/action";
 import { handle as handleMaintenance } from "../addons/maintenance/app/index";
 import { maintenanceService } from "../addons/maintenance/app/service";
-import { fleetView, layout, siteView } from "../addons/maintenance/app/views";
+import { CLIENT_JS, fleetView, layout, siteView } from "../addons/maintenance/app/views";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import {
   inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance,
@@ -323,12 +323,13 @@ test("a site-scoped page keeps CloudPanel's site navigation rather than a back l
   expect(withContext).toContain('href="/site/one.example.com/varnish-cache"');
   expect(withContext).toContain('aria-label="Site navigation"');
   expect(withContext).toContain("203.0.113.10");
-  // The addon's own single "Sites" tab would only compete with the site strip.
-  expect(withContext).not.toContain('aria-label="Maintenance Mode navigation"');
   expect(withContext).not.toContain("Back to site");
 
+  // The addon has one page of its own, so it carries no tab strip anywhere:
+  // the only tab it could hold is the page already being read.
+  expect(withContext).not.toContain('aria-label="Maintenance Mode navigation"');
   const fleet = layout("Maintenance", fleetView([]), null);
-  expect(fleet).toContain('aria-label="Maintenance Mode navigation"');
+  expect(fleet).not.toContain('aria-label="Maintenance Mode navigation"');
   expect(fleet).not.toContain('aria-label="Site navigation"');
 });
 
@@ -578,4 +579,89 @@ test("purgeVarnish sends PURGE requests for domain and www/bare aliases and hand
   purges.length = 0;
   await executeMaintenanceAction(["disable", "--domain=wp.example.com"], actionOptions(paths, { fetchFn: mockFetch as any }));
   expect(purges.some((p) => p.method === "PURGE" && p.host === "wp.example.com")).toBe(true);
+});
+
+test("the template editor borrows CloudPanel's own Ace and works without it", () => {
+  // The panel edits vhosts with the copy it ships at this path; bundling a
+  // second editor would add a megabyte to do what the panel already does.
+  expect(CLIENT_JS).toContain("'/assets/js/ace.min.js'");
+  // That copy carries the core but no modes, so the HTML mode is served from
+  // here, pinned to the version the panel serves. Text mode is set first, so a
+  // mode that will not load leaves a working editor rather than none.
+  expect(CLIENT_JS).toContain("ace/mode/text");
+  expect(CLIENT_JS).toContain("ace.config.setModuleUrl('ace/mode/html', CLP_BASE + '/ace/mode-html.js')");
+  expect(CLIENT_JS.indexOf("'ace/mode/text'")).toBeLessThan(CLIENT_JS.indexOf("'ace/mode/html'"));
+  // The bundled theme is the only one there is; dark mode recolours it here.
+  expect(CLIENT_JS).not.toContain("ace/theme/");
+  const dark = layout("t", siteView(
+    { domain: "a.test", type: "php", user: "a", enabled: false, customTemplate: true, bypasses: [] },
+    { domain: "a.test", custom: true, html: "<p>x</p>" }, "203.0.113.8", false));
+  expect(dark).toContain("html.dark #template-ace .ace_tag");
+  expect(dark).toContain("html.dark #template-ace .ace_string");
+
+  // A panel release that stops shipping it must leave a working textarea.
+  expect(CLIENT_JS).toContain("script.onerror = function () { resolve(null); }");
+  expect(CLIENT_JS).toContain("if (!ace) return;");
+
+  // Ace writes its stylesheet into the document head, which a shadow root
+  // cannot see.
+  expect(CLIENT_JS).toContain("style[id^=\"ace\"]");
+
+  // The textarea stays the value every other path reads and writes.
+  expect(CLIENT_JS).toContain("area.value = templateAce.getValue();");
+  expect(CLIENT_JS).toContain("function templateValue()");
+});
+
+test("the editor markup keeps the textarea beside the editor that replaces it", () => {
+  const html = siteView(
+    { domain: "shop.example.test", type: "php", user: "shop", enabled: false, customTemplate: true, bypasses: [] },
+    { domain: "shop.example.test", custom: true, html: "<p>hi</p>" },
+    "203.0.113.8",
+    false,
+  );
+  expect(html).toContain('<textarea id="template-editor"');
+  expect(html).toContain('<div id="template-ace" hidden></div>');
+  expect(html.indexOf("template-editor")).toBeLessThan(html.indexOf("template-ace"));
+});
+
+test("editing the template is a local mode that never removes what is saved", () => {
+  const html = siteView(
+    { domain: "shop.example.test", type: "php", user: "shop", enabled: false, customTemplate: true, bypasses: [] },
+    { domain: "shop.example.test", custom: true, html: "<p>hi</p>" },
+    "203.0.113.8",
+    false,
+  );
+  // Read-only until asked for, on a site that already has a custom template:
+  // the switch opens the editor, it does not choose which page is served.
+  expect(html).toContain('<label class="switch-field toolbar-end" for="edit-template">Edit');
+  expect(html).toContain('<input id="edit-template" type="checkbox" onchange=');
+  // Removing a template is what the reset button does, and only that.
+  expect(html).toContain('onclick="resetTemplate(');
+  const mode = CLIENT_JS.slice(CLIENT_JS.indexOf("async function changeTemplateMode"));
+  const body = mode.slice(0, mode.indexOf("\nasync function"));
+  expect(body).not.toContain("resetTemplate");
+  // No confirmation for a template nobody touched.
+  expect(body).toContain("templateValue() === templateSaved");
+  expect(body).toContain("Discard the unsaved changes?");
+  // Declining leaves the operator in the editor with the edits still there.
+  expect(body).toContain("toggle.checked = true");
+});
+
+test("the addon serves the Ace mode the panel does not ship", async () => {
+  const res = await handleMaintenance(
+    new Request("https://panel.example.test:8443/addons/maintenance/ace/mode-html.js"),
+    "/ace/mode-html.js",
+  );
+  expect(res.status).toBe(200);
+  expect(res.headers.get("Content-Type")).toContain("text/javascript");
+  const body = await res.text();
+  // Pinned to the 1.4.2 core CloudPanel serves, and self-contained: it brings
+  // the css and javascript modes the HTML mode needs, so nothing else is
+  // fetched from a path the panel does not have.
+  expect(body).toContain('ace.define("ace/mode/html"');
+  expect(body).toContain('ace.define("ace/mode/css"');
+  expect(body).toContain('ace.define("ace/mode/javascript"');
+  // Vendored third-party code keeps its licence.
+  expect(body).toContain("BEGIN LICENSE BLOCK");
+  expect(body).toContain("Copyright (c) 2010, Ajax.org B.V.");
 });

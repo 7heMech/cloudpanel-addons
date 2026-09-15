@@ -1,5 +1,6 @@
 import { esc, escJs } from "../../../lib/app-http";
-import { renderLayout } from "../../../lib/app-ui";
+import { renderFragment, renderLayout } from "../../../lib/app-ui";
+import type { EmbedFragment } from "../../../lib/shadow-embed";
 import { mountPath } from "../../../lib/mount";
 import { siteTypeLabel, type SiteContext } from "../../../lib/site-context";
 import type { MaintenanceSiteView, MaintenanceTemplateView } from "./service";
@@ -9,15 +10,46 @@ const BASE = mountPath("maintenance");
 // Switches, toolbars, the confirmation dialog and the inline notice are in
 // lib/app-ui; only what this addon alone draws is here.
 const STYLE = `
-.page-heading .actions { align-items:center; flex-shrink:0; }
+/* Shrinkable, so the badge and the button wrap rather than overflow a phone. */
+.page-heading .actions { align-items:center; }
 .state-live { color:var(--ok); border-color:var(--ok); }
 .state-maintenance { color:var(--bad); border-color:var(--bad); }
 .state-unavailable { color:var(--muted); }
-.editor-tabs { display:flex; gap:8px; margin-bottom:12px; }
+.editor-toolbar { margin-bottom:12px; }
+.editor-tabs { display:flex; gap:8px; }
 .editor-tabs button[aria-selected="true"] { color:var(--accent); border-color:var(--accent); }
 #template-editor { width:100%; min-height:420px; resize:vertical; font:13px/1.55 var(--mono); tab-size:2; }
 #template-preview { width:100%; min-height:420px; border:1px solid var(--border); border-radius:8px; background:#fff; }
-.template-mode { display:flex; align-items:center; gap:10px; margin-bottom:18px; }
+#template-ace { width:100%; min-height:420px; border:1px solid var(--border); border-radius:4px; }
+#template-ace.is-readonly { opacity:.6; }
+/* The panel ships only Ace's light theme, so dark mode tints it rather than ask
+   for a theme file that is not there. The template is edited in text mode, so
+   there is no syntax colouring to preserve. */
+html.dark #template-ace,
+html.dark #template-ace .ace_scroller,
+html.dark #template-ace .ace_content { background:var(--input-bg); color:var(--text); }
+html.dark #template-ace .ace_gutter { background:var(--surface); color:var(--muted); }
+html.dark #template-ace .ace_gutter-active-line { background:#ffffff14; }
+html.dark #template-ace .ace_cursor { color:var(--text); }
+html.dark #template-ace .ace_marker-layer .ace_active-line { background:#ffffff0d; }
+html.dark #template-ace .ace_marker-layer .ace_selection { background:#2f5b8c; }
+/* Ace's light theme colours its tokens for a white page; on the tinted
+   background they would be navy on near-black. */
+html.dark #template-ace .ace_tag,
+html.dark #template-ace .ace_tag-name,
+html.dark #template-ace .ace_meta.ace_tag,
+html.dark #template-ace .ace_doctype,
+html.dark #template-ace .ace_xml-pe { color:#6cb6ff; }
+html.dark #template-ace .ace_attribute-name,
+html.dark #template-ace .ace_support,
+html.dark #template-ace .ace_fonts,
+html.dark #template-ace .ace_keyword { color:#e5bc76; }
+html.dark #template-ace .ace_string,
+html.dark #template-ace .ace_attribute-value { color:#81c9a0; }
+html.dark #template-ace .ace_constant,
+html.dark #template-ace .ace_numeric,
+html.dark #template-ace .ace_entity { color:#d9a9ff; }
+html.dark #template-ace .ace_comment { color:#93a1ad; }
 .bypass-grid { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:end; }
 .bypass-field { min-width:0; margin:0; }
 .bypass-field span, .bypass-field textarea { display:block; }
@@ -39,12 +71,100 @@ const STYLE = `
 export const CLIENT_JS = `
 let maintenancePreviewUrl = '';
 
+// CloudPanel ships Ace and edits vhosts with it, so the maintenance template is
+// edited by the same editor rather than by one bundled here. The textarea stays
+// the source of truth and stays the editor when the script is not there, which
+// is also what happens if a panel release stops shipping it.
+let templateAce = null;
+// What the server last confirmed. Editing is a local mode, so this is the only
+// way to tell an untouched template from an edited one.
+let templateSaved = '';
+
+function templateArea() { return CLP_ROOT.getElementById('template-editor'); }
+function templateToggle() { return CLP_ROOT.getElementById('edit-template'); }
+
+function templateValue() {
+  const area = templateArea();
+  return area ? area.value : '';
+}
+
+function setTemplateValue(html) {
+  const area = templateArea();
+  if (area) area.value = html;
+  if (templateAce && templateAce.getValue() !== html) templateAce.setValue(html, -1);
+}
+
+function setTemplateHidden(hidden) {
+  const area = templateArea();
+  const holder = CLP_ROOT.getElementById('template-ace');
+  if (area) area.hidden = hidden || Boolean(templateAce);
+  if (holder) holder.hidden = hidden || !templateAce;
+  if (templateAce && !hidden) templateAce.resize();
+}
+
+function setTemplateEditable(editable) {
+  const area = templateArea();
+  if (area) area.disabled = !editable;
+  const holder = CLP_ROOT.getElementById('template-ace');
+  if (holder) holder.classList.toggle('is-readonly', !editable);
+  if (templateAce) templateAce.setReadOnly(!editable);
+}
+
+function loadPanelAce() {
+  if (window.ace) return Promise.resolve(window.ace);
+  if (!window.clpAceLoading) {
+    window.clpAceLoading = new Promise(function (resolve) {
+      const script = document.createElement('script');
+      script.src = '/assets/js/ace.min.js';
+      script.onload = function () { resolve(window.ace || null); };
+      script.onerror = function () { resolve(null); };
+      document.head.appendChild(script);
+    });
+  }
+  return window.clpAceLoading;
+}
+
+async function setupTemplateEditor() {
+  const area = templateArea();
+  const holder = CLP_ROOT.getElementById('template-ace');
+  if (!area || !holder) return;
+  const ace = await loadPanelAce();
+  if (!ace) return;
+  templateAce = ace.edit(holder);
+  // Text first, so a mode that will not load leaves a working editor rather
+  // than none. The panel ships the Ace core but no modes, so the HTML mode is
+  // served from here, pinned to the version the panel serves.
+  templateAce.session.setMode('ace/mode/text');
+  try {
+    ace.config.setModuleUrl('ace/mode/html', CLP_BASE + '/ace/mode-html.js');
+    templateAce.session.setMode('ace/mode/html');
+  } catch (error) { /* the template stays readable without colour */ }
+  templateAce.setOptions({ minLines: 24, maxLines: Infinity, showPrintMargin: false, useWorker: false });
+  templateAce.setAutoScrollEditorIntoView(true);
+  templateAce.setValue(area.value, -1);
+  templateAce.session.on('change', function () {
+    area.value = templateAce.getValue();
+    const preview = CLP_ROOT.getElementById('template-preview');
+    if (preview && !preview.hidden) updateTemplatePreview();
+  });
+  // Ace writes its stylesheet into the document head, which a shadow root
+  // cannot see, so the editor inside one needs its own copy.
+  if (CLP_ROOT !== document) {
+    document.querySelectorAll('style[id^="ace"]').forEach(function (style) {
+      if (!CLP_ROOT.getElementById(style.id)) CLP_ROOT.appendChild(style.cloneNode(true));
+    });
+  }
+  const editing = templateToggle();
+  setTemplateHidden(false);
+  setTemplateEditable(Boolean(editing && editing.checked));
+}
+
 function siteEndpoint(domain, suffix) {
   return '/api/sites/' + encodeURIComponent(domain) + suffix;
 }
 
 function updateStats(inMaintenance, live) {
-  document.querySelectorAll('.card.stats .stat').forEach(function (stat) {
+  CLP_ROOT.querySelectorAll('.card.stats .stat').forEach(function (stat) {
     const label = stat.querySelector('.label');
     const value = stat.querySelector('.value');
     if (!label || !value) return;
@@ -55,19 +175,19 @@ function updateStats(inMaintenance, live) {
 }
 
 function isGlobalActive() {
-  const el = document.querySelector('[data-global-maintenance]');
+  const el = CLP_ROOT.querySelector('[data-global-maintenance]');
   if (el) return el.dataset.globalMaintenance === 'true';
-  const global = document.getElementById('global-toggle');
+  const global = CLP_ROOT.getElementById('global-toggle');
   return global ? global.checked : false;
 }
 
 function paintGlobalState(globalActive) {
-  document.querySelectorAll('[data-global-maintenance]').forEach(function (el) {
+  CLP_ROOT.querySelectorAll('[data-global-maintenance]').forEach(function (el) {
     el.dataset.globalMaintenance = String(globalActive);
   });
-  const global = document.getElementById('global-toggle');
+  const global = CLP_ROOT.getElementById('global-toggle');
   if (global) global.checked = globalActive;
-  const state = document.getElementById('global-state');
+  const state = CLP_ROOT.getElementById('global-state');
   if (state) state.textContent = globalActive ? 'On' : 'Off';
 }
 
@@ -76,7 +196,7 @@ function syncGlobalUI(globalActive) {
 
   // Every row, not only the readable ones: the override covers a site whose
   // saved setting could not be read just as it covers the rest.
-  const rows = Array.from(document.querySelectorAll('input[data-toggle-domain]'));
+  const rows = Array.from(CLP_ROOT.querySelectorAll('input[data-toggle-domain]'));
   let readableCount = 0;
   let siteEnabledCount = 0;
 
@@ -87,7 +207,7 @@ function syncGlobalUI(globalActive) {
     const isSiteEnabled = readable && input.checked;
     if (isSiteEnabled) siteEnabledCount++;
 
-    const badge = document.querySelector('[data-status-domain="' + CSS.escape(domain) + '"]');
+    const badge = CLP_ROOT.querySelector('[data-status-domain="' + CSS.escape(domain) + '"]');
     if (!badge) return;
 
     if (isSiteEnabled) {
@@ -112,7 +232,7 @@ function syncGlobalUI(globalActive) {
 
 function paintStatus(domain, siteEnabled) {
   const globalActive = isGlobalActive();
-  document.querySelectorAll('[data-status-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
+  CLP_ROOT.querySelectorAll('[data-status-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
     if (siteEnabled) {
       node.textContent = 'Maintenance Mode (503)';
       node.className = 'badge state-maintenance';
@@ -124,14 +244,14 @@ function paintStatus(domain, siteEnabled) {
       node.className = 'badge state-live';
     }
   });
-  document.querySelectorAll('[data-toggle-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
+  CLP_ROOT.querySelectorAll('[data-toggle-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
     node.checked = siteEnabled;
   });
 
-  const notice = document.getElementById('global-notice');
+  const notice = CLP_ROOT.getElementById('global-notice');
   if (notice) notice.hidden = !(globalActive && !siteEnabled);
 
-  const available = Array.from(document.querySelectorAll('input[data-toggle-domain][data-available="true"]'));
+  const available = Array.from(CLP_ROOT.querySelectorAll('input[data-toggle-domain][data-available="true"]'));
   if (available.length > 0) {
     const siteEnabledCount = available.filter(function (i) { return i.checked; }).length;
     const maintenanceCount = globalActive ? available.length : siteEnabledCount;
@@ -164,10 +284,10 @@ async function toggleMaintenance(domain, enabled) {
 // The global switch is an override, not a bulk edit: it changes what visitors
 // get without touching what each site has saved. Say so before it is used.
 async function toggleGlobalMaintenance(targetEnabled) {
-  const toggle = document.getElementById('global-toggle');
+  const toggle = CLP_ROOT.getElementById('global-toggle');
   // One Nginx flag covers every CloudPanel site, including any whose own
   // status could not be read, so the scope is the whole inventory.
-  const all = Array.from(document.querySelectorAll('input[data-toggle-domain]'));
+  const all = Array.from(CLP_ROOT.querySelectorAll('input[data-toggle-domain]'));
   const known = all.filter(function (input) { return input.dataset.available === 'true'; });
   const count = all.length;
   const savedOff = known.filter(function (input) { return !input.checked; }).length;
@@ -214,60 +334,64 @@ async function toggleGlobalMaintenance(targetEnabled) {
 }
 
 function showEditorTab(tab) {
-  const editor = document.getElementById('template-editor');
-  const preview = document.getElementById('template-preview');
+  const editor = CLP_ROOT.getElementById('template-editor');
+  const preview = CLP_ROOT.getElementById('template-preview');
   if (!editor || !preview) return;
   const showingPreview = tab === 'preview';
-  editor.hidden = showingPreview;
+  setTemplateHidden(showingPreview);
   preview.hidden = !showingPreview;
-  document.querySelectorAll('[data-editor-tab]').forEach(function (button) {
+  CLP_ROOT.querySelectorAll('[data-editor-tab]').forEach(function (button) {
     button.setAttribute('aria-selected', String(button.getAttribute('data-editor-tab') === tab));
   });
   if (showingPreview) updateTemplatePreview();
 }
 
 function updateTemplatePreview() {
-  const editor = document.getElementById('template-editor');
-  const preview = document.getElementById('template-preview');
+  const editor = CLP_ROOT.getElementById('template-editor');
+  const preview = CLP_ROOT.getElementById('template-preview');
   if (!editor || !preview) return;
   if (maintenancePreviewUrl) URL.revokeObjectURL(maintenancePreviewUrl);
-  maintenancePreviewUrl = URL.createObjectURL(new Blob([editor.value], { type: 'text/html' }));
+  maintenancePreviewUrl = URL.createObjectURL(new Blob([templateValue()], { type: 'text/html' }));
   preview.src = maintenancePreviewUrl;
 }
 
-function setTemplateMode(custom) {
-  const editor = document.getElementById('template-editor');
-  const save = document.getElementById('save-template');
-  if (editor) editor.disabled = !custom;
-  if (save) save.disabled = !custom;
+function setTemplateMode(editing) {
+  const save = CLP_ROOT.getElementById('save-template');
+  setTemplateEditable(editing);
+  if (save) save.disabled = !editing;
 }
 
-async function changeTemplateMode(domain, custom) {
-  if (custom) { setTemplateMode(true); return; }
-  const checkbox = document.getElementById('custom-template');
+// Editing is a local mode and nothing else: leaving it never touches what is
+// saved. Removing a template is what the reset button is for.
+async function changeTemplateMode(domain, editing) {
+  if (editing || templateValue() === templateSaved) { setTemplateMode(editing); return; }
   const accepted = await confirmAction({
-    title: 'Use the default maintenance page?',
-    text: 'The custom template saved for ' + domain + ' is removed and cannot be recovered from here.',
-    confirmLabel: 'Remove template',
+    title: 'Discard the unsaved changes?',
+    text: 'The maintenance page for ' + domain + ' goes back to the version that is saved.',
+    confirmLabel: 'Discard',
     danger: true,
   });
+  const toggle = templateToggle();
   if (!accepted) {
-    if (checkbox) checkbox.checked = true;
+    if (toggle) toggle.checked = true;
     return;
   }
-  resetTemplate(domain, true);
+  setTemplateValue(templateSaved);
+  updateTemplatePreview();
+  setTemplateMode(false);
 }
 
 async function saveTemplate(domain) {
-  const editor = document.getElementById('template-editor');
+  const editor = CLP_ROOT.getElementById('template-editor');
   if (!editor) return;
   clearNotice();
   busy(true);
   try {
     const reply = await call(siteEndpoint(domain, '/template'), {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ html: editor.value })
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ html: templateValue() })
     });
-    editor.value = reply.data.html;
+    setTemplateValue(reply.data.html);
+    templateSaved = reply.data.html;
     updateTemplatePreview();
     notify('Custom maintenance page saved.', 'ok');
   } catch (error) { notify('Could not save the template: ' + error.message, 'error'); }
@@ -288,26 +412,23 @@ async function resetTemplate(domain, confirmed) {
   busy(true);
   try {
     const reply = await call(siteEndpoint(domain, '/template'), { method: 'DELETE' });
-    const editor = document.getElementById('template-editor');
-    const custom = document.getElementById('custom-template');
-    if (editor) editor.value = reply.data.html;
-    if (custom) custom.checked = false;
-    setTemplateMode(false);
+    const toggle = templateToggle();
+    setTemplateValue(reply.data.html);
+    templateSaved = reply.data.html;
+    if (toggle) toggle.checked = false;
     updateTemplatePreview();
     notify('Reset to the default maintenance page.', 'ok');
   } catch (error) {
-    const custom = document.getElementById('custom-template');
-    if (custom) custom.checked = true;
     notify('Could not reset the template: ' + error.message, 'error');
   } finally {
     busy(false);
-    const custom = document.getElementById('custom-template');
-    setTemplateMode(Boolean(custom && custom.checked));
+    const toggle = templateToggle();
+    setTemplateMode(Boolean(toggle && toggle.checked));
   }
 }
 
 async function saveBypasses(domain) {
-  const field = document.getElementById('bypass-ips');
+  const field = CLP_ROOT.getElementById('bypass-ips');
   const ips = String(field && field.value || '').split(/[\\n,]+/).map(function (ip) { return ip.trim(); }).filter(Boolean);
   clearNotice();
   busy(true);
@@ -322,7 +443,7 @@ async function saveBypasses(domain) {
 }
 
 function addCurrentIp(ip) {
-  const field = document.getElementById('bypass-ips');
+  const field = CLP_ROOT.getElementById('bypass-ips');
   if (!field || !ip) return;
   const values = field.value.split(/[\\n,]+/).map(function (value) { return value.trim(); }).filter(Boolean);
   if (values.indexOf(ip) === -1) values.push(ip);
@@ -330,14 +451,16 @@ function addCurrentIp(ip) {
 }
 
 function initMaintenance() {
-  const editor = document.getElementById('template-editor');
+  const editor = templateArea();
   if (editor) {
     editor.addEventListener('input', function () {
-      const preview = document.getElementById('template-preview');
+      const preview = CLP_ROOT.getElementById('template-preview');
       if (preview && !preview.hidden) updateTemplatePreview();
     });
-    const custom = document.getElementById('custom-template');
-    setTemplateMode(Boolean(custom && custom.checked));
+    templateSaved = editor.value;
+    const editing = templateToggle();
+    setTemplateMode(Boolean(editing && editing.checked));
+    setupTemplateEditor();
   }
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initMaintenance);
@@ -353,13 +476,28 @@ export function layout(
   return renderLayout(title, content, {
     brand: "Maintenance Mode",
     base: BASE,
-    // A site-scoped page draws CloudPanel's own site tabs instead, so this
-    // addon's single "Sites" tab would only compete with them.
-    nav: site ? [] : [{ href: `${BASE}/`, label: "Sites" }],
+    // No tab strip: this addon has one page of its own, so the strip could only
+    // hold a tab for the page already being read. A site-scoped page draws
+    // CloudPanel's own site tabs, which come from the site context below.
+    nav: [],
     css: STYLE,
     script: CLIENT_JS,
     updateNotice,
     ...(site ? { site: { ...site, activeSlug: "maintenance" } } : {}),
+  });
+}
+
+/**
+ * The same page as `layout`, as a fragment for mounting inside CloudPanel's own
+ * site page. No site context: the panel is already drawing it.
+ */
+export function fragment(title: string, content: string): EmbedFragment {
+  return renderFragment(title, content, {
+    brand: "Maintenance Mode",
+    base: BASE,
+    nav: [],
+    css: STYLE,
+    script: CLIENT_JS,
   });
 }
 
@@ -443,9 +581,12 @@ export function siteView(
       <div class="actions bypass-actions">${currentIp ? `<button class="btn" type="button" onclick="addCurrentIp('${escJs(currentIp)}')">Add my IP (${esc(currentIp)})</button>` : ""}<button class="btn btn-primary" type="button" onclick="saveBypasses('${escJs(site.domain)}')">Save bypasses</button></div></div>
   </div>
   <div class="card"><div class="card-header"><div><h2>Maintenance page</h2><p class="hint">Custom HTML and CSS are stored for this site. Active scripts and form controls are removed.</p></div></div>
-    <label class="template-mode"><input id="custom-template" type="checkbox" ${template.custom ? "checked" : ""} onchange="changeTemplateMode('${escJs(site.domain)}', this.checked)"> Use a custom template</label>
-    <div class="editor-tabs" role="tablist"><button class="btn" type="button" data-editor-tab="editor" aria-selected="true" onclick="showEditorTab('editor')">HTML / CSS</button><button class="btn" type="button" data-editor-tab="preview" aria-selected="false" onclick="showEditorTab('preview')">Preview</button></div>
+    <div class="toolbar editor-toolbar">
+      <div class="editor-tabs" role="tablist"><button class="btn" type="button" data-editor-tab="editor" aria-selected="true" onclick="showEditorTab('editor')">HTML / CSS</button><button class="btn" type="button" data-editor-tab="preview" aria-selected="false" onclick="showEditorTab('preview')">Preview</button></div>
+      <label class="switch-field toolbar-end" for="edit-template">Edit<span class="switch"><input id="edit-template" type="checkbox" onchange="changeTemplateMode('${escJs(site.domain)}', this.checked)"><span></span></span></label>
+    </div>
     <textarea id="template-editor" aria-label="Maintenance page HTML" spellcheck="false">${esc(template.html)}</textarea>
+    <div id="template-ace" hidden></div>
     <iframe id="template-preview" title="Maintenance page preview" sandbox hidden></iframe>
     <div class="form-actions"><button class="btn btn-danger" type="button" onclick="resetTemplate('${escJs(site.domain)}', false)">Reset to default</button><button class="btn btn-primary" id="save-template" type="button" onclick="saveTemplate('${escJs(site.domain)}')">Save template</button></div>
   </div>`;

@@ -6,7 +6,7 @@ import type { Server } from "bun";
 import { stagerService, validateDomain, validateJobId, expandTarget } from "./service";
 import type { JobView } from "./service";
 import { layout, jobsView, newCloneView, jobView } from "./views";
-import { guardMutation, newCsrfToken, csrfCookieHeader, SECURITY_HEADERS } from "../../../lib/app-http";
+import { guardMutation, newCsrfToken, withCsrfCookie, SECURITY_HEADERS } from "../../../lib/app-http";
 import { getNextAvailablePort, type SanitizedSite } from "../../../lib/snapshot-reader";
 // The Stager already depends on the Instatic addon: cloning a reverse-proxy
 // site means driving its action binary, and this addon refuses one whose backend is
@@ -61,12 +61,11 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 function html(body: string, csrf: string, status = 200): Response {
   return new Response(body, {
     status,
-    headers: {
+    headers: withCsrfCookie({
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
-      "Set-Cookie": csrfCookieHeader(csrf),
       ...SECURITY_HEADERS,
-    },
+    }, csrf),
   });
 }
 

@@ -1,4 +1,5 @@
 import type { AddonTarget } from "../cli/paths";
+import { SITE_EMBED_SCRIPT } from "./shadow-embed";
 import { esc, escJs } from "./app-http";
 import { UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
 
@@ -154,25 +155,31 @@ const SITE_LAYOUT_STYLE = `
 // A scrolled strip can hide the tab the page is on and the tab the keyboard has
 // reached, which are the two tabs an operator needs to see. Nothing else about
 // the strip changes; "nearest" scrolls the strip only, never the page.
-const SITE_LAYOUT_SCRIPT = `(function () {
-  // This block is injected ahead of the strip it reads, so wait for the
-  // document rather than querying markup the parser has not reached yet.
-  function start() {
-    var strip = document.querySelector(".tab-container ul");
-    if (!strip) return;
-    function reveal(el) {
-      if (el && strip.scrollWidth > strip.clientWidth) el.scrollIntoView({ block: "nearest", inline: "nearest" });
-    }
-    reveal(strip.querySelector("li.active a"));
-    strip.addEventListener("focusin", function (event) { reveal(event.target); });
+const SITE_LAYOUT_SCRIPT = `
+  var strip = document.querySelector(".tab-container ul");
+  if (!strip) return;
+  function reveal(el) {
+    if (el && strip.scrollWidth > strip.clientWidth) el.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
+  reveal(strip.querySelector("li.active a"));
+  strip.addEventListener("focusin", function (event) { reveal(event.target); });
+`;
+
+// Everything this block injects sits ahead of the markup it reads, so it waits
+// for the document rather than querying what the parser has not reached yet.
+function deferred(...bodies: string[]): string {
+  return `(function () {
+  function start() {${bodies.join("\n")}}
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
   else start();
 })();`;
+}
 
 /**
  * Keeps CloudPanel's site tab strip on one row once an addon has added a tab
- * to it, and lets the site-information blocks above it wrap on a narrow screen.
+ * to it, lets the site-information blocks above it wrap on a narrow screen, and
+ * mounts an addon's page into the panel's own content area when its tab is
+ * clicked.
  *
  * Injected by the manager rather than by the addon that adds the tab, so two
  * addons adding tabs cannot emit these rules twice.
@@ -184,7 +191,7 @@ export function siteLayoutTarget(): AddonTarget {
     anchorBefore: '<div class="tab-container">',
     required: true,
     snippet: () => `<style>${SITE_LAYOUT_STYLE}</style>
-<script>${SITE_LAYOUT_SCRIPT}</script>
+<script>${deferred(SITE_LAYOUT_SCRIPT, SITE_EMBED_SCRIPT)}</script>
 `,
   };
 }

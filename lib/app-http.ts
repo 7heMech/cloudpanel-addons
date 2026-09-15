@@ -24,11 +24,38 @@ function constantTimeEquals(a: string, b: string): boolean {
   return ba.length === bb.length && timingSafeEqual(ba, bb);
 }
 
+/**
+ * Expiry for the `/addons`-scoped cookie an older release set.
+ *
+ * A cookie's identity is its name, domain and path, so the panel-wide cookie
+ * does not replace it: after an upgrade a browser holds both, and sends both
+ * under `/addons`, longest path first. The server reads the first, which is the
+ * stale one, while a page mounted in a panel route can only see the new one --
+ * every action would be refused as a mismatch until the browser closed.
+ * Expiring a cookie that is not there does nothing, so this is sent always.
+ */
+const LEGACY_CSRF_EXPIRY = `${CSRF_COOKIE}=; Path=/addons; Max-Age=0; SameSite=Strict; Secure`;
+
+/** Response headers with the CSRF cookie set and the superseded one expired. */
+export function withCsrfCookie(headers: Record<string, string>, token: string): Headers {
+  const out = new Headers(headers);
+  out.append("Set-Cookie", csrfCookieHeader(token));
+  out.append("Set-Cookie", LEGACY_CSRF_EXPIRY);
+  return out;
+}
+
 export function csrfCookieHeader(token: string): string {
   // Not HttpOnly on purpose: the page's own script has to read it to echo it
   // back in the header. That is what makes the double-submit check work, and
   // it is safe because a cross-origin page cannot read another origin's cookie.
-  return `${CSRF_COOKIE}=${token}; Path=/addons; SameSite=Strict; Secure`;
+  //
+  // Path is the whole panel, not /addons: an addon page mounted into one of
+  // CloudPanel's own site pages runs at that page's path, and a cookie scoped
+  // to /addons is invisible to it, so every mutation from there would be
+  // refused. Path scoping is not what protects this cookie -- the panel is one
+  // origin, so any panel page could read it at any path -- SameSite and the
+  // same-origin check are.
+  return `${CSRF_COOKIE}=${token}; Path=/; SameSite=Strict; Secure`;
 }
 
 /** Returns null when the request may proceed, or a Response to send instead. */
