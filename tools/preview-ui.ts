@@ -281,11 +281,22 @@ const server = Bun.serve({
             createdAt: "2026-09-10T09:30:00Z", startedAt: "2026-09-10T09:30:01Z", finishedAt: "",
           }
         : null;
-      return indexPage(enabled, notice, {
+      const page = indexPage(enabled, notice, {
         available: ["cloudflare-ips", "instatic", "stager", "maintenance", "login-theme"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
+      // ?confirm=<addon> opens the disable dialog on load. A modal only exists
+      // after a click, and the screenshot tool does not click; without this the
+      // one dialog an operator sees before turning an addon off cannot be
+      // reviewed the way every other view can.
+      const openDialog = url.searchParams.get("confirm");
+      if (!openDialog) return page;
+      const body = await page.text();
+      return new Response(
+        body.replace("</body>", `<script>addEventListener('DOMContentLoaded',function(){disableAddon(${JSON.stringify(openDialog)}, ${JSON.stringify(openDialog === "instatic" ? "Instatic CMS" : openDialog)})})</script></body>`),
+        { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
+      );
     }
     if (path === "/addons/maintenance/" || path === "/addons/maintenance") {
       const maintenanceSites = sites.map((site, index) => ({

@@ -77,6 +77,8 @@ export const ARTIFACT_MANIFEST_PATH = `${STATE_DIR}/artifacts.json`;
 export const TEMPLATE_STATE_DIR = `${STATE_DIR}/templates`;
 export const LOCK_DIR = "/run/lock/clp-addons";
 export const SYSTEMD_DIR = "/etc/systemd/system";
+/** Operator-editable schedule for Instatic's recovery snapshots. */
+export const INSTATIC_BACKUP_CRON = "/etc/cron.d/clp-addons-instatic-backup";
 
 export const RECONCILE_SERVICE = "clp-addons-reconcile.service";
 export const RECONCILE_TIMER = "clp-addons-reconcile.timer";
