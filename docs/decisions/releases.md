@@ -44,3 +44,9 @@ stop at binary verification.
 
 Published releases are immutable in the workflow. A failed draft can be
 recreated, but an existing published tag is rejected.
+
+A tag whose version carries a semver pre-release identifier -- anything after a
+hyphen, such as `v1.2.0-rc.1` -- publishes as a GitHub pre-release. GitHub
+treats the newest release that is not one as "latest", and that is the URL the
+documented `curl | bash` bootstrap fetches `install.sh` from, so a tag that says
+it is not finished must not become what a new install receives.
