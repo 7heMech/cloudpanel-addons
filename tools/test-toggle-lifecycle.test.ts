@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -22,6 +22,7 @@ interface Run {
   calls: [string, string[]][];
   provision: string[];
   inject: string[];
+  /** systemctl calls that change state; the is-active probes are left out. */
   systemd: string[];
   cron: boolean;
   error?: string;
@@ -29,10 +30,11 @@ interface Run {
 
 const childScript = String.raw`
 import { mock } from "bun:test";
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync } from "node:fs";
 
 const root = process.env.CLP_TEST_ROOT;
 const calls = [];
+const failing = JSON.parse(process.env.CLP_TEST_FAILING ?? "[]");
 const provision = [];
 const inject = [];
 const record = (bucket, name) => (...args) => { bucket.push(name); return undefined; };
@@ -64,7 +66,11 @@ mock.module("./cli/util.ts", () => ({
   log: { step: () => {}, ok: () => {}, warn: () => {}, err: () => {}, plain: () => {} },
   requireRoot: () => {},
   run: (cmd, args) => { calls.push([cmd, args]); return cmd === "id" ? "0" : ""; },
-  tryRun: (cmd, args) => { calls.push([cmd, args]); return { ok: true, out: "" }; },
+  tryRun: (cmd, args) => {
+    calls.push([cmd, args]);
+    const line = [cmd, ...args].join(" ");
+    return { ok: !failing.some((needle) => line.includes(needle)), out: "" };
+  },
 }));
 
 // The real installUnits, applyToggleUnits, writeConfig, installedConfig and
@@ -126,7 +132,10 @@ let error;
 try {
   for (const step of JSON.parse(process.env.CLP_TEST_STEPS)) {
     if (step.verb === "enable") await cli.applyEnable(step.addon);
-    else cli.applyDisable(step.addon);
+    else if (step.verb === "disable") cli.applyDisable(step.addon);
+    // A between-steps nudge, so a test can spoil a unit file the way something
+    // outside this binary would and watch the next toggle put it back.
+    else chmodSync(root + "/systemd/" + step.addon, step.mode);
   }
 } catch (err) {
   error = err instanceof Error ? err.message : String(err);
@@ -135,7 +144,9 @@ console.log(JSON.stringify({
   calls,
   provision,
   inject,
-  systemd: calls.filter(([cmd]) => cmd === "systemctl").map(([, args]) => args.join(" ")),
+  systemd: calls
+    .filter(([cmd, args]) => cmd === "systemctl" && args[0] !== "is-active")
+    .map(([, args]) => args.join(" ")),
   cron: existsSync(root + "/cron.d/instatic-backup"),
   error,
 }));
@@ -163,15 +174,27 @@ function fixture(options: { provisioned: boolean; enabled: string[] }): string {
   return root;
 }
 
+type Step =
+  | { verb: "enable" | "disable"; addon: string }
+  | { verb: "chmod"; addon: string; mode: number };
+
 function toggle(
-  steps: { verb: "enable" | "disable"; addon: string }[],
-  options: { provisioned?: boolean; enabled?: string[] } = {},
+  steps: Step[],
+  options: { provisioned?: boolean; enabled?: string[]; failing?: string[]; root?: string } = {},
 ): Run & { root: string } {
-  const root = fixture({ provisioned: options.provisioned ?? true, enabled: options.enabled ?? [] });
+  // A caller may hand back a root a previous toggle left, so a test can spoil
+  // what that toggle wrote and watch the next one find it.
+  const root = options.root
+    ?? fixture({ provisioned: options.provisioned ?? true, enabled: options.enabled ?? [] });
   const result = spawnSync(process.execPath, ["-e", childScript], {
     cwd: repo,
     encoding: "utf8",
-    env: { ...process.env, CLP_TEST_ROOT: root, CLP_TEST_STEPS: JSON.stringify(steps) },
+    env: {
+      ...process.env,
+      CLP_TEST_ROOT: root,
+      CLP_TEST_STEPS: JSON.stringify(steps),
+      CLP_TEST_FAILING: JSON.stringify(options.failing ?? []),
+    },
   });
   if (result.status !== 0) throw new Error(`child failed: ${result.stderr}`);
   const line = result.stdout.trim().split("\n").at(-1)!;
@@ -282,4 +305,57 @@ test("the manager unit written by a toggle describes exactly the enabled set", (
   expect(unit).toContain("STAGER_APP_DATA=");
   expect(unit).toContain("INSTATIC_APP_DATA=");
   expect(unit).not.toContain("MAINTENANCE_APP_DATA=");
+});
+
+test("a spoiled unit file is rewritten even though its text still matches", () => {
+  // Before installUnits answered a delta, repair rewrote every unit whatever
+  // its state, and so put a mode like this back as a side effect. The delta
+  // has to keep doing it: nothing in clp-addons.service says User=, so systemd
+  // runs what it names as root.
+  const run = toggle([
+    { verb: "enable", addon: "stager" },
+    { verb: "chmod", addon: "clp-addons.service", mode: 0o666 },
+    { verb: "enable", addon: "stager" },
+  ]);
+  expect(run.error).toBeUndefined();
+  // Two reloads: the first toggle wrote the unit, the third put its mode back.
+  expect(run.systemd).toEqual(["daemon-reload", "daemon-reload"]);
+  expect(lstatSync(join(run.root, "systemd", "clp-addons.service")).mode & 0o7777).toBe(0o644);
+});
+
+test("a symlink standing in for a unit file is replaced by a real one", () => {
+  const run = toggle([{ verb: "enable", addon: "stager" }]);
+  const unit = join(run.root, "systemd", "clp-addons.service");
+  const decoy = join(run.root, "decoy.service");
+  writeFileSync(decoy, readFileSync(unit, "utf8"));
+  rmSync(unit);
+  symlinkSync(decoy, unit);
+
+  const again = toggle([{ verb: "enable", addon: "stager" }], { root: run.root, enabled: ["stager"] });
+  expect(again.error).toBeUndefined();
+  expect(again.systemd).toContain("daemon-reload");
+  expect(lstatSync(unit).isSymbolicLink()).toBe(false);
+  // The decoy is untouched: a write through the link would have followed it.
+  expect(readFileSync(decoy, "utf8")).toBe(readFileSync(unit, "utf8"));
+});
+
+test("a box whose manager never started is bootstrapped rather than deltaed", () => {
+  // bootstrapProvision writes the unit files well before it calls startUnits,
+  // so a run that failed in between leaves exactly these files behind. The
+  // delta path starts nothing, and would have reported success over a box with
+  // no manager running.
+  const run = toggle([{ verb: "enable", addon: "stager" }], {
+    failing: ["is-active --quiet clp-addons.service"],
+  });
+  expect(run.error).toBeUndefined();
+  expect(run.provision).toContain("ensureServiceUser");
+  expect(run.provision).toContain("startUnits");
+});
+
+test("a box whose reconcile timer is not armed is bootstrapped too", () => {
+  const run = toggle([{ verb: "enable", addon: "stager" }], {
+    failing: ["is-active --quiet clp-addons-reconcile.timer"],
+  });
+  expect(run.error).toBeUndefined();
+  expect(run.provision).toContain("startUnits");
 });

@@ -754,9 +754,37 @@ export interface UnitChanges {
   systemd: boolean;
 }
 
-/** Writes a managed definition only when its text differs; returns whether it did. */
+/**
+ * Whether the file at `path` is already exactly what `writeManaged` would have
+ * written: a plain `0644` regular file owned by this process, holding `body`.
+ *
+ * Content alone is not the question. While `installUnits` rewrote every
+ * definition unconditionally, repair converged their mode and ownership as a
+ * side effect of that rewrite. Skipping the write on matching text alone would
+ * have taken that away: a unit left group-writable, or replaced by a symlink to
+ * a file that happens to hold the right text, would survive the repair that
+ * exists to undo exactly that. Several managed units carry no `User=`, so
+ * systemd runs what they name as root.
+ */
+function managedFileIntact(path: string, body: string): boolean {
+  try {
+    const info = lstatSync(path);
+    if (!info.isFile()) return false;
+    if ((info.mode & 0o7777) !== 0o644) return false;
+    // The owner this compares against is the process's own rather than a
+    // literal 0, because that is what writeAtomic produces. Every caller here
+    // is already past requireRoot, so in service it is 0; saying so that way
+    // keeps the check true of what it is actually checking.
+    if (info.uid !== process.getuid?.()) return false;
+    return readFileSync(path, "utf-8") === body;
+  } catch {
+    return false;
+  }
+}
+
+/** Writes a managed definition unless one is already intact; returns whether it did. */
 function writeManaged(path: string, body: string): boolean {
-  if (existsSync(path) && readFileSync(path, "utf-8") === body) return false;
+  if (managedFileIntact(path, body)) return false;
   writeAtomic(path, body, 0o644);
   return true;
 }
@@ -861,7 +889,16 @@ export function platformProvisioned(commands: ProvisionCommandRunner = { run, tr
   return existsSync(`${SYSTEMD_DIR}/${MANAGER_UNIT}`)
     && existsSync(`${SYSTEMD_DIR}/${AUTH_SOCKET_UNIT}`)
     && existsSync(`${SYSTEMD_DIR}/${AUTH_SERVICE_UNIT}`)
-    && commands.tryRun("id", ["-u", SERVICE_USER]).ok;
+    && commands.tryRun("id", ["-u", SERVICE_USER]).ok
+    // The files exist from the moment `bootstrapProvision` writes them, which
+    // is well before it calls `startUnits`. If it fails in between -- an
+    // unpatchable template, an Nginx block it will not touch -- the files alone
+    // would report a provisioned box, and the delta path never starts anything.
+    // These two are what `startUnits` leaves behind: the manager running and
+    // the reconcile timer armed. Neither is true until it finished, and a box
+    // where either has since stopped is one a full pass should see anyway.
+    && commands.tryRun("systemctl", ["is-active", "--quiet", MANAGER_UNIT]).ok
+    && commands.tryRun("systemctl", ["is-active", "--quiet", RECONCILE_TIMER]).ok;
 }
 
 export interface StartUnitsOptions {

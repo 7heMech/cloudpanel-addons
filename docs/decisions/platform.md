@@ -18,9 +18,18 @@ creates its state directory, rewrites the managed unit definitions and starts
 whatever those definitions newly introduce -- and nothing else. It does not
 create the service user, probe the auth helper or sweep legacy installs: those
 answer "has this box ever been set up", which `install`, `update` and `repair`
-ask and a toggle does not. An `enable` that finds no manager unit, no auth units
-or no service user hands itself to the full install path rather than applying a
-delta to nothing.
+ask and a toggle does not. An `enable` hands itself to the full install path
+rather than applying a delta to nothing whenever the unit files, the service
+user, a running manager or an armed reconcile timer are missing. The last two
+are there because the unit files appear well before the install that wrote them
+reaches `startUnits`: a bootstrap that failed in between leaves files a delta
+would otherwise read as a finished install and then start nothing.
+
+A managed definition is rewritten when its text differs, and also when what
+stands at its path is not the plain `0644` file this binary writes -- a
+group-writable unit, or a symlink to a file holding the right text. Rewriting
+unconditionally used to converge that as a side effect, and several managed
+units name no `User=`, so systemd runs what they name as root.
 
 `systemctl daemon-reload` runs only when a managed definition was created,
 changed or removed, and a toggle starts only units it created -- never the auth
