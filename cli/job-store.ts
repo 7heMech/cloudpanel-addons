@@ -14,7 +14,8 @@
 // purpose, so the decisions live here now and the addons keep only the meaning
 // of their own fields.
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { writeFileAtomic } from "../lib/atomic-write";
 import { join } from "node:path";
 import { runCommand } from "./action-common";
 
@@ -89,10 +90,7 @@ export function jobGet(dir: string, field: string): string {
  * there sees a job with no state.
  */
 export function jobSet(dir: string, field: string, value: string): void {
-  const file = join(dir, field);
-  const tmp = `${file}.tmp.${process.pid}`;
-  writeFileSync(tmp, `${value}\n`, { mode: 0o600 });
-  renameSync(tmp, file);
+  writeFileAtomic(join(dir, field), `${value}\n`, { mode: 0o600 });
 }
 
 /** Start the job's log, owner-only, and return its path. */

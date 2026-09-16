@@ -47,21 +47,44 @@ Mode's preview CSP, the year-long cache on the editor mode asset -- is the only
 way to differ from the default. Caller headers are merged through `Headers`
 rather than spread, because spreading a `Headers` instance yields nothing and
 silently drops what the caller asked for, and `Set-Cookie` is taken from the
-accessor that keeps repeated cookies apart rather than by name. The CSRF cookie is attached by the
-same builder, so no response can set it without the rest of the policy, and
-`guardMutation`'s own refusals go out through it too.
+accessor that keeps repeated cookies apart rather than by name. The CSRF cookie
+is attached by the same builder, so no response can set it without the rest of
+the policy, and `guardMutation`'s own refusals go out through it too.
 
 Request bodies are read by one bounded reader. It refuses a declared
 `Content-Length` over the limit before reading anything, and counts the stream
 as it arrives so a chunked body with no declared length -- or a declared length
 that lies -- is abandoned at the limit rather than buffered whole. Invalid JSON,
 JSON that is not an object, and a `Content-Length` that is not the run of digits
-RFC 9110 defines each have their own message and status. What the fields mean stays with the handler that owns them:
-the reader does not pretend a type parameter validates anything.
+RFC 9110 defines each have their own message and status. What the fields mean
+stays with the handler that owns them: the reader does not pretend a type
+parameter validates anything.
 
 Percent-decoding of path segments goes through one helper that returns null on
 malformed encoding, so a stray `%` is a 400 rather than a URIError escaping to
 the socket boundary as a 500.
+
+## One atomic replacement
+
+`lib/atomic-write.ts` is how a managed file is replaced: written to an
+unpredictable name in the target's own directory with `O_EXCL`, chmodded, given
+its ownership, then renamed. The rename is last, so the target is either the old
+file or the new one, and a failure at any step removes the temporary file and
+leaves the target alone.
+
+Ownership is passed explicitly or not at all. Most writes want the installing
+process to own the result; the Cloudflare policy and the vhosts it stages must
+keep the panel's ownership, and a default for either would be wrong somewhere.
+Whether the existing target is one this project is willing to replace stays with
+the caller too -- the Cloudflare action refuses a policy file that is not a
+root-owned regular file before it writes.
+
+Secrets follow the same path. `writeFileSync`'s mode argument applies only when
+it creates the file, so writing a credential over an existing path left that
+path's old permissions in place until a later `chmod` caught up, with the
+credential already on disk. A file a command is about to write a secret into is
+created with `O_EXCL` rather than truncated, so nothing can leave a symlink at
+that name first.
 
 ## Files and secrets
 
