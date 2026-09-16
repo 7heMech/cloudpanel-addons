@@ -12,11 +12,11 @@ to the requested local port. The panel hostname itself is always rejected.
 
 ## Docker dependency
 
-Instatic declares `requiresUnits: ["docker"]` (`cli/paths.ts`). `clp-addons
-install instatic` / `enable instatic` -- whether run from the CLI or triggered
-from the Addons UI -- provision Docker themselves when it is missing, the same
-way `install.sh --install-docker` does for a fresh host: download
-`get.docker.com` and run it, then `systemctl enable --now docker`
+Instatic declares `requiresUnits: ["docker"]` (`addons/instatic/addon.ts`).
+`clp-addons install instatic` / `enable instatic` -- whether run from the CLI
+or triggered from the Addons UI -- provision Docker themselves when it is
+missing, the same way `install.sh --install-docker` does for a fresh host:
+download `get.docker.com` and run it, then `systemctl enable --now docker`
 (`ensureRequiredUnits` in `cli/provision.ts`). Enabling instatic never fails
 just because Docker was never installed; it only fails if that provisioning
 itself does not bring the unit up.
