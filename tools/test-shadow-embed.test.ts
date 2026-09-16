@@ -7,6 +7,7 @@ import { fragment } from "../addons/maintenance/app/views";
 import { BASE_STYLE } from "../lib/app-ui";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { EMBED_MARKER, embedLandingUrl, shadowStyle, SITE_EMBED_SCRIPT } from "../lib/shadow-embed";
+import { ADDON_SITE_TABS } from "../lib/site-context";
 
 test("the stylesheet is rewritten for a shadow root", () => {
   const css = shadowStyle(BASE_STYLE);
@@ -56,7 +57,7 @@ test("the loader mounts into a shadow root and runs the script at global scope",
   expect(script).not.toContain("new Function(");
   expect(script).toContain("window.CLP_MOUNT = root");
   // One document, one mount, held from before the fetch rather than after it.
-  expect(script).toContain("if (mounted || mounting) return;");
+  expect(script).toContain("if (shown || mounting) return;");
   expect(script).toContain("mounting = true;");
   expect(script).toContain('history[push ? "pushState" : "replaceState"]');
   // Anything it cannot do falls back to the standalone page. Falling back to
@@ -148,14 +149,20 @@ function runLoader(options: {
   const scripts: string[] = [];
   const clicks: ((event: unknown) => void)[] = [];
 
-  const link = {
-    getAttribute: () => "/addons/maintenance?domain=shop.example.test",
+  // One link per addon tab, so a test can click a different tab than the one
+  // that is mounted. The loader looks each up by its own url.
+  const links = ADDON_SITE_TABS.map((tab) => ({
+    getAttribute: () => `${tab.url}?domain=shop.example.test`,
     addEventListener: (_name: string, handler: (event: unknown) => void) => clicks.push(handler),
     parentNode: null,
     scrollIntoView: () => {},
-  };
+  }));
   const strip = {
-    querySelector: (selector: string) => (selector === "ul" ? null : options.link === false ? null : link),
+    querySelector: (selector: string) => {
+      if (selector === "ul" || options.link === false) return null;
+      const index = ADDON_SITE_TABS.findIndex((tab) => selector.includes(`${tab.url}?`));
+      return index === -1 ? null : links[index];
+    },
     querySelectorAll: () => [] as unknown[],
   };
   const content = { textContent: "x", appendChild: () => {} };
@@ -224,6 +231,38 @@ test("a second click while a mount is in flight is ignored", async () => {
 
   // The mount is finished, so a further click is still a no-op.
   loader.clicks[0]!(event);
+  expect(loader.fetched).toHaveLength(1);
+});
+
+test("the other addon's tab still works once one is mounted", async () => {
+  const loader = runLoader({
+    fetchReply: async () => ({
+      json: async () => ({ ok: true, title: "Maintenance", css: "", html: "", script: "const CLP_BASE = 'x';" }),
+    }),
+  });
+  // ADDON_SITE_TABS order, which is the order the loader binds them in.
+  const maintenance = ADDON_SITE_TABS.findIndex((tab) => tab.slug === "maintenance");
+  const stager = ADDON_SITE_TABS.findIndex((tab) => tab.slug === "stager");
+
+  let prevented = 0;
+  const event = { button: 0, preventDefault: () => { prevented++; } };
+  loader.clicks[maintenance]!(event);
+  await Bun.sleep(1);
+  expect(loader.scripts).toHaveLength(1);
+  expect(prevented).toBe(1);
+
+  // The tab already shown stays a no-op, and stays prevented: following its own
+  // link would reload the page to arrive where the operator already is.
+  loader.clicks[maintenance]!(event);
+  expect(loader.fetched).toHaveLength(1);
+  expect(prevented).toBe(2);
+
+  // The other tab is handed to the browser rather than swapped in place. A
+  // second fragment in this document would throw on its own script, which
+  // declares CLP_BASE with const at global scope -- so the click must not be
+  // prevented, or the tab is simply dead.
+  loader.clicks[stager]!(event);
+  expect(prevented).toBe(2);
   expect(loader.fetched).toHaveLength(1);
 });
 

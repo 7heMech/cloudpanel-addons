@@ -151,15 +151,19 @@ are relative to from `CLP_MOUNT`. Shared client code therefore reaches elements
 through `CLP_ROOT`, which is that root when mounted and the document otherwise;
 a lookup written against `document` searches the panel's page instead and finds
 nothing. One page is mounted at a time, held from before the fetch rather than
-after it, because that script declares its bindings once per document. A panel
+after it, because that script declares its bindings once per document. Clicking
+the tab already shown does nothing; clicking a *different* addon's tab is handed
+to the browser and costs a page load, which lands on the panel page that mounts
+it cleanly. That distinction is the whole of it: a guard that covered both left
+the other addon's tab dead, prevented but never followed. A panel
 page without the markup the loader reads says so in the console, and hands over
 to the addon's own page when a deep link is what brought the operator there.
 A direct visit to the addon's own URL
 redirects to the panel's site page carrying `clp-addon`, which the loader reads
 on landing, so the address bar still names the page and a refresh still works.
-`?embed=0` renders the standalone page instead. Maintenance is the only addon
-mounted this way while the approach is being evaluated; the reproduction above
-is what it would replace.
+`?embed=0` renders the standalone page instead. Maintenance and Staging are the
+addons mounted this way while the approach is being evaluated; the reproduction
+above is what it would replace.
 
 CloudPanel sizes that strip for the tabs it ships, so an addon's tab wrapped it
 onto a second row. The manager injects one rule making the strip a single
