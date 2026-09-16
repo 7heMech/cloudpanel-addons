@@ -2,9 +2,7 @@
 //
 // Queried by the CLI overview and web UI to notify operators when a new
 // release is available. The manager asks on every request it serves, so the
-// answer is cached in memory for 15 minutes, refreshed by one call at a time,
-// and served as it stands while that refresh runs: past the first check,
-// nothing here waits on GitHub or spends another of its anonymous rate limit.
+// answer is cached for 15 minutes and refreshed by one call at a time.
 
 export interface CliUpdateInfo {
   current: string;
@@ -17,14 +15,7 @@ const CACHE_TTL_MS = 15 * 60 * 1000;
 
 let cachedUpdate: { at: number; info: CliUpdateInfo | null } | null = null;
 
-/**
- * The refresh currently talking to GitHub, if any.
- *
- * Without it, every request that arrived while the cache was cold started its
- * own call: one page load is several requests, each waiting the full timeout on
- * a box that cannot reach GitHub, and each spending one of the 60 anonymous
- * calls an hour that address is allowed.
- */
+/** The refresh currently talking to GitHub, so concurrent misses share one. */
 let refreshing: Promise<CliUpdateInfo | null> | null = null;
 
 /**
@@ -48,12 +39,7 @@ export function isNewerVersion(candidate: string, current: string): boolean {
   return compareSemver(candidate, current) > 0;
 }
 
-/**
- * Ask GitHub once and record the answer, good or bad.
- *
- * Every outcome fills the cache, including a failure, so an unreachable GitHub
- * is asked again on the next TTL rather than on the next request.
- */
+/** Ask GitHub once. Every outcome fills the cache, a failure included. */
 async function fetchLatestRelease(
   currentVersion: string,
   repo: string,
@@ -80,7 +66,6 @@ async function fetchLatestRelease(
     cachedUpdate = { at: Date.now(), info };
     return info;
   } catch {
-    // Network failure, timeout, or offline: report nothing rather than throw.
     cachedUpdate = { at: Date.now(), info: null };
     return null;
   }
@@ -90,10 +75,8 @@ async function fetchLatestRelease(
  * Check if a newer version of clp-addons is available on GitHub.
  * Returns null if offline, timed out, or unresolvable.
  *
- * Only the very first check waits for GitHub. Once an answer has been recorded,
- * an expired entry is served as it stands while a single refresh runs behind it,
- * so no request after the first ever pays the network timeout. The manager calls
- * this on every request it serves, which is what makes that worth doing.
+ * Only the first check waits for GitHub; after that an expired entry is served
+ * as it stands while one refresh runs behind it.
  */
 export async function checkCliUpdate(
   currentVersion: string,

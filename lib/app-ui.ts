@@ -541,10 +541,8 @@ function waitForManager(id, done) {
   async function tick() {
     if (stopped) return;
     try {
-      // The probe is behind the session gate like everything else, so a status
-      // alone does not answer the question: a session that expired during the
-      // restart redirects to the login page of the panel, which fetch follows
-      // and reports as a perfectly good 200. Only this reply counts.
+      // A status alone is not the answer: a lapsed session redirects to the
+      // login page, which fetch follows and reports as a perfectly good 200.
       const res = await fetch(CLP_BASE + '/health', {
         cache: 'no-store',
         headers: { 'Accept': 'application/json' },

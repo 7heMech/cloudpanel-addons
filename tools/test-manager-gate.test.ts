@@ -1,10 +1,5 @@
-// The manager's request gate, exercised by sending real Requests through the
-// same function the socket calls.
-//
-// What is being pinned here is an ordering, not a route: authentication runs
-// before the URL is examined and before any route, including the liveness probe
-// the update page polls, can answer. The probe used to be decided first, which
-// told anyone who could reach the panel that this box runs clp-addons.
+// The manager's request gate. What is pinned here is an ordering, not a route:
+// authentication runs before any route, the liveness probe included.
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -12,11 +7,8 @@ import { join } from "node:path";
 const repo = join(import.meta.dir, "..");
 
 /**
- * Drive `handleRequest` in a subprocess with the session gate replaced.
- *
- * `auth` is what the replacement gate reports: null for a caller with no valid
- * session, or a principal for one that has it. Everything the manager would
- * reach after the gate is mocked to record that it was reached at all.
+ * Drive `handleRequest` in a subprocess with the session gate replaced, where
+ * `auth` is what that gate reports. Everything past it records being reached.
  */
 function probe(auth: { user: string; roles: string[] } | null): Array<Record<string, unknown>> {
   const script = `
@@ -33,8 +25,6 @@ mock.module("./lib/sso-auth.ts", () => ({
       : { auth: null, response: new Response(null, { status: 302, headers: { Location: "/login" } }) };
   },
 }));
-// Anything past the gate records itself. A reply is not what the ordering is
-// read from -- whether these ran at all is.
 mock.module("./lib/update-check.ts", () => ({
   checkCliUpdate: async () => { reached.push("update-check"); return null; },
 }));
@@ -68,8 +58,6 @@ test("no route answers before the session gate", () => {
   for (const result of probe(null)) {
     expect(result.status, `${result.path} must redirect an anonymous caller`).toBe(302);
     expect(result.location).toBe("/login");
-    // Not even the shape of the reply distinguishes the probe from any other
-    // path, so nothing here says whether this panel runs clp-addons.
     expect(result.body).toBeNull();
     expect(result.reached, `${result.path} ran work before authenticating`).toEqual([]);
   }
@@ -88,8 +76,7 @@ test("an administrator reaches the probe and the routes behind it", () => {
   const health = results.find((result) => result.path === "/addons/health")!;
   expect(health.status).toBe(200);
   expect(health.body).toEqual({ ok: true, service: "clp-addons" });
-  // The probe is answered before the update check, which every other route pays
-  // for: it is polled once a second while the manager restarts.
+  // Answered before the update check: it is polled once a second on restart.
   expect(health.reached).toEqual([]);
 
   const index = results.find((result) => result.path === "/addons/")!;

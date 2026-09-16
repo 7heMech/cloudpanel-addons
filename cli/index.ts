@@ -839,19 +839,12 @@ function mountedAddons(): string[] {
 }
 
 /**
- * Every request the manager answers, in the order it decides them.
- *
- * Exported so a test can send a real Request through the same function the
- * socket does. It used to be an inline literal inside `Bun.serve`, which left
- * the one decision that matters here -- that authentication comes first -- to be
- * checked by searching this file for the order its calls appear in.
+ * Every request the manager answers, in the order it decides them. Exported so
+ * a test can send real requests through the same function the socket does.
  */
 export async function handleRequest(req: Request, server: Server<unknown>): Promise<Response> {
-  // Authentication is the first thing a request meets, before the URL is even
-  // taken apart. Nothing is answered ahead of it -- not the liveness probe,
-  // which used to reply to anyone who could reach the panel and so told an
-  // unauthenticated caller that this box runs clp-addons, and left one route
-  // whose ordering the next one added could copy.
+  // Nothing is answered before this, not even the liveness probe: a route
+  // decided ahead of the gate answers whoever can reach the panel.
   const gate = await authenticateRequest(req);
   if (gate.response) {
     // The gate's own headers first -- it may be redirecting to a login or
@@ -871,9 +864,8 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   if (denied) return denied;
 
   const path = internalPath(new URL(req.url).pathname);
-  // The probe the update page polls while this process restarts. It says only
-  // that the manager is answering again; the session that reaches it survived
-  // the restart because the gateway that validates it is a separate unit.
+  // Polled while this process restarts; the gateway that validates the session
+  // is a separate unit, so it keeps answering across the restart.
   if (path === "/health") {
     return jsonResponse({ ok: true, service: "clp-addons" });
   }
@@ -917,20 +909,9 @@ async function cmdServe(): Promise<never> {
   try {
     server = Bun.serve({
       unix: SOCKET_PATH,
-      // Bun's default is `process.env.NODE_ENV !== "production"`, and systemd
-      // sets no NODE_ENV, so a handler that threw answered with Bun's error
-      // page -- the message and the stack trace of a privileged process,
-      // rendered into the panel. Said here rather than left to an environment
-      // variable an operator could clear.
+      // Bun renders its own error page, stack trace included, unless NODE_ENV
+      // is production, and the unit sets no NODE_ENV.
       development: false,
-      // No route reads a body this large; the bounded reader refuses far less.
-      // The ceiling is here so a body nothing will parse is refused by the
-      // server rather than accepted and then thrown away, and so Bun's 128 MB
-      // default is not what decides it.
-      maxRequestBodySize: 8 * 1024 * 1024,
-      // With `development: false` an uncaught throw is a bare 500 with no body.
-      // Answer it the way every other failure is answered, and keep the detail
-      // in the journal where it belongs.
       error(error) {
         console.error("[clp-addons] request failed:", error);
         return jsonResponse({ ok: false, error: "internal error" }, { status: 500 });

@@ -267,11 +267,8 @@ const nonAdminResult = parsePanelSession(nonAdminRole);
 check("a valid non-admin session remains authenticated with its typed role", nonAdminResult?.roles.length === 1 && nonAdminResult.roles[0] === "ROLE_USER_");
 check("admin gate rejects a valid non-admin", adminGate(nonAdminResult && { user: nonAdminResult.user, roles: nonAdminResult.roles })?.status === 403);
 check("admin gate accepts only ROLE_ADMIN", adminGate(authenticatedResult && { user: authenticatedResult.user, roles: authenticatedResult.roles }) === null);
-// That the session gate and the administrator gate both precede the update
-// check and every route is settled in tools/test-manager-gate.test.ts, by
-// sending real requests through the handler rather than by reading the order
-// its calls appear in. What that test cannot reach is an argument to
-// `Bun.serve`, which is not a decision the handler makes.
+// The gate ordering is settled in tools/test-manager-gate.test.ts by sending
+// real requests. This is an argument to Bun.serve, which that test cannot see.
 const serveSource = readFileSync("cli/index.ts", "utf8").slice(readFileSync("cli/index.ts", "utf8").indexOf("async function cmdServe"));
 check("a handler fault cannot answer with Bun's error page",
   serveSource.includes("development: false"));

@@ -14,9 +14,6 @@ export const MAX_SESSION_BYTES = 256 * 1024;
 export const MAX_SESSION_ID_LENGTH = 128;
 const AUTH_HELPER_TIMEOUT_MS = 2_000;
 const AUTH_HELPER_MAX_OUTPUT_BYTES = 32 * 1024;
-const MAX_AUTH_HELPERS = 8;
-const MAX_AUTH_WAITERS = 16;
-const AUTH_WAIT_TIMEOUT_MS = 500;
 const MAX_SERIALIZATION_DEPTH = 64;
 const MAX_SERIALIZATION_NODES = 20_000;
 const MAX_ARRAY_ITEMS = 20_000;
@@ -66,44 +63,6 @@ function parseAuthHelperReply(stdout: string): AuthHelperReply {
   }
 }
 
-let activeAuthHelpers = 0;
-const authWaiters: Array<() => void> = [];
-
-function releaseAuthSlot(): void {
-  activeAuthHelpers--;
-  const next = authWaiters.shift();
-  if (next) next();
-}
-
-/** Reserves auth-helper capacity, waiting briefly unless the queue is full. */
-async function acquireAuthSlot(): Promise<(() => void) | null> {
-  if (activeAuthHelpers < MAX_AUTH_HELPERS) {
-    activeAuthHelpers++;
-    return releaseAuthSlot;
-  }
-  if (authWaiters.length >= MAX_AUTH_WAITERS) return null;
-
-  return new Promise((resolve) => {
-    let waiting = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const grant = () => {
-      if (!waiting) return;
-      waiting = false;
-      if (timer !== undefined) clearTimeout(timer);
-      activeAuthHelpers++;
-      resolve(releaseAuthSlot);
-    };
-    authWaiters.push(grant);
-    timer = setTimeout(() => {
-      if (!waiting) return;
-      waiting = false;
-      const index = authWaiters.indexOf(grant);
-      if (index >= 0) authWaiters.splice(index, 1);
-      resolve(null);
-    }, AUTH_WAIT_TIMEOUT_MS);
-  });
-}
-
 /**
  * Ask the root helper about one session over its socket.
  *
@@ -113,16 +72,11 @@ async function acquireAuthSlot(): Promise<(() => void) | null> {
  * 503 -- never into an authenticated request.
  */
 async function callAuthHelper(sessionId: string, socketPath = AUTH_SOCKET_PATH): Promise<AuthHelperReply> {
-  const release = await acquireAuthSlot();
-  if (!release) return { kind: "unavailable" };
   try {
     const raw = await callGatewayAuth(sessionId, socketPath, AUTH_HELPER_TIMEOUT_MS);
-    if (!raw) return { kind: "unavailable" };
-    return parseAuthHelperReply(raw);
+    return raw ? parseAuthHelperReply(raw) : { kind: "unavailable" };
   } catch {
     return { kind: "unavailable" };
-  } finally {
-    release();
   }
 }
 
