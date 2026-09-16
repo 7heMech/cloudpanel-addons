@@ -77,7 +77,11 @@ state for a later re-enable.
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
 badges, switches, toolbars, one confirmation dialog and one inline notice per
 page. An addon supplies its brand, its own tabs, its script and any rule only it
-draws. Below 760px the shell tightens: a dialog gives up its desktop padding and
+draws. The manager's own pages use the same two: disabling an addon asks through
+that dialog, naming the addon as its card does and saying that its data is kept,
+and a manager job that fails to start reports through the inline notice. The
+browser's `confirm` and `alert` survive only as what the shell degrades to where
+there is no `<dialog>` or no notice holder. Below 760px the shell tightens: a dialog gives up its desktop padding and
 its buttons take the row, and it is bounded by the visual viewport so a phone's
 collapsing address bar cannot cover them.
 

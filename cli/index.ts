@@ -995,16 +995,40 @@ async function startManagerJob(path, title) {
     watchJob(id);
   } catch (err) {
     busy(false);
-    alert(err.message);
+    // In the page rather than in a modal the browser owns, which would cover
+    // the card it is talking about and lose it on dismissal.
+    notify(err.message, 'error');
   }
 }
 
 function enableAddon(name) {
+  clearNotice();
   startManagerJob('/api/addons/' + encodeURIComponent(name) + '/enable', 'Enabling ' + name);
 }
 
-function disableAddon(name) {
-  if (!confirm('Disable ' + name + '? Its data is kept and it can be enabled again.')) return;
+// The same dialog every addon uses for a decision an operator has to make, so
+// disabling one reads the way turning on global maintenance does. The browser's
+// confirm() said the same words in a box this project does not style, cannot
+// carry a details list in, and which reads as the page having gone wrong.
+async function disableAddon(name, title) {
+  const accepted = await confirmAction({
+    // The name the card shows, not the slug the route takes: an operator
+    // reading "Disable instatic?" under a card headed "Instatic CMS" has to
+    // stop and match them up.
+    title: 'Disable ' + (title || name) + '?',
+    text: 'It stops appearing in CloudPanel and its pages stop answering.',
+    details: [
+      'Nothing it created is deleted: its data is kept and enabling it again returns the same instances.',
+      // Double-quoted because of the apostrophe: this is JavaScript inside a
+      // TypeScript template literal, where a backslash escape is eaten before
+      // the browser ever sees it.
+      "Anything it injected into CloudPanel's own pages is removed.",
+    ],
+    confirmLabel: 'Disable',
+    danger: true,
+  });
+  if (!accepted) return;
+  clearNotice();
   startManagerJob('/api/addons/' + encodeURIComponent(name) + '/disable', 'Disabling ' + name);
 }
 
@@ -1039,7 +1063,7 @@ function addonCard(name: string, enabled: boolean): string {
   const mounted = MANAGERS[spec.name] !== undefined;
   const actions = enabled
     ? `${mounted ? `<a class="btn btn-primary btn-lg" href="${esc(`${mountPath(spec.name)}/`)}" aria-label="Open ${esc(title)}">Open</a>` : '<span class="badge state-running addon-status">Enabled</span>'}
-    <button class="btn btn-danger btn-lg" type="button" onclick="disableAddon('${escJs(spec.name)}')">Disable</button>`
+    <button class="btn btn-danger btn-lg" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}')">Disable</button>`
     : `<button class="btn btn-primary btn-lg" type="button" onclick="enableAddon('${escJs(spec.name)}')">Enable ${esc(title)}</button>`;
   return `<article class="card addon-card">
   <div class="card-header"><h2>${esc(title)}</h2></div>
