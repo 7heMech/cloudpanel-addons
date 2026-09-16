@@ -107,7 +107,7 @@ test("manual stager prune keeps its exact JSON stdout reply", () => {
       nginxVhostDir: vhostsDir,
       tempDir,
     }, ["prune"], prelude);
-    expect(output).toBe('{"ok":true,"data":{"removed":0,"stuck":0,"vhostsRecovered":0}}');
+    expect(output).toBe('{"ok":true,"data":{"removed":0,"stuck":0,"vhostsRecovered":0,"promotionsRecovered":0,"rootsRemoved":0}}');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

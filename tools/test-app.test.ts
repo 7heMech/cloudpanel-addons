@@ -1534,6 +1534,7 @@ if addon_needs_docker ${addons.map((a) => `'${a}'`).join(" ")}; then echo yes; e
 
   const jobBase: JobView = {
     id: "20260909T100000Z-112233",
+    kind: "clone",
     source: "prod.example.com",
     target: "stg.example.com",
     port: 0,
@@ -1683,6 +1684,7 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   // Stager live panelSite check:
   const stgJob: JobView = {
     id: "20260909T100000Z-112233",
+    kind: "clone",
     source: "prod.example.com",
     target: "stg.example.com",
     port: 0,

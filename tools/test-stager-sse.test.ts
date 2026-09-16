@@ -7,6 +7,7 @@ import { JOB_WATCH_JS } from "../lib/app-ui";
 function mockJob(overrides: Partial<JobView> = {}): JobView {
   return {
     id: "20260910T093000Z-a1b2c3",
+    kind: "clone",
     source: "example.com",
     target: "stg.example.com",
     port: 0,

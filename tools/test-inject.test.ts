@@ -166,7 +166,10 @@ check("single addon uninstall: addon target removed and restored", readStager() 
 // STAGER_TARGETS places the Clone button before the Manage button in Frontend/Site/index.html.twig
 const siteDir = `${dir}/Frontend/Site`;
 mkdirSync(siteDir, { recursive: true });
-const siteFile = `${dir}/${STAGER_TARGETS[0]!.template}`;
+// By slug, not by index: this addon has more than one target and their order
+// in the list is the injector's business, not this fixture's.
+const stagerSiteTarget = STAGER_TARGETS.find((target) => target.slug === "site-list-action")!;
+const siteFile = `${dir}/${stagerSiteTarget.template}`;
 const siteOriginal = `
                     <td class="text-end">
                       <a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>
@@ -176,7 +179,7 @@ writeFileSync(siteFile, siteOriginal);
 
 const stagerSiteInj: Injection = {
   addon: "stager",
-  target: STAGER_TARGETS[0]!,
+  target: stagerSiteTarget,
   url: "/addons/stager",
 };
 
@@ -539,23 +542,38 @@ const tabOriginal = `<div class="tab-container">
 `;
 writeFileSync(tabFile, tabOriginal);
 
+const stagerTabTarget = STAGER_TARGETS.find((target) => target.slug === "site-tab")!;
+// Two addons patching one anchor, which is what the strip now is.
 const tabInjections: Injection[] = [
   { addon: "manager", target: { ...siteLayoutTarget(), template: tabTemplate }, url: "/addons/" },
   { addon: "maintenance", target: { ...MAINTENANCE_TARGETS[0]!, template: tabTemplate }, url: "/addons/maintenance" },
+  { addon: "stager", target: { ...stagerTabTarget, template: tabTemplate }, url: "/addons/stager" },
 ];
 reconcile(tabInjections, PATHS);
 const tabBody = () => readFileSync(tabFile, "utf-8");
-check("the one-row rule and the addon tab both land in the strip",
-  tabBody().includes("flex-wrap: nowrap") && tabBody().includes(">Maintenance</a>"), tabBody());
+check("the one-row rule and both addon tabs land in the strip",
+  tabBody().includes("flex-wrap: nowrap") && tabBody().includes(">Maintenance</a>")
+  && tabBody().includes(">Staging</a>"), tabBody());
+// The order ADDON_SITE_TABS gives the reproduced strip, so the panel's copy and
+// the addon's own copy of it read the same left to right.
+check("Maintenance comes before Staging, as it does in the reproduced strip",
+  tabBody().indexOf(">Maintenance</a>") < tabBody().indexOf(">Staging</a>"), tabBody());
 check("the one-row rule is applied before the strip it styles",
   tabBody().indexOf("flex-wrap: nowrap") < tabBody().indexOf('<div class="tab-container">'), tabBody());
 check("the addon tab stays inside the panel's own admin guard",
   tabBody().indexOf("{% if is_granted('ROLE_ADMIN') %}") < tabBody().indexOf(">Maintenance</a>"), tabBody());
 
 reconcile(tabInjections, PATHS);
-check("the strip settles without duplicating either block",
+const settledStrip = tabBody();
+check("the strip settles without duplicating any block",
   (tabBody().match(/flex-wrap: nowrap/g) ?? []).length === 1 &&
-  (tabBody().match(/>Maintenance<\/a>/g) ?? []).length === 1, tabBody());
+  (tabBody().match(/>Maintenance<\/a>/g) ?? []).length === 1 &&
+  (tabBody().match(/>Staging<\/a>/g) ?? []).length === 1, tabBody());
+// Two addons at one anchor must not swap places on every pass, or the file
+// never settles and the panel's Twig cache is rebuilt forever.
+reconcile(tabInjections, PATHS);
+check("a third pass produces the same file, so the two tabs hold their order",
+  tabBody() === settledStrip, tabBody());
 
 // Removing the addon removes the rule that only existed for its tab.
 reconcile([], PATHS);

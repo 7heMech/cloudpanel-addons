@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { ADDON_SITE_TABS, SITE_CONTEXT_STYLE, siteInfoHtml, siteTabs } from "../lib/site-context";
 import { BASE_STYLE, renderLayout } from "../lib/app-ui";
 import { siteLayoutTarget, SITE_TAB_TEMPLATE } from "../lib/panel-nav";
+import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import { readPanelPublicIp } from "../lib/panel-snapshot";
 
@@ -14,7 +15,7 @@ test("the reproduced tab strip applies CloudPanel's own conditions", () => {
   const withVarnish = siteTabs({ ...php, varnishCache: true }).map((tab) => tab.label);
   expect(withVarnish).toEqual([
     "Settings", "Vhost", "Databases", "Varnish Cache", "SSL/TLS", "Security",
-    "SSH/FTP", "File Manager", "Cron Jobs", "Logs", "Maintenance",
+    "SSH/FTP", "File Manager", "Cron Jobs", "Logs", "Maintenance", "Staging",
   ]);
 
   // Varnish Cache is a PHP-with-Varnish tab; Databases is for anything but static.
@@ -24,6 +25,9 @@ test("the reproduced tab strip applies CloudPanel's own conditions", () => {
   expect(staticTabs).not.toContain("Databases");
   expect(staticTabs).toContain("Settings");
   expect(staticTabs).toContain("Maintenance");
+  // Neither addon tab is conditional: the manager denies anyone without
+  // ROLE_ADMIN at the socket, which is the check the injected Twig makes too.
+  expect(staticTabs).toContain("Staging");
 });
 
 test("tab links point at the panel's own routes and mark the active one", () => {
@@ -149,11 +153,24 @@ test("the injected script waits for the strip it is injected ahead of", () => {
   expect(deferred).toBe("DOMContentLoaded");
 });
 
-test("the injected tab label matches the strip the addon reproduces", () => {
-  const maintenance = ADDON_SITE_TABS.find((tab) => tab.slug === "maintenance")!;
-  const snippet = MAINTENANCE_TARGETS[0]!.snippet("/addons/maintenance");
-  expect(snippet).toContain(`>${maintenance.label}</a>`);
-  expect(siteTabs(php).at(-1)!.label).toBe(maintenance.label);
+test("every injected tab label matches the strip the addon reproduces", () => {
+  // The panel's copy of the strip and the addon's reproduction of it are two
+  // renderings of ADDON_SITE_TABS; a label typed into either by hand is how
+  // they drift.
+  const injected = [
+    { slug: "maintenance", targets: MAINTENANCE_TARGETS, url: "/addons/maintenance" },
+    { slug: "stager", targets: STAGER_TARGETS, url: "/addons/stager" },
+  ];
+  for (const { slug, targets, url } of injected) {
+    const tab = ADDON_SITE_TABS.find((candidate) => candidate.slug === slug)!;
+    const target = targets.find((candidate) => candidate.slug === "site-tab")!;
+    expect(target.snippet(url)).toContain(`>${tab.label}</a>`);
+  }
+
+  // And in the same order at the end of the reproduced strip, which is the
+  // order the injector produces in the panel's own copy.
+  expect(siteTabs(php).slice(-ADDON_SITE_TABS.length).map((tab) => tab.label))
+    .toEqual(ADDON_SITE_TABS.map((tab) => tab.label));
 });
 
 function poolItem(root: string, name: string, expiry: number, key: string, value: string): void {

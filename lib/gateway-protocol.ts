@@ -9,6 +9,7 @@ export const DEFAULT_GATEWAY_TIMEOUT_MS = 60_000;
 export const STAGER_ALLOWED_VERBS = new Set([
   "sites",
   "clone",
+  "promote",
   "describe",
   "jobs",
   "prune",
