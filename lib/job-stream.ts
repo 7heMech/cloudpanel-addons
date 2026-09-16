@@ -11,7 +11,7 @@
 // poll interval, what counts as a change, when the stream closes, the keepalive
 // -- lives here.
 import type { Server } from "bun";
-import { SECURITY_HEADERS } from "./app-http";
+import { jsonResponse, policyHeaders } from "./app-http";
 
 /** How often the reader is asked for a fresh view of the job. */
 const POLL_INTERVAL_MS = 1000;
@@ -42,26 +42,23 @@ export function isTerminalJobState(state: string): boolean {
   return state === "done" || state === "failed";
 }
 
-function jsonResponse(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...SECURITY_HEADERS },
-  });
+function json(body: unknown, status: number): Response {
+  return jsonResponse(body, { status });
 }
 
 function sse(body: ReadableStream): Response {
   return new Response(body, {
     status: 200,
-    headers: {
-      "Content-Type": "text/event-stream",
+    headers: policyHeaders("text/event-stream", {
+      // A stream's caching rules are its own: `no-store` would be honest but
+      // `no-cache, no-transform` is what keeps a proxy from rewriting events.
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
       // Nginx buffers proxied responses by default, which holds every event
       // until the job finishes -- exactly the symptom streaming exists to
       // avoid.
       "X-Accel-Buffering": "no",
-      ...SECURITY_HEADERS,
-    },
+    }),
   });
 }
 
@@ -91,7 +88,7 @@ export async function jobEventStream<J extends JobProgress>(options: {
 
   const initial = await getJob(id);
   if (!initial.ok || !initial.data) {
-    return jsonResponse({ ok: false, error: initial.error ?? "job not found" }, 404);
+    return json({ ok: false, error: initial.error ?? "job not found" }, 404);
   }
 
   // Bun closes idle connections on its own schedule, and a job that is pulling

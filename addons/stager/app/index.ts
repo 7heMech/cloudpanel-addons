@@ -6,7 +6,10 @@ import type { Server } from "bun";
 import { stagerService, validateDomain, validateJobId, expandTarget } from "./service";
 import type { JobResult, JobView } from "./service";
 import { layout, fragment, jobsView, newCloneView, jobView, promoteListView, promoteView, siteStagingView } from "./views";
-import { guardMutation, newCsrfToken, withCsrfCookie, SECURITY_HEADERS } from "../../../lib/app-http";
+import {
+  bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
+  redirectResponse, safeDecodePathSegment,
+} from "../../../lib/app-http";
 import { getNextAvailablePort, type SanitizedSite } from "../../../lib/snapshot-reader";
 // The Stager already depends on the Instatic addon: cloning a reverse-proxy
 // site means driving its action binary, and this addon refuses one whose backend is
@@ -60,34 +63,17 @@ const MAX_MFA = 32;
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 
 function html(body: string, csrf: string, status = 200): Response {
-  return new Response(body, {
-    status,
-    headers: withCsrfCookie({
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
-      ...SECURITY_HEADERS,
-    }, csrf),
-  });
+  return htmlResponse(body, { status, csrf });
 }
 
 function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...SECURITY_HEADERS },
-  });
+  return jsonResponse(body, { status });
 }
 
 // A fragment is the first thing an operator who came straight from a site page
 // loads from this addon, so it carries the CSRF cookie its own actions echo.
 function fragmentJson(body: unknown, csrf: string, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: withCsrfCookie({
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store",
-      ...SECURITY_HEADERS,
-    }, csrf),
-  });
+  return jsonResponse(body, { status, csrf });
 }
 
 /**
@@ -123,10 +109,7 @@ export async function handle(
     if (selected && url.searchParams.get("embed") !== "0") {
       const target = validateDomain(selected);
       if (target) {
-        return new Response(null, {
-          status: 302,
-          headers: { Location: embedLandingUrl(target, "stager"), "Cache-Control": "no-store", ...SECURITY_HEADERS },
-        });
+        return redirectResponse(embedLandingUrl(target, "stager"));
       }
     }
     if (selected) {
@@ -242,7 +225,11 @@ export async function handle(
   const jobPage = path.match(/^\/jobs\/([^/]+)$/);
   if (method === "GET" && jobPage) {
     const csrf = newCsrfToken();
-    const id = validateJobId(decodeURIComponent(jobPage[1]!));
+    const decoded = safeDecodePathSegment(jobPage[1]!);
+    if (decoded === null) {
+      return html(layout("Bad request", `<div class="alert">That address is not a valid job link.</div>`, updateNotice), csrf, 400);
+    }
+    const id = validateJobId(decoded);
     if (!id) return html(layout("Not found", `<div class="alert">No such job.</div>`, updateNotice), csrf, 404);
     const res = await stagerService.getJob(id);
     if (!res.ok || !res.data) {
@@ -303,14 +290,14 @@ export async function handle(
   const jobApi = path.match(/^\/api\/jobs\/([^/]+)$/);
   if (method === "GET" && (jobEvents || (jobApi && req.headers.get("accept")?.includes("text/event-stream")))) {
     const rawId = (jobEvents ?? jobApi)![1]!;
-    const id = validateJobId(decodeURIComponent(rawId));
+    const id = validateJobId(safeDecodePathSegment(rawId));
     if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
 
     return jobEventStream({ id, req, server, getJob: (jobId) => stagerService.getJob(jobId) });
   }
 
   if (method === "GET" && jobApi) {
-    const id = validateJobId(decodeURIComponent(jobApi[1]!));
+    const id = validateJobId(safeDecodePathSegment(jobApi[1]!));
     if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
     const res = await stagerService.getJob(id);
     return json(res, res.ok ? 200 : 404);
@@ -352,16 +339,12 @@ async function postClone(req: Request): Promise<Response> {
   const blocked = guardMutation(req);
   if (blocked) return blocked;
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return json({ ok: false, error: "body must be JSON" }, 400);
-  }
+  let body: Record<string, unknown>;
+  try { body = await readJsonObject(req); } catch (error) { return bodyErrorResponse(error); }
   const {
     source: rawSource, target: rawTarget, tls,
     instaticEmail, instaticPassword, mfaCode,
-  } = (body ?? {}) as Record<string, unknown>;
+  } = body;
 
   const source = validateDomain(typeof rawSource === "string" ? rawSource.toLowerCase() : null);
   if (!source) return json({ ok: false, error: "source is not a valid hostname" }, 400);

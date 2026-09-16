@@ -1,5 +1,8 @@
 import { isIP } from "node:net";
-import { guardMutation, newCsrfToken, withCsrfCookie, SECURITY_HEADERS } from "../../../lib/app-http";
+import {
+  SECURITY_HEADERS, bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken,
+  policyResponse, readJsonObject, redirectResponse, safeDecodePathSegment,
+} from "../../../lib/app-http";
 import { fleetView, fragment, layout, siteView } from "./views";
 import { embedLandingUrl } from "../../../lib/shadow-embed";
 import ACE_MODE_HTML from "./ace-mode-html.js" with { type: "text" };
@@ -9,45 +12,19 @@ import { MAX_BYPASS_IPS, MAX_TEMPLATE_BYTES } from "../action";
 const PREVIEW_CSP = SECURITY_HEADERS["Content-Security-Policy"] + "; frame-src 'self' blob:";
 
 function html(body: string, csrf: string, status = 200): Response {
-  return new Response(body, {
-    status,
-    headers: withCsrfCookie({
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
-      ...SECURITY_HEADERS,
-      "Content-Security-Policy": PREVIEW_CSP,
-    }, csrf),
-  });
+  // This addon renders a template preview into a blob: iframe, which the shared
+  // policy's CSP does not allow; the override is the point of passing headers.
+  return htmlResponse(body, { status, csrf, headers: { "Content-Security-Policy": PREVIEW_CSP } });
 }
 
 function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...SECURITY_HEADERS },
-  });
+  return jsonResponse(body, { status });
 }
 
 // A fragment is the first thing an operator who came straight from a site page
 // loads from this addon, so it carries the CSRF cookie its own actions echo.
 function fragmentJson(body: unknown, csrf: string, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: withCsrfCookie({
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store",
-      ...SECURITY_HEADERS,
-    }, csrf),
-  });
-}
-
-async function jsonBody(req: Request, maxBytes: number): Promise<Record<string, unknown>> {
-  const declared = Number(req.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declared) && declared > maxBytes) throw new Error("request body is too large");
-  const text = await req.text();
-  if (Buffer.byteLength(text, "utf8") > maxBytes) throw new Error("request body is too large");
-  const parsed: unknown = JSON.parse(text);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("body must be a JSON object");
-  return parsed as Record<string, unknown>;
+  return jsonResponse(body, { status, csrf });
 }
 
 function clientIp(req: Request): string {
@@ -56,8 +33,8 @@ function clientIp(req: Request): string {
 }
 
 function decodedDomain(raw: string): string | null {
-  try { return validateDomain(decodeURIComponent(raw)); }
-  catch { return null; }
+  const decoded = safeDecodePathSegment(raw);
+  return decoded === null ? null : validateDomain(decoded);
 }
 
 export async function handle(
@@ -73,12 +50,10 @@ export async function handle(
   // The Ace module the panel does not ship, matching the core that it does.
   // Immutable: it is one pinned file, and the editor asks for it on every open.
   if (method === "GET" && path === "/ace/mode-html.js") {
-    return new Response(ACE_MODE_HTML, {
-      headers: {
-        "Content-Type": "text/javascript; charset=utf-8",
-        "Cache-Control": "public, max-age=31536000, immutable",
-        ...SECURITY_HEADERS,
-      },
+    // Immutable, content-addressed by its route: the one place a no-store
+    // default is deliberately overridden rather than inherited.
+    return policyResponse(ACE_MODE_HTML, "text/javascript; charset=utf-8", {
+      headers: { "Cache-Control": "public, max-age=31536000, immutable" },
     });
   }
 
@@ -92,10 +67,7 @@ export async function handle(
     if (selected && url.searchParams.get("embed") !== "0") {
       const target = validateDomain(selected);
       if (target) {
-        return new Response(null, {
-          status: 302,
-          headers: { Location: embedLandingUrl(target, "maintenance"), "Cache-Control": "no-store", ...SECURITY_HEADERS },
-        });
+        return redirectResponse(embedLandingUrl(target, "maintenance"));
       }
     }
     try {
@@ -144,40 +116,31 @@ export async function handle(
   if (method === "POST" && path === "/api/global-toggle") {
     const denied = guardMutation(req);
     if (denied) return denied;
-    try {
-      const body = await jsonBody(req, 1024);
-      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
-      const result = await maintenanceService.setGlobalEnabled(body.enabled);
-      if (!result.ok) return json({ ok: false, error: result.error ?? "failed to toggle global maintenance" }, 500);
-      return json({ ok: true, data: { global: body.enabled } }, 200);
-    } catch (error) {
-      const message = error instanceof SyntaxError ? "body must be valid JSON" : error instanceof Error ? error.message : String(error);
-      return json({ ok: false, error: message }, 400);
-    }
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req, 1024); } catch (error) { return bodyErrorResponse(error); }
+    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
+    const result = await maintenanceService.setGlobalEnabled(body.enabled);
+    if (!result.ok) return json({ ok: false, error: result.error ?? "failed to toggle global maintenance" }, 500);
+    return json({ ok: true, data: { global: body.enabled } }, 200);
   }
 
   if (method === "POST" && (path === "/api/sites/toggle" || path === "/api/toggle-all" || path === "/api/bulk-toggle")) {
     const denied = guardMutation(req);
     if (denied) return denied;
-    try {
-      const body = await jsonBody(req, 16 * 1024);
-      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
-      let domains: string[] | undefined;
-      if (body.domains !== undefined) {
-        if (!Array.isArray(body.domains)) return json({ ok: false, error: "domains must be an array" }, 400);
-        domains = [];
-        for (const raw of body.domains) {
-          const decoded = typeof raw === "string" ? decodedDomain(raw) : null;
-          if (decoded === null) return json({ ok: false, error: `invalid domain in domains list: ${raw}` }, 400);
-          domains.push(decoded);
-        }
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req, 16 * 1024); } catch (error) { return bodyErrorResponse(error); }
+    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
+    let domains: string[] | undefined;
+    if (body.domains !== undefined) {
+      if (!Array.isArray(body.domains)) return json({ ok: false, error: "domains must be an array" }, 400);
+      domains = [];
+      for (const raw of body.domains as unknown[]) {
+        const decoded = typeof raw === "string" ? decodedDomain(raw) : null;
+        if (decoded === null) return json({ ok: false, error: `invalid domain in domains list: ${raw}` }, 400);
+        domains.push(decoded);
       }
-      const result = await maintenanceService.setAllEnabled(body.enabled, domains);
-      return json(result, 200);
-    } catch (error) {
-      const message = error instanceof SyntaxError ? "body must be valid JSON" : error instanceof Error ? error.message : String(error);
-      return json({ ok: false, error: message }, 400);
     }
+    return json(await maintenanceService.setAllEnabled(body.enabled, domains), 200);
   }
 
   const route = path.match(/^\/api\/sites\/([^/]+)\/(toggle|template|bypasses)$/);
@@ -186,35 +149,35 @@ export async function handle(
     if (denied) return denied;
     const domain = decodedDomain(route[1]!);
     if (!domain) return json({ ok: false, error: "invalid domain" }, 400);
-    try {
-      let result;
-      if (route[2] === "toggle" && method === "POST") {
-        const body = await jsonBody(req, 1024);
-        if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
-        result = await maintenanceService.setEnabled(domain, body.enabled);
-      } else if (route[2] === "template" && method === "PUT") {
-        const body = await jsonBody(req, MAX_TEMPLATE_BYTES * 6 + 1024);
-        if (typeof body.html !== "string") return json({ ok: false, error: "html must be a string" }, 400);
-        if (Buffer.byteLength(body.html, "utf8") > MAX_TEMPLATE_BYTES) {
-          return json({ ok: false, error: `html may be at most ${MAX_TEMPLATE_BYTES} bytes` }, 400);
-        }
-        result = await maintenanceService.setTemplate(domain, body.html);
-      } else if (route[2] === "template" && method === "DELETE") {
-        result = await maintenanceService.resetTemplate(domain);
-      } else if (route[2] === "bypasses" && method === "PUT") {
-        const body = await jsonBody(req, 16 * 1024);
-        if (!Array.isArray(body.ips) || body.ips.length > MAX_BYPASS_IPS || body.ips.some((ip) => typeof ip !== "string")) {
-          return json({ ok: false, error: `ips must contain at most ${MAX_BYPASS_IPS} addresses` }, 400);
-        }
-        result = await maintenanceService.setBypasses(domain, body.ips as string[]);
-      } else {
-        return json({ ok: false, error: "method not allowed" }, 405);
+    let result;
+    if (route[2] === "toggle" && method === "POST") {
+      let body: Record<string, unknown>;
+      try { body = await readJsonObject(req, 1024); } catch (error) { return bodyErrorResponse(error); }
+      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
+      result = await maintenanceService.setEnabled(domain, body.enabled);
+    } else if (route[2] === "template" && method === "PUT") {
+      let body: Record<string, unknown>;
+      try { body = await readJsonObject(req, MAX_TEMPLATE_BYTES * 6 + 1024); }
+      catch (error) { return bodyErrorResponse(error); }
+      if (typeof body.html !== "string") return json({ ok: false, error: "html must be a string" }, 400);
+      if (Buffer.byteLength(body.html, "utf8") > MAX_TEMPLATE_BYTES) {
+        return json({ ok: false, error: `html may be at most ${MAX_TEMPLATE_BYTES} bytes` }, 400);
       }
-      return json(result, result.ok ? 200 : 400);
-    } catch (error) {
-      const message = error instanceof SyntaxError ? "body must be valid JSON" : error instanceof Error ? error.message : String(error);
-      return json({ ok: false, error: message }, 400);
+      result = await maintenanceService.setTemplate(domain, body.html);
+    } else if (route[2] === "template" && method === "DELETE") {
+      result = await maintenanceService.resetTemplate(domain);
+    } else if (route[2] === "bypasses" && method === "PUT") {
+      let body: Record<string, unknown>;
+      try { body = await readJsonObject(req, 16 * 1024); } catch (error) { return bodyErrorResponse(error); }
+      const ips = body.ips;
+      if (!Array.isArray(ips) || ips.length > MAX_BYPASS_IPS || ips.some((ip: unknown) => typeof ip !== "string")) {
+        return json({ ok: false, error: `ips must contain at most ${MAX_BYPASS_IPS} addresses` }, 400);
+      }
+      result = await maintenanceService.setBypasses(domain, ips as string[]);
+    } else {
+      return json({ ok: false, error: "method not allowed" }, 405);
     }
+    return json(result, result.ok ? 200 : 400);
   }
 
   return json({ ok: false, error: "not found" }, 404);
