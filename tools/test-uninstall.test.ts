@@ -90,11 +90,17 @@ function tryAction(command, args) {
 const realPaths = await import("./cli/paths.ts");
 mock.module("./cli/paths.ts", () => ({
   ...realPaths,
-  ADDONS: { ...realPaths.ADDONS, instatic: spec },
   ARTIFACT_MANIFEST_PATH: root + "/artifacts.json",
   CLI_BIN: actionBin,
   LIBEXEC_DIR: legacyActionDir,
   SOCKET_PATH: root + "/manager.sock",
+}));
+// The addon catalog is where an addon's facts live; only Instatic's paths are
+// redirected into the fixture, and the rest of the catalog stays real.
+const realCatalog = await import("./cli/addon-catalog.ts");
+mock.module("./cli/addon-catalog.ts", () => ({
+  ...realCatalog,
+  ADDONS: { ...realCatalog.ADDONS, instatic: { ...realCatalog.ADDONS.instatic, ...spec } },
 }));
 mock.module("./cli/release.ts", () => ({
   CLI_VERSION: "1.0.0",

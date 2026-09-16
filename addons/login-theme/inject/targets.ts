@@ -8,7 +8,7 @@
 // and, for a dark device, writes the same cookie as the panel's theme switch.
 // Afterward the panel owns the setting on every page.
 
-import type { AddonTarget } from "../../../cli/paths";
+import type { AddonTarget } from "../../../lib/addon-target";
 
 /** Marker that the one-time device default has already been applied. */
 const SEEDED_KEY = "clp_addons_device_theme";

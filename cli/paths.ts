@@ -1,8 +1,4 @@
 import { existsSync } from "node:fs";
-import { INSTATIC_TARGETS } from "../addons/instatic/inject/targets";
-import { LOGIN_THEME_TARGETS } from "../addons/login-theme/inject/targets";
-import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
-import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 
 export { PANEL_IDENTITY_PATH } from "./action-constants";
 
@@ -87,70 +83,7 @@ export const ANCHOR_SERVICE = "clp-addons-anchor.service";
 export const CLOUDFLARE_RECONCILE_SERVICE = "clp-addons-cloudflare-ips-reconcile.service";
 export const CLOUDFLARE_RECONCILE_TIMER = "clp-addons-cloudflare-ips-reconcile.timer";
 
-export interface AddonTarget {
-  slug: string;
-  template: string;
-  anchorAfter?: string;
-  anchorBefore?: string;
-  snippet: (addonUrl: string) => string;
-  required: boolean;
-}
 
-export interface AddonSpec {
-  name: string;
-  title?: string;
-  description?: string;
-  configFile: string;
-  requiresUnits?: string[];
-  stateDir: string;
-  targets: AddonTarget[];
-}
-
-export const ADDONS: Record<string, AddonSpec> = {
-  "cloudflare-ips": {
-    name: "cloudflare-ips",
-    title: "Cloudflare IP Access",
-    description: "Manage CloudPanel's Cloudflare-only traffic setting across every site.",
-    configFile: `${CONFIG_DIR}/cloudflare-ips.conf`,
-    stateDir: `${STATE_DIR}/cloudflare-ips`,
-    targets: [],
-  },
-  instatic: {
-    name: "instatic",
-    title: "Instatic CMS",
-    description: "Instant static site hosting and staging on CloudPanel.",
-    configFile: `${CONFIG_DIR}/instatic.conf`,
-    requiresUnits: ["docker"],
-    stateDir: `${STATE_DIR}/instatic`,
-    targets: INSTATIC_TARGETS,
-  },
-  stager: {
-    name: "stager",
-    title: "Stager",
-    description: "Create staging copies of WordPress, PHP, static, and Instatic sites.",
-    configFile: `${CONFIG_DIR}/stager.conf`,
-    stateDir: `${STATE_DIR}/stager`,
-    targets: STAGER_TARGETS,
-  },
-  maintenance: {
-    name: "maintenance",
-    title: "Maintenance Mode",
-    description: "Show a per-site maintenance page with instant toggles and IP bypasses.",
-    configFile: `${CONFIG_DIR}/maintenance.conf`,
-    stateDir: `${STATE_DIR}/maintenance`,
-    targets: MAINTENANCE_TARGETS,
-  },
-  "login-theme": {
-    name: "login-theme",
-    title: "Device theme on first visit",
-    description: "Follow the device's light or dark preference on the first visit.",
-    configFile: `${CONFIG_DIR}/login-theme.conf`,
-    stateDir: `${STATE_DIR}/login-theme`,
-    targets: LOGIN_THEME_TARGETS,
-  },
-};
-
-export const ADDON_NAMES = Object.keys(ADDONS);
 export const LEGACY_USERS = ["instatic-app"];
 export const LEGACY_UNITS = [
   "clp-addon-instatic.service",
@@ -158,10 +91,3 @@ export const LEGACY_UNITS = [
   "clp-addons-auth@.service",
 ];
 
-export function templateWatchPaths(): string[] {
-  const paths = new Set<string>();
-  for (const spec of Object.values(ADDONS)) {
-    for (const target of spec.targets) paths.add(`${TEMPLATES_DIR}/${target.template}`);
-  }
-  return [...paths].sort();
-}

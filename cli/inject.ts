@@ -32,8 +32,8 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync
 import {
   NGINX_GLOBAL_SETTINGS, NGINX_MAINTENANCE_STATE_DIR, NGINX_PROXY_STATE_DIR, nginxLayout,
   TEMPLATE_STATE_DIR, TEMPLATES_DIR, TWIG_CACHE_DIR,
-  type AddonTarget,
 } from "./paths";
+import type { AddonTarget } from "../lib/addon-target";
 import { writeAtomic } from "./util";
 
 // CloudPanel versions this patch's markup assumptions were verified against.

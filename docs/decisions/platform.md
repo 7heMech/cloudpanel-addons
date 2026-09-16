@@ -11,6 +11,29 @@ CloudPanel's master Nginx vhost proxies `/addons/` to the manager socket. The
 manager uses the existing `cloudpanel` session and does not create a separate
 site, hostname, or login.
 
+## One catalog, compiled in
+
+`cli/addon-catalog.ts` is the only registration seam. An addon declares itself
+in `addons/<name>/addon.ts` -- title, description, injection targets, required
+systemd units, its manager handler, its privileged action and any repair upkeep
+-- and the catalog derives its config file and state directory from its name, so
+a definition cannot name a file provisioning will not look for. Adding an addon
+used to mean editing the registry in `cli/paths.ts`, the handler map and the
+action conditionals in `cli/index.ts`, and repair's per-addon upkeep calls: four
+files that share nothing but the addon's name.
+
+The catalog is an explicit list, not filesystem discovery. This ships as one
+binary; a registry that depended on what happened to be on disk could be wrong.
+
+The manager and the auth gateway are not in it. They have no config file to
+enable, no mount path of their own and no state to keep, so they are dispatched
+before the catalog is consulted rather than described by it.
+
+`cli/paths.ts` is a leaf again. It held the registry, which meant the module
+owning the project's path constants imported every addon's target list in order
+to describe them; the injection-target shape now lives in `lib/addon-target.ts`,
+which both sides import.
+
 ## Enable and disable apply a delta
 
 A toggle is not an install. Enabling an addon writes that addon's config file,

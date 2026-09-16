@@ -11,7 +11,7 @@
 // the target template sets it as a loop variable, and nothing else may be
 // added here without checking.
 
-import type { AddonTarget } from "../../../cli/paths";
+import type { AddonTarget } from "../../../lib/addon-target";
 
 /**
  * The site types the action binary will clone, guarded here too so a Node.js

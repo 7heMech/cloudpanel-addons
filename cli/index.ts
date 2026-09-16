@@ -2,10 +2,13 @@ import type { Server } from "bun";
 import { chmodSync, chownSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
-  ADDON_NAMES, ADDONS, ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, CLOUDFLARE_RECONCILE_TIMER,
+  ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, CLOUDFLARE_RECONCILE_TIMER,
   LIBEXEC_DIR, MANAGER_UNIT, PANEL_GROUP,
-  SOCKET_PATH, SYSTEMD_DIR, mountPath, type AddonSpec,
+  SOCKET_PATH, SYSTEMD_DIR, mountPath,
 } from "./paths";
+import {
+  ADDONS, ADDON_NAMES, addonHandler, addonMaintenance, type AddonSpec,
+} from "./addon-catalog";
 import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestation, type FetchedArtifact } from "./release";
 import {
   ensureDirs, ensureRequiredUnits, ensureServiceUser, ensureTimerArmed, hardenBackups,
@@ -22,41 +25,18 @@ import {
 import { fatal, Fatal, log, parseFlags, requireRoot, run, tryRun, writeAtomic } from "./util";
 import { runRecon } from "./recon";
 import { authenticateRequest, type AuthenticatedRequest } from "../lib/sso-auth";
-import { handle as handleInstatic } from "../addons/instatic/app/index";
-import { handle as handleLoginTheme } from "../addons/login-theme/app/index";
-import { handle as handleMaintenance } from "../addons/maintenance/app/index";
-import { handle as handleStager } from "../addons/stager/app/index";
-import { handle as handleCloudflareIps } from "../addons/cloudflare-ips/app/index";
 import { splitMount } from "../lib/mount";
 import { SECURITY_HEADERS, esc, escJs, guardMutation, newCsrfToken, withCsrfCookie } from "../lib/app-http";
 import { JOB_STYLE, JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
 import { adminHeaderTarget, headerTarget, siteLayoutTarget, SITE_TAB_TEMPLATE } from "../lib/panel-nav";
 import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
 import { CHANGELOG_URL, UPDATE_PATH } from "../lib/update-ui";
-import { pruneInstaticJobs, runInstaticAction } from "../addons/instatic/action";
-import { runStagerAction, type StagerActionOptions } from "../addons/stager/action";
-import { ensureMaintenanceData, executeMaintenanceAction, runMaintenanceAction } from "../addons/maintenance/action";
-import { runCloudflareAction } from "../addons/cloudflare-ips/action";
+import { ensureMaintenanceData, executeMaintenanceAction } from "../addons/maintenance/action";
 import { runAuthActionStdin } from "./auth-action";
 import { pruneManagerJobs, runManagerAction, type ManagerJobView, type ManagerOps } from "./manager-action";
 import { callGatewayAction, type ActionResult } from "../lib/gateway-client";
 import { jobEventStream } from "../lib/job-stream";
 import { JOB_ID_RE } from "./job-store";
-
-type AddonHandler = (
-  req: Request,
-  path: string,
-  updateNotice?: { current: string; latest: string } | null,
-  server?: Server<unknown> | null,
-) => Promise<Response>;
-
-const MANAGERS: Record<string, AddonHandler> = {
-  "cloudflare-ips": handleCloudflareIps,
-  instatic: handleInstatic,
-  "login-theme": handleLoginTheme,
-  maintenance: handleMaintenance,
-  stager: handleStager,
-};
 
 function resolveAddon(name: string | undefined): AddonSpec {
   const key = name ?? "";
@@ -487,36 +467,26 @@ export const MANAGER_OPS: ManagerOps = {
   update: (beforeManagerRestart) => cmdUpdate([], { beforeManagerRestart }),
 };
 
-// Stager's stale-job recovery, job-record expiry, and orphaned-vhost recovery
-// (cmdPrune, reached through this same runStagerAction path `action stager
-// prune` uses) never ran on their own; only an explicit CLI invocation
-// reached it. That let a killed clone (OOM, `systemctl stop`, a reboot) leave
-// a target stuck `running` forever, which permanently blocked re-cloning that
-// hostname since only prune clears a stuck `running` record. Gated on stager
-// being installed, and never allowed to fail the rest of repair: it is
-// self-healing upkeep, not a precondition for it.
-export async function runStagerMaintenance(installed: AddonSpec[], options?: StagerActionOptions): Promise<void> {
-  if (!installed.some((spec) => spec.name === "stager")) return;
-  try {
-    const result = await runStagerAction(["prune"], { ...(options ?? {}), emitReply: false });
-    if (result !== 0) log.warn(`stager maintenance (prune) returned exit code ${result}`);
-  } catch (error) {
-    log.warn(`stager maintenance (prune) failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-// Instatic's creation records are the same kind of upkeep, and had none: a job
-// killed part-way stayed `running` forever, which is what blocks a retry for
-// that hostname, and every record ever written stayed on disk.
-export async function runInstaticMaintenance(installed: AddonSpec[]): Promise<void> {
-  if (!installed.some((spec) => spec.name === "instatic")) return;
-  try {
-    // Called directly rather than through the verb: the verb prints its result
-    // as JSON for the manager, and repair speaks to a person.
-    const { removed, stuck } = pruneInstaticJobs();
-    if (removed || stuck) log.ok(`instatic job records: ${removed} expired, ${stuck} marked failed`);
-  } catch (error) {
-    log.warn(`instatic maintenance (prune) failed: ${error instanceof Error ? error.message : String(error)}`);
+/**
+ * Run each installed addon's own upkeep, in catalog order.
+ *
+ * Stager's prune and Instatic's were called by name from `cmdRepair`, which
+ * meant repair knew which addons had upkeep and what it was called. An addon
+ * now declares its own, and none of it is allowed to fail the rest of repair:
+ * this is self-healing, not a precondition for anything.
+ */
+export async function runAddonMaintenance(
+  installed: AddonSpec[],
+  options?: Record<string, unknown>,
+): Promise<void> {
+  for (const spec of addonMaintenance(installed)) {
+    const task = spec.maintenance!;
+    try {
+      const line = await task.run(options);
+      if (line) log.ok(`${task.label}: ${line}`);
+    } catch (error) {
+      log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 }
 
@@ -600,8 +570,7 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   // skips the reload if that check fails. Running prune first, while the
   // master vhost might still be broken, would leave a just-restored site
   // vhost on disk but unloaded until the next 15-minute cycle.
-  await runStagerMaintenance(all);
-  await runInstaticMaintenance(all);
+  await runAddonMaintenance(all);
   runManagerMaintenance();
   if (!quiet) log.ok(`repair complete (${specs.map((spec) => spec.name).join(", ") || "no addon enabled"})`);
 }
@@ -677,7 +646,7 @@ async function cmdStatus(): Promise<void> {
   if (specs.length === 0) log.plain("   (none)");
   for (const spec of specs) {
     const action = secureRegularFile(CLI_BIN, true) ? "Verified ✓" : "Missing";
-    const mounted = MANAGERS[spec.name] !== undefined;
+    const mounted = addonHandler(spec.name) !== undefined;
     const ready = active && mounted && action !== "Missing";
     const state = !mounted ? "not mounted" : action === "Missing" ? "action missing" : ready ? "ready" : "manager inactive";
     log.plain(`   ${spec.name.padEnd(10)} ${mountPath(spec.name).padEnd(18)} ${action.padEnd(13)} ${statusValue(state, ready)}`);
@@ -875,7 +844,7 @@ export async function handleManagerRoute(
  * addon killed the only surface that could re-enable it.
  */
 function mountedAddons(): string[] {
-  return ADDON_NAMES.filter((name) => MANAGERS[name] && existsSync(ADDONS[name]!.configFile));
+  return ADDON_NAMES.filter((name) => addonHandler(name) && existsSync(ADDONS[name]!.configFile));
 }
 
 /**
@@ -920,7 +889,7 @@ async function cmdServe(): Promise<never> {
 
       const hit = splitMount(path, mountedAddons());
       let response: Response;
-      if (hit) response = await MANAGERS[hit.addon]!(req, hit.rest, notice, server);
+      if (hit) response = await addonHandler(hit.addon)!(req, hit.rest, notice, server);
       else if (path === "/update" && req.method === "GET") {
         response = updatePage(update, CLI_VERSION, { job: await latestManagerJobView(), csrf: newCsrfToken() });
       }
@@ -1060,7 +1029,7 @@ function addonCard(name: string, enabled: boolean): string {
   if (!spec) return "";
   const title = spec.title ?? spec.name;
   const description = spec.description ? `<p>${esc(spec.description)}</p>` : "";
-  const mounted = MANAGERS[spec.name] !== undefined;
+  const mounted = addonHandler(spec.name) !== undefined;
   const actions = enabled
     ? `${mounted ? `<a class="btn btn-primary btn-lg" href="${esc(`${mountPath(spec.name)}/`)}" aria-label="Open ${esc(title)}">Open</a>` : '<span class="badge state-running addon-status">Enabled</span>'}
     <button class="btn btn-danger btn-lg" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}')">Disable</button>`
@@ -1215,19 +1184,15 @@ the CloudPanel master vhost and authenticates with the CloudPanel cloudpanel ses
 
 async function cmdAction(argv: string[]): Promise<number> {
   const [addon, ...rest] = argv;
+  // Platform verbs, not addon verbs: the auth gateway and the manager are not
+  // things an operator can enable, so they are dispatched before the catalog.
   if (addon === "auth") return runAuthActionStdin(rest);
   if (addon === "manager") return runManagerAction(rest, MANAGER_OPS);
-  if (addon === "cloudflare-ips") {
-    if (!installedConfig(ADDONS[addon]!)) fatal(`the ${addon} addon is not installed`);
-    return runCloudflareAction(rest);
-  }
-  if (addon === "instatic" || addon === "stager" || addon === "maintenance") {
-    if (!installedConfig(ADDONS[addon]!)) fatal(`the ${addon} addon is not installed`);
-    if (addon === "instatic") return runInstaticAction(rest);
-    if (addon === "maintenance") return runMaintenanceAction(rest);
-    return runStagerAction(rest);
-  }
-  fatal(`unknown action addon '${addon ?? ""}'`);
+
+  const spec = addon ? ADDONS[addon] : undefined;
+  if (!spec?.action) fatal(`unknown action addon '${addon ?? ""}'`);
+  if (!installedConfig(spec)) fatal(`the ${spec.name} addon is not installed`);
+  return spec.action(rest);
 }
 
 async function cmdMaintenance(argv: string[]): Promise<void> {

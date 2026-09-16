@@ -27,7 +27,8 @@ import {
   jobTimestamp, jobUnitIsActive, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
   type PruneJobsResult,
 } from "./job-store";
-import { ADDONS, ADDON_NAMES, CLI_BIN, LOCK_DIR, STATE_DIR } from "./paths";
+import { CLI_BIN, LOCK_DIR, STATE_DIR } from "./paths";
+import { ADDONS, ADDON_NAMES } from "./addon-catalog";
 import { Fatal, requireRoot } from "./util";
 
 /** Where the manager's own job records live, beside each addon's state. */
