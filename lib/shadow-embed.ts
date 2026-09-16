@@ -66,7 +66,11 @@ const EMBED_TABS = JSON.stringify(ADDON_SITE_TABS.map((tab) => ({ slug: tab.slug
 export const SITE_EMBED_SCRIPT = `
   var TABS = ${EMBED_TABS};
   var landed = new URLSearchParams(location.search).get("${EMBED_MARKER}");
-  var mounted = false;
+  // Which addon tab is mounted in this document, "" for none. A slug rather
+  // than a flag because the three questions this answers are different: whether
+  // to reload on popstate, whether a click is on the tab already shown, and
+  // whether a click is on a different addon tab.
+  var shown = "";
   var mounting = false;
 
   // Every way this can fail ends at the standalone page, which answers without
@@ -106,11 +110,17 @@ export const SITE_EMBED_SCRIPT = `
     }
     link.addEventListener("click", function (event) {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      // Clicking the tab of the page already shown is a no-op.
+      if (shown === tab.slug) return event.preventDefault();
+      // A different addon tab, with one already mounted, is handed to the
+      // browser rather than swapped in place. One document still gets one
+      // mount: the fragment's script runs at global scope and declares its
+      // helpers with const, so a second fragment would throw on its own script
+      // and leave the first one's root visible under the second one's title.
+      // Following the link costs a page load and lands on the panel page that
+      // mounts the other addon cleanly.
+      if (shown || mounting) return;
       event.preventDefault();
-      // Clicking the tab of the page already shown is a no-op, which also keeps
-      // one document to one mount: the fragment's script runs at global scope
-      // and declares its helpers once.
-      if (mounted || mounting) return;
       mount(tab, link, true);
     });
     if (landed === tab.slug) mount(tab, link, false);
@@ -164,7 +174,7 @@ export const SITE_EMBED_SCRIPT = `
         document.head.appendChild(script);
         markActive(link);
         if (payload.title) document.title = payload.title;
-        mounted = true;
+        shown = tab.slug;
         mounting = false;
         history[push ? "pushState" : "replaceState"]({ clpAddon: tab.slug }, "", href);
       })
@@ -173,5 +183,5 @@ export const SITE_EMBED_SCRIPT = `
 
   // Leaving the addon means going back to a page the panel renders, and its own
   // scripts bound to content this replaced, so hand the navigation back.
-  window.addEventListener("popstate", function () { if (mounted) location.reload(); });
+  window.addEventListener("popstate", function () { if (shown) location.reload(); });
 `;
