@@ -13,7 +13,8 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import { isIP } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ADDONS, PANEL_CACHE_POOL_DIR, PANEL_DB } from "../cli/paths";
+import { PANEL_CACHE_POOL_DIR, PANEL_DB } from "../cli/paths";
+import { ADDONS } from "../cli/addon-catalog";
 import { PORT_RANGE, type PanelSnapshot, type SanitizedSite } from "./snapshot-reader";
 
 const SQLITE_BUSY_TIMEOUT_MS = 5_000;

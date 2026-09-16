@@ -5,7 +5,7 @@
 // data: a second addon is this file plus a registry entry, not a second copy of
 // the patching machinery.
 
-import type { AddonTarget } from "../../../cli/paths";
+import type { AddonTarget } from "../../../lib/addon-target";
 
 export const INSTATIC_TARGETS: AddonTarget[] = [
   {
