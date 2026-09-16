@@ -1,3 +1,4 @@
+import type { SiteContext } from "../../../lib/site-context";
 import { fetchPanelInfo, snapshotAgeSeconds, type PanelSnapshot } from "../../../lib/snapshot-reader";
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 export { type ActionResult };
@@ -9,6 +10,7 @@ export { type ActionResult };
 const TIMEOUTS: Record<string, number> = {
   describe: 120_000,
   clone: 60_000,
+  promote: 60_000,
 };
 const DEFAULT_TIMEOUT = 30_000;
 
@@ -103,8 +105,36 @@ export interface JobResult {
   notes: string[];
 }
 
+/**
+ * What a promote records.
+ *
+ * Deliberately not a superset of a clone's result: a promote creates no site,
+ * no database and no account, so it has no credentials to hand back. What it
+ * has instead is where the replaced document root went and what was kept from
+ * the live site.
+ */
+export interface PromoteResult {
+  siteType: SiteType | string;
+  siteUser: string;
+  /** The live document root as it was before the switch, kept for the job's retention. */
+  previousRoot: string;
+  /** Paths taken from the live site rather than from the staging copy. */
+  preserved: string[];
+  /** Where the pre-switch dump of the live database was written, if it had one. */
+  databaseBackup: string | null;
+  /** Where the live Instatic instance's own content export was written. */
+  contentBackup: string | null;
+  notes: string[];
+}
+
+export function isPromoteResult(job: JobView): job is JobView & { result: PromoteResult | null } {
+  return job.kind === "promote";
+}
+
 export interface JobView {
   id: string;
+  /** `clone` creates a staging site; `promote` moves one back onto its live site. */
+  kind: "clone" | "promote" | string;
   source: string;
   target: string;
   /** The Instatic port this clone reserved, or 0 for a clone that needed none. */
@@ -117,7 +147,7 @@ export interface JobView {
   finishedAt: string;
   /** Optional one-shot event emitted by the job runner. */
   event?: string;
-  result: JobResult | null;
+  result: JobResult | PromoteResult | null;
   panelSite?: boolean | null;
 }
 
@@ -218,6 +248,33 @@ export const stagerService = {
     return callAction<{ job: string }>("clone", args, input);
   },
 
+  /**
+   * Start a promote: put the staging copy's files or content onto the live site.
+   *
+   * `source` is the staging copy and `target` is the live site, which is the
+   * reverse of startClone and the reason neither is called "staging". The live
+   * database is never sent anywhere; see docs/decisions/stager.md for why.
+   *
+   * An Instatic promote signs in to both instances, so the channel carries two
+   * passwords. Four lines, always, for the same reason the clone channel has
+   * exactly two.
+   */
+  async startPromote(
+    source: string,
+    target: string,
+    instatic?: {
+      email: string; password: string; mfaCode?: string;
+      targetEmail: string; targetPassword: string; targetMfaCode?: string;
+    }
+  ): Promise<ActionResult<{ job: string }>> {
+    const args = ["--source", source, "--target", target];
+    if (instatic) args.push("--email", instatic.email, "--target-email", instatic.targetEmail);
+    const input = instatic
+      ? `${instatic.password}\n${instatic.mfaCode ?? ""}\n${instatic.targetPassword}\n${instatic.targetMfaCode ?? ""}\n`
+      : undefined;
+    return callAction<{ job: string }>("promote", args, input);
+  },
+
   async getJob(id: string): Promise<ActionResult<{ job: JobView; log: string }>> {
     return callAction<{ job: JobView; log: string }>("job", ["--job", id]);
   },
@@ -250,5 +307,34 @@ export const stagerService = {
   async snapshot(): Promise<{ snap: PanelSnapshot; ageSeconds: number }> {
     const snap = await fetchPanelInfo();
     return { snap, ageSeconds: snapshotAgeSeconds(snap) };
+  },
+
+  /**
+   * What the shell needs to keep drawing the panel's site information and tab
+   * strip around this addon's site-scoped page, with the jobs that page shows.
+   *
+   * The panel snapshot is the authority on whether the site exists at all, so
+   * a tab clicked on a site the panel no longer has says so rather than
+   * rendering an empty Staging page for nothing.
+   */
+  async sitePage(domain: string): Promise<{ context: SiteContext; jobs: JobView[]; clonable: boolean }> {
+    const [panel, jobs] = await Promise.all([fetchPanelInfo(), this.listJobs()]);
+    const site = panel.sites.find((candidate) => candidate.domain.toLowerCase() === domain.toLowerCase());
+    if (!site) throw new Error(`CloudPanel site not found: ${domain}`);
+    return {
+      context: {
+        domain: site.domain,
+        user: site.user,
+        type: site.type,
+        varnishCache: site.varnishCache,
+        ...(panel.publicIp ? { publicIp: panel.publicIp } : {}),
+      },
+      jobs,
+      // Mirrors CLONABLE in the injected Twig and CLONABLE_TYPES in the action.
+      // A reverse proxy is only really clonable when its backend is an Instatic
+      // instance, which the action decides by name; offering it and explaining
+      // the refusal beats hiding it on a guess.
+      clonable: ["php", "static", "reverse-proxy"].includes(site.type),
+    };
   },
 };

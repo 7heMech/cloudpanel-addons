@@ -12,6 +12,11 @@
 // added here without checking.
 
 import type { AddonTarget } from "../../../cli/paths";
+import { ADDON_SITE_TABS } from "../../../lib/site-context";
+
+// The label the panel's strip shows and the label the addon's own reproduction
+// of that strip shows are the same string, from lib/site-context.
+const TAB_LABEL = ADDON_SITE_TABS.find((tab) => tab.slug === "stager")!.label;
 
 /**
  * The site types the action binary will clone, guarded here too so a Node.js
@@ -31,6 +36,24 @@ import type { AddonTarget } from "../../../cli/paths";
 const CLONABLE = "{% if site.type in ['php', 'static', 'reverse-proxy'] %}";
 
 export const STAGER_TARGETS: AddonTarget[] = [
+  {
+    // The same anchor the Maintenance addon's tab uses. The injector applies
+    // anchorAfter snippets in reverse addon order, so `stager` goes in first
+    // and `maintenance` is then inserted ahead of it: Logs, Maintenance,
+    // Staging -- which is the order ADDON_SITE_TABS gives the reproduced strip
+    // too. It settles on the same file however many times it runs.
+    slug: "site-tab",
+    template: "Frontend/Site/Partial/tab-container.html.twig",
+    anchorAfter: `      <a href="{{ path('clp_site_logs', {'domainName': site.domainName}) }}">{% trans %}Logs{% endtrans %}</a>
+    </li>`,
+    required: true,
+    snippet: (url) => `
+        {% if is_granted('ROLE_ADMIN') %}
+          <li>
+            <a href="${url}?domain={{ site.domainName|url_encode }}">${TAB_LABEL}</a>
+          </li>
+        {% endif %}`,
+  },
   {
     slug: "site-list-action",
     template: "Frontend/Site/index.html.twig",

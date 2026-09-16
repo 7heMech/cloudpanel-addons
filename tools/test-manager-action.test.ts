@@ -305,7 +305,9 @@ describe("the manager index", () => {
     expect(html).toContain("<h2>Available</h2>");
     expect(html).toContain("enableAddon('stager')");
     expect(html).toContain('aria-label="Open Instatic CMS">Open</a>');
-    expect(html).toContain("disableAddon('instatic')");
+    // The slug the route takes, then the name the card shows, which is what
+    // the dialog puts in its question.
+    expect(html).toContain(`disableAddon('instatic', 'Instatic CMS')`);
   });
 
   test("shows no Available section when every addon is on", async () => {

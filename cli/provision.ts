@@ -1,11 +1,11 @@
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
+  chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ADDON_NAMES, ANCHOR_SERVICE, CLI_BIN, CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER,
-  CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS,
+  CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS, INSTATIC_BACKUP_CRON,
   ADDONS, AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT,
   PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
@@ -22,7 +22,6 @@ const LEGACY_PLATFORM_CONFIG = `${CONFIG_DIR}/platform.conf`;
 const LEGACY_SITE_MARKER = `${STATE_DIR}/.site-created-by-addons`;
 const LEGACY_LIBRARY_DIR = "/usr/local/lib/clp-addons";
 const BACKUP_DIR = "/var/backups/clp-addons";
-const INSTATIC_BACKUP_CRON = "/etc/cron.d/clp-addons-instatic-backup";
 
 export function instaticBackupCron(): string {
   return `# Instatic recovery snapshots for CloudPanel Remote Backups.
@@ -34,13 +33,18 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 `;
 }
 
-export function reconcileInstaticBackupCron(enabled: boolean, path = INSTATIC_BACKUP_CRON): void {
+/** Returns true when the cron file was created or removed by this call. */
+export function reconcileInstaticBackupCron(enabled: boolean, path = INSTATIC_BACKUP_CRON): boolean {
+  const present = existsSync(path);
   if (!enabled) {
+    if (!present) return false;
     rmSync(path, { force: true });
-  } else if (!existsSync(path)) {
-    // Preserve an operator's schedule across update/repair.
-    writeAtomic(path, instaticBackupCron(), 0o644);
+    return true;
   }
+  if (present) return false;
+  // Preserve an operator's schedule across update/repair.
+  writeAtomic(path, instaticBackupCron(), 0o644);
+  return true;
 }
 export interface ProvisionCommandRunner {
   run(command: string, args: string[]): string;
@@ -50,11 +54,15 @@ export interface ProvisionCommandRunner {
 interface DirectoryOperations {
   mkdir(path: string, options: { recursive: true }): void;
   exists(path: string): boolean;
+  chmod(path: string, mode: number): void;
+  chown(path: string, uid: number, gid: number): void;
 }
 
 const directoryOperations: DirectoryOperations = {
   mkdir: (path, options) => { mkdirSync(path, options); },
   exists: existsSync,
+  chmod: (path, mode) => { chmodSync(path, mode); },
+  chown: (path, uid, gid) => { chownSync(path, uid, gid); },
 };
 
 const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
@@ -436,26 +444,42 @@ export function ensureDirs(
   commands: ProvisionCommandRunner = { run, tryRun },
   fs: DirectoryOperations = directoryOperations,
 ): void {
+  // One `id` lookup per distinct account, not one `chown` process per path.
+  // The names are constants, so the whole of ensureDirs costs at most three
+  // spawns instead of the fourteen-plus it used to, and the ownership it
+  // applies is exactly what the spawned form applied.
+  const ids = new Map<string, number>();
+  const resolve = (flag: "-u" | "-g", name: string): number => {
+    const key = `${flag}${name}`;
+    const cached = ids.get(key);
+    if (cached !== undefined) return cached;
+    const value = Number.parseInt(commands.run("id", [flag, name]).trim(), 10);
+    if (!Number.isInteger(value) || value < 0) fatal(`could not resolve ${name} to a numeric id`);
+    ids.set(key, value);
+    return value;
+  };
+
   for (const path of [LIBEXEC_DIR, CONFIG_DIR, STATE_DIR, LOCK_DIR, SOCKET_DIR, BACKUP_DIR]) {
     fs.mkdir(path, { recursive: true });
   }
   for (const spec of specs) fs.mkdir(spec.stateDir, { recursive: true });
 
-  commands.run("chown", ["root:root", LIBEXEC_DIR]);
-  commands.run("chmod", ["755", LIBEXEC_DIR]);
-  commands.run("chown", ["root:root", CONFIG_DIR]);
-  commands.run("chmod", ["755", CONFIG_DIR]);
-  commands.run("chown", [`root:${SHARED_GROUP}`, STATE_DIR]);
+  const root = 0;
+  fs.chown(LIBEXEC_DIR, root, root);
+  fs.chmod(LIBEXEC_DIR, 0o755);
+  fs.chown(CONFIG_DIR, root, root);
+  fs.chmod(CONFIG_DIR, 0o755);
+  fs.chown(STATE_DIR, root, resolve("-g", SHARED_GROUP));
   // Nginx workers need traversal (but not listing) to stat maintenance flags
   // and read the public HTML files. Addon directories retain their own modes.
-  commands.run("chmod", [specs.some((spec) => spec.name === "maintenance") ? "751" : "750", STATE_DIR]);
-  commands.run("chown", [`${SERVICE_USER}:${SERVICE_GROUP}`, SOCKET_DIR]);
-  commands.run("chmod", ["755", SOCKET_DIR]);
-  commands.run("chown", ["root:root", BACKUP_DIR]);
-  commands.run("chmod", ["755", BACKUP_DIR]);
+  fs.chmod(STATE_DIR, specs.some((spec) => spec.name === "maintenance") ? 0o751 : 0o750);
+  fs.chown(SOCKET_DIR, resolve("-u", SERVICE_USER), resolve("-g", SERVICE_GROUP));
+  fs.chmod(SOCKET_DIR, 0o755);
+  fs.chown(BACKUP_DIR, root, root);
+  fs.chmod(BACKUP_DIR, 0o755);
   for (const spec of specs) {
-    commands.run("chown", ["root:root", spec.stateDir]);
-    commands.run("chmod", [spec.name === "maintenance" ? "711" : "750", spec.stateDir]);
+    fs.chown(spec.stateDir, root, root);
+    fs.chmod(spec.stateDir, spec.name === "maintenance" ? 0o711 : 0o750);
   }
 
   const snapshot = `${STATE_DIR}/snapshot.json`;
@@ -705,42 +729,176 @@ function reconcileWatchPaths(): string[] {
   return [...templateWatchPaths(), ...(vhost ? [vhost] : []), NGINX_GLOBAL_SETTINGS];
 }
 
-export function installUnits(specs: AddonSpec[]): boolean {
-  reconcileInstaticBackupCron(specs.some((spec) => spec.name === "instatic"));
+/**
+ * What one `installUnits` pass actually altered.
+ *
+ * `installUnits` used to answer a single boolean that meant "the manager or the
+ * Cloudflare units changed", while writing seven other files and a cron entry
+ * it said nothing about. A caller deciding what to restart needs the difference
+ * between them: a toggle that changed no definition should reload nothing and
+ * restart nothing, and one that only added the Cloudflare timer should start
+ * that timer and leave the armed reconcile timer and the auth socket alone.
+ */
+export interface UnitChanges {
+  /** The manager unit's own text differs, so its next start will differ. */
+  manager: boolean;
+  /** Any shared reconcile/anchor definition was written differently. */
+  reconcile: boolean;
+  /** The Cloudflare timer and service were added or removed by this pass. */
+  cloudflare: "added" | "removed" | null;
+  /** The auth socket or service definition differs. */
+  auth: boolean;
+  /** The Instatic backup cron file was created or removed. */
+  cron: boolean;
+  /** Any managed systemd definition was created, changed or removed. */
+  systemd: boolean;
+}
+
+/**
+ * Whether the file at `path` is already exactly what `writeManaged` would have
+ * written: a plain `0644` regular file owned by this process, holding `body`.
+ *
+ * Content alone is not the question. While `installUnits` rewrote every
+ * definition unconditionally, repair converged their mode and ownership as a
+ * side effect of that rewrite. Skipping the write on matching text alone would
+ * have taken that away: a unit left group-writable, or replaced by a symlink to
+ * a file that happens to hold the right text, would survive the repair that
+ * exists to undo exactly that. Several managed units carry no `User=`, so
+ * systemd runs what they name as root.
+ */
+function managedFileIntact(path: string, body: string): boolean {
+  try {
+    const info = lstatSync(path);
+    if (!info.isFile()) return false;
+    if ((info.mode & 0o7777) !== 0o644) return false;
+    // The owner this compares against is the process's own rather than a
+    // literal 0, because that is what writeAtomic produces. Every caller here
+    // is already past requireRoot, so in service it is 0; saying so that way
+    // keeps the check true of what it is actually checking.
+    if (info.uid !== process.getuid?.()) return false;
+    return readFileSync(path, "utf-8") === body;
+  } catch {
+    return false;
+  }
+}
+
+/** Writes a managed definition unless one is already intact; returns whether it did. */
+function writeManaged(path: string, body: string): boolean {
+  if (managedFileIntact(path, body)) return false;
+  writeAtomic(path, body, 0o644);
+  return true;
+}
+
+/** Removes a managed definition; returns whether one was there to remove. */
+function removeManaged(path: string): boolean {
+  if (!existsSync(path)) return false;
+  rmSync(path, { force: true });
+  return true;
+}
+
+export function installUnits(specs: AddonSpec[]): UnitChanges {
+  const cron = reconcileInstaticBackupCron(specs.some((spec) => spec.name === "instatic"));
   const units = reconcileUnits();
-  const servicePath = `${SYSTEMD_DIR}/${MANAGER_UNIT}`;
-  const desired = serviceUnit(specs);
-  const changed = !existsSync(servicePath) || readFileSync(servicePath, "utf-8") !== desired;
-  writeAtomic(servicePath, desired, 0o644);
-  writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_SERVICE}`, units.service, 0o644);
-  writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_TIMER}`, units.timer, 0o644);
-  writeAtomic(`${SYSTEMD_DIR}/${RECONCILE_PATH}`, units.path, 0o644);
-  writeAtomic(`${SYSTEMD_DIR}/${ANCHOR_SERVICE}`, units.anchor, 0o644);
+  const manager = writeManaged(`${SYSTEMD_DIR}/${MANAGER_UNIT}`, serviceUnit(specs));
+  // Written one at a time rather than `||`-chained: short-circuiting would skip
+  // the later writes as soon as an earlier one changed.
+  const reconcileWrites = [
+    writeManaged(`${SYSTEMD_DIR}/${RECONCILE_SERVICE}`, units.service),
+    writeManaged(`${SYSTEMD_DIR}/${RECONCILE_TIMER}`, units.timer),
+    writeManaged(`${SYSTEMD_DIR}/${RECONCILE_PATH}`, units.path),
+    writeManaged(`${SYSTEMD_DIR}/${ANCHOR_SERVICE}`, units.anchor),
+  ];
+  const reconcileChanged = reconcileWrites.some(Boolean);
+
   const cloudflareEnabled = specs.some((spec) => spec.name === "cloudflare-ips");
   const cloudflareUnits = cloudflareReconcileUnits();
   const cloudflareServicePath = `${SYSTEMD_DIR}/${CLOUDFLARE_RECONCILE_SERVICE}`;
   const cloudflareTimerPath = `${SYSTEMD_DIR}/${CLOUDFLARE_RECONCILE_TIMER}`;
-  const cloudflareChanged = cloudflareEnabled
-    ? !existsSync(cloudflareServicePath) || !existsSync(cloudflareTimerPath) ||
-      readFileSync(cloudflareServicePath, "utf8") !== cloudflareUnits.service ||
-      readFileSync(cloudflareTimerPath, "utf8") !== cloudflareUnits.timer
-    : existsSync(cloudflareServicePath) || existsSync(cloudflareTimerPath);
+  let cloudflare: UnitChanges["cloudflare"] = null;
   if (cloudflareEnabled) {
-    writeAtomic(cloudflareServicePath, cloudflareUnits.service, 0o644);
-    writeAtomic(cloudflareTimerPath, cloudflareUnits.timer, 0o644);
+    const writes = [
+      writeManaged(cloudflareServicePath, cloudflareUnits.service),
+      writeManaged(cloudflareTimerPath, cloudflareUnits.timer),
+    ];
+    if (writes.some(Boolean)) cloudflare = "added";
   } else {
-    if (existsSync(`${SYSTEMD_DIR}/${CLOUDFLARE_RECONCILE_TIMER}`)) {
+    if (existsSync(cloudflareTimerPath)) {
       tryRun("systemctl", ["disable", "--now", CLOUDFLARE_RECONCILE_TIMER]);
     }
-    rmSync(cloudflareServicePath, { force: true });
-    rmSync(cloudflareTimerPath, { force: true });
+    const removals = [removeManaged(cloudflareServicePath), removeManaged(cloudflareTimerPath)];
+    if (removals.some(Boolean)) cloudflare = "removed";
   }
+
   const auth = authUnits();
-  writeAtomic(`${SYSTEMD_DIR}/${AUTH_SOCKET_UNIT}`, auth.socket, 0o644);
-  writeAtomic(`${SYSTEMD_DIR}/${AUTH_SERVICE_UNIT}`, auth.service, 0o644);
-  rmSync(`${SYSTEMD_DIR}/clp-addons-auth@.service`, { force: true });
-  run("systemctl", ["daemon-reload"]);
-  return changed || cloudflareChanged;
+  const authWrites = [
+    writeManaged(`${SYSTEMD_DIR}/${AUTH_SOCKET_UNIT}`, auth.socket),
+    writeManaged(`${SYSTEMD_DIR}/${AUTH_SERVICE_UNIT}`, auth.service),
+  ];
+  const legacyTemplate = removeManaged(`${SYSTEMD_DIR}/clp-addons-auth@.service`);
+
+  const changes: UnitChanges = {
+    manager,
+    reconcile: reconcileChanged,
+    cloudflare,
+    auth: authWrites.some(Boolean),
+    cron,
+    systemd: manager || reconcileChanged || cloudflare !== null || authWrites.some(Boolean) || legacyTemplate,
+  };
+  // systemd only needs telling when a definition it reads actually moved. The
+  // cron file is not systemd's, so it does not count towards this.
+  if (changes.systemd) run("systemctl", ["daemon-reload"]);
+  return changes;
+}
+
+/**
+ * Bring running units in line with definitions a toggle just rewrote.
+ *
+ * Deliberately not `startUnits`. That one is the bootstrap and recovery path:
+ * it enables and restarts everything, which is right after an install, an
+ * update or a repair, and wrong for enabling one addon -- restarting the auth
+ * socket drops in-flight authentication, and restarting the reconcile timer
+ * disarms and rearms a schedule the toggle had no opinion about. This starts
+ * only what the toggle actually created.
+ *
+ * The manager is not restarted here. Its unit text changes with the addon set,
+ * but only `After=`/`Wants=` and unread `Environment=` lines, which matter at
+ * the next start; which addons it serves is read per request. `daemon-reload`
+ * has already made the new text the one systemd will use.
+ */
+export function applyToggleUnits(changes: UnitChanges): void {
+  if (changes.cloudflare === "added") {
+    run("systemctl", ["enable", CLOUDFLARE_RECONCILE_TIMER]);
+    run("systemctl", ["restart", CLOUDFLARE_RECONCILE_TIMER]);
+  }
+}
+
+/**
+ * Whether this box already went through a full install.
+ *
+ * A toggle applies a delta, which is only meaningful when there is something to
+ * apply it to. `clp-addons install <addon>` with no version flag is also the
+ * first-install path on a fresh box, and there the delta would be applied to
+ * nothing: no service user, no units, no auth socket. This is the cheap check
+ * that tells the two apart, so the toggle path can hand a first install back to
+ * the full one instead of half-provisioning a machine.
+ *
+ * It is not a drift check. Repair is the convergence path and stays so; this
+ * only asks whether the install ever happened.
+ */
+export function platformProvisioned(commands: ProvisionCommandRunner = { run, tryRun }): boolean {
+  return existsSync(`${SYSTEMD_DIR}/${MANAGER_UNIT}`)
+    && existsSync(`${SYSTEMD_DIR}/${AUTH_SOCKET_UNIT}`)
+    && existsSync(`${SYSTEMD_DIR}/${AUTH_SERVICE_UNIT}`)
+    && commands.tryRun("id", ["-u", SERVICE_USER]).ok
+    // The files exist from the moment `bootstrapProvision` writes them, which
+    // is well before it calls `startUnits`. If it fails in between -- an
+    // unpatchable template, an Nginx block it will not touch -- the files alone
+    // would report a provisioned box, and the delta path never starts anything.
+    // These two are what `startUnits` leaves behind: the manager running and
+    // the reconcile timer armed. Neither is true until it finished, and a box
+    // where either has since stopped is one a full pass should see anyway.
+    && commands.tryRun("systemctl", ["is-active", "--quiet", MANAGER_UNIT]).ok
+    && commands.tryRun("systemctl", ["is-active", "--quiet", RECONCILE_TIMER]).ok;
 }
 
 export interface StartUnitsOptions {

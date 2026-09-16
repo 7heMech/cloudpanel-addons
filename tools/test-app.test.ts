@@ -1534,6 +1534,7 @@ if addon_needs_docker ${addons.map((a) => `'${a}'`).join(" ")}; then echo yes; e
 
   const jobBase: JobView = {
     id: "20260909T100000Z-112233",
+    kind: "clone",
     source: "prod.example.com",
     target: "stg.example.com",
     port: 0,
@@ -1683,6 +1684,7 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   // Stager live panelSite check:
   const stgJob: JobView = {
     id: "20260909T100000Z-112233",
+    kind: "clone",
     source: "prod.example.com",
     target: "stg.example.com",
     port: 0,
@@ -1764,6 +1766,30 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
     pageHtml.includes('aria-label="Open Instatic CMS">Open</a>'),
   );
   check("indexPage does not hardcode false Live badge", !pageHtml.includes("badge state-running") && !pageHtml.includes("Live"));
+
+  // Disabling an addon is a decision, and it asks for it the way every other
+  // addon asks for one: the shared dialog the shell already ships, not the
+  // browser's confirm() in a box this project does not style.
+  check("the manager page carries the shared dialog and notice holder",
+    pageHtml.includes('<dialog id="clp-confirm"') && pageHtml.includes('id="clp-flash"'));
+  // Scoped to the manager's own two functions: the shared shell keeps a
+  // confirm() and an alert() of its own, as what it degrades to when a browser
+  // has no <dialog> or a page has no notice holder, and those are not this.
+  const fnBody = (name: string): string => {
+    const at = pageHtml.indexOf("function " + name + "(");
+    return at === -1 ? "" : pageHtml.slice(at, pageHtml.indexOf("\n}", at));
+  };
+  const disableBody = fnBody("disableAddon");
+  const startBody = fnBody("startManagerJob");
+  check("disabling goes through confirmAction, not confirm()",
+    disableBody.includes("confirmAction({") && !disableBody.includes("confirm("));
+  check("the dialog says what disabling does and does not do",
+    disableBody.includes("confirmLabel: 'Disable'") && disableBody.includes("danger: true")
+      && disableBody.includes("its data is kept"));
+  check("a declined dialog starts nothing",
+    disableBody.includes("if (!accepted) return;"));
+  check("a failed manager job reports in the page, not through alert()",
+    startBody.includes("notify(err.message, 'error')") && !startBody.includes("alert("));
 
   const emptyRes = indexPage([]);
   const emptyHtml = await emptyRes.text();

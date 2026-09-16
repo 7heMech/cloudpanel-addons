@@ -4,7 +4,7 @@ import { indexPage, updatePage } from "../cli/index";
 import { handle as loginThemePage } from "../addons/login-theme/app/index";
 import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } from "../addons/cloudflare-ips/app/views";
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
-import { jobsView, jobView, layout as stagerLayout, newCloneView } from "../addons/stager/app/views";
+import { jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, newCloneView, promoteListView, promoteView, siteStagingView } from "../addons/stager/app/views";
 import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { siteTabs, type SiteContext } from "../lib/site-context";
@@ -31,8 +31,34 @@ const sites: SiteSummary[] = [
 // is the widest strip a site can have.
 const siteVarnish: Record<string, boolean> = { "www.example.com": true };
 const PREVIEW_PUBLIC_IP = "203.0.113.10";
+
+/**
+ * The Staging tab's content for one site.
+ *
+ * Both ends of a clone, because the page answers two questions and a fixture
+ * showing only one would hide half the view: `?staged-from=1` makes this site a
+ * clone of another, which is what puts the Promote section on screen.
+ */
+function previewSiteStaging(domain: string, siteType: string, url: URL): string {
+  const base: JobView = {
+    id: "preview-clone", kind: "clone", source: "", target: "", port: 0, state: "done",
+    step: "", error: "", panelSite: true, createdAt: "2026-09-10T09:30:00Z",
+    startedAt: "2026-09-10T09:30:02Z", finishedAt: "2026-09-10T09:32:10Z", result: null,
+  };
+  if (url.searchParams.has("empty")) {
+    return siteStagingView(domain, [], siteType !== "nodejs" && siteType !== "python");
+  }
+  const jobs: JobView[] = [
+    { ...base, id: "preview-clone-1", source: domain, target: `stg.${domain}` },
+    { ...base, id: "preview-clone-2", source: domain, target: `qa.${domain}`, state: "running", step: "copying files" },
+  ];
+  if (url.searchParams.has("staged-from")) {
+    jobs.push({ ...base, id: "preview-clone-3", source: "live.example.com", target: domain, result: {} as never });
+  }
+  return siteStagingView(domain, jobs, siteType !== "nodejs" && siteType !== "python");
+}
 const job: JobView = {
-  id: "preview-job", source: "www.example.com", target: "stg.example.com", port: 0,
+  id: "preview-job", kind: "clone", source: "www.example.com", target: "stg.example.com", port: 0,
   state: "done", step: "", error: "", panelSite: true,
   createdAt: "2026-09-10T09:30:00Z", startedAt: "2026-09-10T09:30:02Z", finishedAt: "2026-09-10T09:32:10Z",
   result: {
@@ -213,6 +239,15 @@ const server = Bun.serve({
         { headers: withCsrfCookie({}, "preview-token") },
       );
     }
+    if (path === "/addons/stager/fragment") {
+      const domain = url.searchParams.get("domain") ?? sites[0]!.domain;
+      const site = sites.find((candidate) => candidate.domain === domain);
+      if (!site) return Response.json({ ok: false, error: "no such site" }, { status: 404 });
+      return Response.json(
+        stagerFragment(`Staging — ${domain}`, previewSiteStaging(domain, site.siteType, url)),
+        { headers: withCsrfCookie({}, "preview-token") },
+      );
+    }
     const empty = url.searchParams.has("empty");
     const notice = url.searchParams.has("update") || path === "/addons/update" ? { current: "0.9.3", latest: "0.9.4" } : null;
     const age = url.searchParams.has("stale") ? 7200 : 30;
@@ -246,11 +281,22 @@ const server = Bun.serve({
             createdAt: "2026-09-10T09:30:00Z", startedAt: "2026-09-10T09:30:01Z", finishedAt: "",
           }
         : null;
-      return indexPage(enabled, notice, {
+      const page = indexPage(enabled, notice, {
         available: ["cloudflare-ips", "instatic", "stager", "maintenance", "login-theme"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
+      // ?confirm=<addon> opens the disable dialog on load. A modal only exists
+      // after a click, and the screenshot tool does not click; without this the
+      // one dialog an operator sees before turning an addon off cannot be
+      // reviewed the way every other view can.
+      const openDialog = url.searchParams.get("confirm");
+      if (!openDialog) return page;
+      const body = await page.text();
+      return new Response(
+        body.replace("</body>", `<script>addEventListener('DOMContentLoaded',function(){disableAddon(${JSON.stringify(openDialog)}, ${JSON.stringify(openDialog === "instatic" ? "Instatic CMS" : openDialog)})})</script></body>`),
+        { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
+      );
     }
     if (path === "/addons/maintenance/" || path === "/addons/maintenance") {
       const maintenanceSites = sites.map((site, index) => ({
@@ -308,8 +354,26 @@ const server = Bun.serve({
       );
     } else if (path === "/addons/instatic/api/jobs/preview-instatic-job") {
       return Response.json({ ok: true, data: { job: instaticCreationJob, log: instaticLogs } });
-    } else if (path === "/addons/stager/") {
-      html = stagerLayout("Staging sites", jobsView(empty ? [] : [currentJob], age), notice);
+    } else if (path === "/addons/stager/" || path === "/addons/stager") {
+      // ?domain= is the site-scoped page the Staging tab reaches, drawn here
+      // with the panel's chrome around it the way the standalone ?embed=0 page
+      // is; the fragment route above is the same content with no document.
+      const selected = url.searchParams.get("domain");
+      const site = sites.find((candidate) => candidate.domain === selected);
+      html = site
+        ? stagerLayout(
+            `Staging — ${site.domain}`,
+            previewSiteStaging(site.domain, site.siteType, url),
+            notice,
+            {
+              domain: site.domain,
+              user: site.siteUser,
+              type: site.siteType,
+              varnishCache: siteVarnish[site.domain] === true,
+              ...(url.searchParams.has("no-ip") ? {} : { publicIp: PREVIEW_PUBLIC_IP }),
+            },
+          )
+        : stagerLayout("Staging sites", jobsView(empty ? [] : [currentJob], age), notice);
     } else if (path === "/addons/stager/new") {
       const source = sites.find((s) => s.domain === url.searchParams.get("source"));
       const detail: SiteDetail | null = source ? {
@@ -317,6 +381,13 @@ const server = Bun.serve({
         database: source.databases ? "example" : "", sizeMb: 148,
       } : null;
       html = stagerLayout("New staging site", newCloneView(detail, empty ? [] : sites), notice);
+    } else if (path === "/addons/stager/promote") {
+      // ?job= is what the list's Promote link carries, so following it here
+      // reaches the same view it reaches in the panel. The preview had its own
+      // /promote/confirm instead, which nothing linked to.
+      html = url.searchParams.has("job")
+        ? stagerLayout("Promote to live", promoteView(currentJob), notice)
+        : stagerLayout("Promote to live", promoteListView(empty ? [] : [currentJob]), notice);
     } else if (path === "/addons/stager/jobs/preview-job") {
       html = stagerLayout("Staging site details", jobView(currentJob, logs), notice);
     } else if (path === "/addons/stager/api/jobs/preview-job/events" || (path === "/addons/stager/api/jobs/preview-job" && req.headers.get("accept")?.includes("text/event-stream"))) {

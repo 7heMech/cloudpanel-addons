@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import { handle as handleMaintenance } from "../addons/maintenance/app/index";
+import { handle as handleStager } from "../addons/stager/app/index";
+import { stagerService, type JobView } from "../addons/stager/app/service";
 import { maintenanceService } from "../addons/maintenance/app/service";
 import { fragment } from "../addons/maintenance/app/views";
 import { BASE_STYLE } from "../lib/app-ui";
@@ -241,4 +243,80 @@ test("a panel page the loader does not recognise says so and hands the page over
   const noTab = runLoader({ link: false, landed: "maintenance" });
   expect(noTab.warnings[0]).toContain("maintenance tab is not in this site's tab strip");
   expect(noTab.navigations).toEqual(["/addons/maintenance?domain=shop.example.test&embed=0"]);
+});
+
+test("Staging is a site tab too, and mounts the same way", async () => {
+  const url = "https://panel.example.test:8443/addons/stager?domain=shop.example.test";
+  const redirect = await handleStager(new Request(url), "/");
+  expect(redirect.status).toBe(302);
+  expect(redirect.headers.get("Location")).toBe(embedLandingUrl("shop.example.test", "stager"));
+
+  const standalone = await handleStager(new Request(`${url}&embed=0`), "/");
+  expect(standalone.status).not.toBe(302);
+});
+
+test("the Staging fragment shows this site's clones and its way back to live", async () => {
+  const original = { sitePage: stagerService.sitePage, snapshot: stagerService.snapshot };
+  try {
+    const job = (over: Partial<JobView>): JobView => ({
+      id: "20260916T000000Z-aaaaaa", kind: "clone", source: "", target: "", port: 0,
+      state: "done", step: "", error: "", createdAt: "2026-09-16T00:00:00Z",
+      startedAt: "", finishedAt: "", result: null, ...over,
+    });
+    stagerService.sitePage = async (domain: string) => ({
+      context: { domain, user: "shop", type: "php" },
+      jobs: [
+        // One clone made from this site, and one that made this site.
+        job({ id: "20260916T000001Z-bbbbbb", source: domain, target: `stg.${domain}` }),
+        job({ id: "20260916T000002Z-cccccc", source: "live.example.test", target: domain, result: {} as never }),
+      ],
+      clonable: true,
+    });
+    stagerService.snapshot = async () => { throw new Error("no snapshot"); };
+
+    const res = await handleStager(
+      new Request("https://panel.example.test:8443/addons/stager/fragment?domain=shop.example.test"),
+      "/fragment",
+    );
+    expect(res.status).toBe(200);
+    // The fragment is what the operator's next action echoes, so it carries the
+    // cookie the same way the Maintenance one does.
+    expect(res.headers.get("Set-Cookie")).toContain("clp_addons_csrf=");
+    const body = await res.json() as { ok: boolean; title: string; html: string };
+    expect(body.ok).toBe(true);
+    expect(body.title).toBe("Staging — shop.example.test");
+    // What was staged from this site.
+    expect(body.html).toContain("stg.shop.example.test");
+    // And that this site is itself a clone, so it can go back.
+    expect(body.html).toContain("live.example.test");
+    expect(body.html).toContain("/addons/stager/promote?job=20260916T000002Z-cccccc");
+    // No document around it, and no second tab strip: the panel draws both.
+    expect(body.html).not.toContain("<!doctype html>");
+    expect(body.html).not.toContain("clp-addon-tabs");
+  } finally {
+    Object.assign(stagerService, original);
+  }
+});
+
+test("a site with nothing staged says so rather than offering a promote", async () => {
+  const original = { sitePage: stagerService.sitePage, snapshot: stagerService.snapshot };
+  try {
+    stagerService.sitePage = async (domain: string) => ({
+      context: { domain, user: "shop", type: "php" },
+      jobs: [],
+      clonable: true,
+    });
+    stagerService.snapshot = async () => { throw new Error("no snapshot"); };
+    const res = await handleStager(
+      new Request("https://panel.example.test:8443/addons/stager/fragment?domain=shop.example.test"),
+      "/fragment",
+    );
+    const body = await res.json() as { html: string };
+    expect(body.html).toContain("No staging copies");
+    // Promoting is the return leg of a clone; with no clone record there is no
+    // live site to return to, so the section is absent rather than disabled.
+    expect(body.html).not.toContain("Promote to live");
+  } finally {
+    Object.assign(stagerService, original);
+  }
 });

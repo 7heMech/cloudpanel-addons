@@ -419,8 +419,8 @@ test("provisioning creates every project-owned writable directory", () => {
     `import { ADDONS } from "./cli/paths.ts";
      import { ensureDirs } from "./cli/provision.ts";
      const created = [];
-     const commands = { run: () => "", tryRun: () => ({ ok: true, out: "" }) };
-     const fs = { mkdir: (path) => created.push(path), exists: () => false };
+     const commands = { run: () => "0", tryRun: () => ({ ok: true, out: "" }) };
+     const fs = { mkdir: (path) => created.push(path), exists: () => false, chmod: () => {}, chown: () => {} };
      ensureDirs([ADDONS.instatic, ADDONS.stager], false, commands, fs);
      console.log(JSON.stringify(created));`,
   ], { cwd: REPO, encoding: "utf8" });
@@ -695,4 +695,83 @@ test("the root auth helper is reached by socket activation, not sudo", () => {
   expect(client).not.toMatch(/Bun\.spawn|"\/usr\/bin\/sudo"/);
   expect(client).toContain("callGatewayAuth");
   expect(gatewayClient).toContain("Bun.connect");
+});
+
+test("directory provisioning applies ownership natively and resolves each account once", () => {
+  // It used to spawn a chown and a chmod per path: fourteen processes for six
+  // shared directories and two addons. The ownership applied has to be exactly
+  // what those spawns applied, so the modes are asserted as numbers and the
+  // accounts as the ones the unit files name.
+  const result = execFileSync(process.execPath, [
+    "-e",
+    `import { ADDONS, SERVICE_USER, SERVICE_GROUP, SHARED_GROUP } from "./cli/paths.ts";
+     import { ensureDirs } from "./cli/provision.ts";
+     const spawned = [];
+     const chowned = [];
+     const chmodded = [];
+     const ids = { ["-u" + SERVICE_USER]: 900, ["-g" + SERVICE_GROUP]: 901, ["-g" + SHARED_GROUP]: 901 };
+     const commands = {
+       run: (cmd, args) => { spawned.push([cmd, ...args].join(" ")); return String(ids[args[0] + args[1]] ?? 0); },
+       tryRun: () => ({ ok: true, out: "" }),
+     };
+     const fs = {
+       mkdir: () => {},
+       exists: () => false,
+       chmod: (path, mode) => chmodded.push([path, mode]),
+       chown: (path, uid, gid) => chowned.push([path, uid, gid]),
+     };
+     ensureDirs([ADDONS.maintenance, ADDONS.stager], false, commands, fs);
+     console.log(JSON.stringify({ spawned, chowned, chmodded }));`,
+  ], { cwd: REPO, encoding: "utf8" });
+  const { spawned, chowned, chmodded } = JSON.parse(result) as {
+    spawned: string[];
+    chowned: [string, number, number][];
+    chmodded: [string, number][];
+  };
+
+  expect(spawned.every((command) => command.startsWith("id "))).toBe(true);
+  // clp-addons is both the service user and the service group, and the shared
+  // group is the same name again: three resolutions, two lookups.
+  expect(new Set(spawned).size).toBe(spawned.length);
+  expect(spawned.length).toBeLessThanOrEqual(3);
+
+  const modeOf = (path: string) => chmodded.find(([target]) => target === path)?.[1];
+  expect(modeOf("/var/lib/clp-addons")).toBe(0o751);
+  expect(modeOf("/var/lib/clp-addons/maintenance")).toBe(0o711);
+  expect(modeOf("/var/lib/clp-addons/stager")).toBe(0o750);
+  expect(modeOf("/run/clp-addons")).toBe(0o755);
+
+  const ownerOf = (path: string) => chowned.find(([target]) => target === path)?.slice(1);
+  expect(ownerOf("/usr/local/libexec/clp-addons")).toEqual([0, 0]);
+  expect(ownerOf("/var/lib/clp-addons")).toEqual([0, 901]);
+  expect(ownerOf("/run/clp-addons")).toEqual([900, 901]);
+});
+
+test("directory provisioning stops rather than guessing when an account has no id", () => {
+  const result = execFileSync(process.execPath, [
+    "-e",
+    `import { ensureDirs } from "./cli/provision.ts";
+     const commands = { run: () => "no such user", tryRun: () => ({ ok: true, out: "" }) };
+     const fs = { mkdir: () => {}, exists: () => false, chmod: () => {}, chown: () => {} };
+     try { ensureDirs([], false, commands, fs); console.log("no-error"); }
+     catch (error) { console.log(error.message); }`,
+  ], { cwd: REPO, encoding: "utf8" });
+  expect(result.trim()).toContain("could not resolve");
+});
+
+test("a failed ownership change is not swallowed", () => {
+  // The directories carry the project's access rules; a chown that silently
+  // did nothing would leave a state directory readable by the wrong accounts.
+  const result = execFileSync(process.execPath, [
+    "-e",
+    `import { ensureDirs } from "./cli/provision.ts";
+     const commands = { run: () => "0", tryRun: () => ({ ok: true, out: "" }) };
+     const fs = {
+       mkdir: () => {}, exists: () => false, chmod: () => {},
+       chown: () => { throw new Error("EPERM"); },
+     };
+     try { ensureDirs([], false, commands, fs); console.log("no-error"); }
+     catch (error) { console.log(error.message); }`,
+  ], { cwd: REPO, encoding: "utf8" });
+  expect(result.trim()).toBe("EPERM");
 });

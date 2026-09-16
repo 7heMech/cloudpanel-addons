@@ -11,6 +11,45 @@ CloudPanel's master Nginx vhost proxies `/addons/` to the manager socket. The
 manager uses the existing `cloudpanel` session and does not create a separate
 site, hostname, or login.
 
+## Enable and disable apply a delta
+
+A toggle is not an install. Enabling an addon writes that addon's config file,
+creates its state directory, rewrites the managed unit definitions and starts
+whatever those definitions newly introduce -- and nothing else. It does not
+create the service user, probe the auth helper or sweep legacy installs: those
+answer "has this box ever been set up", which `install`, `update` and `repair`
+ask and a toggle does not. An `enable` hands itself to the full install path
+rather than applying a delta to nothing whenever the unit files, the service
+user, a running manager or an armed reconcile timer are missing. The last two
+are there because the unit files appear well before the install that wrote them
+reaches `startUnits`: a bootstrap that failed in between leaves files a delta
+would otherwise read as a finished install and then start nothing.
+
+A managed definition is rewritten when its text differs, and also when what
+stands at its path is not the plain `0644` file this binary writes -- a
+group-writable unit, or a symlink to a file holding the right text. Rewriting
+unconditionally used to converge that as a side effect, and several managed
+units name no `User=`, so systemd runs what they name as root.
+
+`systemctl daemon-reload` runs only when a managed definition was created,
+changed or removed, and a toggle starts only units it created -- never the auth
+socket, the manager, the armed reconcile timer or the path watcher. Panel
+templates are reconciled only for an addon that declares injection targets, and
+the Twig cache is purged by that reconciliation when the markup actually
+changes. The panel identity is written when the enabled set becomes non-empty
+and removed when it becomes empty, so nothing of this project can act on a site
+while no addon is enabled.
+
+Which addons the manager serves is read per request from the config files, so
+enabling one does not restart the manager. The handler map stays compiled in and
+explicit: what is dynamic is availability, not code loading. The manager unit's
+own text still changes with the addon set -- dependency ordering and per-addon
+environment -- and `daemon-reload` makes that the text systemd uses at the next
+start.
+
+Repair remains the convergence path. A toggle assumes the platform is already
+provisioned and does not attempt drift recovery.
+
 ## Managed CloudPanel changes
 
 Nginx and Twig changes are marked and regenerated from a saved pristine copy.
@@ -38,7 +77,11 @@ state for a later re-enable.
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
 badges, switches, toolbars, one confirmation dialog and one inline notice per
 page. An addon supplies its brand, its own tabs, its script and any rule only it
-draws. Below 760px the shell tightens: a dialog gives up its desktop padding and
+draws. The manager's own pages use the same two: disabling an addon asks through
+that dialog, naming the addon as its card does and saying that its data is kept,
+and a manager job that fails to start reports through the inline notice. The
+browser's `confirm` and `alert` survive only as what the shell degrades to where
+there is no `<dialog>` or no notice holder. Below 760px the shell tightens: a dialog gives up its desktop padding and
 its buttons take the row, and it is bounded by the visual viewport so a phone's
 collapsing address bar cannot cover them.
 
