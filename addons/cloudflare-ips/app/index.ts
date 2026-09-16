@@ -1,23 +1,15 @@
-import { guardMutation, newCsrfToken, withCsrfCookie, SECURITY_HEADERS } from "../../../lib/app-http";
+import {
+  bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
+} from "../../../lib/app-http";
 import { cloudflareService } from "./service";
 import { dashboardView, layout } from "./views";
 
 function html(body: string, csrf: string, status = 200): Response {
-  return new Response(body, {
-    status,
-    headers: withCsrfCookie({
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
-      ...SECURITY_HEADERS,
-    }, csrf),
-  });
+  return htmlResponse(body, { status, csrf });
 }
 
 function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...SECURITY_HEADERS },
-  });
+  return jsonResponse(body, { status });
 }
 
 function errorMessage(error: unknown): string {
@@ -54,11 +46,11 @@ export async function handle(
   if (req.method === "POST" && path === "/api/sites") {
     const denied = guardMutation(req);
     if (denied) return denied;
-    let body: unknown;
-    try { body = await req.json(); } catch { return json({ ok: false, error: "body must be JSON" }, 400); }
-    const values = body as { domains?: unknown; enabled?: unknown } | null;
-    if (!Array.isArray(values?.domains) || values.domains.length === 0 ||
-        !values.domains.every((domain) => typeof domain === "string") || typeof values.enabled !== "boolean") {
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req); } catch (error) { return bodyErrorResponse(error); }
+    const values = body as { domains?: unknown; enabled?: unknown };
+    if (!Array.isArray(values.domains) || values.domains.length === 0 ||
+        !values.domains.every((domain: unknown) => typeof domain === "string") || typeof values.enabled !== "boolean") {
       return json({ ok: false, error: "domains must be a non-empty string array and enabled must be boolean" }, 400);
     }
     const result = await cloudflareService.setSites(values.domains, values.enabled);
@@ -68,8 +60,8 @@ export async function handle(
   if (req.method === "POST" && path === "/api/policy") {
     const denied = guardMutation(req);
     if (denied) return denied;
-    let body: unknown;
-    try { body = await req.json(); } catch { return json({ ok: false, error: "body must be JSON" }, 400); }
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req); } catch (error) { return bodyErrorResponse(error); }
     if (!validMutationBody(body)) return json({ ok: false, error: "enabled must be boolean" }, 400);
     const result = await cloudflareService.setAutomatic(body.enabled);
     return json(result, result.ok ? 200 : 400);

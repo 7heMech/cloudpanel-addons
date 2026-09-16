@@ -11,7 +11,8 @@
 // poll interval, what counts as a change, when the stream closes, the keepalive
 // -- lives here.
 import type { Server } from "bun";
-import { SECURITY_HEADERS } from "./app-http";
+import { jsonResponse, policyHeaders, safeDecodePathSegment } from "./app-http";
+import { validateJobId } from "./job-id";
 
 /** How often the reader is asked for a fresh view of the job. */
 const POLL_INTERVAL_MS = 1000;
@@ -37,31 +38,67 @@ export interface JobReadResult<J extends JobProgress> {
 
 export type JobReader<J extends JobProgress> = (id: string) => Promise<JobReadResult<J>>;
 
+export interface JobApiRoute<J extends JobProgress> {
+  req: Request;
+  /** Path with the addon's mount prefix already stripped. */
+  path: string;
+  method: string;
+  server?: Server<unknown> | null;
+  getJob: JobReader<J>;
+}
+
+/**
+ * Answer the two job-observation routes every addon has, or return null.
+ *
+ * `/api/jobs/:id/events` streams, `/api/jobs/:id` polls, and `/api/jobs/:id`
+ * with `Accept: text/event-stream` streams too -- a client that cannot set a
+ * path but can set a header still gets the live view. Choosing between them
+ * was written out twice, character for character, in the Stager and Instatic
+ * routers, which is how the two ended up with the same answer by coincidence
+ * rather than by contract.
+ *
+ * Returns null for anything else, including a non-GET on these paths, so the
+ * addon's own router decides what that is. The HTML `/jobs/:id` page stays with
+ * each addon: what a job looks like is theirs, only how it is watched is shared.
+ */
+export async function jobApiRoute<J extends JobProgress>(route: JobApiRoute<J>): Promise<Response | null> {
+  const events = route.path.match(/^\/api\/jobs\/([^/]+)\/events$/);
+  const poll = route.path.match(/^\/api\/jobs\/([^/]+)$/);
+  if (!events && !poll) return null;
+  if (route.method !== "GET") return null;
+
+  const id = validateJobId(safeDecodePathSegment((events ?? poll)![1]!));
+  if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
+
+  const stream = events !== null || route.req.headers.get("accept")?.includes("text/event-stream") === true;
+  if (stream) return jobEventStream({ id, req: route.req, server: route.server ?? null, getJob: route.getJob });
+
+  const result = await route.getJob(id);
+  return json(result, result.ok ? 200 : 404);
+}
+
 /** A job in one of these states will never change again, so the stream ends. */
 export function isTerminalJobState(state: string): boolean {
   return state === "done" || state === "failed";
 }
 
-function jsonResponse(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...SECURITY_HEADERS },
-  });
+function json(body: unknown, status: number): Response {
+  return jsonResponse(body, { status });
 }
 
 function sse(body: ReadableStream): Response {
   return new Response(body, {
     status: 200,
-    headers: {
-      "Content-Type": "text/event-stream",
+    headers: policyHeaders("text/event-stream", {
+      // A stream's caching rules are its own: `no-store` would be honest but
+      // `no-cache, no-transform` is what keeps a proxy from rewriting events.
       "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
       // Nginx buffers proxied responses by default, which holds every event
       // until the job finishes -- exactly the symptom streaming exists to
       // avoid.
       "X-Accel-Buffering": "no",
-      ...SECURITY_HEADERS,
-    },
+    }),
   });
 }
 
@@ -91,7 +128,7 @@ export async function jobEventStream<J extends JobProgress>(options: {
 
   const initial = await getJob(id);
   if (!initial.ok || !initial.data) {
-    return jsonResponse({ ok: false, error: initial.error ?? "job not found" }, 404);
+    return json({ ok: false, error: initial.error ?? "job not found" }, 404);
   }
 
   // Bun closes idle connections on its own schedule, and a job that is pulling
