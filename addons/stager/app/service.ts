@@ -1,5 +1,5 @@
 import type { SiteContext } from "../../../lib/site-context";
-import { fetchPanelInfo, snapshotAgeSeconds, type PanelSnapshot } from "../../../lib/snapshot-reader";
+import { fetchPanelInfo, readPanelSnapshot, type PanelSnapshot } from "../../../lib/snapshot-reader";
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 export { type ActionResult };
 
@@ -38,15 +38,13 @@ export async function callAction<T = unknown>(
 // UI can reject bad input with a useful message instead of a generic error
 // from the action binary.
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
-const JOB_RE = /^\d{8}T\d{6}Z-[0-9a-f]{6}$/;
+
 
 export function validateDomain(d: unknown): string | null {
   return typeof d === "string" && d.length <= 253 && DOMAIN_RE.test(d) ? d : null;
 }
 
-export function validateJobId(j: unknown): string | null {
-  return typeof j === "string" && JOB_RE.test(j) ? j : null;
-}
+export { validateJobId } from "../../../lib/job-id";
 
 /**
  * Expand the shorthand the original wrapper script accepted: a bare label
@@ -305,8 +303,7 @@ export const stagerService = {
 
   /** Fetches current panel information and reports its age at receipt. */
   async snapshot(): Promise<{ snap: PanelSnapshot; ageSeconds: number }> {
-    const snap = await fetchPanelInfo();
-    return { snap, ageSeconds: snapshotAgeSeconds(snap) };
+    return readPanelSnapshot();
   },
 
   /**

@@ -34,7 +34,26 @@ export async function fetchPanelInfo(
 
 // Age of the panel data in seconds. For real-time gateway data this is 0.
 export function snapshotAgeSeconds(snap: PanelSnapshot): number {
-  return Math.max(0, Math.round((Date.now() - new Date(snap.updatedAt).getTime()) / 1000));
+  const taken = new Date(snap.updatedAt).getTime();
+  // An unreadable timestamp is not a fresh one. Math.round(NaN) is NaN and
+  // `NaN > threshold` is false, so every caller comparing against a staleness
+  // threshold would have read an unparseable snapshot as current.
+  if (Number.isNaN(taken)) return Infinity;
+  // A snapshot from the future is a clock disagreement, not stale data.
+  return Math.max(0, Math.round((Date.now() - taken) / 1000));
+}
+
+/**
+ * Read current panel information and say how old it was when it arrived.
+ *
+ * Stager and Instatic each had this as a `snapshot()` method on their service,
+ * byte for byte. What the age *means* is not shared -- how stale is too stale,
+ * and what a missing site implies, are each addon's question -- so only the
+ * read and the arithmetic moved.
+ */
+export async function readPanelSnapshot(): Promise<{ snap: PanelSnapshot; ageSeconds: number }> {
+  const snap = await fetchPanelInfo();
+  return { snap, ageSeconds: snapshotAgeSeconds(snap) };
 }
 
 /**
