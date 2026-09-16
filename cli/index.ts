@@ -27,7 +27,13 @@ import { handle as handleMaintenance } from "../addons/maintenance/app/index";
 import { handle as handleStager } from "../addons/stager/app/index";
 import { handle as handleCloudflareIps } from "../addons/cloudflare-ips/app/index";
 import { splitMount } from "../lib/mount";
-import { SECURITY_HEADERS, esc, escJs, guardMutation, newCsrfToken, withCsrfCookie } from "../lib/app-http";
+import {
+  esc, escJs, guardMutation, htmlResponse, jsonResponse, newCsrfToken, policyHeaders,
+  safeDecodePathSegment,
+} from "../lib/app-http";
+// Re-exported because this module was where it lived and the manager's tests
+// and routes name it here.
+export { safeDecodePathSegment };
 import { JOB_STYLE, JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
 import { adminHeaderTarget, headerTarget, siteLayoutTarget, SITE_TAB_TEMPLATE } from "../lib/panel-nav";
 import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
@@ -738,10 +744,7 @@ function internalPath(path: string): string {
 /** Return the shared manager denial for an authenticated non-administrator. */
 export function adminGate(auth: AuthenticatedRequest | null): Response | null {
   if (auth?.roles.includes("ROLE_ADMIN")) return null;
-  return Response.json(
-    { ok: false, error: "administrator role required" },
-    { status: 403, headers: SECURITY_HEADERS },
-  );
+  return jsonResponse({ ok: false, error: "administrator role required" }, { status: 403 });
 }
 
 /** The manager's own privileged verbs go over the same gateway the addons use. */
@@ -757,10 +760,7 @@ async function latestManagerJobView(): Promise<ManagerJobView | null> {
 }
 
 function managerJson(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...SECURITY_HEADERS },
-  });
+  return jsonResponse(body, { status });
 }
 
 /**
@@ -774,15 +774,6 @@ function managerJson(body: unknown, status = 200): Response {
  *
  * Returns null when the path is not one of these, so the caller can carry on.
  */
-export function safeDecodePathSegment(segment: string): string | null {
-  try {
-    return decodeURIComponent(segment);
-  } catch (error) {
-    if (error instanceof URIError) return null;
-    throw error;
-  }
-}
-
 export async function handleManagerRoute(
   req: Request,
   path: string,
@@ -848,15 +839,18 @@ async function cmdServe(): Promise<never> {
     async fetch(req, server) {
       const path = internalPath(new URL(req.url).pathname);
       if (path === "/health") {
-        return Response.json({ ok: true, service: "clp-addons" }, { headers: SECURITY_HEADERS });
+        return jsonResponse({ ok: true, service: "clp-addons" });
       }
 
       const gate = await authenticateRequest(req);
       if (gate.response) {
-        return new Response(gate.response.body, {
-          status: gate.response.status,
-          headers: { ...Object.fromEntries(gate.response.headers), ...SECURITY_HEADERS },
-        });
+        // The gate's own headers first -- it may be redirecting to a login or
+        // clearing a session -- then the shared policy over the top, which is
+        // the order this always used. Copied through Headers rather than
+        // Object.fromEntries so a Set-Cookie survives the copy.
+        const headers = new Headers(gate.response.headers);
+        for (const [name, value] of policyHeaders(null)) headers.set(name, value);
+        return new Response(gate.response.body, { status: gate.response.status, headers });
       }
 
       // The manager is an administrative surface. Keep this decision at the
@@ -890,7 +884,7 @@ async function cmdServe(): Promise<never> {
           csrf: newCsrfToken(),
         });
       }
-      else response = Response.json({ ok: false, error: "not found" }, { status: 404, headers: SECURITY_HEADERS });
+      else response = jsonResponse({ ok: false, error: "not found" }, { status: 404 });
       return response;
     },
   });
@@ -1092,21 +1086,14 @@ function managerPage(
 ): Response {
   const job = options.job;
   const live = job && (job.state === "queued" || job.state === "running") ? job : null;
-  const base: Record<string, string> = {
-    "Content-Type": "text/html; charset=utf-8",
-    "Cache-Control": "no-store",
-    ...SECURITY_HEADERS,
-  };
-  const headers = options.csrf ? withCsrfCookie(base, options.csrf) : new Headers(base);
-
-  return new Response(renderLayout(title, content, {
+  return htmlResponse(renderLayout(title, content, {
     brand: "CloudPanel Addons",
     base: "/addons",
     nav: [],
     css: JOB_STYLE + MANAGER_INDEX_CSS,
     script: MANAGER_INDEX_JS + JOB_WATCH_JS + (live ? `\nwatchJob('${escJs(live.id)}');\n` : ""),
     updateNotice: update,
-  }), { headers });
+  }), { csrf: options.csrf });
 }
 
 /** How a job is named in the UI: "Enabling stager", "Updating clp-addons". */

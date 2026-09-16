@@ -1,4 +1,4 @@
-import { esc, newCsrfToken, withCsrfCookie, SECURITY_HEADERS } from "../../../lib/app-http";
+import { esc, htmlResponse, newCsrfToken } from "../../../lib/app-http";
 import { renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 
@@ -6,7 +6,7 @@ const BASE = mountPath("login-theme");
 
 /** Wraps login-theme content in the shared manager page and response headers. */
 function page(content: string, csrf: string, status = 200, updateNotice?: { current: string; latest: string } | null): Response {
-  return new Response(
+  return htmlResponse(
     renderLayout("Device theme on first visit", content, {
       brand: "Device theme on first visit",
       base: BASE,
@@ -14,14 +14,7 @@ function page(content: string, csrf: string, status = 200, updateNotice?: { curr
       script: "",
       updateNotice,
     }),
-    {
-      status,
-      headers: withCsrfCookie({
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": "no-store",
-        ...SECURITY_HEADERS,
-      }, csrf),
-    },
+    { status, csrf },
   );
 }
 
