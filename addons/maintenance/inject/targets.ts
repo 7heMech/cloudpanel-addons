@@ -1,4 +1,4 @@
-import type { AddonTarget } from "../../../cli/paths";
+import type { AddonTarget } from "../../../lib/addon-target";
 import { ADDON_SITE_TABS } from "../../../lib/site-context";
 
 // The label the panel's strip shows and the label the addon's own reproduction

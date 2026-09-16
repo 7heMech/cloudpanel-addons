@@ -3,9 +3,8 @@ import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sym
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import {
-  ADDON_NAMES, ADDONS, nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER,
-} from "../cli/paths";
+import { nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "../cli/paths";
+import { ADDON_NAMES, ADDONS } from "../cli/addon-catalog";
 import {
   authUnits, cloudflareReconcileUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit,
   vhostOwnerAccepted, warnIfPanelSessionUnreadable,
@@ -318,7 +317,7 @@ function provisionProbe(): {
   unsafeIdentity: { primary: string; aliases: string[] } | null;
 } {
   const script = `
-    import { ADDONS } from "./cli/paths.ts";
+    import { ADDONS } from "./cli/addon-catalog.ts";
     import {
       PANEL_IDENTITY_PATH,
       panelIdentityFromVhost,
@@ -416,7 +415,7 @@ test("every addon's APP_DATA environment assignment is a name systemd accepts", 
 test("provisioning creates every project-owned writable directory", () => {
   const result = execFileSync(process.execPath, [
     "-e",
-    `import { ADDONS } from "./cli/paths.ts";
+    `import { ADDONS } from "./cli/addon-catalog.ts";
      import { ensureDirs } from "./cli/provision.ts";
      const created = [];
      const commands = { run: () => "0", tryRun: () => ({ ok: true, out: "" }) };
@@ -704,7 +703,8 @@ test("directory provisioning applies ownership natively and resolves each accoun
   // accounts as the ones the unit files name.
   const result = execFileSync(process.execPath, [
     "-e",
-    `import { ADDONS, SERVICE_USER, SERVICE_GROUP, SHARED_GROUP } from "./cli/paths.ts";
+    `import { SERVICE_USER, SERVICE_GROUP, SHARED_GROUP } from "./cli/paths.ts";
+     import { ADDONS } from "./cli/addon-catalog.ts";
      import { ensureDirs } from "./cli/provision.ts";
      const spawned = [];
      const chowned = [];
