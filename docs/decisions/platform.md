@@ -11,6 +11,36 @@ CloudPanel's master Nginx vhost proxies `/addons/` to the manager socket. The
 manager uses the existing `cloudpanel` session and does not create a separate
 site, hostname, or login.
 
+## Enable and disable apply a delta
+
+A toggle is not an install. Enabling an addon writes that addon's config file,
+creates its state directory, rewrites the managed unit definitions and starts
+whatever those definitions newly introduce -- and nothing else. It does not
+create the service user, probe the auth helper or sweep legacy installs: those
+answer "has this box ever been set up", which `install`, `update` and `repair`
+ask and a toggle does not. An `enable` that finds no manager unit, no auth units
+or no service user hands itself to the full install path rather than applying a
+delta to nothing.
+
+`systemctl daemon-reload` runs only when a managed definition was created,
+changed or removed, and a toggle starts only units it created -- never the auth
+socket, the manager, the armed reconcile timer or the path watcher. Panel
+templates are reconciled only for an addon that declares injection targets, and
+the Twig cache is purged by that reconciliation when the markup actually
+changes. The panel identity is written when the enabled set becomes non-empty
+and removed when it becomes empty, so nothing of this project can act on a site
+while no addon is enabled.
+
+Which addons the manager serves is read per request from the config files, so
+enabling one does not restart the manager. The handler map stays compiled in and
+explicit: what is dynamic is availability, not code loading. The manager unit's
+own text still changes with the addon set -- dependency ordering and per-addon
+environment -- and `daemon-reload` makes that the text systemd uses at the next
+start.
+
+Repair remains the convergence path. A toggle assumes the platform is already
+provisioned and does not attempt drift recovery.
+
 ## Managed CloudPanel changes
 
 Nginx and Twig changes are marked and regenerated from a saved pristine copy.

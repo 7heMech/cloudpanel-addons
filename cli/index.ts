@@ -10,6 +10,7 @@ import { CLI_VERSION, fetchVerified, loadLocal, resolveRelease, verifyAttestatio
 import {
   ensureDirs, ensureRequiredUnits, ensureServiceUser, ensureTimerArmed, hardenBackups,
   ensureAuthHelperReady, reconcilePanelIdentity, installUnits, installedConfig, purgeTwigCache, removeLegacyUnits,
+  applyToggleUnits, platformProvisioned,
   removeLegacyInstall, removeLegacyUsers, removeSudoers, startUnits, stopUnits, unitActive,
   unitPid, warnIfPanelSessionUnreadable, writeConfig,
 } from "./provision";
@@ -283,17 +284,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   removeLegacyInstall();
   ensureDirs(specs, true);
   installArtifacts(artifacts, artifactTag ?? CLI_VERSION.replace(/^v/, ""));
-  ensureAuthHelperReady();
-  for (const item of specs) writeConfig(item, true);
-  reconcilePanelIdentity();
-  installUnits(specs);
-  removeLegacyUnits(true);
-  removeLegacyUsers(true);
-  ensureDirs(specs);
-  if (!reconcileAnchors(false)) fatal("could not safely patch the required CloudPanel templates");
-  if (!reconcileMaintenanceNginx(false)) fatal("could not safely inject the Nginx maintenance check");
-  if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
-  startUnits();
+  bootstrapProvision(specs);
 
   log.plain();
   log.ok(`${spec.name} installed`);
@@ -383,19 +374,17 @@ export async function cmdUpdate(argv: string[], options: { beforeManagerRestart?
 }
 
 /**
- * Turn an addon that already ships in this binary on.
+ * Everything a first install has to put on the box, in the order it has to
+ * happen: accounts and directories before files, files before units, units
+ * before anything is started.
  *
- * This is `cmdInstall` with the download removed, because there is nothing to
- * download: `ADDONS` is compiled in and so are its injection targets. What is
- * left -- the config file, the state directory, the Twig anchors, the units --
- * is the whole of what "installed" ever meant for an individual addon.
+ * Shared by `install` and by an `enable` that finds nothing provisioned. It is
+ * deliberately not what a toggle runs -- re-creating the service user, probing
+ * the auth helper and sweeping legacy installs are answers to "has this box
+ * ever been set up", and asking that on every toggle is most of what made a
+ * toggle slow.
  */
-export async function applyEnable(name: string): Promise<void> {
-  requireRoot("enable");
-  const spec = resolveAddon(name);
-  ensureRequiredUnits(spec);
-  const specs = [...installedAddons().filter((item) => item.name !== spec.name), spec];
-
+function bootstrapProvision(specs: AddonSpec[]): void {
   ensureServiceUser();
   removeLegacyInstall();
   ensureDirs(specs, true);
@@ -410,6 +399,46 @@ export async function applyEnable(name: string): Promise<void> {
   if (!reconcileMaintenanceNginx(false)) fatal("could not safely inject the Nginx maintenance check");
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
   startUnits();
+}
+
+/**
+ * Turn an addon that already ships in this binary on.
+ *
+ * This is `cmdInstall` with the download removed, because there is nothing to
+ * download: `ADDONS` is compiled in and so are its injection targets. What is
+ * left -- the config file, the state directory, the Twig anchors, the units --
+ * is the whole of what "installed" ever meant for an individual addon.
+ */
+export async function applyEnable(name: string): Promise<void> {
+  requireRoot("enable");
+  const spec = resolveAddon(name);
+  ensureRequiredUnits(spec);
+  const before = installedAddons().filter((item) => item.name !== spec.name);
+  const specs = [...before, spec];
+
+  if (!platformProvisioned()) {
+    bootstrapProvision(specs);
+    log.ok(`${spec.name} enabled`);
+    return;
+  }
+
+  // The panel identity is what lets a site action refuse to operate on the
+  // panel's own hostname, and disabling the last addon removes it. Put it back
+  // before anything that could accept a site action, which is the moment this
+  // addon's config file exists.
+  if (before.length === 0) reconcilePanelIdentity(true, specs);
+  writeConfig(spec, true);
+  ensureDirs(specs);
+  const changes = installUnits(specs);
+  // An addon with no injection targets changes no panel markup, so there is
+  // nothing to patch and nothing to purge. cloudflare-ips is the current case.
+  if (spec.targets.length > 0 && !reconcileAnchors(false)) {
+    fatal("could not safely patch the required CloudPanel templates");
+  }
+  if (spec.name === "maintenance" && !reconcileMaintenanceNginx(false, true)) {
+    fatal("could not safely inject the Nginx maintenance check");
+  }
+  applyToggleUnits(changes);
   log.ok(`${spec.name} enabled`);
 }
 
@@ -426,17 +455,21 @@ export function applyDisable(name: string): void {
   const spec = resolveAddon(name);
   const remaining = installedAddons().filter((item) => item.name !== spec.name);
 
-  reconcileAnchors(false, spec.name);
-  if (!reconcileMaintenanceNginx(false, remaining.some((item) => item.name === "maintenance"))) {
-    fatal("could not safely update the Nginx maintenance check");
-  }
-  purgeTwigCache();
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
+  // Reconciled after the config file is gone, so the injection set is read
+  // from the state that now exists rather than described by an `exclude`
+  // argument. The Twig cache is purged by the reconciler when the markup
+  // actually changes; disable used to purge it a second time unconditionally.
+  if (spec.targets.length > 0) reconcileAnchors(false);
+  if (spec.name === "maintenance" && !reconcileMaintenanceNginx(false, false)) {
+    fatal("could not safely update the Nginx maintenance check");
+  }
   ensureDirs(remaining);
-  reconcilePanelIdentity();
-  installUnits(remaining);
-  startUnits();
+  // Nothing of ours may act on a site once no addon is enabled.
+  if (remaining.length === 0) reconcilePanelIdentity(true, remaining);
+  const changes = installUnits(remaining);
+  applyToggleUnits(changes);
   log.ok(`${spec.name} disabled; its data under ${spec.stateDir} was kept`);
 }
 
@@ -550,9 +583,9 @@ export async function cmdRepair(argv: string[]): Promise<void> {
   removeLegacyUnits(quiet);
   removeLegacyUsers(quiet);
   reconcilePanelIdentity(quiet);
-  const unitChanged = installUnits(all);
+  const unitChanges = installUnits(all);
   ensureDirs(all);
-  if (unitChanged || unitActive(MANAGER_UNIT) !== "active") startUnits();
+  if (unitChanges.systemd || unitActive(MANAGER_UNIT) !== "active") startUnits();
   else {
     ensureTimerArmed("clp-addons-reconcile.timer", quiet);
     if (all.some((spec) => spec.name === "cloudflare-ips")) {
@@ -827,17 +860,30 @@ export async function handleManagerRoute(
 }
 
 /**
+ * Which addons this manager serves, answered per request.
+ *
+ * This used to be a list built once at startup, which is why enabling an addon
+ * had to restart the manager: until it did, the addon's own pages returned 404
+ * from a process that had been told, at boot, that it did not exist. The handler
+ * map is still compiled in and still explicit -- nothing is loaded dynamically.
+ * What is dynamic is availability, and availability is a config file, so it is
+ * read from the config files.
+ *
+ * Serving nothing is a legitimate state, not a failed start. Every addon is
+ * compiled in, so a manager with none of them enabled still has a job: it is
+ * the page that offers them back. Exiting instead meant disabling the last
+ * addon killed the only surface that could re-enable it.
+ */
+function mountedAddons(): string[] {
+  return ADDON_NAMES.filter((name) => MANAGERS[name] && existsSync(ADDONS[name]!.configFile));
+}
+
+/**
  * Starts the manager on its Unix socket and remains pending for the process
  * lifetime. The restrictive socket-creation umask is restored before setup
  * continues or an error escapes.
  */
 async function cmdServe(): Promise<never> {
-  // Serving nothing is a legitimate state, not a failed start. Every addon is
-  // compiled in, so a manager with none of them enabled still has a job: it is
-  // the page that offers them back. Exiting here instead meant disabling the
-  // last addon killed the only surface that could re-enable it.
-  const mounted = installedAddons().map((spec) => spec.name).filter((name) => MANAGERS[name]);
-
   const socketDir = SOCKET_PATH.slice(0, SOCKET_PATH.lastIndexOf("/"));
   if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH);
   const prevUmask = process.umask(0o007);
@@ -872,7 +918,7 @@ async function cmdServe(): Promise<never> {
       const managerRoute = await handleManagerRoute(req, path, server, update);
       if (managerRoute) return managerRoute;
 
-      const hit = splitMount(path, mounted);
+      const hit = splitMount(path, mountedAddons());
       let response: Response;
       if (hit) response = await MANAGERS[hit.addon]!(req, hit.rest, notice, server);
       else if (path === "/update" && req.method === "GET") {
