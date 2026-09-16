@@ -28,14 +28,7 @@ curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download
 The installer asks which addons to enable. It verifies checksums and build
 provenance, and can install Docker when Instatic needs it.
 
-For an unattended Instatic and Stager installation:
-
-```bash
-curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download/install.sh \
-  | bash -s -- --addons=instatic,stager --yes --install-docker
-```
-
-Open **Addons** in CloudPanel after installation. Only CloudPanel administrators
+Open the new **Addons** tab in CloudPanel after installation. Only CloudPanel administrators
 can access it.
 
 ## Manage
