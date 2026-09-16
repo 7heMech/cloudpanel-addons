@@ -32,6 +32,18 @@ overwrite, whole tables at a time at best. So Stager moves files and, for an
 Instatic site, content, and refuses the database outright rather than offering a
 table selection that is only safe if the operator already knows the answer.
 
+Staging is a tab on CloudPanel's own site page, beside Maintenance. It shows
+the one site's two ends of a clone -- what has been staged from it, and whether
+it is itself a staging copy with a live site to go back to -- rather than the
+fleet list at `/addons/stager/`, which is the wrong altitude for a page reached
+from one site's tab strip. Both addon tabs patch the same anchor in the panel's
+strip; the injector applies them in a fixed order, so the panel's copy and the
+reproduction in `lib/site-context` read the same left to right and the file
+settles instead of being rewritten on every pass. The page itself is served as
+a fragment and mounted in a shadow root, so the panel draws its own header,
+site information, tab strip and footer and only the content below them is this
+addon's.
+
 For PHP and static sites the new document root is assembled beside the live one
 and put in place with a rename, so the site is never serving a half-copied tree.
 The live site keeps its own `wp-config.php`, `.env` and `wp-content/uploads`:

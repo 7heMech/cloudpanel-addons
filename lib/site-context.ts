@@ -66,6 +66,7 @@ const NATIVE_TABS: TabSpec[] = [
  */
 export const ADDON_SITE_TABS: { slug: string; label: string; url: string }[] = [
   { slug: "maintenance", label: "Maintenance", url: mountPath("maintenance") },
+  { slug: "stager", label: "Staging", url: mountPath("stager") },
 ];
 
 /** How CloudPanel's stored site `type` reads to an operator. */

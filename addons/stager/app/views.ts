@@ -5,7 +5,9 @@ import type { SanitizedSite } from "../../../lib/snapshot-reader";
 // the page is served to an operator whose session can create CloudPanel sites.
 
 import { esc, escJs } from "../../../lib/app-http";
-import { JOB_STYLE, JOB_WATCH_JS, renderLayout } from "../../../lib/app-ui";
+import { JOB_STYLE, JOB_WATCH_JS, renderFragment, renderLayout } from "../../../lib/app-ui";
+import type { EmbedFragment } from "../../../lib/shadow-embed";
+import type { SiteContext } from "../../../lib/site-context";
 import { mountPath } from "../../../lib/mount";
 
 /**
@@ -146,12 +148,15 @@ if (document.readyState === 'loading') {
 export function layout(
   title: string,
   content: string,
-  updateNotice?: { current: string; latest: string } | null
+  updateNotice?: { current: string; latest: string } | null,
+  site?: SiteContext,
 ): string {
   return renderLayout(title, content, {
     brand: "Stager",
     base: BASE,
-    nav: [
+    // A site-scoped page draws CloudPanel's own site tabs instead of this
+    // addon's, so its own nav would be a second strip saying something else.
+    nav: site ? [] : [
       { href: `${BASE}/`, label: "Clones" },
       { href: `${BASE}/new`, label: "New staging site" },
       { href: `${BASE}/promote`, label: "Promote to live" },
@@ -159,6 +164,21 @@ export function layout(
     css: STYLE + JOB_STYLE,
     script: JOB_WATCH_JS + CLIENT_JS,
     updateNotice,
+    ...(site ? { site: { ...site, activeSlug: "stager" } } : {}),
+  });
+}
+
+/**
+ * The same page as `layout`, as a fragment for mounting inside CloudPanel's own
+ * site page. No site context: the panel is already drawing it.
+ */
+export function fragment(title: string, content: string): EmbedFragment {
+  return renderFragment(title, content, {
+    brand: "Stager",
+    base: BASE,
+    nav: [],
+    css: STYLE + JOB_STYLE,
+    script: JOB_WATCH_JS + CLIENT_JS,
   });
 }
 
@@ -241,6 +261,94 @@ export function jobsView(
       </table>`
       }
     </div>`;
+}
+
+/**
+ * Staging as it looks from one site's own page in CloudPanel.
+ *
+ * Two questions, because a site can be either end of a clone and occasionally
+ * both: what has been staged *from* this site, and whether this site *is* a
+ * staging copy that can go back to the site it came from. The fleet view at
+ * `/addons/stager/` answers neither -- it lists every clone on the box, which
+ * is the wrong altitude for a page reached from one site's tab strip.
+ */
+export function siteStagingView(
+  domain: string,
+  jobs: JobView[],
+  clonable: boolean,
+  snapshotAge = Infinity,
+  panelSites: SanitizedSite[] = [],
+  snapshotTakenAt = "",
+): string {
+  const clonesFrom = jobs.filter((j) => j.kind !== "promote" && j.source === domain);
+  // The clone that produced this site, if it is one. Newest first, because a
+  // site cloned twice is the second clone.
+  const cloneOf = jobs
+    .filter((j) => j.kind !== "promote" && j.target === domain && j.state === "done" && j.result)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  const promotes = jobs.filter((j) => j.kind === "promote" && j.target === domain);
+
+  const row = (j: JobView): string => {
+    const missing = isSiteMissing(j, snapshotAge, panelSites, snapshotTakenAt);
+    return `
+        <tr>
+          <td>
+            <a href="${BASE}/jobs/${esc(j.id)}">${esc(j.target)}</a>
+            ${missing ? '<div class="hint">CloudPanel site deleted</div>' : ""}
+          </td>
+          <td><span class="badge ${stateClass(j.state)}">${esc(j.state)}</span></td>
+          <td class="step">${esc(j.state === "done" ? "" : j.step)}</td>
+          <td class="step">${esc(when(j.createdAt))}</td>
+        </tr>`;
+  };
+
+  const cloneAction = clonable
+    ? `<a class="btn btn-primary" href="${BASE}/new?source=${encodeURIComponent(domain)}">+ New staging site</a>`
+    : "";
+  const staged = `
+    <div class="page-heading">
+      <div>
+        <h1>Staging</h1>
+        <p>Copies of ${esc(domain)} you can change without touching what visitors see.</p>
+      </div>
+      ${cloneAction}
+    </div>
+    <div class="card card-table">
+      ${
+        clonesFrom.length === 0
+          ? `<div class="empty">${
+              clonable
+                ? `No staging copies of ${esc(domain)} yet.`
+                : `A ${esc(domain)} site cannot be cloned, so it has no staging copies.`
+            }</div>`
+          : `<table>
+        <thead><tr><th scope="col">Staging site</th><th scope="col">State</th><th scope="col">Step</th><th scope="col">Started</th></tr></thead>
+        <tbody>${clonesFrom.map(row).join("")}</tbody>
+      </table>`
+      }
+    </div>`;
+
+  // Only when this site is itself a finished clone: promoting is the return leg
+  // of a clone, so without that record there is no live site to return to.
+  const promoteSection = cloneOf
+    ? `
+    <div class="addon-section">
+      <h2>Promote to live</h2>
+      <div class="card">
+        <p>${esc(domain)} was cloned from <strong>${esc(cloneOf.source)}</strong>. Promoting moves its files onto that site.</p>
+        ${
+          promotes.length > 0
+            ? `<p class="hint">Last promoted ${esc(when(promotes.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!.createdAt))}.</p>`
+            : ""
+        }
+        <div class="actions">
+          <a class="btn btn-primary" href="${BASE}/promote?job=${encodeURIComponent(cloneOf.id)}">Promote to ${esc(cloneOf.source)}</a>
+        </div>
+      </div>
+    </div>`
+    : "";
+
+  return staged + promoteSection;
 }
 
 /** How a site's `type` column reads to an operator. */

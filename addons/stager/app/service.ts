@@ -1,3 +1,4 @@
+import type { SiteContext } from "../../../lib/site-context";
 import { fetchPanelInfo, snapshotAgeSeconds, type PanelSnapshot } from "../../../lib/snapshot-reader";
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 export { type ActionResult };
@@ -306,5 +307,34 @@ export const stagerService = {
   async snapshot(): Promise<{ snap: PanelSnapshot; ageSeconds: number }> {
     const snap = await fetchPanelInfo();
     return { snap, ageSeconds: snapshotAgeSeconds(snap) };
+  },
+
+  /**
+   * What the shell needs to keep drawing the panel's site information and tab
+   * strip around this addon's site-scoped page, with the jobs that page shows.
+   *
+   * The panel snapshot is the authority on whether the site exists at all, so
+   * a tab clicked on a site the panel no longer has says so rather than
+   * rendering an empty Staging page for nothing.
+   */
+  async sitePage(domain: string): Promise<{ context: SiteContext; jobs: JobView[]; clonable: boolean }> {
+    const [panel, jobs] = await Promise.all([fetchPanelInfo(), this.listJobs()]);
+    const site = panel.sites.find((candidate) => candidate.domain.toLowerCase() === domain.toLowerCase());
+    if (!site) throw new Error(`CloudPanel site not found: ${domain}`);
+    return {
+      context: {
+        domain: site.domain,
+        user: site.user,
+        type: site.type,
+        varnishCache: site.varnishCache,
+        ...(panel.publicIp ? { publicIp: panel.publicIp } : {}),
+      },
+      jobs,
+      // Mirrors CLONABLE in the injected Twig and CLONABLE_TYPES in the action.
+      // A reverse proxy is only really clonable when its backend is an Instatic
+      // instance, which the action decides by name; offering it and explaining
+      // the refusal beats hiding it on a guess.
+      clonable: ["php", "static", "reverse-proxy"].includes(site.type),
+    };
   },
 };

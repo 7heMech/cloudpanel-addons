@@ -5,7 +5,7 @@
 import type { Server } from "bun";
 import { stagerService, validateDomain, validateJobId, expandTarget } from "./service";
 import type { JobResult, JobView } from "./service";
-import { layout, jobsView, newCloneView, jobView, promoteListView, promoteView } from "./views";
+import { layout, fragment, jobsView, newCloneView, jobView, promoteListView, promoteView, siteStagingView } from "./views";
 import { guardMutation, newCsrfToken, withCsrfCookie, SECURITY_HEADERS } from "../../../lib/app-http";
 import { getNextAvailablePort, type SanitizedSite } from "../../../lib/snapshot-reader";
 // The Stager already depends on the Instatic addon: cloning a reverse-proxy
@@ -15,6 +15,7 @@ import { getNextAvailablePort, type SanitizedSite } from "../../../lib/snapshot-
 // closes no cycle.
 import { instaticService } from "../../instatic/app/service";
 import { jobEventStream } from "../../../lib/job-stream";
+import { embedLandingUrl } from "../../../lib/shadow-embed";
 
 /**
  * Ports this addon has handed out that a panel-data request can race with.
@@ -76,6 +77,19 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+// A fragment is the first thing an operator who came straight from a site page
+// loads from this addon, so it carries the CSRF cookie its own actions echo.
+function fragmentJson(body: unknown, csrf: string, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: withCsrfCookie({
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+      ...SECURITY_HEADERS,
+    }, csrf),
+  });
+}
+
 /**
  * The whole request surface, exported so the one manager process can mount it.
  *
@@ -101,6 +115,46 @@ export async function handle(
 
   if (method === "GET" && path === "/") {
     const csrf = newCsrfToken();
+    // A site-scoped page belongs to the panel's site page. Send a direct visit
+    // there and let the injected loader pull this page into it; ?embed=0 keeps
+    // the standalone page. Deciding this needs no panel state, so it happens
+    // before anything is read.
+    const selected = url.searchParams.get("domain");
+    if (selected && url.searchParams.get("embed") !== "0") {
+      const target = validateDomain(selected);
+      if (target) {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: embedLandingUrl(target, "stager"), "Cache-Control": "no-store", ...SECURITY_HEADERS },
+        });
+      }
+    }
+    if (selected) {
+      const domain = validateDomain(selected);
+      if (!domain) {
+        return html(layout("Invalid site", '<div class="alert">That is not a valid hostname.</div>', updateNotice), csrf, 400);
+      }
+      try {
+        const [page, snapshot] = await Promise.all([
+          stagerService.sitePage(domain),
+          stagerService.snapshot().catch(() => null),
+        ]);
+        return html(
+          layout(
+            `Staging — ${domain}`,
+            siteStagingView(page.context.domain, page.jobs, page.clonable,
+              snapshot?.ageSeconds ?? Infinity, snapshot?.snap.sites ?? [], snapshot?.snap.updatedAt ?? ""),
+            updateNotice,
+            page.context,
+          ),
+          csrf,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const status = /not found/i.test(message) ? 404 : 500;
+        return html(layout("Staging", errorBlock(err), updateNotice), csrf, status);
+      }
+    }
     try {
       let panelSites: SanitizedSite[] = [];
       let snapshotAge = Infinity;
@@ -123,6 +177,31 @@ export async function handle(
       );
     } catch (err) {
       return html(layout("Error", errorBlock(err), updateNotice), csrf, 500);
+    }
+  }
+
+  // The same page as GET /?domain=, without a document around it, for the
+  // loader injected into CloudPanel's site pages.
+  if (method === "GET" && path === "/fragment") {
+    const csrf = newCsrfToken();
+    const domain = validateDomain(url.searchParams.get("domain") ?? "");
+    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    try {
+      const [page, snapshot] = await Promise.all([
+        stagerService.sitePage(domain),
+        stagerService.snapshot().catch(() => null),
+      ]);
+      return fragmentJson(
+        fragment(
+          `Staging — ${domain}`,
+          siteStagingView(page.context.domain, page.jobs, page.clonable,
+            snapshot?.ageSeconds ?? Infinity, snapshot?.snap.sites ?? [], snapshot?.snap.updatedAt ?? ""),
+        ),
+        csrf,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return json({ ok: false, error: message }, /not found/i.test(message) ? 404 : 500);
     }
   }
 
