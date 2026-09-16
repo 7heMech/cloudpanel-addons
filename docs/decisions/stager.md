@@ -37,11 +37,17 @@ and put in place with a rename, so the site is never serving a half-copied tree.
 The live site keeps its own `wp-config.php`, `.env` and `wp-content/uploads`:
 the staging copy's are dropped before the switch, because the staging
 `wp-config.php` names the staging database and pointing the live site at it
-would be worse than any missed edit. Those paths are moved onto the new root
-after the switch rather than copied, so a large uploads directory costs a rename
-and the retained copy holds the replaced code rather than a second copy of the
-user data. The live database is dumped first even though it is not written to,
-because promoted code can migrate it on its first request.
+would be worse than any missed edit. The two configuration files are then
+copied from the live root into the staged one, and the staged root is chowned,
+before the rename. A root that went live without a `wp-config.php` and gained
+one a moment later would be a WordPress offering its installer to whoever asked
+in between, however short that moment was. `wp-content/uploads` can be
+gigabytes, so it is moved onto the new root after the switch instead: the cost
+is a rename rather than a second copy, and a moment without it costs images.
+The retained copy therefore holds the replaced code and the site's
+configuration, but not its uploads. The live database is dumped first even
+though it is not written to, because promoted code can migrate it on its first
+request.
 
 For Instatic sites the staging instance's content replaces the live instance's
 through Instatic's export and import APIs. The live instance's own content is

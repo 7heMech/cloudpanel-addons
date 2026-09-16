@@ -318,9 +318,12 @@ const server = Bun.serve({
       } : null;
       html = stagerLayout("New staging site", newCloneView(detail, empty ? [] : sites), notice);
     } else if (path === "/addons/stager/promote") {
-      html = stagerLayout("Promote to live", promoteListView(empty ? [] : [currentJob]), notice);
-    } else if (path === "/addons/stager/promote/confirm") {
-      html = stagerLayout("Promote to live", promoteView(currentJob), notice);
+      // ?job= is what the list's Promote link carries, so following it here
+      // reaches the same view it reaches in the panel. The preview had its own
+      // /promote/confirm instead, which nothing linked to.
+      html = url.searchParams.has("job")
+        ? stagerLayout("Promote to live", promoteView(currentJob), notice)
+        : stagerLayout("Promote to live", promoteListView(empty ? [] : [currentJob]), notice);
     } else if (path === "/addons/stager/jobs/preview-job") {
       html = stagerLayout("Staging site details", jobView(currentJob, logs), notice);
     } else if (path === "/addons/stager/api/jobs/preview-job/events" || (path === "/addons/stager/api/jobs/preview-job" && req.headers.get("accept")?.includes("text/event-stream"))) {

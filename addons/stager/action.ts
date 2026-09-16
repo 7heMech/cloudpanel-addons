@@ -34,7 +34,21 @@ export type StagerVerb = "sites" | "jobs" | "prune" | "describe" | "clone" | "pr
  * where the live site writes what its visitors send it, and none of that exists
  * on the staging copy.
  */
-const PRESERVED_PATHS = ["wp-config.php", ".env", "wp-content/uploads"] as const;
+/**
+ * What the live site owns and a promote must not replace with the staging
+ * site's copy.
+ *
+ * Split by what it costs to have twice. The two configuration files are small
+ * and are the ones whose absence is not a cosmetic fault: a document root with
+ * no `wp-config.php` is a WordPress that offers its installer to whoever asks.
+ * They are copied into the staged root before it goes live, so the root that
+ * becomes live is complete at the instant it does. `wp-content/uploads` can be
+ * gigabytes, so it is moved onto the new root after the switch; a moment
+ * without it costs images, not a site.
+ */
+const PRESERVED_COPIED = ["wp-config.php", ".env"] as const;
+const PRESERVED_MOVED = ["wp-content/uploads"] as const;
+const PRESERVED_PATHS = [...PRESERVED_COPIED, ...PRESERVED_MOVED] as const;
 
 export interface StagerActionPaths {
   lockDir: string;
@@ -2316,6 +2330,7 @@ interface PromoteContext {
   prevRoot: string;
   swapped: boolean;
   movedPreserved: string[];
+  copiedPreserved: string[];
   dbBackup: string;
   contentBackup: string;
   exportZip: string;
@@ -2328,7 +2343,7 @@ function newPromoteContext(id: string, dir: string, paths: StagerActionPaths): P
   return {
     id, dir, paths, source: "", target: "", step: "", failed: false, rollbackActive: false,
     siteType: "", srcUser: "", dstUser: "", srcRoot: "", dstRoot: "", stageRoot: "", prevRoot: "",
-    swapped: false, movedPreserved: [], dbBackup: "", contentBackup: "", exportZip: "",
+    swapped: false, movedPreserved: [], copiedPreserved: [], dbBackup: "", contentBackup: "", exportZip: "",
     srcPort: "", dstPort: "", notes: [],
   };
 }
@@ -2451,6 +2466,37 @@ async function promoteFiles(ctx: PromoteContext): Promise<void> {
   // site's database credentials even for an instant.
   for (const relative of PRESERVED_PATHS) rmSync(join(ctx.stageRoot, relative), { recursive: true, force: true });
 
+  // Then the live site's own copies go in, so the root that becomes live has
+  // them from its first served request. lstat rather than stat: a symlink at
+  // this name in the live root would otherwise be resolved and its target
+  // copied into the new release under a configuration file's name.
+  for (const relative of PRESERVED_COPIED) {
+    const origin = join(ctx.dstRoot, relative);
+    let info;
+    try { info = lstatSync(origin); } catch { continue; }
+    if (!info.isFile()) {
+      warnLine(`${ctx.target}'s ${relative} is not a plain file, so it was left where it is`);
+      continue;
+    }
+    try {
+      copyFileSync(origin, join(ctx.stageRoot, relative));
+      chmodSync(join(ctx.stageRoot, relative), info.mode & 0o7777);
+      ctx.copiedPreserved.push(relative);
+      logLine(`kept the live site's own ${relative}`);
+    } catch {
+      failJob(ctx, `could not copy ${ctx.target}'s own ${relative}; nothing was changed`);
+    }
+  }
+
+  // Before the switch, not after: a recursive chown over the whole release is
+  // the slowest step here, and running it on the live root would leave the site
+  // being served out of a tree whose ownership is still moving. It also turns a
+  // chown failure into one that changed nothing.
+  const staged = runCommand("chown", ["-R", `${ctx.dstUser}:${ctx.dstUser}`, ctx.stageRoot]);
+  if (staged.stdout) diagnostic(staged.stdout);
+  if (staged.stderr) diagnostic(staged.stderr);
+  if (!staged.ok) failJob(ctx, `could not chown the new release; nothing was changed`);
+
   setStep(ctx, `switching ${ctx.target} over`);
   ctx.prevRoot = join(htdocsOf(ctx.dstUser), `.clp-stager-prev-${ctx.target}-${ctx.id}`);
   jobSet(ctx.dir, "liveRoot", ctx.dstRoot);
@@ -2471,7 +2517,7 @@ async function promoteFiles(ctx: PromoteContext): Promise<void> {
   ctx.stageRoot = "";
 
   setStep(ctx, "restoring what the live site owns");
-  for (const relative of PRESERVED_PATHS) {
+  for (const relative of PRESERVED_MOVED) {
     if (movePreserved(ctx.prevRoot, ctx.dstRoot, relative)) {
       ctx.movedPreserved.push(relative);
       logLine(`kept the live site's own ${relative}`);
@@ -2480,21 +2526,16 @@ async function promoteFiles(ctx: PromoteContext): Promise<void> {
       rmSync(join(ctx.dstRoot, relative), { recursive: true, force: true });
     }
   }
-  if (!ctx.movedPreserved.includes("wp-config.php") && !ctx.movedPreserved.includes(".env")) {
+  if (ctx.copiedPreserved.length === 0) {
     ctx.notes.push(`${ctx.target} had neither a wp-config.php nor a .env of its own, so the promoted release has none either; if the application needs one, write it with the live database's credentials`);
   }
-
-  const owner = runCommand("chown", ["-R", `${ctx.dstUser}:${ctx.dstUser}`, ctx.dstRoot]);
-  if (owner.stdout) diagnostic(owner.stdout);
-  if (owner.stderr) diagnostic(owner.stderr);
-  if (!owner.ok) failJob(ctx, `could not chown ${ctx.dstRoot}`);
 
   ctx.notes.push(`the live database was not touched: it holds what ${ctx.target}'s own visitors created since the staging copy was taken, and no part of a promote can tell that apart from a stale row`);
   ctx.notes.push(`absolute URLs written into the live database still name whatever was there before; a promote moves files, not database content`);
   if (ctx.dbBackup) {
     ctx.notes.push(`a dump of the live database was taken before the switch and is kept with this job for ${JOB_RETENTION_DAYS} days`);
   }
-  ctx.notes.push(`${ctx.prevRoot} holds the document root that was replaced, for ${JOB_RETENTION_DAYS} days; the preserved paths above were moved onto the new one rather than copied, so they are not in it`);
+  ctx.notes.push(`${ctx.prevRoot} holds the document root that was replaced, for ${JOB_RETENTION_DAYS} days; it still has ${ctx.target}'s own configuration files, which were copied onto the new release, but not ${PRESERVED_MOVED.join(" or ")}, which were moved`);
 }
 
 function promoteInstatic(ctx: PromoteContext, email: string, targetEmail: string): void {
@@ -2636,7 +2677,7 @@ async function cmdRunPromote(id: string, dir: string, paths: StagerActionPaths):
       siteType: ctx.siteType,
       siteUser: ctx.dstUser,
       previousRoot: ctx.prevRoot,
-      preserved: ctx.movedPreserved,
+      preserved: [...ctx.copiedPreserved, ...ctx.movedPreserved],
       databaseBackup: ctx.dbBackup || null,
       contentBackup: ctx.contentBackup || null,
       notes: ctx.notes,
