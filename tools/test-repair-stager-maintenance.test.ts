@@ -179,8 +179,9 @@ test.serial("repair's automatic entry point runs prune for real: a stuck job fli
     }));
 
     const paths = ${JSON.stringify(paths)};
-    const { runStagerMaintenance } = await import("./cli/index.ts");
-    const stagerSpec = { name: "stager", title: "Stager", description: "", configFile: "", stateDir: "", targets: [] };
+    const { runAddonMaintenance } = await import("./cli/index.ts");
+    const { STAGER_ADDON } = await import("./addons/stager/addon.ts");
+    const stagerSpec = { ...STAGER_ADDON, configFile: "", stateDir: "" };
     const maintenanceOutput = [];
     const originalWrite = process.stdout.write.bind(process.stdout);
     process.stdout.write = (chunk) => {
@@ -188,7 +189,7 @@ test.serial("repair's automatic entry point runs prune for real: a stuck job fli
       return true;
     };
     try {
-      await runStagerMaintenance([stagerSpec], { paths });
+      await runAddonMaintenance([stagerSpec], { paths });
     } finally {
       process.stdout.write = originalWrite;
     }
@@ -271,20 +272,23 @@ test.serial("a throwing prune does not stop the rest of repair", () => {
   }
 });
 
-test("cmdRepair calls the stager maintenance sweep after nginx/anchor reconciliation, and --anchors-only skips it", () => {
+test("cmdRepair runs addon maintenance after nginx/anchor reconciliation, and --anchors-only skips it", () => {
   const source = readFileSync(join(repo, "cli/index.ts"), "utf8");
   const repairStart = source.indexOf("export async function cmdRepair");
   expect(repairStart).toBeGreaterThan(-1);
   const repairBody = source.slice(repairStart);
 
-  expect(repairBody.includes("await runStagerMaintenance(all)")).toBe(true);
-  expect(repairBody.indexOf("await runStagerMaintenance(all)"))
+  // Stager's prune recovers a vhost a killed clone carried over and runs its
+  // own `nginx -t`; running it before the master vhost is repaired would test a
+  // configuration that is still broken.
+  expect(repairBody.includes("await runAddonMaintenance(all)")).toBe(true);
+  expect(repairBody.indexOf("await runAddonMaintenance(all)"))
     .toBeGreaterThan(repairBody.indexOf("reconcileNginx(quiet)"));
-  expect(repairBody.indexOf("await runStagerMaintenance(all)"))
+  expect(repairBody.indexOf("await runAddonMaintenance(all)"))
     .toBeGreaterThan(repairBody.indexOf("reconcileAnchors(quiet)"));
 
   const anchorsOnlyStart = repairBody.indexOf('flags["anchors-only"]');
   const anchorsOnlyReturn = repairBody.indexOf("return;", anchorsOnlyStart);
   const anchorsOnlyBranch = repairBody.slice(anchorsOnlyStart, anchorsOnlyReturn);
-  expect(anchorsOnlyBranch.includes("runStagerMaintenance")).toBe(false);
+  expect(anchorsOnlyBranch.includes("runAddonMaintenance")).toBe(false);
 });

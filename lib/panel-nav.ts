@@ -1,4 +1,4 @@
-import type { AddonTarget } from "../cli/paths";
+import type { AddonTarget } from "./addon-target";
 import { SITE_EMBED_SCRIPT } from "./shadow-embed";
 import { esc, escJs } from "./app-http";
 import { UPDATE_STYLE, updateNoticeHtml } from "./update-ui";

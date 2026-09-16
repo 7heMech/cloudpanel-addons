@@ -18,7 +18,7 @@ import { findMasterVhost, inspect, masterVhostHost, NGINX_PROXY_BLOCK, inspectNg
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { headerTarget, siteLayoutTarget } from "../lib/panel-nav";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
-import type { AddonTarget } from "../cli/paths";
+import type { AddonTarget } from "../lib/addon-target";
 
 function check(label: string, cond: boolean, detail = ""): void {
   test.serial(label, () => {

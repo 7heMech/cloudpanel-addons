@@ -39,15 +39,12 @@ const provision = [];
 const inject = [];
 const record = (bucket, name) => (...args) => { bucket.push(name); return undefined; };
 
+// Only the paths are redirected. The catalog derives each addon's config file
+// and state directory from these, so pointing them at the fixture is enough --
+// there is no second list of addons to keep in step.
 const realPaths = await import("./cli/paths.ts");
-const specs = Object.fromEntries(realPaths.ADDON_NAMES.map((name) => [name, {
-  ...realPaths.ADDONS[name],
-  configFile: root + "/etc/" + name + ".conf",
-  stateDir: root + "/state/" + name,
-}]));
 mock.module("./cli/paths.ts", () => ({
   ...realPaths,
-  ADDONS: specs,
   SYSTEMD_DIR: root + "/systemd",
   CONFIG_DIR: root + "/etc",
   STATE_DIR: root + "/state",
