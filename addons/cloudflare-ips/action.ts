@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import {
-  chmodSync, chownSync, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -8,6 +8,7 @@ import {
   type CommandResult,
 } from "../../cli/action-common";
 import { PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { writeFileAtomic } from "../../lib/atomic-write";
 
 const POLICY_VERSION = 1;
 const MAX_SITES_PER_REQUEST = 10_000;
@@ -129,17 +130,10 @@ function readPolicy(path: string, expectedUid: number): Policy {
 }
 
 function writeAtomicOwned(path: string, content: string, mode: number, uid: number, gid: number): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp.${process.pid}.${Math.random().toString(16).slice(2)}`;
-  try {
-    writeFileSync(temporary, content, { flag: "wx", mode });
-    chmodSync(temporary, mode);
-    chownSync(temporary, uid, gid);
-    renameSync(temporary, path);
-  } catch (error) {
-    rmSync(temporary, { force: true });
-    throw error;
-  }
+  // The vhosts and the policy file belong to accounts this action is not: the
+  // panel owns its Nginx tree, and inheriting root here would make a file the
+  // panel can no longer rewrite. Ownership is passed, never defaulted.
+  writeFileAtomic(path, content, { mode, owner: { uid, gid }, createParent: true });
 }
 
 function writePolicy(path: string, policy: Policy, expectedUid: number): void {

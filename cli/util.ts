@@ -1,6 +1,5 @@
 import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync, renameSync, chmodSync, unlinkSync } from "node:fs";
-import { dirname } from "node:path";
+import { writeFileAtomic } from "../lib/atomic-write";
 
 const RESET = "\x1b[0m";
 const DIM = "\x1b[2m";
@@ -74,18 +73,13 @@ export function have(cmd: string): boolean {
 /**
  * Write a file atomically. Callers that install privileged files rely on the
  * target never existing in a half-written state.
+ *
+ * Root-owned: this is the generic case, for files the installing process should
+ * own. Anything that has to preserve another account's ownership passes it
+ * explicitly to `writeFileAtomic`.
  */
 export function writeAtomic(path: string, content: string | Buffer, mode: number): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp.${process.pid}`;
-  try {
-    writeFileSync(tmp, content, { mode });
-    chmodSync(tmp, mode);
-    renameSync(tmp, path);
-  } catch (err) {
-    if (existsSync(tmp)) unlinkSync(tmp);
-    throw err;
-  }
+  writeFileAtomic(path, content, { mode, createParent: true });
 }
 
 export function parseFlags(argv: string[]): { positional: string[]; flags: Record<string, string | true> } {

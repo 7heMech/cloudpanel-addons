@@ -6,6 +6,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { CLI_BIN } from "../../cli/paths";
+import { writeFileAtomic } from "../../lib/atomic-write";
 import {
   createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet,
   jobTimestamp, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
@@ -452,16 +453,29 @@ function runStdoutAsDiagnostic(command: string, args: string[]): boolean {
   return result.ok;
 }
 
+/**
+ * Create the empty file a command is about to write a secret into.
+ *
+ * Exclusive creation, not "w": between the unlink and the open, "w" would
+ * follow a symlink left at that name, and curl would then write the response --
+ * session cookies included -- wherever it pointed.
+ */
 function tempSecretFile(path: string): void {
   rmSync(path, { force: true });
-  const fd = openSync(path, "w", 0o600);
-  closeSync(fd);
-  chmodSync(path, 0o600);
+  closeSync(openSync(path, "wx", 0o600));
 }
 
+/**
+ * Persist a secret: an Instatic request body carrying a password.
+ *
+ * Through the atomic writer rather than a plain write, because writeFileSync
+ * applies its mode only when it *creates* the file. Writing over a path that
+ * already existed kept that path's old permissions, and the chmod that fixed
+ * them ran after the secret was already on disk -- a window, however short, in
+ * which the password sat in a file anyone could read.
+ */
 function writeSecretFile(path: string, value: string): void {
-  writeFileSync(path, value, { mode: 0o600 });
-  chmodSync(path, 0o600);
+  writeFileAtomic(path, value, { mode: 0o600 });
 }
 
 function jsonField(path: string, field: string): string {

@@ -5,6 +5,7 @@ import {
   renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { writeFileAtomic } from "../../lib/atomic-write";
 import { dirname, join } from "node:path";
 import {
   ActionCommandFailure, ActionFailure, commandFailure, emitActionError, emitActionOk,
@@ -364,9 +365,7 @@ function rejectOrphanedLegacyStorage(dir: string): void {
 }
 
 function writeMetaFile(file: string, content: string): void {
-  const temporary = `${file}.${randomBytes(8).toString("hex")}.tmp`;
-  writeFileSync(temporary, content, { mode: 0o600, flag: "wx" });
-  renameSync(temporary, file);
+  writeFileAtomic(file, content, { mode: 0o600 });
 }
 
 function isRegularFile(path: string): boolean {
