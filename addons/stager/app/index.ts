@@ -17,7 +17,7 @@ import { getNextAvailablePort, type SanitizedSite } from "../../../lib/snapshot-
 // Instatic addon knows nothing about this one -- so importing its service here
 // closes no cycle.
 import { instaticService } from "../../instatic/app/service";
-import { jobEventStream } from "../../../lib/job-stream";
+import { jobApiRoute } from "../../../lib/job-stream";
 import { embedLandingUrl } from "../../../lib/shadow-embed";
 
 /**
@@ -286,22 +286,10 @@ export async function handle(
     return json({ ok: true, sites: await stagerService.listSites() });
   }
 
-  const jobEvents = path.match(/^\/api\/jobs\/([^/]+)\/events$/);
-  const jobApi = path.match(/^\/api\/jobs\/([^/]+)$/);
-  if (method === "GET" && (jobEvents || (jobApi && req.headers.get("accept")?.includes("text/event-stream")))) {
-    const rawId = (jobEvents ?? jobApi)![1]!;
-    const id = validateJobId(safeDecodePathSegment(rawId));
-    if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
-
-    return jobEventStream({ id, req, server, getJob: (jobId) => stagerService.getJob(jobId) });
-  }
-
-  if (method === "GET" && jobApi) {
-    const id = validateJobId(safeDecodePathSegment(jobApi[1]!));
-    if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
-    const res = await stagerService.getJob(id);
-    return json(res, res.ok ? 200 : 404);
-  }
+  const jobApi = await jobApiRoute({
+    req, path, method, server, getJob: (jobId) => stagerService.getJob(jobId),
+  });
+  if (jobApi) return jobApi;
 
   if (method === "POST" && path === "/api/promotions") {
     try {

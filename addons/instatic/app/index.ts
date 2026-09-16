@@ -11,7 +11,7 @@ import {
 } from "../../../lib/app-http";
 import { listAvailableTags } from "./tags";
 import type { SanitizedSite } from "../../../lib/snapshot-reader";
-import { jobEventStream } from "../../../lib/job-stream";
+import { jobApiRoute } from "../../../lib/job-stream";
 
 function html(body: string, csrf: string, status = 200): Response {
   return htmlResponse(body, { status, csrf });
@@ -119,23 +119,10 @@ export async function handle(
     return json({ ok: true, jobs: await instaticService.listJobs() });
   }
 
-  const jobEvents = path.match(/^\/api\/jobs\/([^/]+)\/events$/);
-  const jobApi = path.match(/^\/api\/jobs\/([^/]+)$/);
-  if (method === "GET" && (jobEvents || (jobApi && req.headers.get("accept")?.includes("text/event-stream")))) {
-    const rawId = (jobEvents ?? jobApi)![1]!;
-    const id = validateJobId(safeDecodePathSegment(rawId));
-    if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
-
-    return jobEventStream({ id, req, server, getJob: (jobId) => instaticService.getJob(jobId) });
-  }
-
-  if (method === "GET" && jobApi) {
-    const id = validateJobId(safeDecodePathSegment(jobApi[1]!));
-    if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
-    const res = await instaticService.getJob(id);
-    if (!res.ok) return json(res, 404);
-    return json(res);
-  }
+  const jobApi = await jobApiRoute({
+    req, path, method, server, getJob: (jobId) => instaticService.getJob(jobId),
+  });
+  if (jobApi) return jobApi;
 
   const m = path.match(/^\/api\/instances\/([^/]+)\/([a-z-]+)$/);
   if (m) {

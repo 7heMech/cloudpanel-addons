@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { fetchPanelInfo, getNextAvailablePort, snapshotAgeSeconds, type PanelSnapshot } from "../../../lib/snapshot-reader";
+import { getNextAvailablePort, readPanelSnapshot, type PanelSnapshot } from "../../../lib/snapshot-reader";
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 export { type ActionResult };
 
@@ -28,7 +28,7 @@ async function callAction<T = unknown>(verb: string, args: string[]): Promise<Ac
 // from the action binary.
 const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const TAG_RE = /^\d+\.\d+\.\d+$/;
-const JOB_RE = /^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$/;
+
 
 export function validateDomain(d: unknown): string | null {
   return typeof d === "string" && d.length <= 253 && DOMAIN_RE.test(d) ? d : null;
@@ -38,9 +38,7 @@ export function validateTag(t: unknown): string | null {
   return typeof t === "string" && TAG_RE.test(t) ? t : null;
 }
 
-export function validateJobId(id: unknown): string | null {
-  return typeof id === "string" && JOB_RE.test(id) ? id : null;
-}
+export { validateJobId } from "../../../lib/job-id";
 
 /**
  * An instance as the action binary reports it.
@@ -83,8 +81,7 @@ export interface InstaticJobView {
 export const instaticService = {
   /** Fetches current panel information and reports its age at receipt. */
   async snapshot(): Promise<{ snap: PanelSnapshot; ageSeconds: number }> {
-    const snap = await fetchPanelInfo();
-    return { snap, ageSeconds: snapshotAgeSeconds(snap) };
+    return readPanelSnapshot();
   },
 
   /**

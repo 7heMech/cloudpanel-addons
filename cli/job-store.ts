@@ -19,7 +19,10 @@ import { join } from "node:path";
 import { runCommand } from "./action-common";
 
 /** A job id is a UTC stamp plus six hex characters: 20260911T160031Z-35e759. */
-export const JOB_ID_RE = /^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$/;
+// Re-exported from its neutral home so the app services can check an id
+// without importing this module's job orchestration. See lib/job-id.ts.
+export { JOB_ID_RE, validateJobId } from "../lib/job-id";
+import { JOB_ID_RE } from "../lib/job-id";
 
 /**
  * The longest field value that will ever be read back.

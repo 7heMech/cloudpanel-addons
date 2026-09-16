@@ -72,6 +72,28 @@ When Cloudflare IP Access is enabled, a separate one-minute timer applies its
 new-site policy. Disabling the addon removes that timer while keeping the policy
 state for a later re-enable.
 
+## One way to watch a job
+
+`lib/job-stream.ts` owns both job-observation routes: `/api/jobs/:id` polls and
+`/api/jobs/:id/events` streams, and `/api/jobs/:id` with
+`Accept: text/event-stream` streams too. An addon supplies only a reader and
+its job shape. The helper returns no result for a path it does not own --
+including a non-GET on a path it does -- so the addon's own router still decides
+what that is, and the HTML `/jobs/:id` page stays with each addon, because what a
+job looks like differs and how it is watched does not.
+
+A job id is defined once, in `lib/job-id.ts`, which `cli/job-store.ts`
+re-exports. The app services needed the syntax without the CLI's job
+orchestration; three copies of the pattern is how the checking side and the
+creating side drift apart. An id reaches a path join, so it is anchored at both
+ends and never rewritten.
+
+Panel information is read through `readPanelSnapshot`, which returns the
+snapshot and its age at receipt. A timestamp that cannot be parsed reads as
+infinitely old rather than as `NaN`: every caller compares the age against a
+staleness threshold, and `NaN` fails every comparison, so an unreadable snapshot
+used to look current. What a given age means stays with each addon.
+
 ## Shared interface
 
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
