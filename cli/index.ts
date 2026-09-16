@@ -839,6 +839,72 @@ function mountedAddons(): string[] {
 }
 
 /**
+ * Every request the manager answers, in the order it decides them.
+ *
+ * Exported so a test can send a real Request through the same function the
+ * socket does. It used to be an inline literal inside `Bun.serve`, which left
+ * the one decision that matters here -- that authentication comes first -- to be
+ * checked by searching this file for the order its calls appear in.
+ */
+export async function handleRequest(req: Request, server: Server<unknown>): Promise<Response> {
+  // Authentication is the first thing a request meets, before the URL is even
+  // taken apart. Nothing is answered ahead of it -- not the liveness probe,
+  // which used to reply to anyone who could reach the panel and so told an
+  // unauthenticated caller that this box runs clp-addons, and left one route
+  // whose ordering the next one added could copy.
+  const gate = await authenticateRequest(req);
+  if (gate.response) {
+    // The gate's own headers first -- it may be redirecting to a login or
+    // clearing a session -- then the shared policy over the top, which is
+    // the order this always used. Copied through Headers rather than
+    // Object.fromEntries so a Set-Cookie survives the copy.
+    const headers = new Headers(gate.response.headers);
+    for (const [name, value] of policyHeaders(null)) headers.set(name, value);
+    return new Response(gate.response.body, { status: gate.response.status, headers });
+  }
+
+  // The manager is an administrative surface. Keep this decision at the
+  // shared socket boundary so every mounted HTML and API route, including
+  // future handlers and the manager index, receives the same gate before
+  // update checks or addon code can run.
+  const denied = adminGate(gate.auth);
+  if (denied) return denied;
+
+  const path = internalPath(new URL(req.url).pathname);
+  // The probe the update page polls while this process restarts. It says only
+  // that the manager is answering again; the session that reaches it survived
+  // the restart because the gateway that validates it is a separate unit.
+  if (path === "/health") {
+    return jsonResponse({ ok: true, service: "clp-addons" });
+  }
+
+  const update = await checkCliUpdate(CLI_VERSION);
+  const notice = update?.hasUpdate ? { current: update.current, latest: update.latest } : null;
+
+  const managerRoute = await handleManagerRoute(req, path, server, update);
+  if (managerRoute) return managerRoute;
+
+  const hit = splitMount(path, mountedAddons());
+  if (hit) return await addonHandler(hit.addon)!(req, hit.rest, notice, server);
+  if (path === "/update" && req.method === "GET") {
+    return updatePage(update, CLI_VERSION, { job: await latestManagerJobView(), csrf: newCsrfToken() });
+  }
+  if (path === "/") {
+    // Read at request time rather than from the startup addon list: a job
+    // that has just finished enabling an addon has not yet restarted this
+    // process, and a page that still denied the addon existed would be
+    // wrong for exactly as long as anybody was likely to look at it.
+    const enabled = ADDON_NAMES.filter((name) => existsSync(ADDONS[name]!.configFile));
+    return indexPage(enabled, notice, {
+      available: ADDON_NAMES.filter((name) => !enabled.includes(name)),
+      job: await latestManagerJobView(),
+      csrf: newCsrfToken(),
+    });
+  }
+  return jsonResponse({ ok: false, error: "not found" }, { status: 404 });
+}
+
+/**
  * Starts the manager on its Unix socket and remains pending for the process
  * lifetime. The restrictive socket-creation umask is restored before setup
  * continues or an error escapes.
@@ -851,58 +917,26 @@ async function cmdServe(): Promise<never> {
   try {
     server = Bun.serve({
       unix: SOCKET_PATH,
-    async fetch(req, server) {
-      const path = internalPath(new URL(req.url).pathname);
-      if (path === "/health") {
-        return jsonResponse({ ok: true, service: "clp-addons" });
-      }
-
-      const gate = await authenticateRequest(req);
-      if (gate.response) {
-        // The gate's own headers first -- it may be redirecting to a login or
-        // clearing a session -- then the shared policy over the top, which is
-        // the order this always used. Copied through Headers rather than
-        // Object.fromEntries so a Set-Cookie survives the copy.
-        const headers = new Headers(gate.response.headers);
-        for (const [name, value] of policyHeaders(null)) headers.set(name, value);
-        return new Response(gate.response.body, { status: gate.response.status, headers });
-      }
-
-      // The manager is an administrative surface. Keep this decision at the
-      // shared socket boundary so every mounted HTML and API route, including
-      // future handlers and the manager index, receives the same gate before
-      // update checks or addon code can run.
-      const denied = adminGate(gate.auth);
-      if (denied) return denied;
-
-      const update = await checkCliUpdate(CLI_VERSION);
-      const notice = update?.hasUpdate ? { current: update.current, latest: update.latest } : null;
-
-      const managerRoute = await handleManagerRoute(req, path, server, update);
-      if (managerRoute) return managerRoute;
-
-      const hit = splitMount(path, mountedAddons());
-      let response: Response;
-      if (hit) response = await addonHandler(hit.addon)!(req, hit.rest, notice, server);
-      else if (path === "/update" && req.method === "GET") {
-        response = updatePage(update, CLI_VERSION, { job: await latestManagerJobView(), csrf: newCsrfToken() });
-      }
-      else if (path === "/") {
-        // Read at request time rather than from the startup addon list: a job
-        // that has just finished enabling an addon has not yet restarted this
-        // process, and a page that still denied the addon existed would be
-        // wrong for exactly as long as anybody was likely to look at it.
-        const enabled = ADDON_NAMES.filter((name) => existsSync(ADDONS[name]!.configFile));
-        response = indexPage(enabled, notice, {
-          available: ADDON_NAMES.filter((name) => !enabled.includes(name)),
-          job: await latestManagerJobView(),
-          csrf: newCsrfToken(),
-        });
-      }
-      else response = jsonResponse({ ok: false, error: "not found" }, { status: 404 });
-      return response;
-    },
-  });
+      // Bun's default is `process.env.NODE_ENV !== "production"`, and systemd
+      // sets no NODE_ENV, so a handler that threw answered with Bun's error
+      // page -- the message and the stack trace of a privileged process,
+      // rendered into the panel. Said here rather than left to an environment
+      // variable an operator could clear.
+      development: false,
+      // No route reads a body this large; the bounded reader refuses far less.
+      // The ceiling is here so a body nothing will parse is refused by the
+      // server rather than accepted and then thrown away, and so Bun's 128 MB
+      // default is not what decides it.
+      maxRequestBodySize: 8 * 1024 * 1024,
+      // With `development: false` an uncaught throw is a bare 500 with no body.
+      // Answer it the way every other failure is answered, and keep the detail
+      // in the journal where it belongs.
+      error(error) {
+        console.error("[clp-addons] request failed:", error);
+        return jsonResponse({ ok: false, error: "internal error" }, { status: 500 });
+      },
+      fetch: handleRequest,
+    });
   } finally {
     process.umask(prevUmask);
   }

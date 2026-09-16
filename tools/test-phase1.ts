@@ -267,11 +267,14 @@ const nonAdminResult = parsePanelSession(nonAdminRole);
 check("a valid non-admin session remains authenticated with its typed role", nonAdminResult?.roles.length === 1 && nonAdminResult.roles[0] === "ROLE_USER_");
 check("admin gate rejects a valid non-admin", adminGate(nonAdminResult && { user: nonAdminResult.user, roles: nonAdminResult.roles })?.status === 403);
 check("admin gate accepts only ROLE_ADMIN", adminGate(authenticatedResult && { user: authenticatedResult.user, roles: authenticatedResult.roles }) === null);
+// That the session gate and the administrator gate both precede the update
+// check and every route is settled in tools/test-manager-gate.test.ts, by
+// sending real requests through the handler rather than by reading the order
+// its calls appear in. What that test cannot reach is an argument to
+// `Bun.serve`, which is not a decision the handler makes.
 const serveSource = readFileSync("cli/index.ts", "utf8").slice(readFileSync("cli/index.ts", "utf8").indexOf("async function cmdServe"));
-const adminCheck = serveSource.indexOf("adminGate(gate.auth)");
-check("shared admin denial precedes update checks and handler dispatch",
-  adminCheck >= 0 && adminCheck < serveSource.indexOf("checkCliUpdate") &&
-    adminCheck < serveSource.indexOf("splitMount") && adminCheck < serveSource.indexOf("indexPage"));
+check("a handler fault cannot answer with Bun's error page",
+  serveSource.includes("development: false"));
 check("an oversized session is denied", parsePanelSession(Buffer.alloc(MAX_SESSION_BYTES + 1)) === null);
 check("the scanner does not use PHP deserialization", !readFileSync("lib/sso-auth.ts", "utf8").includes("unserialize"));
 check("the scanner pins the main firewall key", readFileSync("lib/sso-auth.ts", "utf8").includes('"_security_main"'));

@@ -28,6 +28,15 @@ role in CloudPanel's database for every request.
 
 The manager requires `ROLE_ADMIN`. Invalid sessions return to CloudPanel's
 login page, and authentication failures do not fall back to anonymous access.
+
+The gate is the first thing a request meets, before the URL is taken apart and
+before any route is chosen, so there is no list of exceptions to keep correct.
+The liveness probe the update page polls is inside it: answering that one early
+told an unauthenticated caller which panels run this project, and left one
+ordering that a later route could be written to copy. Nothing else the manager
+does needs to run before the session is known, and the update check in
+particular does not.
+
 State-changing HTTP requests also require the expected origin and a CSRF token.
 The token cookie is scoped to the whole panel rather than to `/addons`, because
 an addon page mounted into one of CloudPanel's own site pages runs at that
@@ -63,6 +72,14 @@ parameter validates anything.
 Percent-decoding of path segments goes through one helper that returns null on
 malformed encoding, so a stray `%` is a 400 rather than a URIError escaping to
 the socket boundary as a 500.
+
+A fault that escapes a handler anyway is answered by the same JSON shape with
+the detail left in the journal. `Bun.serve` renders its own error page, message
+and stack trace included, whenever `NODE_ENV` is not `production`, and the unit
+sets no such variable; the server states `development: false` rather than
+depending on an environment an operator could change. The server also caps a
+request body well below Bun's 128 MB default, so a body no route would parse is
+refused before it is read.
 
 ## One atomic replacement
 
