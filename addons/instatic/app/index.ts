@@ -85,7 +85,9 @@ export async function handle(
 
   const jobPage = path.match(/^\/jobs\/([^/]+)$/);
   if (method === "GET" && jobPage) {
-    const id = validateJobId(safeDecodePathSegment(jobPage[1]!));
+    const decoded = safeDecodePathSegment(jobPage[1]!);
+    if (decoded === null) return new Response("Bad request", { status: 400 });
+    const id = validateJobId(decoded);
     if (!id) return new Response("Not found", { status: 404 });
     const res = await instaticService.getJob(id);
     if (!res.ok || !res.data) return new Response("Job not found", { status: 404 });
@@ -172,13 +174,16 @@ export async function handle(
           return json(res, res.ok ? 200 : 400);
         }
         case "update": {
-          let tag: string | null = null;
+          // Only the read is guarded: an oversized body is a 413 the reader
+          // already decided, and folding it into the tag's 400 would answer a
+          // different question than the caller asked.
+          let body: Record<string, unknown>;
           try {
-            tag = validateTag((await readJsonObject(req)).tag);
-          } catch {
-            // fall through to the 400 below: the only field this route takes is
-            // the tag, so an unreadable body and a missing tag are one answer.
+            body = await readJsonObject(req);
+          } catch (error) {
+            return bodyErrorResponse(error);
           }
+          const tag = validateTag(body.tag);
           if (!tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
           const res = await instaticService.updateInstance(domain, tag);
           return json(res, res.ok ? 200 : 400);

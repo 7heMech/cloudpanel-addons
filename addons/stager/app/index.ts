@@ -156,7 +156,11 @@ export async function handle(
   const jobPage = path.match(/^\/jobs\/([^/]+)$/);
   if (method === "GET" && jobPage) {
     const csrf = newCsrfToken();
-    const id = validateJobId(safeDecodePathSegment(jobPage[1]!));
+    const decoded = safeDecodePathSegment(jobPage[1]!);
+    if (decoded === null) {
+      return html(layout("Bad request", `<div class="alert">That address is not a valid job link.</div>`, updateNotice), csrf, 400);
+    }
+    const id = validateJobId(decoded);
     if (!id) return html(layout("Not found", `<div class="alert">No such job.</div>`, updateNotice), csrf, 404);
     const res = await stagerService.getJob(id);
     if (!res.ok || !res.data) {

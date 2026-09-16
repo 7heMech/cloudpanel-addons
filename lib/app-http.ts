@@ -90,7 +90,15 @@ function buildHeaders(contentType: string | null, policy: ResponsePolicy): Heade
   if (contentType !== null) headers.set("Content-Type", contentType);
   headers.set("Cache-Control", "no-store");
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value);
-  for (const [name, value] of new Headers(policy.headers)) headers.set(name, value);
+  // Set-Cookie is the one header a caller may legitimately send more than once,
+  // and iterating a Headers instance joins its cookies into a single value that
+  // `set` would then store as one. Take the rest by name and the cookies from
+  // the accessor that keeps them apart.
+  const extra = new Headers(policy.headers);
+  for (const [name, value] of extra) {
+    if (name.toLowerCase() !== "set-cookie") headers.set(name, value);
+  }
+  for (const cookie of extra.getSetCookie()) headers.append("Set-Cookie", cookie);
   if (policy.csrf !== undefined) {
     headers.append("Set-Cookie", csrfCookieHeader(policy.csrf));
     headers.append("Set-Cookie", LEGACY_CSRF_EXPIRY);
@@ -113,14 +121,12 @@ export function jsonResponse(body: unknown, policy: ResponsePolicy = {}): Respon
 
 /** A redirect carrying the same header policy and no body to type. */
 export function redirectResponse(location: string, policy: ResponsePolicy = {}): Response {
-  return new Response(null, {
-    status: policy.status ?? 302,
-    headers: buildHeaders(null, { ...policy, headers: { ...toRecord(policy.headers), Location: location } }),
-  });
-}
-
-function toRecord(headers: ResponsePolicy["headers"]): Record<string, string> {
-  return headers === undefined ? {} : Object.fromEntries(new Headers(headers));
+  // Location is set on the built headers rather than folded into the caller's,
+  // which would have had to flatten them into a record first and lost any
+  // repeated Set-Cookie on the way.
+  const headers = buildHeaders(null, policy);
+  headers.set("Location", location);
+  return new Response(null, { status: policy.status ?? 302, headers });
 }
 
 /**
@@ -154,9 +160,10 @@ export const MAX_BODY_BYTES = 64 * 1024;
 export async function readJsonObject(req: Request, maxBytes = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
   const declared = req.headers.get("content-length");
   if (declared !== null) {
-    const length = Number(declared);
-    if (!Number.isFinite(length) || length < 0) throw new BodyError("malformed Content-Length", 400);
-    if (length > maxBytes) throw new BodyError("request body is too large", 413);
+    // RFC 9110 gives Content-Length as 1*DIGIT. Number() would take "0x40",
+    // "1e3" and " 12 " as well, so the digits are checked before it is asked.
+    if (!/^[0-9]+$/.test(declared)) throw new BodyError("malformed Content-Length", 400);
+    if (Number(declared) > maxBytes) throw new BodyError("request body is too large", 413);
   }
 
   let text = "";

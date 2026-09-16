@@ -146,6 +146,18 @@ describe("bounded JSON reads", () => {
     }
   });
 
+  test("refuses a Content-Length that is not a run of digits", async () => {
+    // Number() would read every one of these as a small enough number and let
+    // the body through on a claim that is not a Content-Length at all.
+    // No " 12 " here: Headers trims the value before anyone reads it, so that
+    // one arrives as a perfectly ordinary "12".
+    for (const declared of ["0x40", "1e3", "", "+12", "1.5", "-1"]) {
+      const error = await readJsonObject(post(null, { "content-length": declared })).catch((err: unknown) => err);
+      expect((error as BodyError).message).toBe("malformed Content-Length");
+      expect((error as BodyError).status).toBe(400);
+    }
+  });
+
   test("bodyErrorResponse answers a BodyError and rethrows anything else", async () => {
     const res = bodyErrorResponse(new BodyError("request body is too large", 413));
     expect(res.status).toBe(413);
@@ -153,6 +165,32 @@ describe("bounded JSON reads", () => {
     expect(await res.json()).toEqual({ ok: false, error: "request body is too large" });
     // A server fault is not a bad request and must not be reported as one.
     expect(() => bodyErrorResponse(new TypeError("boom"))).toThrow("boom");
+  });
+});
+
+describe("repeated Set-Cookie", () => {
+  test("a caller's cookies survive the merge and join the CSRF pair", () => {
+    const headers = new Headers();
+    headers.append("Set-Cookie", "a=1; Path=/");
+    headers.append("Set-Cookie", "b=2; Path=/");
+    headers.set("X-Thing", "kept");
+    const res = jsonResponse({ ok: true }, { headers, csrf: "token" });
+    const cookies = res.headers.getSetCookie();
+    expect(cookies).toContain("a=1; Path=/");
+    expect(cookies).toContain("b=2; Path=/");
+    // Both the caller's pair and the CSRF pair, not one collapsed value.
+    expect(cookies.length).toBe(4);
+    expect(res.headers.get("X-Thing")).toBe("kept");
+  });
+
+  test("a redirect keeps them too and still carries the policy", () => {
+    const headers: [string, string][] = [["Set-Cookie", "a=1"], ["Set-Cookie", "b=2"]];
+    const res = redirectResponse("/addons/stager/", { headers });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("Location")).toBe("/addons/stager/");
+    expect(res.headers.getSetCookie()).toEqual(["a=1", "b=2"]);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(res.headers.get("X-Frame-Options")).toBe(SECURITY_HEADERS["X-Frame-Options"]!);
   });
 });
 

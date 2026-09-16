@@ -46,7 +46,8 @@ applied before the caller's own headers so a deliberate override -- Maintenance
 Mode's preview CSP, the year-long cache on the editor mode asset -- is the only
 way to differ from the default. Caller headers are merged through `Headers`
 rather than spread, because spreading a `Headers` instance yields nothing and
-silently drops what the caller asked for. The CSRF cookie is attached by the
+silently drops what the caller asked for, and `Set-Cookie` is taken from the
+accessor that keeps repeated cookies apart rather than by name. The CSRF cookie is attached by the
 same builder, so no response can set it without the rest of the policy, and
 `guardMutation`'s own refusals go out through it too.
 
@@ -54,8 +55,8 @@ Request bodies are read by one bounded reader. It refuses a declared
 `Content-Length` over the limit before reading anything, and counts the stream
 as it arrives so a chunked body with no declared length -- or a declared length
 that lies -- is abandoned at the limit rather than buffered whole. Invalid JSON,
-JSON that is not an object, and a malformed `Content-Length` each have their own
-message and status. What the fields mean stays with the handler that owns them:
+JSON that is not an object, and a `Content-Length` that is not the run of digits
+RFC 9110 defines each have their own message and status. What the fields mean stays with the handler that owns them:
 the reader does not pretend a type parameter validates anything.
 
 Percent-decoding of path segments goes through one helper that returns null on
