@@ -38,21 +38,29 @@ test("replacing a loose file does not leave the secret under its old mode", () =
   expect(readFileSync(path, "utf8")).toBe("password\n");
 });
 
-test("the temporary file is never the target's name plus a guessable suffix", () => {
+test("repeated replacement leaves nothing beside the target", () => {
+  // The temporary name is deliberately unobservable: every path out of
+  // writeFileAtomic, including each failure, removes it. So what a test can see
+  // is the directory afterwards, and that is asserted here; that the name is
+  // unguessable in the first place is asserted against the source below.
   const dir = fixture();
   const path = join(dir, "secret");
-  const names = new Set<string>();
   for (let i = 0; i < 20; i++) {
-    // Observed through a failure, which is the only moment the name exists.
     try {
       writeFileAtomic(join(dir, "missing", "secret"), "x", { mode: 0o600 });
     } catch {}
     writeFileAtomic(path, `run-${i}`, { mode: 0o600 });
-    names.add(readFileSync(path, "utf8"));
+    expect(readFileSync(path, "utf8")).toBe(`run-${i}`);
   }
-  expect(names.size).toBe(20);
-  // Nothing accumulated beside the target across twenty replacements.
   expect(readdirSync(dir)).toEqual(["secret"]);
+});
+
+test("the temporary name is random and claimed exclusively", () => {
+  const source = readFileSync(new URL("../lib/atomic-write.ts", import.meta.url), "utf8");
+  // A predictable sibling name is one an unprivileged writer in the same
+  // directory could pre-create as a symlink; "wx" is what refuses to follow it.
+  expect(source).toContain("randomBytes(8).toString(\"hex\")");
+  expect(source).toContain('flag: "wx"');
 });
 
 test("a failed write leaves no temporary file and does not touch the target", () => {
