@@ -4,7 +4,7 @@ import { indexPage, updatePage } from "../cli/index";
 import { handle as loginThemePage } from "../addons/login-theme/app/index";
 import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } from "../addons/cloudflare-ips/app/views";
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
-import { jobsView, jobView, layout as stagerLayout, newCloneView } from "../addons/stager/app/views";
+import { jobsView, jobView, layout as stagerLayout, newCloneView, promoteListView, promoteView } from "../addons/stager/app/views";
 import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { siteTabs, type SiteContext } from "../lib/site-context";
@@ -32,7 +32,7 @@ const sites: SiteSummary[] = [
 const siteVarnish: Record<string, boolean> = { "www.example.com": true };
 const PREVIEW_PUBLIC_IP = "203.0.113.10";
 const job: JobView = {
-  id: "preview-job", source: "www.example.com", target: "stg.example.com", port: 0,
+  id: "preview-job", kind: "clone", source: "www.example.com", target: "stg.example.com", port: 0,
   state: "done", step: "", error: "", panelSite: true,
   createdAt: "2026-09-10T09:30:00Z", startedAt: "2026-09-10T09:30:02Z", finishedAt: "2026-09-10T09:32:10Z",
   result: {
@@ -317,6 +317,10 @@ const server = Bun.serve({
         database: source.databases ? "example" : "", sizeMb: 148,
       } : null;
       html = stagerLayout("New staging site", newCloneView(detail, empty ? [] : sites), notice);
+    } else if (path === "/addons/stager/promote") {
+      html = stagerLayout("Promote to live", promoteListView(empty ? [] : [currentJob]), notice);
+    } else if (path === "/addons/stager/promote/confirm") {
+      html = stagerLayout("Promote to live", promoteView(currentJob), notice);
     } else if (path === "/addons/stager/jobs/preview-job") {
       html = stagerLayout("Staging site details", jobView(currentJob, logs), notice);
     } else if (path === "/addons/stager/api/jobs/preview-job/events" || (path === "/addons/stager/api/jobs/preview-job" && req.headers.get("accept")?.includes("text/event-stream"))) {

@@ -13,7 +13,7 @@ your existing administrator login.
 | --- | --- |
 | Cloudflare IP Access | Manage “Allow traffic from Cloudflare only” for all sites and enable it automatically for new sites. |
 | [Instatic CMS](https://github.com/CoreBunch/Instatic) | Instant static site hosting and staging on CloudPanel. |
-| Stager | Create staging copies of WordPress, PHP, static, and Instatic sites. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
+| Stager | Create staging copies of WordPress, PHP, static, and Instatic sites, and promote them back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
 | Maintenance Mode | Serve a customizable 503 page per site with instant toggles and IP bypasses. |
 | Device theme on first visit | Follow the device's light or dark preference on the first visit to the CloudPanel login page. |
 

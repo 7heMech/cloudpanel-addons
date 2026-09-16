@@ -4,8 +4,8 @@
 
 import type { Server } from "bun";
 import { stagerService, validateDomain, validateJobId, expandTarget } from "./service";
-import type { JobView } from "./service";
-import { layout, jobsView, newCloneView, jobView } from "./views";
+import type { JobResult, JobView } from "./service";
+import { layout, jobsView, newCloneView, jobView, promoteListView, promoteView } from "./views";
 import { guardMutation, newCsrfToken, withCsrfCookie, SECURITY_HEADERS } from "../../../lib/app-http";
 import { getNextAvailablePort, type SanitizedSite } from "../../../lib/snapshot-reader";
 // The Stager already depends on the Instatic addon: cloning a reverse-proxy
@@ -180,12 +180,40 @@ export async function handle(
     } catch {}
     return html(
       layout(
-        `Clone into ${res.data.job.target}`,
+        res.data.job.kind === "promote" ? `Promote onto ${res.data.job.target}` : `Clone into ${res.data.job.target}`,
         jobView(res.data.job, res.data.log, snapshotAge, panelSites, snapshotTakenAt),
         updateNotice
       ),
       csrf
     );
+  }
+
+  // The return leg of a clone. The pair of sites comes from this addon's own
+  // clone record rather than from the request, so a promote can only ever put
+  // a staging site back onto the site it was cloned from.
+  if (method === "GET" && path === "/promote") {
+    const csrf = newCsrfToken();
+    try {
+      const rawJob = url.searchParams.get("job");
+      if (!rawJob) {
+        return html(layout("Promote to live", promoteListView(await stagerService.listJobs()), updateNotice), csrf);
+      }
+      const id = validateJobId(rawJob);
+      if (!id) {
+        return html(layout("Promote to live", promoteListView(await stagerService.listJobs()), updateNotice), csrf, 400);
+      }
+      const res = await stagerService.getJob(id);
+      if (!res.ok || !res.data) {
+        return html(layout("Not found", `<div class="alert">${Bun.escapeHTML(res.error ?? "No such job.")}</div>`, updateNotice), csrf, 404);
+      }
+      const problem = promoteBlocked(res.data.job);
+      if (problem) {
+        return html(layout("Promote to live", promoteView(res.data.job, problem), updateNotice), csrf, 400);
+      }
+      return html(layout(`Promote ${res.data.job.target}`, promoteView(res.data.job), updateNotice), csrf);
+    } catch (err) {
+      return html(layout("Error", errorBlock(err), updateNotice), csrf, 500);
+    }
   }
 
   if (method === "GET" && path === "/api/sites") {
@@ -207,6 +235,16 @@ export async function handle(
     if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
     const res = await stagerService.getJob(id);
     return json(res, res.ok ? 200 : 404);
+  }
+
+  if (method === "POST" && path === "/api/promotions") {
+    try {
+      return await postPromote(req);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[stager] promote request failed:", msg);
+      return json({ ok: false, error: msg }, 500);
+    }
   }
 
   if (method === "POST" && path === "/api/clones") {
@@ -331,6 +369,105 @@ async function postClone(req: Request): Promise<Response> {
   }
 
   const res = await stagerService.startClone(source, target, tls === true, instatic);
+  return json(res, res.ok ? 200 : 400);
+}
+
+/** Why this clone record cannot be the basis of a promote, or "" if it can. */
+function promoteBlocked(job: JobView): string {
+  if (job.kind === "promote") return "That job is itself a promote; promote from the clone that created the staging site.";
+  if (job.state !== "done") return `That clone is ${job.state}. Only a finished clone can be promoted.`;
+  if (!job.result) return "That clone recorded no result, so there is nothing to say what it produced.";
+  if (!job.source || !job.target) return "That clone record is incomplete.";
+  return "";
+}
+
+/**
+ * Validates a promote request and forwards it to the Stager action process.
+ *
+ * The request names a clone job, not two sites: `target` becomes the staging
+ * copy the files come from and `source` becomes the live site they go to,
+ * which is the clone read backwards. Accepting two free hostnames instead
+ * would make this a general site-to-site overwrite, which is a different and
+ * much sharper tool than the one being built here.
+ */
+async function postPromote(req: Request): Promise<Response> {
+  const blocked = guardMutation(req);
+  if (blocked) return blocked;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ ok: false, error: "body must be JSON" }, 400);
+  }
+  const {
+    job: rawJob, instaticEmail, instaticPassword, mfaCode,
+    liveEmail, livePassword, liveMfaCode,
+  } = (body ?? {}) as Record<string, unknown>;
+
+  const jobId = validateJobId(typeof rawJob === "string" ? rawJob : null);
+  if (!jobId) return json({ ok: false, error: "that is not a valid job id" }, 400);
+  const record = await stagerService.getJob(jobId);
+  if (!record.ok || !record.data) return json({ ok: false, error: record.error ?? "no such job" }, 404);
+  const clone = record.data.job;
+  const problem = promoteBlocked(clone);
+  if (problem) return json({ ok: false, error: problem }, 400);
+
+  const staging = validateDomain(clone.target);
+  const live = validateDomain(clone.source);
+  if (!staging || !live) return json({ ok: false, error: "that clone record does not name two valid hostnames" }, 400);
+
+  const isInstatic = (clone.result as JobResult | null)?.siteType === "reverse-proxy";
+  let instatic:
+    | { email: string; password: string; mfaCode?: string; targetEmail: string; targetPassword: string; targetMfaCode?: string }
+    | undefined;
+  if (isInstatic) {
+    // Two accounts, and the same bounds on both as a clone puts on its one:
+    // the action binary validates its arguments before it reads stdin, so an
+    // oversized field would be written into a pipe nobody is reading.
+    const accounts = [
+      { what: "staging", email: instaticEmail, password: instaticPassword, code: mfaCode },
+      { what: "live", email: liveEmail, password: livePassword, code: liveMfaCode },
+    ];
+    for (const account of accounts) {
+      if (typeof account.email !== "string" || !account.email.trim()) {
+        return json({ ok: false, error: `promoting an Instatic site needs the ${account.what} instance's admin email address` }, 400);
+      }
+      if (account.email.length > MAX_EMAIL) return json({ ok: false, error: "that email address is too long" }, 400);
+      if (typeof account.password !== "string" || !account.password) {
+        return json({ ok: false, error: `promoting an Instatic site needs the ${account.what} instance's admin password` }, 400);
+      }
+      if (account.password.length > MAX_PASSWORD) {
+        return json({ ok: false, error: `the password may be at most ${MAX_PASSWORD} characters` }, 400);
+      }
+      if (CONTROL_CHARS.test(account.password)) {
+        return json({ ok: false, error: "the password may not contain a newline or a control character" }, 400);
+      }
+      if (account.code !== undefined && typeof account.code !== "string") {
+        return json({ ok: false, error: "that authentication code is not a string" }, 400);
+      }
+      if (typeof account.code === "string" && account.code.trim().length > MAX_MFA) {
+        return json({ ok: false, error: "that authentication code is too long" }, 400);
+      }
+    }
+    const sourceCode = typeof mfaCode === "string" ? mfaCode.trim() : "";
+    const targetCode = typeof liveMfaCode === "string" ? liveMfaCode.trim() : "";
+    instatic = {
+      email: (instaticEmail as string).trim().toLowerCase(),
+      password: instaticPassword as string,
+      targetEmail: (liveEmail as string).trim().toLowerCase(),
+      targetPassword: livePassword as string,
+      ...(sourceCode ? { mfaCode: sourceCode } : {}),
+      ...(targetCode ? { targetMfaCode: targetCode } : {}),
+    };
+  } else if (
+    instaticEmail !== undefined || instaticPassword !== undefined || mfaCode !== undefined
+    || liveEmail !== undefined || livePassword !== undefined || liveMfaCode !== undefined
+  ) {
+    return json({ ok: false, error: `${live} is not an Instatic site, so it takes no credentials` }, 400);
+  }
+
+  const res = await stagerService.startPromote(staging, live, instatic);
   return json(res, res.ok ? 200 : 400);
 }
 

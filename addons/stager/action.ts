@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
   chmodSync, closeSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, openSync,
-  readFileSync, readdirSync, rmSync, statSync, writeFileSync, writeSync,
+  readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { join } from "node:path";
 import { CLI_BIN } from "../../cli/paths";
@@ -22,7 +22,19 @@ const PORT_MIN = 39000;
 const PORT_MAX = 39999;
 const CLONABLE_TYPES = ["php", "static", "reverse-proxy"] as const;
 
-export type StagerVerb = "sites" | "jobs" | "prune" | "describe" | "clone" | "run" | "job";
+export type StagerVerb = "sites" | "jobs" | "prune" | "describe" | "clone" | "promote" | "run" | "job";
+
+/**
+ * What a promote leaves behind from the live site rather than taking from the
+ * staging copy.
+ *
+ * The configuration files carry the live database credentials and its key
+ * material: taking the staging copy's would point the live site at the staging
+ * database, which is worse than any missing edit. The uploads directory is
+ * where the live site writes what its visitors send it, and none of that exists
+ * on the staging copy.
+ */
+const PRESERVED_PATHS = ["wp-config.php", ".env", "wp-content/uploads"] as const;
 
 export interface StagerActionPaths {
   lockDir: string;
@@ -62,6 +74,7 @@ export interface ParsedStagerAction {
   tls: string;
   port: string;
   email: string;
+  targetEmail: string;
 }
 
 export interface StagerActionOptions {
@@ -98,6 +111,7 @@ interface JobResult {
 
 interface JobView {
   id: string;
+  kind: string;
   source: string;
   target: string;
   port: number;
@@ -148,11 +162,12 @@ function parseAction(argv: string[], paths: StagerActionPaths): ParsedStagerActi
   let tls = "no";
   let port = "";
   let email = "";
+  let targetEmail = "";
 
   for (let i = 1; i < argv.length; i++) {
     const flag = argv[i]!;
     if (flag !== "--source" && flag !== "--target" && flag !== "--domain" && flag !== "--job" &&
-        flag !== "--tls" && flag !== "--port" && flag !== "--email") {
+        flag !== "--tls" && flag !== "--port" && flag !== "--email" && flag !== "--target-email") {
       failAction(`unknown argument: '${flag}'`);
     }
     const value = argv[i + 1];
@@ -164,7 +179,8 @@ function parseAction(argv: string[], paths: StagerActionPaths): ParsedStagerActi
     else if (flag === "--job") job = value;
     else if (flag === "--tls") tls = value;
     else if (flag === "--port") port = value;
-    else email = value;
+    else if (flag === "--email") email = value;
+    else targetEmail = value;
   }
 
   switch (verb) {
@@ -183,6 +199,12 @@ function parseAction(argv: string[], paths: StagerActionPaths): ParsedStagerActi
       if (port) validatePort(port);
       if (email) validateEmail(email);
       break;
+    case "promote":
+      source = validateDomain(source, paths.panelIdentityFile, "source");
+      target = validateDomain(target, paths.panelIdentityFile, "target");
+      if (email) validateEmail(email);
+      if (targetEmail) validateEmail(targetEmail);
+      break;
     case "run":
     case "job":
       job = validateJob(job);
@@ -193,27 +215,32 @@ function parseAction(argv: string[], paths: StagerActionPaths): ParsedStagerActi
 
   switch (verb) {
     case "clone":
-      if (domain || job) {
+      if (domain || job || targetEmail) {
         failAction("clone takes --source, --target, --tls and, for an Instatic site, --port and --email");
       }
       break;
+    case "promote":
+      if (domain || job || tls !== "no" || port) {
+        failAction("promote takes --source, --target and, for an Instatic site, --email and --target-email");
+      }
+      break;
     case "describe":
-      if (source || target || job || tls !== "no" || port || email) failAction("describe takes only --domain");
+      if (source || target || job || tls !== "no" || port || email || targetEmail) failAction("describe takes only --domain");
       break;
     case "run":
     case "job":
-      if (source || target || domain || tls !== "no" || port || email) failAction(`${verb} takes only --job`);
+      if (source || target || domain || tls !== "no" || port || email || targetEmail) failAction(`${verb} takes only --job`);
       break;
     case "sites":
     case "jobs":
     case "prune":
-      if (source || target || domain || job || tls !== "no" || port || email) {
+      if (source || target || domain || job || tls !== "no" || port || email || targetEmail) {
         failAction(`${verb} takes no arguments`);
       }
       break;
   }
 
-  return { verb: verb as StagerVerb, source, target, domain, job, tls, port, email };
+  return { verb: verb as StagerVerb, source, target, domain, job, tls, port, email, targetEmail };
 }
 
 function isRegularFile(path: string): boolean {
@@ -478,7 +505,7 @@ class RunReplyFailure extends Error {
   }
 }
 
-function failJob(ctx: RunContext, message: string): never {
+function failJob(ctx: { dir: string; failed: boolean }, message: string): never {
   ctx.failed = true;
   try {
     jobSet(ctx.dir, "error", message);
@@ -530,7 +557,7 @@ interface RunContext {
   notes: string[];
 }
 
-function setStep(ctx: RunContext, value: string): void {
+function setStep(ctx: { dir: string; step: string }, value: string): void {
   ctx.step = value;
   jobSet(ctx.dir, "step", value);
   logLine(value);
@@ -1172,6 +1199,7 @@ export function jobStateFor(paths: StagerActionPaths, target: string): string {
     const dir = jobDir(paths, entry);
     if (!isDirectory(dir)) continue;
     if (jobGet(dir, "target") !== target) continue;
+    if (jobGet(dir, "kind") === "promote") continue;
     return jobGet(dir, "state");
   }
   return "";
@@ -1232,7 +1260,7 @@ function instaticBody(path: string, body: unknown): void {
 }
 
 function instaticPost(
-  ctx: RunContext,
+  ctx: { dir: string },
   port: string,
   domain: string,
   jar: string,
@@ -1254,7 +1282,7 @@ function instaticPost(
   return result.stdout.trim() || "000";
 }
 
-function instaticGet(ctx: RunContext, port: string, domain: string, jar: string, path: string, output: string): string {
+function instaticGet(ctx: { dir: string }, port: string, domain: string, jar: string, path: string, output: string): string {
   tempSecretFile(output);
   const result = runCommand("curl", [
     "-sS", "--max-time", "900", "-o", output, "-w", "%{http_code}",
@@ -1266,7 +1294,7 @@ function instaticGet(ctx: RunContext, port: string, domain: string, jar: string,
 }
 
 function instaticLogin(
-  ctx: RunContext,
+  ctx: { dir: string },
   port: string,
   domain: string,
   jar: string,
@@ -1311,7 +1339,7 @@ function instaticLogin(
   return { ok: true, reason: "" };
 }
 
-function instaticLogout(ctx: RunContext, port: string, domain: string, jar: string): void {
+function instaticLogout(ctx: { dir: string }, port: string, domain: string, jar: string): void {
   if (!isRegularFile(jar)) return;
   const request = join(ctx.dir, ".api-req");
   const output = join(ctx.dir, ".api-out");
@@ -1323,7 +1351,7 @@ function instaticLogout(ctx: RunContext, port: string, domain: string, jar: stri
 }
 
 function instaticStepUp(
-  ctx: RunContext,
+  ctx: { dir: string },
   port: string,
   domain: string,
   jar: string,
@@ -1345,7 +1373,7 @@ function instaticStepUp(
 }
 
 function instaticSetup(
-  ctx: RunContext,
+  ctx: { dir: string },
   port: string,
   domain: string,
   jar: string,
@@ -1511,6 +1539,41 @@ function readCloneCredentials(): { password: string; mfa: string } {
   } catch (error) {
     if (error instanceof ActionFailure) throw error;
     failAction("the credential channel takes exactly two lines");
+  }
+}
+
+/**
+ * The promote credential channel: four lines, always.
+ *
+ * A promote between Instatic sites signs in twice -- once to export the
+ * staging copy and once to import into the live instance -- so the channel
+ * carries two passwords and two authentication codes. Fixed field count for
+ * the same reason the clone channel has one: a channel whose length varies
+ * cannot tell a password containing a newline from a password followed by a
+ * code.
+ */
+export function parsePromoteCredentials(input: string): {
+  password: string; mfa: string; targetPassword: string; targetMfa: string;
+} {
+  let supplied = input;
+  if (supplied.endsWith("\n")) supplied = supplied.slice(0, -1);
+  const lines = supplied.split("\n");
+  if (lines.length !== 4) failAction("the credential channel takes exactly four lines");
+  const [password, mfa, targetPassword, targetMfa] = lines as [string, string, string, string];
+  if (!password) failAction("promoting an Instatic site needs the staging instance's admin password on stdin");
+  if (!targetPassword) failAction("promoting an Instatic site needs the live instance's admin password on stdin");
+  if (password.length > 256 || targetPassword.length > 256) failAction("the password is too long");
+  if (mfa) validateMfa(mfa);
+  if (targetMfa) validateMfa(targetMfa);
+  return { password, mfa, targetPassword, targetMfa };
+}
+
+function readPromoteCredentials(): { password: string; mfa: string; targetPassword: string; targetMfa: string } {
+  try {
+    return parsePromoteCredentials(readFileSync(0, "utf8"));
+  } catch (error) {
+    if (error instanceof ActionFailure) throw error;
+    failAction("the credential channel takes exactly four lines");
   }
 }
 
@@ -1688,6 +1751,108 @@ function cmdClone(action: ParsedStagerAction, paths: StagerActionPaths, releaseL
   emitStagerOk(paths, { job: id, source, target });
 }
 
+/**
+ * Queue a promote: move the staging copy's files or content onto the live site.
+ *
+ * `source` is the staging copy the edits were made on and `target` is the live
+ * site they are going to, which is the opposite direction from clone and the
+ * reason both names stay. The live database is never part of this: it holds
+ * what the site's visitors created since the clone was taken, and no amount of
+ * table selection makes overwriting that safe. See docs/decisions/stager.md.
+ */
+function cmdPromote(action: ParsedStagerAction, paths: StagerActionPaths, releaseLock: () => void): void {
+  const { source, target, email, targetEmail } = action;
+  if (source === target) failAction("the staging site and the live site are the same site");
+  if (!siteExists(paths, source)) failAction(`no CloudPanel site for ${source}`);
+  if (!siteExists(paths, target)) failAction(`no CloudPanel site for ${target}`);
+
+  let staging: SiteRow | null;
+  let live: SiteRow | null;
+  try {
+    staging = siteRow(paths, source);
+    live = siteRow(paths, target);
+  } catch {
+    failAction("cannot read the panel database");
+  }
+  if (!staging) failAction(`no CloudPanel site for ${source}`);
+  if (!live) failAction(`no CloudPanel site for ${target}`);
+  if (!typeIsClonable(staging.type)) {
+    failAction(`${source} is a '${staging.type}' site; only ${CLONABLE_TYPES.join(" ")} sites can be promoted`);
+  }
+  if (staging.type !== live.type) {
+    failAction(`${source} is a '${staging.type}' site and ${target} is a '${live.type}' site; a promote does not change a site's type`);
+  }
+
+  let password = "";
+  let mfa = "";
+  let targetPassword = "";
+  let targetMfa = "";
+  if (staging.type === "reverse-proxy") {
+    if (!instaticBackendOf(paths, source)) {
+      failAction(`${source} cannot be promoted: ${instaticReject || "its backend is not an Instatic instance this box manages"}`);
+    }
+    if (!instaticBackendOf(paths, target)) {
+      failAction(`${target} cannot receive a promote: ${instaticReject || "its backend is not an Instatic instance this box manages"}`);
+    }
+    if (!email) failAction("promoting an Instatic site needs --email for the staging instance's admin account");
+    if (!targetEmail) failAction("promoting an Instatic site needs --target-email for the live instance's admin account");
+    ({ password, mfa, targetPassword, targetMfa } = readPromoteCredentials());
+  } else {
+    if (email || targetEmail) failAction("--email and --target-email apply only to promoting an Instatic site");
+    if (!staging.user || !live.user) failAction("both sites must have a site user recorded");
+    const stagingRoot = `/home/${staging.user}/htdocs/${source}`;
+    const liveRoot = `/home/${live.user}/htdocs/${target}`;
+    if (!isDirectory(stagingRoot)) failAction(`staging directory not found: ${stagingRoot}`);
+    if (!isDirectory(liveRoot)) failAction(`live directory not found: ${liveRoot}`);
+  }
+
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(paths.jobsDir);
+  } catch {
+    entries = [];
+  }
+  for (const entry of entries) {
+    const dir = jobDir(paths, entry);
+    if (!isDirectory(dir)) continue;
+    if (jobGet(dir, "target") !== target && jobGet(dir, "source") !== target) continue;
+    const state = jobGet(dir, "state");
+    if (state === "queued" || state === "running") failAction(`another stager job involving ${target} is already ${state}`);
+  }
+
+  const id = newJobId();
+  const dir = createJobDir(paths.jobsDir, id);
+  jobSet(dir, "kind", "promote");
+  jobSet(dir, "source", source);
+  jobSet(dir, "target", target);
+  if (email) jobSet(dir, "email", email);
+  if (targetEmail) jobSet(dir, "targetEmail", targetEmail);
+  if (mfa) jobSet(dir, "mfa", mfa);
+  if (targetMfa) jobSet(dir, "targetMfa", targetMfa);
+  if (password) jobSet(dir, "srcPassword", password);
+  if (targetPassword) jobSet(dir, "dstPassword", targetPassword);
+  jobSet(dir, "createdAt", jobTimestamp());
+  jobSet(dir, "step", "queued");
+  jobSet(dir, "state", "queued");
+  createJobLog(dir);
+
+  releaseLock();
+  const started = startJobUnit({
+    addon: "stager",
+    id,
+    description: `clp-addons: promoting ${source} onto ${target}`,
+    actionBinary: paths.actionBinary,
+  });
+  forwardCommandOutput(started);
+  if (!started.ok) {
+    jobSet(dir, "error", "could not start the promote job");
+    jobSet(dir, "state", "failed");
+    for (const name of ["srcPassword", "dstPassword", "mfa", "targetMfa"]) rmSync(join(dir, name), { force: true });
+    failAction("systemd-run refused to start the promote job");
+  }
+  emitStagerOk(paths, { job: id, source, target });
+}
+
 function runReplyError(ctx: RunContext, message: string): never {
   diagnostic(`[stager] ERROR: ${message}\n`);
   diagnostic(`${actionErrorJson(message)}\n`);
@@ -1753,6 +1918,8 @@ function newRunContext(id: string, dir: string, paths: StagerActionPaths): RunCo
 async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
   const dir = jobDir(paths, id);
   if (!isDirectory(dir)) failAction(`no such job: ${id}`);
+  // Records written before promote existed carry no kind, and they are all clones.
+  if (jobGet(dir, "kind") === "promote") return cmdRunPromote(id, dir, paths);
   const transcript = new JobTranscript(join(dir, "log"));
   const previousTranscript = activeTranscript;
   activeTranscript = transcript;
@@ -2115,6 +2282,448 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
   }
 }
 
+interface PromoteResult {
+  siteType: string;
+  siteUser: string;
+  /** The live document root as it was before the switch, kept for the job's retention. */
+  previousRoot: string;
+  /** Paths taken from the live site rather than from the staging copy. */
+  preserved: string[];
+  /** The live database dump taken before anything was touched, or null. */
+  databaseBackup: string | null;
+  /** The live instance's own content export, taken before the import. */
+  contentBackup: string | null;
+  notes: string[];
+}
+
+interface PromoteContext {
+  id: string;
+  dir: string;
+  paths: StagerActionPaths;
+  /** The staging copy the edits were made on. */
+  source: string;
+  /** The live site they are going to. */
+  target: string;
+  step: string;
+  failed: boolean;
+  rollbackActive: boolean;
+  siteType: string;
+  srcUser: string;
+  dstUser: string;
+  srcRoot: string;
+  dstRoot: string;
+  stageRoot: string;
+  prevRoot: string;
+  swapped: boolean;
+  movedPreserved: string[];
+  dbBackup: string;
+  contentBackup: string;
+  exportZip: string;
+  srcPort: string;
+  dstPort: string;
+  notes: string[];
+}
+
+function newPromoteContext(id: string, dir: string, paths: StagerActionPaths): PromoteContext {
+  return {
+    id, dir, paths, source: "", target: "", step: "", failed: false, rollbackActive: false,
+    siteType: "", srcUser: "", dstUser: "", srcRoot: "", dstRoot: "", stageRoot: "", prevRoot: "",
+    swapped: false, movedPreserved: [], dbBackup: "", contentBackup: "", exportZip: "",
+    srcPort: "", dstPort: "", notes: [],
+  };
+}
+
+function htdocsOf(user: string): string {
+  return `/home/${user}/htdocs`;
+}
+
+function pathExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Move one preserved path from `from` into `to`.
+ *
+ * A rename rather than a copy: both sides are in the same site user's htdocs,
+ * so this is instant however large an uploads directory has grown, and it does
+ * not need a second copy of it on disk. The consequence is deliberate and
+ * documented -- the retained previous root holds the code that was replaced,
+ * not a second copy of the live site's user data, which stays on the live site
+ * throughout.
+ */
+function movePreserved(from: string, to: string, relative: string): boolean {
+  const origin = join(from, relative);
+  if (!pathExists(origin)) return false;
+  const destination = join(to, relative);
+  try {
+    const parent = destination.slice(0, destination.lastIndexOf("/"));
+    mkdirSync(parent, { recursive: true });
+    rmSync(destination, { recursive: true, force: true });
+    renameSync(origin, destination);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function rollbackPromote(ctx: PromoteContext): void {
+  warnLine(`promote failed during '${ctx.step}', unwinding`);
+  for (const name of ["srcPassword", "dstPassword", "mfa", "targetMfa", "cookies-src", "cookies-dst", ".api-req", ".api-out"]) {
+    rmSync(join(ctx.dir, name), { force: true });
+  }
+  if (ctx.exportZip) rmSync(ctx.exportZip, { force: true });
+
+  if (ctx.swapped) {
+    warnLine(`putting ${ctx.target}'s own document root back`);
+    // The preserved paths were moved onto the new root; they belong to the
+    // live site either way, so they go back with it.
+    for (const relative of ctx.movedPreserved) movePreserved(ctx.dstRoot, ctx.prevRoot, relative);
+    // Derived from prevRoot, not from stageRoot: the successful swap cleared
+    // stageRoot, and a discard path of ".discard" would be relative to nothing.
+    const discard = `${ctx.prevRoot}.discard`;
+    try {
+      renameSync(ctx.dstRoot, discard);
+      renameSync(ctx.prevRoot, ctx.dstRoot);
+      jobSet(ctx.dir, "swap", "rolled-back");
+      rmSync(discard, { recursive: true, force: true });
+      ctx.swapped = false;
+    } catch {
+      warnLine(`could not put ${ctx.dstRoot} back; ${ctx.prevRoot} still holds what was there before`);
+    }
+  } else if (ctx.prevRoot && pathExists(ctx.prevRoot) && !pathExists(ctx.dstRoot)) {
+    try {
+      renameSync(ctx.prevRoot, ctx.dstRoot);
+      jobSet(ctx.dir, "swap", "rolled-back");
+    } catch {
+      warnLine(`could not put ${ctx.dstRoot} back; ${ctx.prevRoot} still holds what was there before`);
+    }
+  }
+  if (ctx.stageRoot) rmSync(ctx.stageRoot, { recursive: true, force: true });
+
+  if (jobGet(ctx.dir, "state") !== "failed") {
+    try {
+      jobSet(ctx.dir, "error", `promote failed during '${ctx.step}'`);
+      jobSet(ctx.dir, "state", "failed");
+    } catch {
+      // Nothing useful can be done if the record itself is no longer writable.
+    }
+  }
+}
+
+async function promoteFiles(ctx: PromoteContext): Promise<void> {
+  const paths = ctx.paths;
+  ctx.srcRoot = join(htdocsOf(ctx.srcUser), ctx.source);
+  ctx.dstRoot = join(htdocsOf(ctx.dstUser), ctx.target);
+  if (!isDirectory(ctx.srcRoot)) failJob(ctx, `staging directory not found: ${ctx.srcRoot}`);
+  if (!isDirectory(ctx.dstRoot)) failJob(ctx, `live directory not found: ${ctx.dstRoot}`);
+
+  // Taken before anything is touched, and taken even though this promote never
+  // writes to the database: the code being promoted can run a destructive
+  // migration on its first request, and by then the only copy of what the
+  // database held is this one.
+  let liveDb = "";
+  try { liveDb = databaseOf(paths, ctx.target); } catch { failJob(ctx, "cannot read the panel database"); }
+  if (liveDb) {
+    setStep(ctx, `backing up the live database ${liveDb}`);
+    const backup = join(ctx.dir, "live-db.sql.gz");
+    const exported = runCommand(paths.clpctl, ["db:export", `--databaseName=${liveDb}`, `--file=${backup}`]);
+    forwardCommandOutput(exported);
+    if (!exported.ok) failJob(ctx, `clpctl db:export failed for ${liveDb}; nothing was changed`);
+    chmodSync(backup, 0o600);
+    ctx.dbBackup = backup;
+  } else {
+    logLine("the live site has no database, so there was nothing to back up");
+  }
+
+  setStep(ctx, "assembling the new release");
+  ctx.stageRoot = join(htdocsOf(ctx.dstUser), `.clp-stager-promote-${ctx.id}`);
+  rmSync(ctx.stageRoot, { recursive: true, force: true });
+  mkdirSync(ctx.stageRoot, { recursive: true, mode: 0o755 });
+  const copyCode = await runTarCopy(ctx.srcRoot, ctx.stageRoot);
+  if (copyCode >= 2) failJob(ctx, `copying the staging files failed (tar exit ${copyCode})`);
+  // Whatever the staging copy holds at these paths is dropped here rather than
+  // after the switch, so the release that goes live never contains the staging
+  // site's database credentials even for an instant.
+  for (const relative of PRESERVED_PATHS) rmSync(join(ctx.stageRoot, relative), { recursive: true, force: true });
+
+  setStep(ctx, `switching ${ctx.target} over`);
+  ctx.prevRoot = join(htdocsOf(ctx.dstUser), `.clp-stager-prev-${ctx.target}-${ctx.id}`);
+  jobSet(ctx.dir, "liveRoot", ctx.dstRoot);
+  jobSet(ctx.dir, "prevRoot", ctx.prevRoot);
+  try {
+    renameSync(ctx.dstRoot, ctx.prevRoot);
+  } catch {
+    failJob(ctx, `could not move ${ctx.dstRoot} aside; nothing was changed`);
+  }
+  jobSet(ctx.dir, "swap", "moved");
+  try {
+    renameSync(ctx.stageRoot, ctx.dstRoot);
+  } catch {
+    failJob(ctx, `could not put the new release in place at ${ctx.dstRoot}`);
+  }
+  jobSet(ctx.dir, "swap", "done");
+  ctx.swapped = true;
+  ctx.stageRoot = "";
+
+  setStep(ctx, "restoring what the live site owns");
+  for (const relative of PRESERVED_PATHS) {
+    if (movePreserved(ctx.prevRoot, ctx.dstRoot, relative)) {
+      ctx.movedPreserved.push(relative);
+      logLine(`kept the live site's own ${relative}`);
+    } else if (pathExists(join(ctx.dstRoot, relative))) {
+      // Only reachable if the path appeared between the strip above and here.
+      rmSync(join(ctx.dstRoot, relative), { recursive: true, force: true });
+    }
+  }
+  if (!ctx.movedPreserved.includes("wp-config.php") && !ctx.movedPreserved.includes(".env")) {
+    ctx.notes.push(`${ctx.target} had neither a wp-config.php nor a .env of its own, so the promoted release has none either; if the application needs one, write it with the live database's credentials`);
+  }
+
+  const owner = runCommand("chown", ["-R", `${ctx.dstUser}:${ctx.dstUser}`, ctx.dstRoot]);
+  if (owner.stdout) diagnostic(owner.stdout);
+  if (owner.stderr) diagnostic(owner.stderr);
+  if (!owner.ok) failJob(ctx, `could not chown ${ctx.dstRoot}`);
+
+  ctx.notes.push(`the live database was not touched: it holds what ${ctx.target}'s own visitors created since the staging copy was taken, and no part of a promote can tell that apart from a stale row`);
+  ctx.notes.push(`absolute URLs written into the live database still name whatever was there before; a promote moves files, not database content`);
+  if (ctx.dbBackup) {
+    ctx.notes.push(`a dump of the live database was taken before the switch and is kept with this job for ${JOB_RETENTION_DAYS} days`);
+  }
+  ctx.notes.push(`${ctx.prevRoot} holds the document root that was replaced, for ${JOB_RETENTION_DAYS} days; the preserved paths above were moved onto the new one rather than copied, so they are not in it`);
+}
+
+function promoteInstatic(ctx: PromoteContext, email: string, targetEmail: string): void {
+  const dir = ctx.dir;
+  const paths = ctx.paths;
+  const sourceBackend = instaticBackendOf(paths, ctx.source);
+  if (!sourceBackend) failJob(ctx, `${ctx.source} cannot be promoted: ${instaticReject || "its backend is not an Instatic instance this box manages"}`);
+  const targetBackend = instaticBackendOf(paths, ctx.target);
+  if (!targetBackend) failJob(ctx, `${ctx.target} cannot receive a promote: ${instaticReject || "its backend is not an Instatic instance this box manages"}`);
+  ctx.srcPort = sourceBackend.port;
+  ctx.dstPort = targetBackend.port;
+  if (!email || !targetEmail) failJob(ctx, "promoting an Instatic site needs both instances' admin email addresses");
+
+  const sourcePasswordPath = join(dir, "srcPassword");
+  const targetPasswordPath = join(dir, "dstPassword");
+  if (!isRegularFile(sourcePasswordPath) || statSync(sourcePasswordPath).size === 0) {
+    failJob(ctx, "promoting an Instatic site needs the staging instance's admin password");
+  }
+  if (!isRegularFile(targetPasswordPath) || statSync(targetPasswordPath).size === 0) {
+    failJob(ctx, "promoting an Instatic site needs the live instance's admin password");
+  }
+  const sourcePassword = readFileSync(sourcePasswordPath, "utf8").replace(/\n+$/g, "");
+  const targetPassword = readFileSync(targetPasswordPath, "utf8").replace(/\n+$/g, "");
+  const sourceMfa = jobGet(dir, "mfa");
+  const targetMfa = jobGet(dir, "targetMfa");
+
+  setStep(ctx, `signing in to ${ctx.source}`);
+  const sourceLogin = instaticLogin(ctx, ctx.srcPort, ctx.source, join(dir, "cookies-src"), email, sourcePassword, sourceMfa, ctx.source);
+  if (!sourceLogin.ok) failJob(ctx, sourceLogin.reason);
+  rmSync(sourcePasswordPath, { force: true });
+
+  setStep(ctx, `exporting ${ctx.source}'s content`);
+  ctx.exportZip = join(dir, "site-bundle.zip");
+  const exportCode = instaticGet(ctx, ctx.srcPort, ctx.source, join(dir, "cookies-src"), "/admin/api/cms/export?includeSite=1&includeMedia=1", ctx.exportZip);
+  if (!/^2/.test(exportCode)) failJob(ctx, `${ctx.source} refused the export (HTTP ${exportCode}): ${instaticError(ctx.exportZip)}`);
+  instaticLogout(ctx, ctx.srcPort, ctx.source, join(dir, "cookies-src"));
+  let bytes = 0;
+  try { bytes = statSync(ctx.exportZip).size; } catch { bytes = 0; }
+  logLine(`exported ${bytes} bytes of site bundle`);
+
+  setStep(ctx, `signing in to ${ctx.target}`);
+  const targetLogin = instaticLogin(ctx, ctx.dstPort, ctx.target, join(dir, "cookies-dst"), targetEmail, targetPassword, targetMfa, ctx.target);
+  if (!targetLogin.ok) failJob(ctx, targetLogin.reason);
+  const stepUp = instaticStepUp(ctx, ctx.dstPort, ctx.target, join(dir, "cookies-dst"), targetPassword, targetMfa);
+  if (!stepUp.ok) failJob(ctx, stepUp.reason);
+  rmSync(targetPasswordPath, { force: true });
+  rmSync(join(dir, "mfa"), { force: true });
+  rmSync(join(dir, "targetMfa"), { force: true });
+
+  // The import replaces the live instance's content wholesale, so its own
+  // export is taken first. It is the only way back.
+  setStep(ctx, `backing up ${ctx.target}'s current content`);
+  const backup = join(dir, "live-bundle.zip");
+  const backupCode = instaticGet(ctx, ctx.dstPort, ctx.target, join(dir, "cookies-dst"), "/admin/api/cms/export?includeSite=1&includeMedia=1", backup);
+  if (!/^2/.test(backupCode)) failJob(ctx, `${ctx.target} refused to export its current content (HTTP ${backupCode}): ${instaticError(backup)}; nothing was changed`);
+  ctx.contentBackup = backup;
+
+  setStep(ctx, `importing ${ctx.source}'s content into ${ctx.target}`);
+  const output = join(dir, ".api-out");
+  const importCode = instaticPost(ctx, ctx.dstPort, ctx.target, join(dir, "cookies-dst"), "/admin/api/cms/import/archive?strategy=replace", "application/zip", ctx.exportZip, output);
+  if (!/^2/.test(importCode)) failJob(ctx, `${ctx.target} refused the import (HTTP ${importCode}): ${instaticError(output)}`);
+  const tables = jsonField(output, "tablesAffected") || "?";
+  const rows = jsonField(output, "rowsInserted") || "?";
+  const media = jsonField(output, "mediaImported") || "?";
+  logLine(`import: ${instaticError(output)}`);
+  rmSync(output, { force: true });
+  instaticLogout(ctx, ctx.dstPort, ctx.target, join(dir, "cookies-dst"));
+  rmSync(ctx.exportZip, { force: true });
+  ctx.exportZip = "";
+
+  ctx.notes.push(`the import reported ${tables} table(s), ${rows} row(s) and ${media} media file(s)`);
+  ctx.notes.push(`the import replaced ${ctx.target}'s content: anything written on the live instance since the staging copy was taken is gone, and ${backup} is the copy taken just before it`);
+  ctx.notes.push(`publish ${ctx.target} in its own admin before trusting it: the site bundle carries content, not the runtime assets a publish produces`);
+  ctx.notes.push(`integration secrets such as API keys and TOTP seeds are encrypted under each instance's own key and are not part of a bundle, so ${ctx.target} keeps the ones it already had`);
+  ctx.notes.push(`plugins are not part of the site bundle, so a plugin installed on ${ctx.source} has to be installed again on ${ctx.target}`);
+}
+
+async function cmdRunPromote(id: string, dir: string, paths: StagerActionPaths): Promise<void> {
+  const transcript = new JobTranscript(join(dir, "log"));
+  const previousTranscript = activeTranscript;
+  activeTranscript = transcript;
+  const ctx = newPromoteContext(id, dir, paths);
+  try {
+    ctx.source = jobGet(dir, "source");
+    ctx.target = jobGet(dir, "target");
+    const email = jobGet(dir, "email");
+    const targetEmail = jobGet(dir, "targetEmail");
+    if (!ctx.source || !ctx.target) failJob(ctx, "job record is incomplete");
+    try {
+      ctx.source = validateDomain(ctx.source, paths.panelIdentityFile, "source");
+      ctx.target = validateDomain(ctx.target, paths.panelIdentityFile, "target");
+      validateJob(id);
+      if (email) validateEmail(email);
+      if (targetEmail) validateEmail(targetEmail);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "invalid job record";
+      diagnostic(`[stager] ERROR: ${message}\n`);
+      diagnostic(`${actionErrorJson(message)}\n`);
+      throw new RunReplyFailure(message);
+    }
+
+    const state = jobGet(dir, "state");
+    if (state !== "queued") failJob(ctx, `job ${id} is ${state}, not queued`);
+
+    jobSet(dir, "state", "running");
+    jobSet(dir, "startedAt", jobTimestamp());
+    ctx.rollbackActive = true;
+
+    setStep(ctx, "reading both sites");
+    let staging: SiteRow | null;
+    let live: SiteRow | null;
+    try {
+      staging = siteRow(paths, ctx.source);
+      live = siteRow(paths, ctx.target);
+    } catch {
+      failJob(ctx, "cannot read the panel database");
+    }
+    if (!staging) failJob(ctx, `no CloudPanel site for ${ctx.source}`);
+    if (!live) failJob(ctx, `no CloudPanel site for ${ctx.target}`);
+    if (!typeIsClonable(staging.type)) {
+      failJob(ctx, `${ctx.source} is a '${staging.type}' site; only ${CLONABLE_TYPES.join(" ")} sites can be promoted`);
+    }
+    if (staging.type !== live.type) {
+      failJob(ctx, `${ctx.source} is a '${staging.type}' site and ${ctx.target} is a '${live.type}' site; a promote does not change a site's type`);
+    }
+    ctx.siteType = staging.type;
+    ctx.srcUser = staging.user;
+    ctx.dstUser = live.user;
+    if (!ctx.srcUser || !ctx.dstUser) failJob(ctx, "both sites must have a site user recorded");
+
+    if (ctx.siteType === "reverse-proxy") {
+      promoteInstatic(ctx, email, targetEmail);
+    } else {
+      await promoteFiles(ctx);
+    }
+
+    setStep(ctx, "recording the result");
+    const result: PromoteResult = {
+      siteType: ctx.siteType,
+      siteUser: ctx.dstUser,
+      previousRoot: ctx.prevRoot,
+      preserved: ctx.movedPreserved,
+      databaseBackup: ctx.dbBackup || null,
+      contentBackup: ctx.contentBackup || null,
+      notes: ctx.notes,
+    };
+    writeFileSync(join(dir, "result.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
+    chmodSync(join(dir, "result.json"), 0o600);
+    jobSet(dir, "finishedAt", jobTimestamp());
+    jobSet(dir, "state", "done");
+    ctx.rollbackActive = false;
+    logLine(`promote complete: ${ctx.source} onto ${ctx.target}`);
+  } catch (error) {
+    if (error instanceof RunReplyFailure) throw error;
+    if (ctx.rollbackActive) rollbackPromote(ctx);
+    if (!(error instanceof JobFailure) && !ctx.failed) {
+      const message = error instanceof Error ? error.message : "promote failed";
+      try {
+        jobSet(dir, "error", message);
+        jobSet(dir, "state", "failed");
+      } catch {
+        // Keep the stderr-only failure contract even if the record is damaged.
+      }
+      diagnostic(`[stager] ERROR: ${message}\n`);
+    }
+    if (error instanceof JobFailure) throw error;
+    throw new JobFailure(error instanceof Error ? error.message : "promote failed");
+  } finally {
+    activeTranscript = previousTranscript;
+    transcript.close();
+  }
+}
+
+/**
+ * Put back a document root whose promote died between the two renames.
+ *
+ * The window is one rename wide, but a site with no document root at all is
+ * the worst state this addon can leave behind, so the maintenance pass looks
+ * for it explicitly rather than waiting for an operator to notice.
+ */
+export function recoverInterruptedPromotions(paths: StagerActionPaths): number {
+  let recovered = 0;
+  for (const id of listJobIds(paths.jobsDir)) {
+    const dir = jobDir(paths, id);
+    if (jobGet(dir, "kind") !== "promote") continue;
+    const state = jobGet(dir, "state");
+    if (state === "queued" || state === "running") continue;
+    if (jobGet(dir, "swap") !== "moved") continue;
+    const liveRoot = jobGet(dir, "liveRoot");
+    const prevRoot = jobGet(dir, "prevRoot");
+    if (!liveRoot || !prevRoot) continue;
+    if (pathExists(liveRoot) || !pathExists(prevRoot)) continue;
+    warnLine(`restoring ${liveRoot}: a promote was interrupted while switching it over`);
+    try {
+      renameSync(prevRoot, liveRoot);
+      jobSet(dir, "swap", "rolled-back");
+      recovered++;
+    } catch {
+      warnLine(`could not restore ${liveRoot} from ${prevRoot}`);
+    }
+  }
+  return recovered;
+}
+
+/**
+ * Drop the replaced document roots of jobs whose records are about to expire.
+ *
+ * Driven from the records rather than from a directory scan, because the
+ * record is what says which path this addon put there. It runs before
+ * pruneJobs for the same reason: once the record is gone nothing knows the
+ * path was ours.
+ */
+export function dropExpiredPromoteRoots(paths: StagerActionPaths): number {
+  let removed = 0;
+  for (const id of listJobIds(paths.jobsDir)) {
+    const dir = jobDir(paths, id);
+    if (jobGet(dir, "kind") !== "promote") continue;
+    const state = jobGet(dir, "state");
+    if (state === "queued" || state === "running") continue;
+    if (!findOlderThan(dir, 24 * 60 * 60 * 1000, JOB_RETENTION_DAYS)) continue;
+    const prevRoot = jobGet(dir, "prevRoot");
+    if (!prevRoot || !prevRoot.includes("/.clp-stager-prev-")) continue;
+    if (!isDirectory(prevRoot)) continue;
+    rmSync(prevRoot, { recursive: true, force: true });
+    removed++;
+  }
+  return removed;
+}
+
 function readJobResult(dir: string): unknown {
   const raw = readFileSyncSafe(join(dir, "result.json")).trim();
   if (!raw) return null;
@@ -2135,6 +2744,7 @@ function jobJson(paths: StagerActionPaths, dir: string, id: string, hasPanelDb: 
   const portText = jobGet(dir, "port");
   return {
     id,
+    kind: jobGet(dir, "kind") || "clone",
     source: jobGet(dir, "source"),
     target,
     port: /^\d+$/.test(portText) ? Number(portText) || 0 : 0,
@@ -2159,6 +2769,8 @@ function cmdJobs(paths: StagerActionPaths): void {
 }
 
 function cmdPrune(paths: StagerActionPaths): void {
+  const promotionsRecovered = recoverInterruptedPromotions(paths);
+  const rootsRemoved = dropExpiredPromoteRoots(paths);
   const { removed, stuck } = pruneJobs({
     addon: "stager",
     jobsDir: paths.jobsDir,
@@ -2179,7 +2791,7 @@ function cmdPrune(paths: StagerActionPaths): void {
     // Stale staging cleanup is best effort: a failure here must not fail the
     // whole prune.
   }
-  emitStagerOk(paths, { removed, stuck, vhostsRecovered });
+  emitStagerOk(paths, { removed, stuck, vhostsRecovered, promotionsRecovered, rootsRemoved });
 }
 
 async function dispatch(action: ParsedStagerAction, paths: StagerActionPaths, releaseLock: () => void): Promise<void> {
@@ -2189,6 +2801,7 @@ async function dispatch(action: ParsedStagerAction, paths: StagerActionPaths, re
     case "prune": cmdPrune(paths); return;
     case "describe": cmdDescribe(paths, action.domain); return;
     case "clone": cmdClone(action, paths, releaseLock); return;
+    case "promote": cmdPromote(action, paths, releaseLock); return;
     case "run": await cmdRun(action.job, paths); return;
     case "job": cmdJob(paths, action.job); return;
   }
@@ -2226,7 +2839,7 @@ export async function runStagerAction(argv: string[], options?: StagerActionOpti
       lock = null;
     };
     try {
-      if (action.verb === "clone") {
+      if (action.verb === "clone" || action.verb === "promote") {
         lock = await acquireFileLock(
           join(paths.lockDir, `stager-${action.target}.lock`),
           30,

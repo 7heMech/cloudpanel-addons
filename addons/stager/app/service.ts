@@ -9,6 +9,7 @@ export { type ActionResult };
 const TIMEOUTS: Record<string, number> = {
   describe: 120_000,
   clone: 60_000,
+  promote: 60_000,
 };
 const DEFAULT_TIMEOUT = 30_000;
 
@@ -103,8 +104,36 @@ export interface JobResult {
   notes: string[];
 }
 
+/**
+ * What a promote records.
+ *
+ * Deliberately not a superset of a clone's result: a promote creates no site,
+ * no database and no account, so it has no credentials to hand back. What it
+ * has instead is where the replaced document root went and what was kept from
+ * the live site.
+ */
+export interface PromoteResult {
+  siteType: SiteType | string;
+  siteUser: string;
+  /** The live document root as it was before the switch, kept for the job's retention. */
+  previousRoot: string;
+  /** Paths taken from the live site rather than from the staging copy. */
+  preserved: string[];
+  /** Where the pre-switch dump of the live database was written, if it had one. */
+  databaseBackup: string | null;
+  /** Where the live Instatic instance's own content export was written. */
+  contentBackup: string | null;
+  notes: string[];
+}
+
+export function isPromoteResult(job: JobView): job is JobView & { result: PromoteResult | null } {
+  return job.kind === "promote";
+}
+
 export interface JobView {
   id: string;
+  /** `clone` creates a staging site; `promote` moves one back onto its live site. */
+  kind: "clone" | "promote" | string;
   source: string;
   target: string;
   /** The Instatic port this clone reserved, or 0 for a clone that needed none. */
@@ -117,7 +146,7 @@ export interface JobView {
   finishedAt: string;
   /** Optional one-shot event emitted by the job runner. */
   event?: string;
-  result: JobResult | null;
+  result: JobResult | PromoteResult | null;
   panelSite?: boolean | null;
 }
 
@@ -216,6 +245,33 @@ export const stagerService = {
       ? `${instatic.password}\n${instatic.mfaCode ?? ""}\n`
       : undefined;
     return callAction<{ job: string }>("clone", args, input);
+  },
+
+  /**
+   * Start a promote: put the staging copy's files or content onto the live site.
+   *
+   * `source` is the staging copy and `target` is the live site, which is the
+   * reverse of startClone and the reason neither is called "staging". The live
+   * database is never sent anywhere; see docs/decisions/stager.md for why.
+   *
+   * An Instatic promote signs in to both instances, so the channel carries two
+   * passwords. Four lines, always, for the same reason the clone channel has
+   * exactly two.
+   */
+  async startPromote(
+    source: string,
+    target: string,
+    instatic?: {
+      email: string; password: string; mfaCode?: string;
+      targetEmail: string; targetPassword: string; targetMfaCode?: string;
+    }
+  ): Promise<ActionResult<{ job: string }>> {
+    const args = ["--source", source, "--target", target];
+    if (instatic) args.push("--email", instatic.email, "--target-email", instatic.targetEmail);
+    const input = instatic
+      ? `${instatic.password}\n${instatic.mfaCode ?? ""}\n${instatic.targetPassword}\n${instatic.targetMfaCode ?? ""}\n`
+      : undefined;
+    return callAction<{ job: string }>("promote", args, input);
   },
 
   async getJob(id: string): Promise<ActionResult<{ job: JobView; log: string }>> {
