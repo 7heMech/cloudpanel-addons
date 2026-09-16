@@ -196,10 +196,24 @@ jobs:
             fi
           fi
 
+          # Semver reads anything after the first hyphen as a pre-release
+          # identifier -- v1.2.0-rc.1 precedes v1.2.0. GitHub's "Latest" is
+          # whatever the newest non-prerelease release is, and that is what
+          # /releases/latest/download serves: the exact URL the documented
+          # `curl ... | bash` bootstrap fetches install.sh from. So a tag that
+          # says it is not finished must not publish as one that is, or the next
+          # person to run the one-liner installs a release candidate.
+          release_args=()
+          case "${TAG#v}" in
+            *-*) release_args+=(--prerelease)
+                 echo "$TAG carries a pre-release identifier; publishing as a pre-release" ;;
+          esac
+
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --title "$TAG" \
             "${notes_args[@]}" \
+            "${release_args[@]}" \
             dist/clp-addons-linux-x64 \
             dist/install.sh \
             dist/attestations.jsonl \
