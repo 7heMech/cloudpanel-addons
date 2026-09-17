@@ -493,7 +493,7 @@ function categoryRow(category: PoolCategory, sites: number, isDefault: boolean):
     <td class="site-cell name-cell">${esc(category.name)}${
       isDefault ? '<span class="badge state-default">Default for new sites</span>' : ""
     }${category.description ? `<div class="hint">${esc(category.description)}</div>` : ""}</td>
-    <td class="limit-cell" data-label="Limits">${esc(workerSummary(category.profile))}
+    <td class="limit-cell wide-cell" data-label="Limits">${esc(workerSummary(category.profile))}
       <div class="hint">${esc(recycleSummary(category.profile))}</div></td>
     <td class="numeric" data-label="Sites">${sites}</td>
     <td class="action-cell" data-label="Actions"><div class="actions">
@@ -509,9 +509,9 @@ function siteTableRow(site: PoolSiteState, categories: PoolCategory[]): string {
     <td class="site-cell">${esc(site.domain)}${
       site.drifted ? '<div class="hint">Its pool file no longer matches this category.</div>' : ""
     }</td>
-    <td data-label="PHP">${esc(site.phpVersion)}</td>
+    <td class="type-cell">PHP ${esc(site.phpVersion)}</td>
     <td data-label="Category"><select aria-label="Category for ${esc(site.domain)}" onchange="assignRow(this)">${categoryOptions(categories, site.categoryId)}</select></td>
-    <td class="limit-cell" data-label="Now running">${esc(workerSummary(site.current))}</td>
+    <td class="limit-cell wide-cell" data-label="Now running">${esc(workerSummary(site.current))}</td>
   </tr>`;
 }
 

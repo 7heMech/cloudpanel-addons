@@ -138,7 +138,12 @@ test("a fleet table gives the domain its own line on a phone", () => {
   // the column heading the phone no longer has room to show.
   expect(mobile).toContain(".fleet-table thead { display: none; }");
   expect(mobile).toContain(".fleet-table td.site-select { display: flex; flex: 0 0 42px; width: 42px;");
-  expect(mobile).toContain(".fleet-table td.site-cell { flex: 1 0 calc(100% - 54px); min-width: 0;");
+  expect(mobile).toContain(".fleet-table td.site-cell { flex: 1 1 calc(100% - 160px); min-width: 55%;");
+  // What a site is rides beside the domain as a tag, and every labelled cell
+  // keeps half the row whatever it holds -- a status badge that grew when a
+  // site went into maintenance used to move everything under it.
+  expect(mobile).toContain(".fleet-table td.type-cell { flex: 0 1 auto;");
+  expect(mobile).toContain(".fleet-table td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; }");
   expect(mobile).toContain(".fleet-table td[data-label]::before { content: attr(data-label);");
 
   for (const html of [
@@ -153,7 +158,7 @@ test("a fleet table gives the domain its own line on a phone", () => {
   ]) {
     expect(html).toContain('<table class="fleet-table"');
     expect(html).toContain('<td class="site-cell"');
-    expect(html).toContain('data-label="Type"');
+    expect(html).toContain('<td class="type-cell">');
   }
 });
 
