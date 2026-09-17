@@ -930,6 +930,9 @@ const MANAGER_INDEX_CSS = `
 .manager-job-status { width: 100%; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
 .manager-job-status .job-summary { justify-content: space-between; }
 .manager-job-status .step { margin: 6px 0 0; overflow-wrap: anywhere; }
+.job-log-details { margin-top: 10px; }
+.job-log-details summary { color: var(--muted); font-size: 14px; cursor: pointer; }
+.job-log-details pre { max-height: 240px; margin: 10px 0 0; }
 .addon-section { margin-top: 30px; }
 .addon-section h2 { margin: 0 0 20px; font-size: 20px; }
 .update-page { max-width: 800px; margin: 0 auto; }
@@ -955,6 +958,12 @@ function managerJobCard(source, key) {
   }) || null;
 }
 
+function describeManagerJob(job) {
+  if (!job) return 'Working';
+  if (job.kind === 'update') return 'Updating clp-addons';
+  return (job.kind === 'disable' ? 'Disabling ' : 'Enabling ') + (job.addon || 'an addon');
+}
+
 function showJob(title, card) {
   if (!card) return;
   let status = card.querySelector('[data-manager-job-status]');
@@ -967,7 +976,8 @@ function showJob(title, card) {
       '<strong id="job-title"></strong>' +
       '<span class="badge state-queued" id="job-state">queued</span>' +
       '</div>' +
-      '<p class="step" id="job-step">Starting…</p>';
+      '<p class="step" id="job-step">Starting…</p>' +
+      '<details class="job-log-details"><summary>Output</summary><pre id="job-log">(no output yet)</pre></details>';
     card.appendChild(status);
   }
   status.hidden = false;
@@ -992,8 +1002,13 @@ async function startManagerJob(path, title, source, key) {
     const res = await call(path, { method: 'POST' });
     const id = res.data && res.data.jobId;
     if (!id) throw new Error('the manager did not start a job');
-    showJob(title, card);
-    watchJob(id, card);
+    // The manager runs one job at a time and answers a second request with the
+    // one already running. Painting it under the card just clicked would name
+    // the wrong addon, so the running job's own card is the one that follows it.
+    const running = res.data.existing ? res.data.job : null;
+    const home = running ? managerJobCard(null, running.kind === 'update' ? 'update' : running.addon) : card;
+    showJob(running ? describeManagerJob(running) : title, home || card);
+    watchJob(id, home || card);
   } catch (err) {
     busy(false);
     // In the page rather than in a modal the browser owns, which would cover
@@ -1080,7 +1095,14 @@ function liveManagerJob(job: ManagerJobView | null): ManagerJobView | null {
   return job && (job.state === "queued" || job.state === "running") ? job : null;
 }
 
-/** Live manager progress stays with the card whose action started the job. */
+/**
+ * Live manager progress stays with the card whose action started the job.
+ *
+ * The log is behind a summary rather than gone: enabling an addon that has to
+ * install Docker spends minutes on one step, and what it is doing is in the
+ * log. Closed by default, because the state and the step are what a card has
+ * room for.
+ */
 function managerJobStatus(job: ManagerJobView): string {
   return `<div class="manager-job-status" data-manager-job-status aria-live="polite">
   <div class="job-summary">
@@ -1088,7 +1110,29 @@ function managerJobStatus(job: ManagerJobView): string {
     <span class="badge state-${esc(job.state)}" id="job-state">${esc(job.state)}</span>
   </div>
   <p class="step" id="job-step">${esc(job.step)}</p>
+  ${JOB_LOG_DETAILS}
 </div>`;
+}
+
+const JOB_LOG_DETAILS = `<details class="job-log-details">
+    <summary>Output</summary>
+    <pre id="job-log">(no output yet)</pre>
+  </details>`;
+
+/**
+ * A job with no card of its own -- an update watched from the index, an enable
+ * watched from the update page -- still has to be visible, so it takes a block
+ * of its own above the cards.
+ */
+function managerJobBlock(job: ManagerJobView | null, homeCard: string | null): string {
+  const live = liveManagerJob(job);
+  if (!live || managerJobKey(live) === homeCard) return "";
+  return `<article class="card" data-manager-job-card="${esc(managerJobKey(live))}">${managerJobStatus(live)}</article>`;
+}
+
+/** The card a job belongs to: the addon it is about, or the update page's own. */
+function managerJobKey(job: ManagerJobView): string {
+  return job.kind === "update" ? "update" : job.addon;
 }
 
 /** Failure details survive navigation without creating a second progress card. */
@@ -1115,8 +1159,11 @@ export function indexPage(
   const cards = enabled.map((name) => addonCard(name, true, options.job ?? null)).join("");
   const availableCards = available.map((name) => addonCard(name, false, options.job ?? null)).join("");
 
+  const live = liveManagerJob(options.job ?? null);
+  const claimed = live && [...enabled, ...available].includes(managerJobKey(live)) ? managerJobKey(live) : null;
   const content = `<div class="page-heading"><h1>Addons</h1><a class="btn" href="${UPDATE_PATH}">Updates</a></div>` +
     managerJobFailure(options.job ?? null) +
+    managerJobBlock(options.job ?? null, claimed) +
     (cards
       ? `<div class="addon-grid">${cards}</div>`
       : `<div class="card empty">${esc(available.length
@@ -1147,6 +1194,7 @@ export function updatePage(
   const content = `<div class="update-page">
   <div class="page-heading"><h1>Update CloudPanel Addons</h1><a class="btn" href="/addons/">Back to Addons</a></div>
   ${managerJobFailure(options.job ?? null)}
+  ${managerJobBlock(options.job ?? null, "update")}
   <article class="card" data-manager-job-card="update">
     <div class="card-header"><h2>CloudPanel Addons</h2><span class="badge ${update ? "state-queued" : info ? "state-done" : "state-unknown"}">${status}</span></div>
     <dl class="update-versions">
@@ -1158,7 +1206,8 @@ export function updatePage(
       <a class="btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener noreferrer">Changelog</a>
       ${update ? `<button class="btn btn-primary" type="button" onclick="updateNow(this)"${live ? " disabled" : ""}>Install update</button>` : ""}
     </div>
-    ${live ? managerJobStatus(live) : ""}
+    ${live && live.kind === "update" ? managerJobStatus(live) : ""}
+    ${live && live.kind !== "update" ? '<p class="hint">Another addon operation is in progress; the update can start once it finishes.</p>' : ""}
   </article>
 </div>`;
   return managerPage("Update CloudPanel Addons", content, update, options);

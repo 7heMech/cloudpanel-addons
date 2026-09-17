@@ -340,6 +340,18 @@ describe("the manager index", () => {
     expect(running).toContain('data-manager-job-status');
     expect(running).not.toContain('id="job-card"');
     expect(running.indexOf('data-manager-job-status')).toBeGreaterThan(running.indexOf('data-manager-job-card="stager"'));
+    // Enabling an addon can spend minutes installing Docker, and what it is
+    // doing is in the log. The card keeps it, closed.
+    expect(running).toContain('<details class="job-log-details">');
+    expect(running).toContain('<pre id="job-log">');
+
+    // An update has no addon card to live in, so it takes a block of its own
+    // rather than going unreported until the page reloads.
+    const updating = await render(["instatic"], null, {
+      job: { ...job, kind: "update", addon: "", step: "installing the latest release" },
+    });
+    expect(updating).toContain('data-manager-job-card="update"');
+    expect(updating).toContain("Updating clp-addons");
 
     const idle = await render(["instatic"], null, { job: null });
     expect(idle).not.toContain('<div class="manager-job-status"');
@@ -436,6 +448,15 @@ describe("the dedicated update page", () => {
     expect(html).toContain('data-manager-job-status');
     expect(html).not.toContain('id="job-card"');
     expect(html.indexOf('data-manager-job-status')).toBeGreaterThan(html.indexOf('onclick="updateNow(this)" disabled'));
+
+    // An enable is not what this card is about: it reports above, and the card
+    // says why its own button is disabled.
+    const enabling = await updatePage(release, "1.0.0", {
+      job: { ...job, kind: "enable", addon: "stager", step: "enabling stager" },
+    }).text();
+    expect(enabling).toContain('data-manager-job-card="stager"');
+    expect(enabling).toContain("Another addon operation is in progress");
+    expect(enabling.indexOf('data-manager-job-status')).toBeLessThan(enabling.indexOf('onclick="updateNow(this)" disabled'));
     const failure = await updatePage(release, "1.0.0", { job: { ...job, state: "failed", error: "checksum mismatch" } }).text();
     expect(failure).toContain("checksum mismatch");
     expect(failure).toContain('onclick="updateNow(this)">Install update</button>');
