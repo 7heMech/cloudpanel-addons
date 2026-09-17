@@ -547,12 +547,18 @@ function waitForManager(id, done) {
   async function tick() {
     if (stopped) return;
     try {
-      // A status alone is not the answer: a lapsed session redirects to the
-      // login page, which fetch follows and reports as a perfectly good 200.
       const res = await fetch(CLP_BASE + '/health', {
         cache: 'no-store',
         headers: { 'Accept': 'application/json' },
       });
+      // A session that lapsed during the restart is redirected to the login
+      // page, which fetch follows and reports as a perfectly good 200. Waiting
+      // for it would spin here forever; reloading lands on the gate instead.
+      if (res.redirected) {
+        stopped = true;
+        location.reload();
+        return;
+      }
       const body = res.ok ? await res.json().catch(function () { return null; }) : null;
       if (body && body.ok === true) {
         stopped = true;

@@ -18,6 +18,9 @@ let cachedUpdate: { at: number; info: CliUpdateInfo | null } | null = null;
 /** The refresh currently talking to GitHub, so concurrent misses share one. */
 let refreshing: Promise<CliUpdateInfo | null> | null = null;
 
+/** Bumped by a reset, so a refresh it interrupted cannot write its answer. */
+let generation = 0;
+
 /**
  * Compare two semver strings (e.g. "0.9.4" and "0.9.3", or "v0.9.4" and "v0.9.3").
  * Returns > 0 if a > b, < 0 if a < b, 0 if equal.
@@ -45,6 +48,8 @@ async function fetchLatestRelease(
   repo: string,
   timeoutMs: number,
 ): Promise<CliUpdateInfo | null> {
+  const started = generation;
+  let info: CliUpdateInfo | null = null;
   try {
     const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
       headers: {
@@ -56,19 +61,18 @@ async function fetchLatestRelease(
 
     const data = res.ok ? ((await res.json()) as { tag_name?: string }) : null;
     const remoteTag = (data?.tag_name ?? "").replace(/^v/, "");
-    const info: CliUpdateInfo | null = remoteTag
-      ? {
-          current: currentVersion.replace(/^v/, ""),
-          latest: remoteTag,
-          hasUpdate: isNewerVersion(remoteTag, currentVersion),
-        }
-      : null;
-    cachedUpdate = { at: Date.now(), info };
-    return info;
+    if (remoteTag) {
+      info = {
+        current: currentVersion.replace(/^v/, ""),
+        latest: remoteTag,
+        hasUpdate: isNewerVersion(remoteTag, currentVersion),
+      };
+    }
   } catch {
-    cachedUpdate = { at: Date.now(), info: null };
-    return null;
+    info = null;
   }
+  if (started === generation) cachedUpdate = { at: Date.now(), info };
+  return info;
 }
 
 /**
@@ -93,16 +97,21 @@ export async function checkCliUpdate(
     return cached.info;
   }
 
-  const refresh =
-    refreshing ??
-    (refreshing = fetchLatestRelease(currentVersion, repo, timeoutMs).finally(() => {
-      refreshing = null;
-    }));
+  let refresh = refreshing;
+  if (!refresh) {
+    // Cleared by identity: a reset between start and settle may already have
+    // put a newer refresh here, and this one must not throw that away.
+    refresh = fetchLatestRelease(currentVersion, repo, timeoutMs).finally(() => {
+      if (refreshing === refresh) refreshing = null;
+    });
+    refreshing = refresh;
+  }
   return cached ? cached.info : refresh;
 }
 
 /** Reset cache, primarily used in test suites. */
 export function resetUpdateCache(): void {
+  generation++;
   cachedUpdate = null;
   refreshing = null;
 }
