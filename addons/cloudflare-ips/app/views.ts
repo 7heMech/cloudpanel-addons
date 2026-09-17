@@ -285,7 +285,7 @@ export function dashboardView(state: CloudflareState): string {
     <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}">
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
       <td class="site-cell">${esc(site.domain)}<div class="hint site-exception"${site.excludedFromAutomatic && state.autoEnableNewSites ? "" : " hidden"}>Excluded from automatic enabling</div></td>
-      <td data-label="Type">${esc(siteTypeLabel(site.type))}</td>
+      <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
       <td class="action-cell" data-label="Cloudflare only">
         <label class="switch"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
       </td>

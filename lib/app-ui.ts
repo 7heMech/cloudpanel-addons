@@ -263,8 +263,20 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   /* Keep the checkbox column a known size so the domain starts beside it, even
      when a panel stylesheet gives table cells an unexpected intrinsic width. */
   .fleet-table td.site-select { display: flex; flex: 0 0 42px; width: 42px; justify-content: center; }
-  /* The domain takes the rest of the first line; the labelled cells wrap below. */
-  .fleet-table td.site-cell { flex: 1 0 calc(100% - 54px); min-width: 0; font-size: 16px; }
+  /* The domain takes the first line, with what the site is as a tag beside it. */
+  .fleet-table td.site-cell { flex: 1 1 calc(100% - 160px); min-width: 55%; font-size: 16px; }
+  .fleet-table td.type-cell { flex: 0 1 auto; max-width: 40%; margin: 2px 0 0 auto; padding: 3px 8px;
+    border: 1px solid var(--border); border-radius: 4px; color: var(--muted);
+    font-size: 12px; line-height: 1.25; white-space: nowrap; }
+  /* Half the row each, whatever they hold: a cell that widens with its content
+     reflowed the whole row, so switching a site into maintenance -- where the
+     status badge grows by half its width -- moved every cell under it. */
+  .fleet-table td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; }
+  .fleet-table td.wide-cell { flex-basis: 100%; }
+  /* Two buttons do not fit half a phone's width, and a badge wider than its
+     half would reach into the cell beside it. */
+  .fleet-table td.action-cell:has(.btn) { flex-basis: 100%; }
+  .fleet-table td .badge { white-space: normal; }
   .fleet-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px;
     color: var(--table-heading); font-size: 12px; font-weight: 700; text-transform: uppercase; }
   .stats { gap: 20px; }

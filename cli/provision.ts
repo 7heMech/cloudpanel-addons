@@ -244,7 +244,10 @@ function installDocker(commands: ProvisionCommandRunner): void {
     if (!install.ok) fatal(`Docker installation failed: ${install.out || "get-docker.sh failed"}`);
     if (install.out) log.plain(install.out);
     const version = commands.tryRun("docker", ["--version"]);
-    log.ok(version.ok && version.out ? version.out : "Docker Engine installed");
+    if (version.ok && version.out) log.ok(version.out);
+    // Not fatal: `systemctl enable --now docker` below is what decides whether
+    // this install produced a usable daemon, and it says so itself.
+    else log.warn(`Docker installed, but 'docker --version' did not answer: ${version.out || "no output"}`);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

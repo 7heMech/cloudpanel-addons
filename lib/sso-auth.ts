@@ -1,4 +1,4 @@
-import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync } from "node:fs";
+import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
 import { dirname } from "node:path";
 import { AUTH_SOCKET_PATH, PANEL_PHP_INI, PANEL_USER } from "../cli/paths";
@@ -31,14 +31,26 @@ const MAX_ARRAY_ITEMS = 20_000;
  * a panel page, which a long job watched over SSE reaches easily.
  */
 const PHP_DEFAULT_GC_MAXLIFETIME = 1440;
-// Read once per ini: this is on the path of every authenticated request, and
-// the value only changes when the panel's FPM is restarted anyway. A file that
-// could not be read is not remembered, so a later read still finds it.
-const gcMaxlifetimeByIni = new Map<string, number>();
+// Read once per ini, and again whenever the file changes: this is on the path
+// of every authenticated request, but an operator who shortens the panel's
+// session lifetime should not have to restart the gateway for it to count. A
+// file that could not be read or stat'ed is not remembered.
+const gcMaxlifetimeByIni = new Map<string, { stamp: string; seconds: number }>();
+
+function iniStamp(path: string): string | null {
+  try {
+    const stat = statSync(path);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return null;
+  }
+}
 
 export function panelSessionLifetime(iniPath = PANEL_PHP_INI): number {
+  const stamp = iniStamp(iniPath);
+  if (stamp === null) return PHP_DEFAULT_GC_MAXLIFETIME;
   const cached = gcMaxlifetimeByIni.get(iniPath);
-  if (cached !== undefined) return cached;
+  if (cached && cached.stamp === stamp) return cached.seconds;
   let text: string;
   try {
     text = readFileSync(iniPath, "utf8");
@@ -51,7 +63,7 @@ export function panelSessionLifetime(iniPath = PANEL_PHP_INI): number {
     if (match) seconds = Number.parseInt(match[1]!, 10);
   }
   if (seconds <= 0) seconds = PHP_DEFAULT_GC_MAXLIFETIME;
-  gcMaxlifetimeByIni.set(iniPath, seconds);
+  gcMaxlifetimeByIni.set(iniPath, { stamp, seconds });
   return seconds;
 }
 
