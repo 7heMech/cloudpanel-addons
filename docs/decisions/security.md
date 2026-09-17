@@ -31,8 +31,15 @@ login page, and authentication failures do not fall back to anonymous access.
 
 The gate is the first thing a request meets, before the URL is taken apart and
 before any route is chosen, so there is no list of exceptions to keep correct.
-The liveness probe the update page polls is inside it: answering it early told
-an unauthenticated caller which panels run this project.
+The liveness probe the update page polls is inside it, and nothing reads it
+without a session: the page that polls it has one. Keeping it out would not hide
+much, since every `/addons/` path answers a stranger the same way, but it would
+leave one route decided before the gate for the next one to be modelled on.
+
+A response can outlive the request that authorized it. The job event stream
+rechecks the session as it polls and closes when it is no longer an
+administrator's, because a clone's job record carries the database and Instatic
+passwords it generated.
 
 State-changing HTTP requests also require the expected origin and a CSRF token.
 The token cookie is scoped to the whole panel rather than to `/addons`, because

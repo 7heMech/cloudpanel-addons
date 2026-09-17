@@ -2,6 +2,7 @@ import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync } fro
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
 import { dirname } from "node:path";
 import { AUTH_SOCKET_PATH, PANEL_USER } from "../cli/paths";
+import { jsonResponse } from "./app-http";
 import { callGatewayAuth } from "./gateway-client";
 
 const SESSION_COOKIE = "cloudpanel";
@@ -481,6 +482,12 @@ export function parsePanelSession(data: Uint8Array | string): PanelSession | nul
   }
 }
 
+/** Return the shared manager denial for an authenticated non-administrator. */
+export function adminGate(auth: AuthenticatedRequest | null): Response | null {
+  if (auth?.roles.includes("ROLE_ADMIN")) return null;
+  return jsonResponse({ ok: false, error: "administrator role required" }, { status: 403 });
+}
+
 export async function authenticateRequest(req: Request): Promise<{
   auth: AuthenticatedRequest | null;
   response?: Response;
@@ -497,4 +504,16 @@ export async function authenticateRequest(req: Request): Promise<{
     auth: null,
     response: result.kind === "unavailable" ? serviceUnavailableResponse() : redirectToLogin(),
   };
+}
+
+/**
+ * Whether the session behind a request is still an administrator's.
+ *
+ * For a response that outlives the request that opened it. The gateway rechecks
+ * status and role against CloudPanel's database, so this also sees a user who
+ * was deactivated or demoted rather than only an expired session.
+ */
+export async function stillAuthorized(req: Request): Promise<boolean> {
+  const gate = await authenticateRequest(req);
+  return gate.auth !== null && adminGate(gate.auth) === null;
 }

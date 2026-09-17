@@ -525,6 +525,12 @@ function watchJob(id) {
     es.addEventListener('restarting', function () {
       if (!finished) showJobReconnecting();
     });
+    // The session went away under the stream. Reloading lands on the gate,
+    // which sends the browser to the login page.
+    es.addEventListener('unauthorized', function () {
+      es.close();
+      location.reload();
+    });
     es.onerror = function () {
       if (finished) return;
       es.close();

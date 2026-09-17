@@ -13,9 +13,20 @@
 import type { Server } from "bun";
 import { jsonResponse, policyHeaders, safeDecodePathSegment } from "./app-http";
 import { validateJobId } from "./job-id";
+import { stillAuthorized } from "./sso-auth";
 
 /** How often the reader is asked for a fresh view of the job. */
 const POLL_INTERVAL_MS = 1000;
+
+/**
+ * How many poll ticks pass between re-checks of the session.
+ *
+ * A stream is authorized once, when it opens, and then runs until the job ends.
+ * What it sends is the job record, and a clone's record holds the database and
+ * Instatic passwords it generated, so a session revoked mid-job would keep
+ * receiving them. This bounds that to one interval.
+ */
+const AUTH_RECHECK_TICKS = 15;
 
 /** The fields the stream itself reasons about; addons add their own alongside. */
 export interface JobProgress {
@@ -123,8 +134,11 @@ export async function jobEventStream<J extends JobProgress>(options: {
   req: Request;
   getJob: JobReader<J>;
   server?: Server<unknown> | null;
+  /** Test-only; production always uses AUTH_RECHECK_TICKS. */
+  recheckTicks?: number;
 }): Promise<Response> {
   const { id, req, getJob, server } = options;
+  const recheckTicks = options.recheckTicks ?? AUTH_RECHECK_TICKS;
 
   const initial = await getJob(id);
   if (!initial.ok || !initial.data) {
@@ -178,6 +192,7 @@ export async function jobEventStream<J extends JobProgress>(options: {
         return;
       }
 
+      let ticks = 0;
       timer = setInterval(async () => {
         // A read goes through the gateway to the action binary, which can take
         // longer than the interval under load; overlapping them would queue up
@@ -185,6 +200,11 @@ export async function jobEventStream<J extends JobProgress>(options: {
         if (closed || inFlight) return;
         inFlight = true;
         try {
+          if (++ticks % recheckTicks === 0 && !(await stillAuthorized(req))) {
+            send(`event: unauthorized\ndata: ${JSON.stringify({ error: "session is no longer valid" })}\n\n`);
+            finish();
+            return;
+          }
           const res = await getJob(id);
           if (closed) return;
           if (!res.ok || !res.data) {

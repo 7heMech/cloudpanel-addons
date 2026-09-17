@@ -24,7 +24,9 @@ import {
 } from "./inject";
 import { fatal, Fatal, log, parseFlags, requireRoot, run, tryRun, writeAtomic } from "./util";
 import { runRecon } from "./recon";
-import { authenticateRequest, type AuthenticatedRequest } from "../lib/sso-auth";
+import { adminGate, authenticateRequest } from "../lib/sso-auth";
+// Re-exported because the manager's tests name it here.
+export { adminGate };
 import { splitMount } from "../lib/mount";
 import {
   esc, escJs, guardMutation, htmlResponse, jsonResponse, newCsrfToken, policyHeaders,
@@ -741,12 +743,6 @@ function internalPath(path: string): string {
   if (path === "/addons" || path === "/addons/") return "/";
   if (path.startsWith("/addons/")) return path.slice("/addons".length).replace(/\/+$/, "") || "/";
   return path.replace(/\/+$/, "") || "/";
-}
-
-/** Return the shared manager denial for an authenticated non-administrator. */
-export function adminGate(auth: AuthenticatedRequest | null): Response | null {
-  if (auth?.roles.includes("ROLE_ADMIN")) return null;
-  return jsonResponse({ ok: false, error: "administrator role required" }, { status: 403 });
 }
 
 /** The manager's own privileged verbs go over the same gateway the addons use. */
