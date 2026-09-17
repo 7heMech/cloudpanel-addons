@@ -136,7 +136,8 @@ there is no `<dialog>` or no notice holder. Below 760px the shell tightens: a di
 its buttons take the row, and it is bounded by the visual viewport so a phone's
 collapsing address bar cannot cover them. Live enable, disable and update jobs
 put their state, current step and output in the manager card that owns the job,
-with the log closed because the step is what a card has room for. A job whose
+with the log auto-expanding as output arrives so the operator can see the live
+progress while remaining collapsible if desired. A job whose
 card the page does not carry -- an update watched from the index -- takes a card
 of its own under the heading and above the rest, whether the page was drawn
 during the job or a duplicate request told the browser about it, so a job is

@@ -2,7 +2,7 @@
 // and what it sends includes a clone's generated passwords. It rechecks.
 import { expect, mock, test } from "bun:test";
 
-let authorized = true;
+let authorized: boolean | "unavailable" = true;
 const realSso = await import("../lib/sso-auth");
 mock.module("../lib/sso-auth", () => ({ ...realSso, stillAuthorized: async () => authorized }));
 
@@ -91,5 +91,38 @@ test("watcher snapshots become SSE frames and cancellation closes the watcher", 
     watchJob: () => ({ close: () => { watcherClosed = true; } }),
   });
   await cancelled.body!.cancel();
+  expect(watcherClosed).toBe(true);
+});
+
+test("a stream tolerates temporary auth service unavailability without emitting unauthorized", async () => {
+  authorized = "unavailable";
+  let watcherClosed = false;
+  let handlers: { onSnapshot: (snapshot: { job: typeof running; log: string }) => void; onClose: (error?: string) => void } | undefined;
+  const res = await jobEventStream({
+    id: "20260910T093000Z-a1b2c3",
+    req: new Request("https://panel.example/addons/stager/api/jobs/x/events"),
+    getJob,
+    watchJob: (_id, next) => {
+      handlers = next;
+      return { close: () => { watcherClosed = true; } };
+    },
+    recheckMs: 10,
+  });
+  const reader = res.body!.getReader();
+  const first = await reader.read();
+  expect(frameText(first.value)).toContain('"step":"Copying files"');
+
+  await new Promise((resolve) => setTimeout(resolve, 35));
+  expect(watcherClosed).toBe(false);
+
+  handlers!.onSnapshot({ job: { ...running, step: "Still running" }, log: "output" });
+  const second = await reader.read();
+  expect(frameText(second.value)).toContain('"step":"Still running"');
+  expect(watcherClosed).toBe(false);
+
+  authorized = false;
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  const third = await reader.read();
+  expect(frameText(third.value)).toStartWith("event: unauthorized");
   expect(watcherClosed).toBe(true);
 });

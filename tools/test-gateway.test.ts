@@ -10,7 +10,7 @@ import {
 } from "../lib/gateway-protocol";
 import { callGatewayAuth, callGatewayPanelInfo } from "../lib/gateway-client";
 import { createAuthActionServer } from "../cli/auth-action";
-import { panelSessionLifetime } from "../lib/sso-auth";
+import { panelSessionLifetime, parseAuthHelperReply } from "../lib/sso-auth";
 
 describe("Gateway Protocol & Server", () => {
   test("parseGatewayRequest parses structured JSON requests", () => {
@@ -229,7 +229,29 @@ describe("Gateway Protocol & Server", () => {
 
       const result = await callGatewayPanelInfo({ socketPath: sockPath, timeout: 1000 });
       expect(result.ok).toBe(false);
-      expect(result.error).toContain("valid");
+      expect(result.error).toContain("untrusted peer");
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("gateway peer check rejection returns untrusted peer error and auth helper treats as unavailable", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clp-gateway-peer-untrusted-"));
+    const sockPath = join(dir, "gateway.sock");
+
+    try {
+      const server = createAuthActionServer({ enforcePeer: true });
+      await new Promise<void>((resolve) => server.listen(sockPath, resolve));
+
+      const raw = await callGatewayAuth("somesessionid", sockPath, 1000);
+      const parsed = JSON.parse(raw.trim());
+      expect(parsed.ok).toBe(false);
+      expect(parsed.error).toBe("untrusted peer");
+
+      const reply = parseAuthHelperReply(raw);
+      expect(reply.kind).toBe("unavailable");
+
       await new Promise<void>((resolve) => server.close(() => resolve()));
     } finally {
       rmSync(dir, { recursive: true, force: true });

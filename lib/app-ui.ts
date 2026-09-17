@@ -521,6 +521,21 @@ function updateJobUI(job, log, root) {
   if (pre && log !== undefined) {
     pre.textContent = log || '(no output yet)';
     pre.scrollTop = pre.scrollHeight;
+    if (log && log.trim()) {
+      const details = pre.closest ? pre.closest('details') : null;
+      if (details) {
+        if (!details.dataset.logBound) {
+          details.dataset.logBound = 'true';
+          details.addEventListener('toggle', function () {
+            if (!details.open) details.dataset.userClosed = 'true';
+            else delete details.dataset.userClosed;
+          });
+        }
+        if (!details.open && !details.dataset.userClosed) {
+          details.open = true;
+        }
+      }
+    }
   }
   return job.state === 'done' || job.state === 'failed';
 }
