@@ -129,12 +129,14 @@ browser's `confirm` and `alert` survive only as what the shell degrades to where
 there is no `<dialog>` or no notice holder. Below 760px the shell tightens: a dialog gives up its desktop padding and
 its buttons take the row, and it is bounded by the visual viewport so a phone's
 collapsing address bar cannot cover them. Live enable, disable and update jobs
-put their state, current step and output in the manager card that contains the
-action, with the log closed because the step is what a card has room for. A job
-watched from a page with no card of its own -- an update seen from the index --
-takes a block above the cards rather than going unreported. The shared watcher
-scopes its updates to that card; a completed job still reloads the page so the
-server remains the source of the result view.
+put their state and current step in the manager card that owns the job. If that
+owner is not present on the current page, the browser creates a standalone card
+rather than attributing the job to the action the operator just clicked. The
+state, current step and output stay available in the card, with the log closed
+because the step is what a card has room for. A job watched from a page with no
+card of its own takes a block above the cards rather than going unreported. The
+shared watcher scopes its updates to that card; a completed job still reloads
+the page so the server remains the source of the result view.
 
 A page reached from a site's tab strip is drawn in site mode instead: the shell
 shows CloudPanel's site information and the applicable site tabs with the addon's

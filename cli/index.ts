@@ -947,21 +947,30 @@ const MANAGER_INDEX_CSS = `
 `;
 
 const MANAGER_INDEX_JS = `
-function managerJobCard(source, key) {
+function managerJobCard(source, key, standalone) {
   const fromSource = source && typeof source.closest === 'function'
     ? source.closest('[data-manager-job-card]')
     : null;
   if (fromSource) return fromSource;
   if (!key) return null;
-  return Array.from(CLP_ROOT.querySelectorAll('[data-manager-job-card]')).find(function (candidate) {
+  const owner = Array.from(CLP_ROOT.querySelectorAll('[data-manager-job-card]')).find(function (candidate) {
     return candidate.getAttribute('data-manager-job-card') === key;
   }) || null;
+  if (owner || !standalone) return owner;
+
+  const card = document.createElement('article');
+  card.className = 'card';
+  card.setAttribute('data-manager-job-card', key);
+  const parent = CLP_ROOT.querySelector('main') || CLP_ROOT.body || CLP_ROOT;
+  if (parent && typeof parent.appendChild === 'function') parent.appendChild(card);
+  return card;
 }
 
 function describeManagerJob(job) {
   if (!job) return 'Working';
   if (job.kind === 'update') return 'Updating clp-addons';
-  return (job.kind === 'disable' ? 'Disabling ' : 'Enabling ') + (job.addon || 'an addon');
+  const verb = job.kind === 'disable' ? 'Disabling' : job.kind === 'enable' ? 'Enabling' : 'Running';
+  return verb + ' ' + (job.addon || 'an addon');
 }
 
 function showJob(title, card) {
@@ -1002,13 +1011,14 @@ async function startManagerJob(path, title, source, key) {
     const res = await call(path, { method: 'POST' });
     const id = res.data && res.data.jobId;
     if (!id) throw new Error('the manager did not start a job');
-    // The manager runs one job at a time and answers a second request with the
-    // one already running. Painting it under the card just clicked would name
-    // the wrong addon, so the running job's own card is the one that follows it.
-    const running = res.data.existing ? res.data.job : null;
-    const home = running ? managerJobCard(null, running.kind === 'update' ? 'update' : running.addon) : card;
-    showJob(running ? describeManagerJob(running) : title, home || card);
-    watchJob(id, home || card);
+    // A duplicate request follows the job that is already running. Its owner
+    // is authoritative; the clicked card is only for a newly created job.
+    const existing = res.data.existing === true;
+    const running = existing ? res.data.job : null;
+    const jobKey = running && running.kind === 'update' ? 'update' : (running && running.addon) || 'manager-job';
+    const jobCard = existing ? managerJobCard(null, jobKey, true) : card;
+    showJob(running ? describeManagerJob(running) : title, jobCard);
+    watchJob(id, jobCard);
   } catch (err) {
     busy(false);
     // In the page rather than in a modal the browser owns, which would cover

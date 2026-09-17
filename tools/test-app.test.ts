@@ -1834,6 +1834,14 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
     disableBody.includes("if (!accepted) return;"));
   check("a failed manager job reports in the page, not through alert()",
     startBody.includes("notify(err.message, 'error')") && !startBody.includes("alert("));
+  check("an existing manager job uses its own standalone-capable card",
+    startBody.includes("const existing = res.data.existing === true")
+      && startBody.includes("const running = existing ? res.data.job : null")
+      && startBody.includes("managerJobCard(null,")
+      && startBody.includes("const jobKey = running && running.kind === 'update'")
+      && startBody.includes("showJob(running ? describeManagerJob(running) : title, jobCard)")
+      && startBody.includes("watchJob(id, jobCard)")
+      && !startBody.includes("|| card"));
 
   const emptyRes = indexPage([]);
   const emptyHtml = await emptyRes.text();
