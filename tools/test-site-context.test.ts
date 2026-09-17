@@ -25,8 +25,6 @@ test("the reproduced tab strip applies CloudPanel's own conditions", () => {
   expect(staticTabs).not.toContain("Databases");
   expect(staticTabs).toContain("Settings");
   expect(staticTabs).toContain("Maintenance");
-  // Neither addon tab is conditional: the manager denies anyone without
-  // ROLE_ADMIN at the socket, which is the check the injected Twig makes too.
   expect(staticTabs).toContain("Staging");
 });
 

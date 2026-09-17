@@ -23,6 +23,7 @@ import { CLOUDFLARE_IPS_ADDON } from "../addons/cloudflare-ips/addon";
 import { INSTATIC_ADDON } from "../addons/instatic/addon";
 import { LOGIN_THEME_ADDON } from "../addons/login-theme/addon";
 import { MAINTENANCE_ADDON } from "../addons/maintenance/addon";
+import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
 
 export type { AddonTarget };
@@ -73,6 +74,7 @@ const DEFINITIONS: AddonDefinition[] = [
   INSTATIC_ADDON,
   STAGER_ADDON,
   MAINTENANCE_ADDON,
+  PHP_RESOURCES_ADDON,
   LOGIN_THEME_ADDON,
 ];
 

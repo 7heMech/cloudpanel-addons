@@ -45,6 +45,19 @@ export const MAINTENANCE_ALLOWED_VERBS = new Set([
   "global-disable",
 ]);
 
+/**
+ * `reconcile` is deliberately absent, as it is for Cloudflare IP Access: it
+ * walks the whole fleet and is the repair path's to run, not a page's.
+ */
+export const PHP_RESOURCES_ALLOWED_VERBS = new Set([
+  "list",
+  "site",
+  "save-category",
+  "delete-category",
+  "assign",
+  "set-default",
+]);
+
 export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
   "list",
   "set",

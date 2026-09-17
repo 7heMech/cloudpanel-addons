@@ -61,8 +61,9 @@ const NATIVE_TABS: TabSpec[] = [
 
 /**
  * Addon tabs injected into the panel's strip, in the order they are appended
- * after the native ones. Keeping the label here keeps the injected Twig and the
- * reproduced strip from drifting apart.
+ * after the native ones -- ascending addon name, which is the order the
+ * injector settles on when several addons share one anchor. Keeping the label
+ * here keeps the injected Twig and the reproduced strip from drifting apart.
  */
 export const ADDON_SITE_TABS: { slug: string; label: string; url: string }[] = [
   { slug: "maintenance", label: "Maintenance", url: mountPath("maintenance") },
@@ -82,7 +83,7 @@ export function siteTypeLabel(type: string): string {
 /**
  * The tab strip CloudPanel would draw for this site, with `activeSlug` marked.
  *
- * Every addon tab is included: the manager denies anyone without ROLE_ADMIN at
+ * The role is not part of it: the manager denies anyone without ROLE_ADMIN at
  * the socket, which is the same role the injected Twig requires, so a caller
  * that reached a site-scoped page has already passed that check.
  */

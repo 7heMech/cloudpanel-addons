@@ -7,3 +7,4 @@
 - [Instatic CMS](decisions/instatic.md)
 - [Stager](decisions/stager.md)
 - [Maintenance Mode](decisions/maintenance.md)
+- [PHP Resources](decisions/php-resources.md)
