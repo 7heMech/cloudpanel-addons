@@ -29,7 +29,7 @@ import { adminGate, authenticateRequest } from "../lib/sso-auth";
 export { adminGate };
 import { splitMount } from "../lib/mount";
 import {
-  esc, escJs, guardMutation, htmlResponse, jsonResponse, newCsrfToken, policyHeaders,
+  esc, escJs, guardMutation, htmlResponse, jsonResponse, newCsrfToken,
   safeDecodePathSegment,
 } from "../lib/app-http";
 // Re-exported because this module was where it lived and the manager's tests
@@ -842,15 +842,9 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   // Nothing is answered before this, not even the liveness probe: a route
   // decided ahead of the gate answers whoever can reach the panel.
   const gate = await authenticateRequest(req);
-  if (gate.response) {
-    // The gate's own headers first -- it may be redirecting to a login or
-    // clearing a session -- then the shared policy over the top, which is
-    // the order this always used. Copied through Headers rather than
-    // Object.fromEntries so a Set-Cookie survives the copy.
-    const headers = new Headers(gate.response.headers);
-    for (const [name, value] of policyHeaders(null)) headers.set(name, value);
-    return new Response(gate.response.body, { status: gate.response.status, headers });
-  }
+  // Sent as the gate built it. The shared header policy used to go over the
+  // top, which is what made a refusal here look unlike the panel's own.
+  if (gate.response) return gate.response;
 
   // The manager is an administrative surface. Keep this decision at the
   // shared socket boundary so every mounted HTML and API route, including

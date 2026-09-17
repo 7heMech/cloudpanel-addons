@@ -32,9 +32,14 @@ login page, and authentication failures do not fall back to anonymous access.
 The gate is the first thing a request meets, before the URL is taken apart and
 before any route is chosen, so there is no list of exceptions to keep correct.
 The liveness probe the update page polls is inside it, and nothing reads it
-without a session: the page that polls it has one. Keeping it out would not hide
-much, since every `/addons/` path answers a stranger the same way, but it would
-leave one route decided before the gate for the next one to be modelled on.
+without a session: the page that polls it has one.
+
+What a stranger gets back is the redirect Symfony sends for any path CloudPanel
+will not serve them, reproduced byte for byte: same status, same headers, same
+body, and no `Content-Length`, which means streaming the body rather than
+handing Bun one whose length it can count. The project's own header policy used
+to go over the top of it, and that was the one thing that told `/addons` apart
+from the rest of the panel. It still applies to everything behind the gate.
 
 A response can outlive the request that authorized it. The job event stream
 rechecks the session as it polls and closes when it is no longer an

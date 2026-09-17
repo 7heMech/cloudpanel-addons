@@ -83,3 +83,25 @@ test("an administrator reaches the probe and the routes behind it", () => {
   expect(index.status).toBe(200);
   expect(index.reached).toContain("update-check");
 });
+
+// Recorded from a CloudPanel 2.5.4-3+clp-bookworm staging box:
+//   curl -sk https://<panel>:8443/notloggedin
+// A refusal under /addons has to be this response and no other, or the route is
+// distinguishable from any other path the panel does not serve to a stranger.
+const CLOUDPANEL_REDIRECT_SHA = "af7924f0101b882e16aab40bb87254cce1c58be1218b1153bae68d6f6121de49";
+
+test("a refusal is byte-identical to the panel's own unauthenticated redirect", async () => {
+  const { redirectToLogin } = await import("../lib/sso-auth");
+  const res = redirectToLogin();
+  const body = await res.text();
+
+  expect(res.status).toBe(302);
+  expect(Bun.CryptoHasher.hash("sha256", body, "hex")).toBe(CLOUDPANEL_REDIRECT_SHA);
+  expect(res.headers.get("location")).toBe("/login");
+  expect(res.headers.get("content-type")).toBe("text/html; charset=UTF-8");
+  expect(res.headers.get("cache-control")).toBe("no-cache, private");
+  // The header policy is what used to give this away; the panel sends none of it.
+  for (const header of ["content-security-policy", "x-frame-options", "referrer-policy", "x-content-type-options"]) {
+    expect(res.headers.get(header), `${header} is not on the panel's redirect`).toBeNull();
+  }
+});

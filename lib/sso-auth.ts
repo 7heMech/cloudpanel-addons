@@ -28,12 +28,45 @@ function readCookie(req: Request, name: string): string | null {
   return new Bun.CookieMap(req.headers.get("cookie") ?? "").get(name) || null;
 }
 
-function redirectToLogin(): Response {
-  return new Response(null, {
+/**
+ * Symfony's redirect, reproduced byte for byte.
+ *
+ * An anonymous caller should learn nothing from a path under /addons that any
+ * other panel path would not tell it. CloudPanel answers one of those with this
+ * response; sending the project's own header policy instead was the single
+ * thing that told the two apart.
+ */
+const LOGIN_REDIRECT_BODY = [
+  "<!DOCTYPE html>",
+  "<html>",
+  "    <head>",
+  '        <meta charset="UTF-8" />',
+  `        <meta http-equiv="refresh" content="0;url='/login'" />`,
+  "",
+  "        <title>Redirecting to /login</title>",
+  "    </head>",
+  "    <body>",
+  '        Redirecting to <a href="/login">/login</a>.',
+  "    </body>",
+  "</html>",
+].join("\n");
+
+export function redirectToLogin(): Response {
+  // Streamed rather than handed over as a string, because Bun sets
+  // Content-Length for a body whose length it knows and the panel's own
+  // redirect carries none.
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(LOGIN_REDIRECT_BODY));
+      controller.close();
+    },
+  });
+  return new Response(body, {
     status: 302,
     headers: {
+      "Content-Type": "text/html; charset=UTF-8",
+      "Cache-Control": "no-cache, private",
       Location: "/login",
-      "Cache-Control": "no-store",
     },
   });
 }
