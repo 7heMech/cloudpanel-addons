@@ -26,6 +26,14 @@ token shape with depth and item limits. It checks expiry and MFA state. On a
 normal CloudPanel installation it also rechecks the user's active status and
 role in CloudPanel's database for every request.
 
+Expiry is the session's own `u + l` metadata. CloudPanel leaves
+`session.cookie_lifetime` at 0, so `l` is 0 and the bound is whenever PHP's
+garbage collector would drop the file: the gateway reads
+`session.gc_maxlifetime` from the panel's own php.ini rather than assume PHP's
+documented 1440 seconds, which had been logging operators out of the addon
+pages twenty-four minutes after their last panel page -- a wait a job watched
+over SSE reaches on its own.
+
 The manager requires `ROLE_ADMIN`. Invalid sessions return to CloudPanel's
 login page, and authentication failures do not fall back to anonymous access.
 State-changing HTTP requests also require the expected origin and a CSRF token.

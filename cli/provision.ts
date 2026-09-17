@@ -224,14 +224,27 @@ function enforceNoDockerMembership(commands: ProvisionCommandRunner): void {
 
 const DOCKER_INSTALL_SCRIPT_URL = "https://get.docker.com";
 
+/**
+ * The installer prints nothing until it is finished, which is minutes on a
+ * fresh host and reads as a hung job in the panel's progress view. The lines
+ * here are what that wait is spent on, and the captured output follows so the
+ * log says which packages arrived.
+ */
 function installDocker(commands: ProvisionCommandRunner): void {
   const tmpDir = mkdtempSync(join(tmpdir(), "clp-addons-docker-"));
   try {
     const script = join(tmpDir, "get-docker.sh");
+    log.step(`downloading Docker's own installer from ${DOCKER_INSTALL_SCRIPT_URL}`);
     const download = commands.tryRun("curl", ["-fsSL", DOCKER_INSTALL_SCRIPT_URL, "-o", script]);
     if (!download.ok) fatal(`could not download Docker: ${download.out || "curl failed"}`);
+    log.step("running get-docker.sh: it adds Docker's apt repository and installs Docker Engine,");
+    log.plain("  the CLI, containerd and the compose plugin. This takes a few minutes on a fresh");
+    log.plain("  server, and prints nothing until apt is done.");
     const install = commands.tryRun("sh", [script]);
     if (!install.ok) fatal(`Docker installation failed: ${install.out || "get-docker.sh failed"}`);
+    if (install.out) log.plain(install.out);
+    const version = commands.tryRun("docker", ["--version"]);
+    log.ok(version.ok && version.out ? version.out : "Docker Engine installed");
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -260,9 +273,10 @@ export function ensureRequiredUnits(
     // `enable --now` below has anything to start.
     const loadState = commands.tryRun("systemctl", ["show", "docker", "--property=LoadState", "--value"]);
     if (loadState.out.trim() !== "loaded") {
-      log.step("installing Docker");
+      log.step(`Docker is not installed on this server; ${spec.name} needs it to run containers`);
       installDocker(commands);
     }
+    log.step("enabling and starting the docker service");
     if (!commands.tryRun("systemctl", ["enable", "--now", "docker"]).ok) {
       fatal("docker is not active; installing it did not bring the service up");
     }

@@ -56,8 +56,6 @@ html.dark #template-ace .ace_comment { color:#93a1ad; }
 .bypass-field span { margin-bottom:7px; }
 .bypass-field textarea { min-height:110px; resize:vertical; font-family:var(--mono); }
 .bypass-actions { justify-content:flex-end; }
-.fleet-site { font-weight:600; }
-.fleet-site a { overflow-wrap:anywhere; }
 .global-card { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
 .global-card h2 { margin:0 0 8px; }
 .global-card p { margin:0; }
@@ -544,12 +542,12 @@ export function fleetView(sites: MaintenanceSiteView[], globalEnabled = false): 
   const inMaintenanceCount = globalEnabled ? sites.length : siteMaintenanceCount;
   const liveCount = globalEnabled ? 0 : available.length - siteMaintenanceCount;
   const rows = sites.map((site) => `<tr>
-    <td class="fleet-site"><a href="${BASE}?domain=${encodeURIComponent(site.domain)}">${esc(site.domain)}</a>${site.error ? `<div class="hint">${esc(site.error)}</div>` : ""}</td>
-    <td>${esc(siteTypeLabel(site.type))}</td>
-    <td>${statusBadge(site, globalEnabled)}</td>
-    <td>${site.customTemplate ? "Custom" : "Default"}</td>
-    <td>${site.bypasses.length}</td>
-    <td class="action-cell"><label class="switch switch-danger"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" data-available="${!site.error}" aria-label="Maintenance mode for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} ${site.error ? "disabled" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label></td>
+    <td class="site-cell"><a href="${BASE}?domain=${encodeURIComponent(site.domain)}">${esc(site.domain)}</a>${site.error ? `<div class="hint">${esc(site.error)}</div>` : ""}</td>
+    <td data-label="Type">${esc(siteTypeLabel(site.type))}</td>
+    <td data-label="Effective status">${statusBadge(site, globalEnabled)}</td>
+    <td data-label="Page">${site.customTemplate ? "Custom" : "Default"}</td>
+    <td data-label="Bypasses">${site.bypasses.length}</td>
+    <td class="action-cell" data-label="Site setting"><label class="switch switch-danger"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" data-available="${!site.error}" aria-label="Maintenance mode for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} ${site.error ? "disabled" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label></td>
   </tr>`).join("");
   return `<div class="page-heading" data-global-maintenance="${globalEnabled}"><div><h1>Maintenance Mode</h1><p>Switch sites to a 503 maintenance page without reloading Nginx.</p></div></div>
   <div class="card stats">
@@ -559,7 +557,7 @@ export function fleetView(sites: MaintenanceSiteView[], globalEnabled = false): 
   </div>
   ${globalCard(globalEnabled, sites.length === 0)}
   <div class="card card-table"><div class="card-header"><h2>Sites</h2></div>
-  ${sites.length ? `<table><thead><tr><th scope="col">Site</th><th scope="col">Type</th><th scope="col">Effective status</th><th scope="col">Page</th><th scope="col">Bypasses</th><th scope="col" class="action-cell">Site setting</th></tr></thead><tbody data-global-maintenance="${globalEnabled}">${rows}</tbody></table>` : '<div class="empty">No CloudPanel sites were found.</div>'}
+  ${sites.length ? `<table class="fleet-table"><thead><tr><th scope="col">Site</th><th scope="col">Type</th><th scope="col">Effective status</th><th scope="col">Page</th><th scope="col">Bypasses</th><th scope="col" class="action-cell">Site setting</th></tr></thead><tbody data-global-maintenance="${globalEnabled}">${rows}</tbody></table>` : '<div class="empty">No CloudPanel sites were found.</div>'}
   </div>`;
 }
 

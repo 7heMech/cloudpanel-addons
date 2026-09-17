@@ -11,14 +11,11 @@ const BASE = mountPath("php-resources");
 // Cards, switches, the form grid, the confirmation dialog and the inline notice
 // are in lib/app-ui; only what this addon alone draws is here.
 const STYLE = `
-.site-select { width:42px; text-align:center; }
-.site-select input { width:18px; height:18px; margin:0; accent-color:var(--primary); }
 .default-card { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
 .default-card h2 { margin:0 0 8px; }
 .default-card p { margin:0; }
 .default-choice { flex:0 0 260px; max-width:100%; }
-.name-cell { font-weight:600; overflow-wrap:anywhere; max-width:340px; }
-.name-cell .hint { font-weight:400; }
+.name-cell { max-width:340px; }
 .numeric { text-align:right; font-variant-numeric:tabular-nums; }
 .limit-cell { white-space:nowrap; }
 .limit-cell .hint { white-space:normal; }
@@ -490,13 +487,13 @@ function bulkOptions(categories: PoolCategory[]): string {
 
 function categoryRow(category: PoolCategory, sites: number, isDefault: boolean): string {
   return `<tr data-category="${esc(JSON.stringify(category))}" data-sites="${sites}">
-    <td class="name-cell">${esc(category.name)}${
+    <td class="site-cell name-cell">${esc(category.name)}${
       isDefault ? '<span class="badge state-default">Default for new sites</span>' : ""
     }${category.description ? `<div class="hint">${esc(category.description)}</div>` : ""}</td>
-    <td class="limit-cell">${esc(workerSummary(category.profile))}
+    <td class="limit-cell" data-label="Limits">${esc(workerSummary(category.profile))}
       <div class="hint">${esc(recycleSummary(category.profile))}</div></td>
-    <td class="numeric">${sites}</td>
-    <td class="action-cell"><div class="actions">
+    <td class="numeric" data-label="Sites">${sites}</td>
+    <td class="action-cell" data-label="Actions"><div class="actions">
       <button class="btn" type="button" onclick="openCategoryDialog(this)">Edit</button>
       <button class="btn btn-danger" type="button" onclick="deleteCategory(this)">Delete</button>
     </div></td>
@@ -506,12 +503,12 @@ function categoryRow(category: PoolCategory, sites: number, isDefault: boolean):
 function siteTableRow(site: PoolSiteState, categories: PoolCategory[]): string {
   return `<tr data-domain="${esc(site.domain)}" data-category-id="${esc(site.categoryId ?? "")}" data-drifted="${site.drifted}">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSelection()" aria-label="Select ${esc(site.domain)}"></td>
-    <td class="name-cell">${esc(site.domain)}${
+    <td class="site-cell">${esc(site.domain)}${
       site.drifted ? '<div class="hint">Its pool file no longer matches this category.</div>' : ""
     }</td>
-    <td>${esc(site.phpVersion)}</td>
-    <td><select aria-label="Category for ${esc(site.domain)}" onchange="assignRow(this)">${categoryOptions(categories, site.categoryId)}</select></td>
-    <td class="limit-cell">${esc(workerSummary(site.current))}</td>
+    <td data-label="PHP">${esc(site.phpVersion)}</td>
+    <td data-label="Category"><select aria-label="Category for ${esc(site.domain)}" onchange="assignRow(this)">${categoryOptions(categories, site.categoryId)}</select></td>
+    <td class="limit-cell" data-label="Now running">${esc(workerSummary(site.current))}</td>
   </tr>`;
 }
 
@@ -555,7 +552,7 @@ export function dashboardView(state: PhpResourcesState): string {
   </div>
   <div class="card card-table"><div class="card-header"><h2>Categories</h2></div>
   ${state.categories.length
-    ? `<table><thead><tr><th scope="col">Category</th><th scope="col">Limits</th>
+    ? `<table class="fleet-table"><thead><tr><th scope="col">Category</th><th scope="col">Limits</th>
         <th scope="col" class="numeric">Sites</th><th scope="col" class="action-cell">Actions</th></tr></thead>
       <tbody>${categoryRows}</tbody></table>`
     : '<div class="empty">No categories yet. Create one to give a group of sites the same PHP-FPM limits.</div>'}
@@ -568,7 +565,7 @@ export function dashboardView(state: PhpResourcesState): string {
         <select class="toolbar-end" id="bulk-category" aria-label="Category to put the selected sites in">${bulkOptions(state.categories)}</select>
         <button class="btn" id="assign-selected" type="button" disabled onclick="assignSelected()">Assign selected</button>
       </div>
-      <table><thead><tr>
+      <table class="fleet-table"><thead><tr>
         <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
         <th scope="col">Site</th><th scope="col">PHP</th><th scope="col">Category</th><th scope="col">Now running</th>
       </tr></thead><tbody>${siteRows}</tbody></table>`

@@ -9,13 +9,10 @@ const BASE = mountPath("cloudflare-ips");
 // Switches, the toolbar, the confirmation dialog and the inline notice come
 // from lib/app-ui so this addon looks like the rest of the manager.
 const STYLE = `
-.site-select { width: 42px; text-align: center; }
-.site-select input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); }
 .fleet-card, .policy-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
 .fleet-card h2, .policy-card h2 { margin: 0 0 8px; }
 .fleet-card p, .policy-card p { margin: 0; }
 .fleet-card .actions { flex-shrink: 0; }
-.site-cell { font-weight: 600; overflow-wrap: anywhere; }
 @media (max-width: 700px) {
   .fleet-card, .policy-card { flex-direction: column; }
 }
@@ -283,8 +280,8 @@ export function dashboardView(state: CloudflareState): string {
     <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}">
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
       <td class="site-cell">${esc(site.domain)}<div class="hint site-exception"${site.excludedFromAutomatic && state.autoEnableNewSites ? "" : " hidden"}>Excluded from automatic enabling</div></td>
-      <td>${esc(siteTypeLabel(site.type))}</td>
-      <td class="action-cell">
+      <td data-label="Type">${esc(siteTypeLabel(site.type))}</td>
+      <td class="action-cell" data-label="Cloudflare only">
         <label class="switch"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
       </td>
     </tr>`).join("");
@@ -321,7 +318,7 @@ export function dashboardView(state: CloudflareState): string {
             <button class="btn toolbar-end" id="enable-selected" type="button" disabled onclick="setSelectedSites(true)">Enable selected</button>
             <button class="btn" id="disable-selected" type="button" disabled onclick="setSelectedSites(false)">Disable selected</button>
           </div>
-          <table>
+          <table class="fleet-table">
             <thead><tr>
               <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
               <th scope="col">Site</th><th scope="col">Type</th><th scope="col" class="action-cell">Cloudflare only</th>
