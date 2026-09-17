@@ -16,7 +16,7 @@ import {
 } from "../../cli/action-common";
 import {
   createJobDir, createJobLog, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet, jobTimestamp,
-  JOB_ID_RE, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, type PruneJobsResult,
+  JOB_ID_RE, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord, type PruneJobsResult,
 } from "../../cli/job-store";
 
 const REGISTRY_IMAGE = "ghcr.io/corebunch/instatic";
@@ -108,7 +108,7 @@ export const DEFAULT_INSTATIC_ACTION_PATHS: InstaticActionPaths = {
   homeDir: "/home",
 };
 
-export type InstaticVerb = "list" | "create" | "update" | "start" | "stop" | "restart" | "recreate" | "snapshot" | "backup" | "status" | "logs" | "delete" | "job" | "jobs" | "prune" | "run";
+export type InstaticVerb = "list" | "create" | "update" | "start" | "stop" | "restart" | "recreate" | "snapshot" | "backup" | "status" | "logs" | "delete" | "job" | "watch-job" | "jobs" | "prune" | "run";
 
 export interface ParsedInstaticAction {
   verb: InstaticVerb;
@@ -185,7 +185,7 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
   argv = argv.flatMap((arg) => /^--(?:domain|port|tag|confirm|tls|job)=/.test(arg)
     ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)] : [arg]);
   if (argv.length === 0) {
-    failAction("usage: clp-addons action instatic {list|create|update|recreate|start|stop|restart|delete|snapshot|backup|status|logs|job|jobs|prune|run} [options]");
+    failAction("usage: clp-addons action instatic {list|create|update|recreate|start|stop|restart|delete|snapshot|backup|status|logs|job|watch-job|jobs|prune|run} [options]");
   }
 
   const verb = argv[0] as string;
@@ -229,6 +229,7 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
       if (domain) normalizedDomain = validateDomain(domain, paths.panelIdentityFile);
       break;
     case "job":
+    case "watch-job":
     case "run":
       if (!job) failAction(`${verb} requires --job`);
       validateJobId(job);
@@ -268,6 +269,7 @@ function parseAction(argv: string[], paths: InstaticActionPaths): ParsedInstatic
       if (domain || port || tag || confirm || job) failAction(`${verb} takes no arguments`);
       break;
     case "job":
+    case "watch-job":
     case "run":
       if (domain || port || tag || confirm) failAction(`${verb} takes only --job`);
       break;
@@ -1579,20 +1581,20 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
     }
 
     setStep(jDir, "instance created successfully");
-    jobSet(jDir, "state", "done");
     jobSet(jDir, "finishedAt", dateStamp(true));
     try {
       cpSync(logPath, join(dir, "create.log"));
     } catch {}
+    jobSet(jDir, "state", "done");
 
     emitActionOk({ domain, port, tag, container: name, siteUser: siteUserFinal, siteCreatedByAddon: siteCreated, status: "running" });
   } catch (error) {
     if (cleanupActive) cleanupCreate(name, dir, domain, siteCreated, paths, storage);
-    jobSet(jDir, "state", "failed");
     jobSet(jDir, "finishedAt", dateStamp(true));
     const msg = error instanceof Error ? error.message : String(error);
     jobSet(jDir, "error", msg);
     diagnostic(`[instatic] ERROR: ${msg}\n`);
+    jobSet(jDir, "state", "failed");
     throw error;
   } finally {
     if (activeTranscript) {
@@ -1606,6 +1608,16 @@ function cmdJob(paths: InstaticActionPaths, id: string): void {
   const dir = jobDir(paths, id);
   if (!isDirectory(dir)) failAction(`no such job: ${id}`);
   emitActionOk({ job: jobJson(paths, dir, id), log: readJobLog(dir) });
+}
+
+async function cmdWatchJob(paths: InstaticActionPaths, id: string): Promise<void> {
+  const dir = jobDir(paths, id);
+  if (!isDirectory(dir)) failAction(`no such job: ${id}`);
+  await watchJobRecord({
+    dir,
+    read: () => ({ job: jobJson(paths, dir, id), log: readJobLog(dir) }),
+    emit: (data) => emitActionOk(data),
+  });
 }
 
 function cmdJobs(paths: InstaticActionPaths): void {
@@ -1647,6 +1659,7 @@ async function dispatch(action: ParsedInstaticAction, paths: InstaticActionPaths
     case "status": cmdStatus(action); return;
     case "logs": cmdLogs(action); return;
     case "job": cmdJob(paths, action.job); return;
+    case "watch-job": await cmdWatchJob(paths, action.job); return;
     case "jobs": cmdJobs(paths); return;
     case "prune": cmdPrune(paths); return;
     case "run": await cmdRun(action, paths); return;
@@ -1674,12 +1687,12 @@ export async function runInstaticAction(argv: string[], options?: InstaticAction
     chmodSync(paths.lockDir, 0o700);
     mkdirSync(paths.dataBaseDir, { recursive: true });
 
-    // `job` is a read: it prints the record and the log file the running job is
+    // `job` and `watch-job` are reads: they print the record and the log file the running job is
     // still appending to. It must never take the job lock -- `run` holds that
     // for the whole creation, so a locked read blocked every log poll and every
     // page load for the job until the create finished, which is the opposite of
     // what a progress page is for.
-    if (action.verb === "list" || action.verb === "jobs" || action.verb === "job" || action.verb === "prune" || action.verb === "backup") {
+    if (action.verb === "list" || action.verb === "jobs" || action.verb === "job" || action.verb === "watch-job" || action.verb === "prune" || action.verb === "backup") {
       await dispatch(action, paths);
     } else if (action.verb === "run") {
       const lock = join(paths.lockDir, `job-${action.job}.lock`);

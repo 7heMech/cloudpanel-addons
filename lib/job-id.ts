@@ -19,3 +19,8 @@ export const JOB_ID_RE = /^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}$/;
 export function validateJobId(value: unknown): string | null {
   return typeof value === "string" && JOB_ID_RE.test(value) ? value : null;
 }
+
+/** A job in one of these states will never change again. */
+export function isTerminalJobState(state: string): boolean {
+  return state === "done" || state === "failed";
+}

@@ -26,27 +26,70 @@ async function readFrames(res: Response, count: number): Promise<string[]> {
   return frames;
 }
 
+function frameText(value: unknown): string {
+  return typeof value === "string" ? value : new TextDecoder().decode(value as Uint8Array);
+}
+
 test("a stream whose session went away closes instead of sending more", async () => {
   authorized = false;
   const res = await jobEventStream({
     id: "20260910T093000Z-a1b2c3",
     req: new Request("https://panel.example/addons/stager/api/jobs/x/events"),
     getJob,
-    recheckTicks: 1,
+    recheckMs: 10,
   });
   const frames = await readFrames(res, 2);
   expect(frames[0]).toContain('"step":"Copying files"');
   expect(frames[1]).toStartWith("event: unauthorized");
 });
 
-test("a stream whose session is still good keeps streaming", async () => {
-  authorized = true;
+test("a watcher stream whose session went away closes instead of sending more", async () => {
+  authorized = false;
+  let watcherClosed = false;
   const res = await jobEventStream({
     id: "20260910T093000Z-a1b2c3",
     req: new Request("https://panel.example/addons/stager/api/jobs/x/events"),
     getJob,
-    recheckTicks: 1,
+    watchJob: (_id, _handlers) => ({ close: () => { watcherClosed = true; } }),
+    recheckMs: 10,
   });
   const frames = await readFrames(res, 2);
-  expect(frames[1]).not.toContain("unauthorized");
+  expect(frames[1]).toStartWith("event: unauthorized");
+  expect(watcherClosed).toBe(true);
+});
+
+test("watcher snapshots become SSE frames and cancellation closes the watcher", async () => {
+  authorized = true;
+  let handlers: { onSnapshot: (snapshot: { job: typeof running; log: string }) => void; onClose: (error?: string) => void } | undefined;
+  let watcherClosed = false;
+  const res = await jobEventStream({
+    id: "20260910T093000Z-a1b2c3",
+    req: new Request("https://panel.example/addons/stager/api/jobs/x/events"),
+    getJob,
+    watchJob: (_id, next) => {
+      handlers = next;
+      return { close: () => { watcherClosed = true; } };
+    },
+  });
+  const reader = res.body!.getReader();
+  const first = await reader.read();
+  expect(frameText(first.value)).toContain('"step":"Copying files"');
+
+  handlers!.onSnapshot({ job: { ...running, step: "Importing" }, log: "working\nmore" });
+  expect(frameText((await reader.read()).value)).toContain('"step":"Importing"');
+  handlers!.onSnapshot({ job: { ...running, step: "Importing" }, log: "working\nmore" });
+  expect(frameText((await reader.read()).value)).toBe(": keepalive\n\n");
+  handlers!.onSnapshot({ job: { ...running, state: "done", step: "" }, log: "done" });
+  expect(frameText((await reader.read()).value)).toContain('"state":"done"');
+  expect((await reader.read()).done).toBe(true);
+  expect(watcherClosed).toBe(true);
+
+  const cancelled = await jobEventStream({
+    id: "20260910T093000Z-a1b2c3",
+    req: new Request("https://panel.example/addons/stager/api/jobs/x/events"),
+    getJob,
+    watchJob: () => ({ close: () => { watcherClosed = true; } }),
+  });
+  await cancelled.body!.cancel();
+  expect(watcherClosed).toBe(true);
 });

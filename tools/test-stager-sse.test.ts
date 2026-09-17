@@ -155,34 +155,18 @@ describe("Stager SSE job monitoring", () => {
 
   it("streams job updates and keepalives until job completes", async () => {
     const origGetJob = stagerService.getJob;
-    let pollCount = 0;
-    stagerService.getJob = async (id: string) => {
-      pollCount++;
-      if (pollCount === 1) {
-        return {
-          ok: true,
-          data: { job: mockJob({ id, state: "running", step: "Copying files" }), log: "start\n" },
-        };
-      }
-      if (pollCount === 2) {
-        // unchanged tick -> keepalive
-        return {
-          ok: true,
-          data: { job: mockJob({ id, state: "running", step: "Copying files" }), log: "start\n" },
-        };
-      }
-      if (pollCount === 3) {
-        // step update
-        return {
-          ok: true,
-          data: { job: mockJob({ id, state: "running", step: "Importing DB" }), log: "start\ndb\n" },
-        };
-      }
-      // done
-      return {
-        ok: true,
-        data: { job: mockJob({ id, state: "done", step: "" }), log: "start\ndb\ndone\n" },
-      };
+    const origWatchJob = stagerService.watchJob;
+    stagerService.getJob = async (id: string) => ({
+      ok: true,
+      data: { job: mockJob({ id, state: "running", step: "Copying files" }), log: "start\n" },
+    });
+    stagerService.watchJob = (id, handlers) => {
+      const timers = [
+        setTimeout(() => handlers.onSnapshot({ job: mockJob({ id, state: "running", step: "Copying files" }), log: "start\n" }), 5),
+        setTimeout(() => handlers.onSnapshot({ job: mockJob({ id, state: "running", step: "Importing DB" }), log: "start\ndb\n" }), 10),
+        setTimeout(() => handlers.onSnapshot({ job: mockJob({ id, state: "done", step: "" }), log: "start\ndb\ndone\n" }), 15),
+      ];
+      return { close: () => timers.forEach(clearTimeout) };
     };
 
     try {
@@ -218,6 +202,7 @@ describe("Stager SSE job monitoring", () => {
       expect(c5.done).toBe(true);
     } finally {
       stagerService.getJob = origGetJob;
+      stagerService.watchJob = origWatchJob;
     }
   });
 

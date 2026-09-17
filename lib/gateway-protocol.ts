@@ -14,6 +14,7 @@ export const STAGER_ALLOWED_VERBS = new Set([
   "jobs",
   "prune",
   "job",
+  "watch-job",
 ]);
 
 export const INSTATIC_ALLOWED_VERBS = new Set([
@@ -30,6 +31,7 @@ export const INSTATIC_ALLOWED_VERBS = new Set([
   "logs",
   "job",
   "jobs",
+  "watch-job",
 ]);
 
 export const MAINTENANCE_ALLOWED_VERBS = new Set([
@@ -78,7 +80,10 @@ export const MANAGER_ALLOWED_VERBS = new Set([
   "disable",
   "update",
   "job",
+  "watch-job",
 ]);
+
+export const STREAM_ALLOWED_VERBS = new Set(["watch-job"]);
 
 export interface SanitizedSite {
   domain: string;
@@ -118,7 +123,8 @@ export type GatewayRequest =
       args?: string[];
       input?: string;
       timeoutMs?: number;
-    };
+    }
+  | { kind: "stream-action"; addon: string; verb: string; args?: string[] };
 
 export interface ActionResult<T = unknown> {
   ok: boolean;
@@ -158,6 +164,18 @@ export function parseGatewayRequest(raw: string): GatewayRequest | null {
           args: Array.isArray(obj.args) ? obj.args.filter((a: unknown) => typeof a === "string") : undefined,
           input: typeof obj.input === "string" ? obj.input : undefined,
           timeoutMs: typeof obj.timeoutMs === "number" ? obj.timeoutMs : undefined,
+        };
+      }
+      if (
+        obj.kind === "stream-action" &&
+        typeof obj.addon === "string" &&
+        typeof obj.verb === "string"
+      ) {
+        return {
+          kind: "stream-action",
+          addon: obj.addon,
+          verb: obj.verb,
+          args: Array.isArray(obj.args) ? obj.args.filter((a: unknown) => typeof a === "string") : undefined,
         };
       }
     } catch {

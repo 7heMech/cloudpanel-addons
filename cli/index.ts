@@ -42,8 +42,8 @@ import { CHANGELOG_URL, UPDATE_PATH } from "../lib/update-ui";
 import { ensureMaintenanceData, executeMaintenanceAction } from "../addons/maintenance/action";
 import { runAuthActionStdin } from "./auth-action";
 import { pruneManagerJobs, runManagerAction, type ManagerJobView, type ManagerOps } from "./manager-action";
-import { callGatewayAction, type ActionResult } from "../lib/gateway-client";
-import { jobEventStream } from "../lib/job-stream";
+import { callGatewayAction, streamGatewayAction, type ActionResult } from "../lib/gateway-client";
+import { jobEventStream, type JobWatcher } from "../lib/job-stream";
 import { JOB_ID_RE } from "./job-store";
 
 function resolveAddon(name: string | undefined): AddonSpec {
@@ -805,8 +805,27 @@ export async function handleManagerRoute(
     const id = safeDecodePathSegment(jobRoute[1]!);
     if (!id || !JOB_ID_RE.test(id)) return managerJson({ ok: false, error: "not a valid job id" }, 400);
     const getJob = (jobId: string) => managerAction<{ job: ManagerJobView; log: string }>("job", [`--id=${jobId}`]);
+    const watchJob = (jobId: string, handlers: Parameters<JobWatcher<ManagerJobView>>[1]) => {
+      let ended = false;
+      const close = (error?: string) => {
+        if (ended) return;
+        ended = true;
+        handlers.onClose(error);
+      };
+      return streamGatewayAction<{ job: ManagerJobView; log: string }>({
+        addon: "manager",
+        verb: "watch-job",
+        args: [`--id=${jobId}`],
+        onReply(reply) {
+          if (reply.ok && reply.data) handlers.onSnapshot(reply.data);
+          else if (!reply.ok) close(reply.error);
+          else close("gateway returned an empty job snapshot");
+        },
+        onClose: close,
+      });
+    };
     if (jobRoute[2] || req.headers.get("accept")?.includes("text/event-stream")) {
-      return jobEventStream({ id, req, server, getJob });
+      return jobEventStream({ id, req, server, getJob, watchJob });
     }
     const result = await getJob(id);
     return managerJson(result, result.ok ? 200 : 404);
@@ -1269,7 +1288,7 @@ function usage(): void {
   clp-addons action instatic <verb> [options]
   clp-addons action stager <verb> [options]
   clp-addons action maintenance <verb> --domain=<domain>
-  clp-addons action manager <enable|disable|update|job> [--addon=<addon>] [--id=<job>]
+  clp-addons action manager <enable|disable|update|job|watch-job> [--addon=<addon>] [--id=<job>]
   clp-addons action auth (session id on bounded stdin)
   clp-addons serve
   clp-addons --version

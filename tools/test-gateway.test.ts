@@ -31,6 +31,15 @@ describe("Gateway Protocol & Server", () => {
       input: undefined,
       timeoutMs: undefined,
     });
+
+    expect(parseGatewayRequest(
+      '{"kind":"stream-action","addon":"manager","verb":"watch-job","args":["--id=x",3]}'
+    )).toEqual({
+      kind: "stream-action",
+      addon: "manager",
+      verb: "watch-job",
+      args: ["--id=x"],
+    });
   });
 
   test("parseGatewayRequest falls back to legacy raw session IDs", () => {
@@ -43,6 +52,95 @@ describe("Gateway Protocol & Server", () => {
     expect(parseGatewayRequest("   \n")).toBeNull();
     expect(parseGatewayRequest('{"kind":"action","addon":"evil"}\n')).toBeNull();
     expect(parseGatewayRequest("!@#$%^&*()\n")).toBeNull();
+  });
+
+  test("stream-action rejects a verb outside the streaming allowlist", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clp-gateway-stream-deny-"));
+    const sockPath = join(dir, "gateway.sock");
+    try {
+      const server = createAuthActionServer({ enforcePeer: false });
+      await new Promise<void>((resolve) => server.listen(sockPath, resolve));
+      let reply = "";
+      await new Promise<void>((resolve) => {
+        Bun.connect({
+          unix: sockPath,
+          socket: {
+            open(conn) {
+              conn.write(JSON.stringify({ kind: "stream-action", addon: "stager", verb: "describe" }) + "\n");
+            },
+            data(_conn, chunk) { reply += Buffer.from(chunk).toString("utf8"); },
+            close() { resolve(); },
+          },
+        });
+      });
+      expect(JSON.parse(reply.trim())).toEqual({ ok: false, error: "invalid verb" });
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("stream-action forwards worker NDJSON in order", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clp-gateway-stream-lines-"));
+    const sockPath = join(dir, "gateway.sock");
+    const script = [1, 2, 3].map((n) => `process.stdout.write(JSON.stringify({ok:true,data:{line:${n}}})+"\\n")`).join(";");
+    const spawn = (() => Bun.spawn([process.execPath, "-e", script], {
+      stdin: "ignore", stdout: "pipe", stderr: "inherit",
+    })) as unknown as typeof Bun.spawn;
+    try {
+      const server = createAuthActionServer({ enforcePeer: false, spawn });
+      await new Promise<void>((resolve) => server.listen(sockPath, resolve));
+      let reply = "";
+      await new Promise<void>((resolve) => {
+        Bun.connect({
+          unix: sockPath,
+          socket: {
+            open(conn) {
+              conn.write(JSON.stringify({ kind: "stream-action", addon: "stager", verb: "watch-job" }) + "\n");
+            },
+            data(_conn, chunk) { reply += Buffer.from(chunk).toString("utf8"); },
+            close() { resolve(); },
+          },
+        });
+      });
+      expect(reply.trim().split("\n").map((line) => JSON.parse(line).data.line)).toEqual([1, 2, 3]);
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("stream-action kills the worker when the client closes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clp-gateway-stream-close-"));
+    const sockPath = join(dir, "gateway.sock");
+    const childRef: { current: { killed: boolean; kill(): void } | null } = { current: null };
+    const script = "process.stdout.write(JSON.stringify({ok:true,data:{state:'running'}})+'\\n'); setInterval(()=>{},1000)";
+    const spawn = (() => {
+      childRef.current = Bun.spawn([process.execPath, "-e", script], { stdin: "ignore", stdout: "pipe", stderr: "inherit" });
+      return childRef.current;
+    }) as unknown as typeof Bun.spawn;
+    try {
+      const server = createAuthActionServer({ enforcePeer: false, spawn });
+      await new Promise<void>((resolve) => server.listen(sockPath, resolve));
+      await new Promise<void>((resolve) => {
+        Bun.connect({
+          unix: sockPath,
+          socket: {
+            open(conn) {
+              conn.write(JSON.stringify({ kind: "stream-action", addon: "stager", verb: "watch-job" }) + "\n");
+            },
+            data(conn) { conn.end(); },
+            close() { resolve(); },
+          },
+        });
+      });
+      await Bun.sleep(25);
+      expect(childRef.current?.killed).toBe(true);
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    } finally {
+      childRef.current?.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("createAuthActionServer handles invalid requests safely over unix socket", async () => {

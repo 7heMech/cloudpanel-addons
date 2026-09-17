@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createJobDir, createJobLog, jobCommonFields, jobDir, jobGet, jobSet, jobTimestamp,
-  JOB_ID_RE, listJobIds, newJobId, pruneJobs, startJobUnit,
+  JOB_ID_RE, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
 } from "../cli/job-store";
 
 function withJobsDir<T>(fn: (jobsDir: string) => T): T {
@@ -70,6 +70,54 @@ describe("the shared job record", () => {
       expect(listJobIds(jobsDir)).toEqual([]);
       expect(pruneJobs({ addon: "instatic", jobsDir, retentionDays: 14, stuckMessage: "x" }))
         .toEqual({ removed: 0, stuck: 0 });
+    });
+  });
+
+  it("reads fewer than the requested number of log lines", () => {
+    withJobsDir((jobsDir) => {
+      const dir = createJobDir(jobsDir, "20260911T160031Z-35e759");
+      writeFileSync(join(dir, "log"), "first\nsecond\n");
+      expect(readJobLog(dir, 5)).toBe("first\nsecond");
+    });
+  });
+
+  it("reads only the requested number of lines from the end", () => {
+    withJobsDir((jobsDir) => {
+      const dir = createJobDir(jobsDir, "20260911T160031Z-35e759");
+      writeFileSync(join(dir, "log"), "one\ntwo\nthree\nfour\nfive\n");
+      expect(readJobLog(dir, 2)).toBe("four\nfive");
+    });
+  });
+
+  it("returns an empty string for a missing log", () => {
+    withJobsDir((jobsDir) => {
+      const dir = createJobDir(jobsDir, "20260911T160031Z-35e759");
+      expect(readJobLog(dir)).toBe("");
+    });
+  });
+
+  it("keeps a final line that has no trailing newline", () => {
+    withJobsDir((jobsDir) => {
+      const dir = createJobDir(jobsDir, "20260911T160031Z-35e759");
+      writeFileSync(join(dir, "log"), "one\ntwo");
+      expect(readJobLog(dir, 1)).toBe("two");
+    });
+  });
+
+  it("keeps a single line longer than one read chunk", () => {
+    withJobsDir((jobsDir) => {
+      const dir = createJobDir(jobsDir, "20260911T160031Z-35e759");
+      const line = "x".repeat(70 * 1024);
+      writeFileSync(join(dir, "log"), line);
+      expect(readJobLog(dir, 1)).toBe(line);
+    });
+  });
+
+  it("drops the partial first line at the read ceiling", () => {
+    withJobsDir((jobsDir) => {
+      const dir = createJobDir(jobsDir, "20260911T160031Z-35e759");
+      writeFileSync(join(dir, "log"), `${"x".repeat(1024 * 1024)}\nwanted`);
+      expect(readJobLog(dir, 1)).toBe("wanted");
     });
   });
 });

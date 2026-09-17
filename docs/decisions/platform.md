@@ -99,11 +99,17 @@ state for a later re-enable.
 
 `lib/job-stream.ts` owns both job-observation routes: `/api/jobs/:id` polls and
 `/api/jobs/:id/events` streams, and `/api/jobs/:id` with
-`Accept: text/event-stream` streams too. An addon supplies only a reader and
-its job shape. The helper returns no result for a path it does not own --
-including a non-GET on a path it does -- so the addon's own router still decides
-what that is, and the HTML `/jobs/:id` page stays with each addon, because what a
-job looks like differs and how it is watched does not.
+`Accept: text/event-stream` streams too. The poll route is unchanged. A stream
+reads its first snapshot through the manager, then the manager opens one
+`watch-job` stream through the gateway. The gateway starts one privileged worker
+for that stream and pipes its NDJSON stdout; the worker watches the job
+directory in-process rather than spawning a read for each poll. The addon
+supplies the reader and watcher, so the worker emits the addon's own job view
+and keeps fields such as clone results and generated credentials intact. The
+helper returns no result for a path it does not own -- including a non-GET on a
+path it does -- so the addon's own router still decides what that is, and the
+HTML `/jobs/:id` page stays with each addon, because what a job looks like
+differs and how it is watched does not.
 
 A job id is defined once, in `lib/job-id.ts`, which `cli/job-store.ts`
 re-exports. The app services needed the syntax without the CLI's job

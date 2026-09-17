@@ -20,6 +20,8 @@ export interface GatewayClientOptions {
   socketPath?: string;
 }
 
+export interface GatewayStream { close(): void }
+
 interface CommandFailure {
   code?: number | null;
   reason?: string;
@@ -247,6 +249,147 @@ export async function callGatewayAction<T = unknown>(
 
   const clientTimeoutMs = timeoutMs + 2_500;
   return callGatewaySocket<T>(request, socketPath, clientTimeoutMs);
+}
+
+const MAX_GATEWAY_STREAM_BUFFER_BYTES = 16 * 1024 * 1024;
+
+function streamReply<T>(line: string): ActionResult<T> | null {
+  return parseActionReply<T>(line);
+}
+
+/** Runs one long-lived watch action until its child or gateway socket ends. */
+export function streamGatewayAction<T = unknown>(options: {
+  addon: "stager" | "instatic" | "manager";
+  verb: string;
+  args?: string[];
+  socketPath?: string;
+  onReply: (reply: ActionResult<T>) => void;
+  onClose: (error?: string) => void;
+}): GatewayStream {
+  let socket: Bun.Socket | null = null;
+  let child: ReturnType<typeof Bun.spawn> | null = null;
+  let closed = false;
+  let finished = false;
+  let childExited = false;
+  let socketEnded = false;
+  let buffer = "";
+  const decoder = new TextDecoder();
+
+  const endTransport = () => {
+    try {
+      if (child && !childExited && !child.killed) child.kill();
+    } catch {}
+    try {
+      if (socket && !socketEnded) {
+        socketEnded = true;
+        socket.end();
+      }
+    } catch {}
+  };
+
+  const finish = (error?: string) => {
+    if (finished) return;
+    finished = true;
+    closed = true;
+    endTransport();
+    options.onClose(error);
+  };
+
+  const deliver = (chunk: Uint8Array): void => {
+    buffer += decoder.decode(chunk, { stream: true });
+    for (;;) {
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) break;
+      const line = buffer.slice(0, newline);
+      buffer = buffer.slice(newline + 1);
+      const reply = streamReply<T>(line);
+      if (reply) options.onReply(reply);
+      if (closed) break;
+    }
+    if (Buffer.byteLength(buffer, "utf8") > MAX_GATEWAY_STREAM_BUFFER_BYTES) {
+      finish("gateway stream exceeded maximum buffer");
+    }
+  };
+
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    endTransport();
+  };
+
+  const stream: GatewayStream = { close };
+  const socketPath = options.socketPath ?? GATEWAY_SOCKET_PATH;
+  const payload = JSON.stringify({
+    kind: "stream-action",
+    addon: options.addon,
+    verb: options.verb,
+    args: options.args,
+  }) + "\n";
+
+  if (process.env.CLP_ADDONS_ACTION_TEST_BIN || (process.getuid?.() === 0 && !existsSync(socketPath))) {
+    const command = process.env.CLP_ADDONS_ACTION_TEST_BIN ?? DEFAULT_CLI_BIN;
+    void (async () => {
+      try {
+        child = Bun.spawn([command, "action", options.addon, options.verb, ...(options.args ?? [])], {
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "inherit",
+          env: process.env,
+        });
+        if (closed) {
+          endTransport();
+          await child.exited.then(() => { childExited = true; }, () => undefined);
+          if (!finished) finish();
+          return;
+        }
+        if (typeof child.stdout !== "object" || child.stdout === null) {
+          throw new Error("streaming action did not provide stdout");
+        }
+        const reader = child.stdout.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done || closed) break;
+          deliver(value);
+          if (finished) break;
+        }
+        await child.exited.then(() => { childExited = true; }, () => undefined);
+        if (!finished) finish();
+      } catch (error) {
+        finish(error instanceof Error ? error.message : String(error));
+      }
+    })();
+    return stream;
+  }
+
+  Bun.connect({
+    unix: socketPath,
+    socket: {
+      open(connection) {
+        socket = connection;
+        if (closed) {
+          endTransport();
+          return;
+        }
+        connection.write(payload);
+      },
+      data(_connection, chunk) {
+        if (!closed) deliver(chunk);
+      },
+      close() {
+        finish();
+      },
+      error(_connection, error) {
+        finish(`gateway socket error: ${error ? error.message : "socket error"}`);
+      },
+      connectError(_connection, error) {
+        finish(`gateway connection failed: ${error ? error.message : "connect error"}`);
+      },
+    },
+  }).catch((error) => {
+    finish(`gateway connect error: ${String(error)}`);
+  });
+
+  return stream;
 }
 
 /**

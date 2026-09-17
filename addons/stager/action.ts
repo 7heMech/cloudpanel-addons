@@ -9,7 +9,7 @@ import { CLI_BIN } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import {
   createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet,
-  jobTimestamp, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
+  jobTimestamp, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord,
 } from "../../cli/job-store";
 import {
   ActionCommandFailure, ActionFailure, acquireFileLock, actionErrorJson, commandFailure, emitActionError, emitActionOk,
@@ -23,7 +23,7 @@ const PORT_MIN = 39000;
 const PORT_MAX = 39999;
 const CLONABLE_TYPES = ["php", "static", "reverse-proxy"] as const;
 
-export type StagerVerb = "sites" | "jobs" | "prune" | "describe" | "clone" | "promote" | "run" | "job";
+export type StagerVerb = "sites" | "jobs" | "prune" | "describe" | "clone" | "promote" | "run" | "job" | "watch-job";
 
 /**
  * What a promote leaves behind from the live site rather than taking from the
@@ -166,7 +166,7 @@ function requireRoot(): void {
 
 function parseAction(argv: string[], paths: StagerActionPaths): ParsedStagerAction {
   if (argv.length === 0) {
-    failAction("usage: clp-addons action stager {sites|describe|clone|run|job|jobs|prune} [options]");
+    failAction("usage: clp-addons action stager {sites|describe|clone|run|job|watch-job|jobs|prune} [options]");
   }
 
   const verb = argv[0] as string;
@@ -222,6 +222,7 @@ function parseAction(argv: string[], paths: StagerActionPaths): ParsedStagerActi
       break;
     case "run":
     case "job":
+    case "watch-job":
       job = validateJob(job);
       break;
     default:
@@ -244,6 +245,7 @@ function parseAction(argv: string[], paths: StagerActionPaths): ParsedStagerActi
       break;
     case "run":
     case "job":
+    case "watch-job":
       if (source || target || domain || tls !== "no" || port || email || targetEmail) failAction(`${verb} takes only --job`);
       break;
     case "sites":
@@ -537,11 +539,15 @@ function failJob(ctx: { dir: string; failed: boolean }, message: string): never 
   ctx.failed = true;
   try {
     jobSet(ctx.dir, "error", message);
-    jobSet(ctx.dir, "state", "failed");
   } catch {
     // Keep the original failure message; the rollback still removes secrets.
   }
   diagnostic(`[stager] ERROR: ${message}\n`);
+  try {
+    jobSet(ctx.dir, "state", "failed");
+  } catch {
+    // Keep the original failure message; the rollback still removes secrets.
+  }
   throw new JobFailure(message);
 }
 
@@ -2286,9 +2292,9 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
     writeFileSync(join(dir, "result.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
     chmodSync(join(dir, "result.json"), 0o600);
     jobSet(dir, "finishedAt", jobTimestamp());
-    jobSet(dir, "state", "done");
     ctx.rollbackActive = false;
     logLine(`clone complete: ${ctx.target}`);
+    jobSet(dir, "state", "done");
   } catch (error) {
     if (error instanceof RunReplyFailure) throw error;
     if (ctx.rollbackActive) rollbackRun(ctx);
@@ -2296,11 +2302,15 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
       const message = error instanceof Error ? error.message : "clone failed";
       try {
         jobSet(dir, "error", message);
-        jobSet(dir, "state", "failed");
       } catch {
         // Keep the stderr-only failure contract even if the record is damaged.
       }
       diagnostic(`[stager] ERROR: ${message}\n`);
+      try {
+        jobSet(dir, "state", "failed");
+      } catch {
+        // Keep the stderr-only failure contract even if the record is damaged.
+      }
     }
     if (error instanceof JobFailure) throw error;
     throw new JobFailure(error instanceof Error ? error.message : "clone failed");
@@ -2699,9 +2709,9 @@ async function cmdRunPromote(id: string, dir: string, paths: StagerActionPaths):
     writeFileSync(join(dir, "result.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
     chmodSync(join(dir, "result.json"), 0o600);
     jobSet(dir, "finishedAt", jobTimestamp());
-    jobSet(dir, "state", "done");
     ctx.rollbackActive = false;
     logLine(`promote complete: ${ctx.source} onto ${ctx.target}`);
+    jobSet(dir, "state", "done");
   } catch (error) {
     if (error instanceof RunReplyFailure) throw error;
     if (ctx.rollbackActive) rollbackPromote(ctx);
@@ -2709,11 +2719,15 @@ async function cmdRunPromote(id: string, dir: string, paths: StagerActionPaths):
       const message = error instanceof Error ? error.message : "promote failed";
       try {
         jobSet(dir, "error", message);
-        jobSet(dir, "state", "failed");
       } catch {
         // Keep the stderr-only failure contract even if the record is damaged.
       }
       diagnostic(`[stager] ERROR: ${message}\n`);
+      try {
+        jobSet(dir, "state", "failed");
+      } catch {
+        // Keep the stderr-only failure contract even if the record is damaged.
+      }
     }
     if (error instanceof JobFailure) throw error;
     throw new JobFailure(error instanceof Error ? error.message : "promote failed");
@@ -2816,6 +2830,21 @@ function cmdJob(paths: StagerActionPaths, id: string): void {
   emitStagerOk(paths, { job: jobJson(paths, dir, id, panel.readable, panel.domains), log: readJobLog(dir) });
 }
 
+async function cmdWatchJob(paths: StagerActionPaths, id: string): Promise<void> {
+  const dir = jobDir(paths, id);
+  if (!isDirectory(dir)) failAction(`no such job: ${id}`);
+  await watchJobRecord({
+    dir,
+    read: () => {
+      const panel = jobGet(dir, "state") === "done"
+        ? panelDomains(paths)
+        : { readable: false, domains: new Set<string>() };
+      return { job: jobJson(paths, dir, id, panel.readable, panel.domains), log: readJobLog(dir) };
+    },
+    emit: (data) => emitStagerOk(paths, data),
+  });
+}
+
 function cmdJobs(paths: StagerActionPaths): void {
   const panel = panelDomains(paths);
   const jobs = listJobIds(paths.jobsDir).map((id) =>
@@ -2859,6 +2888,7 @@ async function dispatch(action: ParsedStagerAction, paths: StagerActionPaths, re
     case "promote": cmdPromote(action, paths, releaseLock); return;
     case "run": await cmdRun(action.job, paths); return;
     case "job": cmdJob(paths, action.job); return;
+    case "watch-job": await cmdWatchJob(paths, action.job); return;
   }
 }
 

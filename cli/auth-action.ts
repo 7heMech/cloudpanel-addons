@@ -25,6 +25,7 @@ import {
   CLOUDFLARE_IPS_ALLOWED_VERBS,
   PHP_RESOURCES_ALLOWED_VERBS,
   MANAGER_ALLOWED_VERBS,
+  STREAM_ALLOWED_VERBS,
 } from "../lib/gateway-protocol";
 import { getLivePanelInfo } from "../lib/panel-snapshot";
 
@@ -59,6 +60,8 @@ export interface AuthActionOptions {
   getPanelInfo?: (panelDb?: string) => import("../lib/gateway-protocol").PanelSnapshot;
   /** Test-only override; production socket activation always enforces the peer check. */
   enforcePeer?: boolean;
+  /** Test-only child-process override for streaming; production uses Bun.spawn. */
+  spawn?: typeof Bun.spawn;
 }
 
 const SOL_SOCKET = 1;
@@ -216,7 +219,7 @@ export async function runAuthAction(
 /**
  * Creates a socket server for authentication, live panel information, and
  * privileged action requests. Each connection sends one line containing either
- * a session ID or a JSON request, receives a JSON reply, and closes.
+ * a session ID or a JSON request, receives one or more JSON replies, and closes.
  */
 export function createAuthActionServer(options: AuthActionOptions = {}): net.Server {
   // Direct path listeners are test-only; socket activation is the production
@@ -357,6 +360,86 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
               }) + "\n",
             );
           }
+        }
+
+        if (request.kind === "stream-action") {
+          const allowed = ALLOWED_VERBS.get(request.addon);
+          if (!allowed) {
+            socket.end(JSON.stringify({ ok: false, error: "unknown addon" }) + "\n");
+            return;
+          }
+          if (!allowed.has(request.verb) || !STREAM_ALLOWED_VERBS.has(request.verb)) {
+            socket.end(JSON.stringify({ ok: false, error: "invalid verb" }) + "\n");
+            return;
+          }
+
+          cleanup();
+          let proc: ReturnType<typeof Bun.spawn> | null = null;
+          let peerGone = false;
+          let killSent = false;
+          const kill = () => {
+            peerGone = true;
+            if (proc && !killSent && !proc.killed) {
+              killSent = true;
+              proc.kill();
+            }
+          };
+          socket.on("close", kill);
+          socket.on("error", kill);
+
+          try {
+            proc = (options.spawn ?? Bun.spawn)(
+              [CLI_BIN, "action", request.addon, request.verb, ...(request.args ?? [])],
+              { stdin: "ignore", stdout: "pipe", stderr: "inherit", env: process.env },
+            );
+            if (peerGone || socket.destroyed) kill();
+
+            if (typeof proc.stdout !== "object" || proc.stdout === null) {
+              throw new Error("streaming action did not provide stdout");
+            }
+            const reader = proc.stdout.getReader();
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done || socket.destroyed) break;
+              if (!socket.write(Buffer.from(value))) {
+                await new Promise<void>((resolve, reject) => {
+                  const cleanupBackpressure = () => {
+                    socket.off("drain", onDrain);
+                    socket.off("close", onClose);
+                    socket.off("error", onError);
+                  };
+                  const onDrain = () => {
+                    cleanupBackpressure();
+                    resolve();
+                  };
+                  const onClose = () => {
+                    cleanupBackpressure();
+                    resolve();
+                  };
+                  const onError = (error: Error) => {
+                    cleanupBackpressure();
+                    reject(error);
+                  };
+                  socket.once("drain", onDrain);
+                  socket.once("close", onClose);
+                  socket.once("error", onError);
+                  if (socket.destroyed) onClose();
+                });
+                if (socket.destroyed) break;
+              }
+            }
+            if (!socket.destroyed) socket.end();
+            else kill();
+          } catch (error) {
+            kill();
+            if (!socket.destroyed) {
+              socket.end(JSON.stringify({
+                ok: false,
+                error: error instanceof Error ? error.message : String(error),
+              }) + "\n");
+            }
+          }
+          return;
         }
       }
     });
