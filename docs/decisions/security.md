@@ -23,6 +23,15 @@ without directory listing; flag files remain root-only and HTML files are
 readable by Nginx. Custom pages are size-bounded, stripped of active markup,
 and served with a restrictive content security policy.
 
+Panel Tweaks is the only addon that writes into a site's own tree. Its
+WordPress sign-in installs a must-use plugin and a one-time secret as the site's
+user, refuses a domain the panel does not have, one that is not WordPress, and
+any request at all while the operator has not switched the sign-in on. The
+secret is a SHA-256 of a token that lives for a minute, is removed before it is
+compared, and travels in a POST body rather than a URL. Switching the tweak off
+removes the plugin from every site. See
+[Panel Tweaks](panel-tweaks.md).
+
 ## CloudPanel authentication
 
 The gateway reads the bounded `cloudpanel` session file without following

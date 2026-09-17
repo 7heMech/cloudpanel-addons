@@ -60,11 +60,11 @@ async function gatewayReply(request: string): Promise<string> {
   }
 }
 
-const NOOP_OPS: ManagerOps = { enable: () => {}, disable: () => {}, update: async () => {} };
+const NOOP_OPS: ManagerOps = { enable: () => {}, disable: () => {}, update: async () => {}, reconcile: () => {} };
 
 describe("the gateway's manager namespace", () => {
   test("offers exactly the verbs a page may ask for", () => {
-    expect([...MANAGER_ALLOWED_VERBS].sort()).toEqual(["disable", "enable", "job", "update", "watch-job"]);
+    expect([...MANAGER_ALLOWED_VERBS].sort()).toEqual(["disable", "enable", "job", "reconcile", "update", "watch-job"]);
   });
 
   // The runner is started by the transient unit the create path launches, and

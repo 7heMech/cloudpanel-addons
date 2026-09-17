@@ -60,6 +60,18 @@ export const PHP_RESOURCES_ALLOWED_VERBS = new Set([
   "set-default",
 ]);
 
+/**
+ * `wp-login` mints a credential for somebody else's WordPress, so it is named
+ * here as narrowly as the rest: one verb, one `--domain`, and the action itself
+ * refuses when the operator has not switched the sign-in on.
+ */
+export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
+  "state",
+  "set-tweaks",
+  "scan",
+  "wp-login",
+]);
+
 export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
   "list",
   "set",
@@ -81,6 +93,10 @@ export const MANAGER_ALLOWED_VERBS = new Set([
   "update",
   "job",
   "watch-job",
+  // Rendering the panel's templates again. It belongs to the manager rather
+  // than to an addon because one pass regenerates every addon's block in a
+  // shared file; an addon that reconciled only its own would strip the others.
+  "reconcile",
 ]);
 
 export const STREAM_ALLOWED_VERBS = new Set(["watch-job"]);

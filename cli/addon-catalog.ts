@@ -21,8 +21,8 @@ import { CONFIG_DIR, STATE_DIR, TEMPLATES_DIR } from "./paths";
 import type { AddonTarget } from "../lib/addon-target";
 import { CLOUDFLARE_IPS_ADDON } from "../addons/cloudflare-ips/addon";
 import { INSTATIC_ADDON } from "../addons/instatic/addon";
-import { LOGIN_THEME_ADDON } from "../addons/login-theme/addon";
 import { MAINTENANCE_ADDON } from "../addons/maintenance/addon";
+import { PANEL_TWEAKS_ADDON } from "../addons/panel-tweaks/addon";
 import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
 
@@ -75,7 +75,7 @@ const DEFINITIONS: AddonDefinition[] = [
   STAGER_ADDON,
   MAINTENANCE_ADDON,
   PHP_RESOURCES_ADDON,
-  LOGIN_THEME_ADDON,
+  PANEL_TWEAKS_ADDON,
 ];
 
 function specOf(definition: AddonDefinition): AddonSpec {

@@ -1,16 +1,18 @@
 // Local UI review with fictional data. Never starts the manager, reads panel
 // state or invokes an action. Mutating requests are rejected deliberately.
 import { indexPage, updatePage } from "../cli/index";
-import { handle as loginThemePage } from "../addons/login-theme/app/index";
 import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } from "../addons/cloudflare-ips/app/views";
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
 import { jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, newCloneView, promoteListView, promoteView, siteStagingView } from "../addons/stager/app/views";
 import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
 import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
+import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
+import { PANEL_TWEAKS_TARGETS } from "../addons/panel-tweaks/inject/targets";
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
 import { PRESET_CATEGORIES, STOCK_PROFILE, type PhpResourcesState, type PoolSiteState } from "../addons/php-resources/action";
+import type { PanelTweaksState } from "../addons/panel-tweaks/action";
 import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { type: "text" };
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
@@ -149,6 +151,52 @@ function phpResourcesPreviewState(url: URL): PhpResourcesState {
   };
 }
 
+/**
+ * Panel Tweaks with every switch on and most sites measured, because that is
+ * the widest the page gets: `?off` is the state an operator lands on after
+ * enabling the addon, and `?unmeasured` is the gap before the first sweep.
+ */
+function panelTweaksPreviewState(url: URL): PanelTweaksState {
+  const on = !url.searchParams.has("off");
+  const measured = on && !url.searchParams.has("unmeasured");
+  const at = "2026-09-17T08:45:00Z";
+  return {
+    tweaks: {
+      deviceTheme: on,
+      sitesTable: on,
+      diskUsage: on,
+      wordpressLogin: on,
+    },
+    diskMeasuredAt: measured ? at : "",
+    sites: url.searchParams.has("empty") ? [] : [
+      {
+        domain: "www.example.com", user: "example", type: "php", application: "WordPress",
+        runtime: "PHP 8.2", certificate: { type: "2", expiresAt: "2026-11-30 10:00:00" },
+        disk: measured ? { bytes: 4_812_003_328, databaseBytes: 412_003_328, measuredAt: at } : null,
+        wordpress: true,
+      },
+      {
+        domain: "shop.example.com", user: "shop", type: "php", application: "WordPress",
+        runtime: "PHP 8.3", certificate: { type: "2", expiresAt: "2026-09-24 10:00:00" },
+        disk: measured ? { bytes: 19_327_352_832, databaseBytes: 2_147_483_648, measuredAt: at } : null,
+        wordpress: true,
+      },
+      {
+        domain: "static.example.com", user: "static", type: "static", application: "Static",
+        runtime: "", certificate: null,
+        disk: measured ? { bytes: 24_117_248, databaseBytes: 0, measuredAt: at } : null,
+        wordpress: false,
+      },
+      {
+        domain: "app.example.com", user: "app", type: "nodejs", application: "Node.js",
+        runtime: "Node.js 20", certificate: { type: "1", expiresAt: "2027-09-05 10:00:00" },
+        disk: null,
+        wordpress: false,
+      },
+    ],
+  };
+}
+
 // A stand-in for a CloudPanel site page, so the block the manager injects into
 // the panel can be exercised without a panel. The markup mirrors
 // Frontend/Site/settings.html.twig and the rules are the panel's own, from
@@ -221,6 +269,71 @@ ${tabs}
 </html>`;
 }
 
+/**
+ * A stand-in for CloudPanel's own Sites page, so the block Panel Tweaks injects
+ * there can be reviewed without a panel. The markup is
+ * Frontend/Site/index.html.twig with its Twig evaluated, and the rules are the
+ * panel's own from assets/css/style.css and assets/css/frontend/sites.css.
+ */
+function panelSitesStub(state: PanelTweaksState, dark: boolean): string {
+  const rows = state.sites.map((site) => `                  <tr>
+                    <td><a href="/site/${site.domain}/settings">${site.domain}</a></td>
+                    <td>${site.user}</td>
+                    <td>${site.type.toUpperCase()}</td>
+                    <td class="text-end"><a href="/site/${site.domain}/settings">Manage</a></td>
+                  </tr>`).join("\n");
+  return `<!doctype html>
+<html lang="en"${dark ? ' class="dark"' : ""}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sites</title>
+<script>if (/(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie)) document.documentElement.classList.add('dark');</script>
+<style>${PANEL_STUB_STYLE}
+.page-header { display: flex; align-items: center; justify-content: space-between; margin: 30px 0 20px; }
+.page-title h1 { font-size: 30px; margin: 0; }
+.card.card-table { background: #fff; border: 1px solid #00000020; border-radius: 4px; box-shadow: 0 2px 4px rgb(157 161 164 / 19%); }
+html.dark .card.card-table { background: #1c1f26; border-color: #a8b3cf33; box-shadow: none; }
+table.table-sites { width: 100%; border-collapse: collapse; }
+table.table-sites th { text-align: left; font-size: 14px; text-transform: uppercase; color: #9bacb6;
+  background: #fbfcfc; padding: 18px 32px; font-weight: 700; }
+html.dark table.table-sites th { background: #25282f; }
+table.table-sites td { padding: 18px 32px; border-top: 1px solid #eaeaea; }
+html.dark table.table-sites td { border-color: #a8b3cf33; }
+.text-end { text-align: right; }
+.form-control, .form-select { padding: 8px 16px; border: 1px solid #ced4da; border-radius: 4px; font: inherit; min-height: 42px; }
+html.dark .form-control, html.dark .form-select { background: #20242c; color: #fff; border-color: #a8b3cf33; }
+</style>
+</head>
+<body>
+<div class="preview-banner">Stand-in for CloudPanel's own Sites page
+  <button type="button" onclick="document.documentElement.classList.toggle('dark')">Toggle panel theme</button>
+</div>
+<main class="main-container">
+  <div class="container-fluid container-limited-width">
+    <div class="page-header">
+      <div class="page-title"><h1>Sites</h1></div>
+      <div class="page-actions"><a href="#">+ Add Site</a></div>
+    </div>
+${PANEL_TWEAKS_TARGETS[1]!.snippet("/addons/panel-tweaks")
+  .replace("{% if is_granted('ROLE_ADMIN') %}", "")
+  .replace("{% endif %}", "")}
+    <div class="card card-table">
+      <table class="table table-sites">
+        <thead>
+          <tr><th>Domain</th><th>Site User</th><th>App</th><th class="text-end">Action</th></tr>
+        </thead>
+        <tbody>
+${rows}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+</body>
+</html>`;
+}
+
 let panelAce: string | null = null;
 
 const server = Bun.serve({
@@ -252,6 +365,17 @@ const server = Bun.serve({
       });
     }
     if (["/", "/dashboard"].includes(path)) return Response.redirect("/addons/");
+    // /sites stands in for the panel's own site list, with the addon's block in
+    // place; /addons/panel-tweaks/api/panel is what that block then asks for.
+    if (path === "/sites") {
+      return new Response(panelSitesStub(panelTweaksPreviewState(url), url.searchParams.has("dark")), {
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+      });
+    }
+    if (path === "/addons/panel-tweaks/api/panel") {
+      const state = panelTweaksPreviewState(url);
+      return Response.json({ ok: true, data: state });
+    }
     // /site/{domain}/{tab} stands in for the panel's own site page.
     const panelSite = /^\/site\/([^/]+)\/([^/]+)$/.exec(path);
     if (panelSite) {
@@ -316,7 +440,6 @@ const server = Bun.serve({
         } : null,
       });
     }
-    if (path === "/addons/login-theme/") return loginThemePage(req, "/", notice);
     if (path === "/addons/") {
       // ?enabled= picks which addons are on, so the Available section and the
       // enable/disable buttons can be reviewed without a CloudPanel install.
@@ -329,7 +452,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "login-theme"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "panel-tweaks"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
@@ -372,6 +495,8 @@ const server = Bun.serve({
             }
           : undefined,
       );
+    } else if (path === "/addons/panel-tweaks/" || path === "/addons/panel-tweaks") {
+      html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url)), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
