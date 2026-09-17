@@ -120,7 +120,12 @@ export async function handle(
   }
 
   const jobApi = await jobApiRoute({
-    req, path, method, server, getJob: (jobId) => instaticService.getJob(jobId),
+    req,
+    path,
+    method,
+    server,
+    getJob: (jobId) => instaticService.getJob(jobId),
+    watchJob: (jobId, handlers) => instaticService.watchJob(jobId, handlers),
   });
   if (jobApi) return jobApi;
 

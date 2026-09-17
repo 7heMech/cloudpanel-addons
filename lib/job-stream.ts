@@ -7,26 +7,29 @@
 // there was no single place where "how a job is watched" was decided. There is
 // now.
 //
-// The addon supplies only a reader. Everything about the wire format -- the
-// poll interval, what counts as a change, when the stream closes, the keepalive
-// -- lives here.
+// The addon supplies a reader and a watcher. Everything about the wire format
+// -- what counts as a change, when the stream closes, and the keepalive -- lives
+// here.
 import type { Server } from "bun";
 import { jsonResponse, policyHeaders, safeDecodePathSegment } from "./app-http";
-import { validateJobId } from "./job-id";
+import { isTerminalJobState, validateJobId } from "./job-id";
 import { stillAuthorized } from "./sso-auth";
+
+export { isTerminalJobState } from "./job-id";
 
 /** How often the reader is asked for a fresh view of the job. */
 const POLL_INTERVAL_MS = 1000;
+const KEEPALIVE_INTERVAL_MS = 15_000;
 
 /**
- * How many poll ticks pass between re-checks of the session.
+ * How long a stream may run between re-checks of the session.
  *
  * A stream is authorized once, when it opens, and then runs until the job ends.
  * What it sends is the job record, and a clone's record holds the database and
  * Instatic passwords it generated, so a session revoked mid-job would keep
  * receiving them. This bounds that to one interval.
  */
-const AUTH_RECHECK_TICKS = 15;
+const AUTH_RECHECK_MS = 15_000;
 
 /** The fields the stream itself reasons about; addons add their own alongside. */
 export interface JobProgress {
@@ -49,6 +52,14 @@ export interface JobReadResult<J extends JobProgress> {
 
 export type JobReader<J extends JobProgress> = (id: string) => Promise<JobReadResult<J>>;
 
+export type JobWatcher<J extends JobProgress> = (
+  id: string,
+  handlers: {
+    onSnapshot: (snapshot: JobSnapshot<J>) => void;
+    onClose: (error?: string) => void;
+  },
+) => { close(): void };
+
 export interface JobApiRoute<J extends JobProgress> {
   req: Request;
   /** Path with the addon's mount prefix already stripped. */
@@ -56,6 +67,7 @@ export interface JobApiRoute<J extends JobProgress> {
   method: string;
   server?: Server<unknown> | null;
   getJob: JobReader<J>;
+  watchJob?: JobWatcher<J>;
 }
 
 /**
@@ -82,15 +94,18 @@ export async function jobApiRoute<J extends JobProgress>(route: JobApiRoute<J>):
   if (!id) return json({ ok: false, error: "not a valid job id" }, 400);
 
   const stream = events !== null || route.req.headers.get("accept")?.includes("text/event-stream") === true;
-  if (stream) return jobEventStream({ id, req: route.req, server: route.server ?? null, getJob: route.getJob });
+  if (stream) {
+    return jobEventStream({
+      id,
+      req: route.req,
+      server: route.server ?? null,
+      getJob: route.getJob,
+      watchJob: route.watchJob,
+    });
+  }
 
   const result = await route.getJob(id);
   return json(result, result.ok ? 200 : 404);
-}
-
-/** A job in one of these states will never change again, so the stream ends. */
-export function isTerminalJobState(state: string): boolean {
-  return state === "done" || state === "failed";
 }
 
 function json(body: unknown, status: number): Response {
@@ -134,11 +149,11 @@ export async function jobEventStream<J extends JobProgress>(options: {
   req: Request;
   getJob: JobReader<J>;
   server?: Server<unknown> | null;
-  /** Test-only; production always uses AUTH_RECHECK_TICKS. */
-  recheckTicks?: number;
+  watchJob?: JobWatcher<J>;
+  recheckMs?: number;
 }): Promise<Response> {
-  const { id, req, getJob, server } = options;
-  const recheckTicks = options.recheckTicks ?? AUTH_RECHECK_TICKS;
+  const { id, req, getJob, server, watchJob } = options;
+  const recheckMs = options.recheckMs ?? AUTH_RECHECK_MS;
 
   const initial = await getJob(id);
   if (!initial.ok || !initial.data) {
@@ -154,9 +169,13 @@ export async function jobEventStream<J extends JobProgress>(options: {
   }
 
   const first = initial.data;
-  let timer: ReturnType<typeof setInterval> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  let authTimer: ReturnType<typeof setInterval> | null = null;
+  let watcher: ReturnType<JobWatcher<J>> | null = null;
   let closed = false;
   let inFlight = false;
+  let authInFlight = false;
   let lastState = first.job.state;
   let lastStep = first.job.step;
   let lastLog = first.log;
@@ -164,12 +183,23 @@ export async function jobEventStream<J extends JobProgress>(options: {
 
   const stream = new ReadableStream({
     start(controller) {
+      const clearResources = () => {
+        if (pollTimer) clearInterval(pollTimer);
+        if (keepaliveTimer) clearInterval(keepaliveTimer);
+        if (authTimer) clearInterval(authTimer);
+        pollTimer = null;
+        keepaliveTimer = null;
+        authTimer = null;
+        if (watcher) {
+          const current = watcher;
+          watcher = null;
+          try { current.close(); } catch {}
+        }
+      };
       const stop = () => {
         closed = true;
-        if (timer) clearInterval(timer);
+        clearResources();
       };
-      // Every enqueue can throw once the client has gone away, and there is
-      // nothing to do about it but stop polling.
       const send = (chunk: string): boolean => {
         try {
           controller.enqueue(chunk);
@@ -192,19 +222,65 @@ export async function jobEventStream<J extends JobProgress>(options: {
         return;
       }
 
-      let ticks = 0;
-      timer = setInterval(async () => {
-        // A read goes through the gateway to the action binary, which can take
-        // longer than the interval under load; overlapping them would queue up
-        // processes behind a job that is already slow.
+      const sendSnapshot = (snapshot: JobSnapshot<J>) => {
+        if (closed) return;
+        const { job, log } = snapshot;
+        const nextEvent = eventName(job);
+        if (job.state !== lastState || job.step !== lastStep || log !== lastLog || nextEvent !== lastEvent) {
+          const emittedEvent = nextEvent !== lastEvent ? nextEvent : null;
+          lastState = job.state;
+          lastStep = job.step;
+          lastLog = log;
+          lastEvent = nextEvent;
+          if (!send(eventData(job, log, emittedEvent))) return;
+        } else if (!send(": keepalive\n\n")) {
+          return;
+        }
+        if (isTerminalJobState(job.state)) finish();
+      };
+
+      const checkAuthorization = async () => {
+        if (closed || authInFlight) return;
+        authInFlight = true;
+        try {
+          if (!(await stillAuthorized(req))) {
+            send(`event: unauthorized\ndata: ${JSON.stringify({ error: "session is no longer valid" })}\n\n`);
+            finish();
+          }
+        } catch {} finally {
+          authInFlight = false;
+        }
+      };
+
+      authTimer = setInterval(() => { void checkAuthorization(); }, recheckMs);
+
+      if (watchJob) {
+        keepaliveTimer = setInterval(() => {
+          if (!closed) send(": keepalive\n\n");
+        }, KEEPALIVE_INTERVAL_MS);
+        try {
+          watcher = watchJob(id, {
+            onSnapshot: sendSnapshot,
+            onClose(error) {
+              if (closed) return;
+              if (error) send(`event: error\ndata: ${JSON.stringify({ error })}\n\n`);
+              finish();
+            },
+          });
+          if (closed) watcher.close();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (send(`event: error\ndata: ${JSON.stringify({ error: message })}\n\n`)) finish();
+        }
+        return;
+      }
+
+      pollTimer = setInterval(async () => {
+        // A read can take longer than the interval; overlapping them would
+        // queue up action processes behind a job that is already slow.
         if (closed || inFlight) return;
         inFlight = true;
         try {
-          if (++ticks % recheckTicks === 0 && !(await stillAuthorized(req))) {
-            send(`event: unauthorized\ndata: ${JSON.stringify({ error: "session is no longer valid" })}\n\n`);
-            finish();
-            return;
-          }
           const res = await getJob(id);
           if (closed) return;
           if (!res.ok || !res.data) {
@@ -212,21 +288,7 @@ export async function jobEventStream<J extends JobProgress>(options: {
             finish();
             return;
           }
-
-          const { job, log } = res.data;
-          const nextEvent = eventName(job);
-          if (job.state !== lastState || job.step !== lastStep || log !== lastLog || nextEvent !== lastEvent) {
-            const emittedEvent = nextEvent !== lastEvent ? nextEvent : null;
-            lastState = job.state;
-            lastStep = job.step;
-            lastLog = log;
-            lastEvent = nextEvent;
-            if (!send(eventData(job, log, emittedEvent))) return;
-          } else if (!send(": keepalive\n\n")) {
-            return;
-          }
-
-          if (isTerminalJobState(job.state)) finish();
+          sendSnapshot(res.data);
         } catch {
           // Transient read error; retry on the next tick.
         } finally {
@@ -236,7 +298,17 @@ export async function jobEventStream<J extends JobProgress>(options: {
     },
     cancel() {
       closed = true;
-      if (timer) clearInterval(timer);
+      if (pollTimer) clearInterval(pollTimer);
+      if (keepaliveTimer) clearInterval(keepaliveTimer);
+      if (authTimer) clearInterval(authTimer);
+      pollTimer = null;
+      keepaliveTimer = null;
+      authTimer = null;
+      if (watcher) {
+        const current = watcher;
+        watcher = null;
+        try { current.close(); } catch {}
+      }
     },
   });
 

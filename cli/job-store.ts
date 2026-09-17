@@ -14,7 +14,10 @@
 // purpose, so the decisions live here now and the addons keep only the meaning
 // of their own fields.
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  closeSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, rmSync,
+  statSync, writeFileSync,
+} from "node:fs";
 import { writeFileAtomic } from "../lib/atomic-write";
 import { join } from "node:path";
 import { runCommand } from "./action-common";
@@ -23,7 +26,7 @@ import { runCommand } from "./action-common";
 // Re-exported from its neutral home so the app services can check an id
 // without importing this module's job orchestration. See lib/job-id.ts.
 export { JOB_ID_RE, validateJobId } from "../lib/job-id";
-import { JOB_ID_RE } from "../lib/job-id";
+import { isTerminalJobState, JOB_ID_RE } from "../lib/job-id";
 
 /**
  * The longest field value that will ever be read back.
@@ -36,6 +39,8 @@ const MAX_FIELD_BYTES = 4096;
 
 /** How many trailing lines of a job log the UI is given. */
 export const JOB_LOG_TAIL_LINES = 400;
+const JOB_LOG_CHUNK_BYTES = 64 * 1024;
+const MAX_JOB_LOG_READ_BYTES = 1024 * 1024; // Bounds memory used for a rendered log tail.
 
 function isDirectory(path: string): boolean {
   try {
@@ -102,8 +107,85 @@ export function createJobLog(dir: string): string {
 
 /** The tail of a job's log, with trailing blank lines removed. */
 export function readJobLog(dir: string, lines = JOB_LOG_TAIL_LINES): string {
-  const result = runCommand("tail", ["-n", String(lines), join(dir, "log")]);
-  return result.ok ? result.stdout.replace(/\n+$/g, "") : "";
+  if (lines <= 0) return "";
+
+  const path = join(dir, "log");
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const size = fstatSync(fd).size;
+    const chunks: Buffer[] = [];
+    let position = size;
+    let consumed = 0;
+    let newlines = 0;
+
+    while (position > 0 && consumed < MAX_JOB_LOG_READ_BYTES && newlines < lines + 1) {
+      const length = Math.min(JOB_LOG_CHUNK_BYTES, position, MAX_JOB_LOG_READ_BYTES - consumed);
+      const start = Math.max(0, size - consumed - length);
+      const chunk = Buffer.allocUnsafe(length);
+      const bytesRead = readSync(fd, chunk, 0, length, start);
+      if (bytesRead <= 0) break;
+      const readChunk = chunk.subarray(0, bytesRead);
+      chunks.unshift(readChunk);
+      consumed += bytesRead;
+      position = start;
+      for (const byte of readChunk) if (byte === 10) newlines++;
+    }
+
+    const text = Buffer.concat(chunks).toString("utf8");
+    const entries = text.split("\n");
+    if (text.endsWith("\n")) entries.pop();
+    if (position > 0) entries.shift();
+    return entries.slice(-lines).join("\n").replace(/\n+$/g, "");
+  } catch {
+    return "";
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
+  }
+}
+
+export async function watchJobRecord(options: {
+  dir: string;
+  read: () => unknown;
+  emit: (snapshot: unknown) => void;
+  signal?: AbortSignal;
+  intervalMs?: number;
+}): Promise<void> {
+  const intervalMs = options.intervalMs ?? 150;
+  const first = options.read();
+  options.emit(first);
+
+  let previousState = jobGet(options.dir, "state");
+  let previousStep = jobGet(options.dir, "step");
+  let previousEvent = jobGet(options.dir, "event");
+  let previousSize = statSync(join(options.dir, "log"), { throwIfNoEntry: false })?.size ?? 0;
+  if (isTerminalJobState(previousState)) return;
+
+  // Bun.sleep is not abortable; an aborted watch stops within one interval.
+  while (!options.signal?.aborted) {
+    await Bun.sleep(intervalMs);
+    if (options.signal?.aborted) return;
+
+    const directory = statSync(options.dir, { throwIfNoEntry: false });
+    if (!directory?.isDirectory()) return;
+
+    const state = jobGet(options.dir, "state");
+    const step = jobGet(options.dir, "step");
+    const event = jobGet(options.dir, "event");
+    const size = statSync(join(options.dir, "log"), { throwIfNoEntry: false })?.size ?? 0;
+    const changed = state !== previousState || step !== previousStep || event !== previousEvent || size !== previousSize;
+
+    previousState = state;
+    previousStep = step;
+    previousEvent = event;
+    previousSize = size;
+
+    if (!changed) continue;
+    options.emit(options.read());
+    if (isTerminalJobState(state)) return;
+  }
 }
 
 /** Every job id under `jobsDir`, newest first. */

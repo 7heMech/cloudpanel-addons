@@ -25,6 +25,7 @@ import { withFileLock } from "./action-common";
 import {
   createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir, jobGet, jobSet,
   jobTimestamp, jobUnitIsActive, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
+  watchJobRecord,
   type PruneJobsResult,
 } from "./job-store";
 import { CLI_BIN, LOCK_DIR, STATE_DIR } from "./paths";
@@ -323,9 +324,8 @@ export async function runManagerJob(id: string, ops: ManagerOps, jobsDir = MANAG
 /**
  * `clp-addons action manager <verb>`.
  *
- * Every verb answers with one JSON object on stdout, because the gateway reads
- * exactly that. The runner is the exception in spirit -- its output is the job
- * log -- but it still ends with a JSON line so a hand-run `run` behaves.
+ * Every non-watch verb answers with one JSON object on stdout, because the
+ * gateway reads exactly that. A watch emits one object per job change.
  */
 export async function runManagerAction(
   argv: string[],
@@ -358,6 +358,22 @@ export async function runManagerAction(
         return found
           ? reply({ ok: true, data: found }, options.emitReply !== false)
           : failReply(`no such job '${wanted}'`, undefined, options.emitReply !== false);
+      }
+      case "watch-job": {
+        const jobsDir = options.jobsDir ?? MANAGER_JOBS_DIR;
+        const wanted = id || latestManagerJob(jobsDir);
+        if (!wanted) return failReply("no manager job to watch", undefined, options.emitReply !== false);
+        if (!readManagerJob(wanted, jobsDir)) {
+          return failReply(`no such job '${wanted}'`, undefined, options.emitReply !== false);
+        }
+        await watchJobRecord({
+          dir: jobDir(jobsDir, wanted),
+          read: () => ({ ok: true, data: readManagerJob(wanted, jobsDir) }),
+          emit: (line) => {
+            if (options.emitReply !== false) process.stdout.write(`${JSON.stringify(line)}\n`);
+          },
+        });
+        return 0;
       }
       case "run": {
         if (!id) return failReply("'run' needs --job", undefined, options.emitReply !== false);

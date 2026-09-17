@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { getNextAvailablePort, readPanelSnapshot, type PanelSnapshot } from "../../../lib/snapshot-reader";
-import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
+import { callGatewayAction, streamGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
+import type { JobWatcher } from "../../../lib/job-stream";
 export { type ActionResult };
 
 // create pulls an image and waits on a health check, so it needs the longest
@@ -160,6 +161,30 @@ export const instaticService = {
 
   async getJob(id: string): Promise<ActionResult<{ job: InstaticJobView; log: string }>> {
     return callAction<{ job: InstaticJobView; log: string }>("job", ["--job", id]);
+  },
+
+  watchJob(id: string, handlers: Parameters<JobWatcher<InstaticJobView>>[1]): GatewayStream {
+    let ended = false;
+    const close = (error?: string) => {
+      if (ended) return;
+      ended = true;
+      handlers.onClose(error);
+    };
+    return streamGatewayAction<{ job: InstaticJobView; log: string }>({
+      addon: "instatic",
+      verb: "watch-job",
+      args: ["--job", id],
+      onReply(reply) {
+        if (reply.ok && reply.data) {
+          handlers.onSnapshot(reply.data);
+        } else if (!reply.ok) {
+          close(reply.error);
+        } else {
+          close("gateway returned an empty job snapshot");
+        }
+      },
+      onClose: close,
+    });
   },
 
   async listJobs(): Promise<InstaticJobView[]> {

@@ -12,6 +12,11 @@ The gateway accepts only fixed addon and verb combinations and starts
 arguments again before deriving paths, locking, or changing the host. Unknown
 addons, verbs, free-form paths, and malformed action replies are rejected.
 
+The gateway's streaming mode is restricted to `watch-job`: it starts one worker,
+pipes its output without interpreting addon data, and kills the worker when the
+manager socket closes. Session re-authorization remains in the manager that
+owns the stream.
+
 Maintenance actions also require the normalized domain to exist in
 CloudPanel's site database. The public maintenance directories allow traversal
 without directory listing; flag files remain root-only and HTML files are

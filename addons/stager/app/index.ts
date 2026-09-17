@@ -287,7 +287,12 @@ export async function handle(
   }
 
   const jobApi = await jobApiRoute({
-    req, path, method, server, getJob: (jobId) => stagerService.getJob(jobId),
+    req,
+    path,
+    method,
+    server,
+    getJob: (jobId) => stagerService.getJob(jobId),
+    watchJob: (jobId, handlers) => stagerService.watchJob(jobId, handlers),
   });
   if (jobApi) return jobApi;
 
