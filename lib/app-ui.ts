@@ -118,6 +118,11 @@ td { padding: 18px 32px; border-top: 1px solid var(--row-border); vertical-align
 td a { color: var(--link); }
 td a:hover { color: var(--accent); }
 .action-cell { text-align: right; white-space: nowrap; }
+.site-select { width: 42px; text-align: center; }
+.site-select input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); }
+.site-cell { font-weight: 600; overflow-wrap: anywhere; }
+.site-cell a, .site-cell .hint { overflow-wrap: anywhere; font-weight: 400; }
+.site-cell a { font-weight: 600; }
 .mono { font-family: var(--mono); font-size: 14px; }
 .badge { display: inline-block; padding: 3px 7px; border-radius: 4px; font-size: 12px;
   line-height: 1.25; border: 1px solid var(--border); white-space: nowrap; }
@@ -248,6 +253,18 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .addon-card .card-header { width: calc(100% + 40px); }
   .form-grid, .addon-grid { grid-template-columns: minmax(0, 1fr); }
   th, td { padding: 16px 20px; }
+  /* A phone has no room for five or six columns. The row becomes a block with
+     the domain on a line of its own, and every other cell names its column. */
+  .fleet-table, .fleet-table tbody, .fleet-table tr, .fleet-table td { display: block; }
+  .fleet-table thead { display: none; }
+  .fleet-table tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px 20px;
+    padding: 16px 20px; border-top: 1px solid var(--row-border); }
+  .fleet-table td { border: 0; padding: 0; max-width: none; text-align: left; white-space: normal; }
+  .fleet-table td.site-select { width: auto; }
+  /* The domain takes the row, less the width of a select box beside it. */
+  .fleet-table td.site-cell { flex: 1 0 calc(100% - 42px); font-size: 16px; }
+  .fleet-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px;
+    color: var(--table-heading); font-size: 12px; font-weight: 700; text-transform: uppercase; }
   .stats { gap: 20px; }
   /* A phone has no width to give away: the frame tightens and the buttons take
      the row, so a long label wraps inside a button rather than off the edge. */

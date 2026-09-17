@@ -124,7 +124,7 @@ test("the switch column ends where the table ends, as the Maintenance table does
   // .action-cell is the shared right-aligned column; without it the switches
   // sat in the middle of the row with the rest of the table empty beside them.
   expect(html).toContain('<th scope="col" class="action-cell">Cloudflare only</th>');
-  expect(html).toContain('<td class="action-cell">');
+  expect(html).toContain('<td class="action-cell" data-label="Cloudflare only">');
 });
 
 interface FakeElement {

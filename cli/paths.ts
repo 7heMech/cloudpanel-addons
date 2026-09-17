@@ -19,6 +19,8 @@ export const SHARED_GROUP = SERVICE_GROUP;
 export const SOCKET_DIR = "/run/clp-addons";
 export const SOCKET_PATH = `${SOCKET_DIR}/manager.sock`;
 export const SESSION_DIR = "/home/clp/htdocs/app/files/var/sessions";
+/** The php.ini the panel's own FPM pool runs with, per clp-php-fpm.service. */
+export const PANEL_PHP_INI = "/home/clp/services/php-fpm/fpm/php.ini";
 
 export const MANAGER_UNIT = "clp-addons.service";
 export const AUTH_SOCKET_UNIT = "clp-addons-auth.socket";
