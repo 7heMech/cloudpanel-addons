@@ -253,6 +253,8 @@ describe("Stager SSE job monitoring", () => {
     expect(JOB_WATCH_JS).toContain("/health");
     expect(JOB_WATCH_JS).toContain("reconnecting");
     expect(JOB_WATCH_JS).toContain("addEventListener('restarting'");
+    expect(JOB_WATCH_JS).toContain("function watchJob(id, root)");
+    expect(JOB_WATCH_JS).toContain("updateJobUI(payload.job, payload.log, root)");
     expect(CLIENT_JS).toContain("watchJob(");
   });
 

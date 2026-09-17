@@ -303,11 +303,11 @@ describe("the manager index", () => {
   test("offers an addon that is compiled in but not enabled", async () => {
     const html = await render(["instatic"], null, { available: ["stager"] });
     expect(html).toContain("<h2>Available</h2>");
-    expect(html).toContain("enableAddon('stager')");
+    expect(html).toContain("enableAddon('stager', this)");
     expect(html).toContain('aria-label="Open Instatic CMS">Open</a>');
     // The slug the route takes, then the name the card shows, which is what
     // the dialog puts in its question.
-    expect(html).toContain(`disableAddon('instatic', 'Instatic CMS')`);
+    expect(html).toContain(`disableAddon('instatic', 'Instatic CMS', this)`);
   });
 
   test("shows no Available section when every addon is on", async () => {
@@ -333,13 +333,16 @@ describe("the manager index", () => {
       id: "20260908T120000Z-aaaaaa", kind: "enable", addon: "stager", state: "running",
       step: "enabling stager", error: "", createdAt: "", startedAt: "", finishedAt: "",
     };
-    const running = await render(["instatic"], null, { job });
-    expect(running).toContain("watchJob('20260908T120000Z-aaaaaa')");
+    const running = await render(["instatic"], null, { available: ["stager"], job });
+    expect(running).toContain("watchJob('20260908T120000Z-aaaaaa', managerJobTarget");
     expect(running).toContain("Enabling stager");
-    expect(running).not.toContain('id="job-card" hidden');
+    expect(running).toContain('data-manager-job-card="stager"');
+    expect(running).toContain('data-manager-job-status');
+    expect(running).not.toContain('id="job-card"');
+    expect(running.indexOf('data-manager-job-status')).toBeGreaterThan(running.indexOf('data-manager-job-card="stager"'));
 
     const idle = await render(["instatic"], null, { job: null });
-    expect(idle).toContain('id="job-card" hidden');
+    expect(idle).not.toContain('<div class="manager-job-status"');
     expect(idle).not.toContain("watchJob('");
   });
 
@@ -360,8 +363,8 @@ describe("the manager index", () => {
   test("offers the addons back when none is enabled", async () => {
     const html = await render([], null, { available: ["instatic", "stager"] });
     expect(html).toContain("No addons are enabled. Enable one below to add it to CloudPanel.");
-    expect(html).toContain("enableAddon('instatic')");
-    expect(html).toContain("enableAddon('stager')");
+    expect(html).toContain("enableAddon('instatic', this)");
+    expect(html).toContain("enableAddon('stager', this)");
   });
 
   test("still says so plainly when this binary carries no addon at all", async () => {
@@ -399,7 +402,7 @@ describe("the dedicated update page", () => {
     const html = await response.text();
     expect(html).toContain("v1.0.0");
     expect(html).toContain("v1.1.0");
-    expect(html).toContain('onclick="updateNow()">Install update</button>');
+    expect(html).toContain('onclick="updateNow(this)">Install update</button>');
     expect(html).toContain("/releases/latest");
     expect(response.headers.get("set-cookie")).toContain(csrfCookieHeader("update-token"));
     expect(response.headers.get("cache-control")).toBe("no-store");
@@ -428,12 +431,14 @@ describe("the dedicated update page", () => {
       step: "Downloading release", error: "", createdAt: "", startedAt: "", finishedAt: "",
     };
     const html = await updatePage(release, "1.0.0", { job }).text();
-    expect(html).toContain("watchJob('20260908T120000Z-aaaaaa')");
-    expect(html).toContain('onclick="updateNow()" disabled');
-    expect(html).not.toContain('id="job-card" hidden');
+    expect(html).toContain("watchJob('20260908T120000Z-aaaaaa', managerJobTarget");
+    expect(html).toContain('onclick="updateNow(this)" disabled');
+    expect(html).toContain('data-manager-job-status');
+    expect(html).not.toContain('id="job-card"');
+    expect(html.indexOf('data-manager-job-status')).toBeGreaterThan(html.indexOf('onclick="updateNow(this)" disabled'));
     const failure = await updatePage(release, "1.0.0", { job: { ...job, state: "failed", error: "checksum mismatch" } }).text();
     expect(failure).toContain("checksum mismatch");
-    expect(failure).toContain('onclick="updateNow()">Install update</button>');
+    expect(failure).toContain('onclick="updateNow(this)">Install update</button>');
   });
 });
 
