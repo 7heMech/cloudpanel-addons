@@ -5,7 +5,7 @@
 // for hermetic unit tests and are never exposed through action argv.
 
 import net from "node:net";
-import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { dlopen, FFIType } from "bun:ffi";
 import { Database } from "bun:sqlite";
 import { requireRoot } from "./util";
@@ -113,7 +113,11 @@ export function trustedManagerPeer(socket: net.Socket): boolean {
 
     const binary = lstatSync(CLI_BIN);
     if (!binary.isFile() || binary.uid !== 0 || (binary.mode & 0o022) !== 0 || (binary.mode & 0o111) === 0) return false;
-    return readlinkSync(`/proc/${pid}/exe`) === realpathSync(CLI_BIN);
+    const procExe = readlinkSync(`/proc/${pid}/exe`).replace(/ \(deleted\)$/, "");
+    if (procExe !== realpathSync(CLI_BIN)) return false;
+    const procStat = statSync(`/proc/${pid}/exe`);
+    if (!procStat.isFile() || procStat.uid !== 0 || (procStat.mode & 0o022) !== 0 || (procStat.mode & 0o111) === 0) return false;
+    return true;
   } catch {
     return false;
   }
@@ -231,7 +235,7 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
       // early `end()` when no data listener was attached. Explicitly destroy
       // after the bounded failure reply so rejected peers cannot hold gateway
       // connections open until the idle timeout.
-      socket.end(invalidReply(), () => socket.destroy());
+      socket.end(JSON.stringify({ ok: false, error: "untrusted peer" }) + "\n", () => socket.destroy());
       return;
     }
     const chunks: Buffer[] = [];

@@ -119,9 +119,9 @@ export function redirectToLogin(): Response {
   });
 }
 
-type AuthHelperReply = { kind: "valid"; session: PanelSession } | { kind: "invalid" } | { kind: "unavailable" };
+export type AuthHelperReply = { kind: "valid"; session: PanelSession } | { kind: "invalid" } | { kind: "unavailable" };
 
-function parseAuthHelperReply(stdout: string): AuthHelperReply {
+export function parseAuthHelperReply(stdout: string): AuthHelperReply {
   try {
     const value: unknown = JSON.parse(stdout.trim());
     if (value === null || typeof value !== "object" || Array.isArray(value)) return { kind: "unavailable" };
@@ -594,7 +594,13 @@ export async function authenticateRequest(req: Request): Promise<{
  * status and role against CloudPanel's database, so this also sees a user who
  * was deactivated or demoted rather than only an expired session.
  */
-export async function stillAuthorized(req: Request): Promise<boolean> {
+export async function stillAuthorized(req: Request): Promise<boolean | "unavailable"> {
   const gate = await authenticateRequest(req);
-  return gate.auth !== null && adminGate(gate.auth) === null;
+  if (gate.auth !== null) {
+    return adminGate(gate.auth) === null;
+  }
+  if (gate.response?.status === 503) {
+    return "unavailable";
+  }
+  return false;
 }

@@ -333,6 +333,25 @@ test("the handed-off target binary finalizes all provisioning before restarting 
   artifactsAvailable = false;
 });
 
+test("the update handoff invokes restart marker before spawning the target binary", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  artifactsAvailable = false;
+  resolvedReleaseTag = "v1.3.0";
+  let markerCalls = 0;
+
+  await cmdUpdate([], {
+    beforeManagerRestart: () => {
+      markerCalls++;
+      calls.push("beforeManagerRestart");
+    },
+  });
+
+  expect(markerCalls).toBe(1);
+  expect(calls).toContain(handoffCall("v1.3.0"));
+  expect(calls.indexOf("beforeManagerRestart")).toBeLessThan(calls.indexOf(handoffCall("v1.3.0")));
+});
+
 test("the update calls its restart marker immediately before service restart", async () => {
   calls.length = 0;
   resetProvisioning();

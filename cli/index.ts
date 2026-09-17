@@ -327,6 +327,7 @@ export async function cmdUpdate(argv: string[], options: { beforeManagerRestart?
   if (artifacts) {
     installArtifacts(artifacts, target);
     if (flags["no-self-update"] !== true) {
+      options.beforeManagerRestart?.();
       // Re-enter the stable public command rather than a new private command:
       // an explicit downgrade can target a release from before this handoff
       // existed. Such a binary still knows how to update itself. The internal

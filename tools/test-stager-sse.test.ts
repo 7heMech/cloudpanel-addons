@@ -243,6 +243,102 @@ describe("Stager SSE job monitoring", () => {
     expect(CLIENT_JS).toContain("watchJob(");
   });
 
+  it("updateJobUI auto-expands details when output arrives and respects user closure", () => {
+    const fn = new Function(`${JOB_WATCH_JS}\nreturn { updateJobUI };`)();
+    const { updateJobUI } = fn;
+
+    const listeners: Record<string, (() => void)[]> = {};
+    const details = {
+      open: false,
+      dataset: {} as Record<string, string>,
+      addEventListener(event: string, cb: () => void) {
+        (listeners[event] = listeners[event] || []).push(cb);
+      },
+    };
+    const pre = {
+      textContent: "",
+      scrollHeight: 100,
+      scrollTop: 0,
+      closest(selector: string) {
+        return selector === "details" ? details : null;
+      },
+    };
+    const root = {
+      querySelector(selector: string) {
+        if (selector === "#job-log") return pre;
+        return null;
+      },
+    };
+
+    // 1. Initial snapshot with no output -> remains closed
+    updateJobUI({ state: "running", step: "Starting" }, "", root);
+    expect(details.open).toBe(false);
+
+    // 2. Output arrives -> auto-expands
+    updateJobUI({ state: "running", step: "Installing" }, "downloading package...", root);
+    expect(details.open).toBe(true);
+    expect(pre.textContent).toBe("downloading package...");
+
+    // 3. User collapses the details manually
+    details.open = false;
+    for (const cb of listeners["toggle"] || []) cb();
+    expect(details.dataset.userClosed).toBe("true");
+
+    // 4. More output arrives -> does not re-open against user's choice
+    updateJobUI({ state: "running", step: "Configuring" }, "downloading package...\nconfigured", root);
+    expect(details.open).toBe(false);
+
+    // 5. User re-opens manually
+    details.open = true;
+    for (const cb of listeners["toggle"] || []) cb();
+    expect(details.dataset.userClosed).toBeUndefined();
+
+    // 6. Final output -> remains open
+    updateJobUI({ state: "done", step: "Finished" }, "downloading package...\nconfigured\ndone", root);
+    expect(details.open).toBe(true);
+  });
+
+  it("updateJobUI registers toggle listener on empty updates and respects early user closure", () => {
+    const fn = new Function(`${JOB_WATCH_JS}\nreturn { updateJobUI };`)();
+    const { updateJobUI } = fn;
+
+    const listeners: Record<string, (() => void)[]> = {};
+    const details = {
+      open: true,
+      dataset: {} as Record<string, string>,
+      addEventListener(event: string, cb: () => void) {
+        (listeners[event] = listeners[event] || []).push(cb);
+      },
+    };
+    const pre = {
+      textContent: "",
+      scrollHeight: 100,
+      scrollTop: 0,
+      closest(selector: string) {
+        return selector === "details" ? details : null;
+      },
+    };
+    const root = {
+      querySelector(selector: string) {
+        if (selector === "#job-log") return pre;
+        return null;
+      },
+    };
+
+    // 1. Empty update arrives; toggle listener is bound even with empty log
+    updateJobUI({ state: "running", step: "Starting" }, "", root);
+    expect(details.dataset.logBound).toBe("true");
+
+    // 2. Operator closes details before any output arrives
+    details.open = false;
+    for (const cb of listeners["toggle"] || []) cb();
+    expect(details.dataset.userClosed).toBe("true");
+
+    // 3. Output arrives later; it must not reopen because user closed it
+    updateJobUI({ state: "running", step: "Step 1" }, "step 1 output", root);
+    expect(details.open).toBe(false);
+  });
+
   it("both halves of the page script pass quote balance checks", () => {
     for (const line of `${JOB_WATCH_JS}\n${CLIENT_JS}`.split("\n")) {
       const quotes = (line.match(/'/g) || []).length;

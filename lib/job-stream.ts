@@ -243,7 +243,8 @@ export async function jobEventStream<J extends JobProgress>(options: {
         if (closed || authInFlight) return;
         authInFlight = true;
         try {
-          if (!(await stillAuthorized(req))) {
+          const auth = await stillAuthorized(req);
+          if (auth === false) {
             send(`event: unauthorized\ndata: ${JSON.stringify({ error: "session is no longer valid" })}\n\n`);
             finish();
           }
