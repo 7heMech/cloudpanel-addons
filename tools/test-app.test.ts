@@ -21,7 +21,7 @@ import { isNewerVersion } from "../lib/update-check";
 import { CLIENT_JS as STAGER_CLIENT_JS, isSiteMissing, jobsView, jobView } from "../addons/stager/app/views";
 import { CLIENT_JS as MAINTENANCE_CLIENT_JS, fleetView as maintenanceFleetView } from "../addons/maintenance/app/views";
 import { dashboardView as cloudflareDashboardView } from "../addons/cloudflare-ips/app/views";
-import { CLIENT_JS as PHP_RESOURCES_CLIENT_JS } from "../addons/php-resources/app/views";
+import { CLIENT_JS as PHP_RESOURCES_CLIENT_JS, dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
 import type { JobView } from "../addons/stager/app/service";
 import { expandTarget } from "../addons/stager/app/service";
 import { isNewerThan } from "../addons/instatic/app/tags";
@@ -122,13 +122,23 @@ test("a dialog is usable on a phone", () => {
   expect(BASE_STYLE).toContain("dialog { max-height: calc(100dvh - 40px); }");
 });
 
+test("the PHP Resources category dialog fits a phone", () => {
+  const html = phpResourcesLayout(
+    "PHP resources",
+    phpResourcesDashboardView({ categories: [], defaultCategoryId: null, sites: [] }),
+  );
+  expect(html).toContain("#category-dialog { width:720px; }");
+  expect(html).toContain("@media (max-width:760px) {\n  #category-dialog { width:calc(100% - 20px); }");
+});
+
 test("a fleet table gives the domain its own line on a phone", () => {
   const mobile = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 760px)"));
   // Squeezed into a sixth of a phone's width, a hostname wrapped one or two
   // characters at a time. The row becomes a block and every other cell names
   // the column heading the phone no longer has room to show.
   expect(mobile).toContain(".fleet-table thead { display: none; }");
-  expect(mobile).toContain(".fleet-table td.site-cell { flex: 1 0 calc(100% - 42px);");
+  expect(mobile).toContain(".fleet-table td.site-select { display: flex; flex: 0 0 42px; width: 42px;");
+  expect(mobile).toContain(".fleet-table td.site-cell { flex: 1 0 calc(100% - 54px); min-width: 0;");
   expect(mobile).toContain(".fleet-table td[data-label]::before { content: attr(data-label);");
 
   for (const html of [
