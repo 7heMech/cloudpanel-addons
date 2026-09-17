@@ -57,7 +57,7 @@ function paintSummary() {
   }
   const selected = rows.filter(function (row) { return row.selected; }).length;
   const note = document.getElementById('cf-selection');
-  if (note) note.textContent = selected === 0 ? 'No sites selected' : plural(selected, 'site') + ' selected';
+  if (note) note.textContent = selected === 0 ? 'No sites selected' : selected + ' of ' + rows.length + ' selected';
   ['enable-selected', 'disable-selected'].forEach(function (id) {
     const button = document.getElementById(id);
     if (button) button.disabled = selected === 0;
@@ -71,11 +71,22 @@ function paintSummary() {
     all.checked = rows.length > 0 && selected === rows.length;
     all.indeterminate = selected > 0 && selected < rows.length;
   }
+  const allBtn = document.getElementById('select-all-btn');
+  if (allBtn) {
+    allBtn.disabled = rows.length === 0;
+    allBtn.textContent = rows.length > 0 && selected === rows.length ? 'Deselect all' : 'Select all';
+  }
 }
 
 function selectAllSites(checked) {
   document.querySelectorAll('.site-checkbox').forEach(function (box) { box.checked = checked; });
   paintSummary();
+}
+
+function toggleAllSites() {
+  const rows = siteRows().map(rowState);
+  const selected = rows.filter(function (row) { return row.selected; }).length;
+  selectAllSites(selected < rows.length);
 }
 
 // Repaint from the server's answer rather than from what was asked for: the
@@ -320,6 +331,7 @@ export function dashboardView(state: CloudflareState): string {
         : `<div class="card-header toolbar">
             <h2>Sites</h2>
             <span class="toolbar-note" id="cf-selection">No sites selected</span>
+            <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
             <div class="actions toolbar-actions">
               <button class="btn" id="enable-selected" type="button" disabled onclick="setSelectedSites(true)">Enable selected</button>
               <button class="btn" id="disable-selected" type="button" disabled onclick="setSelectedSites(false)">Disable selected</button>
