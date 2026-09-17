@@ -52,9 +52,9 @@ const LOGIN_REDIRECT_BODY = [
 ].join("\n");
 
 export function redirectToLogin(): Response {
-  // Streamed rather than handed over as a string, because Bun sets
-  // Content-Length for a body whose length it knows and the panel's own
-  // redirect carries none.
+  // Streamed because the panel's redirect carries no Content-Length, and Bun
+  // computes one for any body whose length it knows. Deleting the header does
+  // not work: it is never in the map to delete, and Bun emits it regardless.
   const body = new ReadableStream({
     start(controller) {
       controller.enqueue(new TextEncoder().encode(LOGIN_REDIRECT_BODY));
