@@ -1,7 +1,7 @@
-import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync } from "node:fs";
+import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
 import { dirname } from "node:path";
-import { AUTH_SOCKET_PATH, PANEL_USER } from "../cli/paths";
+import { AUTH_SOCKET_PATH, PANEL_PHP_INI, PANEL_USER } from "../cli/paths";
 import { jsonResponse } from "./app-http";
 import { callGatewayAuth } from "./gateway-client";
 
@@ -18,6 +18,54 @@ const AUTH_HELPER_MAX_OUTPUT_BYTES = 32 * 1024;
 const MAX_SERIALIZATION_DEPTH = 64;
 const MAX_SERIALIZATION_NODES = 20_000;
 const MAX_ARRAY_ITEMS = 20_000;
+
+/**
+ * How long a session with no cookie lifetime of its own is good for.
+ *
+ * Symfony records `l: 0` whenever `session.cookie_lifetime` is 0, which is what
+ * CloudPanel ships: the cookie lives until the browser closes, and the session
+ * file lives until PHP's garbage collector decides it is idle. That collector,
+ * not PHP's documented default of 1440 seconds, is the real bound -- CloudPanel
+ * sets `session.gc_maxlifetime = 86400` -- and assuming the default logged an
+ * operator out of the addon pages twenty-four minutes after their last visit to
+ * a panel page, which a long job watched over SSE reaches easily.
+ */
+const PHP_DEFAULT_GC_MAXLIFETIME = 1440;
+// Read once per ini, and again whenever the file changes: this is on the path
+// of every authenticated request, but an operator who shortens the panel's
+// session lifetime should not have to restart the gateway for it to count. A
+// file that could not be read or stat'ed is not remembered.
+const gcMaxlifetimeByIni = new Map<string, { stamp: string; seconds: number }>();
+
+function iniStamp(path: string): string | null {
+  try {
+    const stat = statSync(path);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return null;
+  }
+}
+
+export function panelSessionLifetime(iniPath = PANEL_PHP_INI): number {
+  const stamp = iniStamp(iniPath);
+  if (stamp === null) return PHP_DEFAULT_GC_MAXLIFETIME;
+  const cached = gcMaxlifetimeByIni.get(iniPath);
+  if (cached && cached.stamp === stamp) return cached.seconds;
+  let text: string;
+  try {
+    text = readFileSync(iniPath, "utf8");
+  } catch {
+    return PHP_DEFAULT_GC_MAXLIFETIME;
+  }
+  let seconds = PHP_DEFAULT_GC_MAXLIFETIME;
+  for (const line of text.split("\n")) {
+    const match = /^\s*session\.gc_maxlifetime\s*=\s*"?(\d{1,10})"?\s*$/.exec(line);
+    if (match) seconds = Number.parseInt(match[1]!, 10);
+  }
+  if (seconds <= 0) seconds = PHP_DEFAULT_GC_MAXLIFETIME;
+  gcMaxlifetimeByIni.set(iniPath, { stamp, seconds });
+  return seconds;
+}
 
 export interface AuthenticatedRequest {
   user: string;
@@ -482,7 +530,7 @@ export function parsePanelSession(data: Uint8Array | string): PanelSession | nul
     const updated = uniqueStringEntry(meta.entries, "u");
     const lifetime = uniqueStringEntry(meta.entries, "l");
     if (updated?.type !== "integer" || lifetime?.type !== "integer") return null;
-    const seconds = lifetime.value === 0 ? 1440 : lifetime.value;
+    const seconds = lifetime.value === 0 ? panelSessionLifetime() : lifetime.value;
     if (seconds < 0 || updated.value < 0 || updated.value > Number.MAX_SAFE_INTEGER - seconds) return null;
     const expiresAt = updated.value + seconds;
     if (Math.floor(Date.now() / 1000) >= expiresAt) return null;

@@ -118,6 +118,11 @@ td { padding: 18px 32px; border-top: 1px solid var(--row-border); vertical-align
 td a { color: var(--link); }
 td a:hover { color: var(--accent); }
 .action-cell { text-align: right; white-space: nowrap; }
+.site-select { width: 42px; text-align: center; }
+.site-select input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); }
+.site-cell { font-weight: 600; overflow-wrap: anywhere; }
+.site-cell a, .site-cell .hint { overflow-wrap: anywhere; font-weight: 400; }
+.site-cell a { font-weight: 600; }
 .mono { font-family: var(--mono); font-size: 14px; }
 .badge { display: inline-block; padding: 3px 7px; border-radius: 4px; font-size: 12px;
   line-height: 1.25; border: 1px solid var(--border); white-space: nowrap; }
@@ -248,6 +253,32 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .addon-card .card-header { width: calc(100% + 40px); }
   .form-grid, .addon-grid { grid-template-columns: minmax(0, 1fr); }
   th, td { padding: 16px 20px; }
+  /* A phone has no room for five or six columns. The row becomes a block with
+     the domain on a line of its own, and every other cell names its column. */
+  .fleet-table, .fleet-table tbody, .fleet-table tr, .fleet-table td { display: block; }
+  .fleet-table thead { display: none; }
+  .fleet-table tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px 12px;
+    padding: 16px 20px; border-top: 1px solid var(--row-border); }
+  .fleet-table td { border: 0; padding: 0; max-width: none; text-align: left; white-space: normal; }
+  /* Keep the checkbox column a known size so the domain starts beside it, even
+     when a panel stylesheet gives table cells an unexpected intrinsic width. */
+  .fleet-table td.site-select { display: flex; flex: 0 0 42px; width: 42px; justify-content: center; }
+  /* The domain takes the first line, with what the site is as a tag beside it. */
+  .fleet-table td.site-cell { flex: 1 1 calc(100% - 160px); min-width: 55%; font-size: 16px; }
+  .fleet-table td.type-cell { flex: 0 1 auto; max-width: 40%; margin: 2px 0 0 auto; padding: 3px 8px;
+    border: 1px solid var(--border); border-radius: 4px; color: var(--muted);
+    font-size: 12px; line-height: 1.25; white-space: nowrap; }
+  /* Half the row each, whatever they hold: a cell that widens with its content
+     reflowed the whole row, so switching a site into maintenance -- where the
+     status badge grows by half its width -- moved every cell under it. */
+  .fleet-table td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; }
+  .fleet-table td.wide-cell { flex-basis: 100%; }
+  /* Two buttons do not fit half a phone's width, and a badge wider than its
+     half would reach into the cell beside it. */
+  .fleet-table td.action-cell:has(.btn) { flex-basis: 100%; }
+  .fleet-table td .badge { white-space: normal; }
+  .fleet-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px;
+    color: var(--table-heading); font-size: 12px; font-weight: 700; text-transform: uppercase; }
   .stats { gap: 20px; }
   /* A phone has no width to give away: the frame tightens and the buttons take
      the row, so a long label wraps inside a button rather than off the edge. */

@@ -10,6 +10,7 @@ import {
 } from "../lib/gateway-protocol";
 import { callGatewayAuth, callGatewayPanelInfo } from "../lib/gateway-client";
 import { createAuthActionServer } from "../cli/auth-action";
+import { panelSessionLifetime } from "../lib/sso-auth";
 
 describe("Gateway Protocol & Server", () => {
   test("parseGatewayRequest parses structured JSON requests", () => {
@@ -240,5 +241,22 @@ describe("Gateway Protocol & Server", () => {
   test("the Cloudflare dashboard cannot invoke the timer-only reconcile verb", () => {
     expect(CLOUDFLARE_IPS_ALLOWED_VERBS).toEqual(new Set(["list", "set", "policy"]));
     expect(CLOUDFLARE_IPS_ALLOWED_VERBS.has("reconcile")).toBe(false);
+  });
+});
+
+describe("Panel session lifetime", () => {
+  test("a session with no cookie lifetime lasts as long as PHP keeps the file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "clp-ini-"));
+    try {
+      const ini = join(dir, "php.ini");
+      writeFileSync(ini, "session.cookie_lifetime = 0\nsession.gc_maxlifetime = 86400\n");
+      expect(panelSessionLifetime(ini)).toBe(86400);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an unreadable php.ini falls back to PHP's own default", () => {
+    expect(panelSessionLifetime(join(tmpdir(), "clp-no-such-php.ini"))).toBe(1440);
   });
 });

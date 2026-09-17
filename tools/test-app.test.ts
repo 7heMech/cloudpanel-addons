@@ -19,8 +19,9 @@ import { BASE_CLIENT_JS, BASE_STYLE, THEME_INIT_JS, renderLayout } from "../lib/
 import { headerTarget, headerUpdateScript } from "../lib/panel-nav";
 import { isNewerVersion } from "../lib/update-check";
 import { CLIENT_JS as STAGER_CLIENT_JS, isSiteMissing, jobsView, jobView } from "../addons/stager/app/views";
-import { CLIENT_JS as MAINTENANCE_CLIENT_JS } from "../addons/maintenance/app/views";
-import { CLIENT_JS as PHP_RESOURCES_CLIENT_JS } from "../addons/php-resources/app/views";
+import { CLIENT_JS as MAINTENANCE_CLIENT_JS, fleetView as maintenanceFleetView } from "../addons/maintenance/app/views";
+import { dashboardView as cloudflareDashboardView } from "../addons/cloudflare-ips/app/views";
+import { CLIENT_JS as PHP_RESOURCES_CLIENT_JS, dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
 import type { JobView } from "../addons/stager/app/service";
 import { expandTarget } from "../addons/stager/app/service";
 import { isNewerThan } from "../addons/instatic/app/tags";
@@ -119,6 +120,46 @@ test("a dialog is usable on a phone", () => {
   // The visual viewport, so a collapsing address bar cannot cover the buttons.
   expect(mobile).toContain("dialog { max-height: calc(100dvh - 20px); }");
   expect(BASE_STYLE).toContain("dialog { max-height: calc(100dvh - 40px); }");
+});
+
+test("the PHP Resources category dialog fits a phone", () => {
+  const html = phpResourcesLayout(
+    "PHP resources",
+    phpResourcesDashboardView({ categories: [], defaultCategoryId: null, sites: [] }),
+  );
+  expect(html).toContain("#category-dialog { width:720px; }");
+  expect(html).toContain("@media (max-width:760px) {\n  #category-dialog { width:calc(100% - 20px); }");
+});
+
+test("a fleet table gives the domain its own line on a phone", () => {
+  const mobile = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 760px)"));
+  // Squeezed into a sixth of a phone's width, a hostname wrapped one or two
+  // characters at a time. The row becomes a block and every other cell names
+  // the column heading the phone no longer has room to show.
+  expect(mobile).toContain(".fleet-table thead { display: none; }");
+  expect(mobile).toContain(".fleet-table td.site-select { display: flex; flex: 0 0 42px; width: 42px;");
+  expect(mobile).toContain(".fleet-table td.site-cell { flex: 1 1 calc(100% - 160px); min-width: 55%;");
+  // What a site is rides beside the domain as a tag, and every labelled cell
+  // keeps half the row whatever it holds -- a status badge that grew when a
+  // site went into maintenance used to move everything under it.
+  expect(mobile).toContain(".fleet-table td.type-cell { flex: 0 1 auto;");
+  expect(mobile).toContain(".fleet-table td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; }");
+  expect(mobile).toContain(".fleet-table td[data-label]::before { content: attr(data-label);");
+
+  for (const html of [
+    maintenanceFleetView([{
+      domain: "a-rather-long-hostname.example.test", user: "site-user", type: "php", enabled: false,
+      customTemplate: false, bypasses: [], error: "",
+    }]),
+    cloudflareDashboardView({
+      autoEnableNewSites: false,
+      sites: [{ domain: "a-rather-long-hostname.example.test", type: "php", enabled: false, excludedFromAutomatic: false }],
+    }),
+  ]) {
+    expect(html).toContain('<table class="fleet-table"');
+    expect(html).toContain('<td class="site-cell"');
+    expect(html).toContain('<td class="type-cell">');
+  }
 });
 
 test("native header follows the manager's update state and clears a restored stale notice", async () => {
