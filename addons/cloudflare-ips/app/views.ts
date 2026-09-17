@@ -13,8 +13,13 @@ const STYLE = `
 .fleet-card h2, .policy-card h2 { margin: 0 0 8px; }
 .fleet-card p, .policy-card p { margin: 0; }
 .fleet-card .actions { flex-shrink: 0; }
+.toolbar-actions { margin-left: auto; }
 @media (max-width: 700px) {
   .fleet-card, .policy-card { flex-direction: column; }
+}
+@media (max-width: 760px) {
+  .toolbar-actions { flex: 1 1 100%; margin-left: 0; }
+  .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right:10px; padding-left:10px; white-space:nowrap; }
 }
 `;
 
@@ -315,8 +320,10 @@ export function dashboardView(state: CloudflareState): string {
         : `<div class="card-header toolbar">
             <h2>Sites</h2>
             <span class="toolbar-note" id="cf-selection">No sites selected</span>
-            <button class="btn toolbar-end" id="enable-selected" type="button" disabled onclick="setSelectedSites(true)">Enable selected</button>
-            <button class="btn" id="disable-selected" type="button" disabled onclick="setSelectedSites(false)">Disable selected</button>
+            <div class="actions toolbar-actions">
+              <button class="btn" id="enable-selected" type="button" disabled onclick="setSelectedSites(true)">Enable selected</button>
+              <button class="btn" id="disable-selected" type="button" disabled onclick="setSelectedSites(false)">Disable selected</button>
+            </div>
           </div>
           <table class="fleet-table">
             <thead><tr>

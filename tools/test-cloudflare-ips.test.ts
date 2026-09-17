@@ -114,6 +114,7 @@ test("dashboard summarises how many sites allow Cloudflare only", () => {
   const rendered = dashboardView({ autoEnableNewSites: true, sites });
   expect(rendered).toContain('id="enable-selected" type="button" disabled');
   expect(rendered).toContain('id="disable-selected" type="button" disabled');
+  expect(rendered).toContain('<div class="actions toolbar-actions">');
 });
 
 test("the switch column ends where the table ends, as the Maintenance table does", () => {

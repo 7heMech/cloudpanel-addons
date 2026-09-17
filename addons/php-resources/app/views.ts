@@ -22,13 +22,16 @@ const STYLE = `
 .toolbar #bulk-category { width:auto; min-width:200px; max-width:100%; }
 .notice-actions { margin-top:12px; }
 .state-default { color:var(--accent); border-color:var(--accent); margin-left:8px; }
-#category-dialog { width:760px; }
+#category-dialog { width:720px; }
 #category-dialog .dialog-grid { margin-bottom:25px; }
 @media (max-width:700px) {
   .default-card { flex-direction:column; gap:12px; }
   .default-choice { flex:1 1 auto; width:100%; }
   .toolbar #bulk-category { flex:1 1 100%; }
   .toolbar .toolbar-end { margin-left:0; }
+}
+@media (max-width:760px) {
+  #category-dialog { width:calc(100% - 20px); }
 }
 `;
 

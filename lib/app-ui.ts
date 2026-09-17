@@ -257,12 +257,14 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
      the domain on a line of its own, and every other cell names its column. */
   .fleet-table, .fleet-table tbody, .fleet-table tr, .fleet-table td { display: block; }
   .fleet-table thead { display: none; }
-  .fleet-table tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px 20px;
+  .fleet-table tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px 12px;
     padding: 16px 20px; border-top: 1px solid var(--row-border); }
   .fleet-table td { border: 0; padding: 0; max-width: none; text-align: left; white-space: normal; }
-  .fleet-table td.site-select { width: auto; }
-  /* The domain takes the row, less the width of a select box beside it. */
-  .fleet-table td.site-cell { flex: 1 0 calc(100% - 42px); font-size: 16px; }
+  /* Keep the checkbox column a known size so the domain starts beside it, even
+     when a panel stylesheet gives table cells an unexpected intrinsic width. */
+  .fleet-table td.site-select { display: flex; flex: 0 0 42px; width: 42px; justify-content: center; }
+  /* The domain takes the rest of the first line; the labelled cells wrap below. */
+  .fleet-table td.site-cell { flex: 1 0 calc(100% - 54px); min-width: 0; font-size: 16px; }
   .fleet-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px;
     color: var(--table-heading); font-size: 12px; font-weight: 700; text-transform: uppercase; }
   .stats { gap: 20px; }
