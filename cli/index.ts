@@ -961,16 +961,21 @@ function managerJobCard(source, key, standalone) {
   const card = document.createElement('article');
   card.className = 'card';
   card.setAttribute('data-manager-job-card', key);
-  const parent = CLP_ROOT.querySelector('main') || CLP_ROOT.body || CLP_ROOT;
-  if (parent && typeof parent.appendChild === 'function') parent.appendChild(card);
+  // Where the server puts a job no card claims: under the heading and above the
+  // cards, not below everything else the page has to show.
+  const heading = CLP_ROOT.querySelector('.page-heading');
+  if (heading && heading.parentNode) heading.parentNode.insertBefore(card, heading.nextSibling);
+  else {
+    const parent = CLP_ROOT.querySelector('main') || CLP_ROOT.body || CLP_ROOT;
+    if (parent && typeof parent.appendChild === 'function') parent.appendChild(card);
+  }
   return card;
 }
 
 function describeManagerJob(job) {
   if (!job) return 'Working';
   if (job.kind === 'update') return 'Updating clp-addons';
-  const verb = job.kind === 'disable' ? 'Disabling' : job.kind === 'enable' ? 'Enabling' : 'Running';
-  return verb + ' ' + (job.addon || 'an addon');
+  return (job.kind === 'disable' ? 'Disabling ' : 'Enabling ') + (job.addon || 'an addon');
 }
 
 function showJob(title, card) {
@@ -1017,7 +1022,7 @@ async function startManagerJob(path, title, source, key) {
     const running = existing ? res.data.job : null;
     const jobKey = running && running.kind === 'update' ? 'update' : (running && running.addon) || 'manager-job';
     const jobCard = existing ? managerJobCard(null, jobKey, true) : card;
-    showJob(running ? describeManagerJob(running) : title, jobCard);
+    showJob(existing ? describeManagerJob(running) : title, jobCard);
     watchJob(id, jobCard);
   } catch (err) {
     busy(false);
