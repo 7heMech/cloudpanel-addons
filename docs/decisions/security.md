@@ -28,6 +28,24 @@ role in CloudPanel's database for every request.
 
 The manager requires `ROLE_ADMIN`. Invalid sessions return to CloudPanel's
 login page, and authentication failures do not fall back to anonymous access.
+
+The gate is the first thing a request meets, before the URL is taken apart and
+before any route is chosen, so there is no list of exceptions to keep correct.
+The liveness probe the update page polls is inside it, and nothing reads it
+without a session: the page that polls it has one.
+
+What a stranger gets back is the redirect Symfony sends for any path CloudPanel
+will not serve them, reproduced byte for byte: same status, same headers, same
+body, and no `Content-Length`, which means streaming the body rather than
+handing Bun one whose length it can count. The project's own header policy used
+to go over the top of it, and that was the one thing that told `/addons` apart
+from the rest of the panel. It still applies to everything behind the gate.
+
+A response can outlive the request that authorized it. The job event stream
+rechecks the session as it polls and closes when it is no longer an
+administrator's, because a clone's job record carries the database and Instatic
+passwords it generated.
+
 State-changing HTTP requests also require the expected origin and a CSRF token.
 The token cookie is scoped to the whole panel rather than to `/addons`, because
 an addon page mounted into one of CloudPanel's own site pages runs at that
@@ -63,6 +81,12 @@ parameter validates anything.
 Percent-decoding of path segments goes through one helper that returns null on
 malformed encoding, so a stray `%` is a 400 rather than a URIError escaping to
 the socket boundary as a 500.
+
+A fault that escapes a handler is answered by the same JSON shape with the
+detail left in the journal. `Bun.serve` renders its own error page, stack trace
+included, whenever `NODE_ENV` is not `production`, and the unit sets no such
+variable, so the server states `development: false` rather than depending on an
+environment an operator could change.
 
 ## One atomic replacement
 

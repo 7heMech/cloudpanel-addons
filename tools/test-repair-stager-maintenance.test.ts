@@ -102,7 +102,8 @@ const mockPrelude = String.raw`
     writeAtomic: () => {},
   }));
   mock.module("./lib/panel-snapshot.ts", () => ({ generateSnapshot: () => {} }));
-  mock.module("./lib/sso-auth.ts", () => ({ authenticateRequest: async () => ({ response: null }) }));
+  const realSso = await import("./lib/sso-auth.ts");
+  mock.module("./lib/sso-auth.ts", () => ({ ...realSso, authenticateRequest: async () => ({ response: null }) }));
   mock.module("./cli/auth-action.ts", () => ({ runAuthActionStdin: async () => 0 }));
   mock.module("./addons/instatic/app/index.ts", () => ({ handle: async () => new Response() }));
   mock.module("./addons/stager/app/index.ts", () => ({ handle: async () => new Response() }));

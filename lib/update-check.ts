@@ -1,8 +1,8 @@
 // Check for newer clp-addons releases.
 //
 // Queried by the CLI overview and web UI to notify operators when a new
-// release is available. Cached in-memory with a 15-minute TTL so it never slows
-// down requests or spams the GitHub API.
+// release is available. The manager asks on every request it serves, so the
+// answer is cached for 15 minutes and refreshed by one call at a time.
 
 export interface CliUpdateInfo {
   current: string;
@@ -14,6 +14,12 @@ const DEFAULT_REPO = "7heMech/cloudpanel-addons";
 const CACHE_TTL_MS = 15 * 60 * 1000;
 
 let cachedUpdate: { at: number; info: CliUpdateInfo | null } | null = null;
+
+/** The refresh currently talking to GitHub, so concurrent misses share one. */
+let refreshing: Promise<CliUpdateInfo | null> | null = null;
+
+/** Bumped by a reset, so a refresh it interrupted cannot write its answer. */
+let generation = 0;
 
 /**
  * Compare two semver strings (e.g. "0.9.4" and "0.9.3", or "v0.9.4" and "v0.9.3").
@@ -36,24 +42,14 @@ export function isNewerVersion(candidate: string, current: string): boolean {
   return compareSemver(candidate, current) > 0;
 }
 
-/**
- * Check if a newer version of clp-addons is available on GitHub.
- * Returns null if offline, timed out, or unresolvable.
- */
-export async function checkCliUpdate(
+/** Ask GitHub once. Every outcome fills the cache, a failure included. */
+async function fetchLatestRelease(
   currentVersion: string,
-  repo: string = DEFAULT_REPO,
-  timeoutMs = 2500
+  repo: string,
+  timeoutMs: number,
 ): Promise<CliUpdateInfo | null> {
-  if (cachedUpdate && Date.now() - cachedUpdate.at < CACHE_TTL_MS) {
-    return cachedUpdate.info;
-  }
-
-  // Development builds never check or trigger update warnings
-  if (!currentVersion || currentVersion === "0.0.0-dev") {
-    return null;
-  }
-
+  const started = generation;
+  let info: CliUpdateInfo | null = null;
   try {
     const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
       headers: {
@@ -63,35 +59,59 @@ export async function checkCliUpdate(
       signal: AbortSignal.timeout(timeoutMs),
     });
 
-    if (!res.ok) {
-      cachedUpdate = { at: Date.now(), info: null };
-      return null;
+    const data = res.ok ? ((await res.json()) as { tag_name?: string }) : null;
+    const remoteTag = (data?.tag_name ?? "").replace(/^v/, "");
+    if (remoteTag) {
+      info = {
+        current: currentVersion.replace(/^v/, ""),
+        latest: remoteTag,
+        hasUpdate: isNewerVersion(remoteTag, currentVersion),
+      };
     }
-
-    const data = (await res.json()) as { tag_name?: string };
-    const remoteTag = (data.tag_name ?? "").replace(/^v/, "");
-    if (!remoteTag) {
-      cachedUpdate = { at: Date.now(), info: null };
-      return null;
-    }
-
-    const hasUpdate = isNewerVersion(remoteTag, currentVersion);
-    const info: CliUpdateInfo = {
-      current: currentVersion.replace(/^v/, ""),
-      latest: remoteTag,
-      hasUpdate,
-    };
-
-    cachedUpdate = { at: Date.now(), info };
-    return info;
   } catch {
-    // Network failure, timeout, or offline: return cached or null without error
-    cachedUpdate = { at: Date.now(), info: null };
+    info = null;
+  }
+  if (started === generation) cachedUpdate = { at: Date.now(), info };
+  return info;
+}
+
+/**
+ * Check if a newer version of clp-addons is available on GitHub.
+ * Returns null if offline, timed out, or unresolvable.
+ *
+ * Only the first check waits for GitHub; after that an expired entry is served
+ * as it stands while one refresh runs behind it.
+ */
+export async function checkCliUpdate(
+  currentVersion: string,
+  repo: string = DEFAULT_REPO,
+  timeoutMs = 2500
+): Promise<CliUpdateInfo | null> {
+  // Development builds never check or trigger update warnings
+  if (!currentVersion || currentVersion === "0.0.0-dev") {
     return null;
   }
+
+  const cached = cachedUpdate;
+  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+    return cached.info;
+  }
+
+  let refresh = refreshing;
+  if (!refresh) {
+    // Cleared by identity: a reset between start and settle may already have
+    // put a newer refresh here, and this one must not throw that away.
+    refresh = fetchLatestRelease(currentVersion, repo, timeoutMs).finally(() => {
+      if (refreshing === refresh) refreshing = null;
+    });
+    refreshing = refresh;
+  }
+  return cached ? cached.info : refresh;
 }
 
 /** Reset cache, primarily used in test suites. */
 export function resetUpdateCache(): void {
+  generation++;
   cachedUpdate = null;
+  refreshing = null;
 }

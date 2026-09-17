@@ -18,6 +18,11 @@ verified update path as `clp-addons update` only after an administrator selects
 **Install update**. The work runs in a transient systemd job because replacing
 the binary restarts the manager.
 
+Every request the manager serves asks whether a release is available, so the
+answer is held for fifteen minutes, refreshed by one call at a time, and served
+as it stands while that refresh runs. Only the first check waits for GitHub; a
+box with no route there would otherwise pay the timeout on every request.
+
 The native CloudPanel header asks the manager for update state; it does not
 depend on the updater process's compile-time version. That process can reconcile
 Twig after replacing the binary, so the version-independent header reads
@@ -38,9 +43,11 @@ the old process could still write old Twig or unit definitions after installing
 a new release. The manager job records `restarting background services`
 immediately before the manager service is restarted. The browser treats the
 expected SSE disconnect as a reconnecting state, waits for `/addons/health` to
-recover, and then resumes from the on-disk job record. The job log therefore
-remains available across the restart instead of making the update appear to
-stop at binary verification.
+recover, and then resumes from the on-disk job record. That probe is behind the
+session gate like every other route, so the browser waits for the manager's own
+JSON reply rather than for any 200 -- the login page a lapsed session is sent to
+is also one. The job log therefore remains available across the restart instead
+of making the update appear to stop at binary verification.
 
 Published releases are immutable in the workflow. A failed draft can be
 recreated, but an existing published tag is rejected.

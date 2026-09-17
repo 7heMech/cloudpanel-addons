@@ -525,6 +525,12 @@ function watchJob(id) {
     es.addEventListener('restarting', function () {
       if (!finished) showJobReconnecting();
     });
+    // The session went away under the stream. Reloading lands on the gate,
+    // which sends the browser to the login page.
+    es.addEventListener('unauthorized', function () {
+      es.close();
+      location.reload();
+    });
     es.onerror = function () {
       if (finished) return;
       es.close();
@@ -541,8 +547,20 @@ function waitForManager(id, done) {
   async function tick() {
     if (stopped) return;
     try {
-      const res = await fetch(CLP_BASE + '/health', { cache: 'no-store' });
-      if (res.ok) {
+      const res = await fetch(CLP_BASE + '/health', {
+        cache: 'no-store',
+        headers: { 'Accept': 'application/json' },
+      });
+      // A session that lapsed during the restart is redirected to the login
+      // page, which fetch follows and reports as a perfectly good 200. Waiting
+      // for it would spin here forever; reloading lands on the gate instead.
+      if (res.redirected) {
+        stopped = true;
+        location.reload();
+        return;
+      }
+      const body = res.ok ? await res.json().catch(function () { return null; }) : null;
+      if (body && body.ok === true) {
         stopped = true;
         pollJob(id, done);
         return;

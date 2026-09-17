@@ -2,6 +2,7 @@ import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync } fro
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
 import { dirname } from "node:path";
 import { AUTH_SOCKET_PATH, PANEL_USER } from "../cli/paths";
+import { jsonResponse } from "./app-http";
 import { callGatewayAuth } from "./gateway-client";
 
 const SESSION_COOKIE = "cloudpanel";
@@ -14,9 +15,6 @@ export const MAX_SESSION_BYTES = 256 * 1024;
 export const MAX_SESSION_ID_LENGTH = 128;
 const AUTH_HELPER_TIMEOUT_MS = 2_000;
 const AUTH_HELPER_MAX_OUTPUT_BYTES = 32 * 1024;
-const MAX_AUTH_HELPERS = 8;
-const MAX_AUTH_WAITERS = 16;
-const AUTH_WAIT_TIMEOUT_MS = 500;
 const MAX_SERIALIZATION_DEPTH = 64;
 const MAX_SERIALIZATION_NODES = 20_000;
 const MAX_ARRAY_ITEMS = 20_000;
@@ -30,12 +28,45 @@ function readCookie(req: Request, name: string): string | null {
   return new Bun.CookieMap(req.headers.get("cookie") ?? "").get(name) || null;
 }
 
-function redirectToLogin(): Response {
-  return new Response(null, {
+/**
+ * Symfony's redirect, reproduced byte for byte.
+ *
+ * An anonymous caller should learn nothing from a path under /addons that any
+ * other panel path would not tell it. CloudPanel answers one of those with this
+ * response; sending the project's own header policy instead was the single
+ * thing that told the two apart.
+ */
+const LOGIN_REDIRECT_BODY = [
+  "<!DOCTYPE html>",
+  "<html>",
+  "    <head>",
+  '        <meta charset="UTF-8" />',
+  `        <meta http-equiv="refresh" content="0;url='/login'" />`,
+  "",
+  "        <title>Redirecting to /login</title>",
+  "    </head>",
+  "    <body>",
+  '        Redirecting to <a href="/login">/login</a>.',
+  "    </body>",
+  "</html>",
+].join("\n");
+
+export function redirectToLogin(): Response {
+  // Streamed because the panel's redirect carries no Content-Length, and Bun
+  // computes one for any body whose length it knows. Deleting the header does
+  // not work: it is never in the map to delete, and Bun emits it regardless.
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(LOGIN_REDIRECT_BODY));
+      controller.close();
+    },
+  });
+  return new Response(body, {
     status: 302,
     headers: {
+      "Content-Type": "text/html; charset=UTF-8",
+      "Cache-Control": "no-cache, private",
       Location: "/login",
-      "Cache-Control": "no-store",
     },
   });
 }
@@ -66,44 +97,6 @@ function parseAuthHelperReply(stdout: string): AuthHelperReply {
   }
 }
 
-let activeAuthHelpers = 0;
-const authWaiters: Array<() => void> = [];
-
-function releaseAuthSlot(): void {
-  activeAuthHelpers--;
-  const next = authWaiters.shift();
-  if (next) next();
-}
-
-/** Reserves auth-helper capacity, waiting briefly unless the queue is full. */
-async function acquireAuthSlot(): Promise<(() => void) | null> {
-  if (activeAuthHelpers < MAX_AUTH_HELPERS) {
-    activeAuthHelpers++;
-    return releaseAuthSlot;
-  }
-  if (authWaiters.length >= MAX_AUTH_WAITERS) return null;
-
-  return new Promise((resolve) => {
-    let waiting = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const grant = () => {
-      if (!waiting) return;
-      waiting = false;
-      if (timer !== undefined) clearTimeout(timer);
-      activeAuthHelpers++;
-      resolve(releaseAuthSlot);
-    };
-    authWaiters.push(grant);
-    timer = setTimeout(() => {
-      if (!waiting) return;
-      waiting = false;
-      const index = authWaiters.indexOf(grant);
-      if (index >= 0) authWaiters.splice(index, 1);
-      resolve(null);
-    }, AUTH_WAIT_TIMEOUT_MS);
-  });
-}
-
 /**
  * Ask the root helper about one session over its socket.
  *
@@ -113,16 +106,11 @@ async function acquireAuthSlot(): Promise<(() => void) | null> {
  * 503 -- never into an authenticated request.
  */
 async function callAuthHelper(sessionId: string, socketPath = AUTH_SOCKET_PATH): Promise<AuthHelperReply> {
-  const release = await acquireAuthSlot();
-  if (!release) return { kind: "unavailable" };
   try {
     const raw = await callGatewayAuth(sessionId, socketPath, AUTH_HELPER_TIMEOUT_MS);
-    if (!raw) return { kind: "unavailable" };
-    return parseAuthHelperReply(raw);
+    return raw ? parseAuthHelperReply(raw) : { kind: "unavailable" };
   } catch {
     return { kind: "unavailable" };
-  } finally {
-    release();
   }
 }
 
@@ -527,6 +515,12 @@ export function parsePanelSession(data: Uint8Array | string): PanelSession | nul
   }
 }
 
+/** Return the shared manager denial for an authenticated non-administrator. */
+export function adminGate(auth: AuthenticatedRequest | null): Response | null {
+  if (auth?.roles.includes("ROLE_ADMIN")) return null;
+  return jsonResponse({ ok: false, error: "administrator role required" }, { status: 403 });
+}
+
 export async function authenticateRequest(req: Request): Promise<{
   auth: AuthenticatedRequest | null;
   response?: Response;
@@ -543,4 +537,16 @@ export async function authenticateRequest(req: Request): Promise<{
     auth: null,
     response: result.kind === "unavailable" ? serviceUnavailableResponse() : redirectToLogin(),
   };
+}
+
+/**
+ * Whether the session behind a request is still an administrator's.
+ *
+ * For a response that outlives the request that opened it. The gateway rechecks
+ * status and role against CloudPanel's database, so this also sees a user who
+ * was deactivated or demoted rather than only an expired session.
+ */
+export async function stillAuthorized(req: Request): Promise<boolean> {
+  const gate = await authenticateRequest(req);
+  return gate.auth !== null && adminGate(gate.auth) === null;
 }
