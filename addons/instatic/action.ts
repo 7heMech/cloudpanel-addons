@@ -1581,20 +1581,20 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
     }
 
     setStep(jDir, "instance created successfully");
-    jobSet(jDir, "state", "done");
     jobSet(jDir, "finishedAt", dateStamp(true));
     try {
       cpSync(logPath, join(dir, "create.log"));
     } catch {}
+    jobSet(jDir, "state", "done");
 
     emitActionOk({ domain, port, tag, container: name, siteUser: siteUserFinal, siteCreatedByAddon: siteCreated, status: "running" });
   } catch (error) {
     if (cleanupActive) cleanupCreate(name, dir, domain, siteCreated, paths, storage);
-    jobSet(jDir, "state", "failed");
     jobSet(jDir, "finishedAt", dateStamp(true));
     const msg = error instanceof Error ? error.message : String(error);
     jobSet(jDir, "error", msg);
     diagnostic(`[instatic] ERROR: ${msg}\n`);
+    jobSet(jDir, "state", "failed");
     throw error;
   } finally {
     if (activeTranscript) {

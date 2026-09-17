@@ -154,13 +154,14 @@ export async function watchJobRecord(options: {
   intervalMs?: number;
 }): Promise<void> {
   const intervalMs = options.intervalMs ?? 150;
-  const first = options.read();
-  options.emit(first);
-
   let previousState = jobGet(options.dir, "state");
   let previousStep = jobGet(options.dir, "step");
   let previousEvent = jobGet(options.dir, "event");
   let previousSize = statSync(join(options.dir, "log"), { throwIfNoEntry: false })?.size ?? 0;
+
+  const first = options.read();
+  options.emit(first);
+
   if (isTerminalJobState(previousState)) return;
 
   // Bun.sleep is not abortable; an aborted watch stops within one interval.

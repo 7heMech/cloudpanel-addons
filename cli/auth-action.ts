@@ -5,7 +5,6 @@
 // for hermetic unit tests and are never exposed through action argv.
 
 import net from "node:net";
-import { once } from "node:events";
 import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { dlopen, FFIType } from "bun:ffi";
 import { Database } from "bun:sqlite";
@@ -402,7 +401,32 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             for (;;) {
               const { done, value } = await reader.read();
               if (done || socket.destroyed) break;
-              if (!socket.write(Buffer.from(value))) await once(socket, "drain");
+              if (!socket.write(Buffer.from(value))) {
+                await new Promise<void>((resolve, reject) => {
+                  const cleanupBackpressure = () => {
+                    socket.off("drain", onDrain);
+                    socket.off("close", onClose);
+                    socket.off("error", onError);
+                  };
+                  const onDrain = () => {
+                    cleanupBackpressure();
+                    resolve();
+                  };
+                  const onClose = () => {
+                    cleanupBackpressure();
+                    resolve();
+                  };
+                  const onError = (error: Error) => {
+                    cleanupBackpressure();
+                    reject(error);
+                  };
+                  socket.once("drain", onDrain);
+                  socket.once("close", onClose);
+                  socket.once("error", onError);
+                  if (socket.destroyed) onClose();
+                });
+                if (socket.destroyed) break;
+              }
             }
             if (!socket.destroyed) socket.end();
             else kill();

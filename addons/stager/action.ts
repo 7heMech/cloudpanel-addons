@@ -539,11 +539,15 @@ function failJob(ctx: { dir: string; failed: boolean }, message: string): never 
   ctx.failed = true;
   try {
     jobSet(ctx.dir, "error", message);
-    jobSet(ctx.dir, "state", "failed");
   } catch {
     // Keep the original failure message; the rollback still removes secrets.
   }
   diagnostic(`[stager] ERROR: ${message}\n`);
+  try {
+    jobSet(ctx.dir, "state", "failed");
+  } catch {
+    // Keep the original failure message; the rollback still removes secrets.
+  }
   throw new JobFailure(message);
 }
 
@@ -2288,9 +2292,9 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
     writeFileSync(join(dir, "result.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
     chmodSync(join(dir, "result.json"), 0o600);
     jobSet(dir, "finishedAt", jobTimestamp());
-    jobSet(dir, "state", "done");
     ctx.rollbackActive = false;
     logLine(`clone complete: ${ctx.target}`);
+    jobSet(dir, "state", "done");
   } catch (error) {
     if (error instanceof RunReplyFailure) throw error;
     if (ctx.rollbackActive) rollbackRun(ctx);
@@ -2298,11 +2302,15 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
       const message = error instanceof Error ? error.message : "clone failed";
       try {
         jobSet(dir, "error", message);
-        jobSet(dir, "state", "failed");
       } catch {
         // Keep the stderr-only failure contract even if the record is damaged.
       }
       diagnostic(`[stager] ERROR: ${message}\n`);
+      try {
+        jobSet(dir, "state", "failed");
+      } catch {
+        // Keep the stderr-only failure contract even if the record is damaged.
+      }
     }
     if (error instanceof JobFailure) throw error;
     throw new JobFailure(error instanceof Error ? error.message : "clone failed");
@@ -2701,9 +2709,9 @@ async function cmdRunPromote(id: string, dir: string, paths: StagerActionPaths):
     writeFileSync(join(dir, "result.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
     chmodSync(join(dir, "result.json"), 0o600);
     jobSet(dir, "finishedAt", jobTimestamp());
-    jobSet(dir, "state", "done");
     ctx.rollbackActive = false;
     logLine(`promote complete: ${ctx.source} onto ${ctx.target}`);
+    jobSet(dir, "state", "done");
   } catch (error) {
     if (error instanceof RunReplyFailure) throw error;
     if (ctx.rollbackActive) rollbackPromote(ctx);
@@ -2711,11 +2719,15 @@ async function cmdRunPromote(id: string, dir: string, paths: StagerActionPaths):
       const message = error instanceof Error ? error.message : "promote failed";
       try {
         jobSet(dir, "error", message);
-        jobSet(dir, "state", "failed");
       } catch {
         // Keep the stderr-only failure contract even if the record is damaged.
       }
       diagnostic(`[stager] ERROR: ${message}\n`);
+      try {
+        jobSet(dir, "state", "failed");
+      } catch {
+        // Keep the stderr-only failure contract even if the record is damaged.
+      }
     }
     if (error instanceof JobFailure) throw error;
     throw new JobFailure(error instanceof Error ? error.message : "promote failed");
