@@ -488,9 +488,12 @@ export const JOB_STYLE = `
  * until it reaches a state that will not change again.
  *
  * Appended to an addon's own script, which calls `watchJob(id)` once the page
- * announces a job to follow. The markup contract is four ids -- `job-state`,
- * `job-step`, `job-log` and a hidden `job-watch` carrying `data-job` -- and an
- * addon that draws only some of them still works: each element is optional.
+ * announces a job to follow. A caller can pass a containing element as the
+ * second argument when a page has more than one job surface; the manager uses
+ * that to keep updates in the card whose action started the job. The markup
+ * contract is four ids -- `job-state`, `job-step`, `job-log` and a hidden
+ * `job-watch` carrying `data-job` -- and an addon that draws only some of them
+ * still works: each element is optional.
  *
  * EventSource with a polling fallback rather than polling alone, because a log
  * that appears a second after the line was written reads as a live console,
@@ -498,16 +501,21 @@ export const JOB_STYLE = `
  * covers a proxy that will not stream and a browser without EventSource.
  */
 export const JOB_WATCH_JS = `
-function updateJobUI(job, log) {
+function jobElement(root, id) {
+  const scope = root || CLP_ROOT;
+  return scope.querySelector ? scope.querySelector('#' + id) : CLP_ROOT.getElementById(id);
+}
+
+function updateJobUI(job, log, root) {
   if (!job) return false;
-  const state = CLP_ROOT.getElementById('job-state');
+  const state = jobElement(root, 'job-state');
   if (state) {
     state.textContent = job.state || '';
     state.className = 'badge state-' + (job.state || 'unknown');
   }
-  const step = CLP_ROOT.getElementById('job-step');
+  const step = jobElement(root, 'job-step');
   if (step) step.textContent = job.step || '';
-  const pre = CLP_ROOT.getElementById('job-log');
+  const pre = jobElement(root, 'job-log');
   if (pre && log !== undefined) {
     pre.textContent = log || '(no output yet)';
     pre.scrollTop = pre.scrollHeight;
@@ -515,13 +523,13 @@ function updateJobUI(job, log) {
   return job.state === 'done' || job.state === 'failed';
 }
 
-function showJobReconnecting() {
-  const state = CLP_ROOT.getElementById('job-state');
+function showJobReconnecting(root) {
+  const state = jobElement(root, 'job-state');
   if (state) {
     state.textContent = 'reconnecting';
     state.className = 'badge state-queued';
   }
-  const step = CLP_ROOT.getElementById('job-step');
+  const step = jobElement(root, 'job-step');
   if (step) step.textContent = 'The manager is restarting; waiting for it to come back…';
 }
 
@@ -532,7 +540,7 @@ function jobPayload(raw) {
   return body || {};
 }
 
-function watchJob(id) {
+function watchJob(id, root) {
   let finished = false;
   // Reloading rather than patching the page: a finished job turns the progress
   // view into a result view, and the server already knows how to draw that.
@@ -550,11 +558,11 @@ function watchJob(id) {
       if (finished) return;
       try {
         const payload = jobPayload(JSON.parse(ev.data));
-        if (updateJobUI(payload.job, payload.log)) done(function () { es.close(); });
+        if (updateJobUI(payload.job, payload.log, root)) done(function () { es.close(); });
       } catch (e) {}
     };
     es.addEventListener('restarting', function () {
-      if (!finished) showJobReconnecting();
+      if (!finished) showJobReconnecting(root);
     });
     // The session went away under the stream. Reloading lands on the gate,
     // which sends the browser to the login page.
@@ -565,15 +573,15 @@ function watchJob(id) {
     es.onerror = function () {
       if (finished) return;
       es.close();
-      showJobReconnecting();
-      waitForManager(id, done);
+      showJobReconnecting(root);
+      waitForManager(id, done, root);
     };
     return;
   }
-  pollJob(id, done);
+  pollJob(id, done, root);
 }
 
-function waitForManager(id, done) {
+function waitForManager(id, done, root) {
   let stopped = false;
   async function tick() {
     if (stopped) return;
@@ -593,7 +601,7 @@ function waitForManager(id, done) {
       const body = res.ok ? await res.json().catch(function () { return null; }) : null;
       if (body && body.ok === true) {
         stopped = true;
-        pollJob(id, done);
+        pollJob(id, done, root);
         return;
       }
     } catch (e) {}
@@ -602,13 +610,13 @@ function waitForManager(id, done) {
   tick();
 }
 
-function pollJob(id, done) {
+function pollJob(id, done, root) {
   let stopped = false;
   async function tick() {
     if (stopped) return;
     try {
       const payload = jobPayload(await call('/api/jobs/' + encodeURIComponent(id)));
-      if (updateJobUI(payload.job, payload.log)) {
+      if (updateJobUI(payload.job, payload.log, root)) {
         stopped = true;
         done(null);
         return;

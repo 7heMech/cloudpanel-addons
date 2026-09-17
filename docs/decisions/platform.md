@@ -128,7 +128,15 @@ and a manager job that fails to start reports through the inline notice. The
 browser's `confirm` and `alert` survive only as what the shell degrades to where
 there is no `<dialog>` or no notice holder. Below 760px the shell tightens: a dialog gives up its desktop padding and
 its buttons take the row, and it is bounded by the visual viewport so a phone's
-collapsing address bar cannot cover them.
+collapsing address bar cannot cover them. Live enable, disable and update jobs
+put their state, current step and output in the manager card that owns the job,
+with the log closed because the step is what a card has room for. A job whose
+card the page does not carry -- an update watched from the index -- takes a card
+of its own under the heading and above the rest, whether the page was drawn
+during the job or a duplicate request told the browser about it, so a job is
+never reported under the action the operator happened to click. The shared
+watcher scopes its updates to that card; a completed job still reloads the page
+so the server remains the source of the result view.
 
 A page reached from a site's tab strip is drawn in site mode instead: the shell
 shows CloudPanel's site information and the applicable site tabs with the addon's

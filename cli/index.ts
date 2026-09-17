@@ -927,9 +927,14 @@ async function cmdServe(): Promise<never> {
 const MANAGER_INDEX_CSS = `
 .addon-card .actions { margin-top: auto; }
 .addon-card .addon-status { align-self: center; }
+.manager-job-status { width: 100%; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.manager-job-status .job-summary { justify-content: space-between; }
+.manager-job-status .step { margin: 6px 0 0; overflow-wrap: anywhere; }
+.job-log-details { margin-top: 10px; }
+.job-log-details summary { color: var(--muted); font-size: 14px; cursor: pointer; }
+.job-log-details pre { max-height: 240px; margin: 10px 0 0; }
 .addon-section { margin-top: 30px; }
 .addon-section h2 { margin: 0 0 20px; font-size: 20px; }
-#job-card pre { max-height: 300px; }
 .update-page { max-width: 800px; margin: 0 auto; }
 .update-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin: 0 0 25px; }
 .update-versions dt { color: var(--muted); font-size: 14px; margin-bottom: 8px; }
@@ -942,25 +947,83 @@ const MANAGER_INDEX_CSS = `
 `;
 
 const MANAGER_INDEX_JS = `
-function showJob(title) {
-  const card = document.getElementById('job-card');
+function managerJobCard(source, key, standalone) {
+  const fromSource = source && typeof source.closest === 'function'
+    ? source.closest('[data-manager-job-card]')
+    : null;
+  if (fromSource) return fromSource;
+  if (!key) return null;
+  const owner = Array.from(CLP_ROOT.querySelectorAll('[data-manager-job-card]')).find(function (candidate) {
+    return candidate.getAttribute('data-manager-job-card') === key;
+  }) || null;
+  if (owner || !standalone) return owner;
+
+  const card = document.createElement('article');
+  card.className = 'card';
+  card.setAttribute('data-manager-job-card', key);
+  // Where the server puts a job no card claims: under the heading and above the
+  // cards, not below everything else the page has to show.
+  const heading = CLP_ROOT.querySelector('.page-heading');
+  if (heading && heading.parentNode) heading.parentNode.insertBefore(card, heading.nextSibling);
+  else {
+    const parent = CLP_ROOT.querySelector('main') || CLP_ROOT.body || CLP_ROOT;
+    if (parent && typeof parent.appendChild === 'function') parent.appendChild(card);
+  }
+  return card;
+}
+
+function describeManagerJob(job) {
+  if (!job) return 'Working';
+  if (job.kind === 'update') return 'Updating clp-addons';
+  return (job.kind === 'disable' ? 'Disabling ' : 'Enabling ') + (job.addon || 'an addon');
+}
+
+function showJob(title, card) {
   if (!card) return;
-  card.hidden = false;
-  const heading = document.getElementById('job-title');
+  let status = card.querySelector('[data-manager-job-status]');
+  if (!status) {
+    status = document.createElement('div');
+    status.className = 'manager-job-status';
+    status.setAttribute('data-manager-job-status', '');
+    status.setAttribute('aria-live', 'polite');
+    status.innerHTML = '<div class="job-summary">' +
+      '<strong id="job-title"></strong>' +
+      '<span class="badge state-queued" id="job-state">queued</span>' +
+      '</div>' +
+      '<p class="step" id="job-step">Starting…</p>' +
+      '<details class="job-log-details"><summary>Output</summary><pre id="job-log">(no output yet)</pre></details>';
+    card.appendChild(status);
+  }
+  status.hidden = false;
+  const heading = status.querySelector('#job-title');
   if (heading && title) heading.textContent = title;
+  const state = status.querySelector('#job-state');
+  if (state) {
+    state.textContent = 'queued';
+    state.className = 'badge state-queued';
+  }
+  const step = status.querySelector('#job-step');
+  if (step) step.textContent = 'Starting…';
 }
 
 // Every one of these restarts the manager, so the reply we are waiting for is
 // only ever a job id: the outcome arrives through the job record, which
 // survives the restart that kills this page's connection.
-async function startManagerJob(path, title) {
+async function startManagerJob(path, title, source, key) {
+  const card = managerJobCard(source, key);
   busy(true);
   try {
     const res = await call(path, { method: 'POST' });
     const id = res.data && res.data.jobId;
     if (!id) throw new Error('the manager did not start a job');
-    showJob(title);
-    watchJob(id);
+    // A duplicate request follows the job that is already running. Its owner
+    // is authoritative; the clicked card is only for a newly created job.
+    const existing = res.data.existing === true;
+    const running = existing ? res.data.job : null;
+    const jobKey = running && running.kind === 'update' ? 'update' : (running && running.addon) || 'manager-job';
+    const jobCard = existing ? managerJobCard(null, jobKey, true) : card;
+    showJob(existing ? describeManagerJob(running) : title, jobCard);
+    watchJob(id, jobCard);
   } catch (err) {
     busy(false);
     // In the page rather than in a modal the browser owns, which would cover
@@ -969,16 +1032,16 @@ async function startManagerJob(path, title) {
   }
 }
 
-function enableAddon(name) {
+function enableAddon(name, source) {
   clearNotice();
-  startManagerJob('/api/addons/' + encodeURIComponent(name) + '/enable', 'Enabling ' + name);
+  startManagerJob('/api/addons/' + encodeURIComponent(name) + '/enable', 'Enabling ' + name, source, name);
 }
 
 // The same dialog every addon uses for a decision an operator has to make, so
 // disabling one reads the way turning on global maintenance does. The browser's
 // confirm() said the same words in a box this project does not style, cannot
 // carry a details list in, and which reads as the page having gone wrong.
-async function disableAddon(name, title) {
+async function disableAddon(name, title, source) {
   const accepted = await confirmAction({
     // The name the card shows, not the slug the route takes: an operator
     // reading "Disable instatic?" under a card headed "Instatic CMS" has to
@@ -997,11 +1060,11 @@ async function disableAddon(name, title) {
   });
   if (!accepted) return;
   clearNotice();
-  startManagerJob('/api/addons/' + encodeURIComponent(name) + '/disable', 'Disabling ' + name);
+  startManagerJob('/api/addons/' + encodeURIComponent(name) + '/disable', 'Disabling ' + name, source, name);
 }
 
-function updateNow() {
-  startManagerJob('/api/update', 'Updating clp-addons');
+function updateNow(source) {
+  startManagerJob('/api/update', 'Updating clp-addons', source, 'update');
 }
 
 // A failure is worth showing once. Remembering the dismissal by job id keeps it
@@ -1023,26 +1086,72 @@ function dismissFailure(id) {
 `;
 
 /** Renders the manager card for a known addon, or nothing for an unknown name. */
-function addonCard(name: string, enabled: boolean): string {
+function addonCard(name: string, enabled: boolean, job: ManagerJobView | null = null): string {
   const spec = ADDONS[name];
   if (!spec) return "";
   const title = spec.title ?? spec.name;
   const description = spec.description ? `<p>${esc(spec.description)}</p>` : "";
   const mounted = addonHandler(spec.name) !== undefined;
+  const live = liveManagerJob(job);
+  const addonJob = live && live.addon === spec.name ? live : null;
   const actions = enabled
     ? `${mounted ? `<a class="btn btn-primary btn-lg" href="${esc(`${mountPath(spec.name)}/`)}" aria-label="Open ${esc(title)}">Open</a>` : '<span class="badge state-running addon-status">Enabled</span>'}
-    <button class="btn btn-danger btn-lg" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}')">Disable</button>`
-    : `<button class="btn btn-primary btn-lg" type="button" onclick="enableAddon('${escJs(spec.name)}')">Enable ${esc(title)}</button>`;
-  return `<article class="card addon-card">
+    <button class="btn btn-danger btn-lg" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)">Disable</button>`
+    : `<button class="btn btn-primary btn-lg" type="button" onclick="enableAddon('${escJs(spec.name)}', this)">Enable ${esc(title)}</button>`;
+  return `<article class="card addon-card" data-manager-job-card="${esc(spec.name)}">
   <div class="card-header"><h2>${esc(title)}</h2></div>
   ${description}
   <div class="actions">${actions}</div>
+  ${addonJob ? managerJobStatus(addonJob) : ""}
 </article>`;
 }
 
-/** Shared progress and failure details survive navigation between manager pages. */
-function managerJobBlock(job: ManagerJobView | null): string {
-  const live = job && (job.state === "queued" || job.state === "running") ? job : null;
+function liveManagerJob(job: ManagerJobView | null): ManagerJobView | null {
+  return job && (job.state === "queued" || job.state === "running") ? job : null;
+}
+
+/**
+ * Live manager progress stays with the card whose action started the job.
+ *
+ * The log is behind a summary rather than gone: enabling an addon that has to
+ * install Docker spends minutes on one step, and what it is doing is in the
+ * log. Closed by default, because the state and the step are what a card has
+ * room for.
+ */
+function managerJobStatus(job: ManagerJobView): string {
+  return `<div class="manager-job-status" data-manager-job-status aria-live="polite">
+  <div class="job-summary">
+    <strong id="job-title">${esc(describeJob(job))}</strong>
+    <span class="badge state-${esc(job.state)}" id="job-state">${esc(job.state)}</span>
+  </div>
+  <p class="step" id="job-step">${esc(job.step)}</p>
+  ${JOB_LOG_DETAILS}
+</div>`;
+}
+
+const JOB_LOG_DETAILS = `<details class="job-log-details">
+    <summary>Output</summary>
+    <pre id="job-log">(no output yet)</pre>
+  </details>`;
+
+/**
+ * A job with no card of its own -- an update watched from the index, an enable
+ * watched from the update page -- still has to be visible, so it takes a block
+ * of its own above the cards.
+ */
+function managerJobBlock(job: ManagerJobView | null, homeCard: string | null): string {
+  const live = liveManagerJob(job);
+  if (!live || managerJobKey(live) === homeCard) return "";
+  return `<article class="card" data-manager-job-card="${esc(managerJobKey(live))}">${managerJobStatus(live)}</article>`;
+}
+
+/** The card a job belongs to: the addon it is about, or the update page's own. */
+function managerJobKey(job: ManagerJobView): string {
+  return job.kind === "update" ? "update" : job.addon;
+}
+
+/** Failure details survive navigation without creating a second progress card. */
+function managerJobFailure(job: ManagerJobView | null): string {
   const failure = job && job.state === "failed" ? job : null;
   const failureBlock = failure
     ? `<div class="alert" id="job-failure" data-job="${esc(failure.id)}">
@@ -1050,15 +1159,7 @@ function managerJobBlock(job: ManagerJobView | null): string {
   <button class="btn" type="button" onclick="dismissFailure('${escJs(failure.id)}')">Dismiss</button>
 </div>`
     : "";
-  const jobBlock = `<article class="card" id="job-card"${live ? "" : " hidden"}>
-  <div class="job-summary">
-    <strong id="job-title">${esc(live ? describeJob(live) : "Working")}</strong>
-    <span class="badge state-${esc(live?.state ?? "queued")}" id="job-state">${esc(live?.state ?? "queued")}</span>
-  </div>
-  <p class="step" id="job-step">${esc(live?.step ?? "")}</p>
-  <pre id="job-log"></pre>
-</article>`;
-  return failureBlock + jobBlock;
+  return failureBlock;
 }
 
 type ManagerPageOptions = { job?: ManagerJobView | null; csrf?: string };
@@ -1070,11 +1171,14 @@ export function indexPage(
   options: ManagerPageOptions & { available?: string[] } = {},
 ): Response {
   const available = options.available ?? [];
-  const cards = enabled.map((name) => addonCard(name, true)).join("");
-  const availableCards = available.map((name) => addonCard(name, false)).join("");
+  const cards = enabled.map((name) => addonCard(name, true, options.job ?? null)).join("");
+  const availableCards = available.map((name) => addonCard(name, false, options.job ?? null)).join("");
 
+  const live = liveManagerJob(options.job ?? null);
+  const claimed = live && [...enabled, ...available].includes(managerJobKey(live)) ? managerJobKey(live) : null;
   const content = `<div class="page-heading"><h1>Addons</h1><a class="btn" href="${UPDATE_PATH}">Updates</a></div>` +
-    managerJobBlock(options.job ?? null) +
+    managerJobFailure(options.job ?? null) +
+    managerJobBlock(options.job ?? null, claimed) +
     (cards
       ? `<div class="addon-grid">${cards}</div>`
       : `<div class="card empty">${esc(available.length
@@ -1094,7 +1198,7 @@ export function updatePage(
   options: ManagerPageOptions = {},
 ): Response {
   const update = info?.hasUpdate ? info : null;
-  const live = options.job?.state === "queued" || options.job?.state === "running";
+  const live = liveManagerJob(options.job ?? null);
   const development = currentVersion === "0.0.0-dev";
   const status = update ? "Update available" : info ? "Up to date" : development ? "Development build" : "Unable to check";
   const message = update
@@ -1104,19 +1208,21 @@ export function updatePage(
     : "We could not check for a new release. Try again later or view the changelog on GitHub.";
   const content = `<div class="update-page">
   <div class="page-heading"><h1>Update CloudPanel Addons</h1><a class="btn" href="/addons/">Back to Addons</a></div>
-  ${managerJobBlock(options.job ?? null)}
-  <article class="card">
+  ${managerJobFailure(options.job ?? null)}
+  ${managerJobBlock(options.job ?? null, "update")}
+  <article class="card" data-manager-job-card="update">
     <div class="card-header"><h2>CloudPanel Addons</h2><span class="badge ${update ? "state-queued" : info ? "state-done" : "state-unknown"}">${status}</span></div>
     <dl class="update-versions">
       <div><dt>Installed version</dt><dd>v${esc((info?.current ?? currentVersion).replace(/^v/, ""))}</dd></div>
       <div><dt>Latest release</dt><dd>${info ? `v${esc(info.latest)}` : "Unavailable"}</dd></div>
     </dl>
     <p>${message}</p>
-    ${live ? '<p class="hint">Another addon operation is in progress. Its status is shown above.</p>' : ""}
     <div class="actions update-actions">
       <a class="btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener noreferrer">Changelog</a>
-      ${update ? `<button class="btn btn-primary" type="button" onclick="updateNow()"${live ? " disabled" : ""}>Install update</button>` : ""}
+      ${update ? `<button class="btn btn-primary" type="button" onclick="updateNow(this)"${live ? " disabled" : ""}>Install update</button>` : ""}
     </div>
+    ${live && live.kind === "update" ? managerJobStatus(live) : ""}
+    ${live && live.kind !== "update" ? '<p class="hint">Another addon operation is in progress; the update can start once it finishes.</p>' : ""}
   </article>
 </div>`;
   return managerPage("Update CloudPanel Addons", content, update, options);
@@ -1129,13 +1235,16 @@ function managerPage(
   options: ManagerPageOptions,
 ): Response {
   const job = options.job;
-  const live = job && (job.state === "queued" || job.state === "running") ? job : null;
+  const live = liveManagerJob(job ?? null);
   return htmlResponse(renderLayout(title, content, {
     brand: "CloudPanel Addons",
     base: "/addons",
     nav: [],
     css: JOB_STYLE + MANAGER_INDEX_CSS,
-    script: MANAGER_INDEX_JS + JOB_WATCH_JS + (live ? `\nwatchJob('${escJs(live.id)}');\n` : ""),
+    script: MANAGER_INDEX_JS + JOB_WATCH_JS + (live ? `
+const managerJobTarget = CLP_ROOT.querySelector('[data-manager-job-status]');
+watchJob('${escJs(live.id)}', managerJobTarget ? managerJobTarget.closest('[data-manager-job-card]') : null);
+` : ""),
     updateNotice: update,
   }), { csrf: options.csrf });
 }
