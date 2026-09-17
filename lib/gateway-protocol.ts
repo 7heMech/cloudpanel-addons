@@ -51,10 +51,11 @@ export const MAINTENANCE_ALLOWED_VERBS = new Set([
  */
 export const PHP_RESOURCES_ALLOWED_VERBS = new Set([
   "list",
-  "get",
-  "set",
-  "reset",
-  "default",
+  "site",
+  "save-category",
+  "delete-category",
+  "assign",
+  "set-default",
 ]);
 
 export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([

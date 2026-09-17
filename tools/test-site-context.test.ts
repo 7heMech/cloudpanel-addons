@@ -15,7 +15,7 @@ test("the reproduced tab strip applies CloudPanel's own conditions", () => {
   const withVarnish = siteTabs({ ...php, varnishCache: true }).map((tab) => tab.label);
   expect(withVarnish).toEqual([
     "Settings", "Vhost", "Databases", "Varnish Cache", "SSL/TLS", "Security",
-    "SSH/FTP", "File Manager", "Cron Jobs", "Logs", "Maintenance", "Resources", "Staging",
+    "SSH/FTP", "File Manager", "Cron Jobs", "Logs", "Maintenance", "Staging",
   ]);
 
   // Varnish Cache is a PHP-with-Varnish tab; Databases is for anything but static.
@@ -25,10 +25,7 @@ test("the reproduced tab strip applies CloudPanel's own conditions", () => {
   expect(staticTabs).not.toContain("Databases");
   expect(staticTabs).toContain("Settings");
   expect(staticTabs).toContain("Maintenance");
-  // Maintenance and Staging apply to any site; Resources is the pool file a
-  // static site has not got, and the injected Twig makes the same check.
   expect(staticTabs).toContain("Staging");
-  expect(staticTabs).not.toContain("Resources");
 });
 
 test("tab links point at the panel's own routes and mark the active one", () => {

@@ -1,29 +1,37 @@
-import { esc, escJs } from "../../../lib/app-http";
-import { renderFragment, renderLayout } from "../../../lib/app-ui";
-import type { EmbedFragment } from "../../../lib/shadow-embed";
+import { esc } from "../../../lib/app-http";
+import { renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
-import type { SiteContext } from "../../../lib/site-context";
-import { PM_MODES, STOCK_PROFILE, type PhpResourcesState, type PoolProfile, type PoolSiteState } from "../action";
+import {
+  PM_MODES, STOCK_PROFILE,
+  type PhpResourcesState, type PoolCategory, type PoolProfile, type PoolSiteState,
+} from "../action";
 
 const BASE = mountPath("php-resources");
 
 // Cards, switches, the form grid, the confirmation dialog and the inline notice
 // are in lib/app-ui; only what this addon alone draws is here.
 const STYLE = `
-.policy-head { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
-.policy-head h2 { margin:0 0 8px; }
-.policy-head p { margin:0; }
-.policy-head .hint { margin-top:8px; }
-#default-fields { margin-top:25px; padding-top:25px; border-top:1px solid var(--border); }
-.fleet-site { font-weight:600; }
-.fleet-site a { overflow-wrap:anywhere; }
+.site-select { width:42px; text-align:center; }
+.site-select input { width:18px; height:18px; margin:0; accent-color:var(--primary); }
+.default-card { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
+.default-card h2 { margin:0 0 8px; }
+.default-card p { margin:0; }
+.default-choice { flex:0 0 260px; max-width:100%; }
+.name-cell { font-weight:600; overflow-wrap:anywhere; max-width:340px; }
+.name-cell .hint { font-weight:400; }
 .numeric { text-align:right; font-variant-numeric:tabular-nums; }
-.pool-path { font-family:var(--mono); font-size:13px; overflow-wrap:anywhere; }
-.state-managed { color:var(--accent); border-color:var(--accent); }
-.state-stock { color:var(--muted); }
-.state-drifted { color:var(--warn); border-color:var(--warn); }
+.limit-cell { white-space:nowrap; }
+.limit-cell .hint { white-space:normal; }
+.toolbar #bulk-category { width:auto; min-width:200px; max-width:100%; }
+.notice-actions { margin-top:12px; }
+.state-default { color:var(--accent); border-color:var(--accent); margin-left:8px; }
+#category-dialog { width:760px; }
+#category-dialog .dialog-grid { margin-bottom:25px; }
 @media (max-width:700px) {
-  .policy-head { flex-direction:column; gap:12px; }
+  .default-card { flex-direction:column; gap:12px; }
+  .default-choice { flex:1 1 auto; width:100%; }
+  .toolbar #bulk-category { flex:1 1 100%; }
+  .toolbar .toolbar-end { margin-left:0; }
 }
 `;
 
@@ -38,16 +46,17 @@ interface Field {
 const ALL_MODES = PM_MODES;
 
 /**
- * One description of every editable directive, used by both forms and by the
- * table's column headings. The `modes` list is the same one the action writes
- * by: a field the mode does not use is hidden rather than removed, so switching
- * the mode back finds the number that was typed still there.
+ * One description of every directive, used by the category dialog and by the
+ * read-only block on CloudPanel's own site page. The `modes` list is the same
+ * one the action writes by: a field the mode does not use is hidden rather than
+ * removed, so switching the mode back finds the number that was typed still
+ * there.
  */
 const FIELDS: Field[] = [
   {
     key: "maxChildren",
     label: "Max children",
-    hint: "The most PHP workers this site may run at once. Each one holds its own memory.",
+    hint: "The most PHP workers a site in this category may run at once. Each one holds its own memory.",
     modes: ALL_MODES,
   },
   {
@@ -104,32 +113,47 @@ export function pmLabel(mode: string): string {
   return PM_LABELS[mode] ?? mode;
 }
 
-/**
- * The editable half of a profile, for one scope: `site` or `default`.
- *
- * The saved values ride along in `data-baseline` so the page can tell an
- * untouched form from an edited one without asking the server again -- which is
- * what lets Save say "nothing to change" rather than rewrite the pool file and
- * reload php-fpm for no reason.
- */
-function profileForm(scope: string, profile: PoolProfile): string {
+/** How a pool's worker settings read in one table cell. */
+export function workerSummary(profile: PoolProfile): string {
+  if (profile.pm === "dynamic") {
+    return `Dynamic, ${profile.minSpareServers}–${profile.maxSpareServers} spare, up to ${profile.maxChildren}`;
+  }
+  if (profile.pm === "static") return `Static, ${profile.maxChildren} always running`;
+  return `On demand, up to ${profile.maxChildren}`;
+}
+
+function seconds(value: number): string {
+  return value === 0 ? "Off" : `${value}s`;
+}
+
+/** The two limits that are about a single worker rather than about the pool. */
+function recycleSummary(profile: PoolProfile): string {
+  const recycle = profile.maxRequests === 0 ? "Workers are never recycled" : `Recycled every ${profile.maxRequests} requests`;
+  return profile.requestTerminateTimeout === 0
+    ? `${recycle}, no request limit`
+    : `${recycle}, ${profile.requestTerminateTimeout}s request limit`;
+}
+
+const NO_CATEGORY = "No category — CloudPanel limits";
+
+/** The editable directives of one profile, for the category dialog. */
+function profileForm(profile: PoolProfile): string {
   const modeOptions = ALL_MODES
     .map((mode) => `<option value="${esc(mode)}" ${profile.pm === mode ? "selected" : ""}>${esc(pmLabel(mode))}</option>`)
     .join("");
   const fields = FIELDS.map((field) => {
-    const id = `${scope}-${field.key}`;
     const hidden = field.modes.includes(profile.pm) ? "" : " hidden";
     return `<div class="form-field" data-modes="${esc(field.modes.join(" "))}"${hidden}>
-      <label for="${esc(id)}">${esc(field.label)}</label>
-      <input id="${esc(id)}" data-field="${esc(field.key)}" type="number" inputmode="numeric" step="1" min="0" value="${esc(profile[field.key])}">
+      <label for="category-${esc(field.key)}">${esc(field.label)}</label>
+      <input id="category-${esc(field.key)}" data-field="${esc(field.key)}" type="number" inputmode="numeric" step="1" min="0" value="${esc(profile[field.key])}">
       <div class="hint">${esc(field.hint)}</div>
     </div>`;
   }).join("");
-  return `<div id="${esc(scope)}-profile" data-profile-scope="${esc(scope)}" data-baseline="${esc(JSON.stringify(profile))}">
+  return `<div id="category-profile">
     <div class="form-grid">
       <div class="form-field form-field-full">
-        <label for="${esc(scope)}-pm">Process manager</label>
-        <select id="${esc(scope)}-pm" data-field="pm" onchange="paintProfileModes('${escJs(scope)}')">${modeOptions}</select>
+        <label for="category-pm">Process manager</label>
+        <select id="category-pm" data-field="pm" onchange="paintProfileModes()">${modeOptions}</select>
         <div class="hint">On demand starts a worker per request and stops it when idle. Dynamic keeps a pool warm. Static keeps every worker running.</div>
       </div>
       ${fields}
@@ -138,15 +162,9 @@ function profileForm(scope: string, profile: PoolProfile): string {
 }
 
 export const CLIENT_JS = `
-const PROFILE_KEYS = ${JSON.stringify(["pm", ...FIELDS.map((field) => field.key)])};
-
-function profileRoot(scope) {
-  return CLP_ROOT.getElementById(scope + '-profile');
-}
-
 /** Show only the directives the chosen process manager actually reads. */
-function paintProfileModes(scope) {
-  const root = profileRoot(scope);
+function paintProfileModes() {
+  const root = CLP_ROOT.getElementById('category-profile');
   if (!root) return;
   const mode = root.querySelector('[data-field="pm"]').value;
   root.querySelectorAll('[data-modes]').forEach(function (field) {
@@ -154,11 +172,11 @@ function paintProfileModes(scope) {
   });
 }
 
-// Reads the form, or reports the first field that is not a whole number and
+// Reads the dialog, or reports the first field that is not a whole number and
 // returns null. The server checks all of this again; refusing here is only so
 // an obvious slip does not cost a round trip.
-function readProfile(scope) {
-  const root = profileRoot(scope);
+function readProfile() {
+  const root = CLP_ROOT.getElementById('category-profile');
   if (!root) return null;
   const profile = {};
   let bad = '';
@@ -179,150 +197,256 @@ function readProfile(scope) {
   return profile;
 }
 
-function baselineProfile(scope) {
-  const root = profileRoot(scope);
-  try { return JSON.parse(root.dataset.baseline); } catch (e) { return null; }
+function writeProfile(profile) {
+  const root = CLP_ROOT.getElementById('category-profile');
+  if (!root) return;
+  root.querySelectorAll('[data-field]').forEach(function (input) {
+    input.value = profile[input.dataset.field];
+  });
+  paintProfileModes();
 }
 
-function setBaseline(scope, profile) {
-  const root = profileRoot(scope);
-  if (root) root.dataset.baseline = JSON.stringify(profile);
+// A change here rewrites pool files, renames rows and moves counts between
+// categories, so the page is drawn again by the server rather than patched in
+// nine places. The message survives the reload, so what happened is still said.
+const FLASH_KEY = 'clp-php-resources-flash';
+
+function reloadWith(message, kind) {
+  try { sessionStorage.setItem(FLASH_KEY, JSON.stringify({ message: message, kind: kind })); } catch (e) {}
+  location.reload();
 }
 
-function sameProfile(a, b) {
-  if (!a || !b) return false;
-  return PROFILE_KEYS.every(function (key) { return a[key] === b[key]; });
+function showCarriedFlash() {
+  let carried = null;
+  try {
+    carried = sessionStorage.getItem(FLASH_KEY);
+    if (carried) sessionStorage.removeItem(FLASH_KEY);
+  } catch (e) { return; }
+  if (!carried) return;
+  try {
+    const flash = JSON.parse(carried);
+    notify(flash.message, flash.kind);
+  } catch (e) {}
 }
 
-/** Fields the chosen mode does not use cannot make two profiles differ. */
-function effectiveProfile(profile) {
-  if (!profile) return profile;
-  const copy = Object.assign({}, profile);
-  if (profile.pm !== 'dynamic') { copy.startServers = 0; copy.minSpareServers = 0; copy.maxSpareServers = 0; }
-  if (profile.pm !== 'ondemand') { copy.processIdleTimeout = 0; }
-  return copy;
+function plural(count, word) {
+  return count + ' ' + word + (count === 1 ? '' : 's');
 }
 
-async function saveSiteResources(domain) {
-  const profile = readProfile('site');
-  if (!profile) return;
-  if (sameProfile(effectiveProfile(profile), effectiveProfile(baselineProfile('site')))) {
-    notify('These are already the limits this site has; nothing to change.', 'ok');
-    return;
-  }
+/** What to say when a change landed on some sites and not on others. */
+function withFailures(message, failures) {
+  if (!failures || !failures.length) return { message: message, kind: 'ok' };
+  return {
+    message: message + ' ' + plural(failures.length, 'site') + ' could not be written: ' + failures.join('; '),
+    kind: 'warn',
+  };
+}
+
+async function send(path, body, done) {
   clearNotice();
   busy(true);
   try {
-    const reply = await call('/api/sites/' + encodeURIComponent(domain), {
-      method: 'PUT',
+    const reply = await call(path, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile: profile }),
+      body: JSON.stringify(body),
     });
-    paintSiteState(reply.data);
-    notify('Saved. PHP-FPM reloaded, so requests already running were not interrupted.', 'ok');
+    const flash = withFailures(done, (reply.data || {}).failures);
+    reloadWith(flash.message, flash.kind);
   } catch (error) {
-    notify('Could not save the PHP limits: ' + error.message, 'error');
-  } finally {
+    notify(error.message, 'error');
     busy(false);
   }
 }
 
-async function resetSiteResources(domain) {
+// --- categories -----------------------------------------------------------
+
+function openCategoryDialog(button) {
+  const dialog = CLP_ROOT.getElementById('category-dialog');
+  if (!dialog) return;
+  const row = button.closest('tr[data-category]');
+  const category = row ? JSON.parse(row.dataset.category) : null;
+  dialog.dataset.categoryId = category ? category.id : '';
+  CLP_ROOT.getElementById('category-dialog-title').textContent = category ? 'Edit category' : 'New category';
+  CLP_ROOT.getElementById('category-name').value = category ? category.name : '';
+  CLP_ROOT.getElementById('category-description').value = category ? category.description : '';
+  writeProfile(category ? category.profile : JSON.parse(dialog.dataset.stock));
+  dialog.showModal();
+}
+
+async function saveCategory() {
+  const dialog = CLP_ROOT.getElementById('category-dialog');
+  const name = CLP_ROOT.getElementById('category-name').value.trim();
+  if (!name) {
+    notify('Give the category a name first.', 'warn');
+    return;
+  }
+  const profile = readProfile();
+  if (!profile) return;
+  const id = dialog.dataset.categoryId || null;
+  await send('/api/categories', {
+    id: id,
+    name: name,
+    description: CLP_ROOT.getElementById('category-description').value.trim(),
+    profile: profile,
+  }, id
+    ? 'Saved. Every site in this category now runs these limits.'
+    : 'Category created. Assign sites to it below.');
+}
+
+async function deleteCategory(button) {
+  const row = button.closest('tr[data-category]');
+  const category = JSON.parse(row.dataset.category);
+  const count = Number(row.dataset.sites || '0');
+  const details = ['The name and its limits are removed, here and from the choice for new sites.'];
+  if (count) {
+    details.push(plural(count, 'site') + ' in it go back to what CloudPanel writes for a new site: on demand, 250 max children, 100 requests per worker.');
+  }
   const accepted = await confirmAction({
-    title: 'Restore the CloudPanel limits for ' + domain + '?',
-    text: 'The limits saved here are discarded and the pool goes back to what CloudPanel writes for a new site.',
-    details: [
-      'On demand, 250 max children, 100 requests per worker, a 7200 second request timeout.',
-      'New sites keep following the default set on the PHP resources page.',
-    ],
-    confirmLabel: 'Restore',
+    title: 'Delete ' + category.name + '?',
+    text: 'The limits saved under this name are discarded.',
+    details: details,
+    confirmLabel: 'Delete',
     danger: true,
   });
   if (!accepted) return;
-  clearNotice();
-  busy(true);
-  try {
-    const reply = await call('/api/sites/' + encodeURIComponent(domain), { method: 'DELETE' });
-    paintSiteState(reply.data);
-    notify('The CloudPanel limits are back.', 'ok');
-  } catch (error) {
-    notify('Could not restore the limits: ' + error.message, 'error');
-  } finally {
-    busy(false);
+  await send('/api/categories/delete', { id: category.id }, 'Category deleted.');
+}
+
+async function setDefaultCategory(select) {
+  const id = select.value || null;
+  const label = select.options[select.selectedIndex].textContent;
+  await send('/api/default', { categoryId: id }, id
+    ? 'New sites will join ' + label + '. Sites that already exist are unchanged.'
+    : 'New sites will keep the CloudPanel limits. Sites that already exist are unchanged.');
+}
+
+// --- sites ----------------------------------------------------------------
+
+function siteRows() {
+  return Array.from(CLP_ROOT.querySelectorAll('tr[data-domain]'));
+}
+
+function selectedRows() {
+  return siteRows().filter(function (row) {
+    const box = row.querySelector('.site-checkbox');
+    return box && box.checked;
+  });
+}
+
+function paintSelection() {
+  const rows = siteRows();
+  const chosen = selectedRows();
+  const note = CLP_ROOT.getElementById('site-selection');
+  if (note) note.textContent = chosen.length === 0 ? 'No sites selected' : chosen.length + ' of ' + rows.length + ' selected';
+  const apply = CLP_ROOT.getElementById('assign-selected');
+  if (apply) apply.disabled = chosen.length === 0;
+  const all = CLP_ROOT.getElementById('select-all');
+  if (all) {
+    all.checked = rows.length > 0 && chosen.length === rows.length;
+    all.indeterminate = chosen.length > 0 && chosen.length < rows.length;
   }
 }
 
-// Repaint from what the server answered rather than from what was asked for:
-// the saved profile, the managed badge and the drift notice all come back in
-// the same reply.
-function paintSiteState(state) {
-  if (!state) return;
-  setBaseline('site', state.current);
-  const root = profileRoot('site');
-  if (root) {
-    root.querySelectorAll('[data-field]').forEach(function (input) {
-      input.value = state.current[input.dataset.field];
-    });
-    paintProfileModes('site');
-  }
-  const badge = CLP_ROOT.getElementById('managed-state');
-  if (badge) {
-    badge.textContent = state.managed ? 'Managed here' : 'CloudPanel values';
-    badge.className = 'badge ' + (state.managed ? 'state-managed' : 'state-stock');
-  }
-  const drift = CLP_ROOT.getElementById('drift-notice');
-  if (drift) drift.hidden = !state.drifted;
+function selectAllSites(checked) {
+  CLP_ROOT.querySelectorAll('.site-checkbox').forEach(function (box) { box.checked = checked; });
+  paintSelection();
 }
 
-async function sendDefault(profile, message) {
-  clearNotice();
-  busy(true);
-  try {
-    await call('/api/default', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile: profile }),
-    });
-    if (profile) setBaseline('default', profile);
-    notify(message, 'ok');
-    return true;
-  } catch (error) {
-    notify('Could not save the default: ' + error.message, 'error');
-    return false;
-  } finally {
-    busy(false);
-  }
+function categoryLabel(id) {
+  const picker = CLP_ROOT.getElementById('bulk-category');
+  const option = picker ? picker.querySelector('option[value="' + id + '"]') : null;
+  return option ? option.textContent : id;
 }
 
-function paintDefaultFields(on) {
-  const fields = CLP_ROOT.getElementById('default-fields');
-  if (fields) fields.hidden = !on;
-  const state = CLP_ROOT.getElementById('default-state');
-  if (state) state.textContent = on ? 'On' : 'Off';
+// One row is the ordinary correction after a fleet-wide change, so it acts at
+// once rather than behind a confirmation: it chooses limits rather than
+// destroying anything, and choosing again puts it back.
+async function assignRow(select) {
+  const row = select.closest('tr[data-domain]');
+  const id = select.value || null;
+  await send('/api/assign', { domains: [row.dataset.domain], categoryId: id }, id
+    ? row.dataset.domain + ' is now in ' + categoryLabel(id) + '.'
+    : row.dataset.domain + ' is back on the CloudPanel limits.');
 }
 
-async function toggleDefaultPolicy(on) {
-  if (on) {
-    const profile = readProfile('default');
-    if (!profile) { CLP_ROOT.getElementById('default-policy').checked = false; return; }
-    paintDefaultFields(true);
-    const saved = await sendDefault(profile, 'New sites will start with these limits. Sites that already exist are unchanged.');
-    if (!saved) { CLP_ROOT.getElementById('default-policy').checked = false; paintDefaultFields(false); }
+async function assignSelected() {
+  const rows = selectedRows();
+  if (!rows.length) {
+    notify('Select at least one site first.', 'warn');
     return;
   }
-  paintDefaultFields(false);
-  const saved = await sendDefault(null, 'New sites will keep the CloudPanel limits. Sites that already exist are unchanged.');
-  if (!saved) { CLP_ROOT.getElementById('default-policy').checked = true; paintDefaultFields(true); }
-}
-
-async function saveDefaultProfile() {
-  const profile = readProfile('default');
-  if (!profile) return;
-  if (sameProfile(effectiveProfile(profile), effectiveProfile(baselineProfile('default')))) {
-    notify('These are already the saved defaults; nothing to change.', 'ok');
+  const picker = CLP_ROOT.getElementById('bulk-category');
+  if (!picker.value) {
+    notify('Choose a category to put them in first.', 'warn');
     return;
   }
-  await sendDefault(profile, 'Saved. A site created from now on starts with these limits.');
+  const id = picker.value === 'none' ? null : picker.value;
+  const label = picker.options[picker.selectedIndex].textContent;
+  const moving = rows.filter(function (row) { return (row.dataset.categoryId || '') !== (id || ''); });
+  if (!moving.length) {
+    notify('Those sites are already there; nothing to change.', 'ok');
+    return;
+  }
+  const accepted = await confirmAction({
+    title: id
+      ? 'Put ' + plural(rows.length, 'site') + ' in ' + label + '?'
+      : 'Take ' + plural(rows.length, 'site') + ' out of their category?',
+    text: id
+      ? 'Their PHP-FPM pools are rewritten with the limits saved under that name, and PHP-FPM is reloaded.'
+      : 'Their PHP-FPM pools go back to what CloudPanel writes for a new site.',
+    details: [
+      moving.length + ' of the ' + plural(rows.length, 'selected site') + ' change; the rest are already there.',
+      'A reload does not interrupt requests that are already running.',
+    ],
+    confirmLabel: id ? 'Assign' : 'Remove',
+    danger: !id,
+  });
+  if (!accepted) return;
+  await send('/api/assign', {
+    domains: rows.map(function (row) { return row.dataset.domain; }),
+    categoryId: id,
+  }, id
+    ? plural(rows.length, 'site') + ' now follow ' + label + '.'
+    : plural(rows.length, 'site') + ' are back on the CloudPanel limits.');
+}
+
+// Drift is what a PHP version change leaves behind: CloudPanel rewrites the
+// pool file from its own template, and the category is no longer what runs.
+// Repair fixes it within fifteen minutes; this is that same fix, now.
+async function repairDrifted() {
+  const groups = new Map();
+  siteRows().forEach(function (row) {
+    if (row.dataset.drifted !== 'true' || !row.dataset.categoryId) return;
+    if (!groups.has(row.dataset.categoryId)) groups.set(row.dataset.categoryId, []);
+    groups.get(row.dataset.categoryId).push(row.dataset.domain);
+  });
+  if (!groups.size) return;
+  clearNotice();
+  busy(true);
+  const failures = [];
+  let repaired = 0;
+  for (const entry of groups) {
+    try {
+      await call('/api/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domains: entry[1], categoryId: entry[0] }),
+      });
+      repaired += entry[1].length;
+    } catch (error) {
+      failures.push(categoryLabel(entry[0]) + ': ' + error.message);
+    }
+  }
+  const flash = withFailures(plural(repaired, 'site') + ' are back on the limits of their category.', failures);
+  reloadWith(flash.message, flash.kind);
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', function () { showCarriedFlash(); paintSelection(); });
+} else {
+  showCarriedFlash();
+  paintSelection();
 }
 `;
 
@@ -330,110 +454,179 @@ export function layout(
   title: string,
   content: string,
   updateNotice?: { current: string; latest: string } | null,
-  site?: SiteContext,
 ): string {
   return renderLayout(title, content, {
     brand: "PHP Resources",
-    // No tab strip of its own: the fleet page and the site page are reached
-    // from the Addons list and from CloudPanel's site tabs respectively.
+    // No tab strip of its own: this addon has one page, reached from the
+    // Addons list, and the panel's own site page only reports what it decided.
     base: BASE,
     nav: [],
     css: STYLE,
     script: CLIENT_JS,
     updateNotice,
-    ...(site ? { site: { ...site, activeSlug: "php-resources" } } : {}),
   });
+}
+
+function categoryOptions(categories: PoolCategory[], selected: string | null): string {
+  return [`<option value="">${esc(NO_CATEGORY)}</option>`]
+    .concat(categories.map((category) =>
+      `<option value="${esc(category.id)}"${category.id === selected ? " selected" : ""}>${esc(category.name)}</option>`))
+    .join("");
 }
 
 /**
- * The same page as `layout`, as a fragment for mounting inside CloudPanel's own
- * site page. No site context: the panel is already drawing it.
+ * The bulk picker starts on nothing rather than on a real choice: the button
+ * beside it acts on however many sites are ticked, and the first entry of a
+ * list should not be the one that empties a category.
  */
-export function fragment(title: string, content: string): EmbedFragment {
-  return renderFragment(title, content, {
-    brand: "PHP Resources",
-    base: BASE,
-    nav: [],
-    css: STYLE,
-    script: CLIENT_JS,
-  });
+function bulkOptions(categories: PoolCategory[]): string {
+  return [`<option value="" selected disabled>Choose a category</option>`]
+    .concat(categories.map((category) => `<option value="${esc(category.id)}">${esc(category.name)}</option>`))
+    .concat([`<option value="none">${esc(NO_CATEGORY)}</option>`])
+    .join("");
 }
 
-function managedBadge(site: PoolSiteState): string {
-  return site.managed
-    ? '<span class="badge state-managed" id="managed-state">Managed here</span>'
-    : '<span class="badge state-stock" id="managed-state">CloudPanel values</span>';
+function categoryRow(category: PoolCategory, sites: number, isDefault: boolean): string {
+  return `<tr data-category="${esc(JSON.stringify(category))}" data-sites="${sites}">
+    <td class="name-cell">${esc(category.name)}${
+      isDefault ? '<span class="badge state-default">Default for new sites</span>' : ""
+    }${category.description ? `<div class="hint">${esc(category.description)}</div>` : ""}</td>
+    <td class="limit-cell">${esc(workerSummary(category.profile))}
+      <div class="hint">${esc(recycleSummary(category.profile))}</div></td>
+    <td class="numeric">${sites}</td>
+    <td class="action-cell"><div class="actions">
+      <button class="btn" type="button" onclick="openCategoryDialog(this)">Edit</button>
+      <button class="btn btn-danger" type="button" onclick="deleteCategory(this)">Delete</button>
+    </div></td>
+  </tr>`;
+}
+
+function siteTableRow(site: PoolSiteState, categories: PoolCategory[]): string {
+  return `<tr data-domain="${esc(site.domain)}" data-category-id="${esc(site.categoryId ?? "")}" data-drifted="${site.drifted}">
+    <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSelection()" aria-label="Select ${esc(site.domain)}"></td>
+    <td class="name-cell">${esc(site.domain)}${
+      site.drifted ? '<div class="hint">Its pool file no longer matches this category.</div>' : ""
+    }</td>
+    <td>${esc(site.phpVersion)}</td>
+    <td><select aria-label="Category for ${esc(site.domain)}" onchange="assignRow(this)">${categoryOptions(categories, site.categoryId)}</select></td>
+    <td class="limit-cell">${esc(workerSummary(site.current))}</td>
+  </tr>`;
 }
 
 export function dashboardView(state: PhpResourcesState): string {
-  const on = state.default !== null;
-  const profile = state.default ?? STOCK_PROFILE;
-  const managed = state.sites.filter((site) => site.managed !== null).length;
+  const counts = new Map(state.categories.map((category) => [category.id, 0]));
+  for (const site of state.sites) {
+    if (site.categoryId) counts.set(site.categoryId, (counts.get(site.categoryId) ?? 0) + 1);
+  }
+  const assigned = state.sites.filter((site) => site.categoryId !== null).length;
   const drifted = state.sites.filter((site) => site.drifted).length;
 
-  const rows = state.sites.map((site) => `<tr>
-    <td class="fleet-site"><a href="${BASE}?domain=${encodeURIComponent(site.domain)}">${esc(site.domain)}</a>${
-      site.drifted ? '<div class="hint">The pool file no longer matches what was saved here.</div>' : ""
-    }</td>
-    <td>${esc(site.phpVersion)}</td>
-    <td>${esc(pmLabel(site.current.pm))}</td>
-    <td class="numeric">${esc(site.current.maxChildren)}</td>
-    <td class="numeric">${esc(site.current.maxRequests)}</td>
-    <td>${
-      site.drifted
-        ? '<span class="badge state-drifted">Drifted</span>'
-        : site.managed
-          ? '<span class="badge state-managed">Managed here</span>'
-          : '<span class="badge state-stock">CloudPanel values</span>'
-    }</td>
-  </tr>`).join("");
+  const categoryRows = state.categories
+    .map((category) => categoryRow(category, counts.get(category.id) ?? 0, category.id === state.defaultCategoryId))
+    .join("");
+  const siteRows = state.sites.map((site) => siteTableRow(site, state.categories)).join("");
 
-  return `<div class="page-heading"><div><h1>PHP resources</h1>
-    <p>Set how many PHP-FPM workers a site may run, and what a new site starts with.</p></div></div>
+  return `<div class="page-heading">
+    <div><h1>PHP resources</h1>
+      <p>Put PHP sites into categories, and give each category its PHP-FPM worker limits.</p></div>
+    <button class="btn btn-primary" type="button" onclick="openCategoryDialog(this)">New category</button>
+  </div>
+  ${drifted
+    ? `<div class="notice">${drifted} ${drifted === 1 ? "site no longer matches the category it is" : "sites no longer match the category they are"} in, which is what changing a PHP version leaves behind. Repair puts ${drifted === 1 ? "it" : "them"} back within fifteen minutes.
+      <div class="actions notice-actions"><button class="btn" type="button" onclick="repairDrifted()">Put them back now</button></div></div>`
+    : ""}
   <div class="card stats">
     <div class="stat"><div class="label">PHP sites</div><div class="value">${state.sites.length}</div></div>
-    <div class="stat"><div class="label">Managed here</div><div class="value">${managed}</div></div>
-    <div class="stat"><div class="label">Drifted</div><div class="value">${drifted}</div></div>
+    <div class="stat"><div class="label">In a category</div><div class="value">${assigned}</div></div>
+    <div class="stat"><div class="label">Categories</div><div class="value">${state.categories.length}</div></div>
   </div>
-  <div class="card">
-    <div class="policy-head">
-      <div>
-        <h2>Defaults for new sites</h2>
-        <p>A PHP site created from now on starts with these limits instead of CloudPanel's.</p>
-        <p class="hint">Sites that already exist are never changed by this. A new site is picked up within about fifteen minutes of being created.</p>
-      </div>
-      <label class="switch-field" for="default-policy"><span class="switch-state" id="default-state">${on ? "On" : "Off"}</span>
-        <span class="switch"><input type="checkbox" id="default-policy" ${on ? "checked" : ""} onchange="toggleDefaultPolicy(this.checked)"><span></span></span>
-      </label>
+  <div class="card default-card">
+    <div>
+      <h2>New sites</h2>
+      <p>A PHP site created from now on joins this category.</p>
+      <p class="hint">Sites that already exist are never moved by this. A new site is picked up within about fifteen minutes of being created.</p>
     </div>
-    <div id="default-fields"${on ? "" : " hidden"}>
-      ${profileForm("default", profile)}
-      <div class="form-actions"><button class="btn btn-primary" type="button" onclick="saveDefaultProfile()">Save defaults</button></div>
+    <div class="default-choice">
+      <label class="hint" for="default-category">Category for new sites</label>
+      <select id="default-category" onchange="setDefaultCategory(this)">${categoryOptions(state.categories, state.defaultCategoryId)}</select>
     </div>
   </div>
-  <div class="card card-table"><div class="card-header"><h2>PHP sites</h2></div>
+  <div class="card card-table"><div class="card-header"><h2>Categories</h2></div>
+  ${state.categories.length
+    ? `<table><thead><tr><th scope="col">Category</th><th scope="col">Limits</th>
+        <th scope="col" class="numeric">Sites</th><th scope="col" class="action-cell">Actions</th></tr></thead>
+      <tbody>${categoryRows}</tbody></table>`
+    : '<div class="empty">No categories yet. Create one to give a group of sites the same PHP-FPM limits.</div>'}
+  </div>
+  <div class="card card-table">
   ${state.sites.length
-    ? `<table><thead><tr><th scope="col">Site</th><th scope="col">PHP</th><th scope="col">Process manager</th>
-        <th scope="col" class="numeric">Max children</th><th scope="col" class="numeric">Max requests</th><th scope="col">Limits</th></tr></thead>
-      <tbody>${rows}</tbody></table>`
+    ? `<div class="card-header toolbar">
+        <h2>PHP sites</h2>
+        <span class="toolbar-note" id="site-selection">No sites selected</span>
+        <select class="toolbar-end" id="bulk-category" aria-label="Category to put the selected sites in">${bulkOptions(state.categories)}</select>
+        <button class="btn" id="assign-selected" type="button" disabled onclick="assignSelected()">Assign selected</button>
+      </div>
+      <table><thead><tr>
+        <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
+        <th scope="col">Site</th><th scope="col">PHP</th><th scope="col">Category</th><th scope="col">Now running</th>
+      </tr></thead><tbody>${siteRows}</tbody></table>`
     : '<div class="empty">No CloudPanel site runs PHP, so there is no PHP-FPM pool to tune.</div>'}
-  </div>`;
+  </div>
+  <dialog id="category-dialog" aria-labelledby="category-dialog-title" data-stock="${esc(JSON.stringify(STOCK_PROFILE))}">
+    <div class="dialog-header"><h2 id="category-dialog-title">New category</h2></div>
+    <div class="form-grid dialog-grid">
+      <div class="form-field">
+        <label for="category-name">Name</label>
+        <input id="category-name" type="text" maxlength="40" autocomplete="off">
+        <div class="hint">What this group of sites is, such as Busy site.</div>
+      </div>
+      <div class="form-field">
+        <label for="category-description">Description</label>
+        <input id="category-description" type="text" maxlength="240" autocomplete="off">
+        <div class="hint">Optional. Shown beside the name, to say when to pick it.</div>
+      </div>
+    </div>
+    ${profileForm(STOCK_PROFILE)}
+    <form method="dialog" class="actions dialog-actions">
+      <button class="btn" value="cancel" type="submit">Cancel</button>
+      <button class="btn btn-primary" type="button" onclick="saveCategory()">Save category</button>
+    </form>
+  </dialog>`;
 }
 
-export function siteView(site: PoolSiteState): string {
-  return `<div class="page-heading"><div><h1>PHP resources</h1>
-    <p>Process limits for this site's PHP-FPM pool, on PHP ${esc(site.phpVersion)}.</p></div>
-    <div class="actions">${managedBadge(site)}<a class="btn" href="${BASE}/">All PHP sites</a></div></div>
-  <div id="drift-notice" class="notice"${site.drifted ? "" : " hidden"}>This site's pool file no longer matches what was saved here, which is what happens when its PHP version changes. Saving below writes the limits again.</div>
-  <div class="card">
-    <div class="card-header"><div><h2>PHP-FPM pool</h2>
-      <p class="hint">PHP's own memory limit, execution time and upload sizes stay on CloudPanel's Settings tab; these are the worker limits it does not show. Saving reloads PHP-FPM, so requests already running are not interrupted.</p>
-    </div></div>
-    ${profileForm("site", site.current)}
-    <div class="form-actions">
-      <button class="btn btn-danger" type="button" onclick="resetSiteResources('${escJs(site.domain)}')">Restore CloudPanel's limits</button>
-      <button class="btn btn-primary" type="button" onclick="saveSiteResources('${escJs(site.domain)}')">Save limits</button>
-    </div>
-    <p class="hint pool-path">${esc(site.poolFile)}</p>
-  </div>`;
+/**
+ * The read-only block CloudPanel's own Settings tab shows beside its PHP
+ * Settings form, in the panel's own markup. Changing limits is a decision about
+ * a category rather than about one site, so it happens on the addon page and
+ * this only reports what the site ended up with.
+ */
+export function siteCardHtml(site: PoolSiteState): string {
+  const rows: [string, string][] = [
+    ["Category", site.categoryName ?? NO_CATEGORY],
+    ["Process Manager", pmLabel(site.current.pm)],
+    ["Max Children", String(site.current.maxChildren)],
+  ];
+  if (site.current.pm === "dynamic") {
+    rows.push(
+      ["Start Servers", String(site.current.startServers)],
+      ["Min Spare Servers", String(site.current.minSpareServers)],
+      ["Max Spare Servers", String(site.current.maxSpareServers)],
+    );
+  }
+  if (site.current.pm === "ondemand") rows.push(["Idle Timeout", seconds(site.current.processIdleTimeout)]);
+  rows.push(
+    ["Max Requests per Worker", site.current.maxRequests === 0 ? "Never recycled" : String(site.current.maxRequests)],
+    ["Request Timeout", seconds(site.current.requestTerminateTimeout)],
+    ["Open File Limit", String(site.current.rlimitFiles)],
+  );
+
+  const cells = rows.map(([label, value]) =>
+    `<div class="col-6 col-lg-4"><label class="col-form-label">${esc(label)}</label>
+      <div class="clp-addon-readonly">${esc(value)}</div></div>`).join("");
+
+  const drift = site.drifted
+    ? `<div class="row"><div class="col"><div class="form-text">These are not the limits saved for this category: the PHP version changed and CloudPanel wrote the pool file again. The addon puts them back within fifteen minutes.</div></div></div>`
+    : "";
+
+  return `<div class="row">${cells}</div>${drift}`;
 }

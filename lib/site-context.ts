@@ -63,23 +63,10 @@ const NATIVE_TABS: TabSpec[] = [
  * Addon tabs injected into the panel's strip, in the order they are appended
  * after the native ones -- ascending addon name, which is the order the
  * injector settles on when several addons share one anchor. Keeping the label
- * and the condition here keeps the injected Twig and the reproduced strip from
- * drifting apart.
+ * here keeps the injected Twig and the reproduced strip from drifting apart.
  */
-export const ADDON_SITE_TABS: {
-  slug: string;
-  label: string;
-  url: string;
-  /** Mirrors the condition the addon's injected Twig wraps its tab in. */
-  applies?: (site: SiteContext) => boolean;
-}[] = [
+export const ADDON_SITE_TABS: { slug: string; label: string; url: string }[] = [
   { slug: "maintenance", label: "Maintenance", url: mountPath("maintenance") },
-  {
-    slug: "php-resources",
-    label: "Resources",
-    url: mountPath("php-resources"),
-    applies: (site) => site.type === "php",
-  },
   { slug: "stager", label: "Staging", url: mountPath("stager") },
 ];
 
@@ -96,10 +83,9 @@ export function siteTypeLabel(type: string): string {
 /**
  * The tab strip CloudPanel would draw for this site, with `activeSlug` marked.
  *
- * An addon tab is included when it applies to this site. The role is not part
- * of that: the manager denies anyone without ROLE_ADMIN at the socket, which is
- * the same role the injected Twig requires, so a caller that reached a
- * site-scoped page has already passed that check.
+ * The role is not part of it: the manager denies anyone without ROLE_ADMIN at
+ * the socket, which is the same role the injected Twig requires, so a caller
+ * that reached a site-scoped page has already passed that check.
  */
 export function siteTabs(site: SiteContext, activeSlug = ""): SiteTab[] {
   const native = NATIVE_TABS.filter((tab) => !tab.applies || tab.applies(site)).map((tab) => ({
@@ -108,7 +94,7 @@ export function siteTabs(site: SiteContext, activeSlug = ""): SiteTab[] {
     href: `/site/${encodeURIComponent(site.domain)}/${tab.path}`,
     active: tab.slug === activeSlug,
   }));
-  const addons = ADDON_SITE_TABS.filter((tab) => !tab.applies || tab.applies(site)).map((tab) => ({
+  const addons = ADDON_SITE_TABS.map((tab) => ({
     slug: tab.slug,
     label: tab.label,
     href: `${tab.url}?domain=${encodeURIComponent(site.domain)}`,

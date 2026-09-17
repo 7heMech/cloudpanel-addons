@@ -6,11 +6,11 @@ import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } 
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
 import { jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, newCloneView, promoteListView, promoteView, siteStagingView } from "../addons/stager/app/views";
 import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
-import { dashboardView as phpResourcesDashboardView, fragment as phpResourcesFragment, layout as phpResourcesLayout, siteView as phpResourcesSiteView } from "../addons/php-resources/app/views";
+import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
-import { STOCK_PROFILE, type PhpResourcesState, type PoolSiteState } from "../addons/php-resources/action";
+import { PRESET_CATEGORIES, STOCK_PROFILE, type PhpResourcesState, type PoolSiteState } from "../addons/php-resources/action";
 import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { type: "text" };
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
@@ -105,47 +105,48 @@ function cloudflarePreviewState(url: URL) {
 }
 
 /**
- * PHP sites with a pool file, in the three states the page distinguishes:
- * left on CloudPanel's values, tuned here, and tuned here but since overwritten
- * -- which is what a PHP version change leaves behind.
+ * PHP sites with a pool file, in the three states the page distinguishes: in a
+ * category, in none, and in one but since overwritten -- which is what a PHP
+ * version change leaves behind.
  */
 const phpPoolSites: PoolSiteState[] = [
   {
     domain: "www.example.com", siteUser: "example", phpVersion: "8.3",
     poolFile: "/etc/php/8.3/fpm/pool.d/www.example.com.conf",
-    current: { ...STOCK_PROFILE, pm: "dynamic", maxChildren: 40, startServers: 4, minSpareServers: 2, maxSpareServers: 8, maxRequests: 500, requestTerminateTimeout: 300 },
-    managed: { ...STOCK_PROFILE, pm: "dynamic", maxChildren: 40, startServers: 4, minSpareServers: 2, maxSpareServers: 8, maxRequests: 500, requestTerminateTimeout: 300 },
+    current: { ...PRESET_CATEGORIES[1]!.profile },
+    categoryId: "busy-site", categoryName: "Busy site",
     drifted: false,
   },
   {
     domain: "shop.example.com", siteUser: "shop", phpVersion: "8.2",
     poolFile: "/etc/php/8.2/fpm/pool.d/shop.example.com.conf",
+    current: { ...PRESET_CATEGORIES[2]!.profile },
+    categoryId: "high-traffic", categoryName: "High traffic",
+    drifted: false,
+  },
+  {
+    domain: "blog.example.com", siteUser: "blog", phpVersion: "8.3",
+    poolFile: "/etc/php/8.3/fpm/pool.d/blog.example.com.conf",
     current: { ...STOCK_PROFILE },
-    managed: null,
+    categoryId: null, categoryName: null,
     drifted: false,
   },
   {
     domain: "a-rather-long-customer-hostname.staging.example.com", siteUser: "longname", phpVersion: "8.1",
     poolFile: "/etc/php/8.1/fpm/pool.d/a-rather-long-customer-hostname.staging.example.com.conf",
     current: { ...STOCK_PROFILE },
-    managed: { ...STOCK_PROFILE, maxChildren: 12, maxRequests: 200 },
+    categoryId: "small-site", categoryName: "Small site",
     drifted: true,
   },
 ];
 
-/** ?default=off drops the new-site default; ?site= picks which site is drawn. */
+/** ?default=off leaves new sites uncategorised; ?empty= drops the fleet. */
 function phpResourcesPreviewState(url: URL): PhpResourcesState {
   return {
+    categories: url.searchParams.has("no-categories") ? [] : PRESET_CATEGORIES,
+    defaultCategoryId: url.searchParams.get("default") === "off" ? null : "busy-site",
     sites: url.searchParams.has("empty") ? [] : phpPoolSites,
-    default: url.searchParams.get("default") === "off"
-      ? null
-      : { ...STOCK_PROFILE, pm: "dynamic", maxChildren: 25, startServers: 3, minSpareServers: 2, maxSpareServers: 6, maxRequests: 500 },
   };
-}
-
-function phpResourcesPreviewSite(url: URL): PoolSiteState {
-  const wanted = url.searchParams.get("domain");
-  return phpPoolSites.find((site) => site.domain === wanted) ?? phpPoolSites[0]!;
 }
 
 // A stand-in for a CloudPanel site page, so the block the manager injects into
@@ -285,13 +286,6 @@ const server = Bun.serve({
         { headers: withCsrfCookie({}, "preview-token") },
       );
     }
-    if (path === "/addons/php-resources/fragment") {
-      const site = phpResourcesPreviewSite(url);
-      return Response.json(
-        phpResourcesFragment(`PHP resources — ${site.domain}`, phpResourcesSiteView(site)),
-        { headers: withCsrfCookie({}, "preview-token") },
-      );
-    }
     if (path === "/addons/stager/fragment") {
       const domain = url.searchParams.get("domain") ?? sites[0]!.domain;
       const site = sites.find((candidate) => candidate.domain === domain);
@@ -379,25 +373,7 @@ const server = Bun.serve({
           : undefined,
       );
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
-      // ?domain= is the site-scoped page the Resources tab reaches, drawn here
-      // with the panel's chrome around it the way the standalone ?embed=0 page
-      // is; the fragment route above is the same content with no document.
-      const selected = url.searchParams.get("domain");
-      const site = selected ? phpPoolSites.find((candidate) => candidate.domain === selected) : undefined;
-      html = site
-        ? phpResourcesLayout(
-            `PHP resources — ${site.domain}`,
-            phpResourcesSiteView(site),
-            notice,
-            {
-              domain: site.domain,
-              user: site.siteUser,
-              type: "php",
-              varnishCache: siteVarnish[site.domain] === true,
-              ...(url.searchParams.has("no-ip") ? {} : { publicIp: PREVIEW_PUBLIC_IP }),
-            },
-          )
-        : phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
+      html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
       html = cloudflareLayout("Cloudflare IP access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {

@@ -1,5 +1,5 @@
 /**
- * Per-site PHP-FPM process limits, and the profile new sites start with.
+ * PHP-FPM process limits, kept as named categories a site is assigned to.
  *
  * CloudPanel writes one pool file per PHP site from a template with fixed
  * numbers -- `pm = ondemand`, `pm.max_children = 250`, `pm.max_requests = 100`
@@ -7,6 +7,10 @@
  * `memory_limit` and friends into the site's Nginx vhost as `PHP_VALUE`, and
  * never touches the pool. So the pool file is the panel's blind spot, and it is
  * the only file this addon writes.
+ *
+ * A site's pool follows the category it is in: editing the category rewrites
+ * every pool assigned to it. That is the whole point -- a fleet is tuned by
+ * deciding what "busy site" means once, not by opening eighty forms.
  *
  * It rewrites the directives it manages and leaves every other line alone. The
  * pool's identity -- its `[name]`, `listen`, `user`, `group` and
@@ -26,7 +30,8 @@ import { writeFileAtomic } from "../../lib/atomic-write";
 
 const POLICY_VERSION = 1;
 
-export type PhpResourcesVerb = "list" | "get" | "set" | "reset" | "default" | "reconcile";
+export type PhpResourcesVerb =
+  | "list" | "site" | "save-category" | "delete-category" | "assign" | "set-default" | "reconcile";
 
 /** The process manager modes php-fpm accepts. */
 export const PM_MODES = ["static", "dynamic", "ondemand"] as const;
@@ -53,9 +58,9 @@ export interface PoolProfile {
 }
 
 /**
- * What CloudPanel's PoolBuilder writes for every new site. Reset restores
- * exactly this, and the forms start from it, so the addon never invents a
- * number the panel would not have written itself.
+ * What CloudPanel's PoolBuilder writes for every new site. Taking a site out of
+ * a category restores exactly this, and a new category starts from it, so the
+ * addon never invents a number the panel would not have written itself.
  */
 export const STOCK_PROFILE: PoolProfile = {
   pm: "ondemand",
@@ -69,6 +74,46 @@ export const STOCK_PROFILE: PoolProfile = {
   rlimitFiles: 131072,
 };
 
+/** A named set of limits, and the sites assigned to it follow it. */
+export interface PoolCategory {
+  id: string;
+  name: string;
+  description: string;
+  profile: PoolProfile;
+}
+
+/**
+ * The categories a server starts with, as a starting point rather than a
+ * recommendation: what a site should run is the operator's call, and every one
+ * of these can be edited, renamed or deleted.
+ *
+ * They differ in how many workers a site may hold and how many are kept warm,
+ * because that is what changes with scale. The two numbers they share are the
+ * ones CloudPanel's template gets wrong for everybody: a worker recycled every
+ * 100 requests spends its life restarting, and a request allowed to run for two
+ * hours holds a worker for two hours.
+ */
+export const PRESET_CATEGORIES: PoolCategory[] = [
+  {
+    id: "small-site",
+    name: "Small site",
+    description: "A blog or a brochure site. Workers start when a request arrives and stop when the traffic does — around 0.5 GB at full load.",
+    profile: { ...STOCK_PROFILE, pm: "ondemand", maxChildren: 5, processIdleTimeout: 10, maxRequests: 500, requestTerminateTimeout: 300 },
+  },
+  {
+    id: "busy-site",
+    name: "Busy site",
+    description: "A shop or a membership site with steady traffic. Workers are kept warm so the first request of a visit is not the slow one — around 1.5 GB at full load.",
+    profile: { ...STOCK_PROFILE, pm: "dynamic", maxChildren: 15, startServers: 3, minSpareServers: 2, maxSpareServers: 6, maxRequests: 500, requestTerminateTimeout: 300 },
+  },
+  {
+    id: "high-traffic",
+    name: "High traffic",
+    description: "A large store, or a site under campaign traffic. Sized for how many visitors arrive at once rather than for a small footprint — around 4 GB at full load.",
+    profile: { ...STOCK_PROFILE, pm: "dynamic", maxChildren: 40, startServers: 8, minSpareServers: 6, maxSpareServers: 16, maxRequests: 500, requestTerminateTimeout: 300 },
+  },
+];
+
 export interface PoolSiteState {
   domain: string;
   siteUser: string;
@@ -76,22 +121,31 @@ export interface PoolSiteState {
   poolFile: string;
   /** What the pool file holds now. */
   current: PoolProfile;
-  /** What this addon has saved for the site, or null when it manages none. */
-  managed: PoolProfile | null;
-  /** A managed site whose pool file no longer matches what was saved. */
+  /** The category this site is in, or null when it is in none. */
+  categoryId: string | null;
+  categoryName: string | null;
+  /** A site whose pool file no longer matches the category it is in. */
   drifted: boolean;
 }
 
 export interface PhpResourcesState {
+  categories: PoolCategory[];
+  /** The category a site created from now on joins, or null for none. */
+  defaultCategoryId: string | null;
   sites: PoolSiteState[];
-  /** Applied to sites created from now on, or null to leave them stock. */
-  default: PoolProfile | null;
+}
+
+/** What a change answers with: the new state, and the sites it could not reach. */
+export interface PhpResourcesResult extends PhpResourcesState {
+  failures: string[];
 }
 
 interface Policy {
   version: 1;
-  default: PoolProfile | null;
-  sites: Record<string, PoolProfile>;
+  categories: PoolCategory[];
+  defaultCategoryId: string | null;
+  /** Domain to category id. A domain that is absent is in no category. */
+  assignments: Record<string, string>;
   knownSiteIds: number[];
 }
 
@@ -138,6 +192,10 @@ export const DEFAULT_PHP_RESOURCES_ACTION_PATHS: PhpResourcesActionPaths = {
 
 function pathsFor(options: PhpResourcesActionOptions): PhpResourcesActionPaths {
   return { ...DEFAULT_PHP_RESOURCES_ACTION_PATHS, ...options.paths };
+}
+
+function reason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 // ---------------------------------------------------------------------------
@@ -229,6 +287,48 @@ export function parseProfile(value: unknown): PoolProfile {
 
 export function profilesEqual(a: PoolProfile, b: PoolProfile): boolean {
   return (Object.keys(FIELD_LABELS) as (keyof PoolProfile)[]).every((key) => a[key] === b[key]);
+}
+
+// ---------------------------------------------------------------------------
+// Categories
+// ---------------------------------------------------------------------------
+
+const MAX_CATEGORIES = 24;
+const NAME_MAX = 40;
+const DESCRIPTION_MAX = 240;
+
+/** One line of plain text: no control characters, no runs of whitespace. */
+function oneLine(value: unknown, what: string, max: number, required: boolean): string {
+  if (value == null && !required) return "";
+  if (typeof value !== "string") failAction(`${what} must be text`);
+  const text = value.replace(/[ -]/g, " ").replace(/\s+/g, " ").trim();
+  if (!text && required) failAction(`${what} is required`);
+  if (text.length > max) failAction(`${what} must be at most ${max} characters`);
+  return text;
+}
+
+/**
+ * The stable identifier a category keeps for its whole life, derived from the
+ * name it was created with. Renaming leaves it alone, so the sites assigned to
+ * a category do not come loose when it is renamed.
+ */
+export function categoryIdFor(name: string): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, NAME_MAX).replace(/^-+|-+$/g, "");
+  if (!slug) failAction("a category name needs at least one letter or digit");
+  return slug;
+}
+
+function parseCategoryId(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(value)) {
+    failAction("that is not a category identifier");
+  }
+  return value;
+}
+
+function findCategory(policy: Policy, id: string): PoolCategory {
+  const category = policy.categories.find((candidate) => candidate.id === id);
+  if (!category) failAction(`there is no category called '${id}'`);
+  return category;
 }
 
 // ---------------------------------------------------------------------------
@@ -426,7 +526,7 @@ function openPanelDatabase(path: string): Database {
     db.exec("PRAGMA busy_timeout = 5000;");
     return db;
   } catch (error) {
-    failAction(`CloudPanel database could not be opened: ${error instanceof Error ? error.message : String(error)}`);
+    failAction(`CloudPanel database could not be opened: ${reason(error)}`);
   }
 }
 
@@ -450,7 +550,7 @@ function phpSiteRows(db: Database): SiteRow[] {
       phpVersion: String(row.php_version),
     }));
   } catch (error) {
-    failAction(`CloudPanel does not expose its PHP settings: ${error instanceof Error ? error.message : String(error)}`);
+    failAction(`CloudPanel does not expose its PHP settings: ${reason(error)}`);
   }
 }
 
@@ -470,21 +570,50 @@ function poolFileFor(paths: PhpResourcesActionPaths, site: SiteRow): string {
 // Policy
 // ---------------------------------------------------------------------------
 
-function emptyPolicy(): Policy {
-  return { version: POLICY_VERSION, default: null, sites: {}, knownSiteIds: [] };
+/**
+ * What a server that has never saved anything has: the preset categories, with
+ * nothing assigned to them. Seeding on read rather than on install means a read
+ * never writes, and deleting a preset makes it stay deleted -- by then the file
+ * exists and says so.
+ */
+function seededPolicy(): Policy {
+  return {
+    version: POLICY_VERSION,
+    categories: PRESET_CATEGORIES.map((category) => ({ ...category, profile: { ...category.profile } })),
+    defaultCategoryId: null,
+    assignments: {},
+    knownSiteIds: [],
+  };
 }
 
 function stablePolicy(value: Policy): Policy {
+  const ids = new Set(value.categories.map((category) => category.id));
   return {
     version: POLICY_VERSION,
-    default: value.default,
-    sites: Object.fromEntries(Object.entries(value.sites).sort(([a], [b]) => a.localeCompare(b))),
+    categories: value.categories,
+    defaultCategoryId: value.defaultCategoryId && ids.has(value.defaultCategoryId) ? value.defaultCategoryId : null,
+    assignments: Object.fromEntries(
+      Object.entries(value.assignments)
+        .filter(([, id]) => ids.has(id))
+        .sort(([a], [b]) => a.localeCompare(b)),
+    ),
     knownSiteIds: [...new Set(value.knownSiteIds.filter((id) => Number.isInteger(id) && id > 0))].sort((a, b) => a - b),
   };
 }
 
+function parseCategory(value: unknown): PoolCategory {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) failAction("a category must be a JSON object");
+  const raw = value as Record<string, unknown>;
+  return {
+    id: parseCategoryId(raw.id),
+    name: oneLine(raw.name, "a category name", NAME_MAX, true),
+    description: oneLine(raw.description, "a category description", DESCRIPTION_MAX, false),
+    profile: parseProfile(raw.profile),
+  };
+}
+
 function readPolicy(path: string, expectedUid: number): Policy {
-  if (!existsSync(path)) return emptyPolicy();
+  if (!existsSync(path)) return seededPolicy();
   let raw: unknown;
   try {
     const stat = lstatSync(path);
@@ -494,18 +623,22 @@ function readPolicy(path: string, expectedUid: number): Policy {
     raw = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     if (error instanceof ActionFailure) throw error;
-    failAction(`the PHP resources policy could not be read: ${error instanceof Error ? error.message : String(error)}`);
+    failAction(`the PHP resources policy could not be read: ${reason(error)}`);
   }
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) failAction("the PHP resources policy is malformed");
   const policy = raw as Partial<Policy>;
-  if (policy.version !== POLICY_VERSION || typeof policy.sites !== "object" || policy.sites === null ||
+  if (policy.version !== POLICY_VERSION || !Array.isArray(policy.categories) ||
+      typeof policy.assignments !== "object" || policy.assignments === null ||
       !Array.isArray(policy.knownSiteIds) || !policy.knownSiteIds.every(Number.isInteger)) {
     failAction("the PHP resources policy is malformed");
   }
   return stablePolicy({
     version: POLICY_VERSION,
-    default: policy.default == null ? null : parseProfile(policy.default),
-    sites: Object.fromEntries(Object.entries(policy.sites).map(([domain, profile]) => [domain, parseProfile(profile)])),
+    categories: policy.categories.map(parseCategory),
+    defaultCategoryId: policy.defaultCategoryId == null ? null : parseCategoryId(policy.defaultCategoryId),
+    assignments: Object.fromEntries(
+      Object.entries(policy.assignments).map(([domain, id]) => [domain, parseCategoryId(id)]),
+    ),
     knownSiteIds: policy.knownSiteIds,
   });
 }
@@ -570,32 +703,68 @@ function applyPhpVersion(
   if (!reloaded.ok) failAction(commandError(`PHP ${version} reload`, reloaded));
 }
 
+interface ApplyOutcome {
+  /** Domains whose pool file was rewritten. */
+  changed: Set<string>;
+  /** Domains left as they were, with the reason. */
+  failed: Map<string, string>;
+}
+
 /**
- * Write one site's pool file and reload its PHP version, or leave both as they
- * were. Returns whether the file changed.
+ * Write a profile to each site's pool file, then reload each PHP version once.
+ *
+ * Once per version, not once per site: assigning forty sites to a category is
+ * one decision, and it should cost one reload of each service rather than
+ * forty. The rollback is per version for the same reason -- `php-fpm -t` tests
+ * a version's whole configuration, so a refusal is about all of the files
+ * written for it, and leaving some of them on disk would mean the running pools
+ * and the files no longer agree.
  */
-function applyToSite(
+function applyMany(
   paths: PhpResourcesActionPaths,
-  site: SiteRow,
-  profile: PoolProfile,
+  entries: { site: SiteRow; profile: PoolProfile }[],
   command: (command: string, args: string[]) => CommandResult,
-): boolean {
-  const file = trustedPoolFile(poolFileFor(paths, site), paths.rootUid);
-  const rendered = renderPool(file.content, profile);
-  if (rendered === file.content) return false;
-  writeTrusted(file, rendered);
-  try {
-    applyPhpVersion(paths, site.phpVersion, command);
-  } catch (error) {
-    writeTrusted(file, file.content);
-    // Put the running pool back with the file: leaving the old numbers on disk
-    // while the rejected ones are still what php-fpm holds would be worse than
-    // either outcome on its own. A second failure here has nothing left to say
-    // that the first one does not.
-    try { applyPhpVersion(paths, site.phpVersion, command); } catch { /* reported below */ }
-    throw error;
+): ApplyOutcome {
+  const outcome: ApplyOutcome = { changed: new Set(), failed: new Map() };
+  const byVersion = new Map<string, { site: SiteRow; profile: PoolProfile }[]>();
+  for (const entry of entries) {
+    const group = byVersion.get(entry.site.phpVersion);
+    if (group) group.push(entry);
+    else byVersion.set(entry.site.phpVersion, [entry]);
   }
-  return true;
+
+  for (const [version, group] of byVersion) {
+    const written: { file: TrustedFile; domain: string }[] = [];
+    for (const entry of group) {
+      try {
+        const file = trustedPoolFile(poolFileFor(paths, entry.site), paths.rootUid);
+        const rendered = renderPool(file.content, entry.profile);
+        if (rendered === file.content) continue;
+        writeTrusted(file, rendered);
+        written.push({ file, domain: entry.site.domain });
+      } catch (error) {
+        outcome.failed.set(entry.site.domain, reason(error));
+      }
+    }
+    if (!written.length) continue;
+    try {
+      applyPhpVersion(paths, version, command);
+      for (const entry of written) outcome.changed.add(entry.domain);
+    } catch (error) {
+      for (const entry of written) writeTrusted(entry.file, entry.file.content);
+      // Put the running pools back with the files: leaving the old numbers on
+      // disk while the rejected ones are still what php-fpm holds would be
+      // worse than either outcome on its own. A second failure here has nothing
+      // left to say that the first one does not.
+      try { applyPhpVersion(paths, version, command); } catch { /* reported below */ }
+      for (const entry of written) outcome.failed.set(entry.domain, reason(error));
+    }
+  }
+  return outcome;
+}
+
+function failureLines(outcome: ApplyOutcome): string[] {
+  return [...outcome.failed].map(([domain, why]) => `${domain}: ${why}`);
 }
 
 /**
@@ -615,7 +784,8 @@ function readableProfile(poolFile: string, expectedUid: number): PoolProfile {
 
 function stateFor(paths: PhpResourcesActionPaths, site: SiteRow, policy: Policy): PoolSiteState {
   const poolFile = poolFileFor(paths, site);
-  const managed = policy.sites[site.domain] ?? null;
+  const assigned = policy.assignments[site.domain];
+  const category = assigned ? policy.categories.find((candidate) => candidate.id === assigned) ?? null : null;
   const current = readableProfile(poolFile, paths.rootUid);
   return {
     domain: site.domain,
@@ -623,8 +793,9 @@ function stateFor(paths: PhpResourcesActionPaths, site: SiteRow, policy: Policy)
     phpVersion: site.phpVersion,
     poolFile,
     current,
-    managed,
-    drifted: managed !== null && !profilesEqual(managed, current),
+    categoryId: category?.id ?? null,
+    categoryName: category?.name ?? null,
+    drifted: category !== null && !profilesEqual(category.profile, current),
   };
 }
 
@@ -643,81 +814,161 @@ function panelSites(paths: PhpResourcesActionPaths): SiteRow[] {
   }
 }
 
+function stateOf(paths: PhpResourcesActionPaths, policy: Policy, sites?: SiteRow[]): PhpResourcesState {
+  return {
+    categories: policy.categories,
+    defaultCategoryId: policy.defaultCategoryId,
+    sites: (sites ?? panelSites(paths)).map((site) => stateFor(paths, site, policy)),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Verbs
 // ---------------------------------------------------------------------------
 
-function listState(paths: PhpResourcesActionPaths): PhpResourcesState {
-  const policy = readPolicy(paths.policyFile, paths.rootUid);
-  return {
-    sites: panelSites(paths).map((site) => stateFor(paths, site, policy)),
-    default: policy.default,
-  };
+interface CategoryRequest {
+  id: string | null;
+  name: string;
+  description: string;
+  profile: PoolProfile;
 }
 
-async function setSite(
+/**
+ * Create a category, or change one and rewrite every pool assigned to it.
+ *
+ * Re-applying is the point of a category: an operator who decides a busy site
+ * needs twenty workers rather than fifteen has decided it for all of them.
+ */
+async function saveCategory(
   paths: PhpResourcesActionPaths,
-  domain: string,
-  profile: PoolProfile,
+  request: CategoryRequest,
   command: (command: string, args: string[]) => CommandResult,
-): Promise<PoolSiteState> {
+): Promise<PhpResourcesResult> {
   return withPolicyLock(paths, async () => {
-    const site = requireSite(panelSites(paths), domain);
     const policy = readPolicy(paths.policyFile, paths.rootUid);
-    applyToSite(paths, site, profile, command);
-    policy.sites[domain] = profile;
-    if (!policy.knownSiteIds.includes(site.id)) policy.knownSiteIds.push(site.id);
+    const clash = policy.categories.find((candidate) =>
+      candidate.id !== request.id && candidate.name.toLowerCase() === request.name.toLowerCase());
+    if (clash) failAction(`a category called '${clash.name}' already exists`);
+
+    let id: string;
+    if (request.id === null) {
+      if (policy.categories.length >= MAX_CATEGORIES) failAction(`a server can hold at most ${MAX_CATEGORIES} categories`);
+      id = categoryIdFor(request.name);
+      if (policy.categories.some((candidate) => candidate.id === id)) {
+        failAction(`a category called '${request.name}' already exists`);
+      }
+      policy.categories.push({ id, name: request.name, description: request.description, profile: request.profile });
+    } else {
+      const category = findCategory(policy, request.id);
+      id = category.id;
+      category.name = request.name;
+      category.description = request.description;
+      category.profile = request.profile;
+    }
+
+    const sites = panelSites(paths);
+    const outcome = applyMany(
+      paths,
+      sites.filter((site) => policy.assignments[site.domain] === id).map((site) => ({ site, profile: request.profile })),
+      command,
+    );
     writePolicy(paths.policyFile, policy, paths.rootUid);
-    return stateFor(paths, site, policy);
+    return { ...stateOf(paths, policy, sites), failures: failureLines(outcome) };
   });
 }
 
-async function resetSite(
+/**
+ * Remove a category, and give the sites that were in it CloudPanel's own
+ * limits back -- leaving them on numbers nothing any longer claims would make
+ * the page lie about what the box is running.
+ */
+async function deleteCategory(
   paths: PhpResourcesActionPaths,
-  domain: string,
+  id: string,
   command: (command: string, args: string[]) => CommandResult,
-): Promise<PoolSiteState> {
+): Promise<PhpResourcesResult> {
   return withPolicyLock(paths, async () => {
-    const site = requireSite(panelSites(paths), domain);
     const policy = readPolicy(paths.policyFile, paths.rootUid);
-    applyToSite(paths, site, STOCK_PROFILE, command);
-    delete policy.sites[domain];
+    findCategory(policy, id);
+    const sites = panelSites(paths);
+    const released = sites.filter((site) => policy.assignments[site.domain] === id);
+    const outcome = applyMany(paths, released.map((site) => ({ site, profile: STOCK_PROFILE })), command);
+    for (const site of released) {
+      if (!outcome.failed.has(site.domain)) delete policy.assignments[site.domain];
+    }
+    // A category still holding sites it could not release is not removed: the
+    // alternative is a pool file running numbers with no name attached to them.
+    if (outcome.failed.size === 0) {
+      policy.categories = policy.categories.filter((candidate) => candidate.id !== id);
+      if (policy.defaultCategoryId === id) policy.defaultCategoryId = null;
+    }
     writePolicy(paths.policyFile, policy, paths.rootUid);
-    return stateFor(paths, site, policy);
+    return { ...stateOf(paths, policy, sites), failures: failureLines(outcome) };
   });
 }
 
-async function setDefault(
+async function assignSites(
   paths: PhpResourcesActionPaths,
-  profile: PoolProfile | null,
-): Promise<{ default: PoolProfile | null }> {
+  domains: string[],
+  categoryId: string | null,
+  command: (command: string, args: string[]) => CommandResult,
+): Promise<PhpResourcesResult> {
   return withPolicyLock(paths, async () => {
     const policy = readPolicy(paths.policyFile, paths.rootUid);
-    policy.default = profile;
+    const profile = categoryId === null ? STOCK_PROFILE : findCategory(policy, categoryId).profile;
+    const sites = panelSites(paths);
+    const targets = domains.map((domain) => requireSite(sites, domain));
+    const outcome = applyMany(paths, targets.map((site) => ({ site, profile })), command);
+    for (const site of targets) {
+      if (outcome.failed.has(site.domain)) continue;
+      if (categoryId === null) delete policy.assignments[site.domain];
+      else policy.assignments[site.domain] = categoryId;
+      // Assigning a site is a decision about it, including the decision to
+      // leave it on CloudPanel's limits, so the default for new sites must not
+      // reach it later.
+      if (!policy.knownSiteIds.includes(site.id)) policy.knownSiteIds.push(site.id);
+    }
+    writePolicy(paths.policyFile, policy, paths.rootUid);
+    if (outcome.failed.size === targets.length && targets.length > 0) {
+      failAction(`no site could be updated: ${failureLines(outcome).join("; ")}`);
+    }
+    return { ...stateOf(paths, policy, sites), failures: failureLines(outcome) };
+  });
+}
+
+async function setDefaultCategory(
+  paths: PhpResourcesActionPaths,
+  categoryId: string | null,
+): Promise<PhpResourcesResult> {
+  return withPolicyLock(paths, async () => {
+    const policy = readPolicy(paths.policyFile, paths.rootUid);
+    if (categoryId !== null) findCategory(policy, categoryId);
+    policy.defaultCategoryId = categoryId;
+    const sites = panelSites(paths);
     // The sites that exist now are not new sites. Recording them here is what
-    // keeps a default from reaching back over a fleet that never asked for it.
-    if (profile !== null) policy.knownSiteIds = panelSites(paths).map((site) => site.id);
+    // keeps a default from reaching back over a fleet that did not ask for it.
+    if (categoryId !== null) policy.knownSiteIds = sites.map((site) => site.id);
     writePolicy(paths.policyFile, policy, paths.rootUid);
-    return { default: policy.default };
+    return { ...stateOf(paths, policy, sites), failures: [] };
   });
 }
 
 export interface ReconcileResult {
   /** Sites seen for the first time since the default was set. */
   discovered: number;
-  /** New sites the default profile was written to. */
+  /** New sites that joined the default category. */
   applied: number;
-  /** Managed sites whose pool file had drifted and was written again. */
+  /** Assigned sites whose pool file had drifted and was written again. */
   repaired: number;
 }
 
 /**
- * Give new sites the default profile, and put back what a managed site's pool
- * file lost.
+ * Put new sites in the default category, and put back what an assigned site's
+ * pool file lost.
  *
  * The second half is not housekeeping. Changing a site's PHP version in the
  * panel deletes its pool file and writes a fresh one from CloudPanel's fixed
- * template, so a site tuned here silently returns to `pm.max_children = 250`
+ * template, so a site in a category silently returns to `pm.max_children = 250`
  * the moment somebody moves it from 8.2 to 8.3.
  */
 export async function reconcilePhpResources(
@@ -726,48 +977,48 @@ export async function reconcilePhpResources(
 ): Promise<ReconcileResult> {
   return withPolicyLock(paths, async () => {
     const policy = readPolicy(paths.policyFile, paths.rootUid);
-    const managesNothing = policy.default === null && Object.keys(policy.sites).length === 0;
-    if (managesNothing) return { discovered: 0, applied: 0, repaired: 0 };
+    if (policy.defaultCategoryId === null && Object.keys(policy.assignments).length === 0) {
+      return { discovered: 0, applied: 0, repaired: 0 };
+    }
 
     const sites = panelSites(paths);
     const currentIds = new Set(sites.map((site) => site.id));
     const known = new Set(policy.knownSiteIds.filter((id) => currentIds.has(id)));
     const discovered = sites.filter((site) => !known.has(site.id));
+    const byId = new Map(policy.categories.map((category) => [category.id, category]));
 
-    let applied = 0;
-    let repaired = 0;
-    const failures: string[] = [];
-
+    const joining: SiteRow[] = [];
+    const entries: { site: SiteRow; profile: PoolProfile }[] = [];
     for (const site of sites) {
-      const isNew = !known.has(site.id);
-      // A new site takes the default unless it already has a profile of its
-      // own, which is what a site created and then tuned before the first
-      // reconciliation run has.
-      const wanted = policy.sites[site.domain]
-        ?? (isNew && policy.default !== null ? policy.default : null);
-      if (wanted === null) continue;
-      try {
-        const changed = applyToSite(paths, site, wanted, command);
-        if (policy.sites[site.domain] === undefined) {
-          policy.sites[site.domain] = wanted;
-          applied++;
-        } else if (changed) {
-          repaired++;
-        }
-      } catch (error) {
-        failures.push(`${site.domain}: ${error instanceof Error ? error.message : String(error)}`);
+      const assigned = policy.assignments[site.domain];
+      if (assigned) {
+        entries.push({ site, profile: byId.get(assigned)!.profile });
+        continue;
       }
+      if (known.has(site.id) || policy.defaultCategoryId === null) continue;
+      joining.push(site);
+      entries.push({ site, profile: byId.get(policy.defaultCategoryId)!.profile });
     }
 
-    // A site CloudPanel no longer has is a profile nothing can be applied to.
+    const outcome = applyMany(paths, entries, command);
+    let applied = 0;
+    for (const site of joining) {
+      if (outcome.failed.has(site.domain)) continue;
+      policy.assignments[site.domain] = policy.defaultCategoryId!;
+      applied++;
+    }
+    const joined = new Set(joining.map((site) => site.domain));
+    const repaired = [...outcome.changed].filter((domain) => !joined.has(domain)).length;
+
+    // A site CloudPanel no longer has is an assignment nothing can be applied to.
     const live = new Set(sites.map((site) => site.domain));
-    for (const domain of Object.keys(policy.sites)) {
-      if (!live.has(domain)) delete policy.sites[domain];
+    for (const domain of Object.keys(policy.assignments)) {
+      if (!live.has(domain)) delete policy.assignments[domain];
     }
     policy.knownSiteIds = sites.map((site) => site.id);
     writePolicy(paths.policyFile, policy, paths.rootUid);
 
-    if (failures.length) failAction(`some sites could not be updated: ${failures.join("; ")}`);
+    if (outcome.failed.size) failAction(`some sites could not be updated: ${failureLines(outcome).join("; ")}`);
     return { discovered: discovered.length, applied, repaired };
   });
 }
@@ -777,17 +1028,18 @@ interface ParsedAction {
   domain: string;
 }
 
+const PER_SITE_VERBS: PhpResourcesVerb[] = ["site"];
+const FLEET_VERBS: PhpResourcesVerb[] = ["list", "save-category", "delete-category", "assign", "set-default", "reconcile"];
+
 function parseAction(argv: string[], options: PhpResourcesActionOptions): ParsedAction {
   const normalized = argv.flatMap((arg) => arg.startsWith("--domain=")
     ? ["--domain", arg.slice("--domain=".length)]
     : [arg]);
   const verb = normalized[0] as PhpResourcesVerb | undefined;
-  const perSite: PhpResourcesVerb[] = ["get", "set", "reset"];
-  const fleet: PhpResourcesVerb[] = ["list", "default", "reconcile"];
-  if (!verb || ![...perSite, ...fleet].includes(verb)) {
-    failAction("usage: clp-addons action php-resources {list|default|reconcile} | {get|set|reset} --domain <domain>");
+  if (!verb || ![...PER_SITE_VERBS, ...FLEET_VERBS].includes(verb)) {
+    failAction("usage: clp-addons action php-resources {list|save-category|delete-category|assign|set-default|reconcile} | site --domain <domain>");
   }
-  if (fleet.includes(verb)) {
+  if (FLEET_VERBS.includes(verb)) {
     if (normalized.length > 1) failAction(`${verb} takes no arguments`);
     return { verb, domain: "" };
   }
@@ -803,26 +1055,47 @@ function parseAction(argv: string[], options: PhpResourcesActionOptions): Parsed
   };
 }
 
-function readInput(options: PhpResourcesActionOptions): Promise<string> {
-  if (options.input !== undefined) return Promise.resolve(options.input);
-  return Bun.stdin.text();
-}
+/** The largest request any verb takes: `assign` naming a whole fleet. */
+const MAX_INPUT_BYTES = 256 * 1024;
 
-async function requestedProfile(options: PhpResourcesActionOptions, allowNull: boolean): Promise<PoolProfile | null> {
-  const raw = await readInput(options);
-  if (Buffer.byteLength(raw, "utf8") > 16 * 1024) failAction("the profile request is too large");
+async function requestBody(options: PhpResourcesActionOptions): Promise<Record<string, unknown>> {
+  const raw = options.input !== undefined ? options.input : await Bun.stdin.text();
+  if (Buffer.byteLength(raw, "utf8") > MAX_INPUT_BYTES) failAction("the request is too large");
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    failAction("the profile must be JSON");
+    failAction("the request must be JSON");
   }
-  const profile = (parsed as { profile?: unknown } | null)?.profile;
-  if (profile == null) {
-    if (allowNull) return null;
-    failAction("a profile is required");
-  }
-  return parseProfile(profile);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) failAction("the request must be a JSON object");
+  return parsed as Record<string, unknown>;
+}
+
+function categoryRequest(body: Record<string, unknown>): CategoryRequest {
+  return {
+    id: body.id == null ? null : parseCategoryId(body.id),
+    name: oneLine(body.name, "a category name", NAME_MAX, true),
+    description: oneLine(body.description, "a category description", DESCRIPTION_MAX, false),
+    profile: parseProfile(body.profile),
+  };
+}
+
+/** The most domains one assignment may name; a fleet, not an upload. */
+const MAX_ASSIGN_DOMAINS = 2_000;
+
+function assignRequest(
+  body: Record<string, unknown>,
+  options: PhpResourcesActionOptions,
+): { domains: string[]; categoryId: string | null } {
+  if (!Array.isArray(body.domains)) failAction("a list of domains is required");
+  if (body.domains.length === 0) failAction("no sites were named");
+  if (body.domains.length > MAX_ASSIGN_DOMAINS) failAction("too many sites were named at once");
+  const validate = options.domainValidator ?? ((value: string) => validateDomain(value));
+  const domains = [...new Set(body.domains.map((domain) => {
+    if (typeof domain !== "string") failAction("a domain must be text");
+    return validate(domain);
+  }))];
+  return { domains, categoryId: body.categoryId == null ? null : parseCategoryId(body.categoryId) };
 }
 
 export async function executePhpResourcesAction(
@@ -834,15 +1107,20 @@ export async function executePhpResourcesAction(
   const command = options.run ?? runCommand;
   const { verb, domain } = parseAction(argv, options);
 
-  if (verb === "list") return listState(paths);
+  if (verb === "list") return stateOf(paths, readPolicy(paths.policyFile, paths.rootUid));
   if (verb === "reconcile") return reconcilePhpResources(paths, command);
-  if (verb === "default") return setDefault(paths, await requestedProfile(options, true));
-  if (verb === "get") {
+  if (verb === "site") {
     const policy = readPolicy(paths.policyFile, paths.rootUid);
     return stateFor(paths, requireSite(panelSites(paths), domain), policy);
   }
-  if (verb === "set") return setSite(paths, domain, (await requestedProfile(options, false))!, command);
-  return resetSite(paths, domain, command);
+  const body = await requestBody(options);
+  if (verb === "save-category") return saveCategory(paths, categoryRequest(body), command);
+  if (verb === "delete-category") return deleteCategory(paths, parseCategoryId(body.id), command);
+  if (verb === "assign") {
+    const request = assignRequest(body, options);
+    return assignSites(paths, request.domains, request.categoryId, command);
+  }
+  return setDefaultCategory(paths, body.categoryId == null ? null : parseCategoryId(body.categoryId));
 }
 
 export async function runPhpResourcesAction(
@@ -855,7 +1133,7 @@ export async function runPhpResourcesAction(
     if (emit) emitActionOk(data);
     return 0;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = reason(error);
     if (emit) emitActionError(message, error instanceof ActionFailure ? error.data : undefined, "php-resources");
     else process.stderr.write(`[php-resources] ERROR: ${message}\n`);
     return 1;

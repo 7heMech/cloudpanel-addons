@@ -18,16 +18,38 @@ CloudPanel's, which reads its own pool files back to allocate the next site's
 port, so changing any of it would make the panel and the running pool disagree
 about the same site.
 
+## Categories
+
+Limits belong to a named category, not to a site. A site is put in one, and its
+pool follows that category: editing the category rewrites every pool assigned to
+it. A fleet is then tuned by deciding once what a busy site is, rather than by
+opening one form per site — which is the whole reason the addon exists, since
+one site at a time is what `nano` already offers.
+
+A site in no category is left on whatever CloudPanel wrote. Taking one out of a
+category restores the stock pool byte for byte, because leaving it on numbers
+nothing claims would make every surface lie about what the box is running.
+
+A server that has saved nothing already has three categories — small site, busy
+site, high traffic — as a starting point for sizing rather than a
+recommendation. They are ordinary categories: editable, renamable, deletable.
+They are produced on read rather than written at install, so a read never
+writes, and a deleted preset stays deleted because by then the policy file
+exists and says so.
+
 ## Panel surfaces
 
-The overview at `/addons/php-resources/` lists every site CloudPanel recorded
-PHP settings for, with the values its pool file holds now and whether they are
-this addon's, CloudPanel's, or have drifted from what was saved.
+Everything is decided at `/addons/php-resources/`: the categories and their
+limits, which sites are in each, and which category new sites join. The site
+table carries checkboxes and a bulk assignment, because moving forty sites is
+the ordinary operation.
 
-Each PHP site also gets an administrator-only **Resources** tab, between
-Maintenance and Staging. The injected Twig adds it only when `site.type` is
-`php`, because a static or Node.js site has no pool file; `lib/site-context`
-carries the same condition so the reproduced tab strip matches the panel's.
+A site's Settings tab in CloudPanel shows a read-only card under the panel's own
+PHP Settings form, with the category and the limits that site is running. Twig
+cannot see either — they are in a pool file and in this addon's policy — so the
+card is empty markup that fills itself from `/addons/php-resources/site-card`
+and stays hidden if it cannot. No site-scoped addon page and no extra tab: a
+form there would promise that one site's limits can be changed on their own.
 
 ## Writing the pool file
 
@@ -42,27 +64,33 @@ over its own output changes nothing.
 Every write is followed by `php-fpm<version> -t` and then
 `systemctl reload php<version>-fpm`. The test is what makes a bad number
 recoverable: a reload signals php-fpm, which refuses a configuration it cannot
-parse, keeps the old one, and reports success to systemd all the same. A failed
-test restores the previous file and reloads the version again, so what is on
-disk and what is running never disagree.
+parse, keeps the old one, and reports success to systemd all the same.
+
+Files are written for a whole assignment before anything is reloaded, and each
+PHP version is reloaded once however many sites it covered. The rollback is per
+version for the same reason: `php-fpm -t` tests a version's entire
+configuration, so a refusal is about every file written for it, and the files
+written for that version are all put back and the version reloaded again.
 
 Combinations php-fpm would refuse to start on — spare-server bounds that cross,
 a value outside its range — are refused before anything is written.
 
-## Defaults and reconciliation
+## New sites and reconciliation
 
-A default profile applies to sites created after it was set. The site ids that
-exist when it is saved are recorded, so the default never reaches back over a
-fleet that did not ask for it; turning it off leaves every site that already has
-it alone.
+One category can be the one new sites join. The site ids that exist when it is
+chosen are recorded, so it never reaches back over a fleet that did not ask for
+it; assigning a site explicitly, including to no category, records its id too,
+so a deliberate choice is not overwritten later.
 
 Reconciliation runs as the addon's `repair` upkeep, which the reconcile timer
-fires every fifteen minutes. It gives new sites the default and rewrites a
-managed site whose pool file no longer matches what was saved. The second half
+fires every fifteen minutes. It puts new sites in the default category and
+rewrites an assigned site whose pool file no longer matches it. The second half
 is not housekeeping: changing a site's PHP version in the panel deletes its pool
 file and writes a stock one under the new version, so a tuned site silently
-returns to 250 max children the moment somebody moves it from 8.2 to 8.3. A
-profile for a site CloudPanel no longer has is dropped in the same pass.
+returns to 250 max children the moment somebody moves it from 8.2 to 8.3. The
+addon page offers the same repair on demand, for an operator who does not want
+to wait. An assignment for a site CloudPanel no longer has is dropped in the
+same pass.
 
 No timer of its own: nothing here is urgent enough to justify one, and a new
 site runs on CloudPanel's values in the meantime, which is what it would have
@@ -71,11 +99,12 @@ run on anyway.
 ## State and privileges
 
 Only the root gateway changes a pool. It accepts a fixed verb set, normalizes
-the domain, refuses the panel's own hostname and aliases, and requires the site
-to have PHP settings in CloudPanel's database. `reconcile` is deliberately not
-a gateway verb: it walks the whole fleet and belongs to repair.
+every domain, refuses the panel's own hostname and aliases, and requires each
+site to have PHP settings in CloudPanel's database. `reconcile` is deliberately
+not a gateway verb: it walks the whole fleet and belongs to repair.
 
-Saved profiles live in `/var/lib/clp-addons/php-resources/policy.json`, mode
-`0600` and root-owned; a policy file that is not a trusted regular file is
-refused rather than read. A pool file is checked the same way before it is
-written, and is replaced atomically with its mode and ownership preserved.
+Categories and assignments live in
+`/var/lib/clp-addons/php-resources/policy.json`, mode `0600` and root-owned; a
+policy file that is not a trusted regular file is refused rather than read. A
+pool file is checked the same way before it is written, and is replaced
+atomically with its mode and ownership preserved.

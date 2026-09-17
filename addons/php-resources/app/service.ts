@@ -1,7 +1,5 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
-import { fetchPanelInfo } from "../../../lib/snapshot-reader";
-import type { SiteContext } from "../../../lib/site-context";
-import type { PhpResourcesState, PoolProfile, PoolSiteState } from "../action";
+import type { PhpResourcesResult, PhpResourcesState, PoolSiteState } from "../action";
 
 const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
@@ -11,22 +9,11 @@ export function validateDomain(value: unknown): string | null {
   return domain.length <= 253 && DOMAIN_RE.test(domain) ? domain : null;
 }
 
-/** One site's pool state with the panel context its page is drawn in. */
-export interface PhpResourcesSitePage {
-  site: PoolSiteState;
-  context: SiteContext;
-}
-
 function call<T>(verb: string, args: string[] = [], input?: string): Promise<ActionResult<T>> {
-  // A save writes one file and reloads one php-fpm service, which is quick
-  // unless the box is loaded; the default 60s is more than enough and the
-  // shorter budget the read paths could use is not worth two timeouts.
+  // Assigning a fleet writes one file per site and reloads each PHP version
+  // once, which is quick unless the box is loaded; the default 60s covers it,
+  // and the shorter budget the read paths could use is not worth two timeouts.
   return callGatewayAction<T>("php-resources", verb, args, input);
-}
-
-async function requireData<T>(result: ActionResult<T>, fallback: string): Promise<T> {
-  if (!result.ok || result.data === undefined) throw new Error(result.error ?? fallback);
-  return result.data;
 }
 
 export const phpResourcesService = {
@@ -34,40 +21,23 @@ export const phpResourcesService = {
     return call<PhpResourcesState>("list");
   },
 
-  get(domain: string): Promise<ActionResult<PoolSiteState>> {
-    return call<PoolSiteState>("get", [`--domain=${domain}`]);
+  site(domain: string): Promise<ActionResult<PoolSiteState>> {
+    return call<PoolSiteState>("site", [`--domain=${domain}`]);
   },
 
-  setSite(domain: string, profile: PoolProfile): Promise<ActionResult<PoolSiteState>> {
-    return call<PoolSiteState>("set", [`--domain=${domain}`], JSON.stringify({ profile }));
+  saveCategory(body: unknown): Promise<ActionResult<PhpResourcesResult>> {
+    return call<PhpResourcesResult>("save-category", [], JSON.stringify(body));
   },
 
-  resetSite(domain: string): Promise<ActionResult<PoolSiteState>> {
-    return call<PoolSiteState>("reset", [`--domain=${domain}`]);
+  deleteCategory(id: unknown): Promise<ActionResult<PhpResourcesResult>> {
+    return call<PhpResourcesResult>("delete-category", [], JSON.stringify({ id }));
   },
 
-  setDefault(profile: PoolProfile | null): Promise<ActionResult<{ default: PoolProfile | null }>> {
-    return call<{ default: PoolProfile | null }>("default", [], JSON.stringify({ profile }));
+  assign(domains: unknown, categoryId: unknown): Promise<ActionResult<PhpResourcesResult>> {
+    return call<PhpResourcesResult>("assign", [], JSON.stringify({ domains, categoryId }));
   },
 
-  /**
-   * The site's pool state, together with what the shell needs to keep drawing
-   * CloudPanel's site information and tab strip around it.
-   */
-  async site(domain: string): Promise<PhpResourcesSitePage> {
-    const panel = await fetchPanelInfo();
-    const site = panel.sites.find((candidate) => candidate.domain.toLowerCase() === domain);
-    if (!site) throw new Error(`CloudPanel site not found: ${domain}`);
-    const state = await requireData(await this.get(domain), "PHP pool settings are unavailable");
-    return {
-      site: state,
-      context: {
-        domain: site.domain,
-        user: site.user,
-        type: site.type,
-        varnishCache: site.varnishCache,
-        ...(panel.publicIp ? { publicIp: panel.publicIp } : {}),
-      },
-    };
+  setDefault(categoryId: unknown): Promise<ActionResult<PhpResourcesResult>> {
+    return call<PhpResourcesResult>("set-default", [], JSON.stringify({ categoryId }));
   },
 };
