@@ -428,12 +428,14 @@ async function repairDrifted() {
   let repaired = 0;
   for (const entry of groups) {
     try {
-      await call('/api/assign', {
+      const reply = await call('/api/assign', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ domains: entry[1], categoryId: entry[0] }),
       });
-      repaired += entry[1].length;
+      const written = (reply.data || {}).failures || [];
+      written.forEach(function (failure) { failures.push(failure); });
+      repaired += entry[1].length - written.length;
     } catch (error) {
       failures.push(categoryLabel(entry[0]) + ': ' + error.message);
     }
