@@ -299,9 +299,9 @@ function unwrapTwig(block: string): string {
  * stored on a server, so `?off` and `?menu` change the injected markup here the
  * way a reconciliation would change it on a box.
  */
-function injectedSitesBlocks(state: PanelTweaksState, search: string): string {
+function injectedSitesBlocks(state: PanelTweaksState): string {
   return [
-    unwrapTwig(sitesSnippet(`/addons/panel-tweaks${search}`, state.tweaks)),
+    unwrapTwig(sitesSnippet("/addons/panel-tweaks", state.tweaks)),
     unwrapTwig(WP_LOGIN_SITES_SCRIPT.snippet("/addons/wp-login")),
     unwrapTwig(STAGER_SITES_STYLE.snippet("/addons/stager")),
   ].join("\n");
@@ -317,7 +317,7 @@ function wpLoginPreviewSites(url: URL): WpSiteView[] {
   ];
 }
 
-function panelSitesStub(state: PanelTweaksState, dark: boolean, search = ""): string {
+function panelSitesStub(state: PanelTweaksState, dark: boolean): string {
   const rows = state.sites.map((site) => `                  <tr>
                     <td><a href="/site/${site.domain}/settings">${site.domain}</a></td>
                     <td>${site.user}</td>
@@ -360,7 +360,7 @@ html.dark .form-control, html.dark .form-select { background: #20242c; color: #f
       <div class="page-title"><h1>Sites</h1></div>
       <div class="page-actions"><a href="#">+ Add Site</a></div>
     </div>
-${injectedSitesBlocks(state, search)}
+${injectedSitesBlocks(state)}
     <div class="card card-table">
       <table class="table table-sites">
         <thead>
@@ -411,12 +411,15 @@ const server = Bun.serve({
     // /sites stands in for the panel's own site list, with the addon's block in
     // place; /addons/panel-tweaks/api/panel is what that block then asks for.
     if (path === "/sites") {
-      return new Response(panelSitesStub(panelTweaksPreviewState(url), url.searchParams.has("dark"), url.search), {
+      return new Response(panelSitesStub(panelTweaksPreviewState(url), url.searchParams.has("dark")), {
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
       });
     }
     if (path === "/addons/panel-tweaks/api/panel") {
-      const state = panelTweaksPreviewState(url);
+      // The injected block's URL is fixed, so the fixture the stub was drawn
+      // from is named by the page that asked rather than by this request.
+      const asked = req.headers.get("referer");
+      const state = panelTweaksPreviewState(asked ? new URL(asked) : url);
       return Response.json({ ok: true, data: state });
     }
     // /site/{domain}/{tab} stands in for the panel's own site page.

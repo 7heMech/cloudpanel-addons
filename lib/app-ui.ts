@@ -80,7 +80,7 @@ h2, h3 { font-size: 18px; }
    centring it, so centring here sits the logo ~1.5px lower than the panel's own header. */
 .clp-addon-brand { flex: 0 0 235px; display: flex; align-items: flex-start; padding: 20px 0 0 20px;
   margin-right: 20px; border-right: 1px solid var(--row-border); }
-.clp-addon-logo { display: block; width: 155px; height: 31px; }
+.clp-addon-logo { display: block; flex: 0 0 auto; width: 155px; height: 31px; }
 .clp-addon-logo-dark { display: none; }
 html.dark .clp-addon-logo-light { display: none; }
 html.dark .clp-addon-logo-dark { display: block; }
@@ -286,7 +286,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
      than pushing them off. */
   .clp-addon-brand { flex: 1 1 0; min-width: 0; border: 0; margin: 0; min-height: 64px;
     align-items: center; padding: 0 20px; }
-  .clp-addon-logo { max-width: 100%; height: auto; }
+  /* The logo keeps its own size, as the panel's does; measuring the row from
+     zero above is what keeps it from pushing the tools off instead. */
   /* The logo and the tools share the first row and the navigation takes the
      second, rather than each taking a row of its own. */
   .clp-addon-header-tools { order: 1; margin-left: auto; }
