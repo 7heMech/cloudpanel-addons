@@ -13,38 +13,35 @@ const STYLE = `
 /* Shrinkable, so the badge and the button wrap rather than overflow a phone. */
 .page-heading .actions { align-items:center; }
 .site-heading {
-  display: grid;
-  grid-template-columns: minmax(0, max-content) auto 1fr auto;
-  grid-template-areas:
-    "title badge . actions"
-    "desc  desc  . actions";
+  display: flex;
+  justify-content: space-between;
   align-items: center;
-  column-gap: 12px;
-  row-gap: 6px;
+  gap: 20px;
 }
-.site-heading .site-title {
-  grid-area: title;
+.site-heading .site-header-main {
   min-width: 0;
 }
-.site-heading .site-title h1 {
+.site-heading .site-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.site-heading .site-title-row h1 {
   margin: 0;
   overflow-wrap: anywhere;
 }
 .site-heading .badge {
-  grid-area: badge;
-  align-self: center;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .site-heading .site-desc {
-  grid-area: desc;
-  margin: 0;
+  margin: 6px 0 0;
   color: var(--muted);
   font-size: 14px;
 }
 .site-heading .actions {
-  grid-area: actions;
-  justify-self: end;
-  align-self: center;
+  flex-shrink: 0;
 }
 .state-live { color:var(--ok); border-color:var(--ok); }
 .state-maintenance { color:var(--bad); border-color:var(--bad); }
@@ -100,9 +97,14 @@ html.dark #template-ace .ace_comment { color:#93a1ad; }
     align-items: flex-start;
     gap: 10px;
   }
-  .site-heading .site-title {
+  .site-heading .site-header-main,
+  .site-heading .site-title-row {
+    display: contents;
+  }
+  .site-heading h1 {
     order: 1;
     width: 100%;
+    margin: 0;
   }
   .site-heading .site-desc {
     order: 2;
@@ -327,11 +329,6 @@ async function toggleMaintenance(domain, enabled) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enabled })
     });
     paintStatus(domain, reply.data.enabled);
-    if (isGlobalActive() && !reply.data.enabled) {
-      notify('Saved. ' + domain + ' stays in maintenance while global maintenance is on.', 'warn');
-    } else {
-      notify(domain + (reply.data.enabled ? ' is now in maintenance mode.' : ' is now live.'), 'ok');
-    }
   } catch (error) {
     paintStatus(domain, !enabled);
     notify('Could not change maintenance mode for ' + domain + ': ' + error.message, 'error');
@@ -629,7 +626,7 @@ export function siteView(
   globalEnabled = false,
 ): string {
   const globalNotice = `<div id="global-notice" class="notice"${globalEnabled && !site.enabled ? "" : " hidden"}>Global maintenance is on, so this site serves the maintenance page even though its own setting below is off. Turning the setting below off does not take this site out of global maintenance.</div>`;
-  return `<div class="page-heading site-heading" data-global-maintenance="${globalEnabled}"><div class="site-title"><h1>${esc(site.domain)}</h1></div>${statusBadge(site, globalEnabled)}<p class="site-desc">Maintenance mode applies to HTTP and HTTPS traffic for this site.</p><div class="actions"><a class="btn" href="${BASE}/">All maintenance sites</a></div></div>
+  return `<div class="page-heading site-heading" data-global-maintenance="${globalEnabled}"><div class="site-header-main"><div class="site-title-row"><h1>${esc(site.domain)}</h1>${statusBadge(site, globalEnabled)}</div><p class="site-desc">Maintenance mode applies to HTTP and HTTPS traffic for this site.</p></div><div class="actions"><a class="btn" href="${BASE}/">All maintenance sites</a></div></div>
   ${globalNotice}
   <div class="card"><div class="switch-row"><div><h2>Maintenance response</h2><p class="hint">Visitors receive HTTP 503 with a five-minute Retry-After header. ACME certificate challenges and bypassed IPs remain live.</p></div>
     <label class="switch switch-danger"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" data-available="true" aria-label="Maintenance mode for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label>

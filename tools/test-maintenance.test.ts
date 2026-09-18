@@ -318,12 +318,12 @@ test("siteView renders responsive heading layout with badge after domain title a
   const html = siteView(site, template, "1.2.3.4", false);
 
   expect(html).toContain('class="page-heading site-heading"');
-  expect(html).toContain('<div class="site-title"><h1>one.example.com</h1></div>');
+  expect(html).toContain('<div class="site-header-main"><div class="site-title-row"><h1>one.example.com</h1><span class="badge state-live" data-status-domain="one.example.com">Live</span></div>');
   expect(html).toContain('<p class="site-desc">Maintenance mode applies to HTTP and HTTPS traffic for this site.</p>');
   expect(html).toContain('<div class="actions"><a class="btn" href="/addons/maintenance/">All maintenance sites</a></div>');
 
   // Verify DOM order: title precedes badge, badge precedes description, description precedes actions
-  const titleIndex = html.indexOf('<div class="site-title"><h1>one.example.com</h1></div>');
+  const titleIndex = html.indexOf('<h1>one.example.com</h1>');
   const badgeIndex = html.indexOf('data-status-domain="one.example.com"');
   const descIndex = html.indexOf('<p class="site-desc">');
   const actionsIndex = html.indexOf('<div class="actions"><a class="btn" href="/addons/maintenance/">All maintenance sites</a></div>');
@@ -333,13 +333,17 @@ test("siteView renders responsive heading layout with badge after domain title a
   expect(descIndex).toBeGreaterThan(badgeIndex);
   expect(actionsIndex).toBeGreaterThan(descIndex);
 
-  // Verify layout styling includes desktop grid and mobile column order
+  // Verify layout styling includes natural inline-flex title row and mobile contents order
   const page = layout("Maintenance", html);
   expect(page).toContain(".site-heading {");
-  expect(page).toContain("grid-template-areas:");
-  expect(page).toContain('"title badge . actions"');
+  expect(page).toContain(".site-heading .site-title-row {");
   expect(page).toContain("@media (max-width:760px)");
+  expect(page).toContain("display: contents;");
   expect(page).toContain("flex-direction: column;");
+
+  // Verify toggleMaintenance does not show notify popup on success
+  expect(CLIENT_JS).not.toContain("is now in maintenance mode.");
+  expect(CLIENT_JS).not.toContain("is now live.");
 });
 
 
