@@ -1,4 +1,4 @@
-# Deploys dev to the staging CloudPanel box.
+# Deploys dev, and any pull request into dev, to the staging CloudPanel box.
 #
 # dev is where a change is proven on a real panel before it reaches main, so
 # every push to it installs that commit on staging. The checks run here first
@@ -6,6 +6,13 @@
 # this project's behaviour can be observed at all -- CloudPanel's own templates,
 # a site's generated vhost, an addon injected into a panel page -- and a broken
 # binary there costs the next change its test bed.
+#
+# A pull request deploys what it would merge, so a change can be tried on the
+# panel before it lands. There is one box, so whatever deployed last is what is
+# on it; pushing to dev, or re-running this from a pull request, puts back the
+# state you want. A pull request from a fork is skipped rather than failed: it
+# cannot read these secrets, and it must not -- the deploy authenticates as root
+# on a live machine.
 #
 # The deploy itself is `tools/deploy-stg.ts`, the same script run by hand from a
 # workstation. A second copy of the upload-stop-install-repair sequence written
@@ -15,6 +22,11 @@ name: deploy-staging
 
 on:
   push:
+    branches: [dev]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+  pull_request:
     branches: [dev]
     paths-ignore:
       - "**/*.md"
@@ -32,12 +44,14 @@ permissions: {}
 
 jobs:
   deploy:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     # Holds the staging credentials and records what was deployed. Add a
     # required reviewer here to make a staging deploy a manual step.
     environment: staging
     permissions:
       contents: read
+      pull-requests: write  # say on the pull request that staging now runs it
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -110,3 +124,15 @@ jobs:
             -i "$RUNNER_TEMP/ssh/id" "$STG_HOST" \
             'clp-addons --version; systemctl is-active clp-addons.service clp-addons-auth.socket' \
             | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Say on the pull request that staging is running it
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        # Not worth failing a good deploy over, and the run's own summary says
+        # the same thing.
+        run: |
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --edit-last --create-if-none \
+            --body "Staging is running this pull request as of \`${SHA:0:7}\`. It stays until the next deploy from \`dev\` or from another pull request." || true

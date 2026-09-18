@@ -66,8 +66,9 @@ bun run build
 Run `bun run preview:ui` to preview the interface at
 `http://localhost:4100/addons/` with sample data.
 
-Pull requests target `dev`, which deploys to a staging CloudPanel box on every
-push; `main` is what gets tagged and released.
+Pull requests target `dev`. A pull request and `dev` itself each deploy to the
+staging CloudPanel box, so a change can be tried on a real panel; `main` is what
+gets tagged and released.
 
 Architecture and security choices are indexed in
 [Decisions](docs/DECISIONS.md).
