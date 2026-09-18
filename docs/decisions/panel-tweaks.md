@@ -1,4 +1,4 @@
-# Panel Tweaks
+# Panel UI tweaks
 
 ## One addon for the small additions
 
@@ -69,6 +69,12 @@ is in the row; the addon asks for them whenever its switch is on. They carry a
 `body` in front so they outrank the manager's block, which the panel renders
 after them.
 
+Below 760px those rules give the panel's header the shape the addon's own pages
+already use: the logo and the tools in one 64px row of equal cells, the
+navigation on the row beneath. The panel's 75px row and its 25px cell padding
+are drawn for a desktop and only crowd a phone, and an operator moving between
+CloudPanel's pages and an addon's should not see the header change height.
+
 ## Nothing moves once it is on the screen
 
 The narrow-screen rules are keyed on CloudPanel's own `table-sites` class rather
@@ -94,8 +100,15 @@ An open menu is a child of `<body>` positioned against its button, not a child
 of the cell it came from: the table sits in a horizontal scroller, which clips
 anything hanging out of it. The links themselves are moved into it rather than
 copied, so another addon's link keeps working with no arrangement between the
-two -- Panel Tweaks does not know what is in the action cell, only that it is a
-link.
+two: the addon does not know what is in the action cell, only that it is a link.
+
+`lib/row-actions.ts` is the whole agreement between the two addons. An addon
+with an action worth a place in the menu but not a link in every row of a list
+read every day marks it `clp-addons-menu-only` and emits the rule that hides it;
+the menu's own rule for the links inside it is what shows it again. Stager's
+`Clone` is the one that wants this. The hide is the owning addon's rather than
+this one's, because an operator who never installed this addon must still not be
+shown that link.
 
 ## The data the panel does not have
 

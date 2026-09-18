@@ -86,7 +86,7 @@ export function layout(
   updateNotice?: { current: string; latest: string } | null,
 ): string {
   return renderLayout(title, content, {
-    brand: "Panel Tweaks",
+    brand: "Panel UI tweaks",
     base: BASE,
     nav: [],
     css: STYLE,
@@ -266,7 +266,7 @@ export function dashboardView(state: PanelTweaksState): string {
   return `
     <div class="page-heading">
       <div>
-        <h1>Panel Tweaks</h1>
+        <h1>Panel UI tweaks</h1>
         <p>Additions to CloudPanel's own pages. Each one can be switched off on its own.</p>
       </div>
     </div>

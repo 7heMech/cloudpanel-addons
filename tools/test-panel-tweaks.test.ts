@@ -11,6 +11,8 @@ import {
   PANEL_TWEAKS_TARGETS, deviceThemeSnippet, panelHeaderSnippet, sitesSnippet,
 } from "../addons/panel-tweaks/inject/targets";
 import type { PanelTweaks } from "../addons/panel-tweaks/action";
+import { STAGER_TARGETS } from "../addons/stager/inject/targets";
+import { MENU_ONLY_CLASS, MENU_ONLY_STYLE, ROW_MENU_CLASS } from "../lib/row-actions";
 
 const loginTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "login-device-theme")!;
 const sitesTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "sites-table")!;
@@ -198,7 +200,26 @@ test("the narrow-screen table, the row menu and the header are each in or out of
     .toBeLessThan(on.indexOf(String.raw`<div class="clp-tweaks-toolbar"`));
 
   expect(panelHeaderSnippet(false)).toBe("");
-  expect(panelHeaderSnippet(true)).toContain("@media (max-width: 600px)");
+  expect(panelHeaderSnippet(true)).toContain("@media (max-width: 760px)");
+});
+
+// The menu is a surface two addons share: one draws it, another puts an action
+// in it that must not be a link in every row when there is no menu to hold it.
+test("a menu-only action is hidden by its own addon and shown by the menu", () => {
+  const clone = STAGER_TARGETS.find((target) => target.slug === "site-list-action")!;
+  const style = STAGER_TARGETS.find((target) => target.slug === "site-list-style")!;
+  expect(clone.snippet("/addons/stager")).toContain(`class="${MENU_ONLY_CLASS}"`);
+  // Stager's own, not this addon's: a box without Panel UI tweaks must not be
+  // shown the link either.
+  expect(style.snippet("/addons/stager")).toContain(MENU_ONLY_STYLE);
+  expect(sites({ actionMenu: true })).not.toContain(MENU_ONLY_STYLE);
+
+  // `.clp-addons-row-menu > a` outranks `.clp-addons-menu-only`, so the link
+  // reappears once the menu has moved it inside, whichever order they load in.
+  const menu = sites({ actionMenu: true });
+  expect(menu).toContain(`.${ROW_MENU_CLASS} > a`);
+  // Nothing an addon styled its inline link with survives into the menu.
+  expect(menu).toContain("margin: 0; padding: 9px 18px");
 });
 
 // Both of CloudPanel's headers open with the same tag, and neither may stop an

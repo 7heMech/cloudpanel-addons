@@ -9,6 +9,8 @@ import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayou
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { sitesSnippet } from "../addons/panel-tweaks/inject/targets";
+import { STAGER_TARGETS } from "../addons/stager/inject/targets";
+import { MENU_ONLY_CLASS } from "../lib/row-actions";
 import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
 import { dashboardView as wpLoginDashboardView, layout as wpLoginLayout } from "../addons/wp-login/app/views";
 import { WORDPRESS_APPLICATIONS, type WpSiteView } from "../addons/wp-login/action";
@@ -155,7 +157,7 @@ function phpResourcesPreviewState(url: URL): PhpResourcesState {
 }
 
 /**
- * Panel Tweaks with every switch on and most sites measured, because that is
+ * Panel UI tweaks with every switch on and most sites measured, because that is
  * the widest the page gets: `?off` is the state an operator lands on after
  * enabling the addon, and `?unmeasured` is the gap before the first sweep.
  */
@@ -276,20 +278,21 @@ ${tabs}
 }
 
 /**
- * A stand-in for CloudPanel's own Sites page, so the block Panel Tweaks injects
+ * A stand-in for CloudPanel's own Sites page, so the block Panel UI tweaks injects
  * there can be reviewed without a panel. The markup is
  * Frontend/Site/index.html.twig with its Twig evaluated, and the rules are the
  * panel's own from assets/css/style.css and assets/css/frontend/sites.css.
  */
 const WP_LOGIN_SITES_SCRIPT = WP_LOGIN_TARGETS.find((target) => target.slug === "sites-script")!;
+const STAGER_SITES_STYLE = STAGER_TARGETS.find((target) => target.slug === "site-list-style")!;
 
 function unwrapTwig(block: string): string {
   return block.replace("{% if is_granted('ROLE_ADMIN') %}", "").replace("{% endif %}", "");
 }
 
 /**
- * Both addons put a block above CloudPanel's sites table; the stub shows both.
- * Panel Tweaks is handed the previewed switches rather than reading the ones
+ * Three addons put a block above CloudPanel's sites table; the stub shows all.
+ * Panel UI tweaks is handed the previewed switches rather than reading the ones
  * stored on a server, so `?off` and `?menu` change the injected markup here the
  * way a reconciliation would change it on a box.
  */
@@ -297,6 +300,7 @@ function injectedSitesBlocks(state: PanelTweaksState): string {
   return [
     unwrapTwig(sitesSnippet("/addons/panel-tweaks", state.tweaks)),
     unwrapTwig(WP_LOGIN_SITES_SCRIPT.snippet("/addons/wp-login")),
+    unwrapTwig(STAGER_SITES_STYLE.snippet("/addons/stager")),
   ].join("\n");
 }
 
@@ -317,7 +321,7 @@ function panelSitesStub(state: PanelTweaksState, dark: boolean): string {
                     <td>${site.type.toUpperCase()}</td>
                     <td class="text-end"><a href="/site/${site.domain}/settings">Manage</a>${WORDPRESS_APPLICATIONS.includes(site.application)
                       ? `<a href="#" class="clp-wp-login" data-clp-domain="${site.domain}">WP Login</a>`
-                      : ""}</td>
+                      : ""}<a class="${MENU_ONLY_CLASS}" href="/addons/stager/new?source=${site.domain}">Clone</a></td>
                   </tr>`).join("\n");
   return `<!doctype html>
 <html lang="en"${dark ? ' class="dark"' : ""}>
@@ -532,7 +536,7 @@ const server = Bun.serve({
           : undefined,
       );
     } else if (path === "/addons/panel-tweaks/" || path === "/addons/panel-tweaks") {
-      html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url)), notice);
+      html = panelTweaksLayout("Panel UI tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url)), notice);
     } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {
       html = wpLoginLayout("WordPress Sign-In", wpLoginDashboardView(wpLoginPreviewSites(url)), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {

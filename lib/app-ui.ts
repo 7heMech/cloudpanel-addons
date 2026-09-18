@@ -12,6 +12,18 @@ import { shadowStyle, type EmbedFragment } from "./shadow-embed";
 import { SITE_CONTEXT_STYLE, siteInfoHtml, siteTabs, type SiteContext } from "./site-context";
 import { UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
 
+/**
+ * The three of CloudPanel's own pages the shell's header links to.
+ *
+ * The header reproduces the panel's, so it carries the panel's controls: the
+ * Admin Area, and an account menu of Settings and Logout. The avatar is a
+ * drawing rather than the operator's gravatar, because the manager serves these
+ * pages behind the panel's session without ever being told whose it is.
+ */
+const PANEL_ADMIN_URL = "/admin/users";
+const PANEL_SETTINGS_URL = "/settings";
+const PANEL_LOGOUT_URL = "/logout";
+
 // Measured against CloudPanel 2.5.1's public demo: dashboard, sites, settings,
 // certificates, logs and new-site forms. Keep these rules independent of the
 // panel's private templates and versioned CSS bundles.
@@ -74,13 +86,24 @@ html.dark .clp-addon-logo-dark { display: block; }
 .clp-addon-header-tools { display: flex; margin-left: auto; }
 .clp-addon-header-inner > #clp-addons-update-notice { margin: 0 20px 0 auto; }
 .clp-addon-header-inner > #clp-addons-update-notice + .clp-addon-header-tools { margin-left: 0; }
-.clp-addon-theme { border: 0; border-left: 1px solid var(--row-border); background: transparent;
-  color: var(--header-link); width: 70px; cursor: pointer; display: grid; place-items: center; }
-.clp-addon-theme:hover { color: var(--accent); }
-.clp-addon-theme svg { width: 20px; height: 20px; }
-.clp-addon-theme .sun { display: none; }
-html.dark .clp-addon-theme .sun { display: block; }
-html.dark .clp-addon-theme .moon { display: none; }
+.clp-addon-tool { border: 0; border-left: 1px solid var(--row-border); background: transparent;
+  color: var(--header-link); width: 70px; cursor: pointer; display: grid; place-items: center; gap: 0; }
+.clp-addon-tool:hover { color: var(--accent); text-decoration: none; }
+.clp-addon-tool > svg { width: 20px; height: 20px; }
+#theme-switch .sun { display: none; }
+html.dark #theme-switch .sun { display: block; }
+html.dark #theme-switch .moon { display: none; }
+/* The account control is the panel's: an avatar, a caret, and a menu of the two
+   links its own dropdown carries. */
+.clp-addon-account { position: relative; display: flex; }
+#clp-account-button { display: flex; align-items: center; justify-content: center; gap: 4px; width: 80px; }
+#clp-account-button > .clp-addon-avatar { width: 30px; height: 30px; color: var(--header-link); }
+#clp-account-button > .clp-addon-caret { width: 10px; height: 10px; }
+.clp-addon-account-menu { position: absolute; top: 100%; right: 6px; z-index: 30; min-width: 160px;
+  padding: 6px 0; background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 16%); text-align: left; }
+.clp-addon-account-menu > a { display: block; padding: 9px 18px; color: var(--text); white-space: nowrap; }
+.clp-addon-account-menu > a:hover { background: var(--row-hover, rgb(127 143 153 / 14%)); text-decoration: none; }
 main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 25px 12px 40px; flex: 1; min-width: 0; }
 /* The strip scrolls when the tabs outgrow it, but never shows a bar: overflow-x
    alone also turns overflow-y into auto, and a 16px overflow at desktop width
@@ -237,9 +260,13 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 }
 @media (max-width: 760px) {
   .clp-addon-header-inner { flex-wrap: wrap; }
-  .clp-addon-brand { flex-basis: auto; border: 0; margin: 0; min-height: 64px;
-    align-items: center; padding: 0 20px; }
-  .clp-addon-header-tools { order: 1; }
+  .clp-addon-brand { flex: 1 1 auto; min-width: 0; border: 0; margin: 0; min-height: 64px;
+    align-items: center; padding: 0 16px; }
+  /* The logo and the tools share the first row and the navigation takes the
+     second, rather than each taking a row of its own. */
+  .clp-addon-header-tools { order: 1; margin-left: auto; }
+  .clp-addon-tool { width: 56px; }
+  #clp-account-button { width: 62px; }
   .clp-addon-primary-nav { order: 2; width: 100%; overflow-x: auto; border-top: 1px solid var(--border); padding: 0 5px; gap: 0; }
   .clp-addon-primary-link { min-height: 48px; }
   .clp-addon-header-inner > #clp-addons-update-notice { justify-content: center; padding: 10px 16px; }
@@ -335,6 +362,45 @@ function toggleTheme() {
 syncTheme();
 window.addEventListener('pageshow', syncTheme);
 window.addEventListener('focus', syncTheme);
+
+// The account menu, closed by every way out of it: the button again, a click
+// elsewhere, Escape, or the focus leaving it.
+function accountMenu() {
+  return {
+    button: CLP_ROOT.getElementById('clp-account-button'),
+    list: CLP_ROOT.getElementById('clp-account-menu'),
+  };
+}
+function closeAccountMenu() {
+  const parts = accountMenu();
+  if (!parts.list || parts.list.hidden) return;
+  parts.list.hidden = true;
+  parts.button.setAttribute('aria-expanded', 'false');
+}
+function toggleAccountMenu() {
+  const parts = accountMenu();
+  if (!parts.list) return;
+  const open = parts.list.hidden;
+  parts.list.hidden = !open;
+  parts.button.setAttribute('aria-expanded', String(open));
+  if (open) {
+    const first = parts.list.querySelector('a');
+    if (first) first.focus();
+  }
+}
+document.addEventListener('click', function (event) {
+  const parts = accountMenu();
+  if (!parts.list || parts.list.hidden) return;
+  if (!parts.list.contains(event.target) && !parts.button.contains(event.target)) closeAccountMenu();
+});
+document.addEventListener('keydown', function (event) {
+  if (event.key === 'Escape' || event.key === 'Esc') closeAccountMenu();
+});
+document.addEventListener('focusin', function (event) {
+  const parts = accountMenu();
+  if (!parts.list || parts.list.hidden) return;
+  if (!parts.list.contains(event.target) && !parts.button.contains(event.target)) closeAccountMenu();
+});
 
 // Use the longest matching route so /new takes precedence over the list tab.
 // Only the addon's own tabs: a site strip reproduces CloudPanel's navigation,
@@ -735,10 +801,24 @@ ${primaryNav}
     </nav>
     ${chrome.updateNotice ? updateNoticeHtml(chrome.updateNotice.latest) : ""}
     <div class="clp-addon-header-tools">
-      <button class="clp-addon-theme" id="theme-switch" type="button" onclick="toggleTheme()" aria-label="Switch to dark mode" aria-pressed="false">
+      <button class="clp-addon-tool" id="theme-switch" type="button" onclick="toggleTheme()" aria-label="Switch to dark mode" aria-pressed="false">
         <svg class="moon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.9 13.1A9 9 0 0 1 10.9 3.1 9 9 0 1 0 20.9 13.1Z"/></svg>
         <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 1v3m0 16v3M1 12h3m16 0h3M4.2 4.2l2.1 2.1m11.4 11.4 2.1 2.1M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>
       </button>
+      <a class="clp-addon-tool" href="${esc(PANEL_ADMIN_URL)}" title="Admin Area" aria-label="Admin Area">
+        <svg viewBox="0 0 640 512" fill="currentColor" aria-hidden="true"><path d="M96 224a80 80 0 1 0 0-160 80 80 0 0 0 0 160zm0-112a32 32 0 1 1 0 64 32 32 0 0 1 0-64zm224 96c-59.6 0-112-50.1-112-112S258.1 32 320 32c60.3 0 109 47.7 111.5 107.3-19 6.7-36.5 16.4-52.2 28.4 3-7.4 4.7-15.4 4.7-23.8 0-35.3-28.7-64-64-64s-64 28.7-64 64 28.7 64 64 64c8.4 0 16.4-1.7 23.8-4.7-12 15.7-21.7 33.2-28.4 52.2H320zM154.8 270.3c-13.4 10.1-25.2 22.2-34.5 36.2-3.8-1.4-7.9-2.5-12.3-2.5H84c-19.8 0-36 16.2-36 36 0 13.2-10.8 24-24 24S0 353.2 0 340c0-46.3 37.7-84 84-84h24c17.3 0 33.4 5.3 46.8 14.3zM340.3 432c13.5 18.8 30.3 35.1 49.7 48H176c-26.5 0-48-21.5-48-48v-44.8c0-63.6 51.6-115.2 115.2-115.2 5.5 0 10.8 1.3 15.9 3.4 14.9 6.3 31.2 9.7 48 11.2-4.3 24.6-3 39.3-2.3 48.6-21.5-1.6-42.8-6.6-63.4-15.2-36.2 1-65.4 30.8-65.4 67.2V432h164.3zM496 368.5a48.5 48.5 0 1 1 0-97 48.5 48.5 0 0 1 0 97zm114.5-27.2c2.6-14.1 2.6-28.5 0-42.6l25.8-14.9c3-1.7 4.3-5.2 3.3-8.5-6.7-21.6-18.2-41.2-33.2-57.4-2.3-2.5-6-3.1-9-1.4l-25.8 14.9c-10.9-9.3-23.4-16.5-36.9-21.3v-29.8c0-3.4-2.4-6.4-5.7-7.1-22.3-5-45-4.8-66.2 0-3.3.7-5.7 3.7-5.7 7.1v29.8c-13.5 4.8-26 12-36.9 21.3l-25.8-14.9c-2.9-1.7-6.7-1.1-9 1.4-15 16.2-26.5 35.8-33.2 57.4-1 3.3.4 6.8 3.3 8.5l25.8 14.9c-2.6 14.1-2.6 28.5 0 42.6l-25.8 14.9c-3 1.7-4.3 5.2-3.3 8.5 6.7 21.6 18.2 41.1 33.2 57.4 2.3 2.5 6 3.1 9 1.4l25.8-14.9c10.9 9.3 23.4 16.5 36.9 21.3v29.8c0 3.4 2.4 6.4 5.7 7.1 22.3 5 45 4.8 66.2 0 3.3-.7 5.7-3.7 5.7-7.1v-29.8c13.5-4.8 26-12 36.9-21.3l25.8 14.9c2.9 1.7 6.7 1.1 9-1.4 15-16.2 26.5-35.8 33.2-57.4 1-3.3-.4-6.8-3.3-8.5l-25.8-14.9z"/></svg>
+      </a>
+      <div class="clp-addon-account">
+        <button class="clp-addon-tool" id="clp-account-button" type="button" onclick="toggleAccountMenu()"
+          aria-haspopup="true" aria-expanded="false" aria-label="Account">
+          <svg class="clp-addon-avatar" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="18" fill="currentColor" opacity=".18"/><circle cx="18" cy="14" r="6" fill="currentColor"/><path d="M6 33a12 12 0 0 1 24 0z" fill="currentColor"/></svg>
+          <svg class="clp-addon-caret" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4.5 6 8.5 10 4.5z" fill="currentColor"/></svg>
+        </button>
+        <div class="clp-addon-account-menu" id="clp-account-menu" hidden>
+          <a href="${esc(PANEL_SETTINGS_URL)}">Settings</a>
+          <a href="${esc(PANEL_LOGOUT_URL)}">Logout</a>
+        </div>
+      </div>
     </div>
   </div>
 </header>

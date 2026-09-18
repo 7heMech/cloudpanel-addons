@@ -2,7 +2,7 @@
 
 ## Why it is an addon and not a tweak
 
-It shipped as a fourth switch on [Panel Tweaks](panel-tweaks.md) and was moved
+It shipped as a fourth switch on [Panel UI tweaks](panel-tweaks.md) and was moved
 out. Everything that addon does changes what CloudPanel's own pages look like;
 this writes a file into a customer's site. An operator who installed the one for
 a filterable site list should not thereby have the code that can do the other on

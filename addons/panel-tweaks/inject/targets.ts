@@ -1,4 +1,4 @@
-// What Panel Tweaks adds to CloudPanel's own pages.
+// What Panel UI tweaks adds to CloudPanel's own pages.
 //
 // Two anchors, not six. Every authenticated tweak -- the count, the search, the
 // sorting, the extra columns -- is one script and one toolbar placed above the
@@ -17,6 +17,7 @@
 
 import type { AddonTarget } from "../../../lib/addon-target";
 import { headerWrapStyle } from "../../../lib/panel-nav";
+import { ROW_MENU_CLASS } from "../../../lib/row-actions";
 import {
   APPLICATION_LABELS, CERTIFICATE_LABELS, SELF_SIGNED_CERTIFICATE,
   DEFAULT_TWEAKS, readTweaks, DEFAULT_PANEL_TWEAKS_PATHS,
@@ -120,21 +121,25 @@ const SITES_MOBILE_STYLE = `
   /* The panel sets these with html.dark body .table td, which outranks anything
      scoped to one table, so the reset has to be important -- and so does
      everything below that puts a border or a padding back. */
-  table.table-sites td { order: 2; border: 0 !important; padding: 0 !important; text-align: left !important; }
-  /* The domain takes the first line, with what the site runs as a tag beside
-     it: the value says "WordPress" on its own, and a heading over it would only
-     repeat the column it came from. The App column is the panel's third, so the
-     two are put in this order rather than found in it. */
-  table.table-sites td.clp-tweaks-domain { order: 0; flex: 1 1 calc(100% - 200px); min-width: 0;
+  table.table-sites td { order: 3; border: 0 !important; padding: 0 !important; text-align: left !important; }
+  /* A zero-height flex item that ends the first line, so the domain and its tag
+     keep it to themselves however short the domain is. Its negative margin
+     gives back the row gap the extra line would otherwise add twice. */
+  table.table-sites tbody tr::before { content: ""; order: 2; flex: 0 0 100%; height: 0; margin: -7px 0; }
+  /* The domain takes the first line, with what the site runs as a tag directly
+     after it: the value says "WordPress" on its own, and a heading over it would
+     only repeat the column it came from. The App column is the panel's third, so
+     the two are put in this order rather than found in it. */
+  table.table-sites td.clp-tweaks-domain { order: 0; flex: 0 1 auto; min-width: 0;
     font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
-  table.table-sites td.clp-tweaks-type { order: 1; flex: 0 1 auto; max-width: 45%; margin: 2px 0 0 auto;
+  table.table-sites td.clp-tweaks-type { order: 1; flex: 0 1 auto; max-width: 45%; margin: 2px 0 0;
     padding: 3px 8px !important; border: 1px solid #eaeaea !important; border-radius: 4px; color: #9bacb6;
     font-size: 12px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   html.dark table.table-sites td.clp-tweaks-type { border-color: var(--clp-border-color) !important; }
   table.table-sites td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; }
   table.table-sites td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px;
     color: #9bacb6; font-size: 12px; font-weight: 700; text-transform: uppercase; }
-  table.table-sites td.clp-tweaks-actions { order: 3; flex: 1 1 100%; }
+  table.table-sites td.clp-tweaks-actions { order: 4; flex: 1 1 100%; }
 }
 `;
 
@@ -142,7 +147,8 @@ const SITES_MOBILE_STYLE = `
 // what the site runs, rather than on a full-width row of its own below it.
 const MENU_MOBILE_STYLE = `
 @media (max-width: 860px) {
-  html.clp-tweaks-menu table.table-sites td.clp-tweaks-actions { order: 1; flex: 0 0 auto; margin: 0; }
+  html.clp-tweaks-menu table.table-sites td.clp-tweaks-actions { order: 1; flex: 0 0 auto;
+    margin: 0 0 0 auto; }
 }
 `;
 
@@ -167,16 +173,20 @@ html.clp-tweaks-menu table.table-sites tbody td:last-child > button:not(.clp-twe
   font-size: 18px; line-height: 1; }
 .clp-tweaks-menu-button:hover,
 .clp-tweaks-menu-button[aria-expanded="true"] { background: rgba(127, 143, 153, .18); }
-.clp-tweaks-menu-list { position: fixed; z-index: 1000; min-width: 170px; padding: 6px 0;
+.${ROW_MENU_CLASS} { position: fixed; z-index: 1000; min-width: 170px; padding: 6px 0;
   border: 1px solid #eaeaea; border-radius: 6px; background: #fff; box-shadow: 0 8px 28px rgba(0, 0, 0, .16);
   text-align: left; }
-.clp-tweaks-menu-list[hidden] { display: none; }
-.clp-tweaks-menu-list > a,
-.clp-tweaks-menu-list > button { display: block; width: 100%; padding: 9px 18px; border: 0; background: none;
-  color: inherit; font-size: 14px; line-height: 1.4; text-align: left; white-space: nowrap; cursor: pointer; }
-.clp-tweaks-menu-list > a:hover,
-.clp-tweaks-menu-list > button:hover { background: rgba(127, 143, 153, .14); }
-html.dark .clp-tweaks-menu-list { border-color: var(--clp-border-color, #a8b3cf33);
+.${ROW_MENU_CLASS}[hidden] { display: none; }
+/* The links keep whatever the addon that owns them styled them with, which for
+   an inline action cell is a margin between one link and the next. In here the
+   menu decides the spacing. */
+.${ROW_MENU_CLASS} > a,
+.${ROW_MENU_CLASS} > button { display: block; width: 100%; margin: 0; padding: 9px 18px; border: 0;
+  background: none; color: inherit; font-size: 14px; line-height: 1.4; text-align: left; white-space: nowrap;
+  cursor: pointer; }
+.${ROW_MENU_CLASS} > a:hover,
+.${ROW_MENU_CLASS} > button:hover { background: rgba(127, 143, 153, .14); }
+html.dark .${ROW_MENU_CLASS} { border-color: var(--clp-border-color, #a8b3cf33);
   background: var(--clp-bg-secondary, #1c1f26); color: var(--clp-text, #fff); }
 `;
 
@@ -463,7 +473,7 @@ const SITES_SCRIPT = `
         if (actions.length === 0) return;
 
         var list = document.createElement("div");
-        list.className = "clp-tweaks-menu-list";
+        list.className = "${ROW_MENU_CLASS}";
         list.hidden = true;
         for (var i = 0; i < actions.length; i++) list.appendChild(actions[i]);
         document.body.appendChild(list);
@@ -669,15 +679,25 @@ const PANEL_HEADER_STYLE = headerWrapStyle("body .header") + `
   body .header .nav-link-container::-webkit-scrollbar { display: none; }
   body .header .nav-link-container > a { flex: 0 0 auto; margin-left: 0; line-height: 48px; }
 }
-@media (max-width: 600px) {
-  body .header .logo { min-width: 0; padding: 20px 10px 0; margin: 0; border: 0; }
+/* Below this the header is the shape the addon's own pages use: one 64px row of
+   the logo and the tools, in equal cells with the panel's own divider between
+   them, and the navigation on the row beneath. The panel's 75px row and its
+   25px cell padding are drawn for a desktop and only crowd a phone. */
+@media (max-width: 760px) {
+  body .header { min-height: 0; }
+  body .header .logo { display: flex; align-items: center; min-width: 0; min-height: 64px;
+    padding: 0 16px; margin: 0; border: 0; }
   body .header .logo img { max-width: 100%; height: auto; }
-  body .header .navbar-right { padding: 0; }
-  body .header .navbar-right > ul > li > a { padding: 0 8px; }
+  body .header .navbar-right { height: auto; padding: 0; }
+  body .header .navbar-right > ul > li { height: 64px; line-height: 1; }
+  body .header .navbar-right > ul > li > a { display: flex; align-items: center; justify-content: center;
+    width: 56px; height: 64px; padding: 0; }
+  body .header .navbar-right > ul > li > a svg { margin: 0; }
   /* The label goes, the icon stays: "Admin Area" beside an avatar and a theme
      switch is the one thing that will not fit beside a 155px logo. */
   body .header .navbar-right > ul > li.admin-area > a { font-size: 0; }
-  body .header .navbar-right > ul > li.admin-area > a svg { margin: 0; }
+  body .header .navbar-right > ul > li.user-avatar > a { width: 62px; }
+  body .header .navbar-right > ul > li.user-avatar > a img { width: 30px; height: 30px; }
 }
 `;
 

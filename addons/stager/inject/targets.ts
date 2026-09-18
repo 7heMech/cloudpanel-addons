@@ -13,10 +13,28 @@
 
 import type { AddonTarget } from "../../../lib/addon-target";
 import { ADDON_SITE_TABS } from "../../../lib/site-context";
+import { MENU_ONLY_CLASS, MENU_ONLY_STYLE } from "../../../lib/row-actions";
 
 // The label the panel's strip shows and the label the addon's own reproduction
 // of that strip shows are the same string, from lib/site-context.
 const TAB_LABEL = ADDON_SITE_TABS.find((tab) => tab.slug === "stager")!.label;
+
+/**
+ * The site types the action binary will clone, guarded here too so a Node.js
+ * or Python site does not show an action that only ever answers with an error.
+ * These are the literal `site.type` column values, and they must stay in step
+ * with CLONABLE_TYPES in addons/stager/action.ts (enforced by typeIsClonable,
+ * called from cmdDescribe, cmdClone and cmdRun) -- that is the thing that
+ * actually decides, and which this only mirrors.
+ *
+ * A reverse-proxy site is clonable only when its backend is an Instatic
+ * instance this box manages, and Twig cannot see that: the fact lives in the
+ * Instatic addon's own records. So the action appears on every reverse proxy
+ * and the action binary refuses the ones that are not, by name. Showing it and
+ * explaining the refusal is better than the alternative, which would be
+ * teaching the panel's templates about another addon's state directory.
+ */
+const CLONABLE = "{% if site.type in ['php', 'static', 'reverse-proxy'] %}";
 
 export const STAGER_TARGETS: AddonTarget[] = [
   {
@@ -36,5 +54,30 @@ export const STAGER_TARGETS: AddonTarget[] = [
             <a href="${url}?domain={{ site.domainName|url_encode }}">${TAB_LABEL}</a>
           </li>
         {% endif %}`,
+  },
+  // Cloning is not an action anyone does daily, so it is menu-only: it appears
+  // in a Sites row's action menu and nowhere else, rather than as a link in
+  // every row of a list read every day. A box without that menu shows it in
+  // neither place, which is why the rule that hides it is emitted here rather
+  // than left to the addon that draws the menu.
+  {
+    slug: "site-list-style",
+    template: "Frontend/Site/index.html.twig",
+    anchorBefore: '<div class="card card-table">',
+    required: false,
+    snippet: () => `
+          {% if is_granted('ROLE_ADMIN') %}
+          <style>${MENU_ONLY_STYLE}</style>
+          {% endif %}`,
+  },
+  {
+    slug: "site-list-action",
+    template: "Frontend/Site/index.html.twig",
+    anchorAfter: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
+    required: false,
+    snippet: (url) => `
+        {% if is_granted('ROLE_ADMIN') %}${CLONABLE}
+          <a class="${MENU_ONLY_CLASS}" href="${url}/new?source={{ site.domainName|url_encode }}">Clone</a>
+        {% endif %}{% endif %}`,
   },
 ];

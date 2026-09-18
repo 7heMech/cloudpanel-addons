@@ -32,10 +32,12 @@ overwrite, whole tables at a time at best. So Stager moves files and, for an
 Instatic site, content, and refuses the database outright rather than offering a
 table selection that is only safe if the operator already knows the answer.
 
-A clone starts from the fleet page at `/addons/stager/` or from the site's own
-Staging tab, and no longer from a link on CloudPanel's Sites list. Cloning is
-not an everyday action, and a link in every row of the list an operator reads
-every day is priced as though it were.
+A clone starts from the fleet page at `/addons/stager/`, from the site's own
+Staging tab, or from a Sites row's action menu. Not from a link in the row
+itself: cloning is not an everyday action, and a link in every row of the list
+an operator reads every day is priced as though it were. `Clone` is marked
+`clp-addons-menu-only` from `lib/row-actions.ts`, and Stager emits the rule that
+hides it, so on a box with no action menu it appears in neither place.
 
 Staging is a tab on CloudPanel's own site page, beside Maintenance. It shows
 the one site's two ends of a clone -- what has been staged from it, and whether

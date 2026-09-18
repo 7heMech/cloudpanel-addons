@@ -42,10 +42,10 @@ export async function handle(
     try {
       const result = await panelTweaksService.state();
       if (!result.ok || !result.data) throw new Error(result.error ?? "the panel tweaks state is unavailable");
-      return htmlResponse(layout("Panel Tweaks", dashboardView(result.data), updateNotice), { csrf });
+      return htmlResponse(layout("Panel UI tweaks", dashboardView(result.data), updateNotice), { csrf });
     } catch (error) {
       return htmlResponse(
-        layout("Panel Tweaks", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice),
+        layout("Panel UI tweaks", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice),
         { status: 500, csrf },
       );
     }

@@ -18,7 +18,7 @@ administrator login.
 | Stager | Create staging copies of WordPress, PHP, static, and Instatic sites, and promote them back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
 | Maintenance Mode | Serve a customizable 503 page per site with instant toggles and IP bypasses. |
 | PHP Resources | Group PHP sites into categories of PHP-FPM worker limits, assign them in bulk, and pick the category new sites join. |
-| Panel Tweaks | Small additions to CloudPanel's own pages: a site count, search, sorting, SSL, runtime and measured size columns, a Sites table and a header that read on a phone, row actions in a menu, and a device theme on the login page. |
+| Panel UI tweaks | Small additions to CloudPanel's own pages: a site count, search, sorting, SSL, runtime and measured size columns, a Sites table and a header that read on a phone, row actions in a menu, and a device theme on the login page. |
 | WordPress Sign-In | Open any WordPress on the server as its first administrator, from the panel's Sites page, without its password. |
 
 ## Install
