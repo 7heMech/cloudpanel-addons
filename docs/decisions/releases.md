@@ -3,9 +3,12 @@
 ## Where a change is proven
 
 `dev` is the integration branch and `main` is what gets tagged. A pull request
-targets `dev`; every push to `dev` runs the checks and then installs that commit
-on the staging CloudPanel box, so a change is observed on a real panel before it
-reaches a release. Some of this project's behaviour has nowhere else to be
+targets `dev`; the checks run and then that commit is installed on the staging
+CloudPanel box -- for the pull request as it would merge, and again for `dev`
+once it lands -- so a change is observed on a real panel before it reaches a
+release. There is one box, so it holds whatever deployed last; a pull request
+from a fork is skipped, because it cannot be given credentials that authenticate
+as root on a live machine. Some of this project's behaviour has nowhere else to be
 seen -- CloudPanel's own templates, a site's generated vhost, an addon injected
 into a panel page -- and a unit test cannot stand in for it.
 
