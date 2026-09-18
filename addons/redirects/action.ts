@@ -150,7 +150,11 @@ function validateTarget(value: unknown, domain: string, preservePath: boolean): 
   // directive; keeping the slash would double it when the path is preserved.
   if (url.pathname === "/" && !url.search) target = target.slice(0, -1);
   if (!TARGET_RE.test(target)) failAction(`the target URL contains characters Nginx cannot be given: '${raw}'`);
-  if (url.hostname.toLowerCase() === domain) failAction(`the target points back at ${domain}, which would redirect forever`);
+  // `example.test.` and `example.test` are the same host to DNS and to Nginx,
+  // so the trailing dot is dropped before the comparison rather than making
+  // the loop check miss.
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (host === domain) failAction(`the target points back at ${domain}, which would redirect forever`);
   return target;
 }
 
@@ -401,16 +405,54 @@ function listState(paths: RedirectsActionPaths): RedirectsState {
   };
 }
 
+/**
+ * Changes what one site redirects to, and records it.
+ *
+ * The record is written after the site, so a site is never promised a redirect
+ * it did not get. That leaves one window: a record that cannot be written once
+ * the site already carries the redirect. The site is put back to what the
+ * record still says rather than left redirecting somewhere nothing knows
+ * about -- `list` would not show it, `clear` would refuse it, and repair would
+ * not keep it.
+ *
+ * The caller holds the lock. `create` needs the same lock across site creation
+ * as well, and this lock is not reentrant.
+ */
+async function writeRedirect(
+  paths: RedirectsActionPaths,
+  domain: string,
+  redirect: Redirect | null,
+  command: (command: string, args: string[]) => CommandResult,
+): Promise<void> {
+  const state = readState(paths.stateFile, paths.stateUid);
+  const previous = state.redirects.find((item) => item.domain === domain) ?? null;
+  const transform = (value: Redirect | null) =>
+    value ? (content: string) => withRedirectBlock(content, value) : withoutRedirectBlock;
+
+  await applyToSite(paths, domain, transform(redirect), command);
+  try {
+    state.redirects = redirect
+      ? [...state.redirects.filter((item) => item.domain !== domain), redirect]
+      : state.redirects.filter((item) => item.domain !== domain);
+    writeState(paths.stateFile, state, paths.stateUid);
+  } catch (error) {
+    const failures: string[] = [];
+    try {
+      await applyToSite(paths, domain, transform(previous), command);
+    } catch (rollbackError) {
+      failures.push(errorMessage(rollbackError));
+    }
+    throw withRecoveryFailures(error, "site rollback failed", failures);
+  }
+}
+
 async function saveRedirect(
   paths: RedirectsActionPaths,
   redirect: Redirect,
   command: (command: string, args: string[]) => CommandResult,
 ): Promise<RedirectsState> {
   return withRedirectsLock(paths, async () => {
-    await applyToSite(paths, redirect.domain, (content) => withRedirectBlock(content, redirect), command);
-    const state = readState(paths.stateFile, paths.stateUid);
-    state.redirects = [...state.redirects.filter((item) => item.domain !== redirect.domain), redirect];
-    writeState(paths.stateFile, state, paths.stateUid);
+    await writeRedirect(paths, redirect.domain, redirect, command);
     return listState(paths);
   });
 }
@@ -421,11 +463,10 @@ async function clearRedirect(
   command: (command: string, args: string[]) => CommandResult,
 ): Promise<RedirectsState> {
   return withRedirectsLock(paths, async () => {
-    const state = readState(paths.stateFile, paths.stateUid);
-    if (!state.redirects.some((item) => item.domain === domain)) failAction(`${domain} has no redirect`);
-    await applyToSite(paths, domain, withoutRedirectBlock, command);
-    state.redirects = state.redirects.filter((item) => item.domain !== domain);
-    writeState(paths.stateFile, state, paths.stateUid);
+    if (!readState(paths.stateFile, paths.stateUid).redirects.some((item) => item.domain === domain)) {
+      failAction(`${domain} has no redirect`);
+    }
+    await writeRedirect(paths, domain, null, command);
     return listState(paths);
   });
 }
@@ -435,39 +476,49 @@ async function clearRedirect(
  * redirect. The site user is derived from the domain the way every other addon
  * derives one, and its password is random and never reported: nothing signs in
  * to a site that only redirects.
+ *
+ * The lock covers the whole lifecycle, not just the write. Taking it only for
+ * the write left the check, the creation and the rollback outside it, so a
+ * `set` arriving in between could configure the new site and then have it
+ * deleted underneath by this rollback.
  */
 async function createRedirect(
   paths: RedirectsActionPaths,
   redirect: Redirect,
   command: (command: string, args: string[]) => CommandResult,
 ): Promise<RedirectsState> {
-  const db = openPanelDatabase(paths.panelDb);
-  try {
-    if (siteRows(db).some((row) => row.domain_name === redirect.domain)) {
-      failAction(`${redirect.domain} already exists in CloudPanel; set its redirect instead of creating it`);
+  return withRedirectsLock(paths, async () => {
+    const db = openPanelDatabase(paths.panelDb);
+    try {
+      if (siteRows(db).some((row) => row.domain_name === redirect.domain)) {
+        failAction(`${redirect.domain} already exists in CloudPanel; set its redirect instead of creating it`);
+      }
+    } finally {
+      db.close();
     }
-  } finally {
-    db.close();
-  }
 
-  const created = command(paths.clpctl, [
-    "site:add:static",
-    `--domainName=${redirect.domain}`,
-    `--siteUser=${siteUserFor(redirect.domain)}`,
-    `--siteUserPassword=${randomBytes(24).toString("base64url")}`,
-  ]);
-  if (!created.ok) failAction(commandError(`creating the CloudPanel site for ${redirect.domain}`, created));
+    const created = command(paths.clpctl, [
+      "site:add:static",
+      `--domainName=${redirect.domain}`,
+      `--siteUser=${siteUserFor(redirect.domain)}`,
+      `--siteUserPassword=${randomBytes(24).toString("base64url")}`,
+    ]);
+    if (!created.ok) failAction(commandError(`creating the CloudPanel site for ${redirect.domain}`, created));
 
-  try {
-    return await saveRedirect(paths, redirect, command);
-  } catch (error) {
-    // The site is this action's own half-finished work, so it goes away again
-    // rather than being left behind serving an empty directory.
-    const failures: string[] = [];
-    const removed = command(paths.clpctl, ["site:delete", `--domainName=${redirect.domain}`, "--force"]);
-    if (!removed.ok) failures.push(commandError(`removing the CloudPanel site for ${redirect.domain}`, removed));
-    throw withRecoveryFailures(error, "site rollback failed", failures);
-  }
+    try {
+      await writeRedirect(paths, redirect.domain, redirect, command);
+    } catch (error) {
+      // The site is this action's own half-finished work, so it goes away again
+      // rather than being left behind serving an empty directory. Only up to
+      // here: past this point the redirect is recorded, and deleting the site
+      // would leave the record pointing at nothing.
+      const failures: string[] = [];
+      const removed = command(paths.clpctl, ["site:delete", `--domainName=${redirect.domain}`, "--force"]);
+      if (!removed.ok) failures.push(commandError(`removing the CloudPanel site for ${redirect.domain}`, removed));
+      throw withRecoveryFailures(error, "site rollback failed", failures);
+    }
+    return listState(paths);
+  });
 }
 
 /**

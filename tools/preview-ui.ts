@@ -17,7 +17,7 @@ import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { ty
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
 import type { AvailableTags } from "../addons/instatic/app/tags";
-import { withCsrfCookie, SECURITY_HEADERS } from "../lib/app-http";
+import { escJs, withCsrfCookie, SECURITY_HEADERS } from "../lib/app-http";
 
 const versions: AvailableTags = { tags: ["0.0.19", "0.0.18"], latest: "0.0.19", source: "registry" };
 const instances: InstanceView[] = [
@@ -358,7 +358,7 @@ const server = Bun.serve({
       if (!openDialog) return page;
       const body = await page.text();
       return new Response(
-        body.replace("</body>", `<script>addEventListener('DOMContentLoaded',function(){disableAddon(${JSON.stringify(openDialog)}, ${JSON.stringify(openDialog === "instatic" ? "Instatic CMS" : openDialog)})})</script></body>`),
+        body.replace("</body>", `<script>addEventListener('DOMContentLoaded',function(){disableAddon('${escJs(openDialog)}', '${escJs(openDialog === "instatic" ? "Instatic CMS" : openDialog)}')})</script></body>`),
         { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
       );
     }
@@ -399,7 +399,7 @@ const server = Bun.serve({
       if (editing) {
         html = html.replace(
           "</body>",
-          `<script>addEventListener('DOMContentLoaded',function(){editRedirect(${JSON.stringify(editing)})})</script></body>`,
+          `<script>addEventListener('DOMContentLoaded',function(){editRedirect('${escJs(editing)}')})</script></body>`,
         );
       }
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {

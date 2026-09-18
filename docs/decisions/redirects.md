@@ -77,7 +77,18 @@ because it would redirect forever.
 ## Repair puts a redirect back
 
 `/var/lib/clp-addons/redirects/redirects.json` records what the operator chose,
-mode `0600` and root-owned like every other addon's state. The vhost is where
+mode `0600` and root-owned like every other addon's state. It is written after
+the site, so a site is never promised a redirect it did not get; if the record
+cannot be written once the site already carries the change, the site is put back
+to what the record still says, because a redirect nothing has recorded is one
+`list` would not show, `clear` would refuse and repair would not keep.
+
+One lock covers a whole operation, creation included -- the existence check, the
+`clpctl` call, the vhost write and the rollback. Holding it only around the write
+left the rest outside it, so a `set` arriving in between could configure the new
+site and then have it deleted underneath by the create's rollback. That rollback
+now stops where the record begins: once the redirect is recorded, deleting the
+site would leave the record pointing at nothing. The vhost is where
 that choice is applied, and CloudPanel rewrites a site's vhost whenever it
 touches the site. Repair's upkeep compares the two every fifteen minutes and
 re-applies a redirect that is no longer in both the column and the file, so a

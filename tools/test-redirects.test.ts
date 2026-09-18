@@ -148,6 +148,15 @@ function cleanup(fix: Fixture): void {
   rmSync(fix.root, { recursive: true, force: true });
 }
 
+/**
+ * Whether something already holds an exclusive flock on this path. Asked from a
+ * child process: flock is held per open file description, so this process
+ * re-opening its own lock file would be granted it again and answer nothing.
+ */
+function lockedOut(path: string): boolean {
+  return Bun.spawnSync(["flock", "-n", "-x", path, "true"], { stdio: ["ignore", "ignore", "ignore"] }).exitCode !== 0;
+}
+
 async function failureOf(action: () => Promise<unknown>): Promise<string> {
   try {
     await action();
@@ -230,6 +239,9 @@ test("only an absolute http(s) URL that cannot reach Nginx's own syntax is accep
     expect(await set({ target: "https://www.example.test/$host" })).toContain("characters Nginx cannot be given");
     expect(await set({ target: "https://www.example.test/a;return" })).toContain("characters Nginx cannot be given");
     expect(await set({ target: "https://old.example.test/here" })).toContain("would redirect forever");
+    // A trailing dot is the same host to DNS and to Nginx, so it is the same
+    // loop; dropping it only from the site's own name would have missed this.
+    expect(await set({ target: "https://old.example.test./here" })).toContain("would redirect forever");
     expect(await set({ target: "https://www.example.test/?a=b" })).toContain("cannot also preserve the request path");
     expect(await set({ target: "https://www.example.test", code: 307 })).toContain("code must be 301 or 302");
     expect(await set({ target: `https://www.example.test/${"x".repeat(520)}` })).toContain("too long");
@@ -380,6 +392,67 @@ test("repair leaves a redirect whose site the operator deleted in CloudPanel", a
   }
 });
 
+test("a redirect the record could not be written for is taken off the site again", async () => {
+  const fix = fixture();
+  try {
+    addSite(fix, "old.example.test");
+    const apply = (target: string) => executeRedirectsAction(["set", "--domain=old.example.test"], {
+      paths: fix.paths, domainValidator: normalizeForTest, run: fix.run,
+      input: JSON.stringify({ target, code: 301 }),
+    });
+    await apply("https://first.example.test");
+    const recorded = vhostOf(fix, "old.example.test");
+
+    // The state file is still readable, but its directory is not writable, so
+    // the record cannot be updated after the site already has the new redirect.
+    chmodSync(join(fix.root, "state"), 0o500);
+    try {
+      const message = await failureOf(() => apply("https://second.example.test"));
+      expect(message).not.toContain("site rollback failed");
+      // What the site serves is what the record still says, not the change
+      // nothing would have known about.
+      expect(vhostOf(fix, "old.example.test")).toBe(recorded);
+      expect(templateOf(fix, "old.example.test")).toContain("https://first.example.test");
+    } finally {
+      chmodSync(join(fix.root, "state"), 0o700);
+    }
+
+    const listed = await executeRedirectsAction(["list"], {
+      paths: fix.paths, domainValidator: normalizeForTest, run: fix.run,
+    }) as RedirectsState;
+    expect(listed.redirects).toEqual([{
+      domain: "old.example.test", target: "https://first.example.test", code: 301,
+      preservePath: true, type: "static", applied: true,
+    }]);
+  } finally {
+    cleanup(fix);
+  }
+});
+
+test("a clear the record could not be written for leaves the redirect in place", async () => {
+  const fix = fixture();
+  try {
+    addSite(fix, "old.example.test");
+    await executeRedirectsAction(["set", "--domain=old.example.test"], {
+      paths: fix.paths, domainValidator: normalizeForTest, run: fix.run,
+      input: JSON.stringify({ target: "https://www.example.test", code: 301 }),
+    });
+    const recorded = vhostOf(fix, "old.example.test");
+
+    chmodSync(join(fix.root, "state"), 0o500);
+    try {
+      await failureOf(() => executeRedirectsAction(["clear", "--domain=old.example.test"], {
+        paths: fix.paths, domainValidator: normalizeForTest, run: fix.run,
+      }));
+      expect(vhostOf(fix, "old.example.test")).toBe(recorded);
+    } finally {
+      chmodSync(join(fix.root, "state"), 0o700);
+    }
+  } finally {
+    cleanup(fix);
+  }
+});
+
 test("creating a redirect site asks clpctl for a static site with a derived site user", async () => {
   const fix = fixture((command, args) => {
     if (args[0] === "site:add:static") {
@@ -409,6 +482,32 @@ test("creating a redirect site asks clpctl for a static site with a derived site
       paths: fix.paths, domainValidator: normalizeForTest, run: fix.run,
       input: JSON.stringify({ target: "https://www.example.test", code: 301 }),
     }))).toContain("already exists in CloudPanel");
+  } finally {
+    cleanup(fix);
+  }
+});
+
+test("create holds the redirect lock across the whole lifecycle", async () => {
+  const fix = fixture((command, args) => {
+    if (args[0] === "site:add:static") addSite(fix, "new.example.test", "static", "addon-newexamp-ec0b9a");
+    return ok();
+  });
+  try {
+    // A second operation cannot get between the existence check, the site
+    // creation and the write: it waits for the lock rather than configuring a
+    // site this create would then roll back.
+    let heldDuringCreate = false;
+    const create = executeRedirectsAction(["create", "--domain=new.example.test"], {
+      paths: fix.paths, domainValidator: normalizeForTest, run: (command, args) => {
+        if (args[0] === "site:add:static") {
+          heldDuringCreate = existsSync(fix.paths.lockFile) && lockedOut(fix.paths.lockFile);
+        }
+        return fix.run(command, args);
+      },
+      input: JSON.stringify({ target: "https://www.example.test", code: 301 }),
+    });
+    await create;
+    expect(heldDuringCreate).toBe(true);
   } finally {
     cleanup(fix);
   }
