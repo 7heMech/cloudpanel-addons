@@ -75,7 +75,7 @@ h2, h3 { font-size: 18px; }
 [hidden] { display: none !important; }
 .clp-addon-header { width: 100%; background: var(--header-bg); border-bottom: 1px solid var(--border);
   box-shadow: var(--header-shadow); }
-.clp-addon-header-inner { display: flex; flex-wrap: wrap; align-items: stretch; min-height: 74px; }
+.clp-addon-header-inner { display: flex; flex-wrap: wrap; align-items: stretch; min-height: 75px; }
 /* CloudPanel top-aligns its logo (.header .logo { padding: 20px 0 0 20px }) rather than
    centring it, so centring here sits the logo ~1.5px lower than the panel's own header. */
 .clp-addon-brand { flex: 0 0 235px; display: flex; align-items: flex-start; padding: 20px 0 0 20px;
@@ -101,6 +101,10 @@ html.dark .clp-addon-logo-dark { display: block; }
   justify-content: center; gap: 5px; font: inherit; white-space: nowrap; }
 .clp-addon-tool:hover { color: var(--accent); text-decoration: none; }
 .clp-addon-tool > svg { width: 20px; height: 20px; flex: 0 0 auto; }
+/* The panel's own markup leaves a newline between its icon and its label, and
+   between its avatar and its caret, which renders as a space; a flex row throws
+   whitespace between its items away, so the gap carries it instead. */
+#clp-admin-area { gap: 10px; }
 #clp-admin-area > svg { width: 26px; height: 26px; }
 #theme-switch .sun { display: none; }
 html.dark #theme-switch .sun { display: block; }
@@ -112,7 +116,7 @@ html.dark #theme-switch .moon { display: none; }
 /* The same triangle Bootstrap draws for the panel's own avatar, built the same
    way rather than approximated, so the two sit at the same offset. */
 #clp-account-button::after { content: ""; display: inline-block; border-top: 4px solid;
-  border-right: 4px solid transparent; border-left: 4px solid transparent; margin-left: 4px; }
+  border-right: 4px solid transparent; border-left: 4px solid transparent; margin-left: 9px; }
 #clp-account-button > .clp-addon-avatar { width: 35px; height: 35px; border-radius: 50%; }
 .clp-addon-account-menu { position: absolute; top: 100%; right: 6px; z-index: 30; min-width: 160px;
   padding: 6px 0; background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
@@ -275,17 +279,27 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 }
 @media (max-width: 760px) {
   .clp-addon-header-inner { flex-wrap: wrap; }
-  .clp-addon-brand { flex: 1 1 auto; min-width: 0; border: 0; margin: 0; min-height: 64px;
+  /* Measured from zero rather than from the logo, so the tools keep their place
+     on this row instead of being wrapped onto one of their own by the last
+     pixel of it; the logo then takes whatever is left, and gives way rather
+     than pushing them off. */
+  .clp-addon-brand { flex: 1 1 0; min-width: 0; border: 0; margin: 0; min-height: 64px;
     align-items: center; padding: 0 20px; }
+  .clp-addon-logo { max-width: 100%; height: auto; }
   /* The logo and the tools share the first row and the navigation takes the
      second, rather than each taking a row of its own. */
   .clp-addon-header-tools { order: 1; margin-left: auto; }
   /* The label goes and every cell is the same width, which is the shape the
      panel's own header takes on a phone. */
-  .clp-addon-tool { width: 56px; padding: 0; }
+  /* The panel draws the divider on the list item around its link, so its cell
+     is a pixel wider than the link inside it. */
+  .clp-addon-tool { width: 57px; padding: 0; }
   .clp-addon-tool-label { display: none; }
   #clp-admin-area > svg { width: 20px; height: 20px; }
-  #clp-account-button { width: 66px; }
+  #clp-account-button { width: 67px; }
+  /* No label beside the icons here, and none of the whitespace that came with
+     one: the caret sits at Bootstrap's own margin again. */
+  #clp-account-button::after { margin-left: 4px; }
   #clp-account-button > .clp-addon-avatar { width: 26px; height: 26px; }
   .clp-addon-primary-nav { order: 2; width: 100%; overflow-x: auto; border-top: 1px solid var(--border); padding: 0 5px; gap: 0; }
   /* The first link starts where the logo does, as the panel's own row does. */
