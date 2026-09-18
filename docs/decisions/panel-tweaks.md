@@ -2,17 +2,27 @@
 
 ## One addon for the small additions
 
-Four small changes to CloudPanel's own pages ship as one addon with four
-switches, not as four addons. A site count, a search box, two extra columns, a
-login-page theme and a WordPress sign-in are each a card's worth of description
-and none of them is a system; listing them separately on the Addons dashboard
-would have put a fifteen-line script beside Instatic and Stager and implied they
-were comparable.
+Small changes to CloudPanel's own pages ship as one addon with a switch each,
+not as an addon each. A site count, a search box, two extra columns, a narrow
+screen that reads, a login-page theme: each is a card's worth of description and
+none of them is a system; listing them separately on the Addons dashboard would
+have put a fifteen-line script beside Instatic and Stager and implied they were
+comparable.
 
-The switches are separate because the costs are. Two of them are markup, one
-reads the whole disk every fifteen minutes, and one writes into a customer's
-site. An operator who wants a filtered site list should not have to take the
-other two, so measured sizes and the WordPress sign-in are off until asked for.
+The switches are separate because what they cost is. Most are markup; one reads
+the whole disk every fifteen minutes, so measured sizes are off until asked for.
+The layout switches are separate for a different reason: they change the shape
+of a page CloudPanel drew itself, and the operator who prefers the panel's own
+shape is not wrong. So the narrow-screen site list, the narrow-screen header and
+the row menu are each their own switch, and the row menu -- which is a click
+more than a link -- is off until asked for.
+
+What is deliberately not here is the WordPress sign-in, which shipped as a
+fourth switch and is now [its own addon](wp-login.md). Everything here changes
+what CloudPanel's own pages look like; that one writes a file into a customer's
+site. An operator who wants a filterable site list should not have to install
+the code that can do that, and a switch is a weaker withdrawal than not having
+it on the box.
 
 `login-theme` used to be its own addon and is the device-theme switch here.
 `install`, `update` and `repair` carry a box over: the old config file is what
@@ -37,14 +47,55 @@ being enabled. The login page's anchor is required: it is one line inside
 ## What is read at request time, and what is not
 
 The injected script asks the addon for the current switches along with the site
-data, so three of the four take effect on the next panel page rather than at the
-next reconciliation. The login page cannot do that: it has no session, and every
-route the manager serves is behind the administrator gate. So the device theme's
-switch decides whether the markup exists at all, and moving it asks the manager
-to render the templates again through a `reconcile` verb. That verb belongs to
-the manager rather than to the addon because one pass regenerates every addon's
+data, so the count, the filter, the extra columns and the measured sizes take
+effect on the next panel page rather than at the next reconciliation.
+
+Four switches cannot work that way. The login page has no session to ask with,
+and every route the manager serves is behind the administrator gate. The other
+three -- the narrow-screen site list, the narrow-screen header and the row menu
+-- decide how a page looks the first time it is painted, and a rule that waits
+for a reply is a rule the reader watches arrive. So for those four the switch
+decides whether the markup is there at all, and moving one asks the manager to
+render the templates again through a `reconcile` verb. That verb belongs to the
+manager rather than to the addon because one pass regenerates every addon's
 block in a shared file; an addon that reconciled only its own would strip the
 others.
+
+The header rules are two blocks, one for each of CloudPanel's headers, anchored
+ahead of the `<header>` tag both of them open with rather than inside it. What
+makes that row able to wrap at all is `headerWrapStyle` in `lib/panel-nav.ts`,
+shared with the manager, which asks for the same rules while its update notice
+is in the row; the addon asks for them whenever its switch is on. They carry a
+`body` in front so they outrank the manager's block, which the panel renders
+after them.
+
+## Nothing moves once it is on the screen
+
+The narrow-screen rules are keyed on CloudPanel's own `table-sites` class rather
+than on a class the script adds, so they apply while the browser is still
+parsing the page. Keyed on the added class, a phone painted the panel's
+four-column table and then rearranged it into cards when the reply arrived: the
+layout moved under whoever was reading it, for as long as the request took.
+
+The same reasoning splits the script in two. Naming the cells for the card
+layout needs nothing but the document, so it happens as soon as the table
+exists; only the extra columns wait for data. The request itself is started when
+the block is parsed, above the table, rather than when the document is ready, so
+it is in flight while the rest of the page is still being built.
+
+The row menu hides the panel's own action links the same way: with a class put
+on `<html>` by a one-line script above the table, not by the script that builds
+the menus. Added later, the links would be read and then taken away. The script
+removes that class again if it cannot find the table it expects, so a page a
+CloudPanel release has changed keeps its links rather than losing them to a menu
+that was never built.
+
+An open menu is a child of `<body>` positioned against its button, not a child
+of the cell it came from: the table sits in a horizontal scroller, which clips
+anything hanging out of it. The links themselves are moved into it rather than
+copied, so another addon's link keeps working with no arrangement between the
+two -- Panel Tweaks does not know what is in the action cell, only that it is a
+link.
 
 ## The data the panel does not have
 
@@ -57,6 +108,14 @@ build without one of them reports no runtime rather than failing the list.
 
 Every value the script writes goes in as text or as an element it built. None of
 it is markup, because all of it came out of somebody's database.
+
+The App column is the one the addon rewrites rather than adds. CloudPanel prints
+the site's type there, uppercased, so a WordPress reads as PHP and a reverse
+proxy as REVERSE-PROXY; the application it recorded is both more use and what
+the filter beside the table offers, so the two agree. For a PHP site that column
+holds the vhost template the site was created from, which is a set an operator
+can add to, so only the two run-together names the panel ships are respelled and
+anything else is printed as it was written.
 
 ## Measured sizes ride the repair timer
 
@@ -77,33 +136,3 @@ directory is not owned by it, is skipped rather than guessed at.
 The operator-pressed sweep is the same work with a four-minute budget. A box
 large enough to exceed it gets its sizes from the unattended sweep instead,
 which has no deadline.
-
-## The WordPress sign-in
-
-A must-use plugin and a one-time secret, both written as the site's own user.
-
-The plugin is inert on every request but one: with no secret file on disk it
-returns immediately. The secret exists only between the operator pressing the
-button and the browser arriving -- at most a minute -- and the plugin removes it
-before it compares it, so a failed attempt spends it too. It holds a SHA-256 of
-the token, never the token.
-
-It lives in a subdirectory of `mu-plugins`, because WordPress auto-loads every
-PHP file directly inside that directory and a data file that is also a plugin
-would run on every request. It is a `.php` file rather than plain data so that a
-request for it over HTTP executes it and prints nothing, instead of serving its
-contents to whoever asked.
-
-The token reaches the site in a POST body, not a query string: a single-use
-secret in a URL is still a secret in the site's access log and in the browser's
-history. The window is opened inside the click that starts it, before anything
-is awaited, because a window opened after a fetch resolves is a popup the
-browser blocks.
-
-Switching the tweak off removes the plugin from every site it was installed in.
-An addon that left files in somebody else's site after its switch moved would be
-one an operator cannot fully withdraw.
-
-The sign-in is for the site's first administrator by user id. Which
-administrator an operator becomes is not a choice this offers, because the
-operator is already root on the box that serves the site.

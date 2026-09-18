@@ -225,6 +225,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .toolbar .toolbar-end { margin-left: auto; }
 .toolbar-note { color: var(--muted); font-size: 14px; font-weight: 400; }
+.mobile-select-all { display: none; }
 .alert-ok { color: var(--ok); background: rgb(35 119 75 / 8%); }
 #clp-flash { margin-bottom: 20px; }
 #clp-confirm-details { margin: 12px 0 0; padding-left: 20px; color: var(--muted); font-size: 14px; }
@@ -257,6 +258,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
      the domain on a line of its own, and every other cell names its column. */
   .fleet-table, .fleet-table tbody, .fleet-table tr, .fleet-table td { display: block; }
   .fleet-table thead { display: none; }
+  .mobile-select-all { display: inline-flex; margin-left: auto; padding: 6px 14px; font-size: 13px; white-space: nowrap; }
   .fleet-table tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px 12px;
     padding: 16px 20px; border-top: 1px solid var(--row-border); }
   .fleet-table td { border: 0; padding: 0; max-width: none; text-align: left; white-space: normal; }
@@ -264,8 +266,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
      when a panel stylesheet gives table cells an unexpected intrinsic width. */
   .fleet-table td.site-select { display: flex; flex: 0 0 42px; width: 42px; justify-content: center; }
   /* The domain takes the first line, with what the site is as a tag beside it. */
-  .fleet-table td.site-cell { flex: 1 1 calc(100% - 160px); min-width: 55%; font-size: 16px; }
-  .fleet-table td.type-cell { flex: 0 1 auto; max-width: 40%; margin: 2px 0 0 auto; padding: 3px 8px;
+  .fleet-table td.site-cell { flex: 1 1 calc(100% - 200px); min-width: 0; font-size: 16px; }
+  .fleet-table td.type-cell { flex: 0 1 auto; max-width: 45%; margin: 2px 0 0 auto; padding: 3px 8px;
     border: 1px solid var(--border); border-radius: 4px; color: var(--muted);
     font-size: 12px; line-height: 1.25; white-space: nowrap; }
   /* Half the row each, whatever they hold: a cell that widens with its content

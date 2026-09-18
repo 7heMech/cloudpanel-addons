@@ -8,7 +8,10 @@ import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, lay
 import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
-import { PANEL_TWEAKS_TARGETS } from "../addons/panel-tweaks/inject/targets";
+import { sitesSnippet } from "../addons/panel-tweaks/inject/targets";
+import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
+import { dashboardView as wpLoginDashboardView, layout as wpLoginLayout } from "../addons/wp-login/app/views";
+import { WORDPRESS_APPLICATIONS, type WpSiteView } from "../addons/wp-login/action";
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
 import { PRESET_CATEGORIES, STOCK_PROFILE, type PhpResourcesState, type PoolSiteState } from "../addons/php-resources/action";
@@ -164,8 +167,10 @@ function panelTweaksPreviewState(url: URL): PanelTweaksState {
     tweaks: {
       deviceTheme: on,
       sitesTable: on,
+      sitesMobile: on,
+      actionMenu: url.searchParams.has("menu"),
+      panelHeader: on,
       diskUsage: on,
-      wordpressLogin: on,
     },
     diskMeasuredAt: measured ? at : "",
     sites: url.searchParams.has("empty") ? [] : [
@@ -173,25 +178,26 @@ function panelTweaksPreviewState(url: URL): PanelTweaksState {
         domain: "www.example.com", user: "example", type: "php", application: "WordPress",
         runtime: "PHP 8.2", certificate: { type: "2", expiresAt: "2026-11-30 10:00:00" },
         disk: measured ? { bytes: 4_812_003_328, databaseBytes: 412_003_328, measuredAt: at } : null,
-        wordpress: true,
       },
       {
         domain: "shop.example.com", user: "shop", type: "php", application: "WordPress",
         runtime: "PHP 8.3", certificate: { type: "2", expiresAt: "2026-09-24 10:00:00" },
         disk: measured ? { bytes: 19_327_352_832, databaseBytes: 2_147_483_648, measuredAt: at } : null,
-        wordpress: true,
       },
       {
         domain: "static.example.com", user: "static", type: "static", application: "Static",
         runtime: "", certificate: null,
         disk: measured ? { bytes: 24_117_248, databaseBytes: 0, measuredAt: at } : null,
-        wordpress: false,
       },
       {
-        domain: "app.example.com", user: "app", type: "nodejs", application: "Node.js",
+        domain: "app.example.com", user: "app", type: "nodejs", application: "Nodejs",
         runtime: "Node.js 20", certificate: { type: "1", expiresAt: "2027-09-05 10:00:00" },
         disk: null,
-        wordpress: false,
+      },
+      {
+        domain: "cdn.example.com", user: "cdn", type: "reverse-proxy", application: "ReverseProxy",
+        runtime: "", certificate: { type: "2", expiresAt: "2026-12-20 10:00:00" },
+        disk: measured ? { bytes: 1_048_576, databaseBytes: 0, measuredAt: at } : null,
       },
     ],
   };
@@ -275,12 +281,43 @@ ${tabs}
  * Frontend/Site/index.html.twig with its Twig evaluated, and the rules are the
  * panel's own from assets/css/style.css and assets/css/frontend/sites.css.
  */
+const WP_LOGIN_SITES_SCRIPT = WP_LOGIN_TARGETS.find((target) => target.slug === "sites-script")!;
+
+function unwrapTwig(block: string): string {
+  return block.replace("{% if is_granted('ROLE_ADMIN') %}", "").replace("{% endif %}", "");
+}
+
+/**
+ * Both addons put a block above CloudPanel's sites table; the stub shows both.
+ * Panel Tweaks is handed the previewed switches rather than reading the ones
+ * stored on a server, so `?off` and `?menu` change the injected markup here the
+ * way a reconciliation would change it on a box.
+ */
+function injectedSitesBlocks(state: PanelTweaksState): string {
+  return [
+    unwrapTwig(sitesSnippet("/addons/panel-tweaks", state.tweaks)),
+    unwrapTwig(WP_LOGIN_SITES_SCRIPT.snippet("/addons/wp-login")),
+  ].join("\n");
+}
+
+/** WordPress everywhere but the static and reverse-proxy sites. */
+function wpLoginPreviewSites(url: URL): WpSiteView[] {
+  if (url.searchParams.has("empty")) return [];
+  return [
+    { domain: "www.example.com", user: "example", application: "WordPress", helper: true },
+    { domain: "shop.example.com", user: "shop", application: "WooCommerce", helper: true },
+    { domain: "blog.example.com", user: "blog", application: "Generic", helper: false },
+  ];
+}
+
 function panelSitesStub(state: PanelTweaksState, dark: boolean): string {
   const rows = state.sites.map((site) => `                  <tr>
                     <td><a href="/site/${site.domain}/settings">${site.domain}</a></td>
                     <td>${site.user}</td>
                     <td>${site.type.toUpperCase()}</td>
-                    <td class="text-end"><a href="/site/${site.domain}/settings">Manage</a></td>
+                    <td class="text-end"><a href="/site/${site.domain}/settings">Manage</a>${WORDPRESS_APPLICATIONS.includes(site.application)
+                      ? `<a href="#" class="clp-wp-login" data-clp-domain="${site.domain}">WP Login</a>`
+                      : ""}</td>
                   </tr>`).join("\n");
   return `<!doctype html>
 <html lang="en"${dark ? ' class="dark"' : ""}>
@@ -299,7 +336,8 @@ table.table-sites th { text-align: left; font-size: 14px; text-transform: upperc
   background: #fbfcfc; padding: 18px 32px; font-weight: 700; }
 html.dark table.table-sites th { background: #25282f; }
 table.table-sites td { padding: 18px 32px; border-top: 1px solid #eaeaea; }
-html.dark table.table-sites td { border-color: #a8b3cf33; }
+html.dark { --clp-border-color: #a8b3cf33; }
+html.dark table.table-sites td { border-color: var(--clp-border-color); }
 .text-end { text-align: right; }
 .form-control, .form-select { padding: 8px 16px; border: 1px solid #ced4da; border-radius: 4px; font: inherit; min-height: 42px; }
 html.dark .form-control, html.dark .form-select { background: #20242c; color: #fff; border-color: #a8b3cf33; }
@@ -315,9 +353,7 @@ html.dark .form-control, html.dark .form-select { background: #20242c; color: #f
       <div class="page-title"><h1>Sites</h1></div>
       <div class="page-actions"><a href="#">+ Add Site</a></div>
     </div>
-${PANEL_TWEAKS_TARGETS[1]!.snippet("/addons/panel-tweaks")
-  .replace("{% if is_granted('ROLE_ADMIN') %}", "")
-  .replace("{% endif %}", "")}
+${injectedSitesBlocks(state)}
     <div class="card card-table">
       <table class="table table-sites">
         <thead>
@@ -452,7 +488,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "panel-tweaks"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "panel-tweaks", "wp-login"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
@@ -497,6 +533,8 @@ const server = Bun.serve({
       );
     } else if (path === "/addons/panel-tweaks/" || path === "/addons/panel-tweaks") {
       html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url)), notice);
+    } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {
+      html = wpLoginLayout("WordPress Sign-In", wpLoginDashboardView(wpLoginPreviewSites(url)), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {

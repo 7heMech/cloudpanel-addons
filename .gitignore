@@ -26,3 +26,6 @@ SHA256SUMS
 # Session logs & scratch notes
 codex-session*
 last-session*
+
+# Personal Claude Code settings
+.claude/settings.local.json

@@ -1,19 +1,27 @@
 // What Panel Tweaks adds to CloudPanel's own pages.
 //
-// Two anchors, not seven. Every authenticated tweak -- the count, the search,
-// the sorting, the extra columns, the WordPress sign-in -- is one script and
-// one toolbar placed above the sites table, which then edits the table it finds
-// below it. Patching the heading, the table head, the loop body and the action
-// cell separately would have been four more pieces of CloudPanel's markup to
-// match exactly, and four more ways for a panel release to stop the addon.
+// Two anchors, not six. Every authenticated tweak -- the count, the search, the
+// sorting, the extra columns -- is one script and one toolbar placed above the
+// sites table, which then edits the table it finds below it. Patching the
+// heading, the table head, the loop body and the action cell separately would
+// have been four more pieces of CloudPanel's markup to match exactly, and four
+// more ways for a panel release to stop the addon.
 //
-// Nothing here decides what is switched on. The script asks the addon for the
-// current tweaks along with the site data, so a switch on the addon's page
-// takes effect on the next panel page rather than at the next reconciliation.
-// The login page is the exception below, and the reason it is separate.
+// Most of what is here does not decide what is switched on: the script asks the
+// addon for the current tweaks along with the site data, so a switch on the
+// addon's page takes effect on the next panel page rather than at the next
+// reconciliation. The four switches that decide how a page is painted before
+// any reply could arrive -- the login theme, the two narrow-screen layouts and
+// the row menu -- are read here instead, which is why moving one of those
+// renders the templates again.
 
 import type { AddonTarget } from "../../../lib/addon-target";
-import { CERTIFICATE_LABELS, SELF_SIGNED_CERTIFICATE, readTweaks, DEFAULT_PANEL_TWEAKS_PATHS } from "../action";
+import { headerWrapStyle } from "../../../lib/panel-nav";
+import {
+  APPLICATION_LABELS, CERTIFICATE_LABELS, SELF_SIGNED_CERTIFICATE,
+  DEFAULT_TWEAKS, readTweaks, DEFAULT_PANEL_TWEAKS_PATHS,
+} from "../action";
+import type { PanelTweaks } from "../action";
 
 /** Marker that the one-time device default has already been applied. */
 const SEEDED_KEY = "clp_addons_device_theme";
@@ -54,13 +62,7 @@ const DEVICE_THEME_SCRIPT = `
             })();
           </script>`;
 
-// Rules for the panel's own table, scoped to the class the script adds, so a
-// site list the script never reached keeps CloudPanel's layout exactly.
-//
-// The narrow-screen half is the same shape lib/app-ui gives an addon's own
-// fleet table: the row becomes a block, the domain takes a line of its own, and
-// every other cell names its column. CloudPanel's sites table is four columns
-// wide and already overflows a phone; this addon adds up to three more.
+// What the enhanced table looks like on a screen wide enough for a table.
 const SITES_STYLE = `
 .clp-tweaks-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 20px; }
 .clp-tweaks-toolbar input[type="search"] { flex: 1 1 260px; min-width: 0; max-width: 420px; }
@@ -81,34 +83,101 @@ const SITES_STYLE = `
 .clp-tweaks-table .clp-tweaks-muted { color: #9bacb6; }
 .clp-tweaks-empty { padding: 25px; color: #9bacb6; }
 /* CloudPanel pads its cells 32px each side, which is comfortable for four
-   columns and overflows the 1200px container at seven. The table is also given
-   a scroller, so a narrow window scrolls the table rather than the page. */
-.clp-tweaks-scroll { overflow-x: auto; }
-/* table.table-sites td is what the panel sets this with, so the override
+   columns and overflows the 1200px container at six. The table is also given a
+   scroller, so a narrow window scrolls the table rather than the page.
+   table.table-sites td is what the panel sets the padding with, so the override
    has to carry the same weight to land. */
-table.clp-tweaks-table th, table.clp-tweaks-table td { padding-left: 20px; padding-right: 20px; }
-/* Keeps the link whole: a narrow action column used to break it across
-   two lines as "WP" and "Login". The cell itself still wraps, because a
-   column wide enough never to wrap would push the table past its card. */
-.clp-tweaks-wp { margin-left: 0.75rem; white-space: nowrap; }
+.clp-tweaks-scroll { overflow-x: auto; }
+table.table-sites th, table.table-sites td { padding-left: 20px; padding-right: 20px; }
 @media (max-width: 860px) {
   .clp-tweaks-toolbar .clp-tweaks-summary { margin-left: 0; flex-basis: 100%; }
-  .clp-tweaks-scroll { overflow-x: visible; }
-  .clp-tweaks-table, .clp-tweaks-table tbody, .clp-tweaks-table tr, .clp-tweaks-table td { display: block; }
-  .clp-tweaks-table thead { display: none; }
-  /* The cells lose their borders as blocks, so the row draws the only rule
-     left telling one site from the next. A translucent grey rather than a
-     variable, because the panel defines none this could read. */
-  .clp-tweaks-table tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px 12px;
-    padding: 16px 20px; border-top: 1px solid rgba(155, 172, 182, .35); }
-  .clp-tweaks-table tbody tr:first-child { border-top: 0; }
-  .clp-tweaks-table td { border: 0 !important; padding: 0 !important; text-align: left !important; }
-  .clp-tweaks-table td.clp-tweaks-domain { flex: 1 1 100%; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
-  .clp-tweaks-table td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; }
-  .clp-tweaks-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px;
-    color: #9bacb6; font-size: 12px; font-weight: 700; text-transform: uppercase; }
-  .clp-tweaks-table td.clp-tweaks-actions { flex: 1 1 100%; }
 }
+`;
+
+// The narrow-screen half, which is a switch of its own: it is the panel's own
+// table it rearranges, and an operator who prefers to scroll it should be able
+// to. Keyed on CloudPanel's own `table-sites` rather than on a class the script
+// adds, so it is in force the moment the browser parses the page. Keyed on the
+// added class, a phone painted the panel's four-column table first and
+// rearranged it into cards once the fetch came back -- the layout moved under
+// the reader for as long as the request took.
+//
+// What the script cannot do before its data arrives is name the columns, so the
+// rules that need `data-label` are the ones that wait, and they add text inside
+// a cell rather than moving it.
+const SITES_MOBILE_STYLE = `
+@media (max-width: 860px) {
+  .clp-tweaks-scroll { overflow-x: visible; }
+  table.table-sites, table.table-sites tbody, table.table-sites tr, table.table-sites td { display: block; }
+  table.table-sites thead { display: none; }
+  /* The cells lose their borders as blocks, so the row draws the only rule left
+     telling one site from the next. The panel's own table border, in both of
+     its themes, rather than a grey of this addon's choosing. */
+  table.table-sites tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px 12px;
+    padding: 16px 20px; border-top: 1px solid #eaeaea; }
+  html.dark table.table-sites tr { border-top-color: var(--clp-border-color); }
+  table.table-sites tbody tr:first-child { border-top: 0; }
+  /* The panel sets these with html.dark body .table td, which outranks anything
+     scoped to one table, so the reset has to be important -- and so does
+     everything below that puts a border or a padding back. */
+  table.table-sites td { order: 2; border: 0 !important; padding: 0 !important; text-align: left !important; }
+  /* The domain takes the first line, with what the site runs as a tag beside
+     it: the value says "WordPress" on its own, and a heading over it would only
+     repeat the column it came from. The App column is the panel's third, so the
+     two are put in this order rather than found in it. */
+  table.table-sites td.clp-tweaks-domain { order: 0; flex: 1 1 calc(100% - 200px); min-width: 0;
+    font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+  table.table-sites td.clp-tweaks-type { order: 1; flex: 0 1 auto; max-width: 45%; margin: 2px 0 0 auto;
+    padding: 3px 8px !important; border: 1px solid #eaeaea !important; border-radius: 4px; color: #9bacb6;
+    font-size: 12px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  html.dark table.table-sites td.clp-tweaks-type { border-color: var(--clp-border-color) !important; }
+  table.table-sites td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; }
+  table.table-sites td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px;
+    color: #9bacb6; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+  table.table-sites td.clp-tweaks-actions { order: 3; flex: 1 1 100%; }
+}
+`;
+
+// With both switches on the button belongs on the card's first line, beside
+// what the site runs, rather than on a full-width row of its own below it.
+const MENU_MOBILE_STYLE = `
+@media (max-width: 860px) {
+  html.clp-tweaks-menu table.table-sites td.clp-tweaks-actions { order: 1; flex: 0 0 auto; margin: 0; }
+}
+`;
+
+/**
+ * The action column's links, behind one button.
+ *
+ * The links are hidden by a class this snippet puts on <html> before the table
+ * is parsed rather than by one the script adds once it has run: added later,
+ * the reader would see the links and then watch them disappear. The script
+ * takes the class off again if it cannot find the table, so a page it does not
+ * recognise keeps its links rather than losing them to a menu that was never
+ * built.
+ *
+ * An open menu is a child of <body>, not of the cell it belongs to: the table
+ * sits in a horizontal scroller, which clips anything hanging out of it.
+ */
+const MENU_STYLE = `
+html.clp-tweaks-menu table.table-sites tbody td:last-child > a,
+html.clp-tweaks-menu table.table-sites tbody td:last-child > button:not(.clp-tweaks-menu-button) { display: none; }
+.clp-tweaks-menu-button { display: inline-flex; align-items: center; justify-content: center; width: 30px;
+  height: 30px; padding: 0; border: 0; border-radius: 4px; background: none; color: inherit; cursor: pointer;
+  font-size: 18px; line-height: 1; }
+.clp-tweaks-menu-button:hover,
+.clp-tweaks-menu-button[aria-expanded="true"] { background: rgba(127, 143, 153, .18); }
+.clp-tweaks-menu-list { position: fixed; z-index: 1000; min-width: 170px; padding: 6px 0;
+  border: 1px solid #eaeaea; border-radius: 6px; background: #fff; box-shadow: 0 8px 28px rgba(0, 0, 0, .16);
+  text-align: left; }
+.clp-tweaks-menu-list[hidden] { display: none; }
+.clp-tweaks-menu-list > a,
+.clp-tweaks-menu-list > button { display: block; width: 100%; padding: 9px 18px; border: 0; background: none;
+  color: inherit; font-size: 14px; line-height: 1.4; text-align: left; white-space: nowrap; cursor: pointer; }
+.clp-tweaks-menu-list > a:hover,
+.clp-tweaks-menu-list > button:hover { background: rgba(127, 143, 153, .14); }
+html.dark .clp-tweaks-menu-list { border-color: var(--clp-border-color, #a8b3cf33);
+  background: var(--clp-bg-secondary, #1c1f26); color: var(--clp-text, #fff); }
 `;
 
 // Written for the panel's page, not for an addon page: no shared client code
@@ -117,43 +186,54 @@ table.clp-tweaks-table th, table.clp-tweaks-table td { padding-left: 20px; paddi
 // never as markup, because every value in it came out of somebody's database.
 const SITES_SCRIPT = `
 (function () {
+  // Started here rather than inside the handler below, so the request is in
+  // flight while the browser is still parsing the table it describes.
+  var wanted = fetch("ADDON_URL/api/panel", {
+    credentials: "same-origin",
+    headers: { Accept: "application/json" }
+  })
+    .then(function (response) { return response.ok ? response.json() : null; })
+    .catch(function () { return null; });
+
   function start() {
     var table = document.querySelector("table.table-sites");
     var tbody = table && table.querySelector("tbody");
     var toolbar = document.getElementById("clp-tweaks-toolbar");
-    if (!table || !tbody || !toolbar) return;
+    if (!table || !tbody || !toolbar) {
+      // A page whose markup this no longer recognises keeps its own action
+      // links, rather than losing them to a menu that will never be built.
+      document.documentElement.classList.remove("clp-tweaks-menu");
+      return;
+    }
 
-    fetch("ADDON_URL/api/panel", {
-      credentials: "same-origin",
-      headers: { Accept: "application/json" }
-    })
-      .then(function (response) { return response.ok ? response.json() : null; })
-      .then(function (payload) {
-        if (!payload || payload.ok !== true || !payload.data) return;
-        apply(payload.data);
-      })
-      .catch(function () {});
+    var rows = [];
+    var bodyRows = tbody.querySelectorAll("tr");
+    for (var r = 0; r < bodyRows.length; r++) {
+      var row = bodyRows[r];
+      var link = row.querySelector("td a");
+      var domain = link ? link.textContent.trim() : "";
+      if (!domain) continue;
+      rows.push({ el: row, domain: domain, site: null });
+    }
+    if (rows.length === 0) return;
 
-    function apply(data) {
+    table.classList.add("clp-tweaks-table");
+    scroll(table);
+    labelNativeCells(rows);
+    if (document.documentElement.classList.contains("clp-tweaks-menu")) buildMenus(rows);
+
+    wanted.then(function (payload) {
+      if (!payload || payload.ok !== true || !payload.data) return;
+      apply(payload.data, rows);
+    });
+
+    function apply(data, rows) {
       var tweaks = data.tweaks || {};
       var byDomain = {};
       for (var i = 0; i < data.sites.length; i++) byDomain[data.sites[i].domain] = data.sites[i];
+      for (var r = 0; r < rows.length; r++) rows[r].site = byDomain[rows[r].domain] || null;
 
-      var rows = [];
-      var bodyRows = tbody.querySelectorAll("tr");
-      for (var r = 0; r < bodyRows.length; r++) {
-        var row = bodyRows[r];
-        var link = row.querySelector("td a");
-        var domain = link ? link.textContent.trim() : "";
-        if (!domain) continue;
-        rows.push({ el: row, domain: domain, site: byDomain[domain] || null });
-      }
-      if (rows.length === 0) return;
-
-      table.classList.add("clp-tweaks-table");
-      scroll(table);
-      labelNativeCells(rows);
-      if (tweaks.wordpressLogin) addWordPressLinks(rows);
+      nameApplications(rows);
       if (!tweaks.sitesTable) return;
       addColumns(rows, Boolean(tweaks.diskUsage));
       addCount(rows);
@@ -180,6 +260,9 @@ const SITES_SCRIPT = `
       return labels;
     }
 
+    // Done before the data arrives, because it needs nothing but the document:
+    // a phone gets its labelled cards on the first paint rather than on the
+    // reply. The third column is the panel's own App column.
     function labelNativeCells(rows) {
       var labels = headings();
       for (var i = 0; i < rows.length; i++) {
@@ -187,8 +270,29 @@ const SITES_SCRIPT = `
         for (var c = 0; c < cells.length && c < labels.length; c++) {
           if (c === 0) cells[c].classList.add("clp-tweaks-domain");
           else if (c === cells.length - 1) cells[c].classList.add("clp-tweaks-actions");
+          else if (c === 2) cells[c].classList.add("clp-tweaks-type");
           else cells[c].setAttribute("data-label", labels[c]);
         }
+      }
+    }
+
+    var APPLICATION_NAMES = APPLICATION_LABELS_JSON;
+
+    function applicationName(site) {
+      if (!site) return "";
+      var name = (site.application || "").trim();
+      if (!name) return (site.type || "").trim();
+      return APPLICATION_NAMES[name] || name;
+    }
+
+    // CloudPanel prints the site's type here, uppercased, so a WordPress reads
+    // as PHP and a reverse proxy as REVERSE-PROXY. The application it recorded
+    // is both more use and what the filter beside the table offers.
+    function nameApplications(rows) {
+      for (var i = 0; i < rows.length; i++) {
+        var cell = rows[i].el.children[2];
+        var name = applicationName(rows[i].site);
+        if (cell && name) cell.textContent = name;
       }
     }
 
@@ -321,6 +425,92 @@ const SITES_SCRIPT = `
       }
     }
 
+
+    // --- the row menu ------------------------------------------------------
+
+    // The list is put in the body and positioned against the button, because
+    // the cell it came from is inside a scroller that would clip it. Every way
+    // out of a menu closes it: the button again, a click anywhere else, Escape,
+    // a scroll, a resize, or the focus leaving it.
+    function buildMenus(rows) {
+      var open = null;
+
+      function close() {
+        if (!open) return;
+        open.list.hidden = true;
+        open.button.setAttribute("aria-expanded", "false");
+        open = null;
+      }
+
+      function place(entry) {
+        var rect = entry.button.getBoundingClientRect();
+        var list = entry.list;
+        list.hidden = false;
+        var width = list.offsetWidth;
+        var height = list.offsetHeight;
+        var room = document.documentElement.clientWidth;
+        var left = Math.max(8, Math.min(rect.right - width, room - width - 8));
+        var top = rect.bottom + 4;
+        if (top + height > window.innerHeight - 8) top = Math.max(8, rect.top - height - 4);
+        list.style.left = left + "px";
+        list.style.top = top + "px";
+      }
+
+      function build(row) {
+        var cellEl = row.el.lastElementChild;
+        if (!cellEl) return;
+        var actions = cellEl.querySelectorAll("a, button");
+        if (actions.length === 0) return;
+
+        var list = document.createElement("div");
+        list.className = "clp-tweaks-menu-list";
+        list.hidden = true;
+        for (var i = 0; i < actions.length; i++) list.appendChild(actions[i]);
+        document.body.appendChild(list);
+
+        var button = document.createElement("button");
+        button.type = "button";
+        button.className = "clp-tweaks-menu-button";
+        button.setAttribute("aria-haspopup", "true");
+        button.setAttribute("aria-expanded", "false");
+        button.setAttribute("aria-label", "Actions for " + row.domain);
+        button.textContent = "\u22EE";
+        cellEl.appendChild(button);
+
+        var entry = { button: button, list: list };
+        button.addEventListener("click", function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          var already = open && open.list === list;
+          close();
+          if (already) return;
+          open = entry;
+          button.setAttribute("aria-expanded", "true");
+          place(entry);
+          var first = list.querySelector("a, button");
+          if (first) first.focus();
+        });
+        // Whatever the operator picked is now under way; the menu has no more
+        // to say. The event still reaches the document, where the sign-in
+        // addon's own listener is waiting for it.
+        list.addEventListener("click", function () { close(); });
+      }
+
+      for (var r = 0; r < rows.length; r++) build(rows[r]);
+
+      document.addEventListener("click", function (event) {
+        if (open && !open.list.contains(event.target)) close();
+      });
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" || event.key === "Esc") close();
+      });
+      document.addEventListener("focusin", function (event) {
+        if (open && open.button !== event.target && !open.list.contains(event.target)) close();
+      });
+      window.addEventListener("resize", close);
+      window.addEventListener("scroll", close, true);
+    }
+
     // --- the count beside the heading ------------------------------------
 
     var counter = null;
@@ -346,11 +536,6 @@ const SITES_SCRIPT = `
 
     // --- search and filter -----------------------------------------------
 
-    function typeLabel(site) {
-      if (!site) return "";
-      return site.application || site.type || "";
-    }
-
     function buildToolbar(rows) {
       var search = document.getElementById("clp-tweaks-search");
       var picker = document.getElementById("clp-tweaks-type");
@@ -359,7 +544,7 @@ const SITES_SCRIPT = `
       var seen = {};
       var kinds = [];
       for (var i = 0; i < rows.length; i++) {
-        var label = typeLabel(rows[i].site);
+        var label = applicationName(rows[i].site);
         if (!label || seen[label]) continue;
         seen[label] = true;
         kinds.push(label);
@@ -384,8 +569,8 @@ const SITES_SCRIPT = `
         var shown = 0;
         for (var i = 0; i < rows.length; i++) {
           var row = rows[i];
-          var haystack = (row.domain + " " + (row.site ? row.site.user + " " + typeLabel(row.site) + " " + row.site.runtime : "")).toLowerCase();
-          var visible = (!needle || haystack.indexOf(needle) !== -1) && (!kind || typeLabel(row.site) === kind);
+          var haystack = (row.domain + " " + (row.site ? row.site.user + " " + applicationName(row.site) + " " + row.site.runtime : "")).toLowerCase();
+          var visible = (!needle || haystack.indexOf(needle) !== -1) && (!kind || applicationName(row.site) === kind);
           row.el.hidden = !visible;
           if (visible) shown++;
         }
@@ -453,76 +638,6 @@ const SITES_SCRIPT = `
         });
       }
     }
-
-    // --- the WordPress sign-in -------------------------------------------
-
-    function csrf() {
-      var match = document.cookie.match(/(?:^|;\\s*)clp_addons_csrf=([^;]+)/);
-      return match ? match[1] : "";
-    }
-
-    function addWordPressLinks(rows) {
-      for (var i = 0; i < rows.length; i++) {
-        var row = rows[i];
-        if (!row.site || !row.site.wordpress) continue;
-        var cell = row.el.lastElementChild;
-        if (!cell) continue;
-        var link = document.createElement("a");
-        link.href = "#";
-        link.className = "clp-tweaks-wp";
-        link.textContent = "WP Login";
-        link.title = "Sign in to WordPress as its first administrator";
-        bindLogin(link, row.domain);
-        cell.appendChild(link);
-      }
-    }
-
-    function bindLogin(link, domain) {
-      link.addEventListener("click", function (event) {
-        event.preventDefault();
-        if (link.dataset.busy === "1") return;
-        link.dataset.busy = "1";
-        // Opened inside the click, before anything is awaited: a window opened
-        // after a fetch resolves is a popup the browser blocks.
-        var target = window.open("", "_blank");
-        fetch("ADDON_URL/api/wp-login", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json", "X-CLP-Addons-CSRF": csrf(), Accept: "application/json" },
-          body: JSON.stringify({ domain: domain })
-        })
-          .then(function (response) { return response.json(); })
-          .then(function (payload) {
-            if (!payload || payload.ok !== true) throw new Error((payload && payload.error) || "sign-in unavailable");
-            submit(target, payload.data);
-          })
-          .catch(function (error) {
-            if (target) target.close();
-            alert("WordPress sign-in failed: " + error.message);
-          })
-          .finally(function () { link.dataset.busy = "0"; });
-      });
-    }
-
-    // Posted rather than put in the address bar: a single-use secret in a query
-    // string is still a secret in the site's access log and in the browser's
-    // history.
-    function submit(target, data) {
-      if (!target) {
-        alert("Allow pop-ups for the panel to open WordPress.");
-        return;
-      }
-      var form = target.document.createElement("form");
-      form.method = "POST";
-      form.action = data.url;
-      var field = target.document.createElement("input");
-      field.type = "hidden";
-      field.name = data.field;
-      field.value = data.token;
-      form.appendChild(field);
-      target.document.body.appendChild(form);
-      form.submit();
-    }
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
@@ -530,10 +645,71 @@ const SITES_SCRIPT = `
 })();
 `;
 
-function sitesSnippet(url: string): string {
+/**
+ * CloudPanel's header on a screen narrower than the desktop it was drawn on.
+ *
+ * The header is one non-wrapping flex row of a fixed 75px: a 235px logo, the
+ * navigation, and the tools. It has no narrow-screen layout at all, so on a
+ * phone the avatar and the Admin Area link sit off the right edge of the page
+ * with nothing to scroll them back.
+ *
+ * What lets the row wrap at all is shared with the manager, which asks for the
+ * same rules while an update notice is in the row. Everything else here is what
+ * only a narrow screen wants. They all carry a `body` in front so that they
+ * outrank the manager's block, which the panel renders after this one.
+ */
+const PANEL_HEADER_STYLE = headerWrapStyle("body .header") + `
+@media (max-width: 960px) {
+  body .header .nav-link-container,
+  body .header .header-instance-information-container { order: 2; flex-basis: 100%;
+    border-top: 1px solid #e2e2e233; }
+  /* The links become their own row, and scroll it rather than the page when a
+     translation makes them wider than the phone they are on. */
+  body .header .nav-link-container { display: flex; overflow-x: auto; scrollbar-width: none; }
+  body .header .nav-link-container::-webkit-scrollbar { display: none; }
+  body .header .nav-link-container > a { flex: 0 0 auto; margin-left: 0; line-height: 48px; }
+}
+@media (max-width: 600px) {
+  body .header .logo { min-width: 0; padding: 20px 10px 0; margin: 0; border: 0; }
+  body .header .logo img { max-width: 100%; height: auto; }
+  body .header .navbar-right { padding: 0; }
+  body .header .navbar-right > ul > li > a { padding: 0 8px; }
+  /* The label goes, the icon stays: "Admin Area" beside an avatar and a theme
+     switch is the one thing that will not fit beside a 155px logo. */
+  body .header .navbar-right > ul > li.admin-area > a { font-size: 0; }
+  body .header .navbar-right > ul > li.admin-area > a svg { margin: 0; }
+}
+`;
+
+/**
+ * The switches as they stood when the templates were last rendered.
+ *
+ * Root work, and the only place the stored tweaks can be read from. An empty
+ * snippet still leaves its marker pair behind, which is what lets the next
+ * reconciliation notice a switch move back.
+ */
+function storedTweaks(): PanelTweaks {
+  try {
+    return readTweaks(DEFAULT_PANEL_TWEAKS_PATHS);
+  } catch {
+    // Unreadable state is the default state.
+    return DEFAULT_TWEAKS;
+  }
+}
+
+function sitesSnippet(url: string, tweaks: PanelTweaks = storedTweaks()): string {
+  const style = SITES_STYLE
+    + (tweaks.sitesMobile ? SITES_MOBILE_STYLE : "")
+    + (tweaks.actionMenu ? MENU_STYLE : "")
+    + (tweaks.actionMenu && tweaks.sitesMobile ? MENU_MOBILE_STYLE : "");
+  // Set here rather than when the script below runs, so the rule that hides the
+  // panel's own action links is already in force when the table is parsed.
+  const menuClass = tweaks.actionMenu
+    ? `\n          <script>document.documentElement.classList.add("clp-tweaks-menu");</script>`
+    : "";
   return `
           {% if is_granted('ROLE_ADMIN') %}
-          <style>${SITES_STYLE}</style>
+          <style>${style}</style>${menuClass}
           <div class="clp-tweaks-toolbar" id="clp-tweaks-toolbar" hidden>
             <input type="search" id="clp-tweaks-search" class="form-control" placeholder="Search sites" aria-label="Search sites">
             <select id="clp-tweaks-type" class="form-select" aria-label="Filter by application">
@@ -541,7 +717,9 @@ function sitesSnippet(url: string): string {
             </select>
             <span class="clp-tweaks-summary" id="clp-tweaks-summary" role="status"></span>
           </div>
-          <script>${SITES_SCRIPT.split("ADDON_URL").join(url).replace("CERTIFICATE_LABELS_JSON", JSON.stringify(CERTIFICATE_LABELS))
+          <script>${SITES_SCRIPT.split("ADDON_URL").join(url)
+  .replace("CERTIFICATE_LABELS_JSON", JSON.stringify(CERTIFICATE_LABELS))
+  .replace("APPLICATION_LABELS_JSON", JSON.stringify(APPLICATION_LABELS))
   .replace("SELF_SIGNED_JSON", JSON.stringify(SELF_SIGNED_CERTIFICATE))}</script>
           {% endif %}`;
 }
@@ -551,22 +729,15 @@ export function deviceThemeSnippet(on: boolean): string {
   return on ? DEVICE_THEME_SCRIPT : "";
 }
 
-/**
- * Whether the login page's script is wanted, read at the moment the templates
- * are rendered -- which is root work, and the only place the stored tweaks can
- * be read from. An empty snippet still leaves its marker pair behind, which is
- * what lets the next reconciliation notice the switch moved back.
- */
-function deviceThemeWanted(): boolean {
-  try {
-    return readTweaks(DEFAULT_PANEL_TWEAKS_PATHS).deviceTheme;
-  } catch {
-    // Unreadable state is the default state, and the default is on.
-    return true;
-  }
+/** The narrow-screen header rules, or nothing at all. */
+export function panelHeaderSnippet(on: boolean): string {
+  return on ? `<style>${PANEL_HEADER_STYLE}</style>` : "";
 }
 
 export const SITES_TEMPLATE = "Frontend/Site/index.html.twig";
+
+/** Both headers carry the same opening tag, and both want the same rules. */
+export const HEADER_TEMPLATES = ["Frontend/Partial/header.html.twig", "Admin/Partial/header.html.twig"];
 
 export { sitesSnippet };
 
@@ -579,16 +750,25 @@ export const PANEL_TWEAKS_TARGETS: AddonTarget[] = [
     // device never paints the white default first.
     anchorBefore: "{% block stylesheets %}",
     required: true,
-    snippet: () => deviceThemeSnippet(deviceThemeWanted()),
+    snippet: () => deviceThemeSnippet(storedTweaks().deviceTheme),
   },
   {
     slug: "sites-table",
-    template: "Frontend/Site/index.html.twig",
+    template: SITES_TEMPLATE,
     anchorBefore: '<div class="card card-table">',
     // Not required: a CloudPanel release that renames this card should cost the
     // sites table its enhancements, not stop the addon -- and with it the login
     // theme -- from being enabled at all.
     required: false,
-    snippet: sitesSnippet,
+    snippet: (url) => sitesSnippet(url),
   },
+  ...HEADER_TEMPLATES.map((template, index) => ({
+    slug: index === 0 ? "header-frontend" : "header-admin",
+    template,
+    // Ahead of the header rather than inside it, so one anchor serves both of
+    // CloudPanel's headers and neither depends on what is in them.
+    anchorBefore: '<header class="header d-flex">',
+    required: false,
+    snippet: () => panelHeaderSnippet(storedTweaks().panelHeader),
+  })),
 ];

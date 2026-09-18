@@ -27,11 +27,11 @@ const STYLE = `
 @media (max-width:700px) {
   .default-card { flex-direction:column; gap:12px; }
   .default-choice { flex:1 1 auto; width:100%; }
-  .toolbar #bulk-category { flex:1 1 100%; }
-  .toolbar .toolbar-end { margin-left:0; }
 }
 @media (max-width:760px) {
   #category-dialog { width:calc(100% - 20px); }
+  .toolbar #bulk-category { flex:1 1 100%; }
+  .toolbar .toolbar-end { margin-left:0; }
 }
 `;
 
@@ -346,11 +346,22 @@ function paintSelection() {
     all.checked = rows.length > 0 && chosen.length === rows.length;
     all.indeterminate = chosen.length > 0 && chosen.length < rows.length;
   }
+  const allBtn = CLP_ROOT.getElementById('select-all-btn');
+  if (allBtn) {
+    allBtn.disabled = rows.length === 0;
+    allBtn.textContent = rows.length > 0 && chosen.length === rows.length ? 'Deselect all' : 'Select all';
+  }
 }
 
 function selectAllSites(checked) {
   CLP_ROOT.querySelectorAll('.site-checkbox').forEach(function (box) { box.checked = checked; });
   paintSelection();
+}
+
+function toggleAllSites() {
+  const rows = siteRows();
+  const chosen = selectedRows();
+  selectAllSites(chosen.length < rows.length);
 }
 
 function categoryLabel(id) {
@@ -565,6 +576,7 @@ export function dashboardView(state: PhpResourcesState): string {
     ? `<div class="card-header toolbar">
         <h2>PHP sites</h2>
         <span class="toolbar-note" id="site-selection">No sites selected</span>
+        <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
         <select class="toolbar-end" id="bulk-category" aria-label="Category to put the selected sites in">${bulkOptions(state.categories)}</select>
         <button class="btn" id="assign-selected" type="button" disabled onclick="assignSelected()">Assign selected</button>
       </div>

@@ -95,6 +95,20 @@ When Cloudflare IP Access is enabled, a separate one-minute timer applies its
 new-site policy. Disabling the addon removes that timer while keeping the policy
 state for a later re-enable.
 
+The manager's block in CloudPanel's own header also makes room for its update
+notice there. The panel lays the header out as one non-wrapping flex row of a
+fixed height, sized for exactly the three things in it, so a fourth has nowhere
+to go; flattening the right-hand wrapper lets the row wrap. Those rules apply
+only while a notice is actually in the row, so a panel with nothing to update is
+shaped as CloudPanel drew it.
+
+Panel Tweaks wants the same rules for a different reason, on a narrow screen and
+on any day, so `headerWrapStyle` in `lib/panel-nav.ts` takes the header's own
+selector and both ask for their own copy. What a phone additionally wants -- the
+navigation on a row of its own, a logo that shrinks, an Admin Area link down to
+its icon -- is the addon's alone, and a switch, because that is the panel's own
+shape being changed rather than room being made for something an addon added.
+
 ## One way to watch a job
 
 `lib/job-stream.ts` owns both job-observation routes: `/api/jobs/:id` polls and

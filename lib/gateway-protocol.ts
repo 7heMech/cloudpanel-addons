@@ -60,16 +60,21 @@ export const PHP_RESOURCES_ALLOWED_VERBS = new Set([
   "set-default",
 ]);
 
-/**
- * `wp-login` mints a credential for somebody else's WordPress, so it is named
- * here as narrowly as the rest: one verb, one `--domain`, and the action itself
- * refuses when the operator has not switched the sign-in on.
- */
 export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
   "state",
   "set-tweaks",
   "scan",
-  "wp-login",
+]);
+
+/**
+ * `sign-in` mints a credential for somebody else's WordPress and `remove`
+ * deletes a file from every site, so both are named here as narrowly as the
+ * rest: a verb, at most one `--domain`, and no path anywhere.
+ */
+export const WP_LOGIN_ALLOWED_VERBS = new Set([
+  "sites",
+  "sign-in",
+  "remove",
 ]);
 
 export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([

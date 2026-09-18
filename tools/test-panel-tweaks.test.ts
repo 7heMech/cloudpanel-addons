@@ -1,16 +1,24 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  DEFAULT_TWEAKS, executePanelTweaksAction, WP_LOGIN_FIELD,
-  type PanelTweaksActionOptions, type PanelTweaksState, type ScanResult, type SetTweaksResult, type WpLoginResult,
+  applicationLabel, DEFAULT_TWEAKS, executePanelTweaksAction,
+  type PanelTweaksActionOptions, type PanelTweaksState, type ScanResult, type SetTweaksResult,
 } from "../addons/panel-tweaks/action";
-import { PANEL_TWEAKS_TARGETS, deviceThemeSnippet } from "../addons/panel-tweaks/inject/targets";
+import {
+  PANEL_TWEAKS_TARGETS, deviceThemeSnippet, panelHeaderSnippet, sitesSnippet,
+} from "../addons/panel-tweaks/inject/targets";
+import type { PanelTweaks } from "../addons/panel-tweaks/action";
 
-const loginTarget = PANEL_TWEAKS_TARGETS[0]!;
-const sitesTarget = PANEL_TWEAKS_TARGETS[1]!;
+const loginTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "login-device-theme")!;
+const sitesTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "sites-table")!;
+const headerTargets = PANEL_TWEAKS_TARGETS.filter((target) => target.slug.startsWith("header-"));
+
+function sites(wanted: Partial<PanelTweaks> = {}): string {
+  return sitesSnippet("/addons/panel-tweaks", { ...DEFAULT_TWEAKS, ...wanted });
+}
 
 // --- the login page's device theme ---------------------------------------
 
@@ -140,22 +148,70 @@ test("unusable local storage leaves the panel's own default in place", () => {
 // --- the sites page block -------------------------------------------------
 
 test("the sites block is administrator-only and degrades rather than blocking an install", () => {
-  const snippet = sitesTarget.snippet("/addons/panel-tweaks");
+  const snippet = sites();
   expect(sitesTarget.template).toBe("Frontend/Site/index.html.twig");
   expect(sitesTarget.anchorBefore).toBe('<div class="card card-table">');
   expect(sitesTarget.required).toBe(false);
   expect(snippet).toContain("{% if is_granted('ROLE_ADMIN') %}");
   expect(snippet).toContain("{% endif %}");
   expect(snippet).toContain("/addons/panel-tweaks/api/panel");
-  expect(snippet).toContain("/addons/panel-tweaks/api/wp-login");
+});
+
+// The old block waited for its data before rearranging the table, so a phone
+// painted CloudPanel's four columns and then jumped to cards when the reply
+// landed. The rules are keyed on the panel's own class instead, and are in
+// force from the moment the browser parses them.
+test("the narrow-screen layout needs no data and no class the script adds", () => {
+  const snippet = sites({ sitesMobile: true });
+  const mobile = snippet.slice(snippet.indexOf("table.table-sites, table.table-sites tbody"), snippet.indexOf("</style>"));
+  expect(mobile).toContain("table.table-sites tr { display: flex");
+  expect(mobile).not.toContain(".clp-tweaks-table tr {");
+  // A separator between one site and the next, in whichever theme the panel is
+  // showing, taken from the border the panel draws on its own table cells.
+  expect(mobile).toContain("border-top: 1px solid #eaeaea");
+  expect(mobile).toContain("html.dark table.table-sites tr { border-top-color: var(--clp-border-color); }");
 });
 
 // The block is rendered by Twig before a browser ever sees it, and Twig reads
 // `{{`, `{%` and `{#` wherever they appear -- including inside a <script>.
 test("nothing in the block is markup Twig would take for its own", () => {
-  const snippet = sitesTarget.snippet("/addons/panel-tweaks");
-  const body = snippet.replace("{% if is_granted('ROLE_ADMIN') %}", "").replace("{% endif %}", "");
+  const body = sites({ actionMenu: true })
+    .replace("{% if is_granted('ROLE_ADMIN') %}", "").replace("{% endif %}", "");
   for (const sequence of ["{{", "{%", "{#"]) expect(body).not.toContain(sequence);
+});
+
+// Each of these decides how the page is painted before any reply could arrive,
+// so what the switch says has to be in the template rather than fetched.
+test("the narrow-screen table, the row menu and the header are each in or out of the markup", () => {
+  expect(sites({ sitesMobile: false })).not.toContain("table.table-sites, table.table-sites tbody");
+  expect(sites({ sitesMobile: true })).toContain("table.table-sites, table.table-sites tbody");
+
+  const off = sites({ actionMenu: false });
+  expect(off).not.toContain('classList.add("clp-tweaks-menu")');
+  expect(off).not.toContain("html.clp-tweaks-menu");
+  const on = sites({ actionMenu: true });
+  // The links are hidden by a class set before the table is parsed, not by one
+  // the script adds once it has run, so nothing is seen and then taken away.
+  expect(on).toContain('classList.add("clp-tweaks-menu")');
+  expect(on).toContain("html.clp-tweaks-menu table.table-sites tbody td:last-child > a");
+  expect(on.indexOf('classList.add("clp-tweaks-menu")'))
+    .toBeLessThan(on.indexOf(String.raw`<div class="clp-tweaks-toolbar"`));
+
+  expect(panelHeaderSnippet(false)).toBe("");
+  expect(panelHeaderSnippet(true)).toContain("@media (max-width: 600px)");
+});
+
+// Both of CloudPanel's headers open with the same tag, and neither may stop an
+// install: a release that renames the header costs the rules, not the addon.
+test("the header rules go ahead of both headers and are not required", () => {
+  expect(headerTargets.map((target) => target.template)).toEqual([
+    "Frontend/Partial/header.html.twig",
+    "Admin/Partial/header.html.twig",
+  ]);
+  for (const target of headerTargets) {
+    expect(target.anchorBefore).toBe('<header class="header d-flex">');
+    expect(target.required).toBe(false);
+  }
 });
 
 // --- the privileged action ------------------------------------------------
@@ -166,7 +222,6 @@ function options(extra: Partial<PanelTweaksActionOptions> = {}): PanelTweaksActi
   return {
     processUid: 0,
     emitReply: false,
-    domainValidator: (value: string) => value,
     paths: {
       panelDb: join(root, "panel.sq3"),
       tweaksFile: join(root, "state", "tweaks.json"),
@@ -233,12 +288,24 @@ test("the site list carries what CloudPanel's own template cannot", async () => 
   expect(state.sites.map((site) => site.domain)).toEqual(["docs.example.com", "shop.example.com"]);
   const shop = state.sites.find((site) => site.domain === "shop.example.com")!;
   expect(shop.runtime).toBe("PHP 8.3");
-  expect(shop.wordpress).toBe(true);
+  expect(shop.application).toBe("WordPress");
   expect(shop.certificate).toEqual({ type: "2", expiresAt: "2026-12-01 09:00:00" });
   const docs = state.sites.find((site) => site.domain === "docs.example.com")!;
   expect(docs.runtime).toBe("");
   expect(docs.certificate).toBeNull();
-  expect(docs.wordpress).toBe(false);
+});
+
+// CloudPanel's own column prints the site type uppercased, so a reverse proxy
+// reads as REVERSE-PROXY and a WordPress as PHP. The application it recorded is
+// the more useful of the two, once the two run-together names are spaced out.
+test("the applications CloudPanel records are named the way they are spelled", () => {
+  expect(applicationLabel("ReverseProxy", "reverse-proxy")).toBe("Reverse Proxy");
+  expect(applicationLabel("Nodejs", "nodejs")).toBe("Node.js");
+  expect(applicationLabel("WooCommerce", "php")).toBe("WooCommerce");
+  // An operator's own vhost template is a name this cannot know; it is printed
+  // as they wrote it, and a site with no application falls back to its type.
+  expect(applicationLabel("Acme Intranet", "php")).toBe("Acme Intranet");
+  expect(applicationLabel("", "static")).toBe("static");
 });
 
 test("a switch is saved, and only the login page's one asks for the templates again", async () => {
@@ -291,64 +358,9 @@ test("a site whose account has gone is skipped rather than guessed at", async ()
   expect(result.skipped).toBe(1);
 });
 
-test("the WordPress sign-in is refused until the operator switches it on", async () => {
-  await expect(act(["wp-login", "--domain=shop.example.com"])).rejects.toThrow("switched off");
-});
-
-async function enableWordPressLogin(): Promise<void> {
-  await act(["set-tweaks"], { input: JSON.stringify({ wordpressLogin: true }) });
-}
-
-test("a sign-in installs the loader, leaves a single-use secret, and names the site's own URL", async () => {
-  await enableWordPressLogin();
-  const result = await act<WpLoginResult>(["wp-login", "--domain=shop.example.com"]);
-  expect(result.url).toBe("https://shop.example.com/");
-  expect(result.field).toBe(WP_LOGIN_FIELD);
-  expect(result.token).toMatch(/^[0-9a-f]{64}$/);
-
-  const site = join(root, "home", "shop", "htdocs", "shop.example.com");
-  const loader = readFileSync(join(site, "wp-content/mu-plugins/clp-addons-login.php"), "utf8");
-  expect(loader).toContain("wp_set_auth_cookie");
-  expect(loader).toContain("hash_equals");
-  // Removed before it is compared, so a failed attempt spends the secret too.
-  expect(loader.indexOf("unlink")).toBeLessThan(loader.indexOf("hash_equals"));
-
-  const secret = readFileSync(join(site, "wp-content/mu-plugins/clp-addons/token.php"), "utf8");
-  // The hash of the token, never the token, and only ever for the next minute.
-  expect(secret).not.toContain(result.token);
-  expect(secret).toContain(new Bun.CryptoHasher("sha256").update(result.token).digest("hex"));
-  const expires = Number(/'expires' => (\d+)/.exec(secret)?.[1] ?? "0");
-  expect(expires - Math.floor(Date.now() / 1000)).toBeLessThanOrEqual(60);
-  expect(expires - Math.floor(Date.now() / 1000)).toBeGreaterThan(50);
-});
-
-test("a WordPress site missing wp-content is refused rather than rebuilt", async () => {
-  await enableWordPressLogin();
-  rmSync(join(root, "home", "shop", "htdocs", "shop.example.com", "wp-content"), { recursive: true, force: true });
-  await expect(act(["wp-login", "--domain=shop.example.com"])).rejects.toThrow("does not look like a WordPress");
-});
-
-test("a site that is not WordPress, or not a site at all, gets no sign-in", async () => {
-  await enableWordPressLogin();
-  await expect(act(["wp-login", "--domain=docs.example.com"])).rejects.toThrow("not a WordPress site");
-  await expect(act(["wp-login", "--domain=absent.example.com"])).rejects.toThrow("no site called");
-});
-
-test("switching the sign-in off takes the loader back out of every site", async () => {
-  await enableWordPressLogin();
-  await act(["wp-login", "--domain=shop.example.com"]);
-  const muPlugins = join(root, "home", "shop", "htdocs", "shop.example.com", "wp-content", "mu-plugins");
-  expect(existsSync(join(muPlugins, "clp-addons-login.php"))).toBe(true);
-
-  const result = await act<SetTweaksResult>(["set-tweaks"], { input: JSON.stringify({ wordpressLogin: false }) });
-  expect(result.wordpressRemoved).toBe(1);
-  expect(existsSync(join(muPlugins, "clp-addons-login.php"))).toBe(false);
-  expect(existsSync(join(muPlugins, "clp-addons"))).toBe(false);
-});
-
 test("an unknown verb, a stray argument and a non-root caller are all refused", async () => {
   await expect(act(["sweep"])).rejects.toThrow("unknown panel tweaks verb");
-  await expect(act(["state", "--domain=shop.example.com"])).rejects.toThrow("takes no --domain");
+  await expect(act(["state", "--domain=shop.example.com"])).rejects.toThrow("unexpected argument");
   await expect(act(["state", "--all"])).rejects.toThrow("unexpected argument");
   await expect(executePanelTweaksAction(["state"], { ...options(), processUid: 1000 }))
     .rejects.toThrow("must run as root");

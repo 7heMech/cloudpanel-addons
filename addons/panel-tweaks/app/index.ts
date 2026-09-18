@@ -2,7 +2,7 @@ import {
   bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
 } from "../../../lib/app-http";
 import { callGatewayAction } from "../../../lib/gateway-client";
-import { panelTweaksService, validateDomain } from "./service";
+import { panelTweaksService } from "./service";
 import { dashboardView, layout } from "./views";
 
 function json(body: unknown, status = 200): Response {
@@ -14,13 +14,14 @@ function errorMessage(error: unknown): string {
 }
 
 /**
- * Put the login page's script back, or take it away.
+ * Put the blocks CloudPanel's own templates carry back, or take them away.
  *
- * The device theme is markup in a CloudPanel template, so moving that one
- * switch means the templates have to be rendered again -- and rendering them is
- * the manager's own privileged work, not an addon's: one pass regenerates every
- * addon's block in the file from the pristine copy. The other three switches
- * are read at request time and need none of this.
+ * The login theme, the two narrow-screen layouts and the row menu are markup in
+ * a CloudPanel template, so moving one of those switches means the templates
+ * have to be rendered again -- and rendering them is the manager's own
+ * privileged work, not an addon's: one pass regenerates every addon's block in
+ * the file from the pristine copy. The rest are read at request time and need
+ * none of this.
  */
 async function reinjectTemplates(): Promise<string | null> {
   const result = await callGatewayAction("manager", "reconcile", [], undefined, { timeout: 60_000 });
@@ -82,19 +83,6 @@ export async function handle(
 
   if (path === "/api/scan") {
     const result = await panelTweaksService.scan();
-    return json(result, result.ok ? 200 : 400);
-  }
-
-  if (path === "/api/wp-login") {
-    let body: Record<string, unknown>;
-    try {
-      body = await readJsonObject(req, 4 * 1024);
-    } catch (error) {
-      return bodyErrorResponse(error);
-    }
-    const domain = validateDomain(body.domain);
-    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
-    const result = await panelTweaksService.wpLogin(domain);
     return json(result, result.ok ? 200 : 400);
   }
 

@@ -40,6 +40,7 @@ import { adminHeaderTarget, headerTarget, siteLayoutTarget, SITE_TAB_TEMPLATE } 
 import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
 import { CHANGELOG_URL, UPDATE_PATH } from "../lib/update-ui";
 import { ensureMaintenanceData, executeMaintenanceAction } from "../addons/maintenance/action";
+import { removeWpLogin } from "../addons/wp-login/action";
 import { runAuthActionStdin } from "./auth-action";
 import { pruneManagerJobs, runManagerAction, type ManagerJobView, type ManagerOps } from "./manager-action";
 import { callGatewayAction, streamGatewayAction, type ActionResult } from "../lib/gateway-client";
@@ -458,6 +459,21 @@ export async function applyEnable(name: string): Promise<void> {
 }
 
 /**
+ * The WordPress sign-in helper is a file in somebody else's site, not state in
+ * this addon's own directory, so withdrawing the addon has to take it back out.
+ * A failure warns rather than stops: an addon that cannot be removed because
+ * one site's files moved would be worse than a helper left behind and named.
+ */
+function withdrawWpLogin(): void {
+  try {
+    const { removed } = removeWpLogin();
+    if (removed > 0) log.ok(`sign-in helper removed from ${removed} site${removed === 1 ? "" : "s"}`);
+  } catch (error) {
+    log.warn(`the sign-in helper could not be removed from every site: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
  * Turn one addon off and leave everything it made behind.
  *
  * Deliberately not `cmdUninstall`: that removes the binary once the last addon
@@ -470,6 +486,7 @@ export function applyDisable(name: string): void {
   const spec = resolveAddon(name);
   const remaining = installedAddons().filter((item) => item.name !== spec.name);
 
+  if (spec.name === "wp-login") withdrawWpLogin();
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
   // Reconciled after the config file is gone, so the injection set is read
@@ -750,6 +767,7 @@ export function cmdUninstall(argv: string[]): void {
     }
   }
   removeSudoers();
+  if (spec.name === "wp-login") withdrawWpLogin();
   if (purge) rmSync(spec.stateDir, { recursive: true, force: true });
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });

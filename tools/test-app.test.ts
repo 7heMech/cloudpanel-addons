@@ -22,6 +22,7 @@ import { CLIENT_JS as STAGER_CLIENT_JS, isSiteMissing, jobsView, jobView } from 
 import { CLIENT_JS as MAINTENANCE_CLIENT_JS, fleetView as maintenanceFleetView } from "../addons/maintenance/app/views";
 import { dashboardView as cloudflareDashboardView } from "../addons/cloudflare-ips/app/views";
 import { CLIENT_JS as PHP_RESOURCES_CLIENT_JS, dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
+import { STOCK_PROFILE } from "../addons/php-resources/action";
 import type { JobView } from "../addons/stager/app/service";
 import { expandTarget } from "../addons/stager/app/service";
 import { isNewerThan } from "../addons/instatic/app/tags";
@@ -138,7 +139,7 @@ test("a fleet table gives the domain its own line on a phone", () => {
   // the column heading the phone no longer has room to show.
   expect(mobile).toContain(".fleet-table thead { display: none; }");
   expect(mobile).toContain(".fleet-table td.site-select { display: flex; flex: 0 0 42px; width: 42px;");
-  expect(mobile).toContain(".fleet-table td.site-cell { flex: 1 1 calc(100% - 160px); min-width: 55%;");
+  expect(mobile).toContain(".fleet-table td.site-cell { flex: 1 1 calc(100% - 200px); min-width: 0;");
   // What a site is rides beside the domain as a tag, and every labelled cell
   // keeps half the row whatever it holds -- a status badge that grew when a
   // site went into maintenance used to move everything under it.
@@ -153,13 +154,78 @@ test("a fleet table gives the domain its own line on a phone", () => {
     }]),
     cloudflareDashboardView({
       autoEnableNewSites: false,
-      sites: [{ domain: "a-rather-long-hostname.example.test", type: "php", enabled: false, excludedFromAutomatic: false }],
+      sites: [{ domain: "a-rather-long-hostname.example.test", type: "reverse-proxy", enabled: false, excludedFromAutomatic: false }],
     }),
   ]) {
     expect(html).toContain('<table class="fleet-table"');
     expect(html).toContain('<td class="site-cell"');
     expect(html).toContain('<td class="type-cell">');
   }
+  const cfHtml = cloudflareDashboardView({
+    autoEnableNewSites: false,
+    sites: [{ domain: "sus.com", type: "reverse-proxy", enabled: true, excludedFromAutomatic: false }],
+  });
+  expect(cfHtml).toContain('<td class="type-cell">Reverse proxy</td>');
+});
+
+test("mobile select-all button is hidden on desktop and visible on mobile", () => {
+  // Must not appear on desktop
+  expect(BASE_STYLE).toContain(".mobile-select-all { display: none; }");
+  // Visible under mobile breakpoint
+  const mobile = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 760px)"));
+  expect(mobile).toContain(".mobile-select-all { display: inline-flex;");
+
+  // Rendered in Cloudflare IPs toolbar
+  const cfHtml = cloudflareDashboardView({
+    autoEnableNewSites: false,
+    sites: [{ domain: "example.com", type: "php", enabled: false, excludedFromAutomatic: false }],
+  });
+  expect(cfHtml).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
+
+  // Rendered in PHP Resources toolbar
+  const phpHtml = phpResourcesDashboardView({
+    categories: [],
+    defaultCategoryId: null,
+    sites: [{
+      domain: "example.com", siteUser: "user", phpVersion: "8.2",
+      poolFile: "/etc/php/8.2/fpm/pool.d/example.com.conf",
+      current: { ...STOCK_PROFILE },
+      categoryId: null, categoryName: null, drifted: false,
+    }],
+  });
+  expect(phpHtml).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
+});
+
+test("the php-resources mobile select-all button toggles selection and updates label", () => {
+  const el = (over: any = {}) => ({ textContent: "", className: "", disabled: false, checked: false, indeterminate: false, ...over });
+  const byId: Record<string, any> = {
+    "site-selection": el(), "select-all": el(), "select-all-btn": el(), "assign-selected": el({ disabled: true }),
+    "bulk-category": el({ querySelector: () => null }),
+  };
+  const checkboxes = [el(), el()];
+  const rows = [
+    { dataset: { domain: "a.test" }, querySelector: (sel: string) => sel === ".site-checkbox" ? checkboxes[0] : null },
+    { dataset: { domain: "b.test" }, querySelector: (sel: string) => sel === ".site-checkbox" ? checkboxes[1] : null },
+  ];
+  const CLP_ROOT = {
+    getElementById: (id: string) => byId[id] ?? null,
+    querySelectorAll: (sel: string) => {
+      if (sel === "tr[data-domain]") return rows;
+      if (sel === ".site-checkbox") return checkboxes;
+      return [];
+    },
+  };
+  const fakeDoc = { readyState: "complete", addEventListener: () => {} };
+  const factory = new Function("CLP_ROOT", "document", `${PHP_RESOURCES_CLIENT_JS}\nreturn { toggleAllSites, selectAllSites, paintSelection, selectedRows, siteRows };`);
+  const client = factory(CLP_ROOT, fakeDoc);
+  client.paintSelection();
+  expect(byId["select-all-btn"].textContent).toBe("Select all");
+  client.toggleAllSites();
+  expect(checkboxes.every((c: any) => c.checked)).toBe(true);
+  expect(byId["select-all-btn"].textContent).toBe("Deselect all");
+  client.toggleAllSites();
+  expect(checkboxes.every((c: any) => !c.checked)).toBe(true);
+  expect(byId["select-all-btn"].textContent).toBe("Select all");
 });
 
 test("native header follows the manager's update state and clears a restored stale notice", async () => {
@@ -1489,7 +1555,7 @@ console.log("\n== addons are told apart by the path they are mounted at ==");
 // hands it a sub-path of "-notes", which is a 404 from somewhere unexpected
 // rather than from the router.
 {
-  const all = ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "panel-tweaks"];
+  const all = ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "panel-tweaks", "wp-login"];
   const hit = (p: string) => {
     const m = splitMount(p, all);
     return m ? `${m.addon}:${m.rest}` : "none";

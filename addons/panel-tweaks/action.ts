@@ -2,24 +2,21 @@
  * The privileged half of Panel Tweaks: what the panel's own pages cannot ask
  * for themselves.
  *
- * Three of the four tweaks are decoration -- a count, a filter, two extra
+ * Two of the three tweaks are decoration -- a count, a filter, two extra
  * columns -- and would need no root at all if CloudPanel's Sites template
  * carried the values. It does not: the certificate, the runtime version and the
  * application are columns of a database the web manager cannot open, so the
  * site list is assembled here and sent as data the injected script paints.
  *
- * The other two do change the host. A disk measurement walks every site's home
- * directory, which only root can read across accounts; the WordPress sign-in
- * writes two files into one site's own tree, as that site's user, and mints a
- * credential that lives for a minute. Both are verbs with a fixed shape, and
- * neither accepts a path.
+ * The third does touch the host. A disk measurement walks every site's home
+ * directory, which only root can read across accounts. It is a verb with a
+ * fixed shape, and it accepts no path.
  */
 import { Database } from "bun:sqlite";
-import { createHash, randomBytes } from "node:crypto";
-import { chownSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, runCommand, validateDomain, withFileLock,
+  ActionFailure, emitActionError, emitActionOk, failAction, runCommand, withFileLock,
   type CommandResult,
 } from "../../cli/action-common";
 import { PANEL_DB, STATE_DIR } from "../../cli/paths";
@@ -28,36 +25,55 @@ import { writeFileAtomic } from "../../lib/atomic-write";
 const TWEAKS_VERSION = 1;
 const DISK_VERSION = 1;
 
-export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "wp-login";
+export type PanelTweaksVerb = "state" | "set-tweaks" | "scan";
 
 /**
- * What the addon does, as four independent modes.
+ * What the addon does, as independent modes.
  *
- * Separate rather than one switch because they do not cost the same. The first
- * two are markup; `diskUsage` walks the disk every fifteen minutes, and
- * `wordpressLogin` is a way into somebody's WordPress. An operator who wants a
- * filtered site list should not have to accept either.
+ * Separate rather than one switch because they do not cost the same: most are
+ * markup, and `diskUsage` walks the whole disk every fifteen minutes. An
+ * operator who wants a filtered site list should not have to accept that. The
+ * four narrow-screen and layout tweaks are separate for a different reason:
+ * they change the shape of pages CloudPanel drew itself, and an operator who
+ * likes the panel's own shape should be able to keep it.
  */
 export interface PanelTweaks {
   /** Follow the device's light or dark preference on the panel's login page. */
   deviceTheme: boolean;
   /** Count, search, type filter, sorting and the SSL and runtime columns. */
   sitesTable: boolean;
+  /** One card per site on a narrow screen instead of a table that scrolls. */
+  sitesMobile: boolean;
+  /** The Sites table's action links, collected into a menu on each row. */
+  actionMenu: boolean;
+  /** A CloudPanel header that wraps instead of running off a phone's side. */
+  panelHeader: boolean;
   /** The measured-size column, and the sweep that fills it. */
   diskUsage: boolean;
-  /** The one-click administrator sign-in on WordPress sites. */
-  wordpressLogin: boolean;
 }
 
 export const DEFAULT_TWEAKS: PanelTweaks = {
   deviceTheme: true,
   sitesTable: true,
+  sitesMobile: true,
+  // Off until asked for: a menu is a click more than a link, and it is worth
+  // that only once there is more than one thing behind it.
+  actionMenu: false,
+  panelHeader: true,
   // Off until asked for: it is the only tweak that reads the whole disk.
   diskUsage: false,
-  // Off until asked for: it writes into a site and signs an operator in as its
-  // administrator. That is a decision, not a default.
-  wordpressLogin: false,
 };
+
+/**
+ * The switches whose answer is baked into CloudPanel's own templates.
+ *
+ * Everything else is read at request time by the script on the Sites page.
+ * These four cannot be: the login page has no session to ask with, and the
+ * other three decide how the page is painted the first time, so waiting for a
+ * reply would mean the reader watching the layout move.
+ */
+export const TEMPLATE_TWEAK_KEYS: (keyof PanelTweaks)[] =
+  ["deviceTheme", "sitesMobile", "actionMenu", "panelHeader"];
 
 export const TWEAK_KEYS = Object.keys(DEFAULT_TWEAKS) as (keyof PanelTweaks)[];
 
@@ -83,6 +99,24 @@ export const CERTIFICATE_LABELS: Record<string, string> = {
  */
 export const SELF_SIGNED_CERTIFICATE = "1";
 
+/**
+ * The awkward spellings in CloudPanel's `application` column.
+ *
+ * For a PHP site the column holds the vhost template the site was created from,
+ * which is an open set an operator can add to, so this renames the two the
+ * panel ships run together rather than trying to know every name.
+ */
+export const APPLICATION_LABELS: Record<string, string> = {
+  ReverseProxy: "Reverse Proxy",
+  Nodejs: "Node.js",
+};
+
+export function applicationLabel(application: string, type: string): string {
+  const name = application.trim();
+  if (!name) return type.trim();
+  return APPLICATION_LABELS[name] ?? name;
+}
+
 export function certificateLabel(type: string): string {
   return CERTIFICATE_LABELS[type.trim()] ?? (type.trim() || "Certificate");
 }
@@ -100,7 +134,6 @@ export interface TweakSiteView {
   certificate: { type: string; expiresAt: string } | null;
   /** Bytes under the site's home, and under its databases, when measured. */
   disk: { bytes: number; databaseBytes: number; measuredAt: string } | null;
-  wordpress: boolean;
 }
 
 export interface PanelTweaksState {
@@ -114,16 +147,6 @@ export interface ScanResult {
   measured: number;
   skipped: number;
   measuredAt: string;
-}
-
-export interface WpLoginResult {
-  domain: string;
-  url: string;
-  /** The single-use secret, only ever returned to the operator's own browser. */
-  token: string;
-  field: string;
-  /** Seconds the token is good for, so the page can say so. */
-  expiresIn: number;
 }
 
 export interface PanelTweaksActionPaths {
@@ -144,8 +167,6 @@ export interface PanelTweaksActionOptions {
   processUid?: number;
   run?: (command: string, args: string[]) => CommandResult;
   now?: () => Date;
-  /** Test-only; production always guards against the panel's own hostname. */
-  domainValidator?: (value: string) => string;
 }
 
 export const DEFAULT_PANEL_TWEAKS_PATHS: PanelTweaksActionPaths = {
@@ -321,10 +342,6 @@ function runtimeOf(row: PanelSiteRow): string {
   return "";
 }
 
-function isWordPress(row: PanelSiteRow): boolean {
-  return (row.application ?? "").toLowerCase() === "wordpress";
-}
-
 function siteViews(rows: PanelSiteRow[], cache: DiskCache): TweakSiteView[] {
   return rows.map((row) => ({
     domain: row.domain_name,
@@ -336,7 +353,6 @@ function siteViews(rows: PanelSiteRow[], cache: DiskCache): TweakSiteView[] {
       ? { type: row.certificate_type, expiresAt: row.certificate_expires_at ?? "" }
       : null,
     disk: cache.sites[row.domain_name] ?? null,
-    wordpress: isWordPress(row),
   }));
 }
 
@@ -467,235 +483,22 @@ function scanDisk(
   return { measured: Object.keys(sites).length, skipped, measuredAt };
 }
 
-// --- the WordPress sign-in -----------------------------------------------
-
-/** Where the loader and its one-time secret live inside a WordPress site. */
-const MU_PLUGINS = "wp-content/mu-plugins";
-const LOADER_FILE = `${MU_PLUGINS}/clp-addons-login.php`;
-const SECRET_DIR = `${MU_PLUGINS}/clp-addons`;
-const SECRET_FILE = `${SECRET_DIR}/token.php`;
-/** The POST field the loader reads the secret from. */
-export const WP_LOGIN_FIELD = "clp_addons_login";
-/** How long a minted sign-in is good for. One use, and a minute to make it. */
-export const WP_LOGIN_TTL_SECONDS = 60;
-
-/**
- * The must-use plugin.
- *
- * Must-use rather than a normal plugin because it has to be there when the
- * request arrives and must not be something a site owner can deactivate by
- * accident, and because WordPress loads it before the plugins that would
- * otherwise redirect an anonymous request away.
- *
- * It is inert on every request but the one. Without a secret file on disk it
- * returns immediately, and the secret file only exists between an operator
- * pressing the button and the browser arriving -- at most a minute, and it is
- * removed before it is even checked, so a second attempt with the same value
- * has nothing to compare against.
- *
- * The secret lives in a subdirectory: WordPress auto-loads every PHP file
- * directly inside mu-plugins, and a data file that is also a plugin would be
- * executed on every request. It is a `.php` file rather than plain data so that
- * a request for it over HTTP runs it and prints nothing, instead of serving the
- * hash to whoever asked.
- */
-const LOADER_PHP = `<?php
-/*
- * Plugin Name: CloudPanel Addons sign-in
- * Description: Accepts one single-use administrator sign-in minted by CloudPanel. Installed and removed by the Panel Tweaks addon.
- */
-add_action('init', function () {
-    if (empty($_POST['${WP_LOGIN_FIELD}']) || !is_string($_POST['${WP_LOGIN_FIELD}'])) {
-        return;
-    }
-    $file = __DIR__ . '/clp-addons/token.php';
-    if (!is_readable($file)) {
-        return;
-    }
-    $secret = include $file;
-    // Removed before it is checked, so a failed attempt spends it too.
-    @unlink($file);
-    if (!is_array($secret) || empty($secret['hash']) || empty($secret['expires'])) {
-        return;
-    }
-    if (time() > (int) $secret['expires']) {
-        return;
-    }
-    $given = hash('sha256', (string) $_POST['${WP_LOGIN_FIELD}']);
-    if (!hash_equals((string) $secret['hash'], $given)) {
-        return;
-    }
-    $administrators = get_users(array(
-        'role' => 'administrator',
-        'number' => 1,
-        'orderby' => 'ID',
-        'order' => 'ASC',
-        'fields' => 'ID',
-    ));
-    if (empty($administrators)) {
-        return;
-    }
-    $user = (int) $administrators[0];
-    wp_set_current_user($user);
-    wp_set_auth_cookie($user, false);
-    wp_safe_redirect(admin_url());
-    exit;
-}, 1);
-`;
-
-function siteRoot(account: SiteAccount, row: PanelSiteRow): string {
-  // CloudPanel stores the root as a name under the account's htdocs, and falls
-  // back to the domain when the column is empty.
-  const directory = (row.root_directory ?? "").trim() || row.domain_name;
-  if (directory.includes("/") || directory.includes("..")) {
-    failAction(`the site root recorded for ${row.domain_name} is not a plain directory name`);
-  }
-  return join(account.home, "htdocs", directory);
-}
-
-function writeAsSite(path: string, content: string, account: SiteAccount, mode: number): void {
-  writeFileAtomic(path, content, { mode, owner: { uid: account.uid, gid: account.gid } });
-}
-
-/**
- * One directory, owned by the site.
- *
- * Deliberately not recursive: mkdir runs as root, and a recursive create left
- * the site with a root-owned `wp-content` it could no longer write to. Each
- * level this creates is handed straight over, and a missing parent is a
- * refusal rather than something to invent.
- */
-function ensureOwnedDirectory(path: string, account: SiteAccount): void {
-  if (existsSync(path)) return;
-  try {
-    mkdirSync(path, { mode: 0o755 });
-    chownSync(path, account.uid, account.gid);
-  } catch (error) {
-    failAction(`the site directory ${path} could not be created: ${reason(error)}`);
-  }
-}
-
-function mintWpLogin(
-  paths: PanelTweaksActionPaths,
-  domain: string,
-  options: PanelTweaksActionOptions,
-): WpLoginResult {
-  const db = openPanelDatabase(paths.panelDb);
-  let row: PanelSiteRow | undefined;
-  try {
-    row = panelSites(db).find((site) => site.domain_name === domain);
-  } finally {
-    db.close();
-  }
-  if (!row) failAction(`CloudPanel has no site called ${domain}`);
-  if (!isWordPress(row)) failAction(`${domain} is not a WordPress site`);
-
-  const account = siteAccounts(paths.passwd).get(row.user);
-  if (!account) failAction(`the site user ${row.user} has no account on this host`);
-  const root = siteRoot(account, row);
-  if (!existsSync(join(root, "wp-includes")) || !existsSync(join(root, "wp-content"))) {
-    failAction(`${domain} does not look like a WordPress installation any more`);
-  }
-
-  ensureOwnedDirectory(join(root, MU_PLUGINS), account);
-  ensureOwnedDirectory(join(root, SECRET_DIR), account);
-
-  const loader = join(root, LOADER_FILE);
-  // Rewritten only when it differs, so an untouched site keeps its file's mtime
-  // and nothing reindexes it.
-  let current = "";
-  try {
-    current = readFileSync(loader, "utf8");
-  } catch {
-    current = "";
-  }
-  if (current !== LOADER_PHP) writeAsSite(loader, LOADER_PHP, account, 0o644);
-
-  const token = randomBytes(32).toString("hex");
-  const hash = createHash("sha256").update(token).digest("hex");
-  const expires = Math.floor((options.now?.() ?? new Date()).getTime() / 1000) + WP_LOGIN_TTL_SECONDS;
-  writeAsSite(
-    join(root, SECRET_FILE),
-    `<?php return array('hash' => '${hash}', 'expires' => ${expires});\n`,
-    account,
-    0o600,
-  );
-
-  return {
-    domain,
-    url: `https://${domain}/`,
-    token,
-    field: WP_LOGIN_FIELD,
-    expiresIn: WP_LOGIN_TTL_SECONDS,
-  };
-}
-
-/**
- * Take the sign-in back out of every site that has it.
- *
- * Switching the tweak off is the removal path: leaving a loader behind in
- * somebody else's site because a switch moved would make this addon something
- * an operator cannot fully withdraw.
- */
-function removeWpLogin(paths: PanelTweaksActionPaths): number {
-  const db = openPanelDatabase(paths.panelDb);
-  let rows: PanelSiteRow[];
-  try {
-    rows = panelSites(db);
-  } finally {
-    db.close();
-  }
-  const accounts = siteAccounts(paths.passwd);
-  let removed = 0;
-  for (const row of rows) {
-    const account = accounts.get(row.user);
-    if (!account) continue;
-    let root: string;
-    try {
-      root = siteRoot(account, row);
-    } catch {
-      continue;
-    }
-    const loader = join(root, LOADER_FILE);
-    if (!existsSync(loader)) continue;
-    rmSync(loader, { force: true });
-    rmSync(join(root, SECRET_DIR), { recursive: true, force: true });
-    removed++;
-  }
-  return removed;
-}
-
 // --- request parsing ------------------------------------------------------
 
 const MAX_INPUT_BYTES = 8 * 1024;
 
 interface ParsedAction {
   verb: PanelTweaksVerb;
-  domain: string;
 }
 
-function parseAction(argv: string[], options: PanelTweaksActionOptions): ParsedAction {
+function parseAction(argv: string[]): ParsedAction {
   const [rawVerb, ...rest] = argv;
-  const verbs: PanelTweaksVerb[] = ["state", "set-tweaks", "scan", "wp-login"];
+  const verbs: PanelTweaksVerb[] = ["state", "set-tweaks", "scan"];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown panel tweaks verb '${rawVerb ?? ""}'`);
 
-  let domain = "";
-  for (const argument of rest) {
-    if (argument.startsWith("--domain=")) {
-      domain = argument.slice("--domain=".length);
-      continue;
-    }
-    failAction(`unexpected argument '${argument}'`);
-  }
-  if (verb === "wp-login") {
-    // The panel's own hostname is refused here as it is everywhere else: the
-    // panel is not a site, and nothing of ours writes into it.
-    domain = (options.domainValidator ?? ((value: string) => validateDomain(value)))(domain);
-  } else if (domain) {
-    failAction(`'${verb}' takes no --domain`);
-  }
-  return { verb, domain };
+  if (rest.length > 0) failAction(`unexpected argument '${rest[0]}'`);
+  return { verb };
 }
 
 async function requestTweaks(options: PanelTweaksActionOptions, current: PanelTweaks): Promise<PanelTweaks> {
@@ -727,8 +530,6 @@ export interface SetTweaksResult {
   tweaks: PanelTweaks;
   /** Whether what the panel has injected into its own templates must change. */
   reinject: boolean;
-  /** WordPress sites the sign-in was taken back out of. */
-  wordpressRemoved: number;
 }
 
 async function setTweaks(
@@ -738,16 +539,13 @@ async function setTweaks(
   return withFileLock(paths.lockFile, 15, "another panel tweaks change is still running", async () => {
     const current = readTweaks(paths);
     const wanted = await requestTweaks(options, current);
-    let wordpressRemoved = 0;
-    if (current.wordpressLogin && !wanted.wordpressLogin) wordpressRemoved = removeWpLogin(paths);
     writeTweaks(paths, wanted);
     return {
       tweaks: wanted,
-      // The login page's script is markup in a CloudPanel template, so only
-      // that switch needs the templates rewritten. The rest are read by the
-      // injected script at request time and take effect on the next page.
-      reinject: current.deviceTheme !== wanted.deviceTheme,
-      wordpressRemoved,
+      // Four of the switches are markup in a CloudPanel template, so moving one
+      // of those means rewriting them. The rest are read by the injected script
+      // at request time and take effect on the next page.
+      reinject: TEMPLATE_TWEAK_KEYS.some((key) => current[key] !== wanted[key]),
     };
   });
 }
@@ -758,16 +556,12 @@ export async function executePanelTweaksAction(
 ): Promise<unknown> {
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("panel tweaks actions must run as root");
   const paths = pathsFor(options);
-  const { verb, domain } = parseAction(argv, options);
+  const { verb } = parseAction(argv);
 
   if (verb === "state") return stateOf(paths);
   if (verb === "set-tweaks") return setTweaks(paths, options);
-  if (verb === "scan") {
-    return withFileLock(paths.lockFile, 15, "a disk measurement is already running", async () =>
-      scanDisk(paths, options));
-  }
-  if (!readTweaks(paths).wordpressLogin) failAction("the WordPress sign-in is switched off");
-  return mintWpLogin(paths, domain, options);
+  return withFileLock(paths.lockFile, 15, "a disk measurement is already running", async () =>
+    scanDisk(paths, options));
 }
 
 export async function runPanelTweaksAction(

@@ -23,6 +23,7 @@ import { CLOUDFLARE_IPS_ADDON } from "../addons/cloudflare-ips/addon";
 import { INSTATIC_ADDON } from "../addons/instatic/addon";
 import { MAINTENANCE_ADDON } from "../addons/maintenance/addon";
 import { PANEL_TWEAKS_ADDON } from "../addons/panel-tweaks/addon";
+import { WP_LOGIN_ADDON } from "../addons/wp-login/addon";
 import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
 
@@ -76,6 +77,7 @@ const DEFINITIONS: AddonDefinition[] = [
   MAINTENANCE_ADDON,
   PHP_RESOURCES_ADDON,
   PANEL_TWEAKS_ADDON,
+  WP_LOGIN_ADDON,
 ];
 
 function specOf(definition: AddonDefinition): AddonSpec {

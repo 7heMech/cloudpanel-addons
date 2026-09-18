@@ -1,7 +1,7 @@
 import { esc } from "../../../lib/app-http";
 import { renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
-import { certificateLabel, SELF_SIGNED_CERTIFICATE } from "../action";
+import { applicationLabel, certificateLabel, SELF_SIGNED_CERTIFICATE } from "../action";
 import type { PanelTweaks, PanelTweaksState, TweakSiteView } from "../action";
 
 const BASE = mountPath("panel-tweaks");
@@ -36,11 +36,7 @@ async function setTweak(input) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ [key]: wanted }),
     });
-    const removed = (reply.data || {}).wordpressRemoved || 0;
-    const note = removed
-      ? 'Saved. The sign-in helper was removed from ' + removed + (removed === 1 ? ' site.' : ' sites.')
-      : 'Saved.';
-    reloadWith(note, 'ok');
+    reloadWith('Saved.', 'ok');
   } catch (error) {
     input.checked = !wanted;
     busy(false);
@@ -107,13 +103,29 @@ interface TweakCopy {
 
 /**
  * What each switch does, said in terms of what the operator will see change.
- * The order is the order of cost: markup, markup, disk, access.
+ * The order is the order of cost: the Sites page, then the rest of the panel,
+ * then the whole disk.
  */
 const COPY: TweakCopy[] = [
   {
     key: "sitesTable",
     title: "Search, sort and extra columns on Sites",
-    description: "Adds a site count beside the Sites heading, a search box and application filter, sortable columns, and an SSL and runtime column. The table also becomes readable on a phone.",
+    description: "Adds a site count beside the Sites heading, a search box and application filter, sortable columns, and an SSL and runtime column.",
+  },
+  {
+    key: "sitesMobile",
+    title: "Sites list as cards on a phone",
+    description: "On a narrow screen the Sites table becomes one card per site: the domain and what it runs on the first line, the other columns labelled beneath it. Off, the table scrolls sideways as CloudPanel drew it.",
+  },
+  {
+    key: "actionMenu",
+    title: "Row actions in a menu",
+    description: "Collects the links in the Sites table's last column — Manage, and whatever other addons put there — behind a single button on each row.",
+  },
+  {
+    key: "panelHeader",
+    title: "Header on a narrow screen",
+    description: "CloudPanel's own header wraps onto a second row instead of putting the Admin Area link and the avatar off the side of a phone.",
   },
   {
     key: "deviceTheme",
@@ -124,11 +136,6 @@ const COPY: TweakCopy[] = [
     key: "diskUsage",
     title: "Measured site sizes",
     description: "Adds a size column filled by a sweep that runs with the fifteen-minute repair. The sweep reads every site's home directory and its databases, at the lowest I/O priority.",
-  },
-  {
-    key: "wordpressLogin",
-    title: "One-click WordPress sign-in",
-    description: "Adds a WP Login action to every WordPress site, which signs you in as its first administrator. Switching this off removes the helper from every site it was installed in.",
   },
 ];
 
@@ -201,7 +208,7 @@ function siteRow(site: TweakSiteView, tweaks: PanelTweaks): string {
   return `
               <tr>
                 <td class="site-cell">${esc(site.domain)}</td>
-                <td class="type-cell" data-label="Application">${esc(site.application || site.type)}</td>
+                <td class="type-cell">${esc(applicationLabel(site.application, site.type))}</td>
                 <td data-label="Runtime">${site.runtime ? esc(site.runtime) : '<span class="hint">—</span>'}</td>
                 <td data-label="SSL">${certificateCell(site)}</td>
                 <td class="size-cell" data-label="Size">${diskCell(site, tweaks.diskUsage)}</td>

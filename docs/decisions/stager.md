@@ -32,6 +32,11 @@ overwrite, whole tables at a time at best. So Stager moves files and, for an
 Instatic site, content, and refuses the database outright rather than offering a
 table selection that is only safe if the operator already knows the answer.
 
+A clone starts from the fleet page at `/addons/stager/` or from the site's own
+Staging tab, and no longer from a link on CloudPanel's Sites list. Cloning is
+not an everyday action, and a link in every row of the list an operator reads
+every day is priced as though it were.
+
 Staging is a tab on CloudPanel's own site page, beside Maintenance. It shows
 the one site's two ends of a clone -- what has been staged from it, and whether
 it is itself a staging copy with a live site to go back to -- rather than the

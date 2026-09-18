@@ -18,23 +18,6 @@ import { ADDON_SITE_TABS } from "../../../lib/site-context";
 // of that strip shows are the same string, from lib/site-context.
 const TAB_LABEL = ADDON_SITE_TABS.find((tab) => tab.slug === "stager")!.label;
 
-/**
- * The site types the action binary will clone, guarded here too so a Node.js
- * or Python site does not show a button that only ever answers with an error.
- * These are the literal `site.type` column values, and they must stay in step
- * with CLONABLE_TYPES in addons/stager/action.ts (enforced by typeIsClonable,
- * called from cmdDescribe, cmdClone and cmdRun) -- that is the thing that
- * actually decides, and which this only mirrors.
- *
- * A reverse-proxy site is clonable only when its backend is an Instatic
- * instance this box manages, and Twig cannot see that: the fact lives in the
- * Instatic addon's own records. So the button appears on every reverse proxy
- * and the action binary refuses the ones that are not, by name. Showing it and
- * explaining the refusal is better than the alternative, which would be
- * teaching the panel's templates about another addon's state directory.
- */
-const CLONABLE = "{% if site.type in ['php', 'static', 'reverse-proxy'] %}";
-
 export const STAGER_TARGETS: AddonTarget[] = [
   {
     // The same anchor the Maintenance addon's tab uses. The injector applies
@@ -52,16 +35,6 @@ export const STAGER_TARGETS: AddonTarget[] = [
           <li>
             <a href="${url}?domain={{ site.domainName|url_encode }}">${TAB_LABEL}</a>
           </li>
-        {% endif %}`,
-  },
-  {
-    slug: "site-list-action",
-    template: "Frontend/Site/index.html.twig",
-    anchorAfter: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
-    required: false,
-    snippet: (url) => `
-        ${CLONABLE}
-          <a href="${url}/new?source={{ site.domainName|url_encode }}" style="margin-left: 0.75rem;">Clone</a>
         {% endif %}`,
   },
 ];

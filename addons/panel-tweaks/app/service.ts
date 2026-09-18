@@ -1,13 +1,5 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
-import type { PanelTweaks, PanelTweaksState, ScanResult, SetTweaksResult, WpLoginResult } from "../action";
-
-const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
-
-export function validateDomain(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const domain = value.trim().toLowerCase().replace(/\.$/, "");
-  return domain.length <= 253 && DOMAIN_RE.test(domain) ? domain : null;
-}
+import type { PanelTweaks, PanelTweaksState, ScanResult, SetTweaksResult } from "../action";
 
 function call<T>(verb: string, args: string[] = [], input?: string, timeout?: number): Promise<ActionResult<T>> {
   return callGatewayAction<T>("panel-tweaks", verb, args, input, timeout ? { timeout } : undefined);
@@ -32,9 +24,5 @@ export const panelTweaksService = {
 
   scan(): Promise<ActionResult<ScanResult>> {
     return call<ScanResult>("scan", [], undefined, SCAN_TIMEOUT_MS);
-  },
-
-  wpLogin(domain: string): Promise<ActionResult<WpLoginResult>> {
-    return call<WpLoginResult>("wp-login", [`--domain=${domain}`]);
   },
 };

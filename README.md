@@ -2,8 +2,9 @@
 
 Manage Cloudflare-only site access, host Instatic CMS sites, create staging
 copies, manage per-site maintenance pages, tune PHP-FPM worker limits by
-category, and add search, sorting and extra columns to CloudPanel's own Sites
-page in [CloudPanel](https://www.cloudpanel.io/). Access uses your existing
+category, sign in to any WordPress in one click, and add search, sorting and
+extra columns to CloudPanel's own Sites page in
+[CloudPanel](https://www.cloudpanel.io/). Access uses your existing
 administrator login.
 
 ![CloudPanel Addons Manager](docs/screenshots/addons.png)
@@ -17,7 +18,8 @@ administrator login.
 | Stager | Create staging copies of WordPress, PHP, static, and Instatic sites, and promote them back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
 | Maintenance Mode | Serve a customizable 503 page per site with instant toggles and IP bypasses. |
 | PHP Resources | Group PHP sites into categories of PHP-FPM worker limits, assign them in bulk, and pick the category new sites join. |
-| Panel Tweaks | Small additions to CloudPanel's own pages: a site count, search, sorting, SSL, runtime and measured size columns, a device theme on the login page, and one-click WordPress sign-in. |
+| Panel Tweaks | Small additions to CloudPanel's own pages: a site count, search, sorting, SSL, runtime and measured size columns, a Sites table and a header that read on a phone, row actions in a menu, and a device theme on the login page. |
+| WordPress Sign-In | Open any WordPress on the server as its first administrator, from the panel's Sites page, without its password. |
 
 ## Install
 
@@ -45,7 +47,7 @@ can access it.
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
 Addon names are `cloudflare-ips`, `instatic`, `stager`, `maintenance`,
-`php-resources`, and `panel-tweaks`. Run
+`php-resources`, `panel-tweaks`, and `wp-login`. Run
 `clp-addons --help` for version selection and data removal options.
 
 See [Instatic backup and restore](docs/instatic-backups.md) for CloudPanel Remote
