@@ -312,6 +312,43 @@ test("siteView explains that the global override outranks this site's saved sett
   expect(siteEnabled).toContain('<div id="global-notice" class="notice" hidden>');
 });
 
+test("siteView renders responsive heading layout with badge after domain title and button in actions", () => {
+  const site = { domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] };
+  const template = { domain: "one.example.com", custom: false, html: "<h1>Maintenance</h1>" };
+  const html = siteView(site, template, "1.2.3.4", false);
+
+  expect(html).toContain('class="page-heading site-heading"');
+  expect(html).toContain('<div class="site-header-main"><div class="site-title-row"><h1>one.example.com</h1><span class="badge state-live" data-status-domain="one.example.com">Live</span></div>');
+  expect(html).toContain('<p class="site-desc">Maintenance mode applies to HTTP and HTTPS traffic for this site.</p>');
+  expect(html).toContain('<div class="actions"><a class="btn" href="/addons/maintenance/">All maintenance sites</a></div>');
+
+  // Verify DOM order: title precedes badge, badge precedes description, description precedes actions
+  const titleIndex = html.indexOf('<h1>one.example.com</h1>');
+  const badgeIndex = html.indexOf('data-status-domain="one.example.com"');
+  const descIndex = html.indexOf('<p class="site-desc">');
+  const actionsIndex = html.indexOf('<div class="actions"><a class="btn" href="/addons/maintenance/">All maintenance sites</a></div>');
+
+  expect(titleIndex).toBeGreaterThan(-1);
+  expect(badgeIndex).toBeGreaterThan(titleIndex);
+  expect(descIndex).toBeGreaterThan(badgeIndex);
+  expect(actionsIndex).toBeGreaterThan(descIndex);
+
+  // Verify layout styling includes natural inline-flex title row and mobile contents order
+  const page = layout("Maintenance", html);
+  expect(page).toContain(".site-heading {");
+  expect(page).toContain(".site-heading .site-title-row {");
+  expect(page).toContain("@media (max-width:760px)");
+  expect(page).toContain("display: contents;");
+  expect(page).toContain("grid-template-areas:");
+  expect(page).toContain('"badge .     actions"');
+  expect(page).toContain("overflow-x: auto;");
+
+  // Verify toggleMaintenance does not show notify popup on success
+  expect(CLIENT_JS).not.toContain("is now in maintenance mode.");
+  expect(CLIENT_JS).not.toContain("is now live.");
+});
+
+
 test("a site-scoped page keeps CloudPanel's site navigation rather than a back link", () => {
   const site = { domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] };
   const content = siteView(site, { domain: site.domain, custom: false, html: "" }, "", false);
