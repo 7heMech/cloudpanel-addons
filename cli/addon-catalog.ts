@@ -24,6 +24,7 @@ import { INSTATIC_ADDON } from "../addons/instatic/addon";
 import { LOGIN_THEME_ADDON } from "../addons/login-theme/addon";
 import { MAINTENANCE_ADDON } from "../addons/maintenance/addon";
 import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
+import { REDIRECTS_ADDON } from "../addons/redirects/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
 
 export type { AddonTarget };
@@ -75,6 +76,7 @@ const DEFINITIONS: AddonDefinition[] = [
   STAGER_ADDON,
   MAINTENANCE_ADDON,
   PHP_RESOURCES_ADDON,
+  REDIRECTS_ADDON,
   LOGIN_THEME_ADDON,
 ];
 

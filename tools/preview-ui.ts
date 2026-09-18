@@ -7,10 +7,12 @@ import { dashboardView, layout as instaticLayout, newInstanceView, jobView as in
 import { jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, newCloneView, promoteListView, promoteView, siteStagingView } from "../addons/stager/app/views";
 import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
 import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
+import { fleetView as redirectsFleetView, layout as redirectsLayout } from "../addons/redirects/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
 import { PRESET_CATEGORIES, STOCK_PROFILE, type PhpResourcesState, type PoolSiteState } from "../addons/php-resources/action";
+import type { RedirectsState } from "../addons/redirects/action";
 import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { type: "text" };
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
@@ -91,6 +93,21 @@ const cloudflareSites = [
   { domain: "pages.example.com", type: "reverse-proxy", enabled: true, excludedFromAutomatic: false },
   { domain: "a-rather-long-customer-hostname.staging.example.com", type: "nodejs", enabled: false, excludedFromAutomatic: false },
 ];
+
+/**
+ * The three states a redirect row can be in: the ordinary one, one that drops
+ * the request path, and one whose vhost CloudPanel has since regenerated.
+ */
+function redirectsPreviewState(url: URL): RedirectsState {
+  if (url.searchParams.has("empty")) return { redirects: [] };
+  return {
+    redirects: [
+      { domain: "old.example.com", target: "https://www.example.com", code: 301, preservePath: true, type: "static", applied: true },
+      { domain: "promo.example.com", target: "https://www.example.com/campaigns/spring", code: 302, preservePath: false, type: "static", applied: true },
+      { domain: "a-rather-long-retired-hostname.example.com", target: "https://www.example.com/archive", code: 301, preservePath: true, type: "static", applied: false },
+    ],
+  };
+}
 
 /** ?sites=all|none|mixed and ?auto=off cover the states the controls describe. */
 function cloudflarePreviewState(url: URL) {
@@ -320,7 +337,7 @@ const server = Bun.serve({
     if (path === "/addons/") {
       // ?enabled= picks which addons are on, so the Available section and the
       // enable/disable buttons can be reviewed without a CloudPanel install.
-      const enabled = empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,php-resources").split(",").filter(Boolean);
+      const enabled = empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,php-resources,redirects").split(",").filter(Boolean);
       const previewJob = state && ["running", "queued", "failed"].includes(state)
         ? {
             id: "20260910T093000Z-abc123", kind: "enable", addon: "stager", state,
@@ -329,7 +346,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "login-theme"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "redirects", "login-theme"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
@@ -374,6 +391,17 @@ const server = Bun.serve({
       );
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
+    } else if (path === "/addons/redirects/" || path === "/addons/redirects") {
+      html = redirectsLayout("Redirects", redirectsFleetView(redirectsPreviewState(url)), notice);
+      // ?edit=<domain> opens that row's inline editor on load. The row only
+      // becomes a form after a click, and the screenshot tool does not click.
+      const editing = url.searchParams.get("edit");
+      if (editing) {
+        html = html.replace(
+          "</body>",
+          `<script>addEventListener('DOMContentLoaded',function(){editRedirect(${JSON.stringify(editing)})})</script></body>`,
+        );
+      }
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
       html = cloudflareLayout("Cloudflare IP access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {

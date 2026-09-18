@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync,
 } from "node:fs";
@@ -8,7 +8,10 @@ import {
   type CommandResult,
 } from "../../cli/action-common";
 import { PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { writeFileAtomic } from "../../lib/atomic-write";
+import {
+  commandError, errorMessage, openPanelDatabase, restoreVhosts, trustedVhost, withRecoveryFailures,
+  writeAtomicOwned, type VhostBackup,
+} from "../../cli/vhost-common";
 
 const POLICY_VERSION = 1;
 const MAX_SITES_PER_REQUEST = 10_000;
@@ -61,14 +64,6 @@ interface Policy {
 interface ParsedAction {
   verb: CloudflareVerb;
   enabled: boolean | null;
-}
-
-interface VhostBackup {
-  path: string;
-  content: string;
-  mode: number;
-  uid: number;
-  gid: number;
 }
 
 export const DEFAULT_CLOUDFLARE_ACTION_PATHS: CloudflareActionPaths = {
@@ -129,13 +124,6 @@ function readPolicy(path: string, expectedUid: number): Policy {
   return stablePolicy(policy as Policy);
 }
 
-function writeAtomicOwned(path: string, content: string, mode: number, uid: number, gid: number): void {
-  // The vhosts and the policy file belong to accounts this action is not: the
-  // panel owns its Nginx tree, and inheriting root here would make a file the
-  // panel can no longer rewrite. Ownership is passed, never defaulted.
-  writeFileAtomic(path, content, { mode, owner: { uid, gid }, createParent: true });
-}
-
 function writePolicy(path: string, policy: Policy, expectedUid: number): void {
   let uid = expectedUid;
   let gid = process.getgid?.() ?? 0;
@@ -148,16 +136,6 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
     gid = stat.gid;
   }
   writeAtomicOwned(path, `${JSON.stringify(stablePolicy(policy), null, 2)}\n`, 0o600, uid, gid);
-}
-
-function openPanelDatabase(path: string): Database {
-  try {
-    const db = new Database(path, { create: false, readwrite: true });
-    db.exec("PRAGMA busy_timeout = 5000;");
-    return db;
-  } catch (error) {
-    failAction(`CloudPanel database could not be opened: ${error instanceof Error ? error.message : String(error)}`);
-  }
 }
 
 function siteRows(db: Database): SiteRow[] {
@@ -201,20 +179,6 @@ function requestedDomains(input: string | undefined): string[] {
   return [...new Set(domains as string[])];
 }
 
-function trustedVhost(path: string, expectedUid: number): VhostBackup {
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
-    failAction(`refusing untrusted Nginx vhost ${path}`);
-  }
-  return {
-    path,
-    content: readFileSync(path, "utf8"),
-    mode: stat.mode & 0o777,
-    uid: stat.uid,
-    gid: stat.gid,
-  };
-}
-
 function escapedRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -236,34 +200,6 @@ export function transformVhost(content: string, siteUser: string, enabled: boole
     result = result.replace(access, (line) => `${line}\n  ${CLOUDFLARE_INCLUDE}`);
   }
   return result;
-}
-
-function commandError(label: string, result: CommandResult): string {
-  return `${label} failed: ${(result.stderr || result.stdout || `exit ${result.exitCode ?? "unknown"}`).trim()}`;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function withRecoveryFailures(primary: unknown, label: string, failures: string[]): Error {
-  const original = primary instanceof Error ? primary : new Error(String(primary));
-  if (failures.length === 0) return original;
-  const message = `${original.message}; ${label}: ${failures.join("; ")}`;
-  if (original instanceof ActionFailure) return new ActionFailure(message, original.data);
-  return new Error(message, { cause: original });
-}
-
-function restoreVhosts(backups: VhostBackup[]): string[] {
-  const failures: string[] = [];
-  for (const backup of backups) {
-    try {
-      writeAtomicOwned(backup.path, backup.content, backup.mode, backup.uid, backup.gid);
-    } catch (error) {
-      failures.push(`vhost ${backup.path}: ${errorMessage(error)}`);
-    }
-  }
-  return failures;
 }
 
 /** Updates selected DB rows and rendered vhosts, validating and reloading once. */

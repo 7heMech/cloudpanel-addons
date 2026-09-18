@@ -60,6 +60,17 @@ export const PHP_RESOURCES_ALLOWED_VERBS = new Set([
   "set-default",
 ]);
 
+/**
+ * `reconcile` is deliberately absent here too: it walks every redirect site
+ * and belongs to the repair path, not to a page.
+ */
+export const REDIRECTS_ALLOWED_VERBS = new Set([
+  "list",
+  "create",
+  "set",
+  "clear",
+]);
+
 export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
   "list",
   "set",
