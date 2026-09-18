@@ -42,7 +42,7 @@ export const BASE_STYLE = `
   --border: #e2e2e2; --card-border: #00000020; --row-border: #eaeaea;
   --text: #212529; --heading: #2e2e2e; --muted: #6c757d; --table-heading: #9bacb6;
   --link: #3c3c3c; --accent: #0078d4; --primary: #267ddd; --primary-hover: #2e87eb;
-  --header-bg: #fff; --header-link: #aaa; --tab-link: #666;
+  --header-bg: #fff; --header-link: #aaa; --header-icon: #aaa; --tab-link: #666;
   --input-bg: #fff; --input-border: #ced4da; --readonly-bg: #e9ecef;
   --button-bg: #fff; --button-text: #777; --button-border: #d3d3d3; --button-hover: #e4e5e6;
   --ok: #23774b; --warn: #936319; --bad: #bc3636;
@@ -55,7 +55,7 @@ html.dark {
   --bg: #0e1217; --panel: #1c1f26; --surface: #25282f;
   --border: #a8b3cf33; --card-border: #a8b3cf33; --row-border: #a8b3cf33;
   --text: #fff; --heading: #fff; --muted: #9b9b9b; --table-heading: #9bacb6;
-  --link: #fff; --header-bg: #25282f; --header-link: #fff; --tab-link: #9b9b9b;
+  --link: #fff; --header-bg: #25282f; --header-link: #fff; --header-icon: #aaa; --tab-link: #9b9b9b;
   --input-bg: #20242c; --input-border: #a8b3cf33; --readonly-bg: #0e1217;
   --button-bg: #21262d; --button-text: #c9d1d9; --button-border: #a8b3cf33; --button-hover: #1c1f26;
   --ok: #81c9a0; --warn: #e5bc76; --bad: #ef9999;
@@ -95,9 +95,10 @@ html.dark .clp-addon-logo-dark { display: block; }
 .clp-addon-header-inner > #clp-addons-update-notice + .clp-addon-header-tools { margin-left: 0; }
 /* Sized by padding rather than by a width, as the panel sizes its own: the one
    with a label beside its icon is wider, and the label is what a desktop has
-   room for. */
+   room for. The panel turns its navigation white in the dark theme and leaves
+   these grey, so they have a colour of their own. */
 .clp-addon-tool { border: 0; border-left: 1px solid var(--row-border); background: transparent;
-  color: var(--header-link); padding: 0 25px; cursor: pointer; display: flex; align-items: center;
+  color: var(--header-icon); padding: 0 25px; cursor: pointer; display: flex; align-items: center;
   justify-content: center; gap: 5px; font: inherit; white-space: nowrap; }
 .clp-addon-tool:hover { color: var(--accent); text-decoration: none; }
 .clp-addon-tool > svg { width: 20px; height: 20px; flex: 0 0 auto; }
