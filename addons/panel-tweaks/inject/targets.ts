@@ -725,7 +725,12 @@ const PANEL_HEADER_STYLE = headerWrapStyle("body .header") + `
   html.dark body .header .nav-link-container { border-top-color: var(--clp-border-color); }
   body .header .nav-link-container > a { padding: 0 15px; }
   /* CloudPanel draws its dashboard charts at a fixed 545px, which is wider than
-     the phone they are on, and the information boxes at a fixed 240px. */
+     the phone they are on, and the information boxes at a fixed 240px. The
+     container is a flex row of two-chart rows, so widening a chart to its row
+     only splits the screen between them: the rows have to stop sharing a line
+     first. */
+  body .chart-container { display: block; }
+  body .chart-container .chart-row { width: auto; }
   body .chart-container .chart { width: 100%; margin: 12px 0; }
   body .chart-container .chart .chart-content { overflow-x: auto; }
   body .chart-container .chart canvas { max-width: 100%; }
