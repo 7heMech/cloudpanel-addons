@@ -93,17 +93,22 @@ html.dark .clp-addon-logo-dark { display: block; }
 .clp-addon-header-tools { display: flex; margin-left: auto; }
 .clp-addon-header-inner > #clp-addons-update-notice { margin: 0 20px 0 auto; }
 .clp-addon-header-inner > #clp-addons-update-notice + .clp-addon-header-tools { margin-left: 0; }
+/* Sized by padding rather than by a width, as the panel sizes its own: the one
+   with a label beside its icon is wider, and the label is what a desktop has
+   room for. */
 .clp-addon-tool { border: 0; border-left: 1px solid var(--row-border); background: transparent;
-  color: var(--header-link); width: 70px; cursor: pointer; display: grid; place-items: center; gap: 0; }
+  color: var(--header-link); padding: 0 25px; cursor: pointer; display: flex; align-items: center;
+  justify-content: center; gap: 5px; font: inherit; white-space: nowrap; }
 .clp-addon-tool:hover { color: var(--accent); text-decoration: none; }
-.clp-addon-tool > svg { width: 20px; height: 20px; }
+.clp-addon-tool > svg { width: 20px; height: 20px; flex: 0 0 auto; }
+#clp-admin-area > svg { width: 26px; height: 26px; }
 #theme-switch .sun { display: none; }
 html.dark #theme-switch .sun { display: block; }
 html.dark #theme-switch .moon { display: none; }
 /* The account control is the panel's: an avatar, a caret, and a menu of the two
    links its own dropdown carries. */
 .clp-addon-account { position: relative; display: flex; }
-#clp-account-button { display: flex; align-items: center; justify-content: center; gap: 4px; width: 80px; }
+#clp-account-button { gap: 4px; }
 #clp-account-button > .clp-addon-avatar { width: 35px; height: 35px; border-radius: 50%; }
 #clp-account-button > .clp-addon-caret { width: 10px; height: 10px; }
 .clp-addon-account-menu { position: absolute; top: 100%; right: 6px; z-index: 30; min-width: 160px;
@@ -272,7 +277,11 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   /* The logo and the tools share the first row and the navigation takes the
      second, rather than each taking a row of its own. */
   .clp-addon-header-tools { order: 1; margin-left: auto; }
-  .clp-addon-tool { width: 56px; }
+  /* The label goes and every cell is the same width, which is the shape the
+     panel's own header takes on a phone. */
+  .clp-addon-tool { width: 56px; padding: 0; }
+  .clp-addon-tool-label { display: none; }
+  #clp-admin-area > svg { width: 20px; height: 20px; }
   #clp-account-button { width: 66px; }
   #clp-account-button > .clp-addon-avatar { width: 26px; height: 26px; }
   .clp-addon-primary-nav { order: 2; width: 100%; overflow-x: auto; border-top: 1px solid var(--border); padding: 0 5px; gap: 0; }
@@ -815,8 +824,9 @@ ${primaryNav}
         <svg class="moon" viewBox="0 0 384 512" fill="currentColor" aria-hidden="true"><path d="M223.5 32C100 32 0 132.3 0 256S100 480 223.5 480c60.6 0 115.5-24.2 155.8-63.4c5-4.9 6.3-12.5 3.1-18.7s-10.1-9.7-17-8.5c-9.8 1.7-19.8 2.6-30.1 2.6c-96.9 0-175.5-78.8-175.5-176c0-65.8 36-123.1 89.3-153.3c6.1-3.5 9.2-10.5 7.7-17.3s-7.3-11.9-14.3-12.5c-6.3-.5-12.6-.8-19-.8z"/></svg>
         <svg class="sun" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd"></path></svg>
       </button>
-      <a class="clp-addon-tool" href="${esc(PANEL_ADMIN_URL)}" title="Admin Area" aria-label="Admin Area">
+      <a class="clp-addon-tool" id="clp-admin-area" href="${esc(PANEL_ADMIN_URL)}" title="Admin Area">
         <svg viewBox="0 0 640 512" aria-hidden="true"><path fill="currentColor" d="M315.3 255.5c6.8-19 16.4-36.5 28.4-52.2-7.4 3-15.4 4.7-23.8 4.7-35.3 0-64-28.7-64-64s28.7-64 64-64 64 28.7 64 64c0 8.4-1.7 16.4-4.7 23.8 15.7-12 33.2-21.7 52.2-28.4C429 79.7 380.3 32 320 32c-61.9 0-112 50.1-112 112 0 60.3 47.7 109 107.3 111.5zM96 224c44.2 0 80-35.8 80-80s-35.8-80-80-80-80 35.8-80 80 35.8 80 80 80zm0-112c17.6 0 32 14.4 32 32s-14.4 32-32 32-32-14.4-32-32 14.4-32 32-32zm244.3 320H176v-44.8c0-36.4 29.2-66.2 65.4-67.2 20.6 8.6 41.9 13.6 63.4 15.2-.7-9.3-2-24 2.3-48.6-16.8-1.5-33.1-4.9-48-11.2-5.1-2.1-10.4-3.4-15.9-3.4-63.6 0-115.2 51.6-115.2 115.2V432c0 26.5 21.5 48 48 48h214c-19.4-12.9-36.2-29.2-49.7-48zM154.8 270.3c-13.4-9-29.5-14.3-46.8-14.3H84c-46.3 0-84 37.7-84 84 0 13.2 10.8 24 24 24s24-10.8 24-24c0-19.8 16.2-36 36-36h24c4.4 0 8.5 1.1 12.3 2.5 9.3-14 21.1-26.1 34.5-36.2zm455.7 71c2.6-14.1 2.6-28.5 0-42.6l25.8-14.9c3-1.7 4.3-5.2 3.3-8.5-6.7-21.6-18.2-41.2-33.2-57.4-2.3-2.5-6-3.1-9-1.4l-25.8 14.9c-10.9-9.3-23.4-16.5-36.9-21.3v-29.8c0-3.4-2.4-6.4-5.7-7.1-22.3-5-45-4.8-66.2 0-3.3.7-5.7 3.7-5.7 7.1v29.8c-13.5 4.8-26 12-36.9 21.3l-25.8-14.9c-2.9-1.7-6.7-1.1-9 1.4-15 16.2-26.5 35.8-33.2 57.4-1 3.3.4 6.8 3.3 8.5l25.8 14.9c-2.6 14.1-2.6 28.5 0 42.6l-25.8 14.9c-3 1.7-4.3 5.2-3.3 8.5 6.7 21.6 18.2 41.1 33.2 57.4 2.3 2.5 6 3.1 9 1.4l25.8-14.9c10.9 9.3 23.4 16.5 36.9 21.3v29.8c0 3.4 2.4 6.4 5.7 7.1 22.3 5 45 4.8 66.2 0 3.3-.7 5.7-3.7 5.7-7.1v-29.8c13.5-4.8 26-12 36.9-21.3l25.8 14.9c2.9 1.7 6.7 1.1 9-1.4 15-16.2 26.5-35.8 33.2-57.4 1-3.3-.4-6.8-3.3-8.5l-25.8-14.9zM496 368.5c-26.8 0-48.5-21.8-48.5-48.5s21.8-48.5 48.5-48.5 48.5 21.8 48.5 48.5-21.7 48.5-48.5 48.5z"></path></svg>
+        <span class="clp-addon-tool-label">Admin Area</span>
       </a>
       <div class="clp-addon-account">
         <button class="clp-addon-tool" id="clp-account-button" type="button" onclick="toggleAccountMenu()"

@@ -713,10 +713,19 @@ const PANEL_HEADER_STYLE = headerWrapStyle("body .header") + `
   body .header .navbar-right > ul > li { height: 64px; line-height: 1; }
   body .header .navbar-right > ul > li > a { display: flex; align-items: center; justify-content: center;
     width: 56px; height: 64px; padding: 0; }
+  /* The panel nudges each icon by a pixel or two to sit beside the text it no
+     longer has here, and it names the list item to do it -- so the reset has to
+     name the item too, or the icon lands off the centre of its cell. */
+  body .header .navbar-right > ul > li.theme-switcher > a svg,
+  body .header .navbar-right > ul > li.admin-area > a svg,
   body .header .navbar-right > ul > li > a svg { width: 20px; height: 20px; margin: 0; }
   /* The label goes, the icon stays: "Admin Area" beside an avatar and a theme
      switch is the one thing that will not fit beside a 155px logo. */
   body .header .navbar-right > ul > li.admin-area > a { font-size: 0; }
+  /* Bootstrap draws the caret from the font size it inherits, which is the
+     page's rather than the avatar's. */
+  body .header .navbar-right > ul > li.user-avatar > a.dropdown-toggle::after { border-top-width: 4px;
+    border-left-width: 4px; border-right-width: 4px; margin-left: 4px; }
   body .header .navbar-right > ul > li.user-avatar > a { width: 66px; }
   body .header .navbar-right > ul > li.user-avatar > a img { width: 26px; height: 26px; }
   /* The navigation starts where the logo does, and the rule between the two
