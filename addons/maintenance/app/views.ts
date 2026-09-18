@@ -12,6 +12,40 @@ const BASE = mountPath("maintenance");
 const STYLE = `
 /* Shrinkable, so the badge and the button wrap rather than overflow a phone. */
 .page-heading .actions { align-items:center; }
+.site-heading {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) auto 1fr auto;
+  grid-template-areas:
+    "title badge . actions"
+    "desc  desc  . actions";
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 6px;
+}
+.site-heading .site-title {
+  grid-area: title;
+  min-width: 0;
+}
+.site-heading .site-title h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.site-heading .badge {
+  grid-area: badge;
+  align-self: center;
+  white-space: nowrap;
+}
+.site-heading .site-desc {
+  grid-area: desc;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.site-heading .actions {
+  grid-area: actions;
+  justify-self: end;
+  align-self: center;
+}
 .state-live { color:var(--ok); border-color:var(--ok); }
 .state-maintenance { color:var(--bad); border-color:var(--bad); }
 .state-unavailable { color:var(--muted); }
@@ -59,6 +93,33 @@ html.dark #template-ace .ace_comment { color:#93a1ad; }
 .global-card { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
 .global-card h2 { margin:0 0 8px; }
 .global-card p { margin:0; }
+@media (max-width:760px) {
+  .site-heading {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .site-heading .site-title {
+    order: 1;
+    width: 100%;
+  }
+  .site-heading .site-desc {
+    order: 2;
+    margin: 0;
+  }
+  .site-heading .badge {
+    order: 3;
+    align-self: flex-start;
+    margin-top: 2px;
+  }
+  .site-heading .actions {
+    order: 4;
+    width: 100%;
+    margin-top: 4px;
+    justify-content: flex-start;
+  }
+}
 @media (max-width:700px) {
   .bypass-grid { grid-template-columns:1fr; }
   .bypass-actions { justify-content:flex-start; }
@@ -568,8 +629,7 @@ export function siteView(
   globalEnabled = false,
 ): string {
   const globalNotice = `<div id="global-notice" class="notice"${globalEnabled && !site.enabled ? "" : " hidden"}>Global maintenance is on, so this site serves the maintenance page even though its own setting below is off. Turning the setting below off does not take this site out of global maintenance.</div>`;
-  return `<div class="page-heading" data-global-maintenance="${globalEnabled}"><div><h1>${esc(site.domain)}</h1><p>Maintenance mode applies to HTTP and HTTPS traffic for this site.</p></div>
-    <div class="actions">${statusBadge(site, globalEnabled)}<a class="btn" href="${BASE}/">All maintenance sites</a></div></div>
+  return `<div class="page-heading site-heading" data-global-maintenance="${globalEnabled}"><div class="site-title"><h1>${esc(site.domain)}</h1></div>${statusBadge(site, globalEnabled)}<p class="site-desc">Maintenance mode applies to HTTP and HTTPS traffic for this site.</p><div class="actions"><a class="btn" href="${BASE}/">All maintenance sites</a></div></div>
   ${globalNotice}
   <div class="card"><div class="switch-row"><div><h2>Maintenance response</h2><p class="hint">Visitors receive HTTP 503 with a five-minute Retry-After header. ACME certificate challenges and bypassed IPs remain live.</p></div>
     <label class="switch switch-danger"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" data-available="true" aria-label="Maintenance mode for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label>
