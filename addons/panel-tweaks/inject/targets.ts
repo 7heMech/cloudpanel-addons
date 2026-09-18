@@ -717,7 +717,7 @@ const PANEL_HEADER_STYLE = headerWrapStyle("body .header") + `
   /* The label goes, the icon stays: "Admin Area" beside an avatar and a theme
      switch is the one thing that will not fit beside a 155px logo. */
   body .header .navbar-right > ul > li.admin-area > a { font-size: 0; }
-  body .header .navbar-right > ul > li.user-avatar > a { width: 62px; }
+  body .header .navbar-right > ul > li.user-avatar > a { width: 66px; }
   body .header .navbar-right > ul > li.user-avatar > a img { width: 26px; height: 26px; }
   /* The navigation starts where the logo does, and the rule between the two
      rows is the one the panel draws everywhere else rather than a tenth of it. */

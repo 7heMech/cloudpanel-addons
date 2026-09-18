@@ -17,11 +17,16 @@ import { UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
  *
  * The header reproduces the panel's, so it carries the panel's controls: the
  * Admin Area, and an account menu of Settings and Logout. The avatar is a
- * drawing rather than the operator's gravatar, because the manager serves these
- * pages behind the panel's session without ever being told whose it is. The two
  * icons are the panel's own paths, copied rather than approximated, so the same
  * control does not have two shapes depending on which page it is on.
+ *
+ * The avatar is Gravatar's own default, the image the panel itself shows for an
+ * account with no gravatar, carried here as data rather than fetched: the
+ * manager serves these pages behind the panel's session without ever being told
+ * whose it is, so it has no address to ask about, and asking would tell
+ * Gravatar which boxes an operator administers.
  */
+const DEFAULT_AVATAR = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q1JFQVRPUjogZ2QtanBlZyB2MS4wICh1c2luZyBJSkcgSlBFRyB2NjIpLCBxdWFsaXR5ID0gOTAK/9sAQwADAgIDAgIDAwMDBAMDBAUIBQUEBAUKBwcGCAwKDAwLCgsLDQ4SEA0OEQ4LCxAWEBETFBUVFQwPFxgWFBgSFBUU/9sAQwEDBAQFBAUJBQUJFA0LDRQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU/8AAEQgARgBGAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/aAAwDAQACEQMRAD8A+uKKKKACiiigAooooAKKKKACiiigAooooAK7Hwx8NrzXYEurmT7FavypZcu49QOw9zVP4feH01/xDGky7raBfOkU9GweB+JI/AGvdQABgcCgDz2b4OaeYsR31ykn95wrD8sD+dcJ4n8G3/heUGcCa2c4S4j+6T6H0Ne/VS1TTYNWsJ7O5TfFKu0j09CPcdaAPnGirOp2D6XqFzaSffgkaMn1wetVqACiiigAooooA9J+DO37Rqufv7Y8fTLZ/pXqVeE+APECeH/EEckrbbaceTKx6KCeD+BA/DNe6BgwBByD0IoAdRRVHVtSg0ewmvLl9kUS7j6k9gPc9KAPFfiHt/4TLUtnTcv57Fz+tc5VnUr6TU9QuLuX/WTSNIfbJziq1ABRRRQAUUV1fgDwgPE2oPJcgixt8GTHG89lz/P/AOvQBh6XoWo6yxWys5bjHBZV+UfU9BXr/gLStc0qyMGqSxmFRiKLO50/4EOMe3P4V09tbRWcCQwRrFEgwqIMACpqACvNfiB4c8Sa1eExbLuwQ7ooYiFK/UE8n3/lXpVFAHzXeWVxYTmG6gkt5R1SRSp/WoK+iNc0Gy8QWbW15EHU/dcfeQ+oPavCPEGizeHtVnsZvmaM/K4HDKehoAzqKKKACvbfhfapbeEbZ1HzTu8jH33bf5KKKKAOuooooAKKKKACvK/jNaIl3plyB88iPGfoCCP/AEI0UUAecUUUUAf/2Q==";
 const PANEL_ADMIN_URL = "/admin/users";
 const PANEL_SETTINGS_URL = "/settings";
 const PANEL_LOGOUT_URL = "/logout";
@@ -99,7 +104,7 @@ html.dark #theme-switch .moon { display: none; }
    links its own dropdown carries. */
 .clp-addon-account { position: relative; display: flex; }
 #clp-account-button { display: flex; align-items: center; justify-content: center; gap: 4px; width: 80px; }
-#clp-account-button > .clp-addon-avatar { width: 30px; height: 30px; color: var(--header-link); }
+#clp-account-button > .clp-addon-avatar { width: 35px; height: 35px; border-radius: 50%; }
 #clp-account-button > .clp-addon-caret { width: 10px; height: 10px; }
 .clp-addon-account-menu { position: absolute; top: 100%; right: 6px; z-index: 30; min-width: 160px;
   padding: 6px 0; background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
@@ -263,13 +268,16 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 @media (max-width: 760px) {
   .clp-addon-header-inner { flex-wrap: wrap; }
   .clp-addon-brand { flex: 1 1 auto; min-width: 0; border: 0; margin: 0; min-height: 64px;
-    align-items: center; padding: 0 16px; }
+    align-items: center; padding: 0 20px; }
   /* The logo and the tools share the first row and the navigation takes the
      second, rather than each taking a row of its own. */
   .clp-addon-header-tools { order: 1; margin-left: auto; }
   .clp-addon-tool { width: 56px; }
-  #clp-account-button { width: 62px; }
+  #clp-account-button { width: 66px; }
+  #clp-account-button > .clp-addon-avatar { width: 26px; height: 26px; }
   .clp-addon-primary-nav { order: 2; width: 100%; overflow-x: auto; border-top: 1px solid var(--border); padding: 0 5px; gap: 0; }
+  /* The first link starts where the logo does, as the panel's own row does. */
+  .clp-addon-primary-nav .clp-addon-primary-link:first-child { margin-left: 0; }
   .clp-addon-primary-link { min-height: 48px; }
   .clp-addon-header-inner > #clp-addons-update-notice { justify-content: center; padding: 10px 16px; }
   main { padding: 20px 12px 30px; }
@@ -813,7 +821,7 @@ ${primaryNav}
       <div class="clp-addon-account">
         <button class="clp-addon-tool" id="clp-account-button" type="button" onclick="toggleAccountMenu()"
           aria-haspopup="true" aria-expanded="false" aria-label="Account">
-          <svg class="clp-addon-avatar" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="18" fill="currentColor" opacity=".18"/><circle cx="18" cy="14" r="6" fill="currentColor"/><path d="M6 33a12 12 0 0 1 24 0z" fill="currentColor"/></svg>
+          <img class="clp-addon-avatar" src="${DEFAULT_AVATAR}" alt="" width="35" height="35">
           <svg class="clp-addon-caret" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4.5 6 8.5 10 4.5z" fill="currentColor"/></svg>
         </button>
         <div class="clp-addon-account-menu" id="clp-account-menu" hidden>
