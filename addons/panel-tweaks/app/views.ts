@@ -123,9 +123,9 @@ const COPY: TweakCopy[] = [
     description: "Collects the links in the Sites table's last column — Manage, and whatever other addons put there — behind a single button on each row.",
   },
   {
-    key: "panelHeader",
-    title: "Header on a narrow screen",
-    description: "CloudPanel's own header wraps onto a second row instead of putting the Admin Area link and the avatar off the side of a phone.",
+    key: "panelMobile",
+    title: "CloudPanel's own pages on a phone",
+    description: "The panel's header wraps onto a second row instead of putting the Admin Area link and the avatar off the side, and the Dashboard's charts fit the screen instead of running past it.",
   },
   {
     key: "deviceTheme",

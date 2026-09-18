@@ -11,6 +11,9 @@ import { siteLayoutTarget } from "../lib/panel-nav";
 import { sitesSnippet } from "../addons/panel-tweaks/inject/targets";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MENU_ONLY_CLASS } from "../lib/row-actions";
+
+/** The `site.type` values Stager's own Twig condition offers a Clone for. */
+const CLONABLE_TYPES = ["php", "static", "reverse-proxy"];
 import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
 import { dashboardView as wpLoginDashboardView, layout as wpLoginLayout } from "../addons/wp-login/app/views";
 import { WORDPRESS_APPLICATIONS, type WpSiteView } from "../addons/wp-login/action";
@@ -171,7 +174,7 @@ function panelTweaksPreviewState(url: URL): PanelTweaksState {
       sitesTable: on,
       sitesMobile: on,
       actionMenu: url.searchParams.has("menu"),
-      panelHeader: on,
+      panelMobile: on,
       diskUsage: on,
     },
     diskMeasuredAt: measured ? at : "",
@@ -296,9 +299,9 @@ function unwrapTwig(block: string): string {
  * stored on a server, so `?off` and `?menu` change the injected markup here the
  * way a reconciliation would change it on a box.
  */
-function injectedSitesBlocks(state: PanelTweaksState): string {
+function injectedSitesBlocks(state: PanelTweaksState, search: string): string {
   return [
-    unwrapTwig(sitesSnippet("/addons/panel-tweaks", state.tweaks)),
+    unwrapTwig(sitesSnippet(`/addons/panel-tweaks${search}`, state.tweaks)),
     unwrapTwig(WP_LOGIN_SITES_SCRIPT.snippet("/addons/wp-login")),
     unwrapTwig(STAGER_SITES_STYLE.snippet("/addons/stager")),
   ].join("\n");
@@ -314,14 +317,14 @@ function wpLoginPreviewSites(url: URL): WpSiteView[] {
   ];
 }
 
-function panelSitesStub(state: PanelTweaksState, dark: boolean): string {
+function panelSitesStub(state: PanelTweaksState, dark: boolean, search = ""): string {
   const rows = state.sites.map((site) => `                  <tr>
                     <td><a href="/site/${site.domain}/settings">${site.domain}</a></td>
                     <td>${site.user}</td>
                     <td>${site.type.toUpperCase()}</td>
                     <td class="text-end"><a href="/site/${site.domain}/settings">Manage</a>${WORDPRESS_APPLICATIONS.includes(site.application)
                       ? `<a href="#" class="clp-wp-login" data-clp-domain="${site.domain}">WP Login</a>`
-                      : ""}<a class="${MENU_ONLY_CLASS}" href="/addons/stager/new?source=${site.domain}">Clone</a></td>
+                      : ""}${CLONABLE_TYPES.includes(site.type) ? `<a class="${MENU_ONLY_CLASS}" href="/addons/stager/new?source=${site.domain}">Clone</a>` : ""}</td>
                   </tr>`).join("\n");
   return `<!doctype html>
 <html lang="en"${dark ? ' class="dark"' : ""}>
@@ -357,7 +360,7 @@ html.dark .form-control, html.dark .form-select { background: #20242c; color: #f
       <div class="page-title"><h1>Sites</h1></div>
       <div class="page-actions"><a href="#">+ Add Site</a></div>
     </div>
-${injectedSitesBlocks(state)}
+${injectedSitesBlocks(state, search)}
     <div class="card card-table">
       <table class="table table-sites">
         <thead>
@@ -408,7 +411,7 @@ const server = Bun.serve({
     // /sites stands in for the panel's own site list, with the addon's block in
     // place; /addons/panel-tweaks/api/panel is what that block then asks for.
     if (path === "/sites") {
-      return new Response(panelSitesStub(panelTweaksPreviewState(url), url.searchParams.has("dark")), {
+      return new Response(panelSitesStub(panelTweaksPreviewState(url), url.searchParams.has("dark"), url.search), {
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
       });
     }

@@ -13,8 +13,8 @@ The switches are separate because what they cost is. Most are markup; one reads
 the whole disk every fifteen minutes, so measured sizes are off until asked for.
 The layout switches are separate for a different reason: they change the shape
 of a page CloudPanel drew itself, and the operator who prefers the panel's own
-shape is not wrong. So the narrow-screen site list, the narrow-screen header and
-the row menu are each their own switch, and the row menu -- which is a click
+shape is not wrong. So the narrow-screen site list, the panel's own pages on a
+phone and the row menu are each their own switch, and the row menu -- which is a click
 more than a link -- is off until asked for.
 
 What is deliberately not here is the WordPress sign-in, which shipped as a
@@ -52,7 +52,8 @@ effect on the next panel page rather than at the next reconciliation.
 
 Four switches cannot work that way. The login page has no session to ask with,
 and every route the manager serves is behind the administrator gate. The other
-three -- the narrow-screen site list, the narrow-screen header and the row menu
+three -- the narrow-screen site list, the panel's own pages on a phone and the
+row menu
 -- decide how a page looks the first time it is painted, and a rule that waits
 for a reply is a rule the reader watches arrive. So for those four the switch
 decides whether the markup is there at all, and moving one asks the manager to
@@ -73,7 +74,10 @@ Below 760px those rules give the panel's header the shape the addon's own pages
 already use: the logo and the tools in one 64px row of equal cells, the
 navigation on the row beneath. The panel's 75px row and its 25px cell padding
 are drawn for a desktop and only crowd a phone, and an operator moving between
-CloudPanel's pages and an addon's should not see the header change height.
+CloudPanel's pages and an addon's should not see the header change height. The
+same switch fixes the Dashboard, whose charts are drawn at a fixed 545px and
+whose information boxes at a fixed 240px -- both wider than the phone they are
+on.
 
 ## Nothing moves once it is on the screen
 
@@ -105,8 +109,11 @@ two: the addon does not know what is in the action cell, only that it is a link.
 `lib/row-actions.ts` is the whole agreement between the two addons. An addon
 with an action worth a place in the menu but not a link in every row of a list
 read every day marks it `clp-addons-menu-only` and emits the rule that hides it;
-the menu's own rule for the links inside it is what shows it again. Stager's
-`Clone` is the one that wants this. The hide is the owning addon's rather than
+the menu's own rule for the links inside it is what shows it again, last in the
+menu: an action nobody thought worth a link in the row is not the first thing in
+the menu either, and saying so here means the order does not depend on which
+addon's template patch went in first. Stager's `Clone` is the one that wants
+this. The hide is the owning addon's rather than
 this one's, because an operator who never installed this addon must still not be
 shown that link.
 
@@ -116,8 +123,11 @@ CloudPanel's sites template carries the domain, the site user and the site type.
 The certificate, the runtime version and the application are columns of a
 database the unprivileged manager cannot open, so the site list is assembled by
 the privileged action in one query and sent as data the script paints into
-cells. Each runtime table and the certificate table is an outer join: a panel
-build without one of them reports no runtime rather than failing the list.
+cells. The runtime tables and the certificate table arrived at different
+CloudPanel versions, and SQLite will not prepare a statement naming a table the
+database has not got, so the query is built from what `sqlite_master` says is
+there: a build without `python_settings` selects that column as NULL and reports
+no Python runtime rather than failing the list.
 
 Every value the script writes goes in as text or as an element it built. None of
 it is markup, because all of it came out of somebody's database.

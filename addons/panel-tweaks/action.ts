@@ -46,8 +46,8 @@ export interface PanelTweaks {
   sitesMobile: boolean;
   /** The Sites table's action links, collected into a menu on each row. */
   actionMenu: boolean;
-  /** A CloudPanel header that wraps instead of running off a phone's side. */
-  panelHeader: boolean;
+  /** CloudPanel's own header and dashboard, made to fit a narrow screen. */
+  panelMobile: boolean;
   /** The measured-size column, and the sweep that fills it. */
   diskUsage: boolean;
 }
@@ -59,7 +59,7 @@ export const DEFAULT_TWEAKS: PanelTweaks = {
   // Off until asked for: a menu is a click more than a link, and it is worth
   // that only once there is more than one thing behind it.
   actionMenu: false,
-  panelHeader: true,
+  panelMobile: true,
   // Off until asked for: it is the only tweak that reads the whole disk.
   diskUsage: false,
 };
@@ -73,7 +73,7 @@ export const DEFAULT_TWEAKS: PanelTweaks = {
  * reply would mean the reader watching the layout move.
  */
 export const TEMPLATE_TWEAK_KEYS: (keyof PanelTweaks)[] =
-  ["deviceTheme", "sitesMobile", "actionMenu", "panelHeader"];
+  ["deviceTheme", "sitesMobile", "actionMenu", "panelMobile"];
 
 export const TWEAK_KEYS = Object.keys(DEFAULT_TWEAKS) as (keyof PanelTweaks)[];
 
@@ -294,26 +294,56 @@ function openPanelDatabase(path: string): Database {
  * One query for everything the Sites table shows.
  *
  * The runtime tables and the certificate table arrived at different CloudPanel
- * versions, so each is an outer join: a panel without one of them reports no
- * runtime rather than failing the list. `site.certificate_id` rather than the
- * newest certificate row, because that column is the certificate the panel is
- * actually serving.
+ * versions, and SQLite refuses to prepare a statement that names a table the
+ * database does not have -- an outer join is not enough. So the joins a build
+ * can support are asked for and the rest are selected as NULL: a panel without
+ * `python_settings` reports no Python runtime rather than failing the list.
+ * `site.certificate_id` rather than the newest certificate row, because that
+ * column is the certificate the panel is actually serving.
  */
-const SITE_QUERY = `
+const OPTIONAL_JOINS = [
+  { table: "php_settings", alias: "p", column: "php_version", on: "p.site_id = s.id" },
+  { table: "nodejs_settings", alias: "n", column: "nodejs_version", on: "n.site_id = s.id" },
+  { table: "python_settings", alias: "y", column: "python_version", on: "y.site_id = s.id" },
+  { table: "certificate", alias: "c", column: "type AS certificate_type, c.expires_at AS certificate_expires_at",
+    absent: "NULL AS certificate_type, NULL AS certificate_expires_at", on: "c.id = s.certificate_id" },
+];
+
+function presentTables(db: Database): Set<string> {
+  try {
+    const rows = db.query<{ name: string }, []>(
+      `SELECT name FROM sqlite_master WHERE type IN ('table', 'view');`,
+    ).all();
+    return new Set(rows.map((row) => row.name));
+  } catch {
+    return new Set();
+  }
+}
+
+function siteQuery(db: Database): string {
+  const present = presentTables(db);
+  const columns: string[] = [];
+  const joins: string[] = [];
+  for (const join of OPTIONAL_JOINS) {
+    if (present.has(join.table)) {
+      columns.push(`${join.alias}.${join.column}`);
+      joins.push(`LEFT JOIN ${join.table} ${join.alias} ON ${join.on}`);
+    } else {
+      columns.push(join.absent ?? `NULL AS ${join.column}`);
+    }
+  }
+  return `
   SELECT s.domain_name, s.user, s.type, s.application, s.root_directory,
-         p.php_version, n.nodejs_version, y.python_version,
-         c.type AS certificate_type, c.expires_at AS certificate_expires_at
+         ${columns.join(",\n         ")}
   FROM site s
-  LEFT JOIN php_settings p ON p.site_id = s.id
-  LEFT JOIN nodejs_settings n ON n.site_id = s.id
-  LEFT JOIN python_settings y ON y.site_id = s.id
-  LEFT JOIN certificate c ON c.id = s.certificate_id
+  ${joins.join("\n  ")}
   ORDER BY s.domain_name;
 `;
+}
 
 function panelSites(db: Database): PanelSiteRow[] {
   try {
-    return db.query<PanelSiteRow, []>(SITE_QUERY).all();
+    return db.query<PanelSiteRow, []>(siteQuery(db)).all();
   } catch (error) {
     failAction(`CloudPanel site list could not be read: ${reason(error)}`);
   }

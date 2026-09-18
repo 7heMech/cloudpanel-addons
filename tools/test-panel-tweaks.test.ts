@@ -8,7 +8,7 @@ import {
   type PanelTweaksActionOptions, type PanelTweaksState, type ScanResult, type SetTweaksResult,
 } from "../addons/panel-tweaks/action";
 import {
-  PANEL_TWEAKS_TARGETS, deviceThemeSnippet, panelHeaderSnippet, sitesSnippet,
+  PANEL_TWEAKS_TARGETS, deviceThemeSnippet, panelMobileSnippet, sitesSnippet,
 } from "../addons/panel-tweaks/inject/targets";
 import type { PanelTweaks } from "../addons/panel-tweaks/action";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
@@ -199,8 +199,16 @@ test("the narrow-screen table, the row menu and the header are each in or out of
   expect(on.indexOf('classList.add("clp-tweaks-menu")'))
     .toBeLessThan(on.indexOf(String.raw`<div class="clp-tweaks-toolbar"`));
 
-  expect(panelHeaderSnippet(false)).toBe("");
-  expect(panelHeaderSnippet(true)).toContain("@media (max-width: 760px)");
+  expect(panelMobileSnippet(false)).toBe("");
+  expect(panelMobileSnippet(true)).toContain("@media (max-width: 760px)");
+});
+
+test("a panel build without the runtime or certificate tables still lists its sites", async () => {
+  seedOlderPanel();
+  const state = await act<PanelTweaksState>(["state"]);
+  expect(state.sites.map((site) => site.domain)).toEqual(["docs.example.com", "shop.example.com"]);
+  expect(state.sites.find((site) => site.domain === "shop.example.com")?.runtime).toBe("PHP 8.3");
+  expect(state.sites.every((site) => site.certificate === null)).toBe(true);
 });
 
 // The menu is a surface two addons share: one draws it, another puts an action
@@ -220,6 +228,13 @@ test("a menu-only action is hidden by its own addon and shown by the menu", () =
   expect(menu).toContain(`.${ROW_MENU_CLASS} > a`);
   // Nothing an addon styled its inline link with survives into the menu.
   expect(menu).toContain("margin: 0; padding: 9px 18px");
+  // And a menu-only action is last in the menu whatever order the templates
+  // were patched in, because it is the one nobody asked to have in the row.
+  expect(menu).toContain(`classList.contains("${MENU_ONLY_CLASS}") ? rare : actions`);
+
+  // A filtered-out row is a block or a flex item in the card layout, which
+  // ignores what the hidden attribute would otherwise do on its own.
+  expect(sites({ sitesMobile: true })).toContain("table.table-sites tr[hidden]");
 });
 
 // Both of CloudPanel's headers open with the same tag, and neither may stop an
@@ -272,6 +287,20 @@ function seedPanel(): void {
     INSERT INTO site VALUES (2, 'static', 'docs.example.com', 'docs.example.com', 'docs', 'Static', NULL);
     INSERT INTO php_settings VALUES (1, 1, '8.3');
     INSERT INTO "database" VALUES (1, 1, 'shopdb');
+  `);
+  db.close();
+}
+
+/**
+ * An older panel: no Python runtime table and no certificates at all. SQLite
+ * will not prepare a statement naming a table the database has not got, so an
+ * outer join is not what makes this survivable.
+ */
+function seedOlderPanel(): void {
+  const db = new Database(join(root, "panel.sq3"), { create: true });
+  db.exec(`
+    DROP TABLE python_settings;
+    DROP TABLE certificate;
   `);
   db.close();
 }

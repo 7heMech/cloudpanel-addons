@@ -104,10 +104,11 @@ shaped as CloudPanel drew it.
 
 Panel UI tweaks wants the same rules for a different reason, on a narrow screen
 and on any day, so `headerWrapStyle` in `lib/panel-nav.ts` takes the header's own
-selector and both ask for their own copy. What a phone additionally wants -- the
-navigation on a row of its own, a logo that shrinks, an Admin Area link down to
-its icon -- is the addon's alone, and a switch, because that is the panel's own
-shape being changed rather than room being made for something an addon added.
+selector and both ask for their own copy. What a phone additionally wants of the panel's own pages -- the navigation on a
+row of its own, a logo that shrinks, an Admin Area link down to its icon, a
+Dashboard chart that fits -- is the addon's alone, and a switch, because that is
+the panel's own shape being changed rather than room being made for something an
+addon added.
 
 ## One way to watch a job
 
@@ -144,7 +145,9 @@ navigation, and the three controls the panel puts on the right -- the theme
 switch, the Admin Area, and an account menu of Settings and Logout, pointing at
 the panel's own `/admin/users`, `/settings` and `/logout`. The avatar is a
 drawing rather than the operator's gravatar, because the manager serves these
-pages behind the panel's session without ever being told whose it is. Below
+pages behind the panel's session without ever being told whose it is. The theme
+and Admin Area icons are the panel's own paths rather than approximations of
+them, so one control does not have two shapes depending on the page. Below
 760px the logo and the three controls share one 64px row and the navigation
 takes the row beneath; that shape is what Panel UI tweaks gives the panel's own
 header on a phone, so moving between the two does not move the header.

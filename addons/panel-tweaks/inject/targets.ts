@@ -17,7 +17,7 @@
 
 import type { AddonTarget } from "../../../lib/addon-target";
 import { headerWrapStyle } from "../../../lib/panel-nav";
-import { ROW_MENU_CLASS } from "../../../lib/row-actions";
+import { MENU_ONLY_CLASS, ROW_MENU_CLASS } from "../../../lib/row-actions";
 import {
   APPLICATION_LABELS, CERTIFICATE_LABELS, SELF_SIGNED_CERTIFICATE,
   DEFAULT_TWEAKS, readTweaks, DEFAULT_PANEL_TWEAKS_PATHS,
@@ -86,10 +86,13 @@ const SITES_STYLE = `
 /* CloudPanel pads its cells 32px each side, which is comfortable for four
    columns and overflows the 1200px container at six. The table is also given a
    scroller, so a narrow window scrolls the table rather than the page.
-   table.table-sites td is what the panel sets the padding with, so the override
-   has to carry the same weight to land. */
+   .card .card-body-no-padding .table td is what the panel sets the cell padding
+   with and .table thead th what it sets the heading padding with, so the
+   override has to carry the heavier of the two or the headings move and the
+   cells do not. */
 .clp-tweaks-scroll { overflow-x: auto; }
-table.table-sites th, table.table-sites td { padding-left: 20px; padding-right: 20px; }
+.card .card-body-no-padding table.table-sites th,
+.card .card-body-no-padding table.table-sites td { padding-left: 20px; padding-right: 20px; }
 @media (max-width: 860px) {
   .clp-tweaks-toolbar .clp-tweaks-summary { margin-left: 0; flex-basis: 100%; }
 }
@@ -111,6 +114,9 @@ const SITES_MOBILE_STYLE = `
   .clp-tweaks-scroll { overflow-x: visible; }
   table.table-sites, table.table-sites tbody, table.table-sites tr, table.table-sites td { display: block; }
   table.table-sites thead { display: none; }
+  /* Blocks and flex items ignore the hidden attribute's default styling, and
+     the search below the heading is what sets it. */
+  table.table-sites tr[hidden], table.table-sites td[hidden] { display: none; }
   /* The cells lose their borders as blocks, so the row draws the only rule left
      telling one site from the next. The panel's own table border, in both of
      its themes, rather than a grey of this addon's choosing. */
@@ -130,9 +136,9 @@ const SITES_MOBILE_STYLE = `
      after it: the value says "WordPress" on its own, and a heading over it would
      only repeat the column it came from. The App column is the panel's third, so
      the two are put in this order rather than found in it. */
-  table.table-sites td.clp-tweaks-domain { order: 0; flex: 0 1 auto; min-width: 0;
+  table.table-sites td.clp-tweaks-domain { order: 0; flex: 0 0 calc(50% - 6px); min-width: 0;
     font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
-  table.table-sites td.clp-tweaks-type { order: 1; flex: 0 1 auto; max-width: 45%; margin: 2px 0 0;
+  table.table-sites td.clp-tweaks-type { order: 1; flex: 0 1 auto; max-width: 45%; margin: 1px 0 0;
     padding: 3px 8px !important; border: 1px solid #eaeaea !important; border-radius: 4px; color: #9bacb6;
     font-size: 12px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   html.dark table.table-sites td.clp-tweaks-type { border-color: var(--clp-border-color) !important; }
@@ -173,7 +179,7 @@ html.clp-tweaks-menu table.table-sites tbody td:last-child > button:not(.clp-twe
   font-size: 18px; line-height: 1; }
 .clp-tweaks-menu-button:hover,
 .clp-tweaks-menu-button[aria-expanded="true"] { background: rgba(127, 143, 153, .18); }
-.${ROW_MENU_CLASS} { position: fixed; z-index: 1000; min-width: 170px; padding: 6px 0;
+.${ROW_MENU_CLASS} { position: fixed; z-index: 2147483000; min-width: 170px; padding: 6px 0;
   border: 1px solid #eaeaea; border-radius: 6px; background: #fff; box-shadow: 0 8px 28px rgba(0, 0, 0, .16);
   text-align: left; }
 .${ROW_MENU_CLASS}[hidden] { display: none; }
@@ -469,8 +475,17 @@ const SITES_SCRIPT = `
       function build(row) {
         var cellEl = row.el.lastElementChild;
         if (!cellEl) return;
-        var actions = cellEl.querySelectorAll("a, button");
-        if (actions.length === 0) return;
+        var found = cellEl.querySelectorAll("a, button");
+        if (found.length === 0) return;
+        // An action the owning addon thought too rare for a link in the row is
+        // not the first thing in the menu either, whatever order the templates
+        // were patched in.
+        var actions = [];
+        var rare = [];
+        for (var f = 0; f < found.length; f++) {
+          (found[f].classList.contains("${MENU_ONLY_CLASS}") ? rare : actions).push(found[f]);
+        }
+        actions = actions.concat(rare);
 
         var list = document.createElement("div");
         list.className = "${ROW_MENU_CLASS}";
@@ -672,7 +687,9 @@ const PANEL_HEADER_STYLE = headerWrapStyle("body .header") + `
 @media (max-width: 960px) {
   body .header .nav-link-container,
   body .header .header-instance-information-container { order: 2; flex-basis: 100%;
-    border-top: 1px solid #e2e2e233; }
+    border-top: 1px solid #e2e2e2; }
+  html.dark body .header .nav-link-container,
+  html.dark body .header .header-instance-information-container { border-top-color: var(--clp-border-color); }
   /* The links become their own row, and scroll it rather than the page when a
      translation makes them wider than the phone they are on. */
   body .header .nav-link-container { display: flex; overflow-x: auto; scrollbar-width: none; }
@@ -685,19 +702,34 @@ const PANEL_HEADER_STYLE = headerWrapStyle("body .header") + `
    25px cell padding are drawn for a desktop and only crowd a phone. */
 @media (max-width: 760px) {
   body .header { min-height: 0; }
-  body .header .logo { display: flex; align-items: center; min-width: 0; min-height: 64px;
-    padding: 0 16px; margin: 0; border: 0; }
+  /* The divider belongs to the first tool, not to the logo, or a phone gets two
+     of them next to each other. html.dark body sets it as well, and outranks a
+     rule scoped to the header alone. */
+  body .header .logo,
+  html.dark body .header .logo { display: flex; align-items: center; min-width: 0; min-height: 64px;
+    padding: 0 20px; margin: 0; border: 0; }
   body .header .logo img { max-width: 100%; height: auto; }
   body .header .navbar-right { height: auto; padding: 0; }
   body .header .navbar-right > ul > li { height: 64px; line-height: 1; }
   body .header .navbar-right > ul > li > a { display: flex; align-items: center; justify-content: center;
     width: 56px; height: 64px; padding: 0; }
-  body .header .navbar-right > ul > li > a svg { margin: 0; }
+  body .header .navbar-right > ul > li > a svg { width: 20px; height: 20px; margin: 0; }
   /* The label goes, the icon stays: "Admin Area" beside an avatar and a theme
      switch is the one thing that will not fit beside a 155px logo. */
   body .header .navbar-right > ul > li.admin-area > a { font-size: 0; }
   body .header .navbar-right > ul > li.user-avatar > a { width: 62px; }
-  body .header .navbar-right > ul > li.user-avatar > a img { width: 30px; height: 30px; }
+  body .header .navbar-right > ul > li.user-avatar > a img { width: 26px; height: 26px; }
+  /* The navigation starts where the logo does, and the rule between the two
+     rows is the one the panel draws everywhere else rather than a tenth of it. */
+  body .header .nav-link-container { padding: 0 5px; border-top: 1px solid #e2e2e2; }
+  html.dark body .header .nav-link-container { border-top-color: var(--clp-border-color); }
+  body .header .nav-link-container > a { padding: 0 15px; }
+  /* CloudPanel draws its dashboard charts at a fixed 545px, which is wider than
+     the phone they are on, and the information boxes at a fixed 240px. */
+  body .chart-container .chart { width: 100%; margin: 12px 0; }
+  body .chart-container .chart .chart-content { overflow-x: auto; }
+  body .chart-container .chart canvas { max-width: 100%; }
+  body .information-box { width: auto; min-width: 0; margin: 12px 20px; }
 }
 `;
 
@@ -750,7 +782,7 @@ export function deviceThemeSnippet(on: boolean): string {
 }
 
 /** The narrow-screen header rules, or nothing at all. */
-export function panelHeaderSnippet(on: boolean): string {
+export function panelMobileSnippet(on: boolean): string {
   return on ? `<style>${PANEL_HEADER_STYLE}</style>` : "";
 }
 
@@ -789,6 +821,6 @@ export const PANEL_TWEAKS_TARGETS: AddonTarget[] = [
     // CloudPanel's headers and neither depends on what is in them.
     anchorBefore: '<header class="header d-flex">',
     required: false,
-    snippet: () => panelHeaderSnippet(storedTweaks().panelHeader),
+    snippet: () => panelMobileSnippet(storedTweaks().panelMobile),
   })),
 ];
