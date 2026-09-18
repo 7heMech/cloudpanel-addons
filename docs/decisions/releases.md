@@ -1,5 +1,20 @@
 # Releases and updates
 
+## Where a change is proven
+
+`dev` is the integration branch and `main` is what gets tagged. A pull request
+targets `dev`; every push to `dev` runs the checks and then installs that commit
+on the staging CloudPanel box, so a change is observed on a real panel before it
+reaches a release. Some of this project's behaviour has nowhere else to be
+seen -- CloudPanel's own templates, a site's generated vhost, an addon injected
+into a panel page -- and a unit test cannot stand in for it.
+
+The deploy workflow calls `tools/deploy-stg.ts`, the same script a workstation
+runs, rather than reproducing the upload-stop-install-repair sequence in YAML.
+It reads the box from `STG_HOST` and its credentials from `STG_SSH_KEY` and
+`STG_SSH_KNOWN_HOSTS`; the host key is pinned rather than learned on connection,
+because the deploy authenticates as root and then runs a command sequence.
+
 ## Verified artifacts
 
 The tag workflow builds one Linux x86-64 binary and publishes it with the

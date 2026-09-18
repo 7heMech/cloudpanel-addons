@@ -10,7 +10,15 @@ import { fileURLToPath } from "node:url";
 const repo = join(dirname(fileURLToPath(import.meta.url)), "..");
 const host = process.env.STG_HOST || "root@46.225.93.37";
 const key = process.env.STG_KEY || join(homedir(), ".ssh/cloudpanel-addons-dev-0bad61aa9144");
-const sshOptions = ["-o", "BatchMode=yes", "-i", key];
+// A workstation already knows this box; a CI runner does not, and learning the
+// host key on connection would let anything answering that address receive a
+// root command sequence. STG_KNOWN_HOSTS pins it instead.
+const knownHosts = process.env.STG_KNOWN_HOSTS;
+const sshOptions = [
+  "-o", "BatchMode=yes",
+  ...(knownHosts ? ["-o", `UserKnownHostsFile=${knownHosts}`, "-o", "StrictHostKeyChecking=yes"] : []),
+  "-i", key,
+];
 
 async function run(cmd: string[]): Promise<void> {
   const proc = Bun.spawn(cmd, { cwd: repo, stdout: "inherit", stderr: "inherit" });

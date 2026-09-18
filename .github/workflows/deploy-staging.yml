@@ -1,0 +1,112 @@
+# Deploys dev to the staging CloudPanel box.
+#
+# dev is where a change is proven on a real panel before it reaches main, so
+# every push to it installs that commit on staging. The checks run here first
+# and the deploy is skipped if they fail: staging is the only place some of
+# this project's behaviour can be observed at all -- CloudPanel's own templates,
+# a site's generated vhost, an addon injected into a panel page -- and a broken
+# binary there costs the next change its test bed.
+#
+# The deploy itself is `tools/deploy-stg.ts`, the same script run by hand from a
+# workstation. A second copy of the upload-stop-install-repair sequence written
+# in YAML is a second thing to keep correct.
+
+name: deploy-staging
+
+on:
+  push:
+    branches: [dev]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+  workflow_dispatch:
+
+# Never cancel a deploy in progress: it stops the services, swaps the binary and
+# runs repair, and a run killed between those leaves staging down. A second push
+# waits its turn instead.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    # Holds the staging credentials and records what was deployed. Add a
+    # required reviewer here to make a staging deploy a manual step.
+    environment: staging
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          # Kept in step with ci.yml and release.yml; see the note there.
+          bun-version: "1.4.2"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Full unit and supplemental regression suite
+        run: bun run test
+
+      - name: Check the staging credentials are configured
+        env:
+          STG_HOST: ${{ secrets.STG_HOST }}
+          STG_SSH_KEY: ${{ secrets.STG_SSH_KEY }}
+          STG_SSH_KNOWN_HOSTS: ${{ secrets.STG_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in STG_HOST STG_SSH_KEY STG_SSH_KNOWN_HOSTS; do
+            [ -n "${!name:-}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing secret(s):$missing. Set them on this repository or on" \
+                 "its staging environment. STG_HOST is root@<address>, STG_SSH_KEY is the" \
+                 "deploy key's private half, and STG_SSH_KNOWN_HOSTS is the box's public" \
+                 "host key line from 'ssh-keyscan <address>'."
+            exit 1
+          fi
+
+      - name: Write the SSH key and the host key
+        env:
+          STG_SSH_KEY: ${{ secrets.STG_SSH_KEY }}
+          STG_SSH_KNOWN_HOSTS: ${{ secrets.STG_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$RUNNER_TEMP/ssh"
+          printf '%s\n' "$STG_SSH_KEY" > "$RUNNER_TEMP/ssh/id"
+          chmod 600 "$RUNNER_TEMP/ssh/id"
+          # Pinned, not learned on connection. A deploy authenticates as root and
+          # then runs a command sequence; accepting whatever key answers is how
+          # that sequence reaches a host that is not staging.
+          printf '%s\n' "$STG_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/ssh/known_hosts"
+          chmod 600 "$RUNNER_TEMP/ssh/known_hosts"
+
+      - name: Build and install on staging
+        env:
+          STG_HOST: ${{ secrets.STG_HOST }}
+          STG_KEY: ${{ runner.temp }}/ssh/id
+          STG_KNOWN_HOSTS: ${{ runner.temp }}/ssh/known_hosts
+        run: bun tools/deploy-stg.ts
+
+      - name: Report what staging is running
+        env:
+          STG_HOST: ${{ secrets.STG_HOST }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$RUNNER_TEMP/ssh/known_hosts" \
+            -i "$RUNNER_TEMP/ssh/id" "$STG_HOST" \
+            'clp-addons --version; systemctl is-active clp-addons.service clp-addons-auth.socket' \
+            | tee -a "$GITHUB_STEP_SUMMARY"
