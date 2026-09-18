@@ -339,7 +339,9 @@ test("siteView renders responsive heading layout with badge after domain title a
   expect(page).toContain(".site-heading .site-title-row {");
   expect(page).toContain("@media (max-width:760px)");
   expect(page).toContain("display: contents;");
-  expect(page).toContain("flex-direction: column;");
+  expect(page).toContain("grid-template-areas:");
+  expect(page).toContain('"badge .     actions"');
+  expect(page).toContain("overflow-x: auto;");
 
   // Verify toggleMaintenance does not show notify popup on success
   expect(CLIENT_JS).not.toContain("is now in maintenance mode.");

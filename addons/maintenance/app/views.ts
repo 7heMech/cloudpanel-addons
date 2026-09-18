@@ -92,34 +92,44 @@ html.dark #template-ace .ace_comment { color:#93a1ad; }
 .global-card p { margin:0; }
 @media (max-width:760px) {
   .site-heading {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
+    display: grid;
+    grid-template-columns: minmax(max-content, auto) 1fr auto;
+    grid-template-areas:
+      "title title title"
+      "desc  desc  desc"
+      "badge .     actions";
     gap: 10px;
+    align-items: center;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
   }
   .site-heading .site-header-main,
   .site-heading .site-title-row {
     display: contents;
   }
   .site-heading h1 {
-    order: 1;
+    grid-area: title;
+    min-width: 0;
     width: 100%;
     margin: 0;
   }
   .site-heading .site-desc {
-    order: 2;
+    grid-area: desc;
+    min-width: 0;
+    width: 100%;
     margin: 0;
   }
   .site-heading .badge {
-    order: 3;
-    align-self: flex-start;
+    grid-area: badge;
+    justify-self: start;
+    white-space: nowrap;
     margin-top: 2px;
   }
   .site-heading .actions {
-    order: 4;
-    width: 100%;
-    margin-top: 4px;
-    justify-content: flex-start;
+    grid-area: actions;
+    justify-self: end;
+    white-space: nowrap;
   }
 }
 @media (max-width:700px) {
