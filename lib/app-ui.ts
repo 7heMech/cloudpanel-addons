@@ -108,9 +108,12 @@ html.dark #theme-switch .moon { display: none; }
 /* The account control is the panel's: an avatar, a caret, and a menu of the two
    links its own dropdown carries. */
 .clp-addon-account { position: relative; display: flex; }
-#clp-account-button { gap: 4px; }
+#clp-account-button { gap: 0; }
+/* The same triangle Bootstrap draws for the panel's own avatar, built the same
+   way rather than approximated, so the two sit at the same offset. */
+#clp-account-button::after { content: ""; display: inline-block; border-top: 4px solid;
+  border-right: 4px solid transparent; border-left: 4px solid transparent; margin-left: 4px; }
 #clp-account-button > .clp-addon-avatar { width: 35px; height: 35px; border-radius: 50%; }
-#clp-account-button > .clp-addon-caret { width: 10px; height: 10px; }
 .clp-addon-account-menu { position: absolute; top: 100%; right: 6px; z-index: 30; min-width: 160px;
   padding: 6px 0; background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
   box-shadow: 0 8px 28px rgb(0 0 0 / 16%); text-align: left; }
@@ -832,7 +835,6 @@ ${primaryNav}
         <button class="clp-addon-tool" id="clp-account-button" type="button" onclick="toggleAccountMenu()"
           aria-haspopup="true" aria-expanded="false" aria-label="Account">
           <img class="clp-addon-avatar" src="${DEFAULT_AVATAR}" alt="" width="35" height="35">
-          <svg class="clp-addon-caret" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4.5 6 8.5 10 4.5z" fill="currentColor"/></svg>
         </button>
         <div class="clp-addon-account-menu" id="clp-account-menu" hidden>
           <a href="${esc(PANEL_SETTINGS_URL)}">Settings</a>

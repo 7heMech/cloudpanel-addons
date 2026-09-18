@@ -684,6 +684,11 @@ const SITES_SCRIPT = `
  * outrank the manager's block, which the panel renders after this one.
  */
 const PANEL_HEADER_STYLE = headerWrapStyle("body .header") + `
+/* Bootstrap draws the avatar's caret from the font size it inherits, which is
+   the page's rather than the avatar's, and the addon's own header draws it at a
+   fixed size. */
+body .header .navbar-right > ul > li.user-avatar > a.dropdown-toggle::after { border-top-width: 4px;
+  border-right-width: 4px; border-left-width: 4px; margin-left: 4px; }
 @media (max-width: 960px) {
   body .header .nav-link-container,
   body .header .header-instance-information-container { order: 2; flex-basis: 100%;
@@ -722,10 +727,6 @@ const PANEL_HEADER_STYLE = headerWrapStyle("body .header") + `
   /* The label goes, the icon stays: "Admin Area" beside an avatar and a theme
      switch is the one thing that will not fit beside a 155px logo. */
   body .header .navbar-right > ul > li.admin-area > a { font-size: 0; }
-  /* Bootstrap draws the caret from the font size it inherits, which is the
-     page's rather than the avatar's. */
-  body .header .navbar-right > ul > li.user-avatar > a.dropdown-toggle::after { border-top-width: 4px;
-    border-left-width: 4px; border-right-width: 4px; margin-left: 4px; }
   body .header .navbar-right > ul > li.user-avatar > a { width: 66px; }
   body .header .navbar-right > ul > li.user-avatar > a img { width: 26px; height: 26px; }
   /* The navigation starts where the logo does, and the rule between the two
