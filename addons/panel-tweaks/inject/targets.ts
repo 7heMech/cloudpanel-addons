@@ -120,7 +120,11 @@ const SITES_MOBILE_STYLE = `
   /* The cells lose their borders as blocks, so the row draws the only rule left
      telling one site from the next. The panel's own table border, in both of
      its themes, rather than a grey of this addon's choosing. */
-  table.table-sites tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px 12px;
+  /* The space between one line and the next is a margin on the cells that start
+     a line, not a row gap: a gap also falls either side of the zero-height
+     items below, whose line cannot be given a negative size to take it back,
+     which cost the domain and the tag twice what every other line paid. */
+  table.table-sites tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 12px;
     padding: 16px 20px; border-top: 1px solid #eaeaea; }
   html.dark table.table-sites tr { border-top-color: var(--clp-border-color); }
   table.table-sites tbody tr:first-child { border-top: 0; }
@@ -130,23 +134,22 @@ const SITES_MOBILE_STYLE = `
   table.table-sites td { order: 5; border: 0 !important; padding: 0 !important; text-align: left !important; }
   /* Two zero-height flex items, each ending a line: the domain has the first to
      itself, so a long one has the whole card to run in, and what the site runs
-     goes on the second as a tag. Their negative margins give back the row gap
-     each extra line would otherwise add twice. */
-  table.table-sites tbody tr::before { content: ""; order: 2; flex: 0 0 100%; height: 0; margin: -7px 0; }
-  table.table-sites tbody tr::after { content: ""; order: 4; flex: 0 0 100%; height: 0; margin: -7px 0; }
+     goes on the second as a tag. */
+  table.table-sites tbody tr::before { content: ""; order: 2; flex: 0 0 100%; height: 0; }
+  table.table-sites tbody tr::after { content: ""; order: 4; flex: 0 0 100%; height: 0; }
   /* A heading over the tag would only repeat the column it came from: the value
      says "WordPress" on its own. The App column is the panel's third, so the two
      are put in this order rather than found in it. */
   table.table-sites td.clp-tweaks-domain { order: 0; flex: 1 1 auto; min-width: 0;
     font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
-  table.table-sites td.clp-tweaks-type { order: 3; flex: 0 1 auto; max-width: 100%; margin: 0;
+  table.table-sites td.clp-tweaks-type { order: 3; flex: 0 1 auto; max-width: 100%; margin: 8px 0 0;
     padding: 3px 8px !important; border: 1px solid #eaeaea !important; border-radius: 4px; color: #9bacb6;
     font-size: 12px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   html.dark table.table-sites td.clp-tweaks-type { border-color: var(--clp-border-color) !important; }
-  table.table-sites td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; }
+  table.table-sites td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; margin-top: 14px; }
   table.table-sites td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px;
     color: #9bacb6; font-size: 12px; font-weight: 700; text-transform: uppercase; }
-  table.table-sites td.clp-tweaks-actions { order: 6; flex: 1 1 100%; }
+  table.table-sites td.clp-tweaks-actions { order: 6; flex: 1 1 100%; margin-top: 14px; }
 }
 `;
 
