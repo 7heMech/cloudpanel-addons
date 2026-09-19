@@ -23,9 +23,9 @@ test("Cloudflare new-site reconciliation runs once a minute through the root act
 });
 
 test("hyphenated addon names produce valid systemd environment variables", () => {
-  const unit = serviceUnit([ADDONS["cloudflare-ips"]!, ADDONS["login-theme"]!]);
+  const unit = serviceUnit([ADDONS["cloudflare-ips"]!, ADDONS["panel-tweaks"]!]);
   expect(unit).toContain("Environment=CLOUDFLARE_IPS_APP_DATA=/var/lib/clp-addons/cloudflare-ips");
-  expect(unit).toContain("Environment=LOGIN_THEME_APP_DATA=/var/lib/clp-addons/login-theme");
+  expect(unit).toContain("Environment=PANEL_TWEAKS_APP_DATA=/var/lib/clp-addons/panel-tweaks");
   expect(unit).not.toContain("Environment=CLOUDFLARE-IPS_APP_DATA");
 });
 
@@ -403,7 +403,7 @@ test("manager unit hardens its namespace with zero-sudo root gateway dispatch", 
 
 test("every addon's APP_DATA environment assignment is a name systemd accepts", () => {
   // systemd silently ignores (and warns on) an Environment= line whose name
-  // contains a character outside [A-Za-z0-9_], which "login-theme" produced
+  // contains a character outside [A-Za-z0-9_], which "panel-tweaks" produced
   // via a bare toUpperCase() before it was sanitized.
   const specs = ADDON_NAMES.map((name) => ADDONS[name]!);
   const unit = serviceUnit(specs);

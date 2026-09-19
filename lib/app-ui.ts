@@ -12,6 +12,25 @@ import { shadowStyle, type EmbedFragment } from "./shadow-embed";
 import { SITE_CONTEXT_STYLE, siteInfoHtml, siteTabs, type SiteContext } from "./site-context";
 import { UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
 
+/**
+ * The three of CloudPanel's own pages the shell's header links to.
+ *
+ * The header reproduces the panel's, so it carries the panel's controls: the
+ * Admin Area, and an account menu of Settings and Logout. The avatar is a
+ * icons are the panel's own paths, copied rather than approximated, so the same
+ * control does not have two shapes depending on which page it is on.
+ *
+ * The avatar is Gravatar's own default, the image the panel itself shows for an
+ * account with no gravatar, carried here as data rather than fetched: the
+ * manager serves these pages behind the panel's session without ever being told
+ * whose it is, so it has no address to ask about, and asking would tell
+ * Gravatar which boxes an operator administers.
+ */
+const DEFAULT_AVATAR = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q1JFQVRPUjogZ2QtanBlZyB2MS4wICh1c2luZyBJSkcgSlBFRyB2NjIpLCBxdWFsaXR5ID0gOTAK/9sAQwADAgIDAgIDAwMDBAMDBAUIBQUEBAUKBwcGCAwKDAwLCgsLDQ4SEA0OEQ4LCxAWEBETFBUVFQwPFxgWFBgSFBUU/9sAQwEDBAQFBAUJBQUJFA0LDRQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU/8AAEQgARgBGAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/aAAwDAQACEQMRAD8A+uKKKKACiiigAooooAKKKKACiiigAooooAK7Hwx8NrzXYEurmT7FavypZcu49QOw9zVP4feH01/xDGky7raBfOkU9GweB+JI/AGvdQABgcCgDz2b4OaeYsR31ykn95wrD8sD+dcJ4n8G3/heUGcCa2c4S4j+6T6H0Ne/VS1TTYNWsJ7O5TfFKu0j09CPcdaAPnGirOp2D6XqFzaSffgkaMn1wetVqACiiigAooooA9J+DO37Rqufv7Y8fTLZ/pXqVeE+APECeH/EEckrbbaceTKx6KCeD+BA/DNe6BgwBByD0IoAdRRVHVtSg0ewmvLl9kUS7j6k9gPc9KAPFfiHt/4TLUtnTcv57Fz+tc5VnUr6TU9QuLuX/WTSNIfbJziq1ABRRRQAUUV1fgDwgPE2oPJcgixt8GTHG89lz/P/AOvQBh6XoWo6yxWys5bjHBZV+UfU9BXr/gLStc0qyMGqSxmFRiKLO50/4EOMe3P4V09tbRWcCQwRrFEgwqIMACpqACvNfiB4c8Sa1eExbLuwQ7ooYiFK/UE8n3/lXpVFAHzXeWVxYTmG6gkt5R1SRSp/WoK+iNc0Gy8QWbW15EHU/dcfeQ+oPavCPEGizeHtVnsZvmaM/K4HDKehoAzqKKKACvbfhfapbeEbZ1HzTu8jH33bf5KKKKAOuooooAKKKKACvK/jNaIl3plyB88iPGfoCCP/AEI0UUAecUUUUAf/2Q==";
+const PANEL_ADMIN_URL = "/admin/users";
+const PANEL_SETTINGS_URL = "/settings";
+const PANEL_LOGOUT_URL = "/logout";
+
 // Measured against CloudPanel 2.5.1's public demo: dashboard, sites, settings,
 // certificates, logs and new-site forms. Keep these rules independent of the
 // panel's private templates and versioned CSS bundles.
@@ -23,7 +42,7 @@ export const BASE_STYLE = `
   --border: #e2e2e2; --card-border: #00000020; --row-border: #eaeaea;
   --text: #212529; --heading: #2e2e2e; --muted: #6c757d; --table-heading: #9bacb6;
   --link: #3c3c3c; --accent: #0078d4; --primary: #267ddd; --primary-hover: #2e87eb;
-  --header-bg: #fff; --header-link: #aaa; --tab-link: #666;
+  --header-bg: #fff; --header-link: #aaa; --header-icon: #aaa; --tab-link: #666;
   --input-bg: #fff; --input-border: #ced4da; --readonly-bg: #e9ecef;
   --button-bg: #fff; --button-text: #777; --button-border: #d3d3d3; --button-hover: #e4e5e6;
   --ok: #23774b; --warn: #936319; --bad: #bc3636;
@@ -36,7 +55,7 @@ html.dark {
   --bg: #0e1217; --panel: #1c1f26; --surface: #25282f;
   --border: #a8b3cf33; --card-border: #a8b3cf33; --row-border: #a8b3cf33;
   --text: #fff; --heading: #fff; --muted: #9b9b9b; --table-heading: #9bacb6;
-  --link: #fff; --header-bg: #25282f; --header-link: #fff; --tab-link: #9b9b9b;
+  --link: #fff; --header-bg: #25282f; --header-link: #fff; --header-icon: #aaa; --tab-link: #9b9b9b;
   --input-bg: #20242c; --input-border: #a8b3cf33; --readonly-bg: #0e1217;
   --button-bg: #21262d; --button-text: #c9d1d9; --button-border: #a8b3cf33; --button-hover: #1c1f26;
   --ok: #81c9a0; --warn: #e5bc76; --bad: #ef9999;
@@ -56,12 +75,12 @@ h2, h3 { font-size: 18px; }
 [hidden] { display: none !important; }
 .clp-addon-header { width: 100%; background: var(--header-bg); border-bottom: 1px solid var(--border);
   box-shadow: var(--header-shadow); }
-.clp-addon-header-inner { display: flex; flex-wrap: wrap; align-items: stretch; min-height: 74px; }
+.clp-addon-header-inner { display: flex; flex-wrap: wrap; align-items: stretch; min-height: 75px; }
 /* CloudPanel top-aligns its logo (.header .logo { padding: 20px 0 0 20px }) rather than
    centring it, so centring here sits the logo ~1.5px lower than the panel's own header. */
 .clp-addon-brand { flex: 0 0 235px; display: flex; align-items: flex-start; padding: 20px 0 0 20px;
   margin-right: 20px; border-right: 1px solid var(--row-border); }
-.clp-addon-logo { display: block; width: 155px; height: 31px; }
+.clp-addon-logo { display: block; flex: 0 0 auto; width: 155px; height: 31px; }
 .clp-addon-logo-dark { display: none; }
 html.dark .clp-addon-logo-light { display: none; }
 html.dark .clp-addon-logo-dark { display: block; }
@@ -74,13 +93,37 @@ html.dark .clp-addon-logo-dark { display: block; }
 .clp-addon-header-tools { display: flex; margin-left: auto; }
 .clp-addon-header-inner > #clp-addons-update-notice { margin: 0 20px 0 auto; }
 .clp-addon-header-inner > #clp-addons-update-notice + .clp-addon-header-tools { margin-left: 0; }
-.clp-addon-theme { border: 0; border-left: 1px solid var(--row-border); background: transparent;
-  color: var(--header-link); width: 70px; cursor: pointer; display: grid; place-items: center; }
-.clp-addon-theme:hover { color: var(--accent); }
-.clp-addon-theme svg { width: 20px; height: 20px; }
-.clp-addon-theme .sun { display: none; }
-html.dark .clp-addon-theme .sun { display: block; }
-html.dark .clp-addon-theme .moon { display: none; }
+/* Sized by padding rather than by a width, as the panel sizes its own: the one
+   with a label beside its icon is wider, and the label is what a desktop has
+   room for. The panel turns its navigation white in the dark theme and leaves
+   these grey, so they have a colour of their own. */
+.clp-addon-tool { border: 0; border-left: 1px solid var(--row-border); background: transparent;
+  color: var(--header-icon); padding: 0 25px; cursor: pointer; display: flex; align-items: center;
+  justify-content: center; gap: 5px; font: inherit; white-space: nowrap; }
+.clp-addon-tool:hover { color: var(--accent); text-decoration: none; }
+.clp-addon-tool > svg { width: 20px; height: 20px; flex: 0 0 auto; }
+/* The panel's own markup leaves a newline between its icon and its label, and
+   between its avatar and its caret, which renders as a space; a flex row throws
+   whitespace between its items away, so the gap carries it instead. */
+#clp-admin-area { gap: 10px; }
+#clp-admin-area > svg { width: 26px; height: 26px; }
+#theme-switch .sun { display: none; }
+html.dark #theme-switch .sun { display: block; }
+html.dark #theme-switch .moon { display: none; }
+/* The account control is the panel's: an avatar, a caret, and a menu of the two
+   links its own dropdown carries. */
+.clp-addon-account { position: relative; display: flex; }
+#clp-account-button { gap: 0; }
+/* The same triangle Bootstrap draws for the panel's own avatar, built the same
+   way rather than approximated, so the two sit at the same offset. */
+#clp-account-button::after { content: ""; display: inline-block; border-top: 4px solid;
+  border-right: 4px solid transparent; border-left: 4px solid transparent; margin-left: 9px; }
+#clp-account-button > .clp-addon-avatar { width: 35px; height: 35px; border-radius: 50%; }
+.clp-addon-account-menu { position: absolute; top: 100%; right: 6px; z-index: 30; min-width: 160px;
+  padding: 6px 0; background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 16%); text-align: left; }
+.clp-addon-account-menu > a { display: block; padding: 9px 18px; color: var(--text); white-space: nowrap; }
+.clp-addon-account-menu > a:hover { background: var(--row-hover, rgb(127 143 153 / 14%)); text-decoration: none; }
 main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 25px 12px 40px; flex: 1; min-width: 0; }
 /* The strip scrolls when the tabs outgrow it, but never shows a bar: overflow-x
    alone also turns overflow-y into auto, and a 16px overflow at desktop width
@@ -237,10 +280,32 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 }
 @media (max-width: 760px) {
   .clp-addon-header-inner { flex-wrap: wrap; }
-  .clp-addon-brand { flex-basis: auto; border: 0; margin: 0; min-height: 64px;
+  /* Measured from zero rather than from the logo, so the tools keep their place
+     on this row instead of being wrapped onto one of their own by the last
+     pixel of it; the logo then takes whatever is left, and gives way rather
+     than pushing them off. */
+  .clp-addon-brand { flex: 1 1 0; min-width: 0; border: 0; margin: 0; min-height: 64px;
     align-items: center; padding: 0 20px; }
-  .clp-addon-header-tools { order: 1; }
+  /* The logo keeps its own size, as the panel's does; measuring the row from
+     zero above is what keeps it from pushing the tools off instead. */
+  /* The logo and the tools share the first row and the navigation takes the
+     second, rather than each taking a row of its own. */
+  .clp-addon-header-tools { order: 1; margin-left: auto; }
+  /* The label goes and every cell is the same width, which is the shape the
+     panel's own header takes on a phone. */
+  /* The panel draws the divider on the list item around its link, so its cell
+     is a pixel wider than the link inside it. */
+  .clp-addon-tool { width: 57px; padding: 0; }
+  .clp-addon-tool-label { display: none; }
+  #clp-admin-area > svg { width: 20px; height: 20px; }
+  #clp-account-button { width: 67px; }
+  /* No label beside the icons here, and none of the whitespace that came with
+     one: the caret sits at Bootstrap's own margin again. */
+  #clp-account-button::after { margin-left: 4px; }
+  #clp-account-button > .clp-addon-avatar { width: 26px; height: 26px; }
   .clp-addon-primary-nav { order: 2; width: 100%; overflow-x: auto; border-top: 1px solid var(--border); padding: 0 5px; gap: 0; }
+  /* The first link starts where the logo does, as the panel's own row does. */
+  .clp-addon-primary-nav .clp-addon-primary-link:first-child { margin-left: 0; }
   .clp-addon-primary-link { min-height: 48px; }
   .clp-addon-header-inner > #clp-addons-update-notice { justify-content: center; padding: 10px 16px; }
   main { padding: 20px 12px 30px; }
@@ -335,6 +400,45 @@ function toggleTheme() {
 syncTheme();
 window.addEventListener('pageshow', syncTheme);
 window.addEventListener('focus', syncTheme);
+
+// The account menu, closed by every way out of it: the button again, a click
+// elsewhere, Escape, or the focus leaving it.
+function accountMenu() {
+  return {
+    button: CLP_ROOT.getElementById('clp-account-button'),
+    list: CLP_ROOT.getElementById('clp-account-menu'),
+  };
+}
+function closeAccountMenu() {
+  const parts = accountMenu();
+  if (!parts.list || parts.list.hidden) return;
+  parts.list.hidden = true;
+  parts.button.setAttribute('aria-expanded', 'false');
+}
+function toggleAccountMenu() {
+  const parts = accountMenu();
+  if (!parts.list) return;
+  const open = parts.list.hidden;
+  parts.list.hidden = !open;
+  parts.button.setAttribute('aria-expanded', String(open));
+  if (open) {
+    const first = parts.list.querySelector('a');
+    if (first) first.focus();
+  }
+}
+document.addEventListener('click', function (event) {
+  const parts = accountMenu();
+  if (!parts.list || parts.list.hidden) return;
+  if (!parts.list.contains(event.target) && !parts.button.contains(event.target)) closeAccountMenu();
+});
+document.addEventListener('keydown', function (event) {
+  if (event.key === 'Escape' || event.key === 'Esc') closeAccountMenu();
+});
+document.addEventListener('focusin', function (event) {
+  const parts = accountMenu();
+  if (!parts.list || parts.list.hidden) return;
+  if (!parts.list.contains(event.target) && !parts.button.contains(event.target)) closeAccountMenu();
+});
 
 // Use the longest matching route so /new takes precedence over the list tab.
 // Only the addon's own tabs: a site strip reproduces CloudPanel's navigation,
@@ -731,7 +835,7 @@ ${contextualNav}
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <title>${esc(title)}</title>
 <script>${THEME_INIT_JS}</script>
 <style>${BASE_STYLE}${SITE_CONTEXT_STYLE}${UPDATE_STYLE}${chrome.css ?? ""}</style>
@@ -748,10 +852,24 @@ ${primaryNav}
     </nav>
     ${chrome.updateNotice ? updateNoticeHtml(chrome.updateNotice.latest) : ""}
     <div class="clp-addon-header-tools">
-      <button class="clp-addon-theme" id="theme-switch" type="button" onclick="toggleTheme()" aria-label="Switch to dark mode" aria-pressed="false">
-        <svg class="moon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.9 13.1A9 9 0 0 1 10.9 3.1 9 9 0 1 0 20.9 13.1Z"/></svg>
-        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 1v3m0 16v3M1 12h3m16 0h3M4.2 4.2l2.1 2.1m11.4 11.4 2.1 2.1M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>
+      <button class="clp-addon-tool" id="theme-switch" type="button" onclick="toggleTheme()" aria-label="Switch to dark mode" aria-pressed="false">
+        <svg class="moon" viewBox="0 0 384 512" fill="currentColor" aria-hidden="true"><path d="M223.5 32C100 32 0 132.3 0 256S100 480 223.5 480c60.6 0 115.5-24.2 155.8-63.4c5-4.9 6.3-12.5 3.1-18.7s-10.1-9.7-17-8.5c-9.8 1.7-19.8 2.6-30.1 2.6c-96.9 0-175.5-78.8-175.5-176c0-65.8 36-123.1 89.3-153.3c6.1-3.5 9.2-10.5 7.7-17.3s-7.3-11.9-14.3-12.5c-6.3-.5-12.6-.8-19-.8z"/></svg>
+        <svg class="sun" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd"></path></svg>
       </button>
+      <a class="clp-addon-tool" id="clp-admin-area" href="${esc(PANEL_ADMIN_URL)}" title="Admin Area">
+        <svg viewBox="0 0 640 512" aria-hidden="true"><path fill="currentColor" d="M315.3 255.5c6.8-19 16.4-36.5 28.4-52.2-7.4 3-15.4 4.7-23.8 4.7-35.3 0-64-28.7-64-64s28.7-64 64-64 64 28.7 64 64c0 8.4-1.7 16.4-4.7 23.8 15.7-12 33.2-21.7 52.2-28.4C429 79.7 380.3 32 320 32c-61.9 0-112 50.1-112 112 0 60.3 47.7 109 107.3 111.5zM96 224c44.2 0 80-35.8 80-80s-35.8-80-80-80-80 35.8-80 80 35.8 80 80 80zm0-112c17.6 0 32 14.4 32 32s-14.4 32-32 32-32-14.4-32-32 14.4-32 32-32zm244.3 320H176v-44.8c0-36.4 29.2-66.2 65.4-67.2 20.6 8.6 41.9 13.6 63.4 15.2-.7-9.3-2-24 2.3-48.6-16.8-1.5-33.1-4.9-48-11.2-5.1-2.1-10.4-3.4-15.9-3.4-63.6 0-115.2 51.6-115.2 115.2V432c0 26.5 21.5 48 48 48h214c-19.4-12.9-36.2-29.2-49.7-48zM154.8 270.3c-13.4-9-29.5-14.3-46.8-14.3H84c-46.3 0-84 37.7-84 84 0 13.2 10.8 24 24 24s24-10.8 24-24c0-19.8 16.2-36 36-36h24c4.4 0 8.5 1.1 12.3 2.5 9.3-14 21.1-26.1 34.5-36.2zm455.7 71c2.6-14.1 2.6-28.5 0-42.6l25.8-14.9c3-1.7 4.3-5.2 3.3-8.5-6.7-21.6-18.2-41.2-33.2-57.4-2.3-2.5-6-3.1-9-1.4l-25.8 14.9c-10.9-9.3-23.4-16.5-36.9-21.3v-29.8c0-3.4-2.4-6.4-5.7-7.1-22.3-5-45-4.8-66.2 0-3.3.7-5.7 3.7-5.7 7.1v29.8c-13.5 4.8-26 12-36.9 21.3l-25.8-14.9c-2.9-1.7-6.7-1.1-9 1.4-15 16.2-26.5 35.8-33.2 57.4-1 3.3.4 6.8 3.3 8.5l25.8 14.9c-2.6 14.1-2.6 28.5 0 42.6l-25.8 14.9c-3 1.7-4.3 5.2-3.3 8.5 6.7 21.6 18.2 41.1 33.2 57.4 2.3 2.5 6 3.1 9 1.4l25.8-14.9c10.9 9.3 23.4 16.5 36.9 21.3v29.8c0 3.4 2.4 6.4 5.7 7.1 22.3 5 45 4.8 66.2 0 3.3-.7 5.7-3.7 5.7-7.1v-29.8c13.5-4.8 26-12 36.9-21.3l25.8 14.9c2.9 1.7 6.7 1.1 9-1.4 15-16.2 26.5-35.8 33.2-57.4 1-3.3-.4-6.8-3.3-8.5l-25.8-14.9zM496 368.5c-26.8 0-48.5-21.8-48.5-48.5s21.8-48.5 48.5-48.5 48.5 21.8 48.5 48.5-21.7 48.5-48.5 48.5z"></path></svg>
+        <span class="clp-addon-tool-label">Admin Area</span>
+      </a>
+      <div class="clp-addon-account">
+        <button class="clp-addon-tool" id="clp-account-button" type="button" onclick="toggleAccountMenu()"
+          aria-haspopup="true" aria-expanded="false" aria-label="Account">
+          <img class="clp-addon-avatar" src="${DEFAULT_AVATAR}" alt="" width="35" height="35">
+        </button>
+        <div class="clp-addon-account-menu" id="clp-account-menu" hidden>
+          <a href="${esc(PANEL_SETTINGS_URL)}">Settings</a>
+          <a href="${esc(PANEL_LOGOUT_URL)}">Logout</a>
+        </div>
+      </div>
     </div>
   </div>
 </header>

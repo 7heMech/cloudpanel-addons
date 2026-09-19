@@ -81,6 +81,23 @@ export const PHP_RESOURCES_ALLOWED_VERBS = new Set([
   "set-default",
 ]);
 
+export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
+  "state",
+  "set-tweaks",
+  "scan",
+]);
+
+/**
+ * `sign-in` mints a credential for somebody else's WordPress and `remove`
+ * deletes a file from every site, so both are named here as narrowly as the
+ * rest: a verb, at most one `--domain`, and no path anywhere.
+ */
+export const WP_LOGIN_ALLOWED_VERBS = new Set([
+  "sites",
+  "sign-in",
+  "remove",
+]);
+
 export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
   "list",
   "set",
@@ -102,6 +119,10 @@ export const MANAGER_ALLOWED_VERBS = new Set([
   "update",
   "job",
   "watch-job",
+  // Rendering the panel's templates again. It belongs to the manager rather
+  // than to an addon because one pass regenerates every addon's block in a
+  // shared file; an addon that reconciled only its own would strip the others.
+  "reconcile",
 ]);
 
 export const STREAM_ALLOWED_VERBS = new Set(["watch-job"]);

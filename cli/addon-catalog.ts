@@ -22,8 +22,9 @@ import type { AddonTarget } from "../lib/addon-target";
 import { CLOUDFLARE_IPS_ADDON } from "../addons/cloudflare-ips/addon";
 import { GIT_ADDON } from "../addons/git/addon";
 import { INSTATIC_ADDON } from "../addons/instatic/addon";
-import { LOGIN_THEME_ADDON } from "../addons/login-theme/addon";
 import { MAINTENANCE_ADDON } from "../addons/maintenance/addon";
+import { PANEL_TWEAKS_ADDON } from "../addons/panel-tweaks/addon";
+import { WP_LOGIN_ADDON } from "../addons/wp-login/addon";
 import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
 
@@ -34,6 +35,8 @@ export type AddonHandler = (
   path: string,
   updateNotice?: { current: string; latest: string } | null,
   server?: Server<unknown> | null,
+  /** The session behind the request, for the few routes a non-admin reaches. */
+  auth?: { user: string; roles: string[] } | null,
 ) => Promise<Response>;
 
 /** Upkeep this addon wants during `repair`. */
@@ -77,7 +80,8 @@ const DEFINITIONS: AddonDefinition[] = [
   MAINTENANCE_ADDON,
   PHP_RESOURCES_ADDON,
   GIT_ADDON,
-  LOGIN_THEME_ADDON,
+  PANEL_TWEAKS_ADDON,
+  WP_LOGIN_ADDON,
 ];
 
 function specOf(definition: AddonDefinition): AddonSpec {

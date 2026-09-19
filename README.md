@@ -2,9 +2,9 @@
 
 Manage Cloudflare-only site access, host Instatic CMS sites, create staging
 copies, manage per-site maintenance pages, tune PHP-FPM worker limits by
-category, deploy sites from a Git remote, and set the initial login theme from
-the device preference in
-[CloudPanel](https://www.cloudpanel.io/). Access uses your existing
+category, deploy sites from a Git remote, sign in to any WordPress in one
+click, and add search, sorting and extra columns to CloudPanel's own Sites page
+in [CloudPanel](https://www.cloudpanel.io/). Access uses your existing
 administrator login.
 
 ![CloudPanel Addons Manager](docs/screenshots/addons.png)
@@ -19,7 +19,8 @@ administrator login.
 | Maintenance Mode | Serve a customizable 503 page per site with instant toggles and IP bypasses. |
 | PHP Resources | Group PHP sites into categories of PHP-FPM worker limits, assign them in bulk, and pick the category new sites join. |
 | Git Deploy | Deploy a site from a Git remote with a per-site deploy key, a branch, a target directory and a post-deploy command, from the panel or from a push. |
-| Device theme on first visit | Follow the device's light or dark preference on the first visit to the CloudPanel login page. |
+| Panel Tweaks | Site search and columns, mobile layouts, and theme improvements for CloudPanel. |
+| WordPress Sign-In | Open any WordPress on the server as its first administrator, from the panel's Sites page, without its password. |
 
 ## Install
 
@@ -32,8 +33,9 @@ curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download
 The installer asks which addons to enable. It verifies checksums and build
 provenance, and can install Docker when Instatic needs it.
 
-Open the new **Addons** tab in CloudPanel after installation. Only CloudPanel administrators
-can access it.
+Open the new **Addons** tab in CloudPanel after installation. Only CloudPanel
+administrators can access it. Other panel users see the WordPress Sign-In link
+on the Sites page for their own sites, and nothing else.
 
 ## Manage
 
@@ -47,7 +49,7 @@ can access it.
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
 Addon names are `cloudflare-ips`, `instatic`, `stager`, `maintenance`,
-`php-resources`, `git`, and `login-theme`. Run
+`php-resources`, `git`, `panel-tweaks`, and `wp-login`. Run
 `clp-addons --help` for version selection and data removal options.
 
 See [Instatic backup and restore](docs/instatic-backups.md) for CloudPanel Remote

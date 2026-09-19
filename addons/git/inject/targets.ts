@@ -1,5 +1,6 @@
 import type { AddonTarget } from "../../../lib/addon-target";
 import { SITE_TAB_TEMPLATE } from "../../../lib/panel-nav";
+import { ROW_ACTION_CLASS } from "../../../lib/row-actions";
 import { ADDON_SITE_TABS } from "../../../lib/site-context";
 
 // The label the panel's strip shows and the label the addon's own reproduction
@@ -28,22 +29,22 @@ export const GIT_TARGETS: AddonTarget[] = [
         {% endif %}`,
   },
   {
-    // Beside Stager's Clone, on the same anchor: the fleet is where an operator
-    // decides which site to deploy, and CloudPanel's own site list is the fleet
-    // page they are already on.
+    // Left of the panel's own Manage, which keeps the rightmost place: the
+    // fleet is where an operator decides which site to deploy, and CloudPanel's
+    // own site list is the fleet page they are already on.
     //
     // Hidden as it is rendered. Whether a site has a repository is in this
     // addon's own record, which Twig cannot see, so the row offers the link
-    // only once the script below has said which sites deploy -- and offers
-    // nothing at all if that answer never arrives.
+    // only once the script below has said which sites deploy, and drops it
+    // from the rows that do not.
     slug: "site-list-action",
     template: SITE_LIST_TEMPLATE,
-    anchorAfter: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
+    anchorBefore: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
     required: false,
     snippet: (url) => `
         {% if is_granted('ROLE_ADMIN') %}
-          <a class="clp-addons-git-row" data-domain="{{ site.domainName }}" hidden
-            href="${url}?domain={{ site.domainName|url_encode }}" style="margin-left: 0.75rem;">Deploy from Git</a>
+          <a class="clp-addons-git-row ${ROW_ACTION_CLASS}" data-domain="{{ site.domainName }}" hidden
+            href="${url}?domain={{ site.domainName|url_encode }}" style="margin-right: 0.75rem; white-space: nowrap;">Deploy from Git</a>
         {% endif %}`,
   },
   {
@@ -65,14 +66,21 @@ export const GIT_TARGETS: AddonTarget[] = [
                   })
                     .then(function (res) { return res.json(); })
                     .then(function (payload) {
-                      if (!payload || payload.ok !== true) return;
                       var deployed = {};
-                      (payload.domains || []).forEach(function (domain) { deployed[domain] = true; });
+                      if (payload && payload.ok === true) {
+                        (payload.domains || []).forEach(function (domain) { deployed[domain] = true; });
+                      }
+                      // Removed rather than left hidden: a row's actions may
+                      // have been moved into Panel Tweaks' menu by now, and
+                      // the menu styles the links inside it back into view.
                       Array.prototype.forEach.call(links, function (link) {
                         if (deployed[(link.dataset.domain || '').toLowerCase()]) link.hidden = false;
+                        else link.remove();
                       });
                     })
-                    .catch(function () {});
+                    .catch(function () {
+                      Array.prototype.forEach.call(links, function (link) { link.remove(); });
+                    });
                 })();
               </script>
               {% endif %}`,

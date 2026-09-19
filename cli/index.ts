@@ -2,9 +2,9 @@ import type { Server } from "bun";
 import { chmodSync, chownSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
-  ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, CLOUDFLARE_RECONCILE_TIMER,
+  ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, CLOUDFLARE_RECONCILE_TIMER, CONFIG_DIR,
   LIBEXEC_DIR, MANAGER_UNIT, PANEL_GROUP,
-  SOCKET_PATH, SYSTEMD_DIR, mountPath,
+  SOCKET_PATH, STATE_DIR, SYSTEMD_DIR, mountPath,
 } from "./paths";
 import {
   ADDONS, ADDON_NAMES, addonHandler, addonMaintenance, type AddonSpec,
@@ -41,6 +41,7 @@ import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
 import { CHANGELOG_URL, UPDATE_PATH } from "../lib/update-ui";
 import { ensureMaintenanceData, executeMaintenanceAction } from "../addons/maintenance/action";
 import { GIT_HOOK_PREFIX, handleGitHook } from "../addons/git/app/hook";
+import { removeWpLogin } from "../addons/wp-login/action";
 import { runAuthActionStdin } from "./auth-action";
 import { pruneManagerJobs, runManagerAction, type ManagerJobView, type ManagerOps } from "./manager-action";
 import { callGatewayAction, streamGatewayAction, type ActionResult } from "../lib/gateway-client";
@@ -56,6 +57,32 @@ function resolveAddon(name: string | undefined): AddonSpec {
 
 function installedAddons(): AddonSpec[] {
   return ADDON_NAMES.map((name) => ADDONS[name]!).filter(installedConfig);
+}
+
+/**
+ * Addons that are now part of another addon.
+ *
+ * `login-theme` was a whole addon for one script in the login page's <head>.
+ * It is a switch inside Panel Tweaks now, and a box that had it enabled
+ * should come out of an update with the device theme still working rather than
+ * with an addon that no longer exists. The config file is the enabled flag, so
+ * moving it is the whole migration: the state directory held nothing, and the Twig
+ * block goes when the templates are next rendered, because the injection set is
+ * read from the config files.
+ */
+const ABSORBED_ADDONS: Record<string, string> = { "login-theme": "panel-tweaks" };
+
+export function migrateAbsorbedAddons(quiet = false): void {
+  for (const [from, into] of Object.entries(ABSORBED_ADDONS)) {
+    const legacyConfig = `${CONFIG_DIR}/${from}.conf`;
+    if (!existsSync(legacyConfig)) continue;
+    const spec = ADDONS[into];
+    if (spec && !installedConfig(spec)) writeConfig(spec, true);
+    rmSync(legacyConfig, { force: true });
+    rmSync(`${legacyConfig}.new`, { force: true });
+    rmSync(`${STATE_DIR}/${from}`, { recursive: true, force: true });
+    if (!quiet) log.ok(`${from} is part of ${into} now and was carried over`);
+  }
 }
 
 function artifactNames(): string[] {
@@ -285,6 +312,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
  * Services restart last, after every generated file reflects this process.
  */
 function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
+  migrateAbsorbedAddons();
   const specs = installedAddons();
   ensureServiceUser();
   removeLegacyInstall();
@@ -433,6 +461,21 @@ export async function applyEnable(name: string): Promise<void> {
 }
 
 /**
+ * The WordPress sign-in helper is a file in somebody else's site, not state in
+ * this addon's own directory, so withdrawing the addon has to take it back out.
+ * A failure warns rather than stops: an addon that cannot be removed because
+ * one site's files moved would be worse than a helper left behind and named.
+ */
+function withdrawWpLogin(): void {
+  try {
+    const { removed } = removeWpLogin();
+    if (removed > 0) log.ok(`sign-in helper removed from ${removed} site${removed === 1 ? "" : "s"}`);
+  } catch (error) {
+    log.warn(`the sign-in helper could not be removed from every site: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
  * Turn one addon off and leave everything it made behind.
  *
  * Deliberately not `cmdUninstall`: that removes the binary once the last addon
@@ -445,6 +488,7 @@ export function applyDisable(name: string): void {
   const spec = resolveAddon(name);
   const remaining = installedAddons().filter((item) => item.name !== spec.name);
 
+  if (spec.name === "wp-login") withdrawWpLogin();
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
   // Reconciled after the config file is gone, so the injection set is read
@@ -475,6 +519,9 @@ export const MANAGER_OPS: ManagerOps = {
   enable: applyEnable,
   disable: applyDisable,
   update: (beforeManagerRestart) => cmdUpdate([], { beforeManagerRestart }),
+  reconcile: () => {
+    if (!reconcileAnchors(true)) fatal("could not safely patch the CloudPanel templates");
+  },
 };
 
 /**
@@ -535,6 +582,7 @@ export async function cmdRepair(argv: string[]): Promise<void> {
     if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
     return;
   }
+  migrateAbsorbedAddons(quiet);
   const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
   const all = installedAddons();
   // An installation with every addon disabled still needs its timer, its Nginx
@@ -721,6 +769,7 @@ export function cmdUninstall(argv: string[]): void {
     }
   }
   removeSudoers();
+  if (spec.name === "wp-login") withdrawWpLogin();
   if (purge) rmSync(spec.stateDir, { recursive: true, force: true });
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
@@ -856,6 +905,26 @@ function mountedAddons(): string[] {
 }
 
 /**
+ * The routes a signed-in non-administrator may reach, named one by one.
+ *
+ * The blanket gate below is what makes the manager an administrative surface,
+ * and these are the exceptions that scope themselves instead. The WordPress
+ * sign-in is one because the panel user it signs in for is one CloudPanel
+ * already gave the site's file manager and database to, so the shortcut adds
+ * no authority; the root action holds it to the sites `user_sites` maps to
+ * that account. The session route hands out the CSRF pair those callers cannot
+ * get from an addon page, and reads nothing. Panel Tweaks' state route is one
+ * because the page it enhances is CloudPanel's own Sites page, which every
+ * panel user sees; the action narrows the reply to the rows that page would
+ * already have drawn for the caller.
+ */
+const SELF_SCOPED_ROUTES = new Set([
+  "POST /wp-login/api/sign-in",
+  "GET /wp-login/api/session",
+  "GET /panel-tweaks/api/panel",
+]);
+
+/**
  * Every request the manager answers, in the order it decides them. Exported so
  * a test can send real requests through the same function the socket does.
  */
@@ -886,7 +955,15 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   // future handlers and the manager index, receives the same gate before
   // update checks or addon code can run.
   const denied = adminGate(gate.auth);
-  if (denied) return denied;
+  if (denied) {
+    if (!SELF_SCOPED_ROUTES.has(`${req.method} ${path}`)) return denied;
+    // Straight to the addon, ahead of the update check and the manager's own
+    // routes: what this session is allowed is that one handler, not the rest
+    // of the manager with a narrower path.
+    const scoped = splitMount(path, mountedAddons());
+    if (!scoped) return denied;
+    return await addonHandler(scoped.addon)!(req, scoped.rest, null, server, gate.auth);
+  }
 
   // Polled while this process restarts; the gateway that validates the session
   // is a separate unit, so it keeps answering across the restart.
@@ -901,7 +978,7 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   if (managerRoute) return managerRoute;
 
   const hit = splitMount(path, mountedAddons());
-  if (hit) return await addonHandler(hit.addon)!(req, hit.rest, notice, server);
+  if (hit) return await addonHandler(hit.addon)!(req, hit.rest, notice, server, gate.auth);
   if (path === "/update" && req.method === "GET") {
     return updatePage(update, CLI_VERSION, { job: await latestManagerJobView(), csrf: newCsrfToken() });
   }
