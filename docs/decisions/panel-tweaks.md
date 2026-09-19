@@ -240,12 +240,13 @@ switch reloads only the frame, leaving the addon's page and any open description
 in place. A mutation observer follows the surrounding page's theme class, so a
 theme change reaches the frame without reloading either document.
 
-The wrapper keeps CloudPanel's horizontal page padding on a desktop. At phone
-widths that padding goes, the frame escapes the addon's page and card gutters,
-and the width controls disappear: the embedded page receives the full phone
-width and therefore enters its phone layout by default. The Phone button on a
-desktop is deliberately different: it marks the narrow frame as a simulation
-and keeps a small inner gutter around the panel page.
+The wrapper keeps CloudPanel's horizontal page padding on a desktop. On phones
+the outer preview card has no layout box: its heading, description and
+borderless frame share the page gutters. The width controls disappear, and the
+frame fills the available width. The embedded page drops its own horizontal
+padding so the gutter is applied once. The Phone button on a desktop marks the
+narrow frame as a simulation and keeps a small inner gutter around the panel
+page.
 
 ## Measured sizes ride the repair timer
 

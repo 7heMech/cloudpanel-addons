@@ -263,7 +263,6 @@ test("the addon page keeps switches beside wrapping labels on a phone", () => {
   expect(html).toContain(".tweak-row > div { flex: 1 1 auto; min-width: 0; }");
   expect(html).toContain(".tweak-row .switch { flex: 0 0 auto;");
   expect(html).not.toContain(".tweak-row { flex-wrap: wrap; }");
-  expect(html).toContain("margin-right: calc(-25px - 13px); margin-left: calc(-25px - 13px);");
   expect(html).toContain(".preview-widths { display: none; }");
   expect(html).toContain("position: absolute; inset: 0; display: flex");
   expect(html).toContain("'/preview?refresh=' + Date.now()");

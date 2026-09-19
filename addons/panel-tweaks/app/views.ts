@@ -61,11 +61,14 @@ const STYLE = `
 .preview-frame.is-phone iframe { width: 390px; max-width: 100%; }
 @media (max-width: 760px) {
   .preview-widths { display: none; }
-  /* Let the panel preview use the whole phone width instead of nesting it
-     inside both the page and card gutters. */
-  .preview-frame { display: flex; justify-content: center; margin-right: calc(-25px - 13px); margin-left: calc(-25px - 13px);
-    border-right: 0; border-left: 0; border-radius: 0; }
-  .preview-frame iframe { width: 390px; max-width: 100%; }
+  /* Remove the card's box so the heading, description and frame all share the
+     page gutters. */
+  .preview-card { display: contents; }
+  .preview-card > .card-header { margin: 0 0 8px; padding: 0; border: 0; border-radius: 0; }
+  html.dark .preview-card > .card-header { background: transparent; }
+  .preview-card > .hint { margin-bottom: 0; }
+  .preview-frame { border: 0; border-radius: 0; }
+  .preview-frame iframe, .preview-frame.is-phone iframe { width: 100%; }
 }
 .size-cell { font-variant-numeric: tabular-nums; white-space: nowrap; }
 `;
@@ -109,6 +112,21 @@ async function measureNow(button) {
   }
 }
 
+// Only the desktop Phone preview adds an inner gutter; an actual phone uses
+// the surrounding page's padding.
+const previewMobileScreen = window.matchMedia('(max-width: 760px)');
+
+function syncPreviewGutter() {
+  const frame = document.getElementById('preview-frame');
+  const inner = frame && frame.contentDocument;
+  if (!inner) return;
+  const wrap = document.querySelector('.preview-frame');
+  const framedPhone = !previewMobileScreen.matches && wrap && wrap.classList.contains('is-phone');
+  inner.documentElement.classList.toggle('clp-preview-framed-phone', !!framedPhone);
+}
+
+previewMobileScreen.addEventListener('change', syncPreviewGutter);
+
 // The frame is this origin's, so its document can be measured directly: it
 // grows when the injected script fills the columns, and again whenever a
 // column is switched on inside it.
@@ -118,8 +136,7 @@ function fitPreview() {
   const inner = frame.contentDocument;
   const content = inner && inner.getElementById('clp-preview');
   if (!content) return;
-  const wrap = document.querySelector('.preview-frame');
-  inner.documentElement.classList.toggle('clp-preview-framed-phone', !!wrap && wrap.classList.contains('is-phone'));
+  syncPreviewGutter();
   // The wrapper's height, not the document's or the body's: CloudPanel gives
   // both of those a height of their own, which inside a frame is the frame's
   // height, so measuring either would only ever grow it.
@@ -285,7 +302,7 @@ export function sinceText(iso: string): string {
 function previewCard(state: PanelTweaksState): string {
   const sites = state.sites.length;
   return `
-    <div class="card">
+    <div class="card preview-card">
       <div class="card-header">
         <h2>Preview</h2>
         <div class="preview-widths" role="group" aria-label="Preview width">
