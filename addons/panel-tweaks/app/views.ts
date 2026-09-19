@@ -11,16 +11,25 @@ const STYLE = `
 .tweak-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
   padding: 22px 0; border-top: 1px solid var(--row-border); }
 .tweak-row > div { flex: 1 1 auto; min-width: 0; }
-.tweak-list > .tweak-row:first-child { padding-top: 0; border-top: 0; }
-.tweak-list > .tweak-row:last-child { padding-bottom: 0; }
+.tweak-category + .tweak-category { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--row-border); }
+.tweak-category-title { margin: 0; color: var(--muted); font-size: 12px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase; }
+.tweak-category > .tweak-row:nth-child(2) { padding-top: 10px; border-top: 0; }
+.tweak-category > .tweak-row:last-child { padding-bottom: 0; }
+.tweak-row.is-nested { margin-left: 18px; padding-left: 14px; border-left: 2px solid var(--border); }
 .tweak-row h3 { margin: 0 0 6px; font-size: 16px; }
 .tweak-row p { margin: 0; color: var(--muted); font-size: 14px; }
 .tweak-row .switch { flex: 0 0 auto; margin-top: 4px; }
+.tweak-scan { display: none; align-items: center; gap: 12px; margin-top: 12px; color: var(--muted); font-size: 13px; }
+.tweak-row.is-enabled .tweak-scan { display: flex; }
+.tweak-scan span { flex: 1 1 auto; }
+.tweak-scan .btn { flex: 0 0 auto; min-height: 32px; padding: 4px 12px; }
 /* A phone gets the titles and the switches, with the wording a tap away. The
    button is display: none above that, so nothing can focus a control that
    would do nothing. */
 .tweak-more { display: none; }
 @media (max-width: 760px) {
+  .tweak-row.is-nested { margin-left: 10px; padding-left: 10px; }
   .tweak-row h3 { position: relative; margin: 0; padding-right: 30px; }
   .tweak-row .tweak-note { display: none; margin-top: 8px; }
   .tweak-row.is-open .tweak-note { display: block; }
@@ -51,8 +60,6 @@ const STYLE = `
     border-right: 0; border-left: 0; border-radius: 0; }
   .preview-frame iframe { width: 390px; max-width: 100%; }
 }
-.scan-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
-.scan-row p { margin: 0; }
 .size-cell { font-variant-numeric: tabular-nums; white-space: nowrap; }
 `;
 
@@ -68,6 +75,7 @@ async function setTweak(input) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ [key]: wanted }),
     });
+    input.closest('.tweak-row').classList.toggle('is-enabled', wanted);
     const frame = document.getElementById('preview-frame');
     if (frame) frame.src = CLP_BASE + '/preview?refresh=' + Date.now();
     busy(false);
@@ -164,57 +172,66 @@ export function layout(
 
 interface TweakCopy {
   key: keyof PanelTweaks;
+  category: "Sites" | "Dashboard" | "Login";
   title: string;
   description: string;
+  nested?: boolean;
 }
 
 /**
  * What each switch does, said in terms of what the operator will see change.
- * The order is the order of cost: the Sites page, then the rest of the panel,
- * then the whole disk.
+ * Related controls stay together: the disk scan is nested under the Sites
+ * table enhancement because that table is where its result appears.
  */
 const COPY: TweakCopy[] = [
   {
     key: "sitesTable",
+    category: "Sites",
     title: "Search, sort and extra columns on Sites",
     description: "Adds a site count, search, application filter and sortable extra columns. Column choices are saved per browser.",
   },
   {
+    key: "diskUsage",
+    category: "Sites",
+    title: "Measured site sizes",
+    description: "Adds site sizes from a low-priority scan every 15 minutes. This can add load on busy servers.",
+    nested: true,
+  },
+  {
     key: "sitesMobile",
+    category: "Sites",
     title: "Sites list as cards on a phone",
     description: "Turns the Sites table into readable cards below 860px. Switch it off to keep CloudPanel's sideways-scrolling table.",
   },
   {
     key: "actionMenu",
+    category: "Sites",
     title: "Row actions in a menu",
     description: "Moves each site's Manage and addon links into one menu.",
   },
   {
     key: "panelMobile",
+    category: "Dashboard",
     title: "CloudPanel mobile layout",
     description: "Fits CloudPanel's header and Dashboard charts to phone screens.",
   },
   {
     key: "deviceTheme",
+    category: "Login",
     title: "Device theme on first visit",
     description: "Uses the device's theme on the first visit. Afterward, CloudPanel's theme switch takes over.",
   },
-  {
-    key: "diskUsage",
-    title: "Measured site sizes",
-    description: "Adds site sizes from a low-priority scan every 15 minutes. This can add load on busy servers.",
-  },
 ];
 
-function switchRow(copy: TweakCopy, on: boolean): string {
+function switchRow(copy: TweakCopy, on: boolean, extra = ""): string {
   const note = `tweak-note-${copy.key}`;
   return `
-      <div class="tweak-row">
+      <div class="tweak-row${copy.nested ? " is-nested" : ""}${on ? " is-enabled" : ""}">
         <div>
           <h3>${esc(copy.title)}<button class="tweak-more" type="button" aria-expanded="false"
             aria-controls="${note}" aria-label="What ${esc(copy.title.toLowerCase())} does"
             onclick="toggleNote(this)"></button></h3>
-          <p class="tweak-note" id="${note}">${esc(copy.description)}</p>
+          <div class="tweak-note" id="${note}"><p>${esc(copy.description)}</p>${extra}</div>
         </div>
         <label class="switch" title="${esc(copy.title)}">
           <input type="checkbox" data-tweak="${esc(copy.key)}" onchange="setTweak(this)"${on ? " checked" : ""}
@@ -222,6 +239,25 @@ function switchRow(copy: TweakCopy, on: boolean): string {
           <span></span>
         </label>
       </div>`;
+}
+
+function scanControls(state: PanelTweaksState): string {
+  const measured = state.sites.filter((site) => site.disk).length;
+  const summary = measured === 0
+    ? "Nothing measured yet."
+    : `${measured} of ${state.sites.length} site${state.sites.length === 1 ? "" : "s"} measured, ${esc(sinceText(state.diskMeasuredAt))}.`;
+  return `<div class="tweak-scan"><span>${summary}</span>
+    <button class="btn" type="button" onclick="measureNow(this)">Measure now</button></div>`;
+}
+
+function tweakList(state: PanelTweaksState): string {
+  return (["Sites", "Dashboard", "Login"] as const).map((category) => `
+        <section class="tweak-category" aria-labelledby="tweak-category-${category.toLowerCase()}">
+          <h3 class="tweak-category-title" id="tweak-category-${category.toLowerCase()}">${category}</h3>${COPY
+            .filter((copy) => copy.category === category)
+            .map((copy) => switchRow(copy, state.tweaks[copy.key], copy.key === "diskUsage" ? scanControls(state) : ""))
+            .join("")}
+        </section>`).join("");
 }
 
 /** How long ago something happened, in the words a status line would use. */
@@ -258,21 +294,6 @@ function previewCard(state: PanelTweaksState): string {
     </div>`;
 }
 
-function diskCard(state: PanelTweaksState): string {
-  if (!state.tweaks.diskUsage) return "";
-  const measured = state.sites.filter((site) => site.disk).length;
-  return `
-    <div class="card">
-      <div class="card-header"><h2>Measured sizes</h2></div>
-      <div class="scan-row">
-        <p>${measured === 0
-          ? "Nothing measured yet. The first sweep runs with the next repair, within fifteen minutes."
-          : `${measured} of ${state.sites.length} site${state.sites.length === 1 ? "" : "s"} measured, ${esc(sinceText(state.diskMeasuredAt))}.`}</p>
-        <button class="btn" type="button" onclick="measureNow(this)">Measure now</button>
-      </div>
-    </div>`;
-}
-
 export function dashboardView(state: PanelTweaksState): string {
   return `
     <div class="page-heading">
@@ -283,7 +304,7 @@ export function dashboardView(state: PanelTweaksState): string {
     </div>
     <div class="card">
       <div class="card-header"><h2>What it adds</h2></div>
-      <div class="tweak-list">${COPY.map((copy) => switchRow(copy, state.tweaks[copy.key])).join("")}
+      <div class="tweak-list">${tweakList(state)}
       </div>
-    </div>${diskCard(state)}${previewCard(state)}`;
+    </div>${previewCard(state)}`;
 }

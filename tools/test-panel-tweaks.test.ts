@@ -247,6 +247,17 @@ test("the preview frame is the panel's own page, with the injected block over it
 test("the addon page keeps switches beside wrapping labels on a phone", () => {
   const page = panelTweaksDashboardView({ tweaks: { ...DEFAULT_TWEAKS }, diskMeasuredAt: "", sites: [] });
   expect(page).toContain("CloudPanel mobile layout");
+  expect(page).toContain('id="tweak-category-sites"');
+  expect(page).toContain('id="tweak-category-dashboard"');
+  expect(page).toContain('id="tweak-category-login"');
+  expect(page).toContain('class="tweak-row is-nested"');
+  expect(page).toContain('class="tweak-scan"');
+  expect(page).toContain("Measure now");
+  expect(page).not.toContain("<h2>Measured sizes</h2>");
+  const measuredOn = panelTweaksDashboardView({
+    tweaks: { ...DEFAULT_TWEAKS, diskUsage: true }, diskMeasuredAt: "", sites: [],
+  });
+  expect(measuredOn).toContain('class="tweak-row is-nested is-enabled"');
   const html = panelTweaksLayout("Panel Tweaks", page);
   expect(html).toContain(".tweak-row > div { flex: 1 1 auto; min-width: 0; }");
   expect(html).toContain(".tweak-row .switch { flex: 0 0 auto;");

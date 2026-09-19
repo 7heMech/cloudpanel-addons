@@ -24,6 +24,11 @@ site. An operator who wants a filterable site list should not have to install
 the code that can do that, and a switch is a weaker withdrawal than not having
 it on the box.
 
+The page groups those switches by the panel surface they change: Sites,
+Dashboard, and Login. Measured sizes is nested under the Sites table enhancement
+because the size column is its only visible result. Its scan status and manual
+scan button live in that row rather than taking a card of their own.
+
 `login-theme` used to be its own addon and is the device-theme switch here.
 `install`, `update` and `repair` carry a box over: the old config file is what
 recorded the addon as enabled, so writing `panel-tweaks.conf` and removing
