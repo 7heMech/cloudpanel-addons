@@ -1,8 +1,7 @@
 import { esc } from "../../../lib/app-http";
 import { renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
-import { applicationLabel, certificateLabel, SELF_SIGNED_CERTIFICATE } from "../action";
-import type { PanelTweaks, PanelTweaksState, TweakSiteView } from "../action";
+import type { PanelTweaks, PanelTweaksState } from "../action";
 
 const BASE = mountPath("panel-tweaks");
 
@@ -16,6 +15,30 @@ const STYLE = `
 .tweak-row h3 { margin: 0 0 6px; font-size: 16px; }
 .tweak-row p { margin: 0; color: var(--muted); font-size: 14px; }
 .tweak-row .switch { margin-top: 4px; }
+/* A phone gets the titles and the switches, with the wording a tap away. The
+   button is display: none above that, so nothing can focus a control that
+   would do nothing. */
+.tweak-more { display: none; }
+@media (max-width: 760px) {
+  .tweak-row h3 { margin: 0; display: flex; align-items: center; gap: 2px; }
+  .tweak-row .tweak-note { display: none; margin-top: 8px; }
+  .tweak-row.is-open .tweak-note { display: block; }
+  .tweak-more { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px;
+    margin: -6px 0 -6px 2px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted);
+    font-size: 13px; line-height: 1; cursor: pointer; }
+  .tweak-more:hover { color: var(--text); }
+  .tweak-row.is-open .tweak-more { transform: rotate(180deg); }
+}
+.preview-widths { display: flex; gap: 8px; }
+.preview-widths .btn { min-height: 36px; padding: 4px 14px; font-size: 13px; }
+.preview-widths .btn.is-active { border-color: var(--primary); color: var(--primary); }
+/* The frame carries the panel's own background, so the border is what says
+   where the preview stops and this page starts. */
+.preview-frame { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.preview-frame iframe { display: block; width: 100%; max-width: 100%; height: 320px; border: 0;
+  background: var(--panel); color-scheme: normal; }
+.preview-frame.is-phone { display: flex; justify-content: center; background: var(--row-hover, transparent); }
+.preview-frame.is-phone iframe { width: 390px; max-width: 100%; }
 .scan-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
 .scan-row p { margin: 0; }
 .size-cell { font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -59,6 +82,38 @@ async function measureNow(button) {
   }
 }
 
+// The frame is this origin's, so its document can be measured directly: it
+// grows when the injected script fills the columns, and again whenever a
+// column is switched on inside it.
+function fitPreview() {
+  const frame = document.getElementById('preview-frame');
+  if (!frame) return;
+  const inner = frame.contentDocument;
+  const content = inner && inner.getElementById('clp-preview');
+  if (!content) return;
+  // The wrapper's height, not the document's or the body's: CloudPanel gives
+  // both of those a height of their own, which inside a frame is the frame's
+  // height, so measuring either would only ever grow it.
+  const measure = () => {
+    frame.style.height = Math.max(160, Math.ceil(content.getBoundingClientRect().height)) + 'px';
+  };
+  measure();
+  if (window.ResizeObserver) new ResizeObserver(measure).observe(content);
+}
+
+function setPreviewWidth(button) {
+  const wrap = document.querySelector('.preview-frame');
+  for (const other of button.parentElement.children) other.classList.toggle('is-active', other === button);
+  wrap.classList.toggle('is-phone', button.dataset.width !== '0');
+  fitPreview();
+}
+
+function toggleNote(button) {
+  const row = button.closest('.tweak-row');
+  const open = row.classList.toggle('is-open');
+  button.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
 const FLASH_KEY = 'clp-panel-tweaks-flash';
 
 function reloadWith(message, kind) {
@@ -86,7 +141,7 @@ export function layout(
   updateNotice?: { current: string; latest: string } | null,
 ): string {
   return renderLayout(title, content, {
-    brand: "Panel UI tweaks",
+    brand: "Panel Tweaks",
     base: BASE,
     nav: [],
     css: STYLE,
@@ -110,41 +165,44 @@ const COPY: TweakCopy[] = [
   {
     key: "sitesTable",
     title: "Search, sort and extra columns on Sites",
-    description: "Adds a site count beside the Sites heading, a search box and application filter, sortable columns, and columns for SSL, runtime, size, creation date, Cloudflare-only and Varnish. The Columns button beside the search picks which are shown, the panel's own Site user and Type included; the choice is the browser's, and a phone keeps a shorter set than a desktop.",
+    description: "A count beside the Sites heading, a search box, and a filter by application. Columns for SSL, runtime, size, creation date, Cloudflare-only and Varnish, each one sortable. The Columns button says which of them show, the panel's own Site user and Type included. Every browser keeps its own answer, and a phone keeps a shorter list than a desktop.",
   },
   {
     key: "sitesMobile",
     title: "Sites list as cards on a phone",
-    description: "On a narrow screen the Sites table becomes one card per site: the hostname on the first line, the type beside it when that column is on, and the rest of the columns labelled beneath. Off, the table scrolls sideways as CloudPanel drew it.",
+    description: "Below 860px the Sites table becomes one card per site. The hostname takes the first line, the type sits beside it when that column is on, and the rest are labelled underneath. Switched off, the table scrolls sideways as CloudPanel drew it.",
   },
   {
     key: "actionMenu",
     title: "Row actions in a menu",
-    description: "Collects the links in the Sites table's last column — Manage, and whatever other addons put there — behind a single button on each row.",
+    description: "Puts the links in the Sites table's last column behind one button on each row. That covers Manage and whatever other addons have added beside it.",
   },
   {
     key: "panelMobile",
     title: "CloudPanel's own pages on a phone",
-    description: "The panel's header wraps onto a second row instead of putting the Admin Area link and the avatar off the side, and the Dashboard's charts fit the screen instead of running past it.",
+    description: "The panel's header wraps onto a second row, so the Admin Area link and the avatar stay on the screen. The Dashboard's charts are drawn to fit the screen rather than run past its edge.",
   },
   {
     key: "deviceTheme",
     title: "Device theme on first visit",
-    description: "On the first visit to the CloudPanel login page, the theme follows the device's light or dark preference. After that CloudPanel's own switch owns it.",
+    description: "The first visit to the CloudPanel login page follows the device's light or dark setting. After that, CloudPanel's own theme switch decides.",
   },
   {
     key: "diskUsage",
     title: "Measured site sizes",
-    description: "Adds a size column filled by a sweep that runs with the fifteen-minute repair. The sweep reads every site's home directory and its databases, at the lowest I/O priority.",
+    description: "A size column, filled by a sweep that runs with the fifteen-minute repair. The sweep reads every site's home directory and its databases at the lowest I/O priority. It is the one tweak here that a loaded box would feel.",
   },
 ];
 
 function switchRow(copy: TweakCopy, on: boolean): string {
+  const note = `tweak-note-${copy.key}`;
   return `
       <div class="tweak-row">
         <div>
-          <h3>${esc(copy.title)}</h3>
-          <p>${esc(copy.description)}</p>
+          <h3>${esc(copy.title)}<button class="tweak-more" type="button" aria-expanded="false"
+            aria-controls="${note}" aria-label="What ${esc(copy.title.toLowerCase())} does"
+            onclick="toggleNote(this)">&#9662;</button></h3>
+          <p class="tweak-note" id="${note}">${esc(copy.description)}</p>
         </div>
         <label class="switch" title="${esc(copy.title)}">
           <input type="checkbox" data-tweak="${esc(copy.key)}" onchange="setTweak(this)"${on ? " checked" : ""}
@@ -152,19 +210,6 @@ function switchRow(copy: TweakCopy, on: boolean): string {
           <span></span>
         </label>
       </div>`;
-}
-
-const UNITS = ["B", "KB", "MB", "GB", "TB"];
-
-export function humanBytes(bytes: number): string {
-  let size = Number.isFinite(bytes) ? bytes : 0;
-  let unit = 0;
-  while (size >= 1024 && unit < UNITS.length - 1) {
-    size /= 1024;
-    unit++;
-  }
-  if (unit === 0) return `${Math.round(size)} B`;
-  return `${size < 10 ? size.toFixed(1) : Math.round(size)} ${UNITS[unit]}`;
 }
 
 /** How long ago something happened, in the words a status line would use. */
@@ -180,69 +225,23 @@ export function sinceText(iso: string): string {
   return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
-function certificateCell(site: TweakSiteView): string {
-  if (!site.certificate) return '<span class="badge state-absent">None</span>';
-  const label = certificateLabel(site.certificate.type);
-  // The certificate CloudPanel gives every new site. Naming it without a
-  // countdown keeps the column about which sites a browser actually trusts.
-  if (site.certificate.type === SELF_SIGNED_CERTIFICATE) return `<span class="badge">${esc(label)}</span>`;
-  const expires = Date.parse(site.certificate.expiresAt.replace(" ", "T") + "Z");
-  if (!Number.isFinite(expires)) return `<span class="badge state-done">${esc(label)}</span>`;
-  const days = Math.floor((expires - Date.now()) / 86400000);
-  const state = days < 0 ? "state-failed" : days < 14 ? "state-exited" : "state-done";
-  const note = days < 0 ? "expired" : `${days}d left`;
-  return `<span class="badge ${state}">${esc(label)} · ${esc(note)}</span>`;
-}
-
-function diskCell(site: TweakSiteView, on: boolean): string {
-  if (!on) return '<span class="hint">off</span>';
-  if (!site.disk) return '<span class="hint">not measured</span>';
-  const total = site.disk.bytes + site.disk.databaseBytes;
-  const detail = site.disk.databaseBytes
-    ? `files ${humanBytes(site.disk.bytes)}, databases ${humanBytes(site.disk.databaseBytes)}`
-    : `files ${humanBytes(site.disk.bytes)}`;
-  return `<span title="${esc(detail)}">${esc(humanBytes(total))}</span>`;
-}
-
-function siteRow(site: TweakSiteView, tweaks: PanelTweaks): string {
+function previewCard(state: PanelTweaksState): string {
+  const sites = state.sites.length;
   return `
-              <tr>
-                <td class="site-cell">${esc(site.domain)}</td>
-                <td class="type-cell">${esc(applicationLabel(site.application, site.type))}</td>
-                <td data-label="Runtime">${site.runtime ? esc(site.runtime) : '<span class="hint">—</span>'}</td>
-                <td data-label="SSL">${certificateCell(site)}</td>
-                <td class="size-cell" data-label="Size">${diskCell(site, tweaks.diskUsage)}</td>
-              </tr>`;
-}
-
-function sitesCard(state: PanelTweaksState): string {
-  if (state.sites.length === 0) {
-    return `
-    <div class="card card-table">
-      <div class="card-header"><h2>Sites</h2></div>
-      <div class="empty">CloudPanel has no sites yet.</div>
-    </div>`;
-  }
-  return `
-    <div class="card card-table">
+    <div class="card">
       <div class="card-header">
-        <h2>Sites</h2>
-        <span class="toolbar-note">${state.sites.length} site${state.sites.length === 1 ? "" : "s"}</span>
+        <h2>Preview</h2>
+        <div class="preview-widths" role="group" aria-label="Preview width">
+          <button class="btn is-active" type="button" data-width="0" onclick="setPreviewWidth(this)">This screen</button>
+          <button class="btn" type="button" data-width="390" onclick="setPreviewWidth(this)">Phone</button>
+        </div>
       </div>
-      <div class="table-scroll">
-        <table class="fleet-table">
-          <thead>
-            <tr>
-              <th>Domain</th>
-              <th>Application</th>
-              <th>Runtime</th>
-              <th>SSL</th>
-              <th>Size</th>
-            </tr>
-          </thead>
-          <tbody>${state.sites.map((site) => siteRow(site, state.tweaks)).join("")}
-          </tbody>
-        </table>
+      <p class="hint">CloudPanel's own Sites page, as the switches above leave it.${sites === 0
+    ? " There are no sites on this box yet, so there is little to see."
+    : ""}</p>
+      <div class="preview-frame">
+        <iframe id="preview-frame" src="${esc(BASE)}/preview" title="Preview of the Sites page"
+          onload="fitPreview()"></iframe>
       </div>
     </div>`;
 }
@@ -266,7 +265,7 @@ export function dashboardView(state: PanelTweaksState): string {
   return `
     <div class="page-heading">
       <div>
-        <h1>Panel UI tweaks</h1>
+        <h1>Panel Tweaks</h1>
         <p>Additions to CloudPanel's own pages. Each one can be switched off on its own.</p>
       </div>
     </div>
@@ -274,5 +273,5 @@ export function dashboardView(state: PanelTweaksState): string {
       <div class="card-header"><h2>What it adds</h2></div>
       <div class="tweak-list">${COPY.map((copy) => switchRow(copy, state.tweaks[copy.key])).join("")}
       </div>
-    </div>${diskCard(state)}${sitesCard(state)}`;
+    </div>${diskCard(state)}${previewCard(state)}`;
 }

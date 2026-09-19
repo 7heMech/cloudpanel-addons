@@ -102,7 +102,7 @@ to go; flattening the right-hand wrapper lets the row wrap. Those rules apply
 only while a notice is actually in the row, so a panel with nothing to update is
 shaped as CloudPanel drew it.
 
-Panel UI tweaks wants the same rules for a different reason, on a narrow screen
+Panel Tweaks wants the same rules for a different reason, on a narrow screen
 and on any day, so `headerWrapStyle` in `lib/panel-nav.ts` takes the header's own
 selector and both ask for their own copy. What a phone additionally wants of the panel's own pages -- the navigation on a
 row of its own, a logo that shrinks, an Admin Area link down to its icon, a
@@ -149,7 +149,7 @@ pages behind the panel's session without ever being told whose it is. The theme
 and Admin Area icons are the panel's own paths rather than approximations of
 them, so one control does not have two shapes depending on the page. Below
 760px the logo and the three controls share one 64px row and the navigation
-takes the row beneath; that shape is what Panel UI tweaks gives the panel's own
+takes the row beneath; that shape is what Panel Tweaks gives the panel's own
 header on a phone, so moving between the two does not move the header.
 
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,

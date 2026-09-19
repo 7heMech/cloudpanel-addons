@@ -1,5 +1,5 @@
 /**
- * The privileged half of Panel UI tweaks: what the panel's own pages cannot ask
+ * The privileged half of Panel Tweaks: what the panel's own pages cannot ask
  * for themselves.
  *
  * Two of the three tweaks are decoration -- a count, a filter, two extra

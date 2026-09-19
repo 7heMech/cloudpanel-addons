@@ -1,4 +1,4 @@
-// What Panel UI tweaks adds to CloudPanel's own pages.
+// What Panel Tweaks adds to CloudPanel's own pages.
 //
 // Two anchors, not six. Every authenticated tweak -- the count, the search, the
 // sorting, the extra columns -- is one script and one toolbar placed above the
@@ -1032,7 +1032,14 @@ function storedTweaks(): PanelTweaks {
   }
 }
 
-function sitesSnippet(url: string, tweaks: PanelTweaks = storedTweaks()): string {
+/**
+ * The whole block, without the Twig that guards it on a panel page.
+ *
+ * The addon's own page renders this into the preview under its switches, where
+ * there is no Twig and no administrator test to make: the route that serves it
+ * is already behind the same gate as every other route the manager has.
+ */
+export function sitesBlock(url: string, tweaks: PanelTweaks = storedTweaks()): string {
   const style = SITES_STYLE
     + (tweaks.sitesMobile ? SITES_MOBILE_STYLE : "")
     + (tweaks.actionMenu ? MENU_STYLE : "")
@@ -1043,7 +1050,6 @@ function sitesSnippet(url: string, tweaks: PanelTweaks = storedTweaks()): string
     ? `\n          <script>document.documentElement.classList.add("clp-tweaks-menu");</script>`
     : "";
   return `
-          {% if is_granted('ROLE_ADMIN') %}
           <style>${style}</style>${menuClass}
           <div class="clp-tweaks-toolbar" id="clp-tweaks-toolbar" hidden>
             <input type="search" id="clp-tweaks-search" class="form-control" placeholder="Search sites" aria-label="Search sites">
@@ -1061,7 +1067,12 @@ function sitesSnippet(url: string, tweaks: PanelTweaks = storedTweaks()): string
   .replace("CERTIFICATE_LABELS_JSON", JSON.stringify(CERTIFICATE_LABELS))
   .replace("APPLICATION_LABELS_JSON", JSON.stringify(APPLICATION_LABELS))
   .replace("SELF_SIGNED_JSON", JSON.stringify(SELF_SIGNED_CERTIFICATE))
-  .replace("SITES_TABLE_JSON", JSON.stringify(tweaks.sitesTable))}</script>
+  .replace("SITES_TABLE_JSON", JSON.stringify(tweaks.sitesTable))}</script>`;
+}
+
+function sitesSnippet(url: string, tweaks: PanelTweaks = storedTweaks()): string {
+  return `
+          {% if is_granted('ROLE_ADMIN') %}${sitesBlock(url, tweaks)}
           {% endif %}`;
 }
 

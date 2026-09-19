@@ -62,7 +62,7 @@ function installedAddons(): AddonSpec[] {
  * Addons that are now part of another addon.
  *
  * `login-theme` was a whole addon for one script in the login page's <head>.
- * It is a switch inside Panel UI tweaks now, and a box that had it enabled
+ * It is a switch inside Panel Tweaks now, and a box that had it enabled
  * should come out of an update with the device theme still working rather than
  * with an addon that no longer exists. The config file is the enabled flag, so
  * moving it is the whole migration: the state directory held nothing, and the Twig

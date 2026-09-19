@@ -1,4 +1,4 @@
-# Panel UI tweaks
+# Panel Tweaks
 
 ## One addon for the small additions
 
@@ -175,6 +175,27 @@ The hostname's cell is measured from zero rather than from its text, so a name
 wider than the card wraps beside the tag instead of taking the whole line and
 pushing it onto the next one. That left the right of one line and the left of
 the next both empty.
+
+## The switches are shown against the page they change
+
+Under the switches is CloudPanel's own Sites page in a frame, with the block the
+templates carry rendered over the panel's own markup and stylesheets. A frame
+rather than markup on the addon's page, for two reasons. The rules that turn a
+row into a card are keyed to the width of the window, so only a frame can be
+asked what a phone would see while a desktop is reading the page, which is what
+the Phone button does. And the look being previewed is the panel's, so the frame
+loads `/assets/css/style.css` from the CloudPanel it is installed beside instead
+of a copy kept here that would drift with the next panel release.
+
+The two things that costs are named on the route that serves the frame: it
+allows this origin to frame it, and to load styles from it. The page holding it
+allows the frame. Everything else in the shared policy stands.
+
+The frame is measured by the wrapper inside it rather than by its document,
+because CloudPanel gives `html` and `body` a height of their own, which inside a
+frame is the frame's height: measuring either would only ever grow it. The
+switches reload the page when they are saved, so the frame is drawn again with
+the switch that moved.
 
 ## Measured sizes ride the repair timer
 

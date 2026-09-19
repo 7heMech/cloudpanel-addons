@@ -8,7 +8,8 @@ import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, lay
 import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
-import { sitesSnippet } from "../addons/panel-tweaks/inject/targets";
+import { sitesBlock } from "../addons/panel-tweaks/inject/targets";
+import { previewPage as panelTweaksPreviewPage } from "../addons/panel-tweaks/app/preview";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MENU_ONLY_CLASS } from "../lib/row-actions";
 
@@ -160,7 +161,7 @@ function phpResourcesPreviewState(url: URL): PhpResourcesState {
 }
 
 /**
- * Panel UI tweaks with every switch on and most sites measured, because that is
+ * Panel Tweaks with every switch on and most sites measured, because that is
  * the widest the page gets: `?off` is the state an operator lands on after
  * enabling the addon, and `?unmeasured` is the gap before the first sweep.
  */
@@ -290,7 +291,7 @@ ${tabs}
 }
 
 /**
- * A stand-in for CloudPanel's own Sites page, so the block Panel UI tweaks injects
+ * A stand-in for CloudPanel's own Sites page, so the block Panel Tweaks injects
  * there can be reviewed without a panel. The markup is
  * Frontend/Site/index.html.twig with its Twig evaluated, and the rules are the
  * panel's own from assets/css/style.css and assets/css/frontend/sites.css.
@@ -304,13 +305,13 @@ function unwrapTwig(block: string): string {
 
 /**
  * Three addons put a block above CloudPanel's sites table; the stub shows all.
- * Panel UI tweaks is handed the previewed switches rather than reading the ones
+ * Panel Tweaks is handed the previewed switches rather than reading the ones
  * stored on a server, so `?off` and `?menu` change the injected markup here the
  * way a reconciliation would change it on a box.
  */
 function injectedSitesBlocks(state: PanelTweaksState): string {
   return [
-    unwrapTwig(sitesSnippet("/addons/panel-tweaks", state.tweaks)),
+    sitesBlock("/addons/panel-tweaks", state.tweaks),
     unwrapTwig(WP_LOGIN_SITES_SCRIPT.snippet("/addons/wp-login")),
     unwrapTwig(STAGER_SITES_STYLE.snippet("/addons/stager")),
   ].join("\n");
@@ -387,6 +388,7 @@ ${rows}
 }
 
 let panelAce: string | null = null;
+const panelCss: Record<string, string> = {};
 
 const server = Bun.serve({
   hostname: "127.0.0.1",
@@ -403,6 +405,14 @@ const server = Bun.serve({
       return new Response(await upstream.arrayBuffer(), {
         status: upstream.status,
         headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=3600" },
+      });
+    }
+    // The stylesheets the addon's own preview frame loads from its CloudPanel
+    // origin. Only this development preview borrows them from the public demo.
+    if (path.startsWith("/assets/css/") && path.endsWith(".css")) {
+      panelCss[path] ??= await (await fetch(`https://demo.cloudpanel.io${path}`)).text();
+      return new Response(panelCss[path], {
+        headers: { "Content-Type": "text/css", "Cache-Control": "public, max-age=3600" },
       });
     }
     // CloudPanel serves its own Ace build here, which the maintenance editor
@@ -550,8 +560,12 @@ const server = Bun.serve({
             }
           : undefined,
       );
+    } else if (path === "/addons/panel-tweaks/preview") {
+      return new Response(panelTweaksPreviewPage(panelTweaksPreviewState(url)), {
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+      });
     } else if (path === "/addons/panel-tweaks/" || path === "/addons/panel-tweaks") {
-      html = panelTweaksLayout("Panel UI tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url)), notice);
+      html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url)), notice);
     } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {
       html = wpLoginLayout("WordPress Sign-In", wpLoginDashboardView(wpLoginPreviewSites(url)), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {

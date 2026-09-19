@@ -80,7 +80,7 @@ export function headerUpdateScript(addonsUrl = "/addons/"): string {
  * wrapper makes its children items of the header itself, which is what lets the
  * row wrap at all.
  *
- * Both the update notice and Panel UI tweaks' narrow-screen header need this,
+ * Both the update notice and Panel Tweaks' narrow-screen header need this,
  * and each wants it under different conditions, so the header's own selector is
  * the argument: the manager asks for it only while a notice is in the row, and
  * the addon asks for it whenever its switch is on.
@@ -100,7 +100,7 @@ ${header} .navbar-right { flex: 0 0 auto; padding-left: 0; margin-left: auto; }
 
 // Scoped to the class the notice's own script adds, so a panel with no update
 // waiting is shaped exactly as CloudPanel drew it. What a narrow screen wants
-// from the header on any other day is a Panel UI tweaks switch.
+// from the header on any other day is a Panel Tweaks switch.
 const PANEL_HEADER_STYLE = headerWrapStyle(".header.clp-addons-has-update");
 
 // Where the update notice sits in that row: beside the tools while there is

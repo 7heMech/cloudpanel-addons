@@ -1,12 +1,30 @@
 import {
-  bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
+  SECURITY_HEADERS, bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken,
+  readJsonObject,
 } from "../../../lib/app-http";
 import { callGatewayAction } from "../../../lib/gateway-client";
 import { panelTweaksService } from "./service";
+import { previewPage } from "./preview";
 import { dashboardView, layout } from "./views";
 
 function json(body: unknown, status = 200): Response {
   return jsonResponse(body, { status });
+}
+
+// The preview is a frame inside the addon's own page, and it wears CloudPanel's
+// stylesheets rather than a copy of them, so it needs the two things the shared
+// policy refuses: to be framed by this origin, and to load styles from it. Read
+// when a request asks for it rather than when this module is first evaluated,
+// which on some import orders happens before the policy itself exists.
+function previewCsp(): string {
+  return (SECURITY_HEADERS["Content-Security-Policy"] ?? "")
+    .replace("frame-ancestors 'none'", "frame-ancestors 'self'")
+    .replace("style-src 'unsafe-inline'", "style-src 'self' 'unsafe-inline'");
+}
+
+/** What the page holding that frame needs in turn: permission to hold it. */
+function pageCsp(): string {
+  return (SECURITY_HEADERS["Content-Security-Policy"] ?? "").replace("default-src 'none'", "default-src 'none'; frame-src 'self'");
 }
 
 function errorMessage(error: unknown): string {
@@ -42,13 +60,26 @@ export async function handle(
     try {
       const result = await panelTweaksService.state();
       if (!result.ok || !result.data) throw new Error(result.error ?? "the panel tweaks state is unavailable");
-      return htmlResponse(layout("Panel UI tweaks", dashboardView(result.data), updateNotice), { csrf });
+      return htmlResponse(layout("Panel Tweaks", dashboardView(result.data), updateNotice), {
+        csrf,
+        headers: { "Content-Security-Policy": pageCsp() },
+      });
     } catch (error) {
       return htmlResponse(
-        layout("Panel UI tweaks", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice),
+        layout("Panel Tweaks", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice),
         { status: 500, csrf },
       );
     }
+  }
+
+  // What the switches above it will do to CloudPanel's own Sites page. The same
+  // block the templates carry, over the panel's own markup and stylesheets.
+  if (method === "GET" && path === "/preview") {
+    const result = await panelTweaksService.state();
+    if (!result.ok || !result.data) return json(result, 500);
+    return htmlResponse(previewPage(result.data), {
+      headers: { "Content-Security-Policy": previewCsp(), "X-Frame-Options": "SAMEORIGIN" },
+    });
   }
 
   // What the script injected into CloudPanel's own Sites page reads: which

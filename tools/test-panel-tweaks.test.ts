@@ -11,6 +11,7 @@ import {
   PANEL_TWEAKS_TARGETS, deviceThemeSnippet, panelMobileSnippet, sitesSnippet,
 } from "../addons/panel-tweaks/inject/targets";
 import type { PanelTweaks } from "../addons/panel-tweaks/action";
+import { previewPage } from "../addons/panel-tweaks/app/preview";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MENU_ONLY_CLASS, MENU_ONLY_STYLE, ROW_MENU_CLASS } from "../lib/row-actions";
 
@@ -194,6 +195,35 @@ test("the column picker is in the block, and a switched-off column is never pain
   expect(sites({ sitesTable: false })).toContain("var COLUMNS_ON = false;");
 });
 
+// The addon's own page shows the panel's Sites page in a frame, so an operator
+// can see what a switch does without leaving the addon.
+test("the preview frame is the panel's own page, with the injected block over it", () => {
+  const state: PanelTweaksState = {
+    tweaks: { ...DEFAULT_TWEAKS },
+    diskMeasuredAt: "",
+    sites: Array.from({ length: 7 }, (_, index) => ({
+      domain: `site${index}.example.com`, user: `site${index}`, type: "php", application: "WordPress",
+      runtime: "PHP 8.3", createdAt: "2026-01-01 00:00:00", cloudflareOnly: false, varnish: false,
+      certificate: null, disk: null,
+    })),
+  };
+  const page = previewPage(state);
+  // CloudPanel's own stylesheets, not a copy of them kept here.
+  expect(page).toContain('href="/assets/css/style.css"');
+  expect(page).toContain('href="/assets/css/style-dark.css"');
+  // The card and the class its dark theme keys the cell colour to.
+  expect(page).toContain('<div class="card-body card-body-no-padding">');
+  expect(page).toContain('<table class="table table-sites">');
+  // The block the templates carry, without the Twig that guards it there.
+  expect(page).toContain('id="clp-tweaks-toolbar"');
+  for (const sequence of ["{{", "{%", "{#"]) expect(page).not.toContain(sequence);
+  // A preview, not the list: five rows, and it says what it left out.
+  expect(page.match(/<tr>/g)?.length).toBe(6);
+  expect(page).toContain("2 more sites on the real page.");
+  // The frame is measured by this wrapper, so it has to be there to find.
+  expect(page).toContain('id="clp-preview"');
+});
+
 // The block is rendered by Twig before a browser ever sees it, and Twig reads
 // `{{`, `{%` and `{#` wherever they appear -- including inside a <script>.
 test("nothing in the block is markup Twig would take for its own", () => {
@@ -257,7 +287,7 @@ test("a menu-only action is hidden by its own addon and shown by the menu", () =
   const clone = STAGER_TARGETS.find((target) => target.slug === "site-list-action")!;
   const style = STAGER_TARGETS.find((target) => target.slug === "site-list-style")!;
   expect(clone.snippet("/addons/stager")).toContain(`class="${MENU_ONLY_CLASS}"`);
-  // Stager's own, not this addon's: a box without Panel UI tweaks must not be
+  // Stager's own, not this addon's: a box without Panel Tweaks must not be
   // shown the link either.
   expect(style.snippet("/addons/stager")).toContain(MENU_ONLY_STYLE);
   expect(sites({ actionMenu: true })).not.toContain(MENU_ONLY_STYLE);

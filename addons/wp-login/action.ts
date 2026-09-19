@@ -2,7 +2,7 @@
  * The privileged half of the WordPress sign-in.
  *
  * This is the only addon that writes into a site's own tree, which is why it is
- * an addon rather than a switch on Panel UI tweaks: an operator who wants a
+ * an addon rather than a switch on Panel Tweaks: an operator who wants a
  * filterable site list should not have to install the code that can put a file
  * inside a customer's WordPress. Installing this is the decision, and
  * uninstalling it takes the file back out of every site.

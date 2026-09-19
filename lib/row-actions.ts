@@ -1,5 +1,5 @@
 /**
- * The menu Panel UI tweaks can put a Sites row's actions behind, as the one
+ * The menu Panel Tweaks can put a Sites row's actions behind, as the one
  * thing two addons have to agree on to share it.
  *
  * An addon that adds a link to the action cell needs nothing from here: the
@@ -9,8 +9,8 @@
  * menu's own rule for the links inside it is what shows it again, so it appears
  * exactly when there is a menu to appear in and never otherwise.
  *
- * The addon that owns the link emits `MENU_ONLY_STYLE`, not Panel UI tweaks:
- * an operator who never installed Panel UI tweaks must still not be shown it.
+ * The addon that owns the link emits `MENU_ONLY_STYLE`, not Panel Tweaks:
+ * an operator who never installed Panel Tweaks must still not be shown it.
  */
 export const ROW_MENU_CLASS = "clp-addons-row-menu";
 
