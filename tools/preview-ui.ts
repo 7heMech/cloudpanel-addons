@@ -246,7 +246,7 @@ function panelSiteStub(site: SiteContext, activeSlug: string): string {
 <html id="html" lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <title>${site.domain}</title>
 <script>document.documentElement.classList.toggle('dark', /(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie));</script>
 <style>${PANEL_STUB_STYLE}</style>
@@ -330,7 +330,7 @@ function panelSitesStub(state: PanelTweaksState, dark: boolean): string {
 <html lang="en"${dark ? ' class="dark"' : ""}>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <title>Sites</title>
 <script>if (/(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie)) document.documentElement.classList.add('dark');</script>
 <style>${PANEL_STUB_STYLE}
