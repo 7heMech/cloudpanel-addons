@@ -16,7 +16,12 @@ const STYLE = `
   letter-spacing: .06em; text-transform: uppercase; }
 .tweak-category > .tweak-row:nth-child(2) { padding-top: 10px; border-top: 0; }
 .tweak-category > .tweak-row:last-child { padding-bottom: 0; }
-.tweak-row.is-nested { margin-left: 18px; padding-left: 14px; border-left: 2px solid var(--border); }
+.tweak-row.is-nested { position: relative; padding-top: 0; padding-left: 36px; border-top: 0; }
+/* The branch starts beneath the parent and ends beside the child heading. */
+.tweak-row.is-nested::before { content: ""; position: absolute; top: -16px; left: 8px; width: 18px; height: 26px;
+  border-left: 2px solid var(--border); border-bottom: 2px solid var(--border); border-bottom-left-radius: 5px;
+  pointer-events: none; }
+.tweak-row.is-nested h3 { font-size: 15px; font-weight: 500; }
 .tweak-row h3 { margin: 0 0 6px; font-size: 16px; }
 .tweak-row p { margin: 0; color: var(--muted); font-size: 14px; }
 .tweak-row .switch { flex: 0 0 auto; margin-top: 4px; }
@@ -29,10 +34,12 @@ const STYLE = `
    would do nothing. */
 .tweak-more { display: none; }
 @media (max-width: 760px) {
-  .tweak-row.is-nested { margin-left: 10px; padding-left: 10px; }
+  .tweak-row.is-nested { padding-left: 28px; }
+  .tweak-row.is-nested::before { left: 4px; width: 14px; }
   .tweak-row h3 { position: relative; margin: 0; padding-right: 30px; }
   .tweak-row .tweak-note { display: none; margin-top: 8px; }
   .tweak-row.is-open .tweak-note { display: block; }
+  .tweak-scan { flex-direction: column; align-items: flex-start; gap: 8px; }
   /* The transparent button covers the heading, so tapping either the title or
      its arrow opens the description. */
   .tweak-more { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end;
