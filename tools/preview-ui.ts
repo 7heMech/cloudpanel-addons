@@ -200,8 +200,15 @@ function panelTweaksPreviewState(url: URL): PanelTweaksState {
         runtime: "Node.js 20", createdAt: "2026-06-21 17:40:00", cloudflareOnly: false, varnish: false, certificate: { type: "1", expiresAt: "2027-09-05 10:00:00" },
         disk: null,
       },
-      // A hostname wider than a phone, which is what the card's first line has
-      // to survive: the tag keeps its corner and the name wraps beside it.
+      // A hostname with no room for a whole tag beside it, and one wider than a
+      // phone: the first two cases the card's first line has to survive.
+      {
+        domain: "portal.staging.example-group.com", user: "portal", type: "reverse-proxy",
+        application: "ReverseProxy", runtime: "", createdAt: "2026-04-17 09:10:00",
+        cloudflareOnly: true, varnish: false,
+        certificate: { type: "2", expiresAt: "2026-11-05 10:00:00" },
+        disk: measured ? { bytes: 2_097_152, databaseBytes: 0, measuredAt: at } : null,
+      },
       {
         domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", type: "php",
         application: "WordPress", runtime: "PHP 8.2", createdAt: "2026-08-03 12:00:00",

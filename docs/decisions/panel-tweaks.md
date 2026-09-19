@@ -171,10 +171,19 @@ the row menu's button takes the bottom right-hand corner beside the last of them
 rather than a line of its own. The values give up the width the button needs,
 which is why a long certificate badge can wrap on the line it shares with it.
 
-The hostname's cell is measured from zero rather than from its text, so a name
-wider than the card wraps beside the tag instead of taking the whole line and
-pushing it onto the next one. That left the right of one line and the left of
-the next both empty.
+A hostname and a tag do not always fit on that line together, and which of them
+gives way is measured rather than left to the layout. The hostname keeps the
+width its text needs, because that is what the card is read for; the tag takes
+what is left and ends in an ellipsis, with the whole of it in the cell's title.
+Below 72px there is nothing left worth reading, so the tag goes under the
+hostname instead and the line is the hostname's alone.
+
+CSS cannot make that choice: a flex line moves an item that will not fit onto
+the next line rather than shrinking it. So the script measures the hostname over
+a range of its own text, the cell being a flex item that fills whatever is left
+of the line and so answers a different question, and sets the width each of them
+gets. Every cell is written, then every cell is read, then every cell is written
+again: a list of any length costs three passes rather than three per row.
 
 ## The switches are shown against the page they change
 

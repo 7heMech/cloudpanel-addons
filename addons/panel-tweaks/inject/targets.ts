@@ -172,15 +172,17 @@ const SITES_MOBILE_STYLE = `
   /* A heading over the tag would only repeat the column it came from: the value
      says "WordPress" on its own. The App column is the panel's third, so the two
      are put in this order rather than found in it. */
-  /* Measured from zero rather than from the hostname: a hostname wider than the
-     card would otherwise take the whole line and drop the tag onto one of its
-     own, which left the right of one line and the left of the next both empty.
-     It wraps beside the tag instead. */
+  /* Measured from zero, so the two always share the line and the script decides
+     how much of it each gets: the hostname keeps what it needs and the tag ends
+     in an ellipsis in what is left. A tag with too little left to read goes
+     below instead, and then the hostname has the line to itself. */
   table.table-sites td.clp-tweaks-domain { order: 0; flex: 1 1 0; min-width: 0;
     font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
   table.table-sites td.clp-tweaks-type { order: 1; flex: 0 1 auto; max-width: 50%; margin: 0 0 0 auto;
     padding: 3px 8px !important; border: 1px solid #eaeaea !important; border-radius: 4px; color: #9bacb6;
     font-size: 12px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  table.table-sites tbody tr.clp-tweaks-tag-below td.clp-tweaks-domain { flex-basis: 100%; }
+  table.table-sites tbody tr.clp-tweaks-tag-below td.clp-tweaks-type { max-width: 100%; margin-top: 8px; }
   html.dark table.table-sites td.clp-tweaks-type { border-color: var(--clp-border-color) !important; }
   table.table-sites td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; margin-top: 14px; }
   table.table-sites td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px;
@@ -367,6 +369,15 @@ const SITES_SCRIPT = `
       tagged = true;
       paintColumns(chosen);
     }
+    fitTags(rows);
+    var pending = null;
+    window.addEventListener("resize", function () {
+      if (pending) cancelAnimationFrame(pending);
+      pending = requestAnimationFrame(function () {
+        pending = null;
+        fitTags(rows);
+      });
+    });
     if (document.documentElement.classList.contains("clp-tweaks-menu")) buildMenus(rows);
 
     wanted.then(function (payload) {
@@ -381,6 +392,10 @@ const SITES_SCRIPT = `
       for (var r = 0; r < rows.length; r++) rows[r].site = byDomain[rows[r].domain] || null;
 
       nameApplications(rows);
+      // The panel wrote the site's type in that cell and the line above has
+      // just replaced it with the application's name, which is a different
+      // width, so what fits beside the hostname is a different answer too.
+      fitTags(rows);
       if (!tweaks.sitesTable) return;
       addColumns(rows, Boolean(tweaks.diskUsage));
       addCount(rows);
@@ -434,6 +449,71 @@ const SITES_SCRIPT = `
             if (c === 1) cells[c].setAttribute("data-col", "user");
           }
         }
+      }
+    }
+
+    /**
+     * How much of the card's first line the tag may have.
+     *
+     * A hostname and a tag that will not fit on one line together is a choice
+     * between three bad things: a hostname split over two lines, a tag on a
+     * line of its own, or a tag cut short. The hostname is what the card is
+     * read for, so it keeps what it needs; the tag takes what is left and ends
+     * in an ellipsis, with the whole of it in the cell's title. Below what is
+     * worth reading the tag goes under the hostname instead.
+     *
+     * CSS cannot do this on its own: a flex line puts an item that will not fit
+     * on the next line rather than shrinking it, so the width each one gets has
+     * to be measured and set. Every cell is written, then every cell is read,
+     * then every cell is written again -- three passes over the list rather
+     * than three per row.
+     */
+    var TAG_FLOOR = 72;
+    var TAG_GAP = 12;
+
+    function fitTags(rows) {
+      var pairs = [];
+      for (var i = 0; i < rows.length; i++) {
+        var domain = rows[i].el.querySelector("td.clp-tweaks-domain");
+        var tag = rows[i].el.querySelector("td.clp-tweaks-type");
+        if (domain && tag) pairs.push({ row: rows[i].el, domain: domain, tag: tag });
+      }
+      if (pairs.length === 0) return;
+      var narrow = Boolean(window.matchMedia && window.matchMedia(NARROW_QUERY).matches);
+      for (var w = 0; w < pairs.length; w++) {
+        pairs[w].tag.style.maxWidth = "";
+        pairs[w].tag.removeAttribute("title");
+        pairs[w].row.classList.remove("clp-tweaks-tag-below");
+        if (narrow) pairs[w].domain.style.whiteSpace = "nowrap";
+      }
+      if (!narrow) return;
+      var measured = [];
+      var range = document.createRange();
+      for (var r = 0; r < pairs.length; r++) {
+        var style = window.getComputedStyle(pairs[r].row);
+        var line = pairs[r].row.clientWidth
+          - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+        // The hostname's own width, over a range of the text rather than the
+        // cell holding it: the cell is a flex item filling whatever is left of
+        // the line, so its width answers a different question.
+        range.selectNodeContents(pairs[r].domain);
+        measured.push({
+          // A tag that is switched off is not a tag to make room for.
+          off: pairs[r].tag.offsetWidth === 0,
+          whole: pairs[r].tag.getBoundingClientRect().width,
+          free: line - range.getBoundingClientRect().width - TAG_GAP
+        });
+      }
+      for (var a = 0; a < pairs.length; a++) {
+        pairs[a].domain.style.whiteSpace = "";
+        if (measured[a].off) continue;
+        if (measured[a].free < TAG_FLOOR) {
+          pairs[a].row.classList.add("clp-tweaks-tag-below");
+          continue;
+        }
+        pairs[a].tag.style.maxWidth = Math.floor(measured[a].free) + "px";
+        // Only a tag that lost some of its text says what it was.
+        if (measured[a].free < measured[a].whole) pairs[a].tag.title = pairs[a].tag.textContent.trim();
       }
     }
 
@@ -669,6 +749,7 @@ const SITES_SCRIPT = `
           chosen[key] = box.checked;
           writeChoice(narrowNow(), chosen);
           paintColumns(chosen);
+          fitTags(rows);
         });
       }
 
@@ -701,6 +782,7 @@ const SITES_SCRIPT = `
             boxes[b].checked = chosen[boxes[b].getAttribute("data-column")] !== false;
           }
           paintColumns(chosen);
+          fitTags(rows);
         };
         if (query.addEventListener) query.addEventListener("change", moved);
         else if (query.addListener) query.addListener(moved);

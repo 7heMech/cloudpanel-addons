@@ -224,6 +224,18 @@ test("the preview frame is the panel's own page, with the injected block over it
   expect(page).toContain('id="clp-preview"');
 });
 
+// A hostname and a tag that will not fit on one line is a choice between a
+// split hostname, a tag on a line of its own, and a tag cut short. A flex line
+// only ever makes the second of those, so the widths are measured and set.
+test("the tag takes what the hostname leaves, and goes under it when that is nothing", () => {
+  const snippet = sites({ sitesMobile: true });
+  expect(snippet).toContain("var TAG_FLOOR = 72;");
+  expect(snippet).toContain("range.selectNodeContents(pairs[r].domain)");
+  expect(snippet).toContain('pairs[a].row.classList.add("clp-tweaks-tag-below")');
+  // Under the hostname, that line is the hostname's alone.
+  expect(snippet).toContain("tr.clp-tweaks-tag-below td.clp-tweaks-domain { flex-basis: 100%; }");
+});
+
 // The block is rendered by Twig before a browser ever sees it, and Twig reads
 // `{{`, `{%` and `{#` wherever they appear -- including inside a <script>.
 test("nothing in the block is markup Twig would take for its own", () => {

@@ -170,7 +170,7 @@ const COPY: TweakCopy[] = [
   {
     key: "sitesMobile",
     title: "Sites list as cards on a phone",
-    description: "Below 860px the Sites table becomes one card per site. The hostname takes the first line, the type sits beside it when that column is on, and the rest are labelled underneath. Switched off, the table scrolls sideways as CloudPanel drew it.",
+    description: "Below 860px the Sites table becomes one card per site. The hostname takes the first line, the type sits at the end of it when that column is on and there is room for it, and the rest are labelled underneath. Switched off, the table scrolls sideways as CloudPanel drew it.",
   },
   {
     key: "actionMenu",
