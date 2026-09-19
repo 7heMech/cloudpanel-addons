@@ -29,7 +29,8 @@ Dashboard, and Login. Measured sizes is nested under the Sites table enhancement
 because the size column is its only visible result. A short branch and smaller
 heading show that relationship, with no divider between the child and parent.
 Its scan status and manual scan button live in that row rather than taking a
-card of their own, and stack on phones to fit within the indentation.
+card of their own. The compact button follows the timestamp on desktop; status
+and button stack on phones to fit within the indentation.
 
 `login-theme` used to be its own addon and is the device-theme switch here.
 `install`, `update` and `repair` carry a box over: the old config file is what

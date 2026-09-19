@@ -25,10 +25,10 @@ const STYLE = `
 .tweak-row h3 { margin: 0 0 6px; font-size: 16px; }
 .tweak-row p { margin: 0; color: var(--muted); font-size: 14px; }
 .tweak-row .switch { flex: 0 0 auto; margin-top: 4px; }
-.tweak-scan { display: none; align-items: center; gap: 12px; margin-top: 12px; color: var(--muted); font-size: 13px; }
+.tweak-scan { display: none; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  margin-top: 12px; color: var(--muted); font-size: 13px; }
 .tweak-row.is-enabled .tweak-scan { display: flex; }
-.tweak-scan span { flex: 1 1 auto; }
-.tweak-scan .btn { flex: 0 0 auto; min-height: 32px; padding: 4px 12px; }
+.tweak-scan .btn { flex: 0 0 auto; min-height: 32px; padding: 4px 10px; font-size: 13px; }
 /* A phone gets the titles and the switches, with the wording a tap away. The
    button is display: none above that, so nothing can focus a control that
    would do nothing. */
