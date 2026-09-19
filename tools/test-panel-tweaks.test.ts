@@ -240,6 +240,7 @@ test("the preview frame is the panel's own page, with the injected block over it
   expect(page).toContain('id="clp-preview"');
   expect(page).toContain("#clp-preview { max-width: 1200px; margin: 0 auto; padding: 20px 20px 24px; }");
   expect(page).toContain("#clp-preview { padding-right: 0; padding-left: 0; }");
+  expect(page).toContain("html.clp-preview-framed-phone #clp-preview { padding-right: 20px; padding-left: 20px; }");
   expect(page).toContain("new MutationObserver(syncTheme)");
   for (const match of page.matchAll(/<script>([\s\S]*?)<\/script>/g)) expect(() => new Function(match[1]!)).not.toThrow();
 });
@@ -266,6 +267,7 @@ test("the addon page keeps switches beside wrapping labels on a phone", () => {
   expect(html).toContain(".preview-widths { display: none; }");
   expect(html).toContain("position: absolute; inset: 0; display: flex");
   expect(html).toContain("'/preview?refresh=' + Date.now()");
+  expect(html).toContain("classList.toggle('clp-preview-framed-phone'");
   for (const match of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) expect(() => new Function(match[1]!)).not.toThrow();
 });
 

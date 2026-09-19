@@ -111,6 +111,8 @@ function fitPreview() {
   const inner = frame.contentDocument;
   const content = inner && inner.getElementById('clp-preview');
   if (!content) return;
+  const wrap = document.querySelector('.preview-frame');
+  inner.documentElement.classList.toggle('clp-preview-framed-phone', !!wrap && wrap.classList.contains('is-phone'));
   // The wrapper's height, not the document's or the body's: CloudPanel gives
   // both of those a height of their own, which inside a frame is the frame's
   // height, so measuring either would only ever grow it.

@@ -33,6 +33,9 @@ html, body { margin: 0; }
 @media (max-width: 760px) {
   #clp-preview { padding-right: 0; padding-left: 0; }
 }
+/* The desktop Phone button deliberately shows a framed phone, not an actual
+   edge-to-edge mobile page. The parent marks that case after the frame loads. */
+html.clp-preview-framed-phone #clp-preview { padding-right: 20px; padding-left: 20px; }
 .page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 20px; }
 .page-title h1 { margin: 0; font-size: 26px; }
 .preview-note { margin: 16px 0 0; font-size: 13px; }

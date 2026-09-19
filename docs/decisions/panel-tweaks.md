@@ -240,7 +240,9 @@ theme change reaches the frame without reloading either document.
 The wrapper keeps CloudPanel's horizontal page padding on a desktop. At phone
 widths that padding goes, the frame escapes the addon's page and card gutters,
 and the width controls disappear: the embedded page receives the full phone
-width and therefore enters its phone layout by default.
+width and therefore enters its phone layout by default. The Phone button on a
+desktop is deliberately different: it marks the narrow frame as a simulation
+and keeps a small inner gutter around the panel page.
 
 ## Measured sizes ride the repair timer
 
