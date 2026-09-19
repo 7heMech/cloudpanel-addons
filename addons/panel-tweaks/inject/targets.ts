@@ -81,10 +81,28 @@ const SITES_STYLE = `
 .clp-tweaks-columns-menu[hidden] { display: none; }
 .clp-tweaks-columns-menu label { display: flex; align-items: center; gap: 10px; margin: 0;
   padding: 9px 16px; font-size: 14px; font-weight: 400; white-space: nowrap; cursor: pointer; }
-.clp-tweaks-columns-menu label:hover { background: rgba(127, 143, 153, .14); }
-.clp-tweaks-columns-menu input { width: 16px; height: 16px; margin: 0; flex: 0 0 auto; }
+/* A finger leaves the hover behind it: a tapped row stayed lit until something
+   else was tapped, which on a list of modes reads as a selection. */
+@media (hover: hover) {
+  .clp-tweaks-columns-menu label:hover { background: rgba(127, 143, 153, .14); }
+}
+/* The box is drawn here rather than by the browser because CloudPanel sets
+   -webkit-appearance: none on every input it is hovered, focused or held,
+   which leaves a native checkbox with nothing to draw -- and on a phone, where
+   the hover stays behind, it stayed gone. */
+.clp-tweaks-columns-menu input { appearance: none; -webkit-appearance: none; width: 16px; height: 16px;
+  flex: 0 0 auto; margin: 0; padding: 0; border: 1px solid #b6bfc7; border-radius: 3px;
+  background: #fff; cursor: pointer; }
+.clp-tweaks-columns-menu input:checked { border-color: #0078d4; background-color: #0078d4;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' d='M3.5 8.4l3 3 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-size: 100% 100%; }
+/* The panel clears the outline and the shadow on any focused input, so a
+   keyboard's place in the list has to be drawn over the top of that. */
+.clp-tweaks-columns-menu input:focus-visible { box-shadow: 0 0 0 3px rgba(0, 120, 212, .35) !important; }
 html.dark .clp-tweaks-columns-menu { border-color: var(--clp-border-color, #a8b3cf33);
   background: var(--clp-bg-secondary, #1c1f26); color: var(--clp-text, #fff); }
+html.dark .clp-tweaks-columns-menu input { border-color: #6b7787; background-color: transparent; }
+html.dark .clp-tweaks-columns-menu input:checked { border-color: #0078d4; background-color: #0078d4; }
 .clp-tweaks-count { display: inline-block; margin-left: 12px; padding: 2px 10px; border: 1px solid currentColor;
   border-radius: 99px; color: #9bacb6; font-size: 14px; font-weight: 600; vertical-align: middle; }
 .clp-tweaks-table th.clp-tweaks-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
