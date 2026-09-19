@@ -14,8 +14,10 @@ function call<T>(verb: string, args: string[] = [], input?: string, timeout?: nu
 const SCAN_TIMEOUT_MS = 240_000;
 
 export const panelTweaksService = {
-  state(): Promise<ActionResult<PanelTweaksState>> {
-    return call<PanelTweaksState>("state");
+  // `asUser` narrows the site list to that panel user's own sites; an
+  // administrator's request names nobody and is not narrowed.
+  state(asUser?: string): Promise<ActionResult<PanelTweaksState>> {
+    return call<PanelTweaksState>("state", asUser ? [`--as-user=${asUser}`] : []);
   },
 
   setTweaks(wanted: Partial<PanelTweaks>): Promise<ActionResult<SetTweaksResult>> {

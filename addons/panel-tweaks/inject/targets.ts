@@ -1226,10 +1226,14 @@ export function sitesBlock(url: string, tweaks: PanelTweaks = storedTweaks()): s
   .replace("SITES_TABLE_JSON", JSON.stringify(tweaks.sitesTable))}</script>`;
 }
 
+/**
+ * Emitted for every panel user, not only administrators: the Sites page is one
+ * CloudPanel shows them all, and the reply the script reads is narrowed to the
+ * rows the page already drew for the reader.
+ */
 function sitesSnippet(url: string, tweaks: PanelTweaks = storedTweaks()): string {
   return `
-          {% if is_granted('ROLE_ADMIN') %}${sitesBlock(url, tweaks)}
-          {% endif %}`;
+          ${sitesBlock(url, tweaks)}`;
 }
 
 /** The login page's script, or nothing at all. */

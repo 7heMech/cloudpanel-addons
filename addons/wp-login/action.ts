@@ -12,6 +12,7 @@
  * paths, no user names, no file contents.
  */
 import { Database } from "bun:sqlite";
+import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { createHash, randomBytes } from "node:crypto";
 import { chownSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -123,29 +124,13 @@ function openPanelDatabase(path: string): Database {
  * Whether a panel user may sign in to this site's WordPress.
  *
  * Asked here, as root, rather than in the manager: the manager cannot open
- * CloudPanel's database, and the answer has to come from the same table the
- * panel builds its own Sites page from. An administrator or a site manager
- * sees every site, so the mapping only narrows a `ROLE_USER`, which is the
- * role CloudPanel scopes with `user_sites`. A deactivated account is refused
- * whatever its role, because the session it left behind outlives the status
- * change.
+ * CloudPanel's database, and the answer has to be the same one the panel's own
+ * Sites page is built from.
  */
 function mayManageSite(paths: WpLoginActionPaths, userName: string, domain: string): boolean {
   const db = openPanelDatabase(paths.panelDb);
   try {
-    const account = db.query<{ role: string | null; status: number | null }, [string]>(
-      "SELECT role, status FROM user WHERE user_name = ?",
-    ).get(userName);
-    if (!account || Number(account.status) !== 1) return false;
-    if (account.role === "ROLE_ADMIN" || account.role === "ROLE_SITE_MANAGER") return true;
-    if (account.role !== "ROLE_USER") return false;
-    const owned = db.query<{ one: number }, [string, string]>(
-      `SELECT 1 AS one FROM user_sites
-         JOIN user ON user.id = user_sites.user_id
-         JOIN site ON site.id = user_sites.site_id
-        WHERE user.user_name = ? AND site.domain_name = ?;`,
-    ).get(userName, domain);
-    return owned !== null;
+    return panelUserOwnsSite(db, userName, domain);
   } catch (error) {
     failAction(`CloudPanel could not say whose site that is: ${reason(error)}`);
   } finally {
@@ -404,9 +389,7 @@ interface ParsedAction {
   asUser: string;
 }
 
-// CloudPanel's own user names, which its Add User form limits to letters,
-// digits and a few separators.
-const USER_NAME_RE = /^[A-Za-z0-9._@-]{1,64}$/;
+
 
 function parseAction(argv: string[], options: WpLoginActionOptions): ParsedAction {
   const [rawVerb, ...rest] = argv;
@@ -428,7 +411,7 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
     failAction(`unexpected argument '${argument}'`);
   }
   if (asUser && verb !== "sign-in") failAction(`'${verb}' takes no --as-user`);
-  if (asUser && !USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
+  if (asUser && !PANEL_USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
   if (verb === "sign-in") {
     // The panel's own hostname is refused here as it is everywhere else: the
     // panel is not a site, and nothing of ours writes into it.

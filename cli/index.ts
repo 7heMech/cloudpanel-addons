@@ -912,11 +912,15 @@ function mountedAddons(): string[] {
  * already gave the site's file manager and database to, so the shortcut adds
  * no authority; the root action holds it to the sites `user_sites` maps to
  * that account. The session route hands out the CSRF pair those callers cannot
- * get from an addon page, and reads nothing.
+ * get from an addon page, and reads nothing. Panel Tweaks' state route is one
+ * because the page it enhances is CloudPanel's own Sites page, which every
+ * panel user sees; the action narrows the reply to the rows that page would
+ * already have drawn for the caller.
  */
 const SELF_SCOPED_ROUTES = new Set([
   "POST /wp-login/api/sign-in",
   "GET /wp-login/api/session",
+  "GET /panel-tweaks/api/panel",
 ]);
 
 /**

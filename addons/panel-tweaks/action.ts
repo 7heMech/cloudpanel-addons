@@ -21,6 +21,7 @@ import {
 } from "../../cli/action-common";
 import { PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { PANEL_USER_NAME_RE, panelUserSites } from "../../lib/panel-users";
 
 const TWEAKS_VERSION = 1;
 const DISK_VERSION = 1;
@@ -435,13 +436,26 @@ function siteViews(rows: PanelSiteRow[], cache: DiskCache): TweakSiteView[] {
   }));
 }
 
-function stateOf(paths: PanelTweaksActionPaths): PanelTweaksState {
+/**
+ * The state the injected script is answered with.
+ *
+ * `asUser` narrows the site list to what CloudPanel would list for that panel
+ * user, and is how a session without ROLE_ADMIN is served: the switches are the
+ * box owner's and the same for everyone, but the rows are the reader's own. An
+ * administrator's request carries no name and sees every site.
+ */
+function stateOf(paths: PanelTweaksActionPaths, asUser = ""): PanelTweaksState {
   const db = openPanelDatabase(paths.panelDb);
   try {
     const cache = readDiskCache(paths);
+    let rows = panelSites(db);
+    if (asUser) {
+      const visible = panelUserSites(db, asUser);
+      rows = visible === "all" ? rows : rows.filter((row) => visible?.has(row.domain_name) ?? false);
+    }
     return {
       tweaks: readTweaks(paths),
-      sites: siteViews(panelSites(db), cache),
+      sites: siteViews(rows, cache),
       diskMeasuredAt: cache.measuredAt,
     };
   } finally {
@@ -568,6 +582,8 @@ const MAX_INPUT_BYTES = 8 * 1024;
 
 interface ParsedAction {
   verb: PanelTweaksVerb;
+  /** The panel user the state is for, when it is not an administrator's. */
+  asUser: string;
 }
 
 function parseAction(argv: string[]): ParsedAction {
@@ -576,8 +592,17 @@ function parseAction(argv: string[]): ParsedAction {
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown panel tweaks verb '${rawVerb ?? ""}'`);
 
-  if (rest.length > 0) failAction(`unexpected argument '${rest[0]}'`);
-  return { verb };
+  let asUser = "";
+  for (const argument of rest) {
+    if (argument.startsWith("--as-user=")) {
+      asUser = argument.slice("--as-user=".length);
+      continue;
+    }
+    failAction(`unexpected argument '${argument}'`);
+  }
+  if (asUser && verb !== "state") failAction(`'${verb}' takes no --as-user`);
+  if (asUser && !PANEL_USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
+  return { verb, asUser };
 }
 
 async function requestTweaks(options: PanelTweaksActionOptions, current: PanelTweaks): Promise<PanelTweaks> {
@@ -635,9 +660,9 @@ export async function executePanelTweaksAction(
 ): Promise<unknown> {
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("panel tweaks actions must run as root");
   const paths = pathsFor(options);
-  const { verb } = parseAction(argv);
+  const { verb, asUser } = parseAction(argv);
 
-  if (verb === "state") return stateOf(paths);
+  if (verb === "state") return stateOf(paths, asUser);
   if (verb === "set-tweaks") return setTweaks(paths, options);
   return withFileLock(paths.lockFile, 15, "a disk measurement is already running", async () =>
     scanDisk(paths, options));

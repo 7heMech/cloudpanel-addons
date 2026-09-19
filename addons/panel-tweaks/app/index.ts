@@ -50,6 +50,8 @@ export async function handle(
   req: Request,
   path: string,
   updateNotice?: { current: string; latest: string } | null,
+  _server?: unknown,
+  auth?: { user: string; roles: string[] } | null,
 ): Promise<Response> {
   const method = req.method;
 
@@ -85,8 +87,15 @@ export async function handle(
   // What the script injected into CloudPanel's own Sites page reads: which
   // tweaks are on, and the site facts the panel's template does not carry.
   // Read-only, so no CSRF cookie is set and no mutation reaches it.
+  //
+  // The page it answers is CloudPanel's own, which every panel user sees, so
+  // this route is reached without ROLE_ADMIN. A session that is not an
+  // administrator's is named to the action, which answers with the sites
+  // CloudPanel would list for that account and no others.
   if (method === "GET" && path === "/api/panel") {
-    const result = await panelTweaksService.state();
+    const admin = auth?.roles.includes("ROLE_ADMIN") ?? false;
+    if (!admin && !auth?.user) return json({ ok: false, error: "not found" }, 404);
+    const result = await panelTweaksService.state(admin ? undefined : auth!.user);
     return json(result, result.ok ? 200 : 500);
   }
 
