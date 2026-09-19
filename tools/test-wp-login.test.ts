@@ -15,7 +15,7 @@ const linkTarget = WP_LOGIN_TARGETS.find((target) => target.slug === "sites-acti
 
 // --- what goes into CloudPanel's own page ---------------------------------
 
-test("the link is administrator-only, per-site Twig, and the script is emitted once", () => {
+test("the link is per-site Twig for every role, and the script is emitted once", () => {
   // The action cell is inside the template's site loop, so the condition can be
   // Twig and the script cannot: it would be repeated for every row.
   // Before Manage, so the panel's own primary action keeps the rightmost place.
@@ -24,14 +24,20 @@ test("the link is administrator-only, per-site Twig, and the script is emitted o
   expect(linkTarget.template).toBe(scriptTarget.template);
 
   const link = linkTarget.snippet("/addons/wp-login");
-  expect(link).toContain("{% if is_granted('ROLE_ADMIN') %}");
+  // Not administrator-only: CloudPanel lists a ROLE_USER only their own sites,
+  // and the sign-in action checks the mapping again as root.
+  expect(link).not.toContain("is_granted");
   expect(link).toContain("{{ site.domainName }}");
   // Marked, so Panel Tweaks' menu can put the panel's own actions above it.
   expect(link).toContain(ROW_ACTION_CLASS);
   for (const application of WORDPRESS_APPLICATIONS) expect(link).toContain(`'${application}'`);
 
   const script = scriptTarget.snippet("/addons/wp-login");
+  expect(script).not.toContain("is_granted");
   expect(script).toContain("/addons/wp-login/api/sign-in");
+  // The page belongs to CloudPanel, so the token has to be fetched rather than
+  // assumed: a non-administrator has no addon page to have been given one by.
+  expect(script).toContain("/addons/wp-login/api/session");
   // One listener on the document: the rows belong to the panel, and a filtered
   // or re-sorted table moves them out from under a per-row listener.
   expect(script).toContain('document.addEventListener("click"');
@@ -46,9 +52,7 @@ test("neither block is required", () => {
 // The blocks are rendered by Twig before a browser sees them, and Twig reads
 // `{{`, `{%` and `{#` wherever they appear -- including inside a <script>.
 test("nothing in the script is markup Twig would take for its own", () => {
-  const body = scriptTarget.snippet("/addons/wp-login")
-    .replace("{% if is_granted('ROLE_ADMIN') %}", "")
-    .replace("{% endif %}", "");
+  const body = scriptTarget.snippet("/addons/wp-login");
   for (const sequence of ["{{", "{%", "{#"]) expect(body).not.toContain(sequence);
 });
 
@@ -78,6 +82,15 @@ function seedPanel(): void {
     INSERT INTO site VALUES (1, 'php', 'shop.example.com', 'shop.example.com', 'shop', 'WordPress');
     INSERT INTO site VALUES (2, 'static', 'docs.example.com', 'docs.example.com', 'docs', 'Static');
     INSERT INTO site VALUES (3, 'php', 'blog.example.com', 'blog.example.com', 'blog', 'Generic');
+    CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER);
+    INSERT INTO user VALUES (1, 'boss', 'ROLE_ADMIN', 1);
+    INSERT INTO user VALUES (2, 'shopkeeper', 'ROLE_USER', 1);
+    INSERT INTO user VALUES (3, 'nosy', 'ROLE_USER', 1);
+    INSERT INTO user VALUES (4, 'gone', 'ROLE_USER', 0);
+    INSERT INTO user VALUES (5, 'manager', 'ROLE_SITE_MANAGER', 1);
+    CREATE TABLE user_sites (user_id INTEGER, site_id INTEGER);
+    INSERT INTO user_sites VALUES (2, 1);
+    INSERT INTO user_sites VALUES (4, 1);
   `);
   db.close();
 }
@@ -124,6 +137,32 @@ test("the site list is what is on disk, not what the panel's application column 
   const { sites } = await act<{ sites: WpSiteView[] }>(["sites"]);
   expect(sites.map((site) => site.domain)).toEqual(["blog.example.com", "shop.example.com"]);
   expect(sites.every((site) => site.helper === false)).toBe(true);
+});
+
+// A non-administrator's request names itself, and the action holds it to the
+// sites CloudPanel would list for that account.
+test("a named panel user signs in only to the sites that are theirs", async () => {
+  const mine = await act<WpLoginResult>(["sign-in", "--domain=shop.example.com", "--as-user=shopkeeper"]);
+  expect(mine.url).toBe("https://shop.example.com/");
+
+  await expect(act(["sign-in", "--domain=shop.example.com", "--as-user=nosy"]))
+    .rejects.toThrow("that site is not yours");
+  // Deactivated, though the mapping still says the site is theirs: the session
+  // outlives the status change, so the status is checked too.
+  await expect(act(["sign-in", "--domain=shop.example.com", "--as-user=gone"]))
+    .rejects.toThrow("that site is not yours");
+  await expect(act(["sign-in", "--domain=shop.example.com", "--as-user=ghost"]))
+    .rejects.toThrow("that site is not yours");
+
+  // The two roles CloudPanel shows every site to are not narrowed by the map.
+  for (const user of ["boss", "manager"]) {
+    const all = await act<WpLoginResult>(["sign-in", `--domain=blog.example.com`, `--as-user=${user}`]);
+    expect(all.url).toBe("https://blog.example.com/");
+  }
+
+  await expect(act(["sign-in", "--domain=shop.example.com", "--as-user=not a name"]))
+    .rejects.toThrow("not a valid panel user name");
+  await expect(act(["sites", "--as-user=boss"])).rejects.toThrow("takes no --as-user");
 });
 
 test("a sign-in installs the loader, leaves a single-use secret, and names the site's own URL", async () => {

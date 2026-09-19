@@ -119,6 +119,40 @@ function openPanelDatabase(path: string): Database {
   }
 }
 
+/**
+ * Whether a panel user may sign in to this site's WordPress.
+ *
+ * Asked here, as root, rather than in the manager: the manager cannot open
+ * CloudPanel's database, and the answer has to come from the same table the
+ * panel builds its own Sites page from. An administrator or a site manager
+ * sees every site, so the mapping only narrows a `ROLE_USER`, which is the
+ * role CloudPanel scopes with `user_sites`. A deactivated account is refused
+ * whatever its role, because the session it left behind outlives the status
+ * change.
+ */
+function mayManageSite(paths: WpLoginActionPaths, userName: string, domain: string): boolean {
+  const db = openPanelDatabase(paths.panelDb);
+  try {
+    const account = db.query<{ role: string | null; status: number | null }, [string]>(
+      "SELECT role, status FROM user WHERE user_name = ?",
+    ).get(userName);
+    if (!account || Number(account.status) !== 1) return false;
+    if (account.role === "ROLE_ADMIN" || account.role === "ROLE_SITE_MANAGER") return true;
+    if (account.role !== "ROLE_USER") return false;
+    const owned = db.query<{ one: number }, [string, string]>(
+      `SELECT 1 AS one FROM user_sites
+         JOIN user ON user.id = user_sites.user_id
+         JOIN site ON site.id = user_sites.site_id
+        WHERE user.user_name = ? AND site.domain_name = ?;`,
+    ).get(userName, domain);
+    return owned !== null;
+  } catch (error) {
+    failAction(`CloudPanel could not say whose site that is: ${reason(error)}`);
+  } finally {
+    db.close();
+  }
+}
+
 function panelSites(paths: WpLoginActionPaths): PanelSiteRow[] {
   const db = openPanelDatabase(paths.panelDb);
   try {
@@ -366,7 +400,13 @@ export function removeWpLogin(paths: WpLoginActionPaths = DEFAULT_WP_LOGIN_PATHS
 interface ParsedAction {
   verb: WpLoginVerb;
   domain: string;
+  /** The panel user the request is on behalf of, when it is not an admin's. */
+  asUser: string;
 }
+
+// CloudPanel's own user names, which its Add User form limits to letters,
+// digits and a few separators.
+const USER_NAME_RE = /^[A-Za-z0-9._@-]{1,64}$/;
 
 function parseAction(argv: string[], options: WpLoginActionOptions): ParsedAction {
   const [rawVerb, ...rest] = argv;
@@ -375,13 +415,20 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
   if (!verb) failAction(`unknown WordPress sign-in verb '${rawVerb ?? ""}'`);
 
   let domain = "";
+  let asUser = "";
   for (const argument of rest) {
     if (argument.startsWith("--domain=")) {
       domain = argument.slice("--domain=".length);
       continue;
     }
+    if (argument.startsWith("--as-user=")) {
+      asUser = argument.slice("--as-user=".length);
+      continue;
+    }
     failAction(`unexpected argument '${argument}'`);
   }
+  if (asUser && verb !== "sign-in") failAction(`'${verb}' takes no --as-user`);
+  if (asUser && !USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
   if (verb === "sign-in") {
     // The panel's own hostname is refused here as it is everywhere else: the
     // panel is not a site, and nothing of ours writes into it.
@@ -389,7 +436,7 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
   } else if (domain) {
     failAction(`'${verb}' takes no --domain`);
   }
-  return { verb, domain };
+  return { verb, domain, asUser };
 }
 
 export async function executeWpLoginAction(
@@ -398,7 +445,7 @@ export async function executeWpLoginAction(
 ): Promise<unknown> {
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress sign-in actions must run as root");
   const paths = pathsFor(options);
-  const { verb, domain } = parseAction(argv, options);
+  const { verb, domain, asUser } = parseAction(argv, options);
 
   if (verb === "sites") return { sites: wordpressSites(paths) };
   // Both writing paths take the lock: a sign-in that ran while the addon was
@@ -406,6 +453,13 @@ export async function executeWpLoginAction(
   if (verb === "remove") {
     return withFileLock(paths.lockFile, 30, "a WordPress sign-in change is still running", async () =>
       removeWpLogin(paths));
+  }
+  // An administrator's request arrives without a name and is not narrowed;
+  // every other session names itself and is held to the sites CloudPanel shows
+  // it. The check is here rather than at the manager because only this side can
+  // read the panel's database.
+  if (asUser && !mayManageSite(paths, asUser, domain)) {
+    failAction("that site is not yours to sign in to");
   }
   return withFileLock(paths.lockFile, 15, "a WordPress sign-in change is still running", async () =>
     mintWpLogin(paths, domain, options));

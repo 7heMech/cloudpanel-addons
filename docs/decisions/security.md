@@ -52,10 +52,20 @@ over SSE reaches on its own.
 The manager requires `ROLE_ADMIN`. Invalid sessions return to CloudPanel's
 login page, and authentication failures do not fall back to anonymous access.
 
-The gate is the first thing a request meets, before the URL is taken apart and
-before any route is chosen, so there is no list of exceptions to keep correct.
-The liveness probe the update page polls is inside it, and nothing reads it
-without a session: the page that polls it has one.
+The gate is the first thing a request meets after the URL is taken apart and
+before any route is chosen. The liveness probe the update page polls is inside
+it, and nothing reads it without a session: the page that polls it has one.
+
+Two routes are named as exceptions, both the WordPress sign-in addon's:
+`POST /wp-login/api/sign-in` and the `GET /wp-login/api/session` that hands out
+the CSRF pair, because the link that uses them is injected into CloudPanel's own
+Sites page, which a non-administrator sees too. A session that only clears the
+gate this way is dispatched straight to that addon, ahead of the update check
+and the manager's own routes, so nothing else in the manager runs for it. The
+authorisation it skips here is made up for as root: the sign-in action is told
+which panel user the request is for and refuses any site CloudPanel would not
+list for that account. The set is a literal of two strings rather than a prefix
+or a pattern, so a route cannot join it by being named something similar.
 
 What a stranger gets back is the redirect Symfony sends for any path CloudPanel
 will not serve them, reproduced byte for byte: same status, same headers, same

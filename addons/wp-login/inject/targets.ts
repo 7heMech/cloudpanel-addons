@@ -6,6 +6,11 @@
 // the script cannot. The script and its one rule go above the table instead,
 // where they are emitted once.
 //
+// Neither block asks for ROLE_ADMIN. CloudPanel lists a `ROLE_USER` only the
+// sites `user_sites` maps to their account, so the rows a non-administrator
+// sees are already theirs, and the sign-in route checks that again as root
+// rather than trusting the page it was clicked on.
+//
 // Neither is `required`: a CloudPanel release that renames the sites card or
 // the Manage link should cost the link, not stop the addon from being enabled.
 // The addon's own page signs in to the same sites either way.
@@ -28,6 +33,15 @@ const SCRIPT = `
   function csrf() {
     var match = document.cookie.match(/(?:^|;\\s*)clp_addons_csrf=([^;]+)/);
     return match ? match[1] : "";
+  }
+
+  // This page is CloudPanel's, not the addon's, so the browser may hold no
+  // token yet -- and a non-administrator has no addon page to have been given
+  // one by. One GET, only when there is nothing to send.
+  function ready() {
+    if (csrf()) return Promise.resolve();
+    return fetch("ADDON_URL/api/session", { credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(function () {});
   }
 
   // Posted rather than put in the address bar: a single-use secret in a query
@@ -59,12 +73,15 @@ const SCRIPT = `
     // Opened inside the click, before anything is awaited: a window opened
     // after a fetch resolves is a popup the browser blocks.
     var target = window.open("", "_blank");
-    fetch("ADDON_URL/api/sign-in", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json", "X-CLP-Addons-CSRF": csrf(), Accept: "application/json" },
-      body: JSON.stringify({ domain: link.getAttribute("data-clp-domain") })
-    })
+    ready()
+      .then(function () {
+        return fetch("ADDON_URL/api/sign-in", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json", "X-CLP-Addons-CSRF": csrf(), Accept: "application/json" },
+          body: JSON.stringify({ domain: link.getAttribute("data-clp-domain") })
+        });
+      })
       .then(function (response) { return response.json(); })
       .then(function (payload) {
         if (!payload || payload.ok !== true) throw new Error((payload && payload.error) || "sign-in unavailable");
@@ -90,10 +107,8 @@ export const WP_LOGIN_TARGETS: AddonTarget[] = [
     anchorBefore: '<div class="card card-table">',
     required: false,
     snippet: (url) => `
-          {% if is_granted('ROLE_ADMIN') %}
           <style>${STYLE}</style>
-          <script>${SCRIPT.split("ADDON_URL").join(url)}</script>
-          {% endif %}`,
+          <script>${SCRIPT.split("ADDON_URL").join(url)}</script>`,
   },
   {
     slug: "sites-action",
@@ -101,8 +116,8 @@ export const WP_LOGIN_TARGETS: AddonTarget[] = [
     anchorBefore: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
     required: false,
     snippet: () => `
-        {% if is_granted('ROLE_ADMIN') %}${WORDPRESS}
+        ${WORDPRESS}
           <a href="#" class="clp-wp-login ${ROW_ACTION_CLASS}" data-clp-domain="{{ site.domainName }}" title="Sign in to WordPress as its first administrator">WP Login</a>
-        {% endif %}{% endif %}`,
+        {% endif %}`,
   },
 ];

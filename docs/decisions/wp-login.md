@@ -66,6 +66,30 @@ ships and the action refuses anything that turns out not to be one, the same
 bargain the Stager addon's own site-list condition made. The complete list is
 the addon's page; the link is the shortcut for the common case.
 
+## Every role that can see the site
+
+The link is not administrator-only. CloudPanel lists a `ROLE_USER` only the
+sites `user_sites` maps to their account, and that account already has the site
+through the panel's file manager and its database, so signing in to its
+WordPress is a shortcut past work they can already do rather than authority they
+did not have. `ROLE_SITE_MANAGER` and `ROLE_ADMIN` see every site, and are not
+narrowed.
+
+The page is not what decides that. The manager passes the session's user name
+to the action, and the action -- which is the only side that can open
+CloudPanel's database -- refuses a domain the panel would not list for that
+account, and refuses a deactivated account whatever its role, because a session
+outlives the status change that should have ended it. An administrator's
+request carries no name and is not narrowed.
+
+Two things follow from the link living on a page this addon did not render. The
+manager's blanket administrator gate has to name the sign-in route as an
+exception, which `docs/decisions/security.md` describes; and the browser may
+hold no CSRF cookie, because the only responses that set one are addon pages a
+non-administrator cannot open. So the script fetches `/api/session` -- which
+reads nothing and answers with the cookie and its token -- but only when there
+is no token to send.
+
 ## Two blocks, neither required
 
 The link and the script are separate injections into the same template because

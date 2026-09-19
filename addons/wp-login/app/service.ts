@@ -21,8 +21,13 @@ export const wpLoginService = {
     return call<{ sites: WpSiteView[] }>("sites", [], LIST_TIMEOUT_MS);
   },
 
-  signIn(domain: string): Promise<ActionResult<WpLoginResult>> {
-    return call<WpLoginResult>("sign-in", [`--domain=${domain}`]);
+  // `asUser` is the panel user a non-administrator's request is on behalf of.
+  // The root action is what checks it against CloudPanel's own user-to-site
+  // mapping; this side only says whose request it is.
+  signIn(domain: string, asUser?: string): Promise<ActionResult<WpLoginResult>> {
+    const args = [`--domain=${domain}`];
+    if (asUser) args.push(`--as-user=${asUser}`);
+    return call<WpLoginResult>("sign-in", args);
   },
 
   remove(): Promise<ActionResult<WpRemoveResult>> {

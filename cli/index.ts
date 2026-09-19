@@ -904,6 +904,22 @@ function mountedAddons(): string[] {
 }
 
 /**
+ * The routes a signed-in non-administrator may reach, named one by one.
+ *
+ * The blanket gate below is what makes the manager an administrative surface,
+ * and these are the exceptions that scope themselves instead. The WordPress
+ * sign-in is one because the panel user it signs in for is one CloudPanel
+ * already gave the site's file manager and database to, so the shortcut adds
+ * no authority; the root action holds it to the sites `user_sites` maps to
+ * that account. The session route hands out the CSRF pair those callers cannot
+ * get from an addon page, and reads nothing.
+ */
+const SELF_SCOPED_ROUTES = new Set([
+  "POST /wp-login/api/sign-in",
+  "GET /wp-login/api/session",
+]);
+
+/**
  * Every request the manager answers, in the order it decides them. Exported so
  * a test can send real requests through the same function the socket does.
  */
@@ -915,14 +931,22 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   // top, which is what made a refusal here look unlike the panel's own.
   if (gate.response) return gate.response;
 
+  const path = internalPath(new URL(req.url).pathname);
+
   // The manager is an administrative surface. Keep this decision at the
   // shared socket boundary so every mounted HTML and API route, including
   // future handlers and the manager index, receives the same gate before
   // update checks or addon code can run.
   const denied = adminGate(gate.auth);
-  if (denied) return denied;
-
-  const path = internalPath(new URL(req.url).pathname);
+  if (denied) {
+    if (!SELF_SCOPED_ROUTES.has(`${req.method} ${path}`)) return denied;
+    // Straight to the addon, ahead of the update check and the manager's own
+    // routes: what this session is allowed is that one handler, not the rest
+    // of the manager with a narrower path.
+    const scoped = splitMount(path, mountedAddons());
+    if (!scoped) return denied;
+    return await addonHandler(scoped.addon)!(req, scoped.rest, null, server, gate.auth);
+  }
   // Polled while this process restarts; the gateway that validates the session
   // is a separate unit, so it keeps answering across the restart.
   if (path === "/health") {
@@ -936,7 +960,7 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   if (managerRoute) return managerRoute;
 
   const hit = splitMount(path, mountedAddons());
-  if (hit) return await addonHandler(hit.addon)!(req, hit.rest, notice, server);
+  if (hit) return await addonHandler(hit.addon)!(req, hit.rest, notice, server, gate.auth);
   if (path === "/update" && req.method === "GET") {
     return updatePage(update, CLI_VERSION, { job: await latestManagerJobView(), csrf: newCsrfToken() });
   }

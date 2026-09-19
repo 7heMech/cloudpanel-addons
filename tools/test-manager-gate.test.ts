@@ -10,7 +10,12 @@ const repo = join(import.meta.dir, "..");
  * Drive `handleRequest` in a subprocess with the session gate replaced, where
  * `auth` is what that gate reports. Everything past it records being reached.
  */
-function probe(auth: { user: string; roles: string[] } | null): Array<Record<string, unknown>> {
+function probe(
+  auth: { user: string; roles: string[] } | null,
+  requests: Array<{ path: string; method?: string }> = [
+    { path: "/addons/health" }, { path: "/addons/" }, { path: "/addons/stager/" }, { path: "/addons/api/update" },
+  ],
+): Array<Record<string, unknown>> {
   const script = `
 import { mock } from "bun:test";
 
@@ -40,12 +45,12 @@ mock.module("./lib/mount.ts", () => ({
 const { handleRequest } = await import("./cli/index.ts");
 
 const out = [];
-for (const path of ["/addons/health", "/addons/", "/addons/stager/", "/addons/api/update"]) {
+for (const { path, method } of ${JSON.stringify(requests)}) {
   reached.length = 0;
-  const res = await handleRequest(new Request("https://panel.example" + path), {});
+  const res = await handleRequest(new Request("https://panel.example" + path, { method: method || "GET" }), {});
   let body = null;
   try { body = JSON.parse(await res.text()); } catch (e) { /* the page is HTML */ }
-  out.push({ path, status: res.status, location: res.headers.get("location"), body, reached: [...reached] });
+  out.push({ path, method: method || "GET", status: res.status, location: res.headers.get("location"), body, reached: [...reached] });
 }
 console.log(JSON.stringify(out));
 `;
@@ -68,6 +73,29 @@ test("an authenticated non-administrator gets no further than the gate", () => {
     expect(result.status).toBe(403);
     expect(result.body).toEqual({ ok: false, error: "administrator role required" });
     expect(result.reached).toEqual([]);
+  }
+});
+
+// The one carve-out in the blanket gate. The route is not answered here --
+// splitMount is mocked away -- but reaching the dispatch is what says the gate
+// let it past, and the neighbouring wp-login routes show it is that route only.
+test("a non-administrator reaches the WordPress sign-in and nothing else", () => {
+  const results = probe({ user: "someone", roles: ["ROLE_USER"] }, [
+    { path: "/addons/wp-login/api/sign-in", method: "POST" },
+    { path: "/addons/wp-login/api/session" },
+    { path: "/addons/wp-login/", method: "GET" },
+    { path: "/addons/wp-login/api/remove", method: "POST" },
+    { path: "/addons/wp-login/api/sign-in", method: "GET" },
+  ]);
+  const dispatched = results.filter((result) => (result.reached as string[]).includes("addon-dispatch"));
+  expect(dispatched.map((result) => `${result.method} ${result.path}`)).toEqual([
+    "POST /addons/wp-login/api/sign-in",
+    "GET /addons/wp-login/api/session",
+  ]);
+  for (const result of results) {
+    // Nothing else the manager does runs for this session, dispatched or not.
+    expect(result.reached).not.toContain("update-check");
+    expect(result.status).toBe(403);
   }
 });
 

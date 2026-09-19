@@ -34,6 +34,8 @@ export type AddonHandler = (
   path: string,
   updateNotice?: { current: string; latest: string } | null,
   server?: Server<unknown> | null,
+  /** The session behind the request, for the few routes a non-admin reaches. */
+  auth?: { user: string; roles: string[] } | null,
 ) => Promise<Response>;
 
 /** Upkeep this addon wants during `repair`. */
