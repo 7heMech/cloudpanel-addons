@@ -40,6 +40,12 @@ const STYLE = `
   background: var(--panel); color-scheme: normal; }
 .preview-frame.is-phone { display: flex; justify-content: center; background: var(--row-hover, transparent); }
 .preview-frame.is-phone iframe { width: 390px; max-width: 100%; }
+@media (max-width: 760px) {
+  /* Let the panel preview use the whole phone width instead of nesting it
+     inside both the page and card gutters. */
+  .preview-frame { margin-right: calc(-25px - 13px); margin-left: calc(-25px - 13px);
+    border-right: 0; border-left: 0; border-radius: 0; }
+}
 .scan-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
 .scan-row p { margin: 0; }
 .size-cell { font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -163,32 +169,32 @@ const COPY: TweakCopy[] = [
   {
     key: "sitesTable",
     title: "Search, sort and extra columns on Sites",
-    description: "A count beside the Sites heading, a search box, and a filter by application. Columns for SSL, runtime, size, creation date, Cloudflare-only and Varnish, each one sortable. The Columns button says which of them show, the panel's own Site user and Type included. Every browser keeps its own answer, and a phone keeps a shorter list than a desktop.",
+    description: "Adds a site count, search, application filter and sortable extra columns. Column choices are saved per browser.",
   },
   {
     key: "sitesMobile",
     title: "Sites list as cards on a phone",
-    description: "Below 860px the Sites table becomes one card per site. The hostname comes first, the labelled details keep two stable columns, and Type uses spare space beside the hostname or above a field label. Switched off, the table scrolls sideways as CloudPanel drew it.",
+    description: "Turns the Sites table into readable cards below 860px. Switch it off to keep CloudPanel's sideways-scrolling table.",
   },
   {
     key: "actionMenu",
     title: "Row actions in a menu",
-    description: "Puts the links in the Sites table's last column behind one button on each row. That covers Manage and whatever other addons have added beside it.",
+    description: "Moves each site's Manage and addon links into one menu.",
   },
   {
     key: "panelMobile",
     title: "CloudPanel mobile layout",
-    description: "The panel's header wraps onto a second row, so the Admin Area link and the avatar stay on the screen. The Dashboard's charts are drawn to fit the screen rather than run past its edge.",
+    description: "Fits CloudPanel's header and Dashboard charts to phone screens.",
   },
   {
     key: "deviceTheme",
     title: "Device theme on first visit",
-    description: "The first visit to the CloudPanel login page follows the device's light or dark setting. After that, CloudPanel's own theme switch decides.",
+    description: "Uses the device's theme on the first visit. Afterward, CloudPanel's theme switch takes over.",
   },
   {
     key: "diskUsage",
     title: "Measured site sizes",
-    description: "A size column, filled by a sweep that runs with the fifteen-minute repair. The sweep reads every site's home directory and its databases at the lowest I/O priority. It is the one tweak here that a loaded box would feel.",
+    description: "Adds site sizes from a low-priority scan every 15 minutes. This can add load on busy servers.",
   },
 ];
 

@@ -232,6 +232,8 @@ switches reload the page when they are saved, so the frame is drawn again with
 the switch that moved. That wrapper keeps its vertical breathing room but no
 horizontal padding; the frame itself already supplies the preview's side edge,
 and a second inset makes the phone layout narrower than the width being shown.
+On the addon's mobile page the frame also escapes the page and card gutters, so
+the page being demonstrated receives the full phone width.
 
 ## Measured sizes ride the repair timer
 
