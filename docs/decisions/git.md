@@ -102,6 +102,12 @@ which sites have a webhook. The manager cannot check the token itself: it runs
 as `clp-addons` and cannot read the record, so `hook` both verifies the token
 and queues the deployment in one round trip.
 
+The manager half is transport and nothing else: it hands over the bytes the
+repository sent and the two headers that qualify them, and reads nothing out of
+the body. Which ref was pushed is decided by the action, after the signature has
+been checked, so what is acted on is what was verified -- and the unauthenticated
+half parses no attacker-supplied JSON at all.
+
 What happens after the token matches is reported rather than hidden, because a
 refusal an operator cannot see is a webhook they cannot fix. The delivery's time
 and outcome are recorded on the site and drawn on its page, and the reply says
@@ -114,5 +120,7 @@ A signature is honoured when it is sent and never required, so `curl -X POST`
 from a CI job keeps working.
 
 A delivery with a well-formed token that is wrong still costs one gateway round
-trip and one action process. That is the price of having no oracle: the manager
-cannot tell a wrong token from an unknown one without asking root.
+trip and one action process, and a gateway that is down is answered exactly as a
+wrong token is. Both are the price of having no oracle: the manager cannot tell
+a wrong token from an unknown one, or from an unanswered question, without being
+able to read the record itself.

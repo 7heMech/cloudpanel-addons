@@ -337,6 +337,11 @@ test("the action refuses a site CloudPanel does not have and an unknown argument
 
 /* --------------------------------------------------------- push to deploy */
 
+/** What a repository POSTs: the ref is read out of the body, never beside it. */
+function push(ref: string): string {
+  return JSON.stringify({ ref, repository: { full_name: "example/shop" } });
+}
+
 /** Configure the fixture's site and turn push-to-deploy on, returning its token. */
 async function withWebhook(fx: Fixture, branch = "main"): Promise<string> {
   await action(fx, ["configure", `--domain=${DOMAIN}`],
@@ -402,7 +407,7 @@ test("a delivery is authenticated by its token and nothing else", async () => {
     expect(storedWebhook(fx)!.lastDeliveryAt).toBe("");
     expect((await action(fx, ["jobs"])).data.jobs).toEqual([]);
 
-    const accepted = await deliver({ token, ref: "refs/heads/main" });
+    const accepted = await deliver({ token, body: push("refs/heads/main") });
     expect(accepted.ok).toBe(true);
     expect(accepted.data.deployed).toBe(true);
     expect(accepted.data.outcome).toBe("started a deployment");
@@ -415,7 +420,7 @@ test("a delivery is authenticated by its token and nothing else", async () => {
     expect(storedWebhook(fx)!.lastDeliveryAt).not.toBe("");
 
     // The duplicate-job guard is what makes a redelivery a no-op.
-    const replay = await deliver({ token, ref: "refs/heads/main" });
+    const replay = await deliver({ token, body: push("refs/heads/main") });
     expect(replay.ok).toBe(true);
     expect(replay.data.deployed).toBe(false);
     expect(replay.data.outcome).toContain("already queued");
@@ -432,7 +437,7 @@ test("a push for another branch, a ping and a bad signature are reported rather 
     const deliver = (payload: Record<string, unknown>) =>
       action(fx, ["hook", `--domain=${DOMAIN}`], JSON.stringify(payload));
 
-    const otherBranch = await deliver({ token, ref: "refs/heads/dev" });
+    const otherBranch = await deliver({ token, body: push("refs/heads/dev") });
     expect(otherBranch.data.deployed).toBe(false);
     expect(otherBranch.data.outcome).toContain("refs/heads/dev");
     expect(storedWebhook(fx)!.lastDelivery).toContain("refs/heads/dev");
@@ -441,15 +446,15 @@ test("a push for another branch, a ping and a bad signature are reported rather 
     expect(ping.data.deployed).toBe(false);
     expect(ping.data.outcome).toContain("ping");
 
-    const body = JSON.stringify({ ref: "refs/heads/main" });
-    const forged = await deliver({ token, ref: "refs/heads/main", body, signature: "sha256=0bad" });
+    const body = push("refs/heads/main");
+    const forged = await deliver({ token, body, signature: "sha256=0bad" });
     expect(forged.data.deployed).toBe(false);
     expect(forged.data.outcome).toContain("X-Hub-Signature-256");
     expect((await action(fx, ["jobs"])).data.jobs).toEqual([]);
 
     // The same payload signed with the token, which is the secret to use.
     const signature = `sha256=${createHmac("sha256", token).update(body).digest("hex")}`;
-    const signed = await deliver({ token, ref: "refs/heads/main", body, signature });
+    const signed = await deliver({ token, body, signature });
     expect(signed.data.deployed).toBe(true);
   } finally {
     rmSync(fx.root, { recursive: true, force: true });

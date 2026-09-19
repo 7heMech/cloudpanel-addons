@@ -1,7 +1,7 @@
 import type { SiteContext } from "../../../lib/site-context";
 import { fetchPanelInfo, readPanelSnapshot, type PanelSnapshot } from "../../../lib/snapshot-reader";
-import { callGatewayAction, streamGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
-import type { JobWatcher } from "../../../lib/job-stream";
+import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
+import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
 export { type ActionResult };
 
 // clone only writes a job record and hands the work to systemd, so it
@@ -279,27 +279,7 @@ export const stagerService = {
   },
 
   watchJob(id: string, handlers: Parameters<JobWatcher<JobView>>[1]): GatewayStream {
-    let ended = false;
-    const close = (error?: string) => {
-      if (ended) return;
-      ended = true;
-      handlers.onClose(error);
-    };
-    return streamGatewayAction<{ job: JobView; log: string }>({
-      addon: "stager",
-      verb: "watch-job",
-      args: ["--job", id],
-      onReply(reply) {
-        if (reply.ok && reply.data) {
-          handlers.onSnapshot(reply.data);
-        } else if (!reply.ok) {
-          close(reply.error);
-        } else {
-          close("gateway returned an empty job snapshot");
-        }
-      },
-      onClose: close,
-    });
+    return watchGatewayJob<JobView>("stager", id, handlers);
   },
 
   async listJobs(): Promise<JobView[]> {

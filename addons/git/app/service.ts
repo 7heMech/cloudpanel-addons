@@ -4,8 +4,8 @@
 // mirrors the action's own so a form can say what is wrong without a round
 // trip. The action remains the boundary and re-checks everything.
 
-import { callGatewayAction, streamGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
-import type { JobWatcher } from "../../../lib/job-stream";
+import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
+import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
 import { fetchPanelInfo } from "../../../lib/snapshot-reader";
 import type { SiteContext } from "../../../lib/site-context";
 import type { GitHookPayload, GitHookResult, GitJobView, GitSiteStatus, GitWebhook } from "../action";
@@ -55,12 +55,6 @@ export const gitService = {
     return res.data.sites;
   },
 
-  /** Every CloudPanel site, for the picker that adds one to this addon. */
-  async panelSites(): Promise<{ domain: string; user: string; type: string }[]> {
-    const info = await fetchPanelInfo();
-    return info.sites.map((site) => ({ domain: site.domain, user: site.user, type: site.type }));
-  },
-
   async site(domain: string): Promise<GitSitePage> {
     const [panel, res] = await Promise.all([
       fetchPanelInfo(),
@@ -95,8 +89,10 @@ export const gitService = {
 
   /** Mint the push-to-deploy URL, rotate it with `replace`, or invalidate it. */
   setWebhook(domain: string, enabled: boolean, replace = false): Promise<ActionResult<{ webhook: GitWebhook | null }>> {
-    const args = [`--domain=${domain}`, ...(replace ? ["--replace"] : [])];
-    return action<{ webhook: GitWebhook | null }>(enabled ? "webhook-enable" : "webhook-disable", args);
+    // Only an enable takes --replace; the action refuses it on a disable.
+    return enabled
+      ? action<{ webhook: GitWebhook }>("webhook-enable", [`--domain=${domain}`, ...(replace ? ["--replace"] : [])])
+      : action<{ webhook: null }>("webhook-disable", [`--domain=${domain}`]);
   },
 
   /**
@@ -116,21 +112,6 @@ export const gitService = {
   },
 
   watchJob(id: string, handlers: Parameters<JobWatcher<GitJobView>>[1]): GatewayStream {
-    let ended = false;
-    const close = (error?: string) => {
-      if (ended) return;
-      ended = true;
-      handlers.onClose(error);
-    };
-    return streamGatewayAction<{ job: GitJobView; log: string }>({
-      addon: "git",
-      verb: "watch-job",
-      args: ["--job", id],
-      onReply(reply) {
-        if (reply.ok && reply.data) handlers.onSnapshot(reply.data);
-        else close(reply.error ?? "the gateway returned an empty job snapshot");
-      },
-      onClose: close,
-    });
+    return watchGatewayJob<GitJobView>("git", id, handlers);
   },
 };

@@ -1,4 +1,5 @@
 import type { AddonTarget } from "../../../lib/addon-target";
+import { SITE_TAB_TEMPLATE } from "../../../lib/panel-nav";
 import { ADDON_SITE_TABS } from "../../../lib/site-context";
 
 // The label the panel's strip shows and the label the addon's own reproduction
@@ -12,7 +13,7 @@ export const GIT_TARGETS: AddonTarget[] = [
     // and therefore sits first: Logs, Git, Maintenance, Staging -- the order
     // ADDON_SITE_TABS gives the reproduced strip too.
     slug: "site-tab",
-    template: "Frontend/Site/Partial/tab-container.html.twig",
+    template: SITE_TAB_TEMPLATE,
     anchorAfter: `      <a href="{{ path('clp_site_logs', {'domainName': site.domainName}) }}">{% trans %}Logs{% endtrans %}</a>
     </li>`,
     required: true,

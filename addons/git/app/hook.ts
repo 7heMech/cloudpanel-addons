@@ -7,29 +7,26 @@
 // fall through to the session gate, which answers it with the same redirect any
 // other path under /addons gives a stranger. So there is no oracle here: the
 // URL says nothing about which sites have a webhook.
+//
+// This half is transport and nothing more. It hands the bytes the repository
+// sent to the action, which is where the token can be read and therefore where
+// the delivery can be understood; reading the payload here would mean acting on
+// something nobody had authenticated yet.
 
-import { jsonResponse, readBoundedText, safeDecodePathSegment } from "../../../lib/app-http";
-import { WEBHOOK_TOKEN_RE, type GitHookPayload } from "../action";
+import { BodyError, jsonResponse, readBoundedText, safeDecodePathSegment } from "../../../lib/app-http";
+import { ADDONS_BASE_PATH, mountPath } from "../../../lib/mount";
+import { MAX_HOOK_BODY_BYTES, WEBHOOK_TOKEN_RE } from "../action";
 import { gitService, validateDomain } from "./service";
 
-/** Where the manager sees this route; `internalPath` has stripped `/addons`. */
-export const GIT_HOOK_PREFIX = "/git/hook/";
-
 /**
- * A push payload is a few kilobytes; GitHub caps its own at 25 MB. Deliveries
- * over this are answered as unverifiable rather than read into memory.
+ * The route as the manager sees it: `internalPath` has taken the `/addons`
+ * mount off the front by the time a request is dispatched.
  */
-const MAX_HOOK_BODY_BYTES = 128 * 1024;
+export const GIT_HOOK_PREFIX = `${mountPath("git").slice(ADDONS_BASE_PATH.length)}/hook/`;
 
-/** The ref of a push, for the branch filter. Absent from a plain `curl -X POST`. */
-function refFrom(body: string): string {
-  if (!body.startsWith("{")) return "";
-  try {
-    const ref = (JSON.parse(body) as { ref?: unknown }).ref;
-    return typeof ref === "string" && ref.length <= 255 ? ref : "";
-  } catch {
-    return "";
-  }
+/** The same route as the URL a repository is given. */
+export function gitHookPath(domain: string, token: string): string {
+  return `${ADDONS_BASE_PATH}${GIT_HOOK_PREFIX}${encodeURIComponent(domain)}/${token}`;
 }
 
 export async function handleGitHook(req: Request, path: string): Promise<Response | null> {
@@ -46,20 +43,19 @@ export async function handleGitHook(req: Request, path: string): Promise<Respons
   let body = "";
   try {
     body = await readBoundedText(req, MAX_HOOK_BODY_BYTES);
-  } catch {
-    // Too large to read: the token still decides, and a signature over a body
-    // this never saw cannot match, so the delivery is reported as refused.
+  } catch (error) {
+    // A payload past the bound is delivered without it: the token still
+    // decides, and a signature cannot match a body this never saw, so the
+    // refusal reaches the operator's page. Anything else is a real fault.
+    if (!(error instanceof BodyError)) throw error;
   }
-  const signature = req.headers.get("x-hub-signature-256") ?? "";
-  const payload: GitHookPayload = {
-    token,
-    ref: refFrom(body),
-    event: req.headers.get("x-github-event") ?? "",
-    // The body travels only when there is a signature to check it against.
-    ...(signature ? { signature, body } : {}),
-  };
 
-  const result = await gitService.hook(domain, payload);
+  const result = await gitService.hook(domain, {
+    token,
+    event: req.headers.get("x-github-event") ?? "",
+    signature: req.headers.get("x-hub-signature-256") ?? "",
+    body,
+  });
   if (!result.ok || !result.data) return null;
   return jsonResponse({ ok: true, ...result.data });
 }

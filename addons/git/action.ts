@@ -44,8 +44,14 @@ const MAX_PUBLIC_KEY_BYTES = 4096;
 
 /** The shape of a push-to-deploy token: 32 random bytes, base64url. */
 export const WEBHOOK_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
-/** A delivery carries the pushed payload when its signature has to be checked. */
-const MAX_HOOK_INPUT_BYTES = 512 * 1024;
+/**
+ * The largest delivery this addon reads. A push payload is a few kilobytes and
+ * GitHub caps its own at 25 MB, so this is generous; the manager holds the same
+ * bound and this is the outer one, since the body arrives JSON-escaped inside
+ * the payload the manager sends.
+ */
+export const MAX_HOOK_BODY_BYTES = 128 * 1024;
+const MAX_HOOK_INPUT_BYTES = 4 * MAX_HOOK_BODY_BYTES;
 
 export type GitVerb =
   | "sites" | "status" | "configure" | "forget" | "keygen"
@@ -120,17 +126,22 @@ export interface GitSiteConfig {
   webhook: GitWebhook | null;
 }
 
-/** What one webhook delivery asks of this action. */
+/**
+ * What one webhook delivery asks of this action.
+ *
+ * The manager is transport: it hands over the bytes the repository sent and the
+ * two headers that qualify them, and reads nothing out of the body itself.
+ * Which ref was pushed is decided here, after the signature has been checked,
+ * so what is acted on is what was verified.
+ */
 export interface GitHookPayload {
   token: string;
-  /** The ref the push was for, when the delivery named one. */
-  ref?: string;
   /** GitHub's `X-GitHub-Event`, so a ping is answered rather than deployed. */
-  event?: string;
-  /** GitHub's `X-Hub-Signature-256`, when the delivery carried one. */
-  signature?: string;
-  /** The raw payload, sent only when a signature has to be checked against it. */
-  body?: string;
+  event: string;
+  /** GitHub's `X-Hub-Signature-256`; "" when the delivery carried none. */
+  signature: string;
+  /** The raw payload, "" when there was none or it was over the bound. */
+  body: string;
 }
 
 export interface GitHookResult {
@@ -700,14 +711,33 @@ function jobViews(paths: GitActionPaths): GitJobView[] {
   return listJobIds(paths.jobsDir).map((id) => jobJson(jobDir(paths, id), id));
 }
 
-function lastJobFor(jobs: GitJobView[], domain: string): GitJobView | null {
-  return jobs.find((job) => job.domain === domain) ?? null;
+/**
+ * The newest job for each site, which is all any page draws.
+ *
+ * Ids are newest first, and a record is ten small files, so every field of
+ * every retained job is read only when `jobs` is asked for the whole list. Here
+ * the one field that decides is read, and the rest only for the job that wins.
+ */
+function latestJobs(paths: GitActionPaths): Map<string, GitJobView> {
+  const latest = new Map<string, GitJobView>();
+  for (const id of listJobIds(paths.jobsDir)) {
+    const dir = jobDir(paths, id);
+    const domain = jobGet(dir, "domain");
+    if (!domain || latest.has(domain)) continue;
+    latest.set(domain, jobJson(dir, id));
+  }
+  return latest;
 }
 
 /* ------------------------------------------------------------------- verbs */
 
-function siteStatus(paths: GitActionPaths, domain: string, jobs: GitJobView[]): GitSiteStatus {
-  const site = requireSite(paths, domain);
+/**
+ * One site's whole state. The caller passes the panel row it has already read,
+ * because every path here has just looked the site up to decide what to do.
+ */
+function siteStatus(
+  paths: GitActionPaths, domain: string, site: SiteRow, jobs: Map<string, GitJobView>,
+): GitSiteStatus {
   const config = readConfig(paths, domain);
   const path = deployPath(paths, site.user, domain, config?.directory ?? "");
   return {
@@ -719,12 +749,12 @@ function siteStatus(paths: GitActionPaths, domain: string, jobs: GitJobView[]): 
     config,
     publicKey: readPublicKey(paths, site.user),
     commit: readCommit(paths, site.user, path),
-    lastJob: lastJobFor(jobs, domain),
+    lastJob: jobs.get(domain) ?? null,
   };
 }
 
 function cmdStatus(paths: GitActionPaths, domain: string): void {
-  emitOk(paths, { site: siteStatus(paths, domain, jobViews(paths)) });
+  emitOk(paths, { site: siteStatus(paths, domain, requireSite(paths, domain), latestJobs(paths)) });
 }
 
 /**
@@ -734,24 +764,20 @@ function cmdStatus(paths: GitActionPaths, domain: string): void {
  * about the whole list at once, and the gateway starts a process per call.
  */
 function cmdSites(paths: GitActionPaths): void {
-  const jobs = jobViews(paths);
+  const jobs = latestJobs(paths);
   const sites: GitSiteStatus[] = [];
   for (const domain of configuredDomains(paths)) {
     const row = siteRow(paths, domain);
+    const status = row?.user
+      ? siteStatus(paths, domain, row, jobs)
+      // A site deleted from CloudPanel: listed as configured-but-unreadable
+      // rather than left out of the page.
+      : {
+        domain, siteUser: "", siteType: row?.type ?? "", path: "", configured: false,
+        config: null, publicKey: "", commit: null, lastJob: jobs.get(domain) ?? null,
+      };
     // The fleet page draws no webhook URL, so it is not given the tokens: only
-    // the site's own page asks for a record it will print.
-    const config = withoutToken(readConfig(paths, domain));
-    if (!row?.user || !config) {
-      // A site deleted from CloudPanel, or a record this addon cannot parse.
-      // Listed as configured-but-unreadable rather than left out of the page.
-      sites.push({
-        domain, siteUser: row?.user ?? "", siteType: row?.type ?? "", path: "",
-        configured: config !== null, config, publicKey: "", commit: null,
-        lastJob: lastJobFor(jobs, domain),
-      });
-      continue;
-    }
-    const status = siteStatus(paths, domain, jobs);
+    // the site's own page asks for a record it is going to print.
     sites.push({ ...status, config: withoutToken(status.config) });
   }
   emitOk(paths, { sites });
@@ -797,7 +823,7 @@ async function cmdConfigure(paths: GitActionPaths, domain: string, options: GitA
   const root = siteRoot(paths, site.user, domain);
   if (!isDirectory(root)) failAction(`the site directory ${root} does not exist`);
   writeConfig(paths, config);
-  emitOk(paths, { site: siteStatus(paths, domain, jobViews(paths)) });
+  emitOk(paths, { site: siteStatus(paths, domain, site, latestJobs(paths)) });
 }
 
 function cmdForget(paths: GitActionPaths, domain: string): void {
@@ -877,15 +903,29 @@ function cmdWebhook(paths: GitActionPaths, domain: string, enable: boolean, repl
   const config = readConfig(paths, domain);
   if (!config) failAction(`${domain} has no repository configured yet`);
 
-  const webhook = !enable ? null
-    : config.webhook && !replace ? config.webhook
-    : { token: newWebhookToken(), lastDeliveryAt: "", lastDelivery: "", lastDeliveryJob: "" };
-  if (webhook !== config.webhook) writeConfig(paths, { ...config, webhook });
+  // Enabling a site that already has a URL keeps it, the way keygen keeps a key;
+  // only --replace, which is what Rotate sends, mints a second one.
+  const keep = enable && config.webhook !== null && !replace;
+  const webhook = keep ? config.webhook
+    : enable ? { token: newWebhookToken(), lastDeliveryAt: "", lastDelivery: "", lastDeliveryJob: "" }
+    : null;
+  if (!keep && webhook !== config.webhook) writeConfig(paths, { ...config, webhook });
   emitOk(paths, { domain, webhook });
 }
 
 function signatureMatches(signature: string, body: string, token: string): boolean {
   return secretEquals(signature, `sha256=${createHmac("sha256", token).update(body).digest("hex")}`);
+}
+
+/** The ref a push names, for the branch filter. A plain `curl -X POST` has none. */
+function pushedRef(body: string): string {
+  if (!body.startsWith("{")) return "";
+  try {
+    const ref = (JSON.parse(body) as { ref?: unknown }).ref;
+    return typeof ref === "string" && ref.length <= MAX_BRANCH_LENGTH ? ref : "";
+  } catch {
+    return "";
+  }
 }
 
 /** Record what a delivery did, on a record re-read so a concurrent save stands. */
@@ -917,14 +957,15 @@ async function cmdHook(
   const webhook = config?.webhook;
   if (!config || !webhook || !secretEquals(token, webhook.token)) failAction("no delivery for this site");
 
-  const text = (field: "ref" | "event" | "signature" | "body"): string =>
+  const text = (field: "event" | "signature" | "body"): string =>
     typeof payload[field] === "string" ? payload[field] : "";
-  const ref = text("ref");
+  const body = text("body");
   const signature = text("signature");
+  const ref = pushedRef(body);
 
   let job = "";
   let outcome: string;
-  if (signature && !signatureMatches(signature, text("body"), webhook.token)) {
+  if (signature && !signatureMatches(signature, body, webhook.token)) {
     outcome = "refused: the X-Hub-Signature-256 header did not match this URL";
   } else if (text("event") === "ping") {
     outcome = "the repository's ping arrived; the URL works";
@@ -1015,8 +1056,11 @@ async function cmdRun(paths: GitActionPaths, id: string, options: GitActionOptio
     jobSet(dir, "state", "running");
     jobSet(dir, "startedAt", jobTimestamp());
 
-    const key = keyPathFor(paths, site.user);
-    const useKey = readPublicKey(paths, site.user) ? key : undefined;
+    // The public half is read rather than stat'ed: what decides is whether this
+    // account owns a key of the shape this addon generated, which is the same
+    // question the panel's key block answers.
+    const hasDeployKey = readPublicKey(paths, site.user) !== "";
+    const useKey = hasDeployKey ? keyPathFor(paths, site.user) : undefined;
     const target = deployPath(paths, site.user, domain, config.directory);
     const root = siteRoot(paths, site.user, domain);
     if (!isDirectory(root)) failJob(dir, `the site directory ${root} does not exist`);

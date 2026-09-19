@@ -12,6 +12,7 @@ import { mountPath } from "../../../lib/mount";
 import {
   MAX_BRANCH_LENGTH, MAX_DIRECTORY_LENGTH, MAX_POST_DEPLOY_LENGTH, MAX_REMOTE_LENGTH,
 } from "../action";
+import { gitHookPath } from "./hook";
 import type { GitJobView, GitSiteStatus } from "./service";
 
 const BASE = mountPath("git");
@@ -253,9 +254,9 @@ async function deployGitSelected() {
   setTimeout(function () { location.reload(); }, 1200);
 }
 
-// The page is rendered without an origin -- the server is behind a socket and
-// sees no scheme -- so the browser, which knows exactly which address the
-// operator reached the panel on, completes the URL.
+// The path is completed to a URL by the browser, which knows exactly which
+// address the operator reached the panel on -- including behind a proxy that
+// rewrites Host, where the manager's own view of the address would be wrong.
 function initGitWebhookUrl() {
   const block = CLP_ROOT.getElementById('git-webhook-url');
   if (!block) return;
@@ -281,6 +282,10 @@ if (document.readyState === 'loading') {
 }
 `;
 
+// Built once: neither half of either pair changes between renders.
+const PAGE_STYLE = STYLE + JOB_STYLE;
+const PAGE_SCRIPT = JOB_WATCH_JS + CLIENT_JS;
+
 export function layout(
   title: string,
   content: string,
@@ -291,8 +296,8 @@ export function layout(
     brand: "Git Deploy",
     base: BASE,
     nav: [],
-    css: STYLE + JOB_STYLE,
-    script: JOB_WATCH_JS + CLIENT_JS,
+    css: PAGE_STYLE,
+    script: PAGE_SCRIPT,
     updateNotice,
     ...(site ? { site: { ...site, activeSlug: "git" } } : {}),
   });
@@ -304,8 +309,8 @@ export function fragment(title: string, content: string): EmbedFragment {
     brand: "Git Deploy",
     base: BASE,
     nav: [],
-    css: STYLE + JOB_STYLE,
-    script: JOB_WATCH_JS + CLIENT_JS,
+    css: PAGE_STYLE,
+    script: PAGE_SCRIPT,
   });
 }
 
@@ -350,11 +355,11 @@ function deliveryLine(site: GitSiteStatus): string {
 }
 
 function commitLine(site: GitSiteStatus): string {
-  return site.commit ? `${site.commit.shortHash} ${site.commit.subject}` : "";
+  return site.commit ? `${site.commit.shortHash} ${site.commit.subject}` : "not deployed";
 }
 
 /** The job card: the last deployment's state, step and output. */
-function jobCard(job: GitJobView | null): string {
+function jobCard(job: GitJobView | null, log = ""): string {
   const finished = !job || job.state === "done" || job.state === "failed";
   const hidden = job ? "" : " hidden";
   return `
@@ -370,7 +375,7 @@ function jobCard(job: GitJobView | null): string {
       ${job?.error ? `<div class="alert" style="margin-top:0.75rem;">${esc(job.error)}</div>` : ""}
       <details style="margin-top:20px;"${job && job.state === "failed" ? " open" : ""}>
         <summary>Output</summary>
-        <pre id="job-log" style="margin-top:12px;">(no output yet)</pre>
+        <pre id="job-log" style="margin-top:12px;">${esc(log || "(no output yet)")}</pre>
       </details>
       ${job && !finished ? `<div id="job-watch" data-job="${esc(job.id)}" hidden></div>` : ""}
     </div>`;
@@ -478,7 +483,7 @@ export function siteView(site: GitSiteStatus, log: string): string {
     ${form}
     ${key}
     ${webhookSection(site)}
-    <div class="addon-section">${jobCardWithLog(site.lastJob, log)}</div>`;
+    <div class="addon-section">${jobCard(site.lastJob, log)}</div>`;
 }
 
 /**
@@ -490,7 +495,7 @@ export function siteView(site: GitSiteStatus, log: string): string {
  */
 function webhookSection(site: GitSiteStatus): string {
   const webhook = site.config?.webhook ?? null;
-  const path = webhook ? `${BASE}/hook/${encodeURIComponent(site.domain)}/${webhook.token}` : "";
+  const path = webhook ? gitHookPath(site.domain, webhook.token) : "";
   const branch = site.config?.branch ?? "the configured branch";
   const url = !webhook ? "" : `
         <div class="key-block" style="margin-top:20px;">
@@ -524,14 +529,6 @@ function webhookSection(site: GitSiteStatus): string {
     </div>`;
 }
 
-/** The job card with whatever the last deployment already wrote in it. */
-function jobCardWithLog(job: GitJobView | null, log: string): string {
-  return jobCard(job).replace(
-    '<pre id="job-log" style="margin-top:12px;">(no output yet)</pre>',
-    `<pre id="job-log" style="margin-top:12px;">${esc(log || "(no output yet)")}</pre>`,
-  );
-}
-
 /** The fleet page: every site this addon deploys, and what it last deployed. */
 export function fleetView(sites: GitSiteStatus[]): string {
   const running = (site: GitSiteStatus): boolean =>
@@ -551,7 +548,7 @@ export function fleetView(sites: GitSiteStatus[]): string {
         </td>
         <td class="type-cell">${esc(site.siteType ? siteTypeLabel(site.siteType) : "no CloudPanel site")}</td>
         <td data-label="Branch">${esc(site.config?.branch ?? "—")}</td>
-        <td data-label="Commit" class="commit-cell wide-cell mono">${esc(site.commit ? commitLine(site) : "not deployed")}</td>
+        <td data-label="Commit" class="commit-cell wide-cell mono">${esc(commitLine(site))}</td>
         <td data-label="Last deployment">
           ${job ? `<span class="badge ${stateClass(job.state)}">${esc(job.state)}</span> ${esc(when(job.startedAt || job.createdAt))}` : "—"}
         </td>

@@ -867,6 +867,8 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   // delivery and is answered here; anything else returns null and meets the
   // gate below, so this is a second credential type rather than an exception
   // list, and the URL is no oracle for which sites have a webhook.
+  // Nothing is looked up for a request that is not shaped like one: the gate
+  // below stays the first thing every other request meets.
   if (req.method === "POST" && path.startsWith(GIT_HOOK_PREFIX) && mountedAddons().includes("git")) {
     const delivery = await handleGitHook(req, path);
     if (delivery) return delivery;

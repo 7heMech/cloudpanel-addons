@@ -60,6 +60,16 @@ function settingsFrom(body: Record<string, unknown>): GitSettings | string {
   return { remote, branch, directory, postDeploy };
 }
 
+/** The one flag the deploy key and the webhook URL both take: mint a new one. */
+async function readReplaceFlag(req: Request): Promise<boolean | Response> {
+  let body: Record<string, unknown>;
+  try { body = await readJsonObject(req, 1024); } catch (error) { return bodyErrorResponse(error); }
+  if (body.replace !== undefined && typeof body.replace !== "boolean") {
+    return json({ ok: false, error: "replace must be a boolean" }, 400);
+  }
+  return body.replace === true;
+}
+
 export async function handle(
   req: Request,
   path: string,
@@ -138,28 +148,18 @@ export async function handle(
       const result = await gitService.forget(domain);
       return json(result, result.ok ? 200 : 400);
     }
-    // A mode, not an action: on mints the URL, off invalidates it, and
-    // `replace` is what rotation asks for.
-    if (siteRoute[2] === "webhook" && (method === "POST" || method === "DELETE")) {
-      let replace = false;
-      if (method === "POST") {
-        let body: Record<string, unknown>;
-        try { body = await readJsonObject(req, 1024); } catch (error) { return bodyErrorResponse(error); }
-        if (body.replace !== undefined && typeof body.replace !== "boolean") {
-          return json({ ok: false, error: "replace must be a boolean" }, 400);
-        }
-        replace = body.replace === true;
-      }
-      const result = await gitService.setWebhook(domain, method === "POST", replace);
+    // A mode, not an action: POST mints the URL, DELETE invalidates it, and
+    // `replace` is what Rotate sends. The key works the same way.
+    if (siteRoute[2] === "webhook" && method === "DELETE") {
+      const result = await gitService.setWebhook(domain, false);
       return json(result, result.ok ? 200 : 400);
     }
-    if (siteRoute[2] === "key" && method === "POST") {
-      let body: Record<string, unknown>;
-      try { body = await readJsonObject(req, 1024); } catch (error) { return bodyErrorResponse(error); }
-      if (body.replace !== undefined && typeof body.replace !== "boolean") {
-        return json({ ok: false, error: "replace must be a boolean" }, 400);
-      }
-      const result = await gitService.generateKey(domain, body.replace === true);
+    if ((siteRoute[2] === "webhook" || siteRoute[2] === "key") && method === "POST") {
+      const replace = await readReplaceFlag(req);
+      if (replace instanceof Response) return replace;
+      const result = siteRoute[2] === "webhook"
+        ? await gitService.setWebhook(domain, true, replace)
+        : await gitService.generateKey(domain, replace);
       return json(result, result.ok ? 200 : 400);
     }
     return json({ ok: false, error: "method not allowed" }, 405);
