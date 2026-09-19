@@ -151,13 +151,14 @@ test("unusable local storage leaves the panel's own default in place", () => {
 
 // --- the sites page block -------------------------------------------------
 
-test("the sites block is administrator-only and degrades rather than blocking an install", () => {
+test("the sites block serves every panel user and degrades rather than blocking an install", () => {
   const snippet = sites();
   expect(sitesTarget.template).toBe("Frontend/Site/index.html.twig");
   expect(sitesTarget.anchorBefore).toBe('<div class="card card-table">');
   expect(sitesTarget.required).toBe(false);
-  expect(snippet).toContain("{% if is_granted('ROLE_ADMIN') %}");
-  expect(snippet).toContain("{% endif %}");
+  // The Sites page is everyone's, and the reply the script reads is narrowed to
+  // the rows CloudPanel drew for whoever asked.
+  expect(snippet).not.toContain("is_granted");
   expect(snippet).toContain("/addons/panel-tweaks/api/panel");
 });
 
@@ -419,6 +420,14 @@ function seedPanel(): void {
       '2026-02-14 08:00:00', 0, 1);
     INSERT INTO php_settings VALUES (1, 1, '8.3');
     INSERT INTO "database" VALUES (1, 1, 'shopdb');
+    CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER);
+    INSERT INTO user VALUES (1, 'boss', 'ROLE_ADMIN', 1);
+    INSERT INTO user VALUES (2, 'shopkeeper', 'ROLE_USER', 1);
+    INSERT INTO user VALUES (3, 'manager', 'ROLE_SITE_MANAGER', 1);
+    INSERT INTO user VALUES (4, 'gone', 'ROLE_USER', 0);
+    CREATE TABLE user_sites (user_id INTEGER, site_id INTEGER);
+    INSERT INTO user_sites VALUES (2, 1);
+    INSERT INTO user_sites VALUES (4, 1);
   `);
   db.close();
 }
@@ -516,6 +525,34 @@ test("measured sizes cannot outlive the sites table it belongs to", async () => 
 
   const back = await act<SetTweaksResult>(["set-tweaks"], { input: JSON.stringify({ sitesTable: true }) });
   expect(back.tweaks.diskUsage).toBe(false);
+});
+
+// The injected script runs on a page every panel user sees, so the state it
+// reads is narrowed to the rows CloudPanel would have drawn for that user.
+test("a named panel user is answered with their own sites and no others", async () => {
+  const all = await act<PanelTweaksState>(["state"]);
+  expect(all.sites.map((site) => site.domain)).toEqual(["docs.example.com", "shop.example.com"]);
+
+  const mine = await act<PanelTweaksState>(["state", "--as-user=shopkeeper"]);
+  expect(mine.sites.map((site) => site.domain)).toEqual(["shop.example.com"]);
+  // The switches are the box owner's, and are the same answer for everyone.
+  expect(mine.tweaks).toEqual(all.tweaks);
+
+  // The two roles CloudPanel does not narrow.
+  for (const user of ["boss", "manager"]) {
+    const every = await act<PanelTweaksState>(["state", `--as-user=${user}`]);
+    expect(every.sites.map((site) => site.domain)).toEqual(["docs.example.com", "shop.example.com"]);
+  }
+
+  // Deactivated, and a name that is nobody: both are shown nothing rather than
+  // everything, because a session outlives the status change that ended it.
+  for (const user of ["gone", "ghost"]) {
+    const none = await act<PanelTweaksState>(["state", `--as-user=${user}`]);
+    expect(none.sites).toEqual([]);
+  }
+
+  await expect(act(["state", "--as-user=not a name"])).rejects.toThrow("not a valid panel user name");
+  await expect(act(["scan", "--as-user=boss"])).rejects.toThrow("takes no --as-user");
 });
 
 test("a request that names no tweak, or names one with the wrong type, is refused", async () => {

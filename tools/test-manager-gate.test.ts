@@ -86,11 +86,15 @@ test("a non-administrator reaches the WordPress sign-in and nothing else", () =>
     { path: "/addons/wp-login/", method: "GET" },
     { path: "/addons/wp-login/api/remove", method: "POST" },
     { path: "/addons/wp-login/api/sign-in", method: "GET" },
+    { path: "/addons/panel-tweaks/api/panel" },
+    { path: "/addons/panel-tweaks/", method: "GET" },
+    { path: "/addons/panel-tweaks/api/tweaks", method: "POST" },
   ]);
   const dispatched = results.filter((result) => (result.reached as string[]).includes("addon-dispatch"));
   expect(dispatched.map((result) => `${result.method} ${result.path}`)).toEqual([
     "POST /addons/wp-login/api/sign-in",
     "GET /addons/wp-login/api/session",
+    "GET /addons/panel-tweaks/api/panel",
   ]);
   for (const result of results) {
     // Nothing else the manager does runs for this session, dispatched or not.

@@ -151,6 +151,25 @@ no Python runtime rather than failing the list.
 Every value the script writes goes in as text or as an element it built. None of
 it is markup, because all of it came out of somebody's database.
 
+## Whose sites the reply carries
+
+The Sites page is one CloudPanel shows every panel user, so the block is not
+administrator-only and `GET /api/panel` is one of the routes named as an
+exception to the manager's administrator gate. A session that is not an
+administrator's is passed by name to the action, which answers with the sites
+CloudPanel itself would list for that account -- every site for `ROLE_ADMIN` and
+`ROLE_SITE_MANAGER`, and the `user_sites` mapping for a `ROLE_USER` -- so the
+search, the columns and the sizes describe the rows already on the reader's
+page and nothing beyond them. A deactivated account and a name that is nobody
+are both answered with no sites rather than with all of them, because a session
+outlives the status change that should have ended it. The lookup is
+`lib/panel-users.ts`, shared with the WordPress sign-in, so the two addons
+cannot disagree about who owns what.
+
+The switches themselves are in that reply unnarrowed. They are the box owner's
+decision and the same for every reader; what a non-administrator cannot do is
+change them, which is the Addons page, which stays behind the gate.
+
 The newer of the columns -- the creation date, Cloudflare-only and Varnish --
 are columns of `site` rather than tables of their own, and a statement naming a
 column the table has not got fails exactly as one naming a missing table does.
