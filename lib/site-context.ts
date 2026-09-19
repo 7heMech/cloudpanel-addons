@@ -66,6 +66,7 @@ const NATIVE_TABS: TabSpec[] = [
  * here keeps the injected Twig and the reproduced strip from drifting apart.
  */
 export const ADDON_SITE_TABS: { slug: string; label: string; url: string }[] = [
+  { slug: "git", label: "Git", url: mountPath("git") },
   { slug: "maintenance", label: "Maintenance", url: mountPath("maintenance") },
   { slug: "stager", label: "Staging", url: mountPath("stager") },
 ];

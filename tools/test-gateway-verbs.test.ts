@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
-  CLOUDFLARE_IPS_ALLOWED_VERBS, INSTATIC_ALLOWED_VERBS, MAINTENANCE_ALLOWED_VERBS,
-  STAGER_ALLOWED_VERBS,
+  CLOUDFLARE_IPS_ALLOWED_VERBS, GIT_ALLOWED_VERBS, INSTATIC_ALLOWED_VERBS,
+  MAINTENANCE_ALLOWED_VERBS, STAGER_ALLOWED_VERBS,
 } from "../lib/gateway-protocol";
 
 /**
@@ -33,6 +33,10 @@ const ROOT_ONLY: Record<string, { verb: string; why: string }[]> = {
     { verb: "reconcile", why: "run by the addon's own timer, not by a request" },
   ],
   maintenance: [],
+  git: [
+    { verb: "run", why: "the deployment runner, started only by the transient unit the deploy path launches" },
+    { verb: "prune", why: "retention sweeping, run by the reconcile timer" },
+  ],
 };
 
 const ADDONS = [
@@ -40,6 +44,7 @@ const ADDONS = [
   { addon: "instatic", file: "addons/instatic/action.ts", union: "InstaticVerb", allowed: INSTATIC_ALLOWED_VERBS },
   { addon: "maintenance", file: "addons/maintenance/action.ts", union: "MaintenanceVerb", allowed: MAINTENANCE_ALLOWED_VERBS },
   { addon: "cloudflare-ips", file: "addons/cloudflare-ips/action.ts", union: "CloudflareVerb", allowed: CLOUDFLARE_IPS_ALLOWED_VERBS },
+  { addon: "git", file: "addons/git/action.ts", union: "GitVerb", allowed: GIT_ALLOWED_VERBS },
 ];
 
 /** The string members of a `type XVerb = "a" | "b" | ...` declaration. */

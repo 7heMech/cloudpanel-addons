@@ -1289,6 +1289,7 @@ function usage(): void {
   clp-addons action instatic <verb> [options]
   clp-addons action stager <verb> [options]
   clp-addons action maintenance <verb> --domain=<domain>
+  clp-addons action git <verb> [--domain=<domain>] [--job=<job>]
   clp-addons action manager <enable|disable|update|job|watch-job> [--addon=<addon>] [--id=<job>]
   clp-addons action auth (session id on bounded stdin)
   clp-addons serve
