@@ -139,9 +139,9 @@ So those three are asked for only when `PRAGMA table_info` says they are there,
 and selected as NULL when they are not: an older panel loses three columns
 rather than its site list.
 
-The App column is the one the addon rewrites rather than adds. CloudPanel prints
-the site's type there, uppercased, so a WordPress reads as PHP and a reverse
-proxy as REVERSE-PROXY; the application it recorded is both more use and what
+The App column is the one the addon rewrites rather than adds, and it heads it
+Type. CloudPanel prints the site's type there, uppercased, so a WordPress reads
+as PHP and a reverse proxy as REVERSE-PROXY; the application it recorded is both more use and what
 the filter beside the table offers, so the two agree. For a PHP site that column
 holds the vhost template the site was created from, which is a set an operator
 can add to, so only the two run-together names the panel ships are respelled and
@@ -165,12 +165,16 @@ class. Until the script can name the cells, the panel's own two columns are
 hidden by their position, which is the only thing known about them that early;
 the sheet is written again, without those rules, as soon as they are named.
 
-A card on a phone is the same columns in one flex row: the domain and the
-application tag share the first line, the values that are on follow in pairs
-beneath it, and the row menu's button takes the bottom right-hand corner beside
-the last of them rather than a line of its own. The values give up the width the
-button needs, which is why a long certificate badge can wrap on the line it
-shares with it.
+A card on a phone is the same columns in one flex row. The hostname and the type
+tag share the first line, the values that are on follow in pairs beneath it, and
+the row menu's button takes the bottom right-hand corner beside the last of them
+rather than a line of its own. The values give up the width the button needs,
+which is why a long certificate badge can wrap on the line it shares with it.
+
+The hostname's cell is measured from zero rather than from its text, so a name
+wider than the card wraps beside the tag instead of taking the whole line and
+pushing it onto the next one. That left the right of one line and the left of
+the next both empty.
 
 ## Measured sizes ride the repair timer
 

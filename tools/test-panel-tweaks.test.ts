@@ -185,8 +185,10 @@ test("the column picker is in the block, and a switched-off column is never pain
   expect(snippet).toContain("var COLUMNS_ON = true;");
   expect(snippet).toContain("clp_tweaks_columns_narrow");
   expect(snippet).toContain("clp_tweaks_columns_wide");
-  // A phone starts without the two the panel's own table has room for.
+  // A phone starts with the hostname, the certificate and the size, and the
+  // three a desktop has room for are there to be asked for.
   expect(snippet).toContain('{ key: "user", label: "Site user", wide: true, narrow: false, native: 2 }');
+  expect(snippet).toContain('{ key: "app", label: "Type", wide: true, narrow: false, native: 3 }');
   expect(snippet).toContain('{ key: "runtime", label: "Runtime", wide: true, narrow: false }');
   // Off, the whole thing is inert: no choice is read and no rule is written.
   expect(sites({ sitesTable: false })).toContain("var COLUMNS_ON = false;");

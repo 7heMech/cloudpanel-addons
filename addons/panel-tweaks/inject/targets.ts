@@ -167,13 +167,16 @@ const SITES_MOBILE_STYLE = `
      everything below that puts a border or a padding back. */
   table.table-sites td { order: 5; border: 0 !important; padding: 0 !important; text-align: left !important; }
   /* A zero-height flex item ending the card's first line, which the hostname
-     and the tag share: the tag is short and sits at the right-hand end, so the
-     hostname still has most of the line and wraps into the rest of it. */
+     and the tag share. */
   table.table-sites tbody tr::before { content: ""; order: 2; flex: 0 0 100%; height: 0; }
   /* A heading over the tag would only repeat the column it came from: the value
      says "WordPress" on its own. The App column is the panel's third, so the two
      are put in this order rather than found in it. */
-  table.table-sites td.clp-tweaks-domain { order: 0; flex: 1 1 auto; min-width: 0;
+  /* Measured from zero rather than from the hostname: a hostname wider than the
+     card would otherwise take the whole line and drop the tag onto one of its
+     own, which left the right of one line and the left of the next both empty.
+     It wraps beside the tag instead. */
+  table.table-sites td.clp-tweaks-domain { order: 0; flex: 1 1 0; min-width: 0;
     font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
   table.table-sites td.clp-tweaks-type { order: 1; flex: 0 1 auto; max-width: 50%; margin: 0 0 0 auto;
     padding: 3px 8px !important; border: 1px solid #eaeaea !important; border-radius: 4px; color: #9bacb6;
@@ -263,7 +266,7 @@ const SITES_SCRIPT = `
   // the table is painted from already.
   var COLUMNS = [
     { key: "user", label: "Site user", wide: true, narrow: false, native: 2 },
-    { key: "app", label: "App", wide: true, narrow: true, native: 3 },
+    { key: "app", label: "Type", wide: true, narrow: false, native: 3 },
     { key: "ssl", label: "SSL", wide: true, narrow: true },
     { key: "runtime", label: "Runtime", wide: true, narrow: false },
     { key: "disk", label: "Disk", wide: true, narrow: true },
@@ -412,9 +415,14 @@ const SITES_SCRIPT = `
       var labels = headings();
       var heads = table.querySelectorAll("thead th");
       // The panel's own two middle columns answer to the picker as well, so
-      // they are named here with the keys it knows them by.
+      // they are named here with the keys it knows them by. The third is headed
+      // Type rather than the panel's own App, which is what the picker calls
+      // it, and on a phone it is the tag beside the hostname.
       if (heads[1]) heads[1].setAttribute("data-col", "user");
-      if (heads[2]) heads[2].setAttribute("data-col", "app");
+      if (heads[2]) {
+        heads[2].setAttribute("data-col", "app");
+        if (COLUMNS_ON) heads[2].textContent = "Type";
+      }
       for (var i = 0; i < rows.length; i++) {
         var cells = rows[i].el.children;
         for (var c = 0; c < cells.length && c < labels.length; c++) {

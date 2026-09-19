@@ -110,12 +110,12 @@ const COPY: TweakCopy[] = [
   {
     key: "sitesTable",
     title: "Search, sort and extra columns on Sites",
-    description: "Adds a site count beside the Sites heading, a search box and application filter, sortable columns, and columns for SSL, runtime, size, creation date, Cloudflare-only and Varnish. A Columns button beside the search picks which of them are shown, in this browser, with a phone keeping a shorter set than a desktop.",
+    description: "Adds a site count beside the Sites heading, a search box and application filter, sortable columns, and columns for SSL, runtime, size, creation date, Cloudflare-only and Varnish. The Columns button beside the search picks which are shown, the panel's own Site user and Type included; the choice is the browser's, and a phone keeps a shorter set than a desktop.",
   },
   {
     key: "sitesMobile",
     title: "Sites list as cards on a phone",
-    description: "On a narrow screen the Sites table becomes one card per site: the domain and what it runs on the first line, the columns that are on labelled beneath it. Off, the table scrolls sideways as CloudPanel drew it.",
+    description: "On a narrow screen the Sites table becomes one card per site: the hostname on the first line, the type beside it when that column is on, and the rest of the columns labelled beneath. Off, the table scrolls sideways as CloudPanel drew it.",
   },
   {
     key: "actionMenu",
