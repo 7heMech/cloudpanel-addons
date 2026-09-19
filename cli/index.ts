@@ -2,9 +2,9 @@ import type { Server } from "bun";
 import { chmodSync, chownSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
-  ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, CLOUDFLARE_RECONCILE_TIMER,
+  ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, CLOUDFLARE_RECONCILE_TIMER, CONFIG_DIR,
   LIBEXEC_DIR, MANAGER_UNIT, PANEL_GROUP,
-  SOCKET_PATH, SYSTEMD_DIR, mountPath,
+  SOCKET_PATH, STATE_DIR, SYSTEMD_DIR, mountPath,
 } from "./paths";
 import {
   ADDONS, ADDON_NAMES, addonHandler, addonMaintenance, type AddonSpec,
@@ -40,6 +40,7 @@ import { adminHeaderTarget, headerTarget, siteLayoutTarget, SITE_TAB_TEMPLATE } 
 import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
 import { CHANGELOG_URL, UPDATE_PATH } from "../lib/update-ui";
 import { ensureMaintenanceData, executeMaintenanceAction } from "../addons/maintenance/action";
+import { removeWpLogin } from "../addons/wp-login/action";
 import { runAuthActionStdin } from "./auth-action";
 import { pruneManagerJobs, runManagerAction, type ManagerJobView, type ManagerOps } from "./manager-action";
 import { callGatewayAction, streamGatewayAction, type ActionResult } from "../lib/gateway-client";
@@ -55,6 +56,32 @@ function resolveAddon(name: string | undefined): AddonSpec {
 
 function installedAddons(): AddonSpec[] {
   return ADDON_NAMES.map((name) => ADDONS[name]!).filter(installedConfig);
+}
+
+/**
+ * Addons that are now part of another addon.
+ *
+ * `login-theme` was a whole addon for one script in the login page's <head>.
+ * It is a switch inside Panel Tweaks now, and a box that had it enabled
+ * should come out of an update with the device theme still working rather than
+ * with an addon that no longer exists. The config file is the enabled flag, so
+ * moving it is the whole migration: the state directory held nothing, and the Twig
+ * block goes when the templates are next rendered, because the injection set is
+ * read from the config files.
+ */
+const ABSORBED_ADDONS: Record<string, string> = { "login-theme": "panel-tweaks" };
+
+export function migrateAbsorbedAddons(quiet = false): void {
+  for (const [from, into] of Object.entries(ABSORBED_ADDONS)) {
+    const legacyConfig = `${CONFIG_DIR}/${from}.conf`;
+    if (!existsSync(legacyConfig)) continue;
+    const spec = ADDONS[into];
+    if (spec && !installedConfig(spec)) writeConfig(spec, true);
+    rmSync(legacyConfig, { force: true });
+    rmSync(`${legacyConfig}.new`, { force: true });
+    rmSync(`${STATE_DIR}/${from}`, { recursive: true, force: true });
+    if (!quiet) log.ok(`${from} is part of ${into} now and was carried over`);
+  }
 }
 
 function artifactNames(): string[] {
@@ -284,6 +311,7 @@ export async function cmdInstall(argv: string[]): Promise<void> {
  * Services restart last, after every generated file reflects this process.
  */
 function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
+  migrateAbsorbedAddons();
   const specs = installedAddons();
   ensureServiceUser();
   removeLegacyInstall();
@@ -432,6 +460,21 @@ export async function applyEnable(name: string): Promise<void> {
 }
 
 /**
+ * The WordPress sign-in helper is a file in somebody else's site, not state in
+ * this addon's own directory, so withdrawing the addon has to take it back out.
+ * A failure warns rather than stops: an addon that cannot be removed because
+ * one site's files moved would be worse than a helper left behind and named.
+ */
+function withdrawWpLogin(): void {
+  try {
+    const { removed } = removeWpLogin();
+    if (removed > 0) log.ok(`sign-in helper removed from ${removed} site${removed === 1 ? "" : "s"}`);
+  } catch (error) {
+    log.warn(`the sign-in helper could not be removed from every site: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
  * Turn one addon off and leave everything it made behind.
  *
  * Deliberately not `cmdUninstall`: that removes the binary once the last addon
@@ -444,6 +487,7 @@ export function applyDisable(name: string): void {
   const spec = resolveAddon(name);
   const remaining = installedAddons().filter((item) => item.name !== spec.name);
 
+  if (spec.name === "wp-login") withdrawWpLogin();
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
   // Reconciled after the config file is gone, so the injection set is read
@@ -474,6 +518,9 @@ export const MANAGER_OPS: ManagerOps = {
   enable: applyEnable,
   disable: applyDisable,
   update: (beforeManagerRestart) => cmdUpdate([], { beforeManagerRestart }),
+  reconcile: () => {
+    if (!reconcileAnchors(true)) fatal("could not safely patch the CloudPanel templates");
+  },
 };
 
 /**
@@ -534,6 +581,7 @@ export async function cmdRepair(argv: string[]): Promise<void> {
     if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
     return;
   }
+  migrateAbsorbedAddons(quiet);
   const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
   const all = installedAddons();
   // An installation with every addon disabled still needs its timer, its Nginx
@@ -720,6 +768,7 @@ export function cmdUninstall(argv: string[]): void {
     }
   }
   removeSudoers();
+  if (spec.name === "wp-login") withdrawWpLogin();
   if (purge) rmSync(spec.stateDir, { recursive: true, force: true });
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });

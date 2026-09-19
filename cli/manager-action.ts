@@ -54,6 +54,8 @@ export interface ManagerOps {
   enable(addon: string): Promise<void> | void;
   disable(addon: string): Promise<void> | void;
   update(beforeManagerRestart?: () => void): Promise<void>;
+  /** Render every installed addon's block into the panel's templates again. */
+  reconcile(): void;
 }
 
 export interface ManagerJobView {
@@ -346,6 +348,13 @@ export async function runManagerAction(
         return await createJob(verb, addon, options);
       case "update":
         return await createJob("update", "", options);
+      // Not a job: rendering the templates writes a few files and restarts
+      // nothing, so the request that asked for it can wait for the answer.
+      // It exists because an addon whose markup depends on a setting has to be
+      // able to put that markup back the moment the setting moves.
+      case "reconcile":
+        ops.reconcile();
+        return reply({ ok: true, data: { reconciled: true } }, options.emitReply !== false);
       case "job": {
         // Without --id, the newest record. The page that draws a job is the
         // one the manager restart reloads, and after that reload the browser

@@ -8,3 +8,5 @@
 - [Stager](decisions/stager.md)
 - [Maintenance Mode](decisions/maintenance.md)
 - [PHP Resources](decisions/php-resources.md)
+- [Panel Tweaks](decisions/panel-tweaks.md)
+- [WordPress Sign-In](decisions/wp-login.md)
