@@ -6,7 +6,7 @@ import type { AddonDefinition } from "../../cli/addon-catalog";
 export const PANEL_TWEAKS_ADDON: AddonDefinition = {
   name: "panel-tweaks",
   title: "Panel Tweaks",
-  description: "Small additions to CloudPanel's own pages: a site count, search and sorting, SSL, runtime and size columns, a sites table that reads on a phone, row actions in a menu, the panel's own header and Dashboard fitted to a narrow screen, and a device theme on the login page.",
+  description: "Site search and columns, mobile layouts, and theme improvements for CloudPanel.",
   targets: PANEL_TWEAKS_TARGETS,
   handler: handle,
   action: runPanelTweaksAction,

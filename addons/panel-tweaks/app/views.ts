@@ -299,7 +299,7 @@ export function dashboardView(state: PanelTweaksState): string {
     <div class="page-heading">
       <div>
         <h1>Panel Tweaks</h1>
-        <p>Additions to CloudPanel's own pages. Each one can be switched off on its own.</p>
+        <p>Optional improvements to CloudPanel's sites, dashboard and login.</p>
       </div>
     </div>
     <div class="card">
