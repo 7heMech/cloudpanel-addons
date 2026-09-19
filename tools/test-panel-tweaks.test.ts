@@ -167,7 +167,18 @@ test("the sites block is administrator-only and degrades rather than blocking an
 test("the narrow-screen layout needs no data and no class the script adds", () => {
   const snippet = sites({ sitesMobile: true });
   const mobile = snippet.slice(snippet.indexOf("table.table-sites, table.table-sites tbody"), snippet.indexOf("</style>"));
-  expect(mobile).toContain("table.table-sites tr { display: flex");
+  // Details always use the full card width, while Type can use either a fitting
+  // hostname row or the spare end of a detail heading.
+  expect(mobile).toContain(".clp-tweaks-domain.clp-tweaks-type-at-host { display: grid");
+  expect(mobile).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))");
+  expect(mobile).toContain(".clp-tweaks-detail-heading { display: flex");
+  expect(mobile).toContain("transform: translateY(calc(-100% + 7px))");
+  expect(mobile).toContain("transform: translateY(calc(-100% - 17px))");
+  expect(mobile).not.toContain(".clp-tweaks-mobile-type { display: block; float:");
+  expect(snippet).toContain("hostWidth + tagWidth + 12 <= domain.clientWidth");
+  expect(snippet).toContain("lines.length === 2 && lines[1].right + 12 <= domainRect.right - tagWidth");
+  expect(snippet).toContain("if (visible.length > 1)");
+  expect(snippet).toContain('tag.classList.add("clp-tweaks-type-in-empty-field")');
   expect(mobile).not.toContain(".clp-tweaks-table tr {");
   // A separator between one site and the next, in whichever theme the panel is
   // showing, taken from the border the panel draws on its own table cells.
@@ -222,18 +233,6 @@ test("the preview frame is the panel's own page, with the injected block over it
   expect(page).toContain("2 more sites on the real page.");
   // The frame is measured by this wrapper, so it has to be there to find.
   expect(page).toContain('id="clp-preview"');
-});
-
-// A hostname and a tag that will not fit on one line is a choice between a
-// split hostname, a tag on a line of its own, and a tag cut short. A flex line
-// only ever makes the second of those, so the widths are measured and set.
-test("the tag takes what the hostname leaves, and goes under it when that is nothing", () => {
-  const snippet = sites({ sitesMobile: true });
-  expect(snippet).toContain("var TAG_FLOOR = 72;");
-  expect(snippet).toContain("range.selectNodeContents(pairs[r].domain)");
-  expect(snippet).toContain('pairs[a].row.classList.add("clp-tweaks-tag-below")');
-  // Under the hostname, that line is the hostname's alone.
-  expect(snippet).toContain("tr.clp-tweaks-tag-below td.clp-tweaks-domain { flex-basis: 100%; }");
 });
 
 // The block is rendered by Twig before a browser ever sees it, and Twig reads

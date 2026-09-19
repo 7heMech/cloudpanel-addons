@@ -200,8 +200,9 @@ function panelTweaksPreviewState(url: URL): PanelTweaksState {
         runtime: "Node.js 20", createdAt: "2026-06-21 17:40:00", cloudflareOnly: false, varnish: false, certificate: { type: "1", expiresAt: "2027-09-05 10:00:00" },
         disk: null,
       },
-      // A hostname with no room for a whole tag beside it, and one wider than a
-      // phone: the first two cases the card's first line has to survive.
+      // One hostname competes with its type for a phone line, and another is
+      // wider than a phone. The type must use a detail heading without moving
+      // either detail column when it cannot use the hostname row.
       {
         domain: "portal.staging.example-group.com", user: "portal", type: "reverse-proxy",
         application: "ReverseProxy", runtime: "", createdAt: "2026-04-17 09:10:00",

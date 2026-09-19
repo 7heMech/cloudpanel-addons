@@ -165,25 +165,45 @@ class. Until the script can name the cells, the panel's own two columns are
 hidden by their position, which is the only thing known about them that early;
 the sheet is written again, without those rules, as soon as they are named.
 
-A card on a phone is the same columns in one flex row. The hostname and the type
-tag share the first line, the values that are on follow in pairs beneath it, and
-the row menu's button takes the bottom right-hand corner beside the last of them
-rather than a line of its own. The values give up the width the button needs,
-which is why a long certificate badge can wrap on the line it shares with it.
+A card on a phone gives the hostname the full card width and puts the details in
+a separate two-column grid. Both column starts are always derived from the
+card's inner width. SSL and Disk therefore stay at the same x and y positions
+when Type is shown or hidden, and content wrapping in one field does not move
+the field beside it.
 
-A hostname and a tag do not always fit on that line together, and which of them
-gives way is measured rather than left to the layout. The hostname keeps the
-width its text needs, because that is what the card is read for; the tag takes
-what is left and ends in an ellipsis, with the whole of it in the cell's title.
-Below 72px there is nothing left worth reading, so the tag goes under the
-hostname instead and the line is the hostname's alone.
+Type first tries the unused right side of a one-line hostname. The script reads
+the natural widths of the hostname and badge and chooses that placement only
+when both fit in full; it does not assign a width to either. A wrapped hostname
+keeps its whole line. At the narrow phone layout, if it wraps to exactly two
+lines and the full badge fits beside the second line, the fallback is lifted by
+one hostname line-height to use that space. Wider layouts use the vertical gap
+above the second visible field's label, aligned to the right. If only one detail
+is visible, the badge uses the same gap over the otherwise empty second grid
+cell. Its place remains in a label row with a fixed minimum height, so either
+visual offset leaves the detail values fixed.
+A type too long for that spare space ends in an ellipsis and exposes its full
+value in the title. Resizing, changing column choices, and replacing the native
+type with the application name rerun only this placement choice.
 
-CSS cannot make that choice: a flex line moves an item that will not fit onto
-the next line rather than shrinking it. So the script measures the hostname over
-a range of its own text, the cell being a flex item that fills whatever is left
-of the line and so answers a different question, and sets the width each of them
-gets. Every cell is written, then every cell is read, then every cell is written
-again: a list of any length costs three passes rather than three per row.
+The normal SSL badge remains one text label, including the middle-dot separator
+between issuer and expiry. At phone widths where that timed badge cannot fit in
+its column, a container query shows the compact expiry such as `46d`; the full
+text stays available to screen readers and the certificate date stays in the
+title. Untimed, missing, and self-signed certificates keep their normal labels
+and can wrap if an unknown name is unusually long.
+
+The mobile type and details are copies inside the hostname cell; the original
+cells stay in place for the desktop table. Both copies share their column keys
+and CSS displays only the version for the current layout. Native details are
+copied when the table is labelled, then refreshed when the extra data arrives.
+Only display data is copied: the hostname link and action controls stay live.
+Hostname sorting uses the stored domain rather than the cell's combined text.
+
+The row menu's button uses the empty far-right end of the values and is outside
+the details grid, so it does not change either column start. The known right-side
+values are short; the layout checks also cover every optional column and long
+type names so the button, badge, and values do not overlap. With the menu off,
+the panel's action links follow the details.
 
 ## The switches are shown against the page they change
 

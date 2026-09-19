@@ -116,6 +116,7 @@ html.dark .clp-tweaks-columns-menu input:checked { border-color: #0078d4; backgr
 .clp-tweaks-table .clp-tweaks-none { color: #9bacb6; }
 .clp-tweaks-table .clp-tweaks-size { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .clp-tweaks-table .clp-tweaks-muted { color: #9bacb6; }
+.clp-tweaks-mobile-type, .clp-tweaks-details, .clp-tweaks-badge-compact { display: none; }
 .clp-tweaks-empty { padding: 25px; color: #9bacb6; }
 /* CloudPanel pads its cells 32px each side, which is comfortable for four
    columns and overflows the 1200px container at six. The table is also given a
@@ -140,68 +141,91 @@ html.dark .clp-tweaks-columns-menu input:checked { border-color: #0078d4; backgr
 // rearranged it into cards once the fetch came back -- the layout moved under
 // the reader for as long as the request took.
 //
-// What the script cannot do before its data arrives is name the columns, so the
-// rules that need `data-label` are the ones that wait, and they add text inside
-// a cell rather than moving it.
+// The native cells are labelled as soon as the table exists; only the added
+// columns need the fetched data.
 const SITES_MOBILE_STYLE = `
 @media (max-width: 860px) {
   .clp-tweaks-scroll { overflow-x: visible; }
   table.table-sites, table.table-sites tbody, table.table-sites tr, table.table-sites td { display: block; }
   table.table-sites thead { display: none; }
-  /* Blocks and flex items ignore the hidden attribute's default styling, and
+  /* Block layout overrides the hidden attribute's default styling, and
      the search below the heading is what sets it. */
   table.table-sites tr[hidden], table.table-sites td[hidden] { display: none; }
   /* The cells lose their borders as blocks, so the row draws the only rule left
      telling one site from the next. The panel's own table border, in both of
      its themes, rather than a grey of this addon's choosing. */
-  /* The space between one line and the next is a margin on the cells that start
-     a line, not a row gap: a gap also falls either side of the zero-height
-     items below, whose line cannot be given a negative size to take it back,
-     which cost the domain and the tag twice what every other line paid. */
-  table.table-sites tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 12px;
+  table.table-sites tr { position: relative;
     padding: 16px 20px; border-top: 1px solid #eaeaea; }
   html.dark table.table-sites tr { border-top-color: var(--clp-border-color); }
   table.table-sites tbody tr:first-child { border-top: 0; }
   /* The panel sets these with html.dark body .table td, which outranks anything
      scoped to one table, so the reset has to be important -- and so does
      everything below that puts a border or a padding back. */
-  table.table-sites td { order: 5; border: 0 !important; padding: 0 !important; text-align: left !important; }
-  /* A zero-height flex item ending the card's first line, which the hostname
-     and the tag share. */
-  table.table-sites tbody tr::before { content: ""; order: 2; flex: 0 0 100%; height: 0; }
-  /* A heading over the tag would only repeat the column it came from: the value
-     says "WordPress" on its own. The App column is the panel's third, so the two
-     are put in this order rather than found in it. */
-  /* Measured from zero, so the two always share the line and the script decides
-     how much of it each gets: the hostname keeps what it needs and the tag ends
-     in an ellipsis in what is left. A tag with too little left to read goes
-     below instead, and then the hostname has the line to itself. */
-  table.table-sites td.clp-tweaks-domain { order: 0; flex: 1 1 0; min-width: 0;
-    font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
-  table.table-sites td.clp-tweaks-type { order: 1; flex: 0 1 auto; max-width: 50%; margin: 0 0 0 auto;
-    padding: 3px 8px !important; border: 1px solid #eaeaea !important; border-radius: 4px; color: #9bacb6;
-    font-size: 12px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  table.table-sites tbody tr.clp-tweaks-tag-below td.clp-tweaks-domain { flex-basis: 100%; }
-  table.table-sites tbody tr.clp-tweaks-tag-below td.clp-tweaks-type { max-width: 100%; margin-top: 8px; }
-  html.dark table.table-sites td.clp-tweaks-type { border-color: var(--clp-border-color) !important; }
-  table.table-sites td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; margin-top: 14px; }
-  table.table-sites td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px;
-    color: #9bacb6; font-size: 12px; font-weight: 700; text-transform: uppercase; }
-  /* A certificate badge is wider than half a phone, and it is the panel's own
-     nowrap that would have run it under the value beside it. */
-  table.table-sites td .clp-tweaks-badge { max-width: 100%; white-space: normal; }
-  table.table-sites td.clp-tweaks-actions { order: 6; flex: 1 1 100%; margin-top: 14px; }
+  table.table-sites td { border: 0 !important; padding: 0 !important; text-align: left !important; }
+  table.table-sites td.clp-tweaks-domain { font-size: 16px; font-weight: 600; line-height: 1.5; }
+  table.table-sites td.clp-tweaks-domain > a { white-space: normal; overflow-wrap: anywhere; }
+  table.table-sites td.clp-tweaks-type, table.table-sites td[data-label] { display: none; }
+  table.table-sites .clp-tweaks-mobile-type { display: inline-block; min-width: 0; max-width: 100%;
+    padding: 1px 4px; border: 1px solid #eaeaea; border-radius: 4px; color: #9bacb6;
+    font-size: 12px; font-weight: 400; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  html.dark table.table-sites .clp-tweaks-mobile-type { border-color: var(--clp-border-color); }
+  /* A type that fits shares the hostname row without changing the hostname's
+     natural one-line width. The script only chooses this layout after both
+     values have been measured at their full widths. */
+  table.table-sites td.clp-tweaks-domain.clp-tweaks-type-at-host { display: grid;
+    grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; align-items: start; }
+  table.table-sites td.clp-tweaks-domain.clp-tweaks-type-at-host > a { grid-column: 1; }
+  table.table-sites td.clp-tweaks-domain.clp-tweaks-type-at-host > .clp-tweaks-mobile-type {
+    grid-column: 2; justify-self: end; margin-top: 2px; }
+  table.table-sites td.clp-tweaks-domain.clp-tweaks-type-at-host > .clp-tweaks-details { grid-column: 1 / -1; }
+  /* Both column starts come from the card's full inner width. Content in one
+     field can wrap without changing the position of the field beside it. */
+  table.table-sites .clp-tweaks-details { display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px;
+    margin-top: 14px; font-size: 16px; font-weight: 400; line-height: 1.5; }
+  table.table-sites .clp-tweaks-details > [data-label] { min-width: 0;
+    white-space: normal; overflow-wrap: anywhere; }
+  table.table-sites .clp-tweaks-detail-heading { display: flex; align-items: flex-start; gap: 4px;
+    min-height: 19px; margin-bottom: 4px; }
+  table.table-sites .clp-tweaks-detail-label { flex: 0 0 auto; color: #9bacb6;
+    font-size: 12px; font-weight: 700; line-height: 1.5; text-transform: uppercase; }
+  /* A fallback type visually occupies the gap above this heading while its
+     place in the heading keeps every value at the same coordinates. */
+  table.table-sites .clp-tweaks-detail-heading > .clp-tweaks-mobile-type { flex: 0 1 auto; margin-left: auto;
+    transform: translateY(calc(-100% + 7px)); }
+  table.table-sites .clp-tweaks-details > .clp-tweaks-type-in-empty-field {
+    grid-column: 2; grid-row: 1; justify-self: end; align-self: start;
+    transform: translateY(calc(-100% + 7px)); }
+  table.table-sites .clp-tweaks-detail-value { min-width: 0; }
+  /* Timed certificates keep their normal one-line badge whenever it fits. */
+  table.table-sites td .clp-tweaks-badge { box-sizing: border-box; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+  table.table-sites .clp-tweaks-details > [data-col="ssl"] { container: clp-ssl / inline-size; }
+  table.table-sites td.clp-tweaks-actions { padding-top: 14px !important; }
+}
+/* At the phone width where the fixture hostname wraps, its short second line
+   can share its height with Type. Wider layouts keep the calmer gap placement. */
+@media (max-width: 360px) {
+  table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-detail-heading > .clp-tweaks-mobile-type,
+  table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-details > .clp-tweaks-type-in-empty-field {
+    transform: translateY(calc(-100% - 17px)); }
+}
+/* Below the width of the normal issuer-and-expiry badge, show its compact
+   expiry. The full text remains available to screen readers and in the title. */
+@container clp-ssl (max-width: 160px) {
+  .clp-tweaks-badge-timed > .clp-tweaks-badge-full { position: absolute; width: 1px; height: 1px;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .clp-tweaks-badge-timed > .clp-tweaks-badge-compact { display: block; position: static;
+    width: auto; height: auto; overflow: visible; clip-path: none; white-space: normal; }
 }
 `;
 
-// With both switches on the button costs the card no line of its own: the
-// values give up the width it needs, so it sits at the bottom right-hand corner
-// beside the last of them rather than on a row below them.
+// The menu uses the otherwise empty far-right end of the values. It is outside
+// the grid, so it cannot change either detail column's starting position.
 const MENU_MOBILE_STYLE = `
 @media (max-width: 860px) {
-  html.clp-tweaks-menu table.table-sites td[data-label] { flex: 1 1 calc(50% - 28px); }
-  html.clp-tweaks-menu table.table-sites td.clp-tweaks-actions { flex: 0 0 auto;
-    align-self: flex-end; margin: 0 0 0 auto; }
+  html.clp-tweaks-menu table.table-sites .clp-tweaks-details { padding-bottom: 4px; }
+  html.clp-tweaks-menu table.table-sites td.clp-tweaks-actions { position: absolute; bottom: 16px; right: 20px;
+    width: 30px; height: 30px; padding: 0 !important; }
 }
 `;
 
@@ -365,19 +389,21 @@ const SITES_SCRIPT = `
     table.classList.add("clp-tweaks-table");
     scroll(table);
     labelNativeCells(rows);
+    copyDetails(rows);
     if (COLUMNS_ON) {
       tagged = true;
       paintColumns(chosen);
     }
-    fitTags(rows);
-    var pending = null;
+    placeTypes(rows);
+    var pendingTypePlacement = null;
     window.addEventListener("resize", function () {
-      if (pending) cancelAnimationFrame(pending);
-      pending = requestAnimationFrame(function () {
-        pending = null;
-        fitTags(rows);
+      if (pendingTypePlacement) cancelAnimationFrame(pendingTypePlacement);
+      pendingTypePlacement = requestAnimationFrame(function () {
+        pendingTypePlacement = null;
+        placeTypes(rows);
       });
     });
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { placeTypes(rows); });
     if (document.documentElement.classList.contains("clp-tweaks-menu")) buildMenus(rows);
 
     wanted.then(function (payload) {
@@ -392,12 +418,10 @@ const SITES_SCRIPT = `
       for (var r = 0; r < rows.length; r++) rows[r].site = byDomain[rows[r].domain] || null;
 
       nameApplications(rows);
-      // The panel wrote the site's type in that cell and the line above has
-      // just replaced it with the application's name, which is a different
-      // width, so what fits beside the hostname is a different answer too.
-      fitTags(rows);
-      if (!tweaks.sitesTable) return;
+      if (!tweaks.sitesTable) { placeTypes(rows); return; }
       addColumns(rows, Boolean(tweaks.diskUsage));
+      copyDetails(rows);
+      placeTypes(rows);
       addCount(rows);
       buildToolbar(rows);
       buildColumnPicker(Boolean(tweaks.diskUsage));
@@ -449,71 +473,100 @@ const SITES_SCRIPT = `
             if (c === 1) cells[c].setAttribute("data-col", "user");
           }
         }
+        // Keep the native column for the desktop table. The mobile copy moves
+        // between the hostname and a detail heading without moving either.
+        if (!cells[2]) continue;
+        var tag = document.createElement("span");
+        tag.className = "clp-tweaks-mobile-type";
+        tag.setAttribute("data-col", "app");
+        tag.textContent = cells[2].textContent;
+        cells[0].appendChild(tag);
       }
     }
 
-    /**
-     * How much of the card's first line the tag may have.
-     *
-     * A hostname and a tag that will not fit on one line together is a choice
-     * between three bad things: a hostname split over two lines, a tag on a
-     * line of its own, or a tag cut short. The hostname is what the card is
-     * read for, so it keeps what it needs; the tag takes what is left and ends
-     * in an ellipsis, with the whole of it in the cell's title. Below what is
-     * worth reading the tag goes under the hostname instead.
-     *
-     * CSS cannot do this on its own: a flex line puts an item that will not fit
-     * on the next line rather than shrinking it, so the width each one gets has
-     * to be measured and set. Every cell is written, then every cell is read,
-     * then every cell is written again -- three passes over the list rather
-     * than three per row.
-     */
-    var TAG_FLOOR = 72;
-    var TAG_GAP = 12;
-
-    function fitTags(rows) {
-      var pairs = [];
+    // A single mobile group keeps the detail columns aligned across the full
+    // card width. Copy only data; the hostname link and controls stay live.
+    function copyDetails(rows) {
       for (var i = 0; i < rows.length; i++) {
-        var domain = rows[i].el.querySelector("td.clp-tweaks-domain");
-        var tag = rows[i].el.querySelector("td.clp-tweaks-type");
-        if (domain && tag) pairs.push({ row: rows[i].el, domain: domain, tag: tag });
+        var domain = rows[i].el.querySelector(".clp-tweaks-domain");
+        var group = domain.querySelector(".clp-tweaks-details");
+        var tag = domain.querySelector(".clp-tweaks-mobile-type");
+        if (!group) {
+          group = document.createElement("div");
+          group.className = "clp-tweaks-details";
+          domain.appendChild(group);
+        }
+        // A previous placement may have put Type inside a heading that is
+        // about to be rebuilt.
+        if (tag && group.contains(tag)) domain.insertBefore(tag, group);
+        group.textContent = "";
+        var cells = rows[i].el.querySelectorAll("td[data-label]");
+        for (var c = 0; c < cells.length; c++) {
+          var copy = document.createElement("div");
+          copy.className = cells[c].className;
+          copy.setAttribute("data-label", cells[c].getAttribute("data-label"));
+          copy.setAttribute("data-col", cells[c].getAttribute("data-col"));
+          if (cells[c].title) copy.title = cells[c].title;
+          var heading = document.createElement("div");
+          heading.className = "clp-tweaks-detail-heading";
+          var label = document.createElement("span");
+          label.className = "clp-tweaks-detail-label";
+          label.textContent = cells[c].getAttribute("data-label");
+          heading.appendChild(label);
+          copy.appendChild(heading);
+          var value = document.createElement("div");
+          value.className = "clp-tweaks-detail-value";
+          for (var n = 0; n < cells[c].childNodes.length; n++) value.appendChild(cells[c].childNodes[n].cloneNode(true));
+          copy.appendChild(value);
+          group.appendChild(copy);
+        }
       }
-      if (pairs.length === 0) return;
+    }
+
+    // Type never receives a width and never makes the hostname or metadata
+    // columns narrower. It uses the hostname row only when both full values fit
+    // there; otherwise it moves into the spare end of the right detail heading.
+    function placeTypes(rows) {
       var narrow = Boolean(window.matchMedia && window.matchMedia(NARROW_QUERY).matches);
-      for (var w = 0; w < pairs.length; w++) {
-        pairs[w].tag.style.maxWidth = "";
-        pairs[w].tag.removeAttribute("title");
-        pairs[w].row.classList.remove("clp-tweaks-tag-below");
-        if (narrow) pairs[w].domain.style.whiteSpace = "nowrap";
-      }
-      if (!narrow) return;
-      var measured = [];
-      var range = document.createRange();
-      for (var r = 0; r < pairs.length; r++) {
-        var style = window.getComputedStyle(pairs[r].row);
-        var line = pairs[r].row.clientWidth
-          - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
-        // The hostname's own width, over a range of the text rather than the
-        // cell holding it: the cell is a flex item filling whatever is left of
-        // the line, so its width answers a different question.
-        range.selectNodeContents(pairs[r].domain);
-        measured.push({
-          // A tag that is switched off is not a tag to make room for.
-          off: pairs[r].tag.offsetWidth === 0,
-          whole: pairs[r].tag.getBoundingClientRect().width,
-          free: line - range.getBoundingClientRect().width - TAG_GAP
-        });
-      }
-      for (var a = 0; a < pairs.length; a++) {
-        pairs[a].domain.style.whiteSpace = "";
-        if (measured[a].off) continue;
-        if (measured[a].free < TAG_FLOOR) {
-          pairs[a].row.classList.add("clp-tweaks-tag-below");
+      for (var i = 0; i < rows.length; i++) {
+        var domain = rows[i].el.querySelector(".clp-tweaks-domain");
+        var host = domain && domain.querySelector("a");
+        var tag = domain && domain.querySelector(".clp-tweaks-mobile-type");
+        var group = domain && domain.querySelector(".clp-tweaks-details");
+        if (!domain || !host || !tag || !group) continue;
+        domain.classList.remove("clp-tweaks-type-at-host");
+        domain.classList.remove("clp-tweaks-type-beside-last-host-line");
+        tag.classList.remove("clp-tweaks-type-in-empty-field");
+        domain.insertBefore(tag, group);
+        tag.title = tag.textContent.trim();
+        if (!narrow || window.getComputedStyle(tag).display === "none") continue;
+
+        var range = document.createRange();
+        range.selectNodeContents(host);
+        var lines = range.getClientRects();
+        var hostWidth = lines.length === 1 ? lines[0].width : Infinity;
+        var tagWidth = tag.getBoundingClientRect().width;
+        if (hostWidth + tagWidth + 12 <= domain.clientWidth) {
+          domain.classList.add("clp-tweaks-type-at-host");
           continue;
         }
-        pairs[a].tag.style.maxWidth = Math.floor(measured[a].free) + "px";
-        // Only a tag that lost some of its text says what it was.
-        if (measured[a].free < measured[a].whole) pairs[a].tag.title = pairs[a].tag.textContent.trim();
+        var domainRect = domain.getBoundingClientRect();
+        if (lines.length === 2 && lines[1].right + 12 <= domainRect.right - tagWidth) {
+          domain.classList.add("clp-tweaks-type-beside-last-host-line");
+        }
+
+        var fields = group.children;
+        var visible = [];
+        for (var f = 0; f < fields.length; f++) {
+          if (fields[f].getClientRects().length) visible.push(fields[f]);
+        }
+        if (visible.length > 1) {
+          var heading = visible[1].querySelector(".clp-tweaks-detail-heading");
+          if (heading) heading.appendChild(tag);
+        } else {
+          tag.classList.add("clp-tweaks-type-in-empty-field");
+          group.appendChild(tag);
+        }
       }
     }
 
@@ -534,6 +587,8 @@ const SITES_SCRIPT = `
         var cell = rows[i].el.children[2];
         var name = applicationName(rows[i].site);
         if (cell && name) cell.textContent = name;
+        var tag = rows[i].el.querySelector(".clp-tweaks-mobile-type");
+        if (tag && name) tag.textContent = name;
       }
     }
 
@@ -558,10 +613,21 @@ const SITES_SCRIPT = `
       return td;
     }
 
-    function badge(text, tone, title) {
+    function badge(text, tone, title, detail, compact) {
       var span = document.createElement("span");
       span.className = "clp-tweaks-badge clp-tweaks-" + tone;
-      span.textContent = text;
+      if (detail) {
+        span.classList.add("clp-tweaks-badge-timed");
+        var full = document.createElement("span");
+        full.className = "clp-tweaks-badge-full";
+        full.textContent = text + " · " + detail;
+        span.appendChild(full);
+        var short = document.createElement("span");
+        short.className = "clp-tweaks-badge-compact";
+        short.setAttribute("aria-hidden", "true");
+        short.textContent = compact;
+        span.appendChild(short);
+      } else span.textContent = text;
       if (title) span.title = title;
       return span;
     }
@@ -599,10 +665,8 @@ const SITES_SCRIPT = `
       }
       var left = daysUntil(site.certificate.expiresAt);
       var tone = left !== null && left < 14 ? "warn" : "ok";
-      var note = left === null ? name
-        : left < 0 ? name + " · expired"
-        : name + " · " + left + "d left";
-      td.appendChild(badge(note, tone, site.certificate.expiresAt || ""));
+      var note = left === null ? "" : left < 0 ? "expired" : left + "d left";
+      td.appendChild(badge(name, tone, site.certificate.expiresAt || "", note, left < 0 ? "expired" : left + "d"));
       td.setAttribute("data-value", String(left === null ? 2 : left + 100000));
       return td;
     }
@@ -749,7 +813,7 @@ const SITES_SCRIPT = `
           chosen[key] = box.checked;
           writeChoice(narrowNow(), chosen);
           paintColumns(chosen);
-          fitTags(rows);
+          placeTypes(rows);
         });
       }
 
@@ -782,7 +846,7 @@ const SITES_SCRIPT = `
             boxes[b].checked = chosen[boxes[b].getAttribute("data-column")] !== false;
           }
           paintColumns(chosen);
-          fitTags(rows);
+          placeTypes(rows);
         };
         if (query.addEventListener) query.addEventListener("change", moved);
         else if (query.addListener) query.addListener(moved);
@@ -962,6 +1026,8 @@ const SITES_SCRIPT = `
     // --- sorting ----------------------------------------------------------
 
     function sortKey(row, index, numeric) {
+      // The hostname cell also carries the mobile type label.
+      if (index === 0) return row.domain.toLowerCase();
       var cells = row.el.children;
       var td = cells[index];
       if (!td) return numeric ? 0 : "";
