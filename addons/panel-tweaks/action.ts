@@ -78,6 +78,25 @@ export const TEMPLATE_TWEAK_KEYS: (keyof PanelTweaks)[] =
 export const TWEAK_KEYS = Object.keys(DEFAULT_TWEAKS) as (keyof PanelTweaks)[];
 
 /**
+ * The switches that mean nothing on their own.
+ *
+ * Measured sizes are a column of the enhanced Sites table, so they are turned
+ * off with it rather than left on measuring a disk for a column no page draws.
+ */
+export const TWEAK_PARENTS: Partial<Record<keyof PanelTweaks, keyof PanelTweaks>> = {
+  diskUsage: "sitesTable",
+};
+
+/** A switch whose parent is off is off, whichever of the two was just named. */
+export function withTweakDependencies(tweaks: PanelTweaks): PanelTweaks {
+  const settled = { ...tweaks };
+  for (const [key, parent] of Object.entries(TWEAK_PARENTS) as [keyof PanelTweaks, keyof PanelTweaks][]) {
+    if (!settled[parent]) settled[key] = false;
+  }
+  return settled;
+}
+
+/**
  * How CloudPanel's certificate types read to an operator.
  *
  * The column holds a number, not a name: these are `App\Entity\Certificate`'s
@@ -224,7 +243,7 @@ export function readTweaks(paths: PanelTweaksActionPaths): PanelTweaks {
   const tweaks = { ...DEFAULT_TWEAKS };
   if (stored?.version !== TWEAKS_VERSION) return tweaks;
   for (const key of TWEAK_KEYS) if (typeof stored[key] === "boolean") tweaks[key] = stored[key];
-  return tweaks;
+  return withTweakDependencies(tweaks);
 }
 
 function writeTweaks(paths: PanelTweaksActionPaths, tweaks: PanelTweaks): void {
@@ -585,7 +604,7 @@ async function requestTweaks(options: PanelTweaksActionOptions, current: PanelTw
     named++;
   }
   if (named === 0) failAction("no tweak was named");
-  return wanted;
+  return withTweakDependencies(wanted);
 }
 
 export interface SetTweaksResult {

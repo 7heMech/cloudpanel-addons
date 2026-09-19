@@ -259,6 +259,15 @@ test("the addon page keeps switches beside wrapping labels on a phone", () => {
     tweaks: { ...DEFAULT_TWEAKS, diskUsage: true }, diskMeasuredAt: "", sites: [],
   });
   expect(measuredOn).toContain('class="tweak-row is-nested is-enabled"');
+  // Sites is the longest group, so it sits below the two short ones.
+  expect(page.indexOf('id="tweak-category-sites"')).toBeGreaterThan(page.indexOf('id="tweak-category-login"'));
+  expect(page.indexOf('id="tweak-category-login"')).toBeGreaterThan(page.indexOf('id="tweak-category-dashboard"'));
+  // Measured sizes is unreachable while the table enhancement it belongs to is off.
+  expect(page).toContain('data-tweak-parent="sitesTable" aria-label');
+  const tableOff = panelTweaksDashboardView({
+    tweaks: { ...DEFAULT_TWEAKS, sitesTable: false }, diskMeasuredAt: "", sites: [],
+  });
+  expect(tableOff).toContain('data-tweak-parent="sitesTable" disabled');
   const html = panelTweaksLayout("Panel Tweaks", page);
   expect(html).toContain(".tweak-row > div { flex: 1 1 auto; min-width: 0; }");
   expect(html).toContain(".tweak-row .switch { flex: 0 0 auto;");
@@ -491,6 +500,18 @@ test("a switch is saved, and only the login page's one asks for the templates ag
   expect(theme.reinject).toBe(true);
   // The one that moved is saved beside the one that moved before it.
   expect(theme.tweaks).toEqual({ ...DEFAULT_TWEAKS, diskUsage: true, deviceTheme: false });
+});
+
+test("measured sizes cannot outlive the sites table it belongs to", async () => {
+  await act<SetTweaksResult>(["set-tweaks"], { input: JSON.stringify({ diskUsage: true }) });
+  const off = await act<SetTweaksResult>(["set-tweaks"], { input: JSON.stringify({ sitesTable: false }) });
+  expect(off.tweaks.diskUsage).toBe(false);
+
+  const asked = await act<SetTweaksResult>(["set-tweaks"], { input: JSON.stringify({ diskUsage: true }) });
+  expect(asked.tweaks.diskUsage).toBe(false);
+
+  const back = await act<SetTweaksResult>(["set-tweaks"], { input: JSON.stringify({ sitesTable: true }) });
+  expect(back.tweaks.diskUsage).toBe(false);
 });
 
 test("a request that names no tweak, or names one with the wrong type, is refused", async () => {

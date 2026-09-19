@@ -89,11 +89,24 @@ async function setTweak(input) {
     const frame = document.getElementById('preview-frame');
     if (frame) frame.src = CLP_BASE + '/preview?refresh=' + Date.now();
     busy(false);
+    // After busy(), which restores every control to what it was disabled as.
+    syncDependents(key, wanted);
     notify('Saved.', 'ok');
   } catch (error) {
     input.checked = !wanted;
     busy(false);
     notify(error.message, 'error');
+  }
+}
+
+// A nested switch follows its parent: the action turns it off with the parent,
+// and it cannot be reached again until the parent is back on.
+function syncDependents(key, on) {
+  for (const child of document.querySelectorAll('[data-tweak-parent="' + key + '"]')) {
+    child.disabled = !on;
+    if (on || !child.checked) continue;
+    child.checked = false;
+    child.closest('.tweak-row').classList.remove('is-enabled');
   }
 }
 
@@ -201,7 +214,8 @@ interface TweakCopy {
   category: "Sites" | "Dashboard" | "Login";
   title: string;
   description: string;
-  nested?: boolean;
+  /** The switch this one depends on: off with it, and unusable until it is on. */
+  parent?: keyof PanelTweaks;
 }
 
 /**
@@ -221,7 +235,7 @@ const COPY: TweakCopy[] = [
     category: "Sites",
     title: "Measured site sizes",
     description: "Adds site sizes from a low-priority scan every 15 minutes. This can add load on busy servers.",
-    nested: true,
+    parent: "sitesTable",
   },
   {
     key: "sitesMobile",
@@ -249,10 +263,12 @@ const COPY: TweakCopy[] = [
   },
 ];
 
-function switchRow(copy: TweakCopy, on: boolean, extra = ""): string {
+function switchRow(copy: TweakCopy, tweaks: PanelTweaks, extra = ""): string {
   const note = `tweak-note-${copy.key}`;
+  const on = tweaks[copy.key];
+  const locked = copy.parent !== undefined && !tweaks[copy.parent];
   return `
-      <div class="tweak-row${copy.nested ? " is-nested" : ""}${on ? " is-enabled" : ""}">
+      <div class="tweak-row${copy.parent ? " is-nested" : ""}${on ? " is-enabled" : ""}">
         <div>
           <h3>${esc(copy.title)}<button class="tweak-more" type="button" aria-expanded="false"
             aria-controls="${note}" aria-label="What ${esc(copy.title.toLowerCase())} does"
@@ -261,7 +277,7 @@ function switchRow(copy: TweakCopy, on: boolean, extra = ""): string {
         </div>
         <label class="switch" title="${esc(copy.title)}">
           <input type="checkbox" data-tweak="${esc(copy.key)}" onchange="setTweak(this)"${on ? " checked" : ""}
-            aria-label="${esc(copy.title)}">
+            ${copy.parent ? `data-tweak-parent="${esc(copy.parent)}" ` : ""}${locked ? "disabled " : ""}aria-label="${esc(copy.title)}">
           <span></span>
         </label>
       </div>`;
@@ -277,11 +293,11 @@ function scanControls(state: PanelTweaksState): string {
 }
 
 function tweakList(state: PanelTweaksState): string {
-  return (["Sites", "Dashboard", "Login"] as const).map((category) => `
+  return (["Dashboard", "Login", "Sites"] as const).map((category) => `
         <section class="tweak-category" aria-labelledby="tweak-category-${category.toLowerCase()}">
           <h3 class="tweak-category-title" id="tweak-category-${category.toLowerCase()}">${category}</h3>${COPY
             .filter((copy) => copy.category === category)
-            .map((copy) => switchRow(copy, state.tweaks[copy.key], copy.key === "diskUsage" ? scanControls(state) : ""))
+            .map((copy) => switchRow(copy, state.tweaks, copy.key === "diskUsage" ? scanControls(state) : ""))
             .join("")}
         </section>`).join("");
 }

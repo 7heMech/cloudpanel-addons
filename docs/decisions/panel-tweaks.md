@@ -24,10 +24,17 @@ site. An operator who wants a filterable site list should not have to install
 the code that can do that, and a switch is a weaker withdrawal than not having
 it on the box.
 
-The page groups those switches by the panel surface they change: Sites,
-Dashboard, and Login. Measured sizes is nested under the Sites table enhancement
+The page groups those switches by the panel surface they change, in the order
+Dashboard, Login, Sites. The Sites group is last because it is the longest and
+the only one with a nested switch, so the two short groups are readable without
+scrolling past it. Measured sizes is nested under the Sites table enhancement
 because the size column is its only visible result. A short branch and smaller
 heading show that relationship, with no divider between the child and parent.
+That nesting is enforced rather than only drawn: measured sizes cannot be
+switched on while the Sites table enhancement is off, and turning the parent off
+turns it off too, in the action rather than in the page, so a stale state file
+or a direct API call cannot leave a disk sweep running for a column no page
+draws.
 Its scan status and manual scan button live in that row rather than taking a
 card of their own. The compact button follows the timestamp on desktop; status
 and button stack on phones to fit within the indentation.
