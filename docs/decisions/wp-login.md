@@ -75,6 +75,13 @@ above the table, where it is emitted once, and binds one listener to the
 document rather than one per row -- the rows belong to CloudPanel, and the Panel
 Tweaks filter moves them around.
 
+The link goes before Manage, not after it. Manage is the panel's own primary
+action and the rightmost thing in a right-aligned cell, which is where a reader
+looks first; an addon taking that place pushes the panel's action inward on
+every WordPress row. The menu Panel Tweaks can build reads the other way and
+restores the order, so the link carries `clp-addons-row-action` from
+`lib/row-actions.ts` for it to sort on.
+
 Neither is `required`, so a CloudPanel release that renames the sites card or
 the Manage link costs the shortcut rather than stopping the addon from being
 enabled. The addon's own page signs in to the same sites either way.

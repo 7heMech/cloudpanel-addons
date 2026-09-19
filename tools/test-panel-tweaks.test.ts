@@ -14,7 +14,7 @@ import type { PanelTweaks } from "../addons/panel-tweaks/action";
 import { previewPage } from "../addons/panel-tweaks/app/preview";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
-import { MENU_ONLY_CLASS, MENU_ONLY_STYLE, ROW_MENU_CLASS } from "../lib/row-actions";
+import { MENU_ONLY_CLASS, MENU_ONLY_STYLE, ROW_ACTION_CLASS, ROW_MENU_CLASS } from "../lib/row-actions";
 
 const loginTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "login-device-theme")!;
 const sitesTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "sites-table")!;
@@ -353,9 +353,13 @@ test("a menu-only action is hidden by its own addon and shown by the menu", () =
   expect(menu).toContain(`.${ROW_MENU_CLASS} > a`);
   // Nothing an addon styled its inline link with survives into the menu.
   expect(menu).toContain("margin: 0; padding: 9px 18px");
-  // And a menu-only action is last in the menu whatever order the templates
-  // were patched in, because it is the one nobody asked to have in the row.
-  expect(menu).toContain(`classList.contains("${MENU_ONLY_CLASS}") ? rare : actions`);
+  // The menu reads top to bottom, so it restores the order the row reverses:
+  // the panel's own actions, then the addons' links, then the menu-only ones
+  // nobody asked to have in the row -- whatever order the templates were
+  // patched in.
+  expect(menu).toContain(`if (link.classList.contains("${MENU_ONLY_CLASS}")) rare.push(link);`);
+  expect(menu).toContain(`else if (link.classList.contains("${ROW_ACTION_CLASS}")) added.push(link);`);
+  expect(menu).toContain("var actions = native.concat(added, rare);");
 
   // A filtered-out row is a block or a flex item in the card layout, which
   // ignores what the hidden attribute would otherwise do on its own.

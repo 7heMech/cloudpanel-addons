@@ -164,8 +164,8 @@ check("single addon install: addon target injected", readStager().includes("Stag
 reconcile(simulateInstalledInjections(["stager"], "stager"), PATHS);
 check("single addon uninstall: manager nav removed and header restored", body() === navOriginal);
 check("single addon uninstall: addon target removed and restored", readStager() === stagerOriginal);
-// WP_LOGIN_TARGETS puts its link after the Manage link in the sites table's
-// action cell, which is the project's one anchorAfter inside a Twig loop.
+// WP_LOGIN_TARGETS puts its link before the Manage link in the sites table's
+// action cell, which is the project's one anchor inside a Twig loop.
 const siteDir = `${dir}/Frontend/Site`;
 mkdirSync(siteDir, { recursive: true });
 // By slug, not by index: this addon has more than one target and their order
@@ -191,10 +191,10 @@ check("a site-action target reports missing-anchor before injection",
 reconcile([siteActionInj], PATHS);
 const readSite = () => readFileSync(siteFile, "utf-8");
 
-check("a site-action target lands after the panel's own Manage link",
+check("a site-action target lands before the panel's own Manage link, which keeps the rightmost place",
   readSite().indexOf("WP Login</a>") !== -1 &&
   readSite().indexOf("Manage{% endtrans %}</a>") !== -1 &&
-  readSite().indexOf("Manage{% endtrans %}</a>") < readSite().indexOf("WP Login</a>"));
+  readSite().indexOf("WP Login</a>") < readSite().indexOf("Manage{% endtrans %}</a>"));
 
 check("a site-action target names the row's own site",
   readSite().includes("{{ site.domainName }}"));

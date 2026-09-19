@@ -8,6 +8,7 @@ import {
   type WpLoginActionOptions, type WpLoginResult, type WpRemoveResult, type WpSiteView,
 } from "../addons/wp-login/action";
 import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
+import { ROW_ACTION_CLASS } from "../lib/row-actions";
 
 const scriptTarget = WP_LOGIN_TARGETS.find((target) => target.slug === "sites-script")!;
 const linkTarget = WP_LOGIN_TARGETS.find((target) => target.slug === "sites-action")!;
@@ -17,13 +18,16 @@ const linkTarget = WP_LOGIN_TARGETS.find((target) => target.slug === "sites-acti
 test("the link is administrator-only, per-site Twig, and the script is emitted once", () => {
   // The action cell is inside the template's site loop, so the condition can be
   // Twig and the script cannot: it would be repeated for every row.
-  expect(linkTarget.anchorAfter).toContain("clp_site");
+  // Before Manage, so the panel's own primary action keeps the rightmost place.
+  expect(linkTarget.anchorBefore).toContain("Manage");
   expect(scriptTarget.anchorBefore).toBe('<div class="card card-table">');
   expect(linkTarget.template).toBe(scriptTarget.template);
 
   const link = linkTarget.snippet("/addons/wp-login");
   expect(link).toContain("{% if is_granted('ROLE_ADMIN') %}");
   expect(link).toContain("{{ site.domainName }}");
+  // Marked, so Panel Tweaks' menu can put the panel's own actions above it.
+  expect(link).toContain(ROW_ACTION_CLASS);
   for (const application of WORDPRESS_APPLICATIONS) expect(link).toContain(`'${application}'`);
 
   const script = scriptTarget.snippet("/addons/wp-login");

@@ -11,12 +11,13 @@
 // The addon's own page signs in to the same sites either way.
 
 import type { AddonTarget } from "../../../lib/addon-target";
+import { ROW_ACTION_CLASS } from "../../../lib/row-actions";
 import { WORDPRESS_APPLICATIONS } from "../action";
 
 const WORDPRESS = `{% if site.application in [${WORDPRESS_APPLICATIONS.map((name) => `'${name}'`).join(", ")}] %}`;
 
 const STYLE = `
-.clp-wp-login { margin-left: 0.75rem; white-space: nowrap; }
+.clp-wp-login { margin-right: 0.75rem; white-space: nowrap; }
 `;
 
 // Written for the panel's page, not for an addon page: no shared client code
@@ -97,11 +98,11 @@ export const WP_LOGIN_TARGETS: AddonTarget[] = [
   {
     slug: "sites-action",
     template: "Frontend/Site/index.html.twig",
-    anchorAfter: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
+    anchorBefore: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
     required: false,
     snippet: () => `
         {% if is_granted('ROLE_ADMIN') %}${WORDPRESS}
-          <a href="#" class="clp-wp-login" data-clp-domain="{{ site.domainName }}" title="Sign in to WordPress as its first administrator">WP Login</a>
+          <a href="#" class="clp-wp-login ${ROW_ACTION_CLASS}" data-clp-domain="{{ site.domainName }}" title="Sign in to WordPress as its first administrator">WP Login</a>
         {% endif %}{% endif %}`,
   },
 ];

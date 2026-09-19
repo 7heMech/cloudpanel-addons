@@ -17,7 +17,7 @@
 
 import type { AddonTarget } from "../../../lib/addon-target";
 import { headerWrapStyle } from "../../../lib/panel-nav";
-import { MENU_ONLY_CLASS, ROW_MENU_CLASS } from "../../../lib/row-actions";
+import { MENU_ONLY_CLASS, ROW_ACTION_CLASS, ROW_MENU_CLASS } from "../../../lib/row-actions";
 import {
   APPLICATION_LABELS, CERTIFICATE_LABELS, SELF_SIGNED_CERTIFICATE,
   DEFAULT_TWEAKS, readTweaks, DEFAULT_PANEL_TWEAKS_PATHS,
@@ -895,15 +895,19 @@ const SITES_SCRIPT = `
         if (!cellEl) return;
         var found = cellEl.querySelectorAll("a, button");
         if (found.length === 0) return;
-        // An action the owning addon thought too rare for a link in the row is
-        // not the first thing in the menu either, whatever order the templates
-        // were patched in.
-        var actions = [];
+        // The panel's own actions first, then what the addons added, then the
+        // ones an addon thought too rare for a link in the row at all --
+        // whatever order the templates were patched in.
+        var native = [];
+        var added = [];
         var rare = [];
         for (var f = 0; f < found.length; f++) {
-          (found[f].classList.contains("${MENU_ONLY_CLASS}") ? rare : actions).push(found[f]);
+          var link = found[f];
+          if (link.classList.contains("${MENU_ONLY_CLASS}")) rare.push(link);
+          else if (link.classList.contains("${ROW_ACTION_CLASS}")) added.push(link);
+          else native.push(link);
         }
-        actions = actions.concat(rare);
+        var actions = native.concat(added, rare);
 
         var list = document.createElement("div");
         list.className = "${ROW_MENU_CLASS}";

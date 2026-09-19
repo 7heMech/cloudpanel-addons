@@ -129,7 +129,10 @@ the menu's own rule for the links inside it is what shows it again, last in the
 menu: an action nobody thought worth a link in the row is not the first thing in
 the menu either, and saying so here means the order does not depend on which
 addon's template patch went in first. Stager's `Clone` is the one that wants
-this. The hide is the owning addon's rather than
+this. `clp-addons-row-action` is the other half: a row reads right to left and
+an addon's link sits left of Manage, while the menu reads top to bottom and
+wants the panel's own actions first, so the menu sorts the marked links after
+the unmarked ones and before the menu-only ones. The hide is the owning addon's rather than
 this one's, because an operator who never installed this addon must still not be
 shown that link.
 
