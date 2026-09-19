@@ -18,7 +18,7 @@ administrator login.
 | Stager | Create staging copies of WordPress, PHP, static, and Instatic sites, and promote them back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
 | Maintenance Mode | Serve a customizable 503 page per site with instant toggles and IP bypasses. |
 | PHP Resources | Group PHP sites into categories of PHP-FPM worker limits, assign them in bulk, and pick the category new sites join. |
-| Git Deploy | Deploy a site from a Git remote with a per-site deploy key, a branch, a target directory and a post-deploy command. |
+| Git Deploy | Deploy a site from a Git remote with a per-site deploy key, a branch, a target directory and a post-deploy command, from the panel or from a push. |
 | Device theme on first visit | Follow the device's light or dark preference on the first visit to the CloudPanel login page. |
 
 ## Install

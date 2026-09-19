@@ -7,17 +7,25 @@
 // runs the command as whoever is running the test, and the remote validator
 // accepts a local path, which the installed addon deliberately refuses.
 
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHmac } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { runGitAction, validateBranch, validateDirectory, validatePostDeploy, validateRemote } from "../addons/git/action";
+import {
+  runGitAction, validateBranch, validateDirectory, validatePostDeploy, validateRemote, WEBHOOK_TOKEN_RE,
+} from "../addons/git/action";
 import { ActionFailure } from "../cli/action-common";
 
 const DOMAIN = "app.example.test";
 const USER = userInfo().username;
+const originalPath = process.env.PATH ?? "";
+
+afterEach(() => {
+  process.env.PATH = originalPath;
+});
 
 interface Fixture {
   root: string;
@@ -50,6 +58,14 @@ function fixture(): Fixture {
   const shim = join(bin, "runuser");
   writeFileSync(shim, "#!/bin/sh\nshift 3\nexec \"$@\"\n");
   chmodSync(shim, 0o755);
+
+  // `deploy` and a webhook delivery hand the work to systemd, which a test has
+  // no business starting. The shim accepts the unit and runs nothing, so the
+  // job stays queued and what is asserted is what was enqueued.
+  const systemdRun = join(bin, "systemd-run");
+  writeFileSync(systemdRun, "#!/bin/sh\nexit 0\n");
+  chmodSync(systemdRun, 0o755);
+  process.env.PATH = `${bin}:${originalPath}`;
 
   const panelDb = join(root, "panel.db");
   const db = new Database(panelDb, { create: true });
@@ -314,6 +330,139 @@ test("the action refuses a site CloudPanel does not have and an unknown argument
     const undeployed = await action(fx, ["deploy", `--domain=${DOMAIN}`]);
     expect(undeployed.ok).toBe(false);
     expect(undeployed.error).toContain("no repository configured");
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+/* --------------------------------------------------------- push to deploy */
+
+/** Configure the fixture's site and turn push-to-deploy on, returning its token. */
+async function withWebhook(fx: Fixture, branch = "main"): Promise<string> {
+  await action(fx, ["configure", `--domain=${DOMAIN}`],
+    JSON.stringify({ remote: fx.bare, branch, directory: "", postDeploy: "" }));
+  const enabled = await action(fx, ["webhook-enable", `--domain=${DOMAIN}`]);
+  return enabled.data.webhook.token;
+}
+
+/** The record as it is on disk, which is the only place the token is kept. */
+function storedWebhook(fx: Fixture): { token: string; lastDelivery: string; lastDeliveryAt: string; lastDeliveryJob: string } | null {
+  return JSON.parse(readFileSync(join(fx.root, "state", "sites", `${DOMAIN}.json`), "utf8")).webhook ?? null;
+}
+
+test("the webhook token is minted, kept, rotated and invalidated", async () => {
+  const fx = fixture();
+  try {
+    const token = await withWebhook(fx);
+    expect(token).toMatch(WEBHOOK_TOKEN_RE);
+
+    // Enabling again keeps the URL that is already in the repository.
+    expect((await action(fx, ["webhook-enable", `--domain=${DOMAIN}`])).data.webhook.token).toBe(token);
+
+    const rotated = (await action(fx, ["webhook-enable", `--domain=${DOMAIN}`, "--replace"])).data.webhook.token;
+    expect(rotated).toMatch(WEBHOOK_TOKEN_RE);
+    expect(rotated).not.toBe(token);
+
+    // Saving the repository settings again does not revoke a live URL.
+    await action(fx, ["configure", `--domain=${DOMAIN}`],
+      JSON.stringify({ remote: fx.bare, branch: "main", directory: "", postDeploy: "true" }));
+    expect(storedWebhook(fx)!.token).toBe(rotated);
+
+    // The site's own page is given the token; the fleet page is not.
+    expect((await action(fx, ["status", `--domain=${DOMAIN}`])).data.site.config.webhook.token).toBe(rotated);
+    expect((await action(fx, ["sites"])).data.sites[0].config.webhook.token).toBe("");
+
+    const off = await action(fx, ["webhook-disable", `--domain=${DOMAIN}`]);
+    expect(off.ok).toBe(true);
+    expect(storedWebhook(fx)).toBeNull();
+    // A delivery to the old URL is now refused like any other stranger's.
+    expect((await action(fx, ["hook", `--domain=${DOMAIN}`], JSON.stringify({ token: rotated }))).ok).toBe(false);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test("a delivery is authenticated by its token and nothing else", async () => {
+  const fx = fixture();
+  try {
+    const token = await withWebhook(fx);
+    const deliver = (payload: Record<string, unknown>) =>
+      action(fx, ["hook", `--domain=${DOMAIN}`], JSON.stringify(payload));
+
+    // A token of another length must be refused by the length check rather
+    // than crash the comparison, which is what timingSafeEqual does on one.
+    expect((await deliver({ token: "short" })).ok).toBe(false);
+    expect((await deliver({})).ok).toBe(false);
+    // The right length and the wrong value: one character short of the token.
+    const nearMiss = `${token.slice(0, -1)}${token.endsWith("A") ? "B" : "A"}`;
+    const wrong = await deliver({ token: nearMiss });
+    expect(wrong.ok).toBe(false);
+    // Nothing was queued and nothing was recorded for a delivery that failed
+    // to authenticate: only the operator's own page may learn it happened.
+    expect(storedWebhook(fx)!.lastDeliveryAt).toBe("");
+    expect((await action(fx, ["jobs"])).data.jobs).toEqual([]);
+
+    const accepted = await deliver({ token, ref: "refs/heads/main" });
+    expect(accepted.ok).toBe(true);
+    expect(accepted.data.deployed).toBe(true);
+    expect(accepted.data.outcome).toBe("started a deployment");
+
+    const job = (await action(fx, ["jobs"])).data.jobs[0];
+    expect(job.id).toBe(accepted.data.job);
+    expect(job.startedBy).toBe("push");
+    expect(job.state).toBe("queued");
+    expect(storedWebhook(fx)!.lastDeliveryJob).toBe(job.id);
+    expect(storedWebhook(fx)!.lastDeliveryAt).not.toBe("");
+
+    // The duplicate-job guard is what makes a redelivery a no-op.
+    const replay = await deliver({ token, ref: "refs/heads/main" });
+    expect(replay.ok).toBe(true);
+    expect(replay.data.deployed).toBe(false);
+    expect(replay.data.outcome).toContain("already queued");
+    expect((await action(fx, ["jobs"])).data.jobs.length).toBe(1);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test("a push for another branch, a ping and a bad signature are reported rather than deployed", async () => {
+  const fx = fixture();
+  try {
+    const token = await withWebhook(fx);
+    const deliver = (payload: Record<string, unknown>) =>
+      action(fx, ["hook", `--domain=${DOMAIN}`], JSON.stringify(payload));
+
+    const otherBranch = await deliver({ token, ref: "refs/heads/dev" });
+    expect(otherBranch.data.deployed).toBe(false);
+    expect(otherBranch.data.outcome).toContain("refs/heads/dev");
+    expect(storedWebhook(fx)!.lastDelivery).toContain("refs/heads/dev");
+
+    const ping = await deliver({ token, event: "ping" });
+    expect(ping.data.deployed).toBe(false);
+    expect(ping.data.outcome).toContain("ping");
+
+    const body = JSON.stringify({ ref: "refs/heads/main" });
+    const forged = await deliver({ token, ref: "refs/heads/main", body, signature: "sha256=0bad" });
+    expect(forged.data.deployed).toBe(false);
+    expect(forged.data.outcome).toContain("X-Hub-Signature-256");
+    expect((await action(fx, ["jobs"])).data.jobs).toEqual([]);
+
+    // The same payload signed with the token, which is the secret to use.
+    const signature = `sha256=${createHmac("sha256", token).update(body).digest("hex")}`;
+    const signed = await deliver({ token, ref: "refs/heads/main", body, signature });
+    expect(signed.data.deployed).toBe(true);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test("push-to-deploy cannot be turned on for a site with no repository", async () => {
+  const fx = fixture();
+  try {
+    const refused = await action(fx, ["webhook-enable", `--domain=${DOMAIN}`]);
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toContain("no repository configured");
+    expect((await action(fx, ["webhook-enable", "--domain=absent.example.test"])).ok).toBe(false);
   } finally {
     rmSync(fx.root, { recursive: true, force: true });
   }

@@ -8,6 +8,7 @@
 // root's privileges attached to it.
 
 import { Database } from "bun:sqlite";
+import { createHmac, randomBytes } from "node:crypto";
 import {
   existsSync, lstatSync, mkdirSync, openSync, closeSync, fstatSync, readFileSync, readdirSync,
   rmSync, statSync, chmodSync, writeSync, constants as fsConstants,
@@ -15,6 +16,7 @@ import {
 import { join } from "node:path";
 import { CLI_BIN } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { secretEquals } from "../../lib/secret-equals";
 import {
   createJobDir, createJobLog, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet, jobTimestamp,
   listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord,
@@ -40,8 +42,14 @@ const GIT_TIMEOUT_MS = 10 * 60 * 1000;
 const KEY_NAME = "clp-addons-deploy";
 const MAX_PUBLIC_KEY_BYTES = 4096;
 
+/** The shape of a push-to-deploy token: 32 random bytes, base64url. */
+export const WEBHOOK_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
+/** A delivery carries the pushed payload when its signature has to be checked. */
+const MAX_HOOK_INPUT_BYTES = 512 * 1024;
+
 export type GitVerb =
   | "sites" | "status" | "configure" | "forget" | "keygen"
+  | "webhook-enable" | "webhook-disable" | "hook"
   | "deploy" | "run" | "job" | "jobs" | "watch-job" | "prune";
 
 export interface GitActionPaths {
@@ -87,6 +95,18 @@ export interface GitActionOptions {
   remoteValidator?: (value: unknown) => string;
 }
 
+/**
+ * Push-to-deploy for one site: the token that stands in its URL, and what the
+ * last delivery did, so the page can say whether the repository is reaching us.
+ */
+export interface GitWebhook {
+  token: string;
+  lastDeliveryAt: string;
+  lastDelivery: string;
+  /** The deployment the last delivery started, when it started one. */
+  lastDeliveryJob: string;
+}
+
 /** What an operator saves for one site. */
 export interface GitSiteConfig {
   domain: string;
@@ -96,6 +116,27 @@ export interface GitSiteConfig {
   directory: string;
   postDeploy: string;
   updatedAt: string;
+  /** null when push-to-deploy is off, which is how a site starts. */
+  webhook: GitWebhook | null;
+}
+
+/** What one webhook delivery asks of this action. */
+export interface GitHookPayload {
+  token: string;
+  /** The ref the push was for, when the delivery named one. */
+  ref?: string;
+  /** GitHub's `X-GitHub-Event`, so a ping is answered rather than deployed. */
+  event?: string;
+  /** GitHub's `X-Hub-Signature-256`, when the delivery carried one. */
+  signature?: string;
+  /** The raw payload, sent only when a signature has to be checked against it. */
+  body?: string;
+}
+
+export interface GitHookResult {
+  deployed: boolean;
+  job: string;
+  outcome: string;
 }
 
 export interface GitCommit {
@@ -118,6 +159,8 @@ export interface GitJobView {
   id: string;
   kind: string;
   domain: string;
+  /** "push" for a deployment a webhook delivery started, "operator" otherwise. */
+  startedBy: string;
   state: string;
   step: string;
   error: string;
@@ -179,7 +222,7 @@ function parseAction(argv: string[], paths: GitActionPaths, options: GitActionOp
   });
   const verb = flat[0] as GitVerb | undefined;
   if (!verb) {
-    failAction("usage: clp-addons action git {sites|status|configure|forget|keygen|deploy|run|job|jobs|watch-job|prune} [options]");
+    failAction("usage: clp-addons action git {sites|status|configure|forget|keygen|webhook-enable|webhook-disable|hook|deploy|run|job|jobs|watch-job|prune} [options]");
   }
 
   let domain = "";
@@ -199,13 +242,17 @@ function parseAction(argv: string[], paths: GitActionPaths, options: GitActionOp
     else job = value;
   }
 
-  const needsDomain: GitVerb[] = ["status", "configure", "forget", "keygen", "deploy"];
+  const needsDomain: GitVerb[] = [
+    "status", "configure", "forget", "keygen", "webhook-enable", "webhook-disable", "hook", "deploy",
+  ];
   const needsJob: GitVerb[] = ["run", "job", "watch-job"];
   const takesNothing: GitVerb[] = ["sites", "jobs", "prune"];
 
   if (needsDomain.includes(verb)) {
     if (job) failAction(`${verb} takes only --domain`);
-    if (replace && verb !== "keygen") failAction("--replace applies only to keygen");
+    if (replace && verb !== "keygen" && verb !== "webhook-enable") {
+      failAction("--replace applies only to keygen and webhook-enable");
+    }
     domain = options.domainValidator
       ? options.domainValidator(domain)
       : validateDomain(domain, paths.panelIdentityFile);
@@ -348,17 +395,35 @@ function readConfig(paths: GitActionPaths, domain: string): GitSiteConfig | null
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
   const record = parsed as Record<string, unknown>;
-  const text = (field: string): string => (typeof record[field] === "string" ? (record[field] as string) : "");
-  const remote = text("remote");
-  const branch = text("branch");
+  const remote = stringField(record, "remote");
+  const branch = stringField(record, "branch");
   if (!remote || !branch) return null;
   return {
     domain,
     remote,
     branch,
-    directory: text("directory"),
-    postDeploy: text("postDeploy"),
-    updatedAt: text("updatedAt"),
+    directory: stringField(record, "directory"),
+    postDeploy: stringField(record, "postDeploy"),
+    updatedAt: stringField(record, "updatedAt"),
+    webhook: readWebhook(record.webhook),
+  };
+}
+
+function stringField(record: Record<string, unknown>, field: string): string {
+  return typeof record[field] === "string" ? (record[field] as string) : "";
+}
+
+/** A stored webhook, or null for anything that is not one this addon minted. */
+function readWebhook(value: unknown): GitWebhook | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const token = stringField(record, "token");
+  if (!WEBHOOK_TOKEN_RE.test(token)) return null;
+  return {
+    token,
+    lastDeliveryAt: stringField(record, "lastDeliveryAt"),
+    lastDelivery: stringField(record, "lastDelivery"),
+    lastDeliveryJob: stringField(record, "lastDeliveryJob"),
   };
 }
 
@@ -625,6 +690,7 @@ function jobJson(dir: string, id: string): GitJobView {
     id,
     kind: jobGet(dir, "kind") || "deploy",
     domain: jobGet(dir, "domain"),
+    startedBy: jobGet(dir, "startedBy") || "operator",
     ...jobCommonFields(dir),
     result: readJobResult(dir),
   };
@@ -672,7 +738,9 @@ function cmdSites(paths: GitActionPaths): void {
   const sites: GitSiteStatus[] = [];
   for (const domain of configuredDomains(paths)) {
     const row = siteRow(paths, domain);
-    const config = readConfig(paths, domain);
+    // The fleet page draws no webhook URL, so it is not given the tokens: only
+    // the site's own page asks for a record it will print.
+    const config = withoutToken(readConfig(paths, domain));
     if (!row?.user || !config) {
       // A site deleted from CloudPanel, or a record this addon cannot parse.
       // Listed as configured-but-unreadable rather than left out of the page.
@@ -683,14 +751,20 @@ function cmdSites(paths: GitActionPaths): void {
       });
       continue;
     }
-    sites.push(siteStatus(paths, domain, jobs));
+    const status = siteStatus(paths, domain, jobs);
+    sites.push({ ...status, config: withoutToken(status.config) });
   }
   emitOk(paths, { sites });
 }
 
-async function readSettings(options: GitActionOptions): Promise<Record<string, unknown>> {
+function withoutToken(config: GitSiteConfig | null): GitSiteConfig | null {
+  if (!config?.webhook) return config;
+  return { ...config, webhook: { ...config.webhook, token: "" } };
+}
+
+async function readSettings(options: GitActionOptions, maxBytes = 8192): Promise<Record<string, unknown>> {
   const raw = options.input !== undefined ? options.input : await Bun.stdin.text();
-  if (raw.length > 8192) failAction("that configuration is too large");
+  if (raw.length > maxBytes) failAction("that configuration is too large");
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -713,6 +787,9 @@ async function cmdConfigure(paths: GitActionPaths, domain: string, options: GitA
     directory: validateDirectory(body.directory),
     postDeploy: validatePostDeploy(body.postDeploy),
     updatedAt: jobTimestamp(),
+    // Editing the repository settings does not revoke a URL already pasted
+    // into one; only the switch and Rotate do that.
+    webhook: readConfig(paths, domain)?.webhook ?? null,
   };
   // The deploy directory is derived from the site user and a validated
   // subdirectory, so it cannot leave the site's own tree; this checks that the
@@ -736,7 +813,9 @@ function cmdKeygen(paths: GitActionPaths, domain: string, replace: boolean): voi
   emitOk(paths, { domain, siteUser: site.user, publicKey });
 }
 
-function cmdDeploy(paths: GitActionPaths, domain: string, releaseLock: () => void): void {
+function startDeployment(
+  paths: GitActionPaths, domain: string, releaseLock: () => void, startedBy: "operator" | "push",
+): string {
   requireSite(paths, domain);
   const config = readConfig(paths, domain);
   if (!config) failAction(`${domain} has no repository configured yet`);
@@ -752,6 +831,7 @@ function cmdDeploy(paths: GitActionPaths, domain: string, releaseLock: () => voi
   const dir = createJobDir(paths.jobsDir, id);
   jobSet(dir, "kind", "deploy");
   jobSet(dir, "domain", domain);
+  jobSet(dir, "startedBy", startedBy);
   jobSet(dir, "createdAt", jobTimestamp());
   jobSet(dir, "step", "queued");
   jobSet(dir, "state", "queued");
@@ -773,7 +853,98 @@ function cmdDeploy(paths: GitActionPaths, domain: string, releaseLock: () => voi
     jobSet(dir, "state", "failed");
     failAction("systemd-run refused to start the deployment job");
   }
-  emitOk(paths, { job: id, domain });
+  return id;
+}
+
+function cmdDeploy(paths: GitActionPaths, domain: string, releaseLock: () => void): void {
+  emitOk(paths, { job: startDeployment(paths, domain, releaseLock, "operator"), domain });
+}
+
+/* ---------------------------------------------------------------- webhooks */
+
+function newWebhookToken(): string {
+  return randomBytes(32).toString("base64url");
+}
+
+/**
+ * Turn push-to-deploy on or off for one site.
+ *
+ * `--replace` mints a new token for a site that already has one, which is what
+ * rotation is; without it an enable is idempotent, the way `keygen` is.
+ */
+function cmdWebhook(paths: GitActionPaths, domain: string, enable: boolean, replace: boolean): void {
+  requireSite(paths, domain);
+  const config = readConfig(paths, domain);
+  if (!config) failAction(`${domain} has no repository configured yet`);
+
+  const webhook = !enable ? null
+    : config.webhook && !replace ? config.webhook
+    : { token: newWebhookToken(), lastDeliveryAt: "", lastDelivery: "", lastDeliveryJob: "" };
+  if (webhook !== config.webhook) writeConfig(paths, { ...config, webhook });
+  emitOk(paths, { domain, webhook });
+}
+
+function signatureMatches(signature: string, body: string, token: string): boolean {
+  return secretEquals(signature, `sha256=${createHmac("sha256", token).update(body).digest("hex")}`);
+}
+
+/** Record what a delivery did, on a record re-read so a concurrent save stands. */
+function recordDelivery(paths: GitActionPaths, domain: string, outcome: string, job: string): void {
+  const config = readConfig(paths, domain);
+  if (!config?.webhook) return;
+  writeConfig(paths, {
+    ...config,
+    webhook: { ...config.webhook, lastDeliveryAt: jobTimestamp(), lastDelivery: outcome, lastDeliveryJob: job },
+  });
+}
+
+/**
+ * One webhook delivery.
+ *
+ * The token in the URL is the whole authentication for this route, and the
+ * manager cannot read the `0600` record that holds it, so checking the token
+ * and queueing the deployment are one round trip. Anything that fails before
+ * the token matches is an error the manager turns into the gate's own login
+ * redirect; everything after it is recorded on the site and answered, because
+ * a refusal an operator cannot see is a webhook they cannot fix.
+ */
+async function cmdHook(
+  paths: GitActionPaths, domain: string, options: GitActionOptions, releaseLock: () => void,
+): Promise<void> {
+  const config = readConfig(paths, domain);
+  const payload = await readSettings(options, MAX_HOOK_INPUT_BYTES) as GitHookPayload & Record<string, unknown>;
+  const token = typeof payload.token === "string" ? payload.token : "";
+  const webhook = config?.webhook;
+  if (!config || !webhook || !secretEquals(token, webhook.token)) failAction("no delivery for this site");
+
+  const text = (field: "ref" | "event" | "signature" | "body"): string =>
+    typeof payload[field] === "string" ? payload[field] : "";
+  const ref = text("ref");
+  const signature = text("signature");
+
+  let job = "";
+  let outcome: string;
+  if (signature && !signatureMatches(signature, text("body"), webhook.token)) {
+    outcome = "refused: the X-Hub-Signature-256 header did not match this URL";
+  } else if (text("event") === "ping") {
+    outcome = "the repository's ping arrived; the URL works";
+  } else if (ref && ref !== config.branch && ref !== `refs/heads/${config.branch}`) {
+    outcome = `ignored: the push was for ${ref}, not ${config.branch}`;
+  } else {
+    try {
+      job = startDeployment(paths, domain, releaseLock, "push");
+      outcome = "started a deployment";
+    } catch (error) {
+      // A delivery that arrives while the last one is still deploying, and a
+      // site whose settings stopped being usable, are both reported rather
+      // than retried: the repository has already been told the push landed.
+      if (!(error instanceof ActionFailure)) throw error;
+      outcome = `ignored: ${error.message}`;
+    }
+  }
+
+  recordDelivery(paths, domain, outcome, job);
+  emitOk(paths, { deployed: job !== "", job, outcome } satisfies GitHookResult);
 }
 
 class JobFailure extends Error {
@@ -965,6 +1136,9 @@ async function dispatch(
     case "configure": await cmdConfigure(paths, action.domain, options); return;
     case "forget": cmdForget(paths, action.domain); return;
     case "keygen": cmdKeygen(paths, action.domain, action.replace); return;
+    case "webhook-enable": cmdWebhook(paths, action.domain, true, action.replace); return;
+    case "webhook-disable": cmdWebhook(paths, action.domain, false, false); return;
+    case "hook": await cmdHook(paths, action.domain, options, releaseLock); return;
     case "deploy": cmdDeploy(paths, action.domain, releaseLock); return;
     case "run": await cmdRun(paths, action.job, options); return;
     case "job": cmdJob(paths, action.job); return;
@@ -991,7 +1165,7 @@ export async function runGitAction(argv: string[], options?: GitActionOptions): 
     };
     try {
       // A deployment and the record it reads must not overlap for one site.
-      const locked = action.verb === "deploy" ? action.domain
+      const locked = action.verb === "deploy" || action.verb === "hook" ? action.domain
         : action.verb === "run" ? jobGet(jobDir(paths, action.job), "domain")
         : "";
       if (locked) {

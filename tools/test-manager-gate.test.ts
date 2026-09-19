@@ -105,3 +105,95 @@ test("a refusal is byte-identical to the panel's own unauthenticated redirect", 
     expect(res.headers.get(header), `${header} is not on the panel's redirect`).toBeNull();
   }
 });
+
+/**
+ * The push-to-deploy route is the one thing decided ahead of the gate. What it
+ * must not become is a way to ask which sites have a webhook, so every refusal
+ * it can produce has to be the response the gate would have sent anyway.
+ */
+function hookProbe(): Array<Record<string, unknown>> {
+  const script = `
+import { mock } from "bun:test";
+
+const GOOD = "G".repeat(43);
+const realSso = await import("./lib/sso-auth.ts");
+mock.module("./lib/sso-auth.ts", () => ({
+  ...realSso,
+  authenticateRequest: async () => ({ auth: null, response: realSso.redirectToLogin() }),
+}));
+mock.module("./lib/update-check.ts", () => ({ checkCliUpdate: async () => null }));
+
+let calls = 0;
+mock.module("./lib/gateway-client.ts", () => ({
+  callGatewayAction: async (addon, verb, args, input) => {
+    calls++;
+    const token = JSON.parse(input ?? "{}").token;
+    return token === GOOD
+      ? { ok: true, data: { deployed: true, job: "20260919T120000Z-abcdef", outcome: "started a deployment" } }
+      : { ok: false, error: "no delivery for this site" };
+  },
+  streamGatewayAction: () => ({ close() {} }),
+}));
+
+// The addon has to look installed; its config file is what the manager reads.
+const realCatalog = await import("./cli/addon-catalog.ts");
+mock.module("./cli/addon-catalog.ts", () => ({
+  ...realCatalog,
+  ADDONS: { ...realCatalog.ADDONS, git: { ...realCatalog.ADDONS.git, configFile: "./package.json" } },
+}));
+
+const { handleRequest } = await import("./cli/index.ts");
+
+async function describe(label, req) {
+  const before = calls;
+  const res = await handleRequest(req, {});
+  return {
+    label,
+    status: res.status,
+    headers: [...res.headers].map(([name, value]) => name + ": " + value).sort(),
+    body: await res.text(),
+    gatewayCalls: calls - before,
+  };
+}
+
+const base = "https://panel.example/addons/git/hook/www.example.com/";
+const post = (token) => new Request(base + token, { method: "POST", body: "{}" });
+const out = [
+  await describe("valid", post(GOOD)),
+  await describe("wrong", post("W".repeat(43))),
+  await describe("malformed", post("nope")),
+  await describe("get", new Request(base + GOOD)),
+  await describe("stranger", new Request("https://panel.example/addons/git/", { method: "POST" })),
+];
+console.log(JSON.stringify(out));
+`;
+  const run = spawnSync("bun", ["-e", script], { cwd: repo, encoding: "utf-8" });
+  if (run.status !== 0) throw new Error(run.stderr || "hook probe failed");
+  return JSON.parse(run.stdout.trim().split("\n").at(-1)!);
+}
+
+test("a wrong webhook token is answered exactly as a stranger is", async () => {
+  const { redirectToLogin } = await import("../lib/sso-auth");
+  const gate = redirectToLogin();
+  const expected = {
+    status: gate.status,
+    headers: [...gate.headers].map(([name, value]) => `${name}: ${value}`).sort(),
+    body: await gate.text(),
+  };
+  const results = Object.fromEntries(hookProbe().map((result) => [result.label, result]));
+
+  for (const label of ["wrong", "malformed", "get", "stranger"]) {
+    const { status, headers, body } = results[label]!;
+    expect({ status, headers, body }, `${label} is distinguishable from the gate's own refusal`).toEqual(expected);
+  }
+  // A token that cannot be one is refused without asking root about it, and a
+  // request that is not a delivery never reaches the route at all.
+  expect(results.malformed!.gatewayCalls).toBe(0);
+  expect(results.stranger!.gatewayCalls).toBe(0);
+  expect(results.wrong!.gatewayCalls).toBe(1);
+
+  expect(results.valid!.status).toBe(200);
+  expect(JSON.parse(String(results.valid!.body))).toEqual({
+    ok: true, deployed: true, job: "20260919T120000Z-abcdef", outcome: "started a deployment",
+  });
+});

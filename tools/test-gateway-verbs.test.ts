@@ -79,4 +79,13 @@ describe("the gateway allowlist agrees with what each action implements", () => 
   test("promote is reachable, which it was not when the route shipped", () => {
     expect(STAGER_ALLOWED_VERBS.has("promote")).toBe(true);
   });
+
+  // `hook` is the one verb an unauthenticated request reaches, through the
+  // push-to-deploy route: the manager cannot read the token itself, so a verb
+  // missing here would refuse every delivery as `invalid verb`.
+  test("the push-to-deploy verbs are reachable", () => {
+    for (const verb of ["hook", "webhook-enable", "webhook-disable"]) {
+      expect(GIT_ALLOWED_VERBS.has(verb), `${verb} is not reachable through the gateway`).toBe(true);
+    }
+  });
 });

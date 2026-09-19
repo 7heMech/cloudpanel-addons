@@ -118,7 +118,7 @@ export async function handle(
   });
   if (jobApi) return jobApi;
 
-  const siteRoute = path.match(/^\/api\/sites\/([^/]+)\/(config|key)$/);
+  const siteRoute = path.match(/^\/api\/sites\/([^/]+)\/(config|key|webhook)$/);
   if (siteRoute) {
     const denied = guardMutation(req);
     if (denied) return denied;
@@ -136,6 +136,21 @@ export async function handle(
     }
     if (siteRoute[2] === "config" && method === "DELETE") {
       const result = await gitService.forget(domain);
+      return json(result, result.ok ? 200 : 400);
+    }
+    // A mode, not an action: on mints the URL, off invalidates it, and
+    // `replace` is what rotation asks for.
+    if (siteRoute[2] === "webhook" && (method === "POST" || method === "DELETE")) {
+      let replace = false;
+      if (method === "POST") {
+        let body: Record<string, unknown>;
+        try { body = await readJsonObject(req, 1024); } catch (error) { return bodyErrorResponse(error); }
+        if (body.replace !== undefined && typeof body.replace !== "boolean") {
+          return json({ ok: false, error: "replace must be a boolean" }, 400);
+        }
+        replace = body.replace === true;
+      }
+      const result = await gitService.setWebhook(domain, method === "POST", replace);
       return json(result, result.ok ? 200 : 400);
     }
     if (siteRoute[2] === "key" && method === "POST") {

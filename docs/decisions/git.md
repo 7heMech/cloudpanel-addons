@@ -73,15 +73,46 @@ panel's page behind to show a log.
 `/addons/git/` is the fleet view: every configured site, its branch, what it
 last deployed and when, with per-row and multi-select deploy. That is the
 altitude the list exists for -- deploying ten sites after one merge is the case
-a per-site form cannot answer.
+a per-site form cannot answer. The fleet reply carries no webhook tokens; only
+the site's own page asks for a record it is going to print.
 
-## Push-to-deploy
+CloudPanel's own site list carries a "Deploy from Git" link per row, beside
+Stager's "Clone", because that list is the fleet page an operator is already on.
+There is deliberately no card on the panel's Add Site page: it would have to
+reproduce the panel's own site creation -- PHP version, vhost template, site
+user, TLS -- and drift with every CloudPanel release. The link in the site list
+is the panel-native answer to the same wish.
 
-Not in this version, and not as an addon decision. Every route the manager
-serves is behind the administrator gate in `lib/sso-auth.ts`, which is
-deliberately the first thing a request meets, before the URL is taken apart and
-before any route is chosen, so that there is no exception list to keep correct.
-A webhook needs an unauthenticated route, which is a change to that decision
-rather than a feature of this addon; adding one quietly would put the first
-hole in the property the gate exists to have. Deployments are started from the
-panel until that decision is made on its own.
+## Push to deploy
+
+`POST /addons/git/hook/<domain>/<token>` deploys a site. The token is 32 random
+bytes this addon mints, kept in the site's own `0600` record, and it is the
+whole authentication for the route: a repository sends no CSRF token and its
+Origin is not the panel, so `guardMutation` cannot apply and the URL is the
+credential. That is why it is minted rather than chosen, why the page calls it a
+password, and why rotating it is how a leaked one is revoked.
+
+The route is decided in `handleRequest` before the session gate, and it returns
+a response *only* when the root gateway confirmed the token. Everything else --
+a stranger, a wrong token, a rotated one, a site with no webhook, a `GET` --
+returns null and falls through to the gate, which answers with the same login
+redirect any other path gives a stranger. So the manager gained a second
+credential type rather than an exception list, and the URL is not an oracle for
+which sites have a webhook. The manager cannot check the token itself: it runs
+as `clp-addons` and cannot read the record, so `hook` both verifies the token
+and queues the deployment in one round trip.
+
+What happens after the token matches is reported rather than hidden, because a
+refusal an operator cannot see is a webhook they cannot fix. The delivery's time
+and outcome are recorded on the site and drawn on its page, and the reply says
+`deployed: false` with the reason. Four things end there: a push for a ref that
+is not the configured branch, the repository's first `ping`, an
+`X-Hub-Signature-256` that does not verify against the token, and a delivery
+that arrives while the last one is still deploying -- which is what makes a
+redelivery a no-op, since the duplicate-job guard already refuses the second.
+A signature is honoured when it is sent and never required, so `curl -X POST`
+from a CI job keeps working.
+
+A delivery with a well-formed token that is wrong still costs one gateway round
+trip and one action process. That is the price of having no oracle: the manager
+cannot tell a wrong token from an unknown one without asking root.

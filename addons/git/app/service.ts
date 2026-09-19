@@ -8,9 +8,11 @@ import { callGatewayAction, streamGatewayAction, type ActionResult, type Gateway
 import type { JobWatcher } from "../../../lib/job-stream";
 import { fetchPanelInfo } from "../../../lib/snapshot-reader";
 import type { SiteContext } from "../../../lib/site-context";
-import type { GitJobView, GitSiteStatus } from "../action";
+import type { GitHookPayload, GitHookResult, GitJobView, GitSiteStatus, GitWebhook } from "../action";
 
-export type { GitCommit, GitDeployResult, GitJobView, GitSiteConfig, GitSiteStatus } from "../action";
+export type {
+  GitCommit, GitDeployResult, GitHookPayload, GitHookResult, GitJobView, GitSiteConfig, GitSiteStatus, GitWebhook,
+} from "../action";
 export { validateJobId } from "../../../lib/job-id";
 
 // keygen shells out to ssh-keygen and deploy only writes a record and hands the
@@ -89,6 +91,20 @@ export const gitService = {
 
   generateKey(domain: string, replace: boolean): Promise<ActionResult<{ publicKey: string }>> {
     return action<{ publicKey: string }>("keygen", [`--domain=${domain}`, ...(replace ? ["--replace"] : [])]);
+  },
+
+  /** Mint the push-to-deploy URL, rotate it with `replace`, or invalidate it. */
+  setWebhook(domain: string, enabled: boolean, replace = false): Promise<ActionResult<{ webhook: GitWebhook | null }>> {
+    const args = [`--domain=${domain}`, ...(replace ? ["--replace"] : [])];
+    return action<{ webhook: GitWebhook | null }>(enabled ? "webhook-enable" : "webhook-disable", args);
+  },
+
+  /**
+   * One delivery. The token is checked where the record can be read, which is
+   * root, so this call both authenticates the delivery and queues its work.
+   */
+  hook(domain: string, payload: GitHookPayload): Promise<ActionResult<GitHookResult>> {
+    return action<GitHookResult>("hook", [`--domain=${domain}`], JSON.stringify(payload));
   },
 
   deploy(domain: string): Promise<ActionResult<{ job: string }>> {

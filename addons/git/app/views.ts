@@ -20,6 +20,8 @@ const BASE = mountPath("git");
 const STYLE = `
 .key-block { display: flex; gap: 12px; align-items: flex-start; }
 .key-block pre { flex: 1 1 auto; margin: 0; max-height: 140px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hook-curl { margin: 0 0 16px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hook-delivery { margin-bottom: 8px; color: var(--text); }
 .commit-subject { overflow-wrap: anywhere; }
 .deploy-path { overflow-wrap: anywhere; }
 .addon-section { margin-top: 30px; }
@@ -118,24 +120,63 @@ async function generateGitKey(domain, replace) {
   }
 }
 
-function copyGitKey() {
-  const block = CLP_ROOT.getElementById('git-public-key');
+function copyGitBlock(id, what) {
+  const block = CLP_ROOT.getElementById(id);
   if (!block) return;
   const text = block.textContent || '';
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text).then(
-      function () { notify('Deploy key copied.', 'ok'); },
-      function () { notify('Select the key and copy it.', 'warn'); }
+      function () { notify(what + ' copied.', 'ok'); },
+      function () { notify('Select the ' + what.toLowerCase() + ' and copy it.', 'warn'); }
     );
     return;
   }
-  // No clipboard API: select the key so one keystroke finishes the job.
+  // No clipboard API: select it so one keystroke finishes the job.
   const selection = window.getSelection();
   const range = document.createRange();
   range.selectNodeContents(block);
   selection.removeAllRanges();
   selection.addRange(range);
-  notify('Press Ctrl+C to copy the selected key.', 'warn');
+  notify('Press Ctrl+C to copy the selection.', 'warn');
+}
+
+// A mode, not an action: no confirmation either way, and the switch goes back
+// where it was if the change did not take.
+async function setGitWebhook(domain, on) {
+  busy(true);
+  try {
+    await call('/api/sites/' + encodeURIComponent(domain) + '/webhook',
+      on ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' } : { method: 'DELETE' });
+    location.reload();
+  } catch (e) {
+    busy(false);
+    const box = CLP_ROOT.getElementById('git-webhook-toggle');
+    if (box) box.checked = !on;
+    notify('Could not change push to deploy: ' + e.message, 'error');
+  }
+}
+
+async function rotateGitWebhook(domain) {
+  const accepted = await confirmAction({
+    title: 'Rotate the webhook URL?',
+    text: 'A new URL is generated for ' + domain + '.',
+    details: ['Deliveries fail until the new URL is pasted back into the repository.'],
+    confirmLabel: 'Rotate URL',
+    danger: true,
+  });
+  if (!accepted) return;
+  busy(true);
+  try {
+    await call('/api/sites/' + encodeURIComponent(domain) + '/webhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ replace: true }),
+    });
+    location.reload();
+  } catch (e) {
+    busy(false);
+    notify('Could not rotate the URL: ' + e.message, 'error');
+  }
 }
 
 async function deployGitSite(domain) {
@@ -212,7 +253,20 @@ async function deployGitSelected() {
   setTimeout(function () { location.reload(); }, 1200);
 }
 
+// The page is rendered without an origin -- the server is behind a socket and
+// sees no scheme -- so the browser, which knows exactly which address the
+// operator reached the panel on, completes the URL.
+function initGitWebhookUrl() {
+  const block = CLP_ROOT.getElementById('git-webhook-url');
+  if (!block) return;
+  const url = location.origin + block.getAttribute('data-path');
+  block.textContent = url;
+  const curl = CLP_ROOT.getElementById('git-webhook-curl');
+  if (curl) curl.textContent = 'curl -X POST ' + url;
+}
+
 function initGit() {
+  initGitWebhookUrl();
   CLP_ROOT.querySelectorAll('.git-select').forEach(function (box) {
     box.addEventListener('change', gitSelectionChanged);
   });
@@ -263,6 +317,38 @@ function when(iso: string): string {
   return iso ? iso.replace("T", " ").replace("Z", " UTC") : "—";
 }
 
+/** How long ago, for a line an operator reads to see whether pushes arrive. */
+function since(iso: string): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return when(iso);
+  const minutes = Math.round(Math.max(0, Date.now() - then) / 60_000);
+  if (minutes < 1) return "just now";
+  const plural = (value: number, unit: string): string => `${value} ${unit}${value === 1 ? "" : "s"} ago`;
+  if (minutes < 60) return plural(minutes, "minute");
+  const hours = Math.round(minutes / 60);
+  return hours < 24 ? plural(hours, "hour") : plural(Math.round(hours / 24), "day");
+}
+
+/**
+ * What the last delivery did.
+ *
+ * The recorded outcome says what the delivery itself decided; when it started a
+ * deployment that has since finished, that job is the better answer, because
+ * "started a deployment" three minutes after the deployment failed is not what
+ * the operator came to find out.
+ */
+function deliveryLine(site: GitSiteStatus): string {
+  const webhook = site.config?.webhook;
+  if (!webhook) return "";
+  if (!webhook.lastDeliveryAt) return "No delivery yet.";
+  const job = webhook.lastDeliveryJob && site.lastJob?.id === webhook.lastDeliveryJob ? site.lastJob : null;
+  const what = !job ? webhook.lastDelivery
+    : job.state === "done" ? `deployed ${job.result?.commit?.shortHash ?? site.config?.branch ?? "the branch"}`
+    : job.state === "failed" ? "the deployment failed"
+    : "deploying now";
+  return `Last delivery: ${since(webhook.lastDeliveryAt)} — ${what}`;
+}
+
 function commitLine(site: GitSiteStatus): string {
   return site.commit ? `${site.commit.shortHash} ${site.commit.subject}` : "";
 }
@@ -275,7 +361,9 @@ function jobCard(job: GitJobView | null): string {
     <div class="card" id="git-job-card"${hidden}>
       <div class="card-header"><h2>Last deployment</h2></div>
       <div class="job-summary">
-        <span class="job-domain">${job ? esc(when(job.startedAt || job.createdAt)) : "—"}</span>
+        <span class="job-domain">${job ? esc(when(job.startedAt || job.createdAt)) : "—"}${
+          job?.startedBy === "push" ? ' <span class="hint" style="display:inline;">started by a push</span>' : ""
+        }</span>
         <span class="badge ${stateClass(job?.state ?? "queued")}" id="job-state">${esc(job?.state ?? "queued")}</span>
       </div>
       <div class="step" id="job-step" style="margin-top:0.5rem;">${esc(job && !finished ? job.step : "")}</div>
@@ -364,7 +452,7 @@ export function siteView(site: GitSiteStatus, log: string): string {
             as ${esc(site.siteUser)} and never leaves this server.</p>
         <div class="key-block">
           <pre id="git-public-key">${esc(site.publicKey)}</pre>
-          <button class="btn" type="button" onclick="copyGitKey()">Copy</button>
+          <button class="btn" type="button" onclick="copyGitBlock('git-public-key', 'Deploy key')">Copy</button>
         </div>
         <div class="actions" style="margin-top:20px;">
           <button class="btn btn-danger" type="button" onclick="generateGitKey('${esc(site.domain)}', true)">Replace key</button>
@@ -389,7 +477,51 @@ export function siteView(site: GitSiteStatus, log: string): string {
     ${current}
     ${form}
     ${key}
+    ${webhookSection(site)}
     <div class="addon-section">${jobCardWithLog(site.lastJob, log)}</div>`;
+}
+
+/**
+ * Push to deploy: a switch that mints the URL and a switch that invalidates it.
+ *
+ * The URL is the whole credential, so it is shown the way the deploy key is --
+ * read-only with a Copy button -- and Rotate is the only control here that
+ * confirms, because every delivery fails until the new URL is pasted back.
+ */
+function webhookSection(site: GitSiteStatus): string {
+  const webhook = site.config?.webhook ?? null;
+  const path = webhook ? `${BASE}/hook/${encodeURIComponent(site.domain)}/${webhook.token}` : "";
+  const branch = site.config?.branch ?? "the configured branch";
+  const url = !webhook ? "" : `
+        <div class="key-block" style="margin-top:20px;">
+          <pre id="git-webhook-url" data-path="${esc(path)}">${esc(path)}</pre>
+          <button class="btn" type="button" onclick="copyGitBlock('git-webhook-url', 'Webhook URL')">Copy</button>
+        </div>
+        <p class="hint">In GitHub: Settings → Webhooks → Add webhook, content type
+          <span class="mono">application/json</span>. From anything else:</p>
+        <pre class="hook-curl mono" id="git-webhook-curl">curl -X POST ${esc(path)}</pre>
+        <div class="hint hook-delivery">${esc(deliveryLine(site))}</div>
+        <p class="hint">Anyone who has this URL can deploy this site. Rotate it if it leaks.</p>
+        <div class="actions">
+          <button class="btn btn-danger" type="button" onclick="rotateGitWebhook('${esc(site.domain)}')">Rotate URL</button>
+        </div>`;
+
+  return `
+    <div class="addon-section">
+      <h2>Push to deploy</h2>
+      <div class="card">
+        <div class="switch-row">
+          <p class="hint" style="margin:0;">${
+            site.configured ? `A push to ${esc(branch)} deploys this site.` : "Save a repository above first."
+          }</p>
+          <label class="switch">
+            <input id="git-webhook-toggle" type="checkbox"${webhook ? " checked" : ""}${site.configured ? "" : " disabled"}
+              aria-label="Push to deploy for ${esc(site.domain)}"
+              onchange="setGitWebhook('${esc(site.domain)}', this.checked)"><span></span>
+          </label>
+        </div>${url}
+      </div>
+    </div>`;
 }
 
 /** The job card with whatever the last deployment already wrote in it. */

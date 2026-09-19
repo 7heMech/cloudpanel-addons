@@ -23,4 +23,17 @@ export const GIT_TARGETS: AddonTarget[] = [
           </li>
         {% endif %}`,
   },
+  {
+    // Beside Stager's Clone, on the same anchor: the fleet is where an operator
+    // decides which site to deploy, and CloudPanel's own site list is the fleet
+    // page they are already on.
+    slug: "site-list-action",
+    template: "Frontend/Site/index.html.twig",
+    anchorAfter: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
+    required: false,
+    snippet: (url) => `
+        {% if is_granted('ROLE_ADMIN') %}
+          <a href="${url}?domain={{ site.domainName|url_encode }}" style="margin-left: 0.75rem;">Deploy from Git</a>
+        {% endif %}`,
+  },
 ];

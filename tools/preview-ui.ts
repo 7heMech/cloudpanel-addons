@@ -57,12 +57,14 @@ function gitPreviewSites(url: URL) {
     author: "Ada Lovelace", committedAt: "2026-09-17T11:04:00Z", subject: "Add the checkout summary",
   };
   const job = {
-    id: "20260917T110500Z-ab12cd", kind: "deploy", domain: "www.example.com",
+    id: "20260917T110500Z-ab12cd", kind: "deploy", domain: "www.example.com", startedBy: "push",
     state: url.searchParams.get("state") ?? "done", step: "running the post-deploy command", error: "",
     createdAt: "2026-09-17T11:05:00Z", startedAt: "2026-09-17T11:05:01Z",
     finishedAt: url.searchParams.get("state") ? "" : "2026-09-17T11:05:42Z",
-    result: null,
+    result: { branch: "main", directory: "", commit, postDeploy: "composer install --no-dev", postDeployRan: true },
   };
+  // Relative to now, so the delivery line reads the way an operator sees it.
+  const delivered = new Date(Date.now() - 4 * 60_000).toISOString().replace(/\.\d+Z$/, "Z");
   if (job.state === "failed") job.error = "the post-deploy command failed; the files are deployed and the command did not finish";
   return [
     {
@@ -71,6 +73,11 @@ function gitPreviewSites(url: URL) {
       config: {
         domain: "www.example.com", remote: "git@github.com:example/shop.git", branch: "main",
         directory: "", postDeploy: "composer install --no-dev", updatedAt: "2026-09-15T08:00:00Z",
+        webhook: url.searchParams.has("no-hook") ? null : {
+          token: "PreviewWebhookTokenForTheUiOnlyNotARealOne",
+          lastDeliveryAt: delivered, lastDelivery: "started a deployment",
+          lastDeliveryJob: "20260917T110500Z-ab12cd",
+        },
       },
       publicKey: url.searchParams.has("no-key") ? "" :
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPreviewKeyForTheUiOnlyNotARealKey00 clp-addons deploy key for www.example.com",
@@ -81,7 +88,7 @@ function gitPreviewSites(url: URL) {
       path: "/home/static/htdocs/static.example.com/public", configured: true,
       config: {
         domain: "static.example.com", remote: "https://github.com/example/docs.git", branch: "release/2.1",
-        directory: "public", postDeploy: "", updatedAt: "2026-09-16T09:10:00Z",
+        directory: "public", postDeploy: "", updatedAt: "2026-09-16T09:10:00Z", webhook: null,
       },
       publicKey: "", commit: null, lastJob: null,
     },
