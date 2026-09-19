@@ -109,7 +109,7 @@ html.dark .clp-tweaks-columns-menu input:checked { border-color: #0078d4; backgr
 .clp-tweaks-table th.clp-tweaks-sortable::after { content: "\\2195"; margin-left: 6px; opacity: .35; }
 .clp-tweaks-table th.clp-tweaks-asc::after { content: "\\2191"; opacity: 1; }
 .clp-tweaks-table th.clp-tweaks-desc::after { content: "\\2193"; opacity: 1; }
-.clp-tweaks-table .clp-tweaks-badge { display: inline-block; padding: 2px 8px; border: 1px solid currentColor;
+.clp-tweaks-table .clp-tweaks-badge { display: inline-block; vertical-align: top; padding: 2px 8px; border: 1px solid currentColor;
   border-radius: 4px; font-size: 12px; line-height: 1.4; white-space: nowrap; }
 .clp-tweaks-table .clp-tweaks-ok { color: #23774b; }
 .clp-tweaks-table .clp-tweaks-warn { color: #936319; }
@@ -166,17 +166,17 @@ const SITES_MOBILE_STYLE = `
   table.table-sites td.clp-tweaks-domain > a { white-space: normal; overflow-wrap: anywhere; }
   table.table-sites td.clp-tweaks-type, table.table-sites td[data-label] { display: none; }
   table.table-sites .clp-tweaks-mobile-type { display: inline-block; min-width: 0; max-width: 100%;
-    padding: 1px 4px; border: 1px solid #eaeaea; border-radius: 4px; color: #9bacb6;
-    font-size: 12px; font-weight: 400; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    padding: 2px 8px; border: 1px solid #eaeaea; border-radius: 4px; color: #9bacb6;
+    font-size: 12px; font-weight: 400; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   html.dark table.table-sites .clp-tweaks-mobile-type { border-color: var(--clp-border-color); }
   /* A type that fits shares the hostname row without changing the hostname's
      natural one-line width. The script only chooses this layout after both
      values have been measured at their full widths. */
   table.table-sites td.clp-tweaks-domain.clp-tweaks-type-at-host { display: grid;
-    grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; align-items: start; }
+    grid-template-columns: minmax(0, 1fr) auto; column-gap: 4px; align-items: start; }
   table.table-sites td.clp-tweaks-domain.clp-tweaks-type-at-host > a { grid-column: 1; }
   table.table-sites td.clp-tweaks-domain.clp-tweaks-type-at-host > .clp-tweaks-mobile-type {
-    grid-column: 2; justify-self: end; margin-top: 2px; }
+    grid-column: 2; justify-self: end; }
   table.table-sites td.clp-tweaks-domain.clp-tweaks-type-at-host > .clp-tweaks-details { grid-column: 1 / -1; }
   /* Both column starts come from the card's full inner width. Content in one
      field can wrap without changing the position of the field beside it. */
@@ -186,29 +186,31 @@ const SITES_MOBILE_STYLE = `
   table.table-sites .clp-tweaks-details > [data-label] { min-width: 0;
     white-space: normal; overflow-wrap: anywhere; }
   table.table-sites .clp-tweaks-detail-heading { display: flex; align-items: flex-start; gap: 4px;
-    min-height: 19px; margin-bottom: 4px; }
+    min-height: 23px; }
   table.table-sites .clp-tweaks-detail-label { flex: 0 0 auto; color: #9bacb6;
     font-size: 12px; font-weight: 700; line-height: 1.5; text-transform: uppercase; }
   /* A fallback type visually occupies the gap above this heading while its
      place in the heading keeps every value at the same coordinates. */
   table.table-sites .clp-tweaks-detail-heading > .clp-tweaks-mobile-type { flex: 0 1 auto; margin-left: auto;
-    transform: translateY(calc(-100% + 7px)); }
+    transform: translateY(calc(-100% + 15px)); }
   table.table-sites .clp-tweaks-details > .clp-tweaks-type-in-empty-field {
     grid-column: 2; grid-row: 1; justify-self: end; align-self: start;
-    transform: translateY(calc(-100% + 7px)); }
+    transform: translateY(calc(-100% + 15px)); }
   table.table-sites .clp-tweaks-detail-value { min-width: 0; }
   /* Timed certificates keep their normal one-line badge whenever it fits. */
   table.table-sites td .clp-tweaks-badge { box-sizing: border-box; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
   table.table-sites .clp-tweaks-details > [data-col="ssl"] { container: clp-ssl / inline-size; }
   table.table-sites td.clp-tweaks-actions { padding-top: 14px !important; }
 }
-/* At the phone width where the fixture hostname wraps, its short second line
-   can share its height with Type. Wider layouts keep the calmer gap placement. */
-@media (max-width: 360px) {
-  table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-detail-heading > .clp-tweaks-mobile-type,
-  table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-details > .clp-tweaks-type-in-empty-field {
-    transform: translateY(calc(-100% - 17px)); }
-}
+/* A short second hostname line can share its height with Type at any phone
+   width where the full badge fits beside it. */
+table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-detail-heading { display: grid; }
+table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-detail-heading > .clp-tweaks-detail-label {
+  grid-area: 1 / 1; justify-self: start; }
+table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-detail-heading > .clp-tweaks-mobile-type {
+  grid-area: 1 / 1; justify-self: end; transform: translateY(calc(-100% - 12px)); }
+table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-details > .clp-tweaks-type-in-empty-field {
+  transform: translateY(calc(-100% - 12px)); }
 /* Below the width of the normal issuer-and-expiry badge, show its compact
    expiry. The full text remains available to screen readers and in the title. */
 @container clp-ssl (max-width: 160px) {
@@ -546,12 +548,12 @@ const SITES_SCRIPT = `
         var lines = range.getClientRects();
         var hostWidth = lines.length === 1 ? lines[0].width : Infinity;
         var tagWidth = tag.getBoundingClientRect().width;
-        if (hostWidth + tagWidth + 12 <= domain.clientWidth) {
+        if (hostWidth + tagWidth + 4 <= domain.clientWidth) {
           domain.classList.add("clp-tweaks-type-at-host");
           continue;
         }
         var domainRect = domain.getBoundingClientRect();
-        if (lines.length === 2 && lines[1].right + 12 <= domainRect.right - tagWidth) {
+        if (lines.length === 2 && lines[1].right + 4 <= domainRect.right - tagWidth) {
           domain.classList.add("clp-tweaks-type-beside-last-host-line");
         }
 

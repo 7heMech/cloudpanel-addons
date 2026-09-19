@@ -174,23 +174,25 @@ the field beside it.
 Type first tries the unused right side of a one-line hostname. The script reads
 the natural widths of the hostname and badge and chooses that placement only
 when both fit in full; it does not assign a width to either. A wrapped hostname
-keeps its whole line. At the narrow phone layout, if it wraps to exactly two
-lines and the full badge fits beside the second line, the fallback is lifted by
-one hostname line-height to use that space. Wider layouts use the vertical gap
-above the second visible field's label, aligned to the right. If only one detail
-is visible, the badge uses the same gap over the otherwise empty second grid
-cell. Its place remains in a label row with a fixed minimum height, so either
-visual offset leaves the detail values fixed.
+keeps its whole line. If it wraps to exactly two lines and the full badge fits
+beside the second line, the fallback is lifted by one hostname line-height to
+use that space at any phone width, with a small downward optical offset.
+Otherwise it is centred vertically between
+the hostname and the right-hand value. If only one detail is visible, the badge
+uses the same position over the otherwise empty second grid cell. Its place
+remains in a label row whose fixed height replaces the old bottom margin, so the
+larger badge and either visual offset leave the detail values fixed.
 A type too long for that spare space ends in an ellipsis and exposes its full
 value in the title. Resizing, changing column choices, and replacing the native
 type with the application name rerun only this placement choice.
 
-The normal SSL badge remains one text label, including the middle-dot separator
-between issuer and expiry. At phone widths where that timed badge cannot fit in
-its column, a container query shows the compact expiry such as `46d`; the full
-text stays available to screen readers and the certificate date stays in the
-title. Untimed, missing, and self-signed certificates keep their normal labels
-and can wrap if an unknown name is unusually long.
+Type uses the same padding and line-height as an SSL badge. The normal SSL badge
+remains one text label, including the middle-dot separator between issuer and
+expiry. At phone widths where that timed badge cannot fit in its column, a
+container query shows the compact expiry such as `46d`; the full text stays
+available to screen readers and the certificate date stays in the title.
+Untimed, missing, and self-signed certificates keep their normal labels and can
+wrap if an unknown name is unusually long.
 
 The mobile type and details are copies inside the hostname cell; the original
 cells stay in place for the desktop table. Both copies share their column keys

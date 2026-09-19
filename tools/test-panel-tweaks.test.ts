@@ -172,13 +172,15 @@ test("the narrow-screen layout needs no data and no class the script adds", () =
   expect(mobile).toContain(".clp-tweaks-domain.clp-tweaks-type-at-host { display: grid");
   expect(mobile).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))");
   expect(mobile).toContain(".clp-tweaks-detail-heading { display: flex");
-  expect(mobile).toContain("transform: translateY(calc(-100% + 7px))");
-  expect(mobile).toContain("transform: translateY(calc(-100% - 17px))");
+  expect(mobile).toContain("min-height: 23px");
+  expect(mobile).toContain("transform: translateY(calc(-100% + 15px))");
+  expect(mobile).toContain("transform: translateY(calc(-100% - 12px))");
   expect(mobile).not.toContain(".clp-tweaks-mobile-type { display: block; float:");
-  expect(snippet).toContain("hostWidth + tagWidth + 12 <= domain.clientWidth");
-  expect(snippet).toContain("lines.length === 2 && lines[1].right + 12 <= domainRect.right - tagWidth");
+  expect(snippet).toContain("hostWidth + tagWidth + 4 <= domain.clientWidth");
+  expect(snippet).toContain("lines.length === 2 && lines[1].right + 4 <= domainRect.right - tagWidth");
   expect(snippet).toContain("if (visible.length > 1)");
   expect(snippet).toContain('tag.classList.add("clp-tweaks-type-in-empty-field")');
+  expect(snippet).toContain("display: inline-block; vertical-align: top; padding: 2px 8px");
   expect(mobile).not.toContain(".clp-tweaks-table tr {");
   // A separator between one site and the next, in whichever theme the panel is
   // showing, taken from the border the panel draws on its own table cells.
