@@ -10,11 +10,12 @@ const BASE = mountPath("panel-tweaks");
 const STYLE = `
 .tweak-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
   padding: 22px 0; border-top: 1px solid var(--row-border); }
+.tweak-row > div { flex: 1 1 auto; min-width: 0; }
 .tweak-list > .tweak-row:first-child { padding-top: 0; border-top: 0; }
 .tweak-list > .tweak-row:last-child { padding-bottom: 0; }
 .tweak-row h3 { margin: 0 0 6px; font-size: 16px; }
 .tweak-row p { margin: 0; color: var(--muted); font-size: 14px; }
-.tweak-row .switch { margin-top: 4px; }
+.tweak-row .switch { flex: 0 0 auto; margin-top: 4px; }
 /* A phone gets the titles and the switches, with the wording a tap away. The
    button is display: none above that, so nothing can focus a control that
    would do nothing. */
@@ -42,9 +43,6 @@ const STYLE = `
 .scan-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
 .scan-row p { margin: 0; }
 .size-cell { font-variant-numeric: tabular-nums; white-space: nowrap; }
-@media (max-width: 600px) {
-  .tweak-row { flex-wrap: wrap; }
-}
 `;
 
 const SCRIPT = `
@@ -179,7 +177,7 @@ const COPY: TweakCopy[] = [
   },
   {
     key: "panelMobile",
-    title: "CloudPanel's own pages on a phone",
+    title: "CloudPanel mobile layout",
     description: "The panel's header wraps onto a second row, so the Admin Area link and the avatar stay on the screen. The Dashboard's charts are drawn to fit the screen rather than run past its edge.",
   },
   {

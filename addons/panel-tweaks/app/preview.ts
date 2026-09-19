@@ -30,7 +30,7 @@ html, body { margin: 0; }
    is the wrapper's: CloudPanel gives html and body a height of their own, which
    in a frame is the frame's height and says nothing about the content in it. */
 #clp-preview { padding: 20px 0 24px; }
-.container-limited-width { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+.container-limited-width { max-width: 1200px; margin: 0 auto; padding-right: 0; padding-left: 0; }
 .page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 20px; }
 .page-title h1 { margin: 0; font-size: 26px; }
 .preview-note { margin: 16px 0 0; font-size: 13px; }

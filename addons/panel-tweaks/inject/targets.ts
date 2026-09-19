@@ -167,7 +167,7 @@ const SITES_MOBILE_STYLE = `
   table.table-sites td.clp-tweaks-type, table.table-sites td[data-label] { display: none; }
   table.table-sites .clp-tweaks-mobile-type { display: inline-block; min-width: 0; max-width: 100%;
     padding: 2px 8px; border: 1px solid #eaeaea; border-radius: 4px; color: #9bacb6;
-    font-size: 12px; font-weight: 400; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    font-size: 12px; font-weight: 400; line-height: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   html.dark table.table-sites .clp-tweaks-mobile-type { border-color: var(--clp-border-color); }
   /* A type that fits shares the hostname row without changing the hostname's
      natural one-line width. The script only chooses this layout after both
@@ -198,7 +198,9 @@ const SITES_MOBILE_STYLE = `
     transform: translateY(calc(-100% + 15px)); }
   table.table-sites .clp-tweaks-detail-value { min-width: 0; }
   /* Timed certificates keep their normal one-line badge whenever it fits. */
-  table.table-sites td .clp-tweaks-badge { box-sizing: border-box; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+  table.table-sites td .clp-tweaks-badge { box-sizing: border-box; max-width: 100%; padding: 3px 9px;
+    border: 0; box-shadow: inset 0 0 0 1px currentColor; line-height: 17px;
+    white-space: normal; overflow-wrap: anywhere; }
   table.table-sites .clp-tweaks-details > [data-col="ssl"] { container: clp-ssl / inline-size; }
   table.table-sites td.clp-tweaks-actions { padding-top: 14px !important; }
 }

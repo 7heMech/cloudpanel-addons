@@ -52,7 +52,7 @@ effect on the next panel page rather than at the next reconciliation.
 
 Four switches cannot work that way. The login page has no session to ask with,
 and every route the manager serves is behind the administrator gate. The other
-three -- the narrow-screen site list, the panel's own pages on a phone and the
+three -- the narrow-screen site list, the CloudPanel mobile layout and the
 row menu
 -- decide how a page looks the first time it is painted, and a rule that waits
 for a reply is a rule the reader watches arrive. So for those four the switch
@@ -186,13 +186,16 @@ A type too long for that spare space ends in an ellipsis and exposes its full
 value in the title. Resizing, changing column choices, and replacing the native
 type with the application name rerun only this placement choice.
 
-Type uses the same padding and line-height as an SSL badge. The normal SSL badge
-remains one text label, including the middle-dot separator between issuer and
-expiry. At phone widths where that timed badge cannot fit in its column, a
-container query shows the compact expiry such as `46d`; the full text stays
-available to screen readers and the certificate date stays in the title.
-Untimed, missing, and self-signed certificates keep their normal labels and can
-wrap if an unknown name is unusually long.
+Type and SSL badges use the same exact 17px line-height and 23px outer height.
+On SSL badges the mobile edge is an inset stroke rather than a fractional
+rounded border, keeping all four sides the same visual weight without changing
+the badge's footprint. The normal SSL badge remains one text label, including
+the middle-dot separator between issuer and expiry. At phone widths where that
+timed badge cannot fit in its column, a container query shows the compact expiry
+such as `46d`; the full text stays available to screen readers and the
+certificate date stays in the title. Untimed, missing, and self-signed
+certificates keep their normal labels and can wrap if an unknown name is
+unusually long.
 
 The mobile type and details are copies inside the hostname cell; the original
 cells stay in place for the desktop table. Both copies share their column keys
@@ -226,7 +229,9 @@ The frame is measured by the wrapper inside it rather than by its document,
 because CloudPanel gives `html` and `body` a height of their own, which inside a
 frame is the frame's height: measuring either would only ever grow it. The
 switches reload the page when they are saved, so the frame is drawn again with
-the switch that moved.
+the switch that moved. That wrapper keeps its vertical breathing room but no
+horizontal padding; the frame itself already supplies the preview's side edge,
+and a second inset makes the phone layout narrower than the width being shown.
 
 ## Measured sizes ride the repair timer
 

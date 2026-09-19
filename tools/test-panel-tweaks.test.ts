@@ -12,6 +12,7 @@ import {
 } from "../addons/panel-tweaks/inject/targets";
 import type { PanelTweaks } from "../addons/panel-tweaks/action";
 import { previewPage } from "../addons/panel-tweaks/app/preview";
+import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MENU_ONLY_CLASS, MENU_ONLY_STYLE, ROW_MENU_CLASS } from "../lib/row-actions";
 
@@ -173,6 +174,8 @@ test("the narrow-screen layout needs no data and no class the script adds", () =
   expect(mobile).toContain("grid-template-columns: repeat(2, minmax(0, 1fr))");
   expect(mobile).toContain(".clp-tweaks-detail-heading { display: flex");
   expect(mobile).toContain("min-height: 23px");
+  expect(mobile).toContain("line-height: 17px");
+  expect(mobile).toContain("box-shadow: inset 0 0 0 1px currentColor");
   expect(mobile).toContain("transform: translateY(calc(-100% + 15px))");
   expect(mobile).toContain("transform: translateY(calc(-100% - 12px))");
   expect(mobile).not.toContain(".clp-tweaks-mobile-type { display: block; float:");
@@ -235,6 +238,16 @@ test("the preview frame is the panel's own page, with the injected block over it
   expect(page).toContain("2 more sites on the real page.");
   // The frame is measured by this wrapper, so it has to be there to find.
   expect(page).toContain('id="clp-preview"');
+  expect(page).toContain("padding-right: 0; padding-left: 0");
+});
+
+test("the addon page keeps switches beside wrapping labels on a phone", () => {
+  const page = panelTweaksDashboardView({ tweaks: { ...DEFAULT_TWEAKS }, diskMeasuredAt: "", sites: [] });
+  expect(page).toContain("CloudPanel mobile layout");
+  const html = panelTweaksLayout("Panel Tweaks", page);
+  expect(html).toContain(".tweak-row > div { flex: 1 1 auto; min-width: 0; }");
+  expect(html).toContain(".tweak-row .switch { flex: 0 0 auto;");
+  expect(html).not.toContain(".tweak-row { flex-wrap: wrap; }");
 });
 
 // The block is rendered by Twig before a browser ever sees it, and Twig reads
