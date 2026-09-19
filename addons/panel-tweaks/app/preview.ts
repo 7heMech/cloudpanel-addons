@@ -30,7 +30,10 @@ html, body { margin: 0; }
    is the wrapper's: CloudPanel gives html and body a height of their own, which
    in a frame is the frame's height and says nothing about the content in it. */
 #clp-preview { padding: 20px 0 24px; }
-.container-limited-width { max-width: 1200px; margin: 0 auto; padding-right: 0; padding-left: 0; }
+.container-limited-width { max-width: 1200px; margin: 0 auto; padding-right: 20px; padding-left: 20px; }
+@media (max-width: 760px) {
+  .container-limited-width { padding-right: 0; padding-left: 0; }
+}
 .page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 20px; }
 .page-title h1 { margin: 0; font-size: 26px; }
 .preview-note { margin: 16px 0 0; font-size: 13px; }
@@ -81,7 +84,23 @@ export function previewPage(state: PanelTweaksState): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <title>Sites preview</title>
-<script>if (/(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie)) document.documentElement.classList.add('dark');</script>
+<script>
+(function () {
+  function syncTheme() {
+    var dark = /(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie);
+    try {
+      if (parent !== window) dark = parent.document.documentElement.classList.contains('dark');
+    } catch (e) {}
+    document.documentElement.classList.toggle('dark', dark);
+  }
+  syncTheme();
+  try {
+    if (parent !== window) new MutationObserver(syncTheme).observe(parent.document.documentElement, {
+      attributes: true, attributeFilter: ['class']
+    });
+  } catch (e) {}
+})();
+</script>
 <link rel="stylesheet" href="/assets/css/bootstrap.min.css">
 <link rel="stylesheet" href="/assets/css/style.css">
 <link rel="stylesheet" href="/assets/css/style-dark.css">

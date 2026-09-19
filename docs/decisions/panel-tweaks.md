@@ -227,13 +227,15 @@ allows the frame. Everything else in the shared policy stands.
 
 The frame is measured by the wrapper inside it rather than by its document,
 because CloudPanel gives `html` and `body` a height of their own, which inside a
-frame is the frame's height: measuring either would only ever grow it. The
-switches reload the page when they are saved, so the frame is drawn again with
-the switch that moved. That wrapper keeps its vertical breathing room but no
-horizontal padding; the frame itself already supplies the preview's side edge,
-and a second inset makes the phone layout narrower than the width being shown.
-On the addon's mobile page the frame also escapes the page and card gutters, so
-the page being demonstrated receives the full phone width.
+frame is the frame's height: measuring either would only ever grow it. Saving a
+switch reloads only the frame, leaving the addon's page and any open description
+in place. A mutation observer follows the surrounding page's theme class, so a
+theme change reaches the frame without reloading either document.
+
+The wrapper keeps CloudPanel's horizontal page padding on a desktop. At phone
+widths that padding goes, the frame escapes the addon's page and card gutters,
+and the width controls disappear: the embedded page receives the full phone
+width and therefore enters its phone layout by default.
 
 ## Measured sizes ride the repair timer
 

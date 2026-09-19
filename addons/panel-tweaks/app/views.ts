@@ -21,14 +21,17 @@ const STYLE = `
    would do nothing. */
 .tweak-more { display: none; }
 @media (max-width: 760px) {
-  .tweak-row h3 { margin: 0; display: flex; align-items: center; gap: 2px; }
+  .tweak-row h3 { position: relative; margin: 0; padding-right: 30px; }
   .tweak-row .tweak-note { display: none; margin-top: 8px; }
   .tweak-row.is-open .tweak-note { display: block; }
-  .tweak-more { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px;
-    margin: -6px 0 -6px 2px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted);
-    font-size: 13px; line-height: 1; cursor: pointer; }
+  /* The transparent button covers the heading, so tapping either the title or
+     its arrow opens the description. */
+  .tweak-more { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end;
+    width: 100%; height: 100%; padding: 0 6px 0 0; border: 0; background: none; color: var(--muted);
+    font-size: 0; line-height: 1; cursor: pointer; }
+  .tweak-more::after { content: "\\25BE"; font-size: 13px; transition: transform .15s; }
   .tweak-more:hover { color: var(--text); }
-  .tweak-row.is-open .tweak-more { transform: rotate(180deg); }
+  .tweak-row.is-open .tweak-more::after { transform: rotate(180deg); }
 }
 .preview-widths { display: flex; gap: 8px; }
 .preview-widths .btn { min-height: 36px; padding: 4px 14px; font-size: 13px; }
@@ -41,10 +44,12 @@ const STYLE = `
 .preview-frame.is-phone { display: flex; justify-content: center; background: var(--row-hover, transparent); }
 .preview-frame.is-phone iframe { width: 390px; max-width: 100%; }
 @media (max-width: 760px) {
+  .preview-widths { display: none; }
   /* Let the panel preview use the whole phone width instead of nesting it
      inside both the page and card gutters. */
-  .preview-frame { margin-right: calc(-25px - 13px); margin-left: calc(-25px - 13px);
+  .preview-frame { display: flex; justify-content: center; margin-right: calc(-25px - 13px); margin-left: calc(-25px - 13px);
     border-right: 0; border-left: 0; border-radius: 0; }
+  .preview-frame iframe { width: 390px; max-width: 100%; }
 }
 .scan-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
 .scan-row p { margin: 0; }
@@ -63,7 +68,10 @@ async function setTweak(input) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ [key]: wanted }),
     });
-    reloadWith('Saved.', 'ok');
+    const frame = document.getElementById('preview-frame');
+    if (frame) frame.src = CLP_BASE + '/preview?refresh=' + Date.now();
+    busy(false);
+    notify('Saved.', 'ok');
   } catch (error) {
     input.checked = !wanted;
     busy(false);
@@ -205,7 +213,7 @@ function switchRow(copy: TweakCopy, on: boolean): string {
         <div>
           <h3>${esc(copy.title)}<button class="tweak-more" type="button" aria-expanded="false"
             aria-controls="${note}" aria-label="What ${esc(copy.title.toLowerCase())} does"
-            onclick="toggleNote(this)">&#9662;</button></h3>
+            onclick="toggleNote(this)"></button></h3>
           <p class="tweak-note" id="${note}">${esc(copy.description)}</p>
         </div>
         <label class="switch" title="${esc(copy.title)}">

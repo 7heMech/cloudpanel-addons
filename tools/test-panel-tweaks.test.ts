@@ -238,7 +238,10 @@ test("the preview frame is the panel's own page, with the injected block over it
   expect(page).toContain("2 more sites on the real page.");
   // The frame is measured by this wrapper, so it has to be there to find.
   expect(page).toContain('id="clp-preview"');
-  expect(page).toContain("padding-right: 0; padding-left: 0");
+  expect(page).toContain("padding-right: 20px; padding-left: 20px");
+  expect(page).toContain(".container-limited-width { padding-right: 0; padding-left: 0; }");
+  expect(page).toContain("new MutationObserver(syncTheme)");
+  for (const match of page.matchAll(/<script>([\s\S]*?)<\/script>/g)) expect(() => new Function(match[1]!)).not.toThrow();
 });
 
 test("the addon page keeps switches beside wrapping labels on a phone", () => {
@@ -248,7 +251,11 @@ test("the addon page keeps switches beside wrapping labels on a phone", () => {
   expect(html).toContain(".tweak-row > div { flex: 1 1 auto; min-width: 0; }");
   expect(html).toContain(".tweak-row .switch { flex: 0 0 auto;");
   expect(html).not.toContain(".tweak-row { flex-wrap: wrap; }");
-  expect(html).toContain(".preview-frame { margin-right: calc(-25px - 13px);");
+  expect(html).toContain("margin-right: calc(-25px - 13px); margin-left: calc(-25px - 13px);");
+  expect(html).toContain(".preview-widths { display: none; }");
+  expect(html).toContain("position: absolute; inset: 0; display: flex");
+  expect(html).toContain("'/preview?refresh=' + Date.now()");
+  for (const match of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) expect(() => new Function(match[1]!)).not.toThrow();
 });
 
 // The block is rendered by Twig before a browser ever sees it, and Twig reads
