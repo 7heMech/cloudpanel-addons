@@ -227,7 +227,7 @@ const COPY: TweakCopy[] = [
   {
     key: "sitesTable",
     category: "Sites",
-    title: "Search, sort and extra columns on Sites",
+    title: "Search, sort and extra columns",
     description: "Adds a site count, search, application filter and sortable extra columns. Column choices are saved per browser.",
   },
   {
