@@ -1,0 +1,118 @@
+# Git Deploy
+
+## What it deploys
+
+One repository per CloudPanel site: a remote URL, a branch, a subdirectory of
+the site's own directory and an optional post-deploy command, saved in this
+addon's state directory as a root-owned `0600` record per site. CloudPanel is
+the source of truth for the site user and for whether the site exists at all;
+the record holds only what the panel has no column for.
+
+A deployment fetches the configured branch and moves the working tree onto
+`FETCH_HEAD` with `reset --hard`. It does not `git clean`: what the repository
+carries is replaced, and what the site wrote for itself -- uploads, a `.env`, a
+cache directory -- is left where it is. A deployment that swept untracked files
+would take the site's own data with it, and a hosting panel is the wrong place
+to learn that. The first deployment into a directory that already holds files
+therefore adopts it rather than refusing it: only paths the repository has are
+replaced.
+
+The post-deploy command runs last, in the deployed directory, and its failure
+fails the job with the files already in place. There is no rollback: the way
+back is the previous commit, deployed the same way.
+
+## Privileges
+
+Every command runs as the site's own user through `runuser`: `git`,
+`ssh-keygen`, and the operator's post-deploy command. Root reads CloudPanel's
+database to learn which user that is, writes this addon's own records and
+starts the job; it never runs the repository's code. The site user's name comes
+out of the panel database and is checked against the shape an account name can
+have before it reaches a `runuser -u` argument.
+
+The deploy key is generated as the site user, into that account's own `.ssh`
+directory, and only its public half is ever reported. A key is never accepted
+from the browser: what the panel can send is "generate one" and "replace the
+one you have". Reading the public half back is root reading a file inside a
+directory the site user controls, so it is opened with `O_NOFOLLOW`, checked on
+the descriptor to be that user's own regular file, bounded, and required to
+look like the ed25519 public key it claims to be.
+
+Remotes are HTTPS and SSH only. A `file://`, `ext::` or bare local path would
+make a deployment read whatever the site user can reach on the host, and plain
+HTTP would carry the fetch in the clear. Userinfo in an HTTPS URL is refused
+too: a token pasted into the form would be stored in this addon's record and
+printed back into the page, and the site's own deploy key is what a private
+repository is for. The stored record is validated again when the job runs, so a
+record written by an older release cannot reach a command line unchecked.
+
+Host keys are accepted on first use (`StrictHostKeyChecking=accept-new`) and
+`BatchMode` and `GIT_TERMINAL_PROMPT=0` are set, because nobody is at a
+terminal to confirm a host key or type a password; a remote that wants one
+fails instead of hanging until the job's ten-minute timeout.
+
+## Jobs
+
+A deployment is a job in a transient systemd unit, through `cli/job-store.ts`,
+so it survives a manager restart, and it is watched through `lib/job-stream.ts`
+like every other job on the platform. One site has at most one deployment
+running: the create path holds the site's lock, refuses a second while one is
+queued or running, and releases the lock before the unit starts so the runner
+does not wait on the process that started it. Records expire after 14 days and
+the repair pass marks a deployment whose runner died as failed.
+
+## Surfaces
+
+The site-scoped page is a tab in CloudPanel's own site page, mounted through
+`lib/shadow-embed.ts` beside Maintenance and Staging: it shows the commit that
+is deployed, the configuration form, the deploy key and the last deployment's
+log. A deployment started there is watched in the card it was started from
+rather than on a page of its own, because navigating away would leave the
+panel's page behind to show a log.
+
+`/addons/git/` is the fleet view: every configured site, its branch, what it
+last deployed and when, with per-row and multi-select deploy. That is the
+altitude the list exists for -- deploying ten sites after one merge is the case
+a per-site form cannot answer. The fleet reply carries no webhook tokens; only
+the site's own page asks for a record it is going to print.
+
+CloudPanel's own site list carries a "Deploy from Git" link per row, beside
+Stager's "Clone", because that list is the fleet page an operator is already on.
+There is deliberately no card on the panel's Add Site page: it would have to
+reproduce the panel's own site creation -- PHP version, vhost template, site
+user, TLS -- and drift with every CloudPanel release. The link in the site list
+is the panel-native answer to the same wish.
+
+## Push to deploy
+
+`POST /addons/git/hook/<domain>/<token>` deploys a site. The token is 32 random
+bytes this addon mints, kept in the site's own `0600` record, and it is the
+whole authentication for the route: a repository sends no CSRF token and its
+Origin is not the panel, so `guardMutation` cannot apply and the URL is the
+credential. That is why it is minted rather than chosen, why the page calls it a
+password, and why rotating it is how a leaked one is revoked.
+
+The route is decided in `handleRequest` before the session gate, and it returns
+a response *only* when the root gateway confirmed the token. Everything else --
+a stranger, a wrong token, a rotated one, a site with no webhook, a `GET` --
+returns null and falls through to the gate, which answers with the same login
+redirect any other path gives a stranger. So the manager gained a second
+credential type rather than an exception list, and the URL is not an oracle for
+which sites have a webhook. The manager cannot check the token itself: it runs
+as `clp-addons` and cannot read the record, so `hook` both verifies the token
+and queues the deployment in one round trip.
+
+What happens after the token matches is reported rather than hidden, because a
+refusal an operator cannot see is a webhook they cannot fix. The delivery's time
+and outcome are recorded on the site and drawn on its page, and the reply says
+`deployed: false` with the reason. Four things end there: a push for a ref that
+is not the configured branch, the repository's first `ping`, an
+`X-Hub-Signature-256` that does not verify against the token, and a delivery
+that arrives while the last one is still deploying -- which is what makes a
+redelivery a no-op, since the duplicate-job guard already refuses the second.
+A signature is honoured when it is sent and never required, so `curl -X POST`
+from a CI job keeps working.
+
+A delivery with a well-formed token that is wrong still costs one gateway round
+trip and one action process. That is the price of having no oracle: the manager
+cannot tell a wrong token from an unknown one without asking root.

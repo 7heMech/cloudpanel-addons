@@ -4,7 +4,8 @@
 // guards protect mutating addon routes after the request has passed SSO: a
 // same-origin check and a CSRF token stop cross-origin browser requests.
 
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
+import { secretEquals } from "./secret-equals";
 
 const CSRF_COOKIE = "clp_addons_csrf";
 const CSRF_HEADER = "x-clp-addons-csrf";
@@ -15,13 +16,6 @@ export function newCsrfToken(): string {
 
 function readCookie(req: Request, name: string): string | null {
   return new Bun.CookieMap(req.headers.get("cookie") ?? "").get(name);
-}
-
-function constantTimeEquals(a: string, b: string): boolean {
-  const ba = Buffer.from(a);
-  const bb = Buffer.from(b);
-  // Compare lengths first; timingSafeEqual throws on a mismatch.
-  return ba.length === bb.length && timingSafeEqual(ba, bb);
 }
 
 /**
@@ -147,8 +141,7 @@ export class BodyError extends Error {
 export const MAX_BODY_BYTES = 64 * 1024;
 
 /**
- * Read a request body as a JSON object, refusing anything larger than
- * `maxBytes`.
+ * Read a request body as text, refusing anything larger than `maxBytes`.
  *
  * The declared length is checked first so an oversized body can be refused
  * before a byte of it is read. That check alone is not enough: `Content-Length`
@@ -157,7 +150,7 @@ export const MAX_BODY_BYTES = 64 * 1024;
  * could measure it. So the stream is counted as it arrives and abandoned the
  * moment it passes the limit.
  */
-export async function readJsonObject(req: Request, maxBytes = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
+export async function readBoundedText(req: Request, maxBytes = MAX_BODY_BYTES): Promise<string> {
   const declared = req.headers.get("content-length");
   if (declared !== null) {
     // RFC 9110 gives Content-Length as 1*DIGIT. Number() would take "0x40",
@@ -185,7 +178,12 @@ export async function readJsonObject(req: Request, maxBytes = MAX_BODY_BYTES): P
       await reader.cancel().catch(() => {});
     }
   }
+  return text;
+}
 
+/** The same reader, with the body required to be a JSON object. */
+export async function readJsonObject(req: Request, maxBytes = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
+  const text = await readBoundedText(req, maxBytes);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -274,7 +272,7 @@ export function guardMutation(req: Request): Response | null {
 
   const sent = req.headers.get(CSRF_HEADER);
   const cookie = readCookie(req, CSRF_COOKIE);
-  if (!sent || !cookie || !constantTimeEquals(sent, cookie)) {
+  if (!sent || !cookie || !secretEquals(sent, cookie)) {
     // The cookie is set Secure, so a browser on plain http never stores it.
     return jsonResponse({
       ok: false,

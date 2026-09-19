@@ -47,6 +47,19 @@ before any route is chosen, so there is no list of exceptions to keep correct.
 The liveness probe the update page polls is inside it, and nothing reads it
 without a session: the page that polls it has one.
 
+One route ahead of it takes a different credential. A `POST` to
+`/addons/git/hook/<domain>/<token>` is a push-to-deploy delivery, and the token
+is a per-site secret the Git addon minted and keeps in a root-owned `0600`
+record. It is a second credential type rather than an exception: the route
+returns a response only when the root gateway confirmed the token, and returns
+null for everything else, so a stranger, a wrong token and a rotated one all
+fall through to the gate and receive the login redirect byte for byte. Nothing
+about the URL says whether a site has a webhook. The token is compared with
+`timingSafeEqual` where the record can be read, which is root -- the manager
+cannot read it, so verifying the delivery and queueing its deployment are one
+gateway call. This route is necessarily outside `guardMutation`: a repository
+sends no CSRF token and its Origin is not the panel.
+
 What a stranger gets back is the redirect Symfony sends for any path CloudPanel
 will not serve them, reproduced byte for byte: same status, same headers, same
 body, and no `Content-Length`, which means streaming the body rather than

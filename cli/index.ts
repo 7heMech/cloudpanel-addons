@@ -40,6 +40,7 @@ import { adminHeaderTarget, headerTarget, siteLayoutTarget, SITE_TAB_TEMPLATE } 
 import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
 import { CHANGELOG_URL, UPDATE_PATH } from "../lib/update-ui";
 import { ensureMaintenanceData, executeMaintenanceAction } from "../addons/maintenance/action";
+import { GIT_HOOK_PREFIX, handleGitHook } from "../addons/git/app/hook";
 import { runAuthActionStdin } from "./auth-action";
 import { pruneManagerJobs, runManagerAction, type ManagerJobView, type ManagerOps } from "./manager-action";
 import { callGatewayAction, streamGatewayAction, type ActionResult } from "../lib/gateway-client";
@@ -859,7 +860,19 @@ function mountedAddons(): string[] {
  * a test can send real requests through the same function the socket does.
  */
 export async function handleRequest(req: Request, server: Server<unknown>): Promise<Response> {
-  // Nothing is answered before this, not even the liveness probe: a route
+  const path = internalPath(new URL(req.url).pathname);
+
+  // The one credential that is not a CloudPanel session. A POST whose URL
+  // carries a per-site token the root gateway recognises is a push-to-deploy
+  // delivery and is answered here; anything else returns null and meets the
+  // gate below, so this is a second credential type rather than an exception
+  // list, and the URL is no oracle for which sites have a webhook.
+  if (req.method === "POST" && path.startsWith(GIT_HOOK_PREFIX) && mountedAddons().includes("git")) {
+    const delivery = await handleGitHook(req, path);
+    if (delivery) return delivery;
+  }
+
+  // Nothing else is answered before this, not even the liveness probe: a route
   // decided ahead of the gate answers whoever can reach the panel.
   const gate = await authenticateRequest(req);
   // Sent as the gate built it. The shared header policy used to go over the
@@ -873,7 +886,6 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   const denied = adminGate(gate.auth);
   if (denied) return denied;
 
-  const path = internalPath(new URL(req.url).pathname);
   // Polled while this process restarts; the gateway that validates the session
   // is a separate unit, so it keeps answering across the restart.
   if (path === "/health") {
@@ -1289,6 +1301,7 @@ function usage(): void {
   clp-addons action instatic <verb> [options]
   clp-addons action stager <verb> [options]
   clp-addons action maintenance <verb> --domain=<domain>
+  clp-addons action git <verb> [--domain=<domain>] [--job=<job>]
   clp-addons action manager <enable|disable|update|job|watch-job> [--addon=<addon>] [--id=<job>]
   clp-addons action auth (session id on bounded stdin)
   clp-addons serve
