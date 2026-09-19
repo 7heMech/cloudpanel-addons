@@ -238,8 +238,8 @@ test("the preview frame is the panel's own page, with the injected block over it
   expect(page).toContain("2 more sites on the real page.");
   // The frame is measured by this wrapper, so it has to be there to find.
   expect(page).toContain('id="clp-preview"');
-  expect(page).toContain("padding-right: 20px; padding-left: 20px");
-  expect(page).toContain(".container-limited-width { padding-right: 0; padding-left: 0; }");
+  expect(page).toContain("#clp-preview { max-width: 1200px; margin: 0 auto; padding: 20px 20px 24px; }");
+  expect(page).toContain("#clp-preview { padding-right: 0; padding-left: 0; }");
   expect(page).toContain("new MutationObserver(syncTheme)");
   for (const match of page.matchAll(/<script>([\s\S]*?)<\/script>/g)) expect(() => new Function(match[1]!)).not.toThrow();
 });
