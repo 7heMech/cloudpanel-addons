@@ -2,7 +2,8 @@
 
 Manage Cloudflare-only site access, host Instatic CMS sites, create staging
 copies, manage per-site maintenance pages, tune PHP-FPM worker limits by
-category, and set the initial login theme from the device preference in
+category, sign in to any WordPress in one click, and add search, sorting and
+extra columns to CloudPanel's own Sites page in
 [CloudPanel](https://www.cloudpanel.io/). Access uses your existing
 administrator login.
 
@@ -17,7 +18,8 @@ administrator login.
 | Stager | Create staging copies of WordPress, PHP, static, and Instatic sites, and promote them back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
 | Maintenance Mode | Serve a customizable 503 page per site with instant toggles and IP bypasses. |
 | PHP Resources | Group PHP sites into categories of PHP-FPM worker limits, assign them in bulk, and pick the category new sites join. |
-| Device theme on first visit | Follow the device's light or dark preference on the first visit to the CloudPanel login page. |
+| Panel Tweaks | Site search and columns, mobile layouts, and theme improvements for CloudPanel. |
+| WordPress Sign-In | Open any WordPress on the server as its first administrator, from the panel's Sites page, without its password. |
 
 ## Install
 
@@ -45,7 +47,7 @@ can access it.
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
 Addon names are `cloudflare-ips`, `instatic`, `stager`, `maintenance`,
-`php-resources`, and `login-theme`. Run
+`php-resources`, `panel-tweaks`, and `wp-login`. Run
 `clp-addons --help` for version selection and data removal options.
 
 See [Instatic backup and restore](docs/instatic-backups.md) for CloudPanel Remote

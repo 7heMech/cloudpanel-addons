@@ -23,6 +23,16 @@ without directory listing; flag files remain root-only and HTML files are
 readable by Nginx. Custom pages are size-bounded, stripped of active markup,
 and served with a restrictive content security policy.
 
+WordPress Sign-In is the only addon that writes into a site's own tree, and it
+is a separate addon for that reason: an operator who does not install it does
+not have that code on the box, and the gateway's addon-and-verb table refuses
+the verb to anything else. It installs a must-use plugin and a one-time secret
+as the site's user, and refuses a domain the panel does not have or a root that
+is not a WordPress. The secret is a SHA-256 of a token that lives for a minute,
+is removed before it is compared, and travels in a POST body rather than a URL.
+Disabling or uninstalling the addon removes the plugin from every site. See
+[WordPress Sign-In](wp-login.md).
+
 ## CloudPanel authentication
 
 The gateway reads the bounded `cloudpanel` session file without following
