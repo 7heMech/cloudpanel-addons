@@ -41,6 +41,7 @@ export const INSTATIC_ALLOWED_VERBS = new Set([
  */
 export const GIT_ALLOWED_VERBS = new Set([
   "sites",
+  "domains",
   "status",
   "configure",
   "forget",

@@ -197,10 +197,18 @@ test("configure stores one site's settings and status reads them back", async ()
 
     const listed = await action(fx, ["sites"]);
     expect(listed.data.sites.map((site: { domain: string }) => site.domain)).toEqual([DOMAIN]);
+    // What the panel's own site list asks, which is the names and nothing else.
+    expect((await action(fx, ["domains"])).data).toEqual({ domains: [DOMAIN] });
 
     const forgotten = await action(fx, ["forget", `--domain=${DOMAIN}`]);
     expect(forgotten.ok).toBe(true);
     expect((await action(fx, ["sites"])).data.sites).toEqual([]);
+    expect((await action(fx, ["domains"])).data.domains).toEqual([]);
+
+    // A record this addon cannot parse is not a site that deploys, so the
+    // panel's site list is not told to offer it a link.
+    writeFileSync(join(fx.root, "state", "sites", `${DOMAIN}.json`), "{ broken", { mode: 0o600 });
+    expect((await action(fx, ["domains"])).data.domains).toEqual([]);
   } finally {
     rmSync(fx.root, { recursive: true, force: true });
   }

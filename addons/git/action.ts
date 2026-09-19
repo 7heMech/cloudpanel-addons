@@ -54,7 +54,7 @@ export const MAX_HOOK_BODY_BYTES = 128 * 1024;
 const MAX_HOOK_INPUT_BYTES = 4 * MAX_HOOK_BODY_BYTES;
 
 export type GitVerb =
-  | "sites" | "status" | "configure" | "forget" | "keygen"
+  | "sites" | "domains" | "status" | "configure" | "forget" | "keygen"
   | "webhook-enable" | "webhook-disable" | "hook"
   | "deploy" | "run" | "job" | "jobs" | "watch-job" | "prune";
 
@@ -233,7 +233,7 @@ function parseAction(argv: string[], paths: GitActionPaths, options: GitActionOp
   });
   const verb = flat[0] as GitVerb | undefined;
   if (!verb) {
-    failAction("usage: clp-addons action git {sites|status|configure|forget|keygen|webhook-enable|webhook-disable|hook|deploy|run|job|jobs|watch-job|prune} [options]");
+    failAction("usage: clp-addons action git {sites|domains|status|configure|forget|keygen|webhook-enable|webhook-disable|hook|deploy|run|job|jobs|watch-job|prune} [options]");
   }
 
   let domain = "";
@@ -257,7 +257,7 @@ function parseAction(argv: string[], paths: GitActionPaths, options: GitActionOp
     "status", "configure", "forget", "keygen", "webhook-enable", "webhook-disable", "hook", "deploy",
   ];
   const needsJob: GitVerb[] = ["run", "job", "watch-job"];
-  const takesNothing: GitVerb[] = ["sites", "jobs", "prune"];
+  const takesNothing: GitVerb[] = ["sites", "domains", "jobs", "prune"];
 
   if (needsDomain.includes(verb)) {
     if (job) failAction(`${verb} takes only --domain`);
@@ -788,6 +788,19 @@ function withoutToken(config: GitSiteConfig | null): GitSiteConfig | null {
   return { ...config, webhook: { ...config.webhook, token: "" } };
 }
 
+/**
+ * Which sites this addon deploys, and nothing else about them.
+ *
+ * `sites` answers the fleet page and costs a panel-database read and two
+ * subprocesses per site. CloudPanel's own site list asks a much smaller
+ * question -- which of these rows should offer the link -- and asks it on a
+ * page the panel serves constantly, so it gets the directory listing behind
+ * the fleet view rather than the fleet view.
+ */
+function cmdDomains(paths: GitActionPaths): void {
+  emitOk(paths, { domains: configuredDomains(paths).filter((domain) => readConfig(paths, domain) !== null) });
+}
+
 async function readSettings(options: GitActionOptions, maxBytes = 8192): Promise<Record<string, unknown>> {
   const raw = options.input !== undefined ? options.input : await Bun.stdin.text();
   if (raw.length > maxBytes) failAction("that configuration is too large");
@@ -1176,6 +1189,7 @@ async function dispatch(
 ): Promise<void> {
   switch (action.verb) {
     case "sites": cmdSites(paths); return;
+    case "domains": cmdDomains(paths); return;
     case "status": cmdStatus(paths, action.domain); return;
     case "configure": await cmdConfigure(paths, action.domain, options); return;
     case "forget": cmdForget(paths, action.domain); return;

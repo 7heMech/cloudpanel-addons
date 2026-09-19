@@ -118,6 +118,16 @@ export async function handle(
     }
   }
 
+  // Read by the link injected into CloudPanel's own site list: Twig cannot see
+  // which sites this addon deploys, so the rows ask.
+  if (method === "GET" && path === "/api/sites") {
+    try {
+      return json({ ok: true, domains: await gitService.configuredDomains() });
+    } catch (error) {
+      return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+    }
+  }
+
   const jobApi = await jobApiRoute({
     req,
     path,

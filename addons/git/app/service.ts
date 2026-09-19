@@ -55,6 +55,13 @@ export const gitService = {
     return res.data.sites;
   },
 
+  /** Just the names, for the link CloudPanel's own site list draws per row. */
+  async configuredDomains(): Promise<string[]> {
+    const res = await action<{ domains: string[] }>("domains");
+    if (!res.ok || !res.data) throw new Error(res.error ?? "the configured sites could not be read");
+    return res.data.domains.filter((domain): domain is string => validateDomain(domain) !== null);
+  },
+
   async site(domain: string): Promise<GitSitePage> {
     const [panel, res] = await Promise.all([
       fetchPanelInfo(),

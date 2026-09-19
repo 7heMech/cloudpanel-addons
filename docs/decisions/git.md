@@ -76,8 +76,15 @@ altitude the list exists for -- deploying ten sites after one merge is the case
 a per-site form cannot answer. The fleet reply carries no webhook tokens; only
 the site's own page asks for a record it is going to print.
 
-CloudPanel's own site list carries a "Deploy from Git" link per row, beside
-Stager's "Clone", because that list is the fleet page an operator is already on.
+CloudPanel's own site list carries a "Deploy from Git" link, beside Stager's
+"Clone", on the rows of the sites this addon deploys -- that list is the fleet
+page an operator is already on, and a link on a site with no repository would
+be an invitation rather than an action. Which sites those are is in this addon's
+own records, which Twig cannot see, so the link is rendered hidden and one
+script after the table asks `domains` -- the directory listing behind the fleet
+view, rather than the fleet view, because the panel serves this page constantly.
+A row that gets no answer shows nothing.
+
 There is deliberately no card on the panel's Add Site page: it would have to
 reproduce the panel's own site creation -- PHP version, vhost template, site
 user, TLS -- and drift with every CloudPanel release. The link in the site list
