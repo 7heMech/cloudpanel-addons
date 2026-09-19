@@ -69,6 +69,22 @@ const SITES_STYLE = `
 .clp-tweaks-toolbar input[type="search"] { flex: 1 1 260px; min-width: 0; max-width: 420px; }
 .clp-tweaks-toolbar select { flex: 0 0 auto; width: auto; }
 .clp-tweaks-toolbar .clp-tweaks-summary { margin-left: auto; color: #9bacb6; font-size: 14px; }
+/* The button is one of the panel's own form controls, so it matches the search
+   and the filter it stands beside in both themes. The list hangs off it rather
+   than opening a dialog: a checkbox is a mode, and the table under it is the
+   answer. */
+.clp-tweaks-columns { position: relative; flex: 0 0 auto; }
+.clp-tweaks-columns-button { width: auto; cursor: pointer; text-align: left; }
+.clp-tweaks-columns-menu { position: absolute; z-index: 20; top: 100%; right: 0; margin-top: 4px;
+  min-width: 190px; max-height: 60vh; overflow-y: auto; padding: 6px 0; border: 1px solid #eaeaea;
+  border-radius: 6px; background: #fff; box-shadow: 0 8px 28px rgba(0, 0, 0, .16); }
+.clp-tweaks-columns-menu[hidden] { display: none; }
+.clp-tweaks-columns-menu label { display: flex; align-items: center; gap: 10px; margin: 0;
+  padding: 9px 16px; font-size: 14px; font-weight: 400; white-space: nowrap; cursor: pointer; }
+.clp-tweaks-columns-menu label:hover { background: rgba(127, 143, 153, .14); }
+.clp-tweaks-columns-menu input { width: 16px; height: 16px; margin: 0; flex: 0 0 auto; }
+html.dark .clp-tweaks-columns-menu { border-color: var(--clp-border-color, #a8b3cf33);
+  background: var(--clp-bg-secondary, #1c1f26); color: var(--clp-text, #fff); }
 .clp-tweaks-count { display: inline-block; margin-left: 12px; padding: 2px 10px; border: 1px solid currentColor;
   border-radius: 99px; color: #9bacb6; font-size: 14px; font-weight: 600; vertical-align: middle; }
 .clp-tweaks-table th.clp-tweaks-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
@@ -132,33 +148,37 @@ const SITES_MOBILE_STYLE = `
      scoped to one table, so the reset has to be important -- and so does
      everything below that puts a border or a padding back. */
   table.table-sites td { order: 5; border: 0 !important; padding: 0 !important; text-align: left !important; }
-  /* Two zero-height flex items, each ending a line: the domain has the first to
-     itself, so a long one has the whole card to run in, and what the site runs
-     goes on the second as a tag. */
+  /* A zero-height flex item ending the card's first line, which the hostname
+     and the tag share: the tag is short and sits at the right-hand end, so the
+     hostname still has most of the line and wraps into the rest of it. */
   table.table-sites tbody tr::before { content: ""; order: 2; flex: 0 0 100%; height: 0; }
-  table.table-sites tbody tr::after { content: ""; order: 4; flex: 0 0 100%; height: 0; }
   /* A heading over the tag would only repeat the column it came from: the value
      says "WordPress" on its own. The App column is the panel's third, so the two
      are put in this order rather than found in it. */
   table.table-sites td.clp-tweaks-domain { order: 0; flex: 1 1 auto; min-width: 0;
     font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
-  table.table-sites td.clp-tweaks-type { order: 3; flex: 0 1 auto; max-width: 100%; margin: 8px 0 0;
+  table.table-sites td.clp-tweaks-type { order: 1; flex: 0 1 auto; max-width: 50%; margin: 0 0 0 auto;
     padding: 3px 8px !important; border: 1px solid #eaeaea !important; border-radius: 4px; color: #9bacb6;
     font-size: 12px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   html.dark table.table-sites td.clp-tweaks-type { border-color: var(--clp-border-color) !important; }
   table.table-sites td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; margin-top: 14px; }
   table.table-sites td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px;
     color: #9bacb6; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+  /* A certificate badge is wider than half a phone, and it is the panel's own
+     nowrap that would have run it under the value beside it. */
+  table.table-sites td .clp-tweaks-badge { max-width: 100%; white-space: normal; }
   table.table-sites td.clp-tweaks-actions { order: 6; flex: 1 1 100%; margin-top: 14px; }
 }
 `;
 
-// With both switches on the button belongs on the card's first line, beside
-// what the site runs, rather than on a full-width row of its own below it.
+// With both switches on the button costs the card no line of its own: the
+// values give up the width it needs, so it sits at the bottom right-hand corner
+// beside the last of them rather than on a row below them.
 const MENU_MOBILE_STYLE = `
 @media (max-width: 860px) {
-  html.clp-tweaks-menu table.table-sites td.clp-tweaks-actions { order: 1; flex: 0 0 auto;
-    margin: -3px 0 0 auto; }
+  html.clp-tweaks-menu table.table-sites td[data-label] { flex: 1 1 calc(50% - 28px); }
+  html.clp-tweaks-menu table.table-sites td.clp-tweaks-actions { flex: 0 0 auto;
+    align-self: flex-end; margin: 0 0 0 auto; }
 }
 `;
 
@@ -215,6 +235,88 @@ const SITES_SCRIPT = `
     .then(function (response) { return response.ok ? response.json() : null; })
     .catch(function () { return null; });
 
+  // --- which columns are on ---------------------------------------------
+  //
+  // A phone has room for two values beside each other, and which two is a
+  // question about this screen rather than about the box: the answer is kept
+  // per browser, and a narrow screen keeps a different one from a wide one, so
+  // a desktop losing the runtime column is not a phone's decision. What a
+  // column costs is the same either way -- every one of them is in the reply
+  // the table is painted from already.
+  var COLUMNS = [
+    { key: "user", label: "Site user", wide: true, narrow: false, native: 2 },
+    { key: "app", label: "App", wide: true, narrow: true, native: 3 },
+    { key: "ssl", label: "SSL", wide: true, narrow: true },
+    { key: "runtime", label: "Runtime", wide: true, narrow: false },
+    { key: "disk", label: "Disk", wide: true, narrow: true },
+    { key: "created", label: "Created", wide: false, narrow: false },
+    { key: "cloudflare", label: "Cloudflare", wide: false, narrow: false },
+    { key: "varnish", label: "Varnish", wide: false, narrow: false }
+  ];
+  var NARROW_QUERY = "(max-width: 860px)";
+  var COLUMNS_ON = SITES_TABLE_JSON;
+  var columnStyle = null;
+  var tagged = false;
+  var chosen = {};
+
+  function narrowNow() {
+    return Boolean(window.matchMedia && window.matchMedia(NARROW_QUERY).matches);
+  }
+
+  function storeKey(narrow) {
+    return narrow ? "clp_tweaks_columns_narrow" : "clp_tweaks_columns_wide";
+  }
+
+  // The defaults are what a column is worth on a screen that size, and only the
+  // keys somebody moved are stored, so a column added by a later release
+  // arrives at its own default rather than switched off by an old answer.
+  function readChoice(narrow) {
+    var picked = {};
+    for (var i = 0; i < COLUMNS.length; i++) {
+      picked[COLUMNS[i].key] = narrow ? COLUMNS[i].narrow : COLUMNS[i].wide;
+    }
+    try {
+      var saved = JSON.parse(window.localStorage.getItem(storeKey(narrow)) || "{}");
+      for (var key in saved) {
+        if (Object.prototype.hasOwnProperty.call(picked, key)) picked[key] = saved[key] === true;
+      }
+    } catch (e) {}
+    return picked;
+  }
+
+  function writeChoice(narrow, picked) {
+    try {
+      window.localStorage.setItem(storeKey(narrow), JSON.stringify(picked));
+    } catch (e) {}
+  }
+
+  // One rule sheet rather than an attribute on every cell: this runs while the
+  // browser is still parsing the table, so a column that is off is never
+  // painted at all. Until the cells are named, the panel's own two are hidden
+  // by their position, which is the only thing about them known this early; the
+  // sheet is written again without those rules as soon as they are named.
+  function paintColumns(picked) {
+    var css = "";
+    for (var i = 0; i < COLUMNS.length; i++) {
+      var column = COLUMNS[i];
+      if (picked[column.key] !== false) continue;
+      css += 'table.table-sites [data-col="' + column.key + '"] { display: none !important; }\\n';
+      if (!tagged && column.native) {
+        css += "table.table-sites tr > :nth-child(" + column.native + ") { display: none !important; }\\n";
+      }
+    }
+    if (!columnStyle) {
+      columnStyle = document.createElement("style");
+      (document.head || document.documentElement).appendChild(columnStyle);
+    }
+    columnStyle.textContent = css;
+  }
+
+  if (COLUMNS_ON) {
+    chosen = readChoice(narrowNow());
+    paintColumns(chosen);
+  }
+
   function start() {
     var table = document.querySelector("table.table-sites");
     var tbody = table && table.querySelector("tbody");
@@ -240,6 +342,10 @@ const SITES_SCRIPT = `
     table.classList.add("clp-tweaks-table");
     scroll(table);
     labelNativeCells(rows);
+    if (COLUMNS_ON) {
+      tagged = true;
+      paintColumns(chosen);
+    }
     if (document.documentElement.classList.contains("clp-tweaks-menu")) buildMenus(rows);
 
     wanted.then(function (payload) {
@@ -258,6 +364,7 @@ const SITES_SCRIPT = `
       addColumns(rows, Boolean(tweaks.diskUsage));
       addCount(rows);
       buildToolbar(rows);
+      buildColumnPicker(Boolean(tweaks.diskUsage));
       makeSortable(rows);
     }
 
@@ -285,13 +392,21 @@ const SITES_SCRIPT = `
     // reply. The third column is the panel's own App column.
     function labelNativeCells(rows) {
       var labels = headings();
+      var heads = table.querySelectorAll("thead th");
+      // The panel's own two middle columns answer to the picker as well, so
+      // they are named here with the keys it knows them by.
+      if (heads[1]) heads[1].setAttribute("data-col", "user");
+      if (heads[2]) heads[2].setAttribute("data-col", "app");
       for (var i = 0; i < rows.length; i++) {
         var cells = rows[i].el.children;
         for (var c = 0; c < cells.length && c < labels.length; c++) {
           if (c === 0) cells[c].classList.add("clp-tweaks-domain");
           else if (c === cells.length - 1) cells[c].classList.add("clp-tweaks-actions");
-          else if (c === 2) cells[c].classList.add("clp-tweaks-type");
-          else cells[c].setAttribute("data-label", labels[c]);
+          else if (c === 2) { cells[c].classList.add("clp-tweaks-type"); cells[c].setAttribute("data-col", "app"); }
+          else {
+            cells[c].setAttribute("data-label", labels[c]);
+            if (c === 1) cells[c].setAttribute("data-col", "user");
+          }
         }
       }
     }
@@ -323,15 +438,17 @@ const SITES_SCRIPT = `
       th.textContent = label;
       th.className = "clp-tweaks-sortable";
       th.setAttribute("data-sort", key);
+      th.setAttribute("data-col", key);
       if (numeric) th.setAttribute("data-numeric", "1");
       th.setAttribute("scope", "col");
       th.tabIndex = 0;
       return th;
     }
 
-    function cell(label) {
+    function cell(label, key) {
       var td = document.createElement("td");
       td.setAttribute("data-label", label);
+      td.setAttribute("data-col", key);
       return td;
     }
 
@@ -362,7 +479,7 @@ const SITES_SCRIPT = `
     // that as covered would mark the whole fleet green. It is named as the
     // placeholder it is; only a certificate a browser accepts counts down.
     function sslCell(site) {
-      var td = cell("SSL");
+      var td = cell("SSL", "ssl");
       if (!site || !site.certificate) {
         td.appendChild(badge("None", "none"));
         td.setAttribute("data-value", "0");
@@ -385,7 +502,7 @@ const SITES_SCRIPT = `
     }
 
     function runtimeCell(site) {
-      var td = cell("Runtime");
+      var td = cell("Runtime", "runtime");
       var text = site && site.runtime ? site.runtime : "";
       if (text) {
         td.textContent = text;
@@ -410,7 +527,7 @@ const SITES_SCRIPT = `
     }
 
     function diskCell(site) {
-      var td = cell("Disk");
+      var td = cell("Disk", "disk");
       td.className += " clp-tweaks-size";
       var disk = site && site.disk;
       if (!disk) {
@@ -428,6 +545,49 @@ const SITES_SCRIPT = `
       return td;
     }
 
+    // CloudPanel writes its timestamps in UTC without saying so, the way
+    // SQLite does: "2026-09-10 09:30:00". The cell shows the date in the
+    // reader's own zone and sorts on the instant behind it.
+    function createdAtOf(site) {
+      if (!site || !site.createdAt) return NaN;
+      var at = Date.parse(String(site.createdAt).replace(" ", "T") + "Z");
+      return isNaN(at) ? Date.parse(site.createdAt) : at;
+    }
+
+    function createdCell(site) {
+      var td = cell("Created", "created");
+      var at = createdAtOf(site);
+      if (isNaN(at)) {
+        td.textContent = "—";
+        td.className += " clp-tweaks-muted";
+        td.setAttribute("data-value", "0");
+        return td;
+      }
+      td.textContent = new Date(at).toLocaleDateString();
+      td.title = new Date(at).toLocaleString();
+      td.setAttribute("data-value", String(at));
+      return td;
+    }
+
+    // Two of the panel's own per-site switches. They are modes rather than
+    // problems, so neither is coloured as one: what an operator wants from a
+    // column of them is to see which sites are unlike the rest.
+    function switchCell(label, key, on) {
+      var td = cell(label, key);
+      if (on) {
+        td.textContent = "On";
+        td.setAttribute("data-value", "1");
+        return td;
+      }
+      td.textContent = "—";
+      td.className += " clp-tweaks-muted";
+      td.setAttribute("data-value", "0");
+      return td;
+    }
+
+    // Every column is built for every row, whether or not it is switched on:
+    // what hides one is a rule keyed on its name, so the picker turns a column
+    // back on without the table being built again.
     function addColumns(rows, withDisk) {
       var headRow = table.querySelector("thead tr");
       var actionHead = headRow ? headRow.lastElementChild : null;
@@ -435,6 +595,9 @@ const SITES_SCRIPT = `
       headRow.insertBefore(header("SSL", "ssl", true), actionHead);
       headRow.insertBefore(header("Runtime", "runtime", false), actionHead);
       if (withDisk) headRow.insertBefore(header("Disk", "disk", true), actionHead);
+      headRow.insertBefore(header("Created", "created", true), actionHead);
+      headRow.insertBefore(header("Cloudflare", "cloudflare", true), actionHead);
+      headRow.insertBefore(header("Varnish", "varnish", true), actionHead);
 
       for (var i = 0; i < rows.length; i++) {
         var row = rows[i];
@@ -442,7 +605,82 @@ const SITES_SCRIPT = `
         row.el.insertBefore(sslCell(row.site), actionCell);
         row.el.insertBefore(runtimeCell(row.site), actionCell);
         if (withDisk) row.el.insertBefore(diskCell(row.site), actionCell);
+        row.el.insertBefore(createdCell(row.site), actionCell);
+        row.el.insertBefore(switchCell("Cloudflare", "cloudflare", row.site && row.site.cloudflareOnly), actionCell);
+        row.el.insertBefore(switchCell("Varnish", "varnish", row.site && row.site.varnish), actionCell);
       }
+    }
+
+    // --- the column picker -------------------------------------------------
+
+    // Checking a box is not a submission: it paints the table again and is
+    // remembered for this browser, so the menu stays open for the next one.
+    // Closing it is the button again, a click outside it, or Escape.
+    function buildColumnPicker(withDisk) {
+      var holder = document.getElementById("clp-tweaks-columns");
+      var button = document.getElementById("clp-tweaks-columns-button");
+      var menu = document.getElementById("clp-tweaks-columns-menu");
+      if (!holder || !button || !menu) return;
+
+      var boxes = [];
+      for (var i = 0; i < COLUMNS.length; i++) {
+        var column = COLUMNS[i];
+        if (column.key === "disk" && !withDisk) continue;
+        var label = document.createElement("label");
+        var box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = chosen[column.key] !== false;
+        box.setAttribute("data-column", column.key);
+        label.appendChild(box);
+        label.appendChild(document.createTextNode(column.label));
+        menu.appendChild(label);
+        boxes.push(box);
+        bindBox(box, column.key);
+      }
+
+      function bindBox(box, key) {
+        box.addEventListener("change", function () {
+          chosen[key] = box.checked;
+          writeChoice(narrowNow(), chosen);
+          paintColumns(chosen);
+        });
+      }
+
+      function close() {
+        menu.hidden = true;
+        button.setAttribute("aria-expanded", "false");
+      }
+
+      button.addEventListener("click", function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+        var open = !menu.hidden;
+        menu.hidden = open;
+        button.setAttribute("aria-expanded", open ? "false" : "true");
+      });
+      document.addEventListener("click", function (event) {
+        if (!menu.hidden && !holder.contains(event.target)) close();
+      });
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape" || event.key === "Esc") close();
+      });
+
+      // A window dragged across the breakpoint is a different screen with a
+      // different answer, so the other one is read back and the boxes follow.
+      if (window.matchMedia) {
+        var query = window.matchMedia(NARROW_QUERY);
+        var moved = function () {
+          chosen = readChoice(query.matches);
+          for (var b = 0; b < boxes.length; b++) {
+            boxes[b].checked = chosen[boxes[b].getAttribute("data-column")] !== false;
+          }
+          paintColumns(chosen);
+        };
+        if (query.addEventListener) query.addEventListener("change", moved);
+        else if (query.addListener) query.addListener(moved);
+      }
+
+      holder.hidden = false;
     }
 
 
@@ -786,12 +1024,18 @@ function sitesSnippet(url: string, tweaks: PanelTweaks = storedTweaks()): string
             <select id="clp-tweaks-type" class="form-select" aria-label="Filter by application">
               <option value="">All applications</option>
             </select>
+            <div class="clp-tweaks-columns" id="clp-tweaks-columns" hidden>
+              <button type="button" class="form-control clp-tweaks-columns-button" id="clp-tweaks-columns-button"
+                aria-haspopup="true" aria-expanded="false">Columns</button>
+              <div class="clp-tweaks-columns-menu" id="clp-tweaks-columns-menu" role="group" aria-label="Columns" hidden></div>
+            </div>
             <span class="clp-tweaks-summary" id="clp-tweaks-summary" role="status"></span>
           </div>
           <script>${SITES_SCRIPT.split("ADDON_URL").join(url)
   .replace("CERTIFICATE_LABELS_JSON", JSON.stringify(CERTIFICATE_LABELS))
   .replace("APPLICATION_LABELS_JSON", JSON.stringify(APPLICATION_LABELS))
-  .replace("SELF_SIGNED_JSON", JSON.stringify(SELF_SIGNED_CERTIFICATE))}</script>
+  .replace("SELF_SIGNED_JSON", JSON.stringify(SELF_SIGNED_CERTIFICATE))
+  .replace("SITES_TABLE_JSON", JSON.stringify(tweaks.sitesTable))}</script>
           {% endif %}`;
 }
 

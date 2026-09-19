@@ -3,7 +3,7 @@
 ## One addon for the small additions
 
 Small changes to CloudPanel's own pages ship as one addon with a switch each,
-not as an addon each. A site count, a search box, two extra columns, a narrow
+not as an addon each. A site count, a search box, columns you pick, a narrow
 screen that reads, a login-page theme: each is a card's worth of description and
 none of them is a system; listing them separately on the Addons dashboard would
 have put a fifteen-line script beside Instatic and Stager and implied they were
@@ -132,6 +132,13 @@ no Python runtime rather than failing the list.
 Every value the script writes goes in as text or as an element it built. None of
 it is markup, because all of it came out of somebody's database.
 
+The newer of the columns -- the creation date, Cloudflare-only and Varnish --
+are columns of `site` rather than tables of their own, and a statement naming a
+column the table has not got fails exactly as one naming a missing table does.
+So those three are asked for only when `PRAGMA table_info` says they are there,
+and selected as NULL when they are not: an older panel loses three columns
+rather than its site list.
+
 The App column is the one the addon rewrites rather than adds. CloudPanel prints
 the site's type there, uppercased, so a WordPress reads as PHP and a reverse
 proxy as REVERSE-PROXY; the application it recorded is both more use and what
@@ -139,6 +146,31 @@ the filter beside the table offers, so the two agree. For a PHP site that column
 holds the vhost template the site was created from, which is a set an operator
 can add to, so only the two run-together names the panel ships are respelled and
 anything else is printed as it was written.
+
+## Which columns are on is the browser's answer, not the box's
+
+Every column is built for every row and hidden by a rule rather than left out,
+so the picker beside the search turns one back on without asking the box
+anything or building the table again. The choice is kept in `localStorage`, and
+a narrow screen keeps a different one from a wide one: a phone has room for two
+values beside each other and a desktop for eight, and a desktop dropping the
+runtime column is not a phone's decision. Only the keys somebody moved are
+stored, so a column a later release adds arrives at its own default rather than
+switched off by an old answer.
+
+The rule sheet is written while the browser is still parsing the table, from a
+choice `localStorage` can answer immediately, so a column that is off is never
+painted at all -- the same reason the card layout is keyed on CloudPanel's own
+class. Until the script can name the cells, the panel's own two columns are
+hidden by their position, which is the only thing known about them that early;
+the sheet is written again, without those rules, as soon as they are named.
+
+A card on a phone is the same columns in one flex row: the domain and the
+application tag share the first line, the values that are on follow in pairs
+beneath it, and the row menu's button takes the bottom right-hand corner beside
+the last of them rather than a line of its own. The values give up the width the
+button needs, which is why a long certificate badge can wrap on the line it
+shares with it.
 
 ## Measured sizes ride the repair timer
 

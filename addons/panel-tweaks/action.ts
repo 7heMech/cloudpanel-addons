@@ -40,7 +40,7 @@ export type PanelTweaksVerb = "state" | "set-tweaks" | "scan";
 export interface PanelTweaks {
   /** Follow the device's light or dark preference on the panel's login page. */
   deviceTheme: boolean;
-  /** Count, search, type filter, sorting and the SSL and runtime columns. */
+  /** Count, search, type filter, sorting, the extra columns and their picker. */
   sitesTable: boolean;
   /** One card per site on a narrow screen instead of a table that scrolls. */
   sitesMobile: boolean;
@@ -131,6 +131,11 @@ export interface TweakSiteView {
   application: string;
   /** "PHP 8.2", "Node.js 20", "Python 3.11", or "" for a site with no runtime. */
   runtime: string;
+  /** When CloudPanel created the site, as it recorded it. */
+  createdAt: string;
+  /** The panel's own per-site switches, for the columns that report them. */
+  cloudflareOnly: boolean;
+  varnish: boolean;
   certificate: { type: string; expiresAt: string } | null;
   /** Bytes under the site's home, and under its databases, when measured. */
   disk: { bytes: number; databaseBytes: number; measuredAt: string } | null;
@@ -271,6 +276,9 @@ interface PanelSiteRow {
   domain_name: string;
   user: string;
   type: string;
+  created_at: string | null;
+  allow_traffic_from_cloudflare_only: number | null;
+  varnish_cache: number | null;
   application: string | null;
   root_directory: string | null;
   php_version: string | null;
@@ -309,6 +317,23 @@ const OPTIONAL_JOINS = [
     absent: "NULL AS certificate_type, NULL AS certificate_expires_at", on: "c.id = s.certificate_id" },
 ];
 
+/**
+ * Columns of `site` a column of the table reports, and which the oldest
+ * CloudPanel a box may be running might not have. Named the same way the joins
+ * are: what is there is selected, what is not is selected as NULL, because one
+ * missing column would otherwise cost the whole site list.
+ */
+const OPTIONAL_SITE_COLUMNS = ["created_at", "allow_traffic_from_cloudflare_only", "varnish_cache"];
+
+function presentSiteColumns(db: Database): Set<string> {
+  try {
+    const rows = db.query<{ name: string }, []>(`PRAGMA table_info(site);`).all();
+    return new Set(rows.map((row) => row.name));
+  } catch {
+    return new Set();
+  }
+}
+
 function presentTables(db: Database): Set<string> {
   try {
     const rows = db.query<{ name: string }, []>(
@@ -332,8 +357,12 @@ function siteQuery(db: Database): string {
       columns.push(join.absent ?? `NULL AS ${join.column}`);
     }
   }
+  const siteColumns = presentSiteColumns(db);
+  const optional = OPTIONAL_SITE_COLUMNS.map((column) =>
+    siteColumns.has(column) ? `s.${column}` : `NULL AS ${column}`);
   return `
   SELECT s.domain_name, s.user, s.type, s.application, s.root_directory,
+         ${optional.join(", ")},
          ${columns.join(",\n         ")}
   FROM site s
   ${joins.join("\n  ")}
@@ -379,6 +408,9 @@ function siteViews(rows: PanelSiteRow[], cache: DiskCache): TweakSiteView[] {
     type: row.type,
     application: row.application ?? "",
     runtime: runtimeOf(row),
+    createdAt: row.created_at ?? "",
+    cloudflareOnly: Boolean(row.allow_traffic_from_cloudflare_only),
+    varnish: Boolean(row.varnish_cache),
     certificate: row.certificate_type
       ? { type: row.certificate_type, expiresAt: row.certificate_expires_at ?? "" }
       : null,

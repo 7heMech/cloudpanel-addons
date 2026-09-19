@@ -181,27 +181,27 @@ function panelTweaksPreviewState(url: URL): PanelTweaksState {
     sites: url.searchParams.has("empty") ? [] : [
       {
         domain: "www.example.com", user: "example", type: "php", application: "WordPress",
-        runtime: "PHP 8.2", certificate: { type: "2", expiresAt: "2026-11-30 10:00:00" },
+        runtime: "PHP 8.2", createdAt: "2024-03-02 09:30:00", cloudflareOnly: true, varnish: false, certificate: { type: "2", expiresAt: "2026-11-30 10:00:00" },
         disk: measured ? { bytes: 4_812_003_328, databaseBytes: 412_003_328, measuredAt: at } : null,
       },
       {
         domain: "shop.example.com", user: "shop", type: "php", application: "WordPress",
-        runtime: "PHP 8.3", certificate: { type: "2", expiresAt: "2026-09-24 10:00:00" },
+        runtime: "PHP 8.3", createdAt: "2025-11-19 14:05:00", cloudflareOnly: true, varnish: true, certificate: { type: "2", expiresAt: "2026-09-24 10:00:00" },
         disk: measured ? { bytes: 19_327_352_832, databaseBytes: 2_147_483_648, measuredAt: at } : null,
       },
       {
         domain: "static.example.com", user: "static", type: "static", application: "Static",
-        runtime: "", certificate: null,
+        runtime: "", createdAt: "2026-01-08 08:15:00", cloudflareOnly: false, varnish: false, certificate: null,
         disk: measured ? { bytes: 24_117_248, databaseBytes: 0, measuredAt: at } : null,
       },
       {
         domain: "app.example.com", user: "app", type: "nodejs", application: "Nodejs",
-        runtime: "Node.js 20", certificate: { type: "1", expiresAt: "2027-09-05 10:00:00" },
+        runtime: "Node.js 20", createdAt: "2026-06-21 17:40:00", cloudflareOnly: false, varnish: false, certificate: { type: "1", expiresAt: "2027-09-05 10:00:00" },
         disk: null,
       },
       {
         domain: "cdn.example.com", user: "cdn", type: "reverse-proxy", application: "ReverseProxy",
-        runtime: "", certificate: { type: "2", expiresAt: "2026-12-20 10:00:00" },
+        runtime: "", createdAt: "2026-09-01 11:00:00", cloudflareOnly: false, varnish: true, certificate: { type: "2", expiresAt: "2026-12-20 10:00:00" },
         disk: measured ? { bytes: 1_048_576, databaseBytes: 0, measuredAt: at } : null,
       },
     ],

@@ -174,6 +174,24 @@ test("the narrow-screen layout needs no data and no class the script adds", () =
   expect(mobile).toContain("html.dark table.table-sites tr { border-top-color: var(--clp-border-color); }");
 });
 
+// Which columns a screen has room for is a question about the screen, so the
+// answer is the browser's rather than the box's -- and a column that is off is
+// hidden by a rule written before the table is parsed rather than by an
+// attribute set on cells that have already been painted.
+test("the column picker is in the block, and a switched-off column is never painted", () => {
+  const snippet = sites({ sitesTable: true });
+  expect(snippet).toContain('id="clp-tweaks-columns-button"');
+  expect(snippet).toContain('id="clp-tweaks-columns-menu"');
+  expect(snippet).toContain("var COLUMNS_ON = true;");
+  expect(snippet).toContain("clp_tweaks_columns_narrow");
+  expect(snippet).toContain("clp_tweaks_columns_wide");
+  // A phone starts without the two the panel's own table has room for.
+  expect(snippet).toContain('{ key: "user", label: "Site user", wide: true, narrow: false, native: 2 }');
+  expect(snippet).toContain('{ key: "runtime", label: "Runtime", wide: true, narrow: false }');
+  // Off, the whole thing is inert: no choice is read and no rule is written.
+  expect(sites({ sitesTable: false })).toContain("var COLUMNS_ON = false;");
+});
+
 // The block is rendered by Twig before a browser ever sees it, and Twig reads
 // `{{`, `{%` and `{#` wherever they appear -- including inside a <script>.
 test("nothing in the block is markup Twig would take for its own", () => {
@@ -209,6 +227,26 @@ test("a panel build without the runtime or certificate tables still lists its si
   expect(state.sites.map((site) => site.domain)).toEqual(["docs.example.com", "shop.example.com"]);
   expect(state.sites.find((site) => site.domain === "shop.example.com")?.runtime).toBe("PHP 8.3");
   expect(state.sites.every((site) => site.certificate === null)).toBe(true);
+});
+
+// The columns those three report arrived with later CloudPanel releases, and a
+// statement naming a column the table has not got fails the same way one naming
+// a missing table does -- which would cost the whole list, not one column.
+test("a panel whose site table predates those columns still lists its sites", async () => {
+  const db = new Database(join(root, "panel.sq3"), { create: true });
+  db.exec(`
+    DROP TABLE site;
+    CREATE TABLE site (id INTEGER PRIMARY KEY, type TEXT, domain_name TEXT, root_directory TEXT,
+      user TEXT, application TEXT, certificate_id INTEGER);
+    INSERT INTO site VALUES (1, 'php', 'shop.example.com', 'shop.example.com', 'shop', 'WordPress', 7);
+  `);
+  db.close();
+  const state = await act<PanelTweaksState>(["state"]);
+  const shop = state.sites.find((site) => site.domain === "shop.example.com")!;
+  expect(shop.runtime).toBe("PHP 8.3");
+  expect(shop.createdAt).toBe("");
+  expect(shop.cloudflareOnly).toBe(false);
+  expect(shop.varnish).toBe(false);
 });
 
 // The menu is a surface two addons share: one draws it, another puts an action
@@ -276,15 +314,18 @@ function seedPanel(): void {
   const db = new Database(join(root, "panel.sq3"), { create: true });
   db.exec(`
     CREATE TABLE site (id INTEGER PRIMARY KEY, type TEXT, domain_name TEXT, root_directory TEXT,
-      user TEXT, application TEXT, certificate_id INTEGER);
+      user TEXT, application TEXT, certificate_id INTEGER, created_at TEXT,
+      allow_traffic_from_cloudflare_only BOOLEAN, varnish_cache BOOLEAN);
     CREATE TABLE php_settings (id INTEGER PRIMARY KEY, site_id INTEGER, php_version TEXT);
     CREATE TABLE nodejs_settings (id INTEGER PRIMARY KEY, site_id INTEGER, nodejs_version TEXT);
     CREATE TABLE python_settings (id INTEGER PRIMARY KEY, site_id INTEGER, python_version TEXT);
     CREATE TABLE certificate (id INTEGER PRIMARY KEY, site_id INTEGER, type TEXT, expires_at TEXT);
     CREATE TABLE "database" (id INTEGER PRIMARY KEY, site_id INTEGER, name TEXT);
     INSERT INTO certificate VALUES (7, 1, '2', '2026-12-01 09:00:00');
-    INSERT INTO site VALUES (1, 'php', 'shop.example.com', 'shop.example.com', 'shop', 'WordPress', 7);
-    INSERT INTO site VALUES (2, 'static', 'docs.example.com', 'docs.example.com', 'docs', 'Static', NULL);
+    INSERT INTO site VALUES (1, 'php', 'shop.example.com', 'shop.example.com', 'shop', 'WordPress', 7,
+      '2025-04-09 11:20:00', 1, 0);
+    INSERT INTO site VALUES (2, 'static', 'docs.example.com', 'docs.example.com', 'docs', 'Static', NULL,
+      '2026-02-14 08:00:00', 0, 1);
     INSERT INTO php_settings VALUES (1, 1, '8.3');
     INSERT INTO "database" VALUES (1, 1, 'shopdb');
   `);
@@ -340,9 +381,14 @@ test("the site list carries what CloudPanel's own template cannot", async () => 
   expect(shop.runtime).toBe("PHP 8.3");
   expect(shop.application).toBe("WordPress");
   expect(shop.certificate).toEqual({ type: "2", expiresAt: "2026-12-01 09:00:00" });
+  expect(shop.createdAt).toBe("2025-04-09 11:20:00");
+  expect(shop.cloudflareOnly).toBe(true);
+  expect(shop.varnish).toBe(false);
   const docs = state.sites.find((site) => site.domain === "docs.example.com")!;
   expect(docs.runtime).toBe("");
   expect(docs.certificate).toBeNull();
+  expect(docs.cloudflareOnly).toBe(false);
+  expect(docs.varnish).toBe(true);
 });
 
 // CloudPanel's own column prints the site type uppercased, so a reverse proxy
