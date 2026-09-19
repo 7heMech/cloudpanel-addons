@@ -56,9 +56,7 @@ export const DEFAULT_TWEAKS: PanelTweaks = {
   deviceTheme: true,
   sitesTable: true,
   sitesMobile: true,
-  // Off until asked for: a menu is a click more than a link, and it is worth
-  // that only once there is more than one thing behind it.
-  actionMenu: false,
+  actionMenu: true,
   panelMobile: true,
   // Off until asked for: it is the only tweak that reads the whole disk.
   diskUsage: false,

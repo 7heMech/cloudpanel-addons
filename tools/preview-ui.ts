@@ -174,7 +174,7 @@ function panelTweaksPreviewState(url: URL): PanelTweaksState {
       deviceTheme: on,
       sitesTable: on,
       sitesMobile: on,
-      actionMenu: url.searchParams.has("menu"),
+      actionMenu: on,
       panelMobile: on,
       diskUsage: on,
     },
@@ -314,7 +314,7 @@ function unwrapTwig(block: string): string {
 /**
  * Three addons put a block above CloudPanel's sites table; the stub shows all.
  * Panel Tweaks is handed the previewed switches rather than reading the ones
- * stored on a server, so `?off` and `?menu` change the injected markup here the
+ * stored on a server, so `?off` changes the injected markup here the
  * way a reconciliation would change it on a box.
  */
 function injectedSitesBlocks(state: PanelTweaksState): string {

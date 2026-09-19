@@ -14,8 +14,9 @@ the whole disk every fifteen minutes, so measured sizes are off until asked for.
 The layout switches are separate for a different reason: they change the shape
 of a page CloudPanel drew itself, and the operator who prefers the panel's own
 shape is not wrong. So the narrow-screen site list, the panel's own pages on a
-phone and the row menu are each their own switch, and the row menu -- which is a click
-more than a link -- is off until asked for.
+phone and the row menu are each their own switch. The row menu is on by
+default: several addons put a link in every row, and one button per row reads
+better than the list of links they add up to.
 
 What is deliberately not here is the WordPress sign-in, which shipped as a
 fourth switch and is now [its own addon](wp-login.md). Everything here changes
