@@ -91,15 +91,15 @@ sit beside their Copy buttons below the key or URL and retain their
 confirmation dialogs.
 
 A site nobody has connected yet shows the connection form. That form has the
-page to itself, so it is wider than a reading column and pairs its fields
-across that width: branch beside the repository URL, the post-deploy command
-beside the subdirectory under Advanced, and the submit button below a rule as
-the card's footer. The settings card on a connected site is one column wide and
-keeps its fields stacked. Saving an SSH remote generates the deploy key as part
-of the save, so the sequence is save, add the key to the repository, deploy.
-The key section is expanded until a checkout exists, or when the public key is
-missing. HTTPS remotes have no key section. A missing SSH key offers a generate
-action.
+page to itself, so it fills the width and pairs its fields across it, each pair
+split by how long its values run: branch beside the longer repository URL,
+subdirectory beside the longer post-deploy command under Advanced, and the
+submit button below a rule as the card's footer. The settings card on a
+connected site is one column wide and keeps its fields stacked. Saving an SSH
+remote generates the deploy key as part of the save, so the sequence is save,
+add the key to the repository, deploy. The key section is expanded until a
+checkout exists, or when the public key is missing. HTTPS remotes have no key
+section. A missing SSH key offers a generate action.
 
 The push-to-deploy switch and last delivery outcome stay visible. Webhook setup
 and Other providers & CI are independently expandable sections in that card;
