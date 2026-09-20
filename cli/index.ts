@@ -225,11 +225,15 @@ function restorePreviousArtifacts(): boolean {
   return true;
 }
 
-function installArtifacts(artifacts: FetchedArtifact[], tag: string): void {
-  keepPreviousArtifacts();
+function replaceArtifacts(artifacts: FetchedArtifact[], tag: string): void {
   writeAtomic(CLI_BIN, artifact(artifacts, CLI_ARTIFACT), 0o755);
   tryRun("chown", ["root:root", CLI_BIN]);
   writeArtifactManifest(tag, artifacts);
+}
+
+function installArtifacts(artifacts: FetchedArtifact[], tag: string): void {
+  keepPreviousArtifacts();
+  replaceArtifacts(artifacts, tag);
 }
 
 /**
@@ -480,13 +484,21 @@ async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () 
         "--no-self-update",
         `--updated-from=${current}`,
       ];
+      // Keeping the running binary aside happens before the boundary, because
+      // nothing has been replaced yet: there is no rollback to report, only an
+      // update that never started.
+      try {
+        keepPreviousArtifacts();
+      } catch (error) {
+        fatal(`could not keep the running binary aside, so the update was not started: ${error instanceof Error ? error.message : String(error)}`);
+      }
       // Everything from the replacement onwards is one boundary: the binary
       // and its manifest are written here, so a failure between them is as
       // much a half-finished update as a handoff that will not run. The
       // rollback itself is outside it, so its own failure is not retried.
       let failure: string | null = null;
       try {
-        installArtifacts(artifacts, target);
+        replaceArtifacts(artifacts, target);
         options.beforeManagerRestart?.();
         run(CLI_BIN, handoff, { stdio: "inherit", env: operationLockEnv() });
         const state = unitActive(MANAGER_UNIT);

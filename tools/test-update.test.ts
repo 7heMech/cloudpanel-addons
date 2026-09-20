@@ -12,6 +12,7 @@ let resolvedReleaseTag = "v1.2.3";
 let handoffFailure = false;
 let manifestWriteFailure = false;
 let previousIsSecure = true;
+let keepAsideFailure = false;
 /** null leaves the kept-aside manifest unreadable, as an out-of-band install does. */
 let previousChecksum: string | null = null;
 let managerUnitState = "active";
@@ -57,6 +58,7 @@ function resetProvisioning(): void {
   handoffFailure = false;
   manifestWriteFailure = false;
   previousIsSecure = true;
+  keepAsideFailure = false;
   previousChecksum = null;
   managerUnitState = "active";
   installedOnBox(true);
@@ -113,6 +115,7 @@ mock.module("node:fs", () => ({
   linkSync(from: string | URL, to: string | URL) {
     const source = String(from);
     const target = String(to);
+    if (keepAsideFailure && target === PREVIOUS_BIN) throw new Error("no space left on device");
     if (!tracked.has(source) && !tracked.has(target)) return originalLinkSync(from, to);
     if (!present.has(source)) throw new Error(`no such file: ${source}`);
     calls.push(`link:${source}->${target}`);
@@ -121,6 +124,7 @@ mock.module("node:fs", () => ({
   copyFileSync(from: string | URL, to: string | URL) {
     const source = String(from);
     const target = String(to);
+    if (keepAsideFailure && target === PREVIOUS_BIN) throw new Error("no space left on device");
     if (!tracked.has(source) && !tracked.has(target)) return originalCopyFileSync(from, to);
     if (!present.has(source)) throw new Error(`no such file: ${source}`);
     calls.push(`copy:${source}->${target}`);
@@ -528,6 +532,26 @@ test.each([
   expect(calls).toContain(`rename:${CLI_BIN}.rollback->${CLI_BIN}`);
   const warned = calls.some((call) => call.startsWith("log.warn:") && call.includes("does not match the checksum"));
   expect(warned).toBe(warns);
+});
+
+test("an update that cannot keep the running binary aside never starts", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  artifactsAvailable = false;
+  resolvedReleaseTag = "v1.3.0";
+  keepAsideFailure = true;
+
+  try {
+    await expect(cmdUpdate([])).rejects.toThrow("could not keep the running binary aside, so the update was not started");
+  } finally {
+    keepAsideFailure = false;
+  }
+
+  // Nothing was replaced, so there is nothing to roll back and nothing to say
+  // about which version the box is running.
+  expect(calls).not.toContain(`writeAtomic:${CLI_BIN}`);
+  expect(calls).not.toContain(handoffCall("v1.3.0"));
+  expect(calls).not.toContain(`rename:${CLI_BIN}.rollback->${CLI_BIN}`);
 });
 
 test("a handoff that leaves the manager down rolls back too", async () => {
