@@ -19,7 +19,7 @@ const STYLE = `
 .tweak-category > .tweak-row:last-child { padding-bottom: 0; }
 .tweak-row.is-nested { position: relative; padding-top: 0; padding-left: 36px; border-top: 0; }
 /* The branch starts beneath the parent and ends beside the child heading. */
-.tweak-row.is-nested::before { content: ""; position: absolute; top: -16px; left: 8px; width: 18px; height: 30px;
+.tweak-row.is-nested::before { content: ""; position: absolute; top: -16px; left: 8px; width: 18px; height: 28px;
   border-left: 2px solid var(--border); border-bottom: 2px solid var(--border); border-bottom-left-radius: 5px;
   pointer-events: none; }
 .tweak-row.is-nested h3 { font-size: 15px; font-weight: 500; }
