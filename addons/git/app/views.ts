@@ -20,8 +20,10 @@ const BASE = mountPath("git");
 // Only what the shared shell does not carry.
 const STYLE = `
 .git-dashboard { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-bottom: 24px; }
-.git-dashboard > * { min-width: 0; }
+.git-dashboard > * { min-width: 0; grid-column: 1; align-self: start; }
 .git-dashboard .card { margin-bottom: 0; }
+.git-webhook { grid-column: 2; grid-row: 1; align-self: stretch; }
+.git-webhook-on { grid-row: 1 / span 2; }
 .git-overview { border-top: 3px solid var(--accent); }
 .git-eyebrow { color: var(--muted); font-size: 13px; font-weight: 600; margin-bottom: 14px; }
 .git-commit { display: flex; align-items: flex-start; gap: 14px; }
@@ -44,6 +46,9 @@ const STYLE = `
 .git-disclosure > summary .git-summary-title { display: block; color: var(--heading); font-weight: 600; }
 .git-disclosure[open] > summary { margin-bottom: 20px; }
 .git-disclosure > summary .hint { display: block; margin-top: 5px; }
+.git-advanced { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 20px; }
+.git-advanced > summary { font-size: 14px; }
+.git-advanced .form-grid { grid-template-columns: minmax(0, 1fr); }
 .git-danger { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
 .git-setup { max-width: 760px; margin: 0 auto; }
 .git-setup-intro { margin-bottom: 24px; }
@@ -78,6 +83,7 @@ const STYLE = `
 .git-empty p { margin: 0 0 22px; color: var(--muted); }
 @media (max-width: 760px) {
   .git-dashboard { grid-template-columns: minmax(0, 1fr); }
+  .git-webhook, .git-webhook-on { grid-column: 1; grid-row: auto; }
   .git-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .git-meta > :first-child { grid-column: 1 / -1; }
   .git-commit { flex-direction: column; gap: 10px; }
@@ -524,6 +530,7 @@ export function siteView(site: GitSiteStatus, log: string): string {
 
 function repositoryForm(site: GitSiteStatus): string {
   const config = site.config;
+  const custom = [config?.directory ? "Custom directory" : "", config?.postDeploy ? "Post-deploy command" : ""].filter(Boolean);
   const fields = `
       <form onsubmit="event.preventDefault(); saveGitConfig('${esc(site.domain)}')">
         <div class="form-grid">
@@ -538,23 +545,28 @@ function repositoryForm(site: GitSiteStatus): string {
             <input id="git-branch" type="text" required maxlength="${MAX_BRANCH_LENGTH}" spellcheck="false" autocapitalize="off"
               placeholder="main" value="${esc(config?.branch ?? "main")}">
           </div>
-          <div class="form-field form-field-full">
-            <label for="git-directory">Subdirectory</label>
-            <input id="git-directory" type="text" maxlength="${MAX_DIRECTORY_LENGTH}" spellcheck="false" autocapitalize="off"
-              placeholder="Leave empty for the site directory" value="${esc(config?.directory ?? "")}">
-            <div class="hint">Relative to <span class="mono">/home/${esc(site.siteUser)}/htdocs/${esc(site.domain)}</span>.</div>
-          </div>
-          <div class="form-field form-field-full">
-            <label for="git-post-deploy">Post-deploy command</label>
-            <input id="git-post-deploy" type="text" maxlength="${MAX_POST_DEPLOY_LENGTH}" spellcheck="false" autocapitalize="off"
-              placeholder="composer install --no-dev" value="${esc(config?.postDeploy ?? "")}">
-            <div class="hint">Runs as ${esc(site.siteUser)} in the deployed directory after every deployment.</div>
-          </div>
         </div>
-        ${site.configured ? `<div class="git-danger">
-          <p class="hint">Disconnect the repository and keep the deployed files.</p>
-          <button class="btn btn-danger" type="button" onclick="forgetGitSite('${esc(site.domain)}')">Stop deploying</button>
-        </div>` : ""}
+        <details class="git-disclosure git-advanced">
+          <summary><span><span class="git-summary-title">Advanced</span><span class="hint">${esc(custom.join(" · ") || "Deploy directory and post-deploy command")}</span></span></summary>
+          <div class="form-grid">
+            <div class="form-field">
+              <label for="git-directory">Subdirectory</label>
+              <input id="git-directory" type="text" maxlength="${MAX_DIRECTORY_LENGTH}" spellcheck="false" autocapitalize="off"
+                placeholder="Leave empty for the site directory" value="${esc(config?.directory ?? "")}">
+              <div class="hint">Relative to <span class="mono">/home/${esc(site.siteUser)}/htdocs/${esc(site.domain)}</span>.</div>
+            </div>
+            <div class="form-field">
+              <label for="git-post-deploy">Post-deploy command</label>
+              <input id="git-post-deploy" type="text" maxlength="${MAX_POST_DEPLOY_LENGTH}" spellcheck="false" autocapitalize="off"
+                placeholder="composer install --no-dev" value="${esc(config?.postDeploy ?? "")}">
+              <div class="hint">Runs as ${esc(site.siteUser)} in the deployed directory after every deployment.</div>
+            </div>
+          </div>
+          ${site.configured ? `<div class="git-danger">
+            <p class="hint">Disconnect the repository and keep the deployed files.</p>
+            <button class="btn btn-danger" type="button" onclick="forgetGitSite('${esc(site.domain)}')">Stop deploying</button>
+          </div>` : ""}
+        </details>
         <div class="form-actions"><button class="btn btn-primary" type="submit">${site.configured ? "Save changes" : "Connect repository"}</button></div>
       </form>`;
 
@@ -633,7 +645,7 @@ function webhookSection(site: GitSiteStatus): string {
       </details>`;
 
   return `
-      <div class="card">
+      <div class="card git-webhook${webhook ? " git-webhook-on" : ""}">
         <div class="git-section-heading">
           <h2>Push to deploy</h2>
           <label class="switch">

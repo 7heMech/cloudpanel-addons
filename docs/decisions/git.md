@@ -71,19 +71,23 @@ the repair pass marks a deployment whose runner died as failed.
 The site-scoped page is a tab in CloudPanel's own site page, mounted through
 `lib/shadow-embed.ts` beside Maintenance and Staging. Connected sites lead with
 the current checkout, repository, branch, and deployment mode. The dashboard
-uses two equal columns with cards sharing the same height in each row: the
-latest deployment sits beside push-to-deploy controls, followed by repository
-settings and the deploy key. Cards stack on mobile. A checkout is
-reported separately from job success because a failed post-deploy command can
-leave the new files in place. Deploy is disabled while a job is queued or
-running. A deployment started there is watched in the same card, with failed
-output expanded so it can be read immediately.
+uses two equal columns: latest deployment, repository settings, and the deploy
+key stack in the first, and push to deploy fills the second. That card is as
+tall as the latest deployment while the switch is off, and reaches the bottom
+of repository settings while it is on, so its edge always meets a card edge.
+Cards stack on mobile. A checkout is reported separately from job success
+because a failed post-deploy command can leave the new files in place. Deploy
+is disabled while a job is queued or running. A deployment started there is
+watched in the same card, with failed output expanded so it can be read
+immediately.
 
 Repository settings and the deploy key use native expandable sections, which
-also work inside the panel's shadow root. The repository form shows its URL,
-branch, subdirectory, post-deploy command, and disconnect action together.
-Key replacement and webhook URL rotation sit beside their Copy buttons below
-the key or URL and retain their confirmation dialogs.
+also work inside the panel's shadow root. The repository form keeps its URL
+and branch together; Advanced holds the subdirectory, post-deploy command,
+and disconnect action. Configured advanced values are summarized while closed
+and remain in the form when saving. Key replacement and webhook URL rotation
+sit beside their Copy buttons below the key or URL and retain their
+confirmation dialogs.
 
 A site nobody has connected yet shows the connection form. Saving an SSH
 remote generates the deploy key as part of the save, so the sequence is save,
