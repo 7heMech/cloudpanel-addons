@@ -228,6 +228,8 @@ test("fleet overview separates unavailable sites from the live count", () => {
   expect(rendered).toContain('<table class="fleet-table maintenance-fleet-table">');
   expect(rendered).toContain('<td class="page-cell" data-label="Page">Default</td>');
   expect(rendered).toContain('<td class="bypass-cell" data-label="Bypasses">0</td>');
+  expect(rendered).toContain('<td data-label="Effective status">');
+  expect(rendered).not.toContain('<td class="wide-cell" data-label="Effective status">');
   const page = layout("Maintenance", rendered);
   expect(page).toContain(".fleet-table.maintenance-fleet-table td.page-cell,");
   expect(page).toContain(".fleet-table.maintenance-fleet-table td.bypass-cell { display: none; }");

@@ -614,7 +614,7 @@ export function fleetView(sites: MaintenanceSiteView[], globalEnabled = false): 
   const rows = sites.map((site) => `<tr>
     <td class="site-cell"><a href="${BASE}?domain=${encodeURIComponent(site.domain)}">${esc(site.domain)}</a>${site.error ? `<div class="hint">${esc(site.error)}</div>` : ""}</td>
     <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
-    <td class="wide-cell" data-label="Effective status">${statusBadge(site, globalEnabled)}</td>
+    <td data-label="Effective status">${statusBadge(site, globalEnabled)}</td>
     <td class="page-cell" data-label="Page">${site.customTemplate ? "Custom" : "Default"}</td>
     <td class="bypass-cell" data-label="Bypasses">${site.bypasses.length}</td>
     <td class="action-cell" data-label="Site setting"><label class="switch switch-danger"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" data-available="${!site.error}" aria-label="Maintenance mode for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} ${site.error ? "disabled" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label></td>

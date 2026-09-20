@@ -7,7 +7,8 @@ administrator-only tab in every CloudPanel site view. The overview reads the
 live CloudPanel site inventory and shows each site's effective status, saved
 setting, template choice, and bypass count. At phone widths it omits the
 template-choice and bypass-count fields; both remain available on the site's
-detail page and in the desktop overview.
+detail page and in the desktop overview. Effective status and the saved
+per-site setting share one row in each mobile site card.
 
 The global override is a card of its own labelled "Global maintenance", not a
 switch in the table header: it decides what visitors get for every site at once
