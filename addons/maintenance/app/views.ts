@@ -131,6 +131,8 @@ html.dark #template-ace .ace_comment { color:#93a1ad; }
     justify-self: end;
     white-space: nowrap;
   }
+  .fleet-table.maintenance-fleet-table td.page-cell,
+  .fleet-table.maintenance-fleet-table td.bypass-cell { display: none; }
 }
 @media (max-width:700px) {
   .bypass-grid { grid-template-columns:1fr; }
@@ -613,8 +615,8 @@ export function fleetView(sites: MaintenanceSiteView[], globalEnabled = false): 
     <td class="site-cell"><a href="${BASE}?domain=${encodeURIComponent(site.domain)}">${esc(site.domain)}</a>${site.error ? `<div class="hint">${esc(site.error)}</div>` : ""}</td>
     <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
     <td class="wide-cell" data-label="Effective status">${statusBadge(site, globalEnabled)}</td>
-    <td data-label="Page">${site.customTemplate ? "Custom" : "Default"}</td>
-    <td data-label="Bypasses">${site.bypasses.length}</td>
+    <td class="page-cell" data-label="Page">${site.customTemplate ? "Custom" : "Default"}</td>
+    <td class="bypass-cell" data-label="Bypasses">${site.bypasses.length}</td>
     <td class="action-cell" data-label="Site setting"><label class="switch switch-danger"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" data-available="${!site.error}" aria-label="Maintenance mode for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} ${site.error ? "disabled" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label></td>
   </tr>`).join("");
   return `<div class="page-heading" data-global-maintenance="${globalEnabled}"><div><h1>Maintenance Mode</h1><p>Switch sites to a 503 maintenance page without reloading Nginx.</p></div></div>
@@ -625,7 +627,7 @@ export function fleetView(sites: MaintenanceSiteView[], globalEnabled = false): 
   </div>
   ${globalCard(globalEnabled, sites.length === 0)}
   <div class="card card-table"><div class="card-header"><h2>Sites</h2></div>
-  ${sites.length ? `<table class="fleet-table"><thead><tr><th scope="col">Site</th><th scope="col">Type</th><th scope="col">Effective status</th><th scope="col">Page</th><th scope="col">Bypasses</th><th scope="col" class="action-cell">Site setting</th></tr></thead><tbody data-global-maintenance="${globalEnabled}">${rows}</tbody></table>` : '<div class="empty">No CloudPanel sites were found.</div>'}
+  ${sites.length ? `<table class="fleet-table maintenance-fleet-table"><thead><tr><th scope="col">Site</th><th scope="col">Type</th><th scope="col">Effective status</th><th scope="col">Page</th><th scope="col">Bypasses</th><th scope="col" class="action-cell">Site setting</th></tr></thead><tbody data-global-maintenance="${globalEnabled}">${rows}</tbody></table>` : '<div class="empty">No CloudPanel sites were found.</div>'}
   </div>`;
 }
 
