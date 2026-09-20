@@ -52,9 +52,12 @@ over SSE reaches on its own.
 The manager requires `ROLE_ADMIN`. Invalid sessions return to CloudPanel's
 login page, and authentication failures do not fall back to anonymous access.
 
-The gate is the first thing a request meets after the URL is taken apart and
-before any route is chosen. The liveness probe the update page polls is inside
-it, and nothing reads it without a session: the page that polls it has one.
+The gate is where a request goes by default, after the URL is taken apart and
+before the route is chosen. The liveness probe the update page polls is inside
+it, and nothing reads it without a session: the page that polls it has one. Two
+things are decided differently, and both are described below: the Git webhook,
+which is settled ahead of the gate by a credential of its own, and three named
+routes, which the gate admits for a panel user who is not an administrator.
 
 Three routes are named as exceptions. Two are the WordPress sign-in addon's:
 `POST /wp-login/api/sign-in` and the `GET /wp-login/api/session` that hands out

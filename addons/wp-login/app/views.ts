@@ -54,7 +54,7 @@ function submitToken(target, data) {
 async function removeHelpers(button) {
   const agreed = await confirmAction({
     title: 'Remove the sign-in helper',
-    body: 'The must-use plugin is deleted from every site it is in. The next sign-in puts it back.',
+    text: 'The must-use plugin is deleted from every site it is in. The next sign-in puts it back.',
     confirmLabel: 'Remove',
   });
   if (!agreed) return;
@@ -62,12 +62,17 @@ async function removeHelpers(button) {
   busy(true);
   try {
     const reply = await call('/api/remove', { method: 'POST' });
-    const removed = (reply.data || {}).removed || 0;
+    const data = reply.data || {};
+    const removed = data.removed || 0;
+    const failed = data.failed || [];
+    const message = removed
+      ? 'Removed from ' + removed + (removed === 1 ? ' site.' : ' sites.')
+      : 'No site had the helper installed.';
     sessionStorage.setItem(FLASH_KEY, JSON.stringify({
-      message: removed
-        ? 'Removed from ' + removed + (removed === 1 ? ' site.' : ' sites.')
-        : 'No site had the helper installed.',
-      kind: 'ok',
+      message: failed.length
+        ? message + ' Still in ' + failed.join(', ') + '; remove it there by hand.'
+        : message,
+      kind: failed.length ? 'error' : 'ok',
     }));
     location.reload();
   } catch (error) {

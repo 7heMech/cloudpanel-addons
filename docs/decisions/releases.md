@@ -15,7 +15,9 @@ into a panel page -- and a unit test cannot stand in for it.
 The deploy workflow calls `tools/deploy-stg.ts`, the same script a workstation
 runs, rather than reproducing the upload-swap-restart-repair sequence in YAML.
 Replacing the binary is a rename, so the services keep serving the old inode
-until they are restarted; the restart is part of the install.
+until they are restarted; the restart is part of the install. The binary the box
+was running is hard-linked aside just before the rename, so a restart or repair
+that fails puts it back, including on a box deploying for the first time.
 It reads the box from `STG_HOST` and its credentials from `STG_SSH_KEY` and
 `STG_SSH_KNOWN_HOSTS`; the host key is pinned rather than learned on connection,
 because the deploy authenticates as root and then runs a command sequence.

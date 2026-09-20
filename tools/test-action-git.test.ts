@@ -266,7 +266,15 @@ test("a deployment running now refuses a second one instead of blocking it", asy
 
     const dir = queueJob(fx, "20260918T170000Z-ffffff");
     const running = runGitAction(["run", "--job=20260918T170000Z-ffffff"], { ...fx.options, emitReply: false });
-    while (field(dir, "step") !== "running the post-deploy command") await Bun.sleep(20);
+    while (field(dir, "step") !== "running the post-deploy command") {
+      // A deployment that fails before the post-deploy command leaves the step
+      // where it was, so without this the wait is the test timeout.
+      const state = field(dir, "state");
+      if (state === "failed" || state === "done") {
+        throw new Error(`the deployment ended at '${field(dir, "step")}': ${field(dir, "error") || state}`);
+      }
+      await Bun.sleep(20);
+    }
 
     const refused = await action(fx, ["deploy", `--domain=${DOMAIN}`]);
     expect(refused.ok).toBe(false);

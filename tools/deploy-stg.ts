@@ -51,6 +51,11 @@ try {
   await run(["ssh", ...sshOptions, host, [
     "set -e",
     "install -m 0755 -o root -g root /root/clp-addons-new /usr/local/bin/.clp-addons.new",
+    // What the box is running now is what a failed deploy has to go back to,
+    // and the swap below is the last moment it can be named. A box deploying
+    // for the first time has no earlier binary kept anywhere else.
+    "rm -f /root/clp-addons-previous",
+    "if [ -e /usr/local/bin/clp-addons ]; then ln -f /usr/local/bin/clp-addons /root/clp-addons-previous; fi",
     "if ! (mv -f /usr/local/bin/.clp-addons.new /usr/local/bin/clp-addons &&",
     "      systemctl restart clp-addons-auth.socket clp-addons-auth.service clp-addons.service &&",
     "      clp-addons repair); then",
@@ -61,9 +66,6 @@ try {
     "  systemctl restart clp-addons-auth.socket clp-addons-auth.service clp-addons.service",
     "  exit 1",
     "fi",
-    // Linked only once repair has succeeded: a deploy interrupted before that
-    // leaves a binary staging was never brought up on, which is no rollback.
-    "ln -f /usr/local/bin/clp-addons /root/clp-addons-previous",
   ].join("\n")]);
 } finally {
   rmSync(controlDir, { recursive: true, force: true });

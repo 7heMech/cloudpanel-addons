@@ -13,7 +13,9 @@ Being installed is the whole decision. There is no switch, and no state
 directory: the only trace this addon leaves anywhere is a file inside a site,
 and disabling or uninstalling it takes that file back out of every site it is
 in. An addon that left files behind in somebody else's site would be one an
-operator cannot fully withdraw.
+operator cannot fully withdraw. A site whose files cannot be deleted is named in
+the warning and does not stop the sites after it: the withdrawal reports what is
+still there rather than keeping the addon installed for it.
 
 ## What is in the site
 

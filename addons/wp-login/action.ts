@@ -70,6 +70,8 @@ export interface WpLoginResult {
 
 export interface WpRemoveResult {
   removed: number;
+  /** Sites whose loader could not be deleted, so an operator can be told which. */
+  failed: string[];
 }
 
 export interface WpLoginActionPaths {
@@ -370,14 +372,20 @@ function mintWpLogin(
  */
 export function removeWpLogin(paths: WpLoginActionPaths = DEFAULT_WP_LOGIN_PATHS): WpRemoveResult {
   let removed = 0;
+  const failed: string[] = [];
   for (const site of resolvedSites(paths)) {
     const loader = join(site.root, LOADER_FILE);
     if (!existsSync(loader)) continue;
-    rmSync(loader, { force: true });
-    rmSync(join(site.root, SECRET_DIR), { recursive: true, force: true });
-    removed++;
+    // A site that cannot be cleaned must not stop the sites after it.
+    try {
+      rmSync(loader, { force: true });
+      rmSync(join(site.root, SECRET_DIR), { recursive: true, force: true });
+      removed++;
+    } catch {
+      failed.push(site.row.domain_name);
+    }
   }
-  return { removed };
+  return { removed, failed };
 }
 
 // --- request parsing ------------------------------------------------------
