@@ -2,7 +2,7 @@ import { esc } from "../../../lib/app-http";
 import { renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import {
-  PM_MODES, STOCK_PROFILE,
+  DEFAULT_CATEGORY_PROFILE, PM_MODES, STOCK_PROFILE,
   type PhpResourcesState, type PoolCategory, type PoolProfile, type PoolSiteState,
 } from "../action";
 
@@ -270,7 +270,7 @@ function openCategoryDialog(button) {
   CLP_ROOT.getElementById('category-dialog-title').textContent = category ? 'Edit category' : 'New category';
   CLP_ROOT.getElementById('category-name').value = category ? category.name : '';
   CLP_ROOT.getElementById('category-description').value = category ? category.description : '';
-  writeProfile(category ? category.profile : JSON.parse(dialog.dataset.stock));
+  writeProfile(category ? category.profile : JSON.parse(dialog.dataset.defaultProfile));
   dialog.showModal();
 }
 
@@ -541,7 +541,8 @@ export function dashboardView(state: PhpResourcesState): string {
 
   return `<div class="page-heading">
     <div><h1>PHP resources</h1>
-      <p>Put PHP sites into categories, and give each category its PHP-FPM worker limits.</p></div>
+      <p>Put PHP sites into categories, and give each category its PHP-FPM worker limits.</p>
+      <p class="hint">Limits apply to every site separately. Assigning one category to many sites multiplies its possible workers.</p></div>
     <button class="btn btn-primary" type="button" onclick="openCategoryDialog(this)">New category</button>
   </div>
   ${drifted
@@ -586,7 +587,7 @@ export function dashboardView(state: PhpResourcesState): string {
       </tr></thead><tbody>${siteRows}</tbody></table>`
     : '<div class="empty">No CloudPanel site runs PHP, so there is no PHP-FPM pool to tune.</div>'}
   </div>
-  <dialog id="category-dialog" aria-labelledby="category-dialog-title" data-stock="${esc(JSON.stringify(STOCK_PROFILE))}">
+  <dialog id="category-dialog" aria-labelledby="category-dialog-title" data-default-profile="${esc(JSON.stringify(DEFAULT_CATEGORY_PROFILE))}">
     <div class="dialog-header"><h2 id="category-dialog-title">New category</h2></div>
     <div class="form-grid dialog-grid">
       <div class="form-field">
@@ -600,7 +601,7 @@ export function dashboardView(state: PhpResourcesState): string {
         <div class="hint">Optional. Shown beside the name, to say when to pick it.</div>
       </div>
     </div>
-    ${profileForm(STOCK_PROFILE)}
+    ${profileForm(DEFAULT_CATEGORY_PROFILE)}
     <form method="dialog" class="actions dialog-actions">
       <button class="btn" value="cancel" type="submit">Cancel</button>
       <button class="btn btn-primary" type="button" onclick="saveCategory()">Save category</button>

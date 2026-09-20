@@ -4,11 +4,13 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  executePhpResourcesAction, parseProfile, readProfileFromPool, renderPool, PRESET_CATEGORIES, STOCK_PROFILE,
+  DEFAULT_CATEGORY_PROFILE, executePhpResourcesAction, parseProfile, readProfileFromPool, renderPool,
+  PRESET_CATEGORIES, STOCK_PROFILE,
   type PhpResourcesActionOptions, type PhpResourcesActionPaths, type PhpResourcesResult,
   type PhpResourcesState, type PoolProfile, type PoolSiteState, type ReconcileResult,
 } from "../addons/php-resources/action";
 import type { CommandResult } from "../cli/action-common";
+import { dashboardView } from "../addons/php-resources/app/views";
 
 /** CloudPanel's PoolBuilder output, byte for byte, with no trailing newline. */
 const STOCK_POOL = `[shop.example.com]
@@ -212,6 +214,23 @@ test("a server that has saved nothing already has the preset categories", async 
     box.addSite("shop.example.com", "8.2");
     const state = await executePhpResourcesAction(["list"], options(box)) as PhpResourcesState;
     expect(state.categories.map((category) => category.id)).toEqual(["small-site", "busy-site", "high-traffic"]);
+    expect(state.categories.map((category) => ({
+      mode: category.profile.pm,
+      maxChildren: category.profile.maxChildren,
+      maxRequests: category.profile.maxRequests,
+    }))).toEqual([
+      { mode: "ondemand", maxChildren: 3, maxRequests: 200 },
+      { mode: "ondemand", maxChildren: 8, maxRequests: 200 },
+      { mode: "dynamic", maxChildren: 12, maxRequests: 200 },
+    ]);
+    expect(state.categories[2]!.profile).toMatchObject({
+      startServers: 2, minSpareServers: 1, maxSpareServers: 3,
+    });
+    expect(DEFAULT_CATEGORY_PROFILE).toEqual(state.categories[0]!.profile);
+    const page = dashboardView(state);
+    expect(page).toContain("Limits apply to every site separately");
+    expect(page).toContain("data-default-profile=");
+    expect(page).toContain("&quot;maxChildren&quot;:3");
     expect(state.defaultCategoryId).toBeNull();
     expect(siteIn(state, "shop.example.com").categoryId).toBeNull();
     expect(readFileSync(box.poolOf("shop.example.com", "8.2"), "utf8")).toBe(STOCK_POOL);
