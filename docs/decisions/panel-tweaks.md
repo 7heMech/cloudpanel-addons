@@ -228,12 +228,13 @@ Application and SSL badges use the same exact 17px line-height and 23px outer he
 On SSL badges the mobile edge is an inset stroke rather than a fractional
 rounded border, keeping all four sides the same visual weight without changing
 the badge's footprint. The normal SSL badge remains one text label, including
-the middle-dot separator between issuer and expiry. At phone widths where that
-timed badge cannot fit in its column, a container query shows the compact expiry
-such as `46d`; the full text stays available to screen readers and the
-certificate date stays in the title. Untimed, missing, and self-signed
-certificates keep their normal labels and can wrap if an unknown name is
-unusually long.
+the middle-dot separator between issuer and expiry. A card's badge is half the
+card wide, which the full issuer and expiry overrun at every phone size, so the
+card carries a short name and a bare countdown such as `Let's Enc · 46d`; a
+type with no short name keeps the countdown alone. The full text stays
+available to screen readers and the certificate date stays in the title.
+Untimed, missing, and self-signed certificates keep their normal labels and can
+wrap if an unknown name is unusually long.
 
 The mobile type and details are copies inside the hostname cell; the original
 cells stay in place for the desktop table. Both copies share their column keys

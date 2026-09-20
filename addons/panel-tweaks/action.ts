@@ -112,6 +112,19 @@ export const CERTIFICATE_LABELS: Record<string, string> = {
 };
 
 /**
+ * What a certificate type is called in a phone's card, where the badge is half
+ * a card wide and the full name and the countdown together overrun it.
+ *
+ * Only a timed certificate is ever shortened. A type without an entry here
+ * keeps the countdown alone rather than an abbreviation nobody would
+ * recognise; the full name stays in the title and for screen readers.
+ */
+export const CERTIFICATE_SHORT_LABELS: Record<string, string> = {
+  "2": "Let's Enc",
+  "3": "Imported",
+};
+
+/**
  * The certificate CloudPanel puts on every new site. It is a certificate, but
  * it is not one a browser accepts, so it is never reported as a site being
  * covered -- only as the placeholder it is.
