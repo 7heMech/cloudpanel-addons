@@ -46,10 +46,43 @@ test("anything that is not a certificate gives no issuer rather than a wrong one
 // A truncated certificate must not walk past the bytes it has, whatever it
 // claims its lengths are.
 test("a certificate cut short is refused rather than read out of bounds", () => {
-  const body = /-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/
-    .exec(ZEROSSL)![1]!.replace(/\s+/g, "");
-  for (const length of [8, 40, 120, body.length - 200]) {
-    const cut = `-----BEGIN CERTIFICATE-----\n${body.slice(0, length)}\n-----END CERTIFICATE-----`;
-    expect(() => certificateIssuer(cut)).not.toThrow();
+  for (const length of [8, 40, 120, body(ZEROSSL).length - 200]) {
+    expect(certificateIssuer(pemOf(body(ZEROSSL).slice(0, length)))).toBeNull();
   }
+});
+
+function body(pem: string): string {
+  return /-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/.exec(pem)![1]!.replace(/\s+/g, "");
+}
+
+function pemOf(base64: string): string {
+  return `-----BEGIN CERTIFICATE-----\n${base64}\n-----END CERTIFICATE-----`;
+}
+
+function der(pem: string): Uint8Array {
+  return Uint8Array.from(atob(body(pem)), (character) => character.charCodeAt(0));
+}
+
+function reencoded(bytes: Uint8Array): string {
+  return pemOf(btoa(String.fromCharCode(...bytes)));
+}
+
+// Bytes that say what the structure is, rather than what is in it. A name read
+// out of something shaped like this would be a guess, and a guess would replace
+// the panel's own "Imported" with an authority that never signed anything.
+test("a structure that is not a certificate's gives no issuer", () => {
+  const bytes = der(ZEROSSL);
+  const positions = [
+    0, // the outer Certificate sequence
+    4, // the tbsCertificate sequence inside it
+    bytes.indexOf(0x31, 20), // the first name attribute's set
+  ];
+  for (const at of positions) {
+    expect(at).toBeGreaterThan(-1);
+    const changed = Uint8Array.from(bytes);
+    changed[at] = changed[at] === 0x31 ? 0x30 : 0x31;
+    expect(certificateIssuer(reencoded(changed))).toBeNull();
+  }
+  // Untouched, the same bytes still read.
+  expect(issuerLabel(certificateIssuer(reencoded(bytes)))).toBe("ZeroSSL");
 });

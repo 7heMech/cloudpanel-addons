@@ -27,6 +27,16 @@ export interface CertificateIssuer {
 const COMMON_NAME = "2.5.4.3";
 const ORGANIZATION = "2.5.4.10";
 
+const SEQUENCE = 0x30;
+const SET = 0x31;
+const INTEGER = 0x02;
+const OBJECT_IDENTIFIER = 0x06;
+const VERSION = 0xa0;
+// The string types an authority's name is written in. A BMPString is UTF-16 and
+// would decode to nonsense here, so a name in one is left unread rather than
+// reported wrongly.
+const TEXT_TAGS = new Set([0x0c, 0x13, 0x14, 0x16, 0x1a]);
+
 function field(bytes: Uint8Array, at: number): Field | null {
   if (at + 1 >= bytes.length) return null;
   const tag = bytes[at]!;
@@ -75,34 +85,41 @@ export function certificateIssuer(pem: string): CertificateIssuer | null {
     return null;
   }
 
-  const certificate = field(bytes, 0);
-  const tbs = certificate && field(bytes, certificate.start);
-  if (!tbs) return null;
   // Certificate ::= SEQUENCE { tbsCertificate SEQUENCE { [0] version, serial,
   // signature, issuer Name, ... } }. The version is optional, so the issuer is
-  // the second field after the serial rather than a fixed offset.
+  // the second field after the serial rather than a fixed offset. Every tag on
+  // the way is checked: a field that is not what the structure says it is means
+  // this is not a certificate, and a name read out of it would be a guess.
+  const certificate = field(bytes, 0);
+  const tbs = certificate?.tag === SEQUENCE ? field(bytes, certificate.start) : null;
+  if (tbs?.tag !== SEQUENCE) return null;
   let at = tbs.start;
   const version = field(bytes, at);
-  if (version && version.tag === 0xa0) at = version.next;
+  if (version?.tag === VERSION) at = version.next;
   const serial = field(bytes, at);
-  const algorithm = serial && field(bytes, serial.next);
-  const issuer = algorithm && field(bytes, algorithm.next);
-  if (!issuer || issuer.tag !== 0x30) return null;
+  if (serial?.tag !== INTEGER) return null;
+  const algorithm = field(bytes, serial.next);
+  if (algorithm?.tag !== SEQUENCE) return null;
+  const issuer = field(bytes, algorithm.next);
+  if (issuer?.tag !== SEQUENCE || issuer.end > tbs.end) return null;
 
   const found: CertificateIssuer = { commonName: "", organization: "" };
   // Name ::= SEQUENCE OF SET OF SEQUENCE { type OID, value }, one pair per
   // attribute, of which only the two an operator would read are wanted.
   for (let set = field(bytes, issuer.start); set && set.end <= issuer.end; set = field(bytes, set.next)) {
+    if (set.tag !== SET) return null;
     const pair = field(bytes, set.start);
-    const type = pair && field(bytes, pair.start);
-    const value = type && field(bytes, type.next);
-    if (!type || !value) continue;
+    if (pair?.tag !== SEQUENCE) return null;
+    const type = field(bytes, pair.start);
+    if (type?.tag !== OBJECT_IDENTIFIER) return null;
+    const value = field(bytes, type.next);
+    if (!value) return null;
     const name = objectIdentifier(bytes, type);
-    if (name !== COMMON_NAME && name !== ORGANIZATION) continue;
-    const text = new TextDecoder().decode(bytes.subarray(value.start, value.end)).trim();
-    if (!text) continue;
-    if (name === COMMON_NAME && !found.commonName) found.commonName = text;
-    if (name === ORGANIZATION && !found.organization) found.organization = text;
+    if ((name === COMMON_NAME || name === ORGANIZATION) && TEXT_TAGS.has(value.tag)) {
+      const text = new TextDecoder().decode(bytes.subarray(value.start, value.end)).trim();
+      if (name === COMMON_NAME && !found.commonName) found.commonName = text;
+      if (name === ORGANIZATION && !found.organization) found.organization = text;
+    }
     if (set.next >= issuer.end) break;
   }
   return found.commonName || found.organization ? found : null;

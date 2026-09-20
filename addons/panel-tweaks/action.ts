@@ -371,16 +371,16 @@ function openPanelDatabase(path: string): Database {
  * column is the certificate the panel is actually serving.
  */
 const OPTIONAL_JOINS = [
-  { table: "php_settings", alias: "p", column: "php_version", on: "p.site_id = s.id" },
-  { table: "nodejs_settings", alias: "n", column: "nodejs_version", on: "n.site_id = s.id" },
-  { table: "python_settings", alias: "y", column: "python_version", on: "y.site_id = s.id" },
+  { table: "php_settings", alias: "p", select: "php_version", on: "p.site_id = s.id" },
+  { table: "nodejs_settings", alias: "n", select: "nodejs_version", on: "n.site_id = s.id" },
+  { table: "python_settings", alias: "y", select: "python_version", on: "y.site_id = s.id" },
   // The certificate itself is read for its issuer, and is asked for only where
   // the column is there: a table can predate one of its columns as easily as a
   // database can predate a table.
   { table: "certificate", alias: "c",
-    column: "type AS certificate_type, c.expires_at AS certificate_expires_at",
+    select: "type AS certificate_type, c.expires_at AS certificate_expires_at",
     absent: "NULL AS certificate_type, NULL AS certificate_expires_at",
-    optional: [{ column: "certificate", as: "certificate_pem" }],
+    optionalColumns: [{ column: "certificate", as: "certificate_pem" }],
     on: "c.id = s.certificate_id" },
 ];
 
@@ -419,13 +419,13 @@ function siteQuery(db: Database): string {
   for (const join of OPTIONAL_JOINS) {
     const here = present.has(join.table);
     if (here) {
-      columns.push(`${join.alias}.${join.column}`);
+      columns.push(`${join.alias}.${join.select}`);
       joins.push(`LEFT JOIN ${join.table} ${join.alias} ON ${join.on}`);
     } else {
-      columns.push(join.absent ?? `NULL AS ${join.column}`);
+      columns.push(join.absent ?? `NULL AS ${join.select}`);
     }
     const columnsHere = here ? presentColumns(db, join.table) : new Set<string>();
-    for (const extra of join.optional ?? []) {
+    for (const extra of join.optionalColumns ?? []) {
       columns.push(columnsHere.has(extra.column)
         ? `${join.alias}.${extra.column} AS ${extra.as}`
         : `NULL AS ${extra.as}`);
