@@ -24,6 +24,10 @@ const STYLE = `
 .state-default { color:var(--accent); border-color:var(--accent); margin-left:8px; }
 #category-dialog { width:720px; }
 #category-dialog .dialog-grid { margin-bottom:25px; }
+.php-sites-table tbody tr { cursor:pointer; transition:background-color .15s, box-shadow .15s; }
+.php-sites-table tbody tr:hover { background:rgb(38 125 221 / 6%); }
+.php-sites-table tbody tr[aria-selected="true"] { background:rgb(38 125 221 / 12%); box-shadow:inset 4px 0 var(--primary); }
+.php-sites-table tbody tr:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; }
 @media (max-width:700px) {
   .default-card { flex-direction:column; gap:12px; }
   .default-choice { flex:1 1 auto; width:100%; }
@@ -32,6 +36,7 @@ const STYLE = `
   #category-dialog { width:calc(100% - 20px); }
   .toolbar #bulk-category { flex:1 1 100%; }
   .toolbar .toolbar-end { margin-left:0; }
+  .fleet-table.php-sites-table td.site-select { display:none; }
 }
 `;
 
@@ -346,6 +351,10 @@ function selectedRows() {
 
 function paintSelection() {
   const rows = siteRows();
+  rows.forEach(function (row) {
+    const box = row.querySelector('.site-checkbox');
+    row.setAttribute('aria-selected', String(Boolean(box && box.checked)));
+  });
   const chosen = selectedRows();
   const note = CLP_ROOT.getElementById('site-selection');
   if (note) note.textContent = chosen.length === 0 ? 'No sites selected' : chosen.length + ' of ' + rows.length + ' selected';
@@ -372,6 +381,19 @@ function toggleAllSites() {
   const rows = siteRows();
   const chosen = selectedRows();
   selectAllSites(chosen.length < rows.length);
+}
+
+function toggleSiteSelection(event, row) {
+  const target = event.target;
+  if (target && target !== row && target.closest && target.closest('input, button, a, label, select, textarea')) return;
+  if (event.type === 'keydown') {
+    if (event.key !== ' ' && event.key !== 'Enter') return;
+    event.preventDefault();
+  }
+  const box = row.querySelector('.site-checkbox');
+  if (!box || box.disabled) return;
+  box.checked = !box.checked;
+  paintSelection();
 }
 
 function categoryLabel(id) {
@@ -525,7 +547,7 @@ function categoryRow(category: PoolCategory, sites: number, isDefault: boolean):
 }
 
 function siteTableRow(site: PoolSiteState, categories: PoolCategory[]): string {
-  return `<tr data-domain="${esc(site.domain)}" data-category-id="${esc(site.categoryId ?? "")}" data-drifted="${site.drifted}">
+  return `<tr data-domain="${esc(site.domain)}" data-category-id="${esc(site.categoryId ?? "")}" data-drifted="${site.drifted}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSelection()" aria-label="Select ${esc(site.domain)}"></td>
     <td class="site-cell">${esc(site.domain)}${
       site.drifted ? '<div class="hint">Its pool file no longer matches this category.</div>' : ""
@@ -591,7 +613,7 @@ export function dashboardView(state: PhpResourcesState): string {
         <select class="toolbar-end" id="bulk-category" aria-label="Category to put the selected sites in">${bulkOptions(state.categories)}</select>
         <button class="btn" id="assign-selected" type="button" disabled onclick="assignSelected()">Assign selected</button>
       </div>
-      <table class="fleet-table"><thead><tr>
+      <table class="fleet-table php-sites-table"><thead><tr>
         <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
         <th scope="col">Site</th><th scope="col">PHP</th><th scope="col">Category</th><th scope="col">Now running</th>
       </tr></thead><tbody>${siteRows}</tbody></table>`

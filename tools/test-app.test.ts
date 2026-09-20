@@ -229,19 +229,28 @@ test("mobile select-all button is hidden on desktop and visible on mobile", () =
     }],
   });
   expect(phpHtml).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
+  expect(phpHtml).toContain('<table class="fleet-table php-sites-table">');
+  expect(phpHtml).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)"');
+  const phpPage = phpResourcesLayout("PHP resources", phpHtml);
+  expect(phpPage).toContain(".fleet-table.php-sites-table td.site-select { display:none; }");
 });
 
-test("the php-resources mobile select-all button toggles selection and updates label", () => {
+test("php-resources site cards and select-all keep selection in sync", () => {
   const el = (over: any = {}) => ({ textContent: "", className: "", disabled: false, checked: false, indeterminate: false, ...over });
   const byId: Record<string, any> = {
     "site-selection": el(), "select-all": el(), "select-all-btn": el(), "assign-selected": el({ disabled: true }),
     "bulk-category": el({ querySelector: () => null }),
   };
   const checkboxes = [el(), el()];
-  const rows = [
-    { dataset: { domain: "a.test" }, querySelector: (sel: string) => sel === ".site-checkbox" ? checkboxes[0] : null },
-    { dataset: { domain: "b.test" }, querySelector: (sel: string) => sel === ".site-checkbox" ? checkboxes[1] : null },
-  ];
+  const rows = checkboxes.map((checkbox, index) => {
+    const attributes: Record<string, string> = { "aria-selected": "false" };
+    return {
+      dataset: { domain: index === 0 ? "a.test" : "b.test" },
+      attributes,
+      setAttribute: (name: string, value: string) => { attributes[name] = value; },
+      querySelector: (sel: string) => sel === ".site-checkbox" ? checkbox : null,
+    };
+  });
   const CLP_ROOT = {
     getElementById: (id: string) => byId[id] ?? null,
     querySelectorAll: (sel: string) => {
@@ -251,10 +260,30 @@ test("the php-resources mobile select-all button toggles selection and updates l
     },
   };
   const fakeDoc = { readyState: "complete", addEventListener: () => {} };
-  const factory = new Function("CLP_ROOT", "document", `${PHP_RESOURCES_CLIENT_JS}\nreturn { toggleAllSites, selectAllSites, paintSelection, selectedRows, siteRows };`);
+  const factory = new Function("CLP_ROOT", "document", `${PHP_RESOURCES_CLIENT_JS}\nreturn { toggleAllSites, selectAllSites, paintSelection, selectedRows, siteRows, toggleSiteSelection };`);
   const client = factory(CLP_ROOT, fakeDoc);
   client.paintSelection();
   expect(byId["select-all-btn"].textContent).toBe("Select all");
+
+  const cardTarget = { closest: () => null };
+  client.toggleSiteSelection({ type: "click", target: cardTarget }, rows[0]);
+  expect(checkboxes[0]!.checked).toBe(true);
+  expect(rows[0]!.attributes["aria-selected"]).toBe("true");
+  expect(byId["site-selection"].textContent).toBe("1 of 2 selected");
+  client.toggleSiteSelection({ type: "click", target: { closest: () => ({}) } }, rows[0]);
+  expect(checkboxes[0]!.checked).toBe(true);
+
+  let prevented = false;
+  client.toggleSiteSelection({
+    type: "keydown",
+    key: " ",
+    target: cardTarget,
+    preventDefault: () => { prevented = true; },
+  }, rows[0]);
+  expect(prevented).toBe(true);
+  expect(checkboxes[0]!.checked).toBe(false);
+  expect(rows[0]!.attributes["aria-selected"]).toBe("false");
+
   client.toggleAllSites();
   expect(checkboxes.every((c: any) => c.checked)).toBe(true);
   expect(byId["select-all-btn"].textContent).toBe("Deselect all");
