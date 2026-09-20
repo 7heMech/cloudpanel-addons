@@ -25,14 +25,17 @@ request rewrites; an operation that would change neither is reported and not
 sent. Nothing is restored afterwards, so the dialog says so rather than offering
 an undo the action does not implement.
 
-Selection checkboxes stay separate from the per-site switch, and the
-selected-scope actions are unavailable until something is selected. A per-site
-switch acts immediately without confirmation, because turning one site off is
-the ordinary correction after a fleet-wide change. On a phone that switch stays
-in the site's summary row. The full-size site-type badge follows the hostname's
-final rendered line instead of occupying a narrow column. The switch is the
-dashboard's only per-site action, so the mobile card does not spend a second
-line repeating the desktop column heading.
+Selection stays separate from the per-site switch, and the selected-scope
+actions are unavailable until something is selected. A site row selects as a
+whole with a clear highlighted state and supports Space and Enter; desktop also
+keeps the conventional checkbox, while a phone omits it to recover that width.
+A per-site switch acts immediately without confirmation, because turning one
+site off is the ordinary correction after a fleet-wide change. On a phone that
+switch stays in the site's summary row and never changes row selection. The
+full-size site-type badge follows the hostname's final rendered line instead of
+occupying a narrow column. The switch is the dashboard's only per-site action,
+so the mobile card does not spend a second line repeating the desktop column
+heading.
 
 After any change the page repaints from a fresh read rather than from what was
 requested, keeping selection and scroll, and does the same after a failure so

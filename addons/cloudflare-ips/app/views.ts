@@ -14,6 +14,10 @@ const STYLE = `
 .fleet-card p, .policy-card p { margin: 0; }
 .fleet-card .actions { flex-shrink: 0; }
 .toolbar-actions { margin-left: auto; }
+.cloudflare-site-table tbody tr { cursor: pointer; transition: background-color .15s, box-shadow .15s; }
+.cloudflare-site-table tbody tr:hover { background: rgb(38 125 221 / 6%); }
+.cloudflare-site-table tbody tr[aria-selected="true"] { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); }
+.cloudflare-site-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 @media (max-width: 700px) {
   .fleet-card, .policy-card { flex-direction: column; }
 }
@@ -22,8 +26,10 @@ const STYLE = `
   .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right:10px; padding-left:10px; white-space:nowrap; }
   /* This table has one per-site action, so its switch can finish the site's
      summary row instead of consuming another labeled half-row by itself. */
-  .cloudflare-site-table tr { display: grid; grid-template-columns: 24px minmax(0, 1fr) 50px; column-gap: 6px; }
-  .cloudflare-site-table td.site-select { width: 24px; }
+  .cloudflare-site-table tr { display: grid; grid-template-columns: minmax(0, 1fr) 50px; column-gap: 12px; }
+  /* Tapping the card selects it; the checkbox remains the desktop and form
+     state control, but does not consume scarce phone width. */
+  .fleet-table.cloudflare-site-table td.site-select { display: none; }
   .cloudflare-site-table td.action-cell { display: flex; align-self: center; }
   .cloudflare-site-table td.action-cell::before { display: none; }
 }
@@ -53,7 +59,12 @@ function plural(count, word) {
 }
 
 function paintSummary() {
-  const rows = siteRows().map(rowState);
+  const rowElements = siteRows();
+  rowElements.forEach(function (row) {
+    const box = row.querySelector('.site-checkbox');
+    row.setAttribute('aria-selected', String(Boolean(box && box.checked)));
+  });
+  const rows = rowElements.map(rowState);
   const on = rows.filter(function (row) { return row.enabled; }).length;
   const summary = document.getElementById('cf-summary');
   if (summary) {
@@ -93,6 +104,21 @@ function toggleAllSites() {
   const rows = siteRows().map(rowState);
   const selected = rows.filter(function (row) { return row.selected; }).length;
   selectAllSites(selected < rows.length);
+}
+
+// The switch is an independent action. Everywhere else, a click or a
+// Space/Enter press selects the site like an item in a file manager.
+function toggleSiteSelection(event, row) {
+  const target = event.target;
+  if (target && target !== row && target.closest && target.closest('input, button, a, label')) return;
+  if (event.type === 'keydown') {
+    if (event.key !== ' ' && event.key !== 'Enter') return;
+    event.preventDefault();
+  }
+  const box = row.querySelector('.site-checkbox');
+  if (!box || box.disabled) return;
+  box.checked = !box.checked;
+  paintSummary();
 }
 
 // Repaint from the server's answer rather than from what was asked for: the
@@ -299,7 +325,7 @@ export function dashboardView(state: CloudflareState): string {
   const enabled = state.sites.filter((site) => site.enabled).length;
   const total = state.sites.length;
   const rows = state.sites.map((site) => `
-    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}">
+    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
       <td class="site-cell">${esc(site.domain)}<span class="mobile-site-type">${esc(siteTypeLabel(site.type))}</span><div class="hint site-exception"${site.excludedFromAutomatic && state.autoEnableNewSites ? "" : " hidden"}>Excluded from automatic enabling</div></td>
       <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
