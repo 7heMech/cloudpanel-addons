@@ -327,7 +327,8 @@ function switchRow(copy: TweakCopy, tweaks: PanelTweaks, extra = ""): string {
           <h3>${esc(copy.title)}<button class="tweak-more" type="button" aria-expanded="false"
             aria-controls="${note}" aria-label="What ${esc(copy.title.toLowerCase())} does"
             onclick="toggleNote(this)"></button></h3>
-          <div class="tweak-note" id="${note}"><p>${esc(copy.description)}</p>${extra}</div>
+          <div class="tweak-note" id="${note}"><p>${esc(copy.description)}</p></div>
+          ${extra}
         </div>
         <label class="switch" title="${esc(copy.title)}">
           <input type="checkbox" data-tweak="${esc(copy.key)}" onchange="setTweak(this)"${on ? " checked" : ""}

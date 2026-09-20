@@ -276,6 +276,8 @@ test("the addon page keeps switches beside wrapping labels on a phone", () => {
   expect(html).toContain(".tweak-row > div { flex: 1 1 auto; min-width: 0; }");
   expect(html).toContain("key === 'diskUsage' && wanted");
   expect(page).toContain("Enabling starts a low-priority scan now");
+  expect(page).toContain('</div>\n          <div class="tweak-scan"><span>Nothing measured yet.</span>');
+  expect(page).not.toContain('<p>Enabling starts a low-priority scan now. It refreshes about every 6 hours, or whenever you choose Measure now. Each refresh walks the disk.</p><div class="tweak-scan">');
   expect(html).toContain(".tweak-row .switch { flex: 0 0 auto;");
   expect(html).not.toContain(".tweak-row { flex-wrap: wrap; }");
   expect(html).toContain(".preview-widths { display: none; }");

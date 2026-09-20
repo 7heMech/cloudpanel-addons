@@ -287,7 +287,9 @@ it uses the existing fifteen-minute repair rather than a timer of its own. The
 hook reads the cached measurement time and only walks the disk when roughly six
 hours have passed; the timer therefore checks cheaply between sweeps. Enabling
 the switch starts the first measurement immediately, and the operator can
-request another at any time.
+request another at any time. The latest measurement and that action stay
+visible beneath the switch title; only the longer explanation is in the
+disclosure, so a phone does not hide live progress behind another tap.
 
 It is the one thing here a loaded box would feel, and it runs unattended, so it
 asks the kernel to schedule it last -- idle I/O class, lowest CPU priority.
