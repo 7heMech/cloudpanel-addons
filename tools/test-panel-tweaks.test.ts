@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,6 +18,7 @@ import { panelTweaksService } from "../addons/panel-tweaks/app/service";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MENU_ONLY_CLASS, MENU_ONLY_STYLE, ROW_ACTION_CLASS, ROW_MENU_CLASS } from "../lib/row-actions";
+import { CLOUDFLARE_ORIGIN } from "./fixtures/certificates";
 
 const loginTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "login-device-theme")!;
 const sitesTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "sites-table")!;
@@ -333,7 +334,7 @@ test("a panel build without the runtime or certificate tables still lists its si
 // statement naming a column the table has not got fails the same way one naming
 // a missing table does -- which would cost the whole list, not one column.
 test("a panel whose site table predates those columns still lists its sites", async () => {
-  const db = new Database(join(root, "panel.sq3"), { create: true });
+  const db = new Database(join(panelRoot(), "panel.sq3"), { create: true });
   db.exec(`
     DROP TABLE site;
     CREATE TABLE site (id INTEGER PRIMARY KEY, type TEXT, domain_name TEXT, root_directory TEXT,
@@ -394,19 +395,33 @@ test("the header rules go ahead of both headers and are not required", () => {
 
 // --- the privileged action ------------------------------------------------
 
+// Made on first use rather than before every test: most of the tests in this
+// file read a string the injected block is built from and never open a
+// database, and seeding one for them put a temporary directory and two SQLite
+// databases in the way of each, which is enough for a slow runner's disk to
+// time the hook out and fail a test that touches neither.
 let root = "";
+
+function panelRoot(): string {
+  if (!root) {
+    root = mkdtempSync(join(tmpdir(), "clp-panel-tweaks-"));
+    seedPanel();
+    seedAccounts();
+  }
+  return root;
+}
 
 function options(extra: Partial<PanelTweaksActionOptions> = {}): PanelTweaksActionOptions {
   return {
     processUid: 0,
     emitReply: false,
     paths: {
-      panelDb: join(root, "panel.sq3"),
-      tweaksFile: join(root, "state", "tweaks.json"),
-      diskFile: join(root, "state", "disk-usage.json"),
-      lockFile: join(root, "panel-tweaks.lock"),
-      mysqlDir: join(root, "mysql"),
-      passwd: join(root, "passwd"),
+      panelDb: join(panelRoot(), "panel.sq3"),
+      tweaksFile: join(panelRoot(), "state", "tweaks.json"),
+      diskFile: join(panelRoot(), "state", "disk-usage.json"),
+      lockFile: join(panelRoot(), "panel-tweaks.lock"),
+      mysqlDir: join(panelRoot(), "mysql"),
+      passwd: join(panelRoot(), "passwd"),
       rootUid: process.getuid?.() ?? 0,
     },
     ...extra,
@@ -415,7 +430,7 @@ function options(extra: Partial<PanelTweaksActionOptions> = {}): PanelTweaksActi
 
 /** A panel database with the columns this addon reads, and nothing else. */
 function seedPanel(): void {
-  const db = new Database(join(root, "panel.sq3"), { create: true });
+  const db = new Database(join(panelRoot(), "panel.sq3"), { create: true });
   db.exec(`
     CREATE TABLE site (id INTEGER PRIMARY KEY, type TEXT, domain_name TEXT, root_directory TEXT,
       user TEXT, application TEXT, certificate_id INTEGER, created_at TEXT,
@@ -423,9 +438,10 @@ function seedPanel(): void {
     CREATE TABLE php_settings (id INTEGER PRIMARY KEY, site_id INTEGER, php_version TEXT);
     CREATE TABLE nodejs_settings (id INTEGER PRIMARY KEY, site_id INTEGER, nodejs_version TEXT);
     CREATE TABLE python_settings (id INTEGER PRIMARY KEY, site_id INTEGER, python_version TEXT);
-    CREATE TABLE certificate (id INTEGER PRIMARY KEY, site_id INTEGER, type TEXT, expires_at TEXT);
+    CREATE TABLE certificate (id INTEGER PRIMARY KEY, site_id INTEGER, type TEXT, expires_at TEXT,
+      certificate TEXT);
     CREATE TABLE "database" (id INTEGER PRIMARY KEY, site_id INTEGER, name TEXT);
-    INSERT INTO certificate VALUES (7, 1, '2', '2026-12-01 09:00:00');
+    INSERT INTO certificate VALUES (7, 1, '2', '2026-12-01 09:00:00', NULL);
     INSERT INTO site VALUES (1, 'php', 'shop.example.com', 'shop.example.com', 'shop', 'WordPress', 7,
       '2025-04-09 11:20:00', 1, 0);
     INSERT INTO site VALUES (2, 'static', 'docs.example.com', 'docs.example.com', 'docs', 'Static', NULL,
@@ -450,7 +466,7 @@ function seedPanel(): void {
  * outer join is not what makes this survivable.
  */
 function seedOlderPanel(): void {
-  const db = new Database(join(root, "panel.sq3"), { create: true });
+  const db = new Database(join(panelRoot(), "panel.sq3"), { create: true });
   db.exec(`
     DROP TABLE python_settings;
     DROP TABLE certificate;
@@ -461,24 +477,19 @@ function seedOlderPanel(): void {
 function seedAccounts(): void {
   const uid = process.getuid?.() ?? 0;
   const gid = process.getgid?.() ?? 0;
-  const lines = ["shop", "docs"].map((user) => `${user}:x:${uid}:${gid}::${join(root, "home", user)}:/bin/sh`);
-  writeFileSync(join(root, "passwd"), `${lines.join("\n")}\n`);
-  for (const user of ["shop", "docs"]) mkdirSync(join(root, "home", user), { recursive: true });
+  const lines = ["shop", "docs"].map((user) => `${user}:x:${uid}:${gid}::${join(panelRoot(), "home", user)}:/bin/sh`);
+  writeFileSync(join(panelRoot(), "passwd"), `${lines.join("\n")}\n`);
+  for (const user of ["shop", "docs"]) mkdirSync(join(panelRoot(), "home", user), { recursive: true });
   // What a WordPress install always has, and what the sign-in refuses without:
   // wp-content is the site's own, never something this creates from nothing.
   for (const directory of ["wp-includes", "wp-content"]) {
-    mkdirSync(join(root, "home", "shop", "htdocs", "shop.example.com", directory), { recursive: true });
+    mkdirSync(join(panelRoot(), "home", "shop", "htdocs", "shop.example.com", directory), { recursive: true });
   }
 }
 
-beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "clp-panel-tweaks-"));
-  seedPanel();
-  seedAccounts();
-});
-
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  if (root) rmSync(root, { recursive: true, force: true });
+  root = "";
 });
 
 async function act<T>(argv: string[], extra: Partial<PanelTweaksActionOptions> = {}): Promise<T> {
@@ -501,6 +512,56 @@ test("the site list carries what CloudPanel's own template cannot", async () => 
   expect(docs.certificate).toBeNull();
   expect(docs.cloudflareOnly).toBe(false);
   expect(docs.varnish).toBe(true);
+});
+
+/** Puts a certificate of the given type on shop.example.com. */
+function importCertificate(type: string, pem: string | null): void {
+  const db = new Database(join(panelRoot(), "panel.sq3"));
+  db.run("INSERT INTO certificate VALUES (8, 1, ?, '2041-02-07 10:00:00', ?);", [type, pem]);
+  db.run("UPDATE site SET certificate_id = 8 WHERE id = 1;");
+  db.close();
+}
+
+// CloudPanel records a type, not an issuer, so an uploaded certificate from
+// Cloudflare's origin CA and one from a public authority are the same word to
+// it. The certificate it stored says which.
+test("an imported certificate is named by whoever issued it", async () => {
+  importCertificate("3", CLOUDFLARE_ORIGIN);
+  const state = await act<PanelTweaksState>(["state"]);
+  const shop = state.sites.find((site) => site.domain === "shop.example.com")!;
+  expect(shop.certificate)
+    .toEqual({ type: "3", expiresAt: "2041-02-07 10:00:00", issuer: "CF Origin" });
+});
+
+test("a certificate the panel names itself is left with the panel's own name", async () => {
+  // A self-signed certificate is issued in the site's own name and a Let's
+  // Encrypt one in whichever intermediate signed it, so neither is read.
+  importCertificate("1", CLOUDFLARE_ORIGIN);
+  const selfSigned = await act<PanelTweaksState>(["state"]);
+  expect(selfSigned.sites.find((site) => site.domain === "shop.example.com")!.certificate)
+    .toEqual({ type: "1", expiresAt: "2041-02-07 10:00:00" });
+});
+
+test("an unreadable certificate falls back to the panel's own name", async () => {
+  importCertificate("3", "-----BEGIN CERTIFICATE-----\nnonsense\n-----END CERTIFICATE-----");
+  const state = await act<PanelTweaksState>(["state"]);
+  expect(state.sites.find((site) => site.domain === "shop.example.com")!.certificate)
+    .toEqual({ type: "3", expiresAt: "2041-02-07 10:00:00" });
+});
+
+// A table can predate one of its columns as easily as a database can predate a
+// table, and one missing column must not cost the whole site list.
+test("a panel that stores no certificate still lists its sites", async () => {
+  const db = new Database(join(panelRoot(), "panel.sq3"));
+  db.exec(`
+    DROP TABLE certificate;
+    CREATE TABLE certificate (id INTEGER PRIMARY KEY, site_id INTEGER, type TEXT, expires_at TEXT);
+    INSERT INTO certificate VALUES (7, 1, '3', '2026-12-01 09:00:00');
+  `);
+  db.close();
+  const state = await act<PanelTweaksState>(["state"]);
+  expect(state.sites.find((site) => site.domain === "shop.example.com")!.certificate)
+    .toEqual({ type: "3", expiresAt: "2026-12-01 09:00:00" });
 });
 
 // CloudPanel's own column prints the site type uppercased, so a reverse proxy
@@ -574,7 +635,7 @@ test("a request that names no tweak, or names one with the wrong type, is refuse
 });
 
 test("the sweep measures every site's home and its databases, and caches the answer", async () => {
-  mkdirSync(join(root, "mysql", "shopdb"), { recursive: true });
+  mkdirSync(join(panelRoot(), "mysql", "shopdb"), { recursive: true });
   const asked: string[][] = [];
   const progress: { completed: number; total: number; site: string }[] = [];
   const result = await act<ScanResult>(["scan"], {
@@ -663,7 +724,7 @@ test("the operator-pressed sweep is exempt from Bun's idle request timeout", asy
 });
 
 test("a site whose account has gone is skipped rather than guessed at", async () => {
-  writeFileSync(join(root, "passwd"), `shop:x:${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}::${join(root, "home", "shop")}:/bin/sh\n`);
+  writeFileSync(join(panelRoot(), "passwd"), `shop:x:${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}::${join(panelRoot(), "home", "shop")}:/bin/sh\n`);
   const result = await act<ScanResult>(["scan"], {
     run: () => ({ ok: true, stdout: "512\t/x\n", stderr: "", exitCode: 0 }),
   });

@@ -146,7 +146,22 @@ cells. The runtime tables and the certificate table arrived at different
 CloudPanel versions, and SQLite will not prepare a statement naming a table the
 database has not got, so the query is built from what `sqlite_master` says is
 there: a build without `python_settings` selects that column as NULL and reports
-no Python runtime rather than failing the list.
+no Python runtime rather than failing the list. `PRAGMA table_info` answers the
+same question a column at a time, which is how the stored certificate is asked
+for.
+
+CloudPanel records a certificate's type, not its issuer, so an uploaded
+Cloudflare origin certificate and one from a public authority are both
+"imported" to it. The issuer is read out of the certificate the panel stored,
+by `lib/certificate-issuer.ts` walking the few DER fields in front of it rather
+than decoding a whole X.509. Only an imported certificate is read: a
+self-signed one is issued in the site's own name and a Let's Encrypt one in
+whichever intermediate signed it that month, so in both cases the panel's own
+word is the better one. An authority is named by its organisation rather than
+its common name -- `ZeroSSL`, not `ZeroSSL RSA Domain Secure Site CA` -- except
+Cloudflare's origin CA, which is called `CF Origin` because a browser reaching
+the origin directly rejects it exactly as it rejects the self-signed
+placeholder. A certificate that cannot be parsed keeps the panel's own name.
 
 Every value the script writes goes in as text or as an element it built. None of
 it is markup, because all of it came out of somebody's database.
@@ -228,7 +243,9 @@ Application and SSL badges use the same exact 17px line-height and 23px outer he
 On SSL badges the mobile edge is an inset stroke rather than a fractional
 rounded border, keeping all four sides the same visual weight without changing
 the badge's footprint. The normal SSL badge remains one text label, including
-the middle-dot separator between issuer and expiry. A card's badge is half the
+the middle-dot separator between issuer and expiry. A certificate that runs for
+years rather than months counts down in years, because a four-digit day count
+reads as noise. A card's badge is half the
 card wide, which the full issuer and expiry overrun at every phone size, so the
 card carries a short name and a bare countdown such as `Let's Enc · 46d`; a
 type with no short name keeps the countdown alone. The full text stays

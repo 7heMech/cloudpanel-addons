@@ -297,6 +297,20 @@ function panelTweaksPreviewState(url: URL): PanelTweaksState {
         certificate: { type: "2", expiresAt: "2026-10-30 10:00:00" },
         disk: measured ? { bytes: 41_943_040, databaseBytes: 8_388_608, measuredAt: at } : null,
       },
+      // An imported certificate is named by whoever issued it: Cloudflare's
+      // origin CA on one, a public authority on the other.
+      {
+        domain: "edge.example.com", user: "edge", type: "reverse-proxy", application: "ReverseProxy",
+        runtime: "", createdAt: "2026-02-11 10:20:00", cloudflareOnly: true, varnish: false,
+        certificate: { type: "3", expiresAt: "2041-02-07 10:00:00", issuer: "CF Origin" },
+        disk: measured ? { bytes: 8_388_608, databaseBytes: 0, measuredAt: at } : null,
+      },
+      {
+        domain: "mail.example.com", user: "mail", type: "php", application: "WordPress",
+        runtime: "PHP 8.3", createdAt: "2026-05-05 16:45:00", cloudflareOnly: false, varnish: false,
+        certificate: { type: "3", expiresAt: "2027-04-30 10:00:00", issuer: "ZeroSSL" },
+        disk: measured ? { bytes: 268_435_456, databaseBytes: 33_554_432, measuredAt: at } : null,
+      },
       {
         domain: "cdn.example.com", user: "cdn", type: "reverse-proxy", application: "ReverseProxy",
         runtime: "", createdAt: "2026-09-01 11:00:00", cloudflareOnly: false, varnish: true, certificate: { type: "2", expiresAt: "2026-12-20 10:00:00" },
@@ -317,6 +331,9 @@ body { margin: 0; font-family: 'Helvetica Neue','Segoe UI',Helvetica,Arial,sans-
   background: #f9fafb; color: #212529; }
 a { color: #3c3c3c; text-decoration: none; }
 html.dark body { background: #0e1217; color: #fff; }
+/* The panel's dark theme carries this; without it every hostname in the stub is
+   near-black on a near-black table. */
+html.dark a { color: #fff; }
 .main-container { padding: 0 0 60px; }
 .container-fluid { width: 100%; padding: 0 12px; margin: 0 auto; }
 .container-limited-width { max-width: 1200px; }
