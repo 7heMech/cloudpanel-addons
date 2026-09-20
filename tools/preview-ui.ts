@@ -331,6 +331,9 @@ body { margin: 0; font-family: 'Helvetica Neue','Segoe UI',Helvetica,Arial,sans-
   background: #f9fafb; color: #212529; }
 a { color: #3c3c3c; text-decoration: none; }
 html.dark body { background: #0e1217; color: #fff; }
+/* The panel's dark theme carries this; without it every hostname in the stub is
+   near-black on a near-black table. */
+html.dark a { color: #fff; }
 .main-container { padding: 0 0 60px; }
 .container-fluid { width: 100%; padding: 0 12px; margin: 0 auto; }
 .container-limited-width { max-width: 1200px; }
