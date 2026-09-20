@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -334,7 +334,7 @@ test("a panel build without the runtime or certificate tables still lists its si
 // statement naming a column the table has not got fails the same way one naming
 // a missing table does -- which would cost the whole list, not one column.
 test("a panel whose site table predates those columns still lists its sites", async () => {
-  const db = new Database(join(root, "panel.sq3"), { create: true });
+  const db = new Database(join(panelRoot(), "panel.sq3"), { create: true });
   db.exec(`
     DROP TABLE site;
     CREATE TABLE site (id INTEGER PRIMARY KEY, type TEXT, domain_name TEXT, root_directory TEXT,
@@ -395,19 +395,33 @@ test("the header rules go ahead of both headers and are not required", () => {
 
 // --- the privileged action ------------------------------------------------
 
+// Made on first use rather than before every test: most of the tests in this
+// file read a string the injected block is built from and never open a
+// database, and seeding one for them put a temporary directory and two SQLite
+// databases in the way of each, which is enough for a slow runner's disk to
+// time the hook out and fail a test that touches neither.
 let root = "";
+
+function panelRoot(): string {
+  if (!root) {
+    root = mkdtempSync(join(tmpdir(), "clp-panel-tweaks-"));
+    seedPanel();
+    seedAccounts();
+  }
+  return root;
+}
 
 function options(extra: Partial<PanelTweaksActionOptions> = {}): PanelTweaksActionOptions {
   return {
     processUid: 0,
     emitReply: false,
     paths: {
-      panelDb: join(root, "panel.sq3"),
-      tweaksFile: join(root, "state", "tweaks.json"),
-      diskFile: join(root, "state", "disk-usage.json"),
-      lockFile: join(root, "panel-tweaks.lock"),
-      mysqlDir: join(root, "mysql"),
-      passwd: join(root, "passwd"),
+      panelDb: join(panelRoot(), "panel.sq3"),
+      tweaksFile: join(panelRoot(), "state", "tweaks.json"),
+      diskFile: join(panelRoot(), "state", "disk-usage.json"),
+      lockFile: join(panelRoot(), "panel-tweaks.lock"),
+      mysqlDir: join(panelRoot(), "mysql"),
+      passwd: join(panelRoot(), "passwd"),
       rootUid: process.getuid?.() ?? 0,
     },
     ...extra,
@@ -416,7 +430,7 @@ function options(extra: Partial<PanelTweaksActionOptions> = {}): PanelTweaksActi
 
 /** A panel database with the columns this addon reads, and nothing else. */
 function seedPanel(): void {
-  const db = new Database(join(root, "panel.sq3"), { create: true });
+  const db = new Database(join(panelRoot(), "panel.sq3"), { create: true });
   db.exec(`
     CREATE TABLE site (id INTEGER PRIMARY KEY, type TEXT, domain_name TEXT, root_directory TEXT,
       user TEXT, application TEXT, certificate_id INTEGER, created_at TEXT,
@@ -452,7 +466,7 @@ function seedPanel(): void {
  * outer join is not what makes this survivable.
  */
 function seedOlderPanel(): void {
-  const db = new Database(join(root, "panel.sq3"), { create: true });
+  const db = new Database(join(panelRoot(), "panel.sq3"), { create: true });
   db.exec(`
     DROP TABLE python_settings;
     DROP TABLE certificate;
@@ -463,24 +477,19 @@ function seedOlderPanel(): void {
 function seedAccounts(): void {
   const uid = process.getuid?.() ?? 0;
   const gid = process.getgid?.() ?? 0;
-  const lines = ["shop", "docs"].map((user) => `${user}:x:${uid}:${gid}::${join(root, "home", user)}:/bin/sh`);
-  writeFileSync(join(root, "passwd"), `${lines.join("\n")}\n`);
-  for (const user of ["shop", "docs"]) mkdirSync(join(root, "home", user), { recursive: true });
+  const lines = ["shop", "docs"].map((user) => `${user}:x:${uid}:${gid}::${join(panelRoot(), "home", user)}:/bin/sh`);
+  writeFileSync(join(panelRoot(), "passwd"), `${lines.join("\n")}\n`);
+  for (const user of ["shop", "docs"]) mkdirSync(join(panelRoot(), "home", user), { recursive: true });
   // What a WordPress install always has, and what the sign-in refuses without:
   // wp-content is the site's own, never something this creates from nothing.
   for (const directory of ["wp-includes", "wp-content"]) {
-    mkdirSync(join(root, "home", "shop", "htdocs", "shop.example.com", directory), { recursive: true });
+    mkdirSync(join(panelRoot(), "home", "shop", "htdocs", "shop.example.com", directory), { recursive: true });
   }
 }
 
-beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "clp-panel-tweaks-"));
-  seedPanel();
-  seedAccounts();
-});
-
 afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+  if (root) rmSync(root, { recursive: true, force: true });
+  root = "";
 });
 
 async function act<T>(argv: string[], extra: Partial<PanelTweaksActionOptions> = {}): Promise<T> {
@@ -507,7 +516,7 @@ test("the site list carries what CloudPanel's own template cannot", async () => 
 
 /** Puts a certificate of the given type on shop.example.com. */
 function importCertificate(type: string, pem: string | null): void {
-  const db = new Database(join(root, "panel.sq3"));
+  const db = new Database(join(panelRoot(), "panel.sq3"));
   db.run("INSERT INTO certificate VALUES (8, 1, ?, '2041-02-07 10:00:00', ?);", [type, pem]);
   db.run("UPDATE site SET certificate_id = 8 WHERE id = 1;");
   db.close();
@@ -543,7 +552,7 @@ test("an unreadable certificate falls back to the panel's own name", async () =>
 // A table can predate one of its columns as easily as a database can predate a
 // table, and one missing column must not cost the whole site list.
 test("a panel that stores no certificate still lists its sites", async () => {
-  const db = new Database(join(root, "panel.sq3"));
+  const db = new Database(join(panelRoot(), "panel.sq3"));
   db.exec(`
     DROP TABLE certificate;
     CREATE TABLE certificate (id INTEGER PRIMARY KEY, site_id INTEGER, type TEXT, expires_at TEXT);
@@ -626,7 +635,7 @@ test("a request that names no tweak, or names one with the wrong type, is refuse
 });
 
 test("the sweep measures every site's home and its databases, and caches the answer", async () => {
-  mkdirSync(join(root, "mysql", "shopdb"), { recursive: true });
+  mkdirSync(join(panelRoot(), "mysql", "shopdb"), { recursive: true });
   const asked: string[][] = [];
   const progress: { completed: number; total: number; site: string }[] = [];
   const result = await act<ScanResult>(["scan"], {
@@ -715,7 +724,7 @@ test("the operator-pressed sweep is exempt from Bun's idle request timeout", asy
 });
 
 test("a site whose account has gone is skipped rather than guessed at", async () => {
-  writeFileSync(join(root, "passwd"), `shop:x:${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}::${join(root, "home", "shop")}:/bin/sh\n`);
+  writeFileSync(join(panelRoot(), "passwd"), `shop:x:${process.getuid?.() ?? 0}:${process.getgid?.() ?? 0}::${join(panelRoot(), "home", "shop")}:/bin/sh\n`);
   const result = await act<ScanResult>(["scan"], {
     run: () => ({ ok: true, stdout: "512\t/x\n", stderr: "", exitCode: 0 }),
   });
