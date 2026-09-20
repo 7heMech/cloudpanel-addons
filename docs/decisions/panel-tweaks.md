@@ -294,6 +294,8 @@ Completion updates that status in place. It refreshes the Sites preview frame
 when the Sites enhancement is on, but never reloads the addon page.
 Every minimized row keeps its title and switch in one center-aligned heading;
 descriptions and live status sit below without moving the switch off that line.
+The nested measurement row's branch terminates at that heading's vertical
+center, so the relationship reads correctly at both desktop and phone sizes.
 
 It is the one thing here a loaded box would feel, and it runs unattended, so it
 asks the kernel to schedule it last -- idle I/O class, lowest CPU priority.

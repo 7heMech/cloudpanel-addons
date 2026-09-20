@@ -275,6 +275,7 @@ test("the addon page keeps switches beside wrapping labels on a phone", () => {
   const html = panelTweaksLayout("Panel Tweaks", page);
   expect(html).toContain(".tweak-heading { display: flex; align-items: center;");
   expect(html).toContain(".tweak-row .switch { flex: 0 0 auto; margin: 0; }");
+  expect(html).toContain("top: -16px; left: 8px; width: 18px; height: 30px;");
   expect(html).toContain("key === 'diskUsage' && wanted");
   expect(page).toContain("Enabling starts a low-priority scan now");
   expect(page).toContain('</div>\n          <div class="tweak-scan"><span>Nothing measured yet.</span>');
