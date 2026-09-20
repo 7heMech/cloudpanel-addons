@@ -70,8 +70,10 @@ the repair pass marks a deployment whose runner died as failed.
 
 The site-scoped page is a tab in CloudPanel's own site page, mounted through
 `lib/shadow-embed.ts` beside Maintenance and Staging. Connected sites lead with
-the current checkout, repository, branch, and deployment mode. The latest
-deployment and its output sit beside push-to-deploy controls. A checkout is
+the current checkout, repository, branch, and deployment mode. The dashboard
+uses two equal columns with cards sharing the same height in each row: the
+latest deployment sits beside push-to-deploy controls, followed by repository
+settings and the deploy key. Cards stack on mobile. A checkout is
 reported separately from job success because a failed post-deploy command can
 leave the new files in place. Deploy is disabled while a job is queued or
 running. A deployment started there is watched in the same card, with failed
@@ -90,12 +92,12 @@ checkout exists, or when the public key is missing. HTTPS remotes have no key
 section. A missing SSH key offers a generate action.
 
 The push-to-deploy switch and last delivery outcome stay visible. Webhook setup
-and Other providers & CI are independently expandable sections in that card.
-Webhook setup holds the URL and GitHub instructions and is expanded until a
-delivery has arrived. Other providers & CI holds generic POST instructions;
-it starts collapsed for GitHub remotes and expanded for other remotes, whose
-GitHub steps are collapsed. This choice only changes the instructions; it
-does not configure a provider.
+and Other providers & CI are independently expandable sections in that card;
+both start collapsed regardless of provider or delivery history. Webhook setup
+holds the URL and GitHub instructions. Other providers & CI holds generic POST
+instructions. Non-GitHub remotes also collapse the GitHub steps inside webhook
+setup. This choice only changes the instructions; it does not configure a
+provider.
 
 `/addons/git/` is the fleet view: counts of configured sites, active deployments,
 and sites needing attention precede each site's branch, checkout, and latest

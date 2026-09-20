@@ -19,9 +19,9 @@ const BASE = mountPath("git");
 
 // Only what the shared shell does not carry.
 const STYLE = `
-.git-dashboard { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+.git-dashboard { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-bottom: 24px; }
 .git-dashboard > * { min-width: 0; }
-.git-dashboard .card { margin-bottom: 24px; }
+.git-dashboard .card { margin-bottom: 0; }
 .git-overview { border-top: 3px solid var(--accent); }
 .git-eyebrow { color: var(--muted); font-size: 13px; font-weight: 600; margin-bottom: 14px; }
 .git-commit { display: flex; align-items: flex-start; gap: 14px; }
@@ -77,7 +77,7 @@ const STYLE = `
 .git-empty h2 { margin: 0 0 10px; }
 .git-empty p { margin: 0 0 22px; color: var(--muted); }
 @media (max-width: 760px) {
-  .git-dashboard { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .git-dashboard { grid-template-columns: minmax(0, 1fr); }
   .git-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .git-meta > :first-child { grid-column: 1 / -1; }
   .git-commit { flex-direction: column; gap: 10px; }
@@ -515,12 +515,10 @@ export function siteView(site: GitSiteStatus, log: string): string {
     ${site.configured ? `
       ${current}
       <div class="git-dashboard">
-        <div>
-          ${jobCard(site.lastJob, log)}
-          ${settings}
-          ${key}
-        </div>
+        ${jobCard(site.lastJob, log)}
         ${webhookSection(site)}
+        ${settings}
+        ${key}
       </div>` : `<div class="git-setup">${settings}</div>`}`;
 }
 
@@ -614,7 +612,7 @@ function webhookSection(site: GitSiteStatus): string {
       <li>Send push events to deploy <strong>${esc(branch)}</strong>.</li>
     </ol>`;
   const url = !webhook ? "" : `
-      <details class="git-disclosure git-webhook-setup"${webhook.lastDeliveryAt ? "" : " open"}>
+      <details class="git-disclosure git-webhook-setup">
         <summary>Webhook setup</summary>
         <div class="git-hook-label">Webhook URL</div>
         <div class="key-block">
@@ -627,7 +625,7 @@ function webhookSection(site: GitSiteStatus): string {
         <div class="hint">Keep this URL private. Anyone with it can deploy this site.</div>
         ${github ? githubSteps : `<details class="git-disclosure git-webhook-setup"><summary>GitHub</summary>${githubSteps}</details>`}
       </details>
-      <details class="git-disclosure git-webhook-setup"${github ? "" : " open"}>
+      <details class="git-disclosure git-webhook-setup">
         <summary>Other providers &amp; CI</summary>
         <p class="hint">Send a POST request to deploy the configured branch from your CI job or another service.</p>
         <pre class="hook-curl mono" id="git-webhook-curl">curl -X POST ${esc(path)}</pre>
