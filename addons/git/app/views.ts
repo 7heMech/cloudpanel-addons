@@ -48,12 +48,12 @@ const STYLE = `
 .git-disclosure > summary .hint { display: block; margin-top: 5px; }
 .git-advanced { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 20px; }
 .git-advanced > summary { font-size: 14px; }
-.git-advanced .form-grid { grid-template-columns: minmax(0, 1fr); }
+.git-repo-form .form-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+.git-repo-form .git-advanced .form-grid { grid-template-columns: minmax(0, 1fr); }
+.git-repo-form .form-actions { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 20px; }
 .git-danger { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
-.git-setup .form-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
-.git-setup .form-field-full { grid-column: auto; }
 .git-setup .git-advanced .form-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
-.git-setup .form-actions { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 20px; }
+
 .git-setup-intro { margin-bottom: 24px; }
 .git-setup-intro h2 { margin: 0 0 8px; }
 .git-output { margin-top: 20px; }
@@ -535,15 +535,15 @@ function repositoryForm(site: GitSiteStatus): string {
   const config = site.config;
   const custom = [config?.postDeploy ? "Post-deploy command" : "", config?.directory ? "Custom directory" : ""].filter(Boolean);
   const fields = `
-      <form onsubmit="event.preventDefault(); saveGitConfig('${esc(site.domain)}')">
+      <form class="git-repo-form" onsubmit="event.preventDefault(); saveGitConfig('${esc(site.domain)}')">
         <div class="form-grid">
-          <div class="form-field form-field-full">
+          <div class="form-field">
             <label class="required" for="git-remote">Repository URL</label>
             <input id="git-remote" type="text" required maxlength="${MAX_REMOTE_LENGTH}" spellcheck="false" autocapitalize="off"
               placeholder="git@github.com:owner/repo.git" value="${esc(config?.remote ?? "")}">
             <div class="hint">Use SSH for a private repository, or HTTPS for a public one.</div>
           </div>
-          <div class="form-field form-field-full">
+          <div class="form-field">
             <label class="required" for="git-branch">Branch</label>
             <input id="git-branch" type="text" required maxlength="${MAX_BRANCH_LENGTH}" spellcheck="false" autocapitalize="off"
               placeholder="main" value="${esc(config?.branch ?? "main")}">

@@ -83,24 +83,24 @@ watched in the same card, with failed output expanded so it can be read
 immediately.
 
 Repository settings and the deploy key use native expandable sections, which
-also work inside the panel's shadow root. The repository form keeps its URL
-and branch together; Advanced holds the subdirectory, post-deploy command, and
-disconnect action. Configured advanced values are summarized while closed and
-remain in the form when saving. Key replacement and webhook URL rotation
-sit beside their Copy buttons below the key or URL and retain their
-confirmation dialogs.
+also work inside the panel's shadow root. The repository form puts branch
+beside the URL wherever it is drawn; Advanced holds the post-deploy command,
+subdirectory, and disconnect action, and the submit button sits below a rule as
+the card's footer. Configured advanced values are summarized while closed and
+remain in the form when saving. Key replacement and webhook URL rotation sit
+beside their Copy buttons below the key or URL and retain their confirmation
+dialogs.
 
 A site nobody has connected yet shows the connection form. That form has the
-page to itself, so it fills the width and pairs its fields across it, each pair
-split by how long its values run: branch beside the longer repository URL, and
-subdirectory beside the longer post-deploy command under Advanced, the longer
-field leading in both so the two rows share their column edges, and the submit
-button below a rule as the card's footer. The settings card on a connected site
-is one column wide and keeps its fields stacked. Saving an SSH remote generates
-the deploy key as part of the save, so the sequence is save, add the key to the
-repository, deploy. The key section is expanded until a checkout exists, or
-when the public key is missing. HTTPS remotes have no key section. A missing
-SSH key offers a generate action.
+page to itself, so it also pairs the Advanced fields, subdirectory beside the
+longer post-deploy command. Each pair gives two thirds to the field whose
+values run long, so every row in the form shares its column edges. The settings
+card on a connected site is one column wide, which fits the URL and branch but
+not the Advanced pair, so those stay stacked there. Saving an SSH remote
+generates the deploy key as part of the save, so the sequence is save, add the
+key to the repository, deploy. The key section is expanded until a checkout
+exists, or when the public key is missing. HTTPS remotes have no key section. A
+missing SSH key offers a generate action.
 
 The push-to-deploy switch and last delivery outcome stay visible. Webhook setup
 and Other providers & CI are independently expandable sections in that card;
