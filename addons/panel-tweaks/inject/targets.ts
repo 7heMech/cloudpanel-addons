@@ -19,7 +19,7 @@ import type { AddonTarget } from "../../../lib/addon-target";
 import { headerWrapStyle } from "../../../lib/panel-nav";
 import { MENU_ONLY_CLASS, ROW_ACTION_CLASS, ROW_MENU_CLASS } from "../../../lib/row-actions";
 import {
-  APPLICATION_LABELS, CERTIFICATE_LABELS, SELF_SIGNED_CERTIFICATE,
+  APPLICATION_LABELS, CERTIFICATE_LABELS, CERTIFICATE_SHORT_LABELS, SELF_SIGNED_CERTIFICATE,
   DEFAULT_TWEAKS, readTweaks, DEFAULT_PANEL_TWEAKS_PATHS,
 } from "../action";
 import type { PanelTweaks } from "../action";
@@ -202,7 +202,6 @@ const SITES_MOBILE_STYLE = `
   table.table-sites td .clp-tweaks-badge { box-sizing: border-box; max-width: 100%; padding: 3px 9px;
     border: 0; box-shadow: inset 0 0 0 1px currentColor; line-height: 17px;
     white-space: normal; overflow-wrap: anywhere; }
-  table.table-sites .clp-tweaks-details > [data-col="ssl"] { container: clp-ssl / inline-size; }
   table.table-sites td.clp-tweaks-actions { padding-top: 14px !important; }
 }
 /* A short second hostname line can share its height with Application at any phone
@@ -214,9 +213,10 @@ table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-detail-head
   grid-area: 1 / 1; justify-self: end; transform: translateY(calc(-100% - 12px)); }
 table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-details > .clp-tweaks-type-in-empty-field {
   transform: translateY(calc(-100% - 12px)); }
-/* Below the width of the normal issuer-and-expiry badge, show its compact
-   expiry. The full text remains available to screen readers and in the title. */
-@container clp-ssl (max-width: 160px) {
+/* A card's badge is half its width, which the full issuer and expiry overrun at
+   every phone size, so it carries the short name and the countdown. The full
+   text remains available to screen readers and in the title. */
+@media (max-width: 860px) {
   .clp-tweaks-badge-timed > .clp-tweaks-badge-full { position: absolute; width: 1px; height: 1px;
     overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .clp-tweaks-badge-timed > .clp-tweaks-badge-compact { display: block; position: static;
@@ -638,10 +638,15 @@ const SITES_SCRIPT = `
     }
 
     var CERTIFICATE_NAMES = CERTIFICATE_LABELS_JSON;
+    var CERTIFICATE_SHORT_NAMES = CERTIFICATE_SHORT_LABELS_JSON;
     var SELF_SIGNED = SELF_SIGNED_JSON;
 
     function certificateName(type) {
       return CERTIFICATE_NAMES[String(type || "").trim()] || (type ? String(type) : "Certificate");
+    }
+
+    function shortCertificateName(type) {
+      return CERTIFICATE_SHORT_NAMES[String(type || "").trim()] || "";
     }
 
     function daysUntil(value) {
@@ -671,7 +676,10 @@ const SITES_SCRIPT = `
       var left = daysUntil(site.certificate.expiresAt);
       var tone = left !== null && left < 14 ? "warn" : "ok";
       var note = left === null ? "" : left < 0 ? "expired" : left + "d left";
-      td.appendChild(badge(name, tone, site.certificate.expiresAt || "", note, left < 0 ? "expired" : left + "d"));
+      var short = shortCertificateName(site.certificate.type);
+      var counted = left < 0 ? "expired" : left + "d";
+      td.appendChild(badge(name, tone, site.certificate.expiresAt || "", note,
+        short ? short + " · " + counted : counted));
       td.setAttribute("data-value", String(left === null ? 2 : left + 100000));
       return td;
     }
@@ -707,7 +715,7 @@ const SITES_SCRIPT = `
       var disk = site && site.disk;
       if (!disk) {
         td.textContent = "—";
-        td.title = "Not measured yet. The next sweep runs within fifteen minutes.";
+        td.title = "Not measured yet. Use Measure now, or wait for the next scheduled sweep.";
         td.setAttribute("data-value", "-1");
         return td;
       }
@@ -1222,6 +1230,7 @@ export function sitesBlock(url: string, tweaks: PanelTweaks = storedTweaks()): s
           </div>
           <script>${SITES_SCRIPT.split("ADDON_URL").join(url)
   .replace("CERTIFICATE_LABELS_JSON", JSON.stringify(CERTIFICATE_LABELS))
+  .replace("CERTIFICATE_SHORT_LABELS_JSON", JSON.stringify(CERTIFICATE_SHORT_LABELS))
   .replace("APPLICATION_LABELS_JSON", JSON.stringify(APPLICATION_LABELS))
   .replace("SELF_SIGNED_JSON", JSON.stringify(SELF_SIGNED_CERTIFICATE))
   .replace("SITES_TABLE_JSON", JSON.stringify(tweaks.sitesTable))}</script>`;

@@ -274,6 +274,16 @@ function openCategoryDialog(button) {
   dialog.showModal();
 }
 
+/** Dismiss the modal only when the press landed on the native dialog backdrop. */
+function closeCategoryDialogOnBackdrop(event) {
+  const dialog = event.currentTarget;
+  if (event.target !== dialog) return;
+  const rect = dialog.getBoundingClientRect();
+  const inside = event.clientX >= rect.left && event.clientX <= rect.right &&
+    event.clientY >= rect.top && event.clientY <= rect.bottom;
+  if (!inside) dialog.close();
+}
+
 async function saveCategory() {
   const dialog = CLP_ROOT.getElementById('category-dialog');
   const name = CLP_ROOT.getElementById('category-name').value.trim();
@@ -587,7 +597,7 @@ export function dashboardView(state: PhpResourcesState): string {
       </tr></thead><tbody>${siteRows}</tbody></table>`
     : '<div class="empty">No CloudPanel site runs PHP, so there is no PHP-FPM pool to tune.</div>'}
   </div>
-  <dialog id="category-dialog" aria-labelledby="category-dialog-title" data-default-profile="${esc(JSON.stringify(DEFAULT_CATEGORY_PROFILE))}">
+  <dialog id="category-dialog" aria-labelledby="category-dialog-title" data-default-profile="${esc(JSON.stringify(DEFAULT_CATEGORY_PROFILE))}" onmousedown="closeCategoryDialogOnBackdrop(event)">
     <div class="dialog-header"><h2 id="category-dialog-title">New category</h2></div>
     <div class="form-grid dialog-grid">
       <div class="form-field">

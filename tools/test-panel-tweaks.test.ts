@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   applicationLabel, DEFAULT_TWEAKS, executePanelTweaksAction,
+  scanDiskUsage,
   type PanelTweaksActionOptions, type PanelTweaksState, type ScanResult, type SetTweaksResult,
 } from "../addons/panel-tweaks/action";
 import {
@@ -12,6 +13,8 @@ import {
 } from "../addons/panel-tweaks/inject/targets";
 import type { PanelTweaks } from "../addons/panel-tweaks/action";
 import { previewPage } from "../addons/panel-tweaks/app/preview";
+import { handle as handlePanelTweaks } from "../addons/panel-tweaks/app/index";
+import { panelTweaksService } from "../addons/panel-tweaks/app/service";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MENU_ONLY_CLASS, MENU_ONLY_STYLE, ROW_ACTION_CLASS, ROW_MENU_CLASS } from "../lib/row-actions";
@@ -270,7 +273,16 @@ test("the addon page keeps switches beside wrapping labels on a phone", () => {
   });
   expect(tableOff).toContain('data-tweak-parent="sitesTable" disabled');
   const html = panelTweaksLayout("Panel Tweaks", page);
-  expect(html).toContain(".tweak-row > div { flex: 1 1 auto; min-width: 0; }");
+  expect(html).toContain(".tweak-heading { display: flex; align-items: center;");
+  expect(html).toContain(".tweak-row .switch { flex: 0 0 auto; margin: 0; }");
+  expect(html).toContain("top: -16px; left: 8px; width: 18px; height: 28px;");
+  expect(html).toContain("key === 'diskUsage' && wanted");
+  expect(page).toContain("Enabling starts a low-priority scan now");
+  expect(page).toContain('</div>\n          <div class="tweak-scan"><span>Nothing measured yet.</span>');
+  expect(page).not.toContain('<p>Enabling starts a low-priority scan now. It refreshes about every 6 hours, or whenever you choose Measure now. Each refresh walks the disk.</p><div class="tweak-scan">');
+  expect(html).toContain("summary.textContent = event.measured + ' of ' + total");
+  expect(html).toContain("sitesTable && sitesTable.checked && frame");
+  expect(html).not.toContain("location.reload()");
   expect(html).toContain(".tweak-row .switch { flex: 0 0 auto;");
   expect(html).not.toContain(".tweak-row { flex-wrap: wrap; }");
   expect(html).toContain(".preview-widths { display: none; }");
@@ -564,7 +576,9 @@ test("a request that names no tweak, or names one with the wrong type, is refuse
 test("the sweep measures every site's home and its databases, and caches the answer", async () => {
   mkdirSync(join(root, "mysql", "shopdb"), { recursive: true });
   const asked: string[][] = [];
+  const progress: { completed: number; total: number; site: string }[] = [];
   const result = await act<ScanResult>(["scan"], {
+    onProgress: (event) => progress.push(event),
     run: (command, args) => {
       asked.push([command, ...args]);
       const path = args[args.length - 1] ?? "";
@@ -577,12 +591,75 @@ test("the sweep measures every site's home and its databases, and caches the ans
   // The database directory is measured for the site that has one, and only for
   // that site: three `du` calls across two sites.
   expect(asked).toHaveLength(3);
+  expect(progress.map(({ completed, total, site }) => ({ completed, total, site }))).toEqual([
+    { completed: 0, total: 2, site: "docs.example.com" },
+    { completed: 1, total: 2, site: "shop.example.com" },
+  ]);
 
   const state = await act<PanelTweaksState>(["state"]);
   const shop = state.sites.find((site) => site.domain === "shop.example.com")!;
   expect(shop.disk).toEqual({ bytes: 4096, databaseBytes: 2048, measuredAt: result.measuredAt });
   const docs = state.sites.find((site) => site.domain === "docs.example.com")!;
   expect(docs.disk?.databaseBytes).toBe(0);
+});
+
+test("unattended measurements reuse the result for six hours", async () => {
+  await act<SetTweaksResult>(["set-tweaks"], { input: JSON.stringify({ diskUsage: true }) });
+  let measurements = 0;
+  const at = (iso: string) => options({
+    now: () => new Date(iso),
+    run: () => {
+      measurements++;
+      return { ok: true, stdout: "512\t/x\n", stderr: "", exitCode: 0 };
+    },
+  });
+
+  expect(await scanDiskUsage(at("2026-09-20T00:00:00Z"))).toBe("2 sites measured");
+  expect(measurements).toBe(2);
+  expect(await scanDiskUsage(at("2026-09-20T05:59:59Z"))).toBeNull();
+  expect(measurements).toBe(2);
+  expect(await scanDiskUsage(at("2026-09-20T06:00:00Z"))).toBe("2 sites measured");
+  expect(measurements).toBe(4);
+});
+
+test("the operator-pressed sweep is exempt from Bun's idle request timeout", async () => {
+  const originalScanStream = panelTweaksService.scanStream;
+  const calls: Array<[Request, number]> = [];
+  const token = "panel-tweaks-test-token";
+  const req = new Request("https://panel.example:8443/addons/panel-tweaks/api/scan", {
+    method: "POST",
+    headers: {
+      host: "panel.example:8443",
+      origin: "https://panel.example:8443",
+      cookie: `clp_addons_csrf=${token}`,
+      "x-clp-addons-csrf": token,
+    },
+  });
+
+  try {
+    panelTweaksService.scanStream = (handlers) => {
+      handlers.onEvent({
+        phase: "progress", completed: 0, total: 26, measured: 0, skipped: 0, site: "one.example.com",
+      });
+      handlers.onEvent({ phase: "complete", measured: 25, skipped: 1, measuredAt: "2026-09-20T15:00:00Z" });
+      return { close() {} };
+    };
+    const response = await handlePanelTweaks(req, "/api/scan", null, {
+      timeout(request: Request, seconds: number) {
+        calls.push([request, seconds]);
+      },
+    } as any);
+    expect(response.headers.get("Content-Type")).toBe("text/event-stream");
+    expect(response.headers.get("X-Accel-Buffering")).toBe("no");
+    const events = await response.text();
+    expect(events).toContain('\"phase\":\"progress\"');
+    expect(events).toContain('\"total\":26');
+    expect(events).toContain('\"phase\":\"complete\"');
+  } finally {
+    panelTweaksService.scanStream = originalScanStream;
+  }
+
+  expect(calls).toEqual([[req, 0]]);
 });
 
 test("a site whose account has gone is skipped rather than guessed at", async () => {

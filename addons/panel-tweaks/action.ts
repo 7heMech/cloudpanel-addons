@@ -25,14 +25,15 @@ import { PANEL_USER_NAME_RE, panelUserSites } from "../../lib/panel-users";
 
 const TWEAKS_VERSION = 1;
 const DISK_VERSION = 1;
+const DISK_SCAN_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-export type PanelTweaksVerb = "state" | "set-tweaks" | "scan";
+export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "scan-stream";
 
 /**
  * What the addon does, as independent modes.
  *
  * Separate rather than one switch because they do not cost the same: most are
- * markup, and `diskUsage` walks the whole disk every fifteen minutes. An
+ * markup, and `diskUsage` periodically walks the whole disk. An
  * operator who wants a filtered site list should not have to accept that. The
  * four narrow-screen and layout tweaks are separate for a different reason:
  * they change the shape of pages CloudPanel drew itself, and an operator who
@@ -111,6 +112,19 @@ export const CERTIFICATE_LABELS: Record<string, string> = {
 };
 
 /**
+ * What a certificate type is called in a phone's card, where the badge is half
+ * a card wide and the full name and the countdown together overrun it.
+ *
+ * Only a timed certificate is ever shortened. A type without an entry here
+ * keeps the countdown alone rather than an abbreviation nobody would
+ * recognise; the full name stays in the title and for screen readers.
+ */
+export const CERTIFICATE_SHORT_LABELS: Record<string, string> = {
+  "2": "Let's Enc",
+  "3": "Imported",
+};
+
+/**
  * The certificate CloudPanel puts on every new site. It is a certificate, but
  * it is not one a browser accepts, so it is never reported as a site being
  * covered -- only as the placeholder it is.
@@ -172,6 +186,18 @@ export interface ScanResult {
   measuredAt: string;
 }
 
+/** One compact update from an operator-pressed disk sweep. */
+export type ScanStreamEvent =
+  | {
+      phase: "progress";
+      completed: number;
+      total: number;
+      measured: number;
+      skipped: number;
+      site: string;
+    }
+  | ({ phase: "complete" } & ScanResult);
+
 export interface PanelTweaksActionPaths {
   panelDb: string;
   tweaksFile: string;
@@ -190,6 +216,7 @@ export interface PanelTweaksActionOptions {
   processUid?: number;
   run?: (command: string, args: string[]) => CommandResult;
   now?: () => Date;
+  onProgress?: (event: Extract<ScanStreamEvent, { phase: "progress" }>) => void;
 }
 
 export const DEFAULT_PANEL_TWEAKS_PATHS: PanelTweaksActionPaths = {
@@ -512,7 +539,7 @@ function ownedDirectory(path: string, uid: number): boolean {
  * `du` on every site, politely.
  *
  * A recursive stat of a whole web root is the one thing this addon does that a
- * loaded box would feel, and it runs unattended every fifteen minutes. So it
+ * loaded box would feel, and it runs unattended about every six hours. So it
  * asks the kernel to schedule it last: idle I/O class, lowest CPU priority.
  * Where `ionice` is absent the measurement still happens, just without the
  * concession.
@@ -549,7 +576,15 @@ function scanDisk(
   const sites: Record<string, DiskCacheEntry> = {};
   let skipped = 0;
 
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
+    options.onProgress?.({
+      phase: "progress",
+      completed: index,
+      total: rows.length,
+      measured: Object.keys(sites).length,
+      skipped,
+      site: row.domain_name,
+    });
     const account = accounts.get(row.user);
     if (!account || !ownedDirectory(account.home, account.uid)) {
       skipped++;
@@ -588,7 +623,7 @@ interface ParsedAction {
 
 function parseAction(argv: string[]): ParsedAction {
   const [rawVerb, ...rest] = argv;
-  const verbs: PanelTweaksVerb[] = ["state", "set-tweaks", "scan"];
+  const verbs: PanelTweaksVerb[] = ["state", "set-tweaks", "scan", "scan-stream"];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown panel tweaks verb '${rawVerb ?? ""}'`);
 
@@ -673,9 +708,16 @@ export async function runPanelTweaksAction(
   options: PanelTweaksActionOptions = {},
 ): Promise<number> {
   const emit = options.emitReply !== false;
+  const streaming = argv[0] === "scan-stream";
   try {
-    const data = await executePanelTweaksAction(argv, options);
-    if (emit) emitActionOk(data);
+    const data = await executePanelTweaksAction(argv, streaming && emit ? {
+      ...options,
+      onProgress(event) {
+        options.onProgress?.(event);
+        emitActionOk(event);
+      },
+    } : options);
+    if (emit) emitActionOk(streaming ? { phase: "complete", ...(data as ScanResult) } : data);
     return 0;
   } catch (error) {
     const message = reason(error);
@@ -685,10 +727,14 @@ export async function runPanelTweaksAction(
   }
 }
 
-/** The fifteen-minute sweep, when the operator asked for measured sizes. */
+/** The repair hook checks every fifteen minutes but performs a sweep only when due. */
 export async function scanDiskUsage(options: PanelTweaksActionOptions = {}): Promise<string | null> {
   const paths = pathsFor(options);
   if (!readTweaks(paths).diskUsage) return null;
+  const measuredAt = Date.parse(readDiskCache(paths).measuredAt);
+  const now = (options.now ?? (() => new Date()))().getTime();
+  const age = now - measuredAt;
+  if (Number.isFinite(measuredAt) && age >= 0 && age < DISK_SCAN_INTERVAL_MS) return null;
   const result = await executePanelTweaksAction(["scan"], { ...options, emitReply: false }) as ScanResult;
   const measured = `${result.measured} site${result.measured === 1 ? "" : "s"} measured`;
   return result.skipped ? `${measured}, ${result.skipped} skipped` : measured;
