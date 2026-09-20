@@ -15,8 +15,8 @@
 # on a live machine.
 #
 # The deploy itself is `tools/deploy-stg.ts`, the same script run by hand from a
-# workstation. A second copy of the upload-stop-install-repair sequence written
-# in YAML is a second thing to keep correct.
+# workstation. A second copy of the upload-swap-repair sequence written in YAML
+# is a second thing to keep correct.
 
 name: deploy-staging
 
@@ -33,9 +33,9 @@ on:
       - "docs/**"
   workflow_dispatch:
 
-# Never cancel a deploy in progress: it stops the services, swaps the binary and
-# runs repair, and a run killed between those leaves staging down. A second push
-# waits its turn instead.
+# Never cancel a deploy in progress: it swaps the binary and runs repair, and a
+# run killed between those leaves staging on a binary its services have not been
+# restarted onto. A second push waits its turn instead.
 concurrency:
   group: deploy-staging
   cancel-in-progress: false
@@ -67,11 +67,14 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Full unit and supplemental regression suite
-        run: bun run test
+      - name: Typecheck and the full unit and supplemental regression suite
+        # tsc and the suite share nothing, so the typecheck rides along inside
+        # the suite's runtime rather than adding five seconds ahead of it.
+        run: |
+          set -euo pipefail
+          bun run typecheck & typecheck=$!
+          bun run test
+          wait "$typecheck"
 
       - name: Check the staging credentials are configured
         env:
