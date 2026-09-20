@@ -103,8 +103,9 @@ html.dark .clp-tweaks-columns-menu { border-color: var(--clp-border-color, #a8b3
   background: var(--clp-bg-secondary, #1c1f26); color: var(--clp-text, #fff); }
 html.dark .clp-tweaks-columns-menu input { border-color: #6b7787; background-color: transparent; }
 html.dark .clp-tweaks-columns-menu input:checked { border-color: #0078d4; background-color: #0078d4; }
-.clp-tweaks-count { display: inline-block; margin-left: 12px; padding: 2px 10px; border: 1px solid currentColor;
-  border-radius: 99px; color: #9bacb6; font-size: 14px; font-weight: 600; vertical-align: middle; }
+.clp-tweaks-count { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
+  min-height: 28px; margin-left: 12px; padding: 0 10px; border: 1px solid currentColor; border-radius: 99px;
+  color: #9bacb6; font-size: 14px; font-weight: 600; line-height: 1; vertical-align: middle; }
 .clp-tweaks-table th.clp-tweaks-sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 .clp-tweaks-table th.clp-tweaks-sortable::after { content: "\\2195"; margin-left: 6px; opacity: .35; }
 .clp-tweaks-table th.clp-tweaks-asc::after { content: "\\2191"; opacity: 1; }

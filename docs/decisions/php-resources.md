@@ -31,11 +31,20 @@ category restores the stock pool byte for byte, because leaving it on numbers
 nothing claims would make every surface lie about what the box is running.
 
 A server that has saved nothing already has three categories — small site, busy
-site, high traffic — as a starting point for sizing rather than a
-recommendation. They are ordinary categories: editable, renamable, deletable.
-They are produced on read rather than written at install, so a read never
-writes, and a deleted preset stays deleted because by then the policy file
-exists and says so.
+site, high traffic — with per-site ceilings of 3, 8 and 12 workers. All three
+use a 200-request recycle limit. Small and busy use `ondemand` with a ten-second
+idle timeout. High traffic uses `dynamic` to avoid process-start latency under
+sustained load, but starts only two workers and retains one to three spares. A
+category is multiplied by every site assigned to it, so the page states that
+multiplication explicitly and describes high traffic as a sparingly assigned
+profile. A new operator-created category starts from the small-site profile
+rather than CloudPanel's 250-worker ceiling.
+
+The presets are ordinary categories: editable, renamable, deletable. They are
+produced on read rather than written at install, so a read never writes, and a
+deleted preset stays deleted because by then the policy file exists and says
+so. Once saved, categories are operator configuration and later releases do not
+replace their limits silently.
 
 ## Panel surfaces
 
