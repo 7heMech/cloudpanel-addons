@@ -11,10 +11,9 @@ export const PANEL_TWEAKS_ADDON: AddonDefinition = {
   handler: handle,
   action: runPanelTweaksAction,
   // Measured site sizes ride the fifteen-minute repair timer rather than a
-  // timer of their own. It already runs as root on the interval this wants, and
-  // a second unit would buy nothing but another thing to install, arm and
-  // repair. The sweep returns nothing at all while the tweak is switched off,
-  // so an operator who never asked for sizes never pays for them.
+  // timer of their own. The hook uses the stored measurement time to do the
+  // expensive sweep about every six hours. It returns nothing while the tweak
+  // is off, so an operator who never asked for sizes never pays for them.
   maintenance: {
     label: "panel tweaks",
     run: (options) => scanDiskUsage((options ?? {}) as PanelTweaksActionOptions),

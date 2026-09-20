@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   applicationLabel, DEFAULT_TWEAKS, executePanelTweaksAction,
+  scanDiskUsage,
   type PanelTweaksActionOptions, type PanelTweaksState, type ScanResult, type SetTweaksResult,
 } from "../addons/panel-tweaks/action";
 import {
@@ -273,6 +274,8 @@ test("the addon page keeps switches beside wrapping labels on a phone", () => {
   expect(tableOff).toContain('data-tweak-parent="sitesTable" disabled');
   const html = panelTweaksLayout("Panel Tweaks", page);
   expect(html).toContain(".tweak-row > div { flex: 1 1 auto; min-width: 0; }");
+  expect(html).toContain("key === 'diskUsage' && wanted");
+  expect(page).toContain("Enabling starts a low-priority scan now");
   expect(html).toContain(".tweak-row .switch { flex: 0 0 auto;");
   expect(html).not.toContain(".tweak-row { flex-wrap: wrap; }");
   expect(html).toContain(".preview-widths { display: none; }");
@@ -591,6 +594,25 @@ test("the sweep measures every site's home and its databases, and caches the ans
   expect(shop.disk).toEqual({ bytes: 4096, databaseBytes: 2048, measuredAt: result.measuredAt });
   const docs = state.sites.find((site) => site.domain === "docs.example.com")!;
   expect(docs.disk?.databaseBytes).toBe(0);
+});
+
+test("unattended measurements reuse the result for six hours", async () => {
+  await act<SetTweaksResult>(["set-tweaks"], { input: JSON.stringify({ diskUsage: true }) });
+  let measurements = 0;
+  const at = (iso: string) => options({
+    now: () => new Date(iso),
+    run: () => {
+      measurements++;
+      return { ok: true, stdout: "512\t/x\n", stderr: "", exitCode: 0 };
+    },
+  });
+
+  expect(await scanDiskUsage(at("2026-09-20T00:00:00Z"))).toBe("2 sites measured");
+  expect(measurements).toBe(2);
+  expect(await scanDiskUsage(at("2026-09-20T05:59:59Z"))).toBeNull();
+  expect(measurements).toBe(2);
+  expect(await scanDiskUsage(at("2026-09-20T06:00:00Z"))).toBe("2 sites measured");
+  expect(measurements).toBe(4);
 });
 
 test("the operator-pressed sweep is exempt from Bun's idle request timeout", async () => {

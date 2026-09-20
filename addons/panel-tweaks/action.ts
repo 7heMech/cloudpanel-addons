@@ -25,6 +25,7 @@ import { PANEL_USER_NAME_RE, panelUserSites } from "../../lib/panel-users";
 
 const TWEAKS_VERSION = 1;
 const DISK_VERSION = 1;
+const DISK_SCAN_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "scan-stream";
 
@@ -32,7 +33,7 @@ export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "scan-stream";
  * What the addon does, as independent modes.
  *
  * Separate rather than one switch because they do not cost the same: most are
- * markup, and `diskUsage` walks the whole disk every fifteen minutes. An
+ * markup, and `diskUsage` periodically walks the whole disk. An
  * operator who wants a filtered site list should not have to accept that. The
  * four narrow-screen and layout tweaks are separate for a different reason:
  * they change the shape of pages CloudPanel drew itself, and an operator who
@@ -525,7 +526,7 @@ function ownedDirectory(path: string, uid: number): boolean {
  * `du` on every site, politely.
  *
  * A recursive stat of a whole web root is the one thing this addon does that a
- * loaded box would feel, and it runs unattended every fifteen minutes. So it
+ * loaded box would feel, and it runs unattended about every six hours. So it
  * asks the kernel to schedule it last: idle I/O class, lowest CPU priority.
  * Where `ionice` is absent the measurement still happens, just without the
  * concession.
@@ -713,10 +714,14 @@ export async function runPanelTweaksAction(
   }
 }
 
-/** The fifteen-minute sweep, when the operator asked for measured sizes. */
+/** The repair hook checks every fifteen minutes but performs a sweep only when due. */
 export async function scanDiskUsage(options: PanelTweaksActionOptions = {}): Promise<string | null> {
   const paths = pathsFor(options);
   if (!readTweaks(paths).diskUsage) return null;
+  const measuredAt = Date.parse(readDiskCache(paths).measuredAt);
+  const now = (options.now ?? (() => new Date()))().getTime();
+  const age = now - measuredAt;
+  if (Number.isFinite(measuredAt) && age >= 0 && age < DISK_SCAN_INTERVAL_MS) return null;
   const result = await executePanelTweaksAction(["scan"], { ...options, emitReply: false }) as ScanResult;
   const measured = `${result.measured} site${result.measured === 1 ? "" : "s"} measured`;
   return result.skipped ? `${measured}, ${result.skipped} skipped` : measured;

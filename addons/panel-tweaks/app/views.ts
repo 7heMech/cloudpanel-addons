@@ -91,6 +91,10 @@ async function setTweak(input) {
     busy(false);
     // After busy(), which restores every control to what it was disabled as.
     syncDependents(key, wanted);
+    if (key === 'diskUsage' && wanted) {
+      const button = input.closest('.tweak-row').querySelector('.tweak-scan .btn');
+      if (button) { await measureNow(button); return; }
+    }
     notify('Saved.', 'ok');
   } catch (error) {
     input.checked = !wanted;
@@ -284,7 +288,7 @@ const COPY: TweakCopy[] = [
     key: "diskUsage",
     category: "Sites",
     title: "Measured site sizes",
-    description: "Adds site sizes from a low-priority scan every 15 minutes. This can add load on busy servers.",
+    description: "Enabling starts a low-priority scan now. It refreshes about every 6 hours, or whenever you choose Measure now. Each refresh walks the disk.",
     parent: "sitesTable",
   },
   {

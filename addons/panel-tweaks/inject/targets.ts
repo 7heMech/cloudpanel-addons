@@ -707,7 +707,7 @@ const SITES_SCRIPT = `
       var disk = site && site.disk;
       if (!disk) {
         td.textContent = "—";
-        td.title = "Not measured yet. The next sweep runs within fifteen minutes.";
+        td.title = "Not measured yet. Use Measure now, or wait for the next scheduled sweep.";
         td.setAttribute("data-value", "-1");
         return td;
       }

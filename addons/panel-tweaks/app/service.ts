@@ -9,7 +9,7 @@ function call<T>(verb: string, args: string[] = [], input?: string, timeout?: nu
  * A sweep is `du` over every site's home directory, so how long it takes is a
  * property of the operator's disk rather than of this code. The unattended one
  * has no deadline at all; the one an operator pressed gets four minutes, after
- * which the fifteen-minute sweep is what fills the column instead.
+ * which the next unattended sweep is what fills the column instead.
  */
 const SCAN_TIMEOUT_MS = 240_000;
 
