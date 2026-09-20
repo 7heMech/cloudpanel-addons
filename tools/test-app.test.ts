@@ -190,7 +190,9 @@ test("a fleet table gives the domain its own line on a phone", () => {
       sites: [{ domain: "a-rather-long-hostname.example.test", type: "reverse-proxy", enabled: false, excludedFromAutomatic: false }],
     }),
   ]) {
-    expect(html).toContain('<table class="fleet-table"');
+    // An addon may add a modifier class for its own mobile arrangement while
+    // retaining the shared fleet-table contract.
+    expect(html).toContain('<table class="fleet-table');
     expect(html).toContain('<td class="site-cell"');
     expect(html).toContain('<td class="type-cell">');
   }
