@@ -5,6 +5,10 @@ import { ADDON_SITE_TABS } from "../../../lib/site-context";
 
 // The label the panel's strip shows and the label the addon's own reproduction
 // of that strip shows are the same string, from lib/site-context.
+//
+// Both roles are named in every condition rather than relying on CloudPanel's
+// role hierarchy, which this addon does not own: a site manager reaches these
+// pages because the manager's gate lets that role into this addon's mount.
 const LABEL = ADDON_SITE_TABS.find((tab) => tab.slug === "git")!.label;
 
 /** CloudPanel's own site list, which this addon adds a row action to. */
@@ -22,7 +26,7 @@ export const GIT_TARGETS: AddonTarget[] = [
     </li>`,
     required: true,
     snippet: (url) => `
-        {% if is_granted('ROLE_ADMIN') %}
+        {% if is_granted('ROLE_ADMIN') or is_granted('ROLE_SITE_MANAGER') %}
           <li>
             <a href="${url}?domain={{ site.domainName|url_encode }}">${LABEL}</a>
           </li>
@@ -42,7 +46,7 @@ export const GIT_TARGETS: AddonTarget[] = [
     anchorBefore: `<a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>`,
     required: false,
     snippet: (url) => `
-        {% if is_granted('ROLE_ADMIN') %}
+        {% if is_granted('ROLE_ADMIN') or is_granted('ROLE_SITE_MANAGER') %}
           <a class="clp-addons-git-row ${ROW_ACTION_CLASS}" data-domain="{{ site.domainName }}" hidden
             href="${url}?domain={{ site.domainName|url_encode }}" style="margin-right: 0.75rem; white-space: nowrap;">Deploy from Git</a>
         {% endif %}`,
@@ -55,7 +59,7 @@ export const GIT_TARGETS: AddonTarget[] = [
               </table>`,
     required: false,
     snippet: (url) => `
-              {% if is_granted('ROLE_ADMIN') %}
+              {% if is_granted('ROLE_ADMIN') or is_granted('ROLE_SITE_MANAGER') %}
               <script>
                 (function () {
                   var links = document.querySelectorAll('a.clp-addons-git-row[data-domain]');

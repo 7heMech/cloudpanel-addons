@@ -10,6 +10,10 @@ export const GIT_ADDON: AddonDefinition = {
   targets: GIT_TARGETS,
   handler: handle,
   action: runGitAction,
+  // Deploying is site work, and a site manager manages every site CloudPanel
+  // has. Everything this addon does runs as the site's own user, so it hands
+  // that role no authority the panel has not already given it.
+  siteManager: true,
   // Job-record expiry and stale-job recovery. A deployment killed by a reboot
   // or an OOM leaves its record `running` for ever otherwise, and only this
   // clears it.

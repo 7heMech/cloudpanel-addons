@@ -15,6 +15,10 @@ function probe(
   requests: Array<{ path: string; method?: string }> = [
     { path: "/addons/health" }, { path: "/addons/" }, { path: "/addons/stager/" }, { path: "/addons/api/update" },
   ],
+  // Resolve mounts instead of recording the attempt, so a request that is let
+  // past the gate reaches the addon's own handler. No addon is installed here,
+  // so the real splitMount would answer null for every path.
+  dispatchMounts = false,
 ): Array<Record<string, unknown>> {
   const script = `
 import { mock } from "bun:test";
@@ -39,7 +43,12 @@ mock.module("./lib/gateway-client.ts", () => ({
 mock.module("./lib/mount.ts", () => ({
   ADDONS_BASE_PATH: "/addons",
   mountPath: (addon) => "/addons/" + addon,
-  splitMount: () => { reached.push("addon-dispatch"); return null; },
+  splitMount: (path) => {
+    reached.push("addon-dispatch");
+    if (!${JSON.stringify(dispatchMounts)}) return null;
+    const match = /^\\/([^/]+)(\\/.*)?$/.exec(path);
+    return match ? { addon: match[1], rest: match[2] || "/" } : null;
+  },
 }));
 
 const { handleRequest } = await import("./cli/index.ts");
@@ -100,6 +109,29 @@ test("a non-administrator reaches the WordPress sign-in and nothing else", () =>
     // Nothing else the manager does runs for this session, dispatched or not.
     expect(result.reached).not.toContain("update-check");
     expect(result.status).toBe(403);
+  }
+});
+
+// The addons that declare `siteManager` are the whole mount, not a route list:
+// CloudPanel does not narrow that role's site list, so the addon's own pages
+// are already what it may see. Everything else stays behind the blanket gate.
+test("a site manager reaches the addons that declare the role and nothing else", () => {
+  const results = probe({ user: "manager", roles: ["ROLE_SITE_MANAGER"] }, [
+    { path: "/addons/git/" },
+    { path: "/addons/git/api/sites" },
+    { path: "/addons/stager/" },
+    { path: "/addons/" },
+    { path: "/addons/api/update", method: "POST" },
+  ], true);
+  const answered = results.filter((result) => result.status !== 403);
+  // The Git addon answers for itself -- with this test's dead gateway, but
+  // from its own handler, which is what says the gate let the session through.
+  expect(answered.map((result) => `${result.method} ${result.path}`)).toEqual([
+    "GET /addons/git/",
+    "GET /addons/git/api/sites",
+  ]);
+  for (const result of results) {
+    expect(result.reached).not.toContain("update-check");
   }
 });
 

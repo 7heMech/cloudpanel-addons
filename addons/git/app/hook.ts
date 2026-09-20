@@ -44,16 +44,16 @@ export async function handleGitHook(req: Request, path: string): Promise<Respons
   try {
     body = await readBoundedText(req, MAX_HOOK_BODY_BYTES);
   } catch (error) {
-    // A payload past the bound is delivered without it: the token still
-    // decides, and a signature cannot match a body this never saw, so the
-    // refusal reaches the operator's page. Anything else is a real fault.
+    // A payload past the bound is delivered without it: the token decides, and
+    // the body is only read for the ref, so an unreadable one deploys the
+    // configured branch the way a bare `curl -X POST` does. Anything else is a
+    // real fault.
     if (!(error instanceof BodyError)) throw error;
   }
 
   const result = await gitService.hook(domain, {
     token,
     event: req.headers.get("x-github-event") ?? "",
-    signature: req.headers.get("x-hub-signature-256") ?? "",
     body,
   });
   if (!result.ok || !result.data) return null;

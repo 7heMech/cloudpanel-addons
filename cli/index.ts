@@ -907,6 +907,10 @@ function mountedAddons(): string[] {
 /**
  * The routes a signed-in non-administrator may reach, named one by one.
  *
+ * An addon that declares `siteManager` is the other way in, for the whole
+ * mount rather than a route: CloudPanel does not narrow a site manager's site
+ * list, so its pages are already scoped for that role.
+ *
  * The blanket gate below is what makes the manager an administrative surface,
  * and these are the exceptions that scope themselves instead. The WordPress
  * sign-in is one because the panel user it signs in for is one CloudPanel
@@ -956,12 +960,15 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   // update checks or addon code can run.
   const denied = adminGate(gate.auth);
   if (denied) {
-    if (!SELF_SCOPED_ROUTES.has(`${req.method} ${path}`)) return denied;
+    const selfScoped = SELF_SCOPED_ROUTES.has(`${req.method} ${path}`);
+    const siteManager = gate.auth?.roles.includes("ROLE_SITE_MANAGER") ?? false;
+    if (!selfScoped && !siteManager) return denied;
     // Straight to the addon, ahead of the update check and the manager's own
-    // routes: what this session is allowed is that one handler, not the rest
-    // of the manager with a narrower path.
+    // routes: what this session is allowed is that handler, not the rest of
+    // the manager with a narrower path.
     const scoped = splitMount(path, mountedAddons());
     if (!scoped) return denied;
+    if (!selfScoped && ADDONS[scoped.addon]?.siteManager !== true) return denied;
     return await addonHandler(scoped.addon)!(req, scoped.rest, null, server, gate.auth);
   }
 

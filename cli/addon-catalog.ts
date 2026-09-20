@@ -59,6 +59,15 @@ export interface AddonDefinition {
   handler?: AddonHandler;
   /** The privileged verbs this addon runs as root, if it has any. */
   action?: (argv: string[], options?: Record<string, unknown>) => Promise<number> | number;
+  /**
+   * Whether a `ROLE_SITE_MANAGER` session reaches this addon's routes.
+   *
+   * CloudPanel does not narrow that role's site list, so an addon whose pages
+   * are about sites is already the right page for it. Declared here because
+   * who an addon is for is a fact about the addon, and the gate that reads it
+   * is one place for every addon that says so.
+   */
+  siteManager?: boolean;
   maintenance?: AddonMaintenance;
 }
 

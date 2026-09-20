@@ -70,6 +70,16 @@ log. A deployment started there is watched in the card it was started from
 rather than on a page of its own, because navigating away would leave the
 panel's page behind to show a log.
 
+A site nobody has connected yet shows the repository form and nothing else.
+What is deployed, the deploy key and push-to-deploy all follow from having a
+repository, and drawing them first meant a first visit was three cards saying
+there was nothing to show and one disabled switch. Saving an SSH remote
+generates the deploy key as part of the save, so the sequence is save, add the
+key to the repository, deploy -- not a button an operator has to find between
+them. The key section is drawn only for a remote that uses it: an HTTPS remote
+needs none, and the generate button survives only as what a box where
+`ssh-keygen` failed is offered.
+
 `/addons/git/` is the fleet view: every configured site, its branch, what it
 last deployed and when, with per-row and multi-select deploy. That is the
 altitude the list exists for -- deploying ten sites after one merge is the case
@@ -93,6 +103,22 @@ reproduce the panel's own site creation -- PHP version, vhost template, site
 user, TLS -- and drift with every CloudPanel release. The link in the site list
 is the panel-native answer to the same wish.
 
+## Who reaches it
+
+Administrators, and CloudPanel's site managers. The addon declares
+`siteManager` in its catalog definition and the manager's gate admits that role
+to the whole mount, because CloudPanel does not narrow a site manager's site
+list -- the fleet page is already the fleet that role manages. Nothing here is
+scoped per caller as a result, and `ROLE_USER` stays behind the blanket gate:
+scoping every verb to one account's sites is work this addon has not done.
+
+Deploying hands a site manager no authority the panel has not: every command
+runs as the site's own user, which is the account CloudPanel already gives that
+role the file manager for. The injected Twig names both roles rather than
+relying on CloudPanel's role hierarchy, which this project does not own, and
+the addon's own reproduction of the site tab strip drops the tabs a
+non-administrator cannot reach so it draws what the panel's strip draws.
+
 ## Push to deploy
 
 `POST /addons/git/hook/<domain>/<token>` deploys a site. The token is 32 random
@@ -113,21 +139,26 @@ as `clp-addons` and cannot read the record, so `hook` both verifies the token
 and queues the deployment in one round trip.
 
 The manager half is transport and nothing else: it hands over the bytes the
-repository sent and the two headers that qualify them, and reads nothing out of
-the body. Which ref was pushed is decided by the action, after the signature has
-been checked, so what is acted on is what was verified -- and the unauthenticated
-half parses no attacker-supplied JSON at all.
+repository sent and the `X-GitHub-Event` header, and reads nothing out of the
+body. Which ref was pushed is decided by the action, where the token has just
+been checked, so what is acted on is what was authenticated -- and the
+unauthenticated half parses no attacker-supplied JSON at all.
+
+There is no `X-Hub-Signature-256` check. A signature keyed with the URL's own
+token is computable by anyone who can call the URL, so it proved nothing the
+token had not already proved, and honouring it only when sent meant it could not
+be relied on either. The URL is the one credential, and it is the one that is
+rotated.
 
 What happens after the token matches is reported rather than hidden, because a
 refusal an operator cannot see is a webhook they cannot fix. The delivery's time
 and outcome are recorded on the site and drawn on its page, and the reply says
-`deployed: false` with the reason. Four things end there: a push for a ref that
-is not the configured branch, the repository's first `ping`, an
-`X-Hub-Signature-256` that does not verify against the token, and a delivery
-that arrives while the last one is still deploying -- which is what makes a
-redelivery a no-op, since the duplicate-job guard already refuses the second.
-A signature is honoured when it is sent and never required, so `curl -X POST`
-from a CI job keeps working.
+`deployed: false` with the reason. Three things end there: a push for a ref that
+is not the configured branch, the repository's first `ping`, and a delivery that
+arrives while the last one is still deploying -- which is what makes a
+redelivery a no-op, since the duplicate-job guard already refuses the second. A
+delivery carrying no push payload at all deploys the configured branch, so
+`curl -X POST` from a CI job works.
 
 A delivery with a well-formed token that is wrong still costs one gateway round
 trip and one action process, and a gateway that is down is answered exactly as a

@@ -95,6 +95,12 @@ function gitPreviewSites(url: URL) {
       commit, lastJob: job,
     },
     {
+      // A site the Git tab has never been used on: what an operator meets first.
+      domain: "fresh.example.com", siteUser: "fresh", siteType: "php",
+      path: "/home/fresh/htdocs/fresh.example.com", configured: false,
+      config: null, publicKey: "", commit: null, lastJob: null,
+    },
+    {
       domain: "static.example.com", siteUser: "static", siteType: "static",
       path: "/home/static/htdocs/static.example.com/public", configured: true,
       config: {

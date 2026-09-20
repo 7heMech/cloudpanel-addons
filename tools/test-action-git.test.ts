@@ -9,7 +9,6 @@
 
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { createHmac } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
@@ -438,7 +437,7 @@ test("a delivery is authenticated by its token and nothing else", async () => {
   }
 });
 
-test("a push for another branch, a ping and a bad signature are reported rather than deployed", async () => {
+test("a push for another branch and a ping are reported rather than deployed", async () => {
   const fx = fixture();
   try {
     const token = await withWebhook(fx);
@@ -454,16 +453,11 @@ test("a push for another branch, a ping and a bad signature are reported rather 
     expect(ping.data.deployed).toBe(false);
     expect(ping.data.outcome).toContain("ping");
 
-    const body = push("refs/heads/main");
-    const forged = await deliver({ token, body, signature: "sha256=0bad" });
-    expect(forged.data.deployed).toBe(false);
-    expect(forged.data.outcome).toContain("X-Hub-Signature-256");
     expect((await action(fx, ["jobs"])).data.jobs).toEqual([]);
 
-    // The same payload signed with the token, which is the secret to use.
-    const signature = `sha256=${createHmac("sha256", token).update(body).digest("hex")}`;
-    const signed = await deliver({ token, body, signature });
-    expect(signed.data.deployed).toBe(true);
+    // The URL is the whole credential, so a delivery that carries it deploys.
+    const pushed = await deliver({ token, body: push("refs/heads/main") });
+    expect(pushed.data.deployed).toBe(true);
   } finally {
     rmSync(fx.root, { recursive: true, force: true });
   }

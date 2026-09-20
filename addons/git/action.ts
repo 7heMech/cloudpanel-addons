@@ -8,7 +8,7 @@
 // root's privileges attached to it.
 
 import { Database } from "bun:sqlite";
-import { createHmac, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
   existsSync, lstatSync, mkdirSync, openSync, closeSync, fstatSync, readFileSync, readdirSync,
   rmSync, statSync, chmodSync, writeSync, constants as fsConstants,
@@ -130,16 +130,14 @@ export interface GitSiteConfig {
  * What one webhook delivery asks of this action.
  *
  * The manager is transport: it hands over the bytes the repository sent and the
- * two headers that qualify them, and reads nothing out of the body itself.
- * Which ref was pushed is decided here, after the signature has been checked,
- * so what is acted on is what was verified.
+ * one header that qualifies them, and reads nothing out of the body itself.
+ * Which ref was pushed is decided here, where the token has just been checked,
+ * so what is acted on is what was authenticated.
  */
 export interface GitHookPayload {
   token: string;
   /** GitHub's `X-GitHub-Event`, so a ping is answered rather than deployed. */
   event: string;
-  /** GitHub's `X-Hub-Signature-256`; "" when the delivery carried none. */
-  signature: string;
   /** The raw payload, "" when there was none or it was over the bound. */
   body: string;
 }
@@ -596,6 +594,11 @@ async function streamAsSiteUser(
 
 /* --------------------------------------------------------------- deploy key */
 
+/** Whether this remote is fetched with the site's deploy key rather than HTTPS. */
+export function usesDeployKey(remote: string): boolean {
+  return !remote.startsWith("https://");
+}
+
 function keyPathFor(paths: GitActionPaths, user: string): string {
   return join(paths.homeDir, user, ".ssh", KEY_NAME);
 }
@@ -836,6 +839,17 @@ async function cmdConfigure(paths: GitActionPaths, domain: string, options: GitA
   const root = siteRoot(paths, site.user, domain);
   if (!isDirectory(root)) failAction(`the site directory ${root} does not exist`);
   writeConfig(paths, config);
+  // An SSH remote cannot be fetched without a key, so saving one makes it
+  // rather than leaving a button the operator has to find. The settings are
+  // already saved, so a box where ssh-keygen fails keeps them and offers the
+  // key again on the page.
+  if (usesDeployKey(config.remote)) {
+    try {
+      generateKey(paths, site.user, domain, false);
+    } catch (error) {
+      if (!(error instanceof ActionFailure)) throw error;
+    }
+  }
   emitOk(paths, { site: siteStatus(paths, domain, site, latestJobs(paths)) });
 }
 
@@ -926,10 +940,6 @@ function cmdWebhook(paths: GitActionPaths, domain: string, enable: boolean, repl
   emitOk(paths, { domain, webhook });
 }
 
-function signatureMatches(signature: string, body: string, token: string): boolean {
-  return secretEquals(signature, `sha256=${createHmac("sha256", token).update(body).digest("hex")}`);
-}
-
 /** The ref a push names, for the branch filter. A plain `curl -X POST` has none. */
 function pushedRef(body: string): string {
   if (!body.startsWith("{")) return "";
@@ -970,17 +980,13 @@ async function cmdHook(
   const webhook = config?.webhook;
   if (!config || !webhook || !secretEquals(token, webhook.token)) failAction("no delivery for this site");
 
-  const text = (field: "event" | "signature" | "body"): string =>
+  const text = (field: "event" | "body"): string =>
     typeof payload[field] === "string" ? payload[field] : "";
-  const body = text("body");
-  const signature = text("signature");
-  const ref = pushedRef(body);
+  const ref = pushedRef(text("body"));
 
   let job = "";
   let outcome: string;
-  if (signature && !signatureMatches(signature, body, webhook.token)) {
-    outcome = "refused: the X-Hub-Signature-256 header did not match this URL";
-  } else if (text("event") === "ping") {
+  if (text("event") === "ping") {
     outcome = "the repository's ping arrived; the URL works";
   } else if (ref && ref !== config.branch && ref !== `refs/heads/${config.branch}`) {
     outcome = `ignored: the push was for ${ref}, not ${config.branch}`;

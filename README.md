@@ -34,8 +34,9 @@ The installer asks which addons to enable. It verifies checksums and build
 provenance, and can install Docker when Instatic needs it.
 
 Open the new **Addons** tab in CloudPanel after installation. Only CloudPanel
-administrators can access it. Other panel users see the WordPress Sign-In link
-on the Sites page for their own sites, and nothing else.
+administrators can access it, except that site managers also reach Git Deploy.
+Other panel users see the WordPress Sign-In link on the Sites page for their own
+sites, and nothing else.
 
 ## Manage
 

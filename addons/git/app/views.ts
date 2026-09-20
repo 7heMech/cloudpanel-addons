@@ -10,7 +10,7 @@ import type { SiteContext } from "../../../lib/site-context";
 import { siteTypeLabel } from "../../../lib/site-context";
 import { mountPath } from "../../../lib/mount";
 import {
-  MAX_BRANCH_LENGTH, MAX_DIRECTORY_LENGTH, MAX_POST_DEPLOY_LENGTH, MAX_REMOTE_LENGTH,
+  MAX_BRANCH_LENGTH, MAX_DIRECTORY_LENGTH, MAX_POST_DEPLOY_LENGTH, MAX_REMOTE_LENGTH, usesDeployKey,
 } from "../action";
 import { gitHookPath } from "./hook";
 import type { GitJobView, GitSiteStatus } from "./service";
@@ -416,7 +416,8 @@ export function siteView(site: GitSiteStatus, log: string): string {
             <label class="required" for="git-remote">Repository URL</label>
             <input id="git-remote" type="text" maxlength="${MAX_REMOTE_LENGTH}" spellcheck="false" autocapitalize="off"
               placeholder="git@github.com:owner/repo.git" value="${esc(config?.remote ?? "")}">
-            <div class="hint">An SSH URL uses this site's deploy key. An HTTPS URL works for a public repository.</div>
+            <div class="hint">An SSH URL uses this site's deploy key, generated on save. An HTTPS URL works for a
+              public repository.</div>
           </div>
           <div class="form-field">
             <label class="required" for="git-branch">Branch</label>
@@ -447,14 +448,18 @@ export function siteView(site: GitSiteStatus, log: string): string {
       </div>
     </div>`;
 
-  const key = `
+  // Saving an SSH remote generates the key, so the button is the fallback for
+  // the box where that failed; an HTTPS remote is fetched without a key and
+  // this section would only be a question the operator has to dismiss.
+  const key = !config || !usesDeployKey(config.remote) ? "" : `
     <div class="addon-section">
       <h2>Deploy key</h2>
       <div class="card">
         ${
           site.publicKey
-            ? `<p class="hint">Add this public key to the repository as a deploy key. Its private half was generated
-            as ${esc(site.siteUser)} and never leaves this server.</p>
+            ? `<p class="hint">Add this public key to the repository as a deploy key${
+              site.commit ? "" : ", then deploy"
+            }. Its private half was generated as ${esc(site.siteUser)} and never leaves this server.</p>
         <div class="key-block">
           <pre id="git-public-key">${esc(site.publicKey)}</pre>
           <button class="btn" type="button" onclick="copyGitBlock('git-public-key', 'Deploy key')">Copy</button>
@@ -462,8 +467,9 @@ export function siteView(site: GitSiteStatus, log: string): string {
         <div class="actions" style="margin-top:20px;">
           <button class="btn btn-danger" type="button" onclick="generateGitKey('${esc(site.domain)}', true)">Replace key</button>
         </div>`
-            : `<p class="hint">A private repository needs a deploy key. It is generated as ${esc(site.siteUser)}
-            in that account's own <span class="mono">.ssh</span> directory; only its public half is shown here.</p>
+            : `<p class="hint">This site has no deploy key yet, and an SSH remote is fetched with one. It is
+            generated as ${esc(site.siteUser)} in that account's own <span class="mono">.ssh</span> directory;
+            only its public half is shown here.</p>
         <div class="actions">
           <button class="btn btn-primary" type="button" onclick="generateGitKey('${esc(site.domain)}', false)">Generate deploy key</button>
         </div>`
@@ -471,6 +477,9 @@ export function siteView(site: GitSiteStatus, log: string): string {
       </div>
     </div>`;
 
+  // A site nobody has connected yet is one question, not four cards saying
+  // there is nothing to show: what is deployed, the deploy key and push-to-
+  // deploy all follow from the repository, and each appears once it has one.
   return `
     <div class="page-heading">
       <div>
@@ -479,11 +488,11 @@ export function siteView(site: GitSiteStatus, log: string): string {
       </div>
       ${deployAction}
     </div>
-    ${current}
+    ${site.configured ? current : ""}
     ${form}
     ${key}
-    ${webhookSection(site)}
-    <div class="addon-section">${jobCard(site.lastJob, log)}</div>`;
+    ${site.configured ? webhookSection(site) : ""}
+    ${site.configured ? `<div class="addon-section">${jobCard(site.lastJob, log)}</div>` : ""}`;
 }
 
 /**
@@ -516,11 +525,9 @@ function webhookSection(site: GitSiteStatus): string {
       <h2>Push to deploy</h2>
       <div class="card">
         <div class="switch-row">
-          <p class="hint" style="margin:0;">${
-            site.configured ? `A push to ${esc(branch)} deploys this site.` : "Save a repository above first."
-          }</p>
+          <p class="hint" style="margin:0;">A push to ${esc(branch)} deploys this site.</p>
           <label class="switch">
-            <input id="git-webhook-toggle" type="checkbox"${webhook ? " checked" : ""}${site.configured ? "" : " disabled"}
+            <input id="git-webhook-toggle" type="checkbox"${webhook ? " checked" : ""}
               aria-label="Push to deploy for ${esc(site.domain)}"
               onchange="setGitWebhook('${esc(site.domain)}', this.checked)"><span></span>
           </label>

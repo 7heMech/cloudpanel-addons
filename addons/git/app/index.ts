@@ -75,9 +75,13 @@ export async function handle(
   path: string,
   updateNotice?: { current: string; latest: string } | null,
   server?: Server<unknown> | null,
+  auth?: { user: string; roles: string[] } | null,
 ): Promise<Response> {
   const method = req.method;
   const url = new URL(req.url);
+  // A site manager reaches this addon and no other, so the reproduced strip
+  // draws the tab the panel's own strip draws for that session and no more.
+  const tabs = auth && !auth.roles.includes("ROLE_ADMIN") ? { addonSlugs: ["git"] } : {};
 
   if (path === "/health") return json({ ok: true, service: "git-manager" });
 
@@ -96,7 +100,7 @@ export async function handle(
       const domain = validateDomain(selected);
       if (!domain) return html(layout("Invalid site", '<div class="alert">That is not a valid hostname.</div>', updateNotice), csrf, 400);
       const page = await sitePage(domain);
-      return html(layout(page.title, page.content, updateNotice, page.context), csrf);
+      return html(layout(page.title, page.content, updateNotice, { ...page.context, ...tabs }), csrf);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return html(layout("Git deploy", errorBlock(error), updateNotice), csrf, /not found/i.test(message) ? 404 : 500);
