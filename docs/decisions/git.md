@@ -73,14 +73,14 @@ The site-scoped page is a tab in CloudPanel's own site page, mounted through
 the current checkout, repository, branch, and deployment mode. The dashboard
 uses two equal columns: latest deployment, repository settings, and the deploy
 key stack in the first, and push to deploy fills the second. While the switch
-is off that card shares the row with the latest deployment and the two match
-in height; while it is on it spans the column beside it at its own height, so
-neither card is padded out to reach the other. Cards stack on mobile. A
-checkout is reported separately from job success because a failed post-deploy
-command can leave the new files in place. Deploy
-is disabled while a job is queued or running. A deployment started there is
-watched in the same card, with failed output expanded so it can be read
-immediately.
+is off that card shares a row with the latest deployment and the two match in
+height. While it is on, the cards beside it are stacked in a cell of their own,
+so expanding the webhook instructions grows only that card and leaves the
+others at their own height. Cards stack on mobile. A checkout is reported
+separately from job success because a failed post-deploy command can leave the
+new files in place. Deploy is disabled while a job is queued or running. A
+deployment started there is watched in the same card, with failed output
+expanded so it can be read immediately.
 
 Repository settings and the deploy key use native expandable sections, which
 also work inside the panel's shadow root. The repository form puts branch
