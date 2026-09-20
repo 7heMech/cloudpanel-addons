@@ -221,8 +221,11 @@ test("a server that has saved nothing already has the preset categories", async 
     }))).toEqual([
       { mode: "ondemand", maxChildren: 3, maxRequests: 200 },
       { mode: "ondemand", maxChildren: 8, maxRequests: 200 },
-      { mode: "ondemand", maxChildren: 12, maxRequests: 200 },
+      { mode: "dynamic", maxChildren: 12, maxRequests: 200 },
     ]);
+    expect(state.categories[2]!.profile).toMatchObject({
+      startServers: 2, minSpareServers: 1, maxSpareServers: 3,
+    });
     expect(DEFAULT_CATEGORY_PROFILE).toEqual(state.categories[0]!.profile);
     const page = dashboardView(state);
     expect(page).toContain("Limits apply to every site separately");

@@ -87,12 +87,12 @@ export interface PoolCategory {
  * recommendation: what a site should run is the operator's call, and every one
  * of these can be edited, renamed or deleted.
  *
- * They differ only in how many workers one site may run concurrently. All
- * start workers on demand and retire them after ten idle seconds: a category
- * applies per site, so a dynamic profile assigned across a fleet multiplies
- * its spare workers by every site in that category. Workers are recycled soon
- * enough to bound application and extension growth, and a request cannot hold
- * one for CloudPanel's stock two hours.
+ * They differ in how many workers one site may run concurrently. Small and
+ * busy sites start workers on demand and retire them after ten idle seconds.
+ * High traffic keeps a deliberately small warm pool: a category applies per
+ * site, so every spare worker is multiplied by every site assigned to it.
+ * Workers are recycled soon enough to bound application and extension growth,
+ * and a request cannot hold one for CloudPanel's stock two hours.
  */
 export const PRESET_CATEGORIES: PoolCategory[] = [
   {
@@ -110,8 +110,8 @@ export const PRESET_CATEGORIES: PoolCategory[] = [
   {
     id: "high-traffic",
     name: "High traffic",
-    description: "For measured high concurrency. Assign sparingly: each site may run up to 12 workers and every worker holds application-specific memory.",
-    profile: { ...STOCK_PROFILE, pm: "ondemand", maxChildren: 12, processIdleTimeout: 10, maxRequests: 200, requestTerminateTimeout: 300 },
+    description: "For measured high concurrency. Keeps 1–3 idle workers ready and allows 12 total per site, so assign it sparingly.",
+    profile: { ...STOCK_PROFILE, pm: "dynamic", maxChildren: 12, startServers: 2, minSpareServers: 1, maxSpareServers: 3, maxRequests: 200, requestTerminateTimeout: 300 },
   },
 ];
 

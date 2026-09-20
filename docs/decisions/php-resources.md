@@ -32,12 +32,13 @@ nothing claims would make every surface lie about what the box is running.
 
 A server that has saved nothing already has three categories — small site, busy
 site, high traffic — with per-site ceilings of 3, 8 and 12 workers. All three
-use `ondemand`, a ten-second idle timeout and a 200-request recycle limit. A
-category is multiplied by every site assigned to it, so presets do not reserve
-idle workers: a lower ceiling with `dynamic` would still retain spare workers
-for every quiet site in a fleet. The page states that multiplication explicitly,
-and a new operator-created category starts from the small-site profile rather
-than CloudPanel's 250-worker ceiling.
+use a 200-request recycle limit. Small and busy use `ondemand` with a ten-second
+idle timeout. High traffic uses `dynamic` to avoid process-start latency under
+sustained load, but starts only two workers and retains one to three spares. A
+category is multiplied by every site assigned to it, so the page states that
+multiplication explicitly and describes high traffic as a sparingly assigned
+profile. A new operator-created category starts from the small-site profile
+rather than CloudPanel's 250-worker ceiling.
 
 The presets are ordinary categories: editable, renamable, deletable. They are
 produced on read rather than written at install, so a read never writes, and a
