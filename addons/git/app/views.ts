@@ -23,8 +23,7 @@ const STYLE = `
 .git-dashboard > * { min-width: 0; grid-column: 1; }
 .git-dashboard .card { margin-bottom: 0; }
 .git-webhook { grid-column: 2; grid-row: 1; align-self: stretch; }
-.git-webhook-on { align-self: start; }
-.git-stack { grid-column: 1; display: flex; flex-direction: column; gap: 24px; }
+.git-webhook-on { grid-row: 1 / span var(--git-rows); }
 .git-overview { border-top: 3px solid var(--accent); }
 .git-eyebrow { color: var(--muted); font-size: 13px; font-weight: 600; margin-bottom: 14px; }
 .git-commit { display: flex; align-items: flex-start; gap: 14px; }
@@ -89,10 +88,6 @@ const STYLE = `
   .git-dashboard { grid-template-columns: minmax(0, 1fr); }
   .git-repo-form .form-grid, .git-setup .git-advanced .form-grid { grid-template-columns: minmax(0, 1fr); }
   .git-webhook, .git-webhook-on { grid-column: 1; grid-row: auto; }
-  .git-stack { display: contents; }
-  .git-webhook { order: 1; }
-  #git-repository-settings { order: 2; }
-  #git-deploy-key { order: 3; }
   .git-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .git-meta > :first-child { grid-column: 1 / -1; }
   .git-commit { flex-direction: column; gap: 10px; }
@@ -529,15 +524,12 @@ export function siteView(site: GitSiteStatus, log: string): string {
     </div>
     ${site.configured ? `
       ${current}
-      ${config?.webhook ? `<div class="git-dashboard">
-        <div class="git-stack">${jobCard(site.lastJob, log)}${settings}${key}</div>
-        ${webhookSection(site)}
-      </div>` : `<div class="git-dashboard">
+      <div class="git-dashboard" style="--git-rows: ${key ? 3 : 2}">
         ${jobCard(site.lastJob, log)}
         ${webhookSection(site)}
         ${settings}
         ${key}
-      </div>`}` : `<div class="git-setup">${settings}</div>`}`;
+      </div>` : `<div class="git-setup">${settings}</div>`}`;
 }
 
 function repositoryForm(site: GitSiteStatus): string {
