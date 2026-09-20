@@ -78,11 +78,10 @@ running. A deployment started there is watched in the same card, with failed
 output expanded so it can be read immediately.
 
 Repository settings and the deploy key use native expandable sections, which
-also work inside the panel's shadow root. The repository form keeps its URL
-and branch together; Advanced holds the subdirectory, post-deploy command,
-and disconnect action. Configured advanced values are summarized while closed
-and remain in the form when saving. Key replacement and webhook URL rotation
-also sit behind Advanced and retain their confirmation dialogs.
+also work inside the panel's shadow root. The repository form shows its URL,
+branch, subdirectory, post-deploy command, and disconnect action together.
+Key replacement and webhook URL rotation sit beside their Copy buttons below
+the key or URL and retain their confirmation dialogs.
 
 A site nobody has connected yet shows the connection form. Saving an SSH
 remote generates the deploy key as part of the save, so the sequence is save,
@@ -90,11 +89,13 @@ add the key to the repository, deploy. The key section is expanded until a
 checkout exists, or when the public key is missing. HTTPS remotes have no key
 section. A missing SSH key offers a generate action.
 
-The push-to-deploy switch and last delivery outcome stay visible; webhook
-setup is expanded until a delivery has arrived. GitHub remotes show GitHub
-instructions with generic POST instructions under Other providers & CI.
-Other remotes expand the generic instructions and collapse the GitHub steps.
-This choice only changes the instructions; it does not configure a provider.
+The push-to-deploy switch and last delivery outcome stay visible. Webhook setup
+and Other providers & CI are independently expandable sections in that card.
+Webhook setup holds the URL and GitHub instructions and is expanded until a
+delivery has arrived. Other providers & CI holds generic POST instructions;
+it starts collapsed for GitHub remotes and expanded for other remotes, whose
+GitHub steps are collapsed. This choice only changes the instructions; it
+does not configure a provider.
 
 `/addons/git/` is the fleet view: counts of configured sites, active deployments,
 and sites needing attention precede each site's branch, checkout, and latest
