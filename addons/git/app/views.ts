@@ -556,7 +556,7 @@ function repositoryForm(site: GitSiteStatus): string {
               <label for="git-directory">Subdirectory</label>
               <input id="git-directory" type="text" maxlength="${MAX_DIRECTORY_LENGTH}" spellcheck="false" autocapitalize="off"
                 placeholder="Leave empty for the site directory" value="${esc(config?.directory ?? "")}">
-              <div class="hint">Relative to <span class="mono">/home/${esc(site.siteUser)}/htdocs/${esc(site.domain)}</span>.</div>
+              <div class="hint">Relative to <span class="mono">~/htdocs/${esc(site.domain)}</span></div>
             </div>
             <div class="form-field">
               <label for="git-post-deploy">Post-deploy command</label>
