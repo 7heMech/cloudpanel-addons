@@ -67,11 +67,14 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Full unit and supplemental regression suite
-        run: bun run test
+      - name: Typecheck and the full unit and supplemental regression suite
+        # tsc and the suite share nothing, so the typecheck rides along inside
+        # the suite's runtime rather than adding five seconds ahead of it.
+        run: |
+          set -euo pipefail
+          bun run typecheck & typecheck=$!
+          bun run test
+          wait "$typecheck"
 
       - name: Check the staging credentials are configured
         env:
