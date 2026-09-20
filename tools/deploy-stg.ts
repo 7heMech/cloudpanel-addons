@@ -2,8 +2,9 @@
 //
 // Most of the 85 MB compiled binary is the same Bun runtime every time, so
 // rsync sends only the blocks that changed, over one multiplexed SSH
-// connection. The swap is a rename, which the running services do not block,
-// so they keep serving the old binary until `clp-addons repair` restarts them.
+// connection. The swap is a rename, which the running services do not block:
+// they go on serving the old binary from the replaced inode until they are
+// restarted, so the restart is part of the install and not left to repair.
 //
 //   bun tools/deploy-stg.ts
 import { dirname, join } from "node:path";
@@ -50,7 +51,9 @@ try {
   await run(["ssh", ...sshOptions, host, [
     "set -e",
     "install -m 0755 -o root -g root /root/clp-addons-new /usr/local/bin/.clp-addons.new",
-    "if ! (mv -f /usr/local/bin/.clp-addons.new /usr/local/bin/clp-addons && clp-addons repair); then",
+    "if ! (mv -f /usr/local/bin/.clp-addons.new /usr/local/bin/clp-addons &&",
+    "      systemctl restart clp-addons-auth.socket clp-addons-auth.service clp-addons.service &&",
+    "      clp-addons repair); then",
     "  if [ -e /root/clp-addons-previous ]; then",
     "    ln -f /root/clp-addons-previous /usr/local/bin/.clp-addons.rollback",
     "    mv -f /usr/local/bin/.clp-addons.rollback /usr/local/bin/clp-addons",
