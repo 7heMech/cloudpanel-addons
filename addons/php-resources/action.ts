@@ -87,32 +87,36 @@ export interface PoolCategory {
  * recommendation: what a site should run is the operator's call, and every one
  * of these can be edited, renamed or deleted.
  *
- * They differ in how many workers a site may hold and how many are kept warm,
- * because that is what changes with scale. The two numbers they share are the
- * ones CloudPanel's template gets wrong for everybody: a worker recycled every
- * 100 requests spends its life restarting, and a request allowed to run for two
- * hours holds a worker for two hours.
+ * They differ only in how many workers one site may run concurrently. All
+ * start workers on demand and retire them after ten idle seconds: a category
+ * applies per site, so a dynamic profile assigned across a fleet multiplies
+ * its spare workers by every site in that category. Workers are recycled soon
+ * enough to bound application and extension growth, and a request cannot hold
+ * one for CloudPanel's stock two hours.
  */
 export const PRESET_CATEGORIES: PoolCategory[] = [
   {
     id: "small-site",
     name: "Small site",
-    description: "A blog or a brochure site. Workers start when a request arrives and stop when the traffic does — around 0.5 GB at full load.",
-    profile: { ...STOCK_PROFILE, pm: "ondemand", maxChildren: 5, processIdleTimeout: 10, maxRequests: 500, requestTerminateTimeout: 300 },
+    description: "For most sites and safe fleet-wide use. Workers run only while requests need them, with up to 3 concurrent workers per site.",
+    profile: { ...STOCK_PROFILE, pm: "ondemand", maxChildren: 3, processIdleTimeout: 10, maxRequests: 200, requestTerminateTimeout: 300 },
   },
   {
     id: "busy-site",
     name: "Busy site",
-    description: "A shop or a membership site with steady traffic. Workers are kept warm so the first request of a visit is not the slow one — around 1.5 GB at full load.",
-    profile: { ...STOCK_PROFILE, pm: "dynamic", maxChildren: 15, startServers: 3, minSpareServers: 2, maxSpareServers: 6, maxRequests: 500, requestTerminateTimeout: 300 },
+    description: "For sites with sustained parallel requests. Workers still run on demand, with up to 8 concurrent workers per site.",
+    profile: { ...STOCK_PROFILE, pm: "ondemand", maxChildren: 8, processIdleTimeout: 10, maxRequests: 200, requestTerminateTimeout: 300 },
   },
   {
     id: "high-traffic",
     name: "High traffic",
-    description: "A large store, or a site under campaign traffic. Sized for how many visitors arrive at once rather than for a small footprint — around 4 GB at full load.",
-    profile: { ...STOCK_PROFILE, pm: "dynamic", maxChildren: 40, startServers: 8, minSpareServers: 6, maxSpareServers: 16, maxRequests: 500, requestTerminateTimeout: 300 },
+    description: "For measured high concurrency. Assign sparingly: each site may run up to 12 workers and every worker holds application-specific memory.",
+    profile: { ...STOCK_PROFILE, pm: "ondemand", maxChildren: 12, processIdleTimeout: 10, maxRequests: 200, requestTerminateTimeout: 300 },
   },
 ];
+
+/** The safe starting point for an operator-created category. */
+export const DEFAULT_CATEGORY_PROFILE: PoolProfile = { ...PRESET_CATEGORIES[0]!.profile };
 
 export interface PoolSiteState {
   domain: string;
