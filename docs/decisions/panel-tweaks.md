@@ -178,12 +178,12 @@ and selected as NULL when they are not: an older panel loses three columns
 rather than its site list.
 
 The App column is the one the addon rewrites rather than adds, and it heads it
-Type. CloudPanel prints the site's type there, uppercased, so a WordPress reads
-as PHP and a reverse proxy as REVERSE-PROXY; the application it recorded is both more use and what
-the filter beside the table offers, so the two agree. For a PHP site that column
-holds the vhost template the site was created from, which is a set an operator
-can add to, so only the two run-together names the panel ships are respelled and
-anything else is printed as it was written.
+Application. The addon replaces CloudPanel's native site type with the
+application it recorded, falling back to the site type when that value is empty;
+that is also what the filter beside the table offers, so the two agree. For a
+PHP site that column holds the vhost template the site was created from, which
+is a set an operator can add to, so only the two run-together names the panel
+ships are respelled and anything else is printed as it was written.
 
 ## Which columns are on is the browser's answer, not the box's
 
@@ -206,10 +206,10 @@ the sheet is written again, without those rules, as soon as they are named.
 A card on a phone gives the hostname the full card width and puts the details in
 a separate two-column grid. Both column starts are always derived from the
 card's inner width. SSL and Disk therefore stay at the same x and y positions
-when Type is shown or hidden, and content wrapping in one field does not move
+when Application is shown or hidden, and content wrapping in one field does not move
 the field beside it.
 
-Type first tries the unused right side of a one-line hostname. The script reads
+Application first tries the unused right side of a one-line hostname. The script reads
 the natural widths of the hostname and badge and chooses that placement only
 when both fit in full; it does not assign a width to either. A wrapped hostname
 keeps its whole line. If it wraps to exactly two lines and the full badge fits
@@ -224,7 +224,7 @@ A type too long for that spare space ends in an ellipsis and exposes its full
 value in the title. Resizing, changing column choices, and replacing the native
 type with the application name rerun only this placement choice.
 
-Type and SSL badges use the same exact 17px line-height and 23px outer height.
+Application and SSL badges use the same exact 17px line-height and 23px outer height.
 On SSL badges the mobile edge is an inset stroke rather than a fractional
 rounded border, keeping all four sides the same visual weight without changing
 the badge's footprint. The normal SSL badge remains one text label, including

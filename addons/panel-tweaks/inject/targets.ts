@@ -204,7 +204,7 @@ const SITES_MOBILE_STYLE = `
   table.table-sites .clp-tweaks-details > [data-col="ssl"] { container: clp-ssl / inline-size; }
   table.table-sites td.clp-tweaks-actions { padding-top: 14px !important; }
 }
-/* A short second hostname line can share its height with Type at any phone
+/* A short second hostname line can share its height with Application at any phone
    width where the full badge fits beside it. */
 table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-detail-heading { display: grid; }
 table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-detail-heading > .clp-tweaks-detail-label {
@@ -296,7 +296,7 @@ const SITES_SCRIPT = `
   // the table is painted from already.
   var COLUMNS = [
     { key: "user", label: "Site user", wide: true, narrow: false, native: 2 },
-    { key: "app", label: "Type", wide: true, narrow: false, native: 3 },
+    { key: "app", label: "Application", wide: true, narrow: false, native: 3 },
     { key: "ssl", label: "SSL", wide: true, narrow: true },
     { key: "runtime", label: "Runtime", wide: true, narrow: false },
     { key: "disk", label: "Disk", wide: true, narrow: true },
@@ -459,12 +459,12 @@ const SITES_SCRIPT = `
       var heads = table.querySelectorAll("thead th");
       // The panel's own two middle columns answer to the picker as well, so
       // they are named here with the keys it knows them by. The third is headed
-      // Type rather than the panel's own App, which is what the picker calls
+      // Application rather than the panel's own App, which is what the picker calls
       // it, and on a phone it is the tag beside the hostname.
       if (heads[1]) heads[1].setAttribute("data-col", "user");
       if (heads[2]) {
         heads[2].setAttribute("data-col", "app");
-        if (COLUMNS_ON) heads[2].textContent = "Type";
+        if (COLUMNS_ON) heads[2].textContent = "Application";
       }
       for (var i = 0; i < rows.length; i++) {
         var cells = rows[i].el.children;
@@ -500,7 +500,7 @@ const SITES_SCRIPT = `
           group.className = "clp-tweaks-details";
           domain.appendChild(group);
         }
-        // A previous placement may have put Type inside a heading that is
+        // A previous placement may have put Application inside a heading that is
         // about to be rebuilt.
         if (tag && group.contains(tag)) domain.insertBefore(tag, group);
         group.textContent = "";
@@ -527,7 +527,7 @@ const SITES_SCRIPT = `
       }
     }
 
-    // Type never receives a width and never makes the hostname or metadata
+    // Application never receives a width and never makes the hostname or metadata
     // columns narrower. It uses the hostname row only when both full values fit
     // there; otherwise it moves into the spare end of the right detail heading.
     function placeTypes(rows) {
