@@ -50,10 +50,11 @@ const STYLE = `
 .git-advanced > summary { font-size: 14px; }
 .git-advanced .form-grid { grid-template-columns: minmax(0, 1fr); }
 .git-danger { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
-.git-setup { max-width: 760px; margin: 0 auto; }
+.git-setup { max-width: 960px; margin: 0 auto; }
 .git-setup .form-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
 .git-setup .form-field-full { grid-column: auto; }
 .git-setup .git-advanced .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.git-setup .form-actions { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 20px; }
 .git-setup-intro { margin-bottom: 24px; }
 .git-setup-intro h2 { margin: 0 0 8px; }
 .git-output { margin-top: 20px; }
