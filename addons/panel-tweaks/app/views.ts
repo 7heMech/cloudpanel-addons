@@ -122,8 +122,19 @@ async function measureNow(button) {
   function showProgress(event) {
     if (event.phase === 'complete') {
       completed = true;
+      button.textContent = originalLabel;
+      const total = event.measured + event.skipped;
+      const summary = button.closest('.tweak-scan').querySelector('span');
+      if (summary) summary.textContent = event.measured + ' of ' + total +
+        ' site' + (total === 1 ? '' : 's') + ' measured, just now.';
       const skipped = event.skipped ? ', ' + event.skipped + ' skipped' : '';
-      reloadWith(event.measured + (event.measured === 1 ? ' site measured' : ' sites measured') + skipped + '.', 'ok');
+      const sitesTable = document.querySelector('[data-tweak="sitesTable"]');
+      const frame = document.getElementById('preview-frame');
+      if (sitesTable && sitesTable.checked && frame) {
+        frame.src = CLP_BASE + '/preview?refresh=' + Date.now();
+      }
+      busy(false);
+      notify(event.measured + (event.measured === 1 ? ' site measured' : ' sites measured') + skipped + '.', 'ok');
       return;
     }
     const current = Math.min(event.completed + 1, event.total);
@@ -226,26 +237,6 @@ function toggleNote(button) {
   const open = row.classList.toggle('is-open');
   button.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
-
-const FLASH_KEY = 'clp-panel-tweaks-flash';
-
-function reloadWith(message, kind) {
-  try { sessionStorage.setItem(FLASH_KEY, JSON.stringify({ message: message, kind: kind })); } catch (e) {}
-  location.reload();
-}
-
-(function showCarriedFlash() {
-  let carried = null;
-  try {
-    carried = sessionStorage.getItem(FLASH_KEY);
-    if (carried) sessionStorage.removeItem(FLASH_KEY);
-  } catch (e) { return; }
-  if (!carried) return;
-  try {
-    const flash = JSON.parse(carried);
-    notify(flash.message, flash.kind);
-  } catch (e) {}
-})();
 `;
 
 export function layout(
