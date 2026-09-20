@@ -72,27 +72,32 @@ The site-scoped page is a tab in CloudPanel's own site page, mounted through
 `lib/shadow-embed.ts` beside Maintenance and Staging. Connected sites lead with
 the current checkout, repository, branch, and deployment mode. The dashboard
 uses two equal columns: latest deployment, repository settings, and the deploy
-key stack in the first, and push to deploy fills the second. That card is as
-tall as the latest deployment while the switch is off, and reaches the bottom
-of repository settings while it is on, so its edge always meets a card edge.
-Cards stack on mobile. A checkout is reported separately from job success
-because a failed post-deploy command can leave the new files in place. Deploy
+key stack in the first, and push to deploy fills the second. While the switch
+is off that card shares the row with the latest deployment and the two match
+in height; while it is on it spans the column beside it at its own height, so
+neither card is padded out to reach the other. Cards stack on mobile. A
+checkout is reported separately from job success because a failed post-deploy
+command can leave the new files in place. Deploy
 is disabled while a job is queued or running. A deployment started there is
 watched in the same card, with failed output expanded so it can be read
 immediately.
 
 Repository settings and the deploy key use native expandable sections, which
 also work inside the panel's shadow root. The repository form keeps its URL
-and branch together; Advanced holds the subdirectory, post-deploy command,
-and disconnect action. Configured advanced values are summarized while closed
-and remain in the form when saving. Key replacement and webhook URL rotation
+and branch together; Advanced holds the subdirectory, post-deploy command, and
+disconnect action. Configured advanced values are summarized while closed and
+remain in the form when saving. Key replacement and webhook URL rotation
 sit beside their Copy buttons below the key or URL and retain their
 confirmation dialogs.
 
-A site nobody has connected yet shows the connection form. Saving an SSH
-remote generates the deploy key as part of the save, so the sequence is save,
-add the key to the repository, deploy. The key section is expanded until a
-checkout exists, or when the public key is missing. HTTPS remotes have no key
+A site nobody has connected yet shows the connection form. That form has the
+page to itself, so it pairs its fields across the width: branch beside the
+repository URL, and the post-deploy command beside the subdirectory under
+Advanced. The settings card on a connected site is one column wide and keeps
+its fields stacked. Saving an SSH remote generates the deploy key as part of
+the save, so the sequence is save, add the key to the repository, deploy. The
+key section is expanded until a checkout exists, or when the public key is
+missing. HTTPS remotes have no key
 section. A missing SSH key offers a generate action.
 
 The push-to-deploy switch and last delivery outcome stay visible. Webhook setup

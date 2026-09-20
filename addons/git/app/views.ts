@@ -20,10 +20,10 @@ const BASE = mountPath("git");
 // Only what the shared shell does not carry.
 const STYLE = `
 .git-dashboard { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-bottom: 24px; }
-.git-dashboard > * { min-width: 0; grid-column: 1; align-self: start; }
+.git-dashboard > * { min-width: 0; grid-column: 1; }
 .git-dashboard .card { margin-bottom: 0; }
 .git-webhook { grid-column: 2; grid-row: 1; align-self: stretch; }
-.git-webhook-on { grid-row: 1 / span 2; }
+.git-webhook-on { grid-row: 1 / span var(--git-rows); align-self: start; }
 .git-overview { border-top: 3px solid var(--accent); }
 .git-eyebrow { color: var(--muted); font-size: 13px; font-weight: 600; margin-bottom: 14px; }
 .git-commit { display: flex; align-items: flex-start; gap: 14px; }
@@ -51,6 +51,9 @@ const STYLE = `
 .git-advanced .form-grid { grid-template-columns: minmax(0, 1fr); }
 .git-danger { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
 .git-setup { max-width: 760px; margin: 0 auto; }
+.git-setup .form-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+.git-setup .form-field-full { grid-column: auto; }
+.git-setup .git-advanced .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .git-setup-intro { margin-bottom: 24px; }
 .git-setup-intro h2 { margin: 0 0 8px; }
 .git-output { margin-top: 20px; }
@@ -520,7 +523,7 @@ export function siteView(site: GitSiteStatus, log: string): string {
     </div>
     ${site.configured ? `
       ${current}
-      <div class="git-dashboard">
+      <div class="git-dashboard" style="--git-rows: ${key ? 3 : 2}">
         ${jobCard(site.lastJob, log)}
         ${webhookSection(site)}
         ${settings}
