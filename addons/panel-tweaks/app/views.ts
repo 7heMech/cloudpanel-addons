@@ -8,9 +8,10 @@ const BASE = mountPath("panel-tweaks");
 // Cards, switches, badges, the fleet table and its narrow-screen layout are in
 // lib/app-ui; only the two rows this page alone draws are here.
 const STYLE = `
-.tweak-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
-  padding: 22px 0; border-top: 1px solid var(--row-border); }
-.tweak-row > div { flex: 1 1 auto; min-width: 0; }
+.tweak-row { padding: 22px 0; border-top: 1px solid var(--row-border); }
+.tweak-row > .tweak-body { min-width: 0; }
+.tweak-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.tweak-heading h3 { flex: 1 1 auto; min-width: 0; }
 .tweak-category + .tweak-category { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--row-border); }
 .tweak-category-title { margin: 0; color: var(--muted); font-size: 12px; font-weight: 700;
   letter-spacing: .06em; text-transform: uppercase; }
@@ -22,9 +23,10 @@ const STYLE = `
   border-left: 2px solid var(--border); border-bottom: 2px solid var(--border); border-bottom-left-radius: 5px;
   pointer-events: none; }
 .tweak-row.is-nested h3 { font-size: 15px; font-weight: 500; }
-.tweak-row h3 { margin: 0 0 6px; font-size: 16px; }
+.tweak-row h3 { margin: 0; font-size: 16px; }
+.tweak-note { margin-top: 6px; }
 .tweak-row p { margin: 0; color: var(--muted); font-size: 14px; }
-.tweak-row .switch { flex: 0 0 auto; margin-top: 4px; }
+.tweak-row .switch { flex: 0 0 auto; margin: 0; }
 .tweak-scan { display: none; flex-wrap: wrap; align-items: center; gap: 8px 12px;
   margin-top: 12px; color: var(--muted); font-size: 13px; }
 .tweak-row.is-enabled .tweak-scan { display: flex; }
@@ -314,18 +316,20 @@ function switchRow(copy: TweakCopy, tweaks: PanelTweaks, extra = ""): string {
   const locked = copy.parent !== undefined && !tweaks[copy.parent];
   return `
       <div class="tweak-row${copy.parent ? " is-nested" : ""}${on ? " is-enabled" : ""}">
-        <div>
-          <h3>${esc(copy.title)}<button class="tweak-more" type="button" aria-expanded="false"
-            aria-controls="${note}" aria-label="What ${esc(copy.title.toLowerCase())} does"
-            onclick="toggleNote(this)"></button></h3>
+        <div class="tweak-body">
+          <div class="tweak-heading">
+            <h3>${esc(copy.title)}<button class="tweak-more" type="button" aria-expanded="false"
+              aria-controls="${note}" aria-label="What ${esc(copy.title.toLowerCase())} does"
+              onclick="toggleNote(this)"></button></h3>
+            <label class="switch" title="${esc(copy.title)}">
+              <input type="checkbox" data-tweak="${esc(copy.key)}" onchange="setTweak(this)"${on ? " checked" : ""}
+                ${copy.parent ? `data-tweak-parent="${esc(copy.parent)}" ` : ""}${locked ? "disabled " : ""}aria-label="${esc(copy.title)}">
+              <span></span>
+            </label>
+          </div>
           <div class="tweak-note" id="${note}"><p>${esc(copy.description)}</p></div>
           ${extra}
         </div>
-        <label class="switch" title="${esc(copy.title)}">
-          <input type="checkbox" data-tweak="${esc(copy.key)}" onchange="setTweak(this)"${on ? " checked" : ""}
-            ${copy.parent ? `data-tweak-parent="${esc(copy.parent)}" ` : ""}${locked ? "disabled " : ""}aria-label="${esc(copy.title)}">
-          <span></span>
-        </label>
       </div>`;
 }
 
