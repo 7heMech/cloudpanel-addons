@@ -52,7 +52,7 @@ const STYLE = `
 .git-danger { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
 .git-setup .form-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
 .git-setup .form-field-full { grid-column: auto; }
-.git-setup .git-advanced .form-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+.git-setup .git-advanced .form-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
 .git-setup .form-actions { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 20px; }
 .git-setup-intro { margin-bottom: 24px; }
 .git-setup-intro h2 { margin: 0 0 8px; }
@@ -533,7 +533,7 @@ export function siteView(site: GitSiteStatus, log: string): string {
 
 function repositoryForm(site: GitSiteStatus): string {
   const config = site.config;
-  const custom = [config?.directory ? "Custom directory" : "", config?.postDeploy ? "Post-deploy command" : ""].filter(Boolean);
+  const custom = [config?.postDeploy ? "Post-deploy command" : "", config?.directory ? "Custom directory" : ""].filter(Boolean);
   const fields = `
       <form onsubmit="event.preventDefault(); saveGitConfig('${esc(site.domain)}')">
         <div class="form-grid">
@@ -550,19 +550,19 @@ function repositoryForm(site: GitSiteStatus): string {
           </div>
         </div>
         <details class="git-disclosure git-advanced">
-          <summary><span><span class="git-summary-title">Advanced</span><span class="hint">${esc(custom.join(" · ") || "Deploy directory and post-deploy command")}</span></span></summary>
+          <summary><span><span class="git-summary-title">Advanced</span><span class="hint">${esc(custom.join(" · ") || "Post-deploy command and deploy directory")}</span></span></summary>
           <div class="form-grid">
-            <div class="form-field">
-              <label for="git-directory">Subdirectory</label>
-              <input id="git-directory" type="text" maxlength="${MAX_DIRECTORY_LENGTH}" spellcheck="false" autocapitalize="off"
-                placeholder="Leave empty for the site directory" value="${esc(config?.directory ?? "")}">
-              <div class="hint">Relative to <span class="mono">~/htdocs/${esc(site.domain)}</span></div>
-            </div>
             <div class="form-field">
               <label for="git-post-deploy">Post-deploy command</label>
               <input id="git-post-deploy" type="text" maxlength="${MAX_POST_DEPLOY_LENGTH}" spellcheck="false" autocapitalize="off"
                 placeholder="composer install --no-dev" value="${esc(config?.postDeploy ?? "")}">
               <div class="hint">Runs as ${esc(site.siteUser)} in the deployed directory after every deployment.</div>
+            </div>
+            <div class="form-field">
+              <label for="git-directory">Subdirectory</label>
+              <input id="git-directory" type="text" maxlength="${MAX_DIRECTORY_LENGTH}" spellcheck="false" autocapitalize="off"
+                placeholder="Leave empty for the site directory" value="${esc(config?.directory ?? "")}">
+              <div class="hint">Relative to <span class="mono">~/htdocs/${esc(site.domain)}</span></div>
             </div>
           </div>
           ${site.configured ? `<div class="git-danger">
