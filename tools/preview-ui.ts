@@ -5,6 +5,7 @@ import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } 
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
 import { jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, newCloneView, promoteListView, promoteView, siteStagingView } from "../addons/stager/app/views";
 import { fleetView as gitFleetView, fragment as gitFragment, layout as gitLayout, siteView as gitSiteView } from "../addons/git/app/views";
+import type { GitSiteStatus } from "../addons/git/app/service";
 import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
 import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
@@ -46,23 +47,26 @@ const sites: SiteSummary[] = [
 const siteVarnish: Record<string, boolean> = { "www.example.com": true };
 const PREVIEW_PUBLIC_IP = "203.0.113.10";
 
-const gitLog = [
-  "[git] deploying git@github.com:example/shop.git (main) into /home/example/htdocs/www.example.com as example",
-  "[git] fetching main",
-  "From github.com:example/shop",
-  " * branch            main       -> FETCH_HEAD",
-  "[git] updating the working tree",
-  "HEAD is now at 9f2c1ab Add the checkout summary",
-  "[git] $ composer install --no-dev",
-  "Installing dependencies from lock file",
-  "[git] deployment finished",
-].join("\n");
+function gitPreviewLog(site: GitSiteStatus): string {
+  if (!site.lastJob || !site.config || site.lastJob.state === "queued") return "";
+  return [
+    `[git] deploying ${site.config.remote} (${site.config.branch}) into ${site.path} as ${site.siteUser}`,
+    `[git] fetching ${site.config.branch}`,
+    "[git] updating the working tree",
+    `HEAD is now at ${site.commit?.shortHash ?? "9f2c1ab"} ${site.commit?.subject ?? "Add the checkout summary"}`,
+    ...(site.config.postDeploy ? [`[git] $ ${site.config.postDeploy}`] : []),
+    ...(site.lastJob.state === "done" ? ["[git] deployment finished"]
+      : site.lastJob.state === "failed" ? [`[git] ${site.lastJob.error}`] : []),
+  ].join("\n");
+}
 
 /**
- * The three states the Git pages distinguish: deployed, never deployed, and
- * configured for a site CloudPanel no longer has.
+ * Connected sites and first-time setup. ?first-deploy, ?no-delivery,
+ * ?other-provider, ?unavailable, and ?state= cover the expandable controls.
  */
-function gitPreviewSites(url: URL) {
+function gitPreviewSites(url: URL): GitSiteStatus[] {
+  const delivered = new Date(Date.now() - 4 * 60_000).toISOString().replace(/\.\d+Z$/, "Z");
+  const firstDeploy = url.searchParams.has("first-deploy");
   const commit = {
     hash: "9f2c1ab7c0f0ad0e0f6d2f1b2a3c4d5e6f708192", shortHash: "9f2c1ab",
     author: "Ada Lovelace", committedAt: "2026-09-17T11:04:00Z", subject: "Add the checkout summary",
@@ -70,29 +74,27 @@ function gitPreviewSites(url: URL) {
   const job = {
     id: "20260917T110500Z-ab12cd", kind: "deploy", domain: "www.example.com", startedBy: "push",
     state: url.searchParams.get("state") ?? "done", step: "running the post-deploy command", error: "",
-    createdAt: "2026-09-17T11:05:00Z", startedAt: "2026-09-17T11:05:01Z",
-    finishedAt: url.searchParams.get("state") ? "" : "2026-09-17T11:05:42Z",
+    createdAt: delivered, startedAt: delivered,
+    finishedAt: ["queued", "running"].includes(url.searchParams.get("state") ?? "") ? "" : new Date(Date.parse(delivered) + 41_000).toISOString(),
     result: { branch: "main", directory: "", commit, postDeploy: "composer install --no-dev", postDeployRan: true },
   };
-  // Relative to now, so the delivery line reads the way an operator sees it.
-  const delivered = new Date(Date.now() - 4 * 60_000).toISOString().replace(/\.\d+Z$/, "Z");
   if (job.state === "failed") job.error = "the post-deploy command failed; the files are deployed and the command did not finish";
   return [
     {
       domain: "www.example.com", siteUser: "example", siteType: "php",
       path: "/home/example/htdocs/www.example.com", configured: true,
       config: {
-        domain: "www.example.com", remote: "git@github.com:example/shop.git", branch: "main",
+        domain: "www.example.com", remote: url.searchParams.has("other-provider") ? "git@gitlab.com:example/shop.git" : "git@github.com:example/shop.git", branch: "main",
         directory: "", postDeploy: "composer install --no-dev", updatedAt: "2026-09-15T08:00:00Z",
         webhook: url.searchParams.has("no-hook") ? null : {
           token: "PreviewWebhookTokenForTheUiOnlyNotARealOne",
-          lastDeliveryAt: delivered, lastDelivery: "started a deployment",
+          lastDeliveryAt: url.searchParams.has("no-delivery") || firstDeploy ? "" : delivered, lastDelivery: "started a deployment",
           lastDeliveryJob: "20260917T110500Z-ab12cd",
         },
       },
       publicKey: url.searchParams.has("no-key") ? "" :
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPreviewKeyForTheUiOnlyNotARealKey00 clp-addons deploy key for www.example.com",
-      commit, lastJob: job,
+      commit: firstDeploy ? null : commit, lastJob: firstDeploy ? null : job,
     },
     {
       // A site the Git tab has never been used on: what an operator meets first.
@@ -108,6 +110,17 @@ function gitPreviewSites(url: URL) {
         directory: "public", postDeploy: "", updatedAt: "2026-09-16T09:10:00Z", webhook: null,
       },
       publicKey: "", commit: null, lastJob: null,
+    },
+    {
+      domain: "app.example.com", siteUser: "app", siteType: url.searchParams.has("unavailable") ? "" : "nodejs",
+      path: "/home/app/htdocs/app.example.com", configured: true,
+      config: {
+        domain: "app.example.com", remote: "git@gitlab.com:example/app.git", branch: "production",
+        directory: "", postDeploy: "npm run build", updatedAt: "2026-09-16T09:10:00Z", webhook: null,
+      },
+      publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPreviewKeyForTheUiOnlyNotARealKey00", commit,
+      lastJob: { ...job, id: "20260917T100500Z-ab12cd", domain: "app.example.com", state: "failed", startedBy: "operator", result: null,
+        error: "The build command failed. Check the deployment output before trying again." },
     },
   ];
 }
@@ -553,12 +566,24 @@ const server = Bun.serve({
     // The job the Git pages watch, so ?state=running can be reviewed as a live
     // view rather than as a stream that never answers.
     if (path.startsWith("/addons/git/api/jobs/")) {
-      const gitJob = gitPreviewSites(url)[0]!.lastJob!;
+      // The watcher URL has no query, so use the page that requested it to keep
+      // a running preview running instead of reloading it in a loop as done.
+      const source = req.headers.get("referer");
+      const gitSite = gitPreviewSites(source ? new URL(source) : url).find((site) => site.lastJob && path.includes(site.lastJob.id));
+      if (!gitSite?.lastJob) return Response.json({ ok: false, error: "No preview job" }, { status: 404 });
+      const gitJob = gitSite.lastJob;
+      const gitLog = gitPreviewLog(gitSite);
       if (path.endsWith("/events") || req.headers.get("accept")?.includes("text/event-stream")) {
         if (server && typeof server.timeout === "function") {
           try { server.timeout(req, 0); } catch {}
         }
-        return new Response(`data: ${JSON.stringify({ job: gitJob, log: gitLog })}\n\n`, {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ job: gitJob, log: gitLog })}\n\n`));
+            if (gitJob.state !== "running" && gitJob.state !== "queued") controller.close();
+          },
+        });
+        return new Response(stream, {
           headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", ...SECURITY_HEADERS },
         });
       }
@@ -568,7 +593,7 @@ const server = Bun.serve({
       const domain = url.searchParams.get("domain") ?? sites[0]!.domain;
       const site = gitPreviewSites(url).find((candidate) => candidate.domain === domain) ?? gitPreviewSites(url)[0]!;
       return Response.json(
-        gitFragment(`Git — ${site.domain}`, gitSiteView(site, gitLog)),
+        gitFragment(`Git — ${site.domain}`, gitSiteView(site, gitPreviewLog(site))),
         { headers: withCsrfCookie({}, "preview-token") },
       );
     }
@@ -701,14 +726,14 @@ const server = Bun.serve({
       const selected = url.searchParams.get("domain");
       const site = gitSites.find((candidate) => candidate.domain === selected);
       html = site
-        ? gitLayout(`Git — ${site.domain}`, gitSiteView(site, gitLog), notice, {
+        ? gitLayout(`Git — ${site.domain}`, gitSiteView(site, gitPreviewLog(site)), notice, {
             domain: site.domain,
             user: site.siteUser,
             type: site.siteType,
             varnishCache: siteVarnish[site.domain] === true,
             ...(url.searchParams.has("no-ip") ? {} : { publicIp: PREVIEW_PUBLIC_IP }),
           })
-        : gitLayout("Git deploy", gitFleetView(empty ? [] : gitSites), notice);
+        : gitLayout("Git deploy", gitFleetView(empty ? [] : gitSites.filter((site) => site.configured)), notice);
     } else if (path === "/addons/stager/" || path === "/addons/stager") {
       // ?domain= is the site-scoped page the Staging tab reaches, drawn here
       // with the panel's chrome around it the way the standalone ?embed=0 page

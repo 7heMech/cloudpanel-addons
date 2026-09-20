@@ -69,27 +69,41 @@ the repair pass marks a deployment whose runner died as failed.
 ## Surfaces
 
 The site-scoped page is a tab in CloudPanel's own site page, mounted through
-`lib/shadow-embed.ts` beside Maintenance and Staging: it shows the commit that
-is deployed, the configuration form, the deploy key and the last deployment's
-log. A deployment started there is watched in the card it was started from
-rather than on a page of its own, because navigating away would leave the
-panel's page behind to show a log.
+`lib/shadow-embed.ts` beside Maintenance and Staging. Connected sites lead with
+the current checkout, repository, branch, and deployment mode. The latest
+deployment and its output sit beside push-to-deploy controls. A checkout is
+reported separately from job success because a failed post-deploy command can
+leave the new files in place. Deploy is disabled while a job is queued or
+running. A deployment started there is watched in the same card, with failed
+output expanded so it can be read immediately.
 
-A site nobody has connected yet shows the repository form and nothing else.
-What is deployed, the deploy key and push-to-deploy all follow from having a
-repository, and drawing them first meant a first visit was three cards saying
-there was nothing to show and one disabled switch. Saving an SSH remote
-generates the deploy key as part of the save, so the sequence is save, add the
-key to the repository, deploy -- not a button an operator has to find between
-them. The key section is drawn only for a remote that uses it: an HTTPS remote
-needs none, and the generate button survives only as what a box where
-`ssh-keygen` failed is offered.
+Repository settings and the deploy key use native expandable sections, which
+also work inside the panel's shadow root. The repository form keeps its URL
+and branch together; Advanced holds the subdirectory, post-deploy command,
+and disconnect action. Configured advanced values are summarized while closed
+and remain in the form when saving. Key replacement and webhook URL rotation
+also sit behind Advanced and retain their confirmation dialogs.
 
-`/addons/git/` is the fleet view: every configured site, its branch, what it
-last deployed and when, with per-row and multi-select deploy. That is the
-altitude the list exists for -- deploying ten sites after one merge is the case
-a per-site form cannot answer. The fleet reply carries no webhook tokens; only
-the site's own page asks for a record it is going to print.
+A site nobody has connected yet shows the connection form. Saving an SSH
+remote generates the deploy key as part of the save, so the sequence is save,
+add the key to the repository, deploy. The key section is expanded until a
+checkout exists, or when the public key is missing. HTTPS remotes have no key
+section. A missing SSH key offers a generate action.
+
+The push-to-deploy switch and last delivery outcome stay visible; webhook
+setup is expanded until a delivery has arrived. GitHub remotes show GitHub
+instructions with generic POST instructions under Other providers & CI.
+Other remotes expand the generic instructions and collapse the GitHub steps.
+This choice only changes the instructions; it does not configure a provider.
+
+`/addons/git/` is the fleet view: counts of configured sites, active deployments,
+and sites needing attention precede each site's branch, checkout, and latest
+deployment. Attention means a failed job, unreadable settings, or a site absent
+from CloudPanel. Per-row and multi-select deployment exclude active jobs and
+unavailable sites, with selection controls on desktop and mobile. Connect a
+site links to CloudPanel's site list, where each site's Git tab starts setup.
+The fleet reply carries no webhook tokens; only the site's own page asks for a
+record it is going to print.
 
 CloudPanel's own site list carries a "Deploy from Git" link, left of the
 panel's own "Manage" and marked with `ROW_ACTION_CLASS` so Panel Tweaks' row
@@ -130,8 +144,8 @@ non-administrator cannot reach so it draws what the panel's strip draws.
 bytes this addon mints, kept in the site's own `0600` record, and it is the
 whole authentication for the route: a repository sends no CSRF token and its
 Origin is not the panel, so `guardMutation` cannot apply and the URL is the
-credential. That is why it is minted rather than chosen, why the page calls it a
-password, and why rotating it is how a leaked one is revoked.
+credential. That is why it is minted rather than chosen, why the page says to
+keep it private, and why rotating it is how a leaked one is revoked.
 
 The route is decided in `handleRequest` before the session gate, and it returns
 a response *only* when the root gateway confirmed the token. Everything else --
