@@ -51,7 +51,8 @@ replace their limits silently.
 Everything is decided at `/addons/php-resources/`: the categories and their
 limits, which sites are in each, and which category new sites join. The site
 table carries checkboxes and a bulk assignment, because moving forty sites is
-the ordinary operation.
+the ordinary operation. The category editor is a native modal dialog; Cancel,
+Escape, or a click on its backdrop dismisses it without saving.
 
 A site's Settings tab in CloudPanel shows a read-only card under the panel's own
 PHP Settings form, with the category and the limits that site is running. Twig

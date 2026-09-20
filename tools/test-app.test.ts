@@ -161,6 +161,8 @@ test("the PHP Resources category dialog fits a phone", () => {
   );
   expect(html).toContain("#category-dialog { width:720px; }");
   expect(html).toContain("@media (max-width:760px) {\n  #category-dialog { width:calc(100% - 20px); }");
+  expect(html).toContain('onclick="closeCategoryDialogOnBackdrop(event)"');
+  expect(html).toContain("if (!inside) dialog.close();");
 });
 
 test("a fleet table gives the domain its own line on a phone", () => {
