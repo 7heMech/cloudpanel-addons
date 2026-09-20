@@ -20,6 +20,14 @@ const STYLE = `
 @media (max-width: 760px) {
   .toolbar-actions { flex: 1 1 100%; margin-left: 0; }
   .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right:10px; padding-left:10px; white-space:nowrap; }
+  /* This table has one per-site action, so its switch can finish the site's
+     summary row instead of consuming another labeled half-row by itself. */
+  .cloudflare-site-table tr { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto auto; column-gap: 8px; }
+  .cloudflare-site-table td.site-select { width: 24px; }
+  .cloudflare-site-table td.site-cell { font-size: 15px; }
+  .cloudflare-site-table td.type-cell { margin-left: 0; padding: 2px 6px; font-size: 11px; }
+  .cloudflare-site-table td.action-cell { display: flex; align-self: center; }
+  .cloudflare-site-table td.action-cell::before { display: none; }
 }
 `;
 
@@ -337,7 +345,7 @@ export function dashboardView(state: CloudflareState): string {
               <button class="btn" id="disable-selected" type="button" disabled onclick="setSelectedSites(false)">Disable selected</button>
             </div>
           </div>
-          <table class="fleet-table">
+          <table class="fleet-table cloudflare-site-table">
             <thead><tr>
               <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
               <th scope="col">Site</th><th scope="col">Type</th><th scope="col" class="action-cell">Cloudflare only</th>

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import {
   reconcileNewSites, runCloudflareAction, transformVhost, type CloudflareActionPaths,
 } from "../addons/cloudflare-ips/action";
-import { CLIENT_JS, dashboardView } from "../addons/cloudflare-ips/app/views";
+import { CLIENT_JS, dashboardView, layout } from "../addons/cloudflare-ips/app/views";
 import type { CommandResult } from "../cli/action-common";
 
 const realUid = process.getuid?.() ?? 0;
@@ -118,14 +118,21 @@ test("dashboard summarises how many sites allow Cloudflare only", () => {
 });
 
 test("the switch column ends where the table ends, as the Maintenance table does", () => {
-  const html = dashboardView({
+  const state = {
     autoEnableNewSites: true,
     sites: [{ domain: "a.example.test", type: "php", enabled: true, excludedFromAutomatic: false }],
-  });
+  };
+  const html = dashboardView(state);
   // .action-cell is the shared right-aligned column; without it the switches
   // sat in the middle of the row with the rest of the table empty beside them.
   expect(html).toContain('<th scope="col" class="action-cell">Cloudflare only</th>');
   expect(html).toContain('<td class="action-cell" data-label="Cloudflare only">');
+  expect(html).toContain('<table class="fleet-table cloudflare-site-table">');
+  // On a phone this is the only action, so it stays in the site's summary row
+  // and does not repeat the desktop column heading in every card.
+  const page = layout("Cloudflare IP access", html);
+  expect(page).toContain(".cloudflare-site-table td.action-cell::before { display: none; }");
+  expect(page).toContain(".cloudflare-site-table td.action-cell { display: flex; align-self: center;");
 });
 
 interface FakeElement {
