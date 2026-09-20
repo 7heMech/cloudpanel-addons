@@ -61,13 +61,15 @@ Three routes are named as exceptions. Two are the WordPress sign-in addon's:
 the CSRF pair, because the link that uses them is injected into CloudPanel's own
 Sites page, which a non-administrator sees too. The third is Panel Tweaks'
 read-only `GET /panel-tweaks/api/panel`, which answers the script injected into
-that same page with the sites CloudPanel would list for the caller. A session that only clears the
-gate this way is dispatched straight to that addon, ahead of the update check
-and the manager's own routes, so nothing else in the manager runs for it. The
-authorisation it skips here is made up for as root: the sign-in action is told
-which panel user the request is for and refuses any site CloudPanel would not
-list for that account. The set is a literal of two strings rather than a prefix
-or a pattern, so a route cannot join it by being named something similar.
+that same page with the sites CloudPanel would list for the caller.
+
+A session that only clears the gate this way is dispatched straight to that
+addon, ahead of the update check and the manager's own routes, so nothing else
+in the manager runs for it. The authorisation it skips here is made up for as
+root: the sign-in action is told which panel user the request is for and refuses
+any site CloudPanel would not list for that account. The set is a literal of
+three strings rather than a prefix or a pattern, so a route cannot join it by
+being named something similar.
 
 An addon may also declare `siteManager` in its catalog definition, which admits
 a `ROLE_SITE_MANAGER` session to that addon's whole mount rather than to a named

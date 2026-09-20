@@ -58,7 +58,12 @@ so it survives a manager restart, and it is watched through `lib/job-stream.ts`
 like every other job on the platform. One site has at most one deployment
 running: the create path holds the site's lock, refuses a second while one is
 queued or running, and releases the lock before the unit starts so the runner
-does not wait on the process that started it. Records expire after 14 days and
+does not wait on the process that started it. The runner takes the lock in turn
+and drops it as soon as the record says `running`, because from there the record
+is what refuses a second deployment. Holding it for the whole deployment meant a
+second deploy or delivery waited on the lock until the gateway's own timeout
+expired, and an operator was told the gateway had failed where the answer was
+that the site was already deploying. Records expire after 14 days and
 the repair pass marks a deployment whose runner died as failed.
 
 ## Surfaces
@@ -155,10 +160,13 @@ refusal an operator cannot see is a webhook they cannot fix. The delivery's time
 and outcome are recorded on the site and drawn on its page, and the reply says
 `deployed: false` with the reason. Three things end there: a push for a ref that
 is not the configured branch, the repository's first `ping`, and a delivery that
-arrives while the last one is still deploying -- which is what makes a
-redelivery a no-op, since the duplicate-job guard already refuses the second. A
-delivery carrying no push payload at all deploys the configured branch, so
-`curl -X POST` from a CI job works.
+arrives while the last one is still deploying, which the duplicate-job guard
+refuses. Nothing is remembered about a delivery once its deployment ends: a
+redelivery after that deploys again, which fetches the same commit and runs the
+post-deploy command a second time. Keeping delivery identifiers to refuse it
+would be a store to write, bound and expire for a button a person presses by
+hand. A delivery carrying no push payload at all deploys the configured branch,
+so `curl -X POST` from a CI job works.
 
 A delivery with a well-formed token that is wrong still costs one gateway round
 trip and one action process, and a gateway that is down is answered exactly as a

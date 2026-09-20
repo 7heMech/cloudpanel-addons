@@ -252,6 +252,34 @@ test("a deployment fetches the branch, checks it out and runs the post-deploy co
   }
 });
 
+// The lock is how a runner claims its job, not how it holds the site: a second
+// deploy must meet the duplicate-job guard and be told the site is deploying,
+// rather than wait on a lock until its caller's gateway gives up.
+test("a deployment running now refuses a second one instead of blocking it", async () => {
+  const fx = fixture();
+  try {
+    const gate = join(fx.root, "release-post-deploy");
+    await action(fx, ["configure", `--domain=${DOMAIN}`], JSON.stringify({
+      remote: fx.bare, branch: "main", directory: "",
+      postDeploy: `while [ ! -f ${gate} ]; do sleep 0.05; done`,
+    }));
+
+    const dir = queueJob(fx, "20260918T170000Z-ffffff");
+    const running = runGitAction(["run", "--job=20260918T170000Z-ffffff"], { ...fx.options, emitReply: false });
+    while (field(dir, "step") !== "running the post-deploy command") await Bun.sleep(20);
+
+    const refused = await action(fx, ["deploy", `--domain=${DOMAIN}`]);
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toContain("already running");
+
+    writeFileSync(gate, "");
+    expect(await running).toBe(0);
+    expect(field(dir, "state")).toBe("done");
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
 test("a deployment into a subdirectory creates it and stays inside the site", async () => {
   const fx = fixture();
   try {

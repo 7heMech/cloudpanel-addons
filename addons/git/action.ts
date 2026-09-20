@@ -1041,7 +1041,9 @@ function setStep(dir: string, value: string): void {
  * `.env`, a cache directory -- is left where it is. A deployment that swept
  * untracked files would take the site's own data with it.
  */
-async function cmdRun(paths: GitActionPaths, id: string, options: GitActionOptions): Promise<void> {
+async function cmdRun(
+  paths: GitActionPaths, id: string, options: GitActionOptions, releaseLock: () => void,
+): Promise<void> {
   const dir = jobDir(paths, id);
   if (!isDirectory(dir)) failAction(`no such job: ${id}`);
   const transcript = new JobTranscript(join(dir, "log"));
@@ -1074,6 +1076,12 @@ async function cmdRun(paths: GitActionPaths, id: string, options: GitActionOptio
 
     jobSet(dir, "state", "running");
     jobSet(dir, "startedAt", jobTimestamp());
+    // Held only to settle which runner owns this job; from here the `running`
+    // record is what says so, and the duplicate-job guard reads it. Keeping the
+    // lock for the whole deployment made a second deploy or delivery wait on it
+    // until the gateway gave up, so an operator was told the gateway failed
+    // where the answer was that this site is already deploying.
+    releaseLock();
 
     // The public half is read rather than stat'ed: what decides is whether this
     // account owns a key of the shape this addon generated, which is the same
@@ -1204,7 +1212,7 @@ async function dispatch(
     case "webhook-disable": cmdWebhook(paths, action.domain, false, false); return;
     case "hook": await cmdHook(paths, action.domain, options, releaseLock); return;
     case "deploy": cmdDeploy(paths, action.domain, releaseLock); return;
-    case "run": await cmdRun(paths, action.job, options); return;
+    case "run": await cmdRun(paths, action.job, options, releaseLock); return;
     case "job": cmdJob(paths, action.job); return;
     case "jobs": cmdJobs(paths); return;
     case "watch-job": await cmdWatchJob(paths, action.job); return;
