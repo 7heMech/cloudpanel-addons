@@ -92,6 +92,11 @@ JSON reply rather than for any 200 -- the login page a lapsed session is sent to
 is also one. The job log therefore remains available across the restart instead
 of making the update appear to stop at binary verification.
 
+The release body is the tag's own annotation, so write the tag with
+`git tag -a --cleanup=verbatim -F notes.md`. Without that flag `git tag` treats
+lines beginning with `#` as comments and strips every Markdown heading out of
+the notes.
+
 Published releases are immutable in the workflow. A failed draft can be
 recreated, but an existing published tag is rejected.
 
