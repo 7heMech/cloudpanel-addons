@@ -12,6 +12,8 @@ let resolvedReleaseTag = "v1.2.3";
 let handoffFailure = false;
 let manifestWriteFailure = false;
 let previousIsSecure = true;
+/** null leaves the kept-aside manifest unreadable, as an out-of-band install does. */
+let previousChecksum: string | null = null;
 let managerUnitState = "active";
 
 /** The operation the lock file names while it is held, if it is held. */
@@ -55,6 +57,7 @@ function resetProvisioning(): void {
   handoffFailure = false;
   manifestWriteFailure = false;
   previousIsSecure = true;
+  previousChecksum = null;
   managerUnitState = "active";
   installedOnBox(true);
   Object.assign(provisioning, {
@@ -164,6 +167,14 @@ mock.module("node:fs", () => ({
     if (artifactsAvailable && key === ARTIFACT_MANIFEST_PATH) {
       return options === undefined || typeof options === "object" ? Buffer.from(artifactManifest) : artifactManifest;
     }
+    if (previousChecksum !== null && key === PREVIOUS_MANIFEST) {
+      const saved = JSON.stringify({ version: 1, tag: "1.1.0", artifacts: { [CLI_ARTIFACT]: previousChecksum } });
+      return options === undefined || typeof options === "object" ? Buffer.from(saved) : saved;
+    }
+    if (previousChecksum !== null && key === PREVIOUS_BIN) {
+      const kept = Buffer.from("kept-aside binary", "utf-8");
+      return typeof options === "string" ? kept.toString(options as BufferEncoding) : kept;
+    }
     const bytes = artifactsAvailable ? artifactBytes.get(key) : undefined;
     if (bytes) {
       const content = artifactTampered && key === CLI_BIN ? Buffer.from("tampered", "utf-8") : bytes;
@@ -240,7 +251,7 @@ mock.module("../cli/inject", () => ({
 mock.module("../cli/util", () => ({
   Fatal: TestFatal,
   fatal: (message: string): never => { throw new Error(message); },
-  log: { step: () => {}, ok: (msg: string) => { calls.push(`log.ok:${msg}`); }, warn: () => {}, err: () => {}, plain: () => {} },
+  log: { step: () => {}, ok: (msg: string) => { calls.push(`log.ok:${msg}`); }, warn: (msg: string) => { calls.push(`log.warn:${msg}`); }, err: () => {}, plain: () => {} },
   parseFlags: (argv: string[]) => {
     const flags: Record<string, string | true> = {};
     for (const arg of argv) {
@@ -493,6 +504,30 @@ test("a kept-aside binary that is not root-owned and unwritable is not restored"
   }
 
   expect(calls).not.toContain(`rename:${CLI_BIN}.rollback->${CLI_BIN}`);
+});
+
+test.each([
+  { name: "agrees with", checksum: Bun.CryptoHasher.hash("sha256", Buffer.from("kept-aside binary", "utf-8"), "hex"), warns: false },
+  { name: "disagrees with", checksum: "0".repeat(64), warns: true },
+])("a kept-aside binary that $name its manifest is restored either way", async ({ checksum, warns }) => {
+  calls.length = 0;
+  resetProvisioning();
+  artifactsAvailable = false;
+  resolvedReleaseTag = "v1.3.0";
+  handoffFailure = true;
+  previousChecksum = checksum;
+
+  try {
+    await expect(cmdUpdate([])).rejects.toThrow("rolled the binary and its manifest back");
+  } finally {
+    handoffFailure = false;
+    previousChecksum = null;
+  }
+
+  // Refusing on a mismatch would leave the box on the binary that just failed.
+  expect(calls).toContain(`rename:${CLI_BIN}.rollback->${CLI_BIN}`);
+  const warned = calls.some((call) => call.startsWith("log.warn:") && call.includes("does not match the checksum"));
+  expect(warned).toBe(warns);
 });
 
 test("a handoff that leaves the manager down rolls back too", async () => {

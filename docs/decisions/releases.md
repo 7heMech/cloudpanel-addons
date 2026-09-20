@@ -61,10 +61,12 @@ what restores both, restarts the services and names the version the box is left
 running when the replacement fails part-way, the handoff exits non-zero, or the
 manager unit does not come back. The kept-aside binary is checked for being a
 root-owned, non-group-writable executable at the moment it is restored rather
-than trusted for having been written there; its recorded checksum is not
-consulted, because that describes a release artifact and a staging build is not
-one. A box with no usable earlier copy is told so rather than left looking
-rolled back.
+than trusted for having been written there. Its manifest's checksum is compared
+and a disagreement is reported, not refused: the manifest is rewritten only by
+the release install path, so a binary installed by `tools/deploy-stg.ts` or by
+hand legitimately disagrees with the manifest left beside it, and refusing would
+leave the box on the binary that just failed. A box with no usable earlier copy
+is told so rather than left looking rolled back.
 
 This rolls the two artifacts back and nothing else. Config files, units,
 templates and Nginx fragments the update had already written are the new

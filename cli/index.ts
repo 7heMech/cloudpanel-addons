@@ -182,13 +182,36 @@ function keepPreviousArtifacts(): void {
 }
 
 /**
+ * Whether the kept-aside binary is the release its kept-aside manifest names.
+ *
+ * `null` when there is nothing to compare against. The manifest is rewritten
+ * only by the release install path, so a binary put in place by
+ * `tools/deploy-stg.ts` or by hand leaves the previous release's manifest
+ * beside it and the two legitimately disagree.
+ */
+function previousArtifactsAgree(): boolean | null {
+  if (!secureRegularFile(PREVIOUS_MANIFEST)) return null;
+  try {
+    const manifest = JSON.parse(readFileSync(PREVIOUS_MANIFEST, "utf-8")) as { artifacts?: Record<string, unknown> };
+    const expected = manifest.artifacts?.[CLI_ARTIFACT];
+    if (typeof expected !== "string" || !/^[0-9a-f]{64}$/.test(expected)) return null;
+    return sha256(readFileSync(PREVIOUS_BIN)) === expected;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Checked at the moment of use rather than trusted for having been written
- * here: this runs as root and hands the box back a binary to execute. The
- * saved checksums are deliberately not consulted -- they describe release
- * artifacts, and a binary installed by `tools/deploy-stg.ts` is not one.
+ * here: this runs as root and hands the box back a binary to execute. A
+ * checksum that disagrees is reported rather than refused -- refusing would
+ * leave the box on the binary that just failed, which is worse.
  */
 function restorePreviousArtifacts(): boolean {
   if (!secureRegularFile(PREVIOUS_BIN, true)) return false;
+  if (previousArtifactsAgree() === false) {
+    log.warn(`${PREVIOUS_BIN} does not match the checksum its manifest records; restoring it anyway`);
+  }
   const staged = `${CLI_BIN}.rollback`;
   hardLinkOrCopy(PREVIOUS_BIN, staged);
   renameSync(staged, CLI_BIN);
