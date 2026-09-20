@@ -10,6 +10,8 @@ let artifactsAvailable = false;
 let artifactTampered = false;
 let resolvedReleaseTag = "v1.2.3";
 let handoffFailure = false;
+let manifestWriteFailure = false;
+let previousIsSecure = true;
 let managerUnitState = "active";
 
 /** The operation the lock file names while it is held, if it is held. */
@@ -51,6 +53,8 @@ const provisioning = {
 function resetProvisioning(): void {
   resolvedReleaseTag = "v1.2.3";
   handoffFailure = false;
+  manifestWriteFailure = false;
+  previousIsSecure = true;
   managerUnitState = "active";
   installedOnBox(true);
   Object.assign(provisioning, {
@@ -142,6 +146,15 @@ mock.module("node:fs", () => ({
         isFile: () => true,
         uid: 0,
         mode: key === ARTIFACT_MANIFEST_PATH ? 0o100600 : 0o100755,
+      } as ReturnType<typeof nodeFs.lstatSync>;
+    }
+    // The kept-aside pair is checked before it is restored, so the test has to
+    // be able to say it is there and whether it is root-owned and unwritable.
+    if (tracked.has(key) && present.has(key)) {
+      return {
+        isFile: () => true,
+        uid: previousIsSecure ? 0 : 1000,
+        mode: key.endsWith(".json") ? 0o100600 : 0o100755,
       } as ReturnType<typeof nodeFs.lstatSync>;
     }
     return originalLstatSync(path, ...(rest as Parameters<typeof originalLstatSync> extends [any, ...infer T] ? T : never));
@@ -249,6 +262,7 @@ mock.module("../cli/util", () => ({
   },
   writeAtomic: (path: string) => {
     calls.push(`writeAtomic:${path}`);
+    if (manifestWriteFailure && path === ARTIFACT_MANIFEST_PATH) throw new Error("manifest write failed");
     const operation = lockedOperation();
     if (operation) calls.push(`locked:${operation}:${path}`);
     if (tracked.has(path)) present.add(path);
@@ -365,7 +379,7 @@ test("a failed target-binary handoff rolls back without outgoing-process provisi
   handoffFailure = true;
 
   try {
-    await expect(cmdUpdate([])).rejects.toThrow("rolled back; the box is running clp-addons 1.2.3");
+    await expect(cmdUpdate([])).rejects.toThrow("rolled the binary and its manifest back; the box is running clp-addons 1.2.3");
   } finally {
     handoffFailure = false;
   }
@@ -403,7 +417,7 @@ test("the operation lock is released when the update fails", async () => {
   handoffFailure = true;
 
   try {
-    await expect(cmdUpdate([])).rejects.toThrow("rolled back");
+    await expect(cmdUpdate([])).rejects.toThrow("rolled the binary and its manifest back");
   } finally {
     handoffFailure = false;
   }
@@ -435,9 +449,47 @@ test("an update with no earlier binary says so rather than pretending to roll ba
   installedOnBox(false);
 
   try {
-    await expect(cmdUpdate([])).rejects.toThrow("no earlier binary was kept");
+    await expect(cmdUpdate([])).rejects.toThrow("no usable earlier binary was kept");
   } finally {
     handoffFailure = false;
+  }
+
+  expect(calls).not.toContain(`rename:${CLI_BIN}.rollback->${CLI_BIN}`);
+});
+
+test("a replacement that fails part-way rolls back as far as the handoff does", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  artifactsAvailable = false;
+  resolvedReleaseTag = "v1.3.0";
+  manifestWriteFailure = true;
+
+  try {
+    await expect(cmdUpdate([])).rejects.toThrow("rolled the binary and its manifest back; the box is running clp-addons 1.2.3");
+  } finally {
+    manifestWriteFailure = false;
+  }
+
+  // The binary was already swapped when the manifest write failed, so the box
+  // must not be left on it.
+  expect(calls).not.toContain(handoffCall("v1.3.0"));
+  expect(calls).toContain(`rename:${CLI_BIN}.rollback->${CLI_BIN}`);
+  expect(calls).toContain(`rename:${ARTIFACT_MANIFEST_PATH}.rollback->${ARTIFACT_MANIFEST_PATH}`);
+});
+
+test("a kept-aside binary that is not root-owned and unwritable is not restored", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  artifactsAvailable = false;
+  resolvedReleaseTag = "v1.3.0";
+  handoffFailure = true;
+  previousIsSecure = false;
+
+  try {
+    await expect(cmdUpdate([])).rejects.toThrow("no usable earlier binary was kept");
+  } finally {
+    handoffFailure = false;
+    previousIsSecure = true;
   }
 
   expect(calls).not.toContain(`rename:${CLI_BIN}.rollback->${CLI_BIN}`);
@@ -450,7 +502,7 @@ test("a handoff that leaves the manager down rolls back too", async () => {
   resolvedReleaseTag = "v1.3.0";
   managerUnitState = "failed";
 
-  await expect(cmdUpdate([])).rejects.toThrow("rolled back; the box is running clp-addons 1.2.3");
+  await expect(cmdUpdate([])).rejects.toThrow("rolled the binary and its manifest back; the box is running clp-addons 1.2.3");
 
   expect(calls).toContain(handoffCall("v1.3.0"));
   expect(calls).toContain(`rename:${CLI_BIN}.rollback->${CLI_BIN}`);

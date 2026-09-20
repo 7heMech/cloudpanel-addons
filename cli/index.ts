@@ -181,12 +181,18 @@ function keepPreviousArtifacts(): void {
   if (existsSync(ARTIFACT_MANIFEST_PATH)) hardLinkOrCopy(ARTIFACT_MANIFEST_PATH, PREVIOUS_MANIFEST);
 }
 
+/**
+ * Checked at the moment of use rather than trusted for having been written
+ * here: this runs as root and hands the box back a binary to execute. The
+ * saved checksums are deliberately not consulted -- they describe release
+ * artifacts, and a binary installed by `tools/deploy-stg.ts` is not one.
+ */
 function restorePreviousArtifacts(): boolean {
-  if (!existsSync(PREVIOUS_BIN)) return false;
+  if (!secureRegularFile(PREVIOUS_BIN, true)) return false;
   const staged = `${CLI_BIN}.rollback`;
   hardLinkOrCopy(PREVIOUS_BIN, staged);
   renameSync(staged, CLI_BIN);
-  if (existsSync(PREVIOUS_MANIFEST)) {
+  if (secureRegularFile(PREVIOUS_MANIFEST)) {
     const stagedManifest = `${ARTIFACT_MANIFEST_PATH}.rollback`;
     hardLinkOrCopy(PREVIOUS_MANIFEST, stagedManifest);
     renameSync(stagedManifest, ARTIFACT_MANIFEST_PATH);
@@ -214,13 +220,19 @@ function rollbackUpdate(previousVersion: string, reason: string): never {
   log.err(`the updated binary failed: ${reason}`);
   if (!restorePreviousArtifacts()) {
     fatal(
-      `no earlier binary was kept, so the box is still running the update; ` +
+      `no usable earlier binary was kept, so the box is still running the update; ` +
       `run 'clp-addons repair' and check 'systemctl status ${MANAGER_UNIT}'`,
     );
   }
   const restart = tryRun("systemctl", ["restart", AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, MANAGER_UNIT]);
   if (!restart.ok) log.err(`the background services did not restart: ${restart.out}`);
-  fatal(`rolled back; the box is running clp-addons ${previousVersion}`);
+  // Only the two artifacts come back. Whatever the update had already written
+  // -- config files, units, templates, Nginx fragments -- is the new version's
+  // and stays, which is what repair exists to converge.
+  fatal(
+    `rolled the binary and its manifest back; the box is running clp-addons ${previousVersion}. ` +
+    `Run 'clp-addons repair' to reconcile anything the update had already written`,
+  );
 }
 
 /**
@@ -432,9 +444,7 @@ async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () 
   }
 
   if (artifacts) {
-    installArtifacts(artifacts, target);
     if (flags["no-self-update"] !== true) {
-      options.beforeManagerRestart?.();
       // Re-enter the stable public command rather than a new private command:
       // an explicit downgrade can target a release from before this handoff
       // existed. Such a binary still knows how to update itself. The internal
@@ -447,15 +457,24 @@ async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () 
         "--no-self-update",
         `--updated-from=${current}`,
       ];
+      // Everything from the replacement onwards is one boundary: the binary
+      // and its manifest are written here, so a failure between them is as
+      // much a half-finished update as a handoff that will not run. The
+      // rollback itself is outside it, so its own failure is not retried.
+      let failure: string | null = null;
       try {
+        installArtifacts(artifacts, target);
+        options.beforeManagerRestart?.();
         run(CLI_BIN, handoff, { stdio: "inherit", env: operationLockEnv() });
+        const state = unitActive(MANAGER_UNIT);
+        if (state !== "active") failure = `${MANAGER_UNIT} is ${state} after the update`;
       } catch (error) {
-        rollbackUpdate(current, error instanceof Error ? error.message : String(error));
+        failure = error instanceof Error ? error.message : String(error);
       }
-      const state = unitActive(MANAGER_UNIT);
-      if (state !== "active") rollbackUpdate(current, `${MANAGER_UNIT} is ${state} after the update`);
+      if (failure) rollbackUpdate(current, failure);
       return;
     }
+    installArtifacts(artifacts, target);
   }
   if (current !== target) {
     fatal(`update handoff expected ${target} but the running process is ${current}`);

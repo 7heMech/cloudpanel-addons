@@ -58,8 +58,18 @@ still matches; otherwise the release is downloaded and verified again.
 The binary being replaced is hard-linked aside under `/usr/local/libexec` with
 its manifest. The outgoing process outlives the one it hands off to, so it is
 what restores both, restarts the services and names the version the box is left
-running when the handoff exits non-zero or leaves the manager unit down. A box
-with no earlier copy is told so rather than left looking rolled back.
+running when the replacement fails part-way, the handoff exits non-zero, or the
+manager unit does not come back. The kept-aside binary is checked for being a
+root-owned, non-group-writable executable at the moment it is restored rather
+than trusted for having been written there; its recorded checksum is not
+consulted, because that describes a release artifact and a staging build is not
+one. A box with no usable earlier copy is told so rather than left looking
+rolled back.
+
+This rolls the two artifacts back and nothing else. Config files, units,
+templates and Nginx fragments the update had already written are the new
+version's and stay, so the failure message asks for a `repair`, which is what
+converges them.
 
 After replacement, the outgoing process performs no provisioning. It re-runs
 the same update command through the installed binary with an internal flag that
