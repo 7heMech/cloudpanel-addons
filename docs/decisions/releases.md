@@ -13,7 +13,7 @@ seen -- CloudPanel's own templates, a site's generated vhost, an addon injected
 into a panel page -- and a unit test cannot stand in for it.
 
 The deploy workflow calls `tools/deploy-stg.ts`, the same script a workstation
-runs, rather than reproducing the upload-stop-install-repair sequence in YAML.
+runs, rather than reproducing the upload-swap-repair sequence in YAML.
 It reads the box from `STG_HOST` and its credentials from `STG_SSH_KEY` and
 `STG_SSH_KNOWN_HOSTS`; the host key is pinned rather than learned on connection,
 because the deploy authenticates as root and then runs a command sequence.
