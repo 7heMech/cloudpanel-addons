@@ -55,6 +55,12 @@ The installed binary and helper checksums are recorded in a root-owned
 manifest. Reapplying the same version reuses files only when every checksum
 still matches; otherwise the release is downloaded and verified again.
 
+The binary being replaced is hard-linked aside under `/usr/local/libexec` with
+its manifest. The outgoing process outlives the one it hands off to, so it is
+what restores both, restarts the services and names the version the box is left
+running when the handoff exits non-zero or leaves the manager unit down. A box
+with no earlier copy is told so rather than left looking rolled back.
+
 After replacement, the outgoing process performs no provisioning. It re-runs
 the same update command through the installed binary with an internal flag that
 bounds the handoff. That process generates configuration, units and panel

@@ -1,8 +1,12 @@
 import type { Server } from "bun";
-import { chmodSync, chownSync, existsSync, lstatSync, readFileSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import {
+  chmodSync, chownSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync,
+  renameSync, rmSync, unlinkSync,
+} from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
-  ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, CLOUDFLARE_RECONCILE_TIMER, CONFIG_DIR,
+  ARTIFACT_MANIFEST_PATH, AUTH_SERVICE_UNIT, AUTH_SOCKET_UNIT, CLI_ARTIFACT, CLI_BIN,
+  CLOUDFLARE_RECONCILE_TIMER, CONFIG_DIR,
   LIBEXEC_DIR, MANAGER_UNIT, PANEL_GROUP,
   SOCKET_PATH, STATE_DIR, SYSTEMD_DIR, mountPath,
 } from "./paths";
@@ -23,6 +27,7 @@ import {
   type Injection, type MaintenanceNginxStatus, type NginxProxyStatus, type TargetStatus,
 } from "./inject";
 import { fatal, Fatal, log, parseFlags, requireRoot, run, tryRun, writeAtomic } from "./util";
+import { operationLockEnv, withOperationLock, withOperationLockSync } from "./operation-lock";
 import { runRecon } from "./recon";
 import { adminGate, authenticateRequest } from "../lib/sso-auth";
 // Re-exported because the manager's tests name it here.
@@ -147,10 +152,75 @@ function writeArtifactManifest(tag: string, artifacts: FetchedArtifact[]): void 
   tryRun("chown", ["root:root", ARTIFACT_MANIFEST_PATH]);
 }
 
+/** Where the binary this update replaces is kept, in case it has to come back. */
+const PREVIOUS_BIN = `${LIBEXEC_DIR}/clp-addons.previous`;
+const PREVIOUS_MANIFEST = `${LIBEXEC_DIR}/artifacts.previous.json`;
+
+function hardLinkOrCopy(from: string, to: string): void {
+  rmSync(to, { force: true });
+  try {
+    linkSync(from, to);
+  } catch {
+    copyFileSync(from, to);
+  }
+}
+
+/**
+ * Keep the running binary and its manifest where a failed update can put them
+ * back. Hard-linked rather than copied: it costs nothing and cannot be a
+ * partial file. The manifest goes with it because `currentArtifactsMatch`
+ * reads it -- restoring one without the other leaves the box claiming a
+ * version it is not running.
+ */
+function keepPreviousArtifacts(): void {
+  rmSync(PREVIOUS_BIN, { force: true });
+  rmSync(PREVIOUS_MANIFEST, { force: true });
+  if (!existsSync(CLI_BIN)) return;
+  mkdirSync(LIBEXEC_DIR, { recursive: true });
+  hardLinkOrCopy(CLI_BIN, PREVIOUS_BIN);
+  if (existsSync(ARTIFACT_MANIFEST_PATH)) hardLinkOrCopy(ARTIFACT_MANIFEST_PATH, PREVIOUS_MANIFEST);
+}
+
+function restorePreviousArtifacts(): boolean {
+  if (!existsSync(PREVIOUS_BIN)) return false;
+  const staged = `${CLI_BIN}.rollback`;
+  hardLinkOrCopy(PREVIOUS_BIN, staged);
+  renameSync(staged, CLI_BIN);
+  if (existsSync(PREVIOUS_MANIFEST)) {
+    const stagedManifest = `${ARTIFACT_MANIFEST_PATH}.rollback`;
+    hardLinkOrCopy(PREVIOUS_MANIFEST, stagedManifest);
+    renameSync(stagedManifest, ARTIFACT_MANIFEST_PATH);
+  } else {
+    rmSync(ARTIFACT_MANIFEST_PATH, { force: true });
+  }
+  return true;
+}
+
 function installArtifacts(artifacts: FetchedArtifact[], tag: string): void {
+  keepPreviousArtifacts();
   writeAtomic(CLI_BIN, artifact(artifacts, CLI_ARTIFACT), 0o755);
   tryRun("chown", ["root:root", CLI_BIN]);
   writeArtifactManifest(tag, artifacts);
+}
+
+/**
+ * Put the box back on the binary it was running.
+ *
+ * The parent is the old binary and it outlives the child it handed off to, so
+ * it is the only process still able to act when the new one will not start,
+ * fails part-way through provisioning, or leaves the services down.
+ */
+function rollbackUpdate(previousVersion: string, reason: string): never {
+  log.err(`the updated binary failed: ${reason}`);
+  if (!restorePreviousArtifacts()) {
+    fatal(
+      `no earlier binary was kept, so the box is still running the update; ` +
+      `run 'clp-addons repair' and check 'systemctl status ${MANAGER_UNIT}'`,
+    );
+  }
+  const restart = tryRun("systemctl", ["restart", AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, MANAGER_UNIT]);
+  if (!restart.ok) log.err(`the background services did not restart: ${restart.out}`);
+  fatal(`rolled back; the box is running clp-addons ${previousVersion}`);
 }
 
 /**
@@ -272,6 +342,10 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   requireRoot("install");
   const { positional, flags } = parseFlags(argv);
   const spec = resolveAddon(positional[0]);
+  return withOperationLock(`install ${spec.name}`, () => applyInstall(spec, flags));
+}
+
+async function applyInstall(spec: AddonSpec, flags: Record<string, string | true>): Promise<void> {
   if (flags.version === undefined && flags.local === undefined) {
     await applyEnable(spec.name);
     return;
@@ -337,6 +411,10 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
  */
 export async function cmdUpdate(argv: string[], options: { beforeManagerRestart?: () => void } = {}): Promise<void> {
   requireRoot("update");
+  return withOperationLock("update", () => applyUpdate(argv, options));
+}
+
+async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () => void }): Promise<void> {
   const { flags } = parseFlags(argv);
   const release = await resolveRelease(
     typeof flags.version === "string" ? flags.version : "latest",
@@ -362,13 +440,20 @@ export async function cmdUpdate(argv: string[], options: { beforeManagerRestart?
       // existed. Such a binary still knows how to update itself. The internal
       // flag bounds the handoff in current releases and is ignored safely by
       // older ones, whose installed version already equals the requested tag.
-      run(CLI_BIN, [
+      const handoff = [
         "update",
         ...argv,
         `--version=${release.tag}`,
         "--no-self-update",
         `--updated-from=${current}`,
-      ], { stdio: "inherit" });
+      ];
+      try {
+        run(CLI_BIN, handoff, { stdio: "inherit", env: operationLockEnv() });
+      } catch (error) {
+        rollbackUpdate(current, error instanceof Error ? error.message : String(error));
+      }
+      const state = unitActive(MANAGER_UNIT);
+      if (state !== "active") rollbackUpdate(current, `${MANAGER_UNIT} is ${state} after the update`);
       return;
     }
   }
@@ -430,6 +515,10 @@ function bootstrapProvision(specs: AddonSpec[]): void {
 export async function applyEnable(name: string): Promise<void> {
   requireRoot("enable");
   const spec = resolveAddon(name);
+  return withOperationLock(`enable ${spec.name}`, () => enableAddon(spec));
+}
+
+async function enableAddon(spec: AddonSpec): Promise<void> {
   ensureRequiredUnits(spec);
   const before = installedAddons().filter((item) => item.name !== spec.name);
   const specs = [...before, spec];
@@ -487,6 +576,10 @@ function withdrawWpLogin(): void {
 export function applyDisable(name: string): void {
   requireRoot("disable");
   const spec = resolveAddon(name);
+  withOperationLockSync(`disable ${spec.name}`, () => disableAddon(spec));
+}
+
+function disableAddon(spec: AddonSpec): void {
   const remaining = installedAddons().filter((item) => item.name !== spec.name);
 
   if (spec.name === "wp-login") withdrawWpLogin();
@@ -520,9 +613,11 @@ export const MANAGER_OPS: ManagerOps = {
   enable: applyEnable,
   disable: applyDisable,
   update: (beforeManagerRestart) => cmdUpdate([], { beforeManagerRestart }),
-  reconcile: () => {
+  // Short: this one answers a live request from the panel, so it refuses and
+  // names the operation in the way rather than making the page wait it out.
+  reconcile: () => withOperationLockSync("reconcile", () => {
     if (!reconcileAnchors(true)) fatal("could not safely patch the CloudPanel templates");
-  },
+  }, { timeoutSeconds: 15 }),
 };
 
 /**
@@ -569,6 +664,11 @@ export function runManagerMaintenance(): void {
 export async function cmdRepair(argv: string[]): Promise<void> {
   requireRoot("repair");
   const { positional, flags } = parseFlags(argv);
+  const anchorsOnly = flags["anchors-only"] === true;
+  return withOperationLock(anchorsOnly ? "repair --anchors-only" : "repair", () => applyRepair(positional, flags));
+}
+
+async function applyRepair(positional: string[], flags: Record<string, string | true>): Promise<void> {
   const quiet = flags.quiet === true;
   if (flags["anchors-only"] === true) {
     // The watcher's fast path: reconcile only what this project injected into
@@ -728,6 +828,10 @@ export function cmdUninstall(argv: string[]): void {
   const { positional, flags } = parseFlags(argv);
   const spec = resolveAddon(positional[0]);
   if (!installedConfig(spec)) fatal(`${spec.name} is not installed`);
+  withOperationLockSync(`uninstall ${spec.name}`, () => applyUninstall(spec, flags));
+}
+
+function applyUninstall(spec: AddonSpec, flags: Record<string, string | true>): void {
   const purge = flags.purge === true;
   const instances = listInstances(spec);
   const remaining = ADDON_NAMES.filter((name) => name !== spec.name && existsSync(ADDONS[name]!.configFile));
