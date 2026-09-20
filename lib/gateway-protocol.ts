@@ -85,6 +85,7 @@ export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
   "state",
   "set-tweaks",
   "scan",
+  "scan-stream",
 ]);
 
 /**
@@ -125,7 +126,7 @@ export const MANAGER_ALLOWED_VERBS = new Set([
   "reconcile",
 ]);
 
-export const STREAM_ALLOWED_VERBS = new Set(["watch-job"]);
+export const STREAM_ALLOWED_VERBS = new Set(["watch-job", "scan-stream"]);
 
 export interface SanitizedSite {
   domain: string;

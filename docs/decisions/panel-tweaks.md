@@ -296,4 +296,10 @@ directory is not owned by it, is skipped rather than guessed at.
 
 The operator-pressed sweep is the same work with a four-minute budget. A box
 large enough to exceed it gets its sizes from the unattended sweep instead,
-which has no deadline.
+which has no deadline. The pressed sweep streams compact progress events through
+the root gateway and SSE response: the site being measured, the completed and
+total counts, and the measured/skipped counts. It never streams `du` output or
+filesystem paths. The manager disables Bun's idle timeout for this request so a
+single large site may stay quiet for longer than ten seconds; the gateway's
+four-minute deadline remains the bound on the operation, and a disconnected
+browser closes the gateway stream and its action process.

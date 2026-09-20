@@ -259,10 +259,11 @@ function streamReply<T>(line: string): ActionResult<T> | null {
 
 /** Runs one long-lived watch action until its child or gateway socket ends. */
 export function streamGatewayAction<T = unknown>(options: {
-  addon: "stager" | "instatic" | "git" | "manager";
+  addon: "stager" | "instatic" | "git" | "panel-tweaks" | "manager";
   verb: string;
   args?: string[];
   socketPath?: string;
+  timeoutMs?: number;
   onReply: (reply: ActionResult<T>) => void;
   onClose: (error?: string) => void;
 }): GatewayStream {
@@ -274,6 +275,7 @@ export function streamGatewayAction<T = unknown>(options: {
   let socketEnded = false;
   let buffer = "";
   const decoder = new TextDecoder();
+  let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
   const endTransport = () => {
     try {
@@ -291,6 +293,8 @@ export function streamGatewayAction<T = unknown>(options: {
     if (finished) return;
     finished = true;
     closed = true;
+    if (timeoutTimer) clearTimeout(timeoutTimer);
+    timeoutTimer = null;
     endTransport();
     options.onClose(error);
   };
@@ -314,10 +318,15 @@ export function streamGatewayAction<T = unknown>(options: {
   const close = () => {
     if (closed) return;
     closed = true;
+    if (timeoutTimer) clearTimeout(timeoutTimer);
+    timeoutTimer = null;
     endTransport();
   };
 
   const stream: GatewayStream = { close };
+  if (options.timeoutMs !== undefined) {
+    timeoutTimer = setTimeout(() => finish("gateway stream request timed out"), options.timeoutMs);
+  }
   const socketPath = options.socketPath ?? GATEWAY_SOCKET_PATH;
   const payload = JSON.stringify({
     kind: "stream-action",

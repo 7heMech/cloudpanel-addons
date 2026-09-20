@@ -113,13 +113,63 @@ function syncDependents(key, on) {
 async function measureNow(button) {
   clearNotice();
   busy(true);
-  notify('Measuring every site. This reads the whole disk, so it can take a while.', 'warn');
+  const originalLabel = button.textContent;
+  let completed = false;
+  function showProgress(event) {
+    if (event.phase === 'complete') {
+      completed = true;
+      const skipped = event.skipped ? ', ' + event.skipped + ' skipped' : '';
+      reloadWith(event.measured + (event.measured === 1 ? ' site measured' : ' sites measured') + skipped + '.', 'ok');
+      return;
+    }
+    const current = Math.min(event.completed + 1, event.total);
+    const count = event.total ? current + ' of ' + event.total : 'sites';
+    button.textContent = event.total ? current + '/' + event.total : 'Measuring';
+    notify('Measuring ' + count + (event.site ? ' — ' + event.site : '') + '.', 'warn');
+    // A single large site may be quiet for longer than the ordinary flash.
+    clearTimeout(clpFlashTimer);
+  }
+
+  notify('Starting size measurement…', 'warn');
+  clearTimeout(clpFlashTimer);
   try {
-    const reply = await call('/api/scan', { method: 'POST' });
-    const data = reply.data || {};
-    const skipped = data.skipped ? ', ' + data.skipped + ' skipped' : '';
-    reloadWith(data.measured + (data.measured === 1 ? ' site measured' : ' sites measured') + skipped + '.', 'ok');
+    const res = await fetch(CLP_BASE + '/api/scan', {
+      method: 'POST',
+      headers: { 'X-CLP-Addons-CSRF': csrf() },
+    });
+    if (!res.ok || !res.body) {
+      let message = 'request failed with ' + res.status;
+      try { const body = await res.json(); if (body && body.error) message = body.error; } catch (e) {}
+      throw new Error(message);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+      let boundary;
+      while ((boundary = buffer.search(/\\r?\\n\\r?\\n/)) >= 0) {
+        const frame = buffer.slice(0, boundary);
+        const separator = /^\\r\\n\\r\\n/.test(buffer.slice(boundary)) ? 4 : 2;
+        buffer = buffer.slice(boundary + separator);
+        let eventName = 'message';
+        const data = [];
+        for (const line of frame.split(/\\r?\\n/)) {
+          if (line.startsWith('event:')) eventName = line.slice(6).trim();
+          if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+        }
+        if (!data.length) continue;
+        const event = JSON.parse(data.join('\\n'));
+        if (eventName === 'error') throw new Error(event.error || 'the scan failed');
+        showProgress(event);
+      }
+      if (chunk.done) break;
+    }
+    if (!completed) throw new Error('the scan ended before it completed');
   } catch (error) {
+    button.textContent = originalLabel;
     busy(false);
     notify(error.message, 'error');
   }

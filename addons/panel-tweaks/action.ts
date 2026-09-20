@@ -26,7 +26,7 @@ import { PANEL_USER_NAME_RE, panelUserSites } from "../../lib/panel-users";
 const TWEAKS_VERSION = 1;
 const DISK_VERSION = 1;
 
-export type PanelTweaksVerb = "state" | "set-tweaks" | "scan";
+export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "scan-stream";
 
 /**
  * What the addon does, as independent modes.
@@ -172,6 +172,18 @@ export interface ScanResult {
   measuredAt: string;
 }
 
+/** One compact update from an operator-pressed disk sweep. */
+export type ScanStreamEvent =
+  | {
+      phase: "progress";
+      completed: number;
+      total: number;
+      measured: number;
+      skipped: number;
+      site: string;
+    }
+  | ({ phase: "complete" } & ScanResult);
+
 export interface PanelTweaksActionPaths {
   panelDb: string;
   tweaksFile: string;
@@ -190,6 +202,7 @@ export interface PanelTweaksActionOptions {
   processUid?: number;
   run?: (command: string, args: string[]) => CommandResult;
   now?: () => Date;
+  onProgress?: (event: Extract<ScanStreamEvent, { phase: "progress" }>) => void;
 }
 
 export const DEFAULT_PANEL_TWEAKS_PATHS: PanelTweaksActionPaths = {
@@ -549,7 +562,15 @@ function scanDisk(
   const sites: Record<string, DiskCacheEntry> = {};
   let skipped = 0;
 
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
+    options.onProgress?.({
+      phase: "progress",
+      completed: index,
+      total: rows.length,
+      measured: Object.keys(sites).length,
+      skipped,
+      site: row.domain_name,
+    });
     const account = accounts.get(row.user);
     if (!account || !ownedDirectory(account.home, account.uid)) {
       skipped++;
@@ -588,7 +609,7 @@ interface ParsedAction {
 
 function parseAction(argv: string[]): ParsedAction {
   const [rawVerb, ...rest] = argv;
-  const verbs: PanelTweaksVerb[] = ["state", "set-tweaks", "scan"];
+  const verbs: PanelTweaksVerb[] = ["state", "set-tweaks", "scan", "scan-stream"];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown panel tweaks verb '${rawVerb ?? ""}'`);
 
@@ -673,9 +694,16 @@ export async function runPanelTweaksAction(
   options: PanelTweaksActionOptions = {},
 ): Promise<number> {
   const emit = options.emitReply !== false;
+  const streaming = argv[0] === "scan-stream";
   try {
-    const data = await executePanelTweaksAction(argv, options);
-    if (emit) emitActionOk(data);
+    const data = await executePanelTweaksAction(argv, streaming && emit ? {
+      ...options,
+      onProgress(event) {
+        options.onProgress?.(event);
+        emitActionOk(event);
+      },
+    } : options);
+    if (emit) emitActionOk(streaming ? { phase: "complete", ...(data as ScanResult) } : data);
     return 0;
   } catch (error) {
     const message = reason(error);

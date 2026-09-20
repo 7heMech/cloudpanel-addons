@@ -12,6 +12,8 @@ import {
 } from "../addons/panel-tweaks/inject/targets";
 import type { PanelTweaks } from "../addons/panel-tweaks/action";
 import { previewPage } from "../addons/panel-tweaks/app/preview";
+import { handle as handlePanelTweaks } from "../addons/panel-tweaks/app/index";
+import { panelTweaksService } from "../addons/panel-tweaks/app/service";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MENU_ONLY_CLASS, MENU_ONLY_STYLE, ROW_ACTION_CLASS, ROW_MENU_CLASS } from "../lib/row-actions";
@@ -564,7 +566,9 @@ test("a request that names no tweak, or names one with the wrong type, is refuse
 test("the sweep measures every site's home and its databases, and caches the answer", async () => {
   mkdirSync(join(root, "mysql", "shopdb"), { recursive: true });
   const asked: string[][] = [];
+  const progress: { completed: number; total: number; site: string }[] = [];
   const result = await act<ScanResult>(["scan"], {
+    onProgress: (event) => progress.push(event),
     run: (command, args) => {
       asked.push([command, ...args]);
       const path = args[args.length - 1] ?? "";
@@ -577,12 +581,56 @@ test("the sweep measures every site's home and its databases, and caches the ans
   // The database directory is measured for the site that has one, and only for
   // that site: three `du` calls across two sites.
   expect(asked).toHaveLength(3);
+  expect(progress.map(({ completed, total, site }) => ({ completed, total, site }))).toEqual([
+    { completed: 0, total: 2, site: "docs.example.com" },
+    { completed: 1, total: 2, site: "shop.example.com" },
+  ]);
 
   const state = await act<PanelTweaksState>(["state"]);
   const shop = state.sites.find((site) => site.domain === "shop.example.com")!;
   expect(shop.disk).toEqual({ bytes: 4096, databaseBytes: 2048, measuredAt: result.measuredAt });
   const docs = state.sites.find((site) => site.domain === "docs.example.com")!;
   expect(docs.disk?.databaseBytes).toBe(0);
+});
+
+test("the operator-pressed sweep is exempt from Bun's idle request timeout", async () => {
+  const originalScanStream = panelTweaksService.scanStream;
+  const calls: Array<[Request, number]> = [];
+  const token = "panel-tweaks-test-token";
+  const req = new Request("https://panel.example:8443/addons/panel-tweaks/api/scan", {
+    method: "POST",
+    headers: {
+      host: "panel.example:8443",
+      origin: "https://panel.example:8443",
+      cookie: `clp_addons_csrf=${token}`,
+      "x-clp-addons-csrf": token,
+    },
+  });
+
+  try {
+    panelTweaksService.scanStream = (handlers) => {
+      handlers.onEvent({
+        phase: "progress", completed: 0, total: 26, measured: 0, skipped: 0, site: "one.example.com",
+      });
+      handlers.onEvent({ phase: "complete", measured: 25, skipped: 1, measuredAt: "2026-09-20T15:00:00Z" });
+      return { close() {} };
+    };
+    const response = await handlePanelTweaks(req, "/api/scan", null, {
+      timeout(request: Request, seconds: number) {
+        calls.push([request, seconds]);
+      },
+    } as any);
+    expect(response.headers.get("Content-Type")).toBe("text/event-stream");
+    expect(response.headers.get("X-Accel-Buffering")).toBe("no");
+    const events = await response.text();
+    expect(events).toContain('\"phase\":\"progress\"');
+    expect(events).toContain('\"total\":26');
+    expect(events).toContain('\"phase\":\"complete\"');
+  } finally {
+    panelTweaksService.scanStream = originalScanStream;
+  }
+
+  expect(calls).toEqual([[req, 0]]);
 });
 
 test("a site whose account has gone is skipped rather than guessed at", async () => {

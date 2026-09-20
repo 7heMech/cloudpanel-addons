@@ -1,5 +1,5 @@
-import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
-import type { PanelTweaks, PanelTweaksState, ScanResult, SetTweaksResult } from "../action";
+import { callGatewayAction, streamGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
+import type { PanelTweaks, PanelTweaksState, ScanResult, ScanStreamEvent, SetTweaksResult } from "../action";
 
 function call<T>(verb: string, args: string[] = [], input?: string, timeout?: number): Promise<ActionResult<T>> {
   return callGatewayAction<T>("panel-tweaks", verb, args, input, timeout ? { timeout } : undefined);
@@ -26,5 +26,27 @@ export const panelTweaksService = {
 
   scan(): Promise<ActionResult<ScanResult>> {
     return call<ScanResult>("scan", [], undefined, SCAN_TIMEOUT_MS);
+  },
+
+  scanStream(handlers: {
+    onEvent: (event: ScanStreamEvent) => void;
+    onClose: (error?: string) => void;
+  }): GatewayStream {
+    let ended = false;
+    const close = (error?: string) => {
+      if (ended) return;
+      ended = true;
+      handlers.onClose(error);
+    };
+    return streamGatewayAction<ScanStreamEvent>({
+      addon: "panel-tweaks",
+      verb: "scan-stream",
+      timeoutMs: SCAN_TIMEOUT_MS,
+      onReply(reply) {
+        if (reply.ok && reply.data) handlers.onEvent(reply.data);
+        else close(reply.error ?? "the scan returned an empty progress update");
+      },
+      onClose: close,
+    });
   },
 };
