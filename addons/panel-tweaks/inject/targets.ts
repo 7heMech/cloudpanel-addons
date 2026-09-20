@@ -659,7 +659,9 @@ const SITES_SCRIPT = `
 
     // CloudPanel gives every new site a self-signed certificate, so reporting
     // that as covered would mark the whole fleet green. It is named as the
-    // placeholder it is; only a certificate a browser accepts counts down.
+    // placeholder it is; only a certificate a browser accepts counts down. An
+    // origin certificate runs for years rather than months, and a four-digit
+    // day count reads as noise, so a long one counts down in years.
     function sslCell(site) {
       var td = cell("SSL", "ssl");
       if (!site || !site.certificate) {
@@ -667,7 +669,9 @@ const SITES_SCRIPT = `
         td.setAttribute("data-value", "0");
         return td;
       }
-      var name = certificateName(site.certificate.type);
+      // An imported certificate arrives with the name it was issued under,
+      // which is the only one the panel's own wording cannot tell apart.
+      var name = site.certificate.issuer || certificateName(site.certificate.type);
       if (String(site.certificate.type) === SELF_SIGNED) {
         td.appendChild(badge(name, "none", site.certificate.expiresAt || ""));
         td.setAttribute("data-value", "1");
@@ -675,9 +679,9 @@ const SITES_SCRIPT = `
       }
       var left = daysUntil(site.certificate.expiresAt);
       var tone = left !== null && left < 14 ? "warn" : "ok";
-      var note = left === null ? "" : left < 0 ? "expired" : left + "d left";
-      var short = shortCertificateName(site.certificate.type);
-      var counted = left < 0 ? "expired" : left + "d";
+      var counted = left < 0 ? "expired" : left >= 730 ? Math.floor(left / 365) + "y" : left + "d";
+      var note = left === null ? "" : left < 0 ? "expired" : counted + " left";
+      var short = site.certificate.issuer || shortCertificateName(site.certificate.type);
       td.appendChild(badge(name, tone, site.certificate.expiresAt || "", note,
         short ? short + " · " + counted : counted));
       td.setAttribute("data-value", String(left === null ? 2 : left + 100000));
