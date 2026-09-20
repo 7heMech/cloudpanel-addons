@@ -610,7 +610,7 @@ export function fleetView(sites: MaintenanceSiteView[], globalEnabled = false): 
   const inMaintenanceCount = globalEnabled ? sites.length : siteMaintenanceCount;
   const liveCount = globalEnabled ? 0 : available.length - siteMaintenanceCount;
   const rows = sites.map((site) => `<tr>
-    <td class="site-cell"><a href="${BASE}?domain=${encodeURIComponent(site.domain)}">${esc(site.domain)}</a><span class="mobile-site-type">${esc(siteTypeLabel(site.type))}</span>${site.error ? `<div class="hint">${esc(site.error)}</div>` : ""}</td>
+    <td class="site-cell"><a href="${BASE}?domain=${encodeURIComponent(site.domain)}">${esc(site.domain)}</a>${site.error ? `<div class="hint">${esc(site.error)}</div>` : ""}</td>
     <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
     <td class="wide-cell" data-label="Effective status">${statusBadge(site, globalEnabled)}</td>
     <td data-label="Page">${site.customTemplate ? "Custom" : "Default"}</td>
@@ -625,7 +625,7 @@ export function fleetView(sites: MaintenanceSiteView[], globalEnabled = false): 
   </div>
   ${globalCard(globalEnabled, sites.length === 0)}
   <div class="card card-table"><div class="card-header"><h2>Sites</h2></div>
-  ${sites.length ? `<table class="fleet-table inline-mobile-type"><thead><tr><th scope="col">Site</th><th scope="col">Type</th><th scope="col">Effective status</th><th scope="col">Page</th><th scope="col">Bypasses</th><th scope="col" class="action-cell">Site setting</th></tr></thead><tbody data-global-maintenance="${globalEnabled}">${rows}</tbody></table>` : '<div class="empty">No CloudPanel sites were found.</div>'}
+  ${sites.length ? `<table class="fleet-table"><thead><tr><th scope="col">Site</th><th scope="col">Type</th><th scope="col">Effective status</th><th scope="col">Page</th><th scope="col">Bypasses</th><th scope="col" class="action-cell">Site setting</th></tr></thead><tbody data-global-maintenance="${globalEnabled}">${rows}</tbody></table>` : '<div class="empty">No CloudPanel sites were found.</div>'}
   </div>`;
 }
 
