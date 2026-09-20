@@ -29,8 +29,10 @@ Selection checkboxes stay separate from the per-site switch, and the
 selected-scope actions are unavailable until something is selected. A per-site
 switch acts immediately without confirmation, because turning one site off is
 the ordinary correction after a fleet-wide change. On a phone that switch stays
-in the site's summary row. It is the dashboard's only per-site action, so the
-mobile card does not spend a second line repeating the desktop column heading.
+in the site's summary row. The full-size site-type badge follows the hostname's
+final rendered line instead of occupying a narrow column. The switch is the
+dashboard's only per-site action, so the mobile card does not spend a second
+line repeating the desktop column heading.
 
 After any change the page repaints from a fresh read rather than from what was
 requested, keeping selection and scroll, and does the same after a failure so

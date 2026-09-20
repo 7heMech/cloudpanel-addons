@@ -5,7 +5,9 @@
 Maintenance Mode is available from the Addons overview and from an
 administrator-only tab in every CloudPanel site view. The overview reads the
 live CloudPanel site inventory and shows each site's effective status, saved
-setting, template choice, and bypass count.
+setting, template choice, and bypass count. On a phone, the site-type badge
+follows the hostname's final rendered line while the status, template, bypass,
+and saved-setting controls keep their own labels below it.
 
 The global override is a card of its own labelled "Global maintenance", not a
 switch in the table header: it decides what visitors get for every site at once

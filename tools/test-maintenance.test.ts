@@ -225,6 +225,8 @@ test("fleet overview separates unavailable sites from the live count", () => {
     { domain: "unknown.example.com", type: "nodejs", user: "three", enabled: false, customTemplate: false, bypasses: [], error: "status unavailable" },
   ]);
   expect(rendered).toContain(">Unavailable</span>");
+  expect(rendered).toContain('<table class="fleet-table inline-mobile-type">');
+  expect(rendered).toContain('<span class="mobile-site-type">PHP</span>');
   expect(rendered).toContain('<div class="label">In maintenance</div><div class="value">1</div>');
   expect(rendered).toContain('<div class="label">Live</div><div class="value">1</div>');
 });

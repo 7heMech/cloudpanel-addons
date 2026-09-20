@@ -127,10 +127,12 @@ test("the switch column ends where the table ends, as the Maintenance table does
   // sat in the middle of the row with the rest of the table empty beside them.
   expect(html).toContain('<th scope="col" class="action-cell">Cloudflare only</th>');
   expect(html).toContain('<td class="action-cell" data-label="Cloudflare only">');
-  expect(html).toContain('<table class="fleet-table cloudflare-site-table">');
+  expect(html).toContain('<table class="fleet-table inline-mobile-type cloudflare-site-table">');
+  expect(html).toContain('<span class="mobile-site-type">PHP</span>');
   // On a phone this is the only action, so it stays in the site's summary row
   // and does not repeat the desktop column heading in every card.
   const page = layout("Cloudflare IP access", html);
+  expect(page).toContain(".fleet-table.inline-mobile-type .mobile-site-type { display: inline-block;");
   expect(page).toContain(".cloudflare-site-table td.action-cell::before { display: none; }");
   expect(page).toContain(".cloudflare-site-table td.action-cell { display: flex; align-self: center;");
 });

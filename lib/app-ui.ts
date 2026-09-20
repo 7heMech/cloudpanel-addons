@@ -166,6 +166,7 @@ td a:hover { color: var(--accent); }
 .site-cell { font-weight: 600; overflow-wrap: anywhere; }
 .site-cell a, .site-cell .hint { overflow-wrap: anywhere; font-weight: 400; }
 .site-cell a { font-weight: 600; }
+.mobile-site-type { display: none; }
 .mono { font-family: var(--mono); font-size: 14px; }
 .badge { display: inline-block; padding: 3px 7px; border-radius: 4px; font-size: 12px;
   line-height: 1.25; border: 1px solid var(--border); white-space: nowrap; }
@@ -335,6 +336,13 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .fleet-table td.type-cell { flex: 0 1 auto; max-width: 45%; margin: 2px 0 0 auto; padding: 3px 8px;
     border: 1px solid var(--border); border-radius: 4px; color: var(--muted);
     font-size: 12px; line-height: 1.25; white-space: nowrap; }
+  /* A table with the modifier treats site type as part of the hostname's
+     inline flow. If the hostname wraps, the badge follows its final line
+     instead of occupying a narrow independent column. */
+  .fleet-table.inline-mobile-type td.type-cell { display: none; }
+  .fleet-table.inline-mobile-type .mobile-site-type { display: inline-block; margin-left: 6px; padding: 3px 7px;
+    border: 1px solid var(--border); border-radius: 4px; color: var(--muted);
+    font-size: 12px; font-weight: 400; line-height: 1.25; white-space: nowrap; }
   /* Half the row each, whatever they hold: a cell that widens with its content
      reflowed the whole row, so switching a site into maintenance -- where the
      status badge grows by half its width -- moved every cell under it. */
