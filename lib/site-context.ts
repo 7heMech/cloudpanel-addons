@@ -24,6 +24,11 @@ export interface SiteContext {
   varnishCache?: boolean;
   /** The instance address the panel shows, omitted when the panel has none. */
   publicIp?: string;
+  /**
+   * The addon tabs to draw, when the caller reaches fewer than all of them.
+   * Omitted means every one, which is what an administrator sees.
+   */
+  addonSlugs?: string[];
 }
 
 export interface SiteTab {
@@ -66,6 +71,7 @@ const NATIVE_TABS: TabSpec[] = [
  * here keeps the injected Twig and the reproduced strip from drifting apart.
  */
 export const ADDON_SITE_TABS: { slug: string; label: string; url: string }[] = [
+  { slug: "git", label: "Git", url: mountPath("git") },
   { slug: "maintenance", label: "Maintenance", url: mountPath("maintenance") },
   { slug: "stager", label: "Staging", url: mountPath("stager") },
 ];
@@ -83,9 +89,10 @@ export function siteTypeLabel(type: string): string {
 /**
  * The tab strip CloudPanel would draw for this site, with `activeSlug` marked.
  *
- * The role is not part of it: the manager denies anyone without ROLE_ADMIN at
- * the socket, which is the same role the injected Twig requires, so a caller
- * that reached a site-scoped page has already passed that check.
+ * Which addon tabs belong in it is the caller's to say through `addonSlugs`:
+ * the panel's own strip only draws the tabs whose Twig condition the session
+ * passes, and a reproduction that drew more would offer a site manager links
+ * to addons the manager's gate refuses.
  */
 export function siteTabs(site: SiteContext, activeSlug = ""): SiteTab[] {
   const native = NATIVE_TABS.filter((tab) => !tab.applies || tab.applies(site)).map((tab) => ({
@@ -94,7 +101,9 @@ export function siteTabs(site: SiteContext, activeSlug = ""): SiteTab[] {
     href: `/site/${encodeURIComponent(site.domain)}/${tab.path}`,
     active: tab.slug === activeSlug,
   }));
-  const addons = ADDON_SITE_TABS.map((tab) => ({
+  const addons = ADDON_SITE_TABS.filter(
+    (tab) => site.addonSlugs === undefined || site.addonSlugs.includes(tab.slug),
+  ).map((tab) => ({
     slug: tab.slug,
     label: tab.label,
     href: `${tab.url}?domain=${encodeURIComponent(site.domain)}`,

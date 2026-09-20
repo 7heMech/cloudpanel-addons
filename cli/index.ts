@@ -40,6 +40,7 @@ import { adminHeaderTarget, headerTarget, siteLayoutTarget, SITE_TAB_TEMPLATE } 
 import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
 import { CHANGELOG_URL, UPDATE_PATH } from "../lib/update-ui";
 import { ensureMaintenanceData, executeMaintenanceAction } from "../addons/maintenance/action";
+import { GIT_HOOK_PREFIX, handleGitHook } from "../addons/git/app/hook";
 import { removeWpLogin } from "../addons/wp-login/action";
 import { runAuthActionStdin } from "./auth-action";
 import { pruneManagerJobs, runManagerAction, type ManagerJobView, type ManagerOps } from "./manager-action";
@@ -906,6 +907,10 @@ function mountedAddons(): string[] {
 /**
  * The routes a signed-in non-administrator may reach, named one by one.
  *
+ * An addon that declares `siteManager` is the other way in, for the whole
+ * mount rather than a route: CloudPanel does not narrow a site manager's site
+ * list, so its pages are already scoped for that role.
+ *
  * The blanket gate below is what makes the manager an administrative surface,
  * and these are the exceptions that scope themselves instead. The WordPress
  * sign-in is one because the panel user it signs in for is one CloudPanel
@@ -928,14 +933,26 @@ const SELF_SCOPED_ROUTES = new Set([
  * a test can send real requests through the same function the socket does.
  */
 export async function handleRequest(req: Request, server: Server<unknown>): Promise<Response> {
-  // Nothing is answered before this, not even the liveness probe: a route
+  const path = internalPath(new URL(req.url).pathname);
+
+  // The one credential that is not a CloudPanel session. A POST whose URL
+  // carries a per-site token the root gateway recognises is a push-to-deploy
+  // delivery and is answered here; anything else returns null and meets the
+  // gate below, so this is a second credential type rather than an exception
+  // list, and the URL is no oracle for which sites have a webhook.
+  // Nothing is looked up for a request that is not shaped like one: the gate
+  // below stays the first thing every other request meets.
+  if (req.method === "POST" && path.startsWith(GIT_HOOK_PREFIX) && mountedAddons().includes("git")) {
+    const delivery = await handleGitHook(req, path);
+    if (delivery) return delivery;
+  }
+
+  // Nothing else is answered before this, not even the liveness probe: a route
   // decided ahead of the gate answers whoever can reach the panel.
   const gate = await authenticateRequest(req);
   // Sent as the gate built it. The shared header policy used to go over the
   // top, which is what made a refusal here look unlike the panel's own.
   if (gate.response) return gate.response;
-
-  const path = internalPath(new URL(req.url).pathname);
 
   // The manager is an administrative surface. Keep this decision at the
   // shared socket boundary so every mounted HTML and API route, including
@@ -943,14 +960,18 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   // update checks or addon code can run.
   const denied = adminGate(gate.auth);
   if (denied) {
-    if (!SELF_SCOPED_ROUTES.has(`${req.method} ${path}`)) return denied;
+    const selfScoped = SELF_SCOPED_ROUTES.has(`${req.method} ${path}`);
+    const siteManager = gate.auth?.roles.includes("ROLE_SITE_MANAGER") ?? false;
+    if (!selfScoped && !siteManager) return denied;
     // Straight to the addon, ahead of the update check and the manager's own
-    // routes: what this session is allowed is that one handler, not the rest
-    // of the manager with a narrower path.
+    // routes: what this session is allowed is that handler, not the rest of
+    // the manager with a narrower path.
     const scoped = splitMount(path, mountedAddons());
     if (!scoped) return denied;
+    if (!selfScoped && ADDONS[scoped.addon]?.siteManager !== true) return denied;
     return await addonHandler(scoped.addon)!(req, scoped.rest, null, server, gate.auth);
   }
+
   // Polled while this process restarts; the gateway that validates the session
   // is a separate unit, so it keeps answering across the restart.
   if (path === "/health") {
@@ -1366,6 +1387,7 @@ function usage(): void {
   clp-addons action instatic <verb> [options]
   clp-addons action stager <verb> [options]
   clp-addons action maintenance <verb> --domain=<domain>
+  clp-addons action git <verb> [--domain=<domain>] [--job=<job>]
   clp-addons action manager <enable|disable|update|job|watch-job> [--addon=<addon>] [--id=<job>]
   clp-addons action auth (session id on bounded stdin)
   clp-addons serve

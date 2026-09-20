@@ -4,6 +4,7 @@ import { indexPage, updatePage } from "../cli/index";
 import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } from "../addons/cloudflare-ips/app/views";
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
 import { jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, newCloneView, promoteListView, promoteView, siteStagingView } from "../addons/stager/app/views";
+import { fleetView as gitFleetView, fragment as gitFragment, layout as gitLayout, siteView as gitSiteView } from "../addons/git/app/views";
 import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
 import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
@@ -44,6 +45,72 @@ const sites: SiteSummary[] = [
 // is the widest strip a site can have.
 const siteVarnish: Record<string, boolean> = { "www.example.com": true };
 const PREVIEW_PUBLIC_IP = "203.0.113.10";
+
+const gitLog = [
+  "[git] deploying git@github.com:example/shop.git (main) into /home/example/htdocs/www.example.com as example",
+  "[git] fetching main",
+  "From github.com:example/shop",
+  " * branch            main       -> FETCH_HEAD",
+  "[git] updating the working tree",
+  "HEAD is now at 9f2c1ab Add the checkout summary",
+  "[git] $ composer install --no-dev",
+  "Installing dependencies from lock file",
+  "[git] deployment finished",
+].join("\n");
+
+/**
+ * The three states the Git pages distinguish: deployed, never deployed, and
+ * configured for a site CloudPanel no longer has.
+ */
+function gitPreviewSites(url: URL) {
+  const commit = {
+    hash: "9f2c1ab7c0f0ad0e0f6d2f1b2a3c4d5e6f708192", shortHash: "9f2c1ab",
+    author: "Ada Lovelace", committedAt: "2026-09-17T11:04:00Z", subject: "Add the checkout summary",
+  };
+  const job = {
+    id: "20260917T110500Z-ab12cd", kind: "deploy", domain: "www.example.com", startedBy: "push",
+    state: url.searchParams.get("state") ?? "done", step: "running the post-deploy command", error: "",
+    createdAt: "2026-09-17T11:05:00Z", startedAt: "2026-09-17T11:05:01Z",
+    finishedAt: url.searchParams.get("state") ? "" : "2026-09-17T11:05:42Z",
+    result: { branch: "main", directory: "", commit, postDeploy: "composer install --no-dev", postDeployRan: true },
+  };
+  // Relative to now, so the delivery line reads the way an operator sees it.
+  const delivered = new Date(Date.now() - 4 * 60_000).toISOString().replace(/\.\d+Z$/, "Z");
+  if (job.state === "failed") job.error = "the post-deploy command failed; the files are deployed and the command did not finish";
+  return [
+    {
+      domain: "www.example.com", siteUser: "example", siteType: "php",
+      path: "/home/example/htdocs/www.example.com", configured: true,
+      config: {
+        domain: "www.example.com", remote: "git@github.com:example/shop.git", branch: "main",
+        directory: "", postDeploy: "composer install --no-dev", updatedAt: "2026-09-15T08:00:00Z",
+        webhook: url.searchParams.has("no-hook") ? null : {
+          token: "PreviewWebhookTokenForTheUiOnlyNotARealOne",
+          lastDeliveryAt: delivered, lastDelivery: "started a deployment",
+          lastDeliveryJob: "20260917T110500Z-ab12cd",
+        },
+      },
+      publicKey: url.searchParams.has("no-key") ? "" :
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPreviewKeyForTheUiOnlyNotARealKey00 clp-addons deploy key for www.example.com",
+      commit, lastJob: job,
+    },
+    {
+      // A site the Git tab has never been used on: what an operator meets first.
+      domain: "fresh.example.com", siteUser: "fresh", siteType: "php",
+      path: "/home/fresh/htdocs/fresh.example.com", configured: false,
+      config: null, publicKey: "", commit: null, lastJob: null,
+    },
+    {
+      domain: "static.example.com", siteUser: "static", siteType: "static",
+      path: "/home/static/htdocs/static.example.com/public", configured: true,
+      config: {
+        domain: "static.example.com", remote: "https://github.com/example/docs.git", branch: "release/2.1",
+        directory: "public", postDeploy: "", updatedAt: "2026-09-16T09:10:00Z", webhook: null,
+      },
+      publicKey: "", commit: null, lastJob: null,
+    },
+  ];
+}
 
 /**
  * The Staging tab's content for one site.
@@ -483,6 +550,28 @@ const server = Bun.serve({
         { headers: withCsrfCookie({}, "preview-token") },
       );
     }
+    // The job the Git pages watch, so ?state=running can be reviewed as a live
+    // view rather than as a stream that never answers.
+    if (path.startsWith("/addons/git/api/jobs/")) {
+      const gitJob = gitPreviewSites(url)[0]!.lastJob!;
+      if (path.endsWith("/events") || req.headers.get("accept")?.includes("text/event-stream")) {
+        if (server && typeof server.timeout === "function") {
+          try { server.timeout(req, 0); } catch {}
+        }
+        return new Response(`data: ${JSON.stringify({ job: gitJob, log: gitLog })}\n\n`, {
+          headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", ...SECURITY_HEADERS },
+        });
+      }
+      return Response.json({ ok: true, data: { job: gitJob, log: gitLog } });
+    }
+    if (path === "/addons/git/fragment") {
+      const domain = url.searchParams.get("domain") ?? sites[0]!.domain;
+      const site = gitPreviewSites(url).find((candidate) => candidate.domain === domain) ?? gitPreviewSites(url)[0]!;
+      return Response.json(
+        gitFragment(`Git — ${site.domain}`, gitSiteView(site, gitLog)),
+        { headers: withCsrfCookie({}, "preview-token") },
+      );
+    }
     if (path === "/addons/stager/fragment") {
       const domain = url.searchParams.get("domain") ?? sites[0]!.domain;
       const site = sites.find((candidate) => candidate.domain === domain);
@@ -516,7 +605,7 @@ const server = Bun.serve({
     if (path === "/addons/") {
       // ?enabled= picks which addons are on, so the Available section and the
       // enable/disable buttons can be reviewed without a CloudPanel install.
-      const enabled = empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,php-resources").split(",").filter(Boolean);
+      const enabled = empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,php-resources,git").split(",").filter(Boolean);
       const previewJob = state && ["running", "queued", "failed"].includes(state)
         ? {
             id: "20260910T093000Z-abc123", kind: "enable", addon: "stager", state,
@@ -525,7 +614,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "panel-tweaks", "wp-login"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
@@ -607,6 +696,19 @@ const server = Bun.serve({
       );
     } else if (path === "/addons/instatic/api/jobs/preview-instatic-job") {
       return Response.json({ ok: true, data: { job: instaticCreationJob, log: instaticLogs } });
+    } else if (path === "/addons/git/" || path === "/addons/git") {
+      const gitSites = gitPreviewSites(url);
+      const selected = url.searchParams.get("domain");
+      const site = gitSites.find((candidate) => candidate.domain === selected);
+      html = site
+        ? gitLayout(`Git — ${site.domain}`, gitSiteView(site, gitLog), notice, {
+            domain: site.domain,
+            user: site.siteUser,
+            type: site.siteType,
+            varnishCache: siteVarnish[site.domain] === true,
+            ...(url.searchParams.has("no-ip") ? {} : { publicIp: PREVIEW_PUBLIC_IP }),
+          })
+        : gitLayout("Git deploy", gitFleetView(empty ? [] : gitSites), notice);
     } else if (path === "/addons/stager/" || path === "/addons/stager") {
       // ?domain= is the site-scoped page the Staging tab reaches, drawn here
       // with the panel's chrome around it the way the standalone ?embed=0 page

@@ -34,6 +34,27 @@ export const INSTATIC_ALLOWED_VERBS = new Set([
   "watch-job",
 ]);
 
+/**
+ * `run` and `prune` are deliberately absent. `run` is the deployment runner,
+ * started only by the transient unit the deploy path launches, and `prune` is
+ * retention sweeping the repair timer owns.
+ */
+export const GIT_ALLOWED_VERBS = new Set([
+  "sites",
+  "domains",
+  "status",
+  "configure",
+  "forget",
+  "keygen",
+  "webhook-enable",
+  "webhook-disable",
+  "hook",
+  "deploy",
+  "job",
+  "jobs",
+  "watch-job",
+]);
+
 export const MAINTENANCE_ALLOWED_VERBS = new Set([
   "status",
   "enable",
