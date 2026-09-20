@@ -10,7 +10,7 @@ have put a fifteen-line script beside Instatic and Stager and implied they were
 comparable.
 
 The switches are separate because what they cost is. Most are markup; one reads
-the whole disk every fifteen minutes, so measured sizes are off until asked for.
+the whole disk periodically, so measured sizes are off until asked for.
 The layout switches are separate for a different reason: they change the shape
 of a page CloudPanel drew itself, and the operator who prefers the panel's own
 shape is not wrong. So the narrow-screen site list, the panel's own pages on a
@@ -283,17 +283,36 @@ page.
 A site's size is `du` over its home directory, plus its databases' directories
 under the MySQL data directory, which root can read without asking CloudPanel
 for the master password. The sweep runs from the addon's `maintenance` hook, so
-it happens with the existing fifteen-minute repair rather than from a timer of
-its own: that timer already runs as root on the interval this wants, and a
-second one would only be another unit to install, arm and repair.
+it uses the existing fifteen-minute repair rather than a timer of its own. The
+hook reads the cached measurement time and only walks the disk when roughly six
+hours have passed; the timer therefore checks cheaply between sweeps. Enabling
+the switch starts the first measurement immediately, and the operator can
+request another at any time. The latest measurement and that action stay
+visible beneath the switch title; only the longer explanation is in the
+disclosure, so a phone does not hide live progress behind another tap.
+Completion updates that status in place. It refreshes the Sites preview frame
+when the Sites enhancement is on, but never reloads the addon page.
+Every minimized row keeps its title and switch in one center-aligned heading;
+descriptions and live status sit below without moving the switch off that line.
+The nested measurement row's branch terminates just above that heading's
+mathematical center, which reads as a hierarchy connector rather than an arrow.
 
 It is the one thing here a loaded box would feel, and it runs unattended, so it
 asks the kernel to schedule it last -- idle I/O class, lowest CPU priority.
 Where `ionice` is absent the measurement still happens without the concession.
 The answer is cached in the addon's state directory; the panel's table reads the
-cache and never runs `du` itself. A site whose account has gone, or whose home
-directory is not owned by it, is skipped rather than guessed at.
+cache and never runs `du` itself. That result cache makes page loads cheap, but
+does not make a later sweep incremental: every refresh traverses each site and
+database again. The kernel may retain filesystem metadata, but the schedule
+does not rely on it. A site whose account has gone, or whose home directory is
+not owned by it, is skipped rather than guessed at.
 
 The operator-pressed sweep is the same work with a four-minute budget. A box
 large enough to exceed it gets its sizes from the unattended sweep instead,
-which has no deadline.
+which has no deadline. The pressed sweep streams compact progress events through
+the root gateway and SSE response: the site being measured, the completed and
+total counts, and the measured/skipped counts. It never streams `du` output or
+filesystem paths. The manager disables Bun's idle timeout for this request so a
+single large site may stay quiet for longer than ten seconds; the gateway's
+four-minute deadline remains the bound on the operation, and a disconnected
+browser closes the gateway stream and its action process.

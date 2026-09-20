@@ -1,7 +1,8 @@
 import {
   SECURITY_HEADERS, bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken,
-  readJsonObject,
+  policyHeaders, readJsonObject,
 } from "../../../lib/app-http";
+import type { Server } from "bun";
 import { callGatewayAction } from "../../../lib/gateway-client";
 import { panelTweaksService } from "./service";
 import { previewPage } from "./preview";
@@ -31,6 +32,68 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Bridge the privileged scan's compact JSON lines to browser-facing SSE. */
+function scanEventStream(req: Request, server?: Server<unknown> | null): Response {
+  if (server && typeof server.timeout === "function") {
+    try {
+      server.timeout(req, 0);
+    } catch {}
+  }
+
+  let transport: ReturnType<typeof panelTweaksService.scanStream> | null = null;
+  let closed = false;
+  const body = new ReadableStream<string>({
+    start(controller) {
+      const send = (chunk: string): boolean => {
+        if (closed) return false;
+        try {
+          controller.enqueue(chunk);
+          return true;
+        } catch {
+          closed = true;
+          transport?.close();
+          return false;
+        }
+      };
+      const finish = () => {
+        if (closed) return;
+        closed = true;
+        try { controller.close(); } catch {}
+      };
+
+      try {
+        transport = panelTweaksService.scanStream({
+          onEvent(event) {
+            if (!send(`data: ${JSON.stringify(event)}\n\n`)) return;
+            if (event.phase === "complete") finish();
+          },
+          onClose(error) {
+            if (closed) return;
+            if (error) send(`event: error\ndata: ${JSON.stringify({ error })}\n\n`);
+            else send(`event: error\ndata: ${JSON.stringify({ error: "the scan ended before it completed" })}\n\n`);
+            finish();
+          },
+        });
+      } catch (error) {
+        send(`event: error\ndata: ${JSON.stringify({ error: errorMessage(error) })}\n\n`);
+        finish();
+      }
+    },
+    cancel() {
+      closed = true;
+      transport?.close();
+    },
+  });
+
+  return new Response(body, {
+    headers: policyHeaders("text/event-stream", {
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    }),
+  });
+}
+
 /**
  * Put the blocks CloudPanel's own templates carry back, or take them away.
  *
@@ -50,7 +113,7 @@ export async function handle(
   req: Request,
   path: string,
   updateNotice?: { current: string; latest: string } | null,
-  _server?: unknown,
+  server?: Server<unknown> | null,
   auth?: { user: string; roles: string[] } | null,
 ): Promise<Response> {
   const method = req.method;
@@ -122,8 +185,7 @@ export async function handle(
   }
 
   if (path === "/api/scan") {
-    const result = await panelTweaksService.scan();
-    return json(result, result.ok ? 200 : 400);
+    return scanEventStream(req, server);
   }
 
   return json({ ok: false, error: "not found" }, 404);

@@ -8,9 +8,10 @@ const BASE = mountPath("panel-tweaks");
 // Cards, switches, badges, the fleet table and its narrow-screen layout are in
 // lib/app-ui; only the two rows this page alone draws are here.
 const STYLE = `
-.tweak-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px;
-  padding: 22px 0; border-top: 1px solid var(--row-border); }
-.tweak-row > div { flex: 1 1 auto; min-width: 0; }
+.tweak-row { padding: 22px 0; border-top: 1px solid var(--row-border); }
+.tweak-row > .tweak-body { min-width: 0; }
+.tweak-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.tweak-heading h3 { flex: 1 1 auto; min-width: 0; }
 .tweak-category + .tweak-category { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--row-border); }
 .tweak-category-title { margin: 0; color: var(--muted); font-size: 12px; font-weight: 700;
   letter-spacing: .06em; text-transform: uppercase; }
@@ -18,13 +19,14 @@ const STYLE = `
 .tweak-category > .tweak-row:last-child { padding-bottom: 0; }
 .tweak-row.is-nested { position: relative; padding-top: 0; padding-left: 36px; border-top: 0; }
 /* The branch starts beneath the parent and ends beside the child heading. */
-.tweak-row.is-nested::before { content: ""; position: absolute; top: -16px; left: 8px; width: 18px; height: 26px;
+.tweak-row.is-nested::before { content: ""; position: absolute; top: -16px; left: 8px; width: 18px; height: 28px;
   border-left: 2px solid var(--border); border-bottom: 2px solid var(--border); border-bottom-left-radius: 5px;
   pointer-events: none; }
 .tweak-row.is-nested h3 { font-size: 15px; font-weight: 500; }
-.tweak-row h3 { margin: 0 0 6px; font-size: 16px; }
+.tweak-row h3 { margin: 0; font-size: 16px; }
+.tweak-note { margin-top: 6px; }
 .tweak-row p { margin: 0; color: var(--muted); font-size: 14px; }
-.tweak-row .switch { flex: 0 0 auto; margin-top: 4px; }
+.tweak-row .switch { flex: 0 0 auto; margin: 0; }
 .tweak-scan { display: none; flex-wrap: wrap; align-items: center; gap: 8px 12px;
   margin-top: 12px; color: var(--muted); font-size: 13px; }
 .tweak-row.is-enabled .tweak-scan { display: flex; }
@@ -91,6 +93,10 @@ async function setTweak(input) {
     busy(false);
     // After busy(), which restores every control to what it was disabled as.
     syncDependents(key, wanted);
+    if (key === 'diskUsage' && wanted) {
+      const button = input.closest('.tweak-row').querySelector('.tweak-scan .btn');
+      if (button) { await measureNow(button); return; }
+    }
     notify('Saved.', 'ok');
   } catch (error) {
     input.checked = !wanted;
@@ -113,13 +119,74 @@ function syncDependents(key, on) {
 async function measureNow(button) {
   clearNotice();
   busy(true);
-  notify('Measuring every site. This reads the whole disk, so it can take a while.', 'warn');
+  const originalLabel = button.textContent;
+  let completed = false;
+  function showProgress(event) {
+    if (event.phase === 'complete') {
+      completed = true;
+      button.textContent = originalLabel;
+      const total = event.measured + event.skipped;
+      const summary = button.closest('.tweak-scan').querySelector('span');
+      if (summary) summary.textContent = event.measured + ' of ' + total +
+        ' site' + (total === 1 ? '' : 's') + ' measured, just now.';
+      const skipped = event.skipped ? ', ' + event.skipped + ' skipped' : '';
+      const sitesTable = document.querySelector('[data-tweak="sitesTable"]');
+      const frame = document.getElementById('preview-frame');
+      if (sitesTable && sitesTable.checked && frame) {
+        frame.src = CLP_BASE + '/preview?refresh=' + Date.now();
+      }
+      busy(false);
+      notify(event.measured + (event.measured === 1 ? ' site measured' : ' sites measured') + skipped + '.', 'ok');
+      return;
+    }
+    const current = Math.min(event.completed + 1, event.total);
+    const count = event.total ? current + ' of ' + event.total : 'sites';
+    button.textContent = event.total ? current + '/' + event.total : 'Measuring';
+    notify('Measuring ' + count + (event.site ? ' — ' + event.site : '') + '.', 'warn');
+    // A single large site may be quiet for longer than the ordinary flash.
+    clearTimeout(clpFlashTimer);
+  }
+
+  notify('Starting size measurement…', 'warn');
+  clearTimeout(clpFlashTimer);
   try {
-    const reply = await call('/api/scan', { method: 'POST' });
-    const data = reply.data || {};
-    const skipped = data.skipped ? ', ' + data.skipped + ' skipped' : '';
-    reloadWith(data.measured + (data.measured === 1 ? ' site measured' : ' sites measured') + skipped + '.', 'ok');
+    const res = await fetch(CLP_BASE + '/api/scan', {
+      method: 'POST',
+      headers: { 'X-CLP-Addons-CSRF': csrf() },
+    });
+    if (!res.ok || !res.body) {
+      let message = 'request failed with ' + res.status;
+      try { const body = await res.json(); if (body && body.error) message = body.error; } catch (e) {}
+      throw new Error(message);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+      let boundary;
+      while ((boundary = buffer.search(/\\r?\\n\\r?\\n/)) >= 0) {
+        const frame = buffer.slice(0, boundary);
+        const separator = /^\\r\\n\\r\\n/.test(buffer.slice(boundary)) ? 4 : 2;
+        buffer = buffer.slice(boundary + separator);
+        let eventName = 'message';
+        const data = [];
+        for (const line of frame.split(/\\r?\\n/)) {
+          if (line.startsWith('event:')) eventName = line.slice(6).trim();
+          if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+        }
+        if (!data.length) continue;
+        const event = JSON.parse(data.join('\\n'));
+        if (eventName === 'error') throw new Error(event.error || 'the scan failed');
+        showProgress(event);
+      }
+      if (chunk.done) break;
+    }
+    if (!completed) throw new Error('the scan ended before it completed');
   } catch (error) {
+    button.textContent = originalLabel;
     busy(false);
     notify(error.message, 'error');
   }
@@ -172,26 +239,6 @@ function toggleNote(button) {
   const open = row.classList.toggle('is-open');
   button.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
-
-const FLASH_KEY = 'clp-panel-tweaks-flash';
-
-function reloadWith(message, kind) {
-  try { sessionStorage.setItem(FLASH_KEY, JSON.stringify({ message: message, kind: kind })); } catch (e) {}
-  location.reload();
-}
-
-(function showCarriedFlash() {
-  let carried = null;
-  try {
-    carried = sessionStorage.getItem(FLASH_KEY);
-    if (carried) sessionStorage.removeItem(FLASH_KEY);
-  } catch (e) { return; }
-  if (!carried) return;
-  try {
-    const flash = JSON.parse(carried);
-    notify(flash.message, flash.kind);
-  } catch (e) {}
-})();
 `;
 
 export function layout(
@@ -234,7 +281,7 @@ const COPY: TweakCopy[] = [
     key: "diskUsage",
     category: "Sites",
     title: "Measured site sizes",
-    description: "Adds site sizes from a low-priority scan every 15 minutes. This can add load on busy servers.",
+    description: "Enabling starts a low-priority scan now. It refreshes about every 6 hours, or whenever you choose Measure now. Each refresh walks the disk.",
     parent: "sitesTable",
   },
   {
@@ -269,17 +316,20 @@ function switchRow(copy: TweakCopy, tweaks: PanelTweaks, extra = ""): string {
   const locked = copy.parent !== undefined && !tweaks[copy.parent];
   return `
       <div class="tweak-row${copy.parent ? " is-nested" : ""}${on ? " is-enabled" : ""}">
-        <div>
-          <h3>${esc(copy.title)}<button class="tweak-more" type="button" aria-expanded="false"
-            aria-controls="${note}" aria-label="What ${esc(copy.title.toLowerCase())} does"
-            onclick="toggleNote(this)"></button></h3>
-          <div class="tweak-note" id="${note}"><p>${esc(copy.description)}</p>${extra}</div>
+        <div class="tweak-body">
+          <div class="tweak-heading">
+            <h3>${esc(copy.title)}<button class="tweak-more" type="button" aria-expanded="false"
+              aria-controls="${note}" aria-label="What ${esc(copy.title.toLowerCase())} does"
+              onclick="toggleNote(this)"></button></h3>
+            <label class="switch" title="${esc(copy.title)}">
+              <input type="checkbox" data-tweak="${esc(copy.key)}" onchange="setTweak(this)"${on ? " checked" : ""}
+                ${copy.parent ? `data-tweak-parent="${esc(copy.parent)}" ` : ""}${locked ? "disabled " : ""}aria-label="${esc(copy.title)}">
+              <span></span>
+            </label>
+          </div>
+          <div class="tweak-note" id="${note}"><p>${esc(copy.description)}</p></div>
+          ${extra}
         </div>
-        <label class="switch" title="${esc(copy.title)}">
-          <input type="checkbox" data-tweak="${esc(copy.key)}" onchange="setTweak(this)"${on ? " checked" : ""}
-            ${copy.parent ? `data-tweak-parent="${esc(copy.parent)}" ` : ""}${locked ? "disabled " : ""}aria-label="${esc(copy.title)}">
-          <span></span>
-        </label>
       </div>`;
 }
 
