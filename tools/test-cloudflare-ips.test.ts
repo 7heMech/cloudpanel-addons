@@ -98,7 +98,9 @@ test("dashboard renders bulk, per-site, and automatic controls with escaped site
   expect(html).toContain('id="select-all"');
   expect(html).toContain('id="automatic-policy"');
   expect(html).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)"');
-  expect(html).toContain("Excluded from automatic enabling");
+  expect(html).toContain("This never changes a site that already exists.");
+  expect(html).not.toContain("A site turned off above stays excluded.");
+  expect(html).not.toContain("Excluded from automatic enabling");
   expect(html).not.toContain("<script>alert(1)</script>");
   expect(() => new Function(CLIENT_JS)).not.toThrow();
 });
@@ -155,7 +157,7 @@ interface FakeRow {
   attributes: Record<string, string>;
   setAttribute: (name: string, value: string) => void;
   querySelector: (selector: string) => FakeElement | null;
-  parts: { checkbox: FakeElement; toggle: FakeElement; exception: FakeElement };
+  parts: { checkbox: FakeElement; toggle: FakeElement };
 }
 
 /**
@@ -182,7 +184,6 @@ function fakeDashboard(
     const parts = {
       checkbox: el({ checked: Boolean(site.selected) }),
       toggle: el({ checked: site.enabled }),
-      exception: el({ hidden: !(site.excluded && auto) }),
     };
     const row: FakeRow = {
       dataset: { domain: site.domain, enabled: String(site.enabled), excluded: String(site.excluded) },
@@ -190,7 +191,6 @@ function fakeDashboard(
       setAttribute: (name, value) => { attributes[name] = value; },
       querySelector: (selector) => ({
         ".site-checkbox": parts.checkbox, ".site-switch": parts.toggle,
-        ".site-exception": parts.exception,
       }[selector] ?? null),
       parts,
     };
@@ -382,7 +382,6 @@ test("a site turned off after an enable-all stays off when the page repaints", a
 
   expect(dom.rows[1]!.dataset.enabled).toBe("false");
   expect(dom.rows[1]!.dataset.excluded).toBe("true");
-  expect(dom.rows[1]!.parts.exception.hidden).toBe(false);
   expect(dom.byId["cf-summary"]!.textContent).toBe("1 of 2 sites allow Cloudflare only.");
 });
 

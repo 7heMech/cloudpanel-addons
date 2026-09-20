@@ -138,8 +138,6 @@ function applyState(state) {
     row.dataset.excluded = String(site.excludedFromAutomatic);
     const input = row.querySelector('.site-switch');
     if (input) input.checked = site.enabled;
-    const hint = row.querySelector('.site-exception');
-    if (hint) hint.hidden = !(site.excludedFromAutomatic && state.autoEnableNewSites);
   });
   const policy = document.getElementById('automatic-policy');
   if (policy) policy.checked = Boolean(state.autoEnableNewSites);
@@ -327,7 +325,7 @@ export function dashboardView(state: CloudflareState): string {
   const rows = state.sites.map((site) => `
     <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
-      <td class="site-cell">${esc(site.domain)}<span class="mobile-site-type">${esc(siteTypeLabel(site.type))}</span><div class="hint site-exception"${site.excludedFromAutomatic && state.autoEnableNewSites ? "" : " hidden"}>Excluded from automatic enabling</div></td>
+      <td class="site-cell">${esc(site.domain)}<span class="mobile-site-type">${esc(siteTypeLabel(site.type))}</span></td>
       <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
       <td class="action-cell" data-label="Cloudflare only">
         <label class="switch"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
@@ -353,7 +351,7 @@ export function dashboardView(state: CloudflareState): string {
       <div>
         <h2>Enable on new sites</h2>
         <p>Apply the setting automatically within about one minute after a site is created.</p>
-        <p class="hint">This never changes a site that already exists. A site turned off above stays excluded.</p>
+        <p class="hint">This never changes a site that already exists.</p>
       </div>
       <label class="switch"><input id="automatic-policy" type="checkbox" aria-label="Enable Cloudflare-only access on new sites" ${state.autoEnableNewSites ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
     </div>
