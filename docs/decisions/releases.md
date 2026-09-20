@@ -65,7 +65,10 @@ than trusted for having been written there. Its manifest's checksum is compared
 and a disagreement is reported, not refused: the manifest is rewritten only by
 the release install path, so a binary installed by `tools/deploy-stg.ts` or by
 hand legitimately disagrees with the manifest left beside it, and refusing would
-leave the box on the binary that just failed. A box with no usable earlier copy
+leave the box on the binary that just failed. Both files need root to write, so
+the comparison catches drift rather than tampering: whoever could rewrite the
+checksum could rewrite the binary, and authenticity is established upstream,
+when the release is downloaded and verified. A box with no usable earlier copy
 is told so rather than left looking rolled back.
 
 This rolls the two artifacts back and nothing else. Config files, units,
