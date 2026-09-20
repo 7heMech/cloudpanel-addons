@@ -1117,8 +1117,10 @@ const SITES_SCRIPT = `
  *
  * What lets the row wrap at all is shared with the manager, which asks for the
  * same rules while an update notice is in the row. Everything else here is what
- * only a narrow screen wants. They all carry a `body` in front so that they
- * outrank the manager's block, which the panel renders after this one.
+ * only a narrow screen wants. These rules carry a `body` in front to keep their
+ * narrow-screen overrides strong. The manager's later update block repeats the
+ * navigation row placement while a notice is present, so its shared flex
+ * shorthand cannot collapse that row.
  */
 const PANEL_HEADER_STYLE = headerWrapStyle("body .header") + `
 /* Bootstrap draws the avatar's caret from the font size it inherits, which is

@@ -1888,6 +1888,11 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   check("headerTarget points to manager URL", snip.includes('href="https://addons.example.com/addons/"'));
   check("native header offers separate changelog and update links",
     snip.includes("https://addons.example.com/addons/update") && snip.includes("github.com/7heMech/cloudpanel-addons/releases/latest"));
+  check("native header keeps narrow-screen navigation above the update row",
+    snip.includes("@media (max-width: 960px)") &&
+      snip.includes(".header.clp-addons-has-update .nav-link-container,") &&
+      snip.includes("order: 2; flex: 1 0 100%") &&
+      snip.includes(".header #clp-addons-update-notice { order: 3"));
   const guardStart = snip.indexOf("{% if is_granted('ROLE_ADMIN') %}");
   const guardEnd = snip.indexOf("{% endif %}");
   check("headerTarget wraps the manager nav in the native admin guard", guardStart >= 0 && guardEnd > guardStart);

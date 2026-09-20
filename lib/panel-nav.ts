@@ -113,6 +113,19 @@ const PANEL_UPDATE_STYLE = UPDATE_STYLE + PANEL_HEADER_STYLE + `
   .header #clp-addons-update-notice { order: 3; flex: 1 0 100%; margin: 0; padding: 10px 20px;
     justify-content: flex-end; border-top: 1px solid var(--update-link-border); }
 }
+@media (max-width: 960px) {
+  /* Keep CloudPanel's navigation visible between the tools and the update
+     notice. Left in the first row, its flexible width collapses to nothing on
+     a phone once the notice makes the header wrap. */
+  .header.clp-addons-has-update .nav-link-container,
+  .header.clp-addons-has-update .header-instance-information-container { order: 2; flex: 1 0 100%;
+    border-top: 1px solid #e2e2e2; }
+  html.dark .header.clp-addons-has-update .nav-link-container,
+  html.dark .header.clp-addons-has-update .header-instance-information-container { border-top-color: #444c59; }
+  .header.clp-addons-has-update .nav-link-container { display: flex; overflow-x: auto; scrollbar-width: none; }
+  .header.clp-addons-has-update .nav-link-container::-webkit-scrollbar { display: none; }
+  .header.clp-addons-has-update .nav-link-container > a { flex: 0 0 auto; margin-left: 0; line-height: 48px; }
+}
 @media (max-width: 600px) {
   .header #clp-addons-update-notice,
   .header .header-instance-information-container + #clp-addons-update-notice { justify-content: center; padding: 10px 16px; }

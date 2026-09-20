@@ -83,8 +83,10 @@ ahead of the `<header>` tag both of them open with rather than inside it. What
 makes that row able to wrap at all is `headerWrapStyle` in `lib/panel-nav.ts`,
 shared with the manager, which asks for the same rules while its update notice
 is in the row; the addon asks for them whenever its switch is on. They carry a
-`body` in front so they outrank the manager's block, which the panel renders
-after them.
+`body` in front to keep the narrow-screen overrides strong. While an update is
+present, the manager's later block explicitly repeats the navigation's
+second-row placement and full-width flex basis so its shared flex shorthand
+cannot collapse that row; the update controls then occupy the third row.
 
 Below 760px those rules give the panel's header the shape the addon's own pages
 already use: the logo and the tools in one 64px row of equal cells, the
