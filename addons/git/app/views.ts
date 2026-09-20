@@ -542,7 +542,7 @@ function repositoryForm(site: GitSiteStatus): string {
             <label class="required" for="git-remote">Repository URL</label>
             <input id="git-remote" type="text" required maxlength="${MAX_REMOTE_LENGTH}" spellcheck="false" autocapitalize="off"
               placeholder="git@github.com:owner/repo.git" value="${esc(config?.remote ?? "")}">
-            ${site.configured ? "" : `<div class="hint">Use SSH for a private repository, or HTTPS for a public one.</div>`}
+            <div class="hint">Use SSH for a private repository.</div>
           </div>
           <div class="form-field">
             <label class="required" for="git-branch">Branch</label>

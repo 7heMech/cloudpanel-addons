@@ -95,14 +95,12 @@ A site nobody has connected yet shows the connection form. That form has the
 page to itself, so it also pairs the Advanced fields, subdirectory beside the
 longer post-deploy command. Each pair gives two thirds to the field whose
 values run long, so every row in the form shares its column edges; every pair
-stacks on a phone. Only this form explains SSH against HTTPS remotes, because
-by the time the settings card is drawn the remote has been chosen. The settings
-card on a connected site is one column wide, which fits the URL and branch but
-not the Advanced pair, so those stay stacked there. Saving an SSH remote
-generates the deploy key as part of the save, so the sequence is save, add the
-key to the repository, deploy. The key section is expanded until a checkout
-exists, or when the public key is missing. HTTPS remotes have no key section. A
-missing SSH key offers a generate action.
+stacks on a phone. The settings card on a connected site is one column wide,
+which fits the URL and branch but not the Advanced pair, so those stay stacked
+there. Saving an SSH remote generates the deploy key as part of the save, so
+the sequence is save, add the key to the repository, deploy. The key section is
+expanded until a checkout exists, or when the public key is missing. HTTPS
+remotes have no key section. A missing SSH key offers a generate action.
 
 The push-to-deploy switch and last delivery outcome stay visible. Webhook setup
 and Other providers & CI are independently expandable sections in that card;
