@@ -2,8 +2,9 @@
 
 Manage Cloudflare-only site access, host Instatic CMS sites, create staging
 copies, manage per-site maintenance pages, tune PHP-FPM worker limits by
-category, and set the initial login theme from the device preference in
-[CloudPanel](https://www.cloudpanel.io/). Access uses your existing
+category, deploy sites from a Git remote, sign in to any WordPress in one
+click, and add search, sorting and extra columns to CloudPanel's own Sites page
+in [CloudPanel](https://www.cloudpanel.io/). Access uses your existing
 administrator login.
 
 ![CloudPanel Addons Manager](docs/screenshots/addons.png)
@@ -17,7 +18,9 @@ administrator login.
 | Stager | Create staging copies of WordPress, PHP, static, and Instatic sites, and promote them back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
 | Maintenance Mode | Serve a customizable 503 page per site with instant toggles and IP bypasses. |
 | PHP Resources | Group PHP sites into categories of PHP-FPM worker limits, assign them in bulk, and pick the category new sites join. |
-| Device theme on first visit | Follow the device's light or dark preference on the first visit to the CloudPanel login page. |
+| Git Deploy | Deploy a site from a Git remote with a per-site deploy key, a branch, a target directory and a post-deploy command, from the panel or from a push. |
+| Panel Tweaks | Site search and columns, mobile layouts, and theme improvements for CloudPanel. |
+| WordPress Sign-In | Open any WordPress on the server as its first administrator, from the panel's Sites page, without its password. |
 
 ## Install
 
@@ -30,8 +33,10 @@ curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download
 The installer asks which addons to enable. It verifies checksums and build
 provenance, and can install Docker when Instatic needs it.
 
-Open the new **Addons** tab in CloudPanel after installation. Only CloudPanel administrators
-can access it.
+Open the new **Addons** tab in CloudPanel after installation. Only CloudPanel
+administrators can access it, except that site managers also reach Git Deploy.
+Other panel users see the WordPress Sign-In link on the Sites page for their own
+sites, and nothing else.
 
 ## Manage
 
@@ -45,7 +50,7 @@ can access it.
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
 Addon names are `cloudflare-ips`, `instatic`, `stager`, `maintenance`,
-`php-resources`, and `login-theme`. Run
+`php-resources`, `git`, `panel-tweaks`, and `wp-login`. Run
 `clp-addons --help` for version selection and data removal options.
 
 See [Instatic backup and restore](docs/instatic-backups.md) for CloudPanel Remote
@@ -65,6 +70,10 @@ bun run build
 
 Run `bun run preview:ui` to preview the interface at
 `http://localhost:4100/addons/` with sample data.
+
+Pull requests target `dev`. A pull request and `dev` itself each deploy to the
+staging CloudPanel box, so a change can be tried on a real panel; `main` is what
+gets tagged and released.
 
 Architecture and security choices are indexed in
 [Decisions](docs/DECISIONS.md).

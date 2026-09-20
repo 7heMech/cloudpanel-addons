@@ -19,6 +19,7 @@ import { BASE_CLIENT_JS, BASE_STYLE, THEME_INIT_JS, renderLayout } from "../lib/
 import { headerTarget, headerUpdateScript } from "../lib/panel-nav";
 import { isNewerVersion } from "../lib/update-check";
 import { CLIENT_JS as STAGER_CLIENT_JS, isSiteMissing, jobsView, jobView } from "../addons/stager/app/views";
+import { CLIENT_JS as GIT_CLIENT_JS } from "../addons/git/app/views";
 import { CLIENT_JS as MAINTENANCE_CLIENT_JS, fleetView as maintenanceFleetView } from "../addons/maintenance/app/views";
 import { dashboardView as cloudflareDashboardView } from "../addons/cloudflare-ips/app/views";
 import { CLIENT_JS as PHP_RESOURCES_CLIENT_JS, dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
@@ -60,6 +61,7 @@ const SCRIPTS: { name: string; source: string }[] = [
   { name: "theme initialization", source: THEME_INIT_JS },
   { name: "instatic", source: BASE_CLIENT_JS + CLIENT_JS },
   { name: "stager", source: BASE_CLIENT_JS + STAGER_CLIENT_JS },
+  { name: "git", source: BASE_CLIENT_JS + GIT_CLIENT_JS },
   { name: "maintenance", source: BASE_CLIENT_JS + MAINTENANCE_CLIENT_JS },
   { name: "php-resources", source: BASE_CLIENT_JS + PHP_RESOURCES_CLIENT_JS },
   { name: "clp header update notice", source: headerUpdateScript() },
@@ -121,6 +123,35 @@ test("a dialog is usable on a phone", () => {
   // The visual viewport, so a collapsing address bar cannot cover the buttons.
   expect(mobile).toContain("dialog { max-height: calc(100dvh - 20px); }");
   expect(BASE_STYLE).toContain("dialog { max-height: calc(100dvh - 40px); }");
+});
+
+// `confirmAction` reads title, text, details, confirmLabel and danger, and
+// ignores anything else, so a dialog built with the wrong key opens explaining
+// nothing and no type, test or console message says so.
+test("every confirmAction call uses the keys the shared dialog reads", () => {
+  const known = ["title", "text", "details", "confirmLabel", "danger"];
+  const files = [...ADDON_NAMES.map((name) => `addons/${name}/app/views.ts`), "cli/index.ts"].filter((file) => existsSync(file));
+  const unknown = new Set<string>();
+  let calls = 0;
+  for (const file of files) {
+    const source = readFileSync(file, "utf-8");
+    for (let at = source.indexOf("confirmAction({"); at !== -1; at = source.indexOf("confirmAction({", at + 1)) {
+      calls++;
+      let depth = 0;
+      let end = source.indexOf("{", at);
+      const start = end;
+      for (; end < source.length; end++) {
+        if (source[end] === "{") depth++;
+        else if (source[end] === "}" && --depth === 0) break;
+      }
+      for (const match of source.slice(start + 1, end).matchAll(/(?:^|[,{])\s*([A-Za-z_$][\w$]*)\s*:/g)) {
+        const key = match[1] ?? "";
+        if (!known.includes(key)) unknown.add(`${file}: ${key}`);
+      }
+    }
+  }
+  expect(calls).toBeGreaterThan(5);
+  expect([...unknown]).toEqual([]);
 });
 
 test("the PHP Resources category dialog fits a phone", () => {
@@ -1555,7 +1586,7 @@ console.log("\n== addons are told apart by the path they are mounted at ==");
 // hands it a sub-path of "-notes", which is a 404 from somewhere unexpected
 // rather than from the router.
 {
-  const all = ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "login-theme"];
+  const all = ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login"];
   const hit = (p: string) => {
     const m = splitMount(p, all);
     return m ? `${m.addon}:${m.rest}` : "none";

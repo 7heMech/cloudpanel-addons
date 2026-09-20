@@ -42,13 +42,12 @@ test("every declared injection target is represented in the watch paths", () => 
   expect([...watched].sort()).toEqual(watched);
 });
 
-test("every addon with privileged verbs declares them, and login-theme declares none", () => {
-  for (const name of ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources"]) {
+test("every addon with privileged verbs declares them", () => {
+  for (const name of ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git"]) {
     expect(typeof ADDONS[name]!.action).toBe("function");
   }
   // It is markup injected into the panel's login page and has nothing to do as
   // root; the absence is the declaration.
-  expect(ADDONS["login-theme"]!.action).toBeUndefined();
 });
 
 test("required systemd dependencies survive into the catalog", () => {
@@ -60,7 +59,7 @@ test("required systemd dependencies survive into the catalog", () => {
 
 test("repair upkeep is the addons that ask for it, in catalog order", () => {
   const all = ADDON_NAMES.map((name) => ADDONS[name]!);
-  expect(addonMaintenance(all).map((spec) => spec.name)).toEqual(["instatic", "stager", "php-resources"]);
+  expect(addonMaintenance(all).map((spec) => spec.name)).toEqual(["instatic", "stager", "php-resources", "git", "panel-tweaks"]);
   // Gated on being installed: repair passes the installed set, not every addon.
   expect(addonMaintenance([ADDONS.stager!]).map((spec) => spec.name)).toEqual(["stager"]);
   expect(addonMaintenance([ADDONS.maintenance!])).toEqual([]);

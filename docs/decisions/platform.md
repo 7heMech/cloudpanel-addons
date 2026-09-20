@@ -95,6 +95,21 @@ When Cloudflare IP Access is enabled, a separate one-minute timer applies its
 new-site policy. Disabling the addon removes that timer while keeping the policy
 state for a later re-enable.
 
+The manager's block in CloudPanel's own header also makes room for its update
+notice there. The panel lays the header out as one non-wrapping flex row of a
+fixed height, sized for exactly the three things in it, so a fourth has nowhere
+to go; flattening the right-hand wrapper lets the row wrap. Those rules apply
+only while a notice is actually in the row, so a panel with nothing to update is
+shaped as CloudPanel drew it.
+
+Panel Tweaks wants the same rules for a different reason, on a narrow screen
+and on any day, so `headerWrapStyle` in `lib/panel-nav.ts` takes the header's own
+selector and both ask for their own copy. What a phone additionally wants of the panel's own pages -- the navigation on a
+row of its own, a logo that shrinks, an Admin Area link down to its icon, a
+Dashboard chart that fits -- is the addon's alone, and a switch, because that is
+the panel's own shape being changed rather than room being made for something an
+addon added.
+
 ## One way to watch a job
 
 `lib/job-stream.ts` owns both job-observation routes: `/api/jobs/:id` polls and
@@ -124,6 +139,18 @@ staleness threshold, and `NaN` fails every comparison, so an unreadable snapshot
 used to look current. What a given age means stays with each addon.
 
 ## Shared interface
+
+The shell's header reproduces CloudPanel's: the logo, the panel's own
+navigation, and the three controls the panel puts on the right -- the theme
+switch, the Admin Area, and an account menu of Settings and Logout, pointing at
+the panel's own `/admin/users`, `/settings` and `/logout`. The avatar is a
+drawing rather than the operator's gravatar, because the manager serves these
+pages behind the panel's session without ever being told whose it is. The theme
+and Admin Area icons are the panel's own paths rather than approximations of
+them, so one control does not have two shapes depending on the page. Below
+760px the logo and the three controls share one 64px row and the navigation
+takes the row beneath; that shape is what Panel Tweaks gives the panel's own
+header on a phone, so moving between the two does not move the header.
 
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
 badges, switches, toolbars, one confirmation dialog and one inline notice per

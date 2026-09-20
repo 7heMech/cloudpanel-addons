@@ -1,16 +1,29 @@
 // Local UI review with fictional data. Never starts the manager, reads panel
 // state or invokes an action. Mutating requests are rejected deliberately.
 import { indexPage, updatePage } from "../cli/index";
-import { handle as loginThemePage } from "../addons/login-theme/app/index";
 import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } from "../addons/cloudflare-ips/app/views";
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
 import { jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, newCloneView, promoteListView, promoteView, siteStagingView } from "../addons/stager/app/views";
+import { fleetView as gitFleetView, fragment as gitFragment, layout as gitLayout, siteView as gitSiteView } from "../addons/git/app/views";
+import type { GitSiteStatus } from "../addons/git/app/service";
 import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
 import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
+import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
+import { sitesBlock } from "../addons/panel-tweaks/inject/targets";
+import { previewPage as panelTweaksPreviewPage } from "../addons/panel-tweaks/app/preview";
+import { STAGER_TARGETS } from "../addons/stager/inject/targets";
+import { MENU_ONLY_CLASS } from "../lib/row-actions";
+
+/** The `site.type` values Stager's own Twig condition offers a Clone for. */
+const CLONABLE_TYPES = ["php", "static", "reverse-proxy"];
+import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
+import { dashboardView as wpLoginDashboardView, layout as wpLoginLayout } from "../addons/wp-login/app/views";
+import { WORDPRESS_APPLICATIONS, type WpSiteView } from "../addons/wp-login/action";
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
 import { PRESET_CATEGORIES, STOCK_PROFILE, type PhpResourcesState, type PoolSiteState } from "../addons/php-resources/action";
+import type { PanelTweaksState } from "../addons/panel-tweaks/action";
 import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { type: "text" };
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
@@ -33,6 +46,84 @@ const sites: SiteSummary[] = [
 // is the widest strip a site can have.
 const siteVarnish: Record<string, boolean> = { "www.example.com": true };
 const PREVIEW_PUBLIC_IP = "203.0.113.10";
+
+function gitPreviewLog(site: GitSiteStatus): string {
+  if (!site.lastJob || !site.config || site.lastJob.state === "queued") return "";
+  return [
+    `[git] deploying ${site.config.remote} (${site.config.branch}) into ${site.path} as ${site.siteUser}`,
+    `[git] fetching ${site.config.branch}`,
+    "[git] updating the working tree",
+    `HEAD is now at ${site.commit?.shortHash ?? "9f2c1ab"} ${site.commit?.subject ?? "Add the checkout summary"}`,
+    ...(site.config.postDeploy ? [`[git] $ ${site.config.postDeploy}`] : []),
+    ...(site.lastJob.state === "done" ? ["[git] deployment finished"]
+      : site.lastJob.state === "failed" ? [`[git] ${site.lastJob.error}`] : []),
+  ].join("\n");
+}
+
+/**
+ * Connected sites and first-time setup. ?first-deploy, ?no-delivery,
+ * ?other-provider, ?unavailable, and ?state= cover the expandable controls.
+ */
+function gitPreviewSites(url: URL): GitSiteStatus[] {
+  const delivered = new Date(Date.now() - 4 * 60_000).toISOString().replace(/\.\d+Z$/, "Z");
+  const firstDeploy = url.searchParams.has("first-deploy");
+  const commit = {
+    hash: "9f2c1ab7c0f0ad0e0f6d2f1b2a3c4d5e6f708192", shortHash: "9f2c1ab",
+    author: "Ada Lovelace", committedAt: "2026-09-17T11:04:00Z", subject: "Add the checkout summary",
+  };
+  const job = {
+    id: "20260917T110500Z-ab12cd", kind: "deploy", domain: "www.example.com", startedBy: "push",
+    state: url.searchParams.get("state") ?? "done", step: "running the post-deploy command", error: "",
+    createdAt: delivered, startedAt: delivered,
+    finishedAt: ["queued", "running"].includes(url.searchParams.get("state") ?? "") ? "" : new Date(Date.parse(delivered) + 41_000).toISOString(),
+    result: { branch: "main", directory: "", commit, postDeploy: "composer install --no-dev", postDeployRan: true },
+  };
+  if (job.state === "failed") job.error = "the post-deploy command failed; the files are deployed and the command did not finish";
+  return [
+    {
+      domain: "www.example.com", siteUser: "example", siteType: "php",
+      path: "/home/example/htdocs/www.example.com", configured: true,
+      config: {
+        domain: "www.example.com", remote: url.searchParams.has("other-provider") ? "git@gitlab.com:example/shop.git" : "git@github.com:example/shop.git", branch: "main",
+        directory: "", postDeploy: "composer install --no-dev", updatedAt: "2026-09-15T08:00:00Z",
+        webhook: url.searchParams.has("no-hook") ? null : {
+          token: "PreviewWebhookTokenForTheUiOnlyNotARealOne",
+          lastDeliveryAt: url.searchParams.has("no-delivery") || firstDeploy ? "" : delivered, lastDelivery: "started a deployment",
+          lastDeliveryJob: "20260917T110500Z-ab12cd",
+        },
+      },
+      publicKey: url.searchParams.has("no-key") ? "" :
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPreviewKeyForTheUiOnlyNotARealKey00 clp-addons deploy key for www.example.com",
+      commit: firstDeploy ? null : commit, lastJob: firstDeploy ? null : job,
+    },
+    {
+      // A site the Git tab has never been used on: what an operator meets first.
+      domain: "fresh.example.com", siteUser: "fresh", siteType: "php",
+      path: "/home/fresh/htdocs/fresh.example.com", configured: false,
+      config: null, publicKey: "", commit: null, lastJob: null,
+    },
+    {
+      domain: "static.example.com", siteUser: "static", siteType: "static",
+      path: "/home/static/htdocs/static.example.com/public", configured: true,
+      config: {
+        domain: "static.example.com", remote: "https://github.com/example/docs.git", branch: "release/2.1",
+        directory: "public", postDeploy: "", updatedAt: "2026-09-16T09:10:00Z", webhook: null,
+      },
+      publicKey: "", commit: null, lastJob: null,
+    },
+    {
+      domain: "app.example.com", siteUser: "app", siteType: url.searchParams.has("unavailable") ? "" : "nodejs",
+      path: "/home/app/htdocs/app.example.com", configured: true,
+      config: {
+        domain: "app.example.com", remote: "git@gitlab.com:example/app.git", branch: "production",
+        directory: "", postDeploy: "npm run build", updatedAt: "2026-09-16T09:10:00Z", webhook: null,
+      },
+      publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPreviewKeyForTheUiOnlyNotARealKey00", commit,
+      lastJob: { ...job, id: "20260917T100500Z-ab12cd", domain: "app.example.com", state: "failed", startedBy: "operator", result: null,
+        error: "The build command failed. Check the deployment output before trying again." },
+    },
+  ];
+}
 
 /**
  * The Staging tab's content for one site.
@@ -149,6 +240,72 @@ function phpResourcesPreviewState(url: URL): PhpResourcesState {
   };
 }
 
+/**
+ * Panel Tweaks with every switch on and most sites measured, because that is
+ * the widest the page gets: `?off` is the state an operator lands on after
+ * enabling the addon, and `?unmeasured` is the gap before the first sweep.
+ */
+function panelTweaksPreviewState(url: URL): PanelTweaksState {
+  const on = !url.searchParams.has("off");
+  const measured = on && !url.searchParams.has("unmeasured");
+  const at = "2026-09-17T08:45:00Z";
+  return {
+    tweaks: {
+      deviceTheme: on,
+      sitesTable: on,
+      sitesMobile: on,
+      actionMenu: on,
+      panelMobile: on,
+      diskUsage: on,
+    },
+    diskMeasuredAt: measured ? at : "",
+    sites: url.searchParams.has("empty") ? [] : [
+      {
+        domain: "www.example.com", user: "example", type: "php", application: "WordPress",
+        runtime: "PHP 8.2", createdAt: "2024-03-02 09:30:00", cloudflareOnly: true, varnish: false, certificate: { type: "2", expiresAt: "2026-11-30 10:00:00" },
+        disk: measured ? { bytes: 4_812_003_328, databaseBytes: 412_003_328, measuredAt: at } : null,
+      },
+      {
+        domain: "shop.example.com", user: "shop", type: "php", application: "WordPress",
+        runtime: "PHP 8.3", createdAt: "2025-11-19 14:05:00", cloudflareOnly: true, varnish: true, certificate: { type: "2", expiresAt: "2026-09-24 10:00:00" },
+        disk: measured ? { bytes: 19_327_352_832, databaseBytes: 2_147_483_648, measuredAt: at } : null,
+      },
+      {
+        domain: "static.example.com", user: "static", type: "static", application: "Static",
+        runtime: "", createdAt: "2026-01-08 08:15:00", cloudflareOnly: false, varnish: false, certificate: null,
+        disk: measured ? { bytes: 24_117_248, databaseBytes: 0, measuredAt: at } : null,
+      },
+      {
+        domain: "app.example.com", user: "app", type: "nodejs", application: "Nodejs",
+        runtime: "Node.js 20", createdAt: "2026-06-21 17:40:00", cloudflareOnly: false, varnish: false, certificate: { type: "1", expiresAt: "2027-09-05 10:00:00" },
+        disk: null,
+      },
+      // One hostname competes with its type for a phone line, and another is
+      // wider than a phone. The type must use a detail heading without moving
+      // either detail column when it cannot use the hostname row.
+      {
+        domain: "portal.staging.example-group.com", user: "portal", type: "reverse-proxy",
+        application: "ReverseProxy", runtime: "", createdAt: "2026-04-17 09:10:00",
+        cloudflareOnly: true, varnish: false,
+        certificate: { type: "2", expiresAt: "2026-11-05 10:00:00" },
+        disk: measured ? { bytes: 2_097_152, databaseBytes: 0, measuredAt: at } : null,
+      },
+      {
+        domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", type: "php",
+        application: "WordPress", runtime: "PHP 8.2", createdAt: "2026-08-03 12:00:00",
+        cloudflareOnly: false, varnish: false,
+        certificate: { type: "2", expiresAt: "2026-10-30 10:00:00" },
+        disk: measured ? { bytes: 41_943_040, databaseBytes: 8_388_608, measuredAt: at } : null,
+      },
+      {
+        domain: "cdn.example.com", user: "cdn", type: "reverse-proxy", application: "ReverseProxy",
+        runtime: "", createdAt: "2026-09-01 11:00:00", cloudflareOnly: false, varnish: true, certificate: { type: "2", expiresAt: "2026-12-20 10:00:00" },
+        disk: measured ? { bytes: 1_048_576, databaseBytes: 0, measuredAt: at } : null,
+      },
+    ],
+  };
+}
+
 // A stand-in for a CloudPanel site page, so the block the manager injects into
 // the panel can be exercised without a panel. The markup mirrors
 // Frontend/Site/settings.html.twig and the rules are the panel's own, from
@@ -187,7 +344,7 @@ function panelSiteStub(site: SiteContext, activeSlug: string): string {
 <html id="html" lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <title>${site.domain}</title>
 <script>document.documentElement.classList.toggle('dark', /(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie));</script>
 <style>${PANEL_STUB_STYLE}</style>
@@ -221,7 +378,105 @@ ${tabs}
 </html>`;
 }
 
+/**
+ * A stand-in for CloudPanel's own Sites page, so the block Panel Tweaks injects
+ * there can be reviewed without a panel. The markup is
+ * Frontend/Site/index.html.twig with its Twig evaluated, and the rules are the
+ * panel's own from assets/css/style.css and assets/css/frontend/sites.css.
+ */
+const WP_LOGIN_SITES_SCRIPT = WP_LOGIN_TARGETS.find((target) => target.slug === "sites-script")!;
+const STAGER_SITES_STYLE = STAGER_TARGETS.find((target) => target.slug === "site-list-style")!;
+
+function unwrapTwig(block: string): string {
+  return block.replace("{% if is_granted('ROLE_ADMIN') %}", "").replace("{% endif %}", "");
+}
+
+/**
+ * Three addons put a block above CloudPanel's sites table; the stub shows all.
+ * Panel Tweaks is handed the previewed switches rather than reading the ones
+ * stored on a server, so `?off` changes the injected markup here the
+ * way a reconciliation would change it on a box.
+ */
+function injectedSitesBlocks(state: PanelTweaksState): string {
+  return [
+    sitesBlock("/addons/panel-tweaks", state.tweaks),
+    unwrapTwig(WP_LOGIN_SITES_SCRIPT.snippet("/addons/wp-login")),
+    unwrapTwig(STAGER_SITES_STYLE.snippet("/addons/stager")),
+  ].join("\n");
+}
+
+/** WordPress everywhere but the static and reverse-proxy sites. */
+function wpLoginPreviewSites(url: URL): WpSiteView[] {
+  if (url.searchParams.has("empty")) return [];
+  return [
+    { domain: "www.example.com", user: "example", application: "WordPress", helper: true },
+    { domain: "shop.example.com", user: "shop", application: "WooCommerce", helper: true },
+    { domain: "blog.example.com", user: "blog", application: "Generic", helper: false },
+  ];
+}
+
+function panelSitesStub(state: PanelTweaksState, dark: boolean): string {
+  const rows = state.sites.map((site) => `                  <tr>
+                    <td><a href="/site/${site.domain}/settings">${site.domain}</a></td>
+                    <td>${site.user}</td>
+                    <td>${site.type.toUpperCase()}</td>
+                    <td class="text-end"><a href="/site/${site.domain}/settings">Manage</a>${WORDPRESS_APPLICATIONS.includes(site.application)
+                      ? `<a href="#" class="clp-wp-login" data-clp-domain="${site.domain}">WP Login</a>`
+                      : ""}${CLONABLE_TYPES.includes(site.type) ? `<a class="${MENU_ONLY_CLASS}" href="/addons/stager/new?source=${site.domain}">Clone</a>` : ""}</td>
+                  </tr>`).join("\n");
+  return `<!doctype html>
+<html lang="en"${dark ? ' class="dark"' : ""}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<title>Sites</title>
+<script>if (/(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie)) document.documentElement.classList.add('dark');</script>
+<style>${PANEL_STUB_STYLE}
+.page-header { display: flex; align-items: center; justify-content: space-between; margin: 30px 0 20px; }
+.page-title h1 { font-size: 30px; margin: 0; }
+.card.card-table { background: #fff; border: 1px solid #00000020; border-radius: 4px; box-shadow: 0 2px 4px rgb(157 161 164 / 19%); }
+html.dark .card.card-table { background: #1c1f26; border-color: #a8b3cf33; box-shadow: none; }
+table.table-sites { width: 100%; border-collapse: collapse; }
+table.table-sites th { text-align: left; font-size: 14px; text-transform: uppercase; color: #9bacb6;
+  background: #fbfcfc; padding: 18px 32px; font-weight: 700; }
+html.dark table.table-sites th { background: #25282f; }
+table.table-sites td { padding: 18px 32px; border-top: 1px solid #eaeaea; }
+html.dark { --clp-border-color: #a8b3cf33; }
+html.dark table.table-sites td { border-color: var(--clp-border-color); }
+.text-end { text-align: right; }
+.form-control, .form-select { padding: 8px 16px; border: 1px solid #ced4da; border-radius: 4px; font: inherit; min-height: 42px; }
+html.dark .form-control, html.dark .form-select { background: #20242c; color: #fff; border-color: #a8b3cf33; }
+</style>
+</head>
+<body>
+<div class="preview-banner">Stand-in for CloudPanel's own Sites page
+  <button type="button" onclick="document.documentElement.classList.toggle('dark')">Toggle panel theme</button>
+</div>
+<main class="main-container">
+  <div class="container-fluid container-limited-width">
+    <div class="page-header">
+      <div class="page-title"><h1>Sites</h1></div>
+      <div class="page-actions"><a href="#">+ Add Site</a></div>
+    </div>
+${injectedSitesBlocks(state)}
+    <div class="card card-table">
+      <table class="table table-sites">
+        <thead>
+          <tr><th>Domain</th><th>Site User</th><th>App</th><th class="text-end">Action</th></tr>
+        </thead>
+        <tbody>
+${rows}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</main>
+</body>
+</html>`;
+}
+
 let panelAce: string | null = null;
+const panelCss: Record<string, string> = {};
 
 const server = Bun.serve({
   hostname: "127.0.0.1",
@@ -240,6 +495,14 @@ const server = Bun.serve({
         headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=3600" },
       });
     }
+    // The stylesheets the addon's own preview frame loads from its CloudPanel
+    // origin. Only this development preview borrows them from the public demo.
+    if (path.startsWith("/assets/css/") && path.endsWith(".css")) {
+      panelCss[path] ??= await (await fetch(`https://demo.cloudpanel.io${path}`)).text();
+      return new Response(panelCss[path], {
+        headers: { "Content-Type": "text/css", "Cache-Control": "public, max-age=3600" },
+      });
+    }
     // CloudPanel serves its own Ace build here, which the maintenance editor
     // uses. Only this development preview borrows it from the public demo.
     if (path === "/assets/js/ace.min.js") {
@@ -252,6 +515,20 @@ const server = Bun.serve({
       });
     }
     if (["/", "/dashboard"].includes(path)) return Response.redirect("/addons/");
+    // /sites stands in for the panel's own site list, with the addon's block in
+    // place; /addons/panel-tweaks/api/panel is what that block then asks for.
+    if (path === "/sites") {
+      return new Response(panelSitesStub(panelTweaksPreviewState(url), url.searchParams.has("dark")), {
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+      });
+    }
+    if (path === "/addons/panel-tweaks/api/panel") {
+      // The injected block's URL is fixed, so the fixture the stub was drawn
+      // from is named by the page that asked rather than by this request.
+      const asked = req.headers.get("referer");
+      const state = panelTweaksPreviewState(asked ? new URL(asked) : url);
+      return Response.json({ ok: true, data: state });
+    }
     // /site/{domain}/{tab} stands in for the panel's own site page.
     const panelSite = /^\/site\/([^/]+)\/([^/]+)$/.exec(path);
     if (panelSite) {
@@ -286,6 +563,40 @@ const server = Bun.serve({
         { headers: withCsrfCookie({}, "preview-token") },
       );
     }
+    // The job the Git pages watch, so ?state=running can be reviewed as a live
+    // view rather than as a stream that never answers.
+    if (path.startsWith("/addons/git/api/jobs/")) {
+      // The watcher URL has no query, so use the page that requested it to keep
+      // a running preview running instead of reloading it in a loop as done.
+      const source = req.headers.get("referer");
+      const gitSite = gitPreviewSites(source ? new URL(source) : url).find((site) => site.lastJob && path.includes(site.lastJob.id));
+      if (!gitSite?.lastJob) return Response.json({ ok: false, error: "No preview job" }, { status: 404 });
+      const gitJob = gitSite.lastJob;
+      const gitLog = gitPreviewLog(gitSite);
+      if (path.endsWith("/events") || req.headers.get("accept")?.includes("text/event-stream")) {
+        if (server && typeof server.timeout === "function") {
+          try { server.timeout(req, 0); } catch {}
+        }
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ job: gitJob, log: gitLog })}\n\n`));
+            if (gitJob.state !== "running" && gitJob.state !== "queued") controller.close();
+          },
+        });
+        return new Response(stream, {
+          headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", ...SECURITY_HEADERS },
+        });
+      }
+      return Response.json({ ok: true, data: { job: gitJob, log: gitLog } });
+    }
+    if (path === "/addons/git/fragment") {
+      const domain = url.searchParams.get("domain") ?? sites[0]!.domain;
+      const site = gitPreviewSites(url).find((candidate) => candidate.domain === domain) ?? gitPreviewSites(url)[0]!;
+      return Response.json(
+        gitFragment(`Git — ${site.domain}`, gitSiteView(site, gitPreviewLog(site))),
+        { headers: withCsrfCookie({}, "preview-token") },
+      );
+    }
     if (path === "/addons/stager/fragment") {
       const domain = url.searchParams.get("domain") ?? sites[0]!.domain;
       const site = sites.find((candidate) => candidate.domain === domain);
@@ -316,11 +627,10 @@ const server = Bun.serve({
         } : null,
       });
     }
-    if (path === "/addons/login-theme/") return loginThemePage(req, "/", notice);
     if (path === "/addons/") {
       // ?enabled= picks which addons are on, so the Available section and the
       // enable/disable buttons can be reviewed without a CloudPanel install.
-      const enabled = empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,php-resources").split(",").filter(Boolean);
+      const enabled = empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,php-resources,git").split(",").filter(Boolean);
       const previewJob = state && ["running", "queued", "failed"].includes(state)
         ? {
             id: "20260910T093000Z-abc123", kind: "enable", addon: "stager", state,
@@ -329,7 +639,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "login-theme"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
@@ -372,6 +682,14 @@ const server = Bun.serve({
             }
           : undefined,
       );
+    } else if (path === "/addons/panel-tweaks/preview") {
+      return new Response(panelTweaksPreviewPage(panelTweaksPreviewState(url)), {
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+      });
+    } else if (path === "/addons/panel-tweaks/" || path === "/addons/panel-tweaks") {
+      html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url)), notice);
+    } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {
+      html = wpLoginLayout("WordPress Sign-In", wpLoginDashboardView(wpLoginPreviewSites(url)), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
@@ -403,6 +721,19 @@ const server = Bun.serve({
       );
     } else if (path === "/addons/instatic/api/jobs/preview-instatic-job") {
       return Response.json({ ok: true, data: { job: instaticCreationJob, log: instaticLogs } });
+    } else if (path === "/addons/git/" || path === "/addons/git") {
+      const gitSites = gitPreviewSites(url);
+      const selected = url.searchParams.get("domain");
+      const site = gitSites.find((candidate) => candidate.domain === selected);
+      html = site
+        ? gitLayout(`Git — ${site.domain}`, gitSiteView(site, gitPreviewLog(site)), notice, {
+            domain: site.domain,
+            user: site.siteUser,
+            type: site.siteType,
+            varnishCache: siteVarnish[site.domain] === true,
+            ...(url.searchParams.has("no-ip") ? {} : { publicIp: PREVIEW_PUBLIC_IP }),
+          })
+        : gitLayout("Git deploy", gitFleetView(empty ? [] : gitSites.filter((site) => site.configured)), notice);
     } else if (path === "/addons/stager/" || path === "/addons/stager") {
       // ?domain= is the site-scoped page the Staging tab reaches, drawn here
       // with the panel's chrome around it the way the standalone ?embed=0 page

@@ -20,9 +20,11 @@ import type { Server } from "bun";
 import { CONFIG_DIR, STATE_DIR, TEMPLATES_DIR } from "./paths";
 import type { AddonTarget } from "../lib/addon-target";
 import { CLOUDFLARE_IPS_ADDON } from "../addons/cloudflare-ips/addon";
+import { GIT_ADDON } from "../addons/git/addon";
 import { INSTATIC_ADDON } from "../addons/instatic/addon";
-import { LOGIN_THEME_ADDON } from "../addons/login-theme/addon";
 import { MAINTENANCE_ADDON } from "../addons/maintenance/addon";
+import { PANEL_TWEAKS_ADDON } from "../addons/panel-tweaks/addon";
+import { WP_LOGIN_ADDON } from "../addons/wp-login/addon";
 import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
 
@@ -33,6 +35,8 @@ export type AddonHandler = (
   path: string,
   updateNotice?: { current: string; latest: string } | null,
   server?: Server<unknown> | null,
+  /** The session behind the request, for the few routes a non-admin reaches. */
+  auth?: { user: string; roles: string[] } | null,
 ) => Promise<Response>;
 
 /** Upkeep this addon wants during `repair`. */
@@ -55,6 +59,15 @@ export interface AddonDefinition {
   handler?: AddonHandler;
   /** The privileged verbs this addon runs as root, if it has any. */
   action?: (argv: string[], options?: Record<string, unknown>) => Promise<number> | number;
+  /**
+   * Whether a `ROLE_SITE_MANAGER` session reaches this addon's routes.
+   *
+   * CloudPanel does not narrow that role's site list, so an addon whose pages
+   * are about sites is already the right page for it. Declared here because
+   * who an addon is for is a fact about the addon, and the gate that reads it
+   * is one place for every addon that says so.
+   */
+  siteManager?: boolean;
   maintenance?: AddonMaintenance;
 }
 
@@ -75,7 +88,9 @@ const DEFINITIONS: AddonDefinition[] = [
   STAGER_ADDON,
   MAINTENANCE_ADDON,
   PHP_RESOURCES_ADDON,
-  LOGIN_THEME_ADDON,
+  GIT_ADDON,
+  PANEL_TWEAKS_ADDON,
+  WP_LOGIN_ADDON,
 ];
 
 function specOf(definition: AddonDefinition): AddonSpec {

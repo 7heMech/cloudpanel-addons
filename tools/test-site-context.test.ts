@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { ADDON_SITE_TABS, SITE_CONTEXT_STYLE, siteInfoHtml, siteTabs } from "../lib/site-context";
 import { BASE_STYLE, renderLayout } from "../lib/app-ui";
 import { siteLayoutTarget, SITE_TAB_TEMPLATE } from "../lib/panel-nav";
+import { GIT_TARGETS } from "../addons/git/inject/targets";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import { readPanelPublicIp } from "../lib/panel-snapshot";
@@ -15,7 +16,7 @@ test("the reproduced tab strip applies CloudPanel's own conditions", () => {
   const withVarnish = siteTabs({ ...php, varnishCache: true }).map((tab) => tab.label);
   expect(withVarnish).toEqual([
     "Settings", "Vhost", "Databases", "Varnish Cache", "SSL/TLS", "Security",
-    "SSH/FTP", "File Manager", "Cron Jobs", "Logs", "Maintenance", "Staging",
+    "SSH/FTP", "File Manager", "Cron Jobs", "Logs", "Git", "Maintenance", "Staging",
   ]);
 
   // Varnish Cache is a PHP-with-Varnish tab; Databases is for anything but static.
@@ -24,6 +25,7 @@ test("the reproduced tab strip applies CloudPanel's own conditions", () => {
   const staticTabs = siteTabs({ ...php, type: "static" }).map((tab) => tab.label);
   expect(staticTabs).not.toContain("Databases");
   expect(staticTabs).toContain("Settings");
+  expect(staticTabs).toContain("Git");
   expect(staticTabs).toContain("Maintenance");
   expect(staticTabs).toContain("Staging");
 });
@@ -156,6 +158,7 @@ test("every injected tab label matches the strip the addon reproduces", () => {
   // renderings of ADDON_SITE_TABS; a label typed into either by hand is how
   // they drift.
   const injected = [
+    { slug: "git", targets: GIT_TARGETS, url: "/addons/git" },
     { slug: "maintenance", targets: MAINTENANCE_TARGETS, url: "/addons/maintenance" },
     { slug: "stager", targets: STAGER_TARGETS, url: "/addons/stager" },
   ];

@@ -12,6 +12,7 @@
 // here.
 import type { Server } from "bun";
 import { jsonResponse, policyHeaders, safeDecodePathSegment } from "./app-http";
+import { streamGatewayAction, type GatewayStream } from "./gateway-client";
 import { isTerminalJobState, validateJobId } from "./job-id";
 import { stillAuthorized } from "./sso-auth";
 
@@ -59,6 +60,38 @@ export type JobWatcher<J extends JobProgress> = (
     onClose: (error?: string) => void;
   },
 ) => { close(): void };
+
+/**
+ * Follow one job through the gateway's streaming mode.
+ *
+ * The addon half of a watch is the same wherever it is written: one `watch-job`
+ * stream, every reply either a snapshot or the end of it, and one close
+ * whichever arrives first. Three addons had their own copy and they had already
+ * started to differ, which is the drift this module exists to stop -- so the
+ * watcher lives here beside the endpoint that consumes it.
+ */
+export function watchGatewayJob<J extends JobProgress>(
+  addon: Parameters<typeof streamGatewayAction>[0]["addon"],
+  id: string,
+  handlers: Parameters<JobWatcher<J>>[1],
+): GatewayStream {
+  let ended = false;
+  const close = (error?: string) => {
+    if (ended) return;
+    ended = true;
+    handlers.onClose(error);
+  };
+  return streamGatewayAction<JobSnapshot<J>>({
+    addon,
+    verb: "watch-job",
+    args: ["--job", id],
+    onReply(reply) {
+      if (reply.ok && reply.data) handlers.onSnapshot(reply.data);
+      else close(reply.error ?? "the gateway returned an empty job snapshot");
+    },
+    onClose: close,
+  });
+}
 
 export interface JobApiRoute<J extends JobProgress> {
   req: Request;

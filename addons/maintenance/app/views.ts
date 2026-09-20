@@ -12,6 +12,37 @@ const BASE = mountPath("maintenance");
 const STYLE = `
 /* Shrinkable, so the badge and the button wrap rather than overflow a phone. */
 .page-heading .actions { align-items:center; }
+.site-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+.site-heading .site-header-main {
+  min-width: 0;
+}
+.site-heading .site-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.site-heading .site-title-row h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.site-heading .badge {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.site-heading .site-desc {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.site-heading .actions {
+  flex-shrink: 0;
+}
 .state-live { color:var(--ok); border-color:var(--ok); }
 .state-maintenance { color:var(--bad); border-color:var(--bad); }
 .state-unavailable { color:var(--muted); }
@@ -59,6 +90,48 @@ html.dark #template-ace .ace_comment { color:#93a1ad; }
 .global-card { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
 .global-card h2 { margin:0 0 8px; }
 .global-card p { margin:0; }
+@media (max-width:760px) {
+  .site-heading {
+    display: grid;
+    grid-template-columns: minmax(max-content, auto) 1fr auto;
+    grid-template-areas:
+      "title title title"
+      "desc  desc  desc"
+      "badge .     actions";
+    gap: 10px;
+    align-items: center;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .site-heading .site-header-main,
+  .site-heading .site-title-row {
+    display: contents;
+  }
+  .site-heading h1 {
+    grid-area: title;
+    min-width: 0;
+    width: 100%;
+    margin: 0;
+  }
+  .site-heading .site-desc {
+    grid-area: desc;
+    min-width: 0;
+    width: 100%;
+    margin: 0;
+  }
+  .site-heading .badge {
+    grid-area: badge;
+    justify-self: start;
+    white-space: nowrap;
+    margin-top: 2px;
+  }
+  .site-heading .actions {
+    grid-area: actions;
+    justify-self: end;
+    white-space: nowrap;
+  }
+}
 @media (max-width:700px) {
   .bypass-grid { grid-template-columns:1fr; }
   .bypass-actions { justify-content:flex-start; }
@@ -266,11 +339,6 @@ async function toggleMaintenance(domain, enabled) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enabled })
     });
     paintStatus(domain, reply.data.enabled);
-    if (isGlobalActive() && !reply.data.enabled) {
-      notify('Saved. ' + domain + ' stays in maintenance while global maintenance is on.', 'warn');
-    } else {
-      notify(domain + (reply.data.enabled ? ' is now in maintenance mode.' : ' is now live.'), 'ok');
-    }
   } catch (error) {
     paintStatus(domain, !enabled);
     notify('Could not change maintenance mode for ' + domain + ': ' + error.message, 'error');
@@ -568,8 +636,7 @@ export function siteView(
   globalEnabled = false,
 ): string {
   const globalNotice = `<div id="global-notice" class="notice"${globalEnabled && !site.enabled ? "" : " hidden"}>Global maintenance is on, so this site serves the maintenance page even though its own setting below is off. Turning the setting below off does not take this site out of global maintenance.</div>`;
-  return `<div class="page-heading" data-global-maintenance="${globalEnabled}"><div><h1>${esc(site.domain)}</h1><p>Maintenance mode applies to HTTP and HTTPS traffic for this site.</p></div>
-    <div class="actions">${statusBadge(site, globalEnabled)}<a class="btn" href="${BASE}/">All maintenance sites</a></div></div>
+  return `<div class="page-heading site-heading" data-global-maintenance="${globalEnabled}"><div class="site-header-main"><div class="site-title-row"><h1>${esc(site.domain)}</h1>${statusBadge(site, globalEnabled)}</div><p class="site-desc">Maintenance mode applies to HTTP and HTTPS traffic for this site.</p></div><div class="actions"><a class="btn" href="${BASE}/">All maintenance sites</a></div></div>
   ${globalNotice}
   <div class="card"><div class="switch-row"><div><h2>Maintenance response</h2><p class="hint">Visitors receive HTTP 503 with a five-minute Retry-After header. ACME certificate challenges and bypassed IPs remain live.</p></div>
     <label class="switch switch-danger"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" data-available="true" aria-label="Maintenance mode for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label>

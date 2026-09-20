@@ -13,9 +13,9 @@
 // before this fix -- the missing piece was `applyEnable` checking the return
 // value at all. "template-absent" (the template file itself does not exist)
 // used to be excluded from `blocked` outright, regardless of `required`. That
-// second gap is what let login-theme's real bug -- its target named
+// second gap is what let the login theme's real bug -- its target named
 // Frontend/Security/login.html.twig, but CloudPanel actually serves the login
-// page from Frontend/Login/login.html.twig -- report "login-theme enabled"
+// page from Frontend/Login/login.html.twig -- report "enabled"
 // on a real CloudPanel 2.5.4-3+clp-bookworm box while never touching the
 // real login template at all.
 import { expect, test } from "bun:test";
@@ -101,7 +101,7 @@ function probeFor(state: "anchor-not-found-in-markup" | "template-absent"): stri
   let threw = false;
   let message = "";
   try {
-    await applyEnable("login-theme");
+    await applyEnable("panel-tweaks");
   } catch (error) {
     threw = error instanceof TestFatal;
     message = error instanceof Error ? error.message : String(error);

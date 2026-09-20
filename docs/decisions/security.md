@@ -23,6 +23,16 @@ without directory listing; flag files remain root-only and HTML files are
 readable by Nginx. Custom pages are size-bounded, stripped of active markup,
 and served with a restrictive content security policy.
 
+WordPress Sign-In is the only addon that writes into a site's own tree, and it
+is a separate addon for that reason: an operator who does not install it does
+not have that code on the box, and the gateway's addon-and-verb table refuses
+the verb to anything else. It installs a must-use plugin and a one-time secret
+as the site's user, and refuses a domain the panel does not have or a root that
+is not a WordPress. The secret is a SHA-256 of a token that lives for a minute,
+is removed before it is compared, and travels in a POST body rather than a URL.
+Disabling or uninstalling the addon removes the plugin from every site. See
+[WordPress Sign-In](wp-login.md).
+
 ## CloudPanel authentication
 
 The gateway reads the bounded `cloudpanel` session file without following
@@ -42,10 +52,47 @@ over SSE reaches on its own.
 The manager requires `ROLE_ADMIN`. Invalid sessions return to CloudPanel's
 login page, and authentication failures do not fall back to anonymous access.
 
-The gate is the first thing a request meets, before the URL is taken apart and
-before any route is chosen, so there is no list of exceptions to keep correct.
-The liveness probe the update page polls is inside it, and nothing reads it
-without a session: the page that polls it has one.
+The gate is where a request goes by default, after the URL is taken apart and
+before the route is chosen. The liveness probe the update page polls is inside
+it, and nothing reads it without a session: the page that polls it has one. The
+two exceptions are below: three named routes, and the Git webhook, which is
+settled ahead of the gate by a credential of its own.
+
+Three routes are named as exceptions. Two are the WordPress sign-in addon's:
+`POST /wp-login/api/sign-in` and the `GET /wp-login/api/session` that hands out
+the CSRF pair, because the link that uses them is injected into CloudPanel's own
+Sites page, which a non-administrator sees too. The third is Panel Tweaks'
+read-only `GET /panel-tweaks/api/panel`, which answers the script injected into
+that same page with the sites CloudPanel would list for the caller.
+
+A session that only clears the gate this way is dispatched straight to that
+addon, ahead of the update check and the manager's own routes, so nothing else
+in the manager runs for it. The authorisation it skips here is made up for as
+root: the sign-in action is told which panel user the request is for and refuses
+any site CloudPanel would not list for that account. The set is a literal of
+three strings rather than a prefix or a pattern, so a route cannot join it by
+being named something similar.
+
+An addon may also declare `siteManager` in its catalog definition, which admits
+a `ROLE_SITE_MANAGER` session to that addon's whole mount rather than to a named
+route. Only the Git addon does. CloudPanel does not narrow that role's site
+list, so the addon's pages are already the sites it manages, and everything the
+addon does as root runs as the site's own user. The declaration is read at the
+gate, so an addon that does not make it is refused for that role exactly as
+before, and `ROLE_USER` is admitted by the route list alone.
+
+One route ahead of it takes a different credential. A `POST` to
+`/addons/git/hook/<domain>/<token>` is a push-to-deploy delivery, and the token
+is a per-site secret the Git addon minted and keeps in a root-owned `0600`
+record. It is a second credential type rather than an exception: the route
+returns a response only when the root gateway confirmed the token, and returns
+null for everything else, so a stranger, a wrong token and a rotated one all
+fall through to the gate and receive the login redirect byte for byte. Nothing
+about the URL says whether a site has a webhook. The token is compared with
+`timingSafeEqual` where the record can be read, which is root -- the manager
+cannot read it, so verifying the delivery and queueing its deployment are one
+gateway call. This route is necessarily outside `guardMutation`: a repository
+sends no CSRF token and its Origin is not the panel.
 
 What a stranger gets back is the redirect Symfony sends for any path CloudPanel
 will not serve them, reproduced byte for byte: same status, same headers, same

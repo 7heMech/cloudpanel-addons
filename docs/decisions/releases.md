@@ -1,5 +1,27 @@
 # Releases and updates
 
+## Where a change is proven
+
+`dev` is the integration branch and `main` is what gets tagged. A pull request
+targets `dev`; the checks run and then that commit is installed on the staging
+CloudPanel box -- for the pull request as it would merge, and again for `dev`
+once it lands -- so a change is observed on a real panel before it reaches a
+release. There is one box, so it holds whatever deployed last; a pull request
+from a fork is skipped, because it cannot be given credentials that authenticate
+as root on a live machine. Some of this project's behaviour has nowhere else to be
+seen -- CloudPanel's own templates, a site's generated vhost, an addon injected
+into a panel page -- and a unit test cannot stand in for it.
+
+The deploy workflow calls `tools/deploy-stg.ts`, the same script a workstation
+runs, rather than reproducing the upload-swap-restart-repair sequence in YAML.
+Replacing the binary is a rename, so the services keep serving the old inode
+until they are restarted; the restart is part of the install. The binary the box
+was running is hard-linked aside just before the rename, so a restart or repair
+that fails puts it back, including on a box deploying for the first time.
+It reads the box from `STG_HOST` and its credentials from `STG_SSH_KEY` and
+`STG_SSH_KNOWN_HOSTS`; the host key is pinned rather than learned on connection,
+because the deploy authenticates as root and then runs a command sequence.
+
 ## Verified artifacts
 
 The tag workflow builds one Linux x86-64 binary and publishes it with the

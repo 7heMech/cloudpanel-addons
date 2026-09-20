@@ -208,7 +208,7 @@ async function callGatewaySocket<T>(
  * invokes directly. Otherwise dispatches securely through the root gateway daemon over UNIX socket.
  */
 export async function callGatewayAction<T = unknown>(
-  addon: "stager" | "instatic" | "cloudflare-ips" | "maintenance" | "php-resources" | "manager",
+  addon: "stager" | "instatic" | "cloudflare-ips" | "maintenance" | "php-resources" | "git" | "panel-tweaks" | "wp-login" | "manager",
   verb: string,
   args: string[] = [],
   input?: string,
@@ -259,7 +259,7 @@ function streamReply<T>(line: string): ActionResult<T> | null {
 
 /** Runs one long-lived watch action until its child or gateway socket ends. */
 export function streamGatewayAction<T = unknown>(options: {
-  addon: "stager" | "instatic" | "manager";
+  addon: "stager" | "instatic" | "git" | "manager";
   verb: string;
   args?: string[];
   socketPath?: string;

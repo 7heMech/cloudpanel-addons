@@ -16,6 +16,7 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync,
 import { tmpdir } from "node:os";
 import { findMasterVhost, inspect, masterVhostHost, NGINX_PROXY_BLOCK, inspectNginxProxy, reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
+import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
 import { headerTarget, siteLayoutTarget } from "../lib/panel-nav";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import type { AddonTarget } from "../lib/addon-target";
@@ -163,13 +164,14 @@ check("single addon install: addon target injected", readStager().includes("Stag
 reconcile(simulateInstalledInjections(["stager"], "stager"), PATHS);
 check("single addon uninstall: manager nav removed and header restored", body() === navOriginal);
 check("single addon uninstall: addon target removed and restored", readStager() === stagerOriginal);
-// STAGER_TARGETS places the Clone button before the Manage button in Frontend/Site/index.html.twig
+// WP_LOGIN_TARGETS puts its link before the Manage link in the sites table's
+// action cell, which is the project's one anchor inside a Twig loop.
 const siteDir = `${dir}/Frontend/Site`;
 mkdirSync(siteDir, { recursive: true });
 // By slug, not by index: this addon has more than one target and their order
 // in the list is the injector's business, not this fixture's.
-const stagerSiteTarget = STAGER_TARGETS.find((target) => target.slug === "site-list-action")!;
-const siteFile = `${dir}/${stagerSiteTarget.template}`;
+const siteActionTarget = WP_LOGIN_TARGETS.find((target) => target.slug === "sites-action")!;
+const siteFile = `${dir}/${siteActionTarget.template}`;
 const siteOriginal = `
                     <td class="text-end">
                       <a href="{{ path('clp_site', {'domainName': site.domainName}) }}">{% trans %}Manage{% endtrans %}</a>
@@ -177,34 +179,33 @@ const siteOriginal = `
 `;
 writeFileSync(siteFile, siteOriginal);
 
-const stagerSiteInj: Injection = {
-  addon: "stager",
-  target: stagerSiteTarget,
-  url: "/addons/stager",
+const siteActionInj: Injection = {
+  addon: "wp-login",
+  target: siteActionTarget,
+  url: "/addons/wp-login",
 };
 
-check("STAGER_TARGETS inspect reports missing-anchor before injection",
-  inspect(stagerSiteInj, PATHS).state === "missing-anchor");
+check("a site-action target reports missing-anchor before injection",
+  inspect(siteActionInj, PATHS).state === "missing-anchor");
 
-reconcile([stagerSiteInj], PATHS);
+reconcile([siteActionInj], PATHS);
 const readSite = () => readFileSync(siteFile, "utf-8");
 
-check("STAGER_TARGETS injects Clone button after Manage button",
-  readSite().indexOf("Clone</a>") !== -1 &&
+check("a site-action target lands before the panel's own Manage link, which keeps the rightmost place",
+  readSite().indexOf("WP Login</a>") !== -1 &&
   readSite().indexOf("Manage{% endtrans %}</a>") !== -1 &&
-  readSite().indexOf("Manage{% endtrans %}</a>") < readSite().indexOf("Clone</a>"));
+  readSite().indexOf("WP Login</a>") < readSite().indexOf("Manage{% endtrans %}</a>"));
 
-check("STAGER_TARGETS Clone button uses margin-left instead of margin-right",
-  readSite().includes("style=\"margin-left: 0.75rem;\"") &&
-  !readSite().includes("style=\"margin-right: 0.75rem;\""));
+check("a site-action target names the row's own site",
+  readSite().includes("{{ site.domainName }}"));
 
-check("STAGER_TARGETS inspect reports ok after reconcile",
-  inspect(stagerSiteInj, PATHS).state === "ok");
+check("a site-action target reports ok after reconcile",
+  inspect(siteActionInj, PATHS).state === "ok");
 
 // Idempotent reconciliation
-reconcile([stagerSiteInj], PATHS);
-check("repeated reconciliation of STAGER_TARGETS is idempotent",
-  (readSite().match(/Clone<\/a>/g) ?? []).length === 1);
+reconcile([siteActionInj], PATHS);
+check("repeated reconciliation of a site-action target is idempotent",
+  (readSite().match(/WP Login<\/a>/g) ?? []).length === 1);
 
 // Multiple anchorBefore targets preserve stable alphabetical order before anchor
 const multiBeforeTemplate = "multi-before.html.twig";
