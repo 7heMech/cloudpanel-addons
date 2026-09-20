@@ -51,8 +51,8 @@ try {
     "set -e",
     "install -m 0755 -o root -g root /root/clp-addons-new /usr/local/bin/.clp-addons.new",
     "if ! (mv -f /usr/local/bin/.clp-addons.new /usr/local/bin/clp-addons && clp-addons repair); then",
-    "  if [ -e /root/clp-addons-previous ]; then",
-    "    ln -f /root/clp-addons-previous /usr/local/bin/.clp-addons.rollback",
+    "  if [ -e /root/clp-addons-repaired ]; then",
+    "    ln -f /root/clp-addons-repaired /usr/local/bin/.clp-addons.rollback",
     "    mv -f /usr/local/bin/.clp-addons.rollback /usr/local/bin/clp-addons",
     "  fi",
     "  systemctl restart clp-addons-auth.socket clp-addons-auth.service clp-addons.service",
@@ -60,7 +60,9 @@ try {
     "fi",
     // Linked only once repair has succeeded: a deploy interrupted before that
     // leaves a binary staging was never brought up on, which is no rollback.
-    "ln -f /usr/local/bin/clp-addons /root/clp-addons-previous",
+    // A link, under its own name: a checkout still on the copy-aside deploy
+    // aims `cp -a` at this path, and a copy onto its own source is an error.
+    "ln -f /usr/local/bin/clp-addons /root/clp-addons-repaired",
   ].join("\n")]);
 } finally {
   rmSync(controlDir, { recursive: true, force: true });
