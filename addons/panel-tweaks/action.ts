@@ -21,6 +21,7 @@ import {
 } from "../../cli/action-common";
 import { PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { certificateIssuer, issuerLabel } from "../../lib/certificate-issuer";
 import { PANEL_USER_NAME_RE, panelUserSites } from "../../lib/panel-users";
 
 const TWEAKS_VERSION = 1;
@@ -132,6 +133,15 @@ export const CERTIFICATE_SHORT_LABELS: Record<string, string> = {
 export const SELF_SIGNED_CERTIFICATE = "1";
 
 /**
+ * The type CloudPanel gives a certificate an operator uploaded.
+ *
+ * The panel has one word for all of them, so this is the only type whose
+ * issuer is read: a Cloudflare origin certificate and a public authority's are
+ * both "imported" to it, and they are not the same thing to an operator.
+ */
+export const IMPORTED_CERTIFICATE = "3";
+
+/**
  * The awkward spellings in CloudPanel's `application` column.
  *
  * For a PHP site the column holds the vhost template the site was created from,
@@ -168,7 +178,12 @@ export interface TweakSiteView {
   /** The panel's own per-site switches, for the columns that report them. */
   cloudflareOnly: boolean;
   varnish: boolean;
-  certificate: { type: string; expiresAt: string } | null;
+  certificate: {
+    type: string;
+    expiresAt: string;
+    /** Who issued an imported certificate; absent when the panel's own name stands. */
+    issuer?: string;
+  } | null;
   /** Bytes under the site's home, and under its databases, when measured. */
   disk: { bytes: number; databaseBytes: number; measuredAt: string } | null;
 }
@@ -331,6 +346,7 @@ interface PanelSiteRow {
   python_version: string | null;
   certificate_type: string | null;
   certificate_expires_at: string | null;
+  certificate_pem: string | null;
 }
 
 function openPanelDatabase(path: string): Database {
@@ -358,8 +374,14 @@ const OPTIONAL_JOINS = [
   { table: "php_settings", alias: "p", column: "php_version", on: "p.site_id = s.id" },
   { table: "nodejs_settings", alias: "n", column: "nodejs_version", on: "n.site_id = s.id" },
   { table: "python_settings", alias: "y", column: "python_version", on: "y.site_id = s.id" },
-  { table: "certificate", alias: "c", column: "type AS certificate_type, c.expires_at AS certificate_expires_at",
-    absent: "NULL AS certificate_type, NULL AS certificate_expires_at", on: "c.id = s.certificate_id" },
+  // The certificate itself is read for its issuer, and is asked for only where
+  // the column is there: a table can predate one of its columns as easily as a
+  // database can predate a table.
+  { table: "certificate", alias: "c",
+    column: "type AS certificate_type, c.expires_at AS certificate_expires_at",
+    absent: "NULL AS certificate_type, NULL AS certificate_expires_at",
+    optional: [{ column: "certificate", as: "certificate_pem" }],
+    on: "c.id = s.certificate_id" },
 ];
 
 /**
@@ -370,9 +392,9 @@ const OPTIONAL_JOINS = [
  */
 const OPTIONAL_SITE_COLUMNS = ["created_at", "allow_traffic_from_cloudflare_only", "varnish_cache"];
 
-function presentSiteColumns(db: Database): Set<string> {
+function presentColumns(db: Database, table: string): Set<string> {
   try {
-    const rows = db.query<{ name: string }, []>(`PRAGMA table_info(site);`).all();
+    const rows = db.query<{ name: string }, []>(`PRAGMA table_info(${table});`).all();
     return new Set(rows.map((row) => row.name));
   } catch {
     return new Set();
@@ -395,14 +417,21 @@ function siteQuery(db: Database): string {
   const columns: string[] = [];
   const joins: string[] = [];
   for (const join of OPTIONAL_JOINS) {
-    if (present.has(join.table)) {
+    const here = present.has(join.table);
+    if (here) {
       columns.push(`${join.alias}.${join.column}`);
       joins.push(`LEFT JOIN ${join.table} ${join.alias} ON ${join.on}`);
     } else {
       columns.push(join.absent ?? `NULL AS ${join.column}`);
     }
+    const columnsHere = here ? presentColumns(db, join.table) : new Set<string>();
+    for (const extra of join.optional ?? []) {
+      columns.push(columnsHere.has(extra.column)
+        ? `${join.alias}.${extra.column} AS ${extra.as}`
+        : `NULL AS ${extra.as}`);
+    }
   }
-  const siteColumns = presentSiteColumns(db);
+  const siteColumns = presentColumns(db, "site");
   const optional = OPTIONAL_SITE_COLUMNS.map((column) =>
     siteColumns.has(column) ? `s.${column}` : `NULL AS ${column}`);
   return `
@@ -446,6 +475,20 @@ function runtimeOf(row: PanelSiteRow): string {
   return "";
 }
 
+/**
+ * What an imported certificate says about itself.
+ *
+ * Only an imported one is read: a self-signed certificate names the site it
+ * was made for, and a Let's Encrypt certificate names whichever intermediate
+ * signed it that month, so in both cases the panel's own word is the better
+ * one. A certificate that cannot be parsed keeps it too.
+ */
+function issuerNames(row: PanelSiteRow): { issuer?: string } {
+  if (row.certificate_type !== IMPORTED_CERTIFICATE || !row.certificate_pem) return {};
+  const name = issuerLabel(certificateIssuer(row.certificate_pem));
+  return name ? { issuer: name } : {};
+}
+
 function siteViews(rows: PanelSiteRow[], cache: DiskCache): TweakSiteView[] {
   return rows.map((row) => ({
     domain: row.domain_name,
@@ -457,7 +500,11 @@ function siteViews(rows: PanelSiteRow[], cache: DiskCache): TweakSiteView[] {
     cloudflareOnly: Boolean(row.allow_traffic_from_cloudflare_only),
     varnish: Boolean(row.varnish_cache),
     certificate: row.certificate_type
-      ? { type: row.certificate_type, expiresAt: row.certificate_expires_at ?? "" }
+      ? {
+          type: row.certificate_type,
+          expiresAt: row.certificate_expires_at ?? "",
+          ...issuerNames(row),
+        }
       : null,
     disk: cache.sites[row.domain_name] ?? null,
   }));

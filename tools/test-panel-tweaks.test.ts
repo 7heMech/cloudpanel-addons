@@ -18,6 +18,7 @@ import { panelTweaksService } from "../addons/panel-tweaks/app/service";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MENU_ONLY_CLASS, MENU_ONLY_STYLE, ROW_ACTION_CLASS, ROW_MENU_CLASS } from "../lib/row-actions";
+import { CLOUDFLARE_ORIGIN } from "./fixtures/certificates";
 
 const loginTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "login-device-theme")!;
 const sitesTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "sites-table")!;
@@ -423,9 +424,10 @@ function seedPanel(): void {
     CREATE TABLE php_settings (id INTEGER PRIMARY KEY, site_id INTEGER, php_version TEXT);
     CREATE TABLE nodejs_settings (id INTEGER PRIMARY KEY, site_id INTEGER, nodejs_version TEXT);
     CREATE TABLE python_settings (id INTEGER PRIMARY KEY, site_id INTEGER, python_version TEXT);
-    CREATE TABLE certificate (id INTEGER PRIMARY KEY, site_id INTEGER, type TEXT, expires_at TEXT);
+    CREATE TABLE certificate (id INTEGER PRIMARY KEY, site_id INTEGER, type TEXT, expires_at TEXT,
+      certificate TEXT);
     CREATE TABLE "database" (id INTEGER PRIMARY KEY, site_id INTEGER, name TEXT);
-    INSERT INTO certificate VALUES (7, 1, '2', '2026-12-01 09:00:00');
+    INSERT INTO certificate VALUES (7, 1, '2', '2026-12-01 09:00:00', NULL);
     INSERT INTO site VALUES (1, 'php', 'shop.example.com', 'shop.example.com', 'shop', 'WordPress', 7,
       '2025-04-09 11:20:00', 1, 0);
     INSERT INTO site VALUES (2, 'static', 'docs.example.com', 'docs.example.com', 'docs', 'Static', NULL,
@@ -501,6 +503,56 @@ test("the site list carries what CloudPanel's own template cannot", async () => 
   expect(docs.certificate).toBeNull();
   expect(docs.cloudflareOnly).toBe(false);
   expect(docs.varnish).toBe(true);
+});
+
+/** Puts a certificate of the given type on shop.example.com. */
+function importCertificate(type: string, pem: string | null): void {
+  const db = new Database(join(root, "panel.sq3"));
+  db.run("INSERT INTO certificate VALUES (8, 1, ?, '2041-02-07 10:00:00', ?);", [type, pem]);
+  db.run("UPDATE site SET certificate_id = 8 WHERE id = 1;");
+  db.close();
+}
+
+// CloudPanel records a type, not an issuer, so an uploaded certificate from
+// Cloudflare's origin CA and one from a public authority are the same word to
+// it. The certificate it stored says which.
+test("an imported certificate is named by whoever issued it", async () => {
+  importCertificate("3", CLOUDFLARE_ORIGIN);
+  const state = await act<PanelTweaksState>(["state"]);
+  const shop = state.sites.find((site) => site.domain === "shop.example.com")!;
+  expect(shop.certificate)
+    .toEqual({ type: "3", expiresAt: "2041-02-07 10:00:00", issuer: "CF Origin" });
+});
+
+test("a certificate the panel names itself is left with the panel's own name", async () => {
+  // A self-signed certificate is issued in the site's own name and a Let's
+  // Encrypt one in whichever intermediate signed it, so neither is read.
+  importCertificate("1", CLOUDFLARE_ORIGIN);
+  const selfSigned = await act<PanelTweaksState>(["state"]);
+  expect(selfSigned.sites.find((site) => site.domain === "shop.example.com")!.certificate)
+    .toEqual({ type: "1", expiresAt: "2041-02-07 10:00:00" });
+});
+
+test("an unreadable certificate falls back to the panel's own name", async () => {
+  importCertificate("3", "-----BEGIN CERTIFICATE-----\nnonsense\n-----END CERTIFICATE-----");
+  const state = await act<PanelTweaksState>(["state"]);
+  expect(state.sites.find((site) => site.domain === "shop.example.com")!.certificate)
+    .toEqual({ type: "3", expiresAt: "2041-02-07 10:00:00" });
+});
+
+// A table can predate one of its columns as easily as a database can predate a
+// table, and one missing column must not cost the whole site list.
+test("a panel that stores no certificate still lists its sites", async () => {
+  const db = new Database(join(root, "panel.sq3"));
+  db.exec(`
+    DROP TABLE certificate;
+    CREATE TABLE certificate (id INTEGER PRIMARY KEY, site_id INTEGER, type TEXT, expires_at TEXT);
+    INSERT INTO certificate VALUES (7, 1, '3', '2026-12-01 09:00:00');
+  `);
+  db.close();
+  const state = await act<PanelTweaksState>(["state"]);
+  expect(state.sites.find((site) => site.domain === "shop.example.com")!.certificate)
+    .toEqual({ type: "3", expiresAt: "2026-12-01 09:00:00" });
 });
 
 // CloudPanel's own column prints the site type uppercased, so a reverse proxy
