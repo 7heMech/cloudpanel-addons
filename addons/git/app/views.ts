@@ -86,6 +86,7 @@ const STYLE = `
 .git-empty p { margin: 0 0 22px; color: var(--muted); }
 @media (max-width: 760px) {
   .git-dashboard { grid-template-columns: minmax(0, 1fr); }
+  .git-repo-form .form-grid, .git-setup .git-advanced .form-grid { grid-template-columns: minmax(0, 1fr); }
   .git-webhook, .git-webhook-on { grid-column: 1; grid-row: auto; }
   .git-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
   .git-meta > :first-child { grid-column: 1 / -1; }
@@ -541,7 +542,7 @@ function repositoryForm(site: GitSiteStatus): string {
             <label class="required" for="git-remote">Repository URL</label>
             <input id="git-remote" type="text" required maxlength="${MAX_REMOTE_LENGTH}" spellcheck="false" autocapitalize="off"
               placeholder="git@github.com:owner/repo.git" value="${esc(config?.remote ?? "")}">
-            <div class="hint">Use SSH for a private repository, or HTTPS for a public one.</div>
+            ${site.configured ? "" : `<div class="hint">Use SSH for a private repository, or HTTPS for a public one.</div>`}
           </div>
           <div class="form-field">
             <label class="required" for="git-branch">Branch</label>
