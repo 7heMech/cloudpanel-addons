@@ -65,14 +65,13 @@ async function removeHelpers(button) {
     const data = reply.data || {};
     const removed = data.removed || 0;
     const failed = data.failed || [];
-    const message = removed
+    let message = removed
       ? 'Removed from ' + removed + (removed === 1 ? ' site.' : ' sites.')
       : 'No site had the helper installed.';
+    if (failed.length) message += ' Still in ' + failed.join('; ') + '.';
     sessionStorage.setItem(FLASH_KEY, JSON.stringify({
-      message: failed.length
-        ? message + ' Still in ' + failed.join(', ') + '; remove it there by hand.'
-        : message,
-      kind: failed.length ? 'error' : 'ok',
+      message: message,
+      kind: failed.length ? 'warn' : 'ok',
     }));
     location.reload();
   } catch (error) {

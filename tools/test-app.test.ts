@@ -125,6 +125,35 @@ test("a dialog is usable on a phone", () => {
   expect(BASE_STYLE).toContain("dialog { max-height: calc(100dvh - 40px); }");
 });
 
+// `confirmAction` reads title, text, details, confirmLabel and danger, and
+// ignores anything else, so a dialog built with the wrong key opens explaining
+// nothing and no type, test or console message says so.
+test("every confirmAction call uses the keys the shared dialog reads", () => {
+  const known = ["title", "text", "details", "confirmLabel", "danger"];
+  const files = [...ADDON_NAMES.map((name) => `addons/${name}/app/views.ts`), "cli/index.ts"].filter((file) => existsSync(file));
+  const unknown = new Set<string>();
+  let calls = 0;
+  for (const file of files) {
+    const source = readFileSync(file, "utf-8");
+    for (let at = source.indexOf("confirmAction({"); at !== -1; at = source.indexOf("confirmAction({", at + 1)) {
+      calls++;
+      let depth = 0;
+      let end = source.indexOf("{", at);
+      const start = end;
+      for (; end < source.length; end++) {
+        if (source[end] === "{") depth++;
+        else if (source[end] === "}" && --depth === 0) break;
+      }
+      for (const match of source.slice(start + 1, end).matchAll(/(?:^|[,{])\s*([A-Za-z_$][\w$]*)\s*:/g)) {
+        const key = match[1] ?? "";
+        if (!known.includes(key)) unknown.add(`${file}: ${key}`);
+      }
+    }
+  }
+  expect(calls).toBeGreaterThan(5);
+  expect([...unknown]).toEqual([]);
+});
+
 test("the PHP Resources category dialog fits a phone", () => {
   const html = phpResourcesLayout(
     "PHP resources",

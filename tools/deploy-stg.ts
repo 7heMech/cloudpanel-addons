@@ -51,11 +51,9 @@ try {
   await run(["ssh", ...sshOptions, host, [
     "set -e",
     "install -m 0755 -o root -g root /root/clp-addons-new /usr/local/bin/.clp-addons.new",
-    // What the box is running now is what a failed deploy has to go back to,
-    // and the swap below is the last moment it can be named. A box deploying
-    // for the first time has no earlier binary kept anywhere else.
-    "rm -f /root/clp-addons-previous",
-    "if [ -e /usr/local/bin/clp-addons ]; then ln -f /usr/local/bin/clp-addons /root/clp-addons-previous; fi",
+    // The swap below is the last moment the binary the box is running can be
+    // named, and on a first deploy it is kept nowhere else.
+    "if [ -e /usr/local/bin/clp-addons ]; then ln -f /usr/local/bin/clp-addons /root/clp-addons-previous; else rm -f /root/clp-addons-previous; fi",
     "if ! (mv -f /usr/local/bin/.clp-addons.new /usr/local/bin/clp-addons &&",
     "      systemctl restart clp-addons-auth.socket clp-addons-auth.service clp-addons.service &&",
     "      clp-addons repair); then",

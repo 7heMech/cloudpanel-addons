@@ -70,7 +70,7 @@ export interface WpLoginResult {
 
 export interface WpRemoveResult {
   removed: number;
-  /** Sites whose loader could not be deleted, so an operator can be told which. */
+  /** `domain: reason` for each site whose loader could not be deleted. */
   failed: string[];
 }
 
@@ -381,8 +381,8 @@ export function removeWpLogin(paths: WpLoginActionPaths = DEFAULT_WP_LOGIN_PATHS
       rmSync(loader, { force: true });
       rmSync(join(site.root, SECRET_DIR), { recursive: true, force: true });
       removed++;
-    } catch {
-      failed.push(site.row.domain_name);
+    } catch (error) {
+      failed.push(`${site.row.domain_name}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   return { removed, failed };

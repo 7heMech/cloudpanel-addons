@@ -470,7 +470,7 @@ function withdrawWpLogin(): void {
   try {
     const { removed, failed } = removeWpLogin();
     if (removed > 0) log.ok(`sign-in helper removed from ${removed} site${removed === 1 ? "" : "s"}`);
-    if (failed.length > 0) log.warn(`the sign-in helper is still in ${failed.join(", ")}; remove it by hand`);
+    if (failed.length > 0) log.warn(`the sign-in helper is still in ${failed.join("; ")}`);
   } catch (error) {
     log.warn(`the sign-in helper could not be removed from every site: ${error instanceof Error ? error.message : String(error)}`);
   }
