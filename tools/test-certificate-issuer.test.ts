@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { certificateIssuer, issuerLabel } from "../lib/certificate-issuer";
 import {
-  CLOUDFLARE_ORIGIN, CLOUDFLARE_ORIGIN_CA, CLOUDFLARE_ORIGIN_ECC, SELF_SIGNED, ZEROSSL,
+  CLOUDFLARE_ORIGIN, CLOUDFLARE_ORIGIN_CA, CLOUDFLARE_ORIGIN_ECC, MULTI_VALUED_RDN, SELF_SIGNED, ZEROSSL,
 } from "./fixtures/certificates";
 
 test("an origin certificate is recognised whichever way Cloudflare spelled itself", () => {
@@ -19,6 +19,16 @@ test("another authority is named as it named itself, by its organisation", () =>
     organization: "ZeroSSL",
   });
   expect(issuerLabel(certificateIssuer(ZEROSSL))).toBe("ZeroSSL");
+});
+
+// One relative distinguished name may carry several attributes, in any order,
+// so reading only the first of a set would miss a name that is there.
+test("an attribute is read wherever it sits in a multi-valued name", () => {
+  expect(certificateIssuer(MULTI_VALUED_RDN)).toEqual({
+    commonName: "Example Trust Domain CA",
+    organization: "Example Trust Services",
+  });
+  expect(issuerLabel(certificateIssuer(MULTI_VALUED_RDN))).toBe("Example Trust Services");
 });
 
 test("an issuer with no organisation keeps its common name", () => {

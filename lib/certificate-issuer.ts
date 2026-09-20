@@ -104,21 +104,24 @@ export function certificateIssuer(pem: string): CertificateIssuer | null {
   if (issuer?.tag !== SEQUENCE || issuer.end > tbs.end) return null;
 
   const found: CertificateIssuer = { commonName: "", organization: "" };
-  // Name ::= SEQUENCE OF SET OF SEQUENCE { type OID, value }, one pair per
-  // attribute, of which only the two an operator would read are wanted.
+  // Name ::= SEQUENCE OF SET OF SEQUENCE { type OID, value }. A set usually
+  // holds one attribute, but it may hold several, in any order, so every one of
+  // them is read and the two an operator would recognise are kept.
   for (let set = field(bytes, issuer.start); set && set.end <= issuer.end; set = field(bytes, set.next)) {
     if (set.tag !== SET) return null;
-    const pair = field(bytes, set.start);
-    if (pair?.tag !== SEQUENCE) return null;
-    const type = field(bytes, pair.start);
-    if (type?.tag !== OBJECT_IDENTIFIER) return null;
-    const value = field(bytes, type.next);
-    if (!value) return null;
-    const name = objectIdentifier(bytes, type);
-    if ((name === COMMON_NAME || name === ORGANIZATION) && TEXT_TAGS.has(value.tag)) {
-      const text = new TextDecoder().decode(bytes.subarray(value.start, value.end)).trim();
-      if (name === COMMON_NAME && !found.commonName) found.commonName = text;
-      if (name === ORGANIZATION && !found.organization) found.organization = text;
+    for (let pair = field(bytes, set.start); pair && pair.end <= set.end; pair = field(bytes, pair.next)) {
+      if (pair.tag !== SEQUENCE) return null;
+      const type = field(bytes, pair.start);
+      if (type?.tag !== OBJECT_IDENTIFIER) return null;
+      const value = field(bytes, type.next);
+      if (!value) return null;
+      const name = objectIdentifier(bytes, type);
+      if ((name === COMMON_NAME || name === ORGANIZATION) && TEXT_TAGS.has(value.tag)) {
+        const text = new TextDecoder().decode(bytes.subarray(value.start, value.end)).trim();
+        if (name === COMMON_NAME && !found.commonName) found.commonName = text;
+        if (name === ORGANIZATION && !found.organization) found.organization = text;
+      }
+      if (pair.next >= set.end) break;
     }
     if (set.next >= issuer.end) break;
   }

@@ -119,3 +119,29 @@ XmVjzpaHzlZnZC7yya+yBbsyaIkpWToEwSQ+UeaxwxHPjO4H7xC/q2x+gViwvolm
 44hd1cUZHxrA0Ps433/7gZvhotdtdQmesFAy
 -----END CERTIFICATE-----
 `;
+
+/**
+ * A leaf whose issuer put three attributes in one relative distinguished name,
+ * with the common name last. A set usually holds one attribute, but it may hold
+ * several in any order.
+ */
+export const MULTI_VALUED_RDN = `-----BEGIN CERTIFICATE-----
+MIIDEzCCAfsCFHtTvwYOEO4WNjWLA2cbWDVpOPoCMA0GCSqGSIb3DQEBCwUAMG0x
+CzAJBgNVBAYTAlVTMV4wHQYDVQQKDBZFeGFtcGxlIFRydXN0IFNlcnZpY2VzMB0G
+A1UECwwWQ2VydGlmaWNhdGUgT3BlcmF0aW9uczAeBgNVBAMMF0V4YW1wbGUgVHJ1
+c3QgRG9tYWluIENBMB4XDTI2MDkyMDIwMzg0OVoXDTI3MDkyMDIwMzg0OVowHzEd
+MBsGA1UEAwwUaW50cmFuZXQuZXhhbXBsZS5jb20wggEiMA0GCSqGSIb3DQEBAQUA
+A4IBDwAwggEKAoIBAQC4sq9MAGaBFq6knkH7YiX8zMMLN/W5XT7QnKXaeWFGy9ge
+OUl7vZw44gAhFI5eBClEbRMgf7MtnbDX1x8VxlWK24+X7B5vImrofHwGhuNPgAZS
+fqb62HjdQ+2pPAmhRBi/+F+xjDm7kRqEObo794OQnlt4kxO+RTAo7ANPD5EOKPDk
+TmQmleBzJ9ZVCsxWbmdL/G5b+AKRelS0/O1mqJ96hhWzMa41c78THe62DYJPjEgH
+X8xOH89AmMCX+pY0PcA3XOT8tqmyCrogoAlQbUGeXwm5Rh9OwgEZVgWIpoEd86Ne
+RAysE/ZVISEjVsU5Ch/xQpo1ortRlPEiyX5Gv1u/AgMBAAEwDQYJKoZIhvcNAQEL
+BQADggEBAIqpgZi6Upwp9at5IcU2ncViFKfmoQu4/VgfpQjQ12Eang2gGfiFk3gQ
+ytqxfZPl+GttgpiLNry/ArQRw0X+c0XAs7JBQ/WAhXYUxunJsNmP7FsnwBnU/TsH
+5FnJ+zhyPujbMLIpoJ0yExKx+eo1VIfVX+qPgC+l1KU/FmrRYOXKXTfSd1I+1afQ
+XW0vv01/3UaiX8nUeIowfJcPK7jVmTAf0gkLKoNB2SpLIeP8hYKvuFiLPPsCLt1C
+9/LytcV7xqci65RkdRaoOABWFPZpwxcbgmezpdj41AGal7NrKPCfhCMz7serRnfP
+CXVItlYtBTeCeDDzua5h2PIPvvgVDfo=
+-----END CERTIFICATE-----
+`;
