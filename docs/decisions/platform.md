@@ -73,6 +73,26 @@ start.
 Repair remains the convergence path. A toggle assumes the platform is already
 provisioned and does not attempt drift recovery.
 
+## One operation at a time
+
+`install`, `enable`, `disable`, `repair`, `update`, `uninstall` and the panel's
+template reconcile all rewrite the same config files, units, Twig templates and
+Nginx fragments, and none of that is atomic across the set. Each takes one
+exclusive lock in `/run/lock/clp-addons/operation.lock` for the whole operation,
+so a root shell, a panel job, the anchor path unit and the reconcile timer queue
+instead of overwriting each other's work.
+
+The lock is taken at the entry point and nowhere below it. A nested call, and a
+re-exec marked with `CLP_ADDONS_IN_OPERATION` such as the update handoff, run
+inside the lock their caller already holds. The holder records its operation and
+start time in the lock file, so a waiter that gives up names what it waited for.
+The wait is generous, because an enable that installs Docker runs for minutes;
+the template reconcile is the exception, answering a live panel request and
+refusing after fifteen seconds.
+
+The manager keeps its own short `manager.lock` for writing a job record. That is
+what makes a second click follow the first click's job rather than start one.
+
 ## Managed CloudPanel changes
 
 Nginx and Twig changes are marked and regenerated from a saved pristine copy.

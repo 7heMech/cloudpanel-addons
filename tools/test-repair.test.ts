@@ -122,21 +122,21 @@ const PROBE = String.raw`
 
   const { cmdInstall, cmdRepair } = await import("./cli/index.ts");
 
-  function repairResult() {
+  async function repairResult() {
     calls.length = 0;
     resetProvisioning();
     hasInstalledAddon = true;
     let threw = false;
     try {
-      cmdRepair(["--quiet"]);
+      await cmdRepair(["--quiet"]);
     } catch {
       threw = true;
     }
     return { threw, calls: [...calls], provisioning: { ...provisioning } };
   }
 
-  const repairWithoutSession = repairResult();
-  const repairWithSession = repairResult();
+  const repairWithoutSession = await repairResult();
+  const repairWithSession = await repairResult();
 
   calls.length = 0;
   resetProvisioning();

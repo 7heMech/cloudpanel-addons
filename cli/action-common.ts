@@ -1,6 +1,8 @@
 import { dlopen, FFIType } from "bun:ffi";
 import { createHash } from "node:crypto";
-import { accessSync, closeSync, lstatSync, openSync, readFileSync, constants as fsConstants } from "node:fs";
+import {
+  accessSync, closeSync, ftruncateSync, lstatSync, openSync, readFileSync, writeSync, constants as fsConstants,
+} from "node:fs";
 import { PANEL_IDENTITY_PATH } from "./action-constants";
 
 export { PANEL_IDENTITY_PATH } from "./action-constants";
@@ -308,46 +310,144 @@ export interface FileLockHandle {
   release(): void;
 }
 
-export async function acquireFileLock(path: string, timeoutSeconds: number, onTimeout: string): Promise<FileLockHandle> {
+/**
+ * The refusal a waiter gets when the lock does not come free.
+ *
+ * A function is handed whatever the holder wrote into the lock file, so a
+ * refusal can name the operation it waited for rather than only say "busy".
+ */
+export type LockTimeoutMessage = string | ((holder: string | null) => string);
+
+export interface FileLockOptions {
+  /** Kept in the lock file while the lock is held, for a waiter to read. */
+  note?: string;
+}
+
+// O_RDWR|O_CREAT rather than "w": truncating on open would erase the note the
+// holder wrote. The file is created with mode 0666 under the service umask,
+// the same mode the original wrapper's `exec 200>...` used; the lock directory
+// itself, not the file mode, is the access boundary.
+function openLockFile(path: string): number {
+  return openSync(path, fsConstants.O_RDWR | fsConstants.O_CREAT, 0o666);
+}
+
+function lockHolder(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function lockTimeout(message: LockTimeoutMessage, path: string): never {
+  failAction(typeof message === "string" ? message : message(lockHolder(path)));
+}
+
+function lockHandle(fd: number, state: { locked: boolean }): FileLockHandle {
+  return {
+    release: () => {
+      if (!state.locked) return;
+      ftruncateSync(fd, 0);
+      libc!.symbols.flock(fd, LOCK_UN);
+      state.locked = false;
+      closeSync(fd);
+    },
+  };
+}
+
+function takeLock(fd: number, options: FileLockOptions): void {
+  ftruncateSync(fd, 0);
+  if (options.note) writeSync(fd, options.note, 0);
+}
+
+export async function acquireFileLock(
+  path: string,
+  timeoutSeconds: number,
+  onTimeout: LockTimeoutMessage,
+  options: FileLockOptions = {},
+): Promise<FileLockHandle> {
   if (!libc) failAction("flock is unavailable; refusing to run a privileged action");
-  // openSync(path, "w", 0o666) below creates the file with mode 0666 under the
-  // service umask, the same mode the original wrapper's `exec 200>...` used;
-  // the lock directory itself, not the file mode, is the access boundary.
-  const fd = openSync(path, "w", 0o666);
-  let locked = false;
+  const fd = openLockFile(path);
+  const state = { locked: false };
   let handedOff = false;
   try {
     const deadline = Date.now() + timeoutSeconds * 1000;
     while (true) {
-      if (libc.symbols.flock(fd, LOCK_EX | LOCK_NB) === 0) {
-        locked = true;
-        break;
-      }
-      if (Date.now() >= deadline) failAction(onTimeout);
+      if (libc.symbols.flock(fd, LOCK_EX | LOCK_NB) === 0) break;
+      if (Date.now() >= deadline) lockTimeout(onTimeout, path);
       await sleep(100);
     }
+    state.locked = true;
+    takeLock(fd, options);
     handedOff = true;
-    return {
-      release: () => {
-        if (!locked) return;
-        libc.symbols.flock(fd, LOCK_UN);
-        locked = false;
-        closeSync(fd);
-      },
-    };
+    return lockHandle(fd, state);
   } finally {
     // A timeout or another failure before the handle is returned owns the fd.
     if (!handedOff) {
-      if (locked) libc.symbols.flock(fd, LOCK_UN);
+      if (state.locked) libc.symbols.flock(fd, LOCK_UN);
       closeSync(fd);
     }
   }
 }
 
-export async function withFileLock<T>(path: string, timeoutSeconds: number, onTimeout: string, body: () => Promise<T>): Promise<T> {
-  const lock = await acquireFileLock(path, timeoutSeconds, onTimeout);
+/**
+ * The same lock for callers that cannot await: disable, uninstall and the
+ * template reconcile are synchronous from end to end.
+ */
+export function acquireFileLockSync(
+  path: string,
+  timeoutSeconds: number,
+  onTimeout: LockTimeoutMessage,
+  options: FileLockOptions = {},
+): FileLockHandle {
+  if (!libc) failAction("flock is unavailable; refusing to run a privileged action");
+  const fd = openLockFile(path);
+  const state = { locked: false };
+  let handedOff = false;
+  try {
+    const deadline = Date.now() + timeoutSeconds * 1000;
+    while (true) {
+      if (libc.symbols.flock(fd, LOCK_EX | LOCK_NB) === 0) break;
+      if (Date.now() >= deadline) lockTimeout(onTimeout, path);
+      Bun.sleepSync(100);
+    }
+    state.locked = true;
+    takeLock(fd, options);
+    handedOff = true;
+    return lockHandle(fd, state);
+  } finally {
+    if (!handedOff) {
+      if (state.locked) libc.symbols.flock(fd, LOCK_UN);
+      closeSync(fd);
+    }
+  }
+}
+
+export async function withFileLock<T>(
+  path: string,
+  timeoutSeconds: number,
+  onTimeout: LockTimeoutMessage,
+  body: () => Promise<T>,
+  options: FileLockOptions = {},
+): Promise<T> {
+  const lock = await acquireFileLock(path, timeoutSeconds, onTimeout, options);
   try {
     return await body();
+  } finally {
+    lock.release();
+  }
+}
+
+export function withFileLockSync<T>(
+  path: string,
+  timeoutSeconds: number,
+  onTimeout: LockTimeoutMessage,
+  body: () => T,
+  options: FileLockOptions = {},
+): T {
+  const lock = acquireFileLockSync(path, timeoutSeconds, onTimeout, options);
+  try {
+    return body();
   } finally {
     lock.release();
   }

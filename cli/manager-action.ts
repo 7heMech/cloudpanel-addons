@@ -354,21 +354,12 @@ export async function runManagerAction(
       // Not a job: rendering the templates writes a few files and restarts
       // nothing, so the request that asked for it can wait for the answer.
       // It exists because an addon whose markup depends on a setting has to be
-      // able to put that markup back the moment the setting moves.
-      //
-      // The injector holds no lock of its own, so this takes the manager's and
-      // refuses while a job is running: two passes over the same templates
-      // leave the panel carrying whichever injection set was written last.
-      case "reconcile": {
-        const busy = "another manager operation is running; try again when it has finished";
-        return await withManagerLock(options.lockDir ?? LOCK_DIR, busy, async () => {
-          if (activeManagerJob(options.jobsDir ?? MANAGER_JOBS_DIR)) {
-            return failReply(busy, undefined, options.emitReply !== false);
-          }
-          ops.reconcile();
-          return reply({ ok: true, data: { reconciled: true } }, options.emitReply !== false);
-        });
-      }
+      // able to put that markup back the moment the setting moves. `reconcile`
+      // takes the operation lock itself, which is what keeps it from crossing
+      // an enable, a repair or an update.
+      case "reconcile":
+        ops.reconcile();
+        return reply({ ok: true, data: { reconciled: true } }, options.emitReply !== false);
       case "job": {
         // Without --id, the newest record. The page that draws a job is the
         // one the manager restart reloads, and after that reload the browser
