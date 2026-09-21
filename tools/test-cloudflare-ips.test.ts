@@ -144,7 +144,8 @@ test("site type tags move above the hostname on phones without taking row space"
   expect(html).toContain('<span class="site-copy"><span class="mobile-site-type">Reverse proxy</span><span class="site-name">a.example.test</span></span>');
   expect(page).toContain(".cloudflare-site-table .mobile-site-type { display: none; }");
   expect(page).toContain(".cloudflare-site-table td.type-cell { display: none; }");
-  expect(page).toContain("position: absolute; top: -11px; left: 0;");
+  expect(page).toContain("position: static; margin-top: -15px;");
+  expect(page).toContain("flex-direction: column; align-items: flex-start;");
   expect(page).toContain("transform: translateY(2px);");
   expect(page).toContain("font-size: 10px;");
 });

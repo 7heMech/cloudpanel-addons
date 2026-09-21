@@ -31,11 +31,11 @@ const STYLE = `
   .cloudflare-site-table td.action-cell { width: auto; flex: 0 0 auto; margin-left: auto; display: flex; align-items: center; justify-content: flex-end; }
   .cloudflare-site-table td.action-cell::before { display: none; }
   .cloudflare-site-table td.type-cell { display: none; }
-  .cloudflare-site-table .site-copy { display: block; width: 100%; min-width: 0; transform: translateY(2px); }
+  .cloudflare-site-table .site-copy { display: flex; flex-direction: column; align-items: flex-start; width: 100%; min-width: 0; transform: translateY(2px); }
   .cloudflare-site-table .site-name { display: block; overflow-wrap: anywhere; }
   /* Use the row's existing top padding for the type tag, so it sits above the
      hostname without increasing the card's height or moving the switch. */
-  .cloudflare-site-table .mobile-site-type { display: block; position: absolute; top: -11px; left: 0;
+  .cloudflare-site-table .mobile-site-type { display: block; position: static; margin-top: -15px;
     padding: 1px 4px; border: 1px solid var(--border); border-radius: 3px; color: var(--muted);
     font-size: 10px; font-weight: 400; line-height: 1.1; white-space: nowrap; }
 }
