@@ -14,25 +14,27 @@ const STYLE = `
 .fleet-card p, .policy-card p { margin: 0; }
 .fleet-card .actions { flex-shrink: 0; }
 .toolbar-actions { margin-left: auto; }
+.toolbar #select-all-btn { display: inline-flex; }
 .cloudflare-site-table tbody tr { cursor: pointer; transition: background-color .15s, box-shadow .15s; }
 .cloudflare-site-table tbody tr:hover { background: rgb(38 125 221 / 6%); }
 .cloudflare-site-table tbody tr[aria-selected="true"] { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); }
 .cloudflare-site-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.cloudflare-site-table th.site-action,
+.cloudflare-site-table td.site-action { width: 140px; text-align: left; }
+.switch-sm { width: 40px; height: 22px; flex: 0 0 40px; }
+.switch-sm span { border-radius: 22px; }
+.switch-sm span::after { width: 16px; height: 16px; left: 3px; top: 3px; }
+.switch-sm input:checked + span::after { transform: translateX(18px); }
 @media (max-width: 700px) {
   .fleet-card, .policy-card { flex-direction: column; }
 }
 @media (max-width: 760px) {
   .toolbar-actions { flex: 1 1 100%; margin-left: 0; }
-  .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right:10px; padding-left:10px; white-space:nowrap; }
-  /* This table has one per-site action, so its switch can finish the site's
-     summary row instead of consuming another labeled half-row by itself. */
-  .cloudflare-site-table tr { display: grid; grid-template-columns: minmax(0, 1fr) 50px; column-gap: 12px; }
-  /* Tapping the card selects it; the checkbox remains the desktop and form
-     state control, but does not consume scarce phone width. */
-  .fleet-table.cloudflare-site-table td.site-select { display: none; }
-  .cloudflare-site-table td.action-cell { display: flex; flex: 0 0 auto; align-self: center;
-    margin-left: auto; justify-content: flex-end; }
-  .cloudflare-site-table td.action-cell::before { display: none; }
+  .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right: 10px; padding-left: 10px; white-space: nowrap; }
+  .cloudflare-site-table tbody tr { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+  .cloudflare-site-table td.site-action { width: auto; flex: 0 0 auto; }
+  .cloudflare-site-table td.site-cell { flex: 1 1 calc(100% - 130px); min-width: 0; }
+  .cloudflare-site-table td.type-cell { flex: 0 0 auto; margin-left: auto; }
 }
 `;
 
@@ -42,11 +44,12 @@ function siteRows() {
 }
 
 function rowState(row) {
+  const box = row.querySelector('.site-checkbox');
   return {
     domain: row.dataset.domain,
     enabled: row.dataset.enabled === 'true',
     excluded: row.dataset.excluded === 'true',
-    selected: Boolean(row.querySelector('.site-checkbox') && row.querySelector('.site-checkbox').checked),
+    selected: box ? box.checked : row.getAttribute('aria-selected') === 'true',
   };
 }
 
@@ -63,7 +66,8 @@ function paintSummary() {
   const rowElements = siteRows();
   rowElements.forEach(function (row) {
     const box = row.querySelector('.site-checkbox');
-    row.setAttribute('aria-selected', String(Boolean(box && box.checked)));
+    const isSelected = box ? box.checked : row.getAttribute('aria-selected') === 'true';
+    row.setAttribute('aria-selected', String(isSelected));
   });
   const rows = rowElements.map(rowState);
   const on = rows.filter(function (row) { return row.enabled; }).length;
@@ -97,7 +101,11 @@ function paintSummary() {
 }
 
 function selectAllSites(checked) {
-  document.querySelectorAll('.site-checkbox').forEach(function (box) { box.checked = checked; });
+  siteRows().forEach(function (row) {
+    const box = row.querySelector('.site-checkbox');
+    if (box) box.checked = checked;
+    row.setAttribute('aria-selected', String(checked));
+  });
   paintSummary();
 }
 
@@ -117,8 +125,9 @@ function toggleSiteSelection(event, row) {
     event.preventDefault();
   }
   const box = row.querySelector('.site-checkbox');
-  if (!box || box.disabled) return;
-  box.checked = !box.checked;
+  const next = box ? !box.checked : row.getAttribute('aria-selected') !== 'true';
+  if (box) box.checked = next;
+  row.setAttribute('aria-selected', String(next));
   paintSummary();
 }
 
@@ -139,6 +148,8 @@ function applyState(state) {
     row.dataset.excluded = String(site.excludedFromAutomatic);
     const input = row.querySelector('.site-switch');
     if (input) input.checked = site.enabled;
+    const hint = row.querySelector('.site-exception');
+    if (hint) hint.hidden = !(site.excludedFromAutomatic && state.autoEnableNewSites);
   });
   const policy = document.getElementById('automatic-policy');
   if (policy) policy.checked = Boolean(state.autoEnableNewSites);
@@ -325,12 +336,11 @@ export function dashboardView(state: CloudflareState): string {
   const total = state.sites.length;
   const rows = state.sites.map((site) => `
     <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
-      <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
-      <td class="site-cell"><span class="site-name">${esc(site.domain)}</span><span class="mobile-site-type">${esc(siteTypeLabel(site.type))}</span></td>
-      <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
-      <td class="action-cell" data-label="Cloudflare only">
-        <label class="switch"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
+      <td class="site-action">
+        <label class="switch switch-sm"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
       </td>
+      <td class="site-cell"><input class="site-checkbox" type="checkbox" hidden aria-label="Select ${esc(site.domain)}">${esc(site.domain)}<div class="hint site-exception"${site.excludedFromAutomatic && state.autoEnableNewSites ? "" : " hidden"}>Excluded from automatic enabling</div></td>
+      <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
     </tr>`).join("");
 
   return `
@@ -352,7 +362,7 @@ export function dashboardView(state: CloudflareState): string {
       <div>
         <h2>Enable on new sites</h2>
         <p>Apply the setting automatically within about one minute after a site is created.</p>
-        <p class="hint">This never changes a site that already exists.</p>
+        <p class="hint">This never changes a site that already exists. A site turned off above stays excluded.</p>
       </div>
       <label class="switch"><input id="automatic-policy" type="checkbox" aria-label="Enable Cloudflare-only access on new sites" ${state.autoEnableNewSites ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
     </div>
@@ -367,11 +377,12 @@ export function dashboardView(state: CloudflareState): string {
               <button class="btn" id="enable-selected" type="button" disabled onclick="setSelectedSites(true)">Enable selected</button>
               <button class="btn" id="disable-selected" type="button" disabled onclick="setSelectedSites(false)">Disable selected</button>
             </div>
+            <input id="select-all" type="checkbox" hidden aria-hidden="true">
           </div>
-          <table class="fleet-table inline-mobile-type cloudflare-site-table">
+          <table class="fleet-table cloudflare-site-table">
             <thead><tr>
-              <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
-              <th scope="col">Site</th><th scope="col">Type</th><th scope="col" class="action-cell">Cloudflare only</th>
+              <th scope="col" class="site-action">Cloudflare only</th>
+              <th scope="col">Site</th><th scope="col">Type</th>
             </tr></thead>
             <tbody>${rows}</tbody>
           </table>`}

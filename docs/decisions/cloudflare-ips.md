@@ -26,20 +26,11 @@ sent. Nothing is restored afterwards, so the dialog says so rather than offering
 an undo the action does not implement.
 
 Selection stays separate from the per-site switch, and the selected-scope
-actions are unavailable until something is selected. A site row selects as a
-whole with a clear highlighted state and supports Space and Enter; desktop also
-keeps the conventional checkbox, while a phone omits it to recover that width.
+actions are unavailable until something is selected. The per-site switch is sized
+compactly and sits in the first column, replacing the standalone checkbox, while
+clicking or pressing Space/Enter on a row toggles its selection for bulk actions.
 A per-site switch acts immediately without confirmation, because turning one
-site off is the ordinary correction after a fleet-wide change. On a phone that
-switch stays in the site's summary row and never changes row selection. The
-site-type badge follows the hostname's final rendered line instead of occupying
-a narrow column; the hostname is set a size smaller there so more of it fits
-beside the badge, and the badge holds that line by trimming its own label,
-capped at a third of the cell and floored at a few characters. It never drops
-onto a line of its own, which would cost the card a whole row. The switch sits
-at the end of the row. The switch is the dashboard's only per-site action,
-so the mobile card does not spend a second line repeating the desktop column
-heading.
+site off is the ordinary correction after a fleet-wide change.
 
 After any change the page repaints from a fresh read rather than from what was
 requested, keeping selection and scroll, and does the same after a failure so

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import {
   reconcileNewSites, runCloudflareAction, transformVhost, type CloudflareActionPaths,
 } from "../addons/cloudflare-ips/action";
-import { CLIENT_JS, dashboardView, layout } from "../addons/cloudflare-ips/app/views";
+import { CLIENT_JS, dashboardView } from "../addons/cloudflare-ips/app/views";
 import type { CommandResult } from "../cli/action-common";
 
 const realUid = process.getuid?.() ?? 0;
@@ -97,10 +97,7 @@ test("dashboard renders bulk, per-site, and automatic controls with escaped site
   expect(html).toContain("Enable selected");
   expect(html).toContain('id="select-all"');
   expect(html).toContain('id="automatic-policy"');
-  expect(html).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)"');
-  expect(html).toContain("This never changes a site that already exists.");
-  expect(html).not.toContain("A site turned off above stays excluded.");
-  expect(html).not.toContain("Excluded from automatic enabling");
+  expect(html).toContain("Excluded from automatic enabling");
   expect(html).not.toContain("<script>alert(1)</script>");
   expect(() => new Function(CLIENT_JS)).not.toThrow();
 });
@@ -120,30 +117,15 @@ test("dashboard summarises how many sites allow Cloudflare only", () => {
   expect(rendered).toContain('<div class="actions toolbar-actions">');
 });
 
-test("the switch column ends where the table ends, as the Maintenance table does", () => {
-  const state = {
+test("the per-site switch replaces the checkbox column with full-row selection", () => {
+  const html = dashboardView({
     autoEnableNewSites: true,
     sites: [{ domain: "a.example.test", type: "php", enabled: true, excludedFromAutomatic: false }],
-  };
-  const html = dashboardView(state);
-  // .action-cell is the shared right-aligned column; without it the switches
-  // sat in the middle of the row with the rest of the table empty beside them.
-  expect(html).toContain('<th scope="col" class="action-cell">Cloudflare only</th>');
-  expect(html).toContain('<td class="action-cell" data-label="Cloudflare only">');
-  expect(html).toContain('<table class="fleet-table inline-mobile-type cloudflare-site-table">');
-  expect(html).toContain('<span class="mobile-site-type">PHP</span>');
-  // On a phone this is the only action, so it stays in the site's summary row
-  // and does not repeat the desktop column heading in every card.
-  const page = layout("Cloudflare IP access", html);
-  expect(page).toContain(".fleet-table.inline-mobile-type .mobile-site-type { display: inline-block;");
-  // The hostname is the thing being read, so it is set smaller to fit and the
-  // badge beside it is trimmed rather than pushing it around.
-  expect(html).toContain('<span class="site-name">a.example.test</span>');
-  expect(page).toContain(".fleet-table.inline-mobile-type td.site-cell { display: flex;");
-  expect(page).toContain(".cloudflare-site-table td.action-cell { display: flex; flex: 0 0 auto;");
-  expect(page).toContain("grid-template-columns: minmax(0, 1fr) 50px;");
-  expect(page).toContain(".fleet-table.cloudflare-site-table td.site-select { display: none; }");
-  expect(page).toContain(".cloudflare-site-table td.action-cell::before { display: none; }");
+  });
+  expect(html).toContain('<th scope="col" class="site-action">Cloudflare only</th>');
+  expect(html).toContain('<td class="site-action">');
+  expect(html).toContain('class="switch switch-sm"');
+  expect(html).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)"');
 });
 
 interface FakeElement {
@@ -160,8 +142,9 @@ interface FakeRow {
   dataset: { domain: string; enabled: string; excluded: string };
   attributes: Record<string, string>;
   setAttribute: (name: string, value: string) => void;
+  getAttribute: (name: string) => string | null;
   querySelector: (selector: string) => FakeElement | null;
-  parts: { checkbox: FakeElement; toggle: FakeElement };
+  parts: { checkbox: FakeElement; toggle: FakeElement; exception: FakeElement };
 }
 
 /**
@@ -184,17 +167,20 @@ function fakeDashboard(
     "automatic-policy": el({ checked: auto }),
   };
   const rows: FakeRow[] = sites.map((site) => {
-    const attributes: Record<string, string> = { "aria-selected": "false" };
+    const attributes: Record<string, string> = { "aria-selected": String(Boolean(site.selected)) };
     const parts = {
       checkbox: el({ checked: Boolean(site.selected) }),
       toggle: el({ checked: site.enabled }),
+      exception: el({ hidden: !(site.excluded && auto) }),
     };
     const row: FakeRow = {
       dataset: { domain: site.domain, enabled: String(site.enabled), excluded: String(site.excluded) },
       attributes,
       setAttribute: (name, value) => { attributes[name] = value; },
+      getAttribute: (name) => attributes[name] ?? null,
       querySelector: (selector) => ({
         ".site-checkbox": parts.checkbox, ".site-switch": parts.toggle,
+        ".site-exception": parts.exception,
       }[selector] ?? null),
       parts,
     };
@@ -238,7 +224,8 @@ function loadDashboard(
 ): DashboardClient {
   const factory = new Function(
     "document", "call", "busy", "notify", "clearNotice", "confirmAction", "location",
-    `${CLIENT_JS}\nreturn { setOne, setAllSites, runBulk, siteRows, rowState, paintSummary, toggleAllSites, selectAllSites, toggleSiteSelection };`,
+    `${CLIENT_JS}
+return { setOne, setAllSites, runBulk, siteRows, rowState, paintSummary, toggleAllSites, selectAllSites, toggleSiteSelection };`,
   ) as (...args: unknown[]) => DashboardClient;
   return factory(
     dom.document,
@@ -386,6 +373,7 @@ test("a site turned off after an enable-all stays off when the page repaints", a
 
   expect(dom.rows[1]!.dataset.enabled).toBe("false");
   expect(dom.rows[1]!.dataset.excluded).toBe("true");
+  expect(dom.rows[1]!.parts.exception.hidden).toBe(false);
   expect(dom.byId["cf-summary"]!.textContent).toBe("1 of 2 sites allow Cloudflare only.");
 });
 
