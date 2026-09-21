@@ -33,6 +33,9 @@ ${fleetRowSelectionStyle("php-sites-table")}
   #category-dialog { width:calc(100% - 20px); }
   .toolbar #bulk-category { flex:1 1 100%; }
   .toolbar .toolbar-end { margin-left:0; }
+}
+/* The card each row becomes carries its own selection control. */
+@media (max-width:940px) {
   .fleet-table.php-sites-table td.site-select { display:none; }
 }
 `;
@@ -610,7 +613,7 @@ export function dashboardView(state: PhpResourcesState): string {
       <div class="form-field">
         <label for="category-name">Name</label>
         <input id="category-name" type="text" maxlength="40" autocomplete="off">
-        <div class="hint">What this group of sites is, such as Busy site.</div>
+        <div class="hint">What this group of sites is, such as Standard.</div>
       </div>
       <div class="form-field">
         <label for="category-description">Description</label>

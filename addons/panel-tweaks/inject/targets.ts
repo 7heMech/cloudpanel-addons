@@ -377,10 +377,12 @@ const SITES_SCRIPT = `
       // A page whose markup this no longer recognises keeps its own action
       // links, rather than losing them to a menu that will never be built.
       document.documentElement.classList.remove("clp-tweaks-menu");
+      if (toolbar) toolbar.hidden = true;
       return;
     }
 
     var rows = [];
+    function noToolbar() { toolbar.hidden = true; }
     var bodyRows = tbody.querySelectorAll("tr");
     for (var r = 0; r < bodyRows.length; r++) {
       var row = bodyRows[r];
@@ -389,7 +391,7 @@ const SITES_SCRIPT = `
       if (!domain) continue;
       rows.push({ el: row, domain: domain, site: null });
     }
-    if (rows.length === 0) return;
+    if (rows.length === 0) return noToolbar();
 
     table.classList.add("clp-tweaks-table");
     scroll(table);
@@ -412,7 +414,7 @@ const SITES_SCRIPT = `
     if (document.documentElement.classList.contains("clp-tweaks-menu")) buildMenus(rows);
 
     wanted.then(function (payload) {
-      if (!payload || payload.ok !== true || !payload.data) return;
+      if (!payload || payload.ok !== true || !payload.data) return noToolbar();
       apply(payload.data, rows);
     });
 
@@ -423,7 +425,7 @@ const SITES_SCRIPT = `
       for (var r = 0; r < rows.length; r++) rows[r].site = byDomain[rows[r].domain] || null;
 
       nameApplications(rows);
-      if (!tweaks.sitesTable) { placeTypes(rows); return; }
+      if (!tweaks.sitesTable) { placeTypes(rows); return noToolbar(); }
       addColumns(rows, Boolean(tweaks.diskUsage));
       copyDetails(rows);
       placeTypes(rows);
@@ -1220,14 +1222,18 @@ export function sitesBlock(url: string, tweaks: PanelTweaks = storedTweaks()): s
   const menuClass = tweaks.actionMenu
     ? `\n          <script>document.documentElement.classList.add("clp-tweaks-menu");</script>`
     : "";
+  // Shown from the markup rather than when the reply lands: revealing it later
+  // pushed the table down, which was the largest layout shift on the page. The
+  // script hides it again on a page whose table it does not recognise.
+  const toolbarHidden = tweaks.sitesTable ? "" : " hidden";
   return `
           <style>${style}</style>${menuClass}
-          <div class="clp-tweaks-toolbar" id="clp-tweaks-toolbar" hidden>
+          <div class="clp-tweaks-toolbar" id="clp-tweaks-toolbar"${toolbarHidden}>
             <input type="search" id="clp-tweaks-search" class="form-control" placeholder="Search sites" aria-label="Search sites">
             <select id="clp-tweaks-type" class="form-select" aria-label="Filter by application">
               <option value="">All applications</option>
             </select>
-            <div class="clp-tweaks-columns" id="clp-tweaks-columns" hidden>
+            <div class="clp-tweaks-columns" id="clp-tweaks-columns"${toolbarHidden}>
               <button type="button" class="form-control clp-tweaks-columns-button" id="clp-tweaks-columns-button"
                 aria-haspopup="true" aria-expanded="false">Columns</button>
               <div class="clp-tweaks-columns-menu" id="clp-tweaks-columns-menu" role="group" aria-label="Columns" hidden></div>

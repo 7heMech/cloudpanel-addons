@@ -202,7 +202,7 @@ function siteIn(state: PhpResourcesState, domain: string): PoolSiteState {
 }
 
 const tuned: PoolProfile = { ...STOCK_PROFILE, pm: "dynamic", maxChildren: 24, startServers: 3, minSpareServers: 2, maxSpareServers: 6, maxRequests: 400 };
-const BUSY = PRESET_CATEGORIES.find((category) => category.id === "busy-site")!;
+const BUSY = PRESET_CATEGORIES.find((category) => category.id === "standard")!;
 
 function assign(box: Box, domains: string[], categoryId: string | null): Promise<unknown> {
   return executePhpResourcesAction(["assign"], options(box, JSON.stringify({ domains, categoryId })));
@@ -213,7 +213,7 @@ test("a server that has saved nothing already has the preset categories", async 
   try {
     box.addSite("shop.example.com", "8.2");
     const state = await executePhpResourcesAction(["list"], options(box)) as PhpResourcesState;
-    expect(state.categories.map((category) => category.id)).toEqual(["small-site", "busy-site", "high-traffic"]);
+    expect(state.categories.map((category) => category.id)).toEqual(["lite", "standard", "pro"]);
     expect(state.categories.map((category) => ({
       mode: category.profile.pm,
       maxChildren: category.profile.maxChildren,
@@ -247,10 +247,10 @@ test("assigning a fleet writes every pool and reloads each PHP version once", as
     box.addSite("news.example.com", "8.3");
     box.addSite("untouched.example.com", "8.3");
 
-    const result = await assign(box, ["shop.example.com", "blog.example.com", "news.example.com"], "busy-site") as PhpResourcesResult;
+    const result = await assign(box, ["shop.example.com", "blog.example.com", "news.example.com"], "standard") as PhpResourcesResult;
     expect(result.failures).toEqual([]);
     for (const [domain, version] of [["shop.example.com", "8.2"], ["blog.example.com", "8.2"], ["news.example.com", "8.3"]]) {
-      expect(siteIn(result, domain!).categoryName).toBe("Busy site");
+      expect(siteIn(result, domain!).categoryName).toBe("Standard");
       expect(readProfileFromPool(readFileSync(box.poolOf(domain!, version!), "utf8"))).toEqual(BUSY.profile);
     }
     // One decision, one reload of each service, however many sites it covered.
@@ -275,10 +275,10 @@ test("editing a category rewrites every pool that follows it", async () => {
   try {
     box.addSite("shop.example.com", "8.2");
     box.addSite("blog.example.com", "8.2");
-    await assign(box, ["shop.example.com"], "busy-site");
+    await assign(box, ["shop.example.com"], "standard");
 
     const saved = await executePhpResourcesAction(["save-category"], options(box, JSON.stringify({
-      id: "busy-site", name: "Busy site", description: BUSY.description, profile: tuned,
+      id: "standard", name: "Standard", description: BUSY.description, profile: tuned,
     }))) as PhpResourcesResult;
     expect(saved.failures).toEqual([]);
     expect(readProfileFromPool(readFileSync(box.poolOf("shop.example.com", "8.2"), "utf8"))).toEqual(tuned);
@@ -314,7 +314,7 @@ test("taking a site out of a category restores CloudPanel's own pool file", asyn
   const box = makeBox();
   try {
     box.addSite("shop.example.com", "8.2");
-    await assign(box, ["shop.example.com"], "busy-site");
+    await assign(box, ["shop.example.com"], "standard");
     const released = await assign(box, ["shop.example.com"], null) as PhpResourcesResult;
     expect(siteIn(released, "shop.example.com").categoryId).toBeNull();
     expect(readFileSync(box.poolOf("shop.example.com", "8.2"), "utf8")).toBe(STOCK_POOL);
@@ -327,14 +327,14 @@ test("deleting a category gives the sites in it CloudPanel's limits back", async
   const box = makeBox();
   try {
     box.addSite("shop.example.com", "8.2");
-    await assign(box, ["shop.example.com"], "busy-site");
-    await executePhpResourcesAction(["set-default"], options(box, JSON.stringify({ categoryId: "busy-site" })));
+    await assign(box, ["shop.example.com"], "standard");
+    await executePhpResourcesAction(["set-default"], options(box, JSON.stringify({ categoryId: "standard" })));
 
     const after = await executePhpResourcesAction(
       ["delete-category"],
-      options(box, JSON.stringify({ id: "busy-site" })),
+      options(box, JSON.stringify({ id: "standard" })),
     ) as PhpResourcesResult;
-    expect(after.categories.map((category) => category.id)).toEqual(["small-site", "high-traffic"]);
+    expect(after.categories.map((category) => category.id)).toEqual(["lite", "pro"]);
     expect(after.defaultCategoryId).toBeNull();
     expect(siteIn(after, "shop.example.com").categoryId).toBeNull();
     expect(readFileSync(box.poolOf("shop.example.com", "8.2"), "utf8")).toBe(STOCK_POOL);
@@ -352,8 +352,8 @@ test("a PHP version whose service is not running is written but not reloaded", a
     // moves one, and the pool file is what it reads when it does.
     box.failing.add("systemctl is-active --quiet php8.2-fpm");
 
-    const result = await assign(box, ["shop.example.com"], "busy-site") as PhpResourcesResult;
-    expect(siteIn(result, "shop.example.com").categoryId).toBe("busy-site");
+    const result = await assign(box, ["shop.example.com"], "standard") as PhpResourcesResult;
+    expect(siteIn(result, "shop.example.com").categoryId).toBe("standard");
     expect(readProfileFromPool(readFileSync(box.poolOf("shop.example.com", "8.2"), "utf8"))).toEqual(BUSY.profile);
     expect(reloadsOf(box, "8.2")).toBe(0);
   } finally {
@@ -366,7 +366,7 @@ test("a configuration php-fpm refuses leaves the pool file as it was", async () 
   try {
     box.addSite("shop.example.com", "8.2");
     box.failing.add("php-fpm8.2 -t");
-    await expect(assign(box, ["shop.example.com"], "busy-site")).rejects.toThrow(/configuration test failed/);
+    await expect(assign(box, ["shop.example.com"], "standard")).rejects.toThrow(/configuration test failed/);
     expect(readFileSync(box.poolOf("shop.example.com", "8.2"), "utf8")).toBe(STOCK_POOL);
     // Nothing was assigned either, so the next reconciliation will not write it.
     const state = await executePhpResourcesAction(["list"], options(box)) as PhpResourcesState;
@@ -380,7 +380,7 @@ test("the default category reaches sites created after it, and no others", async
   const box = makeBox();
   try {
     box.addSite("shop.example.com", "8.2");
-    await executePhpResourcesAction(["set-default"], options(box, JSON.stringify({ categoryId: "busy-site" })));
+    await executePhpResourcesAction(["set-default"], options(box, JSON.stringify({ categoryId: "standard" })));
 
     // The site that already existed is left alone.
     let result = await executePhpResourcesAction(["reconcile"], options(box)) as ReconcileResult;
@@ -401,7 +401,7 @@ test("the default category reaches sites created after it, and no others", async
     await executePhpResourcesAction(["set-default"], options(box, JSON.stringify({ categoryId: null })));
     const state = await executePhpResourcesAction(["list"], options(box)) as PhpResourcesState;
     expect(state.defaultCategoryId).toBeNull();
-    expect(siteIn(state, "new.example.com").categoryId).toBe("busy-site");
+    expect(siteIn(state, "new.example.com").categoryId).toBe("standard");
   } finally {
     rmSync(box.root, { recursive: true, force: true });
   }
@@ -412,13 +412,13 @@ test("a site taken out of a category is not a new site the default can claim", a
   try {
     box.addSite("shop.example.com", "8.2");
     await assign(box, ["shop.example.com"], null);
-    await executePhpResourcesAction(["set-default"], options(box, JSON.stringify({ categoryId: "busy-site" })));
+    await executePhpResourcesAction(["set-default"], options(box, JSON.stringify({ categoryId: "standard" })));
     box.addSite("new.example.com", "8.2");
 
     await executePhpResourcesAction(["reconcile"], options(box));
     const state = await executePhpResourcesAction(["list"], options(box)) as PhpResourcesState;
     expect(siteIn(state, "shop.example.com").categoryId).toBeNull();
-    expect(siteIn(state, "new.example.com").categoryId).toBe("busy-site");
+    expect(siteIn(state, "new.example.com").categoryId).toBe("standard");
   } finally {
     rmSync(box.root, { recursive: true, force: true });
   }
@@ -428,7 +428,7 @@ test("a pool file CloudPanel rewrote for a new PHP version is restored", async (
   const box = makeBox();
   try {
     box.addSite("shop.example.com", "8.2");
-    await assign(box, ["shop.example.com"], "busy-site");
+    await assign(box, ["shop.example.com"], "standard");
 
     // What changing the PHP version in the panel leaves behind: the old pool
     // file deleted, a stock one written under the new version.
@@ -462,7 +462,7 @@ test("a site CloudPanel no longer has stops being carried", async () => {
   try {
     box.addSite("shop.example.com", "8.2");
     box.addSite("keep.example.com", "8.2");
-    await assign(box, ["shop.example.com"], "busy-site");
+    await assign(box, ["shop.example.com"], "standard");
     const panel = new Database(box.paths.panelDb);
     panel.query("DELETE FROM site WHERE domain_name = 'shop.example.com';").run();
     panel.close();
@@ -480,7 +480,7 @@ test("a site with no PHP settings has no pool to assign", async () => {
     const panel = new Database(box.paths.panelDb);
     panel.query("INSERT INTO site (type, domain_name, user) VALUES ('static', 'static.example.com', 'static');").run();
     panel.close();
-    await expect(assign(box, ["static.example.com"], "busy-site"))
+    await expect(assign(box, ["static.example.com"], "standard"))
       .rejects.toThrow(/no CloudPanel site with PHP settings/);
   } finally {
     rmSync(box.root, { recursive: true, force: true });

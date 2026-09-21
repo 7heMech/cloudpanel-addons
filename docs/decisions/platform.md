@@ -170,7 +170,7 @@ drawing rather than the operator's gravatar, because the manager serves these
 pages behind the panel's session without ever being told whose it is. The theme
 and Admin Area icons are the panel's own paths rather than approximations of
 them, so one control does not have two shapes depending on the page. Below
-760px the logo and the three controls share one 64px row and the navigation
+940px the logo and the three controls share one 64px row and the navigation
 takes the row beneath; that shape is what Panel Tweaks gives the panel's own
 header on a phone, so moving between the two does not move the header.
 
@@ -185,9 +185,14 @@ draws. The manager's own pages use the same two: disabling an addon asks through
 that dialog, naming the addon as its card does and saying that its data is kept,
 and a manager job that fails to start reports through the inline notice. The
 browser's `confirm` and `alert` survive only as what the shell degrades to where
-there is no `<dialog>` or no notice holder. Below 760px the shell tightens: a dialog gives up its desktop padding and
-its buttons take the row, and it is bounded by the visual viewport so a phone's
-collapsing address bar cannot cover them. Live enable, disable and update jobs
+there is no `<dialog>` or no notice holder. Below 940px the shell tightens: a fleet table's rows become cards, a dialog
+gives up its desktop padding and its buttons take the row, and the dialog is
+bounded by the visual viewport so a phone's collapsing address bar cannot cover
+them. 940px rather than a phone width because a fleet table is five or six
+columns wide: below that the columns are narrower than the hostnames in them and
+a domain wrapped a character at a time. Cell padding comes down from 1200px for
+the same reason. Two-column card and field grids hold until 760px, where the
+tables have already given way. Live enable, disable and update jobs
 put their state, current step and output in the manager card that owns the job,
 with the log auto-expanding as output arrives so the operator can see the live
 progress while remaining collapsible if desired. A job whose
@@ -229,9 +234,19 @@ to the addon's own page when a deep link is what brought the operator there.
 A direct visit to the addon's own URL
 redirects to the panel's site page carrying `clp-addon`, which the loader reads
 on landing, so the address bar still names the page and a refresh still works.
-`?embed=0` renders the standalone page instead. Maintenance and Staging are the
-addons mounted this way while the approach is being evaluated; the reproduction
-above is what it would replace.
+`?embed=0` renders the standalone page instead. Git, Maintenance and Staging --
+every addon with a site tab -- are mounted this way while the approach is being
+evaluated; the reproduction above is what it would replace.
+
+Such a landing knows which fragment it wants from the URL alone, so the loader
+runs as the page is parsed and asks for it then rather than once the document is
+ready, and hides the panel's content area from the same moment. The settings
+page the redirect passes through is otherwise painted and then thrown away,
+which reads as the wrong page. Only the half that reads the panel's markup
+waits for the document; it marks the addon's tab active as soon as it has the
+strip, ahead of the fragment it is still waiting for. The content area is
+revealed by whatever finishes -- the mount, the fallback to the addon's own
+page, or a timer -- so a page the loader never reached is never left blank.
 
 CloudPanel sizes that strip for the tabs it ships, so an addon's tab wrapped it
 onto a second row. The manager injects one rule making the strip a single

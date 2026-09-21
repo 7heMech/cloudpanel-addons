@@ -1,5 +1,5 @@
 import type { AddonTarget } from "./addon-target";
-import { SITE_EMBED_SCRIPT } from "./shadow-embed";
+import { SITE_EMBED_SCRIPT, SITE_EMBED_STYLE } from "./shadow-embed";
 import { esc, escJs } from "./app-http";
 import { UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
 
@@ -193,11 +193,11 @@ const SITE_LAYOUT_SCRIPT = `
   strip.addEventListener("focusin", function (event) { reveal(event.target); });
 `;
 
-// Everything this block injects sits ahead of the markup it reads, so it waits
-// for the document rather than querying what the parser has not reached yet.
-function deferred(...bodies: string[]): string {
+// This block sits ahead of the markup it reads, so it waits for the document
+// rather than querying what the parser has not reached yet.
+function deferred(body: string): string {
   return `(function () {
-  function start() {${bodies.join("\n")}}
+  function start() {${body}}
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
   else start();
 })();`;
@@ -218,8 +218,9 @@ export function siteLayoutTarget(): AddonTarget {
     template: SITE_TAB_TEMPLATE,
     anchorBefore: '<div class="tab-container">',
     required: true,
-    snippet: () => `<style>${SITE_LAYOUT_STYLE}</style>
-<script>${deferred(SITE_LAYOUT_SCRIPT, SITE_EMBED_SCRIPT)}</script>
+    snippet: () => `<style>${SITE_LAYOUT_STYLE}${SITE_EMBED_STYLE}</style>
+<script>${deferred(SITE_LAYOUT_SCRIPT)}
+${SITE_EMBED_SCRIPT}</script>
 `,
   };
 }

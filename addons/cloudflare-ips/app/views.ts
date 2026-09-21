@@ -20,9 +20,13 @@ ${fleetRowSelectionStyle("cloudflare-site-table")}
   .fleet-card, .policy-card { flex-direction: column; }
 }
 @media (max-width: 760px) {
-  .cloudflare-site-table tbody tr { flex-wrap: nowrap; align-items: center; padding: 10px 20px; }
   .toolbar-actions { flex: 1 1 100%; margin-left: 0; }
   .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right:10px; padding-left:10px; white-space:nowrap; }
+}
+/* Where the shared fleet table becomes a card, this row keeps the domain and
+   its action on one line instead. */
+@media (max-width: 940px) {
+  .cloudflare-site-table tbody tr { flex-wrap: nowrap; align-items: center; padding: 10px 20px; }
   .fleet-table.cloudflare-site-table td.site-select { display: none; }
   .cloudflare-site-table td.site-cell { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; }
   .cloudflare-site-table td.action-cell { width: auto; flex: 0 0 auto; margin-left: auto; display: flex; align-items: center; justify-content: flex-end; }

@@ -312,7 +312,18 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
     padding: 10px 20px; justify-content: flex-end; border-top: 1px solid var(--border); }
   .clp-addon-header-inner > #clp-addons-update-notice + .clp-addon-header-tools { margin-left: auto; }
 }
+/* CloudPanel's own cell padding is generous, and six columns of it leave a
+   hostname a column too narrow to hold a word. The table keeps the padding it
+   was designed with only while there is width to spare. */
+@media (max-width: 1200px) {
+  th, td { padding: 18px 20px; }
+}
+/* Two cards or two fields side by side still read well on a tablet; it is the
+   wide tables above that run out of room first. */
 @media (max-width: 760px) {
+  .form-grid, .addon-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 940px) {
   .clp-addon-header-inner { flex-wrap: wrap; }
   /* Measured from zero rather than from the logo, so the tools keep their place
      on this row instead of being wrapped onto one of their own by the last
@@ -320,8 +331,9 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
      than pushing them off. */
   .clp-addon-brand { flex: 1 1 0; min-width: 0; border: 0; margin: 0; min-height: 64px;
     align-items: center; padding: 0 20px; }
-  /* The logo keeps its own size, as the panel's does; measuring the row from
-     zero above is what keeps it from pushing the tools off instead. */
+  /* Narrow phones leave the brand less than the logo's own width, so it scales
+     down rather than running under the tools beside it. */
+  .clp-addon-logo { max-width: 100%; height: auto; }
   /* The logo and the tools share the first row and the navigation takes the
      second, rather than each taking a row of its own. */
   .clp-addon-header-tools { order: 1; margin-left: auto; }
@@ -341,7 +353,9 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   /* The first link starts where the logo does, as the panel's own row does. */
   .clp-addon-primary-nav .clp-addon-primary-link:first-child { margin-left: 0; }
   .clp-addon-primary-link { min-height: 48px; }
-  .clp-addon-header-inner > #clp-addons-update-notice { justify-content: center; padding: 10px 16px; }
+  /* Starts where the logo and the first navigation link start, rather than in
+     the middle of a row of its own. */
+  .clp-addon-header-inner > #clp-addons-update-notice { justify-content: flex-start; padding: 10px 20px; }
   main { padding: 20px 12px 30px; }
   .clp-addon-tabs { padding: 0 5px; margin-bottom: 24px; }
   .page-heading { flex-wrap: wrap; }
@@ -351,7 +365,6 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .card-table { padding: 0; }
   .card-table > .card-header { margin: 0; padding: 20px; }
   .addon-card .card-header { width: calc(100% + 40px); }
-  .form-grid, .addon-grid { grid-template-columns: minmax(0, 1fr); }
   th, td { padding: 16px 20px; }
   /* A phone has no room for five or six columns. The row becomes a block with
      the domain on a line of its own, and every other cell names its column. */

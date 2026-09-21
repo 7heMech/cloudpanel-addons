@@ -6,7 +6,9 @@ import { maintenanceService } from "../addons/maintenance/app/service";
 import { fragment } from "../addons/maintenance/app/views";
 import { BASE_STYLE } from "../lib/app-ui";
 import { siteLayoutTarget } from "../lib/panel-nav";
-import { EMBED_MARKER, embedLandingUrl, shadowStyle, SITE_EMBED_SCRIPT } from "../lib/shadow-embed";
+import {
+  EMBED_LANDING_CLASS, EMBED_MARKER, embedLandingUrl, shadowStyle, SITE_EMBED_SCRIPT,
+} from "../lib/shadow-embed";
 import { ADDON_SITE_TABS } from "../lib/site-context";
 
 test("the stylesheet is rewritten for a shadow root", () => {
@@ -68,13 +70,30 @@ test("the loader mounts into a shadow root and runs the script at global scope",
   expect(script).toContain(`get("${EMBED_MARKER}")`);
 });
 
-test("the loader is injected with the layout rule, behind the same deferral", () => {
+test("the loader is injected with the layout rule, and only its markup half waits", () => {
   const snippet = siteLayoutTarget().snippet("/addons/");
   expect(snippet).toContain("attachShadow");
   expect(snippet).toContain('document.addEventListener("DOMContentLoaded", start, { once: true })');
-  // One script element, one deferral, both bodies inside it.
+  // One script element. The layout block is deferred whole; the loader runs now
+  // and defers the half that reads markup.
   expect(snippet.match(/<script>/g)).toHaveLength(1);
-  expect(snippet.indexOf("function start()")).toBeLessThan(snippet.indexOf("attachShadow"));
+  expect(snippet.match(/function start\(\)/g)).toHaveLength(1);
+  expect(snippet).toContain('document.addEventListener("DOMContentLoaded", attach, { once: true })');
+  expect(snippet).toContain(`html.${EMBED_LANDING_CLASS} .site-content { visibility: hidden; }`);
+});
+
+test("a deep link asks for its fragment while the panel page is still parsing", () => {
+  // The panel's own content is hidden from the same moment, so the settings
+  // page the redirect passed through is never the page the operator reads.
+  expect(SITE_EMBED_SCRIPT).toContain(`classList.add("${EMBED_LANDING_CLASS}")`);
+  expect(SITE_EMBED_SCRIPT).toContain(`classList.remove("${EMBED_LANDING_CLASS}")`);
+  expect(SITE_EMBED_SCRIPT).toContain('"domain=" + encodeURIComponent(domain)');
+  // The request is started before the document is ready, and the landing mount
+  // takes that reply rather than asking again.
+  expect(SITE_EMBED_SCRIPT).toContain("var early = landed ? prefetch(landed) : null;");
+  expect(SITE_EMBED_SCRIPT).toContain("var reply = !push && early ? early : fetchFragment(tab, query);");
+  // Nothing is hidden or fetched on a page nobody deep-linked to.
+  expect(SITE_EMBED_SCRIPT).toContain("setTimeout(reveal, 5000)");
 });
 
 test("a deep link into a site's addon page is answered by the panel's own page", async () => {
@@ -170,7 +189,7 @@ function runLoader(options: {
   const document = {
     title: "",
     head,
-    documentElement: { classList: { contains: () => false } },
+    documentElement: { classList: { contains: () => false, add: () => {}, remove: () => {} } },
     createElement: (tag: string) => (tag === "script"
       ? { textContent: "" }
       : { classList: { toggle: () => {} }, attachShadow: () => ({ innerHTML: "" }) }),

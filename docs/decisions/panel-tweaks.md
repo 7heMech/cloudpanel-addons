@@ -60,6 +60,12 @@ card costs the site list its enhancements rather than preventing the addon from
 being enabled. The login page's anchor is required: it is one line inside
 `{% block stylesheets %}` and there is nothing to degrade to.
 
+The toolbar is in that markup rather than created when the reply lands, and it
+is visible from the start whenever the sites-table switch is on. Revealed later
+it pushed the whole table down, which was the largest layout shift on the page.
+The script hides it again on a page whose table it does not recognise and when
+the reply never arrives.
+
 ## What is read at request time, and what is not
 
 The injected script asks the addon for the current switches along with the site
