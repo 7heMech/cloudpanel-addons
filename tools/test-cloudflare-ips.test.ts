@@ -98,7 +98,7 @@ test("dashboard renders bulk, per-site, and automatic controls with escaped site
   expect(html).toContain('id="select-all"');
   expect(html).toContain('id="select-all-btn"');
   expect(html).toContain('id="automatic-policy"');
-  expect(html).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)"');
+  expect(html).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this, paintSummary)"');
   expect(html).not.toContain("site-exception");
   expect(html).not.toContain("<script>alert(1)</script>");
   expect(() => new Function(CLIENT_JS)).not.toThrow();
@@ -229,7 +229,7 @@ interface DashboardClient {
   paintSummary(): void;
   selectAllSites(checked: boolean): void;
   toggleAllSites(): void;
-  toggleSiteSelection(event: unknown, row: unknown): void;
+  toggleSiteSelection(event: unknown, row: unknown, repaint: () => void): void;
 }
 
 function loadDashboard(
@@ -432,19 +432,19 @@ test("selection actions stay unavailable until sites are selected", () => {
   expect(dom.byId["disable-selected"]!.disabled).toBe(true);
 });
 
-test("site rows use PHP Resources selection mode", () => {
+test("Cloudflare site rows support mouse and keyboard selection", () => {
   const dom = fakeDashboard([
     { domain: "one.example.test", enabled: true, excluded: false },
     { domain: "two.example.test", enabled: false, excluded: false },
   ]);
   const client = loadDashboard(dom, { call: async () => ({ ok: true }) });
 
-  client.toggleSiteSelection({ type: "click", target: { closest: () => null } }, dom.rows[0]);
+  client.toggleSiteSelection({ type: "click", target: { closest: () => null } }, dom.rows[0], client.paintSummary);
   expect(dom.rows[0]!.parts.checkbox.checked).toBe(true);
   expect(dom.rows[0]!.attributes["aria-selected"]).toBe("true");
   expect(dom.byId["cf-selection"]!.textContent).toBe("1 of 2 selected");
 
-  client.toggleSiteSelection({ type: "click", target: { closest: () => ({}) } }, dom.rows[0]);
+  client.toggleSiteSelection({ type: "click", target: { closest: () => ({}) } }, dom.rows[0], client.paintSummary);
   expect(dom.rows[0]!.parts.checkbox.checked).toBe(true);
 
   client.toggleAllSites();
@@ -454,7 +454,7 @@ test("site rows use PHP Resources selection mode", () => {
   let prevented = false;
   client.toggleSiteSelection({
     type: "keydown", key: " ", target: { closest: () => null }, preventDefault: () => { prevented = true; },
-  }, dom.rows[1]);
+  }, dom.rows[1], client.paintSummary);
   expect(prevented).toBe(true);
   expect(dom.rows[1]!.parts.checkbox.checked).toBe(false);
 });

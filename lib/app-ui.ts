@@ -31,6 +31,32 @@ const PANEL_ADMIN_URL = "/admin/users";
 const PANEL_SETTINGS_URL = "/settings";
 const PANEL_LOGOUT_URL = "/logout";
 
+/** Shared interaction and focus treatment for selectable site-table rows. */
+export function fleetRowSelectionStyle(tableClass: string): string {
+  return `
+.${tableClass} tbody tr { cursor: pointer; transition: background-color .15s, box-shadow .15s; }
+.${tableClass} tbody tr:hover { background: rgb(38 125 221 / 6%); }
+.${tableClass} tbody tr[aria-selected="true"] { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); }
+.${tableClass} tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+`;
+}
+
+/** Shared mouse/keyboard selection for the Cloudflare and PHP site tables. */
+export const FLEET_ROW_SELECTION_JS = `
+function toggleSiteSelection(event, row, repaint) {
+  const target = event.target;
+  if (target && target !== row && target.closest && target.closest('input, button, a, label, select, textarea')) return;
+  if (event.type === 'keydown') {
+    if (event.key !== ' ' && event.key !== 'Enter') return;
+    event.preventDefault();
+  }
+  const box = row.querySelector('.site-checkbox');
+  if (!box || box.disabled) return;
+  box.checked = !box.checked;
+  repaint();
+}
+`;
+
 // Measured against CloudPanel 2.5.1's public demo: dashboard, sites, settings,
 // certificates, logs and new-site forms. Keep these rules independent of the
 // panel's private templates and versioned CSS bundles.

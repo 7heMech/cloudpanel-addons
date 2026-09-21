@@ -1,5 +1,5 @@
 import { esc } from "../../../lib/app-http";
-import { renderLayout } from "../../../lib/app-ui";
+import { FLEET_ROW_SELECTION_JS, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import { siteTypeLabel } from "../../../lib/site-context";
 import type { CloudflareState } from "./service";
@@ -14,11 +14,8 @@ const STYLE = `
 .fleet-card p, .policy-card p { margin: 0; }
 .fleet-card .actions { flex-shrink: 0; }
 .toolbar-actions { margin-left: auto; }
+${fleetRowSelectionStyle("cloudflare-site-table")}
 .cloudflare-site-table .mobile-site-type { display: none; }
-.cloudflare-site-table tbody tr { cursor: pointer; transition: background-color .15s, box-shadow .15s; }
-.cloudflare-site-table tbody tr:hover { background: rgb(38 125 221 / 6%); }
-.cloudflare-site-table tbody tr[aria-selected="true"] { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); }
-.cloudflare-site-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 @media (max-width: 700px) {
   .fleet-card, .policy-card { flex-direction: column; }
 }
@@ -40,6 +37,7 @@ const STYLE = `
 `;
 
 export const CLIENT_JS = `
+${FLEET_ROW_SELECTION_JS}
 function siteRows() {
   return Array.from(document.querySelectorAll('tr[data-domain]'));
 }
@@ -115,19 +113,6 @@ function selectAllSites(checked) {
 function toggleAllSites() {
   const rows = siteRows();
   selectAllSites(selectedRows().length < rows.length);
-}
-
-function toggleSiteSelection(event, row) {
-  const target = event.target;
-  if (target && target !== row && target.closest && target.closest('input, button, a, label, select, textarea')) return;
-  if (event.type === 'keydown') {
-    if (event.key !== ' ' && event.key !== 'Enter') return;
-    event.preventDefault();
-  }
-  const box = row.querySelector('.site-checkbox');
-  if (!box || box.disabled) return;
-  box.checked = !box.checked;
-  paintSummary();
 }
 
 // Repaint from the server's answer rather than from what was asked for: the
@@ -332,7 +317,7 @@ export function dashboardView(state: CloudflareState): string {
   const enabled = state.sites.filter((site) => site.enabled).length;
   const total = state.sites.length;
   const rows = state.sites.map((site) => `
-    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
+    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this, paintSummary)" onkeydown="toggleSiteSelection(event, this, paintSummary)">
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
       <td class="site-cell"><span class="site-copy"><span class="mobile-site-type">${esc(siteTypeLabel(site.type))}</span><span class="site-name">${esc(site.domain)}</span></span></td>
       <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
