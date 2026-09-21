@@ -14,12 +14,28 @@ const STYLE = `
 .fleet-card p, .policy-card p { margin: 0; }
 .fleet-card .actions { flex-shrink: 0; }
 .toolbar-actions { margin-left: auto; }
+.cloudflare-site-table .mobile-site-type { display: none; }
+.cloudflare-site-table tbody tr { cursor: pointer; transition: background-color .15s, box-shadow .15s; }
+.cloudflare-site-table tbody tr:hover { background: rgb(38 125 221 / 6%); }
+.cloudflare-site-table tbody tr[aria-selected="true"] { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); }
+.cloudflare-site-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 @media (max-width: 700px) {
   .fleet-card, .policy-card { flex-direction: column; }
 }
 @media (max-width: 760px) {
+  .cloudflare-site-table tbody tr { flex-wrap: nowrap; align-items: center; padding: 10px 20px; }
   .toolbar-actions { flex: 1 1 100%; margin-left: 0; }
   .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right:10px; padding-left:10px; white-space:nowrap; }
+  .fleet-table.cloudflare-site-table td.site-select { display: none; }
+  .cloudflare-site-table td.site-cell { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; }
+  .cloudflare-site-table td.action-cell { width: auto; flex: 0 0 auto; margin-left: auto; display: flex; align-items: center; justify-content: flex-end; }
+  .cloudflare-site-table td.action-cell::before { display: none; }
+  .cloudflare-site-table td.type-cell { display: none; }
+  .cloudflare-site-table .site-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; min-width: 0; }
+  .cloudflare-site-table .site-name { display: block; overflow-wrap: anywhere; }
+  .cloudflare-site-table .mobile-site-type { display: block;
+    padding: 1px 4px; border: 1px solid var(--border); border-radius: 3px; color: var(--muted);
+    font-size: 10px; font-weight: 400; line-height: 1.1; white-space: nowrap; }
 }
 `;
 
@@ -37,6 +53,13 @@ function rowState(row) {
   };
 }
 
+function selectedRows() {
+  return siteRows().filter(function (row) {
+    const box = row.querySelector('.site-checkbox');
+    return box && box.checked;
+  });
+}
+
 function automaticOn() {
   const policy = document.getElementById('automatic-policy');
   return Boolean(policy && policy.checked);
@@ -47,7 +70,13 @@ function plural(count, word) {
 }
 
 function paintSummary() {
-  const rows = siteRows().map(rowState);
+  const rowElements = siteRows();
+  rowElements.forEach(function (row) {
+    const box = row.querySelector('.site-checkbox');
+    row.tabIndex = 0;
+    row.setAttribute('aria-selected', String(Boolean(box && box.checked)));
+  });
+  const rows = rowElements.map(rowState);
   const on = rows.filter(function (row) { return row.enabled; }).length;
   const summary = document.getElementById('cf-summary');
   if (summary) {
@@ -55,9 +84,9 @@ function paintSummary() {
       ? 'No sites found in CloudPanel.'
       : on + ' of ' + plural(rows.length, 'site') + ' allow Cloudflare only.';
   }
-  const selected = rows.filter(function (row) { return row.selected; }).length;
+  const selected = selectedRows().length;
   const note = document.getElementById('cf-selection');
-  if (note) note.textContent = selected === 0 ? 'No sites selected' : plural(selected, 'site') + ' selected';
+  if (note) note.textContent = selected === 0 ? 'No sites selected' : selected + ' of ' + rows.length + ' selected';
   ['enable-selected', 'disable-selected'].forEach(function (id) {
     const button = document.getElementById(id);
     if (button) button.disabled = selected === 0;
@@ -71,10 +100,33 @@ function paintSummary() {
     all.checked = rows.length > 0 && selected === rows.length;
     all.indeterminate = selected > 0 && selected < rows.length;
   }
+  const allBtn = document.getElementById('select-all-btn');
+  if (allBtn) {
+    allBtn.disabled = rows.length === 0;
+    allBtn.textContent = rows.length > 0 && selected === rows.length ? 'Deselect all' : 'Select all';
+  }
 }
 
 function selectAllSites(checked) {
   document.querySelectorAll('.site-checkbox').forEach(function (box) { box.checked = checked; });
+  paintSummary();
+}
+
+function toggleAllSites() {
+  const rows = siteRows();
+  selectAllSites(selectedRows().length < rows.length);
+}
+
+function toggleSiteSelection(event, row) {
+  const target = event.target;
+  if (target && target !== row && target.closest && target.closest('input, button, a, label, select, textarea')) return;
+  if (event.type === 'keydown') {
+    if (event.key !== ' ' && event.key !== 'Enter') return;
+    event.preventDefault();
+  }
+  const box = row.querySelector('.site-checkbox');
+  if (!box || box.disabled) return;
+  box.checked = !box.checked;
   paintSummary();
 }
 
@@ -95,8 +147,6 @@ function applyState(state) {
     row.dataset.excluded = String(site.excludedFromAutomatic);
     const input = row.querySelector('.site-switch');
     if (input) input.checked = site.enabled;
-    const hint = row.querySelector('.site-exception');
-    if (hint) hint.hidden = !(site.excludedFromAutomatic && state.autoEnableNewSites);
   });
   const policy = document.getElementById('automatic-policy');
   if (policy) policy.checked = Boolean(state.autoEnableNewSites);
@@ -282,9 +332,9 @@ export function dashboardView(state: CloudflareState): string {
   const enabled = state.sites.filter((site) => site.enabled).length;
   const total = state.sites.length;
   const rows = state.sites.map((site) => `
-    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}">
+    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
-      <td class="site-cell">${esc(site.domain)}<div class="hint site-exception"${site.excludedFromAutomatic && state.autoEnableNewSites ? "" : " hidden"}>Excluded from automatic enabling</div></td>
+      <td class="site-cell"><span class="site-copy"><span class="mobile-site-type">${esc(siteTypeLabel(site.type))}</span><span class="site-name">${esc(site.domain)}</span></span></td>
       <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
       <td class="action-cell" data-label="Cloudflare only">
         <label class="switch"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
@@ -299,7 +349,7 @@ export function dashboardView(state: CloudflareState): string {
       <div>
         <h2>All sites</h2>
         <p id="cf-summary">${total === 0 ? "No sites found in CloudPanel." : `${enabled} of ${total} ${total === 1 ? "site" : "sites"} allow Cloudflare only.`}</p>
-        <p class="hint">A one-time change to the sites that exist now. Turning a single site off afterwards keeps it off.</p>
+        <p class="hint">A one-time change to the sites that exist now.</p>
       </div>
       <div class="actions">
         <button class="btn btn-primary" id="enable-all" type="button" ${total === 0 ? "disabled" : ""} onclick="setAllSites(true)">Enable all sites</button>
@@ -310,7 +360,6 @@ export function dashboardView(state: CloudflareState): string {
       <div>
         <h2>Enable on new sites</h2>
         <p>Apply the setting automatically within about one minute after a site is created.</p>
-        <p class="hint">This never changes a site that already exists. A site turned off above stays excluded.</p>
       </div>
       <label class="switch"><input id="automatic-policy" type="checkbox" aria-label="Enable Cloudflare-only access on new sites" ${state.autoEnableNewSites ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
     </div>
@@ -320,12 +369,13 @@ export function dashboardView(state: CloudflareState): string {
         : `<div class="card-header toolbar">
             <h2>Sites</h2>
             <span class="toolbar-note" id="cf-selection">No sites selected</span>
+            <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
             <div class="actions toolbar-actions">
               <button class="btn" id="enable-selected" type="button" disabled onclick="setSelectedSites(true)">Enable selected</button>
               <button class="btn" id="disable-selected" type="button" disabled onclick="setSelectedSites(false)">Disable selected</button>
             </div>
           </div>
-          <table class="fleet-table">
+          <table class="fleet-table cloudflare-site-table">
             <thead><tr>
               <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
               <th scope="col">Site</th><th scope="col">Type</th><th scope="col" class="action-cell">Cloudflare only</th>
