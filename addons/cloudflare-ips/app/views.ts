@@ -95,8 +95,6 @@ function applyState(state) {
     row.dataset.excluded = String(site.excludedFromAutomatic);
     const input = row.querySelector('.site-switch');
     if (input) input.checked = site.enabled;
-    const hint = row.querySelector('.site-exception');
-    if (hint) hint.hidden = !(site.excludedFromAutomatic && state.autoEnableNewSites);
   });
   const policy = document.getElementById('automatic-policy');
   if (policy) policy.checked = Boolean(state.autoEnableNewSites);
@@ -284,7 +282,7 @@ export function dashboardView(state: CloudflareState): string {
   const rows = state.sites.map((site) => `
     <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}">
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
-      <td class="site-cell">${esc(site.domain)}<div class="hint site-exception"${site.excludedFromAutomatic && state.autoEnableNewSites ? "" : " hidden"}>Excluded from automatic enabling</div></td>
+      <td class="site-cell">${esc(site.domain)}</td>
       <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
       <td class="action-cell" data-label="Cloudflare only">
         <label class="switch"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
@@ -299,7 +297,7 @@ export function dashboardView(state: CloudflareState): string {
       <div>
         <h2>All sites</h2>
         <p id="cf-summary">${total === 0 ? "No sites found in CloudPanel." : `${enabled} of ${total} ${total === 1 ? "site" : "sites"} allow Cloudflare only.`}</p>
-        <p class="hint">A one-time change to the sites that exist now. Turning a single site off afterwards keeps it off.</p>
+        <p class="hint">A one-time change to the sites that exist now.</p>
       </div>
       <div class="actions">
         <button class="btn btn-primary" id="enable-all" type="button" ${total === 0 ? "disabled" : ""} onclick="setAllSites(true)">Enable all sites</button>
@@ -310,7 +308,6 @@ export function dashboardView(state: CloudflareState): string {
       <div>
         <h2>Enable on new sites</h2>
         <p>Apply the setting automatically within about one minute after a site is created.</p>
-        <p class="hint">This never changes a site that already exists. A site turned off above stays excluded.</p>
       </div>
       <label class="switch"><input id="automatic-policy" type="checkbox" aria-label="Enable Cloudflare-only access on new sites" ${state.autoEnableNewSites ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
     </div>
