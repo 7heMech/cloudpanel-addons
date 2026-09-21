@@ -34,10 +34,10 @@ site off is the ordinary correction after a fleet-wide change. On a phone that
 switch stays in the site's summary row and never changes row selection. The
 site-type badge follows the hostname's final rendered line instead of occupying
 a narrow column; the hostname is set a size smaller there so more of it fits
-beside the badge, and a badge close to fitting gives up the tail of its label
-rather than crowding the name. One with no room left drops below the hostname
-instead of trimming to something too short to read. The switch sits at the end
-of the row. The switch is the dashboard's only per-site action,
+beside the badge, and the badge holds that line by trimming its own label,
+capped at a third of the cell and floored at a few characters. It never drops
+onto a line of its own, which would cost the card a whole row. The switch sits
+at the end of the row. The switch is the dashboard's only per-site action,
 so the mobile card does not spend a second line repeating the desktop column
 heading.
 

@@ -346,16 +346,19 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
     font-size: 11px; line-height: 1.3; white-space: nowrap; }
   /* A table with the modifier puts site type beside the hostname rather than
      in a narrow column of its own. The hostname takes the room it needs and is
-     set a size smaller here. The badge gives up the tail of its label to keep
-     the line when it is close to fitting, and drops below the name rather than
-     trim to something too short to read. */
+     set a size smaller here. The badge holds that line whatever it costs its
+     own label: it is capped at a third of the cell and trims from there, since
+     a tag dropping onto a line of its own costs the card a whole row. It keeps
+     a floor of a few characters so a trimmed label still says something, and
+     centres its text because that floor leaves a short label room to spare. */
   .fleet-table.inline-mobile-type td.type-cell { display: none; }
-  .fleet-table.inline-mobile-type td.site-cell { display: flex; flex-wrap: wrap; align-items: baseline;
-    gap: 4px 6px; font-size: 14px; }
+  .fleet-table.inline-mobile-type td.site-cell { display: flex; align-items: baseline; gap: 6px;
+    font-size: 14px; }
   .fleet-table.inline-mobile-type td.site-cell > .site-name { min-width: 0; }
-  .fleet-table.inline-mobile-type .mobile-site-type { display: inline-block; flex: 0 1 auto; min-width: 0;
+  .fleet-table.inline-mobile-type .mobile-site-type { display: inline-block; flex: 0 1 auto; max-width: 33%;
+    min-width: 54px;
     padding: 2px 6px; overflow: hidden; border: 1px solid var(--border); border-radius: 4px;
-    color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.3;
+    color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.3; text-align: center;
     text-overflow: ellipsis; white-space: nowrap; }
   /* Half the row each, whatever they hold: a cell that widens with its content
      reflowed the whole row, so switching a site into maintenance -- where the
