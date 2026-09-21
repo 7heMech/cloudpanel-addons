@@ -56,54 +56,23 @@ const EMBED_TABS = JSON.stringify(ADDON_SITE_TABS.map((tab) => ({ slug: tab.slug
  * paints first and is then thrown away, which reads as the wrong page. */
 export const EMBED_LANDING_CLASS = "clp-addon-embedding";
 
-/** Kept visible rather than removed, so the content area holds its height. */
+/** Hidden rather than removed, so the content area holds its height. */
 export const SITE_EMBED_STYLE = `html.${EMBED_LANDING_CLASS} .site-content { visibility: hidden; }`;
 
 /**
- * Run as the panel parses the page, ahead of the loader below.
- *
- * A deep link knows which fragment it wants from the URL alone, so the request
- * goes out while the panel's own markup is still being parsed rather than after
- * it, and the loader picks the reply up. The document is hidden from the same
- * moment and revealed again by whatever finishes -- a mount, a fallback, or the
- * timer, which is what keeps a page the loader never reached from staying
- * blank.
- */
-export const SITE_EMBED_PRELOAD = `(function () {
-  var TABS = ${EMBED_TABS};
-  var landed = new URLSearchParams(location.search).get("${EMBED_MARKER}");
-  if (!landed) return;
-  var domain = decodeURIComponent(location.pathname.split("/")[2] || "");
-  var tab = null;
-  for (var i = 0; i < TABS.length; i++) if (TABS[i].slug === landed) tab = TABS[i];
-  if (!tab || !domain) return;
-  var root = document.documentElement;
-  root.classList.add("${EMBED_LANDING_CLASS}");
-  setTimeout(function () { root.classList.remove("${EMBED_LANDING_CLASS}"); }, 5000);
-  window.__clpAddonFragment = {
-    slug: landed,
-    reply: fetch(tab.url + "/fragment?domain=" + encodeURIComponent(domain), {
-      credentials: "same-origin",
-      headers: { Accept: "application/json" },
-    })
-      .then(function (res) { return res.json(); })
-      .catch(function () { return null; }),
-  };
-})();`
-
-/**
  * The loader injected into the panel's site pages next to the tab strip.
- *
- * The body of a function, not a whole script: the caller runs it once the
- * document has been parsed, because the block sits ahead of the markup it
- * reads.
  *
  * It replaces the panel's content area with the addon's fragment when its tab
  * is clicked, and on landing when a deep link redirected here. Anything it
  * cannot do -- a failed fetch, a modified click, a browser without shadow DOM
  * -- falls through to following the link, which the addon still answers.
+ *
+ * Runs as the panel parses the page, because a deep link knows which fragment
+ * it wants from the URL alone: that request goes out while the panel's own
+ * markup is still being parsed rather than after it. Only the half that reads
+ * markup waits for the document, since this block sits ahead of it.
  */
-export const SITE_EMBED_SCRIPT = `
+export const SITE_EMBED_SCRIPT = `(function () {
   var TABS = ${EMBED_TABS};
   var landed = new URLSearchParams(location.search).get("${EMBED_MARKER}");
   // Which addon tab is mounted in this document, "" for none. A slug rather
@@ -112,14 +81,49 @@ export const SITE_EMBED_SCRIPT = `
   // whether a click is on a different addon tab.
   var shown = "";
   var mounting = false;
+  var strip = null;
+  var content = null;
+  // The deep link's fragment, in flight before the document is ready.
+  var early = landed ? prefetch(landed) : null;
 
-  // Every way this can fail ends at the standalone page, which answers without
-  // redirecting here again. Sending a failure back to the tab link would bounce
-  // through the redirect and land right back on this loader.
+  // A reply is never a rejected promise: mount attaches to it only once the
+  // document is ready, which can be after a fetch this started has already
+  // failed.
+  function fetchFragment(tab, query) {
+    return fetch(tab.url + "/fragment?" + query, { credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(function (res) { return res.json(); })
+      .catch(function () { return null; });
+  }
+
+  function siteDomain() {
+    return decodeURIComponent(location.pathname.split("/")[2] || "");
+  }
+
+  function tabFor(slug) {
+    for (var i = 0; i < TABS.length; i++) if (TABS[i].slug === slug) return TABS[i];
+    return null;
+  }
+
+  // The panel's content is hidden from the moment the request goes out, and
+  // revealed by whatever finishes: the mount, the fallback to the addon's own
+  // page, or the timer, which is what keeps a page this never reached from
+  // staying blank.
+  function prefetch(slug) {
+    var tab = tabFor(slug);
+    var domain = siteDomain();
+    if (!tab || !domain) return null;
+    document.documentElement.classList.add("${EMBED_LANDING_CLASS}");
+    setTimeout(reveal, 5000);
+    return fetchFragment(tab, "domain=" + encodeURIComponent(domain));
+  }
+
   function reveal() {
     document.documentElement.classList.remove("${EMBED_LANDING_CLASS}");
   }
 
+  // Every way this can fail ends at the standalone page, which answers without
+  // redirecting here again. Sending a failure back to the tab link would bounce
+  // through the redirect and land right back on this loader.
   function standalone(href) {
     reveal();
     location.href = href + (href.indexOf("?") === -1 ? "?" : "&") + "embed=0";
@@ -130,47 +134,50 @@ export const SITE_EMBED_SCRIPT = `
   // redirected here -- hand them the addon's own copy rather than leave them
   // looking at the settings page they never asked for.
   function unavailable(reason) {
-    reveal();
     if (window.console && console.warn) {
       console.warn("clp-addons: " + reason + "; addon pages open on their own instead.");
     }
-    if (!landed) return;
-    var domain = decodeURIComponent(location.pathname.split("/")[2] || "");
-    for (var i = 0; i < TABS.length; i++) {
-      if (TABS[i].slug === landed && domain) {
-        standalone(TABS[i].url + "?domain=" + encodeURIComponent(domain));
-        return;
-      }
-    }
+    var tab = landed ? tabFor(landed) : null;
+    var domain = siteDomain();
+    if (tab && domain) standalone(tab.url + "?domain=" + encodeURIComponent(domain));
+    else reveal();
   }
 
-  var strip = document.querySelector(".tab-container");
-  var content = document.querySelector(".site-content");
-  if (!strip || !content) return unavailable("this CloudPanel site page has no tab strip or content area");
+  function attach() {
+    strip = document.querySelector(".tab-container");
+    content = document.querySelector(".site-content");
+    if (!strip || !content) return unavailable("this CloudPanel site page has no tab strip or content area");
 
-  TABS.forEach(function (tab) {
-    var link = strip.querySelector('a[href^="' + tab.url + '?"]');
-    if (!link) {
-      if (landed === tab.slug) unavailable("the " + tab.slug + " tab is not in this site's tab strip");
-      return;
-    }
-    link.addEventListener("click", function (event) {
-      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-      // Clicking the tab of the page already shown is a no-op.
-      if (shown === tab.slug) return event.preventDefault();
-      // A different addon tab, with one already mounted, is handed to the
-      // browser rather than swapped in place. One document still gets one
-      // mount: the fragment's script runs at global scope and declares its
-      // helpers with const, so a second fragment would throw on its own script
-      // and leave the first one's root visible under the second one's title.
-      // Following the link costs a page load and lands on the panel page that
-      // mounts the other addon cleanly.
-      if (shown || mounting) return;
-      event.preventDefault();
-      mount(tab, link, true);
+    TABS.forEach(function (tab) {
+      var link = strip.querySelector('a[href^="' + tab.url + '?"]');
+      if (!link) {
+        if (landed === tab.slug) unavailable("the " + tab.slug + " tab is not in this site's tab strip");
+        return;
+      }
+      link.addEventListener("click", function (event) {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        // Clicking the tab of the page already shown is a no-op.
+        if (shown === tab.slug) return event.preventDefault();
+        // A different addon tab, with one already mounted, is handed to the
+        // browser rather than swapped in place. One document still gets one
+        // mount: the fragment's script runs at global scope and declares its
+        // helpers with const, so a second fragment would throw on its own script
+        // and leave the first one's root visible under the second one's title.
+        // Following the link costs a page load and lands on the panel page that
+        // mounts the other addon cleanly.
+        if (shown || mounting) return;
+        event.preventDefault();
+        mount(tab, link, true);
+      });
+      // Marked before the fragment lands, not after it: the strip is the
+      // panel's own markup and still shows Settings as the tab the redirect
+      // passed through.
+      if (landed === tab.slug) {
+        markActive(link);
+        mount(tab, link, false);
+      }
     });
-    if (landed === tab.slug) mount(tab, link, false);
-  });
+  }
 
   function markActive(link) {
     var items = strip.querySelectorAll("ul li");
@@ -199,15 +206,10 @@ export const SITE_EMBED_SCRIPT = `
     if (!Element.prototype.attachShadow) return standalone(href);
     mounting = true;
     var query = href.indexOf("?") === -1 ? "" : href.slice(href.indexOf("?") + 1);
-    // The deep link's own fragment is already in flight, asked for as the page
-    // was parsed rather than after it; anything else asks now. Taken once, so a
-    // later click on the same tab fetches again.
-    var early = window.__clpAddonFragment;
-    window.__clpAddonFragment = null;
-    var reply = early && early.slug === tab.slug && !push
-      ? early.reply
-      : fetch(tab.url + "/fragment?" + query, { credentials: "same-origin", headers: { Accept: "application/json" } })
-        .then(function (res) { return res.json(); });
+    // The landing mount takes the reply already in flight; a click asks now.
+    // Taken once, so a later click on the same tab fetches again.
+    var reply = !push && early ? early : fetchFragment(tab, query);
+    early = null;
     reply
       .then(function (payload) {
         if (!payload || payload.ok !== true) throw new Error("fragment unavailable");
@@ -239,4 +241,7 @@ export const SITE_EMBED_SCRIPT = `
   // Leaving the addon means going back to a page the panel renders, and its own
   // scripts bound to content this replaced, so hand the navigation back.
   window.addEventListener("popstate", function () { if (shown) location.reload(); });
-`;
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", attach, { once: true });
+  else attach();
+})();`;

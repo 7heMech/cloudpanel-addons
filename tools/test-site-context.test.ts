@@ -139,18 +139,23 @@ test("the injected script waits for the strip it is injected ahead of", () => {
   const script = siteLayoutTarget().snippet("/addons/")
     .replace(/[\s\S]*<script>/, "").replace(/<\/script>[\s\S]*/, "");
   let queried = 0;
-  let deferred = "";
+  const deferred: string[] = [];
   const document = {
     readyState: "loading",
-    addEventListener: (event: string) => { deferred = event; },
+    addEventListener: (event: string) => { deferred.push(event); },
     querySelector: () => { queried++; return null; },
   };
-  new Function("document", script)(document);
+  new Function("document", "location", "window", script)(
+    document,
+    { pathname: "/site/shop.example.test/settings", search: "" },
+    { addEventListener: () => {} },
+  );
 
   // Reading the strip during parsing found nothing, so the active tab was never
-  // revealed and the focus handler was never attached.
+  // revealed, the focus handler was never attached and no tab was mounted.
   expect(queried).toBe(0);
-  expect(deferred).toBe("DOMContentLoaded");
+  // Both blocks: the layout rules and the loader's markup half.
+  expect(deferred).toEqual(["DOMContentLoaded", "DOMContentLoaded"]);
 });
 
 test("every injected tab label matches the strip the addon reproduces", () => {
