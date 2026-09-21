@@ -250,13 +250,15 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .clp-addon-footer a { color: var(--muted); }
 /* The on/off control every addon uses. The checkbox keeps its role, its label
    and the keyboard; the span is only paint, so focus and state stay real. */
-.switch { position: relative; display: inline-flex; width: 50px; height: 28px; margin: 0; flex: none; }
+/* Sized to a line of body text, so a switch in a table row reads as part of
+   the row rather than setting its height. */
+.switch { position: relative; display: inline-flex; width: 40px; height: 22px; margin: 0; flex: none; }
 .switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .switch span { width: 100%; border-radius: 99px; background: var(--border); transition: background-color .15s; pointer-events: none; }
-.switch span::after { content: ""; display: block; width: 22px; height: 22px; margin: 3px; border-radius: 50%;
+.switch span::after { content: ""; display: block; width: 16px; height: 16px; margin: 3px; border-radius: 50%;
   background: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / 25%); transition: transform .15s; }
 .switch input:checked + span { background: var(--primary); }
-.switch input:checked + span::after { transform: translateX(22px); }
+.switch input:checked + span::after { transform: translateX(18px); }
 .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 3px; }
 .switch input:disabled { cursor: not-allowed; }
 .switch input:disabled + span { opacity: .5; }

@@ -111,7 +111,7 @@ test("a switch sits on the line of whatever it is beside", () => {
   // input. Nothing sits under a switch, and that margin is what pushed every
   // one of them above the centre of its toolbar row or table cell.
   expect(BASE_STYLE).toContain(".switch-field { display: inline-flex; align-items: center; gap: 10px; margin: 0;");
-  expect(BASE_STYLE).toContain(".switch { position: relative; display: inline-flex; width: 50px; height: 28px; margin: 0;");
+  expect(BASE_STYLE).toContain(".switch { position: relative; display: inline-flex; width: 40px; height: 22px; margin: 0;");
 });
 
 test("a dialog is usable on a phone", () => {
