@@ -26,9 +26,13 @@ sent. Nothing is restored afterwards, so the dialog says so rather than offering
 an undo the action does not implement.
 
 Selection checkboxes stay separate from the per-site switch, and the
-selected-scope actions are unavailable until something is selected. A per-site
-switch acts immediately without confirmation, because turning one site off is
-the ordinary correction after a fleet-wide change.
+selected-scope actions are unavailable until something is selected. On desktop,
+the checkbox remains visible; on phones, the whole site row selects with a
+highlight and the checkbox disappears to give the site card its width back.
+Mouse clicks on the row and Enter or Space on its focused row select it, while
+the switch and other controls keep their own actions. A per-site switch acts
+immediately without confirmation, because turning one site off is the ordinary
+correction after a fleet-wide change.
 
 After any change the page repaints from a fresh read rather than from what was
 requested, keeping selection and scroll, and does the same after a failure so

@@ -1,5 +1,5 @@
 import { esc } from "../../../lib/app-http";
-import { renderLayout } from "../../../lib/app-ui";
+import { FLEET_ROW_SELECTION_JS, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import {
   DEFAULT_CATEGORY_PROFILE, PM_MODES, STOCK_PROFILE,
@@ -24,10 +24,7 @@ const STYLE = `
 .state-default { color:var(--accent); border-color:var(--accent); margin-left:8px; }
 #category-dialog { width:720px; }
 #category-dialog .dialog-grid { margin-bottom:25px; }
-.php-sites-table tbody tr { cursor:pointer; transition:background-color .15s, box-shadow .15s; }
-.php-sites-table tbody tr:hover { background:rgb(38 125 221 / 6%); }
-.php-sites-table tbody tr[aria-selected="true"] { background:rgb(38 125 221 / 12%); box-shadow:inset 4px 0 var(--primary); }
-.php-sites-table tbody tr:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; }
+${fleetRowSelectionStyle("php-sites-table")}
 @media (max-width:700px) {
   .default-card { flex-direction:column; gap:12px; }
   .default-choice { flex:1 1 auto; width:100%; }
@@ -167,6 +164,7 @@ function profileForm(profile: PoolProfile): string {
 }
 
 export const CLIENT_JS = `
+${FLEET_ROW_SELECTION_JS}
 /** Show only the directives the chosen process manager actually reads. */
 function paintProfileModes() {
   const root = CLP_ROOT.getElementById('category-profile');
@@ -383,19 +381,6 @@ function toggleAllSites() {
   selectAllSites(chosen.length < rows.length);
 }
 
-function toggleSiteSelection(event, row) {
-  const target = event.target;
-  if (target && target !== row && target.closest && target.closest('input, button, a, label, select, textarea')) return;
-  if (event.type === 'keydown') {
-    if (event.key !== ' ' && event.key !== 'Enter') return;
-    event.preventDefault();
-  }
-  const box = row.querySelector('.site-checkbox');
-  if (!box || box.disabled) return;
-  box.checked = !box.checked;
-  paintSelection();
-}
-
 function categoryLabel(id) {
   const picker = CLP_ROOT.getElementById('bulk-category');
   const option = picker ? picker.querySelector('option[value="' + id + '"]') : null;
@@ -547,7 +532,7 @@ function categoryRow(category: PoolCategory, sites: number, isDefault: boolean):
 }
 
 function siteTableRow(site: PoolSiteState, categories: PoolCategory[]): string {
-  return `<tr data-domain="${esc(site.domain)}" data-category-id="${esc(site.categoryId ?? "")}" data-drifted="${site.drifted}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
+  return `<tr data-domain="${esc(site.domain)}" data-category-id="${esc(site.categoryId ?? "")}" data-drifted="${site.drifted}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this, paintSelection)" onkeydown="toggleSiteSelection(event, this, paintSelection)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSelection()" aria-label="Select ${esc(site.domain)}"></td>
     <td class="site-cell">${esc(site.domain)}${
       site.drifted ? '<div class="hint">Its pool file no longer matches this category.</div>' : ""

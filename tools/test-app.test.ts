@@ -219,7 +219,7 @@ test("mobile select-all button is hidden on desktop and visible on mobile", () =
   });
   expect(phpHtml).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
   expect(phpHtml).toContain('<table class="fleet-table php-sites-table">');
-  expect(phpHtml).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)"');
+  expect(phpHtml).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this, paintSelection)"');
   const phpPage = phpResourcesLayout("PHP resources", phpHtml);
   expect(phpPage).toContain(".fleet-table.php-sites-table td.site-select { display:none; }");
 });
@@ -255,11 +255,11 @@ test("php-resources site cards and select-all keep selection in sync", () => {
   expect(byId["select-all-btn"].textContent).toBe("Select all");
 
   const cardTarget = { closest: () => null };
-  client.toggleSiteSelection({ type: "click", target: cardTarget }, rows[0]);
+  client.toggleSiteSelection({ type: "click", target: cardTarget }, rows[0], client.paintSelection);
   expect(checkboxes[0]!.checked).toBe(true);
   expect(rows[0]!.attributes["aria-selected"]).toBe("true");
   expect(byId["site-selection"].textContent).toBe("1 of 2 selected");
-  client.toggleSiteSelection({ type: "click", target: { closest: () => ({}) } }, rows[0]);
+  client.toggleSiteSelection({ type: "click", target: { closest: () => ({}) } }, rows[0], client.paintSelection);
   expect(checkboxes[0]!.checked).toBe(true);
 
   let prevented = false;
@@ -268,7 +268,7 @@ test("php-resources site cards and select-all keep selection in sync", () => {
     key: " ",
     target: cardTarget,
     preventDefault: () => { prevented = true; },
-  }, rows[0]);
+  }, rows[0], client.paintSelection);
   expect(prevented).toBe(true);
   expect(checkboxes[0]!.checked).toBe(false);
   expect(rows[0]!.attributes["aria-selected"]).toBe("false");
