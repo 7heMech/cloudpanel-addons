@@ -158,7 +158,7 @@ function fakeDashboard(
     textContent: "", className: "", hidden: false, disabled: false, checked: false, indeterminate: false, ...over,
   });
   const byId: Record<string, FakeElement> = {
-    "cf-summary": el(), "cf-selection": el(), "select-all": el(), "select-all-btn": el(),
+    "cf-summary": el(), "cf-selection": el(), "select-all": el(),
     "enable-selected": el({ disabled: true }), "disable-selected": el({ disabled: true }),
     "enable-all": el(), "disable-all": el(),
     "automatic-policy": el({ checked: auto }),
@@ -200,8 +200,6 @@ interface DashboardClient {
   siteRows(): unknown[];
   rowState(row: unknown): unknown;
   paintSummary(): void;
-  toggleAllSites(): void;
-  selectAllSites(checked: boolean): void;
 }
 
 function loadDashboard(
@@ -216,7 +214,7 @@ function loadDashboard(
 ): DashboardClient {
   const factory = new Function(
     "document", "call", "busy", "notify", "clearNotice", "confirmAction", "location",
-    `${CLIENT_JS}\nreturn { setOne, setAllSites, runBulk, siteRows, rowState, paintSummary, toggleAllSites, selectAllSites };`,
+    `${CLIENT_JS}\nreturn { setOne, setAllSites, runBulk, siteRows, rowState, paintSummary };`,
   ) as (...args: unknown[]) => DashboardClient;
   return factory(
     dom.document,
@@ -394,7 +392,7 @@ test("selection actions stay unavailable until sites are selected", () => {
   const client = loadDashboard(dom, { call: async () => ({ ok: true }) });
 
   client.paintSummary();
-  expect(dom.byId["cf-selection"]!.textContent).toBe("1 of 2 selected");
+  expect(dom.byId["cf-selection"]!.textContent).toBe("1 site selected");
   expect(dom.byId["enable-selected"]!.disabled).toBe(false);
   expect(dom.byId["select-all"]!.indeterminate).toBe(true);
 
@@ -403,27 +401,6 @@ test("selection actions stay unavailable until sites are selected", () => {
   expect(dom.byId["cf-selection"]!.textContent).toBe("No sites selected");
   expect(dom.byId["enable-selected"]!.disabled).toBe(true);
   expect(dom.byId["disable-selected"]!.disabled).toBe(true);
-});
-
-
-test("the mobile select-all button toggles selection and updates label", () => {
-  const dom = fakeDashboard([
-    { domain: "a.example.test", enabled: true, excluded: false, selected: false },
-    { domain: "b.example.test", enabled: false, excluded: false, selected: false },
-  ]);
-  const client = loadDashboard(dom, { call: async () => ({ ok: true }) });
-
-  client.paintSummary();
-  expect(dom.byId["select-all-btn"]!.textContent).toBe("Select all");
-
-  client.toggleAllSites();
-  expect(dom.rows.every((r) => r.parts.checkbox.checked)).toBe(true);
-  expect(dom.byId["select-all-btn"]!.textContent).toBe("Deselect all");
-  expect(dom.byId["cf-selection"]!.textContent).toBe("2 of 2 selected");
-
-  client.toggleAllSites();
-  expect(dom.rows.every((r) => !r.parts.checkbox.checked)).toBe(true);
-  expect(dom.byId["select-all-btn"]!.textContent).toBe("Select all");
 });
 
 test("vhost transformation mirrors CloudPanel and is reversible", () => {

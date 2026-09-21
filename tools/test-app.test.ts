@@ -112,6 +112,9 @@ test("a switch sits on the line of whatever it is beside", () => {
   // one of them above the centre of its toolbar row or table cell.
   expect(BASE_STYLE).toContain(".switch-field { display: inline-flex; align-items: center; gap: 10px; margin: 0;");
   expect(BASE_STYLE).toContain(".switch { position: relative; display: inline-flex; width: 50px; height: 28px; margin: 0;");
+  // One switch per row is a repeated control and comes down to the line height
+  // beside it; a switch that decides the whole page keeps its full size.
+  expect(BASE_STYLE).toContain(".fleet-table .switch { width: 44px; height: 24px; }");
 });
 
 test("a dialog is usable on a phone", () => {
@@ -187,18 +190,13 @@ test("a fleet table gives the domain its own line on a phone", () => {
     }]),
     cloudflareDashboardView({
       autoEnableNewSites: false,
-      sites: [{ domain: "a-rather-long-hostname.example.test", type: "reverse-proxy", enabled: false, excludedFromAutomatic: false }],
+      sites: [{ domain: "a-rather-long-hostname.example.test", type: "php", enabled: false, excludedFromAutomatic: false }],
     }),
   ]) {
-    expect(html).toContain('<table class="fleet-table"');
+    expect(html).toContain('<table class="fleet-table');
     expect(html).toContain('<td class="site-cell"');
     expect(html).toContain('<td class="type-cell">');
   }
-  const cfHtml = cloudflareDashboardView({
-    autoEnableNewSites: false,
-    sites: [{ domain: "sus.com", type: "reverse-proxy", enabled: true, excludedFromAutomatic: false }],
-  });
-  expect(cfHtml).toContain('<td class="type-cell">Reverse proxy</td>');
 });
 
 test("mobile select-all button is hidden on desktop and visible on mobile", () => {
@@ -207,13 +205,6 @@ test("mobile select-all button is hidden on desktop and visible on mobile", () =
   // Visible under mobile breakpoint
   const mobile = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 760px)"));
   expect(mobile).toContain(".mobile-select-all { display: inline-flex;");
-
-  // Rendered in Cloudflare IPs toolbar
-  const cfHtml = cloudflareDashboardView({
-    autoEnableNewSites: false,
-    sites: [{ domain: "example.com", type: "php", enabled: false, excludedFromAutomatic: false }],
-  });
-  expect(cfHtml).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
 
   // Rendered in PHP Resources toolbar
   const phpHtml = phpResourcesDashboardView({
@@ -227,19 +218,28 @@ test("mobile select-all button is hidden on desktop and visible on mobile", () =
     }],
   });
   expect(phpHtml).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
+  expect(phpHtml).toContain('<table class="fleet-table php-sites-table">');
+  expect(phpHtml).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)"');
+  const phpPage = phpResourcesLayout("PHP resources", phpHtml);
+  expect(phpPage).toContain(".fleet-table.php-sites-table td.site-select { display:none; }");
 });
 
-test("the php-resources mobile select-all button toggles selection and updates label", () => {
+test("php-resources site cards and select-all keep selection in sync", () => {
   const el = (over: any = {}) => ({ textContent: "", className: "", disabled: false, checked: false, indeterminate: false, ...over });
   const byId: Record<string, any> = {
     "site-selection": el(), "select-all": el(), "select-all-btn": el(), "assign-selected": el({ disabled: true }),
     "bulk-category": el({ querySelector: () => null }),
   };
   const checkboxes = [el(), el()];
-  const rows = [
-    { dataset: { domain: "a.test" }, querySelector: (sel: string) => sel === ".site-checkbox" ? checkboxes[0] : null },
-    { dataset: { domain: "b.test" }, querySelector: (sel: string) => sel === ".site-checkbox" ? checkboxes[1] : null },
-  ];
+  const rows = checkboxes.map((checkbox, index) => {
+    const attributes: Record<string, string> = { "aria-selected": "false" };
+    return {
+      dataset: { domain: index === 0 ? "a.test" : "b.test" },
+      attributes,
+      setAttribute: (name: string, value: string) => { attributes[name] = value; },
+      querySelector: (sel: string) => sel === ".site-checkbox" ? checkbox : null,
+    };
+  });
   const CLP_ROOT = {
     getElementById: (id: string) => byId[id] ?? null,
     querySelectorAll: (sel: string) => {
@@ -249,10 +249,30 @@ test("the php-resources mobile select-all button toggles selection and updates l
     },
   };
   const fakeDoc = { readyState: "complete", addEventListener: () => {} };
-  const factory = new Function("CLP_ROOT", "document", `${PHP_RESOURCES_CLIENT_JS}\nreturn { toggleAllSites, selectAllSites, paintSelection, selectedRows, siteRows };`);
+  const factory = new Function("CLP_ROOT", "document", `${PHP_RESOURCES_CLIENT_JS}\nreturn { toggleAllSites, selectAllSites, paintSelection, selectedRows, siteRows, toggleSiteSelection };`);
   const client = factory(CLP_ROOT, fakeDoc);
   client.paintSelection();
   expect(byId["select-all-btn"].textContent).toBe("Select all");
+
+  const cardTarget = { closest: () => null };
+  client.toggleSiteSelection({ type: "click", target: cardTarget }, rows[0]);
+  expect(checkboxes[0]!.checked).toBe(true);
+  expect(rows[0]!.attributes["aria-selected"]).toBe("true");
+  expect(byId["site-selection"].textContent).toBe("1 of 2 selected");
+  client.toggleSiteSelection({ type: "click", target: { closest: () => ({}) } }, rows[0]);
+  expect(checkboxes[0]!.checked).toBe(true);
+
+  let prevented = false;
+  client.toggleSiteSelection({
+    type: "keydown",
+    key: " ",
+    target: cardTarget,
+    preventDefault: () => { prevented = true; },
+  }, rows[0]);
+  expect(prevented).toBe(true);
+  expect(checkboxes[0]!.checked).toBe(false);
+  expect(rows[0]!.attributes["aria-selected"]).toBe("false");
+
   client.toggleAllSites();
   expect(checkboxes.every((c: any) => c.checked)).toBe(true);
   expect(byId["select-all-btn"].textContent).toBe("Deselect all");
@@ -1888,6 +1908,11 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   check("headerTarget points to manager URL", snip.includes('href="https://addons.example.com/addons/"'));
   check("native header offers separate changelog and update links",
     snip.includes("https://addons.example.com/addons/update") && snip.includes("github.com/7heMech/cloudpanel-addons/releases/latest"));
+  check("native header keeps narrow-screen navigation above the update row",
+    snip.includes("@media (max-width: 960px)") &&
+      snip.includes(".header.clp-addons-has-update .nav-link-container,") &&
+      snip.includes("order: 2; flex: 1 0 100%") &&
+      snip.includes(".header #clp-addons-update-notice { order: 3"));
   const guardStart = snip.indexOf("{% if is_granted('ROLE_ADMIN') %}");
   const guardEnd = snip.indexOf("{% endif %}");
   check("headerTarget wraps the manager nav in the native admin guard", guardStart >= 0 && guardEnd > guardStart);

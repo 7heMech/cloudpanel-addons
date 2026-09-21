@@ -118,9 +118,11 @@ state for a later re-enable.
 The manager's block in CloudPanel's own header also makes room for its update
 notice there. The panel lays the header out as one non-wrapping flex row of a
 fixed height, sized for exactly the three things in it, so a fourth has nowhere
-to go; flattening the right-hand wrapper lets the row wrap. Those rules apply
-only while a notice is actually in the row, so a panel with nothing to update is
-shaped as CloudPanel drew it.
+to go; flattening the right-hand wrapper lets the row wrap. Below 960px the
+panel navigation takes the second row and the update notice takes the third, so
+the navigation cannot be shrunk out of view by the added controls. Those rules
+apply only while a notice is actually in the row, so a panel with nothing to
+update is shaped as CloudPanel drew it.
 
 Panel Tweaks wants the same rules for a different reason, on a narrow screen
 and on any day, so `headerWrapStyle` in `lib/panel-nav.ts` takes the header's own
@@ -174,7 +176,11 @@ header on a phone, so moving between the two does not move the header.
 
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
 badges, switches, toolbars, one confirmation dialog and one inline notice per
-page. An addon supplies its brand, its own tabs, its script and any rule only it
+page. A badge names what something is rather than being read for itself, so it
+is set a size below the smallest body text wherever it appears. A switch that
+decides one thing for a whole page keeps its full size; one repeated per table
+row comes down to the height of the line beside it, so the control does not set
+the row's height. An addon supplies its brand, its own tabs, its script and any rule only it
 draws. The manager's own pages use the same two: disabling an addon asks through
 that dialog, naming the addon as its card does and saying that its data is kept,
 and a manager job that fails to start reports through the inline notice. The

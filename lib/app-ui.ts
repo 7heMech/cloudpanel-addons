@@ -167,8 +167,10 @@ td a:hover { color: var(--accent); }
 .site-cell a, .site-cell .hint { overflow-wrap: anywhere; font-weight: 400; }
 .site-cell a { font-weight: 600; }
 .mono { font-family: var(--mono); font-size: 14px; }
-.badge { display: inline-block; padding: 3px 7px; border-radius: 4px; font-size: 12px;
-  line-height: 1.25; border: 1px solid var(--border); white-space: nowrap; }
+/* A tag names what something is; it sits beside the text it belongs to and
+   reads as secondary to it, so it stays a size below the smallest body text. */
+.badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px;
+  line-height: 1.3; border: 1px solid var(--border); white-space: nowrap; }
 .state-running, .state-done { color: var(--ok); border-color: currentColor; }
 .state-exited, .state-created, .state-paused { color: var(--warn); border-color: currentColor; }
 .state-absent, .state-unknown, .state-failed { color: var(--bad); border-color: currentColor; }
@@ -254,6 +256,12 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   background: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / 25%); transition: transform .15s; }
 .switch input:checked + span { background: var(--primary); }
 .switch input:checked + span::after { transform: translateX(22px); }
+/* A switch that decides one thing for the whole page keeps its full size; one
+   per row in a table is a repeated control, so it comes down to the height of
+   the line beside it rather than setting the row's height. */
+.fleet-table .switch { width: 44px; height: 24px; }
+.fleet-table .switch span::after { width: 18px; height: 18px; }
+.fleet-table .switch input:checked + span::after { transform: translateX(20px); }
 .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 3px; }
 .switch input:disabled { cursor: not-allowed; }
 .switch input:disabled + span { opacity: .5; }
@@ -332,9 +340,9 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .fleet-table td.site-select { display: flex; flex: 0 0 42px; width: 42px; justify-content: center; }
   /* The domain takes the first line, with what the site is as a tag beside it. */
   .fleet-table td.site-cell { flex: 1 1 calc(100% - 200px); min-width: 0; font-size: 16px; }
-  .fleet-table td.type-cell { flex: 0 1 auto; max-width: 45%; margin: 2px 0 0 auto; padding: 3px 8px;
+  .fleet-table td.type-cell { flex: 0 1 auto; max-width: 45%; margin: 2px 0 0 auto; padding: 2px 6px;
     border: 1px solid var(--border); border-radius: 4px; color: var(--muted);
-    font-size: 12px; line-height: 1.25; white-space: nowrap; }
+    font-size: 11px; line-height: 1.3; white-space: nowrap; }
   /* Half the row each, whatever they hold: a cell that widens with its content
      reflowed the whole row, so switching a site into maintenance -- where the
      status badge grows by half its width -- moved every cell under it. */
