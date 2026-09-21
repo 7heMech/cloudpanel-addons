@@ -429,6 +429,7 @@ function wpLoginPreviewSites(url: URL): WpSiteView[] {
     { domain: "www.example.com", user: "example", application: "WordPress", helper: true },
     { domain: "shop.example.com", user: "shop", application: "WooCommerce", helper: true },
     { domain: "blog.example.com", user: "blog", application: "Generic", helper: false },
+    { domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", application: "WordPress", helper: false },
   ];
 }
 

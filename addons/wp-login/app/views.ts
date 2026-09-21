@@ -57,7 +57,7 @@ function sitesCard(sites: WpSiteView[]): string {
         <span class="toolbar-note">${sites.length} site${sites.length === 1 ? "" : "s"}</span>
       </div>
       <div class="table-scroll">
-        <table class="fleet-table">
+        <table class="fleet-table wp-site-table">
           <thead>
             <tr>
               <th>Domain</th>
