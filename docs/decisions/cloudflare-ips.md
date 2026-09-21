@@ -25,13 +25,10 @@ request rewrites; an operation that would change neither is reported and not
 sent. Nothing is restored afterwards, so the dialog says so rather than offering
 an undo the action does not implement.
 
-Selection stays separate from the per-site switch, and the selected-scope
-actions are unavailable until something is selected. Clicking or pressing
-Space/Enter on a row toggles its selection for bulk actions, while the per-site
-switch sits on the right side as a compact, centered toggle. The table omits
-site-type tags so domain names have ample space without wrapping onto multiple
-rows. A per-site switch acts immediately without confirmation, because turning
-one site off is the ordinary correction after a fleet-wide change.
+Selection checkboxes stay separate from the per-site switch, and the
+selected-scope actions are unavailable until something is selected. A per-site
+switch acts immediately without confirmation, because turning one site off is
+the ordinary correction after a fleet-wide change.
 
 After any change the page repaints from a fresh read rather than from what was
 requested, keeping selection and scroll, and does the same after a failure so

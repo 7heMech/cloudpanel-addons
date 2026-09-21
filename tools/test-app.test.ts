@@ -183,22 +183,20 @@ test("a fleet table gives the domain its own line on a phone", () => {
   expect(mobile).toContain(".fleet-table td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; }");
   expect(mobile).toContain(".fleet-table td[data-label]::before { content: attr(data-label);");
 
-  const maintenanceHtml = maintenanceFleetView([{
-    domain: "a-rather-long-hostname.example.test", user: "site-user", type: "php", enabled: false,
-    customTemplate: false, bypasses: [], error: "",
-  }]);
-  expect(maintenanceHtml).toContain('<table class="fleet-table');
-  expect(maintenanceHtml).toContain('<td class="site-cell"');
-  expect(maintenanceHtml).toContain('<td class="type-cell">');
-
-  const cfHtml = cloudflareDashboardView({
-    autoEnableNewSites: false,
-    sites: [{ domain: "sus.com", type: "reverse-proxy", enabled: true, excludedFromAutomatic: false }],
-  });
-  expect(cfHtml).toContain('<table class="fleet-table');
-  expect(cfHtml).toContain('<td class="site-cell"');
-  expect(cfHtml).toContain('<td class="action-cell">');
-  expect(cfHtml).not.toContain('<td class="type-cell">');
+  for (const html of [
+    maintenanceFleetView([{
+      domain: "a-rather-long-hostname.example.test", user: "site-user", type: "php", enabled: false,
+      customTemplate: false, bypasses: [], error: "",
+    }]),
+    cloudflareDashboardView({
+      autoEnableNewSites: false,
+      sites: [{ domain: "a-rather-long-hostname.example.test", type: "php", enabled: false, excludedFromAutomatic: false }],
+    }),
+  ]) {
+    expect(html).toContain('<table class="fleet-table');
+    expect(html).toContain('<td class="site-cell"');
+    expect(html).toContain('<td class="type-cell">');
+  }
 });
 
 test("mobile select-all button is hidden on desktop and visible on mobile", () => {
@@ -207,13 +205,6 @@ test("mobile select-all button is hidden on desktop and visible on mobile", () =
   // Visible under mobile breakpoint
   const mobile = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 760px)"));
   expect(mobile).toContain(".mobile-select-all { display: inline-flex;");
-
-  // Rendered in Cloudflare IPs toolbar
-  const cfHtml = cloudflareDashboardView({
-    autoEnableNewSites: false,
-    sites: [{ domain: "example.com", type: "php", enabled: false, excludedFromAutomatic: false }],
-  });
-  expect(cfHtml).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
 
   // Rendered in PHP Resources toolbar
   const phpHtml = phpResourcesDashboardView({

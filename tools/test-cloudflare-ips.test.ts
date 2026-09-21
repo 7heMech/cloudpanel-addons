@@ -117,19 +117,15 @@ test("dashboard summarises how many sites allow Cloudflare only", () => {
   expect(rendered).toContain('<div class="actions toolbar-actions">');
 });
 
-test("the per-site switch sits on the right with full-row selection and no site tags", () => {
+test("the switch column ends where the table ends, as the Maintenance table does", () => {
   const html = dashboardView({
     autoEnableNewSites: true,
     sites: [{ domain: "a.example.test", type: "php", enabled: true, excludedFromAutomatic: false }],
   });
-  expect(html).toContain('<th scope="col">Site</th>');
+  // .action-cell is the shared right-aligned column; without it the switches
+  // sat in the middle of the row with the rest of the table empty beside them.
   expect(html).toContain('<th scope="col" class="action-cell">Cloudflare only</th>');
-  expect(html).toContain('<td class="site-cell">');
-  expect(html).toContain('<td class="action-cell">');
-  expect(html).toContain('class="switch switch-sm"');
-  expect(html).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)"');
-  expect(html).not.toContain("type-cell");
-  expect(html).not.toContain('<th scope="col">Type</th>');
+  expect(html).toContain('<td class="action-cell" data-label="Cloudflare only">');
 });
 
 interface FakeElement {
@@ -144,9 +140,6 @@ interface FakeElement {
 
 interface FakeRow {
   dataset: { domain: string; enabled: string; excluded: string };
-  attributes: Record<string, string>;
-  setAttribute: (name: string, value: string) => void;
-  getAttribute: (name: string) => string | null;
   querySelector: (selector: string) => FakeElement | null;
   parts: { checkbox: FakeElement; toggle: FakeElement; exception: FakeElement };
 }
@@ -165,13 +158,12 @@ function fakeDashboard(
     textContent: "", className: "", hidden: false, disabled: false, checked: false, indeterminate: false, ...over,
   });
   const byId: Record<string, FakeElement> = {
-    "cf-summary": el(), "cf-selection": el(), "select-all": el(), "select-all-btn": el(),
+    "cf-summary": el(), "cf-selection": el(), "select-all": el(),
     "enable-selected": el({ disabled: true }), "disable-selected": el({ disabled: true }),
     "enable-all": el(), "disable-all": el(),
     "automatic-policy": el({ checked: auto }),
   };
   const rows: FakeRow[] = sites.map((site) => {
-    const attributes: Record<string, string> = { "aria-selected": String(Boolean(site.selected)) };
     const parts = {
       checkbox: el({ checked: Boolean(site.selected) }),
       toggle: el({ checked: site.enabled }),
@@ -179,9 +171,6 @@ function fakeDashboard(
     };
     const row: FakeRow = {
       dataset: { domain: site.domain, enabled: String(site.enabled), excluded: String(site.excluded) },
-      attributes,
-      setAttribute: (name, value) => { attributes[name] = value; },
-      getAttribute: (name) => attributes[name] ?? null,
       querySelector: (selector) => ({
         ".site-checkbox": parts.checkbox, ".site-switch": parts.toggle,
         ".site-exception": parts.exception,
@@ -211,9 +200,6 @@ interface DashboardClient {
   siteRows(): unknown[];
   rowState(row: unknown): unknown;
   paintSummary(): void;
-  toggleAllSites(): void;
-  selectAllSites(checked: boolean): void;
-  toggleSiteSelection(event: unknown, row: unknown): void;
 }
 
 function loadDashboard(
@@ -228,8 +214,7 @@ function loadDashboard(
 ): DashboardClient {
   const factory = new Function(
     "document", "call", "busy", "notify", "clearNotice", "confirmAction", "location",
-    `${CLIENT_JS}
-return { setOne, setAllSites, runBulk, siteRows, rowState, paintSummary, toggleAllSites, selectAllSites, toggleSiteSelection };`,
+    `${CLIENT_JS}\nreturn { setOne, setAllSites, runBulk, siteRows, rowState, paintSummary };`,
   ) as (...args: unknown[]) => DashboardClient;
   return factory(
     dom.document,
@@ -407,7 +392,7 @@ test("selection actions stay unavailable until sites are selected", () => {
   const client = loadDashboard(dom, { call: async () => ({ ok: true }) });
 
   client.paintSummary();
-  expect(dom.byId["cf-selection"]!.textContent).toBe("1 of 2 selected");
+  expect(dom.byId["cf-selection"]!.textContent).toBe("1 site selected");
   expect(dom.byId["enable-selected"]!.disabled).toBe(false);
   expect(dom.byId["select-all"]!.indeterminate).toBe(true);
 
@@ -416,54 +401,6 @@ test("selection actions stay unavailable until sites are selected", () => {
   expect(dom.byId["cf-selection"]!.textContent).toBe("No sites selected");
   expect(dom.byId["enable-selected"]!.disabled).toBe(true);
   expect(dom.byId["disable-selected"]!.disabled).toBe(true);
-});
-
-
-test("the mobile select-all button toggles selection and updates label", () => {
-  const dom = fakeDashboard([
-    { domain: "a.example.test", enabled: true, excluded: false, selected: false },
-    { domain: "b.example.test", enabled: false, excluded: false, selected: false },
-  ]);
-  const client = loadDashboard(dom, { call: async () => ({ ok: true }) });
-
-  client.paintSummary();
-  expect(dom.byId["select-all-btn"]!.textContent).toBe("Select all");
-
-  client.toggleAllSites();
-  expect(dom.rows.every((r) => r.parts.checkbox.checked)).toBe(true);
-  expect(dom.byId["select-all-btn"]!.textContent).toBe("Deselect all");
-  expect(dom.byId["cf-selection"]!.textContent).toBe("2 of 2 selected");
-
-  client.toggleAllSites();
-  expect(dom.rows.every((r) => !r.parts.checkbox.checked)).toBe(true);
-  expect(dom.byId["select-all-btn"]!.textContent).toBe("Select all");
-});
-
-test("a site row selects as a whole without the Cloudflare switch changing selection", () => {
-  const dom = fakeDashboard([
-    { domain: "a.example.test", enabled: true, excluded: false, selected: false },
-  ]);
-  const client = loadDashboard(dom, { call: async () => ({ ok: true }) });
-  const rowTarget = { closest: () => null };
-
-  client.toggleSiteSelection({ type: "click", target: rowTarget }, dom.rows[0]);
-  expect(dom.rows[0]!.parts.checkbox.checked).toBe(true);
-  expect(dom.rows[0]!.attributes["aria-selected"]).toBe("true");
-  expect(dom.byId["cf-selection"]!.textContent).toBe("1 of 1 selected");
-
-  client.toggleSiteSelection({ type: "click", target: { closest: () => ({}) } }, dom.rows[0]);
-  expect(dom.rows[0]!.parts.checkbox.checked).toBe(true);
-
-  let prevented = false;
-  client.toggleSiteSelection({
-    type: "keydown",
-    key: " ",
-    target: rowTarget,
-    preventDefault: () => { prevented = true; },
-  }, dom.rows[0]);
-  expect(prevented).toBe(true);
-  expect(dom.rows[0]!.parts.checkbox.checked).toBe(false);
-  expect(dom.rows[0]!.attributes["aria-selected"]).toBe("false");
 });
 
 test("vhost transformation mirrors CloudPanel and is reversible", () => {

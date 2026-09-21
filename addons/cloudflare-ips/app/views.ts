@@ -1,6 +1,7 @@
 import { esc } from "../../../lib/app-http";
 import { renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
+import { siteTypeLabel } from "../../../lib/site-context";
 import type { CloudflareState } from "./service";
 
 const BASE = mountPath("cloudflare-ips");
@@ -13,28 +14,12 @@ const STYLE = `
 .fleet-card p, .policy-card p { margin: 0; }
 .fleet-card .actions { flex-shrink: 0; }
 .toolbar-actions { margin-left: auto; }
-.toolbar #select-all-btn { display: inline-flex; }
-.cloudflare-site-table tbody tr { cursor: pointer; transition: background-color .15s, box-shadow .15s; }
-.cloudflare-site-table tbody tr:hover { background: rgb(38 125 221 / 6%); }
-.cloudflare-site-table tbody tr[aria-selected="true"] { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); }
-.cloudflare-site-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
-.cloudflare-site-table th.action-cell,
-.cloudflare-site-table td.action-cell { width: 140px; text-align: center; vertical-align: middle; }
-.cloudflare-site-table td.action-cell .switch { display: inline-block; vertical-align: middle; margin: 0 auto; }
-.switch-sm { width: 40px; height: 22px; flex: 0 0 40px; }
-.switch-sm span { border-radius: 22px; }
-.switch-sm span::after { width: 16px; height: 16px; left: 3px; top: 3px; }
-.switch-sm input:checked + span::after { transform: translateX(18px); }
 @media (max-width: 700px) {
   .fleet-card, .policy-card { flex-direction: column; }
 }
 @media (max-width: 760px) {
   .toolbar-actions { flex: 1 1 100%; margin-left: 0; }
-  .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right: 10px; padding-left: 10px; white-space: nowrap; }
-  .cloudflare-site-table tbody tr { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-  .cloudflare-site-table td.site-cell { flex: 1 1 auto; min-width: 0; }
-  .cloudflare-site-table td.action-cell { width: auto; flex: 0 0 auto; margin-left: auto; display: flex; align-items: center; justify-content: center; }
-  .cloudflare-site-table td.action-cell::before { display: none; }
+  .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right:10px; padding-left:10px; white-space:nowrap; }
 }
 `;
 
@@ -44,12 +29,11 @@ function siteRows() {
 }
 
 function rowState(row) {
-  const box = row.querySelector('.site-checkbox');
   return {
     domain: row.dataset.domain,
     enabled: row.dataset.enabled === 'true',
     excluded: row.dataset.excluded === 'true',
-    selected: box ? box.checked : row.getAttribute('aria-selected') === 'true',
+    selected: Boolean(row.querySelector('.site-checkbox') && row.querySelector('.site-checkbox').checked),
   };
 }
 
@@ -63,13 +47,7 @@ function plural(count, word) {
 }
 
 function paintSummary() {
-  const rowElements = siteRows();
-  rowElements.forEach(function (row) {
-    const box = row.querySelector('.site-checkbox');
-    const isSelected = box ? box.checked : row.getAttribute('aria-selected') === 'true';
-    row.setAttribute('aria-selected', String(isSelected));
-  });
-  const rows = rowElements.map(rowState);
+  const rows = siteRows().map(rowState);
   const on = rows.filter(function (row) { return row.enabled; }).length;
   const summary = document.getElementById('cf-summary');
   if (summary) {
@@ -79,7 +57,7 @@ function paintSummary() {
   }
   const selected = rows.filter(function (row) { return row.selected; }).length;
   const note = document.getElementById('cf-selection');
-  if (note) note.textContent = selected === 0 ? 'No sites selected' : selected + ' of ' + rows.length + ' selected';
+  if (note) note.textContent = selected === 0 ? 'No sites selected' : plural(selected, 'site') + ' selected';
   ['enable-selected', 'disable-selected'].forEach(function (id) {
     const button = document.getElementById(id);
     if (button) button.disabled = selected === 0;
@@ -93,41 +71,10 @@ function paintSummary() {
     all.checked = rows.length > 0 && selected === rows.length;
     all.indeterminate = selected > 0 && selected < rows.length;
   }
-  const allBtn = document.getElementById('select-all-btn');
-  if (allBtn) {
-    allBtn.disabled = rows.length === 0;
-    allBtn.textContent = rows.length > 0 && selected === rows.length ? 'Deselect all' : 'Select all';
-  }
 }
 
 function selectAllSites(checked) {
-  siteRows().forEach(function (row) {
-    const box = row.querySelector('.site-checkbox');
-    if (box) box.checked = checked;
-    row.setAttribute('aria-selected', String(checked));
-  });
-  paintSummary();
-}
-
-function toggleAllSites() {
-  const rows = siteRows().map(rowState);
-  const selected = rows.filter(function (row) { return row.selected; }).length;
-  selectAllSites(selected < rows.length);
-}
-
-// The switch is an independent action. Everywhere else, a click or a
-// Space/Enter press selects the site like an item in a file manager.
-function toggleSiteSelection(event, row) {
-  const target = event.target;
-  if (target && target !== row && target.closest && target.closest('input, button, a, label')) return;
-  if (event.type === 'keydown') {
-    if (event.key !== ' ' && event.key !== 'Enter') return;
-    event.preventDefault();
-  }
-  const box = row.querySelector('.site-checkbox');
-  const next = box ? !box.checked : row.getAttribute('aria-selected') !== 'true';
-  if (box) box.checked = next;
-  row.setAttribute('aria-selected', String(next));
+  document.querySelectorAll('.site-checkbox').forEach(function (box) { box.checked = checked; });
   paintSummary();
 }
 
@@ -335,10 +282,12 @@ export function dashboardView(state: CloudflareState): string {
   const enabled = state.sites.filter((site) => site.enabled).length;
   const total = state.sites.length;
   const rows = state.sites.map((site) => `
-    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
-      <td class="site-cell"><input class="site-checkbox" type="checkbox" hidden aria-label="Select ${esc(site.domain)}">${esc(site.domain)}<div class="hint site-exception"${site.excludedFromAutomatic && state.autoEnableNewSites ? "" : " hidden"}>Excluded from automatic enabling</div></td>
-      <td class="action-cell">
-        <label class="switch switch-sm"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
+    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}">
+      <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
+      <td class="site-cell">${esc(site.domain)}<div class="hint site-exception"${site.excludedFromAutomatic && state.autoEnableNewSites ? "" : " hidden"}>Excluded from automatic enabling</div></td>
+      <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
+      <td class="action-cell" data-label="Cloudflare only">
+        <label class="switch"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
       </td>
     </tr>`).join("");
 
@@ -371,17 +320,15 @@ export function dashboardView(state: CloudflareState): string {
         : `<div class="card-header toolbar">
             <h2>Sites</h2>
             <span class="toolbar-note" id="cf-selection">No sites selected</span>
-            <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
             <div class="actions toolbar-actions">
               <button class="btn" id="enable-selected" type="button" disabled onclick="setSelectedSites(true)">Enable selected</button>
               <button class="btn" id="disable-selected" type="button" disabled onclick="setSelectedSites(false)">Disable selected</button>
             </div>
-            <input id="select-all" type="checkbox" hidden aria-hidden="true">
           </div>
-          <table class="fleet-table cloudflare-site-table">
+          <table class="fleet-table">
             <thead><tr>
-              <th scope="col">Site</th>
-              <th scope="col" class="action-cell">Cloudflare only</th>
+              <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
+              <th scope="col">Site</th><th scope="col">Type</th><th scope="col" class="action-cell">Cloudflare only</th>
             </tr></thead>
             <tbody>${rows}</tbody>
           </table>`}
