@@ -250,15 +250,19 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .clp-addon-footer a { color: var(--muted); }
 /* The on/off control every addon uses. The checkbox keeps its role, its label
    and the keyboard; the span is only paint, so focus and state stay real. */
-/* Sized to a line of body text, so a switch in a table row reads as part of
-   the row rather than setting its height. */
-.switch { position: relative; display: inline-flex; width: 40px; height: 22px; margin: 0; flex: none; }
+.switch { position: relative; display: inline-flex; width: 50px; height: 28px; margin: 0; flex: none; }
 .switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .switch span { width: 100%; border-radius: 99px; background: var(--border); transition: background-color .15s; pointer-events: none; }
-.switch span::after { content: ""; display: block; width: 16px; height: 16px; margin: 3px; border-radius: 50%;
+.switch span::after { content: ""; display: block; width: 22px; height: 22px; margin: 3px; border-radius: 50%;
   background: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / 25%); transition: transform .15s; }
 .switch input:checked + span { background: var(--primary); }
-.switch input:checked + span::after { transform: translateX(18px); }
+.switch input:checked + span::after { transform: translateX(22px); }
+/* A switch that decides one thing for the whole page keeps its full size; one
+   per row in a table is a repeated control, so it comes down to the height of
+   the line beside it rather than setting the row's height. */
+.fleet-table .switch { width: 44px; height: 24px; }
+.fleet-table .switch span::after { width: 18px; height: 18px; }
+.fleet-table .switch input:checked + span::after { transform: translateX(20px); }
 .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 3px; }
 .switch input:disabled { cursor: not-allowed; }
 .switch input:disabled + span { opacity: .5; }
@@ -340,17 +344,19 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .fleet-table td.type-cell { flex: 0 1 auto; max-width: 45%; margin: 2px 0 0 auto; padding: 2px 6px;
     border: 1px solid var(--border); border-radius: 4px; color: var(--muted);
     font-size: 11px; line-height: 1.3; white-space: nowrap; }
-  /* A table with the modifier treats site type as part of the hostname's
-     inline flow. If the hostname wraps, the badge follows its final line
-     instead of occupying a narrow independent column. The hostname is set a
-     size smaller here so more of it fits beside the badge, and the badge is
-     trimmed rather than allowed to crowd it. */
+  /* A table with the modifier puts site type beside the hostname rather than
+     in a narrow column of its own. The hostname takes the room it needs and is
+     set a size smaller here. The badge gives up the tail of its label to keep
+     the line when it is close to fitting, and drops below the name rather than
+     trim to something too short to read. */
   .fleet-table.inline-mobile-type td.type-cell { display: none; }
-  .fleet-table.inline-mobile-type td.site-cell { font-size: 14px; }
-  .fleet-table.inline-mobile-type .mobile-site-type { display: inline-block; max-width: 40%; margin-left: 6px;
+  .fleet-table.inline-mobile-type td.site-cell { display: flex; flex-wrap: wrap; align-items: baseline;
+    gap: 4px 6px; font-size: 14px; }
+  .fleet-table.inline-mobile-type td.site-cell > .site-name { min-width: 0; }
+  .fleet-table.inline-mobile-type .mobile-site-type { display: inline-block; flex: 0 1 auto; min-width: 0;
     padding: 2px 6px; overflow: hidden; border: 1px solid var(--border); border-radius: 4px;
     color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.3;
-    text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+    text-overflow: ellipsis; white-space: nowrap; }
   /* Half the row each, whatever they hold: a cell that widens with its content
      reflowed the whole row, so switching a site into maintenance -- where the
      status badge grows by half its width -- moved every cell under it. */

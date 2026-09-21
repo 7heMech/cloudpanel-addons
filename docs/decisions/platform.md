@@ -177,7 +177,10 @@ header on a phone, so moving between the two does not move the header.
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
 badges, switches, toolbars, one confirmation dialog and one inline notice per
 page. A badge names what something is rather than being read for itself, so it
-is set a size below the smallest body text wherever it appears. An addon supplies its brand, its own tabs, its script and any rule only it
+is set a size below the smallest body text wherever it appears. A switch that
+decides one thing for a whole page keeps its full size; one repeated per table
+row comes down to the height of the line beside it, so the control does not set
+the row's height. An addon supplies its brand, its own tabs, its script and any rule only it
 draws. The manager's own pages use the same two: disabling an addon asks through
 that dialog, naming the addon as its card does and saying that its data is kept,
 and a manager job that fails to start reports through the inline notice. The

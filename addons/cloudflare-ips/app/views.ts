@@ -30,7 +30,8 @@ const STYLE = `
   /* Tapping the card selects it; the checkbox remains the desktop and form
      state control, but does not consume scarce phone width. */
   .fleet-table.cloudflare-site-table td.site-select { display: none; }
-  .cloudflare-site-table td.action-cell { display: flex; align-self: center; }
+  .cloudflare-site-table td.action-cell { display: flex; flex: 0 0 auto; align-self: center;
+    margin-left: auto; justify-content: flex-end; }
   .cloudflare-site-table td.action-cell::before { display: none; }
 }
 `;
@@ -325,7 +326,7 @@ export function dashboardView(state: CloudflareState): string {
   const rows = state.sites.map((site) => `
     <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
-      <td class="site-cell">${esc(site.domain)}<span class="mobile-site-type">${esc(siteTypeLabel(site.type))}</span></td>
+      <td class="site-cell"><span class="site-name">${esc(site.domain)}</span><span class="mobile-site-type">${esc(siteTypeLabel(site.type))}</span></td>
       <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
       <td class="action-cell" data-label="Cloudflare only">
         <label class="switch"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
