@@ -96,7 +96,9 @@ test("dashboard renders bulk, per-site, and automatic controls with escaped site
   expect(html).toContain("Disable all sites");
   expect(html).toContain("Enable selected");
   expect(html).toContain('id="select-all"');
+  expect(html).toContain('id="select-all-btn"');
   expect(html).toContain('id="automatic-policy"');
+  expect(html).toContain('tabindex="-1" onclick="toggleSiteSelection(event, this)"');
   expect(html).not.toContain("site-exception");
   expect(html).not.toContain("<script>alert(1)</script>");
   expect(() => new Function(CLIENT_JS)).not.toThrow();
@@ -126,6 +128,7 @@ test("the switch column ends where the table ends, as the Maintenance table does
   // sat in the middle of the row with the rest of the table empty beside them.
   expect(html).toContain('<th scope="col" class="action-cell">Cloudflare only</th>');
   expect(html).toContain('<td class="action-cell" data-label="Cloudflare only">');
+  expect(html).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
 });
 
 test("site type tags move above the hostname on phones without taking row space", () => {
@@ -154,6 +157,9 @@ interface FakeElement {
 
 interface FakeRow {
   dataset: { domain: string; enabled: string; excluded: string };
+  attributes: Record<string, string>;
+  setAttribute: (name: string, value: string) => void;
+  removeAttribute: (name: string) => void;
   querySelector: (selector: string) => FakeElement | null;
   parts: { checkbox: FakeElement; toggle: FakeElement };
 }
@@ -173,17 +179,22 @@ function fakeDashboard(
   });
   const byId: Record<string, FakeElement> = {
     "cf-summary": el(), "cf-selection": el(), "select-all": el(),
+    "select-all-btn": el({ textContent: "Select all" }),
     "enable-selected": el({ disabled: true }), "disable-selected": el({ disabled: true }),
     "enable-all": el(), "disable-all": el(),
     "automatic-policy": el({ checked: auto }),
   };
   const rows: FakeRow[] = sites.map((site) => {
+    const attributes: Record<string, string> = { "aria-selected": "false" };
     const parts = {
       checkbox: el({ checked: Boolean(site.selected) }),
       toggle: el({ checked: site.enabled }),
     };
     const row: FakeRow = {
       dataset: { domain: site.domain, enabled: String(site.enabled), excluded: String(site.excluded) },
+      attributes,
+      setAttribute: (name, value) => { attributes[name] = value; },
+      removeAttribute: (name) => { delete attributes[name]; },
       querySelector: (selector) => ({
         ".site-checkbox": parts.checkbox, ".site-switch": parts.toggle,
       }[selector] ?? null),
@@ -212,6 +223,9 @@ interface DashboardClient {
   siteRows(): unknown[];
   rowState(row: unknown): unknown;
   paintSummary(): void;
+  selectAllSites(checked: boolean): void;
+  toggleAllSites(): void;
+  toggleSiteSelection(event: unknown, row: unknown): void;
 }
 
 function loadDashboard(
@@ -226,7 +240,7 @@ function loadDashboard(
 ): DashboardClient {
   const factory = new Function(
     "document", "call", "busy", "notify", "clearNotice", "confirmAction", "location",
-    `${CLIENT_JS}\nreturn { setOne, setAllSites, runBulk, siteRows, rowState, paintSummary };`,
+    `${CLIENT_JS}\nreturn { setOne, setAllSites, runBulk, siteRows, rowState, paintSummary, selectAllSites, toggleAllSites, toggleSiteSelection };`,
   ) as (...args: unknown[]) => DashboardClient;
   return factory(
     dom.document,
@@ -403,7 +417,7 @@ test("selection actions stay unavailable until sites are selected", () => {
   const client = loadDashboard(dom, { call: async () => ({ ok: true }) });
 
   client.paintSummary();
-  expect(dom.byId["cf-selection"]!.textContent).toBe("1 site selected");
+  expect(dom.byId["cf-selection"]!.textContent).toBe("1 of 2 selected");
   expect(dom.byId["enable-selected"]!.disabled).toBe(false);
   expect(dom.byId["select-all"]!.indeterminate).toBe(true);
 
@@ -412,6 +426,33 @@ test("selection actions stay unavailable until sites are selected", () => {
   expect(dom.byId["cf-selection"]!.textContent).toBe("No sites selected");
   expect(dom.byId["enable-selected"]!.disabled).toBe(true);
   expect(dom.byId["disable-selected"]!.disabled).toBe(true);
+});
+
+test("site rows use PHP Resources selection mode", () => {
+  const dom = fakeDashboard([
+    { domain: "one.example.test", enabled: true, excluded: false },
+    { domain: "two.example.test", enabled: false, excluded: false },
+  ]);
+  const client = loadDashboard(dom, { call: async () => ({ ok: true }) });
+
+  client.toggleSiteSelection({ type: "click", target: { closest: () => null } }, dom.rows[0]);
+  expect(dom.rows[0]!.parts.checkbox.checked).toBe(true);
+  expect(dom.rows[0]!.attributes["aria-selected"]).toBe("true");
+  expect(dom.byId["cf-selection"]!.textContent).toBe("1 of 2 selected");
+
+  client.toggleSiteSelection({ type: "click", target: { closest: () => ({}) } }, dom.rows[0]);
+  expect(dom.rows[0]!.parts.checkbox.checked).toBe(true);
+
+  client.toggleAllSites();
+  expect(dom.rows.every((row) => row.parts.checkbox.checked)).toBe(true);
+  expect(dom.byId["select-all-btn"]!.textContent).toBe("Deselect all");
+
+  let prevented = false;
+  client.toggleSiteSelection({
+    type: "keydown", key: " ", target: { closest: () => null }, preventDefault: () => { prevented = true; },
+  }, dom.rows[1]);
+  expect(prevented).toBe(true);
+  expect(dom.rows[1]!.parts.checkbox.checked).toBe(false);
 });
 
 test("vhost transformation mirrors CloudPanel and is reversible", () => {

@@ -19,9 +19,15 @@ const STYLE = `
   .fleet-card, .policy-card { flex-direction: column; }
 }
 @media (max-width: 760px) {
+  .cloudflare-site-table tbody tr { cursor: pointer; transition: background-color .15s, box-shadow .15s; }
+  .cloudflare-site-table tbody tr:hover { background: rgb(38 125 221 / 6%); }
+  .cloudflare-site-table tbody tr[aria-selected="true"] { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); }
+  .cloudflare-site-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
   .toolbar-actions { flex: 1 1 100%; margin-left: 0; }
   .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right:10px; padding-left:10px; white-space:nowrap; }
-  .cloudflare-site-table td.site-cell { position: relative; }
+  .fleet-table.cloudflare-site-table td.site-select { display: none; }
+  .cloudflare-site-table td.site-cell { position: relative; flex-basis: 100%; }
+  .cloudflare-site-table td.action-cell { flex-basis: 100%; }
   .cloudflare-site-table td.type-cell { display: none; }
   /* Use the row's existing top padding for the type tag, so it sits above the
      hostname without increasing the card's height or moving the switch. */
@@ -45,6 +51,13 @@ function rowState(row) {
   };
 }
 
+function selectedRows() {
+  return siteRows().filter(function (row) {
+    const box = row.querySelector('.site-checkbox');
+    return box && box.checked;
+  });
+}
+
 function automaticOn() {
   const policy = document.getElementById('automatic-policy');
   return Boolean(policy && policy.checked);
@@ -55,7 +68,15 @@ function plural(count, word) {
 }
 
 function paintSummary() {
-  const rows = siteRows().map(rowState);
+  const rowElements = siteRows();
+  const mobile = mobileSelectionMode();
+  rowElements.forEach(function (row) {
+    const box = row.querySelector('.site-checkbox');
+    row.tabIndex = mobile ? 0 : -1;
+    if (mobile) row.setAttribute('aria-selected', String(Boolean(box && box.checked)));
+    else row.removeAttribute('aria-selected');
+  });
+  const rows = rowElements.map(rowState);
   const on = rows.filter(function (row) { return row.enabled; }).length;
   const summary = document.getElementById('cf-summary');
   if (summary) {
@@ -63,9 +84,9 @@ function paintSummary() {
       ? 'No sites found in CloudPanel.'
       : on + ' of ' + plural(rows.length, 'site') + ' allow Cloudflare only.';
   }
-  const selected = rows.filter(function (row) { return row.selected; }).length;
+  const selected = selectedRows().length;
   const note = document.getElementById('cf-selection');
-  if (note) note.textContent = selected === 0 ? 'No sites selected' : plural(selected, 'site') + ' selected';
+  if (note) note.textContent = selected === 0 ? 'No sites selected' : selected + ' of ' + rows.length + ' selected';
   ['enable-selected', 'disable-selected'].forEach(function (id) {
     const button = document.getElementById(id);
     if (button) button.disabled = selected === 0;
@@ -79,10 +100,38 @@ function paintSummary() {
     all.checked = rows.length > 0 && selected === rows.length;
     all.indeterminate = selected > 0 && selected < rows.length;
   }
+  const allBtn = document.getElementById('select-all-btn');
+  if (allBtn) {
+    allBtn.disabled = rows.length === 0;
+    allBtn.textContent = rows.length > 0 && selected === rows.length ? 'Deselect all' : 'Select all';
+  }
 }
 
 function selectAllSites(checked) {
   document.querySelectorAll('.site-checkbox').forEach(function (box) { box.checked = checked; });
+  paintSummary();
+}
+
+function mobileSelectionMode() {
+  return typeof window === 'undefined' || !window.matchMedia || window.matchMedia('(max-width: 760px)').matches;
+}
+
+function toggleAllSites() {
+  const rows = siteRows();
+  selectAllSites(selectedRows().length < rows.length);
+}
+
+function toggleSiteSelection(event, row) {
+  if (!mobileSelectionMode()) return;
+  const target = event.target;
+  if (target && target !== row && target.closest && target.closest('input, button, a, label, select, textarea')) return;
+  if (event.type === 'keydown') {
+    if (event.key !== ' ' && event.key !== 'Enter') return;
+    event.preventDefault();
+  }
+  const box = row.querySelector('.site-checkbox');
+  if (!box || box.disabled) return;
+  box.checked = !box.checked;
   paintSummary();
 }
 
@@ -288,7 +337,7 @@ export function dashboardView(state: CloudflareState): string {
   const enabled = state.sites.filter((site) => site.enabled).length;
   const total = state.sites.length;
   const rows = state.sites.map((site) => `
-    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}">
+    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}" tabindex="-1" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
       <td class="site-cell"><span class="mobile-site-type">${esc(siteTypeLabel(site.type))}</span><span class="site-name">${esc(site.domain)}</span></td>
       <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
@@ -325,6 +374,7 @@ export function dashboardView(state: CloudflareState): string {
         : `<div class="card-header toolbar">
             <h2>Sites</h2>
             <span class="toolbar-note" id="cf-selection">No sites selected</span>
+            <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
             <div class="actions toolbar-actions">
               <button class="btn" id="enable-selected" type="button" disabled onclick="setSelectedSites(true)">Enable selected</button>
               <button class="btn" id="disable-selected" type="button" disabled onclick="setSelectedSites(false)">Disable selected</button>
