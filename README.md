@@ -1,11 +1,21 @@
 # CloudPanel Addons
 
-Manage Cloudflare-only site access, host Instatic CMS sites, create staging
-copies, manage per-site maintenance pages, tune PHP-FPM worker limits by
-category, deploy sites from a Git remote, sign in to any WordPress in one
-click, and add search, sorting and extra columns to CloudPanel's own Sites page
-in [CloudPanel](https://www.cloudpanel.io/). Access uses your existing
-administrator login.
+Extra features for [CloudPanel](https://www.cloudpanel.io/): staging copies,
+maintenance pages, Git deploys, one-click WordPress sign-in, and more. You sign
+in with your existing CloudPanel login.
+
+## Install
+
+Log in to your server as **root** and run:
+
+```bash
+curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download/install.sh | bash
+```
+
+The installer asks which addons you want, checks that the download is genuine,
+and installs Docker if Instatic needs it. Requires an x86-64 CloudPanel host.
+
+When it finishes, open the new **Addons** tab in CloudPanel.
 
 ![CloudPanel Addons Manager](docs/screenshots/addons.png)
 
@@ -13,37 +23,25 @@ administrator login.
 
 | Addon | Description |
 | --- | --- |
-| Cloudflare IP Access | Manage “Allow traffic from Cloudflare only” for all sites and enable it automatically for new sites. |
-| [Instatic CMS](https://github.com/CoreBunch/Instatic) | Instant static site hosting and staging on CloudPanel. |
-| Stager | Create staging copies of WordPress, PHP, static, and Instatic sites, and promote them back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
-| Maintenance Mode | Serve a customizable 503 page per site with instant toggles and IP bypasses. |
-| PHP Resources | Group PHP sites into categories of PHP-FPM worker limits, assign them in bulk, and pick the category new sites join. |
-| Git Deploy | Deploy a site from a Git remote with a per-site deploy key, a branch, a target directory and a post-deploy command, from the panel or from a push. |
-| Panel Tweaks | Site search and columns, mobile layouts, and theme improvements for CloudPanel. |
-| WordPress Sign-In | Open any WordPress on the server as its first administrator, from the panel's Sites page, without its password. |
+| Cloudflare IP Access | Allow traffic from Cloudflare only, across all sites and for new ones. |
+| [Instatic CMS](https://github.com/CoreBunch/Instatic) | Instatic CMS sites on CloudPanel. |
+| Stager | Staging copies of WordPress, PHP, static and Instatic sites, and promotion back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
+| Maintenance Mode | A customizable 503 page per site, with instant toggles and IP bypasses. |
+| PHP Resources | Categories of PHP-FPM worker limits, assigned in bulk and to new sites. |
+| Git Deploy | Deploys from a Git remote, from the panel or from a push. |
+| Panel Tweaks | Site search and columns, mobile layouts and theme improvements. |
+| WordPress Sign-In | One-click sign-in to any WordPress on the server, no password needed. |
 
-## Install
-
-Run as **root** on an **x86-64 CloudPanel host**:
-
-```bash
-curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download/install.sh | bash
-```
-
-The installer asks which addons to enable. It verifies checksums and build
-provenance, and can install Docker when Instatic needs it.
-
-Open the new **Addons** tab in CloudPanel after installation. Only CloudPanel
-administrators can access it, except that site managers also reach Git Deploy.
-Other panel users see the WordPress Sign-In link on the Sites page for their own
-sites, and nothing else.
+Only CloudPanel administrators see the Addons tab, except that site managers
+also reach Git Deploy. Other panel users get the WordPress Sign-In link on the
+Sites page for their own sites, and nothing else.
 
 ## Manage
 
 | Command | Purpose |
 | --- | --- |
 | `clp-addons status` | Check services and CloudPanel integration. |
-| `clp-addons install <addon>` | Enable a bundled addon; installs Docker automatically if it's not active yet and the addon needs it. |
+| `clp-addons install <addon>` | Enable an addon, installing Docker if it needs it. |
 | `clp-addons update` | Install the latest verified release. |
 | `clp-addons repair` | Restore managed services and CloudPanel integration. |
 | `clp-addons maintenance <domain> [on\|off\|status]` | Control or inspect maintenance mode for a site. |
