@@ -253,6 +253,26 @@ test("a deployment fetches the branch, checks it out and runs the post-deploy co
   }
 });
 
+test("a post-deploy command can use the site's configured login PATH", async () => {
+  const fx = fixture();
+  try {
+    const userBin = join(fx.root, "home", USER, "tools", "bin");
+    mkdirSync(userBin, { recursive: true });
+    writeFileSync(join(userBin, "site-tool"), "#!/bin/sh\necho path-ran > path-result.txt\n", { mode: 0o755 });
+    writeFileSync(join(fx.root, "home", USER, ".profile"), `cd /tmp\nexport PATH="${userBin}:$PATH"\n`);
+
+    await action(fx, ["configure", `--domain=${DOMAIN}`], JSON.stringify({
+      remote: fx.bare, branch: "main", directory: "", postDeploy: "site-tool",
+    }));
+    const dir = queueJob(fx, "20260918T123000Z-aabbcc");
+    expect(await runGitAction(["run", "--job=20260918T123000Z-aabbcc"], { ...fx.options, emitReply: false })).toBe(0);
+    expect(field(dir, "state")).toBe("done");
+    expect(readFileSync(join(fx.siteDir, "path-result.txt"), "utf8").trim()).toBe("path-ran");
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
 // The lock is how a runner claims its job, not how it holds the site: a second
 // deploy must meet the duplicate-job guard and be told the site is deploying,
 // rather than wait on a lock until its caller's gateway gives up.

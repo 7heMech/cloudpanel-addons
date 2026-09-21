@@ -21,6 +21,12 @@ The post-deploy command runs last, in the deployed directory, and its failure
 fails the job with the files already in place. There is no rollback: the way
 back is the previous commit, deployed the same way.
 
+Post-deploy commands use a login shell, so the site's configured PATH is loaded
+from its normal login profile. This makes user-installed runtimes and custom
+toolchains available without hard-coding one ecosystem's bin directory. The
+command still runs as the site user, in the deployed directory, and within the
+job timeout.
+
 ## Privileges
 
 Every command runs as the site's own user through `runuser`: `git`,
