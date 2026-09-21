@@ -534,8 +534,9 @@ class JobTranscript {
  * wants a password must fail rather than wait for one nobody will type.
  */
 function asSiteUser(paths: GitActionPaths, user: string, command: string, args: string[], keyPath?: string): string[] {
+  const home = join(paths.homeDir, user);
   const environment = [
-    `HOME=${join(paths.homeDir, user)}`,
+    `HOME=${home}`,
     "GIT_TERMINAL_PROMPT=0",
     "GIT_CONFIG_NOSYSTEM=1",
   ];
@@ -1140,7 +1141,10 @@ async function cmdRun(
     if (config.postDeploy) {
       setStep(dir, "running the post-deploy command");
       logLine(`$ ${config.postDeploy}`);
-      if (!await streamAsSiteUser(paths, site.user, "bash", ["-c", config.postDeploy], { cwd: target })) {
+      // A login shell loads the site's configured PATH, which is where user
+      // installs such as Bun, Composer or custom toolchains are normally
+      // exposed. The command still runs as the site user in the deploy dir.
+      if (!await streamAsSiteUser(paths, site.user, "bash", ["-lc", config.postDeploy], { cwd: target })) {
         failJob(dir, "the post-deploy command failed; the files are deployed and the command did not finish");
       }
       postDeployRan = true;
