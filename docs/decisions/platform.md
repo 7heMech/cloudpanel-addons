@@ -272,6 +272,14 @@ JSON the manager computes -- are bare identifiers or string tokens in the asset,
 substituted by the module that imports it. That keeps each file valid CSS or
 JavaScript on its own.
 
+Three scripts are shared. Every addon page gets the base helpers; the two fleet
+tables also get the site-selection ones, and the two addons whose change is too
+wide to patch into the page get the pair that carries a message across a reload.
+That pair is not in the base: a page that reloads is the exception here, and a
+page whose switches are modes rather than actions must not be handed the means
+to reload itself. Each shared function takes the page's own repaint, because
+what a change redraws is the one thing the addons do not agree on.
+
 ## Live panel data
 
 The manager requests current site and port information from the root gateway.

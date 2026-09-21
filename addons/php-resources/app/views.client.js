@@ -47,28 +47,6 @@ function writeProfile(profile) {
 // nine places. The message survives the reload, so what happened is still said.
 const FLASH_KEY = 'clp-php-resources-flash';
 
-function reloadWith(message, kind) {
-  try { sessionStorage.setItem(FLASH_KEY, JSON.stringify({ message: message, kind: kind })); } catch (e) {}
-  location.reload();
-}
-
-function showCarriedFlash() {
-  let carried = null;
-  try {
-    carried = sessionStorage.getItem(FLASH_KEY);
-    if (carried) sessionStorage.removeItem(FLASH_KEY);
-  } catch (e) { return; }
-  if (!carried) return;
-  try {
-    const flash = JSON.parse(carried);
-    notify(flash.message, flash.kind);
-  } catch (e) {}
-}
-
-function plural(count, word) {
-  return count + ' ' + word + (count === 1 ? '' : 's');
-}
-
 /** What to say when a change landed on some sites and not on others. */
 function withFailures(message, failures) {
   if (!failures || !failures.length) return { message: message, kind: 'ok' };
@@ -88,7 +66,7 @@ async function send(path, body, done) {
       body: JSON.stringify(body),
     });
     const flash = withFailures(done, (reply.data || {}).failures);
-    reloadWith(flash.message, flash.kind);
+    reloadWithFlash(FLASH_KEY, flash.message, flash.kind);
   } catch (error) {
     notify(error.message, 'error');
     busy(false);
@@ -169,17 +147,6 @@ async function setDefaultCategory(select) {
 
 // --- sites ----------------------------------------------------------------
 
-function siteRows() {
-  return Array.from(CLP_ROOT.querySelectorAll('tr[data-domain]'));
-}
-
-function selectedRows() {
-  return siteRows().filter(function (row) {
-    const box = row.querySelector('.site-checkbox');
-    return box && box.checked;
-  });
-}
-
 function paintSelection() {
   const rows = siteRows();
   rows.forEach(function (row) {
@@ -201,17 +168,6 @@ function paintSelection() {
     allBtn.disabled = rows.length === 0;
     allBtn.textContent = rows.length > 0 && chosen.length === rows.length ? 'Deselect all' : 'Select all';
   }
-}
-
-function selectAllSites(checked) {
-  CLP_ROOT.querySelectorAll('.site-checkbox').forEach(function (box) { box.checked = checked; });
-  paintSelection();
-}
-
-function toggleAllSites() {
-  const rows = siteRows();
-  const chosen = selectedRows();
-  selectAllSites(chosen.length < rows.length);
 }
 
 function categoryLabel(id) {
@@ -302,12 +258,12 @@ async function repairDrifted() {
     }
   }
   const flash = withFailures(plural(repaired, 'site') + ' are back on the limits of their category.', failures);
-  reloadWith(flash.message, flash.kind);
+  reloadWithFlash(FLASH_KEY, flash.message, flash.kind);
 }
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', function () { showCarriedFlash(); paintSelection(); });
+  document.addEventListener('DOMContentLoaded', function () { showCarriedFlash(FLASH_KEY); paintSelection(); });
 } else {
-  showCarriedFlash();
+  showCarriedFlash(FLASH_KEY);
   paintSelection();
 }

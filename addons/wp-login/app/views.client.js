@@ -56,11 +56,7 @@ async function removeHelpers(button) {
       ? 'Removed from ' + removed + (removed === 1 ? ' site.' : ' sites.')
       : 'No site had the helper installed.';
     if (failed.length) message += ' Still in ' + failed.join('; ') + '.';
-    sessionStorage.setItem(FLASH_KEY, JSON.stringify({
-      message: message,
-      kind: failed.length ? 'warn' : 'ok',
-    }));
-    location.reload();
+    reloadWithFlash(FLASH_KEY, message, failed.length ? 'warn' : 'ok');
   } catch (error) {
     busy(false);
     notify(error.message, 'error');
@@ -69,15 +65,4 @@ async function removeHelpers(button) {
 
 const FLASH_KEY = 'clp-wp-login-flash';
 
-(function showCarriedFlash() {
-  let carried = null;
-  try {
-    carried = sessionStorage.getItem(FLASH_KEY);
-    if (carried) sessionStorage.removeItem(FLASH_KEY);
-  } catch (e) { return; }
-  if (!carried) return;
-  try {
-    const flash = JSON.parse(carried);
-    notify(flash.message, flash.kind);
-  } catch (e) {}
-})();
+showCarriedFlash(FLASH_KEY);

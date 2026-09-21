@@ -41,9 +41,26 @@ export function fleetRowSelectionStyle(tableClass: string): string {
 `;
 }
 
-/** Shared mouse/keyboard selection for the Cloudflare and PHP site tables. */
+/**
+ * Shared selection for the Cloudflare and PHP site tables: which rows there
+ * are, which are picked, and the mouse and keyboard ways to pick them.
+ *
+ * Each entry point takes the page's own repaint, because what a selection
+ * changes on the page is the one thing the two tables do not agree on.
+ */
 import FLEET_ROW_SELECTION_JS from "./assets/fleet-row-selection.client.js" with { type: "text" };
 export { FLEET_ROW_SELECTION_JS };
+
+/**
+ * Carrying a message across the reload a change needed, for the addons whose
+ * change is too wide to patch into the page in nine places.
+ *
+ * Not in BASE_CLIENT_JS: a page that reloads is the exception here, and the
+ * pages whose switches are modes rather than actions must not be handed the
+ * means to reload themselves.
+ */
+import CARRIED_FLASH_JS from "./assets/carried-flash.client.js" with { type: "text" };
+export { CARRIED_FLASH_JS };
 
 // Measured against CloudPanel 2.5.1's public demo: dashboard, sites, settings,
 // certificates, logs and new-site forms. Keep these rules independent of the

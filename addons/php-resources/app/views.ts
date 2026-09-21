@@ -1,6 +1,6 @@
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
-import { FLEET_ROW_SELECTION_JS, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
+import { CARRIED_FLASH_JS, FLEET_ROW_SELECTION_JS, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import {
   DEFAULT_CATEGORY_PROFILE, PM_MODES, STOCK_PROFILE,
@@ -168,7 +168,7 @@ function profileForm(profile: PoolProfile): string {
 }
 
 export const CLIENT_JS = `
-${FLEET_ROW_SELECTION_JS}
+${FLEET_ROW_SELECTION_JS}${CARRIED_FLASH_JS}
 ${CLIENT_JS_BODY}`;
 
 export function layout(
@@ -285,12 +285,12 @@ export function dashboardView(state: PhpResourcesState): string {
     ? `<div class="card-header toolbar">
         <h2>PHP sites</h2>
         <span class="toolbar-note" id="site-selection">No sites selected</span>
-        <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
+        <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites(paintSelection)">Select all</button>
         <select class="toolbar-end" id="bulk-category" aria-label="Category to put the selected sites in">${bulkOptions(state.categories)}</select>
         <button class="btn" id="assign-selected" type="button" disabled onclick="assignSelected()">Assign selected</button>
       </div>
       <table class="fleet-table php-sites-table"><thead><tr>
-        <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
+        <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked, paintSelection)" aria-label="Select all sites"></th>
         <th scope="col">Site</th><th scope="col">PHP</th><th scope="col">Category</th><th scope="col">Now running</th>
       </tr></thead><tbody>${siteRows}</tbody></table>`
     : '<div class="empty">No CloudPanel site runs PHP, so there is no PHP-FPM pool to tune.</div>'}

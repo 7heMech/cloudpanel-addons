@@ -1,7 +1,3 @@
-function siteRows() {
-  return Array.from(document.querySelectorAll('tr[data-domain]'));
-}
-
 function rowState(row) {
   return {
     domain: row.dataset.domain,
@@ -11,20 +7,9 @@ function rowState(row) {
   };
 }
 
-function selectedRows() {
-  return siteRows().filter(function (row) {
-    const box = row.querySelector('.site-checkbox');
-    return box && box.checked;
-  });
-}
-
 function automaticOn() {
   const policy = document.getElementById('automatic-policy');
   return Boolean(policy && policy.checked);
-}
-
-function plural(count, word) {
-  return count + ' ' + word + (count === 1 ? '' : 's');
 }
 
 function paintSummary() {
@@ -63,16 +48,6 @@ function paintSummary() {
     allBtn.disabled = rows.length === 0;
     allBtn.textContent = rows.length > 0 && selected === rows.length ? 'Deselect all' : 'Select all';
   }
-}
-
-function selectAllSites(checked) {
-  document.querySelectorAll('.site-checkbox').forEach(function (box) { box.checked = checked; });
-  paintSummary();
-}
-
-function toggleAllSites() {
-  const rows = siteRows();
-  selectAllSites(selectedRows().length < rows.length);
 }
 
 // Repaint from the server's answer rather than from what was asked for: the

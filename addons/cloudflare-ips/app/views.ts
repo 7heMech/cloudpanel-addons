@@ -97,7 +97,7 @@ export function dashboardView(state: CloudflareState): string {
         : `<div class="card-header toolbar">
             <h2>Sites</h2>
             <span class="toolbar-note" id="cf-selection">No sites selected</span>
-            <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
+            <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites(paintSummary)">Select all</button>
             <div class="actions toolbar-actions">
               <button class="btn" id="enable-selected" type="button" disabled onclick="setSelectedSites(true)">Enable selected</button>
               <button class="btn" id="disable-selected" type="button" disabled onclick="setSelectedSites(false)">Disable selected</button>
@@ -105,7 +105,7 @@ export function dashboardView(state: CloudflareState): string {
           </div>
           <table class="fleet-table cloudflare-site-table">
             <thead><tr>
-              <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
+              <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked, paintSummary)" aria-label="Select all sites"></th>
               <th scope="col">Site</th><th scope="col">Type</th><th scope="col" class="action-cell">Cloudflare only</th>
             </tr></thead>
             <tbody>${rows}</tbody>

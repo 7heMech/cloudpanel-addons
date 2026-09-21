@@ -1,5 +1,5 @@
 import { esc } from "../../../lib/app-http";
-import { renderLayout } from "../../../lib/app-ui";
+import { CARRIED_FLASH_JS, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { WpSiteView } from "../action";
 
@@ -11,7 +11,9 @@ const STYLE = `
 .remove-row p { margin: 0; }
 `;
 
-import SCRIPT from "./views.client.js" with { type: "text" };
+import SCRIPT_BODY from "./views.client.js" with { type: "text" };
+
+const SCRIPT = `${CARRIED_FLASH_JS}${SCRIPT_BODY}`;
 
 export function layout(
   title: string,
