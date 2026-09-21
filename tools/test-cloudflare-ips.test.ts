@@ -117,15 +117,19 @@ test("dashboard summarises how many sites allow Cloudflare only", () => {
   expect(rendered).toContain('<div class="actions toolbar-actions">');
 });
 
-test("the per-site switch replaces the checkbox column with full-row selection", () => {
+test("the per-site switch sits on the right with full-row selection and no site tags", () => {
   const html = dashboardView({
     autoEnableNewSites: true,
     sites: [{ domain: "a.example.test", type: "php", enabled: true, excludedFromAutomatic: false }],
   });
-  expect(html).toContain('<th scope="col" class="site-action">Cloudflare only</th>');
-  expect(html).toContain('<td class="site-action">');
+  expect(html).toContain('<th scope="col">Site</th>');
+  expect(html).toContain('<th scope="col" class="action-cell">Cloudflare only</th>');
+  expect(html).toContain('<td class="site-cell">');
+  expect(html).toContain('<td class="action-cell">');
   expect(html).toContain('class="switch switch-sm"');
   expect(html).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)"');
+  expect(html).not.toContain("type-cell");
+  expect(html).not.toContain('<th scope="col">Type</th>');
 });
 
 interface FakeElement {

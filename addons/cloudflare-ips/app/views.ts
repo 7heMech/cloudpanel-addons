@@ -1,7 +1,6 @@
 import { esc } from "../../../lib/app-http";
 import { renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
-import { siteTypeLabel } from "../../../lib/site-context";
 import type { CloudflareState } from "./service";
 
 const BASE = mountPath("cloudflare-ips");
@@ -19,8 +18,9 @@ const STYLE = `
 .cloudflare-site-table tbody tr:hover { background: rgb(38 125 221 / 6%); }
 .cloudflare-site-table tbody tr[aria-selected="true"] { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); }
 .cloudflare-site-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
-.cloudflare-site-table th.site-action,
-.cloudflare-site-table td.site-action { width: 140px; text-align: left; }
+.cloudflare-site-table th.action-cell,
+.cloudflare-site-table td.action-cell { width: 140px; text-align: center; vertical-align: middle; }
+.cloudflare-site-table td.action-cell .switch { display: inline-block; vertical-align: middle; margin: 0 auto; }
 .switch-sm { width: 40px; height: 22px; flex: 0 0 40px; }
 .switch-sm span { border-radius: 22px; }
 .switch-sm span::after { width: 16px; height: 16px; left: 3px; top: 3px; }
@@ -31,10 +31,10 @@ const STYLE = `
 @media (max-width: 760px) {
   .toolbar-actions { flex: 1 1 100%; margin-left: 0; }
   .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right: 10px; padding-left: 10px; white-space: nowrap; }
-  .cloudflare-site-table tbody tr { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
-  .cloudflare-site-table td.site-action { width: auto; flex: 0 0 auto; }
-  .cloudflare-site-table td.site-cell { flex: 1 1 calc(100% - 130px); min-width: 0; }
-  .cloudflare-site-table td.type-cell { flex: 0 0 auto; margin-left: auto; }
+  .cloudflare-site-table tbody tr { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .cloudflare-site-table td.site-cell { flex: 1 1 auto; min-width: 0; }
+  .cloudflare-site-table td.action-cell { width: auto; flex: 0 0 auto; margin-left: auto; display: flex; align-items: center; justify-content: center; }
+  .cloudflare-site-table td.action-cell::before { display: none; }
 }
 `;
 
@@ -336,11 +336,10 @@ export function dashboardView(state: CloudflareState): string {
   const total = state.sites.length;
   const rows = state.sites.map((site) => `
     <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
-      <td class="site-action">
+      <td class="site-cell"><input class="site-checkbox" type="checkbox" hidden aria-label="Select ${esc(site.domain)}">${esc(site.domain)}<div class="hint site-exception"${site.excludedFromAutomatic && state.autoEnableNewSites ? "" : " hidden"}>Excluded from automatic enabling</div></td>
+      <td class="action-cell">
         <label class="switch switch-sm"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
       </td>
-      <td class="site-cell"><input class="site-checkbox" type="checkbox" hidden aria-label="Select ${esc(site.domain)}">${esc(site.domain)}<div class="hint site-exception"${site.excludedFromAutomatic && state.autoEnableNewSites ? "" : " hidden"}>Excluded from automatic enabling</div></td>
-      <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
     </tr>`).join("");
 
   return `
@@ -381,8 +380,8 @@ export function dashboardView(state: CloudflareState): string {
           </div>
           <table class="fleet-table cloudflare-site-table">
             <thead><tr>
-              <th scope="col" class="site-action">Cloudflare only</th>
-              <th scope="col">Site</th><th scope="col">Type</th>
+              <th scope="col">Site</th>
+              <th scope="col" class="action-cell">Cloudflare only</th>
             </tr></thead>
             <tbody>${rows}</tbody>
           </table>`}
