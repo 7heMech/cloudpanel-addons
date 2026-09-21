@@ -1,0 +1,23 @@
+
+html.clp-tweaks-menu table.table-sites tbody td:last-child > a,
+html.clp-tweaks-menu table.table-sites tbody td:last-child > button:not(.clp-tweaks-menu-button) { display: none; }
+.clp-tweaks-menu-button { display: inline-flex; align-items: center; justify-content: center; width: 30px;
+  height: 30px; padding: 0; border: 0; border-radius: 4px; background: none; color: inherit; cursor: pointer;
+  font-size: 18px; line-height: 1; }
+.clp-tweaks-menu-button:hover,
+.clp-tweaks-menu-button[aria-expanded="true"] { background: rgba(127, 143, 153, .18); }
+.ROW_MENU_CLASS { position: fixed; z-index: 2147483000; min-width: 170px; padding: 6px 0;
+  border: 1px solid #eaeaea; border-radius: 6px; background: #fff; box-shadow: 0 8px 28px rgba(0, 0, 0, .16);
+  text-align: left; }
+.ROW_MENU_CLASS[hidden] { display: none; }
+/* The links keep whatever the addon that owns them styled them with, which for
+   an inline action cell is a margin between one link and the next. In here the
+   menu decides the spacing. */
+.ROW_MENU_CLASS > a,
+.ROW_MENU_CLASS > button { display: block; width: 100%; margin: 0; padding: 9px 18px; border: 0;
+  background: none; color: inherit; font-size: 14px; line-height: 1.4; text-align: left; white-space: nowrap;
+  cursor: pointer; }
+.ROW_MENU_CLASS > a:hover,
+.ROW_MENU_CLASS > button:hover { background: rgba(127, 143, 153, .14); }
+html.dark .ROW_MENU_CLASS { border-color: var(--clp-border-color, #a8b3cf33);
+  background: var(--clp-bg-secondary, #1c1f26); color: var(--clp-text, #fff); }

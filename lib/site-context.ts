@@ -121,18 +121,8 @@ export function siteTabs(site: SiteContext, activeSlug = ""): SiteTab[] {
  * the top margin differs -- the panel's own 30px, less the 25px `main` already
  * contributes above the first element on an addon page.
  */
-export const SITE_CONTEXT_STYLE = `
-.clp-addon-site-info { display: flex; flex-wrap: wrap; row-gap: 20px; margin: 5px 0 30px; }
-.clp-addon-site-box { min-width: 200px; max-width: 100%; margin: 0 60px 0 0; }
-.clp-addon-site-box h3 { font-size: 14px; font-weight: 500; color: #aaa; margin: 0 0 5px; }
-.clp-addon-site-value { font-size: 18px; overflow-wrap: anywhere; }
-.clp-addon-site-value svg { width: 12px; height: 12px; margin-left: 2px; fill: #aaa; }
-.clp-addon-site-value a:hover svg { fill: var(--accent); }
-@media (max-width: 760px) {
-  .clp-addon-site-info { margin: 0 0 24px; }
-  .clp-addon-site-box { min-width: 0; margin-right: 30px; }
-}
-`;
+import SITE_CONTEXT_STYLE from "./assets/site-context.css" with { type: "text" };
+export { SITE_CONTEXT_STYLE };
 
 const EXTERNAL_LINK_ICON =
   '<svg viewBox="0 0 512 512" aria-hidden="true" focusable="false"><path d="M440,256H424a8,8,0,0,0-8,8V464a16,16,0,0,1-16,16H48a16,16,0,0,1-16-16V112A16,16,0,0,1,48,96H248a8,8,0,0,0,8-8V72a8,8,0,0,0-8-8H48A48,48,0,0,0,0,112V464a48,48,0,0,0,48,48H400a48,48,0,0,0,48-48V264A8,8,0,0,0,440,256ZM500,0,364,.34a12,12,0,0,0-12,12v10a12,12,0,0,0,12,12L454,34l.7.71L131.51,357.86a12,12,0,0,0,0,17l5.66,5.66a12,12,0,0,0,17,0L477.29,57.34l.71.7-.34,90a12,12,0,0,0,12,12h10a12,12,0,0,0,12-12L512,12A12,12,0,0,0,500,0Z"/></svg>';

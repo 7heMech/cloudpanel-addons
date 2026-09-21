@@ -255,6 +255,23 @@ widening the panel's limited-width container, which would only postpone the
 break until the next addon. The rule is injected once, and only while an
 installed addon patches that partial.
 
+## Browser assets are files
+
+Stylesheets and browser scripts live in `.css` and `.client.js` files beside the
+module that serves them, imported with `with { type: "text" }`. They were
+template literals in TypeScript, where no editor highlighted, formatted or
+linted them.
+
+They are served as they are, never bundled or minified. The pages carry inline
+handlers calling top-level functions by name from markup no bundler sees, so
+tree-shaking and renaming would break them. The panel's nginx already gzips
+these responses, which is where the size saving comes from.
+
+Values a file cannot know -- the addon's mount URL, the shared class names,
+JSON the manager computes -- are bare identifiers or string tokens in the asset,
+substituted by the module that imports it. That keeps each file valid CSS or
+JavaScript on its own.
+
 ## Live panel data
 
 The manager requests current site and port information from the root gateway.

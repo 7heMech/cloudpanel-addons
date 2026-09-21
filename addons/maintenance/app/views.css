@@ -1,0 +1,130 @@
+
+/* Shrinkable, so the badge and the button wrap rather than overflow a phone. */
+.page-heading .actions { align-items:center; }
+.site-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+}
+.site-heading .site-header-main {
+  min-width: 0;
+}
+.site-heading .site-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.site-heading .site-title-row h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.site-heading .badge {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.site-heading .site-desc {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.site-heading .actions {
+  flex-shrink: 0;
+}
+.state-live { color:var(--ok); border-color:var(--ok); }
+.state-maintenance { color:var(--bad); border-color:var(--bad); }
+.state-unavailable { color:var(--muted); }
+.editor-toolbar { margin-bottom:12px; }
+.editor-tabs { display:flex; gap:8px; }
+.editor-tabs button[aria-selected="true"] { color:var(--accent); border-color:var(--accent); }
+#template-editor { width:100%; min-height:420px; resize:vertical; font:13px/1.55 var(--mono); tab-size:2; }
+#template-preview { width:100%; min-height:420px; border:1px solid var(--border); border-radius:8px; background:#fff; }
+#template-ace { width:100%; min-height:420px; border:1px solid var(--border); border-radius:4px; }
+#template-ace.is-readonly { opacity:.6; }
+/* The panel ships only Ace's light theme, so dark mode tints it rather than ask
+   for a theme file that is not there. The template is edited in text mode, so
+   there is no syntax colouring to preserve. */
+html.dark #template-ace,
+html.dark #template-ace .ace_scroller,
+html.dark #template-ace .ace_content { background:var(--input-bg); color:var(--text); }
+html.dark #template-ace .ace_gutter { background:var(--surface); color:var(--muted); }
+html.dark #template-ace .ace_gutter-active-line { background:#ffffff14; }
+html.dark #template-ace .ace_cursor { color:var(--text); }
+html.dark #template-ace .ace_marker-layer .ace_active-line { background:#ffffff0d; }
+html.dark #template-ace .ace_marker-layer .ace_selection { background:#2f5b8c; }
+/* Ace's light theme colours its tokens for a white page; on the tinted
+   background they would be navy on near-black. */
+html.dark #template-ace .ace_tag,
+html.dark #template-ace .ace_tag-name,
+html.dark #template-ace .ace_meta.ace_tag,
+html.dark #template-ace .ace_doctype,
+html.dark #template-ace .ace_xml-pe { color:#6cb6ff; }
+html.dark #template-ace .ace_attribute-name,
+html.dark #template-ace .ace_support,
+html.dark #template-ace .ace_fonts,
+html.dark #template-ace .ace_keyword { color:#e5bc76; }
+html.dark #template-ace .ace_string,
+html.dark #template-ace .ace_attribute-value { color:#81c9a0; }
+html.dark #template-ace .ace_constant,
+html.dark #template-ace .ace_numeric,
+html.dark #template-ace .ace_entity { color:#d9a9ff; }
+html.dark #template-ace .ace_comment { color:#93a1ad; }
+.bypass-grid { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:end; }
+.bypass-field { min-width:0; margin:0; }
+.bypass-field span, .bypass-field textarea { display:block; }
+.bypass-field span { margin-bottom:7px; }
+.bypass-field textarea { min-height:110px; resize:vertical; font-family:var(--mono); }
+.bypass-actions { justify-content:flex-end; }
+.global-card { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
+.global-card h2 { margin:0 0 8px; }
+.global-card p { margin:0; }
+@media (max-width:760px) {
+  .site-heading {
+    display: grid;
+    grid-template-columns: minmax(max-content, auto) 1fr auto;
+    grid-template-areas:
+      "title title title"
+      "desc  desc  desc"
+      "badge .     actions";
+    gap: 10px;
+    align-items: center;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .site-heading .site-header-main,
+  .site-heading .site-title-row {
+    display: contents;
+  }
+  .site-heading h1 {
+    grid-area: title;
+    min-width: 0;
+    width: 100%;
+    margin: 0;
+  }
+  .site-heading .site-desc {
+    grid-area: desc;
+    min-width: 0;
+    width: 100%;
+    margin: 0;
+  }
+  .site-heading .badge {
+    grid-area: badge;
+    justify-self: start;
+    white-space: nowrap;
+    margin-top: 2px;
+  }
+  .site-heading .actions {
+    grid-area: actions;
+    justify-self: end;
+    white-space: nowrap;
+  }
+  .fleet-table.maintenance-fleet-table td.page-cell,
+  .fleet-table.maintenance-fleet-table td.bypass-cell { display: none; }
+}
+@media (max-width:700px) {
+  .bypass-grid { grid-template-columns:1fr; }
+  .bypass-actions { justify-content:flex-start; }
+  .global-card { flex-direction:column; }
+}
