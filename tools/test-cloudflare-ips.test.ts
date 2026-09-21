@@ -134,7 +134,7 @@ test("the switch column ends where the table ends, as the Maintenance table does
   expect(page).toContain("margin-left: auto; display: flex; align-items: center; justify-content: flex-end;");
 });
 
-test("site type tags move above the hostname on phones without taking row space", () => {
+test("site type tags sit above the hostname on phones, centred with it in the row", () => {
   const html = dashboardView({
     autoEnableNewSites: true,
     sites: [{ domain: "a.example.test", type: "reverse-proxy", enabled: true, excludedFromAutomatic: false }],
@@ -144,9 +144,8 @@ test("site type tags move above the hostname on phones without taking row space"
   expect(html).toContain('<span class="site-copy"><span class="mobile-site-type">Reverse proxy</span><span class="site-name">a.example.test</span></span>');
   expect(page).toContain(".cloudflare-site-table .mobile-site-type { display: none; }");
   expect(page).toContain(".cloudflare-site-table td.type-cell { display: none; }");
-  expect(page).toContain("position: static; margin-top: -15px;");
-  expect(page).toContain("flex-direction: column; align-items: flex-start;");
-  expect(page).toContain("transform: translateY(2px);");
+  expect(page).toContain(".cloudflare-site-table tbody tr { flex-wrap: nowrap; align-items: center; }");
+  expect(page).toContain("flex-direction: column; align-items: flex-start; gap: 3px;");
   expect(page).toContain("font-size: 10px;");
 });
 
