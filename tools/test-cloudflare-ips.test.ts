@@ -98,7 +98,7 @@ test("dashboard renders bulk, per-site, and automatic controls with escaped site
   expect(html).toContain('id="select-all"');
   expect(html).toContain('id="select-all-btn"');
   expect(html).toContain('id="automatic-policy"');
-  expect(html).toContain('tabindex="-1" onclick="toggleSiteSelection(event, this)"');
+  expect(html).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)"');
   expect(html).not.toContain("site-exception");
   expect(html).not.toContain("<script>alert(1)</script>");
   expect(() => new Function(CLIENT_JS)).not.toThrow();
@@ -129,6 +129,9 @@ test("the switch column ends where the table ends, as the Maintenance table does
   expect(html).toContain('<th scope="col" class="action-cell">Cloudflare only</th>');
   expect(html).toContain('<td class="action-cell" data-label="Cloudflare only">');
   expect(html).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
+  const page = layout("Cloudflare IP access", html);
+  expect(page).toContain(".cloudflare-site-table td.action-cell::before { display: none; }");
+  expect(page).toContain("margin-left: auto; display: flex; align-items: center; justify-content: flex-end;");
 });
 
 test("site type tags move above the hostname on phones without taking row space", () => {

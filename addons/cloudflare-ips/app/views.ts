@@ -15,19 +15,20 @@ const STYLE = `
 .fleet-card .actions { flex-shrink: 0; }
 .toolbar-actions { margin-left: auto; }
 .cloudflare-site-table .mobile-site-type { display: none; }
+.cloudflare-site-table tbody tr { cursor: pointer; transition: background-color .15s, box-shadow .15s; }
+.cloudflare-site-table tbody tr:hover { background: rgb(38 125 221 / 6%); }
+.cloudflare-site-table tbody tr[aria-selected="true"] { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); }
+.cloudflare-site-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 @media (max-width: 700px) {
   .fleet-card, .policy-card { flex-direction: column; }
 }
 @media (max-width: 760px) {
-  .cloudflare-site-table tbody tr { cursor: pointer; transition: background-color .15s, box-shadow .15s; }
-  .cloudflare-site-table tbody tr:hover { background: rgb(38 125 221 / 6%); }
-  .cloudflare-site-table tbody tr[aria-selected="true"] { background: rgb(38 125 221 / 12%); box-shadow: inset 4px 0 var(--primary); }
-  .cloudflare-site-table tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
   .toolbar-actions { flex: 1 1 100%; margin-left: 0; }
   .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right:10px; padding-left:10px; white-space:nowrap; }
   .fleet-table.cloudflare-site-table td.site-select { display: none; }
-  .cloudflare-site-table td.site-cell { position: relative; flex-basis: 100%; }
-  .cloudflare-site-table td.action-cell { flex-basis: 100%; }
+  .cloudflare-site-table td.site-cell { position: relative; flex: 1 1 auto; min-width: 0; }
+  .cloudflare-site-table td.action-cell { width: auto; flex: 0 0 auto; margin-left: auto; display: flex; align-items: center; justify-content: flex-end; }
+  .cloudflare-site-table td.action-cell::before { display: none; }
   .cloudflare-site-table td.type-cell { display: none; }
   /* Use the row's existing top padding for the type tag, so it sits above the
      hostname without increasing the card's height or moving the switch. */
@@ -69,12 +70,10 @@ function plural(count, word) {
 
 function paintSummary() {
   const rowElements = siteRows();
-  const mobile = mobileSelectionMode();
   rowElements.forEach(function (row) {
     const box = row.querySelector('.site-checkbox');
-    row.tabIndex = mobile ? 0 : -1;
-    if (mobile) row.setAttribute('aria-selected', String(Boolean(box && box.checked)));
-    else row.removeAttribute('aria-selected');
+    row.tabIndex = 0;
+    row.setAttribute('aria-selected', String(Boolean(box && box.checked)));
   });
   const rows = rowElements.map(rowState);
   const on = rows.filter(function (row) { return row.enabled; }).length;
@@ -112,17 +111,12 @@ function selectAllSites(checked) {
   paintSummary();
 }
 
-function mobileSelectionMode() {
-  return typeof window === 'undefined' || !window.matchMedia || window.matchMedia('(max-width: 760px)').matches;
-}
-
 function toggleAllSites() {
   const rows = siteRows();
   selectAllSites(selectedRows().length < rows.length);
 }
 
 function toggleSiteSelection(event, row) {
-  if (!mobileSelectionMode()) return;
   const target = event.target;
   if (target && target !== row && target.closest && target.closest('input, button, a, label, select, textarea')) return;
   if (event.type === 'keydown') {
@@ -337,7 +331,7 @@ export function dashboardView(state: CloudflareState): string {
   const enabled = state.sites.filter((site) => site.enabled).length;
   const total = state.sites.length;
   const rows = state.sites.map((site) => `
-    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}" tabindex="-1" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
+    <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
       <td class="site-cell"><span class="mobile-site-type">${esc(siteTypeLabel(site.type))}</span><span class="site-name">${esc(site.domain)}</span></td>
       <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
