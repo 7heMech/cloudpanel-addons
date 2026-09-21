@@ -141,10 +141,11 @@ test("site type tags move above the hostname on phones without taking row space"
   });
   const page = layout("Cloudflare IP access", html);
   expect(html).toContain('<table class="fleet-table cloudflare-site-table">');
-  expect(html).toContain('<span class="mobile-site-type">Reverse proxy</span><span class="site-name">a.example.test</span>');
+  expect(html).toContain('<span class="site-copy"><span class="mobile-site-type">Reverse proxy</span><span class="site-name">a.example.test</span></span>');
   expect(page).toContain(".cloudflare-site-table .mobile-site-type { display: none; }");
   expect(page).toContain(".cloudflare-site-table td.type-cell { display: none; }");
-  expect(page).toContain("position: absolute; top: -15px; left: 0;");
+  expect(page).toContain("position: absolute; top: -11px; left: 0;");
+  expect(page).toContain("transform: translateY(2px);");
   expect(page).toContain("font-size: 10px;");
 });
 
