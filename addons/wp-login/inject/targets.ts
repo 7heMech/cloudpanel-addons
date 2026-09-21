@@ -21,9 +21,7 @@ import { WORDPRESS_APPLICATIONS } from "../action";
 
 const WORDPRESS = `{% if site.application in [${WORDPRESS_APPLICATIONS.map((name) => `'${name}'`).join(", ")}] %}`;
 
-const STYLE = `
-.clp-wp-login { margin-right: 0.75rem; white-space: nowrap; }
-`;
+import STYLE from "./sites.css" with { type: "text" };
 
 // Written for the panel's page, not for an addon page: no shared client code
 // reaches here, so this is plain ES5 with its own fetch. It reads nothing out

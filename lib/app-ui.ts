@@ -71,11 +71,8 @@ export { BASE_STYLE };
 // CloudPanel uses a session cookie named "theme"; absence means light. Read it
 // before CSS is painted, so moving between the panel and an addon never flashes
 // or silently switches to the operating system's preferred theme.
-export const THEME_INIT_JS = `
-try {
-  document.documentElement.classList.toggle('dark', /(?:^|;\\s*)theme=dark(?:;|$)/.test(document.cookie));
-} catch (e) {}
-`;
+import THEME_INIT_JS from "./assets/theme-init.client.js" with { type: "text" };
+export { THEME_INIT_JS };
 
 /**
  * The client-side helpers every addon page needs: read the CSRF cookie, echo it

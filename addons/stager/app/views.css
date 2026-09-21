@@ -1,0 +1,10 @@
+
+.notes { margin: 0; padding-left: 1.1rem; }
+.notes li { margin: 8px 0; font-size: 14px; color: var(--muted); }
+.kv + .hint { margin: 20px 0 0; }
+.secret .kv dd { font-family: var(--mono); font-size: 14px; }
+.credential-fields { border-top: 1px solid var(--border); padding-top: 25px; margin-top: 25px; }
+.credential-fields h2 { margin: 0 0 20px; }
+.page-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.page-actions > .btn { min-height: 50px; padding: 8px 30px; flex-shrink: 0; }
+.danger-note { border-left: 3px solid var(--bad); padding-left: 14px; }

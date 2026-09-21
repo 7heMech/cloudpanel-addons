@@ -82,13 +82,7 @@ import SITES_MOBILE_STYLE from "./sites-mobile.css" with { type: "text" };
 
 // The menu uses the otherwise empty far-right end of the values. It is outside
 // the grid, so it cannot change either detail column's starting position.
-const MENU_MOBILE_STYLE = `
-@media (max-width: 860px) {
-  html.clp-tweaks-menu table.table-sites .clp-tweaks-details { padding-bottom: 4px; }
-  html.clp-tweaks-menu table.table-sites td.clp-tweaks-actions { position: absolute; bottom: 16px; right: 20px;
-    width: 30px; height: 30px; padding: 0 !important; }
-}
-`;
+import MENU_MOBILE_STYLE from "./menu-mobile.css" with { type: "text" };
 
 /**
  * The action column's links, behind one button.

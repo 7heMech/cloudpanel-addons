@@ -1,0 +1,3 @@
+
+.remove-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+.remove-row p { margin: 0; }

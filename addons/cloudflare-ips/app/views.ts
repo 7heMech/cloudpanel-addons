@@ -9,37 +9,10 @@ const BASE = mountPath("cloudflare-ips");
 
 // Switches, the toolbar, the confirmation dialog and the inline notice come
 // from lib/app-ui so this addon looks like the rest of the manager.
-const STYLE = `
-.fleet-card, .policy-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
-.fleet-card h2, .policy-card h2 { margin: 0 0 8px; }
-.fleet-card p, .policy-card p { margin: 0; }
-.fleet-card .actions { flex-shrink: 0; }
-.toolbar-actions { margin-left: auto; }
-${fleetRowSelectionStyle("cloudflare-site-table")}
-.cloudflare-site-table .mobile-site-type { display: none; }
-@media (max-width: 700px) {
-  .fleet-card, .policy-card { flex-direction: column; }
-}
-@media (max-width: 760px) {
-  .toolbar-actions { flex: 1 1 100%; margin-left: 0; }
-  .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right:10px; padding-left:10px; white-space:nowrap; }
-}
-/* Where the shared fleet table becomes a card, this row keeps the domain and
-   its action on one line instead. */
-@media (max-width: 940px) {
-  .cloudflare-site-table tbody tr { flex-wrap: nowrap; align-items: center; padding: 10px 20px; }
-  .fleet-table.cloudflare-site-table td.site-select { display: none; }
-  .cloudflare-site-table td.site-cell { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; }
-  .cloudflare-site-table td.action-cell { width: auto; flex: 0 0 auto; margin-left: auto; display: flex; align-items: center; justify-content: flex-end; }
-  .cloudflare-site-table td.action-cell::before { display: none; }
-  .cloudflare-site-table td.type-cell { display: none; }
-  .cloudflare-site-table .site-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; min-width: 0; }
-  .cloudflare-site-table .site-name { display: block; overflow-wrap: anywhere; }
-  .cloudflare-site-table .mobile-site-type { display: block;
-    padding: 1px 4px; border: 1px solid var(--border); border-radius: 3px; color: var(--muted);
-    font-size: 10px; font-weight: 400; line-height: 1.1; white-space: nowrap; }
-}
-`;
+import VIEWS_CSS from "./views.css" with { type: "text" };
+
+const STYLE = VIEWS_CSS
+  .split("/* fleet-row-selection */").join(fleetRowSelectionStyle("cloudflare-site-table"));
 
 export const CLIENT_JS = `
 ${FLEET_ROW_SELECTION_JS}

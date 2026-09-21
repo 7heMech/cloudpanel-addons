@@ -272,6 +272,11 @@ JSON the manager computes -- are bare identifiers or string tokens in the asset,
 substituted by the module that imports it. That keeps each file valid CSS or
 JavaScript on its own.
 
+What stays in TypeScript is what a file could not hold on its own: a one-rule
+string built from a shared class name, a script fragment that is a function
+body rather than a program, and a `<script>` element indented to sit inside a
+Twig template.
+
 Three scripts are shared. Every addon page gets the base helpers; the two fleet
 tables also get the site-selection ones, and the two addons whose change is too
 wide to patch into the page get the pair that carries a message across a reload.

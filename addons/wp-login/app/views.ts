@@ -6,10 +6,7 @@ import type { WpSiteView } from "../action";
 const BASE = mountPath("wp-login");
 
 // The cards, the buttons and the narrow-screen table layout are in lib/app-ui.
-const STYLE = `
-.remove-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
-.remove-row p { margin: 0; }
-`;
+import STYLE from "./views.css" with { type: "text" };
 
 import SCRIPT_BODY from "./views.client.js" with { type: "text" };
 

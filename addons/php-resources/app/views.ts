@@ -11,35 +11,10 @@ const BASE = mountPath("php-resources");
 
 // Cards, switches, the form grid, the confirmation dialog and the inline notice
 // are in lib/app-ui; only what this addon alone draws is here.
-const STYLE = `
-.default-card { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
-.default-card h2 { margin:0 0 8px; }
-.default-card p { margin:0; }
-.default-choice { flex:0 0 260px; max-width:100%; }
-.name-cell { max-width:340px; }
-.numeric { text-align:right; font-variant-numeric:tabular-nums; }
-.limit-cell { white-space:nowrap; }
-.limit-cell .hint { white-space:normal; }
-.toolbar #bulk-category { width:auto; min-width:200px; max-width:100%; }
-.notice-actions { margin-top:12px; }
-.state-default { color:var(--accent); border-color:var(--accent); margin-left:8px; }
-#category-dialog { width:720px; }
-#category-dialog .dialog-grid { margin-bottom:25px; }
-${fleetRowSelectionStyle("php-sites-table")}
-@media (max-width:700px) {
-  .default-card { flex-direction:column; gap:12px; }
-  .default-choice { flex:1 1 auto; width:100%; }
-}
-@media (max-width:760px) {
-  #category-dialog { width:calc(100% - 20px); }
-  .toolbar #bulk-category { flex:1 1 100%; }
-  .toolbar .toolbar-end { margin-left:0; }
-}
-/* The card each row becomes carries its own selection control. */
-@media (max-width:940px) {
-  .fleet-table.php-sites-table td.site-select { display:none; }
-}
-`;
+import VIEWS_CSS from "./views.css" with { type: "text" };
+
+const STYLE = VIEWS_CSS
+  .split("/* fleet-row-selection */").join(fleetRowSelectionStyle("php-sites-table"));
 
 interface Field {
   key: keyof PoolProfile;

@@ -21,10 +21,7 @@ import type { SanitizedSite } from "../../../lib/snapshot-reader";
 // Only what the shared shell does not carry. Everything else -- the palette,
 // the cards, the table, the badges -- lives in lib/app-ui.ts, so a second addon
 // does not have to choose between copying it and looking like another product.
-const STYLE = `
-.behind { color: var(--warn); border-color: var(--warn); margin-left: 0.35rem; }
-.btn-update { border-color: var(--warn); color: var(--warn); }
-`;
+import STYLE from "./views.css" with { type: "text" };
 
 /**
  * The dashboard's inline script.
