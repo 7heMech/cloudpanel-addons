@@ -87,30 +87,30 @@ export interface PoolCategory {
  * recommendation: what a site should run is the operator's call, and every one
  * of these can be edited, renamed or deleted.
  *
- * They differ in how many workers one site may run concurrently. Small and
- * busy sites start workers on demand and retire them after ten idle seconds.
- * High traffic keeps a deliberately small warm pool: a category applies per
- * site, so every spare worker is multiplied by every site assigned to it.
- * Workers are recycled soon enough to bound application and extension growth,
- * and a request cannot hold one for CloudPanel's stock two hours.
+ * They differ in how many workers one site may run concurrently. Lite and
+ * Standard start workers on demand and retire them after ten idle seconds. Pro
+ * keeps a deliberately small warm pool: a category applies per site, so every
+ * spare worker is multiplied by every site assigned to it. Workers are recycled
+ * soon enough to bound application and extension growth, and a request cannot
+ * hold one for CloudPanel's stock two hours.
  */
 export const PRESET_CATEGORIES: PoolCategory[] = [
   {
-    id: "small-site",
-    name: "Small site",
-    description: "For most sites and safe fleet-wide use. Workers run only while requests need them, with up to 3 concurrent workers per site.",
+    id: "lite",
+    name: "Lite",
+    description: "Most sites, and safe across a whole fleet. Workers run only while requests need them, up to 3 at once per site.",
     profile: { ...STOCK_PROFILE, pm: "ondemand", maxChildren: 3, processIdleTimeout: 10, maxRequests: 200, requestTerminateTimeout: 300 },
   },
   {
-    id: "busy-site",
-    name: "Busy site",
-    description: "For sites with sustained parallel requests. Workers still run on demand, with up to 8 concurrent workers per site.",
+    id: "standard",
+    name: "Standard",
+    description: "Sites with steady parallel traffic. Workers still run on demand, up to 8 at once per site.",
     profile: { ...STOCK_PROFILE, pm: "ondemand", maxChildren: 8, processIdleTimeout: 10, maxRequests: 200, requestTerminateTimeout: 300 },
   },
   {
-    id: "high-traffic",
-    name: "High traffic",
-    description: "For measured high concurrency. Keeps 1–3 idle workers ready and allows 12 total per site, so assign it sparingly.",
+    id: "pro",
+    name: "Pro",
+    description: "Peak concurrency. Keeps 1–3 workers warm and allows 12 at once per site, so assign it sparingly.",
     profile: { ...STOCK_PROFILE, pm: "dynamic", maxChildren: 12, startServers: 2, minSpareServers: 1, maxSpareServers: 3, maxRequests: 200, requestTerminateTimeout: 300 },
   },
 ];

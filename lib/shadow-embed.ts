@@ -51,6 +51,46 @@ export interface EmbedFragment {
 
 const EMBED_TABS = JSON.stringify(ADDON_SITE_TABS.map((tab) => ({ slug: tab.slug, url: tab.url })));
 
+/** On `<html>` while a deep-landed page waits for the fragment that replaces
+ * the panel's content. Without it the settings page the redirect passed through
+ * paints first and is then thrown away, which reads as the wrong page. */
+export const EMBED_LANDING_CLASS = "clp-addon-embedding";
+
+/** Kept visible rather than removed, so the content area holds its height. */
+export const SITE_EMBED_STYLE = `html.${EMBED_LANDING_CLASS} .site-content { visibility: hidden; }`;
+
+/**
+ * Run as the panel parses the page, ahead of the loader below.
+ *
+ * A deep link knows which fragment it wants from the URL alone, so the request
+ * goes out while the panel's own markup is still being parsed rather than after
+ * it, and the loader picks the reply up. The document is hidden from the same
+ * moment and revealed again by whatever finishes -- a mount, a fallback, or the
+ * timer, which is what keeps a page the loader never reached from staying
+ * blank.
+ */
+export const SITE_EMBED_PRELOAD = `(function () {
+  var TABS = ${EMBED_TABS};
+  var landed = new URLSearchParams(location.search).get("${EMBED_MARKER}");
+  if (!landed) return;
+  var domain = decodeURIComponent(location.pathname.split("/")[2] || "");
+  var tab = null;
+  for (var i = 0; i < TABS.length; i++) if (TABS[i].slug === landed) tab = TABS[i];
+  if (!tab || !domain) return;
+  var root = document.documentElement;
+  root.classList.add("${EMBED_LANDING_CLASS}");
+  setTimeout(function () { root.classList.remove("${EMBED_LANDING_CLASS}"); }, 5000);
+  window.__clpAddonFragment = {
+    slug: landed,
+    reply: fetch(tab.url + "/fragment?domain=" + encodeURIComponent(domain), {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(function (res) { return res.json(); })
+      .catch(function () { return null; }),
+  };
+})();`
+
 /**
  * The loader injected into the panel's site pages next to the tab strip.
  *
@@ -76,7 +116,12 @@ export const SITE_EMBED_SCRIPT = `
   // Every way this can fail ends at the standalone page, which answers without
   // redirecting here again. Sending a failure back to the tab link would bounce
   // through the redirect and land right back on this loader.
+  function reveal() {
+    document.documentElement.classList.remove("${EMBED_LANDING_CLASS}");
+  }
+
   function standalone(href) {
+    reveal();
     location.href = href + (href.indexOf("?") === -1 ? "?" : "&") + "embed=0";
   }
 
@@ -85,6 +130,7 @@ export const SITE_EMBED_SCRIPT = `
   // redirected here -- hand them the addon's own copy rather than leave them
   // looking at the settings page they never asked for.
   function unavailable(reason) {
+    reveal();
     if (window.console && console.warn) {
       console.warn("clp-addons: " + reason + "; addon pages open on their own instead.");
     }
@@ -153,8 +199,16 @@ export const SITE_EMBED_SCRIPT = `
     if (!Element.prototype.attachShadow) return standalone(href);
     mounting = true;
     var query = href.indexOf("?") === -1 ? "" : href.slice(href.indexOf("?") + 1);
-    fetch(tab.url + "/fragment?" + query, { credentials: "same-origin", headers: { Accept: "application/json" } })
-      .then(function (res) { return res.json(); })
+    // The deep link's own fragment is already in flight, asked for as the page
+    // was parsed rather than after it; anything else asks now. Taken once, so a
+    // later click on the same tab fetches again.
+    var early = window.__clpAddonFragment;
+    window.__clpAddonFragment = null;
+    var reply = early && early.slug === tab.slug && !push
+      ? early.reply
+      : fetch(tab.url + "/fragment?" + query, { credentials: "same-origin", headers: { Accept: "application/json" } })
+        .then(function (res) { return res.json(); });
+    reply
       .then(function (payload) {
         if (!payload || payload.ok !== true) throw new Error("fragment unavailable");
         var host = document.createElement("div");
@@ -173,6 +227,7 @@ export const SITE_EMBED_SCRIPT = `
         script.textContent = payload.script;
         document.head.appendChild(script);
         markActive(link);
+        reveal();
         if (payload.title) document.title = payload.title;
         shown = tab.slug;
         mounting = false;

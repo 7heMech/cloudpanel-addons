@@ -205,14 +205,14 @@ const phpPoolSites: PoolSiteState[] = [
     domain: "www.example.com", siteUser: "example", phpVersion: "8.3",
     poolFile: "/etc/php/8.3/fpm/pool.d/www.example.com.conf",
     current: { ...PRESET_CATEGORIES[1]!.profile },
-    categoryId: "busy-site", categoryName: "Busy site",
+    categoryId: "standard", categoryName: "Standard",
     drifted: false,
   },
   {
     domain: "shop.example.com", siteUser: "shop", phpVersion: "8.2",
     poolFile: "/etc/php/8.2/fpm/pool.d/shop.example.com.conf",
     current: { ...PRESET_CATEGORIES[2]!.profile },
-    categoryId: "high-traffic", categoryName: "High traffic",
+    categoryId: "pro", categoryName: "Pro",
     drifted: false,
   },
   {
@@ -226,7 +226,7 @@ const phpPoolSites: PoolSiteState[] = [
     domain: "a-rather-long-customer-hostname.staging.example.com", siteUser: "longname", phpVersion: "8.1",
     poolFile: "/etc/php/8.1/fpm/pool.d/a-rather-long-customer-hostname.staging.example.com.conf",
     current: { ...STOCK_PROFILE },
-    categoryId: "small-site", categoryName: "Small site",
+    categoryId: "lite", categoryName: "Lite",
     drifted: true,
   },
 ];
@@ -235,7 +235,7 @@ const phpPoolSites: PoolSiteState[] = [
 function phpResourcesPreviewState(url: URL): PhpResourcesState {
   return {
     categories: url.searchParams.has("no-categories") ? [] : PRESET_CATEGORIES,
-    defaultCategoryId: url.searchParams.get("default") === "off" ? null : "busy-site",
+    defaultCategoryId: url.searchParams.get("default") === "off" ? null : "standard",
     sites: url.searchParams.has("empty") ? [] : phpPoolSites,
   };
 }

@@ -610,7 +610,7 @@ export function dashboardView(state: PhpResourcesState): string {
       <div class="form-field">
         <label for="category-name">Name</label>
         <input id="category-name" type="text" maxlength="40" autocomplete="off">
-        <div class="hint">What this group of sites is, such as Busy site.</div>
+        <div class="hint">What this group of sites is, such as Standard.</div>
       </div>
       <div class="form-field">
         <label for="category-description">Description</label>

@@ -320,8 +320,9 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
      than pushing them off. */
   .clp-addon-brand { flex: 1 1 0; min-width: 0; border: 0; margin: 0; min-height: 64px;
     align-items: center; padding: 0 20px; }
-  /* The logo keeps its own size, as the panel's does; measuring the row from
-     zero above is what keeps it from pushing the tools off instead. */
+  /* Narrow phones leave the brand less than the logo's own width, so it scales
+     down rather than running under the tools beside it. */
+  .clp-addon-logo { max-width: 100%; height: auto; }
   /* The logo and the tools share the first row and the navigation takes the
      second, rather than each taking a row of its own. */
   .clp-addon-header-tools { order: 1; margin-left: auto; }
@@ -341,7 +342,9 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   /* The first link starts where the logo does, as the panel's own row does. */
   .clp-addon-primary-nav .clp-addon-primary-link:first-child { margin-left: 0; }
   .clp-addon-primary-link { min-height: 48px; }
-  .clp-addon-header-inner > #clp-addons-update-notice { justify-content: center; padding: 10px 16px; }
+  /* Starts where the logo and the first navigation link start, rather than in
+     the middle of a row of its own. */
+  .clp-addon-header-inner > #clp-addons-update-notice { justify-content: flex-start; padding: 10px 20px; }
   main { padding: 20px 12px 30px; }
   .clp-addon-tabs { padding: 0 5px; margin-bottom: 24px; }
   .page-heading { flex-wrap: wrap; }

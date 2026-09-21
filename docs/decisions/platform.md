@@ -233,6 +233,14 @@ on landing, so the address bar still names the page and a refresh still works.
 addons mounted this way while the approach is being evaluated; the reproduction
 above is what it would replace.
 
+Such a landing knows which fragment it wants from the URL alone, so a second
+block ahead of the loader asks for it as the page is parsed rather than once the
+document is ready, and hides the panel's content area from the same moment. The
+settings page the redirect passes through is otherwise painted and then thrown
+away, which reads as the wrong page. The area is revealed by whatever finishes
+-- the mount, the fallback to the addon's own page, or a timer -- so a page the
+loader never reached is never left blank.
+
 CloudPanel sizes that strip for the tabs it ships, so an addon's tab wrapped it
 onto a second row. The manager injects one rule making the strip a single
 scrollable row and letting the site-information blocks wrap, rather than

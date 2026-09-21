@@ -1,5 +1,5 @@
 import type { AddonTarget } from "./addon-target";
-import { SITE_EMBED_SCRIPT } from "./shadow-embed";
+import { SITE_EMBED_PRELOAD, SITE_EMBED_SCRIPT, SITE_EMBED_STYLE } from "./shadow-embed";
 import { esc, escJs } from "./app-http";
 import { UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
 
@@ -218,7 +218,8 @@ export function siteLayoutTarget(): AddonTarget {
     template: SITE_TAB_TEMPLATE,
     anchorBefore: '<div class="tab-container">',
     required: true,
-    snippet: () => `<style>${SITE_LAYOUT_STYLE}</style>
+    snippet: () => `<style>${SITE_LAYOUT_STYLE}${SITE_EMBED_STYLE}</style>
+<script>${SITE_EMBED_PRELOAD}</script>
 <script>${deferred(SITE_LAYOUT_SCRIPT, SITE_EMBED_SCRIPT)}</script>
 `,
   };
