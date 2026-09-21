@@ -118,13 +118,13 @@ test("a switch sits on the line of whatever it is beside", () => {
 });
 
 test("a dialog is usable on a phone", () => {
-  const mobile = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 760px)"));
+  const narrow = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 940px)"));
   // The frame gives up its desktop padding, and the buttons take the row so a
   // confirmation label wraps inside its button rather than off the edge.
-  expect(mobile).toContain("dialog { padding: 20px; width: calc(100% - 20px);");
-  expect(mobile).toContain(".dialog-actions .btn { flex: 1 1 auto; }");
+  expect(narrow).toContain("dialog { padding: 20px; width: calc(100% - 20px);");
+  expect(narrow).toContain(".dialog-actions .btn { flex: 1 1 auto; }");
   // The visual viewport, so a collapsing address bar cannot cover the buttons.
-  expect(mobile).toContain("dialog { max-height: calc(100dvh - 20px); }");
+  expect(narrow).toContain("dialog { max-height: calc(100dvh - 20px); }");
   expect(BASE_STYLE).toContain("dialog { max-height: calc(100dvh - 40px); }");
 });
 
@@ -169,19 +169,19 @@ test("the PHP Resources category dialog fits a phone", () => {
 });
 
 test("a fleet table gives the domain its own line on a phone", () => {
-  const mobile = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 760px)"));
+  const narrow = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 940px)"));
   // Squeezed into a sixth of a phone's width, a hostname wrapped one or two
   // characters at a time. The row becomes a block and every other cell names
   // the column heading the phone no longer has room to show.
-  expect(mobile).toContain(".fleet-table thead { display: none; }");
-  expect(mobile).toContain(".fleet-table td.site-select { display: flex; flex: 0 0 42px; width: 42px;");
-  expect(mobile).toContain(".fleet-table td.site-cell { flex: 1 1 calc(100% - 200px); min-width: 0;");
+  expect(narrow).toContain(".fleet-table thead { display: none; }");
+  expect(narrow).toContain(".fleet-table td.site-select { display: flex; flex: 0 0 42px; width: 42px;");
+  expect(narrow).toContain(".fleet-table td.site-cell { flex: 1 1 calc(100% - 200px); min-width: 0;");
   // What a site is rides beside the domain as a tag, and every labelled cell
   // keeps half the row whatever it holds -- a status badge that grew when a
   // site went into maintenance used to move everything under it.
-  expect(mobile).toContain(".fleet-table td.type-cell { flex: 0 1 auto;");
-  expect(mobile).toContain(".fleet-table td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; }");
-  expect(mobile).toContain(".fleet-table td[data-label]::before { content: attr(data-label);");
+  expect(narrow).toContain(".fleet-table td.type-cell { flex: 0 1 auto;");
+  expect(narrow).toContain(".fleet-table td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; }");
+  expect(narrow).toContain(".fleet-table td[data-label]::before { content: attr(data-label);");
 
   for (const html of [
     maintenanceFleetView([{
@@ -203,8 +203,8 @@ test("mobile select-all button is hidden on desktop and visible on mobile", () =
   // Must not appear on desktop
   expect(BASE_STYLE).toContain(".mobile-select-all { display: none; }");
   // Visible under mobile breakpoint
-  const mobile = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 760px)"));
-  expect(mobile).toContain(".mobile-select-all { display: inline-flex;");
+  const narrow = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 940px)"));
+  expect(narrow).toContain(".mobile-select-all { display: inline-flex;");
 
   // Rendered in PHP Resources toolbar
   const phpHtml = phpResourcesDashboardView({
