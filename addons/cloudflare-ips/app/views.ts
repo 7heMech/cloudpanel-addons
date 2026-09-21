@@ -23,7 +23,7 @@ const STYLE = `
   .fleet-card, .policy-card { flex-direction: column; }
 }
 @media (max-width: 760px) {
-  .cloudflare-site-table tbody tr { flex-wrap: nowrap; align-items: center; }
+  .cloudflare-site-table tbody tr { flex-wrap: nowrap; align-items: center; padding: 10px 20px; }
   .toolbar-actions { flex: 1 1 100%; margin-left: 0; }
   .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right:10px; padding-left:10px; white-space:nowrap; }
   .fleet-table.cloudflare-site-table td.site-select { display: none; }
@@ -31,7 +31,7 @@ const STYLE = `
   .cloudflare-site-table td.action-cell { width: auto; flex: 0 0 auto; margin-left: auto; display: flex; align-items: center; justify-content: flex-end; }
   .cloudflare-site-table td.action-cell::before { display: none; }
   .cloudflare-site-table td.type-cell { display: none; }
-  .cloudflare-site-table .site-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; min-width: 0; }
+  .cloudflare-site-table .site-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; min-width: 0; }
   .cloudflare-site-table .site-name { display: block; overflow-wrap: anywhere; }
   .cloudflare-site-table .mobile-site-type { display: block;
     padding: 1px 4px; border: 1px solid var(--border); border-radius: 3px; color: var(--muted);

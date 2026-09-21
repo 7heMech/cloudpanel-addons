@@ -144,8 +144,8 @@ test("site type tags sit above the hostname on phones, centred with it in the ro
   expect(html).toContain('<span class="site-copy"><span class="mobile-site-type">Reverse proxy</span><span class="site-name">a.example.test</span></span>');
   expect(page).toContain(".cloudflare-site-table .mobile-site-type { display: none; }");
   expect(page).toContain(".cloudflare-site-table td.type-cell { display: none; }");
-  expect(page).toContain(".cloudflare-site-table tbody tr { flex-wrap: nowrap; align-items: center; }");
-  expect(page).toContain("flex-direction: column; align-items: flex-start; gap: 3px;");
+  expect(page).toContain(".cloudflare-site-table tbody tr { flex-wrap: nowrap; align-items: center; padding: 10px 20px; }");
+  expect(page).toContain("flex-direction: column; align-items: flex-start; gap: 1px;");
   expect(page).toContain("font-size: 10px;");
 });
 
