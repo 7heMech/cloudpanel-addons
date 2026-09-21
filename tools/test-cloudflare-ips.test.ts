@@ -136,6 +136,10 @@ test("the switch column ends where the table ends, as the Maintenance table does
   // and does not repeat the desktop column heading in every card.
   const page = layout("Cloudflare IP access", html);
   expect(page).toContain(".fleet-table.inline-mobile-type .mobile-site-type { display: inline-block;");
+  // The hostname is the thing being read, so it is set smaller to fit and the
+  // badge beside it is trimmed rather than pushing it around.
+  expect(page).toContain(".fleet-table.inline-mobile-type td.site-cell { font-size: 14px; }");
+  expect(page).toContain("max-width: 40%;");
   expect(page).toContain("grid-template-columns: minmax(0, 1fr) 50px;");
   expect(page).toContain(".fleet-table.cloudflare-site-table td.site-select { display: none; }");
   expect(page).toContain(".cloudflare-site-table td.action-cell::before { display: none; }");

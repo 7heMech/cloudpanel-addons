@@ -32,8 +32,10 @@ keeps the conventional checkbox, while a phone omits it to recover that width.
 A per-site switch acts immediately without confirmation, because turning one
 site off is the ordinary correction after a fleet-wide change. On a phone that
 switch stays in the site's summary row and never changes row selection. The
-full-size site-type badge follows the hostname's final rendered line instead of
-occupying a narrow column. The switch is the dashboard's only per-site action,
+site-type badge follows the hostname's final rendered line instead of occupying
+a narrow column; the hostname is set a size smaller there so more of it fits
+beside the badge, and a badge with no room for its label is trimmed rather than
+crowding the name. The switch is the dashboard's only per-site action,
 so the mobile card does not spend a second line repeating the desktop column
 heading.
 
