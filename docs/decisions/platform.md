@@ -229,9 +229,9 @@ to the addon's own page when a deep link is what brought the operator there.
 A direct visit to the addon's own URL
 redirects to the panel's site page carrying `clp-addon`, which the loader reads
 on landing, so the address bar still names the page and a refresh still works.
-`?embed=0` renders the standalone page instead. Maintenance and Staging are the
-addons mounted this way while the approach is being evaluated; the reproduction
-above is what it would replace.
+`?embed=0` renders the standalone page instead. Git, Maintenance and Staging --
+every addon with a site tab -- are mounted this way while the approach is being
+evaluated; the reproduction above is what it would replace.
 
 Such a landing knows which fragment it wants from the URL alone, so a second
 block ahead of the loader asks for it as the page is parsed rather than once the
