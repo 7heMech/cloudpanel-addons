@@ -6,7 +6,7 @@ import { join } from "node:path";
 import {
   reconcileNewSites, runCloudflareAction, transformVhost, type CloudflareActionPaths,
 } from "../addons/cloudflare-ips/action";
-import { CLIENT_JS, dashboardView } from "../addons/cloudflare-ips/app/views";
+import { CLIENT_JS, dashboardView, layout } from "../addons/cloudflare-ips/app/views";
 import type { CommandResult } from "../cli/action-common";
 
 const realUid = process.getuid?.() ?? 0;
@@ -126,6 +126,20 @@ test("the switch column ends where the table ends, as the Maintenance table does
   // sat in the middle of the row with the rest of the table empty beside them.
   expect(html).toContain('<th scope="col" class="action-cell">Cloudflare only</th>');
   expect(html).toContain('<td class="action-cell" data-label="Cloudflare only">');
+});
+
+test("site type tags move above the hostname on phones without taking row space", () => {
+  const html = dashboardView({
+    autoEnableNewSites: true,
+    sites: [{ domain: "a.example.test", type: "reverse-proxy", enabled: true, excludedFromAutomatic: false }],
+  });
+  const page = layout("Cloudflare IP access", html);
+  expect(html).toContain('<table class="fleet-table cloudflare-site-table">');
+  expect(html).toContain('<span class="mobile-site-type">Reverse proxy</span><span class="site-name">a.example.test</span>');
+  expect(page).toContain(".cloudflare-site-table .mobile-site-type { display: none; }");
+  expect(page).toContain(".cloudflare-site-table td.type-cell { display: none; }");
+  expect(page).toContain("position: absolute; top: -15px; left: 0;");
+  expect(page).toContain("font-size: 10px;");
 });
 
 interface FakeElement {

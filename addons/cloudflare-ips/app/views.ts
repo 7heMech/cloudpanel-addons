@@ -14,12 +14,20 @@ const STYLE = `
 .fleet-card p, .policy-card p { margin: 0; }
 .fleet-card .actions { flex-shrink: 0; }
 .toolbar-actions { margin-left: auto; }
+.cloudflare-site-table .mobile-site-type { display: none; }
 @media (max-width: 700px) {
   .fleet-card, .policy-card { flex-direction: column; }
 }
 @media (max-width: 760px) {
   .toolbar-actions { flex: 1 1 100%; margin-left: 0; }
   .toolbar-actions .btn { flex: 1 1 calc(50% - 6px); padding-right:10px; padding-left:10px; white-space:nowrap; }
+  .cloudflare-site-table td.site-cell { position: relative; }
+  .cloudflare-site-table td.type-cell { display: none; }
+  /* Use the row's existing top padding for the type tag, so it sits above the
+     hostname without increasing the card's height or moving the switch. */
+  .cloudflare-site-table .mobile-site-type { display: block; position: absolute; top: -15px; left: 0;
+    padding: 1px 4px; border: 1px solid var(--border); border-radius: 3px; color: var(--muted);
+    font-size: 10px; font-weight: 400; line-height: 1.1; white-space: nowrap; }
 }
 `;
 
@@ -282,7 +290,7 @@ export function dashboardView(state: CloudflareState): string {
   const rows = state.sites.map((site) => `
     <tr data-domain="${esc(site.domain)}" data-enabled="${site.enabled}" data-excluded="${site.excludedFromAutomatic}">
       <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintSummary()" aria-label="Select ${esc(site.domain)}"></td>
-      <td class="site-cell">${esc(site.domain)}</td>
+      <td class="site-cell"><span class="mobile-site-type">${esc(siteTypeLabel(site.type))}</span><span class="site-name">${esc(site.domain)}</span></td>
       <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
       <td class="action-cell" data-label="Cloudflare only">
         <label class="switch"><input class="site-switch" type="checkbox" aria-label="Cloudflare-only access for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="setOne(this)"><span></span></label>
@@ -322,7 +330,7 @@ export function dashboardView(state: CloudflareState): string {
               <button class="btn" id="disable-selected" type="button" disabled onclick="setSelectedSites(false)">Disable selected</button>
             </div>
           </div>
-          <table class="fleet-table">
+          <table class="fleet-table cloudflare-site-table">
             <thead><tr>
               <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
               <th scope="col">Site</th><th scope="col">Type</th><th scope="col" class="action-cell">Cloudflare only</th>
