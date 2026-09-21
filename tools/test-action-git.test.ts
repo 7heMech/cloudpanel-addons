@@ -259,7 +259,7 @@ test("a post-deploy command can use the site's configured login PATH", async () 
     const userBin = join(fx.root, "home", USER, "tools", "bin");
     mkdirSync(userBin, { recursive: true });
     writeFileSync(join(userBin, "site-tool"), "#!/bin/sh\necho path-ran > path-result.txt\n", { mode: 0o755 });
-    writeFileSync(join(fx.root, "home", USER, ".profile"), `export PATH="${userBin}:$PATH"\n`);
+    writeFileSync(join(fx.root, "home", USER, ".profile"), `cd /tmp\nexport PATH="${userBin}:$PATH"\n`);
 
     await action(fx, ["configure", `--domain=${DOMAIN}`], JSON.stringify({
       remote: fx.bare, branch: "main", directory: "", postDeploy: "site-tool",

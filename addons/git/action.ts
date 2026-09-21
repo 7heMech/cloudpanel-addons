@@ -557,6 +557,11 @@ function runAsSiteUser(
   return runCommand(paths.runuser, asSiteUser(paths, user, command, args, keyPath));
 }
 
+/** Quote one literal for interpolation into the post-deploy shell script. */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 /**
  * Run a command as the site user with its output going into the job log as it
  * arrives, rather than in one piece when it exits.
@@ -1144,7 +1149,8 @@ async function cmdRun(
       // A login shell loads the site's configured PATH, which is where user
       // installs such as Bun, Composer or custom toolchains are normally
       // exposed. The command still runs as the site user in the deploy dir.
-      if (!await streamAsSiteUser(paths, site.user, "bash", ["-lc", config.postDeploy], { cwd: target })) {
+      const postDeployScript = `cd -- ${shellQuote(target)} && ${config.postDeploy}`;
+      if (!await streamAsSiteUser(paths, site.user, "bash", ["-lc", postDeployScript], { cwd: target })) {
         failJob(dir, "the post-deploy command failed; the files are deployed and the command did not finish");
       }
       postDeployRan = true;
