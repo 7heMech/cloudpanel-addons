@@ -250,12 +250,9 @@ const MENU_MOBILE_STYLE = `
 const MENU_STYLE = `
 html.clp-tweaks-menu table.table-sites tbody td:last-child > a,
 html.clp-tweaks-menu table.table-sites tbody td:last-child > button:not(.clp-tweaks-menu-button) { display: none; }
-/* Aligned on the middle rather than on the baseline: a 30px baseline-aligned
-   button leaves room for the descenders under it too, which made every row
-   taller than the panel drew it and moved the whole table down. */
 .clp-tweaks-menu-button { display: inline-flex; align-items: center; justify-content: center; width: 30px;
   height: 30px; padding: 0; border: 0; border-radius: 4px; background: none; color: inherit; cursor: pointer;
-  font-size: 18px; line-height: 1; vertical-align: middle; }
+  font-size: 18px; line-height: 1; }
 .clp-tweaks-menu-button:hover,
 .clp-tweaks-menu-button[aria-expanded="true"] { background: rgba(127, 143, 153, .18); }
 .${ROW_MENU_CLASS} { position: fixed; z-index: 2147483000; min-width: 170px; padding: 6px 0;
