@@ -120,7 +120,8 @@ const PROBE = String.raw`
     }),
   }));
 
-  const { cmdInstall, cmdRepair } = await import("./cli/index.ts");
+  const { cmdInstall } = await import("./cli/install.ts");
+  const { cmdRepair } = await import("./cli/repair.ts");
 
   async function repairResult() {
     calls.length = 0;

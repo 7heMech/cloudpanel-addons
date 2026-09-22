@@ -297,7 +297,8 @@ mock.module("../lib/panel-snapshot", () => ({
   }),
 }));
 
-const { cmdInstall, cmdUpdate } = await import("../cli/index");
+const { cmdInstall } = await import("../cli/install");
+const { cmdUpdate } = await import("../cli/update");
 const handoffCall = (tag: string, ...args: string[]) =>
   `run:${CLI_BIN} ${["update", ...args, `--version=${tag}`, "--no-self-update", "--updated-from=1.2.3"].join(" ")}`;
 

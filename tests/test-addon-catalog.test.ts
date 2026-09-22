@@ -104,7 +104,7 @@ test("a new addon is one definition and one catalog line, not edits across the p
       addonHandler: (name) => (name === "synthetic" ? spec.handler : real.addonHandler(name)),
     }));
     const catalog = await import("./cli/addon-catalog.ts");
-    const { runAddonMaintenance } = await import("./cli/index.ts");
+    const { runAddonMaintenance } = await import("./cli/maintenance.ts");
     await runAddonMaintenance([spec]);
     console.log(JSON.stringify({
       named: catalog.ADDON_NAMES.includes("synthetic"),

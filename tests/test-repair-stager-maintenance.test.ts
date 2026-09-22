@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 
 const repo = join(import.meta.dir, "..");
 
-// Everything here except addons/stager/action.ts is stubbed: cli/index.ts's
+// Everything here except addons/stager/action.ts is stubbed: cli/repair.ts's
 // addon-agnostic repair machinery (service user, sudoers, systemd units, the
 // master nginx vhost) genuinely touches the host, and this process is not
 // actually root. Stager's own action module is left real in the first test
@@ -180,7 +180,7 @@ test.serial("repair's automatic entry point runs prune for real: a stuck job fli
     }));
 
     const paths = ${JSON.stringify(paths)};
-    const { runAddonMaintenance } = await import("./cli/index.ts");
+    const { runAddonMaintenance } = await import("./cli/maintenance.ts");
     const { STAGER_ADDON } = await import("./addons/stager/addon.ts");
     const stagerSpec = { ...STAGER_ADDON, configFile: "", stateDir: "" };
     const maintenanceOutput = [];
@@ -239,7 +239,7 @@ test.serial("a throwing prune does not stop the rest of repair", () => {
       },
     }));
 
-    const { cmdRepair } = await import("./cli/index.ts");
+    const { cmdRepair } = await import("./cli/repair.ts");
     let threw = false;
     try {
       await cmdRepair([]);
@@ -274,7 +274,7 @@ test.serial("a throwing prune does not stop the rest of repair", () => {
 });
 
 test("cmdRepair runs addon maintenance after nginx/anchor reconciliation, and --anchors-only skips it", () => {
-  const source = readFileSync(join(repo, "cli/index.ts"), "utf8");
+  const source = readFileSync(join(repo, "cli/repair.ts"), "utf8");
   const repairStart = source.indexOf("export async function cmdRepair");
   expect(repairStart).toBeGreaterThan(-1);
   const repairBody = source.slice(repairStart);

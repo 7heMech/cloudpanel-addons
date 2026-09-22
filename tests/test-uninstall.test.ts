@@ -176,7 +176,7 @@ mock.module("./lib/app-http.ts", () => ({ ...appHttp, SECURITY_HEADERS: {}, esc:
 mock.module("./lib/app-ui.ts", () => ({ ...appUi, renderLayout: () => "" }));
 mock.module("./lib/update-check.ts", () => ({ checkCliUpdate: async () => null }));
 
-const { cmdUninstall } = await import("./cli/index.ts");
+const { cmdUninstall } = await import("./cli/uninstall.ts");
 try {
   cmdUninstall(["instatic", "--yes", "--purge"]);
   console.log(JSON.stringify({ ok: true, removeSudoersCalls }));

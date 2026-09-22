@@ -96,7 +96,7 @@ function probeFor(state: "anchor-not-found-in-markup" | "template-absent"): stri
     writeAtomic: () => {},
   }));
 
-  const { applyEnable } = await import("./cli/index.ts");
+  const { applyEnable } = await import("./cli/toggle.ts");
 
   let threw = false;
   let message = "";

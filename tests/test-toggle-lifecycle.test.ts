@@ -124,7 +124,7 @@ mock.module("./lib/sso-auth.ts", () => ({
 }));
 mock.module("./lib/update-check.ts", () => ({ checkCliUpdate: async () => null }));
 
-const cli = await import("./cli/index.ts");
+const cli = await import("./cli/toggle.ts");
 let error;
 try {
   for (const step of JSON.parse(process.env.CLP_TEST_STEPS)) {

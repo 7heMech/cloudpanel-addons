@@ -614,7 +614,7 @@ test("the path unit watches the panel vhost as well as the addon templates", () 
 });
 
 test("the watcher's fast path reconciles the proxy, not just the anchors", () => {
-  const source = readFileSync(join(import.meta.dir, "..", "cli/index.ts"), "utf8");
+  const source = readFileSync(join(import.meta.dir, "..", "cli/repair.ts"), "utf8");
   const branchStart = source.indexOf('flags["anchors-only"] === true');
   const branch = source.slice(branchStart, source.indexOf("return;", branchStart));
   expect(branch.includes("reconcileAnchors(quiet)")).toBe(true);
