@@ -240,6 +240,67 @@ export function siteUserFor(domain: string): string {
   return `addon-${domainStem(domain)}-${domainHash(domain)}`;
 }
 
+// The panel resolves the registrable domain with the public suffix list, so a
+// name ending in one of these before a two-letter country code is part of the
+// suffix and never the registrable label: example.co.uk is example, not co.
+const SECOND_LEVEL_SUFFIXES = new Set([
+  "ac", "ad", "co", "com", "ed", "edu", "go", "gov", "gr", "id", "in", "lg", "ltd",
+  "me", "mil", "ne", "net", "nhs", "nom", "or", "org", "plc", "sch", "web",
+]);
+
+/**
+ * The site user CloudPanel's own New Site page would suggest: the registrable
+ * label, then any subdomain labels in the order they appear, hyphen-joined.
+ * `the.staging.renaissancechurch.com` becomes `renaissancechurch-the-staging`,
+ * which is what the panel wrote for that site on this project's staging box.
+ *
+ * Matching the panel matters because an operator reads these in the panel's own
+ * site list beside sites it named itself, and `addon-stagingr-852487` announced
+ * which tool made the site rather than which site it is.
+ *
+ * The name is not unique on its own -- two domains differing only in their TLD
+ * produce the same one, and CloudPanel refuses a duplicate with "siteUser: This
+ * value already exists" -- so a caller creating a site picks through
+ * `availableSiteUser`.
+ */
+export function panelSiteUserFor(domain: string): string {
+  const labels = domain.toLowerCase().replace(/\.+$/, "").split(".")
+    .map((label) => label.replace(/[^a-z0-9]/g, ""))
+    .filter((label) => label.length > 0);
+  const suffix = labels.length > 2 && labels[labels.length - 1]!.length === 2
+    && SECOND_LEVEL_SUFFIXES.has(labels[labels.length - 2]!) ? 2 : 1;
+  // Anything with a TLD keeps every label except it; a bare hostname is itself.
+  const named = labels.length > suffix ? labels.slice(0, -suffix) : labels;
+  const registrable = named[named.length - 1] ?? "";
+  // The panel treats a bare www as noise rather than as a subdomain worth naming.
+  const subdomains = named.slice(0, -1);
+  const parts = subdomains.length === 1 && subdomains[0] === "www" ? [] : subdomains;
+  return clampSiteUser([registrable, ...parts].join("-"));
+}
+
+/** A Linux account name: starts with a letter, at most 32 characters. */
+function clampSiteUser(name: string): string {
+  const prefixed = /^[a-z]/.test(name) ? name : `s${name}`;
+  return prefixed.slice(0, 32).replace(/-+$/, "");
+}
+
+/**
+ * The panel-style name, or the first free variation of it. CloudPanel enforces
+ * one site per site user, so the caller supplies the question "is this account
+ * taken" and this answers with one that is not.
+ */
+export function availableSiteUser(domain: string, taken: (user: string) => boolean): string {
+  const base = panelSiteUserFor(domain);
+  if (!taken(base)) return base;
+  // The digits a person would add in the panel, with room kept for them.
+  for (let n = 2; n <= 99; n++) {
+    const suffix = `-${n}`;
+    const candidate = clampSiteUser(base.slice(0, 32 - suffix.length)) + suffix;
+    if (!taken(candidate)) return candidate;
+  }
+  failAction(`could not find a free site user for ${domain}; ${base} and 98 variations of it are taken`);
+}
+
 export function dbNameFor(domain: string): string {
   return `stg${domainStem(domain)}${domainHash(domain)}`;
 }
