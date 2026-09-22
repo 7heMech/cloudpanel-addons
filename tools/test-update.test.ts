@@ -1,4 +1,8 @@
 import { expect, mock, test } from "bun:test";
+
+// The mocks below are registered at import time and Bun keeps mock.module
+// overrides for the life of the runtime, so this file only stays contained
+// because the suite runs under `bun test --isolate`.
 import * as nodeFs from "node:fs";
 import { join } from "node:path";
 import { ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, LOCK_DIR } from "../cli/paths";

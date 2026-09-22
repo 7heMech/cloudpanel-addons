@@ -2,6 +2,7 @@
 // authentication runs before any route, the liveness probe included.
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const repo = join(import.meta.dir, "..");
@@ -260,4 +261,13 @@ test("a wrong webhook token is answered exactly as a stranger is", async () => {
   expect(JSON.parse(String(results.valid!.body))).toEqual({
     ok: true, deployed: true, job: "20260919T120000Z-abcdef", outcome: "started a deployment",
   });
+});
+
+// The tests above drive real requests through the gate. This one is about an
+// argument to Bun.serve, which no request can reach: with `development` on,
+// Bun answers a handler fault with its own error page, which would put a stack
+// trace in front of whoever tripped it.
+test("a handler fault cannot answer with Bun's error page", () => {
+  const source = readFileSync(join(repo, "cli/index.ts"), "utf8");
+  expect(source.slice(source.indexOf("async function cmdServe"))).toInclude("development: false");
 });

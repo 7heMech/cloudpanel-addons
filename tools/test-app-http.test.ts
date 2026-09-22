@@ -1,9 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
-  BodyError, MAX_BODY_BYTES, SECURITY_HEADERS, bodyErrorResponse, guardMutation, htmlResponse,
+  BodyError, MAX_BODY_BYTES, SECURITY_HEADERS, bodyErrorResponse, esc, escJs, guardMutation, htmlResponse,
   jsonResponse, newCsrfToken, policyHeaders, policyResponse, readJsonObject, redirectResponse,
   safeDecodePathSegment,
 } from "../lib/app-http";
+
+function repoSource(path: string): string {
+  return readFileSync(join(import.meta.dir, "..", path), "utf8");
+}
 
 describe("response policy", () => {
   test("every response carries the content type, no-store and the security headers", () => {
@@ -202,5 +208,84 @@ describe("path segment decoding", () => {
     // directly turned into a 500 from the socket boundary.
     expect(safeDecodePathSegment("%")).toBeNull();
     expect(safeDecodePathSegment("%zz")).toBeNull();
+  });
+});
+
+describe("HTML and JavaScript escaping", () => {
+  test("esc encodes HTML rather than removing characters", () => {
+    expect(esc(`<tag attr="quoted">&'`)).toBe("&lt;tag attr=&quot;quoted&quot;&gt;&amp;&#x27;");
+    expect(esc("<&>")).toBe("&lt;&amp;&gt;");
+    // The helper this replaced deleted the characters instead of encoding them.
+    expect(esc("<unsafe>&")).not.toBe("unsafe");
+  });
+
+  test("the addon error paths escape through Bun rather than by hand", () => {
+    expect(repoSource("addons/instatic/app/index.ts")).toInclude("Bun.escapeHTML(msg)");
+    const stager = repoSource("addons/stager/app/index.ts");
+    expect(stager).toInclude("Bun.escapeHTML(");
+    expect(stager).not.toInclude("escapeMinimal");
+  });
+
+  test("escJs neutralises a quote while preserving the JavaScript value", () => {
+    expect(escJs('a"b')).not.toInclude('"');
+    expect(new Function(`return '${escJs("a'b\n")}'`)()).toBe("a'b\n");
+  });
+});
+
+describe("CSRF and origin guard", () => {
+  function mutation(headers: Record<string, string>, url = "https://panel.example:8443/addons/stager/api/clones"): Request {
+    return new Request(url, { method: "POST", headers: { Cookie: "clp_addons_csrf=csrf_token", "x-clp-addons-csrf": "csrf_token", ...headers } });
+  }
+
+  function csrf(cookie: string, header: string): Request {
+    return new Request("https://panel.example/addons/instatic/api/instances", {
+      method: "POST",
+      headers: { Origin: "https://panel.example", Host: "panel.example", Cookie: cookie, "x-clp-addons-csrf": header },
+    });
+  }
+
+  test("duplicate cookie names keep the first value", () => {
+    expect(guardMutation(csrf("clp_addons_csrf=first; clp_addons_csrf=second", "first"))).toBeNull();
+    expect(guardMutation(csrf("clp_addons_csrf=first; clp_addons_csrf=second", "second"))?.status).toBe(403);
+  });
+
+  test("an empty CSRF cookie remains invalid", () => {
+    expect(guardMutation(csrf("clp_addons_csrf=", "anything"))?.status).toBe(403);
+  });
+
+  test("equals signs and percent-encoding in a cookie value survive validation", () => {
+    expect(guardMutation(csrf("clp_addons_csrf=left=middle=right", "left=middle=right"))).toBeNull();
+    expect(guardMutation(csrf("clp_addons_csrf=left%2Fmiddle", "left/middle"))).toBeNull();
+  });
+
+  test("both request guards parse cookies with Bun.CookieMap", () => {
+    expect(repoSource("lib/app-http.ts")).toInclude("new Bun.CookieMap");
+    expect(repoSource("lib/sso-auth.ts")).toInclude("new Bun.CookieMap");
+  });
+
+  test("same-origin is accepted with an explicit port and when a proxy strips it", () => {
+    expect(guardMutation(mutation({ Origin: "https://panel.example:8443", Host: "panel.example:8443" }))).toBeNull();
+    expect(guardMutation(mutation({ Origin: "https://panel.example:8443", Host: "panel.example" }))).toBeNull();
+  });
+
+  // The panel is on 8443 and its tenants' own sites are on 443, so a mismatched
+  // port is the shape a cross-site request from a hosted site actually takes.
+  test("a different origin, port or scheme is refused", () => {
+    for (const origin of [
+      "https://evil.example:8443",
+      "https://panel.example",
+      "https://panel.example:3000",
+      "http://panel.example:8443",
+    ]) {
+      expect(guardMutation(mutation({ Origin: origin, Host: "panel.example:8443" }))?.status).toBe(403);
+    }
+  });
+
+  test("a spoofed X-Forwarded-Host cannot rescue a cross-origin request", () => {
+    expect(guardMutation(mutation({
+      Origin: "https://evil.example:8443",
+      Host: "panel.example:8443",
+      "X-Forwarded-Host": "evil.example:8443",
+    }))?.status).toBe(403);
   });
 });
