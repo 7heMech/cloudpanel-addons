@@ -25,7 +25,7 @@ import STYLE from "./views.css" with { type: "text" };
 /**
  * The pages' inline script.
  *
- * Exported so tools/test-app.ts can parse it.
+ * Exported so tests/test-app.test.ts can parse it.
  */
 import CLIENT_JS from "./views.client.js" with { type: "text" };
 export { CLIENT_JS };

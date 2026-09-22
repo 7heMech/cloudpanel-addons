@@ -11,6 +11,12 @@ CloudPanel's master Nginx vhost proxies `/addons/` to the manager socket. The
 manager uses the existing `cloudpanel` session and does not create a separate
 site, hostname, or login.
 
+`manager/` holds that process: `server.ts` owns the socket, the request gate
+and the mount dispatch, and `index.ts`, `service.ts` and `views.ts` are the
+Addons page itself, laid out the way an addon's `app/` is. It is not in `cli/`
+because none of it is a command; `cli/index.ts` calls `cmdServe` and otherwise
+knows nothing about it.
+
 ## One catalog, compiled in
 
 `cli/addon-catalog.ts` is the only registration seam. An addon declares itself

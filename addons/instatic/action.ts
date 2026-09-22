@@ -10,10 +10,10 @@ import { dirname, join } from "node:path";
 import {
   ActionCommandFailure, ActionFailure, commandFailure, emitActionError, emitActionOk,
   failAction, forwardCommandOutput as defaultForwardCommandOutput, normalizeIdentityHostname,
-  PANEL_IDENTITY_PATH,
   readable, runCommand, siteUserFor, validateDomain, validateFlag, validatePort, validateTag,
   withFileLock,
 } from "../../cli/action-common";
+import { PANEL_IDENTITY_PATH } from "../../cli/paths";
 import {
   createJobDir, createJobLog, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet, jobTimestamp,
   JOB_ID_RE, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord, type PruneJobsResult,

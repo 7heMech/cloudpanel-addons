@@ -5,7 +5,7 @@ import {
   readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import { CLI_BIN } from "../../cli/paths";
+import { CLI_BIN, PANEL_IDENTITY_PATH } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import {
   createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet,
@@ -13,7 +13,7 @@ import {
 } from "../../cli/job-store";
 import {
   ActionCommandFailure, ActionFailure, acquireFileLock, actionErrorJson, commandFailure, emitActionError, emitActionOk,
-  dbNameFor, dbUserFor, failAction, normalizeIdentityHostname, PANEL_IDENTITY_PATH, readable, readPanelIdentity,
+  dbNameFor, dbUserFor, failAction, normalizeIdentityHostname, readable, readPanelIdentity,
   runCommand, siteUserFor, validateDomain, validateEmail, validateFlag, validateJob, validateMfa, validatePort,
   type CommandResult, type FileLockHandle,
 } from "../../cli/action-common";

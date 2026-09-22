@@ -1,0 +1,205 @@
+// Regression coverage for the unattended repair path aborting whenever no CloudPanel
+// operator session exists. `repair` runs unattended every 15 minutes via
+// clp-addons-reconcile.timer; it must complete its reconciliation even when no live
+// panel session exists. Readiness checks the fixed directory and helper contract, so a
+// live session file is not required for unattended repair or interactive install.
+import { expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
+
+const REPO = join(import.meta.dir, "..");
+
+// Keep the module mocks inside a child process. Bun keeps mock.module overrides for the
+// whole test process, and a top-level repair mock can otherwise replace cli/inject for a
+// later test file when the test runner discovers files in a different order.
+const PROBE = String.raw`
+  import { mock } from "bun:test";
+
+  const calls = [];
+  let hasInstalledAddon = true;
+  const provisioning = {
+    dirs: false,
+    sudoers: false,
+    units: false,
+    nginx: false,
+  };
+
+  function resetProvisioning() {
+    Object.assign(provisioning, { dirs: false, sudoers: false, units: false, nginx: false });
+  }
+
+  class TestFatal extends Error {}
+
+  function parseFlags(argv) {
+    const positional = [];
+    const flags = {};
+    for (const arg of argv) {
+      if (!arg.startsWith("--")) {
+        positional.push(arg);
+        continue;
+      }
+      const equal = arg.indexOf("=");
+      flags[arg.slice(2, equal === -1 ? undefined : equal)] = equal === -1 ? true : arg.slice(equal + 1);
+    }
+    return { positional, flags };
+  }
+
+  const realProvision = await import("./cli/provision.ts?repair-test-real");
+  mock.module("./cli/release.ts", () => ({
+    CLI_VERSION: "1.2.3",
+    resolveRelease: async () => ({ tag: "v1.2.3", assets: new Map() }),
+    fetchVerified: async (_release, names = []) => names.map((name) => ({ name, bytes: Buffer.from(name, "utf-8") })),
+    verifyAttestation: async () => {},
+    loadLocal: (_dir, names = []) => names.map((name) => ({ name, bytes: Buffer.from(name, "utf-8") })),
+  }));
+
+  mock.module("./cli/provision.ts", () => ({
+    ...realProvision,
+    ensureDirs: (_specs, verifySession) => {
+      calls.push(verifySession ? "ensureDirs:verifySession" : "ensureDirs");
+      provisioning.dirs = true;
+    },
+    ensureAuthHelperReady: () => calls.push("ensureAuthHelperReady"),
+    warnIfPanelSessionUnreadable: () => {
+      // The real repair helper never throws; it only records a warning.
+      calls.push("warnIfPanelSessionUnreadable");
+    },
+    ensureServiceUser: () => calls.push("ensureServiceUser"),
+    ensureTimerArmed: (unit) => calls.push("ensureTimerArmed:" + unit),
+    hardenBackups: () => calls.push("hardenBackups"),
+    reconcilePanelIdentity: () => { calls.push("reconcilePanelIdentity"); provisioning.sudoers = true; },
+    installUnits: () => { calls.push("installUnits"); provisioning.units = true; return false; },
+    installedConfig: () => hasInstalledAddon,
+    purgeTwigCache: () => calls.push("purgeTwigCache"),
+    removeLegacyInstall: () => calls.push("removeLegacyInstall"),
+    removeLegacyUnits: () => calls.push("removeLegacyUnits"),
+    removeLegacyUsers: () => calls.push("removeLegacyUsers"),
+    removeSudoers: () => calls.push("removeSudoers"),
+    startUnits: () => calls.push("startUnits"),
+    stopUnits: () => calls.push("stopUnits"),
+    unitActive: () => "active",
+    unitPid: () => 1234,
+    writeConfig: (spec) => calls.push("writeConfig:" + spec.name),
+  }));
+
+  mock.module("./cli/inject.ts", () => ({
+    KNOWN_GOOD_PANEL_VERSIONS: [],
+    inspect: () => ({ state: "ok" }),
+    inspectNginxProxy: () => ({ state: "missing" }),
+    masterVhostHost: () => null,
+    panelVersion: () => "test",
+    purgeTwigCache: () => calls.push("purgeInjectCache"),
+    reconcile: () => {
+      calls.push("reconcile");
+      return { statuses: [], changed: false };
+    },
+    reconcileNginxProxy: () => {
+      calls.push("reconcileNginxProxy");
+      provisioning.nginx = true;
+      return { state: "ok", changed: false };
+    },
+  }));
+
+  mock.module("./cli/util.ts", () => ({
+    Fatal: TestFatal,
+    fatal: (message) => { throw new TestFatal(message); },
+    log: { step: () => {}, ok: () => {}, warn: () => {}, err: () => {}, plain: () => {} },
+    parseFlags,
+    requireRoot: () => {},
+    run: () => "",
+    tryRun: () => ({ ok: true, out: "" }),
+    writeAtomic: () => {},
+  }));
+
+  mock.module("./lib/panel-snapshot.ts", () => ({
+        getLivePanelInfo: () => ({
+      updatedAt: new Date().toISOString(),
+      portRange: { min: 39000, max: 39999 },
+      allocatedPorts: [],
+      sites: [],
+    }),
+  }));
+
+  const { cmdInstall } = await import("./cli/install.ts");
+  const { cmdRepair } = await import("./cli/repair.ts");
+
+  async function repairResult() {
+    calls.length = 0;
+    resetProvisioning();
+    hasInstalledAddon = true;
+    let threw = false;
+    try {
+      await cmdRepair(["--quiet"]);
+    } catch {
+      threw = true;
+    }
+    return { threw, calls: [...calls], provisioning: { ...provisioning } };
+  }
+
+  const repairWithoutSession = await repairResult();
+  const repairWithSession = await repairResult();
+
+  calls.length = 0;
+  resetProvisioning();
+  hasInstalledAddon = false;
+  let installThrew = false;
+  try {
+    await cmdInstall(["stager", "--local=/tmp/does-not-matter"]);
+  } catch (error) {
+    installThrew = error instanceof TestFatal;
+  }
+
+  process.stdout.write(JSON.stringify({
+    repairWithoutSession,
+    repairWithSession,
+    installWithoutSession: { threw: installThrew, calls: [...calls], provisioning: { ...provisioning } },
+  }));
+`;
+
+function runProbe(): {
+  repairWithoutSession: { threw: boolean; calls: string[]; provisioning: Record<string, boolean> };
+  repairWithSession: { threw: boolean; calls: string[]; provisioning: Record<string, boolean> };
+  installWithoutSession: { threw: boolean; calls: string[]; provisioning: Record<string, boolean> };
+} {
+  const result = spawnSync(process.execPath, ["-e", PROBE], { cwd: REPO, encoding: "utf8" });
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout);
+}
+
+const result = runProbe();
+
+test("repair completes reconciliation even when no panel session exists", () => {
+  expect(result.repairWithoutSession.threw).toBe(false);
+  expect(result.repairWithoutSession.calls).not.toContain("ensureDirs:verifySession");
+  expect(result.repairWithoutSession.calls).toContain("ensureDirs");
+  expect(result.repairWithoutSession.calls).toContain("warnIfPanelSessionUnreadable");
+  for (const name of ["reconcilePanelIdentity", "installUnits", "reconcileNginxProxy"]) {
+    expect(result.repairWithoutSession.calls).toContain(name);
+  }
+  expect(result.repairWithoutSession.provisioning).toEqual({
+    dirs: true,
+    sudoers: true,
+    units: true,
+    nginx: true,
+  });
+});
+
+test("repair still completes when a panel session is available", () => {
+  expect(result.repairWithSession.threw).toBe(false);
+  for (const name of ["reconcilePanelIdentity", "installUnits", "reconcileNginxProxy"]) {
+    expect(result.repairWithSession.calls).toContain(name);
+  }
+});
+
+test("repair checks persistent enablement for every installed timer", () => {
+  expect(result.repairWithoutSession.calls).toContain("ensureTimerArmed:clp-addons-reconcile.timer");
+  expect(result.repairWithoutSession.calls).toContain("ensureTimerArmed:clp-addons-cloudflare-ips-reconcile.timer");
+});
+
+test("install proceeds when the fixed directory has no live panel session", () => {
+  expect(result.installWithoutSession.threw).toBe(false);
+  expect(result.installWithoutSession.calls).toContain("ensureDirs:verifySession");
+  expect(result.installWithoutSession.calls).toContain("ensureAuthHelperReady");
+  expect(result.installWithoutSession.calls).toContain("reconcilePanelIdentity");
+  expect(result.installWithoutSession.calls).toContain("installUnits");
+});

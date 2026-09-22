@@ -3,9 +3,7 @@ import { createHash } from "node:crypto";
 import {
   accessSync, closeSync, ftruncateSync, lstatSync, openSync, readFileSync, writeSync, constants as fsConstants,
 } from "node:fs";
-import { PANEL_IDENTITY_PATH } from "./action-constants";
-
-export { PANEL_IDENTITY_PATH } from "./action-constants";
+import { PANEL_IDENTITY_PATH } from "./paths";
 
 const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
 const HOSTNAME_RE = new RegExp(`^(?:${HOSTNAME_LABEL})(?:\\.${HOSTNAME_LABEL})+$`);

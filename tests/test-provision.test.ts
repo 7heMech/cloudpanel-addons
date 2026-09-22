@@ -1,0 +1,775 @@
+import { expect, test } from "bun:test";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "../cli/paths";
+import { ADDON_NAMES, ADDONS } from "../cli/addon-catalog";
+import {
+  authUnits, cloudflareReconcileUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit,
+  vhostOwnerAccepted, warnIfPanelSessionUnreadable,
+} from "../cli/provision";
+import { panelUserUid } from "../lib/sso-auth";
+// Other suites in this process mock.module("../cli/provision"); the query suffix keeps
+// these assertions bound to the real implementation regardless of file order.
+const realProvision = async (): Promise<typeof import("../cli/provision")> =>
+  await import("../cli/provision?provision-test-real" as "../cli/provision");
+
+test("Cloudflare new-site reconciliation runs once a minute through the root action", () => {
+  const units = cloudflareReconcileUnits();
+  expect(units.service).toContain("ConditionPathExists=/etc/clp-addons/cloudflare-ips.conf");
+  expect(units.service).toContain("ExecStart=/usr/local/bin/clp-addons action cloudflare-ips reconcile");
+  expect(units.timer).toContain("OnUnitActiveSec=1min");
+});
+
+test("hyphenated addon names produce valid systemd environment variables", () => {
+  const unit = serviceUnit([ADDONS["cloudflare-ips"]!, ADDONS["panel-tweaks"]!]);
+  expect(unit).toContain("Environment=CLOUDFLARE_IPS_APP_DATA=/var/lib/clp-addons/cloudflare-ips");
+  expect(unit).toContain("Environment=PANEL_TWEAKS_APP_DATA=/var/lib/clp-addons/panel-tweaks");
+  expect(unit).not.toContain("Environment=CLOUDFLARE-IPS_APP_DATA");
+});
+
+const REPO = join(import.meta.dir, "..");
+
+test("timer repair persistently enables a disabled timer without restarting an armed timer", () => {
+  const root = mkdtempSync(join(tmpdir(), "timer-enable-test-"));
+  const bin = join(root, "bin");
+  const calls = join(root, "systemctl.calls");
+  mkdirSync(bin);
+  const systemctl = join(bin, "systemctl");
+  writeFileSync(systemctl, `#!/bin/sh
+printf '%s\n' "$*" >> "$SYSTEMCTL_CALLS"
+if [ "$1" = "is-enabled" ]; then
+  echo disabled
+  exit 1
+fi
+if [ "$1" = "show" ]; then
+  echo soon
+fi
+`);
+  chmodSync(systemctl, 0o755);
+  try {
+    execFileSync(process.execPath, ["-e", `
+      import { ensureTimerArmed } from "./cli/provision.ts";
+      ensureTimerArmed("test-reconcile.timer", true);
+    `], {
+      cwd: REPO,
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        SYSTEMCTL_CALLS: calls,
+      },
+    });
+    expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+      "is-enabled test-reconcile.timer",
+      "enable test-reconcile.timer",
+      "show -p NextElapseUSecRealtime -p NextElapseUSecMonotonic --value test-reconcile.timer",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("native backup cron is installed, preserves custom schedules, and is removed on disable", () => {
+  const root = mkdtempSync(join(tmpdir(), "instatic-cron-"));
+  const path = join(root, "instatic-backup");
+  try {
+    // Other suites mock cli/util.writeAtomic; exercise real provisioning in
+    // its own process so this checks the actual cron file lifecycle.
+    const output = execFileSync(process.execPath, ["-e", `
+      import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+      import { reconcileInstaticBackupCron } from './cli/provision.ts';
+      const path = ${JSON.stringify(path)};
+      reconcileInstaticBackupCron(true, path);
+      const original = readFileSync(path, 'utf8');
+      const mode = statSync(path).mode & 0o777;
+      writeFileSync(path, 'custom schedule');
+      reconcileInstaticBackupCron(true, path);
+      const preserved = readFileSync(path, 'utf8');
+      reconcileInstaticBackupCron(false, path);
+      console.log(JSON.stringify({ original, mode, preserved, removed: !existsSync(path) }));
+    `], { cwd: REPO, encoding: "utf8" });
+    const result = JSON.parse(output);
+    expect(result.original).toContain("30 3 * * * root /usr/local/bin/clp-addons action instatic backup");
+    expect(result.mode).toBe(0o644);
+    expect(result.preserved).toBe("custom schedule");
+    expect(result.removed).toBe(true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+function serviceUserProbe(options: {
+  dockerGroup: boolean;
+  groups?: string[];
+  primary?: string;
+  failedCommand?: string;
+}): { ok: boolean; error?: string; calls: Array<{ command: string; args: string[] }> } {
+  const script = `
+    import { PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "./cli/paths.ts";
+    import { ensureServiceUser } from "./cli/provision.ts";
+    const options = ${JSON.stringify(options)};
+    const calls = [];
+    const groups = new Set(options.groups ?? [SERVICE_GROUP, PANEL_GROUP]);
+    let primary = options.primary ?? SERVICE_GROUP;
+    const runner = {
+      run(command, args) {
+        calls.push({ command, args: [...args] });
+        return "";
+      },
+      tryRun(command, args) {
+        calls.push({ command, args: [...args] });
+        const invocation = command + " " + args.join(" ");
+        if (invocation === options.failedCommand) return { ok: false, out: "permission denied" };
+        if (command === "id" && args[0] === "-u") return { ok: true, out: "998" };
+        if (command === "id" && args[0] === "-gn") return { ok: true, out: primary };
+        if (command === "id" && args[0] === "-nG") return { ok: true, out: [...groups].join(" ") };
+        if (command === "getent" && args[0] === "passwd") {
+          return { ok: true, out: SERVICE_USER + ":x:998:998::/nonexistent:/usr/sbin/nologin" };
+        }
+        if (command === "getent" && args[0] === "group" && args[1] === SERVICE_GROUP) {
+          return { ok: true, out: SERVICE_GROUP + ":x:998:" + SERVICE_USER };
+        }
+        if (command === "getent" && args[0] === "group" && args[1] === PANEL_GROUP) {
+          return { ok: true, out: PANEL_GROUP + ":x:996:" + SERVICE_USER };
+        }
+        if (command === "getent" && args[0] === "group" && args[1] === "docker") {
+          if (!options.dockerGroup) return { ok: false, out: "" };
+          return { ok: true, out: "docker:x:999:" + (groups.has("docker") ? SERVICE_USER : "") };
+        }
+        if (command === "passwd" && args[0] === "-S") return { ok: true, out: SERVICE_USER + " L" };
+        if (command === "passwd" && args[0] === "-l") return { ok: true, out: "" };
+        if (command === "usermod" && args[0] === "--gid") {
+          primary = args[1];
+          groups.delete("docker");
+          return { ok: true, out: "" };
+        }
+        if (command === "gpasswd" && args[0] === "--delete") {
+          groups.delete("docker");
+          return { ok: true, out: "" };
+        }
+        return { ok: true, out: "" };
+      },
+    };
+    try {
+      ensureServiceUser(true, runner);
+      console.log(JSON.stringify({ ok: true, calls }));
+    } catch (error) {
+      console.log(JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        calls,
+      }));
+    }
+  `;
+  return JSON.parse(execFileSync(process.execPath, ["-e", script], {
+    cwd: REPO,
+    encoding: "utf8",
+  }));
+}
+
+test("removes an existing supplementary docker membership", () => {
+  const result = serviceUserProbe({
+    dockerGroup: true,
+    groups: [SERVICE_GROUP, PANEL_GROUP, "docker"],
+  });
+
+  expect(result.ok).toBe(true);
+
+  expect(result.calls).toContainEqual({
+    command: "gpasswd",
+    args: ["--delete", SERVICE_USER, "docker"],
+  });
+  expect(result.calls).not.toContainEqual({
+    command: "usermod",
+    args: ["--gid", SERVICE_GROUP, SERVICE_USER],
+  });
+});
+
+test("leaves systems without a docker group unchanged", () => {
+  const result = serviceUserProbe({ dockerGroup: false });
+
+  expect(result.ok).toBe(true);
+
+  expect(result.calls).not.toContainEqual({
+    command: "gpasswd",
+    args: ["--delete", SERVICE_USER, "docker"],
+  });
+  expect(result.calls.some(({ command, args }) => command === "id" && args[0] === "-gn")).toBe(false);
+});
+
+test("fails clearly when docker membership cannot be removed", () => {
+  const result = serviceUserProbe({
+    dockerGroup: true,
+    groups: [SERVICE_GROUP, PANEL_GROUP, "docker"],
+    failedCommand: `gpasswd --delete ${SERVICE_USER} docker`,
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe(
+    `could not remove ${SERVICE_USER} from the docker group: permission denied`,
+  );
+});
+
+function requiredUnitsProbe(options: {
+  unit?: string;
+  active?: boolean;
+  dockerUnitLoaded?: boolean;
+  downloadOk?: boolean;
+  installOk?: boolean;
+  enableOk?: boolean;
+} = {}): { ok: boolean; error?: string; calls: Array<{ command: string; args: string[] }> } {
+  const script = `
+    import { ensureRequiredUnits } from "./cli/provision.ts";
+    const options = ${JSON.stringify(options)};
+    const spec = { name: "instatic", configFile: "", stateDir: "", targets: [], requiresUnits: [options.unit ?? "docker"] };
+    const calls = [];
+    const runner = {
+      run(command, args) { calls.push({ command, args: [...args] }); return ""; },
+      tryRun(command, args) {
+        calls.push({ command, args: [...args] });
+        if (command === "systemctl" && args[0] === "is-active") {
+          return { ok: options.active ?? false, out: options.active ? "active" : "inactive" };
+        }
+        if (command === "systemctl" && args[0] === "show") {
+          return { ok: true, out: options.dockerUnitLoaded ?? false ? "loaded" : "not-found" };
+        }
+        if (command === "curl") return { ok: options.downloadOk ?? true, out: options.downloadOk === false ? "could not resolve host" : "" };
+        if (command === "sh") return { ok: options.installOk ?? true, out: options.installOk === false ? "get-docker.sh exited 1" : "" };
+        if (command === "systemctl" && args[0] === "enable") return { ok: options.enableOk ?? true, out: "" };
+        return { ok: true, out: "" };
+      },
+    };
+    try {
+      ensureRequiredUnits(spec, runner);
+      console.log(JSON.stringify({ ok: true, calls }));
+    } catch (error) {
+      console.log(JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        calls,
+      }));
+    }
+  `;
+  // ensureRequiredUnits logs through the real cli/util.ts (unmocked here, to
+  // exercise the genuine Docker-provisioning code path), so stdout carries
+  // those step/ok lines ahead of the JSON result; only the last line is it.
+  const output = execFileSync(process.execPath, ["-e", script], { cwd: REPO, encoding: "utf8" });
+  return JSON.parse(output.trim().split("\n").pop() ?? "");
+}
+
+test("a required unit already active needs no Docker provisioning", () => {
+  const result = requiredUnitsProbe({ active: true });
+
+  expect(result.ok).toBe(true);
+  expect(result.calls).toEqual([{ command: "systemctl", args: ["is-active", "docker"] }]);
+});
+
+test("installs Docker via get.docker.com when its unit is not loaded, then starts it", () => {
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: false });
+
+  expect(result.ok).toBe(true);
+  expect(result.calls).toContainEqual({ command: "systemctl", args: ["show", "docker", "--property=LoadState", "--value"] });
+  expect(result.calls.some(({ command, args }) =>
+    command === "curl" && args.includes("https://get.docker.com"))).toBe(true);
+  expect(result.calls.some(({ command }) => command === "sh")).toBe(true);
+  expect(result.calls).toContainEqual({ command: "systemctl", args: ["enable", "--now", "docker"] });
+});
+
+test("starts Docker without reinstalling when its unit is already loaded (an orphaned CLI is not enough to skip provisioning)", () => {
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: true });
+
+  expect(result.ok).toBe(true);
+  expect(result.calls.some(({ command }) => command === "curl" || command === "sh")).toBe(false);
+  expect(result.calls).toContainEqual({ command: "systemctl", args: ["enable", "--now", "docker"] });
+});
+
+test("fails clearly when the Docker installer cannot be downloaded", () => {
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: false, downloadOk: false });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("could not download Docker: could not resolve host");
+});
+
+test("fails clearly when the Docker installer itself fails", () => {
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: false, installOk: false });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("Docker installation failed: get-docker.sh exited 1");
+});
+
+test("fails clearly when Docker still is not active after installing it", () => {
+  const result = requiredUnitsProbe({ active: false, dockerUnitLoaded: true, enableOk: false });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("docker is not active; installing it did not bring the service up");
+});
+
+test("a non-docker required unit still fails fast with no provisioning attempt", () => {
+  const result = requiredUnitsProbe({ unit: "postgresql", active: false });
+
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("postgresql is not active; install and start it before enabling instatic");
+  expect(result.calls).toEqual([{ command: "systemctl", args: ["is-active", "postgresql"] }]);
+});
+
+function provisionProbe(): {
+  identityPath: string;
+  identity: { primary: string; aliases: string[] } | null;
+  unsafeIdentity: { primary: string; aliases: string[] } | null;
+} {
+  const script = `
+    import { ADDONS } from "./cli/addon-catalog.ts";
+    import { PANEL_IDENTITY_PATH } from "./cli/paths.ts";
+    import { panelIdentityFromVhost } from "./cli/provision.ts";
+    console.log(JSON.stringify({
+      identityPath: PANEL_IDENTITY_PATH,
+      identity: panelIdentityFromVhost(
+        "server { listen 8443 ssl; server_name PANEL.Example.Test. www.PANEL.Example.Test. *.panel.example.test; }",
+      ),
+      unsafeIdentity: panelIdentityFromVhost(
+        "server { listen 8443 ssl; server_name panel.example.test ~^.+$; }",
+      ),
+    }));
+  `;
+  return JSON.parse(execFileSync(process.execPath, ["-e", script], {
+    cwd: REPO,
+    encoding: "utf8",
+  }));
+}
+
+// The rule builders these used to exercise were dead: the root gateway daemon
+// replaced sudo outright, and nothing but their own test had called them since.
+// What is worth asserting now is the absence, not the shape of a string.
+test("nothing in the tree grants the manager a sudo rule", () => {
+  // git grep exits 1 when nothing matches, which is the passing case here, so
+  // this cannot use execFileSync.
+  const granting = Bun.spawnSync(["git", "grep", "-l", "NOPASSWD", "--", "cli", "lib", "addons"], { cwd: REPO });
+  expect(granting.stdout.toString().trim()).toBe("");
+});
+
+test("every sudoers path the provisioner names is one it deletes", () => {
+  const provision = readFileSync(join(REPO, "cli/provision.ts"), "utf8");
+  const mentions = provision
+    .split("\n")
+    .filter((line) => line.includes("/etc/sudoers.d") && !line.trimStart().startsWith("*"));
+  expect(mentions.length).toBeGreaterThan(0);
+  // Removal has to keep happening for as long as an upgrade from a pre-gateway
+  // version is possible. Writing one must not come back with it.
+  for (const mention of mentions) expect(mention).toContain("rmSync");
+});
+
+test("panel identity extraction normalizes exact, alias, and wildcard names", () => {
+  const { identity } = provisionProbe();
+
+  expect(identity).toEqual({
+    primary: "panel.example.test",
+    aliases: ["*.panel.example.test", "www.panel.example.test"],
+  });
+});
+
+test("panel identity extraction rejects missing or unsafe names", () => {
+  const { unsafeIdentity } = provisionProbe();
+  expect(unsafeIdentity).toBeNull();
+});
+
+test("the identity file is a separate root-owned action input", () => {
+  expect(provisionProbe().identityPath).toBe("/etc/clp-addons/panel-identity.conf");
+});
+
+test("manager unit hardens its namespace with zero-sudo root gateway dispatch", () => {
+  const unit = serviceUnit([ADDONS.instatic!, ADDONS.stager!]);
+
+  expect(unit).toContain("ProtectSystem=full");
+  expect(unit).toContain("ProtectHome=read-only");
+  expect(unit).toContain("PrivateTmp=yes");
+  expect(unit).toContain("ProtectKernelTunables=yes");
+  expect(unit).toContain("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6");
+  expect(unit).toContain("NoNewPrivileges=yes");
+  const readWrite = unit.match(/^ReadWritePaths=(.*)$/m)?.[1]?.split(" ") ?? [];
+  expect(readWrite).toContain("-/etc/letsencrypt");
+  expect(readWrite).toContain("/var/backups/clp-addons");
+  expect(readWrite).not.toContain("/etc/letsencrypt");
+
+  expect(unit).toContain("User=clp-addons");
+  expect(unit).toContain("Group=clp-addons");
+  expect(unit).toContain("SupplementaryGroups=clp");
+  expect(unit).toContain("RuntimeDirectory=clp-addons");
+  expect(unit).toContain("ExecStart=/usr/local/bin/clp-addons serve");
+  expect(unit).toContain("Restart=always");
+  expect(unit).not.toContain("ExecStartPre=+");
+  expect(unit).not.toContain("hmac");
+});
+
+test("every addon's APP_DATA environment assignment is a name systemd accepts", () => {
+  // systemd silently ignores (and warns on) an Environment= line whose name
+  // contains a character outside [A-Za-z0-9_], which "panel-tweaks" produced
+  // via a bare toUpperCase() before it was sanitized.
+  const specs = ADDON_NAMES.map((name) => ADDONS[name]!);
+  const unit = serviceUnit(specs);
+  const assignments = [...unit.matchAll(/^Environment=([^=]+)=/gm)].map((match) => match[1]);
+  expect(assignments.length).toBe(specs.length);
+  for (const name of assignments) expect(name).toMatch(/^[A-Za-z_][A-Za-z0-9_]*$/);
+});
+
+test("provisioning creates every project-owned writable directory", () => {
+  const result = execFileSync(process.execPath, [
+    "-e",
+    `import { ADDONS } from "./cli/addon-catalog.ts";
+     import { ensureDirs } from "./cli/provision.ts";
+     const created = [];
+     const commands = { run: () => "0", tryRun: () => ({ ok: true, out: "" }) };
+     const fs = { mkdir: (path) => created.push(path), exists: () => false, chmod: () => {}, chown: () => {} };
+     ensureDirs([ADDONS.instatic, ADDONS.stager], false, commands, fs);
+     console.log(JSON.stringify(created));`,
+  ], { cwd: REPO, encoding: "utf8" });
+  const created = JSON.parse(result) as string[];
+  expect(created).toContain("/var/backups/clp-addons");
+  expect(created).toContain("/run/clp-addons");
+  expect(created).toContain("/run/lock/clp-addons");
+  expect(created).toContain("/var/lib/clp-addons");
+});
+
+test("manager startup does not require lock directories erased by reboot, even with all addons disabled", () => {
+  for (const specs of [[], [ADDONS.instatic!, ADDONS.stager!]]) {
+    const unit = serviceUnit(specs);
+    const runtime = unit.match(/^RuntimeDirectory=(.*)$/m)![1]!.split(" ").map((path) => `/run/${path}`);
+    const writable = unit.match(/^ReadWritePaths=(.*)$/m)![1]!.split(" ");
+    for (const path of writable.filter((path) => path.startsWith("/run/"))) {
+      expect(runtime).toContain(path);
+    }
+    expect(writable).not.toContain("/run/lock/clp-addons");
+    for (const directive of ["After", "Wants"]) {
+      expect(unit.match(new RegExp(`^${directive}=(.*)$`, "m"))![1]!.split(" ")).toContain("clp-addons-auth.socket");
+    }
+  }
+  const socket = authUnits().socket;
+  expect(socket).toContain("DirectoryMode=0755");
+  expect(socket).not.toContain("RuntimeDirectory=");
+});
+
+test.each([0o700, 0o750, 0o755, 0o770, 0o2750, 0o2770])("provisioning accepts safe panel session permissions %o without changing them", (mode) => {
+  const sessionDir = mkdtempSync(`${tmpdir()}/panel-session-`);
+  chmodSync(sessionDir, mode);
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  const gid = typeof process.getgid === "function" ? process.getgid() : 0;
+  const calls: Array<{ command: string; args: string[] }> = [];
+  try {
+    ensurePanelSessionReadable({
+      run: (command, args) => { calls.push({ command, args }); return ""; },
+      tryRun: (command, args) => { calls.push({ command, args }); return { ok: true, out: "" }; },
+    }, sessionDir, uid, gid);
+    expect(calls).toEqual([]);
+    expect(lstatSync(sessionDir).mode & 0o7777).toBe(mode);
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true });
+  }
+});
+
+test("provisioning accepts a root-owned session directory readable by the root helper", () => {
+  expect(() => ensurePanelSessionReadable({
+    run: () => "",
+    tryRun: () => ({ ok: true, out: "" }),
+  }, "/usr", 12345, 12345)).not.toThrow();
+});
+
+test("provisioning rejects untrusted session directory writers and symlinks", () => {
+  const directory = mkdtempSync(`${tmpdir()}/panel-session-unsafe-`);
+  const sessionDir = join(directory, "sessions");
+  mkdirSync(sessionDir);
+  const uid = process.getuid!();
+  const gid = process.getgid!();
+  const commands = { run: () => "", tryRun: () => ({ ok: true, out: "" }) };
+  try {
+    chmodSync(sessionDir, 0o777);
+    expect(() => ensurePanelSessionReadable(commands, sessionDir, uid, gid)).toThrow(/writable only/);
+    chmodSync(sessionDir, 0o770);
+    if (gid !== 0) {
+      expect(() => ensurePanelSessionReadable(commands, sessionDir, uid, gid + 1)).toThrow(/writable only/);
+    }
+    chmodSync(sessionDir, 0o700);
+    if (uid !== 0) {
+      expect(() => ensurePanelSessionReadable(commands, sessionDir, uid + 1, gid)).toThrow(/owned by root or clp/);
+    }
+    const link = join(directory, "link");
+    symlinkSync(sessionDir, link);
+    expect(() => ensurePanelSessionReadable(commands, link, uid, gid)).toThrow(/not a regular directory/);
+    const file = join(directory, "file");
+    writeFileSync(file, "");
+    expect(() => ensurePanelSessionReadable(commands, file, uid, gid)).toThrow(/not a regular directory/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("does not fail when the session directory has no live session yet", () => {
+  const sessionDir = mkdtempSync(`${tmpdir()}/panel-session-empty-`);
+  chmodSync(sessionDir, 0o770);
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  const gid = typeof process.getgid === "function" ? process.getgid() : 0;
+  try {
+    expect(() => ensurePanelSessionReadable({
+      run: () => "",
+      tryRun: () => ({ ok: true, out: "" }),
+    }, sessionDir, uid, gid)).not.toThrow();
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true });
+  }
+});
+
+test("provisioning probes the root auth helper without exposing session data", async () => {
+  const { ensureAuthHelperReady } = await realProvision();
+  const calls: Array<{ command: string; args: string[] }> = [];
+  ensureAuthHelperReady({
+    run: () => "",
+    tryRun: (command, args) => {
+      calls.push({ command, args });
+      return { ok: true, out: '{"valid":false}\n' };
+    },
+  }, "/usr/bin/true");
+  expect(calls).toEqual([{ command: "/usr/bin/true", args: ["action", "auth"] }]);
+});
+
+test("provisioning rejects an auth helper with the wrong probe contract", async () => {
+  const { ensureAuthHelperReady } = await realProvision();
+  expect(() => ensureAuthHelperReady({
+    run: () => "",
+    tryRun: () => ({ ok: true, out: '{"valid":true}\n' }),
+  }, "/usr/bin/true")).toThrow(/invalid-session probe/);
+});
+
+// Run in a fresh subprocess (rather than in-process, like the tests above) so the
+// console.warn capture below cannot be polluted by other test files in this suite that
+// mock.module("../cli/util") to silence logging for their own purposes.
+function panelSessionWarningProbe(sessionDir: string): { threw: boolean; warnings: string[] } {
+  const script = `
+    import { warnIfPanelSessionUnreadable } from "./cli/provision.ts";
+    const warnings = [];
+    console.warn = (...args) => { warnings.push(args.map(String).join(" ")); };
+    const commands = { run: () => "", tryRun: () => ({ ok: true, out: "" }) };
+    let threw = false;
+    try {
+      warnIfPanelSessionUnreadable(commands, ${JSON.stringify(sessionDir)}, process.getuid?.(), process.getgid?.());
+    } catch {
+      threw = true;
+    }
+    console.log(JSON.stringify({ threw, warnings }));
+  `;
+  return JSON.parse(execFileSync(process.execPath, ["-e", script], { cwd: REPO, encoding: "utf8" }));
+}
+
+test("warnIfPanelSessionUnreadable stays quiet when the session directory is empty", () => {
+  const sessionDir = mkdtempSync(`${tmpdir()}/panel-session-empty-`);
+  chmodSync(sessionDir, 0o770);
+  try {
+    const result = panelSessionWarningProbe(sessionDir);
+    expect(result.threw).toBe(false);
+    expect(result.warnings.some((line) => line.includes("panel session check failed"))).toBe(false);
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true });
+  }
+});
+
+test("warnIfPanelSessionUnreadable never aborts, even when the session directory does not exist at all", () => {
+  const missingDir = `${mkdtempSync(`${tmpdir()}/panel-session-missing-`)}/does-not-exist`;
+  const result = panelSessionWarningProbe(missingDir);
+  expect(result.threw).toBe(false);
+  expect(result.warnings.some((line) => line.includes("panel session check failed"))).toBe(true);
+});
+
+test("the panel Nginx instance is detected from its tree, not a version string", () => {
+  const root = mkdtempSync(`${tmpdir()}/nginx-layout-`);
+  try {
+    const distro = nginxLayout(`${root}/absent`);
+    expect(distro).toEqual({
+      sitesDir: "/etc/nginx/sites-enabled",
+      configFile: null,
+      service: "nginx",
+      panelOwned: false,
+    });
+
+    const panelDir = `${root}/services/nginx`;
+    mkdirSync(`${panelDir}/sites-enabled`, { recursive: true });
+    // A sites-enabled directory alone is not the panel instance; its own
+    // nginx.conf is what makes the tree a separately served config root.
+    expect(nginxLayout(panelDir).service).toBe("nginx");
+
+    writeFileSync(`${panelDir}/nginx.conf`, "user clp;\n");
+    expect(nginxLayout(panelDir)).toEqual({
+      sitesDir: `${panelDir}/sites-enabled`,
+      configFile: `${panelDir}/nginx.conf`,
+      service: "clp-nginx",
+      panelOwned: true,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the path unit watches the panel vhost as well as the addon templates", () => {
+  const unit = reconcileUnits().path;
+  const watched = unit.split("\n").filter((line) => line.startsWith("PathChanged=")).map((line) => line.slice(12));
+  expect(watched.some((path) => path.endsWith(".html.twig"))).toBe(true);
+  // The proxy block lives in a panel-owned file, so a panel action can remove
+  // it; the watcher is what makes the reconciler put it back promptly.
+  expect(watched.some((path) => path.endsWith("/cloudpanel.conf"))).toBe(true);
+});
+
+test("the watcher's fast path reconciles the proxy, not just the anchors", () => {
+  const source = readFileSync(join(import.meta.dir, "..", "cli/repair.ts"), "utf8");
+  const branchStart = source.indexOf('flags["anchors-only"] === true');
+  const branch = source.slice(branchStart, source.indexOf("return;", branchStart));
+  expect(branch.includes("reconcileAnchors(quiet)")).toBe(true);
+  expect(branch.includes("reconcileNginx(quiet)")).toBe(true);
+});
+
+test("the panel vhost may be owned by root or the panel user, but never world-writable", () => {
+  const panelUid = panelUserUid();
+  expect(vhostOwnerAccepted(0, 0o644)).toBe(true);
+  expect(vhostOwnerAccepted(0, 0o666)).toBe(false);
+  // Group-writable is accepted: the CloudPanel tree is clp:clp 0770, and the
+  // panel user is already inside the trust boundary (socket group, session
+  // store). World-writable is the case that still means anyone can rewrite it.
+  expect(vhostOwnerAccepted(0, 0o660)).toBe(true);
+  if (panelUid !== null) {
+    expect(vhostOwnerAccepted(panelUid, 0o770)).toBe(true);
+    expect(vhostOwnerAccepted(panelUid, 0o777)).toBe(false);
+    expect(vhostOwnerAccepted(panelUid + 1000, 0o644)).toBe(false);
+  }
+});
+
+test("a stock catch-all panel vhost yields an empty identity, not an install failure", () => {
+  const script = `
+    import { panelIdentityFromVhost } from "./cli/provision.ts";
+    import { parsePanelIdentity, validateDomain } from "./cli/action-common.ts";
+    const catchAll = panelIdentityFromVhost("server { listen 8443 ssl; server_name _; }");
+    const named = panelIdentityFromVhost("server { listen 8443 ssl; server_name panel.example.test; }");
+    const noDirective = panelIdentityFromVhost("server { listen 8443 ssl; root /var/www; }");
+    let guardedCatchAll = "accepted";
+    try {
+      validateDomain("site.example.test", "");
+    } catch (error) {
+      guardedCatchAll = String(error);
+    }
+    console.log(JSON.stringify({
+      catchAll,
+      named,
+      noDirective,
+      roundTrip: parsePanelIdentity("PRIMARY=\\nALIASES=\\n"),
+      rejectsGarbage: parsePanelIdentity("PRIMARY=not a host\\nALIASES=\\n"),
+    }));
+  `;
+  const result = JSON.parse(execFileSync(process.execPath, ["-e", script], { cwd: join(import.meta.dir, ".."), encoding: "utf8" }));
+  expect(result.catchAll).toEqual({ primary: "", aliases: [] });
+  expect(result.named).toEqual({ primary: "panel.example.test", aliases: [] });
+  // A vhost with no server_name at all is not the file we think it is.
+  expect(result.noDirective).toBeNull();
+  expect(result.roundTrip).toEqual({ primary: "", aliases: [] });
+  expect(result.rejectsGarbage).toBeNull();
+});
+
+test("the root auth helper is reached by socket activation, not sudo", () => {
+  const { socket, service } = authUnits();
+  expect(socket).toContain("ListenStream=/run/clp-addons/auth.sock");
+  expect(socket).toContain("SocketUser=root");
+  expect(socket).toContain("SocketGroup=clp-addons");
+  expect(socket).toContain("SocketMode=0660");
+  // Accept=no keeps the helper daemon resident to answer in ~1ms without
+  // process startup latency.
+  expect(socket).toContain("Accept=no");
+
+  expect(service).toContain("ExecStart=/usr/local/bin/clp-addons action auth");
+  expect(service).toContain("Requires=clp-addons-auth.socket");
+  expect(service).toContain("After=clp-addons-auth.socket");
+  expect(service).toContain("Restart=always");
+  expect(service).toContain("RestartSec=1");
+  // The reply must never carry helper diagnostics back to the caller.
+  expect(service).toContain("StandardError=journal");
+  expect(service).not.toContain("User=clp-addons");
+
+  // The manager must not reach the helper through sudo: its own unit implies
+  // NoNewPrivileges, under which sudo cannot escalate.
+  const client = readFileSync(join(import.meta.dir, "..", "lib/sso-auth.ts"), "utf8");
+  const gatewayClient = readFileSync(join(import.meta.dir, "..", "lib/gateway-client.ts"), "utf8");
+  expect(client).not.toMatch(/Bun\.spawn|"\/usr\/bin\/sudo"/);
+  expect(client).toContain("callGatewayAuth");
+  expect(gatewayClient).toContain("Bun.connect");
+});
+
+test("directory provisioning applies ownership natively and resolves each account once", () => {
+  // It used to spawn a chown and a chmod per path: fourteen processes for six
+  // shared directories and two addons. The ownership applied has to be exactly
+  // what those spawns applied, so the modes are asserted as numbers and the
+  // accounts as the ones the unit files name.
+  const result = execFileSync(process.execPath, [
+    "-e",
+    `import { SERVICE_USER, SERVICE_GROUP, SHARED_GROUP } from "./cli/paths.ts";
+     import { ADDONS } from "./cli/addon-catalog.ts";
+     import { ensureDirs } from "./cli/provision.ts";
+     const spawned = [];
+     const chowned = [];
+     const chmodded = [];
+     const ids = { ["-u" + SERVICE_USER]: 900, ["-g" + SERVICE_GROUP]: 901, ["-g" + SHARED_GROUP]: 901 };
+     const commands = {
+       run: (cmd, args) => { spawned.push([cmd, ...args].join(" ")); return String(ids[args[0] + args[1]] ?? 0); },
+       tryRun: () => ({ ok: true, out: "" }),
+     };
+     const fs = {
+       mkdir: () => {},
+       exists: () => false,
+       chmod: (path, mode) => chmodded.push([path, mode]),
+       chown: (path, uid, gid) => chowned.push([path, uid, gid]),
+     };
+     ensureDirs([ADDONS.maintenance, ADDONS.stager], false, commands, fs);
+     console.log(JSON.stringify({ spawned, chowned, chmodded }));`,
+  ], { cwd: REPO, encoding: "utf8" });
+  const { spawned, chowned, chmodded } = JSON.parse(result) as {
+    spawned: string[];
+    chowned: [string, number, number][];
+    chmodded: [string, number][];
+  };
+
+  expect(spawned.every((command) => command.startsWith("id "))).toBe(true);
+  // clp-addons is both the service user and the service group, and the shared
+  // group is the same name again: three resolutions, two lookups.
+  expect(new Set(spawned).size).toBe(spawned.length);
+  expect(spawned.length).toBeLessThanOrEqual(3);
+
+  const modeOf = (path: string) => chmodded.find(([target]) => target === path)?.[1];
+  expect(modeOf("/var/lib/clp-addons")).toBe(0o751);
+  expect(modeOf("/var/lib/clp-addons/maintenance")).toBe(0o711);
+  expect(modeOf("/var/lib/clp-addons/stager")).toBe(0o750);
+  expect(modeOf("/run/clp-addons")).toBe(0o755);
+
+  const ownerOf = (path: string) => chowned.find(([target]) => target === path)?.slice(1);
+  expect(ownerOf("/usr/local/libexec/clp-addons")).toEqual([0, 0]);
+  expect(ownerOf("/var/lib/clp-addons")).toEqual([0, 901]);
+  expect(ownerOf("/run/clp-addons")).toEqual([900, 901]);
+});
+
+test("directory provisioning stops rather than guessing when an account has no id", () => {
+  const result = execFileSync(process.execPath, [
+    "-e",
+    `import { ensureDirs } from "./cli/provision.ts";
+     const commands = { run: () => "no such user", tryRun: () => ({ ok: true, out: "" }) };
+     const fs = { mkdir: () => {}, exists: () => false, chmod: () => {}, chown: () => {} };
+     try { ensureDirs([], false, commands, fs); console.log("no-error"); }
+     catch (error) { console.log(error.message); }`,
+  ], { cwd: REPO, encoding: "utf8" });
+  expect(result.trim()).toContain("could not resolve");
+});
+
+test("a failed ownership change is not swallowed", () => {
+  // The directories carry the project's access rules; a chown that silently
+  // did nothing would leave a state directory readable by the wrong accounts.
+  const result = execFileSync(process.execPath, [
+    "-e",
+    `import { ensureDirs } from "./cli/provision.ts";
+     const commands = { run: () => "0", tryRun: () => ({ ok: true, out: "" }) };
+     const fs = {
+       mkdir: () => {}, exists: () => false, chmod: () => {},
+       chown: () => { throw new Error("EPERM"); },
+     };
+     try { ensureDirs([], false, commands, fs); console.log("no-error"); }
+     catch (error) { console.log(error.message); }`,
+  ], { cwd: REPO, encoding: "utf8" });
+  expect(result.trim()).toBe("EPERM");
+});

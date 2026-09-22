@@ -9,15 +9,13 @@
     "preview:shot": "bun tools/ui-shot.ts",
     "deploy:stg": "bun tools/deploy-stg.ts",
     "typecheck": "tsc --noEmit --project tsconfig.tools.json",
-    "typecheck:tools": "tsc --noEmit --project tsconfig.tools.json",
     "build": "bun build --compile --target=bun-linux-x64 --bytecode --minify --format=esm --outfile dist/clp-addons-linux-x64 cli/index.ts",
     "lint:install": "shellcheck -S warning install.sh",
-    "test": "bun test --max-concurrency=1 && bun run test:supplemental",
-    "test:supplemental": "bun tools/test-panel-snapshot.ts && bun tools/test-phase1.ts && bun tools/test-builtins.ts && bun tools/test-stager-spawn.ts",
-    "test:app": "bun test ./tools/test-app.test.ts",
-    "test:delete": "bun test ./tools/test-delete.test.ts",
-    "test:inject": "bun test ./tools/test-inject.test.ts",
-    "test:installer": "bun tools/integration-installer-picker.ts"
+    "test": "bun test --isolate --max-concurrency=1",
+    "test:app": "bun test ./tests/test-app.test.ts",
+    "test:delete": "bun test ./tests/test-delete.test.ts",
+    "test:inject": "bun test ./tests/test-inject.test.ts",
+    "test:installer": "bun tests/integration/integration-installer-picker.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
