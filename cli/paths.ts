@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 
-export { PANEL_IDENTITY_PATH } from "./action-constants";
+// Read by cli/action-common.ts, which cannot own it: that module opens FFI at
+// import time, and every consumer of this leaf would then pay for it.
+export const PANEL_IDENTITY_PATH = "/etc/clp-addons/panel-identity.conf";
 
 export { mountPath } from "../lib/mount";
 

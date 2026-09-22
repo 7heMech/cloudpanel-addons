@@ -16,7 +16,6 @@ import { findMasterVhost, panelVhostWatchPath } from "./inject";
 import { panelUserUid } from "../lib/sso-auth";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
 
-export { PANEL_IDENTITY_PATH } from "./paths";
 
 const LEGACY_MANAGER_AUTH = `${CONFIG_DIR}/manager-auth`;
 const LEGACY_PLATFORM_CONFIG = `${CONFIG_DIR}/platform.conf`;

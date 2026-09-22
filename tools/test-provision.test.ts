@@ -318,10 +318,8 @@ function provisionProbe(): {
 } {
   const script = `
     import { ADDONS } from "./cli/addon-catalog.ts";
-    import {
-      PANEL_IDENTITY_PATH,
-      panelIdentityFromVhost,
-    } from "./cli/provision.ts";
+    import { PANEL_IDENTITY_PATH } from "./cli/paths.ts";
+    import { panelIdentityFromVhost } from "./cli/provision.ts";
     console.log(JSON.stringify({
       identityPath: PANEL_IDENTITY_PATH,
       identity: panelIdentityFromVhost(

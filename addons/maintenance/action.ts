@@ -5,9 +5,10 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, PANEL_IDENTITY_PATH, withFileLock,
+  ActionFailure, emitActionError, emitActionOk, failAction, withFileLock,
   validateDomain,
 } from "../../cli/action-common";
+import { PANEL_IDENTITY_PATH } from "../../cli/paths";
 import { writeAtomic } from "../../cli/util";
 import DEFAULT_TEMPLATE from "./default.html" with { type: "text" };
 
