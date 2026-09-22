@@ -240,6 +240,14 @@ export function siteUserFor(domain: string): string {
   return `addon-${domainStem(domain)}-${domainHash(domain)}`;
 }
 
+// The panel resolves the registrable domain with the public suffix list, so a
+// name ending in one of these before a two-letter country code is part of the
+// suffix and never the registrable label: example.co.uk is example, not co.
+const SECOND_LEVEL_SUFFIXES = new Set([
+  "ac", "ad", "co", "com", "ed", "edu", "go", "gov", "gr", "id", "in", "lg", "ltd",
+  "me", "mil", "ne", "net", "nhs", "nom", "or", "org", "plc", "sch", "web",
+]);
+
 /**
  * The site user CloudPanel's own New Site page would suggest: the registrable
  * label, then any subdomain labels in the order they appear, hyphen-joined.
@@ -259,11 +267,15 @@ export function panelSiteUserFor(domain: string): string {
   const labels = domain.toLowerCase().replace(/\.+$/, "").split(".")
     .map((label) => label.replace(/[^a-z0-9]/g, ""))
     .filter((label) => label.length > 0);
+  const suffix = labels.length > 2 && labels[labels.length - 1]!.length === 2
+    && SECOND_LEVEL_SUFFIXES.has(labels[labels.length - 2]!) ? 2 : 1;
   // Anything with a TLD keeps every label except it; a bare hostname is itself.
-  const named = labels.length > 1 ? labels.slice(0, -1) : labels;
+  const named = labels.length > suffix ? labels.slice(0, -suffix) : labels;
   const registrable = named[named.length - 1] ?? "";
-  const name = [registrable, ...named.slice(0, -1)].join("-");
-  return clampSiteUser(name);
+  // The panel treats a bare www as noise rather than as a subdomain worth naming.
+  const subdomains = named.slice(0, -1);
+  const parts = subdomains.length === 1 && subdomains[0] === "www" ? [] : subdomains;
+  return clampSiteUser([registrable, ...parts].join("-"));
 }
 
 /** A Linux account name: starts with a letter, at most 32 characters. */

@@ -78,6 +78,22 @@ describe("the panel-style site user", () => {
     expect(panelSiteUserFor("bdn.wpsite.example.test")).toBe("example-bdn-wpsite");
   });
 
+  // The panel reads the registrable domain off the public suffix list, so the
+  // label before a country code can belong to the suffix rather than the site.
+  test("a multi-part public suffix is not mistaken for the registrable label", () => {
+    expect(panelSiteUserFor("example.co.uk")).toBe("example");
+    expect(panelSiteUserFor("shop.example.com.au")).toBe("example-shop");
+    expect(panelSiteUserFor("example.co")).toBe("example");
+    expect(panelSiteUserFor("co.example.com")).toBe("example-co");
+  });
+
+  // The panel's own suggestion skips a bare www.
+  test("a bare www is not named", () => {
+    expect(panelSiteUserFor("www.example.com")).toBe("example");
+    expect(panelSiteUserFor("www.example.co.uk")).toBe("example");
+    expect(panelSiteUserFor("www.demo.example.com")).toBe("example-www-demo");
+  });
+
   test("case and punctuation are normalised away", () => {
     expect(panelSiteUserFor("UPPER.Example.COM")).toBe("example-upper");
     expect(panelSiteUserFor("example.com.")).toBe("example");

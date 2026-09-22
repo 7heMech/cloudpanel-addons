@@ -13,9 +13,11 @@ to the requested local port. The panel hostname itself is always rejected.
 A site the addon creates gets the site user CloudPanel's own New Site page
 would have suggested: the registrable label, then any subdomain labels in the
 order they are written, so `the.staging.example.com` becomes
-`example-the-staging`. An operator reads these in the panel's site list beside
-sites the panel named itself, and a name built from a hash announced which tool
-made the site rather than which site it is. CloudPanel allows one site per site
+`example-the-staging`. The panel reads the registrable label off the public
+suffix list and ignores a bare `www`, so `www.example.co.uk` is `example`. An
+operator reads these in the panel's site list beside sites the panel named
+itself, and a name built from a hash announced which tool made the site rather
+than which site it is. CloudPanel allows one site per site
 user, so where two domains want the same name -- they differ only in their TLD
 -- the next free `-2`, `-3` is taken instead.
 
