@@ -70,7 +70,7 @@ const COPY: TweakCopy[] = [
     key: "panelMobile",
     category: "Dashboard",
     title: "CloudPanel mobile layout",
-    description: "Fits CloudPanel's header and Dashboard charts to phone screens.",
+    description: "Fits CloudPanel's header, Dashboard charts and new-site pages to phone screens.",
   },
   {
     key: "deviceTheme",
