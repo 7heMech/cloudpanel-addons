@@ -35,7 +35,7 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const INSTALL_SH = join(import.meta.dir, "..", "install.sh");
+const INSTALL_SH = join(import.meta.dir, "..", "..", "install.sh");
 const TMP_SCRIPT = join(Bun.env.TMPDIR ?? "/tmp", "clp-addons-picker-harness.sh");
 
 /**
