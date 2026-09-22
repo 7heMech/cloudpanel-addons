@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import {
   ActionCommandFailure, ActionFailure, commandFailure, emitActionError, emitActionOk,
   failAction, forwardCommandOutput as defaultForwardCommandOutput, normalizeIdentityHostname,
-  readable, runCommand, siteUserFor, validateDomain, validateFlag, validatePort, validateTag,
+  availableSiteUser, readable, runCommand, validateDomain, validateFlag, validatePort, validateTag,
   withFileLock,
 } from "../../cli/action-common";
 import { PANEL_IDENTITY_PATH } from "../../cli/paths";
@@ -950,8 +950,7 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
       diagnostic(`[instatic] CloudPanel site ${domain} already exists as the right reverse proxy; adopting it\n`);
     } else {
       diagnostic(`[instatic] creating CloudPanel reverse-proxy site for ${domain}\n`);
-      const siteUser = siteUserFor(domain);
-      if (siteUserTaken(siteUser)) failAction(`the site user ${siteUser} already exists; a site for ${domain} may be half-created`);
+      const siteUser = availableSiteUser(domain, siteUserTaken);
       const password = generatedPassword();
       const result = runCommand(paths.clpctl, [
         "site:add:reverse-proxy",
@@ -1514,8 +1513,7 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
       diagnostic(`[instatic] CloudPanel site ${domain} already exists as the right reverse proxy; adopting it\n`);
     } else {
       setStep(jDir, `creating CloudPanel reverse-proxy site for ${domain}`);
-      const siteUser = siteUserFor(domain);
-      if (siteUserTaken(siteUser)) failAction(`the site user ${siteUser} already exists; a site for ${domain} may be half-created`);
+      const siteUser = availableSiteUser(domain, siteUserTaken);
       const password = generatedPassword();
       const result = runCommand(paths.clpctl, [
         "site:add:reverse-proxy",
