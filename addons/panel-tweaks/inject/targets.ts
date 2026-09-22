@@ -189,6 +189,37 @@ body .header .navbar-right > ul > li.user-avatar > a.dropdown-toggle::after { bo
 `;
 
 /**
+ * CloudPanel's new-site pages on a screen narrower than the desktop they were
+ * drawn on.
+ *
+ * The chooser and every new-site form live in a fixed 800px container, so on a
+ * phone the page scrolls sideways. The chooser lays its site types out as
+ * fixed 340px cards two to a row, and the forms put their fields in `col-6`
+ * halves that Bootstrap never stacks on its own. Below 760px the container
+ * becomes the viewport and the cards become one centred column; below 576px --
+ * Bootstrap's own point for stacking columns -- each half takes the whole row,
+ * with the row's own spacing between the stacked halves. These rules carry a
+ * `body` in front for the same reason the header's do.
+ */
+const NEW_SITE_STYLE = `
+@media (max-width: 760px) {
+  body .new-site-container-fix { width: auto; max-width: 800px; }
+  body .new-site-container .page-header .page-title h1 { font-size: 24px; }
+  body .site-type-container { justify-content: center; }
+  body .site-type-container .application,
+  body .site-type-container .application:nth-child(2n),
+  body .site-type-container .application:nth-child(4n) { width: 100%; max-width: 420px; height: auto;
+    margin: 0 0 20px; }
+  body .site-type-container .application-image img { max-width: 100%; height: auto; }
+  body .new-site-container .deploy-application-container .btn { white-space: normal; }
+}
+@media (max-width: 576px) {
+  body .new-site-container .card-form .row > .col-6 { width: 100%; }
+  body .new-site-container .card-form .row > .col-6 + .col-6 { margin-top: 20px; }
+}
+`;
+
+/**
  * The switches as they stood when the templates were last rendered.
  *
  * Root work, and the only place the stored tweaks can be read from. An empty
@@ -262,9 +293,9 @@ export function deviceThemeSnippet(on: boolean): string {
   return on ? DEVICE_THEME_SCRIPT : "";
 }
 
-/** The narrow-screen header rules, or nothing at all. */
+/** The narrow-screen header and new-site rules, or nothing at all. */
 export function panelMobileSnippet(on: boolean): string {
-  return on ? `<style>${PANEL_HEADER_STYLE}</style>` : "";
+  return on ? `<style>${PANEL_HEADER_STYLE}${NEW_SITE_STYLE}</style>` : "";
 }
 
 export const SITES_TEMPLATE = "Frontend/Site/index.html.twig";

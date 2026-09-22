@@ -322,6 +322,20 @@ test("the narrow-screen table, the row menu and the header are each in or out of
   expect(panelMobileSnippet(true)).toContain("@media (max-width: 760px)");
 });
 
+// The new-site pages are a fixed 800px of two-column cards and unstacking
+// halves, so the mobile layout fits those too: one centred column of cards,
+// and whole-row fields below Bootstrap's own stacking point.
+test("the mobile layout fits the new-site chooser and its forms to a phone", () => {
+  const snippet = panelMobileSnippet(true);
+  expect(snippet).toContain("body .new-site-container-fix { width: auto; max-width: 800px; }");
+  expect(snippet).toContain("body .site-type-container .application,");
+  expect(snippet).toContain("width: 100%; max-width: 420px; height: auto;");
+  expect(snippet).toContain("@media (max-width: 576px)");
+  expect(snippet).toContain("body .new-site-container .card-form .row > .col-6 { width: 100%; }");
+  expect(snippet).toContain("body .new-site-container .card-form .row > .col-6 + .col-6 { margin-top: 20px; }");
+  for (const sequence of ["{{", "{%", "{#"]) expect(snippet).not.toContain(sequence);
+});
+
 test("a panel build without the runtime or certificate tables still lists its sites", async () => {
   seedOlderPanel();
   const state = await act<PanelTweaksState>(["state"]);

@@ -101,7 +101,10 @@ are drawn for a desktop and only crowd a phone, and an operator moving between
 CloudPanel's pages and an addon's should not see the header change height. The
 same switch fixes the Dashboard, whose charts are drawn at a fixed 545px and
 whose information boxes at a fixed 240px -- both wider than the phone they are
-on.
+on -- and the new-site pages, whose chooser and forms live in a fixed 800px
+container of two-column cards and unstacking halves. Below 760px the container
+becomes the viewport and the cards become one centred column; below 576px,
+Bootstrap's own stacking point, each form half takes the whole row.
 
 ## Nothing moves once it is on the screen
 
