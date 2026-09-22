@@ -111,12 +111,21 @@ async function confirmUpdate() {
   if (!/^\d+\.\d+\.\d+$/.test(tag)) { alert('Enter an exact version, for example 0.0.18'); return; }
   document.getElementById('update-dialog').close();
   busy(true);
-  const res = await fetch(CLP_BASE + '/api/instances/' + encodeURIComponent(pendingUpdate) + '/update', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-CLP-Addons-CSRF': csrf() },
-    body: JSON.stringify({ tag: tag })
-  });
+  let res = null;
   let body = null;
+  try {
+    res = await fetch(CLP_BASE + '/api/instances/' + encodeURIComponent(pendingUpdate) + '/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-CLP-Addons-CSRF': csrf() },
+      body: JSON.stringify({ tag: tag })
+    });
+  } catch (error) {
+    // The dialog is already closed, so a request that never reached the server
+    // would otherwise leave the page disabled with nothing said.
+    busy(false);
+    notify(error.message || 'the update request did not reach the server', 'error');
+    return;
+  }
   try { body = await res.json(); } catch (e) {}
   if (res.ok && body && body.ok !== false) { location.reload(); return; }
 

@@ -181,10 +181,13 @@ function paintStatus(domain, siteEnabled) {
   const notice = CLP_ROOT.getElementById('global-notice');
   if (notice) notice.hidden = !(globalActive && !siteEnabled);
 
-  const available = Array.from(CLP_ROOT.querySelectorAll('input[data-toggle-domain][data-available="true"]'));
+  const rows = Array.from(CLP_ROOT.querySelectorAll('input[data-toggle-domain]'));
+  const available = rows.filter(function (i) { return i.dataset.available === 'true'; });
   if (available.length > 0) {
     const siteEnabledCount = available.filter(function (i) { return i.checked; }).length;
-    const maintenanceCount = globalActive ? available.length : siteEnabledCount;
+    // Every row, as syncGlobalUI counts them: the override covers a site whose
+    // saved setting could not be read just as it covers the rest.
+    const maintenanceCount = globalActive ? rows.length : siteEnabledCount;
     const liveCount = globalActive ? 0 : available.length - siteEnabledCount;
     updateStats(maintenanceCount, liveCount);
   }

@@ -574,7 +574,13 @@
         if (!menu.hidden && !holder.contains(event.target)) close();
       });
       document.addEventListener("keydown", function (event) {
-        if (event.key === "Escape" || event.key === "Esc") close();
+        if (event.key !== "Escape" && event.key !== "Esc") return;
+        if (menu.hidden) return;
+        // Taken back only from inside the menu, so Escape pressed elsewhere on
+        // the page does not pull focus to this button.
+        var inside = holder.contains(document.activeElement);
+        close();
+        if (inside) button.focus();
       });
 
       // A window dragged across the breakpoint is a different screen with a
@@ -686,7 +692,13 @@
         if (open && !open.list.contains(event.target)) close();
       });
       document.addEventListener("keydown", function (event) {
-        if (event.key === "Escape" || event.key === "Esc") close();
+        if (event.key !== "Escape" && event.key !== "Esc") return;
+        if (!open) return;
+        // Opening put focus on the first item in the menu, so closing has to
+        // hand it back rather than leave it on what is now hidden.
+        var opener = open.button;
+        close();
+        opener.focus();
       });
       document.addEventListener("focusin", function (event) {
         if (open && open.button !== event.target && !open.list.contains(event.target)) close();
@@ -811,6 +823,7 @@
           for (var h = 0; h < headCells.length; h++) {
             headCells[h].classList.remove("clp-tweaks-asc");
             headCells[h].classList.remove("clp-tweaks-desc");
+            headCells[h].removeAttribute("aria-sort");
           }
           th.classList.add(direction === "asc" ? "clp-tweaks-asc" : "clp-tweaks-desc");
           th.setAttribute("aria-sort", direction === "asc" ? "ascending" : "descending");
