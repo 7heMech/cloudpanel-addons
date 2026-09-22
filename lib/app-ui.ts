@@ -79,7 +79,7 @@ export { THEME_INIT_JS };
  * back on a mutation, and disable the page while one is in flight.
  *
  * Concatenated into the addon's own script, so a syntax error here takes down
- * every button on the page; tools/test-app.ts parses the pair together.
+ * every button on the page; tests/test-app.test.ts parses the pair together.
  */
 import BASE_CLIENT_JS from "./assets/app-ui.client.js" with { type: "text" };
 export { BASE_CLIENT_JS };

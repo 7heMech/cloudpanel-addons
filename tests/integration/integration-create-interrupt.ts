@@ -22,7 +22,7 @@
 // `integration-` prefix keeps this out of that discovery on purpose.
 //
 // Usage:
-//   bun tools/integration-create-interrupt.ts [test-domain]
+//   bun tests/integration/integration-create-interrupt.ts [test-domain]
 //
 // Note on the name: nothing here sends a signal to the create action. The
 // action process is left running; what gets killed is the Docker container

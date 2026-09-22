@@ -30,7 +30,7 @@
 // what `Bun.spawn` needs to pipe.
 //
 // Usage:
-//   bun tools/integration-installer-picker.ts
+//   bun tests/integration/integration-installer-picker.ts
 
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

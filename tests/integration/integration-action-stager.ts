@@ -8,11 +8,11 @@
  * root/executable preflight checks below.
  *
  * Invocation:
- *   bun tools/integration-action-stager.ts [path-to-clp-addons-binary]
+ *   bun tests/integration/integration-action-stager.ts [path-to-clp-addons-binary]
  *
  * (defaults to /usr/local/bin/clp-addons if no path is given)
  *
- * This is the integration sibling of tools/test-action-stager.test.ts, which
+ * This is the integration sibling of tests/test-action-stager.test.ts, which
  * imports addons/stager/action.ts and drives runStagerAction() directly, in
  * process, against a scratch panel database -- no root, no Docker, no
  * binary. This file instead spawns the real installed binary as a real

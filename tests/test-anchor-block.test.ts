@@ -24,7 +24,7 @@ import { join } from "node:path";
 
 const REPO = join(import.meta.dir, "..");
 
-// Keep the module mocks inside a child process, matching tools/test-repair.test.ts:
+// Keep the module mocks inside a child process, matching tests/test-repair.test.ts:
 // Bun's mock.module overrides stick around for the whole test process, and a
 // top-level mock here would otherwise leak into other test files.
 function probeFor(state: "anchor-not-found-in-markup" | "template-absent"): string {

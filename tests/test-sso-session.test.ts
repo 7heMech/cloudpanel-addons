@@ -3,7 +3,7 @@
 // assertion here is about a scanner that must fail closed: a session it cannot
 // prove is a completed, MFA-satisfied login is not a session.
 //
-// The fixtures under tools/fixtures/session are real panel sessions with the
+// The fixtures under tests/fixtures/session are real panel sessions with the
 // identifying fields replaced; the mutations below are the ways a forged one
 // could try to look authenticated.
 import { describe, expect, test } from "bun:test";
@@ -25,7 +25,7 @@ function repoSource(path: string): string {
 /** A fixture with its comments and line wrapping stripped back to one blob. */
 function fixture(name: string): Buffer {
   return Buffer.from(
-    readFileSync(join(repo, "tools/fixtures/session", `${name}.txt`), "utf8")
+    readFileSync(join(repo, "tests/fixtures/session", `${name}.txt`), "utf8")
       .split(/\r?\n/)
       .filter((line) => line.length > 0 && !line.startsWith("#"))
       .join(""),

@@ -10,12 +10,12 @@
 //
 // It is a manual, host-side smoke test. `bun test` only collects
 // `*.test.ts` / `*.spec.*` / `*_test.*`, so the `integration-` prefix keeps
-// this out of that discovery on purpose -- see tools/test-action-instatic.test.ts
+// this out of that discovery on purpose -- see tests/test-action-instatic.test.ts
 // for the in-process unit test that exercises addons/instatic/action.ts
 // directly and needs none of the above.
 //
 // Usage:
-//   bun tools/integration-action-instatic.ts [path-to-clp-addons-binary]
+//   bun tests/integration/integration-action-instatic.ts [path-to-clp-addons-binary]
 //
 // Two things are checked, and the second is the one that has actually broken:
 //

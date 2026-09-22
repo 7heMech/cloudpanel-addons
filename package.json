@@ -13,10 +13,10 @@
     "build": "bun build --compile --target=bun-linux-x64 --bytecode --minify --format=esm --outfile dist/clp-addons-linux-x64 cli/index.ts",
     "lint:install": "shellcheck -S warning install.sh",
     "test": "bun test --isolate --max-concurrency=1",
-    "test:app": "bun test ./tools/test-app.test.ts",
-    "test:delete": "bun test ./tools/test-delete.test.ts",
-    "test:inject": "bun test ./tools/test-inject.test.ts",
-    "test:installer": "bun tools/integration-installer-picker.ts"
+    "test:app": "bun test ./tests/test-app.test.ts",
+    "test:delete": "bun test ./tests/test-delete.test.ts",
+    "test:inject": "bun test ./tests/test-inject.test.ts",
+    "test:installer": "bun tests/integration/integration-installer-picker.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
