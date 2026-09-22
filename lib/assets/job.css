@@ -1,0 +1,16 @@
+
+.kv { display: grid; grid-template-columns: minmax(110px, 180px) minmax(0, 1fr); gap: 12px 25px; align-items: baseline; margin: 0; }
+.kv dt { color: var(--muted); font-size: 14px; }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.state-queued { color: var(--muted); border-color: var(--border); }
+.state-running { color: var(--accent); border-color: var(--accent); }
+.state-done { color: var(--ok); border-color: var(--ok); }
+.state-failed { color: var(--bad); border-color: var(--bad); }
+.step { color: var(--muted); font-size: 14px; }
+.job-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.job-summary .job-domain { overflow-wrap: anywhere; min-width: 0; }
+.job-summary #job-state { margin-left: auto; }
+.job-timing { margin-top: 25px; }
+@media (max-width: 760px) {
+  .kv { grid-template-columns: minmax(80px, 100px) minmax(0, 1fr); gap: 12px; }
+}

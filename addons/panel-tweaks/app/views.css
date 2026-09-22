@@ -1,0 +1,66 @@
+
+.tweak-row { padding: 22px 0; border-top: 1px solid var(--row-border); }
+.tweak-row > .tweak-body { min-width: 0; }
+.tweak-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.tweak-heading h3 { flex: 1 1 auto; min-width: 0; }
+.tweak-category + .tweak-category { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--row-border); }
+.tweak-category-title { margin: 0; color: var(--muted); font-size: 12px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase; }
+.tweak-category > .tweak-row:nth-child(2) { padding-top: 10px; border-top: 0; }
+.tweak-category > .tweak-row:last-child { padding-bottom: 0; }
+.tweak-row.is-nested { position: relative; padding-top: 0; padding-left: 36px; border-top: 0; }
+/* The branch starts beneath the parent and ends beside the child heading. */
+.tweak-row.is-nested::before { content: ""; position: absolute; top: -16px; left: 8px; width: 18px; height: 28px;
+  border-left: 2px solid var(--border); border-bottom: 2px solid var(--border); border-bottom-left-radius: 5px;
+  pointer-events: none; }
+.tweak-row.is-nested h3 { font-size: 15px; font-weight: 500; }
+.tweak-row h3 { margin: 0; font-size: 16px; }
+.tweak-note { margin-top: 6px; }
+.tweak-row p { margin: 0; color: var(--muted); font-size: 14px; }
+.tweak-row .switch { flex: 0 0 auto; margin: 0; }
+.tweak-scan { display: none; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  margin-top: 12px; color: var(--muted); font-size: 13px; }
+.tweak-row.is-enabled .tweak-scan { display: flex; }
+.tweak-scan .btn { flex: 0 0 auto; min-height: 32px; padding: 4px 10px; font-size: 13px; }
+/* A phone gets the titles and the switches, with the wording a tap away. The
+   button is display: none above that, so nothing can focus a control that
+   would do nothing. */
+.tweak-more { display: none; }
+@media (max-width: 760px) {
+  .tweak-row.is-nested { padding-left: 28px; }
+  .tweak-row.is-nested::before { left: 4px; width: 14px; }
+  .tweak-row h3 { position: relative; margin: 0; padding-right: 30px; }
+  .tweak-row .tweak-note { display: none; margin-top: 8px; }
+  .tweak-row.is-open .tweak-note { display: block; }
+  .tweak-scan { flex-direction: column; align-items: flex-start; gap: 8px; }
+  /* The transparent button covers the heading, so tapping either the title or
+     its arrow opens the description. */
+  .tweak-more { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-end;
+    width: 100%; height: 100%; padding: 0 6px 0 0; border: 0; background: none; color: var(--muted);
+    font-size: 0; line-height: 1; cursor: pointer; }
+  .tweak-more::after { content: "\25BE"; font-size: 13px; transition: transform .15s; }
+  .tweak-more:hover { color: var(--text); }
+  .tweak-row.is-open .tweak-more::after { transform: rotate(180deg); }
+}
+.preview-widths { display: flex; gap: 8px; }
+.preview-widths .btn { min-height: 36px; padding: 4px 14px; font-size: 13px; }
+.preview-widths .btn.is-active { border-color: var(--primary); color: var(--primary); }
+/* The frame carries the panel's own background, so the border is what says
+   where the preview stops and this page starts. */
+.preview-frame { border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.preview-frame iframe { display: block; width: 100%; max-width: 100%; height: 320px; border: 0;
+  background: var(--panel); color-scheme: normal; }
+.preview-frame.is-phone { display: flex; justify-content: center; background: var(--row-hover, transparent); }
+.preview-frame.is-phone iframe { width: 390px; max-width: 100%; }
+@media (max-width: 760px) {
+  .preview-widths { display: none; }
+  /* Remove the card's box so the heading, description and frame all share the
+     page gutters. */
+  .preview-card { display: contents; }
+  .preview-card > .card-header { margin: 0 0 8px; padding: 0; border: 0; border-radius: 0; }
+  html.dark .preview-card > .card-header { background: transparent; }
+  .preview-card > .hint { margin-bottom: 0; }
+  .preview-frame { border: 0; border-radius: 0; }
+  .preview-frame iframe, .preview-frame.is-phone iframe { width: 100%; }
+}
+.size-cell { font-variant-numeric: tabular-nums; white-space: nowrap; }

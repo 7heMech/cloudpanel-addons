@@ -133,7 +133,7 @@ test("a dialog is usable on a phone", () => {
 // nothing and no type, test or console message says so.
 test("every confirmAction call uses the keys the shared dialog reads", () => {
   const known = ["title", "text", "details", "confirmLabel", "danger"];
-  const files = [...ADDON_NAMES.map((name) => `addons/${name}/app/views.ts`), "cli/index.ts"].filter((file) => existsSync(file));
+  const files = [...ADDON_NAMES.map((name) => `addons/${name}/app/views.client.js`), "cli/assets/manager-index.client.js"].filter((file) => existsSync(file));
   const unknown = new Set<string>();
   let calls = 0;
   for (const file of files) {
@@ -217,7 +217,7 @@ test("mobile select-all button is hidden on desktop and visible on mobile", () =
       categoryId: null, categoryName: null, drifted: false,
     }],
   });
-  expect(phpHtml).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
+  expect(phpHtml).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites(paintSelection)">Select all</button>');
   expect(phpHtml).toContain('<table class="fleet-table php-sites-table">');
   expect(phpHtml).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this, paintSelection)"');
   const phpPage = phpResourcesLayout("PHP resources", phpHtml);
@@ -249,8 +249,11 @@ test("php-resources site cards and select-all keep selection in sync", () => {
     },
   };
   const fakeDoc = { readyState: "complete", addEventListener: () => {} };
-  const factory = new Function("CLP_ROOT", "document", `${PHP_RESOURCES_CLIENT_JS}\nreturn { toggleAllSites, selectAllSites, paintSelection, selectedRows, siteRows, toggleSiteSelection };`);
-  const client = factory(CLP_ROOT, fakeDoc);
+  // showCarriedFlash comes from BASE_CLIENT_JS, which the page prepends and this
+  // test does not: the script calls it as it loads, and it has no say in what a
+  // selection does.
+  const factory = new Function("CLP_ROOT", "document", "showCarriedFlash", `${PHP_RESOURCES_CLIENT_JS}\nreturn { toggleAllSites, selectAllSites, paintSelection, selectedRows, siteRows, toggleSiteSelection };`);
+  const client = factory(CLP_ROOT, fakeDoc, () => {});
   client.paintSelection();
   expect(byId["select-all-btn"].textContent).toBe("Select all");
 
@@ -273,10 +276,10 @@ test("php-resources site cards and select-all keep selection in sync", () => {
   expect(checkboxes[0]!.checked).toBe(false);
   expect(rows[0]!.attributes["aria-selected"]).toBe("false");
 
-  client.toggleAllSites();
+  client.toggleAllSites(client.paintSelection);
   expect(checkboxes.every((c: any) => c.checked)).toBe(true);
   expect(byId["select-all-btn"].textContent).toBe("Deselect all");
-  client.toggleAllSites();
+  client.toggleAllSites(client.paintSelection);
   expect(checkboxes.every((c: any) => !c.checked)).toBe(true);
   expect(byId["select-all-btn"].textContent).toBe("Select all");
 });

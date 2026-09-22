@@ -1,0 +1,11 @@
+
+.clp-addon-site-info { display: flex; flex-wrap: wrap; row-gap: 20px; margin: 5px 0 30px; }
+.clp-addon-site-box { min-width: 200px; max-width: 100%; margin: 0 60px 0 0; }
+.clp-addon-site-box h3 { font-size: 14px; font-weight: 500; color: #aaa; margin: 0 0 5px; }
+.clp-addon-site-value { font-size: 18px; overflow-wrap: anywhere; }
+.clp-addon-site-value svg { width: 12px; height: 12px; margin-left: 2px; fill: #aaa; }
+.clp-addon-site-value a:hover svg { fill: var(--accent); }
+@media (max-width: 760px) {
+  .clp-addon-site-info { margin: 0 0 24px; }
+  .clp-addon-site-box { min-width: 0; margin-right: 30px; }
+}

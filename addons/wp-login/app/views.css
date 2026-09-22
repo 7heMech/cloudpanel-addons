@@ -1,0 +1,18 @@
+
+.remove-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+.remove-row p { margin: 0; }
+/* Where the shared fleet table becomes a card, Sign in shares a line with the
+   site user and the helper rather than taking one of its own. A grid rather
+   than the shared flex row, because with flex the line a cell lands on depends
+   on how long the domain above it is, and these cells have to keep their
+   places whatever the hostname. The domain takes both of the flexible columns;
+   the tag and the button share the third, which is as wide as the wider. */
+@media (max-width: 940px) {
+  .wp-site-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; }
+  .wp-site-table td.site-cell { grid-area: 1 / 1 / 2 / 3; }
+  /* The shared 45% cap is measured against the flex row; in its own column
+     it would cut the tag to a third of a word. */
+  .wp-site-table td.type-cell { grid-area: 1 / 3; justify-self: end; align-self: start;
+    max-width: none; margin: 2px 0 0; }
+  .wp-site-table td.action-cell { grid-area: 2 / 3; justify-self: end; }
+}

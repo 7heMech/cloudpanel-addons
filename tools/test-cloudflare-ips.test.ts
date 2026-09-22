@@ -128,7 +128,7 @@ test("the switch column ends where the table ends, as the Maintenance table does
   // sat in the middle of the row with the rest of the table empty beside them.
   expect(html).toContain('<th scope="col" class="action-cell">Cloudflare only</th>');
   expect(html).toContain('<td class="action-cell" data-label="Cloudflare only">');
-  expect(html).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
+  expect(html).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites(paintSummary)">Select all</button>');
   const page = layout("Cloudflare IP access", html);
   expect(page).toContain(".cloudflare-site-table td.action-cell::before { display: none; }");
   expect(page).toContain("margin-left: auto; display: flex; align-items: center; justify-content: flex-end;");
@@ -227,8 +227,8 @@ interface DashboardClient {
   siteRows(): unknown[];
   rowState(row: unknown): unknown;
   paintSummary(): void;
-  selectAllSites(checked: boolean): void;
-  toggleAllSites(): void;
+  selectAllSites(checked: boolean, repaint: () => void): void;
+  toggleAllSites(repaint: () => void): void;
   toggleSiteSelection(event: unknown, row: unknown, repaint: () => void): void;
 }
 
@@ -243,11 +243,15 @@ function loadDashboard(
   },
 ): DashboardClient {
   const factory = new Function(
-    "document", "call", "busy", "notify", "clearNotice", "confirmAction", "location",
+    "CLP_ROOT", "document", "plural", "call", "busy", "notify", "clearNotice", "confirmAction", "location",
     `${CLIENT_JS}\nreturn { setOne, setAllSites, runBulk, siteRows, rowState, paintSummary, selectAllSites, toggleAllSites, toggleSiteSelection };`,
   ) as (...args: unknown[]) => DashboardClient;
   return factory(
+    // BASE_CLIENT_JS supplies these; on this page, which never mounts in a
+    // shadow root, its CLP_ROOT is the document.
     dom.document,
+    dom.document,
+    (count: number, word: string) => count + " " + word + (count === 1 ? "" : "s"),
     handlers.call,
     handlers.busy ?? (() => {}),
     handlers.notify ?? (() => {}),
@@ -447,7 +451,7 @@ test("Cloudflare site rows support mouse and keyboard selection", () => {
   client.toggleSiteSelection({ type: "click", target: { closest: () => ({}) } }, dom.rows[0], client.paintSummary);
   expect(dom.rows[0]!.parts.checkbox.checked).toBe(true);
 
-  client.toggleAllSites();
+  client.toggleAllSites(client.paintSummary);
   expect(dom.rows.every((row) => row.parts.checkbox.checked)).toBe(true);
   expect(dom.byId["select-all-btn"]!.textContent).toBe("Deselect all");
 
