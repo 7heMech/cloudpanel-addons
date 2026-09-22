@@ -1,15 +1,11 @@
-// The dashboard's inline script is written inside a TypeScript template
-// literal, so TypeScript consumes one level of backslash before the browser
-// sees anything. A `\n` written for the browser arrives as a real newline, and
-// inside a single-quoted JS string that is a SyntaxError -- which takes down
-// the entire <script> element, not just the line that contains it.
+// A syntax error anywhere in a page's script takes down the whole <script>
+// element, not the line that holds it: the page still renders, the server still
+// answers, and only a browser console says anything. This shipped once, and
+// every button on the dashboard was dead for four releases.
 //
-// Nothing catches that: the page still renders, the server still answers, and
-// only a browser console shows the error. This shipped, and every button on
-// the dashboard was dead for four releases.
-//
-// The Function constructor compiles without executing, which is exactly the
-// check that was missing.
+// The Function constructor compiles without executing, which is the check that
+// was missing. The scripts are concatenated here as the browser receives them,
+// because the shared half and the addon's own half share one scope.
 
 // The .test.ts suffix keeps this suite in Bun's default discovery set.
 import { expect, test } from "bun:test";
@@ -1971,3 +1967,116 @@ console.log("\n== instatic UI indicates deleted CloudPanel sites ==");
   const emptyHtml = await emptyRes.text();
   check("empty indexPage shows no addons notice", emptyHtml.includes("No addons are currently available."));
 }
+
+// Global maintenance covers every site, including one whose saved setting could
+// not be read. syncGlobalUI counts them all; paintStatus counted only the
+// readable ones, so toggling any site under the override shrank the total.
+test("the maintenance count under a global override covers unreadable sites too", () => {
+  const stat = (label: string) => {
+    const value = { textContent: "" };
+    return { value, querySelector: (sel: string) => sel === ".label" ? { textContent: label } : value };
+  };
+  const stats = [stat("In maintenance"), stat("Live")];
+  const toggle = (available: boolean, checked: boolean) => ({
+    dataset: { available: String(available) }, checked,
+  });
+  // Three sites, one of which the manager could not read.
+  const toggles = [toggle(true, false), toggle(true, false), toggle(false, false)];
+  const CLP_ROOT = {
+    querySelector: () => ({ dataset: { globalMaintenance: "true" } }),
+    getElementById: () => null,
+    querySelectorAll: (sel: string) => {
+      if (sel === "input[data-toggle-domain]") return toggles;
+      if (sel === ".card.stats .stat") return stats;
+      return [];
+    },
+  };
+  const factory = new Function("CLP_ROOT", "CSS", "document",
+    `${MAINTENANCE_CLIENT_JS}\nreturn { paintStatus };`);
+  const client = factory(CLP_ROOT, { escape: (v: string) => v },
+    { readyState: "complete", addEventListener: () => {} });
+
+  client.paintStatus("a.test", false);
+  // Three rows under the override, not the two that could be read.
+  expect(stats[0]!.value.textContent).toBe("3");
+  expect(stats[1]!.value.textContent).toBe("0");
+});
+
+// /api/tweaks saves the switch and then writes the panel's templates. When only
+// the second half fails it answers 500 with the saved state attached, so putting
+// the switch back would show the operator the opposite of what is stored.
+test("a tweak that saved but could not be reinjected keeps its switch", () => {
+  const source = readFileSync("addons/panel-tweaks/app/views.client.js", "utf-8");
+  const rowClasses = new Set<string>();
+  const row = {
+    classList: {
+      toggle: (name: string, on: boolean) => { if (on) rowClasses.add(name); else rowClasses.delete(name); },
+      remove: (name: string) => rowClasses.delete(name),
+    },
+    querySelector: () => null,
+  };
+  const load = (thrown: Error) => {
+    const input = { checked: true, disabled: false, dataset: { tweak: "actionMenu" }, closest: () => row };
+    const factory = new Function("document", "window", "CLP_BASE", "call", "busy", "notify", "clearNotice",
+      `${source}\nreturn { setTweak };`);
+    const client = factory(
+      { getElementById: () => null, querySelectorAll: () => [] },
+      { matchMedia: () => ({ matches: false, addEventListener: () => {} }) },
+      "/addons/panel-tweaks",
+      async () => { throw thrown; },
+      () => {}, () => {}, () => {},
+    );
+    return { input, run: () => client.setTweak(input) };
+  };
+
+  const saved: Error & { data?: unknown } = new Error("nginx could not be reloaded");
+  saved.data = { reinject: true };
+  const a = load(saved);
+  return a.run().then(() => {
+    // Saved: the switch stays where the operator put it.
+    expect(a.input.checked).toBe(true);
+    expect(rowClasses.has("is-enabled")).toBe(true);
+    const b = load(new Error("that is not a tweak"));
+    return b.run().then(() => {
+      // Rejected outright: nothing was stored, so the switch goes back.
+      expect(b.input.checked).toBe(false);
+    });
+  });
+});
+
+// A route that saved a change and then failed at something after it answers
+// with the state it did reach. `call` rejects, so that state is only knowable
+// from the error, and the Panel Tweaks switch reads it to decide whether to
+// stay where the operator put it.
+test("a rejected request carries the state the route says it reached", async () => {
+  const stubDoc = {
+    cookie: "clp_addons_csrf=t",
+    documentElement: { classList: { toggle: () => {}, contains: () => false } },
+    querySelectorAll: () => [],
+    querySelector: () => null,
+    getElementById: () => null,
+    addEventListener: () => {},
+  };
+  const reply = (status: number, body: unknown) => async () => ({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  });
+  const load = (fetchStub: unknown) => new Function("document", "window", "location", "CLP_BASE", "fetch",
+    `${BASE_CLIENT_JS}\nreturn { call };`)(
+    stubDoc,
+    { addEventListener: () => {}, matchMedia: () => ({ matches: false, addEventListener: () => {} }) },
+    { pathname: "/addons/panel-tweaks/" }, "/addons/panel-tweaks", fetchStub,
+  );
+
+  const saved = load(reply(500, { ok: false, error: "nginx could not be reloaded", data: { reinject: true } }));
+  await expect(saved.call("/api/tweaks", { method: "POST" })).rejects.toThrow("nginx could not be reloaded");
+  const failure = await saved.call("/api/tweaks", { method: "POST" }).catch((e: Error & { data?: unknown }) => e);
+  expect(failure.data).toEqual({ reinject: true });
+
+  // A route that rejected the change outright has nothing to hand back, which
+  // is what tells the caller it is safe to put the control back.
+  const refused = load(reply(400, { ok: false, error: "that is not a tweak" }));
+  const plain = await refused.call("/api/tweaks", { method: "POST" }).catch((e: Error & { data?: unknown }) => e);
+  expect(plain.data).toBeUndefined();
+});

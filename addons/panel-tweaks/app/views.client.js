@@ -22,8 +22,17 @@ async function setTweak(input) {
     }
     notify('Saved.', 'ok');
   } catch (error) {
-    input.checked = !wanted;
-    busy(false);
+    // A reply carrying data saved the switch and failed to write the panel's
+    // copy of it, so putting the switch back would show the opposite of what
+    // is stored.
+    if (error.data) {
+      input.closest('.tweak-row').classList.toggle('is-enabled', wanted);
+      busy(false);
+      syncDependents(key, wanted);
+    } else {
+      input.checked = !wanted;
+      busy(false);
+    }
     notify(error.message, 'error');
   }
 }
