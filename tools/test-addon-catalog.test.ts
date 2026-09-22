@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { ADDONS, ADDON_NAMES, addonHandler, addonMaintenance, templateWatchPaths } from "../cli/addon-catalog";
 import { mountPath } from "../lib/mount";
+import { CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, SERVICE_USER, SOCKET_PATH } from "../cli/paths";
 
 const REPO = join(import.meta.dir, "..");
 
@@ -127,4 +128,15 @@ test("the manager and the auth gateway are not addons", () => {
   // Both are still dispatched before the catalog is consulted.
   expect(source).toContain('if (addon === "auth") return runAuthActionStdin(rest);');
   expect(source).toContain('if (addon === "manager") return runManagerAction(rest, MANAGER_OPS);');
+});
+
+// One binary, one socket, one service account. The layout these name is what
+// provisioning writes and what the units reference, so a change to any of them
+// is a change every addon's action inherits.
+test("the active layout has one binary and direct helpers", () => {
+  expect(CLI_BIN).toBe("/usr/local/bin/clp-addons");
+  expect(LIBEXEC_DIR).toBe("/usr/local/libexec/clp-addons");
+  expect(SOCKET_PATH).toBe("/run/clp-addons/manager.sock");
+  expect(SERVICE_USER).toBe("clp-addons");
+  expect(CLI_ARTIFACT).toBe("clp-addons-linux-x64");
 });

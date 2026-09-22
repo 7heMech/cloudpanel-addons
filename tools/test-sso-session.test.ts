@@ -6,8 +6,8 @@
 // The fixtures under tools/fixtures/session are real panel sessions with the
 // identifying fields replaced; the mutations below are the ways a forged one
 // could try to look authenticated.
-import { expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { describe, expect, test } from "bun:test";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -179,4 +179,33 @@ test("session-file provenance is checked before bounded descriptor reads", async
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// The SSO path is in-process and reads the panel's own session files; there is
+// no token exchange and no external validator to be tricked into answering.
+describe("the SSO path is in-process and fail-closed", () => {
+  test("sessions are read through a bounded no-follow descriptor", () => {
+    const source = repoSource("lib/sso-auth.ts");
+    expect(source).toInclude("O_NOFOLLOW");
+    expect(source).toInclude("fstatSync(fd)");
+    expect(source).toInclude("readSync(fd");
+  });
+
+  test("the root auth action uses the fixed session directory", () => {
+    const source = repoSource("cli/auth-action.ts");
+    expect(source).toInclude("SESSION_DIR");
+    expect(source).toInclude("sess_");
+  });
+
+  test("CloudPanel's own cookie name and session directory are used", () => {
+    expect(repoSource("lib/sso-auth.ts")).toInclude('SESSION_COOKIE = "cloudpanel"');
+    expect(repoSource("cli/paths.ts")).toInclude("/home/clp/htdocs/app/files/var/sessions");
+  });
+
+  test("there is no HMAC token exchange and no external session validator", () => {
+    const source = repoSource("lib/sso-auth.ts");
+    expect(source).not.toInclude("issueToken");
+    expect(source).not.toInclude("verifyToken");
+    expect(existsSync(join(repo, "libexec/clp-verify-session"))).toBe(false);
+  });
 });

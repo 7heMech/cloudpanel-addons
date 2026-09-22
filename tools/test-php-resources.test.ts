@@ -10,7 +10,7 @@ import {
   type PhpResourcesState, type PoolProfile, type PoolSiteState, type ReconcileResult,
 } from "../addons/php-resources/action";
 import type { CommandResult } from "../cli/action-common";
-import { dashboardView } from "../addons/php-resources/app/views";
+import { CLIENT_JS, dashboardView, layout } from "../addons/php-resources/app/views";
 
 /** CloudPanel's PoolBuilder output, byte for byte, with no trailing newline. */
 const STOCK_POOL = `[shop.example.com]
@@ -500,4 +500,96 @@ test("only root may change a pool, and only the declared verbs exist", async () 
   } finally {
     rmSync(box.root, { recursive: true, force: true });
   }
+});
+
+test("the PHP Resources category dialog fits a phone", () => {
+  const html = layout(
+    "PHP resources",
+    dashboardView({ categories: [], defaultCategoryId: null, sites: [] }),
+  );
+  expect(html).toContain("#category-dialog { width:720px; }");
+  expect(html).toContain("@media (max-width:760px) {\n  #category-dialog { width:calc(100% - 20px); }");
+  expect(html).toContain('onmousedown="closeCategoryDialogOnBackdrop(event)"');
+  expect(html).toContain("if (!inside) dialog.close();");
+});
+
+test("php-resources site cards and select-all keep selection in sync", () => {
+  const el = (over: any = {}) => ({ textContent: "", className: "", disabled: false, checked: false, indeterminate: false, ...over });
+  const byId: Record<string, any> = {
+    "site-selection": el(), "select-all": el(), "select-all-btn": el(), "assign-selected": el({ disabled: true }),
+    "bulk-category": el({ querySelector: () => null }),
+  };
+  const checkboxes = [el(), el()];
+  const rows = checkboxes.map((checkbox, index) => {
+    const attributes: Record<string, string> = { "aria-selected": "false" };
+    return {
+      dataset: { domain: index === 0 ? "a.test" : "b.test" },
+      attributes,
+      setAttribute: (name: string, value: string) => { attributes[name] = value; },
+      querySelector: (sel: string) => sel === ".site-checkbox" ? checkbox : null,
+    };
+  });
+  const CLP_ROOT = {
+    getElementById: (id: string) => byId[id] ?? null,
+    querySelectorAll: (sel: string) => {
+      if (sel === "tr[data-domain]") return rows;
+      if (sel === ".site-checkbox") return checkboxes;
+      return [];
+    },
+  };
+  const fakeDoc = { readyState: "complete", addEventListener: () => {} };
+  // showCarriedFlash comes from BASE_CLIENT_JS, which the page prepends and this
+  // test does not: the script calls it as it loads, and it has no say in what a
+  // selection does.
+  const factory = new Function("CLP_ROOT", "document", "showCarriedFlash", `${CLIENT_JS}\nreturn { toggleAllSites, selectAllSites, paintSelection, selectedRows, siteRows, toggleSiteSelection };`);
+  const client = factory(CLP_ROOT, fakeDoc, () => {});
+  client.paintSelection();
+  expect(byId["select-all-btn"].textContent).toBe("Select all");
+
+  const cardTarget = { closest: () => null };
+  client.toggleSiteSelection({ type: "click", target: cardTarget }, rows[0], client.paintSelection);
+  expect(checkboxes[0]!.checked).toBe(true);
+  expect(rows[0]!.attributes["aria-selected"]).toBe("true");
+  expect(byId["site-selection"].textContent).toBe("1 of 2 selected");
+  client.toggleSiteSelection({ type: "click", target: { closest: () => ({}) } }, rows[0], client.paintSelection);
+  expect(checkboxes[0]!.checked).toBe(true);
+
+  let prevented = false;
+  client.toggleSiteSelection({
+    type: "keydown",
+    key: " ",
+    target: cardTarget,
+    preventDefault: () => { prevented = true; },
+  }, rows[0], client.paintSelection);
+  expect(prevented).toBe(true);
+  expect(checkboxes[0]!.checked).toBe(false);
+  expect(rows[0]!.attributes["aria-selected"]).toBe("false");
+
+  client.toggleAllSites(client.paintSelection);
+  expect(checkboxes.every((c: any) => c.checked)).toBe(true);
+  expect(byId["select-all-btn"].textContent).toBe("Deselect all");
+  client.toggleAllSites(client.paintSelection);
+  expect(checkboxes.every((c: any) => !c.checked)).toBe(true);
+  expect(byId["select-all-btn"].textContent).toBe("Select all");
+});
+
+// The shared shell hides the select-all button on desktop and shows it under
+// the phone breakpoint; this is the half that says this page actually uses it,
+// and that a row is selectable by tapping the card rather than the checkbox
+// the phone layout hides.
+test("the site table carries the mobile select-all control and selectable rows", () => {
+  const html = dashboardView({
+    categories: [],
+    defaultCategoryId: null,
+    sites: [{
+      domain: "example.com", siteUser: "user", phpVersion: "8.2",
+      poolFile: "/etc/php/8.2/fpm/pool.d/example.com.conf",
+      current: { ...STOCK_PROFILE },
+      categoryId: null, categoryName: null, drifted: false,
+    }],
+  });
+  expect(html).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites(paintSelection)">Select all</button>');
+  expect(html).toContain('<table class="fleet-table php-sites-table">');
+  expect(html).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this, paintSelection)"');
+  expect(layout("PHP resources", html)).toContain(".fleet-table.php-sites-table td.site-select { display:none; }");
 });

@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -378,5 +379,60 @@ describe("Panel session lifetime", () => {
 
   test("an unreadable php.ini falls back to PHP's own default", () => {
     expect(panelSessionLifetime(join(tmpdir(), "clp-no-such-php.ini"))).toBe(1440);
+  });
+});
+
+// Every verb of the action binary validates its arguments before it reads
+// stdin, so an oversized credential is refused with the pipe unread. The write
+// then fails with EPIPE on a stream tick outside the request promise, where
+// Bun.serve cannot turn it into a 500 -- and Node's default for an unhandled
+// 'error' event is to throw. Since v0.7.0 one process serves every addon, so a
+// 1 MiB password field took all of them down, 20 times out of 20.
+describe("one request may not kill the manager", () => {
+  const repo = join(import.meta.dir, "..");
+  const source = (path: string) => readFileSync(join(repo, path), "utf-8");
+
+  // Driven for real: a child that exits before reading, a megabyte written to
+  // it, and the question is whether the process is still there afterwards.
+  test("a megabyte on a pipe nothing reads does not kill the process", () => {
+    const driver = `
+      import { stagerService } from "${repo}/addons/stager/app/service";
+      const res = await stagerService.startClone("a.example.com", "stg.a.example.com", false,
+        { port: 39000, email: "a@example.com", password: "x".repeat(1024 * 1024) });
+      console.log("SURVIVED", res.ok);
+    `;
+    let out = "";
+    try {
+      out = execFileSync("bun", ["-e", driver], {
+        encoding: "utf-8",
+        env: { ...process.env, CLP_ADDONS_ACTION_TEST_BIN: "/bin/true" },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (err) {
+      out = String((err as { stderr?: string }).stderr ?? err);
+    }
+    expect(out, out.slice(-400)).toInclude("SURVIVED");
+  });
+
+  test("the payload is handed to Bun.spawn's stdin option, so Bun owns the write and absorbs EPIPE", () => {
+    expect(source("lib/gateway-client.ts"))
+      .toMatch(/Bun\.spawn\(\[cmd,\s*\.\.\.cmdArgs\],[\s\S]*?stdin,[\s\S]*?stdout:\s*"pipe",/m);
+  });
+
+  test("the field is bounded before the write is even attempted", () => {
+    const index = source("addons/stager/app/index.ts");
+    expect(index).toInclude("instaticPassword.length > MAX_PASSWORD");
+    expect(index).toInclude("CONTROL_CHARS.test(instaticPassword)");
+  });
+
+  // The long-lived process is the one place an unexpected throw should not be
+  // fatal: it is the only process, and Restart=always turns a request that can
+  // kill it into a request that can hold both addons in a crash loop.
+  test("the manager survives an out-of-band throw, and installs the handler once", () => {
+    const cli = source("cli/index.ts");
+    const serve = cli.slice(cli.indexOf("async function cmdServe"));
+    expect(serve).toInclude('process.on("uncaughtException"');
+    expect(serve).toInclude('process.on("unhandledRejection"');
+    expect(cli.match(/process\.on\("uncaughtException"/g) ?? []).toHaveLength(1);
   });
 });

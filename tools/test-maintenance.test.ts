@@ -10,6 +10,7 @@ import {
   type MaintenanceActionPaths, type MaintenanceStatus,
 } from "../addons/maintenance/action";
 import { handle as handleMaintenance } from "../addons/maintenance/app/index";
+import { CLIENT_JS as MAINTENANCE_CLIENT_JS } from "../addons/maintenance/app/views";
 import { maintenanceService } from "../addons/maintenance/app/service";
 import { CLIENT_JS, fleetView, layout, siteView } from "../addons/maintenance/app/views";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
@@ -355,7 +356,6 @@ test("siteView renders responsive heading layout with badge after domain title a
   expect(CLIENT_JS).not.toContain("is now in maintenance mode.");
   expect(CLIENT_JS).not.toContain("is now live.");
 });
-
 
 test("a site-scoped page keeps CloudPanel's site navigation rather than a back link", () => {
   const site = { domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] };
@@ -710,3 +710,40 @@ test("the addon serves the Ace mode the panel does not ship", async () => {
   expect(body).toContain("BEGIN LICENSE BLOCK");
   expect(body).toContain("Copyright (c) 2010, Ajax.org B.V.");
 });
+
+// Global maintenance covers every site, including one whose saved setting could
+// not be read. syncGlobalUI counts them all; paintStatus counted only the
+// readable ones, so toggling any site under the override shrank the total.
+test("the maintenance count under a global override covers unreadable sites too", () => {
+  const stat = (label: string) => {
+    const value = { textContent: "" };
+    return { value, querySelector: (sel: string) => sel === ".label" ? { textContent: label } : value };
+  };
+  const stats = [stat("In maintenance"), stat("Live")];
+  const toggle = (available: boolean, checked: boolean) => ({
+    dataset: { available: String(available) }, checked,
+  });
+  // Three sites, one of which the manager could not read.
+  const toggles = [toggle(true, false), toggle(true, false), toggle(false, false)];
+  const CLP_ROOT = {
+    querySelector: () => ({ dataset: { globalMaintenance: "true" } }),
+    getElementById: () => null,
+    querySelectorAll: (sel: string) => {
+      if (sel === "input[data-toggle-domain]") return toggles;
+      if (sel === ".card.stats .stat") return stats;
+      return [];
+    },
+  };
+  const factory = new Function("CLP_ROOT", "CSS", "document",
+    `${MAINTENANCE_CLIENT_JS}\nreturn { paintStatus };`);
+  const client = factory(CLP_ROOT, { escape: (v: string) => v },
+    { readyState: "complete", addEventListener: () => {} });
+
+  client.paintStatus("a.test", false);
+  // Three rows under the override, not the two that could be read.
+  expect(stats[0]!.value.textContent).toBe("3");
+  expect(stats[1]!.value.textContent).toBe("0");
+});
+
+// /api/tweaks saves the switch and then writes the panel's templates. When only
+// the second half fails it answers 500 with the saved state attached, so putting

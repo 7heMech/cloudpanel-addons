@@ -226,10 +226,25 @@ describe("HTML and JavaScript escaping", () => {
     expect(stager).not.toInclude("escapeMinimal");
   });
 
-  test("escJs neutralises a quote while preserving the JavaScript value", () => {
+  // escJs writes into a single-quoted JS string that itself sits inside a
+  // double-quoted HTML attribute, so a character that is inert to JavaScript
+  // can still end the attribute.
+  test("escJs may not break out of the attribute it sits in", () => {
     expect(escJs('a"b')).not.toInclude('"');
-    expect(new Function(`return '${escJs("a'b\n")}'`)()).toBe("a'b\n");
+    expect(escJs("a'b")).toBe("a\\'b");
+    expect(escJs("</script>")).not.toInclude("<");
+    expect(escJs("</script>")).not.toInclude(">");
+    expect(escJs("&amp;")).not.toInclude("&");
+    expect(escJs("a\nb")).toBe("a\\nb");
+    expect(escJs("stg.example.com")).toBe("stg.example.com");
   });
+
+  // The whole point: what comes out must still be the input to JavaScript.
+  for (const value of ['a"b', "a'b", "</script>", "&amp;", "a\nb", "\u00b5\u2014\u00fc"]) {
+    test(`${JSON.stringify(value)} still means itself to JavaScript`, () => {
+      expect(new Function(`return '${escJs(value)}'`)()).toBe(value);
+    });
+  }
 });
 
 describe("CSRF and origin guard", () => {

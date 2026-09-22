@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -739,3 +739,49 @@ test("an unknown verb, a stray argument and a non-root caller are all refused", 
   await expect(executePanelTweaksAction(["state"], { ...options(), processUid: 1000 }))
     .rejects.toThrow("must run as root");
 });
+
+// /api/tweaks saves the switch and then writes the panel's templates. When only
+// the second half fails it answers 500 with the saved state attached, so putting
+// the switch back would show the operator the opposite of what is stored.
+test("a tweak that saved but could not be reinjected keeps its switch", () => {
+  const source = readFileSync(join(import.meta.dir, "../addons/panel-tweaks/app/views.client.js"), "utf-8");
+  const rowClasses = new Set<string>();
+  const row = {
+    classList: {
+      toggle: (name: string, on: boolean) => { if (on) rowClasses.add(name); else rowClasses.delete(name); },
+      remove: (name: string) => rowClasses.delete(name),
+    },
+    querySelector: () => null,
+  };
+  const load = (thrown: Error) => {
+    const input = { checked: true, disabled: false, dataset: { tweak: "actionMenu" }, closest: () => row };
+    const factory = new Function("document", "window", "CLP_BASE", "call", "busy", "notify", "clearNotice",
+      `${source}\nreturn { setTweak };`);
+    const client = factory(
+      { getElementById: () => null, querySelectorAll: () => [] },
+      { matchMedia: () => ({ matches: false, addEventListener: () => {} }) },
+      "/addons/panel-tweaks",
+      async () => { throw thrown; },
+      () => {}, () => {}, () => {},
+    );
+    return { input, run: () => client.setTweak(input) };
+  };
+
+  const saved: Error & { data?: unknown } = new Error("nginx could not be reloaded");
+  saved.data = { reinject: true };
+  const a = load(saved);
+  return a.run().then(() => {
+    // Saved: the switch stays where the operator put it.
+    expect(a.input.checked).toBe(true);
+    expect(rowClasses.has("is-enabled")).toBe(true);
+    const b = load(new Error("that is not a tweak"));
+    return b.run().then(() => {
+      // Rejected outright: nothing was stored, so the switch goes back.
+      expect(b.input.checked).toBe(false);
+    });
+  });
+});
+
+// A route that saved a change and then failed at something after it answers
+// with the state it did reach. `call` rejects, so that state is only knowable
+// from the error, and the Panel Tweaks switch reads it to decide whether to
