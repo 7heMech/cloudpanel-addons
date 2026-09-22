@@ -258,3 +258,19 @@ describe("the TLS certificate option", () => {
     }
   });
 });
+
+// Two different things refuse a site user, and they do not hold the same set:
+// createUser fails when the account exists, and CloudPanel validates the site
+// row separately. Asking only getent would offer a name a site already holds,
+// which the panel then rejects with "siteUser: This value already exists".
+test("the site-user guard asks both the passwd database and the panel's site table", () => {
+  const source = readFileSync(join(import.meta.dir, "../addons/instatic/action.ts"), "utf-8");
+  const guard = source.slice(source.indexOf("function siteUserTaken"));
+  const body = guard.slice(0, guard.indexOf("\n}\n") + 2);
+  expect(body).toInclude('runCommand("getent", ["passwd", user])');
+  expect(body).toInclude("SELECT 1 FROM site WHERE user = ? LIMIT 1;");
+  // Both creates pick a free name rather than failing on the first guess.
+  expect(source.match(/availableSiteUser\(domain, \(user\) => siteUserTaken\(user, paths\)\)/g) ?? [])
+    .toHaveLength(2);
+  expect(source).not.toInclude("may be half-created");
+});

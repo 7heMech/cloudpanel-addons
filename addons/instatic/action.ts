@@ -473,8 +473,25 @@ function siteUserOf(domain: string, paths: InstaticActionPaths): string | null {
   }
 }
 
-function siteUserTaken(user: string): boolean {
-  return runCommand("getent", ["passwd", user]).ok;
+/**
+ * Whether a site user is spoken for, asked of both things that can refuse it.
+ *
+ * `createUser` fails if the account exists, and CloudPanel validates the site
+ * row separately -- it answers "siteUser: This value already exists" for a name
+ * another site holds. The two sets are not the same: an account can exist
+ * without a site (a system account, or one left by a half-finished delete), and
+ * a row can name an account someone removed by hand.
+ */
+function siteUserTaken(user: string, paths: InstaticActionPaths): boolean {
+  if (runCommand("getent", ["passwd", user]).ok) return true;
+  if (!readable(paths.panelDb)) return false;
+  try {
+    return queryPanel(paths, (db) =>
+      db.query("SELECT 1 FROM site WHERE user = ? LIMIT 1;").get(user)) != null;
+  } catch {
+    // Unreadable here means the create is about to fail for a better reason.
+    return false;
+  }
 }
 
 function commandCombinedOutput(command: string, args: string[]): string {
@@ -950,7 +967,7 @@ async function cmdCreate(action: ParsedInstaticAction, paths: InstaticActionPath
       diagnostic(`[instatic] CloudPanel site ${domain} already exists as the right reverse proxy; adopting it\n`);
     } else {
       diagnostic(`[instatic] creating CloudPanel reverse-proxy site for ${domain}\n`);
-      const siteUser = availableSiteUser(domain, siteUserTaken);
+      const siteUser = availableSiteUser(domain, (user) => siteUserTaken(user, paths));
       const password = generatedPassword();
       const result = runCommand(paths.clpctl, [
         "site:add:reverse-proxy",
@@ -1513,7 +1530,7 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
       diagnostic(`[instatic] CloudPanel site ${domain} already exists as the right reverse proxy; adopting it\n`);
     } else {
       setStep(jDir, `creating CloudPanel reverse-proxy site for ${domain}`);
-      const siteUser = availableSiteUser(domain, siteUserTaken);
+      const siteUser = availableSiteUser(domain, (user) => siteUserTaken(user, paths));
       const password = generatedPassword();
       const result = runCommand(paths.clpctl, [
         "site:add:reverse-proxy",
