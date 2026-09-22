@@ -1,6 +1,6 @@
 // Local UI review with fictional data. Never starts the manager, reads panel
 // state or invokes an action. Mutating requests are rejected deliberately.
-import { indexPage, updatePage } from "../cli/index";
+import { indexPage, updatePage } from "../manager/views";
 import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } from "../addons/cloudflare-ips/app/views";
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
 import { jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, newCloneView, promoteListView, promoteView, siteStagingView } from "../addons/stager/app/views";

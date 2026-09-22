@@ -99,7 +99,7 @@ test("a dialog is usable on a phone", () => {
 // nothing and no type, test or console message says so.
 test("every confirmAction call uses the keys the shared dialog reads", () => {
   const known = ["title", "text", "details", "confirmLabel", "danger"];
-  const files = [...ADDON_NAMES.map((name) => `addons/${name}/app/views.client.js`), "cli/assets/manager-index.client.js"]
+  const files = [...ADDON_NAMES.map((name) => `addons/${name}/app/views.client.js`), "manager/views.client.js"]
     .map((file) => join(repo, file)).filter((file) => existsSync(file));
   const unknown = new Set<string>();
   let calls = 0;

@@ -3,7 +3,7 @@
 // every other addon does -- through the shared dialog the shell ships, not the
 // browser's confirm() in a box this project does not style.
 import { beforeAll, describe, expect, test } from "bun:test";
-import { indexPage } from "../cli/index";
+import { indexPage } from "../manager/views";
 
 let page = "";
 let empty = "";

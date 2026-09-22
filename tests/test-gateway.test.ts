@@ -429,10 +429,13 @@ describe("one request may not kill the manager", () => {
   // fatal: it is the only process, and Restart=always turns a request that can
   // kill it into a request that can hold both addons in a crash loop.
   test("the manager survives an out-of-band throw, and installs the handler once", () => {
-    const cli = source("cli/index.ts");
-    const serve = cli.slice(cli.indexOf("async function cmdServe"));
+    const server = source("manager/server.ts");
+    const serve = server.slice(server.indexOf("export async function cmdServe"));
     expect(serve).toInclude('process.on("uncaughtException"');
     expect(serve).toInclude('process.on("unhandledRejection"');
-    expect(cli.match(/process\.on\("uncaughtException"/g) ?? []).toHaveLength(1);
+    // One handler, and only the serving process installs it: a second one in
+    // the CLI would swallow a fault in a command that should exit nonzero.
+    expect(server.match(/process\.on\("uncaughtException"/g) ?? []).toHaveLength(1);
+    expect(source("cli/index.ts")).not.toInclude('process.on("uncaughtException"');
   });
 });

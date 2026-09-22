@@ -14,9 +14,11 @@ import {
   activeManagerJob, createJob, type CreateJobOptions, latestManagerJob, parseManagerFlags, pruneManagerJobs, readManagerJob,
   runManagerJob, type ManagerOps,
 } from "../cli/manager-action";
-import { handleManagerRoute, indexPage, installedInjections, safeDecodePathSegment, updatePage } from "../cli/index";
+import { installedInjections } from "../cli/index";
+import { handleManagerRoute } from "../manager/index";
+import { indexPage, updatePage } from "../manager/views";
 import { listJobIds } from "../cli/job-store";
-import { csrfCookieHeader, newCsrfToken } from "../lib/app-http";
+import { csrfCookieHeader, newCsrfToken, safeDecodePathSegment } from "../lib/app-http";
 
 function makeJobsDir(): string {
   return mkdtempSync(join(tmpdir(), "clp-manager-jobs-"));

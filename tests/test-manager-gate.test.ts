@@ -52,7 +52,7 @@ mock.module("./lib/mount.ts", () => ({
   },
 }));
 
-const { handleRequest } = await import("./cli/index.ts");
+const { handleRequest } = await import("./manager/server.ts");
 
 const out = [];
 for (const { path, method } of ${JSON.stringify(requests)}) {
@@ -207,7 +207,7 @@ mock.module("./cli/addon-catalog.ts", () => ({
   ADDONS: { ...realCatalog.ADDONS, git: { ...realCatalog.ADDONS.git, configFile: "./package.json" } },
 }));
 
-const { handleRequest } = await import("./cli/index.ts");
+const { handleRequest } = await import("./manager/server.ts");
 
 async function describe(label, req) {
   const before = calls;
@@ -268,6 +268,6 @@ test("a wrong webhook token is answered exactly as a stranger is", async () => {
 // Bun answers a handler fault with its own error page, which would put a stack
 // trace in front of whoever tripped it.
 test("a handler fault cannot answer with Bun's error page", () => {
-  const source = readFileSync(join(repo, "cli/index.ts"), "utf8");
+  const source = readFileSync(join(repo, "manager/server.ts"), "utf8");
   expect(source.slice(source.indexOf("async function cmdServe"))).toInclude("development: false");
 });

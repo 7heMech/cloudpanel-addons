@@ -14,7 +14,8 @@ import { join } from "node:path";
 import {
   authenticateRequest, MAX_SESSION_BYTES, parsePanelSession, readPanelSessionFile,
 } from "../lib/sso-auth";
-import { adminGate } from "../cli/index";
+import { adminGate } from "../lib/sso-auth";
+
 
 const repo = join(import.meta.dir, "..");
 
