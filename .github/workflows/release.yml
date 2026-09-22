@@ -47,7 +47,7 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Full test suite
+      - name: Full unit and supplemental regression suite
         run: bun run test
 
       - name: Installer keyboard selection
