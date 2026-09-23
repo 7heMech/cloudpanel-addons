@@ -4,6 +4,7 @@ import type { EmbedFragment } from "../../../lib/shadow-embed";
 import { mountPath } from "../../../lib/mount";
 import { siteTypeLabel, type SiteContext } from "../../../lib/site-context";
 import type { MaintenanceSiteView, MaintenanceTemplateView } from "./service";
+import type { GlobalMaintenanceStatus } from "../action";
 
 const BASE = mountPath("maintenance");
 
@@ -71,8 +72,8 @@ function statusBadge(site: MaintenanceSiteView, globalEnabled = false): string {
  * bulk edit of the switches below it. It is not one: it decides what visitors
  * get while every site keeps the setting it has saved.
  */
-function globalCard(globalEnabled: boolean, disabled: boolean): string {
-  return `<div class="card global-card" data-global-maintenance="${globalEnabled}">
+function globalCard(globalEnabled: boolean, disabled: boolean, bypasses: string[]): string {
+  return `<div class="card" data-global-maintenance="${globalEnabled}"><div class="global-card">
     <div>
       <h2>Global maintenance</h2>
       <p>Serve the maintenance page for every site at once, whatever each site has saved.</p>
@@ -81,10 +82,16 @@ function globalCard(globalEnabled: boolean, disabled: boolean): string {
     <label class="switch-field" for="global-toggle"><span class="switch-state" id="global-state">${globalEnabled ? "On" : "Off"}</span>
       <span class="switch switch-danger"><input type="checkbox" id="global-toggle" ${globalEnabled ? "checked" : ""} ${disabled ? "disabled" : ""} onchange="toggleGlobalMaintenance(this.checked)"><span></span></span>
     </label>
-  </div>`;
+  </div>
+  <div class="global-bypass"><label class="bypass-field" for="global-bypass-ips"><span>Global IP bypasses</span><textarea id="global-bypass-ips" spellcheck="false">${esc(bypasses.join("\n"))}</textarea></label>
+    <div class="actions bypass-actions"><button class="btn btn-primary" type="button" onclick="saveGlobalBypasses()">Save bypasses</button></div>
+    <p class="hint">One IPv4 or IPv6 visitor address per line. These skip maintenance on every site, including sites with their own setting on. For Cloudflare sites, enter the visitor IP.</p>
+  </div></div>`;
 }
 
-export function fleetView(sites: MaintenanceSiteView[], globalEnabled = false): string {
+export function fleetView(sites: MaintenanceSiteView[], globalState: boolean | GlobalMaintenanceStatus = false): string {
+  const globalEnabled = typeof globalState === "boolean" ? globalState : globalState.global;
+  const globalBypasses = typeof globalState === "boolean" ? [] : globalState.bypasses;
   const available = sites.filter((site) => !site.error);
   const siteMaintenanceCount = available.filter((site) => site.enabled).length;
   // The override covers the fleet, including the sites this page could not read.
@@ -104,7 +111,7 @@ export function fleetView(sites: MaintenanceSiteView[], globalEnabled = false): 
     <div class="stat"><div class="label">In maintenance</div><div class="value">${inMaintenanceCount}</div></div>
     <div class="stat"><div class="label">Live</div><div class="value">${liveCount}</div></div>
   </div>
-  ${globalCard(globalEnabled, sites.length === 0)}
+  ${globalCard(globalEnabled, sites.length === 0, globalBypasses)}
   <div class="card card-table"><div class="card-header"><h2>Sites</h2></div>
   ${sites.length ? `<table class="fleet-table maintenance-fleet-table"><thead><tr><th scope="col">Site</th><th scope="col">Type</th><th scope="col">Effective status</th><th scope="col">Page</th><th scope="col">Bypasses</th><th scope="col" class="action-cell">Site setting</th></tr></thead><tbody data-global-maintenance="${globalEnabled}">${rows}</tbody></table>` : '<div class="empty">No CloudPanel sites were found.</div>'}
   </div>`;
@@ -122,7 +129,7 @@ export function siteView(
   <div class="card"><div class="switch-row"><div><h2>Maintenance response</h2><p class="hint">Visitors receive HTTP 503 with a five-minute Retry-After header. ACME certificate challenges and bypassed IPs remain live.</p></div>
     <label class="switch switch-danger"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" data-available="true" aria-label="Maintenance mode for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label>
   </div></div>
-  <div class="card"><div class="card-header"><div><h2>IP bypasses</h2><p class="hint">One IPv4 or IPv6 address per line. Requests from these addresses skip maintenance mode.</p></div></div>
+  <div class="card"><div class="card-header"><div><h2>IP bypasses</h2><p class="hint">One IPv4 or IPv6 visitor address per line. For Cloudflare sites, enter the visitor IP. Global bypasses from the overview also apply here.</p></div></div>
     <div class="bypass-grid"><label class="bypass-field" for="bypass-ips"><span>Allowed IP addresses</span><textarea id="bypass-ips" spellcheck="false">${esc(site.bypasses.join("\n"))}</textarea></label>
       <div class="actions bypass-actions">${currentIp ? `<button class="btn" type="button" onclick="addCurrentIp('${escJs(currentIp)}')">Add my IP (${esc(currentIp)})</button>` : ""}<button class="btn btn-primary" type="button" onclick="saveBypasses('${escJs(site.domain)}')">Save bypasses</button></div></div>
   </div>

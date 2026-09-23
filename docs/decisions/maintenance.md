@@ -17,7 +17,10 @@ how many have maintenance saved off. While it is on, every site serves 503 and a
 site whose own setting is off, or could not be read, shows a "Maintenance
 (Global)" badge and is counted as in maintenance; turning it off returns each
 site to its saved setting. Turning it on or off purges Varnish
-cache across the fleet.
+cache across the fleet. The card also saves up to 64 global IP bypasses. Each
+one applies to every site, including sites with their own maintenance setting
+on, and remains saved when the global override is off. Site bypasses continue
+to apply to their own site.
 
 A domain query opens the focused editor for that site. That page is drawn in the
 shell's site mode, so CloudPanel's site information and site tabs stay above it
@@ -46,10 +49,22 @@ The addon installs one marked block in `/etc/nginx/global_settings`, which all
 customer site templates include. Nginx checks
 `/var/lib/clp-addons/maintenance/_global/on` and
 `/var/lib/clp-addons/maintenance/$server_name/on` on every request and clears
-the maintenance decision when a matching `bypass_$remote_addr` file exists.
+the maintenance decision when a matching `bypass_$clp_maintenance_ip` file
+exists in either the global or site's directory.
 CloudPanel writes the database domain first in `server_name`, so aliases share
 the canonical site's state and template. Turning a site on or off is an atomic
 file operation and needs no Nginx reload.
+
+A managed HTTP-level map in `/etc/nginx/sites-enabled/00-clp-addons-maintenance-client-ip.conf`
+uses CloudPanel's `/etc/nginx/cloudflare/ips` ranges to recognize the actual
+connection peer. Only a request from one of those peers can use
+`CF-Connecting-IP` as its bypass address. Other requests use the connection
+peer, even if CloudPanel's broad real-IP setting changed `$remote_addr` from a
+client-supplied header. This map leaves CloudPanel's `$remote_addr` and
+Cloudflare-only access rules untouched. Reconciliation updates the map when
+CloudPanel's Cloudflare range file changes, after validating and reloading
+Nginx. If CloudPanel has no range file, the map trusts no proxy headers and
+direct connections still use their peer address.
 
 The check returns an internal 418 sentinel and maps only that sentinel to the
 public 503 maintenance response. An application's own 503 response therefore
@@ -70,20 +85,21 @@ without assuming it was scheduled or promising a recovery time.
 ## State and privileges
 
 Only the root gateway changes maintenance state. It accepts a fixed verb set,
-normalizes domains and IP addresses, checks that the domain is a current
-CloudPanel site, and bounds a custom template at 256 KiB. Bypass updates replace
-the complete list and allow at most 64 addresses.
+normalizes domains and IP addresses, checks that site-scoped domains are current
+CloudPanel sites, and bounds a custom template at 256 KiB. Each bypass update
+replaces the complete list for its scope and allows at most 64 addresses.
 
-The state root and per-domain directories are mode `0711`, which lets Nginx
-traverse a known path without listing domains or bypasses. Toggle and bypass
-files are mode `0600`; public HTML files are mode `0644`. Disabling or
-uninstalling the addon removes the global Nginx block and keeps site state
+The state root, global directory, and per-domain directories are mode `0711`,
+which lets Nginx traverse a known path without listing domains or bypasses.
+Per-site toggle and all bypass files are mode `0600`; the global toggle and
+public HTML files are mode `0644`. Disabling or
+uninstalling the addon removes the global Nginx block and client-IP map, and keeps site state
 unless purge was requested.
 
 ## Reconciliation
 
 The global-settings reconciler records the pristine file and its SHA-256 hash.
 It renders only when the current unmarked content still matches that baseline,
-runs `nginx -t`, reloads the distro Nginx service, and restores the prior file
-on validation or reload failure. Repair and the path watcher reconcile this
-block alongside Twig and the CloudPanel manager proxy.
+runs `nginx -t`, reloads the distro Nginx service, and restores the prior
+settings and client-IP map on validation or reload failure. Repair and the path
+watcher reconcile this block alongside Twig and the CloudPanel manager proxy.

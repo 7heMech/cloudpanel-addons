@@ -66,6 +66,7 @@ export const MAINTENANCE_ALLOWED_VERBS = new Set([
   "global-status",
   "global-enable",
   "global-disable",
+  "global-set-bypass",
 ]);
 
 /**

@@ -1,7 +1,7 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 import { fetchPanelInfo, type SanitizedSite } from "../../../lib/snapshot-reader";
 import type { SiteContext } from "../../../lib/site-context";
-import type { MaintenanceStatus } from "../action";
+import type { GlobalMaintenanceStatus, MaintenanceStatus } from "../action";
 
 const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
@@ -45,8 +45,8 @@ function action<T>(verb: string, domain: string, input?: string): Promise<Action
   });
 }
 
-function globalAction<T>(verb: string): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("maintenance", verb, [], undefined, {
+function globalAction<T>(verb: string, input?: string): Promise<ActionResult<T>> {
+  return callGatewayAction<T>("maintenance", verb, [], input, {
     timeout: 30_000,
     maxBuffer: 1024 * 1024,
   });
@@ -111,10 +111,14 @@ export const maintenanceService = {
     return action(enabled ? "enable" : "disable", domain);
   },
 
-  async globalStatus(): Promise<boolean> {
-    const res = await globalAction<{ global: boolean }>("global-status");
+  async globalStatus(): Promise<GlobalMaintenanceStatus> {
+    const res = await globalAction<GlobalMaintenanceStatus>("global-status");
     const data = await requireResult(res, "global maintenance status unavailable");
-    return data.global;
+    return data;
+  },
+
+  setGlobalBypasses(ips: string[]): Promise<ActionResult<GlobalMaintenanceStatus>> {
+    return globalAction("global-set-bypass", JSON.stringify({ ips }));
   },
 
   async setGlobalEnabled(enabled: boolean): Promise<ActionResult<{ global: boolean }>> {

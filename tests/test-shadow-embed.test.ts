@@ -116,7 +116,7 @@ test("the fragment route answers with the page and the CSRF cookie its actions e
     template: maintenanceService.template,
   };
   try {
-    maintenanceService.globalStatus = async () => false;
+    maintenanceService.globalStatus = async () => ({ global: false, bypasses: [] });
     maintenanceService.site = async (domain: string) => ({
       site: { domain, type: "php", user: "shop", enabled: false, customTemplate: false, bypasses: [] },
       context: { domain, user: "shop", type: "php" },
