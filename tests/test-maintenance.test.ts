@@ -319,6 +319,19 @@ test("fleet overview renders the global override and badges according to global 
   ])).not.toContain('id="global-toggle"  disabled');
 });
 
+test("both bypass lists offer the operator's IP and hold Save until the list changes", () => {
+  const fleet = fleetView([], { global: false, bypasses: ["203.0.113.8"] }, "198.51.100.4");
+  expect(fleet).toContain(`onclick="addCurrentIp('global-bypass-ips', '198.51.100.4')"`);
+  expect(fleet).toContain('data-bypass-save="global-bypass-ips" disabled');
+  const site = siteView(
+    { domain: "example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] },
+    { domain: "example.com", custom: false, html: "" },
+    "198.51.100.4",
+  );
+  expect(site).toContain(`onclick="addCurrentIp('bypass-ips', '198.51.100.4')"`);
+  expect(site).toContain('data-bypass-save="bypass-ips" disabled');
+});
+
 test("siteView explains that the global override outranks this site's saved setting", () => {
   const site = { domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] };
   const template = { domain: "one.example.com", custom: false, html: "<h1>Maintenance</h1>" };
