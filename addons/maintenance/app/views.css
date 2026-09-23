@@ -70,17 +70,14 @@ html.dark #template-ace .ace_constant,
 html.dark #template-ace .ace_numeric,
 html.dark #template-ace .ace_entity { color:#d9a9ff; }
 html.dark #template-ace .ace_comment { color:#93a1ad; }
-.bypass-grid { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:end; }
-.bypass-field { min-width:0; margin:0; }
-.bypass-field span, .bypass-field textarea { display:block; }
-.bypass-field span { margin-bottom:7px; }
-.bypass-field textarea { min-height:110px; resize:vertical; font-family:var(--mono); }
-.bypass-actions { justify-content:flex-end; }
+.bypass-card h2 { margin:0 0 8px; }
+.bypass-card .hint { margin:0; }
+.bypass-card .form-actions { flex-wrap:wrap; margin-top:16px; }
+.bypass-card .btn { white-space:nowrap; }
+.bypass-list { display:block; width:100%; margin-top:16px; resize:vertical; font-family:var(--mono); }
 .global-card { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
 .global-card h2 { margin:0 0 8px; }
 .global-card p { margin:0; }
-.global-bypass { border-top:1px solid var(--border); margin-top:20px; padding-top:20px; }
-.global-bypass .bypass-field textarea { width:100%; }
 @media (max-width:760px) {
   .site-heading {
     display: grid;
@@ -126,7 +123,5 @@ html.dark #template-ace .ace_comment { color:#93a1ad; }
   .fleet-table.maintenance-fleet-table td.bypass-cell { display: none; }
 }
 @media (max-width:700px) {
-  .bypass-grid { grid-template-columns:1fr; }
-  .bypass-actions { justify-content:flex-start; }
   .global-card { flex-direction:column; }
 }

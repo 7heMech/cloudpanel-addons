@@ -355,43 +355,49 @@ async function resetTemplate(domain, confirmed) {
   }
 }
 
-async function saveBypasses(domain) {
-  const field = CLP_ROOT.getElementById('bypass-ips');
-  const ips = String(field && field.value || '').split(/[\n,]+/).map(function (ip) { return ip.trim(); }).filter(Boolean);
-  clearNotice();
-  busy(true);
-  try {
-    const reply = await call(siteEndpoint(domain, '/bypasses'), {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ips: ips })
-    });
-    field.value = reply.data.bypasses.join('\n');
-    notify('IP bypasses saved.', 'ok');
-  } catch (error) { notify('Could not save IP bypasses: ' + error.message, 'error'); }
-  finally { busy(false); }
+function bypassList(value) {
+  return String(value || '').split(/[\n,]+/).map(function (ip) { return ip.trim(); }).filter(Boolean);
 }
 
-async function saveGlobalBypasses() {
-  const field = CLP_ROOT.getElementById('global-bypass-ips');
+// Save stays off until the list differs from what the server last returned.
+function syncBypassSave(field) {
+  const save = CLP_ROOT.querySelector('[data-bypass-save="' + field.id + '"]');
+  if (save) save.disabled = bypassList(field.value).join('\n') === bypassList(field.defaultValue).join('\n');
+}
+
+async function saveBypassList(id, endpoint, saved, failed) {
+  const field = CLP_ROOT.getElementById(id);
   if (!field) return;
-  const ips = field.value.split(/[\n,]+/).map(function (ip) { return ip.trim(); }).filter(Boolean);
   clearNotice();
   busy(true);
   try {
-    const reply = await call('/api/global-bypasses', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ips: ips })
+    const reply = await call(endpoint, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ips: bypassList(field.value) })
     });
-    field.value = reply.data.bypasses.join('\n');
-    notify('Global IP bypasses saved.', 'ok');
-  } catch (error) { notify('Could not save global IP bypasses: ' + error.message, 'error'); }
-  finally { busy(false); }
+    field.value = field.defaultValue = reply.data.bypasses.join('\n');
+    notify(saved, 'ok');
+  } catch (error) { notify(failed + error.message, 'error'); }
+  finally {
+    busy(false);
+    syncBypassSave(field);
+  }
 }
 
-function addCurrentIp(ip) {
-  const field = CLP_ROOT.getElementById('bypass-ips');
+function saveBypasses(domain) {
+  return saveBypassList('bypass-ips', siteEndpoint(domain, '/bypasses'), 'IP bypasses saved.', 'Could not save IP bypasses: ');
+}
+
+function saveGlobalBypasses() {
+  return saveBypassList('global-bypass-ips', '/api/global-bypasses', 'Global IP bypasses saved.', 'Could not save global IP bypasses: ');
+}
+
+function addCurrentIp(id, ip) {
+  const field = CLP_ROOT.getElementById(id);
   if (!field || !ip) return;
-  const values = field.value.split(/[\n,]+/).map(function (value) { return value.trim(); }).filter(Boolean);
+  const values = bypassList(field.value);
   if (values.indexOf(ip) === -1) values.push(ip);
   field.value = values.join('\n');
+  syncBypassSave(field);
 }
 
 function initMaintenance() {

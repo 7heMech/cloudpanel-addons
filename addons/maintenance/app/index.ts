@@ -75,7 +75,7 @@ export async function handle(
     }
     try {
       const globalStatus = await maintenanceService.globalStatus();
-      if (!selected) return html(layout("Maintenance Mode", fleetView(await maintenanceService.listSites(), globalStatus), updateNotice), csrf);
+      if (!selected) return html(layout("Maintenance Mode", fleetView(await maintenanceService.listSites(), globalStatus, clientIp(req)), updateNotice), csrf);
       const domain = validateDomain(selected);
       if (!domain) return html(layout("Invalid site", '<div class="alert">That is not a valid hostname.</div>', updateNotice), csrf, 400);
       const [page, template] = await Promise.all([maintenanceService.site(domain), maintenanceService.template(domain)]);

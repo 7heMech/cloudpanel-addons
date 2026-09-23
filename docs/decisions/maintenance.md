@@ -17,10 +17,11 @@ how many have maintenance saved off. While it is on, every site serves 503 and a
 site whose own setting is off, or could not be read, shows a "Maintenance
 (Global)" badge and is counted as in maintenance; turning it off returns each
 site to its saved setting. Turning it on or off purges Varnish
-cache across the fleet. The card also saves up to 64 global IP bypasses. Each
+cache across the fleet. A card below it saves up to 64 global IP bypasses. Each
 one applies to every site, including sites with their own maintenance setting
 on, and remains saved when the global override is off. Site bypasses continue
-to apply to their own site.
+to apply to their own site. Both bypass lists keep Save off until the list
+differs from the saved one.
 
 A domain query opens the focused editor for that site. That page is drawn in the
 shell's site mode, so CloudPanel's site information and site tabs stay above it
