@@ -72,6 +72,8 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
   writeFileSync(pool, "[example.com]\nuser = example\n", { mode: 0o644 });
   chmodSync(pool, 0o644);
   const settings = new Map<string, string>();
+  settings.set("relayhost", "");
+  settings.set("smtp_tls_CApath", "/etc/ssl/certs");
   const commands: string[] = [];
   const run: NonNullable<SmtpActionOptions["run"]> = (command, args) => {
     commands.push(`${command} ${args.join(" ")}`);
@@ -119,5 +121,6 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
   await executeSmtpAction(["deactivate"], options);
   expect(readFileSync(pool, "utf8")).not.toContain("smtp-submit");
   expect(existsSync(join(dir, "submission.json"))).toBe(false);
-  expect(settings.has("relayhost")).toBe(false);
+  expect(settings.get("relayhost")).toBe("");
+  expect(settings.get("smtp_tls_CApath")).toBe("/etc/ssl/certs");
 });

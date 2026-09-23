@@ -263,7 +263,7 @@ function currentPostfixSettings(run: (command: string, args: string[]) => Comman
   const explicit = runChecked(run, "postconf", ["-n"]);
   const values: Record<string, string | null> = {};
   for (const key of POSTFIX_KEYS) {
-    const match = explicit.match(new RegExp(`(?:^|\\n)${key}\\s*=\\s*([^\\n]*)`));
+    const match = explicit.match(new RegExp(`(?:^|\\n)${key}[ \\t]*=[ \\t]*([^\\n]*)`));
     values[key] = match ? match[1]!.trim() : null;
   }
   return values;
