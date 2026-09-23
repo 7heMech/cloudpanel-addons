@@ -29,6 +29,7 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   NGINX_GLOBAL_SETTINGS, NGINX_MAINTENANCE_STATE_DIR, NGINX_PROXY_STATE_DIR, nginxLayout,
   TEMPLATE_STATE_DIR, TEMPLATES_DIR, TWIG_CACHE_DIR,
@@ -768,7 +769,10 @@ if (-f /var/lib/clp-addons/maintenance/_global/on) {
 if (-f /var/lib/clp-addons/maintenance/$server_name/on) {
     set $clp_maintenance 1;
 }
-if (-f /var/lib/clp-addons/maintenance/$server_name/bypass_$remote_addr) {
+if (-f /var/lib/clp-addons/maintenance/_global/bypass_$clp_maintenance_ip) {
+    set $clp_maintenance 0;
+}
+if (-f /var/lib/clp-addons/maintenance/$server_name/bypass_$clp_maintenance_ip) {
     set $clp_maintenance 0;
 }
 if ($uri ~ ^/\\.well-known/acme-challenge/) {
@@ -794,9 +798,46 @@ location = /__clp_addons_maintenance {
 
 const NGINX_MAINTENANCE_BLOCK_RE = /\r?\n?[ \t]*# clp-addons:maintenance:start[\s\S]*?[ \t]*# clp-addons:maintenance:end\r?\n?/g;
 
+const MAINTENANCE_GEO_MARKER = "# clp-addons:maintenance-client-ip";
+
+/** CloudPanel keeps these ranges for its own Cloudflare-only vhost setting. */
+function cloudflareRanges(path: string): string[] {
+  let content: string;
+  try { content = readFileSync(path, "utf8"); } catch { return []; }
+  return content.split(/\r?\n/).flatMap((line) => {
+    const match = line.match(/^\s*allow\s+([0-9a-fA-F.:/]+)\s*;/);
+    return match ? [match[1]!] : [];
+  });
+}
+
+function maintenanceGeoContent(ranges: string[]): string {
+  return `${MAINTENANCE_GEO_MARKER}
+# Preserve the connection peer even if CloudPanel's broad real_ip settings
+# replaced $remote_addr using a request header.
+map $realip_remote_addr $clp_maintenance_peer {
+    "" $remote_addr;
+    default $realip_remote_addr;
+}
+geo $clp_maintenance_peer $clp_cf_peer {
+    default 0;
+${ranges.map((range) => `    ${range} 1;`).join("\n")}
+}
+map $http_cf_connecting_ip $clp_cf_header_ip {
+    default "";
+    ~^[0-9A-Fa-f:.]+$ $http_cf_connecting_ip;
+}
+map "$clp_cf_peer:$clp_cf_header_ip" $clp_maintenance_ip {
+    default $clp_maintenance_peer;
+    ~^1:.+$ $clp_cf_header_ip;
+}
+`;
+}
+
 export interface MaintenanceNginxPaths {
   settingsPath?: string;
   stateDir?: string;
+  geoPath?: string;
+  cloudflareIpsPath?: string;
 }
 
 export type MaintenanceNginxState =
@@ -841,15 +882,18 @@ function maintenanceBaseline(
   }
 }
 
-function maintenancePath(options: MaintenanceNginxPaths): { settingsPath: string; stateDir: string } {
+function maintenancePath(options: MaintenanceNginxPaths): { settingsPath: string; stateDir: string; geoPath: string; cloudflareIpsPath: string } {
+  const settingsPath = options.settingsPath ?? NGINX_GLOBAL_SETTINGS;
   return {
-    settingsPath: options.settingsPath ?? NGINX_GLOBAL_SETTINGS,
+    settingsPath,
     stateDir: options.stateDir ?? NGINX_MAINTENANCE_STATE_DIR,
+    geoPath: options.geoPath ?? join(dirname(settingsPath), "sites-enabled", "00-clp-addons-maintenance-client-ip.conf"),
+    cloudflareIpsPath: options.cloudflareIpsPath ?? join(dirname(settingsPath), "cloudflare", "ips"),
   };
 }
 
 export function inspectNginxMaintenance(options: MaintenanceNginxPaths = {}): MaintenanceNginxStatus {
-  const { settingsPath, stateDir } = maintenancePath(options);
+  const { settingsPath, stateDir, geoPath, cloudflareIpsPath } = maintenancePath(options);
   const content = readNginxFile(settingsPath);
   if (content === null) return { state: "missing", settingsPath, detail: `Nginx global settings do not exist: ${settingsPath}` };
   const files = maintenanceNginxFiles(stateDir);
@@ -878,6 +922,9 @@ export function inspectNginxMaintenance(options: MaintenanceNginxPaths = {}): Ma
   if (!content.includes(NGINX_MAINTENANCE_BLOCK)) {
     return { state: "stale-content", settingsPath, detail: "maintenance block differs from the managed definition" };
   }
+  if (readNginxFile(geoPath) !== maintenanceGeoContent(cloudflareRanges(cloudflareIpsPath))) {
+    return { state: "stale-content", settingsPath, detail: "maintenance client IP map is missing or outdated" };
+  }
   return { state: "ok", settingsPath };
 }
 
@@ -885,7 +932,7 @@ export function reconcileNginxMaintenance(
   options: MaintenanceNginxPaths & { enabled?: boolean; reload?: boolean } = {},
 ): MaintenanceNginxResult {
   const { enabled = true, reload = true, ...pathOptions } = options;
-  const { settingsPath: selectedPath, stateDir } = maintenancePath(pathOptions);
+  const { settingsPath: selectedPath, stateDir, geoPath, cloudflareIpsPath } = maintenancePath(pathOptions);
   const read = readNginxFile(selectedPath);
   if (read === null) {
     return { state: "missing", changed: false, settingsPath: selectedPath, detail: `Nginx global settings do not exist: ${selectedPath}` };
@@ -916,6 +963,10 @@ export function reconcileNginxMaintenance(
   if (enabled && /(?:location\s+(?:@clp_maintenance|=\s*\/__clp_addons_maintenance)|\$clp_maintenance\b|error_page\s+[^;]*\b418\b)/m.test(upstream)) {
     return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unmanaged maintenance variable or location already exists" };
   }
+  const oldGeo = readNginxFile(geoPath);
+  if (oldGeo !== null && !oldGeo.startsWith(`${MAINTENANCE_GEO_MARKER}\n`)) {
+    return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unowned maintenance client IP map exists" };
+  }
   if (!baseline && (enabled || read.includes("# clp-addons:maintenance:start"))) {
     mkdirSync(stateDir, { recursive: true });
     writeAtomic(files.pristine, upstream, 0o600);
@@ -925,12 +976,30 @@ export function reconcileNginxMaintenance(
   const rendered = enabled
     ? `${upstream}\n${NGINX_MAINTENANCE_BLOCK}\n`
     : upstream;
-  if (rendered === read) {
+  const newGeo = enabled ? maintenanceGeoContent(cloudflareRanges(cloudflareIpsPath)) : null;
+  if (rendered === read && newGeo === oldGeo) {
     if (!enabled) removeNginxState(files);
     return { state: enabled ? "ok" : "missing", changed: false, settingsPath: selectedPath };
   }
   const mode = statSync(settingsPath).mode & 0o777;
-  writeAtomic(settingsPath, rendered, mode);
+  const restoreGeo = () => {
+    if (newGeo === oldGeo) return;
+    if (oldGeo === null) rmSync(geoPath, { force: true });
+    else writeAtomic(geoPath, oldGeo, 0o644);
+  };
+  try {
+    if (newGeo !== oldGeo) {
+      if (newGeo === null) rmSync(geoPath, { force: true });
+      else {
+        mkdirSync(dirname(geoPath), { recursive: true });
+        writeAtomic(geoPath, newGeo, 0o644);
+      }
+    }
+    if (rendered !== read) writeAtomic(settingsPath, rendered, mode);
+  } catch (error) {
+    restoreGeo();
+    throw error;
+  }
   if (!reload) {
     if (!enabled) removeNginxState(files);
     return { state: enabled ? "ok" : "missing", changed: true, settingsPath: selectedPath };
@@ -938,11 +1007,13 @@ export function reconcileNginxMaintenance(
   const tested = commandFailure("nginx", ["-t"]);
   if (tested) {
     restoreNginxContent(settingsPath, read);
+    restoreGeo();
     return { state: "validation-failed", changed: false, settingsPath: selectedPath, detail: `nginx -t failed: ${tested}` };
   }
   const reloaded = commandFailure("systemctl", ["reload", "nginx"]);
   if (reloaded) {
     restoreNginxContent(settingsPath, read);
+    restoreGeo();
     return { state: "validation-failed", changed: false, settingsPath: selectedPath, detail: `nginx reload failed: ${reloaded}` };
   }
   if (!enabled) removeNginxState(files);

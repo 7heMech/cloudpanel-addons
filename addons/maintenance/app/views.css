@@ -79,6 +79,8 @@ html.dark #template-ace .ace_comment { color:#93a1ad; }
 .global-card { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
 .global-card h2 { margin:0 0 8px; }
 .global-card p { margin:0; }
+.global-bypass { border-top:1px solid var(--border); margin-top:20px; padding-top:20px; }
+.global-bypass .bypass-field textarea { width:100%; }
 @media (max-width:760px) {
   .site-heading {
     display: grid;

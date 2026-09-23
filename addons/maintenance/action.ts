@@ -24,6 +24,11 @@ export interface MaintenanceStatus {
   bypasses: string[];
 }
 
+export interface GlobalMaintenanceStatus {
+  global: boolean;
+  bypasses: string[];
+}
+
 export interface MaintenanceActionPaths {
   dataDir: string;
   lockDir: string;
@@ -62,7 +67,8 @@ type MaintenanceVerb =
   | "set-bypass"
   | "global-status"
   | "global-enable"
-  | "global-disable";
+  | "global-disable"
+  | "global-set-bypass";
 
 interface ParsedAction {
   verb: MaintenanceVerb;
@@ -86,14 +92,14 @@ function parseAction(argv: string[], paths: MaintenanceActionPaths, options: Mai
     "status", "enable", "disable", "get-template", "set-template", "reset-template", "set-bypass",
   ];
   const globalAllowed: MaintenanceVerb[] = [
-    "global-status", "global-enable", "global-disable",
+    "global-status", "global-enable", "global-disable", "global-set-bypass",
   ];
   if (verb && globalAllowed.includes(verb)) {
     if (argv.length > 1) failAction(`action ${verb} takes no arguments`);
     return { verb, domain: "" };
   }
   if (!verb || !siteAllowed.includes(verb)) {
-    failAction("usage: clp-addons action maintenance {status|enable|disable|get-template|set-template|reset-template|set-bypass} --domain <domain> | {global-status|global-enable|global-disable}");
+    failAction("usage: clp-addons action maintenance {status|enable|disable|get-template|set-template|reset-template|set-bypass} --domain <domain> | {global-status|global-enable|global-disable|global-set-bypass}");
   }
   let domain = "";
   for (let i = 1; i < argv.length; i++) {
@@ -198,6 +204,46 @@ function bypasses(path: string): string[] {
     .map((name) => name.slice("bypass_".length))
     .filter((ip) => isIP(ip) !== 0)
     .sort((a, b) => a.localeCompare(b));
+}
+
+async function replaceBypasses(
+  paths: MaintenanceActionPaths, domain: string, options: MaintenanceActionOptions,
+): Promise<string[]> {
+  const raw = await readInput(options);
+  if (Buffer.byteLength(raw, "utf8") > 16 * 1024) failAction("the bypass request is too large");
+  let values: unknown;
+  try {
+    const parsed = JSON.parse(raw) as { ips?: unknown };
+    values = parsed.ips;
+  } catch {
+    failAction("the bypass list must be JSON");
+  }
+  if (!Array.isArray(values)) failAction("the bypass list must contain an ips array");
+  if (values.length > MAX_BYPASS_IPS) failAction(`at most ${MAX_BYPASS_IPS} bypass addresses are allowed`);
+  const ips = [...new Set(values.map(normalizeIp))].sort((a, b) => a.localeCompare(b));
+  const dir = siteDir(paths, domain, true);
+  assertDirectory(paths.lockDir);
+  mkdirSync(paths.lockDir, { recursive: true, mode: 0o700 });
+  chmodSync(paths.lockDir, 0o700);
+  const lockKey = Bun.CryptoHasher.hash("sha256", domain, "hex");
+  return withFileLock(
+    join(paths.lockDir, `maintenance-${lockKey}.lock`),
+    10,
+    `another maintenance update is running for ${domain}`,
+    async () => {
+      const stage = mkdtempSync(join(dir, ".bypass-stage-"));
+      try {
+        for (const ip of ips) (options.writeAtomicFn ?? writeAtomic)(join(stage, ip), "", 0o600);
+        for (const name of readdirSync(dir)) {
+          if (name.startsWith("bypass_")) rmSync(join(dir, name), { force: true });
+        }
+        for (const ip of ips) renameSync(join(stage, ip), join(dir, `bypass_${ip}`));
+      } finally {
+        rmSync(stage, { recursive: true, force: true });
+      }
+      return bypasses(dir);
+    },
+  );
 }
 
 export function maintenanceStatus(paths: MaintenanceActionPaths, domain: string): MaintenanceStatus {
@@ -318,8 +364,13 @@ export async function executeMaintenanceAction(
   const { verb, domain } = parseAction(argv, paths, options);
 
   if (verb === "global-status") {
-    const onPath = join(paths.dataDir, "_global", "on");
-    return { global: existsSync(onPath) && safeRegularFile(onPath) };
+    const dir = siteDir(paths, "_global");
+    return { global: safeRegularFile(join(dir, "on"), 0), bypasses: bypasses(dir) };
+  }
+
+  if (verb === "global-set-bypass") {
+    const updated = await replaceBypasses(paths, "_global", options);
+    return { global: safeRegularFile(join(paths.dataDir, "_global", "on"), 0), bypasses: updated };
   }
 
   if (verb === "global-enable" || verb === "global-disable") {
@@ -416,42 +467,8 @@ export async function executeMaintenanceAction(
     return { domain, custom: false, html: DEFAULT_MAINTENANCE_PAGE };
   }
 
-  const raw = await readInput(options);
-  if (Buffer.byteLength(raw, "utf8") > 16 * 1024) failAction("the bypass request is too large");
-  let values: unknown;
-  try {
-    const parsed = JSON.parse(raw) as { ips?: unknown };
-    values = parsed.ips;
-  } catch {
-    failAction("the bypass list must be JSON");
-  }
-  if (!Array.isArray(values)) failAction("the bypass list must contain an ips array");
-  if (values.length > MAX_BYPASS_IPS) failAction(`at most ${MAX_BYPASS_IPS} bypass addresses are allowed`);
-  const ips = [...new Set(values.map(normalizeIp))].sort((a, b) => a.localeCompare(b));
-  const dir = siteDir(paths, domain, true);
-  assertDirectory(paths.lockDir);
-  mkdirSync(paths.lockDir, { recursive: true, mode: 0o700 });
-  chmodSync(paths.lockDir, 0o700);
-  const lockKey = Bun.CryptoHasher.hash("sha256", domain, "hex");
-  return withFileLock(
-    join(paths.lockDir, `maintenance-${lockKey}.lock`),
-    10,
-    `another maintenance update is running for ${domain}`,
-    async () => {
-      const stage = mkdtempSync(join(dir, ".bypass-stage-"));
-      try {
-        // Complete every fallible write before changing the active set.
-        for (const ip of ips) (options.writeAtomicFn ?? writeAtomic)(join(stage, ip), "", 0o600);
-        for (const name of readdirSync(dir)) {
-          if (name.startsWith("bypass_")) rmSync(join(dir, name), { force: true });
-        }
-        for (const ip of ips) renameSync(join(stage, ip), join(dir, `bypass_${ip}`));
-      } finally {
-        rmSync(stage, { recursive: true, force: true });
-      }
-      return maintenanceStatus(paths, domain);
-    },
-  );
+  await replaceBypasses(paths, domain, options);
+  return maintenanceStatus(paths, domain);
 }
 
 export async function runMaintenanceAction(

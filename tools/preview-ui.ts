@@ -688,7 +688,7 @@ const server = Bun.serve({
         site ? `Maintenance — ${site.domain}` : "Maintenance Mode",
         site
           ? maintenanceSiteView(site, { domain: site.domain, custom: site.customTemplate, html: DEFAULT_MAINTENANCE_TEMPLATE }, "203.0.113.8", globalEnabled)
-          : maintenanceFleetView(empty ? [] : maintenanceSites, globalEnabled),
+          : maintenanceFleetView(empty ? [] : maintenanceSites, { global: globalEnabled, bypasses: empty ? [] : ["203.0.113.8"] }),
         notice,
         site
           ? {

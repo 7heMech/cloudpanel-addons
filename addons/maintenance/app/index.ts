@@ -28,7 +28,10 @@ function fragmentJson(body: unknown, csrf: string, status = 200): Response {
 }
 
 function clientIp(req: Request): string {
-  const candidate = (req.headers.get("x-real-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0] ?? "").trim();
+  // For the convenience button, prefer the visitor address Cloudflare sends.
+  // The public Nginx bypass independently checks the connection peer before
+  // using this header, so the button itself grants nothing.
+  const candidate = (req.headers.get("cf-connecting-ip") ?? req.headers.get("x-real-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0] ?? "").trim();
   return isIP(candidate) ? candidate : "";
 }
 
@@ -71,8 +74,8 @@ export async function handle(
       }
     }
     try {
-      const globalEnabled = await maintenanceService.globalStatus();
-      if (!selected) return html(layout("Maintenance Mode", fleetView(await maintenanceService.listSites(), globalEnabled), updateNotice), csrf);
+      const globalStatus = await maintenanceService.globalStatus();
+      if (!selected) return html(layout("Maintenance Mode", fleetView(await maintenanceService.listSites(), globalStatus), updateNotice), csrf);
       const domain = validateDomain(selected);
       if (!domain) return html(layout("Invalid site", '<div class="alert">That is not a valid hostname.</div>', updateNotice), csrf, 400);
       const [page, template] = await Promise.all([maintenanceService.site(domain), maintenanceService.template(domain)]);
@@ -80,7 +83,7 @@ export async function handle(
       return html(
         layout(
           `Maintenance — ${domain}`,
-          siteView(page.site, template.data, clientIp(req), globalEnabled),
+          siteView(page.site, template.data, clientIp(req), globalStatus.global),
           updateNotice,
           page.context,
         ),
@@ -100,7 +103,7 @@ export async function handle(
     const domain = validateDomain(url.searchParams.get("domain") ?? "");
     if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
     try {
-      const globalEnabled = await maintenanceService.globalStatus();
+      const globalEnabled = (await maintenanceService.globalStatus()).global;
       const [page, template] = await Promise.all([maintenanceService.site(domain), maintenanceService.template(domain)]);
       if (!template.ok || !template.data) throw new Error(template.error ?? "maintenance template unavailable");
       return fragmentJson(
@@ -122,6 +125,19 @@ export async function handle(
     const result = await maintenanceService.setGlobalEnabled(body.enabled);
     if (!result.ok) return json({ ok: false, error: result.error ?? "failed to toggle global maintenance" }, 500);
     return json({ ok: true, data: { global: body.enabled } }, 200);
+  }
+
+  if (method === "PUT" && path === "/api/global-bypasses") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req, 16 * 1024); } catch (error) { return bodyErrorResponse(error); }
+    const ips = body.ips;
+    if (!Array.isArray(ips) || ips.length > MAX_BYPASS_IPS || ips.some((ip: unknown) => typeof ip !== "string")) {
+      return json({ ok: false, error: `ips must contain at most ${MAX_BYPASS_IPS} addresses` }, 400);
+    }
+    const result = await maintenanceService.setGlobalBypasses(ips as string[]);
+    return json(result, result.ok ? 200 : 400);
   }
 
   if (method === "POST" && (path === "/api/sites/toggle" || path === "/api/toggle-all" || path === "/api/bulk-toggle")) {

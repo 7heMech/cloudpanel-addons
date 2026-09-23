@@ -2,14 +2,14 @@ import {
   chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   ANCHOR_SERVICE, CLI_BIN, CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER,
   CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS, INSTATIC_BACKUP_CRON,
   AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT,
   PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
-  SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS,
+  SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH,
 } from "./paths";
 import { ADDONS, ADDON_NAMES, templateWatchPaths, type AddonSpec } from "./addon-catalog";
 import { findMasterVhost, panelVhostWatchPath } from "./inject";
@@ -689,7 +689,7 @@ RandomizedDelaySec=30
 WantedBy=timers.target
 `,
     path: `[Unit]
-Description=CloudPanel Addons template watcher
+Description=CloudPanel Addons configuration watcher
 
 [Path]
 ${reconcileWatchPaths().map((path) => `PathChanged=${path}`).join("\n")}
@@ -735,15 +735,15 @@ WantedBy=timers.target
 }
 
 /**
- * Everything the watcher reconciles: the addons' Twig anchors and the panel
- * vhost carrying the /addons/ proxy. The vhost belongs here because on the
- * CloudPanel layout it is owned by the panel user, so a panel action can
- * rewrite it at any time; the reconciler puts the block back, but only once
- * something tells it to look.
+ * Everything the watcher's fast repair reconciles: Twig anchors, the panel
+ * vhost, global Nginx settings, and CloudPanel's Cloudflare range list. Watch
+ * both the range file for in-place writes and its directory for atomic
+ * replacement; either change requires regenerating the maintenance IP map.
  */
 function reconcileWatchPaths(): string[] {
   const vhost = panelVhostWatchPath();
-  return [...templateWatchPaths(), ...(vhost ? [vhost] : []), NGINX_GLOBAL_SETTINGS];
+  return [...templateWatchPaths(), ...(vhost ? [vhost] : []), NGINX_GLOBAL_SETTINGS,
+    CLOUDFLARE_IPS_PATH, dirname(CLOUDFLARE_IPS_PATH)];
 }
 
 /**

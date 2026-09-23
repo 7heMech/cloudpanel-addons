@@ -44,22 +44,28 @@ const actionOptions = <T extends Record<string, unknown>>(paths: MaintenanceActi
 test("global maintenance actions enable, report status, and disable fleet-wide maintenance mode", async () => {
   const { root, paths } = fixture();
   try {
-    const initial = await executeMaintenanceAction(["global-status"], actionOptions(paths)) as { global: boolean };
-    expect(initial).toEqual({ global: false });
+    const initial = await executeMaintenanceAction(["global-status"], actionOptions(paths)) as { global: boolean; bypasses: string[] };
+    expect(initial).toEqual({ global: false, bypasses: [] });
+
+    const bypassed = await executeMaintenanceAction(["global-set-bypass"], actionOptions(paths, {
+      input: JSON.stringify({ ips: ["203.0.113.8", "2001:db8::1"] }),
+    })) as { global: boolean; bypasses: string[] };
+    expect(bypassed).toEqual({ global: false, bypasses: ["2001:db8::1", "203.0.113.8"] });
+    expect(existsSync(join(paths.dataDir, "_global", "bypass_203.0.113.8"))).toBe(true);
 
     const enabled = await executeMaintenanceAction(["global-enable"], actionOptions(paths)) as { ok: boolean; global: boolean };
     expect(enabled).toEqual({ ok: true, global: true });
     expect(lstatSync(join(paths.dataDir, "_global", "on")).isFile()).toBe(true);
 
-    const statusAfterEnable = await executeMaintenanceAction(["global-status"], actionOptions(paths)) as { global: boolean };
-    expect(statusAfterEnable).toEqual({ global: true });
+    const statusAfterEnable = await executeMaintenanceAction(["global-status"], actionOptions(paths)) as { global: boolean; bypasses: string[] };
+    expect(statusAfterEnable).toEqual({ global: true, bypasses: ["2001:db8::1", "203.0.113.8"] });
 
     const disabled = await executeMaintenanceAction(["global-disable"], actionOptions(paths)) as { ok: boolean; global: boolean };
     expect(disabled).toEqual({ ok: true, global: false });
     expect(existsSync(join(paths.dataDir, "_global", "on"))).toBe(false);
 
-    const finalStatus = await executeMaintenanceAction(["global-status"], actionOptions(paths)) as { global: boolean };
-    expect(finalStatus).toEqual({ global: false });
+    const finalStatus = await executeMaintenanceAction(["global-status"], actionOptions(paths)) as { global: boolean; bypasses: string[] };
+    expect(finalStatus).toEqual({ global: false, bypasses: ["2001:db8::1", "203.0.113.8"] });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -139,24 +145,39 @@ test("global-settings reconciliation is idempotent, drift-gated, and reversible"
   const root = mkdtempSync(join(tmpdir(), "clp-maintenance-nginx-"));
   const settingsPath = join(root, "global_settings");
   const stateDir = join(root, "state");
+  const geoPath = join(root, "sites-enabled", "00-clp-addons-maintenance-client-ip.conf");
+  const cloudflareIpsPath = join(root, "cloudflare", "ips");
   const original = "client_max_body_size 128m;";
   writeFileSync(settingsPath, original);
+  mkdirSync(join(root, "cloudflare"));
+  writeFileSync(cloudflareIpsPath, "allow 173.245.48.0/20;\nallow 2400:cb00::/32;\ndeny all;\n");
   try {
-    const installed = reconcileNginxMaintenance({ settingsPath, stateDir, reload: false });
+    const installed = reconcileNginxMaintenance({ settingsPath, stateDir, geoPath, cloudflareIpsPath, reload: false });
     expect(installed).toMatchObject({ state: "ok", changed: true });
     expect(readFileSync(settingsPath, "utf8")).toContain(NGINX_MAINTENANCE_BLOCK);
-    expect(inspectNginxMaintenance({ settingsPath, stateDir }).state).toBe("ok");
+    expect(inspectNginxMaintenance({ settingsPath, stateDir, geoPath, cloudflareIpsPath }).state).toBe("ok");
+    const geo = readFileSync(geoPath, "utf8");
+    expect(geo).toContain("173.245.48.0/20 1;");
+    expect(geo).toContain("2400:cb00::/32 1;");
+    expect(geo).toContain("map $realip_remote_addr $clp_maintenance_peer");
+    expect(geo).toContain("default $clp_maintenance_peer;");
+    expect(geo).toContain("~^1:.+$ $clp_cf_header_ip;");
+    writeFileSync(cloudflareIpsPath, "allow 173.245.48.0/20;\nallow 2400:cb00::/32;\nallow 104.16.0.0/13;\ndeny all;\n");
+    expect(inspectNginxMaintenance({ settingsPath, stateDir, geoPath, cloudflareIpsPath }).state).toBe("stale-content");
+    expect(reconcileNginxMaintenance({ settingsPath, stateDir, geoPath, cloudflareIpsPath, reload: false }).changed).toBe(true);
+    expect(readFileSync(geoPath, "utf8")).toContain("104.16.0.0/13 1;");
 
-    expect(reconcileNginxMaintenance({ settingsPath, stateDir, reload: false }).changed).toBe(false);
+    expect(reconcileNginxMaintenance({ settingsPath, stateDir, geoPath, cloudflareIpsPath, reload: false }).changed).toBe(false);
     writeFileSync(settingsPath, readFileSync(settingsPath, "utf8").replace(original, `${original}\nserver_tokens off;`));
-    const drift = reconcileNginxMaintenance({ settingsPath, stateDir, reload: false });
+    const drift = reconcileNginxMaintenance({ settingsPath, stateDir, geoPath, cloudflareIpsPath, reload: false });
     expect(drift.state).toBe("upstream-changed");
     expect(drift.changed).toBe(false);
 
     writeFileSync(settingsPath, `${original}\n${NGINX_MAINTENANCE_BLOCK}\n`);
-    const removed = reconcileNginxMaintenance({ settingsPath, stateDir, enabled: false, reload: false });
+    const removed = reconcileNginxMaintenance({ settingsPath, stateDir, geoPath, cloudflareIpsPath, enabled: false, reload: false });
     expect(removed).toMatchObject({ state: "missing", changed: true });
     expect(readFileSync(settingsPath, "utf8")).toBe(original);
+    expect(existsSync(geoPath)).toBe(false);
     expect(existsSync(stateDir) ? Bun.file(join(stateDir, "global-settings.sha256")).size : 0).toBe(0);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -430,6 +451,35 @@ test("global toggle API guards mutations and toggles fleet-wide maintenance mode
   }
 });
 
+test("global bypass API validates and saves addresses", async () => {
+  const token = "global-bypass-test";
+  const request = (body: unknown, csrf = true) => new Request("https://panel.example.test:8443/addons/maintenance/api/global-bypasses", {
+    method: "PUT",
+    body: JSON.stringify(body),
+    headers: {
+      "content-type": "application/json",
+      host: "panel.example.test:8443",
+      origin: "https://panel.example.test:8443",
+      ...(csrf ? { cookie: `clp_addons_csrf=${token}`, "x-clp-addons-csrf": token } : {}),
+    },
+  });
+  expect((await handleMaintenance(request({ ips: [] }, false), "/api/global-bypasses")).status).toBe(403);
+  expect((await handleMaintenance(request({ ips: [42] }), "/api/global-bypasses")).status).toBe(400);
+  const original = maintenanceService.setGlobalBypasses;
+  try {
+    let received: string[] = [];
+    maintenanceService.setGlobalBypasses = async (ips) => {
+      received = ips;
+      return { ok: true, data: { global: true, bypasses: ips } };
+    };
+    const response = await handleMaintenance(request({ ips: ["203.0.113.8"] }), "/api/global-bypasses");
+    expect(response.status).toBe(200);
+    expect(received).toEqual(["203.0.113.8"]);
+  } finally {
+    maintenanceService.setGlobalBypasses = original;
+  }
+});
+
 test("bulk toggle API guards mutations and toggles all available sites", async () => {
   const token = "bulk-test-csrf-token";
   const request = (path: string, body: unknown, headers?: Record<string, string>) => new Request(`https://panel.example.test:8443/addons/maintenance${path}`, {
@@ -563,6 +613,9 @@ test("maintenance integration preserves ACME and normalizes non-GET errors throu
   expect(NGINX_MAINTENANCE_BLOCK).toContain("$uri = /__clp_addons_maintenance");
   expect(NGINX_MAINTENANCE_BLOCK).toContain("maintenance/_global/on");
   expect(NGINX_MAINTENANCE_BLOCK).toContain("maintenance/$server_name/on");
+  expect(NGINX_MAINTENANCE_BLOCK).toContain("maintenance/_global/bypass_$clp_maintenance_ip");
+  expect(NGINX_MAINTENANCE_BLOCK).toContain("maintenance/$server_name/bypass_$clp_maintenance_ip");
+  expect(NGINX_MAINTENANCE_BLOCK).not.toContain("bypass_$remote_addr");
   expect(NGINX_MAINTENANCE_BLOCK).not.toContain("maintenance/$host/on");
   expect(NGINX_MAINTENANCE_BLOCK).toContain("return 418;");
   expect(NGINX_MAINTENANCE_BLOCK).toContain("error_page 418 =503 /__clp_addons_maintenance;");
@@ -578,6 +631,7 @@ test("maintenance integration preserves ACME and normalizes non-GET errors throu
   expect(MAINTENANCE_ALLOWED_VERBS).toEqual(new Set([
     "status", "enable", "disable", "get-template", "set-template", "reset-template", "set-bypass",
     "global-status", "global-enable", "global-disable",
+    "global-set-bypass",
   ]));
 });
 

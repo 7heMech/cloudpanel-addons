@@ -370,6 +370,22 @@ async function saveBypasses(domain) {
   finally { busy(false); }
 }
 
+async function saveGlobalBypasses() {
+  const field = CLP_ROOT.getElementById('global-bypass-ips');
+  if (!field) return;
+  const ips = field.value.split(/[\n,]+/).map(function (ip) { return ip.trim(); }).filter(Boolean);
+  clearNotice();
+  busy(true);
+  try {
+    const reply = await call('/api/global-bypasses', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ips: ips })
+    });
+    field.value = reply.data.bypasses.join('\n');
+    notify('Global IP bypasses saved.', 'ok');
+  } catch (error) { notify('Could not save global IP bypasses: ' + error.message, 'error'); }
+  finally { busy(false); }
+}
+
 function addCurrentIp(ip) {
   const field = CLP_ROOT.getElementById('bypass-ips');
   if (!field || !ip) return;

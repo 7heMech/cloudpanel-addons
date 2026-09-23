@@ -63,6 +63,7 @@ export function nginxLayout(panelDir = PANEL_NGINX_DIR): NginxLayout {
 }
 export const NGINX_PROXY_STATE_DIR = "/var/lib/clp-addons/nginx";
 export const NGINX_GLOBAL_SETTINGS = "/etc/nginx/global_settings";
+export const CLOUDFLARE_IPS_PATH = "/etc/nginx/cloudflare/ips";
 export const NGINX_MAINTENANCE_STATE_DIR = "/var/lib/clp-addons/nginx-maintenance";
 
 const PANEL_APP = "/home/clp/htdocs/app/files";
