@@ -254,12 +254,9 @@ function installDocker(commands: ProvisionCommandRunner): void {
 
 /**
  * `applyEnable`/`cmdInstall` gate on `requiresUnits` before touching any
- * addon state. Docker is the only unit any addon currently requires, and the
- * installer already knows how to bring it up on a fresh host
- * (`install.sh --install-docker`, via get.docker.com). Enabling instatic
- * later -- from the UI or `clp-addons install instatic` -- should follow the
- * same path instead of just telling the operator to go run that installer's
- * logic by hand.
+ * addon state. Docker and Postfix are installed only when their respective
+ * addons require them. Postfix is used as a local queue and authenticated
+ * outbound relay, not as a listening mail service for customer sites.
  */
 export function ensureRequiredUnits(
   spec: AddonSpec,
@@ -267,6 +264,21 @@ export function ensureRequiredUnits(
 ): void {
   for (const unit of spec.requiresUnits ?? []) {
     if (commands.tryRun("systemctl", ["is-active", unit]).ok) continue;
+    if (unit === "postfix") {
+      const loadState = commands.tryRun("systemctl", ["show", "postfix", "--property=LoadState", "--value"]);
+      if (loadState.out.trim() !== "loaded") {
+        log.step("installing Postfix and its SMTP authentication modules");
+        const install = commands.tryRun("env", ["DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "postfix", "libsasl2-modules"]);
+        if (!install.ok) fatal(`Postfix installation failed: ${install.out || "apt-get failed"}`);
+        const outboundOnly = commands.tryRun("postconf", ["-e", "inet_interfaces=loopback-only"]);
+        if (!outboundOnly.ok) fatal(`Postfix could not be limited to local submissions: ${outboundOnly.out || "postconf failed"}`);
+      }
+      if (!commands.tryRun("systemctl", ["enable", "--now", "postfix"]).ok) {
+        fatal("Postfix could not be started");
+      }
+      log.ok("Postfix installed and started");
+      continue;
+    }
     if (unit !== "docker") {
       fatal(`${unit} is not active; install and start it before enabling ${spec.name}`);
     }

@@ -72,6 +72,7 @@ function applyUninstall(spec: AddonSpec, flags: Record<string, string | true>): 
     }
   }
   removeSudoers();
+  spec.deactivate?.();
   if (spec.name === "wp-login") withdrawWpLogin();
   if (purge) rmSync(spec.stateDir, { recursive: true, force: true });
   rmSync(spec.configFile, { force: true });

@@ -8,6 +8,8 @@ import { fleetView as gitFleetView, fragment as gitFragment, layout as gitLayout
 import type { GitSiteStatus } from "../addons/git/app/service";
 import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
 import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
+import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../addons/smtp/app/views";
+import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { sitesBlock } from "../addons/panel-tweaks/inject/targets";
@@ -46,6 +48,22 @@ const sites: SiteSummary[] = [
 // is the widest strip a site can have.
 const siteVarnish: Record<string, boolean> = { "www.example.com": true };
 const PREVIEW_PUBLIC_IP = "203.0.113.10";
+
+function smtpPreviewState(url: URL): SmtpState {
+  const configured = !url.searchParams.has("setup");
+  return {
+    configured,
+    relay: configured ? { host: "mail.example.com", port: 587, username: "cloudpanel-relay@example.com", hasPassword: true } : null,
+    relayOverrides: configured ? { "shop.example.com": { host: "smtp.provider.test", port: 587, username: "shop@example.com", hasPassword: true } } : {},
+    defaultRule: { mode: "force", sender: "noreply@{domain}", domains: [], addresses: [] },
+    sites: url.searchParams.has("empty") ? [] : [
+      { domain: "www.example.com", user: "example", phpVersion: "8.3", overridden: false,
+        rule: { mode: "force", sender: "noreply@{domain}", domains: [], addresses: [] }, senderPreview: "noreply@www.example.com" },
+      { domain: "shop.example.com", user: "shop", phpVersion: "8.3", overridden: true,
+        rule: { mode: "allow", sender: "noreply@{domain}", domains: ["news.shop.example.com"], addresses: [] }, senderPreview: "noreply@shop.example.com" },
+    ],
+  };
+}
 
 function gitPreviewLog(site: GitSiteStatus): string {
   if (!site.lastJob || !site.config || site.lastJob.state === "queued") return "";
@@ -657,7 +675,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login", "smtp"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
@@ -710,6 +728,8 @@ const server = Bun.serve({
       html = wpLoginLayout("WordPress Sign-In", wpLoginDashboardView(wpLoginPreviewSites(url)), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
+    } else if (path === "/addons/smtp/" || path === "/addons/smtp") {
+      html = smtpLayout("SMTP Relay", smtpDashboardView(smtpPreviewState(url)), notice);
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
       html = cloudflareLayout("Cloudflare IP access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {

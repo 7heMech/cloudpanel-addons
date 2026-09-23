@@ -13,7 +13,8 @@ curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download
 ```
 
 The installer asks which addons you want, checks that the download is genuine,
-and installs Docker if Instatic needs it. Requires an x86-64 CloudPanel host.
+and installs Docker or Postfix when a selected addon needs it. Requires an
+x86-64 CloudPanel host.
 
 When it finishes, open the new **Addons** tab in CloudPanel.
 
@@ -28,6 +29,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | Stager | Staging copies of WordPress, PHP, static and Instatic sites, and promotion back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
 | Maintenance Mode | A customizable 503 page per site, with instant toggles and IP bypasses. |
 | PHP Resources | Categories of PHP-FPM worker limits, assigned in bulk and to new sites. |
+| [SMTP Relay](docs/smtp-relay.md) | Send PHP and WordPress mail through a shared or per-domain SMTP relay. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
 | Panel Tweaks | Site search and columns, mobile layouts and theme improvements. |
 | WordPress Sign-In | One-click sign-in to any WordPress on the server, no password needed. |
@@ -48,7 +50,7 @@ Sites page for their own sites, and nothing else.
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
 Addon names are `cloudflare-ips`, `instatic`, `stager`, `maintenance`,
-`php-resources`, `git`, `panel-tweaks`, and `wp-login`. Run
+`php-resources`, `git`, `panel-tweaks`, `wp-login`, and `smtp`. Run
 `clp-addons --help` for version selection and data removal options.
 
 See [Instatic backup and restore](docs/instatic-backups.md) for CloudPanel Remote
