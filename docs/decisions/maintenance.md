@@ -63,8 +63,10 @@ peer, even if CloudPanel's broad real-IP setting changed `$remote_addr` from a
 client-supplied header. This map leaves CloudPanel's `$remote_addr` and
 Cloudflare-only access rules untouched. Reconciliation updates the map when
 CloudPanel's Cloudflare range file changes, after validating and reloading
-Nginx. If CloudPanel has no range file, the map trusts no proxy headers and
-direct connections still use their peer address.
+Nginx. The path watcher monitors the range file and its directory so both
+in-place writes and atomic replacements trigger reconciliation; the periodic
+repair timer is a fallback. If CloudPanel has no range file, the map trusts no
+proxy headers and direct connections still use their peer address.
 
 The check returns an internal 418 sentinel and maps only that sentinel to the
 public 503 maintenance response. An application's own 503 response therefore

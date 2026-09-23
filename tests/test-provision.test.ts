@@ -604,20 +604,23 @@ test("the panel Nginx instance is detected from its tree, not a version string",
   }
 });
 
-test("the path unit watches the panel vhost as well as the addon templates", () => {
+test("the path unit watches panel files and Cloudflare range replacements", () => {
   const unit = reconcileUnits().path;
   const watched = unit.split("\n").filter((line) => line.startsWith("PathChanged=")).map((line) => line.slice(12));
   expect(watched.some((path) => path.endsWith(".html.twig"))).toBe(true);
   // The proxy block lives in a panel-owned file, so a panel action can remove
   // it; the watcher is what makes the reconciler put it back promptly.
   expect(watched.some((path) => path.endsWith("/cloudpanel.conf"))).toBe(true);
+  expect(watched).toContain("/etc/nginx/cloudflare/ips");
+  expect(watched).toContain("/etc/nginx/cloudflare");
 });
 
-test("the watcher's fast path reconciles the proxy, not just the anchors", () => {
+test("the watcher's fast path reconciles maintenance and the proxy", () => {
   const source = readFileSync(join(import.meta.dir, "..", "cli/repair.ts"), "utf8");
   const branchStart = source.indexOf('flags["anchors-only"] === true');
   const branch = source.slice(branchStart, source.indexOf("return;", branchStart));
   expect(branch.includes("reconcileAnchors(quiet)")).toBe(true);
+  expect(branch.includes("reconcileMaintenanceNginx(quiet)")).toBe(true);
   expect(branch.includes("reconcileNginx(quiet)")).toBe(true);
 });
 
