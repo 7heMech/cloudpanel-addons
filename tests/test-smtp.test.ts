@@ -23,6 +23,9 @@ test("forced sender replaces a foreign From and sets the envelope identity", () 
   expect(output).toContain("From: noreply@example.com\r\n");
   expect(output).not.toContain("cool.com");
   expect(output.endsWith("\r\n\r\nHello")).toBe(true);
+  const invalidRequested = prepareSubmission(Buffer.from("To: user@recipient.test\nFrom: wordpress@example.com (WordPress)\n\nHello"), site);
+  expect(invalidRequested.sender).toBe("noreply@example.com");
+  expect(Buffer.from(invalidRequested.message).toString()).not.toContain("(WordPress)");
 });
 
 test("allow-listed mode preserves own and approved domains but refuses another site", () => {
@@ -101,6 +104,7 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
   expect(readFileSync(pool, "utf8")).toContain("smtp-submit -t -i");
   expect(readFileSync(join(dir, "submission.json"), "utf8")).toContain("noreply@{domain}");
   expect(settings.get("local_login_sender_maps")).toContain("clp-addons-local-senders");
+  expect(readFileSync(join(postfixDir, "clp-addons-local-senders"), "utf8")).toContain("clp *\n");
   expect(commands.some((item) => item.includes("php-fpm8.2 -t"))).toBe(true);
   const publicState = await executeSmtpAction(["list"], options);
   const html = dashboardView(publicState as SmtpState);

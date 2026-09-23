@@ -62,8 +62,8 @@ export function prepareSubmission(message: Uint8Array, site: SmtpSubmissionSite)
       kept.push(line);
     }
   }
-  const from = fromRaw === null ? null : senderFromHeader(fromRaw);
   const configured = senderFor(site.rule.sender, site.domain);
+  const from = site.rule.mode === "allow" && fromRaw !== null ? senderFromHeader(fromRaw) : null;
   const sender = site.rule.mode === "force" ? configured : (from ?? configured);
   if (site.rule.mode === "allow" && !permittedSender(site, sender)) {
     throw new Error(`sender ${sender} is not allowed for ${site.domain}`);

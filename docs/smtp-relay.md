@@ -44,7 +44,9 @@ also does not filter arbitrary mail submitted directly to Postfix or another
 local SMTP listener. Postfix restricts local envelope senders for known site
 Unix accounts, but that check does not validate the message's visible From
 header. Treat the site sender rule as a policy for PHP `mail()` and configure
-untrusted shell or SMTP access separately.
+untrusted shell or SMTP access separately. Local submissions from other Unix
+accounts are restricted, except for Postfix, root, and CloudPanel's `clp`
+account.
 
 New PHP sites and pool changes are picked up by `clp-addons repair` and the
 regular reconciliation timer (every 15 minutes). If a site has a conflicting

@@ -153,6 +153,7 @@ function validatedSites(sites: SiteRow[]): SiteRow[] {
   for (const site of sites) {
     smtpDomain(site.domain);
     if (!/^[0-9]+\.[0-9]+$/.test(site.phpVersion)) failAction(`invalid PHP version for ${site.domain}`);
+    if (["root", "postfix", "clp"].includes(site.user)) failAction(`reserved Unix account for ${site.domain}`);
     if (uids.has(site.uid)) failAction(`multiple sites share Unix UID ${site.uid}; SMTP cannot identify their sender safely`);
     uids.add(site.uid);
   }
@@ -233,7 +234,7 @@ export function postfixMaps(policy: SmtpPolicy): { credentials: string; routes: 
 }
 
 function localSenderMap(policy: SmtpPolicy, sites: SiteRow[]): string {
-  const entries = ["root *", "postfix *"];
+  const entries = ["root *", "postfix *", "clp *"];
   for (const site of sites) {
     const rule = effectiveRule(policy, site.domain);
     const patterns = rule.mode === "force"

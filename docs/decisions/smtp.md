@@ -33,9 +33,12 @@ authorized by its upstream provider.
 The global and per-domain credentials are stored in
 `/var/lib/clp-addons/smtp/config.json` at mode `0600`. Postfix reads generated
 `regexp:` credential and route maps under `/etc/postfix`; the credential map is
-`0600`. Local Unix sender restrictions use a `hash:` map. The public submission
-policy lives at `/etc/clp-addons/smtp-submission.json` and contains no SMTP
-passwords. The manager receives only relay host, port, username, and a
+`0600`. Local Unix sender restrictions use a `hash:` map. The trusted `root`,
+`postfix`, and CloudPanel `clp` accounts retain unrestricted local envelope
+senders; site accounts get only their configured senders. Other local Unix
+accounts are not granted Postfix sendmail access by this addon. The public
+submission policy lives at `/etc/clp-addons/smtp-submission.json` and contains
+no SMTP passwords. The manager receives only relay host, port, username, and a
 has-password flag, never the saved password.
 
 Before changing Postfix, the action captures its explicit values for every key

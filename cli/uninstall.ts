@@ -48,6 +48,8 @@ function applyUninstall(spec: AddonSpec, flags: Record<string, string | true>): 
     );
   }
 
+  spec.deactivate?.();
+
   if (!reconcileMaintenanceNginx(true, remaining.includes("maintenance"))) {
     fatal("could not safely update the Nginx maintenance check; no addon files were removed");
   }
@@ -72,7 +74,6 @@ function applyUninstall(spec: AddonSpec, flags: Record<string, string | true>): 
     }
   }
   removeSudoers();
-  spec.deactivate?.();
   if (spec.name === "wp-login") withdrawWpLogin();
   if (purge) rmSync(spec.stateDir, { recursive: true, force: true });
   rmSync(spec.configFile, { force: true });

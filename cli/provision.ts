@@ -272,6 +272,9 @@ export function ensureRequiredUnits(
         if (!install.ok) fatal(`Postfix installation failed: ${install.out || "apt-get failed"}`);
         const outboundOnly = commands.tryRun("postconf", ["-e", "inet_interfaces=loopback-only"]);
         if (!outboundOnly.ok) fatal(`Postfix could not be limited to local submissions: ${outboundOnly.out || "postconf failed"}`);
+        if (!commands.tryRun("systemctl", ["restart", "postfix"]).ok) {
+          fatal("Postfix could not be restarted on the loopback interface");
+        }
       }
       if (!commands.tryRun("systemctl", ["enable", "--now", "postfix"]).ok) {
         fatal("Postfix could not be started");

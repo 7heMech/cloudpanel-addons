@@ -216,6 +216,7 @@ function requiredUnitsProbe(options: {
   downloadOk?: boolean;
   installOk?: boolean;
   enableOk?: boolean;
+  restartOk?: boolean;
 } = {}): { ok: boolean; error?: string; calls: Array<{ command: string; args: string[] }> } {
   const script = `
     import { ensureRequiredUnits } from "./cli/provision.ts";
@@ -235,6 +236,7 @@ function requiredUnitsProbe(options: {
         if (command === "curl") return { ok: options.downloadOk ?? true, out: options.downloadOk === false ? "could not resolve host" : "" };
         if (command === "sh") return { ok: options.installOk ?? true, out: options.installOk === false ? "get-docker.sh exited 1" : "" };
         if (command === "systemctl" && args[0] === "enable") return { ok: options.enableOk ?? true, out: "" };
+        if (command === "systemctl" && args[0] === "restart") return { ok: options.restartOk ?? true, out: "" };
         return { ok: true, out: "" };
       },
     };
@@ -301,6 +303,21 @@ test("fails clearly when Docker still is not active after installing it", () => 
 
   expect(result.ok).toBe(false);
   expect(result.error).toBe("docker is not active; installing it did not bring the service up");
+});
+
+test("a fresh Postfix install restarts after binding to loopback", () => {
+  const result = requiredUnitsProbe({ unit: "postfix", active: false, dockerUnitLoaded: false });
+  expect(result.ok).toBe(true);
+  const commands = result.calls.map(({ command, args }) => `${command} ${args.join(" ")}`);
+  expect(commands.indexOf("postconf -e inet_interfaces=loopback-only")).toBeLessThan(commands.indexOf("systemctl restart postfix"));
+  expect(commands.indexOf("systemctl restart postfix")).toBeLessThan(commands.indexOf("systemctl enable --now postfix"));
+});
+
+test("a failed Postfix restart aborts provisioning", () => {
+  const result = requiredUnitsProbe({ unit: "postfix", active: false, dockerUnitLoaded: false, restartOk: false });
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("Postfix could not be restarted on the loopback interface");
+  expect(result.calls).not.toContainEqual({ command: "systemctl", args: ["enable", "--now", "postfix"] });
 });
 
 test("a non-docker required unit still fails fast with no provisioning attempt", () => {
