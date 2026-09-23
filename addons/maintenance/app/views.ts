@@ -84,14 +84,13 @@ function globalCard(globalEnabled: boolean, disabled: boolean, bypasses: string[
     </label>
   </div>
   </div></div>
-  ${bypassCard("global-bypass-ips", "Global IP bypasses", "These addresses skip maintenance on every site, including sites with their own setting on.", bypasses, currentIp, "saveGlobalBypasses()")}`;
+  ${bypassCard("global-bypass-ips", "Global IP bypasses", "These skip maintenance on every site.", bypasses, currentIp, "saveGlobalBypasses()")}`;
 }
 
 function bypassCard(id: string, title: string, scope: string, bypasses: string[], currentIp: string, save: string): string {
-  return `<div class="card bypass-card">
-    <div class="bypass-intro"><h2>${title}</h2><p class="hint">${scope}</p><p class="hint">One IPv4 or IPv6 visitor address per line. For Cloudflare sites, enter the visitor IP.</p></div>
-    <textarea id="${id}" class="bypass-list" aria-label="${title}" spellcheck="false" rows="${Math.min(Math.max(bypasses.length + 1, 4), 8)}" oninput="syncBypassSave(this)">${esc(bypasses.join("\n"))}</textarea>
-    <div class="bypass-actions">${currentIp ? `<button class="btn" type="button" onclick="addCurrentIp('${id}', '${escJs(currentIp)}')">Add my IP (${esc(currentIp)})</button>` : ""}<button class="btn btn-primary" type="button" data-bypass-save="${id}" disabled onclick="${save}">Save bypasses</button></div>
+  return `<div class="card bypass-card"><h2>${title}</h2><p class="hint">${scope} One visitor IP per line.</p>
+    <textarea id="${id}" class="bypass-list" aria-label="${title}" spellcheck="false" rows="${Math.min(Math.max(bypasses.length + 1, 3), 8)}" oninput="syncBypassSave(this)">${esc(bypasses.join("\n"))}</textarea>
+    <div class="form-actions">${currentIp ? `<button class="btn" type="button" onclick="addCurrentIp('${id}', '${escJs(currentIp)}')">Add my IP (${esc(currentIp)})</button>` : ""}<button class="btn btn-primary" type="button" data-bypass-save="${id}" disabled onclick="${save}">Save bypasses</button></div>
   </div>`;
 }
 
@@ -135,7 +134,7 @@ export function siteView(
   <div class="card"><div class="switch-row"><div><h2>Maintenance response</h2><p class="hint">Visitors receive HTTP 503 with a five-minute Retry-After header. ACME certificate challenges and bypassed IPs remain live.</p></div>
     <label class="switch switch-danger"><input type="checkbox" data-toggle-domain="${esc(site.domain)}" data-available="true" aria-label="Maintenance mode for ${esc(site.domain)}" ${site.enabled ? "checked" : ""} onchange="toggleMaintenance('${escJs(site.domain)}', this.checked)"><span></span></label>
   </div></div>
-  ${bypassCard("bypass-ips", "IP bypasses", "These addresses skip maintenance on this site, as do the global bypasses on the overview.", site.bypasses, currentIp, `saveBypasses('${escJs(site.domain)}')`)}
+  ${bypassCard("bypass-ips", "IP bypasses", "These skip maintenance on this site, as do the global bypasses.", site.bypasses, currentIp, `saveBypasses('${escJs(site.domain)}')`)}
   <div class="card"><div class="card-header"><div><h2>Maintenance page</h2><p class="hint">Custom HTML and CSS are stored for this site. Active scripts and form controls are removed.</p></div></div>
     <div class="toolbar editor-toolbar">
       <div class="editor-tabs" role="tablist"><button class="btn" type="button" data-editor-tab="editor" aria-selected="true" onclick="showEditorTab('editor')">HTML / CSS</button><button class="btn" type="button" data-editor-tab="preview" aria-selected="false" onclick="showEditorTab('preview')">Preview</button></div>

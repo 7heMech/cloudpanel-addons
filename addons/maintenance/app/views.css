@@ -70,12 +70,11 @@ html.dark #template-ace .ace_constant,
 html.dark #template-ace .ace_numeric,
 html.dark #template-ace .ace_entity { color:#d9a9ff; }
 html.dark #template-ace .ace_comment { color:#93a1ad; }
-.bypass-card { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,3fr); grid-template-areas:"intro list" "intro actions"; gap:12px 32px; align-items:start; }
-.bypass-intro { grid-area:intro; }
-.bypass-intro h2 { margin:0 0 8px; }
-.bypass-intro .hint { margin:0 0 6px; }
-.bypass-list { grid-area:list; display:block; width:100%; min-width:0; resize:vertical; font-family:var(--mono); }
-.bypass-actions { grid-area:actions; display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; }
+.bypass-card h2 { margin:0 0 8px; }
+.bypass-card .hint { margin:0; }
+.bypass-card .form-actions { flex-wrap:wrap; margin-top:16px; }
+.bypass-card .btn { white-space:nowrap; }
+.bypass-list { display:block; width:100%; margin-top:16px; resize:vertical; font-family:var(--mono); }
 .global-card { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
 .global-card h2 { margin:0 0 8px; }
 .global-card p { margin:0; }
@@ -124,7 +123,5 @@ html.dark #template-ace .ace_comment { color:#93a1ad; }
   .fleet-table.maintenance-fleet-table td.bypass-cell { display: none; }
 }
 @media (max-width:700px) {
-  .bypass-card { grid-template-columns:1fr; grid-template-areas:"intro" "list" "actions"; }
-  .bypass-actions { justify-content:flex-start; }
   .global-card { flex-direction:column; }
 }
