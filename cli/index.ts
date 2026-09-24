@@ -21,6 +21,7 @@ import { cmdServe } from "../manager/server";
 import { executeMaintenanceAction } from "../addons/maintenance/action";
 import { runAuthActionStdin } from "./auth-action";
 import { runManagerAction, type ManagerOps } from "./manager-action";
+import { runSmtpSubmit } from "../addons/smtp/submit";
 
 /**
  * The privileged half of the three manager verbs.
@@ -51,6 +52,7 @@ function usage(): void {
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons maintenance <domain> [on|off|status]
   clp-addons action cloudflare-ips <list|set|policy|reconcile> [options]
+  clp-addons action smtp <list|save-setup|save-relay|save-default|save-site|clear-site|save-domain-relay|clear-domain-relay|test|reconcile|deactivate>
   clp-addons action instatic <verb> [options]
   clp-addons action stager <verb> [options]
   clp-addons action maintenance <verb> --domain=<domain>
@@ -58,6 +60,7 @@ function usage(): void {
   clp-addons action manager <enable|disable|update|job|watch-job> [--addon=<addon>] [--id=<job>]
   clp-addons action auth (session id on bounded stdin)
   clp-addons serve
+  clp-addons smtp-submit -t -i
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}
@@ -135,6 +138,7 @@ async function main(): Promise<number> {
     case "maintenance": await cmdMaintenance(rest); return 0;
     case "uninstall": cmdUninstall(rest); return 0;
     case "action": return await cmdAction(rest);
+    case "smtp-submit": return await runSmtpSubmit(rest);
     case "serve": return await cmdServe();
     case "help":
     case "--help":

@@ -48,6 +48,8 @@ function applyUninstall(spec: AddonSpec, flags: Record<string, string | true>): 
     );
   }
 
+  spec.deactivate?.();
+
   if (!reconcileMaintenanceNginx(true, remaining.includes("maintenance"))) {
     fatal("could not safely update the Nginx maintenance check; no addon files were removed");
   }
