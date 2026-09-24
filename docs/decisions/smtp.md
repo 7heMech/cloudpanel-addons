@@ -21,13 +21,20 @@ authorized to send from that domain.
 
 ## Postfix and state
 
-Enabling requires Postfix and SASL modules. A newly installed Postfix is bound
+Enabling requires a Postfix SMTP client with Cyrus SASL support and the
+`libsasl2-modules` package. Provisioning checks active and inactive existing
+Postfix installs as well as new installs, and installs missing modules. It
+requires `smtp_sasl_type=cyrus`. A newly installed Postfix is bound
 to loopback for inbound SMTP; an existing Postfix installation keeps its
 existing listener configuration. The addon sets `relayhost`, sender-dependent
 relay routing, sender-dependent SASL authentication, authenticated SMTP client
-settings, mandatory verified TLS, and `local_login_sender_maps`. The latter
-limits envelope senders from known site Unix accounts even if they invoke
-Postfix's sendmail command directly. The selected credential still has to be
+settings and mandatory verified TLS. `local_login_sender_maps` limits envelope
+senders from known site Unix accounts even if they invoke Postfix's sendmail
+command directly. A generated TLS policy map puts `secure match=nexthop` first
+for the global and domain relay destinations, ahead of existing operator TLS
+maps, which are restored on
+disable. A nonempty TLS policy map also supersedes the legacy
+`smtp_tls_per_site` parameter. The selected credential still has to be
 authorized by its upstream provider.
 
 The global and per-domain credentials are stored in
@@ -56,7 +63,8 @@ domain against CloudPanel's PHP sites before changing a site rule, and validates
 every relay host, address, template, and allowlist entry. It rejects multiple
 sites sharing one Unix UID because their submissions could not be distinguished.
 The submission command accepts only sendmail flags needed by PHP mail, ignores
-an untrusted `-f` request, and caps messages at 25 MiB with a bounded header.
+an untrusted `-f` request, and stops reading stdin when a message exceeds
+25 MiB. It also requires a bounded header.
 
 This sender policy is enforced on PHP `mail()` submissions through the managed
 pool. Direct Postfix submission from a site account is restricted at the

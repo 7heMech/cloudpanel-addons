@@ -52,7 +52,7 @@ function usage(): void {
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons maintenance <domain> [on|off|status]
   clp-addons action cloudflare-ips <list|set|policy|reconcile> [options]
-  clp-addons action smtp <list|save-relay|save-default|save-site|clear-site|save-domain-relay|clear-domain-relay|test|reconcile|deactivate>
+  clp-addons action smtp <list|save-setup|save-relay|save-default|save-site|clear-site|save-domain-relay|clear-domain-relay|test|reconcile|deactivate>
   clp-addons action instatic <verb> [options]
   clp-addons action stager <verb> [options]
   clp-addons action maintenance <verb> --domain=<domain>

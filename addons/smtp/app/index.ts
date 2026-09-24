@@ -20,7 +20,8 @@ export async function handle(req: Request, path: string, notice?: { current: str
     if (denied) return denied;
     let body: Record<string, unknown>;
     try { body = await readJsonObject(req); } catch (error) { return bodyErrorResponse(error); }
-    const result = path === "/api/relay" ? await smtpService.saveRelay(body)
+    const result = path === "/api/setup" ? await smtpService.saveSetup(body)
+      : path === "/api/relay" ? await smtpService.saveRelay(body)
       : path === "/api/default" ? await smtpService.saveDefault(body)
       : path === "/api/site" ? await smtpService.saveSite(body)
       : path === "/api/site/clear" ? await smtpService.clearSite(body)

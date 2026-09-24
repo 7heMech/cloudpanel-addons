@@ -81,8 +81,8 @@ export function parseRule(value: unknown): SmtpSiteRule {
   return {
     mode: rule.mode,
     sender: rule.sender.toLowerCase(),
-    domains: [...new Set(rule.domains.map(smtpDomain))].sort(),
-    addresses: [...new Set(rule.addresses.map(smtpAddress))].sort(),
+    domains: rule.mode === "allow" ? [...new Set(rule.domains.map(smtpDomain))].sort() : [],
+    addresses: rule.mode === "allow" ? [...new Set(rule.addresses.map(smtpAddress))].sort() : [],
   };
 }
 
@@ -102,9 +102,18 @@ export function parseRelay(value: unknown): SmtpRelay {
   return { host, port: Number(relay.port), username: relay.username, password: relay.password };
 }
 
+export function senderGrants(site: Pick<SmtpSubmissionSite, "domain" | "rule">): { addresses: string[]; domains: string[] } {
+  const addresses = [senderFor(site.rule.sender, site.domain)];
+  if (site.rule.mode === "force") return { addresses, domains: [] };
+  return {
+    addresses: [...new Set([...addresses, ...site.rule.addresses])],
+    domains: [...new Set([site.domain, ...site.rule.domains])],
+  };
+}
+
 export function permittedSender(site: SmtpSubmissionSite, address: string): boolean {
   const sender = smtpAddress(address);
   const domain = sender.slice(sender.lastIndexOf("@") + 1);
-  return sender === senderFor(site.rule.sender, site.domain) ||
-    site.rule.addresses.includes(sender) || domain === site.domain || site.rule.domains.includes(domain);
+  const grants = senderGrants(site);
+  return grants.addresses.includes(sender) || grants.domains.includes(domain);
 }

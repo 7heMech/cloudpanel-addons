@@ -6,6 +6,7 @@ const call = (verb: string, body?: unknown): Promise<ActionResult<SmtpState>> =>
 
 export const smtpService = {
   state: () => call("list"),
+  saveSetup: (body: unknown) => call("save-setup", body),
   saveRelay: (body: unknown) => call("save-relay", body),
   saveDefault: (body: unknown) => call("save-default", body),
   saveSite: (body: unknown) => call("save-site", body),

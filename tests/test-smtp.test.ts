@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeSmtpAction, postfixMaps, type SmtpActionOptions, type SmtpState } from "../addons/smtp/action";
 import { emptySmtpPolicy, parseRule, type SmtpSubmissionSite } from "../addons/smtp/config";
-import { prepareSubmission } from "../addons/smtp/submit";
+import { MAX_MESSAGE_BYTES, prepareSubmission, readBoundedSubmission } from "../addons/smtp/submit";
 import { dashboardView } from "../addons/smtp/app/views";
 
 const dirs: string[] = [];
@@ -45,6 +45,23 @@ test("folded From is checked and ignored Sender fields cannot change it", () => 
   expect(Buffer.from(result.message).toString()).not.toContain("forged@cool.com");
 });
 
+test("stdin accepts exactly 25 MiB and cancels at the first byte over the limit", async () => {
+  const atLimit = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new Uint8Array(MAX_MESSAGE_BYTES)); controller.close(); } });
+  expect((await readBoundedSubmission(atLimit)).byteLength).toBe(MAX_MESSAGE_BYTES);
+  let pulls = 0;
+  let cancelled = false;
+  const oversized = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulls++;
+      controller.enqueue(new Uint8Array(pulls === 1 ? MAX_MESSAGE_BYTES : 1));
+    },
+    cancel() { cancelled = true; },
+  }, { highWaterMark: 0 });
+  await expect(readBoundedSubmission(oversized)).rejects.toThrow("25 MiB");
+  expect(pulls).toBe(2);
+  expect(cancelled).toBe(true);
+});
+
 test("domain relay map selects an override before the shared credential", () => {
   const policy = emptySmtpPolicy();
   policy.relay = { host: "mail.example.com", port: 587, username: "shared@example.com", password: "secret-one" };
@@ -53,6 +70,8 @@ test("domain relay map selects an override before the shared credential", () => 
   expect(maps.credentials.indexOf("noreply@cool.com:secret-two")).toBeLessThan(maps.credentials.indexOf("shared@example.com:secret-one"));
   expect(maps.routes).toContain("[smtp.cool.com]:587");
   expect(maps.credentials).not.toContain("* shared");
+  expect(maps.tls).toContain("/^\\[mail\\.example\\.com\\]:587$/ secure match=nexthop");
+  expect(maps.tls).toContain("/^\\[smtp\\.cool\\.com\\]:587$/ secure match=nexthop");
 });
 
 test("regexp credential maps keep dollar signs literal in SMTP passwords", () => {
@@ -74,6 +93,7 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
   const settings = new Map<string, string>();
   settings.set("relayhost", "");
   settings.set("smtp_tls_CApath", "/etc/ssl/certs");
+  settings.set("smtp_tls_policy_maps", "hash:/etc/postfix/operator-tls");
   const commands: string[] = [];
   const run: NonNullable<SmtpActionOptions["run"]> = (command, args) => {
     commands.push(`${command} ${args.join(" ")}`);
@@ -102,16 +122,51 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
     run,
   };
   const body = { relay: { host: "mail.example.com", port: 587, username: "relay@example.com", password: "secret" } };
-  await executeSmtpAction(["save-relay"], { ...options, input: JSON.stringify(body) });
+  await expect(executeSmtpAction(["save-setup"], { ...options, input: JSON.stringify({ ...body, rule: { mode: "invalid" } }) })).rejects.toThrow("sender mode");
+  expect((await executeSmtpAction(["list"], options) as SmtpState).configured).toBe(false);
+  const submissionPath = join(dir, "submission.json");
+  writeFileSync(submissionPath, "prior submission file\n");
+  chmodSync(submissionPath, 0o644);
+  writeFileSync(pool, readFileSync(pool, "utf8") + "php_admin_value[sendmail_path] = /other/sendmail\n");
+  await expect(executeSmtpAction(["save-setup"], { ...options, input: JSON.stringify({ ...body, rule: site.rule }) })).rejects.toThrow("already configures sendmail_path");
+  expect((await executeSmtpAction(["list"], options) as SmtpState).configured).toBe(false);
+  for (const path of ["clp-addons-sasl", "clp-addons-relays", "clp-addons-local-senders", "clp-addons-local-senders.db", "clp-addons-tls-policy"]) {
+    expect(existsSync(join(postfixDir, path))).toBe(false);
+  }
+  expect(readFileSync(submissionPath, "utf8")).toBe("prior submission file\n");
+  expect(settings.get("smtp_tls_policy_maps")).toBe("hash:/etc/postfix/operator-tls");
+  writeFileSync(pool, readFileSync(pool, "utf8").replace("php_admin_value[sendmail_path] = /other/sendmail\n", ""));
+  await executeSmtpAction(["save-setup"], { ...options, input: JSON.stringify({ ...body, rule: site.rule }) });
   expect(readFileSync(pool, "utf8")).toContain("smtp-submit -t -i");
   expect(readFileSync(join(dir, "submission.json"), "utf8")).toContain("noreply@{domain}");
   expect(settings.get("local_login_sender_maps")).toContain("clp-addons-local-senders");
   expect(readFileSync(join(postfixDir, "clp-addons-local-senders"), "utf8")).toContain("clp *\n");
+  expect(settings.get("smtp_tls_security_level")).toBe("secure");
+  expect(settings.get("smtp_tls_policy_maps")).toBe(`regexp:${join(postfixDir, "clp-addons-tls-policy")}, hash:/etc/postfix/operator-tls`);
+  settings.set("smtp_tls_per_site", "hash:/etc/postfix/old-tls");
+  await executeSmtpAction(["save-default"], { ...options, input: JSON.stringify({ rule: site.rule }) });
+  expect(settings.get("smtp_tls_policy_maps")?.startsWith(`regexp:${join(postfixDir, "clp-addons-tls-policy")}`)).toBe(true);
+  settings.delete("smtp_tls_per_site");
+  const originalPath = join(dir, "original.json");
+  const priorBackup = JSON.parse(readFileSync(originalPath, "utf8"));
+  delete priorBackup.values.smtp_tls_policy_maps;
+  writeFileSync(originalPath, JSON.stringify(priorBackup));
+  settings.set("smtp_tls_policy_maps", "hash:/etc/postfix/operator-tls");
+  await executeSmtpAction(["save-default"], { ...options, input: JSON.stringify({ rule: site.rule }) });
+  expect(JSON.parse(readFileSync(originalPath, "utf8")).values.smtp_tls_policy_maps).toBe("hash:/etc/postfix/operator-tls");
+  expect(settings.get("smtp_tls_policy_maps")).toBe(`regexp:${join(postfixDir, "clp-addons-tls-policy")}, hash:/etc/postfix/operator-tls`);
+  expect(readFileSync(join(postfixDir, "clp-addons-tls-policy"), "utf8")).toContain("secure match=nexthop");
+  await executeSmtpAction(["save-domain-relay"], { ...options, input: JSON.stringify({ domain: "cool.com", relay: {
+    host: "smtp.cool.com", port: 587, username: "cool@cool.com", password: "other-secret",
+  } }) });
+  expect(readFileSync(join(postfixDir, "clp-addons-tls-policy"), "utf8")).toContain("smtp\\.cool\\.com");
+  expect(settings.get("smtp_tls_policy_maps")).toBe(`regexp:${join(postfixDir, "clp-addons-tls-policy")}, hash:/etc/postfix/operator-tls`);
   expect(commands.some((item) => item.includes("php-fpm8.2 -t"))).toBe(true);
   const publicState = await executeSmtpAction(["list"], options);
   const html = dashboardView(publicState as SmtpState);
   expect(JSON.stringify(publicState)).not.toContain("secret");
   expect(html).not.toContain("secret");
+  expect(html).toContain('data-label="Forced From"');
   writeFileSync(pool, readFileSync(pool, "utf8") + "php_admin_value[sendmail_path] = /other/sendmail\n");
   await expect(executeSmtpAction(["save-default"], { ...options, input: JSON.stringify({
     rule: { mode: "allow", sender: "noreply@{domain}", domains: [], addresses: [] },
@@ -123,4 +178,23 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
   expect(existsSync(join(dir, "submission.json"))).toBe(false);
   expect(settings.get("relayhost")).toBe("");
   expect(settings.get("smtp_tls_CApath")).toBe("/etc/ssl/certs");
+  expect(settings.get("smtp_tls_policy_maps")).toBe("hash:/etc/postfix/operator-tls");
+  expect(existsSync(join(postfixDir, "clp-addons-tls-policy"))).toBe(false);
+});
+
+test("force mode drops dormant allow-list grants", () => {
+  expect(parseRule({ mode: "force", sender: "noreply@{domain}", domains: ["other.test"], addresses: ["a@other.test"] })).toEqual(site.rule);
+});
+
+test("site table distinguishes an allow-mode fallback from its full grants", () => {
+  const policy = emptySmtpPolicy();
+  const rule = parseRule({ mode: "allow", sender: "noreply@{domain}", domains: ["news.example.com"], addresses: ["billing@partner.test"] });
+  const html = dashboardView({
+    configured: false, relay: null, relayOverrides: {}, defaultRule: policy.defaultRule,
+    sites: [{ domain: "example.com", user: "example", phpVersion: "8.2", rule, overridden: true, senderPreview: "noreply@example.com" }],
+  });
+  expect(html).toContain('data-label="Fallback From"');
+  expect(html).toContain("@news.example.com");
+  expect(html).toContain("billing@partner.test");
+  expect(html).toContain('data-label="Actions"');
 });

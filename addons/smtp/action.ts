@@ -8,18 +8,18 @@ import {
 import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import {
-  emptySmtpPolicy, parseRelay, parseRule, senderFor, smtpAddress, smtpDomain,
+  emptySmtpPolicy, parseRelay, parseRule, senderFor, senderGrants, smtpAddress, smtpDomain,
   type SmtpPolicy, type SmtpRelay, type SmtpSiteRule, type SmtpSubmissionPolicy,
 } from "./config";
 import { SUBMISSION_POLICY_PATH } from "./submit";
 
 const MANAGED_POOL_LINE = `php_admin_value[sendmail_path] = ${CLI_BIN} smtp-submit -t -i`;
 const MANAGED_POOL_MARKER = "; clp-addons smtp relay";
-type SmtpVerb = "list" | "save-relay" | "save-default" | "save-site" | "clear-site" |
+type SmtpVerb = "list" | "save-setup" | "save-relay" | "save-default" | "save-site" | "clear-site" |
   "save-domain-relay" | "clear-domain-relay" | "test" | "reconcile" | "deactivate";
 const POSTFIX_KEYS = [
   "relayhost", "smtp_sasl_auth_enable", "smtp_sender_dependent_authentication",
-  "smtp_sasl_password_maps", "sender_dependent_relayhost_maps", "smtp_tls_security_level",
+  "smtp_sasl_password_maps", "sender_dependent_relayhost_maps", "smtp_tls_security_level", "smtp_tls_policy_maps",
   "smtp_sasl_security_options", "smtp_sasl_tls_security_options", "local_login_sender_maps",
 ] as const;
 
@@ -192,7 +192,10 @@ function replacePolicy(policy: SmtpPolicy, verb: string, body: Record<string, un
   const next: SmtpPolicy = {
     ...policy, siteRules: { ...policy.siteRules }, relayOverrides: { ...policy.relayOverrides },
   };
-  if (verb === "save-relay") {
+  if (verb === "save-setup") {
+    next.relay = relayFromRequest(body.relay, policy.relay);
+    next.defaultRule = parseRule(body.rule);
+  } else if (verb === "save-relay") {
     next.relay = relayFromRequest(body.relay, policy.relay);
   } else if (verb === "save-default") {
     next.defaultRule = parseRule(body.rule);
@@ -220,7 +223,7 @@ function regexpResult(value: string): string {
   // A literal dollar sign in a provider username or password must be doubled.
   return value.split("$").join("$$");
 }
-export function postfixMaps(policy: SmtpPolicy): { credentials: string; routes: string } {
+export function postfixMaps(policy: SmtpPolicy): { credentials: string; routes: string; tls: string } {
   if (!policy.relay) throw new Error("global relay is not configured");
   const credentials: string[] = [];
   const routes: string[] = [];
@@ -230,27 +233,48 @@ export function postfixMaps(policy: SmtpPolicy): { credentials: string; routes: 
     routes.push(`${pattern} ${relayDestination(relay)}`);
   }
   credentials.push(`/.*/ ${regexpResult(policy.relay.username)}:${regexpResult(policy.relay.password)}`);
-  return { credentials: credentials.join("\n") + "\n", routes: routes.join("\n") + "\n" };
+  const destinations = new Set([relayDestination(policy.relay), ...Object.values(policy.relayOverrides).map(relayDestination)]);
+  const tls = [...destinations].sort().map((destination) =>
+    `/^${destination.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$/ secure match=nexthop`).join("\n") + "\n";
+  return { credentials: credentials.join("\n") + "\n", routes: routes.join("\n") + "\n", tls };
 }
 
 function localSenderMap(policy: SmtpPolicy, sites: SiteRow[]): string {
   const entries = ["root *", "postfix *", "clp *"];
   for (const site of sites) {
     const rule = effectiveRule(policy, site.domain);
-    const patterns = rule.mode === "force"
-      ? [senderFor(rule.sender, site.domain)]
-      : [senderFor(rule.sender, site.domain), `@${site.domain}`, ...rule.domains.map((d) => `@${d}`), ...rule.addresses];
-    entries.push(`${site.user} ${[...new Set(patterns)].join(" ")}`);
+    const grants = senderGrants({ domain: site.domain, rule });
+    entries.push(`${site.user} ${[...grants.addresses, ...grants.domains.map((domain) => `@${domain}`)].join(" ")}`);
   }
   return entries.join("\n") + "\n";
 }
 
-function managedPaths(paths: SmtpPaths): { credentials: string; routes: string; senders: string } {
+function managedPaths(paths: SmtpPaths): { credentials: string; routes: string; senders: string; tls: string } {
   return {
     credentials: join(paths.postfixDir, "clp-addons-sasl"),
     routes: join(paths.postfixDir, "clp-addons-relays"),
     senders: join(paths.postfixDir, "clp-addons-local-senders"),
+    tls: join(paths.postfixDir, "clp-addons-tls-policy"),
   };
+}
+
+function managedFileSnapshot(paths: SmtpPaths): { path: string; content: Buffer | null; mode: number }[] {
+  const managed = managedPaths(paths);
+  return [managed.credentials, managed.routes, managed.senders, managed.tls, `${managed.senders}.db`, paths.submissionFile].map((path) => {
+    if (!existsSync(path)) return { path, content: null, mode: 0o600 };
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== paths.rootUid || (stat.mode & 0o022) !== 0) {
+      failAction(`refusing untrusted SMTP file: ${path}`);
+    }
+    return { path, content: readFileSync(path), mode: stat.mode & 0o777 };
+  });
+}
+
+function restoreManagedFiles(snapshot: ReturnType<typeof managedFileSnapshot>): void {
+  for (const { path, content, mode } of snapshot) {
+    if (content === null) rmSync(path, { force: true });
+    else writeFileAtomic(path, content, { mode, createParent: true });
+  }
 }
 
 function capturePostfix(paths: SmtpPaths, run: (command: string, args: string[]) => CommandResult): void {
@@ -271,6 +295,8 @@ function currentPostfixSettings(run: (command: string, args: string[]) => Comman
 
 function applyPostfixSettings(values: Record<string, string | null>, run: (command: string, args: string[]) => CommandResult): void {
   for (const key of POSTFIX_KEYS) {
+    // Backups written before this key was managed must leave it untouched.
+    if (!(key in values)) continue;
     const value = values[key];
     if (value === null || value === undefined) runChecked(run, "postconf", ["-X", key]);
     else runChecked(run, "postconf", ["-e", `${key}=${value}`]);
@@ -296,6 +322,7 @@ function updatePostfix(paths: SmtpPaths, policy: SmtpPolicy, sites: SiteRow[], r
     [managed.credentials]: maps.credentials,
     [managed.routes]: maps.routes,
     [managed.senders]: localSenderMap(policy, sites),
+    [managed.tls]: maps.tls,
   };
   const before = Object.fromEntries(Object.keys(mapContents).map((path) => [path, trustedRead(path, paths.rootUid)]));
   const oldDbPath = `${managed.senders}.db`;
@@ -304,6 +331,16 @@ function updatePostfix(paths: SmtpPaths, policy: SmtpPolicy, sites: SiteRow[], r
     failAction(`refusing untrusted SMTP file: ${oldDbPath}`);
   }
   const oldDb = oldDbStat ? readFileSync(oldDbPath) : null;
+  const current = currentPostfixSettings(run);
+  const originalRaw = trustedRead(paths.originalFile, paths.rootUid);
+  const originalValues = originalRaw ? (JSON.parse(originalRaw) as OriginalPostfix).values : null;
+  if (originalValues && !("smtp_tls_policy_maps" in originalValues)) {
+    // Earlier installations did not manage TLS policy maps, so the current
+    // value is the operator's original value and belongs in the backup.
+    originalValues.smtp_tls_policy_maps = current.smtp_tls_policy_maps ?? null;
+    writeFileAtomic(paths.originalFile, JSON.stringify({ version: 1, values: originalValues }, null, 2) + "\n", { mode: 0o600 });
+  }
+  const existingTlsMaps = originalValues ? originalValues.smtp_tls_policy_maps : current.smtp_tls_policy_maps;
   const settings: Record<string, string> = {
     relayhost: relayDestination(policy.relay),
     smtp_sasl_auth_enable: "yes",
@@ -311,11 +348,11 @@ function updatePostfix(paths: SmtpPaths, policy: SmtpPolicy, sites: SiteRow[], r
     smtp_sasl_password_maps: `regexp:${managed.credentials}`,
     sender_dependent_relayhost_maps: `regexp:${managed.routes}`,
     smtp_tls_security_level: "secure",
+    smtp_tls_policy_maps: [`regexp:${managed.tls}`, existingTlsMaps].filter(Boolean).join(", "),
     smtp_sasl_security_options: "noanonymous",
     smtp_sasl_tls_security_options: "noanonymous",
     local_login_sender_maps: `hash:${managed.senders}`,
   };
-  const current = currentPostfixSettings(run);
   const mapsChanged = Object.entries(mapContents).some(([path, content]) => before[path] !== content);
   const configChanged = Object.entries(settings).some(([key, value]) => current[key] !== value);
   const dbStale = oldDb === null || (existsSync(managed.senders) && statSync(managed.senders).mtimeMs > oldDbStat!.mtimeMs);
@@ -438,8 +475,8 @@ export async function executeSmtpAction(argv: string[], options: SmtpActionOptio
   const paths = { ...DEFAULT_SMTP_PATHS, ...options.paths };
   const run = options.run ?? runCommand;
   const verb = argv[0] as SmtpVerb | undefined;
-  if (argv.length !== 1 || !["list", "save-relay", "save-default", "save-site", "clear-site", "save-domain-relay", "clear-domain-relay", "test", "reconcile", "deactivate"].includes(verb ?? "")) {
-    failAction("usage: clp-addons action smtp {list|save-relay|save-default|save-site|clear-site|save-domain-relay|clear-domain-relay|test|reconcile|deactivate}");
+  if (argv.length !== 1 || !["list", "save-setup", "save-relay", "save-default", "save-site", "clear-site", "save-domain-relay", "clear-domain-relay", "test", "reconcile", "deactivate"].includes(verb ?? "")) {
+    failAction("usage: clp-addons action smtp {list|save-setup|save-relay|save-default|save-site|clear-site|save-domain-relay|clear-domain-relay|test|reconcile|deactivate}");
   }
   return withFileLock(paths.lockFile, 30, "SMTP configuration is busy", async () => {
     const policy = readPolicy(paths);
@@ -450,7 +487,7 @@ export async function executeSmtpAction(argv: string[], options: SmtpActionOptio
       rmSync(paths.submissionFile, { force: true });
       restorePostfix(paths, run);
       const managed = managedPaths(paths);
-      for (const path of [managed.credentials, managed.routes, managed.senders, `${managed.senders}.db`]) {
+      for (const path of [managed.credentials, managed.routes, managed.senders, managed.tls, `${managed.senders}.db`]) {
         trustedRead(path, paths.rootUid);
         rmSync(path, { force: true });
       }
@@ -463,6 +500,7 @@ export async function executeSmtpAction(argv: string[], options: SmtpActionOptio
     const body = await inputBody(options);
     if (verb === "test") return sendTest(paths, policy, sites, body);
     const next = replacePolicy(policy, verb!, body, sites);
+    const firstSetupFiles = !policy.relay && next.relay ? managedFileSnapshot(paths) : null;
     try {
       if (next.relay) applyConfiguration(paths, next, sites, run);
       writePolicy(paths, next);
@@ -477,10 +515,10 @@ export async function executeSmtpAction(argv: string[], options: SmtpActionOptio
           updatePostfix(paths, policy, sites, run);
           writeSubmissionPolicy(paths, policy, sites);
         }
-        else {
+        else if (firstSetupFiles) {
           updatePools(paths, sites, false, run);
-          rmSync(paths.submissionFile, { force: true });
-          restorePostfix(paths, run);
+          try { restorePostfix(paths, run); }
+          finally { restoreManagedFiles(firstSetupFiles); }
         }
       } catch (rollbackError) {
         failAction(`SMTP update failed (${reason(error)}); rollback also failed: ${reason(rollbackError)}`);

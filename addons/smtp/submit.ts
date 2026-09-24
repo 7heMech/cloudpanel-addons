@@ -3,7 +3,7 @@ import { CONFIG_DIR } from "../../cli/paths";
 import { permittedSender, senderFor, smtpAddress, type SmtpSubmissionPolicy, type SmtpSubmissionSite } from "./config";
 
 export const SUBMISSION_POLICY_PATH = `${CONFIG_DIR}/smtp-submission.json`;
-const MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
+export const MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
 const MAX_HEADER_BYTES = 64 * 1024;
 
 function trustedPolicy(path: string): SmtpSubmissionPolicy {
@@ -23,6 +23,28 @@ function senderFromHeader(value: string): string {
   const address = bracketed ? bracketed[1] : unfolded;
   if (!address || address.includes(",") || /[\r\n]/.test(address)) throw new Error("message has an invalid From address");
   return smtpAddress(address);
+}
+
+/** Stops reading stdin at the first chunk that crosses the submission limit. */
+export async function readBoundedSubmission(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > MAX_MESSAGE_BYTES) throw new Error("message exceeds the 25 MiB submission limit");
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks, length);
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 /** Rewrites one message before it crosses the trusted local sendmail boundary. */
@@ -91,7 +113,7 @@ export async function runSmtpSubmit(
     const policy = trustedPolicy(options.policyPath ?? SUBMISSION_POLICY_PATH);
     const matches = policy.sites.filter((site) => site.uid === uid);
     if (matches.length !== 1) throw new Error("the sending Unix account has no unique CloudPanel site");
-    const input = options.input ?? new Uint8Array(await Bun.stdin.arrayBuffer());
+    const input = options.input ?? await readBoundedSubmission(Bun.stdin.stream());
     const prepared = prepareSubmission(input, matches[0]!);
     const result = Bun.spawnSync([options.sendmailPath ?? "/usr/sbin/sendmail", "-t", "-i", "-f", prepared.sender], {
       stdin: prepared.message, stdout: "pipe", stderr: "pipe", maxBuffer: 64 * 1024,

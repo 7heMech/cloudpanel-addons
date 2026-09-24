@@ -8,21 +8,26 @@ there is no WordPress plugin to install.
 
 ## Set up
 
-1. Enable **SMTP Relay** in Addons. The installer starts Postfix if needed.
-   An existing Postfix must be version 3.6 or newer.
+1. Enable **SMTP Relay** in Addons. The installer starts Postfix if needed and
+   checks SMTP authentication modules even when Postfix is already active.
+   An existing Postfix must be version 3.6 or newer with Cyrus SASL client
+   support.
 2. Open **SMTP Relay** and enter the SMTP hostname, STARTTLS submission port
-   (normally 587), username, and password. Save the global relay.
-3. Choose a default sender. `noreply@{domain}` becomes
+   (normally 587), username, and password. Choose a default sender in the same
+   form, then save both settings together. `noreply@{domain}` becomes
    `noreply@example.com` for the `example.com` site. **Force one address**
    replaces an application's requested From address. **Allow site domains**
    preserves From addresses on that site's domain and on any domains or exact
-   addresses explicitly granted in the site's editor.
-4. For a sending domain that needs its own SMTP account, add a **Sending domain
+   addresses explicitly granted in the site's editor. Switching a site to
+   Force clears its additional grants.
+3. For a sending domain that needs its own SMTP account, add a **Sending domain
    relay**. All other senders use the global account. The relay's SMTP provider
    must allow the resulting From address; configuring the addon does not create
    mailboxes, authorize senders at the provider, or set DNS records.
-5. Send a test to an inbox you control. The page confirms that Postfix queued
-   the message; check the inbox and, if needed, `/var/log/mail.log` and
+4. Send a test to an inbox you control. The test submits directly to Postfix
+   as root with the selected site's configured sender; it does not exercise
+   the site's PHP path. The page confirms that Postfix queued the message;
+   check the inbox and, if needed, `/var/log/mail.log` and
    `postqueue -p` for the delivery result.
 
 For Mailcow, one mailbox credential can be used as the global relay when that

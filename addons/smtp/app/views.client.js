@@ -20,18 +20,18 @@ async function smtpPost(path, body) {
   }
 }
 
-function smtpSaveRelay(event) {
-  event.preventDefault();
-  const fields = smtpFields(event.currentTarget);
-  smtpPost('/api/relay', { relay: {
-    host: fields.host, port: Number(fields.port), username: fields.username, password: fields.password,
-  } });
+function smtpRelayPayload(fields) {
+  return { host: fields.host, port: Number(fields.port), username: fields.username, password: fields.password };
 }
 
-function smtpSaveDefault(event) {
+function smtpSaveSetup(event) {
   event.preventDefault();
   const fields = smtpFields(event.currentTarget);
-  smtpPost('/api/default', { rule: { mode: fields.mode, sender: fields.sender, domains: [], addresses: [] } });
+  smtpPost('/api/setup', {
+    relay: smtpRelayPayload(fields),
+    rule: { mode: fields.mode, sender: fields.sender,
+      domains: smtpState.defaultRule.domains, addresses: smtpState.defaultRule.addresses },
+  });
 }
 
 async function smtpSendTest(event) {
@@ -64,9 +64,21 @@ function smtpEditSite(domain) {
   form.elements.namedItem('sender').value = site.rule.sender;
   form.elements.namedItem('domains').value = site.rule.domains.join('\n');
   form.elements.namedItem('addresses').value = site.rule.addresses.join('\n');
+  smtpSyncSiteMode();
   document.getElementById('smtp-site-heading').textContent = 'Sender policy for ' + domain;
   document.getElementById('smtp-clear-site').hidden = !site.overridden;
   document.getElementById('smtp-site-dialog').showModal();
+}
+
+function smtpSyncSiteMode() {
+  const form = document.getElementById('smtp-site-form');
+  const allow = form.elements.namedItem('mode').value === 'allow';
+  document.getElementById('smtp-site-allow-fields').hidden = !allow;
+  for (const name of ['domains', 'addresses']) {
+    const field = form.elements.namedItem(name);
+    if (!allow) field.value = '';
+    field.disabled = !allow;
+  }
 }
 
 function smtpSaveSite(event) {
@@ -93,15 +105,14 @@ function smtpEditDomain(domain) {
   form.elements.namedItem('username').value = old ? old.username : '';
   form.elements.namedItem('password').value = '';
   form.elements.namedItem('password').required = !old;
+  form.elements.namedItem('password').placeholder = old ? 'Leave blank to keep saved password' : 'New SMTP password';
   document.getElementById('smtp-domain-dialog').showModal();
 }
 
 function smtpSaveDomain(event) {
   event.preventDefault();
   const fields = smtpFields(event.currentTarget);
-  smtpPost('/api/domain-relay', { domain: fields.domain, relay: {
-    host: fields.host, port: Number(fields.port), username: fields.username, password: fields.password,
-  } });
+  smtpPost('/api/domain-relay', { domain: fields.domain, relay: smtpRelayPayload(fields) });
 }
 
 async function smtpClearDomain(domain) {
