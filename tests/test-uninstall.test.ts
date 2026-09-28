@@ -12,6 +12,7 @@ const configFile = join(root, "instatic.conf");
 const actionBin = join(root, "clp-addons");
 const identityPath = join(root, "panel-identity.conf");
 const callsPath = join(root, "calls");
+const stopsPath = join(root, "stops");
 const identityReadsPath = join(root, "identity-reads");
 const domains = ["alpha.example.test", "beta.example.test", "gamma.example.test"];
 let failureDomain: string | undefined;
@@ -37,7 +38,7 @@ printf '%s\n' '{"ok":true,"data":{"status":"deleted"}}'
 
 const childScript = String.raw`
 import { mock } from "bun:test";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
 const root = process.env.CLP_TEST_ROOT;
@@ -46,6 +47,7 @@ const configFile = process.env.CLP_TEST_CONFIG;
 const actionBin = process.env.CLP_TEST_ACTION_BIN;
 const identityPath = process.env.CLP_TEST_IDENTITY;
 const legacyActionDir = process.env.CLP_TEST_LEGACY_ACTION_DIR;
+const stopsPath = process.env.CLP_TEST_STOPS;
 if (!root || !stateDir || !configFile || !actionBin || !identityPath || !legacyActionDir) {
   throw new Error("test fixture environment is incomplete");
 }
@@ -58,6 +60,9 @@ const spec = {
   requiresUnits: [],
   stateDir,
   targets: [],
+  deactivate: () => {
+    if (process.env.CLP_TEST_DEACTIVATE_FAIL === "1") throw new Error("simulated SMTP cleanup failure");
+  },
 };
 let removeSudoersCalls = 0;
 
@@ -134,7 +139,7 @@ mock.module("./cli/provision.ts", () => ({
     rmSync(identityPath, { force: true });
   },
   startUnits: () => {},
-  stopUnits: () => {},
+  stopUnits: () => { writeFileSync(stopsPath, "stopped"); },
   unitActive: () => "inactive",
   unitPid: () => null,
   warnIfPanelSessionUnreadable: () => {},
@@ -202,11 +207,12 @@ function resetFixture(): void {
   writeFileSync(actionBin, action, { mode: 0o755 });
   chmodSync(actionBin, 0o755);
   rmSync(callsPath, { force: true });
+  rmSync(stopsPath, { force: true });
   rmSync(identityReadsPath, { force: true });
   failureDomain = undefined;
 }
 
-function runUninstall(): { ok: boolean; error?: string; removeSudoersCalls: number } {
+function runUninstall(deactivateFail = false): { ok: boolean; error?: string; removeSudoersCalls: number } {
   const result = spawnSync(process.execPath, ["-e", childScript], {
     cwd: repo,
     encoding: "utf8",
@@ -220,6 +226,8 @@ function runUninstall(): { ok: boolean; error?: string; removeSudoersCalls: numb
       CLP_TEST_LEGACY_ACTION_DIR: legacyActionDir,
       CLP_TEST_FAIL_DOMAIN: failureDomain ?? "",
       CLP_TEST_CALLS: callsPath,
+      CLP_TEST_STOPS: stopsPath,
+      CLP_TEST_DEACTIVATE_FAIL: deactivateFail ? "1" : "0",
       CLP_TEST_IDENTITY_READS: identityReadsPath,
     },
   });
@@ -230,6 +238,14 @@ function runUninstall(): { ok: boolean; error?: string; removeSudoersCalls: numb
 }
 
 beforeEach(resetFixture);
+
+test.serial("a failed deactivation stops uninstall before shared services change", () => {
+  const result = runUninstall(true);
+  expect(result).toEqual({ ok: false, error: "simulated SMTP cleanup failure", removeSudoersCalls: 0 });
+  expect(existsSync(stopsPath)).toBe(false);
+  expect(existsSync(configFile)).toBe(true);
+  expect(existsSync(identityPath)).toBe(true);
+});
 
 test.serial("purge deletes every instance before removing panel identity", () => {
   const result = runUninstall();

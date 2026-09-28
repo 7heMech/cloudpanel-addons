@@ -106,6 +106,11 @@ export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
   "policy",
 ]);
 
+export const SMTP_ALLOWED_VERBS = new Set([
+  "list", "save-setup", "save-relay", "save-default", "save-site", "clear-site",
+  "save-domain-relay", "clear-domain-relay", "test",
+]);
+
 /**
  * The manager's own privileged verbs: enabling and disabling an addon that
  * already ships inside this binary, and replacing the binary itself.

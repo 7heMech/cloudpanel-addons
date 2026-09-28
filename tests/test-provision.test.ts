@@ -216,12 +216,17 @@ function requiredUnitsProbe(options: {
   downloadOk?: boolean;
   installOk?: boolean;
   enableOk?: boolean;
+  restartOk?: boolean;
+  modulesInstalled?: boolean;
+  cyrusClient?: boolean;
+  saslType?: string;
 } = {}): { ok: boolean; error?: string; calls: Array<{ command: string; args: string[] }> } {
   const script = `
     import { ensureRequiredUnits } from "./cli/provision.ts";
     const options = ${JSON.stringify(options)};
     const spec = { name: "instatic", configFile: "", stateDir: "", targets: [], requiresUnits: [options.unit ?? "docker"] };
     const calls = [];
+    let modulesInstalled = options.modulesInstalled ?? true;
     const runner = {
       run(command, args) { calls.push({ command, args: [...args] }); return ""; },
       tryRun(command, args) {
@@ -234,7 +239,12 @@ function requiredUnitsProbe(options: {
         }
         if (command === "curl") return { ok: options.downloadOk ?? true, out: options.downloadOk === false ? "could not resolve host" : "" };
         if (command === "sh") return { ok: options.installOk ?? true, out: options.installOk === false ? "get-docker.sh exited 1" : "" };
+        if (command === "dpkg-query") return { ok: modulesInstalled, out: modulesInstalled ? "install ok installed" : "" };
+        if (command === "postconf" && args[0] === "-A") return { ok: true, out: options.cyrusClient === false ? "" : "cyrus" };
+        if (command === "postconf" && args[0] === "-h") return { ok: true, out: options.saslType ?? "cyrus" };
+        if (command === "env") { modulesInstalled = options.installOk ?? true; return { ok: options.installOk ?? true, out: options.installOk === false ? "apt-get exited 1" : "" }; }
         if (command === "systemctl" && args[0] === "enable") return { ok: options.enableOk ?? true, out: "" };
+        if (command === "systemctl" && args[0] === "restart") return { ok: options.restartOk ?? true, out: "" };
         return { ok: true, out: "" };
       },
     };
@@ -301,6 +311,63 @@ test("fails clearly when Docker still is not active after installing it", () => 
 
   expect(result.ok).toBe(false);
   expect(result.error).toBe("docker is not active; installing it did not bring the service up");
+});
+
+test("a fresh Postfix install restarts after binding to loopback", () => {
+  const result = requiredUnitsProbe({ unit: "postfix", active: false, dockerUnitLoaded: false });
+  expect(result.ok).toBe(true);
+  const commands = result.calls.map(({ command, args }) => `${command} ${args.join(" ")}`);
+  expect(commands).toContain("env DEBIAN_FRONTEND=noninteractive apt-get install -y postfix libsasl2-modules");
+  expect(commands.indexOf("postconf -e inet_interfaces=loopback-only")).toBeLessThan(commands.indexOf("systemctl restart postfix"));
+  expect(commands.indexOf("systemctl restart postfix")).toBeLessThan(commands.indexOf("systemctl enable --now postfix"));
+});
+
+test.each([true, false])("existing Postfix (active %p) gets missing SASL modules without changing its listener", (active) => {
+  const result = requiredUnitsProbe({ unit: "postfix", active, dockerUnitLoaded: true, modulesInstalled: false });
+  expect(result.ok).toBe(true);
+  expect(result.calls).toContainEqual({ command: "env", args: ["DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "libsasl2-modules"] });
+  expect(result.calls).not.toContainEqual({ command: "postconf", args: ["-e", "inet_interfaces=loopback-only"] });
+  expect(result.calls).not.toContainEqual({ command: "systemctl", args: ["restart", "postfix"] });
+  expect(result.calls.some(({ command, args }) => command === "systemctl" && args[0] === "enable")).toBe(!active);
+});
+
+test("active Postfix with SASL ready needs no install", () => {
+  const result = requiredUnitsProbe({ unit: "postfix", active: true });
+  expect(result.ok).toBe(true);
+  expect(result.calls.some(({ command }) => command === "env")).toBe(false);
+  expect(result.calls).toContainEqual({ command: "postconf", args: ["-A"] });
+});
+
+test("inactive Postfix with SASL ready starts without reinstalling", () => {
+  const result = requiredUnitsProbe({ unit: "postfix", active: false, dockerUnitLoaded: true });
+  expect(result.ok).toBe(true);
+  expect(result.calls.some(({ command }) => command === "env")).toBe(false);
+  expect(result.calls).toContainEqual({ command: "systemctl", args: ["enable", "--now", "postfix"] });
+});
+
+test("Postfix without Cyrus client support fails before activating the addon", () => {
+  const result = requiredUnitsProbe({ unit: "postfix", active: true, cyrusClient: false });
+  expect(result.ok).toBe(false);
+  expect(result.error).toContain("lacks Cyrus SASL support");
+});
+
+test("Postfix configured for another SASL client fails clearly", () => {
+  const result = requiredUnitsProbe({ unit: "postfix", active: true, saslType: "dovecot" });
+  expect(result.ok).toBe(false);
+  expect(result.error).toContain("smtp_sasl_type must be cyrus");
+});
+
+test("missing SASL modules report an installation error", () => {
+  const result = requiredUnitsProbe({ unit: "postfix", active: true, modulesInstalled: false, installOk: false });
+  expect(result.ok).toBe(false);
+  expect(result.error).toContain("authentication modules could not be installed");
+});
+
+test("a failed Postfix restart aborts provisioning", () => {
+  const result = requiredUnitsProbe({ unit: "postfix", active: false, dockerUnitLoaded: false, restartOk: false });
+  expect(result.ok).toBe(false);
+  expect(result.error).toBe("Postfix could not be restarted on the loopback interface");
+  expect(result.calls).not.toContainEqual({ command: "systemctl", args: ["enable", "--now", "postfix"] });
 });
 
 test("a non-docker required unit still fails fast with no provisioning attempt", () => {

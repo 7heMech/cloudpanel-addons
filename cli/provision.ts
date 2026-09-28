@@ -254,19 +254,52 @@ function installDocker(commands: ProvisionCommandRunner): void {
 
 /**
  * `applyEnable`/`cmdInstall` gate on `requiresUnits` before touching any
- * addon state. Docker is the only unit any addon currently requires, and the
- * installer already knows how to bring it up on a fresh host
- * (`install.sh --install-docker`, via get.docker.com). Enabling instatic
- * later -- from the UI or `clp-addons install instatic` -- should follow the
- * same path instead of just telling the operator to go run that installer's
- * logic by hand.
+ * addon state. Docker and Postfix are installed only when their respective
+ * addons require them. Postfix is used as a local queue and authenticated
+ * outbound relay, not as a listening mail service for customer sites.
  */
 export function ensureRequiredUnits(
   spec: AddonSpec,
   commands: ProvisionCommandRunner = { run, tryRun },
 ): void {
   for (const unit of spec.requiresUnits ?? []) {
-    if (commands.tryRun("systemctl", ["is-active", unit]).ok) continue;
+    const active = commands.tryRun("systemctl", ["is-active", unit]).ok;
+    if (active && unit !== "postfix") continue;
+    if (unit === "postfix") {
+      const loadState = active ? null : commands.tryRun("systemctl", ["show", "postfix", "--property=LoadState", "--value"]);
+      const fresh = loadState !== null && loadState.out.trim() !== "loaded";
+      const modules = commands.tryRun("dpkg-query", ["-W", "-f=${Status}", "libsasl2-modules"]);
+      if (fresh || !modules.ok || modules.out.trim() !== "install ok installed") {
+        log.step("installing Postfix and its SMTP authentication modules");
+        const packages = fresh ? ["postfix", "libsasl2-modules"] : ["libsasl2-modules"];
+        const install = commands.tryRun("env", ["DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", ...packages]);
+        if (!install.ok) fatal(`Postfix SMTP authentication modules could not be installed: ${install.out || "apt-get failed"}`);
+      }
+      const installedModules = commands.tryRun("dpkg-query", ["-W", "-f=${Status}", "libsasl2-modules"]);
+      if (!installedModules.ok || installedModules.out.trim() !== "install ok installed") {
+        fatal("Postfix SMTP authentication requires the libsasl2-modules package");
+      }
+      const clients = commands.tryRun("postconf", ["-A"]);
+      if (!clients.ok || !clients.out.split(/\s+/).includes("cyrus")) {
+        fatal("Postfix SMTP client lacks Cyrus SASL support; install a Postfix build with Cyrus SASL client support");
+      }
+      const saslType = commands.tryRun("postconf", ["-h", "smtp_sasl_type"]);
+      if (!saslType.ok || saslType.out.trim() !== "cyrus") {
+        fatal("Postfix smtp_sasl_type must be cyrus for authenticated SMTP relay");
+      }
+      if (fresh) {
+        const outboundOnly = commands.tryRun("postconf", ["-e", "inet_interfaces=loopback-only"]);
+        if (!outboundOnly.ok) fatal(`Postfix could not be limited to local submissions: ${outboundOnly.out || "postconf failed"}`);
+        if (!commands.tryRun("systemctl", ["restart", "postfix"]).ok) {
+          fatal("Postfix could not be restarted on the loopback interface");
+        }
+      }
+      if (!active && !commands.tryRun("systemctl", ["enable", "--now", "postfix"]).ok) {
+        fatal("Postfix could not be started");
+      }
+      log.ok("Postfix and SMTP authentication ready");
+      continue;
+    }
     if (unit !== "docker") {
       fatal(`${unit} is not active; install and start it before enabling ${spec.name}`);
     }

@@ -120,6 +120,7 @@ export function applyDisable(name: string): void {
 function disableAddon(spec: AddonSpec): void {
   const remaining = installedAddons().filter((item) => item.name !== spec.name);
 
+  spec.deactivate?.();
   if (spec.name === "wp-login") withdrawWpLogin();
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });

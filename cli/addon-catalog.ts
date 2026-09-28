@@ -27,6 +27,7 @@ import { PANEL_TWEAKS_ADDON } from "../addons/panel-tweaks/addon";
 import { WP_LOGIN_ADDON } from "../addons/wp-login/addon";
 import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
+import { SMTP_ADDON } from "../addons/smtp/addon";
 
 export type { AddonTarget };
 
@@ -59,6 +60,8 @@ export interface AddonDefinition {
   handler?: AddonHandler;
   /** The privileged verbs this addon runs as root, if it has any. */
   action?: (argv: string[], options?: Record<string, unknown>) => Promise<number> | number;
+  /** Withdraw changes outside addon state before disabling or uninstalling. */
+  deactivate?: () => void;
   /**
    * Whether a `ROLE_SITE_MANAGER` session reaches this addon's routes.
    *
@@ -91,6 +94,7 @@ const DEFINITIONS: AddonDefinition[] = [
   GIT_ADDON,
   PANEL_TWEAKS_ADDON,
   WP_LOGIN_ADDON,
+  SMTP_ADDON,
 ];
 
 function specOf(definition: AddonDefinition): AddonSpec {
