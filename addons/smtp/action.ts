@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, lstatSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   ActionFailure, emitActionError, emitActionOk, failAction, runCommand, withFileLock,
@@ -258,22 +258,32 @@ function managedPaths(paths: SmtpPaths): { credentials: string; routes: string; 
   };
 }
 
-function managedFileSnapshot(paths: SmtpPaths): { path: string; content: Buffer | null; mode: number }[] {
+interface ManagedFileSnapshot {
+  path: string;
+  content: Buffer | null;
+  mode: number;
+  owner: { uid: number; gid: number } | null;
+  mtimeMs: number | null;
+}
+
+function managedFileSnapshot(paths: SmtpPaths, filePaths?: string[]): ManagedFileSnapshot[] {
   const managed = managedPaths(paths);
-  return [managed.credentials, managed.routes, managed.senders, managed.tls, `${managed.senders}.db`, paths.submissionFile].map((path) => {
-    if (!existsSync(path)) return { path, content: null, mode: 0o600 };
+  const tracked = filePaths ?? [managed.credentials, managed.routes, managed.senders, managed.tls, `${managed.senders}.db`, paths.submissionFile];
+  return tracked.map((path) => {
+    if (!existsSync(path)) return { path, content: null, mode: 0o600, owner: null, mtimeMs: null };
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== paths.rootUid || (stat.mode & 0o022) !== 0) {
       failAction(`refusing untrusted SMTP file: ${path}`);
     }
-    return { path, content: readFileSync(path), mode: stat.mode & 0o777 };
+    return { path, content: readFileSync(path), mode: stat.mode & 0o777,
+      owner: { uid: stat.uid, gid: stat.gid }, mtimeMs: stat.mtimeMs };
   });
 }
 
-function restoreManagedFiles(snapshot: ReturnType<typeof managedFileSnapshot>): void {
-  for (const { path, content, mode } of snapshot) {
+function restoreManagedFiles(snapshot: ManagedFileSnapshot[]): void {
+  for (const { path, content, mode, owner } of snapshot) {
     if (content === null) rmSync(path, { force: true });
-    else writeFileAtomic(path, content, { mode, createParent: true });
+    else writeFileAtomic(path, content, { mode, owner: owner!, createParent: true });
   }
 }
 
@@ -283,14 +293,34 @@ function capturePostfix(paths: SmtpPaths, run: (command: string, args: string[])
   writeFileAtomic(paths.originalFile, JSON.stringify({ version: 1, values }, null, 2) + "\n", { mode: 0o600, createParent: true });
 }
 
+function explicitPostfixValue(explicit: string, key: string): string | null {
+  const match = explicit.match(new RegExp(`(?:^|\\n)${key}[ \\t]*=[ \\t]*([^\\n]*)`));
+  return match ? match[1]!.trim() : null;
+}
+
 function currentPostfixSettings(run: (command: string, args: string[]) => CommandResult): Record<string, string | null> {
   const explicit = runChecked(run, "postconf", ["-n"]);
   const values: Record<string, string | null> = {};
   for (const key of POSTFIX_KEYS) {
-    const match = explicit.match(new RegExp(`(?:^|\\n)${key}[ \\t]*=[ \\t]*([^\\n]*)`));
-    values[key] = match ? match[1]!.trim() : null;
+    values[key] = explicitPostfixValue(explicit, key);
   }
   return values;
+}
+
+function requireUnambiguousRelayRouting(run: (command: string, args: string[]) => CommandResult): void {
+  const explicit = runChecked(run, "postconf", ["-n"]);
+  const allowed: Record<string, string[]> = {
+    transport_maps: [],
+    sender_dependent_default_transport_maps: [],
+    default_transport: ["smtp", "smtp:"],
+    relay_transport: ["relay", "relay:"],
+  };
+  for (const [key, defaults] of Object.entries(allowed)) {
+    const value = explicitPostfixValue(explicit, key);
+    if (value !== null && value !== "" && !defaults.includes(value)) {
+      failAction(`Postfix ${key} can override the configured SMTP relay; resolve this routing setting before enabling SMTP Relay`);
+    }
+  }
 }
 
 function applyPostfixSettings(values: Record<string, string | null>, run: (command: string, args: string[]) => CommandResult): void {
@@ -324,13 +354,12 @@ function updatePostfix(paths: SmtpPaths, policy: SmtpPolicy, sites: SiteRow[], r
     [managed.senders]: localSenderMap(policy, sites),
     [managed.tls]: maps.tls,
   };
-  const before = Object.fromEntries(Object.keys(mapContents).map((path) => [path, trustedRead(path, paths.rootUid)]));
   const oldDbPath = `${managed.senders}.db`;
-  const oldDbStat = existsSync(oldDbPath) ? lstatSync(oldDbPath) : null;
-  if (oldDbStat && (!oldDbStat.isFile() || oldDbStat.isSymbolicLink() || oldDbStat.uid !== paths.rootUid || (oldDbStat.mode & 0o022) !== 0)) {
-    failAction(`refusing untrusted SMTP file: ${oldDbPath}`);
-  }
-  const oldDb = oldDbStat ? readFileSync(oldDbPath) : null;
+  const fileSnapshot = managedFileSnapshot(paths, [...Object.keys(mapContents), oldDbPath]);
+  const files = new Map(fileSnapshot.map((item) => [item.path, item]));
+  const before = Object.fromEntries(Object.keys(mapContents).map((path) => [path, files.get(path)!.content?.toString("utf8") ?? null]));
+  const oldDb = files.get(oldDbPath)!;
+  requireUnambiguousRelayRouting(run);
   const current = currentPostfixSettings(run);
   const originalRaw = trustedRead(paths.originalFile, paths.rootUid);
   const originalValues = originalRaw ? (JSON.parse(originalRaw) as OriginalPostfix).values : null;
@@ -355,7 +384,7 @@ function updatePostfix(paths: SmtpPaths, policy: SmtpPolicy, sites: SiteRow[], r
   };
   const mapsChanged = Object.entries(mapContents).some(([path, content]) => before[path] !== content);
   const configChanged = Object.entries(settings).some(([key, value]) => current[key] !== value);
-  const dbStale = oldDb === null || (existsSync(managed.senders) && statSync(managed.senders).mtimeMs > oldDbStat!.mtimeMs);
+  const dbStale = oldDb.content === null || (files.get(managed.senders)!.mtimeMs ?? 0) > oldDb.mtimeMs!;
   if (!mapsChanged && !configChanged && !dbStale) return;
   // Older Postfix cannot enforce local Unix login sender maps. Refuse the
   // configuration instead of silently offering a sender policy it cannot keep.
@@ -377,12 +406,7 @@ function updatePostfix(paths: SmtpPaths, policy: SmtpPolicy, sites: SiteRow[], r
     runChecked(run, "postfix", ["check"]);
     runChecked(run, "systemctl", ["reload", "postfix"]);
   } catch (error) {
-    for (const [path, content] of Object.entries(before)) {
-      if (content === null) rmSync(path, { force: true });
-      else writeFileAtomic(path, content, { mode: path === managed.senders ? 0o644 : 0o600 });
-    }
-    if (oldDb === null) rmSync(oldDbPath, { force: true });
-    else writeFileAtomic(oldDbPath, oldDb, { mode: oldDbStat!.mode & 0o777 });
+    restoreManagedFiles(fileSnapshot);
     applyPostfixSettings(current, run);
     runChecked(run, "postfix", ["check"]);
     runChecked(run, "systemctl", ["reload", "postfix"]);
@@ -455,13 +479,18 @@ async function inputBody(options: SmtpActionOptions): Promise<Record<string, unk
   return value as Record<string, unknown>;
 }
 
-function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SiteRow[], body: Record<string, unknown>): { queued: true; sender: string; recipient: string } {
+function testSubmission(policy: SmtpPolicy, sites: SiteRow[], body: Record<string, unknown>): { domain: string; sender: string; recipient: string } {
   if (!policy.relay) failAction("configure the global SMTP relay first");
   const domain = smtpDomain(body.domain);
   const site = sites.find((item) => item.domain === domain);
   if (!site) failAction(`CloudPanel has no PHP site ${domain}`);
   const recipient = smtpAddress(body.recipient);
   const sender = senderFor(effectiveRule(policy, domain).sender, domain);
+  return { domain, sender, recipient };
+}
+
+function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SiteRow[], body: Record<string, unknown>): { queued: true; sender: string; recipient: string } {
+  const { domain, sender, recipient } = testSubmission(policy, sites, body);
   const message = `To: ${recipient}\nFrom: ${sender}\nSubject: CloudPanel SMTP relay test for ${domain}\n\nThis message was submitted through the CloudPanel Addons Postfix relay.\n`;
   const result = Bun.spawnSync([paths.sendmail, "-t", "-i", "-f", sender], {
     stdin: Buffer.from(message), stdout: "pipe", stderr: "pipe", maxBuffer: 64 * 1024,
@@ -472,11 +501,21 @@ function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SiteRow[], body: 
 
 export async function executeSmtpAction(argv: string[], options: SmtpActionOptions = {}): Promise<unknown> {
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("SMTP actions must run as root");
-  const paths = { ...DEFAULT_SMTP_PATHS, ...options.paths };
-  const run = options.run ?? runCommand;
   const verb = argv[0] as SmtpVerb | undefined;
   if (argv.length !== 1 || !["list", "save-setup", "save-relay", "save-default", "save-site", "clear-site", "save-domain-relay", "clear-domain-relay", "test", "reconcile", "deactivate"].includes(verb ?? "")) {
     failAction("usage: clp-addons action smtp {list|save-setup|save-relay|save-default|save-site|clear-site|save-domain-relay|clear-domain-relay|test|reconcile|deactivate}");
+  }
+  const hasBody = verb !== "list" && verb !== "deactivate" && verb !== "reconcile";
+  const body = hasBody ? await inputBody(options) : {};
+  const paths = { ...DEFAULT_SMTP_PATHS, ...options.paths };
+  const run = options.run ?? runCommand;
+  if (hasBody) {
+    // Validate request data before locking. State-dependent checks run again
+    // under the lock so a concurrent update cannot invalidate this preflight.
+    const policy = readPolicy(paths);
+    const sites = validatedSites(panelSites(paths, options.sites));
+    if (verb === "test") testSubmission(policy, sites, body);
+    else replacePolicy(policy, verb!, body, sites);
   }
   return withFileLock(paths.lockFile, 30, "SMTP configuration is busy", async () => {
     const policy = readPolicy(paths);
@@ -497,9 +536,11 @@ export async function executeSmtpAction(argv: string[], options: SmtpActionOptio
       const repaired = applyConfiguration(paths, policy, sites, run);
       return { repaired };
     }
-    const body = await inputBody(options);
     if (verb === "test") return sendTest(paths, policy, sites, body);
     const next = replacePolicy(policy, verb!, body, sites);
+    // A routing conflict is a precondition failure, before any state changes
+    // that would need the rollback below. updatePostfix checks again as well.
+    if (next.relay) requireUnambiguousRelayRouting(run);
     const firstSetupFiles = !policy.relay && next.relay ? managedFileSnapshot(paths) : null;
     try {
       if (next.relay) applyConfiguration(paths, next, sites, run);

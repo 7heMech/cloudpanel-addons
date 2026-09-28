@@ -30,10 +30,13 @@ existing listener configuration. The addon sets `relayhost`, sender-dependent
 relay routing, sender-dependent SASL authentication, authenticated SMTP client
 settings and mandatory verified TLS. `local_login_sender_maps` limits envelope
 senders from known site Unix accounts even if they invoke Postfix's sendmail
-command directly. A generated TLS policy map puts `secure match=nexthop` first
-for the global and domain relay destinations, ahead of existing operator TLS
-maps, which are restored on
-disable. A nonempty TLS policy map also supersedes the legacy
+command directly. Before applying or reconciling relay settings, it rejects
+`transport_maps`, `sender_dependent_default_transport_maps`, and custom
+`default_transport` or `relay_transport` values that could take precedence over
+the configured global or sender-dependent relay. A generated TLS policy map
+puts `secure match=nexthop` first for the global and domain relay destinations,
+ahead of existing operator TLS maps, which are restored on disable. A nonempty
+TLS policy map also supersedes the legacy
 `smtp_tls_per_site` parameter. The selected credential still has to be
 authorized by its upstream provider.
 
@@ -50,7 +53,8 @@ has-password flag, never the saved password.
 
 Before changing Postfix, the action captures its explicit values for every key
 it owns. Updates replace managed files atomically, run `postfix check`, then
-reload Postfix. A failed update restores the prior managed files and settings.
+reload Postfix. A failed update restores the prior managed files, their
+permissions and ownership, and Postfix settings.
 Before changing PHP-FPM pools, it rejects conflicting sendmail settings, then
 tests each affected PHP-FPM version and reloads it. The pool directive and
 Postfix settings are withdrawn when the addon is disabled or uninstalled. The
@@ -62,6 +66,8 @@ The root gateway accepts only named SMTP verbs. The action validates a sending
 domain against CloudPanel's PHP sites before changing a site rule, and validates
 every relay host, address, template, and allowlist entry. It rejects multiple
 sites sharing one Unix UID because their submissions could not be distinguished.
+Request data is checked before taking the SMTP lock and checked again against
+current site and policy state under the lock.
 The submission command accepts only sendmail flags needed by PHP mail, ignores
 an untrusted `-f` request, and stops reading stdin when a message exceeds
 25 MiB. It also requires a bounded header.

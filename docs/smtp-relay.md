@@ -20,6 +20,10 @@ there is no WordPress plugin to install.
    preserves From addresses on that site's domain and on any domains or exact
    addresses explicitly granted in the site's editor. Switching a site to
    Force clears its additional grants.
+   If saving reports a Postfix routing conflict, resolve the named
+   `transport_maps`, `sender_dependent_default_transport_maps`,
+   `default_transport`, or `relay_transport` setting first. Those settings can
+   route mail around the selected SMTP relay; the addon leaves them untouched.
 3. For a sending domain that needs its own SMTP account, add a **Sending domain
    relay**. All other senders use the global account. The relay's SMTP provider
    must allow the resulting From address; configuring the addon does not create

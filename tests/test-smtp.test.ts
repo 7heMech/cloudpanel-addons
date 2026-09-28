@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeSmtpAction, postfixMaps, type SmtpActionOptions, type SmtpState } from "../addons/smtp/action";
@@ -123,6 +123,7 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
   };
   const body = { relay: { host: "mail.example.com", port: 587, username: "relay@example.com", password: "secret" } };
   await expect(executeSmtpAction(["save-setup"], { ...options, input: JSON.stringify({ ...body, rule: { mode: "invalid" } }) })).rejects.toThrow("sender mode");
+  expect(existsSync(join(dir, "smtp.lock"))).toBe(false);
   expect((await executeSmtpAction(["list"], options) as SmtpState).configured).toBe(false);
   const submissionPath = join(dir, "submission.json");
   writeFileSync(submissionPath, "prior submission file\n");
@@ -136,6 +137,11 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
   expect(readFileSync(submissionPath, "utf8")).toBe("prior submission file\n");
   expect(settings.get("smtp_tls_policy_maps")).toBe("hash:/etc/postfix/operator-tls");
   writeFileSync(pool, readFileSync(pool, "utf8").replace("php_admin_value[sendmail_path] = /other/sendmail\n", ""));
+  settings.set("transport_maps", "hash:/etc/postfix/transport");
+  await expect(executeSmtpAction(["save-setup"], { ...options, input: JSON.stringify({ ...body, rule: site.rule }) })).rejects.toThrow("transport_maps");
+  expect(existsSync(join(dir, "original.json"))).toBe(false);
+  expect(existsSync(join(postfixDir, "clp-addons-sasl"))).toBe(false);
+  settings.delete("transport_maps");
   await executeSmtpAction(["save-setup"], { ...options, input: JSON.stringify({ ...body, rule: site.rule }) });
   expect(readFileSync(pool, "utf8")).toContain("smtp-submit -t -i");
   expect(readFileSync(join(dir, "submission.json"), "utf8")).toContain("noreply@{domain}");
@@ -143,6 +149,24 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
   expect(readFileSync(join(postfixDir, "clp-addons-local-senders"), "utf8")).toContain("clp *\n");
   expect(settings.get("smtp_tls_security_level")).toBe("secure");
   expect(settings.get("smtp_tls_policy_maps")).toBe(`regexp:${join(postfixDir, "clp-addons-tls-policy")}, hash:/etc/postfix/operator-tls`);
+  for (const [key, value] of [
+    ["transport_maps", "hash:/etc/postfix/transport"],
+    ["sender_dependent_default_transport_maps", "hash:/etc/postfix/sender-transport"],
+    ["default_transport", "smtp:[other.example.com]:587"],
+    ["relay_transport", "relay:[other.example.com]:587"],
+  ] as const) {
+    settings.set(key, value);
+    await expect(executeSmtpAction(["reconcile"], options)).rejects.toThrow(key);
+    settings.delete(key);
+  }
+  settings.set("transport_maps", "hash:/etc/postfix/transport");
+  await expect(executeSmtpAction(["save-default"], { ...options, input: JSON.stringify({ rule: site.rule }) })).rejects.toThrow("Postfix transport_maps can override");
+  settings.delete("transport_maps");
+  settings.set("default_transport", "smtp:");
+  settings.set("relay_transport", "relay:");
+  await executeSmtpAction(["reconcile"], options);
+  settings.delete("default_transport");
+  settings.delete("relay_transport");
   settings.set("smtp_tls_per_site", "hash:/etc/postfix/old-tls");
   await executeSmtpAction(["save-default"], { ...options, input: JSON.stringify({ rule: site.rule }) });
   expect(settings.get("smtp_tls_policy_maps")?.startsWith(`regexp:${join(postfixDir, "clp-addons-tls-policy")}`)).toBe(true);
@@ -156,6 +180,23 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
   expect(JSON.parse(readFileSync(originalPath, "utf8")).values.smtp_tls_policy_maps).toBe("hash:/etc/postfix/operator-tls");
   expect(settings.get("smtp_tls_policy_maps")).toBe(`regexp:${join(postfixDir, "clp-addons-tls-policy")}, hash:/etc/postfix/operator-tls`);
   expect(readFileSync(join(postfixDir, "clp-addons-tls-policy"), "utf8")).toContain("secure match=nexthop");
+  const credentialsPath = join(postfixDir, "clp-addons-sasl");
+  const credentialsBefore = readFileSync(credentialsPath);
+  chmodSync(credentialsPath, 0o640);
+  let failPostfixCheck = true;
+  const failingRun: NonNullable<SmtpActionOptions["run"]> = (command, args) => {
+    if (command === "postfix" && args[0] === "check" && failPostfixCheck) {
+      failPostfixCheck = false;
+      return { ok: false, stdout: "", stderr: "test failure" };
+    }
+    return run(command, args);
+  };
+  const domainRelayInput = JSON.stringify({ domain: "cool.com", relay: {
+    host: "smtp.cool.com", port: 587, username: "cool@cool.com", password: "other-secret",
+  } });
+  await expect(executeSmtpAction(["save-domain-relay"], { ...options, run: failingRun, input: domainRelayInput })).rejects.toThrow("test failure");
+  expect(readFileSync(credentialsPath)).toEqual(credentialsBefore);
+  expect(statSync(credentialsPath).mode & 0o777).toBe(0o640);
   await executeSmtpAction(["save-domain-relay"], { ...options, input: JSON.stringify({ domain: "cool.com", relay: {
     host: "smtp.cool.com", port: 587, username: "cool@cool.com", password: "other-secret",
   } }) });
