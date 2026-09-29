@@ -11,7 +11,7 @@ export function layout(title: string, content: string, notice?: { current: strin
   return renderLayout(title, content, { brand: "SMTP Relay", base: BASE, nav: [], css: CSS, script: CLIENT, updateNotice: notice });
 }
 
-const TEMPLATE_HINT = "<code>{site}</code> is the site's domain. <code>{from.local}</code> and <code>{from.domain}</code> are the name and domain of the From the app asked for, so <code>{from.local}@{site}</code> keeps <code>wordpress@</code> or <code>orders@</code> on the site's domain.";
+const TEMPLATE_HINT = "<code>{site}</code> is the site's domain. <code>{from.local}</code> and <code>{from.domain}</code> are the name and domain of the From the app asked for, when it is on the site's domain, so <code>{from.local}@{site}</code> keeps <code>wordpress@</code> or <code>orders@</code> on the site's domain.";
 
 export function dashboardView(state: SmtpState): string {
   return `<div id="smtp-root">${dashboardContent(state)}</div>`;
@@ -62,7 +62,7 @@ export function dashboardContent(state: SmtpState): string {
       <label>From address<input name="sender" required autocomplete="off" oninput="smtpSyncSiteDomains()"></label>
       <p class="hint">${TEMPLATE_HINT}</p>
       <div id="smtp-site-domains" hidden><label>Also allowed domains<textarea name="domains" rows="3" placeholder="news.example.com"></textarea></label>
-      <p class="hint">{from.domain} keeps these and the site's own domain. Any other domain becomes the site's domain, and the app's address moves to Reply-To.</p></div>
+      <p class="hint">The app's From is used only on the site's own domain or these. Any other From is sent as noreply on the site's domain, with the app's address as Reply-To.</p></div>
       <div class="actions"><button class="btn" type="button" onclick="smtpClearSite()" id="smtp-clear-site">Use default</button><button class="btn" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-primary" type="submit">Save site</button></div>
     </form></dialog>
     <dialog id="smtp-domain-dialog" class="smtp-dialog"><form method="dialog" id="smtp-domain-form" onsubmit="smtpSaveDomain(event)">

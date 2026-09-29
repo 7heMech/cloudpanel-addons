@@ -13,14 +13,14 @@ own SMTP transports remain outside this path.
 
 Each site's From is a template, `noreply@{site}` by default. `{site}` is the
 site's domain; `{from.local}` and `{from.domain}` are the two halves of the From
-the application requested. `{from.domain}` must be the whole domain and keeps
-only the site's own domain or domains an administrator granted that site;
-anything else becomes the site's domain. A missing, unparsable, or overlong
-requested From falls back to `noreply`. The template is the whole policy, so no
-submission is rejected for its sender. When the requested address is on a
-domain the site may not use, as with a contact form that sends from the visitor,
-it moves to `Reply-To` unless the message already has one. The requested
-display name is kept.
+the application requested, used only when its domain is the site's own or one
+an administrator granted that site. `{from.domain}` must be the whole domain.
+For any other, missing, unparsable, or overlong requested From, the tokens
+resolve to `noreply` and the site's domain, so a contact form's visitor never
+appears as a mailbox on the site's domain. The template is the whole policy, so
+no submission is rejected for its sender. A requested address on a domain the
+site may not use moves to `Reply-To` unless the message already has one. The
+requested display name is kept.
 
 The global SMTP credential is the fallback. Optional relay overrides are keyed
 by *sending* domain, so a site can use a separate provider for mail it is

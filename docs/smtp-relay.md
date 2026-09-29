@@ -21,13 +21,13 @@ there is no WordPress plugin to install.
    | From template | WordPress asks for `wordpress@example.com` | A form asks for `jane@gmail.com` |
    |---|---|---|
    | `noreply@{site}` | `noreply@example.com` | `noreply@example.com` |
-   | `{from.local}@{site}` | `wordpress@example.com` | `jane@example.com` |
-   | `{from.local}@{from.domain}` | `wordpress@example.com` | `jane@example.com` |
+   | `{from.local}@{site}` | `wordpress@example.com` | `noreply@example.com` |
+   | `{from.local}@{from.domain}` | `wordpress@example.com` | `noreply@example.com` |
 
-   `{from.domain}` keeps only the site's own domain and any domains granted in
-   the site's editor. When the requested address is on another domain, it is
-   added as `Reply-To` so replies still reach it. When the application asks
-   for no From, `{from.local}` is `noreply`.
+   The requested From is used only when its domain is the site's own or one
+   granted in the site's editor. Otherwise, or when the application asks for no
+   From, `{from.local}` is `noreply`, `{from.domain}` is the site's domain, and
+   a requested address is added as `Reply-To` so replies still reach it.
    If saving reports a Postfix routing conflict, resolve the named
    `transport_maps`, `sender_dependent_default_transport_maps`,
    `default_transport`, or `relay_transport` setting first. Those settings can

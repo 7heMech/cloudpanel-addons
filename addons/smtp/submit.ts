@@ -99,12 +99,12 @@ export function prepareSubmission(message: Uint8Array, site: SmtpSubmissionSite)
   const allowed = allowedDomains(site);
   let sender: string;
   try {
-    sender = senderFor(site.rule.sender, site.domain, from && { local, domain: allowed.includes(domain) ? domain : site.domain });
+    sender = senderFor(site.rule.sender, site.domain, from && allowed.includes(domain) ? { local, domain } : null);
   } catch {
     sender = senderFor(site.rule.sender, site.domain);
   }
   // A contact form's visitor address cannot be the From, but replies should still reach them.
-  if (from && !hasReplyTo && !allowed.includes(domain) && !sender.endsWith(`@${domain}`)) {
+  if (from && !hasReplyTo && !allowed.includes(domain)) {
     kept.unshift(`Reply-To: ${from.address}`);
   }
   kept.unshift(`From: ${from?.display ? `${from.display} <${sender}>` : sender}`);

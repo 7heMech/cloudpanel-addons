@@ -42,7 +42,8 @@ test("{from.local} keeps the app's name on the template's domain", () => {
   expect(wordpress.sender).toBe("wordpress@example.com");
   expect(wordpress.text).toContain("From: WordPress <wordpress@example.com>\n");
   expect(wordpress.text).not.toContain("Reply-To");
-  expect(submit(rule, "From: orders@cool.com").sender).toBe("orders@example.com");
+  const visitor = submit(rule, "From: Jane <jane@cool.com>");
+  expect(visitor.text).toContain("From: Jane <noreply@example.com>\nReply-To: jane@cool.com\n");
   expect(submit(rule, "Subject: none").sender).toBe("noreply@example.com");
   expect(submit(parseRule({ sender: "{from.local}@mail.{site}" }), `From: ${"a".repeat(240)}@example.com`).sender).toBe("noreply@mail.example.com");
 });
