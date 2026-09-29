@@ -55,12 +55,14 @@ function smtpPreviewState(url: URL): SmtpState {
     configured,
     relay: configured ? { host: "mail.example.com", port: 587, username: "cloudpanel-relay@example.com", hasPassword: true } : null,
     relayOverrides: configured ? { "shop.example.com": { host: "smtp.provider.test", port: 587, username: "shop@example.com", hasPassword: true } } : {},
-    defaultRule: { mode: "force", sender: "noreply@{domain}", domains: [], addresses: [] },
+    defaultRule: { sender: "noreply@{site}", domains: [] },
     sites: url.searchParams.has("empty") ? [] : [
       { domain: "www.example.com", user: "example", phpVersion: "8.3", overridden: false,
-        rule: { mode: "force", sender: "noreply@{domain}", domains: [], addresses: [] }, senderPreview: "noreply@www.example.com" },
+        rule: { sender: "noreply@{site}", domains: [] }, senderPreview: "noreply@www.example.com" },
       { domain: "shop.example.com", user: "shop", phpVersion: "8.3", overridden: true,
-        rule: { mode: "allow", sender: "noreply@{domain}", domains: ["news.shop.example.com"], addresses: [] }, senderPreview: "noreply@shop.example.com" },
+        rule: { sender: "{from.local}@{from.domain}", domains: ["news.shop.example.com"] }, senderPreview: "{from.local}@{from.domain}" },
+      { domain: "blog.example.com", user: "blog", phpVersion: "8.2", overridden: true,
+        rule: { sender: "{from.local}@{site}", domains: [] }, senderPreview: "{from.local}@blog.example.com" },
     ],
   };
 }

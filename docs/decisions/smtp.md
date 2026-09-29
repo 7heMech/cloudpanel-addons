@@ -11,10 +11,17 @@ envelope sender. This covers default WordPress PHPMailer behavior and other PHP
 `mail()` callers without changing application files. Applications with their
 own SMTP transports remain outside this path.
 
-The default rule forces `noreply@{domain}`. A site may instead allow senders on
-its own domain, additional administrator-approved domains, or exact addresses.
-Forcing an address supports a relay account allowed to send as many domains;
-allowing senders supports applications that need their own From identities.
+Each site's From is a template, `noreply@{site}` by default. `{site}` is the
+site's domain; `{from.local}` and `{from.domain}` are the two halves of the From
+the application requested. `{from.domain}` must be the whole domain and keeps
+only the site's own domain or domains an administrator granted that site;
+anything else becomes the site's domain. A missing, unparsable, or overlong
+requested From falls back to `noreply`. The template is the whole policy, so no
+submission is rejected for its sender. When the requested address is on a
+domain the site may not use, as with a contact form that sends from the visitor,
+it moves to `Reply-To` unless the message already has one. The requested
+display name is kept.
+
 The global SMTP credential is the fallback. Optional relay overrides are keyed
 by *sending* domain, so a site can use a separate provider for mail it is
 authorized to send from that domain.
@@ -45,8 +52,9 @@ The global and per-domain credentials are stored in
 `regexp:` credential and route maps under `/etc/postfix`; the credential map is
 `0600`. Local Unix sender restrictions use a `hash:` map. The trusted `root`,
 `postfix`, and CloudPanel `clp` accounts retain unrestricted local envelope
-senders; site accounts get only their configured senders. Other local Unix
-accounts are not granted Postfix sendmail access by this addon. The public
+senders; site accounts get only the envelope senders their template can
+produce: an exact address, or a whole domain when the template keeps
+`{from.local}`. Other local Unix accounts are not granted Postfix sendmail access by this addon. The public
 submission policy lives at `/etc/clp-addons/smtp-submission.json` and contains
 no SMTP passwords. The manager receives only relay host, port, username, and a
 has-password flag, never the saved password.
@@ -64,7 +72,7 @@ saved addon policy remains for a later enable.
 
 The root gateway accepts only named SMTP verbs. The action validates a sending
 domain against CloudPanel's PHP sites before changing a site rule, and validates
-every relay host, address, template, and allowlist entry. It rejects multiple
+every relay host, address, template, and granted domain. It rejects multiple
 sites sharing one Unix UID because their submissions could not be distinguished.
 Request data is checked before taking the SMTP lock and checked again against
 current site and policy state under the lock.
@@ -77,8 +85,10 @@ pool. Direct Postfix submission from a site account is restricted at the
 envelope only; a process with shell access can still write an arbitrary From
 header, and another local SMTP listener can bypass the Unix account check.
 This addon does not promise isolation against a hostile tenant with direct
-process or network access. The test-mail action queues a message through
-Postfix as root to test relay delivery; it does not exercise the PHP wrapper.
+process or network access. The test-mail action submits as the site's Unix
+account with `runuser` through the same `smtp-submit` command the pool uses, so
+it exercises the template, the submission policy, and Postfix's local sender
+check.
 
 The regular repair timer reapplies the policy to new or recreated PHP pools
 every 15 minutes. Until then, a new site's mail may fail the Postfix local

@@ -1,5 +1,5 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
-import type { SmtpState } from "../action";
+import type { SmtpState, SmtpTestResult } from "../action";
 
 const call = (verb: string, body?: unknown): Promise<ActionResult<SmtpState>> =>
   callGatewayAction<SmtpState>("smtp", verb, [], body === undefined ? undefined : JSON.stringify(body));
@@ -13,6 +13,6 @@ export const smtpService = {
   clearSite: (body: unknown) => call("clear-site", body),
   saveDomainRelay: (body: unknown) => call("save-domain-relay", body),
   clearDomainRelay: (body: unknown) => call("clear-domain-relay", body),
-  test: (body: unknown): Promise<ActionResult<{ queued: boolean; sender: string; recipient: string }>> =>
+  test: (body: unknown): Promise<ActionResult<SmtpTestResult>> =>
     callGatewayAction("smtp", "test", [], JSON.stringify(body)),
 };

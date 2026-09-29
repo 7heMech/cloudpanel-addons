@@ -1,18 +1,21 @@
-const smtpState = JSON.parse(document.getElementById('smtp-state')?.textContent || '{}');
+let smtpState = JSON.parse(document.getElementById('smtp-state')?.textContent || '{}');
 
 function smtpFields(form) {
   return Object.fromEntries(new FormData(form).entries());
 }
 
-async function smtpPost(path, body) {
+async function smtpPost(path, body, done) {
   busy(true);
   try {
-    await call(path, {
+    const reply = await call(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    location.reload();
+    for (const dialog of document.querySelectorAll('dialog[open]')) dialog.close();
+    document.getElementById('smtp-root').innerHTML = reply.html;
+    smtpState = reply.data;
+    notify(done, 'ok');
   } catch (error) {
     notify(error.message, 'error');
   } finally {
@@ -29,9 +32,8 @@ function smtpSaveSetup(event) {
   const fields = smtpFields(event.currentTarget);
   smtpPost('/api/setup', {
     relay: smtpRelayPayload(fields),
-    rule: { mode: fields.mode, sender: fields.sender,
-      domains: smtpState.defaultRule.domains, addresses: smtpState.defaultRule.addresses },
-  });
+    rule: { sender: fields.sender, domains: [] },
+  }, 'Saved the relay and default From.');
 }
 
 async function smtpSendTest(event) {
@@ -41,9 +43,11 @@ async function smtpSendTest(event) {
   try {
     const result = await call('/api/test', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ domain: fields.domain, recipient: fields.recipient }),
+      body: JSON.stringify({ domain: fields.domain, recipient: fields.recipient, from: fields.from }),
     });
-    notify('Postfix queued a test from ' + result.data.sender + ' to ' + result.data.recipient + '.', 'ok');
+    const data = result.data;
+    notify('Postfix queued the test to ' + data.recipient + '. The app asked for ' + data.requested +
+      ' and it was sent as ' + data.sender + (data.replyTo ? ', with Reply-To ' + data.replyTo : '') + '.', 'ok');
   } catch (error) {
     notify(error.message, 'error');
   } finally {
@@ -60,39 +64,32 @@ function smtpEditSite(domain) {
   if (!site) return;
   const form = document.getElementById('smtp-site-form');
   form.elements.namedItem('domain').value = domain;
-  form.elements.namedItem('mode').value = site.rule.mode;
   form.elements.namedItem('sender').value = site.rule.sender;
   form.elements.namedItem('domains').value = site.rule.domains.join('\n');
-  form.elements.namedItem('addresses').value = site.rule.addresses.join('\n');
-  smtpSyncSiteMode();
-  document.getElementById('smtp-site-heading').textContent = 'Sender policy for ' + domain;
+  smtpSyncSiteDomains();
+  document.getElementById('smtp-site-heading').textContent = 'From for ' + domain;
   document.getElementById('smtp-clear-site').hidden = !site.overridden;
   document.getElementById('smtp-site-dialog').showModal();
 }
 
-function smtpSyncSiteMode() {
+function smtpSyncSiteDomains() {
   const form = document.getElementById('smtp-site-form');
-  const allow = form.elements.namedItem('mode').value === 'allow';
-  document.getElementById('smtp-site-allow-fields').hidden = !allow;
-  for (const name of ['domains', 'addresses']) {
-    const field = form.elements.namedItem(name);
-    if (!allow) field.value = '';
-    field.disabled = !allow;
-  }
+  const keepsDomain = form.elements.namedItem('sender').value.includes('{from.domain}');
+  document.getElementById('smtp-site-domains').hidden = !keepsDomain;
+  form.elements.namedItem('domains').disabled = !keepsDomain;
 }
 
 function smtpSaveSite(event) {
   event.preventDefault();
   const fields = smtpFields(event.currentTarget);
   smtpPost('/api/site', { domain: fields.domain, rule: {
-    mode: fields.mode, sender: fields.sender,
-    domains: smtpList(fields.domains), addresses: smtpList(fields.addresses),
-  } });
+    sender: fields.sender, domains: smtpList(fields.domains),
+  } }, 'Saved the From for ' + fields.domain + '.');
 }
 
 function smtpClearSite() {
   const domain = document.getElementById('smtp-site-form').elements.namedItem('domain').value;
-  smtpPost('/api/site/clear', { domain: domain });
+  smtpPost('/api/site/clear', { domain: domain }, domain + ' uses the default From again.');
 }
 
 function smtpEditDomain(domain) {
@@ -112,10 +109,10 @@ function smtpEditDomain(domain) {
 function smtpSaveDomain(event) {
   event.preventDefault();
   const fields = smtpFields(event.currentTarget);
-  smtpPost('/api/domain-relay', { domain: fields.domain, relay: smtpRelayPayload(fields) });
+  smtpPost('/api/domain-relay', { domain: fields.domain, relay: smtpRelayPayload(fields) }, 'Saved the relay for ' + fields.domain + '.');
 }
 
 async function smtpClearDomain(domain) {
   if (!await confirmAction({ title: 'Remove SMTP override?', text: domain + ' will use the global relay credential again.', confirmLabel: 'Remove' })) return;
-  smtpPost('/api/domain-relay/clear', { domain: domain });
+  smtpPost('/api/domain-relay/clear', { domain: domain }, domain + ' uses the global relay again.');
 }

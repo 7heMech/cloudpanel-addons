@@ -13,13 +13,21 @@ there is no WordPress plugin to install.
    An existing Postfix must be version 3.6 or newer with Cyrus SASL client
    support.
 2. Open **SMTP Relay** and enter the SMTP hostname, STARTTLS submission port
-   (normally 587), username, and password. Choose a default sender in the same
-   form, then save both settings together. `noreply@{domain}` becomes
-   `noreply@example.com` for the `example.com` site. **Force one address**
-   replaces an application's requested From address. **Allow site domains**
-   preserves From addresses on that site's domain and on any domains or exact
-   addresses explicitly granted in the site's editor. Switching a site to
-   Force clears its additional grants.
+   (normally 587), username, and password. Choose the default From in the same
+   form, then save both together. In the From template, `{site}` is the site's
+   domain, and `{from.local}` and `{from.domain}` are the name and domain of the
+   From the application asked for:
+
+   | From template | WordPress asks for `wordpress@example.com` | A form asks for `jane@gmail.com` |
+   |---|---|---|
+   | `noreply@{site}` | `noreply@example.com` | `noreply@example.com` |
+   | `{from.local}@{site}` | `wordpress@example.com` | `jane@example.com` |
+   | `{from.local}@{from.domain}` | `wordpress@example.com` | `jane@example.com` |
+
+   `{from.domain}` keeps only the site's own domain and any domains granted in
+   the site's editor. When the requested address is on another domain, it is
+   added as `Reply-To` so replies still reach it. When the application asks
+   for no From, `{from.local}` is `noreply`.
    If saving reports a Postfix routing conflict, resolve the named
    `transport_maps`, `sender_dependent_default_transport_maps`,
    `default_transport`, or `relay_transport` setting first. Those settings can
@@ -28,11 +36,12 @@ there is no WordPress plugin to install.
    relay**. All other senders use the global account. The relay's SMTP provider
    must allow the resulting From address; configuring the addon does not create
    mailboxes, authorize senders at the provider, or set DNS records.
-4. Send a test to an inbox you control. The test submits directly to Postfix
-   as root with the selected site's configured sender; it does not exercise
-   the site's PHP path. The page confirms that Postfix queued the message;
-   check the inbox and, if needed, `/var/log/mail.log` and
-   `postqueue -p` for the delivery result.
+4. Send a test to an inbox you control. The test sends as the site's own
+   account through the same path as PHP `mail()`, with `wordpress@` the site's
+   domain as the requested From unless you enter another. The page shows the
+   From it was sent as and confirms that Postfix queued it; check the inbox
+   and, if needed, `/var/log/mail.log` and `postqueue -p` for the delivery
+   result.
 
 For Mailcow, one mailbox credential can be used as the global relay when that
 mailbox is explicitly permitted to send as all intended domains. Otherwise use
@@ -41,18 +50,16 @@ receive mail; the addon does not replace them.
 
 ## Behavior and limits
 
-The sender rule applies to PHP `mail()` in CloudPanel's PHP-FPM site pools. In
-force mode, the addon sets both the visible From and envelope sender to the
-configured address. In allow mode, it rejects a requested From outside the
-site's own domain and its approved senders. Only CloudPanel administrators can
-grant additional domains or addresses. A site cannot use another site's domain
-through this PHP mail path unless an administrator grants it.
+The From template applies to PHP `mail()` in CloudPanel's PHP-FPM site pools
+and sets both the visible From and the envelope sender. Only CloudPanel
+administrators can grant a site additional domains. A site cannot use another
+site's domain through this PHP mail path unless an administrator grants it.
 
 The addon does not alter applications that open their own SMTP connection. It
 also does not filter arbitrary mail submitted directly to Postfix or another
 local SMTP listener. Postfix restricts local envelope senders for known site
 Unix accounts, but that check does not validate the message's visible From
-header. Treat the site sender rule as a policy for PHP `mail()` and configure
+header. Treat the site's From template as a policy for PHP `mail()` and configure
 untrusted shell or SMTP access separately. Local submissions from other Unix
 accounts are restricted, except for Postfix, root, and CloudPanel's `clp`
 account.

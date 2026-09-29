@@ -1,6 +1,6 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { CONFIG_DIR } from "../../cli/paths";
-import { permittedSender, senderFor, smtpAddress, type SmtpSubmissionPolicy, type SmtpSubmissionSite } from "./config";
+import { allowedDomains, senderFor, smtpAddress, type SmtpSubmissionPolicy, type SmtpSubmissionSite } from "./config";
 
 export const SUBMISSION_POLICY_PATH = `${CONFIG_DIR}/smtp-submission.json`;
 export const MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
@@ -17,12 +17,18 @@ function trustedPolicy(path: string): SmtpSubmissionPolicy {
   return value as SmtpSubmissionPolicy;
 }
 
-function senderFromHeader(value: string): string {
-  const unfolded = value.replace(/\r?\n[ \t]+/g, " ").trim();
-  const bracketed = unfolded.match(/<([^<>]+)>$/);
-  const address = bracketed ? bracketed[1] : unfolded;
-  if (!address || address.includes(",") || /[\r\n]/.test(address)) throw new Error("message has an invalid From address");
-  return smtpAddress(address);
+/** The app's requested From, or null when it is missing or not one plain address. */
+function requestedFrom(raw: string | null): { display: string; address: string } | null {
+  if (raw === null) return null;
+  const unfolded = raw.replace(/\r?\n[ \t]+/g, " ").trim();
+  const bracketed = unfolded.match(/^([^<>]*)<([^<>]+)>$/);
+  try {
+    return bracketed
+      ? { display: bracketed[1]!.trim(), address: smtpAddress(bracketed[2]!.trim()) }
+      : { display: "", address: smtpAddress(unfolded) };
+  } catch {
+    return null;
+  }
 }
 
 /** Stops reading stdin at the first chunk that crosses the submission limit. */
@@ -63,6 +69,7 @@ export function prepareSubmission(message: Uint8Array, site: SmtpSubmissionSite)
   let fromRaw: string | null = null;
   let lastWasFrom = false;
   let lastWasIgnored = false;
+  let hasReplyTo = false;
   for (let i = 0; i < headers.length; i++) {
     const line = headers[i]!;
     if (/^[ \t]/.test(line)) {
@@ -77,6 +84,7 @@ export function prepareSubmission(message: Uint8Array, site: SmtpSubmissionSite)
     const name = line.slice(0, colon).toLowerCase();
     lastWasFrom = name === "from";
     lastWasIgnored = name === "sender" || name === "return-path";
+    if (name === "reply-to") hasReplyTo = true;
     if (name === "from") {
       if (fromRaw !== null) throw new Error("message has multiple From headers");
       fromRaw = line.slice(colon + 1);
@@ -84,13 +92,22 @@ export function prepareSubmission(message: Uint8Array, site: SmtpSubmissionSite)
       kept.push(line);
     }
   }
-  const configured = senderFor(site.rule.sender, site.domain);
-  const from = site.rule.mode === "allow" && fromRaw !== null ? senderFromHeader(fromRaw) : null;
-  const sender = site.rule.mode === "force" ? configured : (from ?? configured);
-  if (site.rule.mode === "allow" && !permittedSender(site, sender)) {
-    throw new Error(`sender ${sender} is not allowed for ${site.domain}`);
+  const from = requestedFrom(fromRaw);
+  const at = from ? from.address.lastIndexOf("@") : -1;
+  const local = from ? from.address.slice(0, at) : "";
+  const domain = from ? from.address.slice(at + 1) : "";
+  const allowed = allowedDomains(site);
+  let sender: string;
+  try {
+    sender = senderFor(site.rule.sender, site.domain, from && { local, domain: allowed.includes(domain) ? domain : site.domain });
+  } catch {
+    sender = senderFor(site.rule.sender, site.domain);
   }
-  kept.unshift(`From: ${sender}`);
+  // A contact form's visitor address cannot be the From, but replies should still reach them.
+  if (from && !hasReplyTo && !allowed.includes(domain) && !sender.endsWith(`@${domain}`)) {
+    kept.unshift(`Reply-To: ${from.address}`);
+  }
+  kept.unshift(`From: ${from?.display ? `${from.display} <${sender}>` : sender}`);
   const head = Buffer.from(kept.join(newline) + newline + newline, "utf8");
   return { message: Buffer.concat([head, input.subarray(boundary + separatorLength)]), sender };
 }

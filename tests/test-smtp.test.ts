@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, st
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeSmtpAction, postfixMaps, type SmtpActionOptions, type SmtpState } from "../addons/smtp/action";
-import { emptySmtpPolicy, parseRule, type SmtpSubmissionSite } from "../addons/smtp/config";
+import { emptySmtpPolicy, parseRule, senderGrants, type SmtpSubmissionSite } from "../addons/smtp/config";
 import { MAX_MESSAGE_BYTES, prepareSubmission, readBoundedSubmission } from "../addons/smtp/submit";
 import { dashboardView } from "../addons/smtp/app/views";
 
@@ -12,37 +12,72 @@ afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: tru
 
 const site: SmtpSubmissionSite = {
   domain: "example.com", user: "example", uid: 1234,
-  rule: { mode: "force", sender: "noreply@{domain}", domains: [], addresses: [] },
+  rule: { sender: "noreply@{site}", domains: [] },
 };
 
-test("forced sender replaces a foreign From and sets the envelope identity", () => {
-  const raw = Buffer.from("To: user@recipient.test\r\nFrom: noreply@cool.com\r\nSubject: Reset\r\nReturn-Path: forged@cool.com\r\n\r\nHello", "utf8");
+const submit = (rule: SmtpSubmissionSite["rule"], headers: string) => {
+  const result = prepareSubmission(Buffer.from(`To: user@recipient.test\n${headers}\n\nHi`), { ...site, rule });
+  return { sender: result.sender, text: Buffer.from(result.message).toString("utf8") };
+};
+
+test("a fixed From replaces the app's and keeps a foreign address reachable", () => {
+  const raw = Buffer.from("To: user@recipient.test\r\nFrom: Visitor <visitor@cool.com>\r\nSubject: Reset\r\nReturn-Path: forged@cool.com\r\n\r\nHello", "utf8");
   const result = prepareSubmission(raw, site);
   const output = Buffer.from(result.message).toString("utf8");
   expect(result.sender).toBe("noreply@example.com");
-  expect(output).toContain("From: noreply@example.com\r\n");
-  expect(output).not.toContain("cool.com");
+  expect(output).toContain("From: Visitor <noreply@example.com>\r\nReply-To: visitor@cool.com\r\n");
+  expect(output).not.toContain("forged@cool.com");
   expect(output.endsWith("\r\n\r\nHello")).toBe(true);
-  const invalidRequested = prepareSubmission(Buffer.from("To: user@recipient.test\nFrom: wordpress@example.com (WordPress)\n\nHello"), site);
-  expect(invalidRequested.sender).toBe("noreply@example.com");
-  expect(Buffer.from(invalidRequested.message).toString()).not.toContain("(WordPress)");
+  const unparsable = submit(site.rule, "From: wordpress@example.com (WordPress)");
+  expect(unparsable.sender).toBe("noreply@example.com");
+  expect(unparsable.text).not.toContain("(WordPress)");
+  expect(unparsable.text).not.toContain("Reply-To");
+  expect(submit(site.rule, "From: wordpress@example.com").text).not.toContain("Reply-To");
+  expect(submit(site.rule, "From: a@cool.com\nReply-To: desk@cool.com").text.match(/Reply-To/g)).toHaveLength(1);
 });
 
-test("allow-listed mode preserves own and approved domains but refuses another site", () => {
-  const allowed = { ...site, rule: parseRule({ mode: "allow", sender: "noreply@{domain}", domains: ["news.example.com"], addresses: ["billing@partner.test"] }) };
-  for (const sender of ["wordpress@example.com", "edition@news.example.com", "billing@partner.test"]) {
-    const result = prepareSubmission(Buffer.from(`To: test@recipient.test\nFrom: ${sender}\n\nHi`), allowed);
-    expect(result.sender).toBe(sender);
+test("{from.local} keeps the app's name on the template's domain", () => {
+  const rule = parseRule({ sender: "{from.local}@{site}" });
+  const wordpress = submit(rule, "From: WordPress <wordpress@example.com>");
+  expect(wordpress.sender).toBe("wordpress@example.com");
+  expect(wordpress.text).toContain("From: WordPress <wordpress@example.com>\n");
+  expect(wordpress.text).not.toContain("Reply-To");
+  expect(submit(rule, "From: orders@cool.com").sender).toBe("orders@example.com");
+  expect(submit(rule, "Subject: none").sender).toBe("noreply@example.com");
+  expect(submit(parseRule({ sender: "{from.local}@mail.{site}" }), `From: ${"a".repeat(240)}@example.com`).sender).toBe("noreply@mail.example.com");
+});
+
+test("{from.domain} keeps only the site's own and granted domains", () => {
+  const rule = parseRule({ sender: "{from.local}@{from.domain}", domains: ["news.example.com"] });
+  for (const sender of ["wordpress@example.com", "edition@news.example.com"]) {
+    expect(submit(rule, `From: ${sender}`).sender).toBe(sender);
   }
-  expect(() => prepareSubmission(Buffer.from("To: test@recipient.test\nFrom: noreply@cool.com\n\nHi"), allowed)).toThrow("not allowed");
-  expect(() => prepareSubmission(Buffer.from("From: a@example.com\nFrom: b@example.com\nTo: test@recipient.test\n\nHi"), allowed)).toThrow("multiple From");
+  const foreign = submit(rule, "From: noreply@othersite.test");
+  expect(foreign.sender).toBe("noreply@example.com");
+  expect(foreign.text).toContain("Reply-To: noreply@othersite.test");
+  expect(() => submit(rule, "From: a@example.com\nFrom: b@example.com")).toThrow("multiple From");
 });
 
-test("folded From is checked and ignored Sender fields cannot change it", () => {
-  const allowed = { ...site, rule: { ...site.rule, mode: "allow" as const } };
-  const result = prepareSubmission(Buffer.from("To: test@recipient.test\nFrom: Example\n <wordpress@example.com>\nSender: forged@cool.com\n x: bogus\n\nHi"), allowed);
+test("folded From is read and ignored Sender fields cannot change it", () => {
+  const rule = parseRule({ sender: "{from.local}@{from.domain}" });
+  const result = submit(rule, "From: Example\n <wordpress@example.com>\nSender: forged@cool.com\n x: bogus");
   expect(result.sender).toBe("wordpress@example.com");
-  expect(Buffer.from(result.message).toString()).not.toContain("forged@cool.com");
+  expect(result.text).not.toContain("forged@cool.com");
+});
+
+test("From templates accept only the three tokens in their own halves", () => {
+  for (const sender of ["noreply@{domain}", "{from.domain}@example.com", "noreply@mail.{from.domain}", "{from.local}", "a@b@{site}"]) {
+    expect(() => parseRule({ sender })).toThrow();
+  }
+  expect(parseRule({ sender: "NoReply@{site}", domains: ["other.test"] })).toEqual(site.rule);
+});
+
+test("Postfix envelope grants follow what the template can produce", () => {
+  const grants = (sender: string, domains: string[] = []) => senderGrants({ domain: "example.com", rule: parseRule({ sender, domains }) });
+  expect(grants("noreply@{site}")).toEqual(["noreply@example.com"]);
+  expect(grants("{from.local}@{site}")).toEqual(["@example.com"]);
+  expect(grants("{from.local}@{from.domain}", ["news.example.com"])).toEqual(["@example.com", "@news.example.com"]);
+  expect(grants("noreply@{from.domain}", ["news.example.com"])).toEqual(["noreply@example.com", "noreply@news.example.com"]);
 });
 
 test("stdin accepts exactly 25 MiB and cancels at the first byte over the limit", async () => {
@@ -122,7 +157,7 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
     run,
   };
   const body = { relay: { host: "mail.example.com", port: 587, username: "relay@example.com", password: "secret" } };
-  await expect(executeSmtpAction(["save-setup"], { ...options, input: JSON.stringify({ ...body, rule: { mode: "invalid" } }) })).rejects.toThrow("sender mode");
+  await expect(executeSmtpAction(["save-setup"], { ...options, input: JSON.stringify({ ...body, rule: { sender: "noreply@{domain}" } }) })).rejects.toThrow("{from.local}, {from.domain} and {site}");
   expect(existsSync(join(dir, "smtp.lock"))).toBe(false);
   expect((await executeSmtpAction(["list"], options) as SmtpState).configured).toBe(false);
   const submissionPath = join(dir, "submission.json");
@@ -144,7 +179,7 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
   settings.delete("transport_maps");
   await executeSmtpAction(["save-setup"], { ...options, input: JSON.stringify({ ...body, rule: site.rule }) });
   expect(readFileSync(pool, "utf8")).toContain("smtp-submit -t -i");
-  expect(readFileSync(join(dir, "submission.json"), "utf8")).toContain("noreply@{domain}");
+  expect(readFileSync(join(dir, "submission.json"), "utf8")).toContain("noreply@{site}");
   expect(settings.get("local_login_sender_maps")).toContain("clp-addons-local-senders");
   expect(readFileSync(join(postfixDir, "clp-addons-local-senders"), "utf8")).toContain("clp *\n");
   expect(settings.get("smtp_tls_security_level")).toBe("secure");
@@ -207,12 +242,12 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
   const html = dashboardView(publicState as SmtpState);
   expect(JSON.stringify(publicState)).not.toContain("secret");
   expect(html).not.toContain("secret");
-  expect(html).toContain('data-label="Forced From"');
+  expect(html).toContain('data-label="From"');
   writeFileSync(pool, readFileSync(pool, "utf8") + "php_admin_value[sendmail_path] = /other/sendmail\n");
   await expect(executeSmtpAction(["save-default"], { ...options, input: JSON.stringify({
-    rule: { mode: "allow", sender: "noreply@{domain}", domains: [], addresses: [] },
+    rule: { sender: "{from.local}@{site}", domains: [] },
   }) })).rejects.toThrow("already configures sendmail_path");
-  expect((await executeSmtpAction(["list"], options) as SmtpState).defaultRule.mode).toBe("force");
+  expect((await executeSmtpAction(["list"], options) as SmtpState).defaultRule.sender).toBe("noreply@{site}");
   writeFileSync(pool, readFileSync(pool, "utf8").replace("php_admin_value[sendmail_path] = /other/sendmail\n", ""));
   await executeSmtpAction(["deactivate"], options);
   expect(readFileSync(pool, "utf8")).not.toContain("smtp-submit");
@@ -223,19 +258,14 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
   expect(existsSync(join(postfixDir, "clp-addons-tls-policy"))).toBe(false);
 });
 
-test("force mode drops dormant allow-list grants", () => {
-  expect(parseRule({ mode: "force", sender: "noreply@{domain}", domains: ["other.test"], addresses: ["a@other.test"] })).toEqual(site.rule);
-});
-
-test("site table distinguishes an allow-mode fallback from its full grants", () => {
+test("site table shows each site's From and its granted domains", () => {
   const policy = emptySmtpPolicy();
-  const rule = parseRule({ mode: "allow", sender: "noreply@{domain}", domains: ["news.example.com"], addresses: ["billing@partner.test"] });
+  const rule = parseRule({ sender: "{from.local}@{from.domain}", domains: ["news.example.com"] });
   const html = dashboardView({
     configured: false, relay: null, relayOverrides: {}, defaultRule: policy.defaultRule,
-    sites: [{ domain: "example.com", user: "example", phpVersion: "8.2", rule, overridden: true, senderPreview: "noreply@example.com" }],
+    sites: [{ domain: "example.com", user: "example", phpVersion: "8.2", rule, overridden: true, senderPreview: rule.sender }],
   });
-  expect(html).toContain('data-label="Fallback From"');
-  expect(html).toContain("@news.example.com");
-  expect(html).toContain("billing@partner.test");
+  expect(html).toContain("<code>{from.local}@{from.domain}</code>");
+  expect(html).toContain("news.example.com");
   expect(html).toContain('data-label="Actions"');
 });

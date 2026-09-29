@@ -1,12 +1,9 @@
 /** The public sender policy is separate from the root-only SMTP credentials. */
 export interface SmtpSiteRule {
-  mode: "force" | "allow";
-  /** Used by force mode, and as the fallback when an allowed message has no From. */
+  /** From template: {from.local} and {from.domain} come from the app's From, {site} is the site's domain. */
   sender: string;
-  /** Extra sending domains explicitly granted to this CloudPanel site. */
+  /** Domains {from.domain} may keep besides the site's own. */
   domains: string[];
-  /** Exact additional addresses, for providers that authorize individual senders. */
-  addresses: string[];
 }
 
 export interface SmtpRelay {
@@ -40,9 +37,8 @@ export interface SmtpSubmissionPolicy {
 const DOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 const ADDRESS = /^[A-Za-z0-9._%+-]+@([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)$/i;
 
-export const DEFAULT_RULE: SmtpSiteRule = {
-  mode: "force", sender: "noreply@{domain}", domains: [], addresses: [],
-};
+export const DEFAULT_RULE: SmtpSiteRule = { sender: "noreply@{site}", domains: [] };
+export const FALLBACK_LOCAL = "noreply";
 
 export function emptySmtpPolicy(): SmtpPolicy {
   return { version: 1, relay: null, relayOverrides: {}, defaultRule: { ...DEFAULT_RULE }, siteRules: {} };
@@ -62,28 +58,39 @@ export function smtpAddress(value: unknown): string {
   return value.toLowerCase();
 }
 
-export function senderFor(template: string, domain: string): string {
-  if (typeof template !== "string" || template.length > 254 ||
-      template.replaceAll("{domain}", "").includes("{")) {
-    throw new Error("sender template may contain only {domain}");
+export interface RequestedSender { local: string; domain: string }
+
+export function senderFor(template: string, site: string, from?: RequestedSender | null): string {
+  return smtpAddress(template
+    .replaceAll("{from.local}", from?.local ?? FALLBACK_LOCAL)
+    .replaceAll("{from.domain}", from?.domain ?? site)
+    .replaceAll("{site}", site));
+}
+
+export function parseSenderTemplate(value: unknown): string {
+  if (typeof value !== "string" || value.length > 254) throw new Error("From address is required");
+  const template = value.trim().toLowerCase();
+  const at = template.lastIndexOf("@");
+  const local = template.slice(0, at);
+  const domain = template.slice(at + 1);
+  if (["{from.local}", "{from.domain}", "{site}"].reduce((rest, token) => rest.replaceAll(token, ""), template).match(/[{}]/)) {
+    throw new Error("From may use only {from.local}, {from.domain} and {site}");
   }
-  return smtpAddress(template.replaceAll("{domain}", domain));
+  if (at < 1 || local.includes("{from.domain}") || domain.includes("{from.local}") ||
+      (domain.includes("{from.domain}") && domain !== "{from.domain}")) {
+    throw new Error("From must be name@domain, with {from.local} before the @ and {from.domain} as the whole domain");
+  }
+  senderFor(template, "example.com", { local: "wordpress", domain: "example.com" });
+  return template;
 }
 
 export function parseRule(value: unknown): SmtpSiteRule {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("sender rule must be an object");
   const rule = value as Record<string, unknown>;
-  if (rule.mode !== "force" && rule.mode !== "allow") throw new Error("sender mode must be force or allow");
-  if (typeof rule.sender !== "string") throw new Error("sender template is required");
-  senderFor(rule.sender, "example.com");
-  if (!Array.isArray(rule.domains) || !Array.isArray(rule.addresses) ||
-      rule.domains.length > 30 || rule.addresses.length > 100) throw new Error("too many allowed senders");
-  return {
-    mode: rule.mode,
-    sender: rule.sender.toLowerCase(),
-    domains: rule.mode === "allow" ? [...new Set(rule.domains.map(smtpDomain))].sort() : [],
-    addresses: rule.mode === "allow" ? [...new Set(rule.addresses.map(smtpAddress))].sort() : [],
-  };
+  const sender = parseSenderTemplate(rule.sender);
+  const domains = rule.domains ?? [];
+  if (!Array.isArray(domains) || domains.length > 30) throw new Error("too many allowed domains");
+  return { sender, domains: sender.includes("{from.domain}") ? [...new Set(domains.map(smtpDomain))].sort() : [] };
 }
 
 export function parseRelay(value: unknown): SmtpRelay {
@@ -102,18 +109,17 @@ export function parseRelay(value: unknown): SmtpRelay {
   return { host, port: Number(relay.port), username: relay.username, password: relay.password };
 }
 
-export function senderGrants(site: Pick<SmtpSubmissionSite, "domain" | "rule">): { addresses: string[]; domains: string[] } {
-  const addresses = [senderFor(site.rule.sender, site.domain)];
-  if (site.rule.mode === "force") return { addresses, domains: [] };
-  return {
-    addresses: [...new Set([...addresses, ...site.rule.addresses])],
-    domains: [...new Set([site.domain, ...site.rule.domains])],
-  };
+/** Domains the app's own From domain may keep; anything else is foreign. */
+export function allowedDomains(site: Pick<SmtpSubmissionSite, "domain" | "rule">): string[] {
+  return [...new Set([site.domain, ...site.rule.domains])];
 }
 
-export function permittedSender(site: SmtpSubmissionSite, address: string): boolean {
-  const sender = smtpAddress(address);
-  const domain = sender.slice(sender.lastIndexOf("@") + 1);
-  const grants = senderGrants(site);
-  return grants.addresses.includes(sender) || grants.domains.includes(domain);
+/** Envelope senders a site's Unix account may use, as Postfix sender map entries. */
+export function senderGrants(site: Pick<SmtpSubmissionSite, "domain" | "rule">): string[] {
+  const { sender } = site.rule;
+  const domains = sender.includes("{from.domain}") ? allowedDomains(site) : [site.domain];
+  return [...new Set(domains.map((domain) => {
+    const address = senderFor(sender, site.domain, { local: FALLBACK_LOCAL, domain });
+    return sender.includes("{from.local}") ? address.slice(address.lastIndexOf("@")) : address;
+  }))];
 }

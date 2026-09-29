@@ -8,10 +8,10 @@ import {
 import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import {
-  emptySmtpPolicy, parseRelay, parseRule, senderFor, senderGrants, smtpAddress, smtpDomain,
+  emptySmtpPolicy, parseRelay, parseRule, senderGrants, smtpAddress, smtpDomain,
   type SmtpPolicy, type SmtpRelay, type SmtpSiteRule, type SmtpSubmissionPolicy,
 } from "./config";
-import { SUBMISSION_POLICY_PATH } from "./submit";
+import { prepareSubmission, SUBMISSION_POLICY_PATH } from "./submit";
 
 const MANAGED_POOL_LINE = `php_admin_value[sendmail_path] = ${CLI_BIN} smtp-submit -t -i`;
 const MANAGED_POOL_MARKER = "; clp-addons smtp relay";
@@ -49,7 +49,7 @@ export interface SmtpPaths {
   lockFile: string;
   submissionFile: string;
   postfixDir: string;
-  sendmail: string;
+  runuser: string;
   rootUid: number;
 }
 export interface SmtpActionOptions {
@@ -69,7 +69,7 @@ export const DEFAULT_SMTP_PATHS: SmtpPaths = {
   lockFile: "/run/lock/clp-addons/smtp.lock",
   submissionFile: SUBMISSION_POLICY_PATH,
   postfixDir: "/etc/postfix",
-  sendmail: "/usr/sbin/sendmail",
+  runuser: "/usr/sbin/runuser",
   rootUid: 0,
 };
 
@@ -176,7 +176,7 @@ function stateOf(policy: SmtpPolicy, sites: SiteRow[]): SmtpState {
       return {
         domain: site.domain, user: site.user, phpVersion: site.phpVersion, rule,
         overridden: Boolean(policy.siteRules[site.domain]),
-        senderPreview: senderFor(rule.sender, site.domain),
+        senderPreview: rule.sender.replaceAll("{site}", site.domain),
       };
     }),
   };
@@ -242,9 +242,7 @@ export function postfixMaps(policy: SmtpPolicy): { credentials: string; routes: 
 function localSenderMap(policy: SmtpPolicy, sites: SiteRow[]): string {
   const entries = ["root *", "postfix *", "clp *"];
   for (const site of sites) {
-    const rule = effectiveRule(policy, site.domain);
-    const grants = senderGrants({ domain: site.domain, rule });
-    entries.push(`${site.user} ${[...grants.addresses, ...grants.domains.map((domain) => `@${domain}`)].join(" ")}`);
+    entries.push(`${site.user} ${senderGrants({ domain: site.domain, rule: effectiveRule(policy, site.domain) }).join(" ")}`);
   }
   return entries.join("\n") + "\n";
 }
@@ -479,24 +477,32 @@ async function inputBody(options: SmtpActionOptions): Promise<Record<string, unk
   return value as Record<string, unknown>;
 }
 
-function testSubmission(policy: SmtpPolicy, sites: SiteRow[], body: Record<string, unknown>): { domain: string; sender: string; recipient: string } {
+export interface SmtpTestResult { queued: true; requested: string; sender: string; replyTo: string | null; recipient: string }
+
+function testSubmission(policy: SmtpPolicy, sites: SiteRow[], body: Record<string, unknown>): { site: SiteRow; message: Buffer; result: SmtpTestResult } {
   if (!policy.relay) failAction("configure the global SMTP relay first");
   const domain = smtpDomain(body.domain);
   const site = sites.find((item) => item.domain === domain);
   if (!site) failAction(`CloudPanel has no PHP site ${domain}`);
   const recipient = smtpAddress(body.recipient);
-  const sender = senderFor(effectiveRule(policy, domain).sender, domain);
-  return { domain, sender, recipient };
+  const requested = body.from === undefined || body.from === "" ? `wordpress@${domain}` : smtpAddress(body.from);
+  const message = Buffer.from(`To: ${recipient}\nFrom: ${requested}\nSubject: CloudPanel SMTP relay test for ${domain}\n\nThis message was sent through PHP's mail path for ${domain} and the CloudPanel Addons Postfix relay.\n`);
+  const prepared = prepareSubmission(message, { domain, uid: site.uid, user: site.user, rule: effectiveRule(policy, domain) });
+  const replyTo = Buffer.from(prepared.message).toString("utf8").match(/^Reply-To: (.+)$/m)?.[1] ?? null;
+  return { site, message, result: { queued: true, requested, sender: prepared.sender, replyTo, recipient } };
 }
 
-function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SiteRow[], body: Record<string, unknown>): { queued: true; sender: string; recipient: string } {
-  const { domain, sender, recipient } = testSubmission(policy, sites, body);
-  const message = `To: ${recipient}\nFrom: ${sender}\nSubject: CloudPanel SMTP relay test for ${domain}\n\nThis message was submitted through the CloudPanel Addons Postfix relay.\n`;
-  const result = Bun.spawnSync([paths.sendmail, "-t", "-i", "-f", sender], {
-    stdin: Buffer.from(message), stdout: "pipe", stderr: "pipe", maxBuffer: 64 * 1024,
+/** Submits as the site's Unix account through the same command its PHP pool uses. */
+function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SiteRow[], body: Record<string, unknown>): SmtpTestResult {
+  const { site, message, result } = testSubmission(policy, sites, body);
+  const submit = Bun.spawnSync([paths.runuser, "-u", site.user, "--", CLI_BIN, "smtp-submit", "-t", "-i"], {
+    stdin: message, stdout: "pipe", stderr: "pipe", maxBuffer: 64 * 1024, timeout: 30_000,
   });
-  if (!result.success) failAction(`Postfix did not queue the test: ${Buffer.from(result.stderr).toString("utf8").trim() || "sendmail failed"}`);
-  return { queued: true, sender, recipient };
+  if (!submit.success) {
+    const detail = Buffer.from(submit.stderr).toString("utf8").trim().replace(/^\[smtp\] /, "");
+    failAction(`${site.domain}'s PHP mail path did not queue the test: ${detail || "submission failed"}`);
+  }
+  return result;
 }
 
 export async function executeSmtpAction(argv: string[], options: SmtpActionOptions = {}): Promise<unknown> {
