@@ -63,6 +63,7 @@ async function enableAddon(spec: AddonSpec): Promise<void> {
 
   if (!platformProvisioned()) {
     bootstrapProvision(specs);
+    spec.activate?.();
     log.ok(`${spec.name} enabled`);
     return;
   }
@@ -84,6 +85,7 @@ async function enableAddon(spec: AddonSpec): Promise<void> {
     fatal("could not safely inject the Nginx maintenance check");
   }
   applyToggleUnits(changes);
+  spec.activate?.();
   log.ok(`${spec.name} enabled`);
 }
 

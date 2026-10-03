@@ -1,37 +1,167 @@
-const smtpState = JSON.parse(document.getElementById('smtp-state')?.textContent || '{}');
+let smtpState = JSON.parse(CLP_ROOT.getElementById('smtp-state')?.textContent || '{}');
 
 function smtpFields(form) {
   return Object.fromEntries(new FormData(form).entries());
 }
 
-async function smtpPost(path, body) {
+async function smtpPost(path, body, done) {
   busy(true);
   try {
-    await call(path, {
+    const reply = await call(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    location.reload();
+    for (const dialog of CLP_ROOT.querySelectorAll('dialog[open]')) dialog.close();
+    CLP_ROOT.getElementById('smtp-root').innerHTML = reply.html;
+    smtpState = reply.data;
+    smtpPaintSelection();
+    notify(done, 'ok');
+    return true;
   } catch (error) {
     notify(error.message, 'error');
+    return false;
   } finally {
     busy(false);
   }
 }
 
-function smtpRelayPayload(fields) {
-  return { host: fields.host, port: Number(fields.port), username: fields.username, password: fields.password };
+function smtpProfileName(id) {
+  const profile = smtpState.profiles.find(function (item) { return item.id === id; });
+  return profile ? profile.name : id;
 }
 
-function smtpSaveSetup(event) {
+// --- profiles ---------------------------------------------------------------
+
+function smtpSyncDelivery() {
+  const form = CLP_ROOT.getElementById('smtp-profile-form');
+  const send = form.elements.namedItem('delivery').value === 'send';
+  CLP_ROOT.getElementById('smtp-relay-fields').hidden = !send;
+  for (const name of ['host', 'port', 'username', 'sender']) form.elements.namedItem(name).required = send;
+  form.elements.namedItem('password').required = send && form.dataset.savedRelay !== 'yes';
+}
+
+function smtpEditProfile(id) {
+  const profile = id ? smtpState.profiles.find(function (item) { return item.id === id; }) : null;
+  const form = CLP_ROOT.getElementById('smtp-profile-form');
+  form.reset();
+  form.elements.namedItem('id').value = profile ? profile.id : '';
+  form.elements.namedItem('name').value = profile ? profile.name : '';
+  form.elements.namedItem('delivery').value = profile && !profile.relay ? 'discard' : 'send';
+  form.elements.namedItem('host').value = profile && profile.relay ? profile.relay.host : '';
+  form.elements.namedItem('port').value = profile && profile.relay ? profile.relay.port : 587;
+  form.elements.namedItem('username').value = profile && profile.relay ? profile.relay.username : '';
+  form.elements.namedItem('sender').value = profile ? profile.sender : 'noreply@{site}';
+  form.dataset.savedRelay = profile && profile.relay ? 'yes' : 'no';
+  form.elements.namedItem('password').placeholder = profile && profile.relay ? 'Leave blank to keep the saved password' : 'SMTP password';
+  smtpSyncDelivery();
+  CLP_ROOT.getElementById('smtp-profile-heading').textContent = profile ? 'Edit ' + profile.name : 'New profile';
+  CLP_ROOT.getElementById('smtp-profile-dialog').showModal();
+}
+
+function smtpSaveProfile(event) {
   event.preventDefault();
   const fields = smtpFields(event.currentTarget);
-  smtpPost('/api/setup', {
-    relay: smtpRelayPayload(fields),
-    rule: { mode: fields.mode, sender: fields.sender,
-      domains: smtpState.defaultRule.domains, addresses: smtpState.defaultRule.addresses },
+  const send = fields.delivery === 'send';
+  smtpPost('/api/profiles', {
+    id: fields.id || null,
+    name: fields.name,
+    relay: send ? { host: fields.host, port: Number(fields.port), username: fields.username, password: fields.password } : null,
+    sender: send ? fields.sender : undefined,
+  }, fields.id ? 'Saved ' + fields.name + '. Its sites use it now.' : 'Created ' + fields.name + '. Assign sites to it below.');
+}
+
+async function smtpDeleteProfile(id) {
+  const profile = smtpState.profiles.find(function (item) { return item.id === id; });
+  const details = profile && profile.sites ? [plural(profile.sites, 'site') + ' in it stop being relayed.'] : [];
+  const accepted = await confirmAction({
+    title: 'Delete ' + smtpProfileName(id) + '?',
+    text: 'Its SMTP account and From are removed.',
+    details: details,
+    confirmLabel: 'Delete',
+    danger: true,
   });
+  if (accepted) smtpPost('/api/profiles/delete', { id: id }, 'Deleted ' + smtpProfileName(id) + '.');
+}
+
+async function smtpSetDefault(select) {
+  const id = select.value || null;
+  const saved = await smtpPost('/api/default', { profileId: id }, id
+    ? 'New sites will join ' + smtpProfileName(id) + '. Existing sites are unchanged.'
+    : 'New sites will not be relayed. Existing sites are unchanged.');
+  if (!saved) select.value = smtpState.defaultProfileId || '';
+}
+
+// --- sites ------------------------------------------------------------------
+
+function smtpPaintSelection() {
+  const rows = siteRows();
+  rows.forEach(function (row) {
+    const box = row.querySelector('.site-checkbox');
+    row.setAttribute('aria-selected', String(Boolean(box && box.checked)));
+  });
+  const chosen = selectedRows();
+  const note = CLP_ROOT.getElementById('site-selection');
+  if (note) note.textContent = chosen.length === 0 ? 'No sites selected' : chosen.length + ' of ' + rows.length + ' selected';
+  const apply = CLP_ROOT.getElementById('assign-selected');
+  if (apply) apply.disabled = chosen.length === 0;
+  const all = CLP_ROOT.getElementById('select-all');
+  if (all) {
+    all.checked = rows.length > 0 && chosen.length === rows.length;
+    all.indeterminate = chosen.length > 0 && chosen.length < rows.length;
+  }
+  const allBtn = CLP_ROOT.getElementById('select-all-btn');
+  if (allBtn) allBtn.textContent = rows.length > 0 && chosen.length === rows.length ? 'Deselect all' : 'Select all';
+}
+
+async function smtpAssignRow(select) {
+  const row = select.closest('tr[data-domain]');
+  const id = select.value || null;
+  const saved = await smtpPost('/api/assign', { domains: [row.dataset.domain], profileId: id }, id
+    ? row.dataset.domain + ' now sends through ' + smtpProfileName(id) + '.'
+    : row.dataset.domain + ' is no longer relayed.');
+  if (!saved) select.value = row.dataset.profileId || '';
+}
+
+async function smtpAssignSelected() {
+  const rows = selectedRows();
+  const picker = CLP_ROOT.getElementById('bulk-profile');
+  if (!rows.length) return notify('Select at least one site first.', 'warn');
+  if (!picker.value) return notify('Choose a profile to put them in first.', 'warn');
+  const id = picker.value === '-' ? null : picker.value;
+  const moving = rows.filter(function (row) { return (row.dataset.profileId || '') !== (id || ''); });
+  if (!moving.length) return notify('Those sites are already there; nothing to change.', 'ok');
+  const accepted = await confirmAction({
+    title: id ? 'Send ' + plural(rows.length, 'site') + ' through ' + smtpProfileName(id) + '?' : 'Stop relaying ' + plural(rows.length, 'site') + '?',
+    text: id ? 'Their mail goes through this profile\'s SMTP account from now on.' : 'Their mail is no longer relayed.',
+    details: [moving.length + ' of the ' + plural(rows.length, 'selected site') + ' change; the rest are already there.'],
+    confirmLabel: id ? 'Assign' : 'Stop relaying',
+    danger: !id,
+  });
+  if (!accepted) return;
+  smtpPost('/api/assign', { domains: rows.map(function (row) { return row.dataset.domain; }), profileId: id }, id
+    ? plural(rows.length, 'site') + ' now send through ' + smtpProfileName(id) + '.'
+    : plural(rows.length, 'site') + ' are no longer relayed.');
+}
+
+function smtpList(value) {
+  return String(value || '').split(/[\s,]+/).map(function (part) { return part.trim(); }).filter(Boolean);
+}
+
+function smtpEditGrants(domain) {
+  const site = smtpState.sites.find(function (item) { return item.domain === domain; });
+  if (!site) return;
+  const form = CLP_ROOT.getElementById('smtp-grants-form');
+  form.elements.namedItem('domain').value = domain;
+  form.elements.namedItem('domains').value = site.grants.join('\n');
+  CLP_ROOT.getElementById('smtp-grants-heading').textContent = 'Sending domains for ' + domain;
+  CLP_ROOT.getElementById('smtp-grants-dialog').showModal();
+}
+
+function smtpSaveGrants(event) {
+  event.preventDefault();
+  const fields = smtpFields(event.currentTarget);
+  smtpPost('/api/grants', { domain: fields.domain, domains: smtpList(fields.domains) }, 'Saved the sending domains of ' + fields.domain + '.');
 }
 
 async function smtpSendTest(event) {
@@ -41,9 +171,12 @@ async function smtpSendTest(event) {
   try {
     const result = await call('/api/test', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ domain: fields.domain, recipient: fields.recipient }),
+      body: JSON.stringify({ domain: fields.domain, recipient: fields.recipient, from: fields.from }),
     });
-    notify('Postfix queued a test from ' + result.data.sender + ' to ' + result.data.recipient + '.', 'ok');
+    const data = result.data;
+    notify((data.discarded ? 'Postfix accepted the test and its profile discards it, so it will not arrive. ' : 'Postfix queued the test to ' + data.recipient + '. ') +
+      (data.sender === data.requested ? 'Its From stays ' + data.sender
+        : 'The app asked for ' + data.requested + ' and it was sent as ' + data.sender + (data.replyTo ? ', with Reply-To ' + data.replyTo : '')) + '.', 'ok');
   } catch (error) {
     notify(error.message, 'error');
   } finally {
@@ -51,71 +184,4 @@ async function smtpSendTest(event) {
   }
 }
 
-function smtpList(value) {
-  return String(value || '').split(/[\s,]+/).map(function (part) { return part.trim(); }).filter(Boolean);
-}
-
-function smtpEditSite(domain) {
-  const site = smtpState.sites.find(function (item) { return item.domain === domain; });
-  if (!site) return;
-  const form = document.getElementById('smtp-site-form');
-  form.elements.namedItem('domain').value = domain;
-  form.elements.namedItem('mode').value = site.rule.mode;
-  form.elements.namedItem('sender').value = site.rule.sender;
-  form.elements.namedItem('domains').value = site.rule.domains.join('\n');
-  form.elements.namedItem('addresses').value = site.rule.addresses.join('\n');
-  smtpSyncSiteMode();
-  document.getElementById('smtp-site-heading').textContent = 'Sender policy for ' + domain;
-  document.getElementById('smtp-clear-site').hidden = !site.overridden;
-  document.getElementById('smtp-site-dialog').showModal();
-}
-
-function smtpSyncSiteMode() {
-  const form = document.getElementById('smtp-site-form');
-  const allow = form.elements.namedItem('mode').value === 'allow';
-  document.getElementById('smtp-site-allow-fields').hidden = !allow;
-  for (const name of ['domains', 'addresses']) {
-    const field = form.elements.namedItem(name);
-    if (!allow) field.value = '';
-    field.disabled = !allow;
-  }
-}
-
-function smtpSaveSite(event) {
-  event.preventDefault();
-  const fields = smtpFields(event.currentTarget);
-  smtpPost('/api/site', { domain: fields.domain, rule: {
-    mode: fields.mode, sender: fields.sender,
-    domains: smtpList(fields.domains), addresses: smtpList(fields.addresses),
-  } });
-}
-
-function smtpClearSite() {
-  const domain = document.getElementById('smtp-site-form').elements.namedItem('domain').value;
-  smtpPost('/api/site/clear', { domain: domain });
-}
-
-function smtpEditDomain(domain) {
-  const old = domain && smtpState.relayOverrides[domain];
-  const form = document.getElementById('smtp-domain-form');
-  form.elements.namedItem('domain').value = domain || '';
-  form.elements.namedItem('domain').readOnly = Boolean(old);
-  form.elements.namedItem('host').value = old ? old.host : '';
-  form.elements.namedItem('port').value = old ? old.port : 587;
-  form.elements.namedItem('username').value = old ? old.username : '';
-  form.elements.namedItem('password').value = '';
-  form.elements.namedItem('password').required = !old;
-  form.elements.namedItem('password').placeholder = old ? 'Leave blank to keep saved password' : 'New SMTP password';
-  document.getElementById('smtp-domain-dialog').showModal();
-}
-
-function smtpSaveDomain(event) {
-  event.preventDefault();
-  const fields = smtpFields(event.currentTarget);
-  smtpPost('/api/domain-relay', { domain: fields.domain, relay: smtpRelayPayload(fields) });
-}
-
-async function smtpClearDomain(domain) {
-  if (!await confirmAction({ title: 'Remove SMTP override?', text: domain + ' will use the global relay credential again.', confirmLabel: 'Remove' })) return;
-  smtpPost('/api/domain-relay/clear', { domain: domain });
-}
+smtpPaintSelection();

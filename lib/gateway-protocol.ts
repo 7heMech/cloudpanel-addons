@@ -107,8 +107,7 @@ export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
 ]);
 
 export const SMTP_ALLOWED_VERBS = new Set([
-  "list", "save-setup", "save-relay", "save-default", "save-site", "clear-site",
-  "save-domain-relay", "clear-domain-relay", "test",
+  "list", "save-profile", "delete-profile", "assign", "set-default", "save-grants", "test",
 ]);
 
 /**

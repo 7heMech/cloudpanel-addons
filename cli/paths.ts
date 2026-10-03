@@ -29,7 +29,8 @@ export const AUTH_SOCKET_UNIT = "clp-addons-auth.socket";
 export const AUTH_SERVICE_UNIT = "clp-addons-auth.service";
 export const AUTH_SOCKET_PATH = `${SOCKET_DIR}/auth.sock`;
 export const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";
-const DISTRO_NGINX_SITES_DIR = "/etc/nginx/sites-enabled";
+/** Site vhosts, which stay with the distro Nginx in both panel layouts. */
+export const DISTRO_NGINX_SITES_DIR = "/etc/nginx/sites-enabled";
 const PANEL_NGINX_DIR = "/home/clp/services/nginx";
 
 export interface NginxLayout {
@@ -87,6 +88,8 @@ export const RECONCILE_PATH = "clp-addons-anchor.path";
 export const ANCHOR_SERVICE = "clp-addons-anchor.service";
 export const CLOUDFLARE_RECONCILE_SERVICE = "clp-addons-cloudflare-ips-reconcile.service";
 export const CLOUDFLARE_RECONCILE_TIMER = "clp-addons-cloudflare-ips-reconcile.timer";
+export const SMTP_RECONCILE_SERVICE = "clp-addons-smtp-reconcile.service";
+export const SMTP_RECONCILE_PATH = "clp-addons-smtp-reconcile.path";
 
 
 export const LEGACY_USERS = ["instatic-app"];

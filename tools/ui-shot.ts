@@ -66,7 +66,7 @@ function findChrome(): string | null {
 async function chromeBinary(): Promise<string> {
   const existing = findChrome();
   if (existing) return existing;
-  await run(["bunx", "playwright", "install", "chromium-headless-shell"]);
+  await run(["bunx", "--bun", "playwright", "install", "chromium-headless-shell"]);
   const installed = findChrome();
   if (!installed) throw new Error("no headless chromium found after installing it");
   return installed;
