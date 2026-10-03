@@ -1,33 +1,56 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { CONFIG_DIR } from "../../cli/paths";
-import { allowedDomains, senderFor, smtpAddress, type SmtpSubmissionPolicy, type SmtpSubmissionSite } from "./config";
+import { senderFor, smtpAddress, type SmtpSubmissionRule } from "./config";
 
-export const SUBMISSION_POLICY_PATH = `${CONFIG_DIR}/smtp-submission.json`;
+/** One rule file per site uid, readable only by that site's group. */
+export const RULE_DIR = `${CONFIG_DIR}/smtp`;
+export const SENDMAIL = "/usr/sbin/sendmail";
 export const MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
 const MAX_HEADER_BYTES = 64 * 1024;
 
-function trustedPolicy(path: string): SmtpSubmissionPolicy {
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) {
-    throw new Error("SMTP sender policy is not a trusted root-owned file");
-  }
-  const value: unknown = JSON.parse(readFileSync(path, "utf8"));
-  if (!value || typeof value !== "object" || (value as SmtpSubmissionPolicy).version !== 1 ||
-      !Array.isArray((value as SmtpSubmissionPolicy).sites)) throw new Error("SMTP sender policy is malformed");
-  return value as SmtpSubmissionPolicy;
+export function rulePathFor(uid: number, dir = RULE_DIR): string {
+  return `${dir}/${uid}.json`;
 }
 
-/** The app's requested From, or null when it is missing or not one plain address. */
-function requestedFrom(raw: string | null): { display: string; address: string } | null {
+/** The site's rule, or null when there is none to apply: Postfix still enforces the envelope either way. */
+function trustedRule(path: string, rootUid: number): SmtpSubmissionRule | null {
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.uid !== rootUid || (stat.mode & 0o022) !== 0) return null;
+    const value = JSON.parse(readFileSync(path, "utf8")) as Partial<SmtpSubmissionRule>;
+    if (value.version !== 1 || typeof value.site !== "string" || typeof value.sender !== "string" ||
+        !Array.isArray(value.allowed) || !value.allowed.every((domain) => typeof domain === "string")) return null;
+    return { version: 1, site: value.site, sender: value.sender, allowed: value.allowed };
+  } catch {
+    return null;
+  }
+}
+
+/** Whether these are the arguments PHP's `mail()` passes, the only ones the rewrite handles. */
+function plainSubmission(argv: string[]): boolean {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (arg === "-t" || arg === "-i" || arg === "-oi") continue;
+    if (arg === "-f" || arg === "-r") {
+      if (!argv[++i]) return false;
+      continue;
+    }
+    if ((arg.startsWith("-f") || arg.startsWith("-r")) && arg.length > 2) continue;
+    return false;
+  }
+  return argv.includes("-t");
+}
+
+/** The app's requested From. A display name survives an address that cannot be used. */
+function requestedFrom(raw: string | null): { display: string; address: string | null } | null {
   if (raw === null) return null;
   const unfolded = raw.replace(/\r?\n[ \t]+/g, " ").trim();
   const bracketed = unfolded.match(/^([^<>]*)<([^<>]+)>$/);
+  const display = bracketed ? bracketed[1]!.trim() : "";
   try {
-    return bracketed
-      ? { display: bracketed[1]!.trim(), address: smtpAddress(bracketed[2]!.trim()) }
-      : { display: "", address: smtpAddress(unfolded) };
+    return { display, address: smtpAddress((bracketed ? bracketed[2]! : unfolded).trim()) };
   } catch {
-    return null;
+    return { display, address: null };
   }
 }
 
@@ -53,8 +76,8 @@ export async function readBoundedSubmission(stream: ReadableStream<Uint8Array>):
   }
 }
 
-/** Rewrites one message before it crosses the trusted local sendmail boundary. */
-export function prepareSubmission(message: Uint8Array, site: SmtpSubmissionSite): { message: Uint8Array; sender: string } {
+/** Rewrites one message's From to the site's template; throws when the message cannot be read as mail. */
+export function prepareSubmission(message: Uint8Array, rule: SmtpSubmissionRule): { message: Uint8Array; sender: string } {
   if (message.byteLength > MAX_MESSAGE_BYTES) throw new Error("message exceeds the 25 MiB submission limit");
   const input = Buffer.from(message);
   const lfBoundary = input.indexOf("\n\n");
@@ -93,52 +116,50 @@ export function prepareSubmission(message: Uint8Array, site: SmtpSubmissionSite)
     }
   }
   const from = requestedFrom(fromRaw);
-  const at = from ? from.address.lastIndexOf("@") : -1;
-  const local = from ? from.address.slice(0, at) : "";
-  const domain = from ? from.address.slice(at + 1) : "";
-  const allowed = allowedDomains(site);
+  const address = from?.address ?? null;
+  const at = address ? address.lastIndexOf("@") : -1;
+  const local = address ? address.slice(0, at) : "";
+  const domain = address ? address.slice(at + 1) : "";
   let sender: string;
   try {
-    sender = senderFor(site.rule.sender, site.domain, from && allowed.includes(domain) ? { local, domain } : null);
+    sender = senderFor(rule.sender, rule.site, address && rule.allowed.includes(domain) ? { local, domain } : null);
   } catch {
-    sender = senderFor(site.rule.sender, site.domain);
+    sender = senderFor(rule.sender, rule.site);
   }
-  // A contact form's visitor address cannot be the From, but replies should still reach them.
-  if (from && !hasReplyTo && !allowed.includes(domain)) {
-    kept.unshift(`Reply-To: ${from.address}`);
+  // Whoever the app named as the sender should still get the replies.
+  if (address && address !== sender && !hasReplyTo) {
+    kept.unshift(`Reply-To: ${from!.display ? `${from!.display} <${address}>` : address}`);
   }
   kept.unshift(`From: ${from?.display ? `${from.display} <${sender}>` : sender}`);
   const head = Buffer.from(kept.join(newline) + newline + newline, "utf8");
   return { message: Buffer.concat([head, input.subarray(boundary + separatorLength)]), sender };
 }
 
-/** Invoked as the PHP-FPM pool's sendmail_path, never through the root gateway. */
+function sendmail(path: string, argv: string[], stdin: Uint8Array | "inherit"): number {
+  return Bun.spawnSync([path, ...argv], { stdin, stdout: "inherit", stderr: "inherit" }).exitCode ?? 1;
+}
+
+/** Invoked as PHP's `sendmail_path`, as the site's own Unix user. */
 export async function runSmtpSubmit(
   argv: string[],
-  options: { policyPath?: string; sendmailPath?: string; uid?: number; input?: Uint8Array } = {},
+  options: { ruleDir?: string; rootUid?: number; sendmailPath?: string; uid?: number; input?: Uint8Array } = {},
 ): Promise<number> {
+  const path = options.sendmailPath ?? SENDMAIL;
+  const uid = options.uid ?? process.getuid?.();
+  const rule = uid === undefined || !plainSubmission(argv) ? null : trustedRule(rulePathFor(uid, options.ruleDir), options.rootUid ?? 0);
+  if (!rule) return sendmail(path, argv, options.input ?? "inherit");
+  let input: Uint8Array;
   try {
-    for (let i = 0; i < argv.length; i++) {
-      const arg = argv[i]!;
-      if (arg === "-t" || arg === "-i" || arg === "-oi") continue;
-      if (arg === "-f") { i++; if (!argv[i]) throw new Error("-f needs an address"); continue; }
-      if (arg.startsWith("-f") && arg.length > 2) continue;
-      throw new Error("unsupported sendmail option");
-    }
-    const uid = options.uid ?? process.getuid?.();
-    if (uid === undefined) throw new Error("cannot identify the sending site");
-    const policy = trustedPolicy(options.policyPath ?? SUBMISSION_POLICY_PATH);
-    const matches = policy.sites.filter((site) => site.uid === uid);
-    if (matches.length !== 1) throw new Error("the sending Unix account has no unique CloudPanel site");
-    const input = options.input ?? await readBoundedSubmission(Bun.stdin.stream());
-    const prepared = prepareSubmission(input, matches[0]!);
-    const result = Bun.spawnSync([options.sendmailPath ?? "/usr/sbin/sendmail", "-t", "-i", "-f", prepared.sender], {
-      stdin: prepared.message, stdout: "pipe", stderr: "pipe", maxBuffer: 64 * 1024,
-    });
-    if (!result.success) throw new Error(Buffer.from(result.stderr).toString("utf8").trim() || "Postfix did not accept the message");
-    return 0;
+    input = options.input ?? await readBoundedSubmission(Bun.stdin.stream());
   } catch (error) {
     process.stderr.write(`[smtp] ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
+  let prepared: { message: Uint8Array; sender: string };
+  try {
+    prepared = prepareSubmission(input, rule);
+  } catch {
+    return sendmail(path, argv, input);
+  }
+  return sendmail(path, ["-t", "-i", "-f", prepared.sender], prepared.message);
 }

@@ -52,6 +52,8 @@ mock.module("./cli/paths.ts", () => ({
   LOCK_DIR: root + "/lock",
   SOCKET_DIR: root + "/run",
   INSTATIC_BACKUP_CRON: root + "/cron.d/instatic-backup",
+  // What an addon's deactivate hook runs; nothing here may reach the real binary.
+  CLI_BIN: "/bin/true",
 }));
 
 const realUtil = await import("./cli/util.ts");
@@ -161,12 +163,13 @@ function fixture(options: { provisioned: boolean; enabled: string[] }): string {
   }
   for (const name of options.enabled) {
     writeFileSync(join(root, "etc", `${name}.conf`), `# clp-addons: ${name}\nRUN_AS=clp-addons\n`);
-    if (name !== "cloudflare-ips") continue;
-    // Its units are part of "already enabled": a disable has to find them to
-    // stop and remove them.
-    for (const unit of ["clp-addons-cloudflare-ips-reconcile.timer", "clp-addons-cloudflare-ips-reconcile.service"]) {
-      writeFileSync(join(root, "systemd", unit), "# placeholder\n");
-    }
+    // An addon's own units are part of "already enabled": a disable has to
+    // find them to stop and remove them.
+    const units: Record<string, string[]> = {
+      "cloudflare-ips": ["clp-addons-cloudflare-ips-reconcile.timer", "clp-addons-cloudflare-ips-reconcile.service"],
+      smtp: ["clp-addons-smtp-reconcile.path", "clp-addons-smtp-reconcile.service"],
+    };
+    for (const unit of units[name] ?? []) writeFileSync(join(root, "systemd", unit), "# placeholder\n");
   }
   return root;
 }
@@ -245,6 +248,23 @@ test("the Cloudflare timer is started when its units appear and stopped when the
   expect(off.systemd).toContain("disable --now clp-addons-cloudflare-ips-reconcile.timer");
   expect(existsSync(join(off.root, "systemd", "clp-addons-cloudflare-ips-reconcile.timer"))).toBe(false);
   expect(existsSync(join(off.root, "systemd", "clp-addons-cloudflare-ips-reconcile.service"))).toBe(false);
+});
+
+test("the SMTP new-site watcher is started when its units appear and stopped when they go", () => {
+  const on = toggle([{ verb: "enable", addon: "smtp" }]);
+  expect(on.error).toBeUndefined();
+  expect(on.systemd).toContain("enable clp-addons-smtp-reconcile.path");
+  expect(on.systemd).toContain("restart clp-addons-smtp-reconcile.path");
+  const service = readFileSync(join(on.root, "systemd", "clp-addons-smtp-reconcile.service"), "utf8");
+  // CloudPanel commits a new site's row after writing its vhost, so it runs twice.
+  expect(service.match(/action smtp reconcile/g)).toHaveLength(2);
+  expect(readFileSync(join(on.root, "systemd", "clp-addons-smtp-reconcile.path"), "utf8")).toContain("PathChanged=/etc/nginx/sites-enabled");
+
+  const off = toggle([{ verb: "disable", addon: "smtp" }], { enabled: ["smtp"] });
+  expect(off.error).toBeUndefined();
+  expect(off.systemd).toContain("disable --now clp-addons-smtp-reconcile.path");
+  expect(existsSync(join(off.root, "systemd", "clp-addons-smtp-reconcile.path"))).toBe(false);
+  expect(existsSync(join(off.root, "systemd", "clp-addons-smtp-reconcile.service"))).toBe(false);
 });
 
 test("an addon with no panel markup does not touch the panel templates", () => {

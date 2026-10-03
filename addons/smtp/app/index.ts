@@ -2,6 +2,14 @@ import { bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfTo
 import { smtpService } from "./service";
 import { dashboardContent, dashboardView, layout } from "./views";
 
+const CHANGES: Record<string, (body: unknown) => ReturnType<typeof smtpService.assign>> = {
+  "/api/profiles": smtpService.saveProfile,
+  "/api/profiles/delete": smtpService.deleteProfile,
+  "/api/assign": smtpService.assign,
+  "/api/default": smtpService.setDefault,
+  "/api/grants": smtpService.saveGrants,
+};
+
 export async function handle(req: Request, path: string, notice?: { current: string; latest: string } | null): Promise<Response> {
   if (req.method === "GET" && path === "/") {
     const csrf = newCsrfToken();
@@ -19,21 +27,17 @@ export async function handle(req: Request, path: string, notice?: { current: str
     const denied = guardMutation(req);
     if (denied) return denied;
     let body: Record<string, unknown>;
-    try { body = await readJsonObject(req); } catch (error) { return bodyErrorResponse(error); }
+    try { body = await readJsonObject(req, 256 * 1024); } catch (error) { return bodyErrorResponse(error); }
     if (path === "/api/test") {
       const result = await smtpService.test(body);
       return jsonResponse(result, { status: result.ok ? 200 : 400 });
     }
-    const result = path === "/api/setup" ? await smtpService.saveSetup(body)
-      : path === "/api/relay" ? await smtpService.saveRelay(body)
-      : path === "/api/default" ? await smtpService.saveDefault(body)
-      : path === "/api/site" ? await smtpService.saveSite(body)
-      : path === "/api/site/clear" ? await smtpService.clearSite(body)
-      : path === "/api/domain-relay" ? await smtpService.saveDomainRelay(body)
-      : path === "/api/domain-relay/clear" ? await smtpService.clearDomainRelay(body)
-      : null;
-    if (result?.ok && result.data) return jsonResponse({ ...result, html: dashboardContent(result.data) });
-    if (result) return jsonResponse(result, { status: 400 });
+    const change = CHANGES[path];
+    if (change) {
+      const result = await change(body);
+      if (result.ok && result.data) return jsonResponse({ ...result, html: dashboardContent(result.data) });
+      return jsonResponse(result, { status: 400 });
+    }
   }
   return jsonResponse({ ok: false, error: "not found" }, { status: 404 });
 }

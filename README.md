@@ -29,7 +29,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | Stager | Staging copies of WordPress, PHP, static and Instatic sites, and promotion back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
 | Maintenance Mode | A customizable 503 page per site, with instant toggles and IP bypasses. |
 | PHP Resources | Categories of PHP-FPM worker limits, assigned in bulk and to new sites. |
-| [SMTP Relay](docs/smtp-relay.md) | Send PHP and WordPress mail through a shared or per-domain SMTP relay. |
+| [SMTP Relay](docs/smtp-relay.md) | Send each site's mail through SMTP relay profiles, WordPress and PHP included. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
 | Panel Tweaks | Site search and columns, mobile layouts and theme improvements. |
 | WordPress Sign-In | One-click sign-in to any WordPress on the server, no password needed. |

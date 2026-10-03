@@ -1,84 +1,87 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeSmtpAction, postfixMaps, type SmtpActionOptions, type SmtpState } from "../addons/smtp/action";
-import { emptySmtpPolicy, parseRule, senderGrants, type SmtpSubmissionSite } from "../addons/smtp/config";
-import { MAX_MESSAGE_BYTES, prepareSubmission, readBoundedSubmission } from "../addons/smtp/submit";
-import { dashboardView } from "../addons/smtp/app/views";
+import { closedRelay, executeSmtpAction, type SmtpActionOptions, type SmtpSiteRow, type SmtpState, type SmtpTestResult } from "../addons/smtp/action";
+import { envelopeGrants, siteName, submissionRule, type SmtpSubmissionRule } from "../addons/smtp/config";
+import { MAX_MESSAGE_BYTES, prepareSubmission, readBoundedSubmission, runSmtpSubmit } from "../addons/smtp/submit";
+import { dashboardContent } from "../addons/smtp/app/views";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+function scratch(): string {
+  const dir = mkdtempSync(join(tmpdir(), "clp-smtp-"));
+  dirs.push(dir);
+  return dir;
+}
 
-const site: SmtpSubmissionSite = {
-  domain: "example.com", user: "example", uid: 1234,
-  rule: { sender: "noreply@{site}", domains: [] },
-};
-
-const submit = (rule: SmtpSubmissionSite["rule"], headers: string) => {
-  const result = prepareSubmission(Buffer.from(`To: user@recipient.test\n${headers}\n\nHi`), { ...site, rule });
+const rule = (sender: string, allowed = ["example.com"], site = "example.com"): SmtpSubmissionRule =>
+  ({ version: 1, site, sender, allowed });
+function submit(r: SmtpSubmissionRule, headers: string): { sender: string; text: string } {
+  const result = prepareSubmission(Buffer.from(`To: user@recipient.test\n${headers}\n\nHi`), r);
   return { sender: result.sender, text: Buffer.from(result.message).toString("utf8") };
-};
+}
 
-test("a fixed From replaces the app's and keeps a foreign address reachable", () => {
-  const raw = Buffer.from("To: user@recipient.test\r\nFrom: Visitor <visitor@cool.com>\r\nSubject: Reset\r\nReturn-Path: forged@cool.com\r\n\r\nHello", "utf8");
-  const result = prepareSubmission(raw, site);
-  const output = Buffer.from(result.message).toString("utf8");
-  expect(result.sender).toBe("noreply@example.com");
-  expect(output).toContain("From: Visitor <noreply@example.com>\r\nReply-To: visitor@cool.com\r\n");
+test("a fixed From keeps the display name and the original address as Reply-To", () => {
+  const fixed = rule("noreply@{site}");
+  const wordpress = submit(fixed, "From: WordPress <wordpress@example.com>");
+  expect(wordpress.sender).toBe("noreply@example.com");
+  expect(wordpress.text).toContain("From: WordPress <noreply@example.com>\nReply-To: WordPress <wordpress@example.com>\n");
+  const shop = submit(fixed, "From: My Shop <orders@example.com>");
+  expect(shop.text).toContain("Reply-To: My Shop <orders@example.com>");
+  const visitor = submit(fixed, "From: Jane Visitor <jane@gmail.com>");
+  expect(visitor.text).toContain("From: Jane Visitor <noreply@example.com>\nReply-To: Jane Visitor <jane@gmail.com>\n");
+  expect(submit(fixed, "From: noreply@example.com").text).not.toContain("Reply-To");
+  expect(submit(fixed, "From: a@cool.com\nReply-To: desk@cool.com").text.match(/Reply-To/g)).toHaveLength(1);
+  const crlf = prepareSubmission(Buffer.from("To: u@r.test\r\nFrom: Visitor <visitor@cool.com>\r\nReturn-Path: forged@cool.com\r\n\r\nHello"), fixed);
+  const output = Buffer.from(crlf.message).toString("utf8");
+  expect(output).toContain("From: Visitor <noreply@example.com>\r\nReply-To: Visitor <visitor@cool.com>\r\n");
   expect(output).not.toContain("forged@cool.com");
   expect(output.endsWith("\r\n\r\nHello")).toBe(true);
-  const unparsable = submit(site.rule, "From: wordpress@example.com (WordPress)");
-  expect(unparsable.sender).toBe("noreply@example.com");
-  expect(unparsable.text).not.toContain("(WordPress)");
-  expect(unparsable.text).not.toContain("Reply-To");
-  expect(submit(site.rule, "From: wordpress@example.com").text).not.toContain("Reply-To");
-  expect(submit(site.rule, "From: a@cool.com\nReply-To: desk@cool.com").text.match(/Reply-To/g)).toHaveLength(1);
 });
 
-test("{from.local} keeps the app's name on the template's domain", () => {
-  const rule = parseRule({ sender: "{from.local}@{site}" });
-  const wordpress = submit(rule, "From: WordPress <wordpress@example.com>");
+test("{from.local} and {from.domain} keep only the site's own and granted domains", () => {
+  const local = rule("{from.local}@{site}");
+  expect(submit(local, "From: WordPress <wordpress@example.com>").text).toContain("From: WordPress <wordpress@example.com>\nTo:");
+  expect(submit(local, "From: Jane <jane@cool.com>").sender).toBe("noreply@example.com");
+  expect(submit(local, "Subject: none").sender).toBe("noreply@example.com");
+  const domain = rule("{from.local}@{from.domain}", ["example.com", "news.example.com"]);
+  expect(submit(domain, "From: edition@news.example.com").sender).toBe("edition@news.example.com");
+  expect(submit(domain, "From: noreply@othersite.test").text).toContain("Reply-To: noreply@othersite.test");
+  expect(() => submit(domain, "From: a@example.com\nFrom: b@example.com")).toThrow("multiple From");
+  const folded = submit(domain, "From: Example\n <wordpress@example.com>\nSender: forged@cool.com\n x: bogus");
+  expect(folded.sender).toBe("wordpress@example.com");
+  expect(folded.text).not.toContain("forged@cool.com");
+});
+
+test("a www. site sends as its bare domain, as WordPress does", () => {
+  expect(siteName("www.example.com", new Set(["www.example.com"]))).toBe("example.com");
+  expect(siteName("www.example.com", new Set(["www.example.com", "example.com"]))).toBe("www.example.com");
+  expect(siteName("www.com", new Set())).toBe("www.com");
+  const www = submissionRule("www.example.com", "example.com", "{from.local}@{from.domain}", []);
+  expect(www.allowed).toEqual(["example.com", "www.example.com"]);
+  const wordpress = submit(www, "From: WordPress <wordpress@example.com>");
   expect(wordpress.sender).toBe("wordpress@example.com");
-  expect(wordpress.text).toContain("From: WordPress <wordpress@example.com>\n");
   expect(wordpress.text).not.toContain("Reply-To");
-  const visitor = submit(rule, "From: Jane <jane@cool.com>");
-  expect(visitor.text).toContain("From: Jane <noreply@example.com>\nReply-To: jane@cool.com\n");
-  expect(submit(rule, "Subject: none").sender).toBe("noreply@example.com");
-  expect(submit(parseRule({ sender: "{from.local}@mail.{site}" }), `From: ${"a".repeat(240)}@example.com`).sender).toBe("noreply@mail.example.com");
+  expect(submit({ ...www, sender: "noreply@{site}" }, "Subject: x").sender).toBe("noreply@example.com");
 });
 
-test("{from.domain} keeps only the site's own and granted domains", () => {
-  const rule = parseRule({ sender: "{from.local}@{from.domain}", domains: ["news.example.com"] });
-  for (const sender of ["wordpress@example.com", "edition@news.example.com"]) {
-    expect(submit(rule, `From: ${sender}`).sender).toBe(sender);
-  }
-  const foreign = submit(rule, "From: noreply@othersite.test");
-  expect(foreign.sender).toBe("noreply@example.com");
-  expect(foreign.text).toContain("Reply-To: noreply@othersite.test");
-  expect(() => submit(rule, "From: a@example.com\nFrom: b@example.com")).toThrow("multiple From");
+test("an address that cannot be used still keeps its display name; an apostrophe is fine", () => {
+  const fixed = rule("noreply@{site}");
+  const irish = submit(fixed, "From: Pat <o'brien@gmail.com>");
+  expect(irish.text).toContain("From: Pat <noreply@example.com>\nReply-To: Pat <o'brien@gmail.com>\n");
+  const odd = submit(fixed, "From: Shop <shop@exa_mple.com>");
+  expect(odd.text).toContain("From: Shop <noreply@example.com>\n");
+  expect(odd.text).not.toContain("Reply-To");
+  expect(submit(fixed, "From: wordpress@example.com (WordPress)").text).not.toContain("(WordPress)");
 });
 
-test("folded From is read and ignored Sender fields cannot change it", () => {
-  const rule = parseRule({ sender: "{from.local}@{from.domain}" });
-  const result = submit(rule, "From: Example\n <wordpress@example.com>\nSender: forged@cool.com\n x: bogus");
-  expect(result.sender).toBe("wordpress@example.com");
-  expect(result.text).not.toContain("forged@cool.com");
-});
-
-test("From templates accept only the three tokens in their own halves", () => {
-  for (const sender of ["noreply@{domain}", "{from.domain}@example.com", "noreply@mail.{from.domain}", "{from.local}", "a@b@{site}"]) {
-    expect(() => parseRule({ sender })).toThrow();
-  }
-  expect(parseRule({ sender: "NoReply@{site}", domains: ["other.test"] })).toEqual(site.rule);
-});
-
-test("Postfix envelope grants follow what the template can produce", () => {
-  const grants = (sender: string, domains: string[] = []) => senderGrants({ domain: "example.com", rule: parseRule({ sender, domains }) });
-  expect(grants("noreply@{site}")).toEqual(["noreply@example.com"]);
-  expect(grants("{from.local}@{site}")).toEqual(["@example.com"]);
-  expect(grants("{from.local}@{from.domain}", ["news.example.com"])).toEqual(["@example.com", "@news.example.com"]);
-  expect(grants("noreply@{from.domain}", ["news.example.com"])).toEqual(["noreply@example.com", "noreply@news.example.com"]);
+test("envelope grants cover the site's domains and whatever its template can produce", () => {
+  expect(envelopeGrants(rule("noreply@{site}"))).toEqual(["@example.com", "noreply@example.com"]);
+  expect(envelopeGrants(rule("{from.local}@{from.domain}", ["example.com", "news.example.com"])))
+    .toEqual(["@example.com", "@news.example.com"]);
+  expect(envelopeGrants(rule("alerts@agency.example"))).toEqual(["@example.com", "alerts@agency.example"]);
+  expect(envelopeGrants(rule("{from.local}@agency.example"))).toEqual(["@example.com", "@agency.example"]);
 });
 
 test("stdin accepts exactly 25 MiB and cancels at the first byte over the limit", async () => {
@@ -98,49 +101,72 @@ test("stdin accepts exactly 25 MiB and cancels at the first byte over the limit"
   expect(cancelled).toBe(true);
 });
 
-test("domain relay map selects an override before the shared credential", () => {
-  const policy = emptySmtpPolicy();
-  policy.relay = { host: "mail.example.com", port: 587, username: "shared@example.com", password: "secret-one" };
-  policy.relayOverrides["cool.com"] = { host: "smtp.cool.com", port: 587, username: "noreply@cool.com", password: "secret-two" };
-  const maps = postfixMaps(policy);
-  expect(maps.credentials.indexOf("noreply@cool.com:secret-two")).toBeLessThan(maps.credentials.indexOf("shared@example.com:secret-one"));
-  expect(maps.routes).toContain("[smtp.cool.com]:587");
-  expect(maps.credentials).not.toContain("* shared");
-  expect(maps.tls).toContain("/^\\[mail\\.example\\.com\\]:587$/ secure match=nexthop");
-  expect(maps.tls).toContain("/^\\[smtp\\.cool\\.com\\]:587$/ secure match=nexthop");
+test("the wrapper hands mail to sendmail unchanged whenever it has no rule to apply", async () => {
+  const dir = scratch();
+  const fake = join(dir, "sendmail");
+  writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$@" > "${dir}/args"\ncat > "${dir}/stdin"\n`);
+  chmodSync(fake, 0o755);
+  const ruleDir = join(dir, "rules");
+  mkdirSync(ruleDir);
+  const uid = 4321;
+  const message = Buffer.from("To: a@b.test\nFrom: Me <me@gmail.com>\n\nbody");
+  const options = { ruleDir, rootUid: process.getuid!(), sendmailPath: fake, uid, input: message };
+  const sent = () => ({ args: readFileSync(join(dir, "args"), "utf8").trim().split("\n"), stdin: readFileSync(join(dir, "stdin"), "utf8") });
+
+  expect(await runSmtpSubmit(["-t", "-i", "-fme@gmail.com"], options)).toBe(0);
+  expect(sent()).toEqual({ args: ["-t", "-i", "-fme@gmail.com"], stdin: message.toString() });
+
+  const path = join(ruleDir, `${uid}.json`);
+  writeFileSync(path, JSON.stringify(rule("noreply@{site}")));
+  chmodSync(path, 0o660);
+  await runSmtpSubmit(["-t", "-i"], options);
+  expect(sent().stdin).toBe(message.toString());
+
+  chmodSync(path, 0o640);
+  expect(await runSmtpSubmit(["-t", "-i", "-f", "me@gmail.com"], options)).toBe(0);
+  expect(sent().args).toEqual(["-t", "-i", "-f", "noreply@example.com"]);
+  expect(sent().stdin).toContain("From: Me <noreply@example.com>\nReply-To: Me <me@gmail.com>\n");
+
+  await runSmtpSubmit(["-bs"], options);
+  expect(sent().args).toEqual(["-bs"]);
+  const twoFroms = Buffer.from("To: a@b.test\nFrom: a@example.com\nFrom: b@example.com\n\nbody");
+  await runSmtpSubmit(["-t", "-i"], { ...options, input: twoFroms });
+  expect(sent()).toEqual({ args: ["-t", "-i"], stdin: twoFroms.toString() });
 });
 
-test("regexp credential maps keep dollar signs literal in SMTP passwords", () => {
-  const policy = emptySmtpPolicy();
-  policy.relay = { host: "mail.example.com", port: 587, username: "relay@example.com", password: "pa$1ss" };
-  expect(postfixMaps(policy).credentials).toContain("relay@example.com:pa$$1ss");
+test("relay restrictions lose only permit_mynetworks", () => {
+  expect(closedRelay(null)).toBe("permit_sasl_authenticated, defer_unauth_destination");
+  expect(closedRelay("permit_mynetworks permit_sasl_authenticated defer_unauth_destination")).toBe("permit_sasl_authenticated defer_unauth_destination");
+  expect(closedRelay("permit_mynetworks, check_policy_service { inet:127.0.0.1:10023, timeout=10s }, reject_unauth_destination"))
+    .toBe("check_policy_service { inet:127.0.0.1:10023, timeout=10s }, reject_unauth_destination");
+  expect(closedRelay("permit_mynetworks")).toBe("permit_sasl_authenticated, defer_unauth_destination");
 });
 
-test("configured relay applies to Postfix and site pool, then deactivates cleanly", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "clp-smtp-"));
-  dirs.push(dir);
-  const poolDir = join(dir, "php", "8.2", "fpm", "pool.d");
+interface Box { options: SmtpActionOptions; settings: Map<string, string>; commands: string[]; dir: string; postfixDir: string; phpRoot: string; ruleDir: string }
+
+function box(sites: SmtpSiteRow[]): Box {
+  const dir = scratch();
   const postfixDir = join(dir, "postfix");
-  mkdirSync(poolDir, { recursive: true });
+  const phpRoot = join(dir, "php");
+  const ruleDir = join(dir, "rules");
   mkdirSync(postfixDir);
-  const pool = join(poolDir, "example.com.conf");
-  writeFileSync(pool, "[example.com]\nuser = example\n", { mode: 0o644 });
-  chmodSync(pool, 0o644);
-  const settings = new Map<string, string>();
-  settings.set("relayhost", "");
-  settings.set("smtp_tls_CApath", "/etc/ssl/certs");
-  settings.set("smtp_tls_policy_maps", "hash:/etc/postfix/operator-tls");
+  for (const path of ["8.2/fpm/conf.d", "8.2/cli/conf.d", "8.3/cli/conf.d"]) mkdirSync(join(phpRoot, path), { recursive: true });
+  const settings = new Map<string, string>([
+    ["mynetworks", "127.0.0.0/8"],
+    ["smtp_tls_policy_maps", "hash:/etc/postfix/operator-tls"],
+  ]);
   const commands: string[] = [];
   const run: NonNullable<SmtpActionOptions["run"]> = (command, args) => {
     commands.push(`${command} ${args.join(" ")}`);
-    if (command === "postconf" && args[0] === "-d") {
-      return { ok: true, stdout: "local_login_sender_maps = static:*", stderr: "" };
-    }
+    if (command === "postconf" && args[0] === "-d") return { ok: true, stdout: "local_login_sender_maps = static:*", stderr: "" };
+    if (command === "postconf" && args[0] === "-xh") return { ok: true, stdout: "cp-stg", stderr: "" };
     if (command === "postconf" && args[0] === "-n") {
       return { ok: true, stdout: [...settings].map(([key, value]) => `${key} = ${value}`).join("\n"), stderr: "" };
     }
     if (command === "postconf" && args[0] === "-e") {
-      const text = args[1]!; const equal = text.indexOf("="); settings.set(text.slice(0, equal), text.slice(equal + 1));
+      const text = args[1]!;
+      const equal = text.indexOf("=");
+      settings.set(text.slice(0, equal), text.slice(equal + 1));
     }
     if (command === "postconf" && args[0] === "-X") settings.delete(args[1]!);
     if (command === "postmap") writeFileSync(`${args[0]!.slice(5)}.db`, "indexed");
@@ -149,124 +175,146 @@ test("configured relay applies to Postfix and site pool, then deactivates cleanl
   const options: SmtpActionOptions = {
     processUid: 0,
     paths: {
-      phpRoot: join(dir, "php"), postfixDir,
-      stateFile: join(dir, "state.json"), originalFile: join(dir, "original.json"),
-      submissionFile: join(dir, "submission.json"), lockFile: join(dir, "smtp.lock"),
-      rootUid: process.getuid?.() ?? 0,
+      phpRoot, fpmBinDir: "/usr/sbin", postfixDir, ruleDir,
+      stateFile: join(dir, "state.json"), originalFile: join(dir, "original.json"), lockFile: join(dir, "lock", "smtp.lock"),
+      runuser: "/bin/true", rootUid: process.getuid!(),
     },
-    sites: [{ domain: "example.com", user: "example", phpVersion: "8.2", uid: 1234 }],
+    sites,
     run,
   };
-  const body = { relay: { host: "mail.example.com", port: 587, username: "relay@example.com", password: "secret" } };
-  await expect(executeSmtpAction(["save-setup"], { ...options, input: JSON.stringify({ ...body, rule: { sender: "noreply@{domain}" } }) })).rejects.toThrow("{from.local}, {from.domain} and {site}");
-  expect(existsSync(join(dir, "smtp.lock"))).toBe(false);
-  expect((await executeSmtpAction(["list"], options) as SmtpState).configured).toBe(false);
-  const submissionPath = join(dir, "submission.json");
-  writeFileSync(submissionPath, "prior submission file\n");
-  chmodSync(submissionPath, 0o644);
-  writeFileSync(pool, readFileSync(pool, "utf8") + "php_admin_value[sendmail_path] = /other/sendmail\n");
-  await expect(executeSmtpAction(["save-setup"], { ...options, input: JSON.stringify({ ...body, rule: site.rule }) })).rejects.toThrow("already configures sendmail_path");
-  expect((await executeSmtpAction(["list"], options) as SmtpState).configured).toBe(false);
-  for (const path of ["clp-addons-sasl", "clp-addons-relays", "clp-addons-local-senders", "clp-addons-local-senders.db", "clp-addons-tls-policy"]) {
-    expect(existsSync(join(postfixDir, path))).toBe(false);
+  return { options, settings, commands, dir, postfixDir, phpRoot, ruleDir };
+}
+
+const gid = process.getgid!();
+const SITES: SmtpSiteRow[] = [
+  { id: 1, domain: "www.example.com", user: "example", uid: 2001, gid, type: "php", phpVersion: "8.2" },
+  { id: 2, domain: "shop.test", user: "shop", uid: 2002, gid, type: "php", phpVersion: "8.3" },
+  { id: 3, domain: "app.test", user: "app", uid: 2003, gid, type: "nodejs", phpVersion: null },
+];
+const POSTMARK = { name: "Postmark", relay: { host: "smtp.postmarkapp.com", port: 587, username: "token", password: "pa$1ss" }, sender: "{from.local}@{site}" };
+
+async function act(b: Box, verb: string, body?: unknown): Promise<unknown> {
+  return executeSmtpAction([verb], { ...b.options, input: body === undefined ? undefined : JSON.stringify(body) });
+}
+const file = (b: Box, name: string) => readFileSync(join(b.postfixDir, `clp-addons-${name}`), "utf8");
+
+test("routing a site binds every login, relays by sender, closes loopback, and installs the PHP hook", async () => {
+  const b = box(SITES);
+  await expect(act(b, "save-profile", { ...POSTMARK, sender: "{nope}@x" })).rejects.toThrow("From may use only");
+  await expect(act(b, "save-profile", { ...POSTMARK, relay: { ...POSTMARK.relay, port: 465 } })).rejects.toThrow("465");
+  expect(existsSync(join(b.dir, "lock", "smtp.lock"))).toBe(false);
+  const seeded = await act(b, "list") as SmtpState;
+  expect(seeded.profiles.map((profile) => profile.name)).toEqual(["Don't send"]);
+
+  await act(b, "save-profile", POSTMARK);
+  expect(b.commands.filter((command) => command.startsWith("postconf -e"))).toEqual([]);
+  const state = await act(b, "assign", { domains: ["www.example.com", "app.test"], profileId: "postmark" }) as SmtpState;
+  expect(state.sites.find((site) => site.domain === "www.example.com")!.sender).toBe("{from.local}@example.com");
+
+  expect(b.settings.get("smtpd_relay_restrictions")).toBe("permit_sasl_authenticated, defer_unauth_destination");
+  expect(b.settings.get("local_login_sender_maps")).toBe(`hash:${join(b.postfixDir, "clp-addons-local-senders")}, regexp:${join(b.postfixDir, "clp-addons-login-fallback")}`);
+  expect(b.settings.get("smtp_tls_policy_maps")).toBe(`regexp:${join(b.postfixDir, "clp-addons-tls-policy")}, hash:/etc/postfix/operator-tls`);
+  expect(b.settings.has("relayhost")).toBe(false);
+  expect(file(b, "transports")).toBe(
+    "/@app\\.test$/ smtp:[smtp.postmarkapp.com]:587\n/@example\\.com$/ smtp:[smtp.postmarkapp.com]:587\n/@www\\.example\\.com$/ smtp:[smtp.postmarkapp.com]:587\n");
+  expect(file(b, "sasl")).toContain("/@example\\.com$/ token:pa$$1ss\n");
+  expect(statSync(join(b.postfixDir, "clp-addons-sasl")).mode & 0o777).toBe(0o600);
+  expect(file(b, "tls-policy")).toBe("/^\\[smtp\\.postmarkapp\\.com\\]:587$/ secure match=nexthop\n");
+  expect(file(b, "canonical")).toBe("example@cp-stg noreply@example.com\napp@cp-stg noreply@app.test\n");
+  expect(file(b, "local-senders")).toBe("root *\npostfix *\nclp *\nexample example @example.com @www.example.com\n" +
+    "shop shop @shop.test noreply@shop.test\napp app @app.test\n");
+  expect(file(b, "login-fallback")).toBe("/^(.+)$/ $1\n");
+
+  for (const sapi of ["8.2/fpm", "8.2/cli", "8.3/cli"]) {
+    expect(readFileSync(join(b.phpRoot, sapi, "conf.d", "99-clp-addons-smtp.ini"), "utf8")).toContain("sendmail_path = /usr/local/bin/clp-addons smtp-submit -t -i");
   }
-  expect(readFileSync(submissionPath, "utf8")).toBe("prior submission file\n");
-  expect(settings.get("smtp_tls_policy_maps")).toBe("hash:/etc/postfix/operator-tls");
-  writeFileSync(pool, readFileSync(pool, "utf8").replace("php_admin_value[sendmail_path] = /other/sendmail\n", ""));
-  settings.set("transport_maps", "hash:/etc/postfix/transport");
-  await expect(executeSmtpAction(["save-setup"], { ...options, input: JSON.stringify({ ...body, rule: site.rule }) })).rejects.toThrow("transport_maps");
-  expect(existsSync(join(dir, "original.json"))).toBe(false);
-  expect(existsSync(join(postfixDir, "clp-addons-sasl"))).toBe(false);
-  settings.delete("transport_maps");
-  await executeSmtpAction(["save-setup"], { ...options, input: JSON.stringify({ ...body, rule: site.rule }) });
-  expect(readFileSync(pool, "utf8")).toContain("smtp-submit -t -i");
-  expect(readFileSync(join(dir, "submission.json"), "utf8")).toContain("noreply@{site}");
-  expect(settings.get("local_login_sender_maps")).toContain("clp-addons-local-senders");
-  expect(readFileSync(join(postfixDir, "clp-addons-local-senders"), "utf8")).toContain("clp *\n");
-  expect(settings.get("smtp_tls_security_level")).toBe("secure");
-  expect(settings.get("smtp_tls_policy_maps")).toBe(`regexp:${join(postfixDir, "clp-addons-tls-policy")}, hash:/etc/postfix/operator-tls`);
-  for (const [key, value] of [
-    ["transport_maps", "hash:/etc/postfix/transport"],
-    ["sender_dependent_default_transport_maps", "hash:/etc/postfix/sender-transport"],
-    ["default_transport", "smtp:[other.example.com]:587"],
-    ["relay_transport", "relay:[other.example.com]:587"],
-  ] as const) {
-    settings.set(key, value);
-    await expect(executeSmtpAction(["reconcile"], options)).rejects.toThrow(key);
-    settings.delete(key);
-  }
-  settings.set("transport_maps", "hash:/etc/postfix/transport");
-  await expect(executeSmtpAction(["save-default"], { ...options, input: JSON.stringify({ rule: site.rule }) })).rejects.toThrow("Postfix transport_maps can override");
-  settings.delete("transport_maps");
-  settings.set("default_transport", "smtp:");
-  settings.set("relay_transport", "relay:");
-  await executeSmtpAction(["reconcile"], options);
-  settings.delete("default_transport");
-  settings.delete("relay_transport");
-  settings.set("smtp_tls_per_site", "hash:/etc/postfix/old-tls");
-  await executeSmtpAction(["save-default"], { ...options, input: JSON.stringify({ rule: site.rule }) });
-  expect(settings.get("smtp_tls_policy_maps")?.startsWith(`regexp:${join(postfixDir, "clp-addons-tls-policy")}`)).toBe(true);
-  settings.delete("smtp_tls_per_site");
-  const originalPath = join(dir, "original.json");
-  const priorBackup = JSON.parse(readFileSync(originalPath, "utf8"));
-  delete priorBackup.values.smtp_tls_policy_maps;
-  writeFileSync(originalPath, JSON.stringify(priorBackup));
-  settings.set("smtp_tls_policy_maps", "hash:/etc/postfix/operator-tls");
-  await executeSmtpAction(["save-default"], { ...options, input: JSON.stringify({ rule: site.rule }) });
-  expect(JSON.parse(readFileSync(originalPath, "utf8")).values.smtp_tls_policy_maps).toBe("hash:/etc/postfix/operator-tls");
-  expect(settings.get("smtp_tls_policy_maps")).toBe(`regexp:${join(postfixDir, "clp-addons-tls-policy")}, hash:/etc/postfix/operator-tls`);
-  expect(readFileSync(join(postfixDir, "clp-addons-tls-policy"), "utf8")).toContain("secure match=nexthop");
-  const credentialsPath = join(postfixDir, "clp-addons-sasl");
-  const credentialsBefore = readFileSync(credentialsPath);
-  chmodSync(credentialsPath, 0o640);
-  let failPostfixCheck = true;
-  const failingRun: NonNullable<SmtpActionOptions["run"]> = (command, args) => {
-    if (command === "postfix" && args[0] === "check" && failPostfixCheck) {
-      failPostfixCheck = false;
-      return { ok: false, stdout: "", stderr: "test failure" };
-    }
-    return run(command, args);
-  };
-  const domainRelayInput = JSON.stringify({ domain: "cool.com", relay: {
-    host: "smtp.cool.com", port: 587, username: "cool@cool.com", password: "other-secret",
-  } });
-  await expect(executeSmtpAction(["save-domain-relay"], { ...options, run: failingRun, input: domainRelayInput })).rejects.toThrow("test failure");
-  expect(readFileSync(credentialsPath)).toEqual(credentialsBefore);
-  expect(statSync(credentialsPath).mode & 0o777).toBe(0o640);
-  await executeSmtpAction(["save-domain-relay"], { ...options, input: JSON.stringify({ domain: "cool.com", relay: {
-    host: "smtp.cool.com", port: 587, username: "cool@cool.com", password: "other-secret",
-  } }) });
-  expect(readFileSync(join(postfixDir, "clp-addons-tls-policy"), "utf8")).toContain("smtp\\.cool\\.com");
-  expect(settings.get("smtp_tls_policy_maps")).toBe(`regexp:${join(postfixDir, "clp-addons-tls-policy")}, hash:/etc/postfix/operator-tls`);
-  expect(commands.some((item) => item.includes("php-fpm8.2 -t"))).toBe(true);
-  const publicState = await executeSmtpAction(["list"], options);
-  const html = dashboardView(publicState as SmtpState);
-  expect(JSON.stringify(publicState)).not.toContain("secret");
-  expect(html).not.toContain("secret");
-  expect(html).toContain('data-label="From"');
-  writeFileSync(pool, readFileSync(pool, "utf8") + "php_admin_value[sendmail_path] = /other/sendmail\n");
-  await expect(executeSmtpAction(["save-default"], { ...options, input: JSON.stringify({
-    rule: { sender: "{from.local}@{site}", domains: [] },
-  }) })).rejects.toThrow("already configures sendmail_path");
-  expect((await executeSmtpAction(["list"], options) as SmtpState).defaultRule.sender).toBe("noreply@{site}");
-  writeFileSync(pool, readFileSync(pool, "utf8").replace("php_admin_value[sendmail_path] = /other/sendmail\n", ""));
-  await executeSmtpAction(["deactivate"], options);
-  expect(readFileSync(pool, "utf8")).not.toContain("smtp-submit");
-  expect(existsSync(join(dir, "submission.json"))).toBe(false);
-  expect(settings.get("relayhost")).toBe("");
-  expect(settings.get("smtp_tls_CApath")).toBe("/etc/ssl/certs");
-  expect(settings.get("smtp_tls_policy_maps")).toBe("hash:/etc/postfix/operator-tls");
-  expect(existsSync(join(postfixDir, "clp-addons-tls-policy"))).toBe(false);
+  expect(b.commands).toContain("/usr/sbin/php-fpm8.2 -t");
+  expect(b.commands).toContain("systemctl try-reload-or-restart php8.2-fpm");
+  expect(b.commands.some((command) => command.includes("php8.3-fpm"))).toBe(false);
+  expect(readdirSync(b.ruleDir)).toEqual(["2001.json"]);
+  expect(statSync(join(b.ruleDir, "2001.json")).mode & 0o777).toBe(0o640);
+  expect(JSON.parse(readFileSync(join(b.ruleDir, "2001.json"), "utf8")))
+    .toEqual({ version: 1, site: "example.com", sender: "{from.local}@{site}", allowed: ["example.com", "www.example.com"] });
+
+  const html = dashboardContent(await act(b, "list") as SmtpState);
+  expect(html).not.toContain("pa$1ss");
+  expect(html).toContain("Node.js");
 });
 
-test("site table shows each site's From and its granted domains", () => {
-  const policy = emptySmtpPolicy();
-  const rule = parseRule({ sender: "{from.local}@{from.domain}", domains: ["news.example.com"] });
-  const html = dashboardView({
-    configured: false, relay: null, relayOverrides: {}, defaultRule: policy.defaultRule,
-    sites: [{ domain: "example.com", user: "example", phpVersion: "8.2", rule, overridden: true, senderPreview: rule.sender }],
-  });
-  expect(html).toContain("<code>{from.local}@{from.domain}</code>");
-  expect(html).toContain("news.example.com");
-  expect(html).toContain('data-label="Actions"');
+test("a site can never use a sending domain that routes through another profile", async () => {
+  const b = box(SITES);
+  await act(b, "save-profile", POSTMARK);
+  await act(b, "save-profile", { name: "Agency", relay: { host: "smtp.gmail.com", port: 587, username: "alerts@agency.example", password: "x" }, sender: "alerts@agency.example" });
+  await act(b, "assign", { domains: ["www.example.com"], profileId: "postmark" });
+  await act(b, "assign", { domains: ["shop.test"], profileId: "agency" });
+  await expect(act(b, "save-grants", { domain: "shop.test", domains: ["example.com"] })).rejects.toThrow("both send as @example.com through different profiles");
+  await expect(act(b, "save-grants", { domain: "app.test", domains: ["shop.test"] })).rejects.toThrow("Agency profile");
+  expect((await act(b, "list") as SmtpState).sites.every((site) => site.grants.length === 0)).toBe(true);
+  expect(file(b, "transports")).toContain("/^alerts@agency\\.example$/ smtp:[smtp.gmail.com]:587\n");
+});
+
+test("a blank password keeps the saved one, and a failed Postfix check changes nothing", async () => {
+  const b = box(SITES);
+  await act(b, "save-profile", POSTMARK);
+  await act(b, "assign", { domains: ["shop.test"], profileId: "postmark" });
+  await act(b, "save-profile", { ...POSTMARK, id: "postmark", relay: { ...POSTMARK.relay, password: "" } });
+  expect(file(b, "sasl")).toContain("token:pa$$1ss");
+  const before = file(b, "sasl");
+  const run = b.options.run!;
+  let fail = true;
+  const failing: NonNullable<SmtpActionOptions["run"]> = (command, args) => {
+    if (command === "postfix" && fail) { fail = false; return { ok: false, stdout: "", stderr: "test failure" }; }
+    return run(command, args);
+  };
+  await expect(executeSmtpAction(["save-profile"], { ...b.options, run: failing,
+    input: JSON.stringify({ ...POSTMARK, id: "postmark", relay: { ...POSTMARK.relay, password: "other" } }) })).rejects.toThrow("test failure");
+  expect(file(b, "sasl")).toBe(before);
+  b.settings.set("transport_maps", "hash:/etc/postfix/transport");
+  await expect(act(b, "assign", { domains: ["app.test"], profileId: "postmark" })).rejects.toThrow("transport_maps");
+});
+
+test("new sites join the default profile, and stopping all routing restores Postfix exactly", async () => {
+  const b = box(SITES.slice(0, 1));
+  await act(b, "save-profile", POSTMARK);
+  await act(b, "set-default", { profileId: "postmark" });
+  expect((await act(b, "reconcile") as { joined: number }).joined).toBe(0);
+  b.options.sites = SITES;
+  expect(await act(b, "reconcile")).toEqual({ repaired: 0, joined: 2 });
+  expect((await act(b, "list") as SmtpState).sites.map((site) => site.profileId)).toEqual([null, "postmark", "postmark"]);
+  b.options.sites = SITES.slice(1);
+  await act(b, "reconcile");
+  expect(Object.keys(JSON.parse(readFileSync(join(b.dir, "state.json"), "utf8")).assignments)).toEqual(["app.test", "shop.test"]);
+
+  await act(b, "assign", { domains: ["shop.test", "app.test"], profileId: null });
+  expect(b.settings.has("smtpd_relay_restrictions")).toBe(false);
+  expect(b.settings.has("local_login_sender_maps")).toBe(false);
+  expect(b.settings.get("smtp_tls_policy_maps")).toBe("hash:/etc/postfix/operator-tls");
+  expect(readdirSync(b.postfixDir)).toEqual([]);
+  expect(existsSync(join(b.phpRoot, "8.2/fpm/conf.d/99-clp-addons-smtp.ini"))).toBe(false);
+  expect(readdirSync(b.ruleDir)).toEqual([]);
+  expect(existsSync(join(b.dir, "original.json"))).toBe(false);
+});
+
+test("the test mail goes through the site's own path and reports what the rewrite does", async () => {
+  const b = box(SITES);
+  await act(b, "save-profile", POSTMARK);
+  await act(b, "assign", { domains: ["www.example.com"], profileId: "dont-send" });
+  await expect(act(b, "test", { domain: "shop.test", recipient: "me@inbox.test" })).rejects.toThrow("in no profile");
+  const result = await act(b, "test", { domain: "www.example.com", recipient: "me@inbox.test", from: "orders@example.com" }) as SmtpTestResult;
+  expect(result).toEqual({ queued: true, discarded: true, requested: "orders@example.com", sender: "noreply@example.com",
+    replyTo: "orders@example.com", recipient: "me@inbox.test" });
+  expect(file(b, "transports")).toBe("/^noreply@example\\.com$/ discard:\n/@example\\.com$/ discard:\n/@www\\.example\\.com$/ discard:\n");
+});
+
+test("deactivate withdraws everything even when the saved policy is unreadable", async () => {
+  const b = box(SITES);
+  await act(b, "save-profile", POSTMARK);
+  await act(b, "assign", { domains: ["www.example.com"], profileId: "postmark" });
+  writeFileSync(join(b.dir, "state.json"), "{not json");
+  chmodSync(join(b.dir, "state.json"), 0o600);
+  await expect(act(b, "list")).rejects.toThrow("malformed");
+  await act(b, "deactivate");
+  expect(readdirSync(b.postfixDir)).toEqual([]);
+  expect(b.settings.get("smtp_tls_policy_maps")).toBe("hash:/etc/postfix/operator-tls");
+  expect(existsSync(join(b.phpRoot, "8.2/cli/conf.d/99-clp-addons-smtp.ini"))).toBe(false);
 });
