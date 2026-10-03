@@ -1,5 +1,5 @@
 import type { AddonDefinition } from "../../cli/addon-catalog";
-import { deactivateSmtp, executeSmtpAction, runSmtpAction, type SmtpActionOptions } from "./action";
+import { activateSmtp, deactivateSmtp, executeSmtpAction, runSmtpAction, type SmtpActionOptions } from "./action";
 import { handle } from "./app/index";
 
 const count = (value: number, word: string) => `${value} ${word}${value === 1 ? "" : "s"}`;
@@ -13,6 +13,7 @@ export const SMTP_ADDON: AddonDefinition = {
   handler: handle,
   action: runSmtpAction,
   deactivate: deactivateSmtp,
+  activate: activateSmtp,
   maintenance: {
     label: "SMTP relay",
     run: async (options) => {

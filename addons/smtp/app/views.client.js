@@ -17,8 +17,10 @@ async function smtpPost(path, body, done) {
     smtpState = reply.data;
     smtpPaintSelection();
     notify(done, 'ok');
+    return true;
   } catch (error) {
     notify(error.message, 'error');
+    return false;
   } finally {
     busy(false);
   }
@@ -82,11 +84,12 @@ async function smtpDeleteProfile(id) {
   if (accepted) smtpPost('/api/profiles/delete', { id: id }, 'Deleted ' + smtpProfileName(id) + '.');
 }
 
-function smtpSetDefault(select) {
+async function smtpSetDefault(select) {
   const id = select.value || null;
-  smtpPost('/api/default', { profileId: id }, id
+  const saved = await smtpPost('/api/default', { profileId: id }, id
     ? 'New sites will join ' + smtpProfileName(id) + '. Existing sites are unchanged.'
     : 'New sites will not be relayed. Existing sites are unchanged.');
+  if (!saved) select.value = smtpState.defaultProfileId || '';
 }
 
 // --- sites ------------------------------------------------------------------
@@ -111,12 +114,13 @@ function smtpPaintSelection() {
   if (allBtn) allBtn.textContent = rows.length > 0 && chosen.length === rows.length ? 'Deselect all' : 'Select all';
 }
 
-function smtpAssignRow(select) {
+async function smtpAssignRow(select) {
   const row = select.closest('tr[data-domain]');
   const id = select.value || null;
-  smtpPost('/api/assign', { domains: [row.dataset.domain], profileId: id }, id
+  const saved = await smtpPost('/api/assign', { domains: [row.dataset.domain], profileId: id }, id
     ? row.dataset.domain + ' now sends through ' + smtpProfileName(id) + '.'
     : row.dataset.domain + ' is no longer relayed.');
+  if (!saved) select.value = row.dataset.profileId || '';
 }
 
 async function smtpAssignSelected() {
@@ -124,7 +128,7 @@ async function smtpAssignSelected() {
   const picker = CLP_ROOT.getElementById('bulk-profile');
   if (!rows.length) return notify('Select at least one site first.', 'warn');
   if (!picker.value) return notify('Choose a profile to put them in first.', 'warn');
-  const id = picker.value === 'none' ? null : picker.value;
+  const id = picker.value === '-' ? null : picker.value;
   const moving = rows.filter(function (row) { return (row.dataset.profileId || '') !== (id || ''); });
   if (!moving.length) return notify('Those sites are already there; nothing to change.', 'ok');
   const accepted = await confirmAction({
@@ -171,7 +175,8 @@ async function smtpSendTest(event) {
     });
     const data = result.data;
     notify((data.discarded ? 'Postfix accepted the test and its profile discards it, so it will not arrive. ' : 'Postfix queued the test to ' + data.recipient + '. ') +
-      'The app asked for ' + data.requested + ' and it was sent as ' + data.sender + (data.replyTo ? ', with Reply-To ' + data.replyTo : '') + '.', 'ok');
+      (data.sender === data.requested ? 'Its From stays ' + data.sender
+        : 'The app asked for ' + data.requested + ' and it was sent as ' + data.sender + (data.replyTo ? ', with Reply-To ' + data.replyTo : '')) + '.', 'ok');
   } catch (error) {
     notify(error.message, 'error');
   } finally {

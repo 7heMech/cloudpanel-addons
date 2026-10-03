@@ -1,6 +1,6 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { CONFIG_DIR } from "../../cli/paths";
-import { senderFor, smtpAddress, type SmtpSubmissionRule } from "./config";
+import { senderFor, smtpAddress, type SmtpRewriteRule, type SmtpSubmissionRule } from "./config";
 
 /** One rule file per site uid, readable only by that site's group. */
 export const RULE_DIR = `${CONFIG_DIR}/smtp`;
@@ -18,7 +18,7 @@ function trustedRule(path: string, rootUid: number): SmtpSubmissionRule | null {
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.uid !== rootUid || (stat.mode & 0o022) !== 0) return null;
     const value = JSON.parse(readFileSync(path, "utf8")) as Partial<SmtpSubmissionRule>;
-    if (value.version !== 1 || typeof value.site !== "string" || typeof value.sender !== "string" ||
+    if (value.version !== 1 || typeof value.site !== "string" || (value.sender !== null && typeof value.sender !== "string") ||
         !Array.isArray(value.allowed) || !value.allowed.every((domain) => typeof domain === "string")) return null;
     return { version: 1, site: value.site, sender: value.sender, allowed: value.allowed };
   } catch {
@@ -39,6 +39,22 @@ function plainSubmission(argv: string[]): boolean {
     return false;
   }
   return argv.includes("-t");
+}
+
+/** Drops an envelope sender outside the site's domains, which Postfix would refuse, so the mail goes out under its login. */
+function envelopeWithin(argv: string[], allowed: readonly string[]): string[] {
+  const kept: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]!;
+    if (!/^-[fr]/.test(arg)) {
+      kept.push(arg);
+      continue;
+    }
+    const value = arg.length > 2 ? arg.slice(2) : argv[++i]!;
+    const at = value.lastIndexOf("@");
+    if (at > 0 && allowed.includes(value.slice(at + 1).toLowerCase())) kept.push(...(arg.length > 2 ? [arg] : [arg, value]));
+  }
+  return kept;
 }
 
 /** The app's requested From. A display name survives an address that cannot be used. */
@@ -77,7 +93,7 @@ export async function readBoundedSubmission(stream: ReadableStream<Uint8Array>):
 }
 
 /** Rewrites one message's From to the site's template; throws when the message cannot be read as mail. */
-export function prepareSubmission(message: Uint8Array, rule: SmtpSubmissionRule): { message: Uint8Array; sender: string } {
+export function prepareSubmission(message: Uint8Array, rule: SmtpRewriteRule): { message: Uint8Array; sender: string } {
   if (message.byteLength > MAX_MESSAGE_BYTES) throw new Error("message exceeds the 25 MiB submission limit");
   const input = Buffer.from(message);
   const lfBoundary = input.indexOf("\n\n");
@@ -148,6 +164,7 @@ export async function runSmtpSubmit(
   const uid = options.uid ?? process.getuid?.();
   const rule = uid === undefined || !plainSubmission(argv) ? null : trustedRule(rulePathFor(uid, options.ruleDir), options.rootUid ?? 0);
   if (!rule) return sendmail(path, argv, options.input ?? "inherit");
+  if (rule.sender === null) return sendmail(path, envelopeWithin(argv, rule.allowed), options.input ?? "inherit");
   let input: Uint8Array;
   try {
     input = options.input ?? await readBoundedSubmission(Bun.stdin.stream());
@@ -157,7 +174,7 @@ export async function runSmtpSubmit(
   }
   let prepared: { message: Uint8Array; sender: string };
   try {
-    prepared = prepareSubmission(input, rule);
+    prepared = prepareSubmission(input, rule as SmtpRewriteRule);
   } catch {
     return sendmail(path, argv, input);
   }

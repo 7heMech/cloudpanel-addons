@@ -9,6 +9,8 @@ const BASE = mountPath("smtp");
 const STYLE = CSS.split("/* fleet-row-selection */").join(fleetRowSelectionStyle("smtp-site-table"));
 const CLIENT = `${FLEET_ROW_SELECTION_JS}\n${CLIENT_BODY}`;
 const NO_PROFILE = "Not relayed";
+/** Not a valid profile id, so no profile can be mistaken for it. */
+const BULK_NONE = "-";
 
 export function layout(title: string, content: string, notice?: { current: string; latest: string } | null): string {
   return renderLayout(title, content, { brand: "SMTP Relay", base: BASE, nav: [], css: STYLE, script: CLIENT, updateNotice: notice });
@@ -31,7 +33,7 @@ function profileOptions(profiles: SmtpProfileView[], selected: string | null, no
 function bulkOptions(profiles: SmtpProfileView[]): string {
   return [`<option value="" selected disabled>Choose a profile</option>`]
     .concat(profiles.map((profile) => `<option value="${esc(profile.id)}">${esc(profile.name)}</option>`))
-    .concat([`<option value="none">${esc(NO_PROFILE)}</option>`])
+    .concat([`<option value="${BULK_NONE}">${esc(NO_PROFILE)}</option>`])
     .join("");
 }
 
@@ -51,8 +53,12 @@ function profileRow(profile: SmtpProfileView, isDefault: boolean): string {
   </tr>`;
 }
 
+/** Lets an address wrap after its @ and dots, so a long one narrows the column instead of widening the table. */
+const wrappable = (address: string): string => esc(address).replace(/[@.]/g, "$&<wbr>");
+
 function siteRow(site: SmtpSiteView, profiles: SmtpProfileView[]): string {
-  const from = site.sender === null ? '<span class="hint">Not relayed</span>' : `<code>${esc(site.sender)}</code>`;
+  const from = site.blocked ? `<span class="hint blocked">Blocked: ${esc(site.blocked)}</span>`
+    : site.sender === null ? '<span class="hint">Not relayed</span>' : `<code>${wrappable(site.sender)}</code>`;
   const grants = site.grants.length ? `<span class="hint">Also sends as ${site.grants.map(esc).join(", ")}</span>` : "";
   return `<tr data-domain="${esc(site.domain)}" data-profile-id="${esc(site.profileId ?? "")}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this, smtpPaintSelection)" onkeydown="toggleSiteSelection(event, this, smtpPaintSelection)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="smtpPaintSelection()" aria-label="Select ${esc(site.domain)}"></td>
@@ -102,6 +108,8 @@ export function dashboardContent(state: SmtpState): string {
         <th>Site</th><th>Runs</th><th>Profile</th><th>From</th><th class="action-cell">Actions</th>
       </tr></thead><tbody>${sites}</tbody></table>`
       : '<div class="empty">CloudPanel has no sites yet.</div>'}
+    ${state.skipped.length ? `<p class="hint skipped-note">Left alone, sending only as their Unix user: ${state.skipped
+      .map((site) => `${esc(site.domain)} (${esc(site.reason)})`).join("; ")}.</p>` : ""}
     </div>
     <form class="card smtp-form" id="smtp-test-form" onsubmit="smtpSendTest(event)">
       <h2>Send a test</h2><p class="hint">Sends as the site's own Unix user through the same path as its mail: PHP's <code>mail()</code> for a PHP site, sendmail for any other. A successful result means Postfix queued it; check the inbox for delivery.</p>

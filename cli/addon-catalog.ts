@@ -62,6 +62,8 @@ export interface AddonDefinition {
   action?: (argv: string[], options?: Record<string, unknown>) => Promise<number> | number;
   /** Withdraw changes outside addon state before disabling or uninstalling. */
   deactivate?: () => void;
+  /** Reapply the kept state outside addon state once enabled again. */
+  activate?: () => void;
   /**
    * Whether a `ROLE_SITE_MANAGER` session reaches this addon's routes.
    *

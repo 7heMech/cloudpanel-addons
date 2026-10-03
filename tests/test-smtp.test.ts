@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closedRelay, executeSmtpAction, type SmtpActionOptions, type SmtpSiteRow, type SmtpState, type SmtpTestResult } from "../addons/smtp/action";
-import { envelopeGrants, siteName, submissionRule, type SmtpSubmissionRule } from "../addons/smtp/config";
+import { envelopeGrants, siteName, submissionRule, type SmtpRewriteRule } from "../addons/smtp/config";
 import { MAX_MESSAGE_BYTES, prepareSubmission, readBoundedSubmission, runSmtpSubmit } from "../addons/smtp/submit";
 import { dashboardContent } from "../addons/smtp/app/views";
 
@@ -15,9 +15,9 @@ function scratch(): string {
   return dir;
 }
 
-const rule = (sender: string, allowed = ["example.com"], site = "example.com"): SmtpSubmissionRule =>
+const rule = (sender: string, allowed = ["example.com"], site = "example.com"): SmtpRewriteRule =>
   ({ version: 1, site, sender, allowed });
-function submit(r: SmtpSubmissionRule, headers: string): { sender: string; text: string } {
+function submit(r: SmtpRewriteRule, headers: string): { sender: string; text: string } {
   const result = prepareSubmission(Buffer.from(`To: user@recipient.test\n${headers}\n\nHi`), r);
   return { sender: result.sender, text: Buffer.from(result.message).toString("utf8") };
 }
@@ -129,6 +129,14 @@ test("the wrapper hands mail to sendmail unchanged whenever it has no rule to ap
 
   await runSmtpSubmit(["-bs"], options);
   expect(sent().args).toEqual(["-bs"]);
+
+  // A site in no profile keeps its message, and loses only an envelope sender outside its own domains.
+  writeFileSync(path, JSON.stringify({ ...rule("noreply@{site}"), sender: null }));
+  await runSmtpSubmit(["-t", "-i", "-fme@gmail.com"], options);
+  expect(sent()).toEqual({ args: ["-t", "-i"], stdin: message.toString() });
+  await runSmtpSubmit(["-t", "-i", "-f", "Orders@Example.com"], options);
+  expect(sent().args).toEqual(["-t", "-i", "-f", "Orders@Example.com"]);
+  writeFileSync(path, JSON.stringify(rule("noreply@{site}")));
   const twoFroms = Buffer.from("To: a@b.test\nFrom: a@example.com\nFrom: b@example.com\n\nbody");
   await runSmtpSubmit(["-t", "-i"], { ...options, input: twoFroms });
   expect(sent()).toEqual({ args: ["-t", "-i"], stdin: twoFroms.toString() });
@@ -142,15 +150,19 @@ test("relay restrictions lose only permit_mynetworks", () => {
   expect(closedRelay("permit_mynetworks")).toBe("permit_sasl_authenticated, defer_unauth_destination");
 });
 
-interface Box { options: SmtpActionOptions; settings: Map<string, string>; commands: string[]; dir: string; postfixDir: string; phpRoot: string; ruleDir: string }
+interface Box { options: SmtpActionOptions; settings: Map<string, string>; commands: string[]; dir: string; postfixDir: string; phpRoot: string; ruleDir: string; fpmBinDir: string }
 
 function box(sites: SmtpSiteRow[]): Box {
   const dir = scratch();
   const postfixDir = join(dir, "postfix");
   const phpRoot = join(dir, "php");
   const ruleDir = join(dir, "rules");
+  const fpmBinDir = join(dir, "sbin");
   mkdirSync(postfixDir);
-  for (const path of ["8.2/fpm/conf.d", "8.2/cli/conf.d", "8.3/cli/conf.d"]) mkdirSync(join(phpRoot, path), { recursive: true });
+  // 7.4's PHP-FPM was removed and its conf.d left behind.
+  for (const path of ["8.2/fpm/conf.d", "8.2/cli/conf.d", "8.3/cli/conf.d", "7.4/fpm/conf.d"]) mkdirSync(join(phpRoot, path), { recursive: true });
+  mkdirSync(fpmBinDir);
+  writeFileSync(join(fpmBinDir, "php-fpm8.2"), "");
   const settings = new Map<string, string>([
     ["mynetworks", "127.0.0.0/8"],
     ["smtp_tls_policy_maps", "hash:/etc/postfix/operator-tls"],
@@ -175,14 +187,14 @@ function box(sites: SmtpSiteRow[]): Box {
   const options: SmtpActionOptions = {
     processUid: 0,
     paths: {
-      phpRoot, fpmBinDir: "/usr/sbin", postfixDir, ruleDir,
+      phpRoot, fpmBinDir, postfixDir, ruleDir,
       stateFile: join(dir, "state.json"), originalFile: join(dir, "original.json"), lockFile: join(dir, "lock", "smtp.lock"),
       runuser: "/bin/true", rootUid: process.getuid!(),
     },
     sites,
     run,
   };
-  return { options, settings, commands, dir, postfixDir, phpRoot, ruleDir };
+  return { options, settings, commands, dir, postfixDir, phpRoot, ruleDir, fpmBinDir };
 }
 
 const gid = process.getgid!();
@@ -228,17 +240,29 @@ test("routing a site binds every login, relays by sender, closes loopback, and i
   for (const sapi of ["8.2/fpm", "8.2/cli", "8.3/cli"]) {
     expect(readFileSync(join(b.phpRoot, sapi, "conf.d", "99-clp-addons-smtp.ini"), "utf8")).toContain("sendmail_path = /usr/local/bin/clp-addons smtp-submit -t -i");
   }
-  expect(b.commands).toContain("/usr/sbin/php-fpm8.2 -t");
+  expect(b.commands).toContain(`${b.fpmBinDir}/php-fpm8.2 -t`);
   expect(b.commands).toContain("systemctl try-reload-or-restart php8.2-fpm");
-  expect(b.commands.some((command) => command.includes("php8.3-fpm"))).toBe(false);
-  expect(readdirSync(b.ruleDir)).toEqual(["2001.json"]);
+  expect(b.commands.some((command) => command.includes("php8.3-fpm") || command.includes("php7.4-fpm"))).toBe(false);
+  expect(readdirSync(join(b.phpRoot, "7.4/fpm/conf.d"))).toEqual([]);
+  expect(readdirSync(b.ruleDir)).toEqual(["2001.json", "2002.json"]);
   expect(statSync(join(b.ruleDir, "2001.json")).mode & 0o777).toBe(0o640);
   expect(JSON.parse(readFileSync(join(b.ruleDir, "2001.json"), "utf8")))
     .toEqual({ version: 1, site: "example.com", sender: "{from.local}@{site}", allowed: ["example.com", "www.example.com"] });
+  // shop.test is in no profile, so it keeps its From and only an envelope sender Postfix would refuse is dropped.
+  expect(JSON.parse(readFileSync(join(b.ruleDir, "2002.json"), "utf8"))).toEqual({ version: 1, site: "shop.test", sender: null, allowed: ["shop.test"] });
 
   const html = dashboardContent(await act(b, "list") as SmtpState);
   expect(html).not.toContain("pa$1ss");
   expect(html).toContain("Node.js");
+  expect(html).toContain('<option value="-">Not relayed</option>');
+
+  // A settled box reads Postfix once and writes nothing; the new-site watcher does not even read it.
+  b.commands.length = 0;
+  expect(await act(b, "reconcile")).toEqual({ repaired: 0, joined: 0 });
+  expect(b.commands).toEqual(["postconf -n", "postconf -xh myorigin"]);
+  b.commands.length = 0;
+  await act(b, "sync-sites");
+  expect(b.commands).toEqual([]);
 });
 
 test("a site can never use a sending domain that routes through another profile", async () => {
@@ -247,10 +271,53 @@ test("a site can never use a sending domain that routes through another profile"
   await act(b, "save-profile", { name: "Agency", relay: { host: "smtp.gmail.com", port: 587, username: "alerts@agency.example", password: "x" }, sender: "alerts@agency.example" });
   await act(b, "assign", { domains: ["www.example.com"], profileId: "postmark" });
   await act(b, "assign", { domains: ["shop.test"], profileId: "agency" });
-  await expect(act(b, "save-grants", { domain: "shop.test", domains: ["example.com"] })).rejects.toThrow("both send as @example.com through different profiles");
+  await expect(act(b, "save-grants", { domain: "shop.test", domains: ["example.com"] }))
+    .rejects.toThrow("shop.test can send as @example.com, which www.example.com sends through the Postmark profile");
   await expect(act(b, "save-grants", { domain: "app.test", domains: ["shop.test"] })).rejects.toThrow("Agency profile");
   expect((await act(b, "list") as SmtpState).sites.every((site) => site.grants.length === 0)).toBe(true);
   expect(file(b, "transports")).toContain("/^alerts@agency\\.example$/ smtp:[smtp.gmail.com]:587\n");
+});
+
+test("a site created onto another profile's domain is blocked, and nothing else stops working", async () => {
+  const b = box(SITES.slice(0, 2));
+  await act(b, "save-profile", POSTMARK);
+  await act(b, "save-profile", { name: "Agency", relay: { host: "smtp.gmail.com", port: 587, username: "alerts@agency.example", password: "x" }, sender: "alerts@agency.example" });
+  await act(b, "assign", { domains: ["www.example.com"], profileId: "postmark" });
+  await act(b, "save-grants", { domain: "www.example.com", domains: ["news.test"] });
+  await act(b, "set-default", { profileId: "agency" });
+  const news: SmtpSiteRow = { id: 4, domain: "news.test", user: "news", uid: 2004, gid, type: "php", phpVersion: "8.2" };
+  b.options.sites = [...SITES.slice(0, 2), news];
+
+  // It cannot join the default, and in no profile it could still send as news.test through Postmark.
+  expect(await act(b, "reconcile")).toEqual({ repaired: 0, joined: 0 });
+  const why = "news.test can send as @news.test, which www.example.com sends through the Postmark profile";
+  expect((await act(b, "list") as SmtpState).sites.find((site) => site.domain === "news.test"))
+    .toMatchObject({ profileId: null, sender: null, blocked: why });
+  expect(file(b, "local-senders")).toContain("\nnews news\n");
+  expect(JSON.parse(readFileSync(join(b.ruleDir, "2004.json"), "utf8"))).toEqual({ version: 1, site: "news.test", sender: null, allowed: [] });
+
+  await act(b, "assign", { domains: ["shop.test"], profileId: "postmark" });
+  // Refused before anything changes, so there is nothing to restore.
+  expect(await act(b, "assign", { domains: ["news.test"], profileId: "agency" }).catch((error: Error) => error.message)).toBe(why);
+  const state = await act(b, "assign", { domains: ["news.test"], profileId: "postmark" }) as SmtpState;
+  expect(state.sites.every((site) => site.blocked === null)).toBe(true);
+});
+
+test("a site SMTP cannot bind is listed and left alone instead of stopping the rest", async () => {
+  const b = box([...SITES.slice(0, 2),
+    { id: 5, domain: "under_score.test", user: "under", uid: 2005, gid, type: "php", phpVersion: "8.2" },
+    { id: 6, domain: "twin.test", user: "twin", uid: 2002, gid, type: "static", phpVersion: null },
+    { id: 7, domain: "panel.test", user: "clp", uid: 2007, gid, type: "static", phpVersion: null }]);
+  await act(b, "save-profile", POSTMARK);
+  const state = await act(b, "assign", { domains: ["www.example.com"], profileId: "postmark" }) as SmtpState;
+  expect(state.sites.map((site) => site.domain)).toEqual(["www.example.com"]);
+  expect(state.skipped).toEqual([
+    { domain: "under_score.test", reason: "its domain is not one mail can use" },
+    { domain: "panel.test", reason: "its Unix user clp cannot be bound" },
+    { domain: "shop.test", reason: "it shares Unix UID 2002 with another site" },
+    { domain: "twin.test", reason: "it shares Unix UID 2002 with another site" },
+  ]);
+  expect(file(b, "local-senders")).toBe("root *\npostfix *\nclp *\nexample example @example.com @www.example.com\n");
 });
 
 test("a blank password keeps the saved one, and a failed Postfix check changes nothing", async () => {
@@ -304,6 +371,11 @@ test("the test mail goes through the site's own path and reports what the rewrit
   expect(result).toEqual({ queued: true, discarded: true, requested: "orders@example.com", sender: "noreply@example.com",
     replyTo: "orders@example.com", recipient: "me@inbox.test" });
   expect(file(b, "transports")).toBe("/^noreply@example\\.com$/ discard:\n/@example\\.com$/ discard:\n/@www\\.example\\.com$/ discard:\n");
+
+  // Plain sendmail keeps the From the app wrote; only the envelope is the profile's.
+  await act(b, "assign", { domains: ["app.test"], profileId: "postmark" });
+  expect(await act(b, "test", { domain: "app.test", recipient: "me@inbox.test", from: "other@gmail.com" })).toMatchObject({
+    discarded: false, requested: "other@gmail.com", sender: "other@gmail.com", replyTo: null });
 });
 
 test("deactivate withdraws everything even when the saved policy is unreadable", async () => {

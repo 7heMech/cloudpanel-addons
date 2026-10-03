@@ -12,7 +12,9 @@ plugin: their `mail()` goes through the relay as it is.
    2525), username, password, and the From its sites send with. The built-in
    **Don't send** profile discards mail instead, for staging copies.
 3. Assign sites to profiles, one at a time or in bulk, and choose the profile new
-   sites join. A site in no profile is not relayed.
+   sites join. A site in no profile is not relayed. A site marked **Blocked**
+   could send as a domain another site sends through a different profile; put
+   both in one profile or remove the domain from that site's **Domains**.
 4. Send a test to an inbox you control. It runs as the site's own user, through
    PHP's `mail()` for a PHP site and sendmail for any other, and confirms that
    Postfix queued it. Delivery results are in `journalctl -u postfix@-`, or in
@@ -48,4 +50,4 @@ added under **Domains**. Whenever the address changes, the original moves to
 - Apps with their own SMTP settings keep connecting to their provider directly.
 - New sites are picked up seconds after CloudPanel creates them. Disabling the
   addon restores Postfix's previous settings and removes its PHP setting; the
-  profiles are kept for a later enable.
+  profiles are kept, and enabling it again applies them.

@@ -25,14 +25,17 @@ interface Run {
   /** systemctl calls that change state; the is-active probes are left out. */
   systemd: string[];
   cron: boolean;
+  /** What addon hooks ran through the CLI binary. */
+  cli: string[];
   error?: string;
 }
 
 const childScript = String.raw`
 import { mock } from "bun:test";
-import { chmodSync, existsSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const root = process.env.CLP_TEST_ROOT;
+writeFileSync(root + "/clp-addons", "#!/bin/sh\necho \"$*\" >> " + root + "/cli-calls\n", { mode: 0o755 });
 const calls = [];
 const failing = JSON.parse(process.env.CLP_TEST_FAILING ?? "[]");
 const provision = [];
@@ -52,8 +55,8 @@ mock.module("./cli/paths.ts", () => ({
   LOCK_DIR: root + "/lock",
   SOCKET_DIR: root + "/run",
   INSTATIC_BACKUP_CRON: root + "/cron.d/instatic-backup",
-  // What an addon's deactivate hook runs; nothing here may reach the real binary.
-  CLI_BIN: "/bin/true",
+  // What an addon's hooks run; nothing here may reach the real binary.
+  CLI_BIN: root + "/clp-addons",
 }));
 
 const realUtil = await import("./cli/util.ts");
@@ -147,6 +150,7 @@ console.log(JSON.stringify({
     .filter(([cmd, args]) => cmd === "systemctl" && args[0] !== "is-active")
     .map(([, args]) => args.join(" ")),
   cron: existsSync(root + "/cron.d/instatic-backup"),
+  cli: existsSync(root + "/cli-calls") ? readFileSync(root + "/cli-calls", "utf8").trim().split("\n") : [],
   error,
 }));
 `;
@@ -255,13 +259,16 @@ test("the SMTP new-site watcher is started when its units appear and stopped whe
   expect(on.error).toBeUndefined();
   expect(on.systemd).toContain("enable clp-addons-smtp-reconcile.path");
   expect(on.systemd).toContain("restart clp-addons-smtp-reconcile.path");
+  // Disable withdrew the saved policy, so enable puts it back.
+  expect(on.cli).toEqual(["action smtp reconcile"]);
   const service = readFileSync(join(on.root, "systemd", "clp-addons-smtp-reconcile.service"), "utf8");
-  // CloudPanel commits a new site's row after writing its vhost, so it runs twice.
-  expect(service.match(/action smtp reconcile/g)).toHaveLength(2);
+  // CloudPanel commits a new site's row after writing its vhost, so it runs twice, and a failed first run still waits for the second.
+  expect(service).toMatch(/ExecStart=-\S+ action smtp sync-sites\nExecStart=\/bin\/sleep 10\nExecStart=\/\S+ action smtp sync-sites\n/);
   expect(readFileSync(join(on.root, "systemd", "clp-addons-smtp-reconcile.path"), "utf8")).toContain("PathChanged=/etc/nginx/sites-enabled");
 
   const off = toggle([{ verb: "disable", addon: "smtp" }], { enabled: ["smtp"] });
   expect(off.error).toBeUndefined();
+  expect(off.cli).toEqual(["action smtp deactivate"]);
   expect(off.systemd).toContain("disable --now clp-addons-smtp-reconcile.path");
   expect(existsSync(join(off.root, "systemd", "clp-addons-smtp-reconcile.path"))).toBe(false);
   expect(existsSync(join(off.root, "systemd", "clp-addons-smtp-reconcile.service"))).toBe(false);

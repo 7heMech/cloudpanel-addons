@@ -771,8 +771,9 @@ WantedBy=timers.target
 /**
  * New sites need SMTP Relay quickly: their login is refused any sender but its
  * bare name until the sender map lists it. CloudPanel writes a vhost for every
- * new site, but commits the site row about 200 ms later, so the reconcile runs
- * again shortly after to catch a row that was not there yet.
+ * new site, but commits the site row about 200 ms later, so the sync runs
+ * again shortly after to catch a row that was not there yet. A vhost write
+ * that adds or removes no site changes nothing.
  */
 export function smtpReconcileUnits(): { service: string; path: string } {
   return {
@@ -782,9 +783,9 @@ ConditionPathExists=${ADDONS.smtp!.configFile}
 
 [Service]
 Type=oneshot
-ExecStart=${CLI_BIN} action smtp reconcile
+ExecStart=-${CLI_BIN} action smtp sync-sites
 ExecStart=/bin/sleep 10
-ExecStart=${CLI_BIN} action smtp reconcile
+ExecStart=${CLI_BIN} action smtp sync-sites
 `,
     path: `[Unit]
 Description=Watch for new CloudPanel sites that SMTP Relay must bind

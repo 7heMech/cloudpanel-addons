@@ -20,10 +20,12 @@ export interface SmtpSubmissionRule {
   version: 1;
   /** The value of {site}. */
   site: string;
-  sender: string;
+  /** Null for a site in no profile: its From is kept, and only an envelope sender outside `allowed` is dropped. */
+  sender: string | null;
   /** Domains a requested From may keep. */
   allowed: string[];
 }
+export type SmtpRewriteRule = SmtpSubmissionRule & { sender: string };
 
 const LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
 const DOMAIN = new RegExp(`^${LABEL}(?:\\.${LABEL})+$`);
@@ -99,12 +101,12 @@ export function siteName(domain: string, otherSites: ReadonlySet<string>): strin
   return bare.includes(".") && !otherSites.has(bare) ? bare : domain;
 }
 
-export function submissionRule(domain: string, site: string, sender: string, grants: readonly string[]): SmtpSubmissionRule {
+export function submissionRule(domain: string, site: string, sender: string, grants: readonly string[]): SmtpRewriteRule {
   return { version: 1, site, sender, allowed: [...new Set([site, domain, ...grants])] };
 }
 
 /** Envelope senders a site may use, as Postfix sender patterns: `@domain` or an exact address. */
-export function envelopeGrants(rule: SmtpSubmissionRule): string[] {
+export function envelopeGrants(rule: SmtpRewriteRule): string[] {
   const { sender } = rule;
   const domains = sender.includes("{from.domain}") ? rule.allowed : [rule.site];
   const fromTemplate = domains.map((domain) => {

@@ -58,8 +58,9 @@ function smtpPreviewState(url: URL): SmtpState {
     { id: "agency-gmail", name: "Agency Gmail", relay: { host: "smtp.gmail.com", port: 587, username: "alerts@agency.example" }, sender: "alerts@agency.example", sites: 1 },
     dontSend,
   ];
-  const site = (domain: string, user: string, type: string, phpVersion: string | null, profileId: string | null, sender: string | null, grants: string[] = []) =>
-    ({ domain, user, type, phpVersion, profileId: setup ? null : profileId, sender: setup ? null : sender, grants });
+  const site = (domain: string, user: string, type: string, phpVersion: string | null, profileId: string | null, sender: string | null,
+    grants: string[] = [], blocked: string | null = null) =>
+    ({ domain, user, type, phpVersion, profileId: setup ? null : profileId, sender: setup ? null : sender, grants, blocked: setup ? null : blocked });
   return {
     profiles,
     defaultProfileId: setup ? null : "postmark",
@@ -68,9 +69,12 @@ function smtpPreviewState(url: URL): SmtpState {
       site("shop.example.com", "shop", "php", "8.3", "postmark", "{from.local}@shop.example.com", ["news.shop.example.com"]),
       site("blog.client.org", "blog", "php", "8.2", "agency-gmail", "alerts@agency.example"),
       site("staging.example.com", "staging", "php", "8.3", "dont-send", "noreply@staging.example.com"),
+      site("news.shop.example.com", "news", "php", "8.3", null, null, [],
+        "news.shop.example.com can send as @news.shop.example.com, which shop.example.com sends through the Postmark profile"),
       site("app.example.com", "app", "nodejs", null, null, null),
       site("docs.example.com", "docs", "static", null, null, null),
     ],
+    skipped: setup || url.searchParams.has("empty") ? [] : [{ domain: "old.example.com", reason: "it has no Unix account" }],
   };
 }
 

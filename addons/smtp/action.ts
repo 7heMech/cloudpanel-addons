@@ -19,17 +19,18 @@ import {
   type CommandResult,
 } from "../../cli/action-common";
 import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { log } from "../../cli/util";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import {
   DEFAULT_SENDER, envelopeGrants, parseRelay, parseSenderTemplate, senderFor, siteName, smtpAddress, smtpDomain,
-  submissionRule, type SmtpProfile, type SmtpRelay, type SmtpSubmissionRule,
+  submissionRule, type SmtpProfile, type SmtpRelay, type SmtpRewriteRule, type SmtpSubmissionRule,
 } from "./config";
 import { prepareSubmission, RULE_DIR, rulePathFor, SENDMAIL } from "./submit";
 
 type SmtpVerb = "list" | "save-profile" | "delete-profile" | "assign" | "set-default" | "save-grants" | "test" |
-  "reconcile" | "deactivate";
+  "reconcile" | "sync-sites" | "deactivate";
 const VERBS: SmtpVerb[] = ["list", "save-profile", "delete-profile", "assign", "set-default", "save-grants", "test",
-  "reconcile", "deactivate"];
+  "reconcile", "sync-sites", "deactivate"];
 const BODY_VERBS: SmtpVerb[] = ["save-profile", "delete-profile", "assign", "set-default", "save-grants", "test"];
 
 const POSTFIX_KEYS = [
@@ -82,14 +83,17 @@ export interface SmtpSiteView {
   type: string;
   phpVersion: string | null;
   profileId: string | null;
-  /** The From template with {site} filled in, or null when the site is in no profile. */
+  /** The From template with {site} filled in, or null when the site's mail is not relayed. */
   sender: string | null;
+  /** Why the site is not relayed although it is in a profile, or may not use its own domains although it is in none. */
+  blocked: string | null;
   grants: string[];
 }
 export interface SmtpState {
   profiles: SmtpProfileView[];
   defaultProfileId: string | null;
   sites: SmtpSiteView[];
+  skipped: { domain: string; reason: string }[];
 }
 export interface SmtpTestResult {
   queued: true;
@@ -240,25 +244,36 @@ function findProfile(policy: SmtpPolicy, id: string): SmtpProfile {
 // Sites
 // ---------------------------------------------------------------------------
 
-function validatedSites(sites: SmtpSiteRow[]): SmtpSiteRow[] {
-  const uids = new Set<number>();
-  for (const site of sites) {
-    smtpDomain(site.domain);
-    if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(site.user)) failAction(`invalid site user for ${site.domain}`);
-    if (TRUSTED_LOGINS.includes(site.user)) failAction(`reserved Unix account for ${site.domain}`);
-    if (site.phpVersion !== null && !/^[0-9]+\.[0-9]+$/.test(site.phpVersion)) failAction(`invalid PHP version for ${site.domain}`);
-    if (!Number.isInteger(site.uid) || site.uid < 1 || !Number.isInteger(site.gid) || site.gid < 0) {
-      failAction(`invalid site account for ${site.domain}`);
-    }
-    if (uids.has(site.uid)) failAction(`multiple sites share Unix UID ${site.uid}; SMTP cannot tell their mail apart`);
-    uids.add(site.uid);
+interface SiteSet {
+  sites: SmtpSiteRow[];
+  /** Sites SMTP cannot bind. Their logins keep only their bare names, and the other sites are still managed. */
+  skipped: { id: number; domain: string; reason: string }[];
+}
+
+function checkedSites(rows: SmtpSiteRow[], skipped: SiteSet["skipped"] = []): SiteSet {
+  const valid: SmtpSiteRow[] = [];
+  for (const site of rows) {
+    let domain: string | null = null;
+    try { domain = smtpDomain(site.domain); } catch { /* reported as skipped */ }
+    const reason = domain === null ? "its domain is not one mail can use"
+      : !/^[a-z_][a-z0-9_-]{0,31}$/.test(site.user) || TRUSTED_LOGINS.includes(site.user) ? `its Unix user ${site.user} cannot be bound`
+      : site.phpVersion !== null && !/^[0-9]+\.[0-9]+$/.test(site.phpVersion) ? "its PHP version is unreadable"
+      : !Number.isInteger(site.uid) || site.uid < 1 || !Number.isInteger(site.gid) || site.gid < 0 ? "its Unix account is invalid"
+      : null;
+    if (reason) skipped.push({ id: site.id, domain: site.domain, reason });
+    else valid.push({ ...site, domain: domain! });
   }
-  return sites;
+  const uids = new Map<number, number>();
+  for (const site of valid) uids.set(site.uid, (uids.get(site.uid) ?? 0) + 1);
+  for (const site of valid) {
+    if (uids.get(site.uid)! > 1) skipped.push({ id: site.id, domain: site.domain, reason: `it shares Unix UID ${site.uid} with another site` });
+  }
+  return { sites: valid.filter((site) => uids.get(site.uid) === 1), skipped };
 }
 
 /** Every CloudPanel site, whatever it runs: anything can call sendmail as its site user. */
-function panelSites(paths: SmtpPaths, fixture?: SmtpSiteRow[]): SmtpSiteRow[] {
-  if (fixture) return validatedSites(fixture);
+function panelSites(paths: SmtpPaths, fixture?: SmtpSiteRow[]): SiteSet {
+  if (fixture) return checkedSites(fixture);
   const accounts = new Map<string, { uid: number; gid: number }>();
   for (const line of readFileSync(paths.passwd, "utf8").split("\n")) {
     const [name, , uid, gid] = line.split(":");
@@ -272,16 +287,19 @@ function panelSites(paths: SmtpPaths, fixture?: SmtpSiteRow[]): SmtpSiteRow[] {
         ORDER BY site.domain_name`,
     ).all();
     const sites: SmtpSiteRow[] = [];
+    const skipped: SiteSet["skipped"] = [];
     for (const row of rows) {
       const account = accounts.get(String(row.user));
-      // A site whose Unix account is gone cannot submit mail at all.
-      if (!account) continue;
+      if (!account) {
+        skipped.push({ id: Number(row.id), domain: String(row.domain_name), reason: "it has no Unix account" });
+        continue;
+      }
       sites.push({
-        id: Number(row.id), domain: smtpDomain(row.domain_name), user: String(row.user), uid: account.uid, gid: account.gid,
+        id: Number(row.id), domain: String(row.domain_name), user: String(row.user), uid: account.uid, gid: account.gid,
         type: String(row.type), phpVersion: row.php_version == null ? null : String(row.php_version),
       });
     }
-    return validatedSites(sites);
+    return checkedSites(sites, skipped);
   } finally {
     db.close();
   }
@@ -299,17 +317,22 @@ function requireSite(sites: SmtpSiteRow[], domain: string): SmtpSiteRow {
 
 interface Route {
   site: SmtpSiteRow;
+  /** Null when the site is in no profile, or is blocked. */
   profile: SmtpProfile | null;
-  rule: SmtpSubmissionRule;
+  rule: SmtpRewriteRule;
   /** Envelope senders this site's login may use, as `@domain` or an exact address. */
   envelopes: string[];
+  /** Why the site's login may send only as its bare name: its senders reach another profile's account. */
+  blocked: string | null;
 }
 
 const domainOf = (pattern: string): string => pattern.slice(pattern.lastIndexOf("@") + 1);
 
 /**
- * Each site's rule and envelope senders, refusing any policy under which one
- * site's login could send through another profile's account.
+ * Each site's rule and envelope senders. A site that could send through
+ * another profile's account is blocked instead: it is not relayed and its
+ * login keeps only its bare name. Sites in a profile claim first, so a site in
+ * none never displaces one that is.
  */
 function routesFor(policy: SmtpPolicy, sites: SmtpSiteRow[]): Route[] {
   const names = new Set(sites.map((site) => site.domain));
@@ -318,32 +341,32 @@ function routesFor(policy: SmtpPolicy, sites: SmtpSiteRow[]): Route[] {
     const profile = profiles.get(policy.assignments[site.domain] ?? "") ?? null;
     const rule = submissionRule(site.domain, siteName(site.domain, names), profile?.sender ?? DEFAULT_SENDER,
       policy.grants[site.domain] ?? []);
-    return { site, profile, rule, envelopes: envelopeGrants(rule) };
+    return { site, profile, rule, envelopes: envelopeGrants(rule), blocked: null };
   });
-  const claims = new Map<string, Route>();
-  for (const route of routes) {
-    if (!route.profile) continue;
+  const claims = new Map<string, [string, Route][]>();
+  for (const route of [...routes.filter((route) => route.profile), ...routes.filter((route) => !route.profile)]) {
     for (const pattern of route.envelopes) {
-      const owner = claims.get(pattern);
-      if (owner && owner.profile!.id !== route.profile.id) {
-        failAction(`${route.site.domain} and ${owner.site.domain} both send as ${pattern} through different profiles`);
-      }
-      claims.set(pattern, route);
+      const clash = (claims.get(domainOf(pattern)) ?? []).find(([claimed, owner]) => owner.profile!.id !== route.profile?.id &&
+        (claimed === pattern || claimed.startsWith("@") || pattern.startsWith("@")));
+      if (!clash) continue;
+      route.blocked = `${route.site.domain} can send as ${pattern}, which ${clash[1].site.domain} sends through the ${clash[1].profile!.name} profile`;
+      route.profile = null;
+      route.envelopes = [];
+      break;
     }
-  }
-  const byDomain = new Map<string, [string, Route][]>();
-  for (const claim of claims) byDomain.set(domainOf(claim[0]), [...(byDomain.get(domainOf(claim[0])) ?? []), claim]);
-  for (const route of routes) {
-    for (const pattern of route.envelopes) {
-      for (const [claimed, owner] of byDomain.get(domainOf(pattern)) ?? []) {
-        const overlaps = claimed === pattern || claimed.startsWith("@") || pattern.startsWith("@");
-        if (overlaps && owner.profile!.id !== route.profile?.id) {
-          failAction(`${route.site.domain} can send as ${pattern}, which ${owner.site.domain} sends through the ${owner.profile!.name} profile`);
-        }
-      }
+    for (const pattern of route.profile ? route.envelopes : []) {
+      claims.set(domainOf(pattern), [...(claims.get(domainOf(pattern)) ?? []), [pattern, route]]);
     }
   }
   return routes;
+}
+
+/** The first site `next` blocks that `before` did not, keyed with its profile so a blocked site moved elsewhere counts. */
+function newBlock(before: SmtpPolicy, next: SmtpPolicy, sites: SmtpSiteRow[]): string | null {
+  const blocks = (policy: SmtpPolicy) => new Map(routesFor(policy, sites).filter((route) => route.blocked)
+    .map((route) => [`${route.site.domain} ${policy.assignments[route.site.domain] ?? ""}`, route.blocked!]));
+  const existing = blocks(before);
+  return [...blocks(next)].find(([key]) => !existing.has(key))?.[1] ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -400,8 +423,7 @@ function explicitPostfixValue(explicit: string, key: string): string | null {
   return match ? match[1]!.trim() : null;
 }
 
-function currentPostfixSettings(run: Run): Record<PostfixKey, string | null> {
-  const explicit = runChecked(run, "postconf", ["-n"]);
+function postfixSettings(explicit: string): Record<PostfixKey, string | null> {
   return Object.fromEntries(POSTFIX_KEYS.map((key) => [key, explicitPostfixValue(explicit, key)])) as Record<PostfixKey, string | null>;
 }
 
@@ -466,18 +488,22 @@ function restoreFiles(snapshot: FileSnapshot[]): void {
 }
 
 function applyPostfix(paths: SmtpPaths, routes: Route[], run: Run): void {
-  if (explicitPostfixValue(runChecked(run, "postconf", ["-n"]), "transport_maps")) {
+  const explicit = runChecked(run, "postconf", ["-n"]);
+  if (explicitPostfixValue(explicit, "transport_maps")) {
     failAction("Postfix transport_maps can route mail around the SMTP relay; remove it before routing sites");
   }
-  if (!/^local_login_sender_maps\s*=/.test(runChecked(run, "postconf", ["-d", "local_login_sender_maps"]))) {
+  const current = postfixSettings(explicit);
+  const files = managedFiles(paths);
+  const localSenders = `hash:${files.senders}, regexp:${files.fallback}`;
+  // A Postfix already running our sender map has passed this before.
+  if (current.local_login_sender_maps !== localSenders &&
+      !/^local_login_sender_maps\s*=/.test(runChecked(run, "postconf", ["-d", "local_login_sender_maps"]))) {
     failAction("Postfix 3.6 or newer is required for local sender restrictions");
   }
-  const files = managedFiles(paths);
   const maps = postfixMaps(routes, mailOrigin(run));
   const tracked = [...Object.values(files), ...HASH_MAPS.map((name) => `${files[name]}.db`)];
   const snapshot = snapshotFiles(paths, tracked);
   const before = new Map(snapshot.map((item) => [item.path, item]));
-  const current = currentPostfixSettings(run);
   const original = originalPostfix(paths, current);
   const settings: Record<PostfixKey, string> = {
     smtp_sasl_auth_enable: "yes",
@@ -487,7 +513,7 @@ function applyPostfix(paths: SmtpPaths, routes: Route[], run: Run): void {
     smtp_tls_policy_maps: chained(`regexp:${files.tls}`, original.smtp_tls_policy_maps),
     sender_dependent_default_transport_maps: chained(`regexp:${files.transports}`, original.sender_dependent_default_transport_maps),
     sender_canonical_maps: chained(`hash:${files.canonical}`, original.sender_canonical_maps),
-    local_login_sender_maps: `hash:${files.senders}, regexp:${files.fallback}`,
+    local_login_sender_maps: localSenders,
     smtpd_relay_restrictions: closedRelay(original.smtpd_relay_restrictions),
   };
   const changedMaps = (Object.keys(files) as ManagedMap[])
@@ -539,22 +565,26 @@ function withdrawPostfix(paths: SmtpPaths, run: Run): void {
 // The PHP side: one conf.d file per PHP version, and one rule file per site
 // ---------------------------------------------------------------------------
 
-function phpIniTargets(paths: SmtpPaths): { version: string; sapi: string; path: string }[] {
+/** `present` is false for a PHP-FPM whose package was removed but whose conf.d was left behind. */
+function phpIniTargets(paths: SmtpPaths): { version: string; sapi: string; path: string; present: boolean }[] {
   if (!existsSync(paths.phpRoot)) return [];
   return readdirSync(paths.phpRoot).filter((version) => /^[0-9]+\.[0-9]+$/.test(version)).sort()
     .flatMap((version) => ["fpm", "cli"]
       .filter((sapi) => existsSync(join(paths.phpRoot, version, sapi, "conf.d")))
-      .map((sapi) => ({ version, sapi, path: join(paths.phpRoot, version, sapi, "conf.d", PHP_INI_NAME) })));
+      .map((sapi) => ({
+        version, sapi, path: join(paths.phpRoot, version, sapi, "conf.d", PHP_INI_NAME),
+        present: sapi !== "fpm" || existsSync(join(paths.fpmBinDir, `php-fpm${version}`)),
+      })));
 }
 
 /** Installs or removes the conf.d file everywhere, testing and reloading each PHP-FPM it changed. */
 function syncPhpIni(paths: SmtpPaths, install: boolean, run: Run): number {
   const changes = phpIniTargets(paths).flatMap((target) => {
     const before = existsSync(target.path) ? (trustedStat(target.path, paths.rootUid), readFileSync(target.path, "utf8")) : null;
-    const after = install ? PHP_INI : null;
+    const after = install && target.present ? PHP_INI : null;
     return before === after ? [] : [{ ...target, before, after }];
   });
-  const fpm = [...new Set(changes.filter((change) => change.sapi === "fpm").map((change) => change.version))];
+  const fpm = [...new Set(changes.filter((change) => change.sapi === "fpm" && change.present).map((change) => change.version))];
   const write = (path: string, content: string | null) => content === null
     ? rmSync(path, { force: true })
     : writeFileAtomic(path, content, { mode: 0o644 });
@@ -572,8 +602,9 @@ function syncPhpIni(paths: SmtpPaths, install: boolean, run: Run): number {
   return changes.length;
 }
 
+/** Every PHP site gets one: a site that is not relayed still needs an envelope sender Postfix accepts. */
 function syncRuleFiles(paths: SmtpPaths, routes: Route[]): void {
-  const wanted = new Map(routes.filter((route) => route.profile && route.site.phpVersion !== null)
+  const wanted = new Map(routes.filter((route) => route.site.phpVersion !== null)
     .map((route) => [rulePathFor(route.site.uid, paths.ruleDir), route]));
   if (!existsSync(paths.ruleDir)) {
     if (!wanted.size) return;
@@ -584,7 +615,9 @@ function syncRuleFiles(paths: SmtpPaths, routes: Route[]): void {
     if (/^[0-9]+\.json$/.test(name) && !wanted.has(path)) rmSync(path, { force: true });
   }
   for (const [path, route] of wanted) {
-    const content = JSON.stringify(route.rule) + "\n";
+    const rule: SmtpSubmissionRule = route.profile ? route.rule
+      : { ...route.rule, sender: null, allowed: route.blocked ? [] : route.rule.allowed };
+    const content = JSON.stringify(rule) + "\n";
     if (existsSync(path)) {
       const stat = lstatSync(path);
       if (stat.isFile() && stat.uid === paths.rootUid && stat.gid === route.site.gid && (stat.mode & 0o777) === 0o640 &&
@@ -618,6 +651,9 @@ function applyConfiguration(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSit
 
 /** Saves a policy only once the box runs it, and puts the old one back if it could not. */
 function commit(paths: SmtpPaths, before: SmtpPolicy, next: SmtpPolicy, sites: SmtpSiteRow[], run: Run): number {
+  // A site blocked already, say by a site created after a grant, does not stop unrelated changes.
+  const blocked = newBlock(before, next, sites);
+  if (blocked) failAction(blocked);
   try {
     const written = applyConfiguration(paths, next, sites, run);
     writePolicy(paths, next);
@@ -636,8 +672,8 @@ function commit(paths: SmtpPaths, before: SmtpPolicy, next: SmtpPolicy, sites: S
 // Verbs
 // ---------------------------------------------------------------------------
 
-function stateOf(policy: SmtpPolicy, sites: SmtpSiteRow[]): SmtpState {
-  const names = new Set(sites.map((site) => site.domain));
+function stateOf(policy: SmtpPolicy, { sites, skipped }: SiteSet): SmtpState {
+  const routes = new Map(routesFor(policy, sites).map((route) => [route.site, route]));
   const profiles = new Map(policy.profiles.map((profile) => [profile.id, profile]));
   const count = (id: string) => sites.filter((site) => policy.assignments[site.domain] === id).length;
   return {
@@ -650,14 +686,16 @@ function stateOf(policy: SmtpPolicy, sites: SmtpSiteRow[]): SmtpState {
     })),
     defaultProfileId: policy.defaultProfileId,
     sites: sites.map((site) => {
-      const profile = profiles.get(policy.assignments[site.domain] ?? "") ?? null;
+      const route = routes.get(site)!;
       return {
         domain: site.domain, user: site.user, type: site.type, phpVersion: site.phpVersion,
-        profileId: profile?.id ?? null,
-        sender: profile ? profile.sender.replaceAll("{site}", siteName(site.domain, names)) : null,
+        profileId: profiles.get(policy.assignments[site.domain] ?? "")?.id ?? null,
+        sender: route.profile ? route.profile.sender.replaceAll("{site}", route.rule.site) : null,
+        blocked: route.blocked,
         grants: policy.grants[site.domain] ?? [],
       };
     }),
+    skipped: skipped.map(({ domain, reason }) => ({ domain, reason })),
   };
 }
 
@@ -722,6 +760,7 @@ function assignRequest(body: Record<string, unknown>): { domains: string[]; prof
 function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], body: Record<string, unknown>): SmtpTestResult {
   const site = requireSite(sites, smtpDomain(body.domain));
   const route = routesFor(policy, sites).find((candidate) => candidate.site === site)!;
+  if (route.blocked) failAction(`${site.domain} is not relayed: ${route.blocked}`);
   if (!route.profile) failAction(`${site.domain} is in no profile, so its mail is not relayed`);
   const recipient = smtpAddress(body.recipient);
   const php = site.phpVersion !== null;
@@ -730,7 +769,8 @@ function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], bo
   const path = php ? "PHP's mail path" : "sendmail";
   const message = Buffer.from(`To: ${recipient}\nFrom: ${requested}\nSubject: CloudPanel SMTP relay test for ${site.domain}\n\n` +
     `This message was sent as ${site.user} through ${path} and the ${route.profile.name} profile.\n`);
-  let sender = senderFor(route.rule.sender, route.rule.site);
+  // Plain sendmail keeps the From the app wrote; Postfix maps only the envelope.
+  let sender = requested;
   let replyTo: string | null = null;
   if (php) {
     const prepared = prepareSubmission(message, route.rule);
@@ -748,17 +788,24 @@ function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], bo
   return { queued: true, discarded: route.profile.relay === null, requested, sender, replyTo, recipient };
 }
 
-/** New sites join the default profile, and sites CloudPanel no longer has drop out. */
-function reconcile(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], run: Run): { repaired: number; joined: number } {
-  const next = structuredClone(policy);
-  const live = new Set(sites.map((site) => site.domain));
+/**
+ * New sites join the default profile, and sites CloudPanel no longer has drop
+ * out. With `repair`, an unchanged policy is applied again to undo drift.
+ */
+function reconcile(paths: SmtpPaths, policy: SmtpPolicy, { sites, skipped }: SiteSet, run: Run, repair: boolean): { repaired: number; joined: number } {
+  let next = structuredClone(policy);
+  const live = new Set([...sites, ...skipped].map((site) => site.domain));
   for (const domain of Object.keys(next.assignments)) if (!live.has(domain)) delete next.assignments[domain];
   for (const domain of Object.keys(next.grants)) if (!live.has(domain)) delete next.grants[domain];
   const known = new Set(policy.knownSiteIds);
   let joined = 0;
   for (const site of sites) {
     if (known.has(site.id) || next.defaultProfileId === null || next.assignments[site.domain]) continue;
-    next.assignments[site.domain] = next.defaultProfileId;
+    const candidate = structuredClone(next);
+    candidate.assignments[site.domain] = next.defaultProfileId;
+    // A new site whose senders another profile already uses stays out, rather than blocking a site that works.
+    if (newBlock(next, candidate, sites)) continue;
+    next = candidate;
     joined++;
   }
   next.knownSiteIds = sites.map((site) => site.id);
@@ -767,7 +814,7 @@ function reconcile(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], r
     commit(paths, policy, next, sites, run);
     return { repaired: 0, joined };
   }
-  return { repaired: applyConfiguration(paths, next, sites, run), joined };
+  return { repaired: repair ? applyConfiguration(paths, next, sites, run) : 0, joined };
 }
 
 async function inputBody(options: SmtpActionOptions): Promise<Record<string, unknown>> {
@@ -801,10 +848,11 @@ export async function executeSmtpAction(argv: string[], options: SmtpActionOptio
       return { deactivated: true };
     }
     const policy = readPolicy(paths);
-    const sites = panelSites(paths, options.sites);
-    if (verb === "list") return stateOf(policy, sites);
+    const siteSet = panelSites(paths, options.sites);
+    const { sites } = siteSet;
+    if (verb === "list") return stateOf(policy, siteSet);
     if (verb === "test") return sendTest(paths, policy, sites, body);
-    if (verb === "reconcile") return reconcile(paths, policy, sites, run);
+    if (verb === "reconcile" || verb === "sync-sites") return reconcile(paths, policy, siteSet, run, verb === "reconcile");
     let next = structuredClone(policy);
     if (profile) next = saveProfile(policy, profile);
     if (verb === "delete-profile") {
@@ -834,7 +882,7 @@ export async function executeSmtpAction(argv: string[], options: SmtpActionOptio
       next.grants[grants.domain] = grants.domains;
     }
     commit(paths, policy, next, sites, run);
-    return stateOf(stablePolicy(next), sites);
+    return stateOf(stablePolicy(next), siteSet);
   });
 }
 
@@ -853,4 +901,10 @@ export async function runSmtpAction(argv: string[], options: SmtpActionOptions =
 export function deactivateSmtp(): void {
   const result = runCommand(CLI_BIN, ["action", "smtp", "deactivate"]);
   if (!result.ok) failAction(`SMTP could not be deactivated: ${commandError(result)}`);
+}
+
+/** Called by enable, since disable withdrew the policy it kept; the repair timer retries a failure. */
+export function activateSmtp(): void {
+  const result = runCommand(CLI_BIN, ["action", "smtp", "reconcile"]);
+  if (!result.ok) log.warn(`SMTP Relay could not reapply its profiles yet: ${commandError(result)}`);
 }

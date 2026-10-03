@@ -51,6 +51,7 @@ async function applyInstall(spec: AddonSpec, flags: Record<string, string | true
   ensureDirs(specs, true);
   installArtifacts(artifacts, artifactTag ?? CLI_VERSION.replace(/^v/, ""));
   bootstrapProvision(specs);
+  spec.activate?.();
 
   log.plain();
   log.ok(`${spec.name} installed`);
