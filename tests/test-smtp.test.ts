@@ -244,7 +244,7 @@ test("routing a site binds every login, relays by sender, closes loopback, and i
   expect(b.commands).toContain("systemctl try-reload-or-restart php8.2-fpm");
   expect(b.commands.some((command) => command.includes("php8.3-fpm") || command.includes("php7.4-fpm"))).toBe(false);
   expect(readdirSync(join(b.phpRoot, "7.4/fpm/conf.d"))).toEqual([]);
-  expect(readdirSync(b.ruleDir)).toEqual(["2001.json", "2002.json"]);
+  expect(readdirSync(b.ruleDir).sort()).toEqual(["2001.json", "2002.json"]);
   expect(statSync(join(b.ruleDir, "2001.json")).mode & 0o777).toBe(0o640);
   expect(JSON.parse(readFileSync(join(b.ruleDir, "2001.json"), "utf8")))
     .toEqual({ version: 1, site: "example.com", sender: "{from.local}@{site}", allowed: ["example.com", "www.example.com"] });
