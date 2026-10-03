@@ -22,7 +22,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, runCommand, validateDomain, withFileLock,
+  ActionFailure, emitActionError, emitActionOk, failAction, nameSlug, oneLine, runCommand, validateDomain, withFileLock,
   type CommandResult,
 } from "../../cli/action-common";
 import { PANEL_DB, STATE_DIR } from "../../cli/paths";
@@ -301,25 +301,9 @@ const MAX_CATEGORIES = 24;
 const NAME_MAX = 40;
 const DESCRIPTION_MAX = 240;
 
-/** One line of plain text: no control characters, no runs of whitespace. */
-function oneLine(value: unknown, what: string, max: number, required: boolean): string {
-  if (value == null && !required) return "";
-  if (typeof value !== "string") failAction(`${what} must be text`);
-  const text = value.replace(/[ -]/g, " ").replace(/\s+/g, " ").trim();
-  if (!text && required) failAction(`${what} is required`);
-  if (text.length > max) failAction(`${what} must be at most ${max} characters`);
-  return text;
-}
-
-/**
- * The stable identifier a category keeps for its whole life, derived from the
- * name it was created with. Renaming leaves it alone, so the sites assigned to
- * a category do not come loose when it is renamed.
- */
+/** A stable category id from the name it was created with; see nameSlug. */
 export function categoryIdFor(name: string): string {
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, NAME_MAX).replace(/^-+|-+$/g, "");
-  if (!slug) failAction("a category name needs at least one letter or digit");
-  return slug;
+  return nameSlug(name, "a category name", NAME_MAX);
 }
 
 function parseCategoryId(value: unknown): string {

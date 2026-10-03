@@ -228,6 +228,27 @@ export function validateMfa(value: string): string {
   return value;
 }
 
+/** One line of plain text: no control characters, no runs of whitespace. */
+export function oneLine(value: unknown, what: string, max: number, required: boolean): string {
+  if (value == null && !required) return "";
+  if (typeof value !== "string") failAction(`${what} must be text`);
+  const text = value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  if (!text && required) failAction(`${what} is required`);
+  if (text.length > max) failAction(`${what} must be at most ${max} characters`);
+  return text;
+}
+
+/**
+ * The stable identifier a named record keeps for its whole life, derived from
+ * the name it was created with. Renaming leaves it alone, so whatever is
+ * assigned to the record does not come loose when it is renamed.
+ */
+export function nameSlug(name: string, what: string, max = 40): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, max).replace(/^-+|-+$/g, "");
+  if (!slug) failAction(`${what} needs at least one letter or digit`);
+  return slug;
+}
+
 function domainStem(domain: string): string {
   return domain.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8);
 }
