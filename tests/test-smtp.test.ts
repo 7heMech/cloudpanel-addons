@@ -387,6 +387,9 @@ test("the test mail goes through the site's own path and reports what the rewrit
   expect(result).toEqual({ queued: true, discarded: true, requested: "orders@example.com", sender: "noreply@example.com",
     replyTo: "orders@example.com", recipient: "me@inbox.test" });
   expect(file(b, "transports")).toBe("/^noreply@example\\.com$/ discard:\n/@example\\.com$/ discard:\n/@www\\.example\\.com$/ discard:\n");
+  const html = dashboardContent(await act(b, "list") as SmtpState);
+  expect(html).toContain('<span class="hint">Discarded</span>');
+  expect(html).not.toContain("noreply@<wbr>example.com");
 
   // Plain sendmail keeps the From the app wrote; only the envelope is the profile's.
   await act(b, "assign", { domains: ["app.test"], profileId: "postmark" });

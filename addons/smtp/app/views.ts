@@ -57,8 +57,10 @@ function profileRow(profile: SmtpProfileView, isDefault: boolean): string {
 }
 
 function siteRow(site: SmtpSiteView, profiles: SmtpProfileView[]): string {
+  const discards = profiles.find((profile) => profile.id === site.profileId)?.relay === null;
   const from = site.blocked ? `<span class="hint blocked">Blocked: ${esc(site.blocked)}</span>`
-    : site.sender === null ? '<span class="hint">Not relayed</span>' : `<span class="mono">${wrappable(site.sender)}</span>`;
+    : site.sender === null ? '<span class="hint">Not relayed</span>'
+    : discards ? '<span class="hint">Discarded</span>' : `<span class="mono">${wrappable(site.sender)}</span>`;
   const grants = site.grants.length ? `<span class="hint">Also sends as ${site.grants.map(esc).join(", ")}</span>` : "";
   return `<tr data-domain="${esc(site.domain)}" data-profile-id="${esc(site.profileId ?? "")}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this, smtpPaintSelection)" onkeydown="toggleSiteSelection(event, this, smtpPaintSelection)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="smtpPaintSelection()" aria-label="Select ${esc(site.domain)}"></td>
