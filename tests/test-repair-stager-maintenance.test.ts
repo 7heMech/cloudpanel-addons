@@ -53,6 +53,7 @@ const mockPrelude = String.raw`
     ensureRequiredUnits: () => {},
     ensureServiceUser: () => {},
     ensureTimerArmed: () => {},
+    ensurePathWatching: () => {},
     hardenBackups: () => {},
     reconcilePanelIdentity: () => {},
     installUnits: () => ({ manager: false, reconcile: false, cloudflare: null, smtp: null, auth: false, cron: false, systemd: false }),

@@ -40,7 +40,8 @@ login keeps only its bare name. Sites in a profile claim first, so a site in
 none never displaces one that is. A save is refused if it blocks a site that was
 not blocked before, so a block that arose without a save, such as a site created
 on a domain another site was granted, does not stop other changes. A new site
-joins the default profile only if that would block nothing. Port 465 is refused:
+joins the default profile only if that would block nothing and the profile's
+From template forms a valid address for it. Port 465 is refused:
 implicit TLS needs its own transport.
 
 ## The From header
@@ -53,7 +54,7 @@ That covers web requests, cron and WP-CLI, and survives CloudPanel rewriting a
 pool when a site changes PHP version. A site cannot change it: `sendmail_path` is
 `PHP_INI_SYSTEM`, and CloudPanel's PHP settings reach PHP as nginx `PHP_VALUE`,
 which php-fpm applies in user mode. A pool's own
-`php_admin_value[sendmail_path]` still wins.
+`php_admin_value[sendmail_path]` still wins, and the test refuses such a site.
 
 The wrapper reads `/etc/clp-addons/smtp/<uid>.json`, root-owned and readable
 only by that site's group. It keeps the requested From when the template uses it
@@ -77,7 +78,8 @@ is already there.
 ## State and changes
 
 Credentials live in `/var/lib/clp-addons/smtp/config.json` (0600). The manager
-receives relay host, port and username, never the password. Before changing
+receives relay host, port and username, never the password. A blank password
+keeps the saved one only while the host and username stay the same. Before changing
 Postfix, the action records the operator's value of every key it manages and
 restores them once no site is routed or the addon is disabled. Its maps go ahead
 of the operator's existing `smtp_sasl_password_maps`, `smtp_tls_policy_maps`,
@@ -97,7 +99,8 @@ does nothing unless CloudPanel's sites have changed since the last run; then it
 binds new site users, puts new sites in the default profile and drops deleted
 sites. CloudPanel commits the site row about 200 ms after writing the vhost, so
 the service runs it again 10 seconds later, even if the first run failed. Repair
-runs the full reconcile, which also undoes drift, every 15 minutes.
+runs the full reconcile, which also undoes drift, every 15 minutes, and restarts
+the watcher if it has stopped.
 
 ## Limits
 
@@ -105,4 +108,5 @@ The From rewrite covers PHP `mail()` only; a site that calls sendmail directly
 can put another domain in its From, and Postfix holds only its envelope. The
 provider is the boundary for From, so sites that do not trust each other need
 separate profiles rather than one account allowed to send as all of them. The
-test reports that Postfix queued the message, not the relay's answer.
+test runs the site's PHP CLI `mail()`, or sendmail for other sites, and reports
+that Postfix queued the message, not the relay's answer.

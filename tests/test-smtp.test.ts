@@ -76,6 +76,13 @@ test("an address that cannot be used still keeps its display name; an apostrophe
   expect(submit(fixed, "From: wordpress@example.com (WordPress)").text).not.toContain("(WordPress)");
 });
 
+test("headers pass through byte for byte, whatever charset the app wrote them in", () => {
+  const latin1 = Buffer.from("To: u@r.test\nSubject: Caf\xe9\nFrom: Jos\xe9 <j@gmail.com>\n\nbody", "latin1");
+  const output = Buffer.from(prepareSubmission(latin1, rule("noreply@{site}")).message);
+  expect(output.toString("latin1")).toBe("From: Jos\xe9 <noreply@example.com>\nReply-To: Jos\xe9 <j@gmail.com>\nTo: u@r.test\nSubject: Caf\xe9\n\nbody");
+  expect(submit(rule("noreply@{site}"), "From: José <j@gmail.com>").text).toContain("From: José <noreply@example.com>\n");
+});
+
 test("envelope grants cover the site's domains and whatever its template can produce", () => {
   expect(envelopeGrants(rule("noreply@{site}"))).toEqual(["@example.com", "noreply@example.com"]);
   expect(envelopeGrants(rule("{from.local}@{from.domain}", ["example.com", "news.example.com"])))
@@ -140,6 +147,10 @@ test("the wrapper hands mail to sendmail unchanged whenever it has no rule to ap
   const twoFroms = Buffer.from("To: a@b.test\nFrom: a@example.com\nFrom: b@example.com\n\nbody");
   await runSmtpSubmit(["-t", "-i"], { ...options, input: twoFroms });
   expect(sent()).toEqual({ args: ["-t", "-i"], stdin: twoFroms.toString() });
+  writeFileSync(path, JSON.stringify({ ...rule("noreply@{site}"), sender: null }));
+  await runSmtpSubmit(["-t", "-i", "-f", ""], options);
+  expect(sent().args).toEqual(["-t", "-i"]);
+  expect(await runSmtpSubmit(["-t", "-i"], { ...options, sendmailPath: join(dir, "missing") })).toBe(1);
 });
 
 test("relay restrictions lose only permit_mynetworks", () => {
@@ -269,6 +280,49 @@ test("routing a site binds every login, relays by sender, closes loopback, and i
   rmSync(b.sendmailLink);
   expect(await act(b, "reconcile")).toEqual({ repaired: 1, joined: 0 });
   expect(readlinkSync(b.sendmailLink)).toBe("/usr/sbin/sendmail");
+
+  // Drift in Postfix and in the rule files counts too, and a umask cannot leave the rules unreachable.
+  b.settings.delete("smtpd_relay_restrictions");
+  rmSync(join(b.postfixDir, "clp-addons-transports"));
+  chmodSync(b.ruleDir, 0o750);
+  rmSync(join(b.ruleDir, "2002.json"));
+  expect(await act(b, "reconcile")).toEqual({ repaired: 4, joined: 0 });
+  expect(statSync(b.ruleDir).mode & 0o777).toBe(0o755);
+  expect(b.settings.get("smtpd_relay_restrictions")).toBe("permit_sasl_authenticated, defer_unauth_destination");
+});
+
+test("a saved password goes only to the server and account it was saved for", async () => {
+  const b = box(SITES);
+  await act(b, "save-profile", POSTMARK);
+  await act(b, "assign", { domains: ["shop.test"], profileId: "postmark" });
+  const edit = (relay: Partial<typeof POSTMARK.relay>) => act(b, "save-profile", { ...POSTMARK, id: "postmark", relay: { ...POSTMARK.relay, password: "", ...relay } });
+  await edit({ port: 2525 });
+  expect(file(b, "sasl")).toContain(" token:pa$$1ss\n");
+  await expect(edit({ host: "smtp.other.test" })).rejects.toThrow("enter the password again");
+  await expect(edit({ username: "someone" })).rejects.toThrow("enter the password again");
+  await edit({ host: "smtp.other.test", password: "fresh" });
+  expect(file(b, "sasl")).toContain(" token:fresh\n");
+});
+
+test("a site or domain too long for an email address is left out instead of breaking every site", async () => {
+  // Three 62-letter labels, then one that brings the name to `length`.
+  const hostname = (length: number) => `${"a".repeat(62)}.`.repeat(3) + "b".repeat(length - 194) + ".test";
+  const unmailable: SmtpSiteRow = { id: 8, domain: hostname(248), user: "long", uid: 2008, gid, type: "php", phpVersion: "8.2" };
+  const tight: SmtpSiteRow = { id: 9, domain: hostname(240), user: "tight", uid: 2009, gid, type: "php", phpVersion: "8.2" };
+  const b = box([...SITES, unmailable, tight]);
+  await act(b, "save-profile", POSTMARK);
+  const state = await act(b, "assign", { domains: ["shop.test", tight.domain], profileId: "postmark" }) as SmtpState;
+  expect(state.skipped).toEqual([{ domain: unmailable.domain, reason: "its domain is not one mail can use" }]);
+  await expect(act(b, "save-grants", { domain: "shop.test", domains: [unmailable.domain] })).rejects.toThrow("too long for an email address");
+
+  // A From the profile cannot form for a site is refused on assigning, and a new site it cannot form one for stays out.
+  await act(b, "save-profile", { name: "Agency", relay: { host: "smtp.gmail.com", port: 587, username: "a", password: "x" }, sender: "{site}@agency.example" });
+  await expect(act(b, "assign", { domains: [tight.domain], profileId: "agency" })).rejects.toThrow("its From would be too long");
+  await act(b, "set-default", { profileId: "agency" });
+  const late: SmtpSiteRow = { ...tight, id: 10, domain: hostname(241), user: "late", uid: 2010 };
+  b.options.sites = [...SITES, unmailable, tight, late];
+  expect(await act(b, "reconcile")).toEqual({ repaired: 0, joined: 0 });
+  expect((await act(b, "list") as SmtpState).sites.find((site) => site.domain === late.domain)!.profileId).toBeNull();
 });
 
 test("a site can never use a sending domain that routes through another profile", async () => {
@@ -398,6 +452,25 @@ test("the test mail goes through the site's own path and reports what the rewrit
   await act(b, "assign", { domains: ["app.test"], profileId: "postmark" });
   expect(await act(b, "test", { domain: "app.test", recipient: "me@inbox.test", from: "other@gmail.com" })).toMatchObject({
     discarded: false, requested: "other@gmail.com", sender: "other@gmail.com", replyTo: null });
+});
+
+test("the test mail runs PHP's own mail(), and is refused for a pool that bypasses the relay", async () => {
+  const b = box(SITES);
+  const runuser = join(b.dir, "runuser");
+  writeFileSync(runuser, `#!/bin/sh\nprintf '%s\\n' "$@" > "${b.dir}/runuser-args"\n`);
+  chmodSync(runuser, 0o755);
+  b.options.paths!.runuser = runuser;
+  await act(b, "save-profile", POSTMARK);
+  await act(b, "assign", { domains: ["www.example.com"], profileId: "postmark" });
+  await act(b, "test", { domain: "www.example.com", recipient: "me@inbox.test" });
+  const args = readFileSync(join(b.dir, "runuser-args"), "utf8");
+  expect(args.startsWith("-u\nexample\n--\n/usr/bin/php8.2\n-r\n")).toBe(true);
+  expect(args).toContain("\n--\nme@inbox.test\nCloudPanel SMTP relay test for www.example.com\n");
+  expect(args.trim().endsWith("\nwordpress@example.com")).toBe(true);
+
+  mkdirSync(join(b.phpRoot, "8.2/fpm/pool.d"));
+  writeFileSync(join(b.phpRoot, "8.2/fpm/pool.d/www.example.com.conf"), "[example]\nphp_admin_value[sendmail_path] = /usr/sbin/sendmail -t -i\n");
+  await expect(act(b, "test", { domain: "www.example.com", recipient: "me@inbox.test" })).rejects.toThrow("sets its own sendmail_path");
 });
 
 test("deactivate withdraws everything even when the saved policy is unreadable", async () => {

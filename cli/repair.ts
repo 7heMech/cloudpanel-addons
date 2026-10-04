@@ -4,9 +4,9 @@ import { installedAddons, resolveAddon, migrateAbsorbedAddons } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
 import { runAddonMaintenance, runManagerMaintenance } from "./maintenance";
 import { withOperationLock } from "./operation-lock";
-import { CLOUDFLARE_RECONCILE_TIMER, MANAGER_UNIT, SYSTEMD_DIR } from "./paths";
+import { CLOUDFLARE_RECONCILE_TIMER, MANAGER_UNIT, SMTP_RECONCILE_PATH, SYSTEMD_DIR } from "./paths";
 import {
-  ensureAuthHelperReady, ensureDirs, ensureServiceUser, ensureTimerArmed, hardenBackups, installUnits,
+  ensureAuthHelperReady, ensureDirs, ensurePathWatching, ensureServiceUser, ensureTimerArmed, hardenBackups, installUnits,
   reconcilePanelIdentity, removeLegacyInstall, removeLegacyUnits, removeLegacyUsers, startUnits,
   unitActive, warnIfPanelSessionUnreadable, writeConfig,
 } from "./provision";
@@ -75,6 +75,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     if (all.some((spec) => spec.name === "cloudflare-ips")) {
       ensureTimerArmed(CLOUDFLARE_RECONCILE_TIMER, quiet);
     }
+    if (all.some((spec) => spec.name === "smtp")) ensurePathWatching(SMTP_RECONCILE_PATH, quiet);
   }
   reconcileAnchors(quiet);
   if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; run repair after checking global_settings");

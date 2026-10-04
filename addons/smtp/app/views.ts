@@ -151,9 +151,9 @@ export function dashboardContent(state: SmtpState): string {
         ${field("smtp-delivery", "Mail from its sites", '<select id="smtp-delivery" name="delivery" onchange="smtpSyncDelivery()"><option value="send">Is sent through an SMTP server</option><option value="discard">Is discarded, for staging copies</option></select>')}
       </div>
       <div class="form-grid smtp-relay-fields" id="smtp-relay-fields">
-        ${field("smtp-host", "SMTP hostname", '<input id="smtp-host" name="host" autocomplete="off" placeholder="smtp.postmarkapp.com">', "Its certificate must be valid for this name.")}
+        ${field("smtp-host", "SMTP hostname", '<input id="smtp-host" name="host" autocomplete="off" placeholder="smtp.postmarkapp.com" oninput="smtpSyncDelivery()">', "Its certificate must be valid for this name.")}
         ${field("smtp-port", "Port", '<input id="smtp-port" name="port" type="number" min="1" max="65535" value="587">', "587 or 2525, with STARTTLS.")}
-        ${field("smtp-username", "Username", '<input id="smtp-username" name="username" autocomplete="off">')}
+        ${field("smtp-username", "Username", '<input id="smtp-username" name="username" autocomplete="off" oninput="smtpSyncDelivery()">')}
         ${field("smtp-password", "Password", '<input id="smtp-password" name="password" type="password" autocomplete="new-password">')}
         ${field("smtp-sender", "From", '<input id="smtp-sender" name="sender" autocomplete="off" placeholder="noreply@{site}">', TEMPLATE_HINT, true)}
       </div>

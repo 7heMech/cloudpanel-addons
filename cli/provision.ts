@@ -1063,6 +1063,19 @@ export function ensureTimerArmed(unit: string, quiet = false): void {
   if (!timerNextElapse(unit) && !quiet) log.err(`${unit} still has no scheduled run`);
 }
 
+/** A path unit only watches while it is active, and nothing else restarts one that stopped. */
+export function ensurePathWatching(unit: string, quiet = false): void {
+  const enabled = tryRun("systemctl", ["is-enabled", unit]);
+  if (!enabled.ok || enabled.out.trim() !== "enabled") {
+    if (!quiet) log.warn(`${unit} is not enabled; enabling it`);
+    run("systemctl", ["enable", unit]);
+  }
+  if (unitActive(unit) === "active") return;
+  if (!quiet) log.warn(`${unit} is not watching; restarting it`);
+  tryRun("systemctl", ["restart", unit]);
+  if (unitActive(unit) !== "active" && !quiet) log.err(`${unit} still is not watching`);
+}
+
 export function purgeTwigCache(): void {
   if (!existsSync(TWIG_CACHE_DIR)) return;
   for (const entry of readdirSync(TWIG_CACHE_DIR)) {

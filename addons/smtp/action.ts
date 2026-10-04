@@ -22,8 +22,8 @@ import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { log } from "../../cli/util";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import {
-  DEFAULT_SENDER, envelopeGrants, parseRelay, parseSenderTemplate, senderFor, siteName, smtpAddress, smtpDomain,
-  submissionRule, type SmtpProfile, type SmtpRelay, type SmtpRewriteRule, type SmtpSubmissionRule,
+  DEFAULT_SENDER, envelopeGrants, FALLBACK_LOCAL, parseRelay, parseSenderTemplate, senderFor, siteName, smtpAddress, smtpDomain,
+  submissionRule, trustedFile, type SmtpProfile, type SmtpRelay, type SmtpRewriteRule, type SmtpSubmissionRule,
 } from "./config";
 import { prepareSubmission, RULE_DIR, rulePathFor, SENDMAIL } from "./submit";
 
@@ -109,6 +109,7 @@ export interface SmtpPaths {
   passwd: string;
   phpRoot: string;
   fpmBinDir: string;
+  phpBinDir: string;
   stateFile: string;
   originalFile: string;
   lockFile: string;
@@ -132,6 +133,7 @@ export const DEFAULT_SMTP_PATHS: SmtpPaths = {
   passwd: "/etc/passwd",
   phpRoot: "/etc/php",
   fpmBinDir: "/usr/sbin",
+  phpBinDir: "/usr/bin",
   stateFile: `${STATE_DIR}/smtp/config.json`,
   originalFile: `${STATE_DIR}/smtp/postfix-original.json`,
   lockFile: "/run/lock/clp-addons/smtp.lock",
@@ -152,10 +154,7 @@ function runChecked(run: Run, command: string, args: string[]): string {
 }
 
 function trustedStat(path: string, uid: number): void {
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== uid || (stat.mode & 0o022) !== 0) {
-    failAction(`refusing untrusted SMTP file: ${path}`);
-  }
+  if (!trustedFile(lstatSync(path), uid)) failAction(`refusing untrusted SMTP file: ${path}`);
 }
 
 function trustedRead(path: string, uid: number): string | null {
@@ -178,9 +177,22 @@ function parseProfileId(value: unknown): string {
   return value;
 }
 
+/** Whether mail can be sent as an address on this domain at all. */
+function mailable(domain: string): boolean {
+  try {
+    smtpAddress(`${FALLBACK_LOCAL}@${domain}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function parseGrants(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > MAX_GRANTS) failAction(`a site can send as at most ${MAX_GRANTS} extra domains`);
-  return [...new Set(value.map(smtpDomain))].sort();
+  const domains = value.map(smtpDomain);
+  const long = domains.find((domain) => !mailable(domain));
+  if (long) failAction(`${long} is too long for an email address`);
+  return [...new Set(domains)].sort();
 }
 
 function stablePolicy(policy: SmtpPolicy): SmtpPolicy {
@@ -257,7 +269,7 @@ function checkedSites(rows: SmtpSiteRow[], skipped: SiteSet["skipped"] = []): Si
   for (const site of rows) {
     let domain: string | null = null;
     try { domain = smtpDomain(site.domain); } catch { /* reported as skipped */ }
-    const reason = domain === null ? "its domain is not one mail can use"
+    const reason = domain === null || !mailable(domain) ? "its domain is not one mail can use"
       : !/^[a-z_][a-z0-9_-]{0,31}$/.test(site.user) || TRUSTED_LOGINS.includes(site.user) ? `its Unix user ${site.user} cannot be bound`
       : site.phpVersion !== null && !/^[0-9]+\.[0-9]+$/.test(site.phpVersion) ? "its PHP version is unreadable"
       : !Number.isInteger(site.uid) || site.uid < 1 || !Number.isInteger(site.gid) || site.gid < 0 ? "its Unix account is invalid"
@@ -345,9 +357,15 @@ function routesFor(policy: SmtpPolicy, sites: SmtpSiteRow[]): Route[] {
     const profile = profiles.get(policy.assignments[site.domain] ?? "") ?? null;
     const rule = submissionRule(site.domain, siteName(site.domain, names), profile?.sender ?? DEFAULT_SENDER,
       policy.grants[site.domain] ?? []);
-    return { site, profile, rule, envelopes: envelopeGrants(rule), blocked: null };
+    try {
+      return { site, profile, rule, envelopes: envelopeGrants(rule), blocked: null };
+    } catch {
+      failAction(`${site.domain} cannot use the ${profile?.name} profile: its From would be too long for an email address`);
+    }
   });
   const claims = new Map<string, [string, Route][]>();
+  // Sites sharing a fixed From all claim the same address; the first one stands for them.
+  const claimed = new Set<string>();
   for (const route of [...routes.filter((route) => route.profile), ...routes.filter((route) => !route.profile)]) {
     for (const pattern of route.envelopes) {
       const clash = (claims.get(domainOf(pattern)) ?? []).find(([claimed, owner]) => owner.profile!.id !== route.profile?.id &&
@@ -359,7 +377,12 @@ function routesFor(policy: SmtpPolicy, sites: SmtpSiteRow[]): Route[] {
       break;
     }
     for (const pattern of route.profile ? route.envelopes : []) {
-      claims.set(domainOf(pattern), [...(claims.get(domainOf(pattern)) ?? []), [pattern, route]]);
+      const key = `${route.profile!.id} ${pattern}`;
+      if (claimed.has(key)) continue;
+      claimed.add(key);
+      const owners = claims.get(domainOf(pattern));
+      if (owners) owners.push([pattern, route]);
+      else claims.set(domainOf(pattern), [[pattern, route]]);
     }
   }
   return routes;
@@ -491,7 +514,8 @@ function restoreFiles(snapshot: FileSnapshot[]): void {
   }
 }
 
-function applyPostfix(paths: SmtpPaths, routes: Route[], run: Run): void {
+/** Returns how many maps and settings it changed. */
+function applyPostfix(paths: SmtpPaths, routes: Route[], run: Run): number {
   const explicit = runChecked(run, "postconf", ["-n"]);
   if (explicitPostfixValue(explicit, "transport_maps")) {
     failAction("Postfix transport_maps can route mail around the SMTP relay; remove it before routing sites");
@@ -527,7 +551,8 @@ function applyPostfix(paths: SmtpPaths, routes: Route[], run: Run): void {
     return changedMaps.includes(name) || db.content === null || lstatSync(files[name]).mtimeMs > lstatSync(`${files[name]}.db`).mtimeMs;
   });
   const changedSettings = POSTFIX_KEYS.filter((key) => current[key] !== settings[key]);
-  if (!changedMaps.length && !staleHashes.length && !changedSettings.length) return;
+  const changes = new Set([...changedMaps, ...staleHashes]).size + changedSettings.length;
+  if (!changes) return 0;
   try {
     for (const name of changedMaps) {
       writeFileAtomic(files[name], maps[name], { mode: name === "credentials" ? 0o600 : 0o644, createParent: true });
@@ -539,6 +564,7 @@ function applyPostfix(paths: SmtpPaths, routes: Route[], run: Run): void {
     for (const key of changedSettings) runChecked(run, "postconf", ["-e", `${key}=${settings[key]}`]);
     runChecked(run, "postfix", ["check"]);
     runChecked(run, "systemctl", ["reload", "postfix"]);
+    return changes;
   } catch (error) {
     restoreFiles(snapshot);
     applyPostfixSettings(Object.fromEntries(changedSettings.map((key) => [key, current[key]])), run);
@@ -606,17 +632,26 @@ function syncPhpIni(paths: SmtpPaths, install: boolean, run: Run): number {
   return changes.length;
 }
 
-/** Every PHP site gets one: a site that is not relayed still needs an envelope sender Postfix accepts. */
-function syncRuleFiles(paths: SmtpPaths, routes: Route[]): void {
+/** Every PHP site gets one: a site that is not relayed still needs an envelope sender Postfix accepts. Returns how many it changed. */
+function syncRuleFiles(paths: SmtpPaths, routes: Route[]): number {
   const wanted = new Map(routes.filter((route) => route.site.phpVersion !== null)
     .map((route) => [rulePathFor(route.site.uid, paths.ruleDir), route]));
+  let changed = 0;
   if (!existsSync(paths.ruleDir)) {
-    if (!wanted.size) return;
-    mkdirSync(paths.ruleDir, { recursive: true, mode: 0o755 });
+    if (!wanted.size) return 0;
+    mkdirSync(paths.ruleDir, { recursive: true });
+  }
+  // Every site user must reach its own file, whatever the umask was.
+  if ((lstatSync(paths.ruleDir).mode & 0o777) !== 0o755) {
+    chmodSync(paths.ruleDir, 0o755);
+    changed++;
   }
   for (const name of readdirSync(paths.ruleDir)) {
     const path = join(paths.ruleDir, name);
-    if (/^[0-9]+\.json$/.test(name) && !wanted.has(path)) rmSync(path, { force: true });
+    if (/^[0-9]+\.json$/.test(name) && !wanted.has(path)) {
+      rmSync(path, { force: true });
+      changed++;
+    }
   }
   for (const [path, route] of wanted) {
     const rule: SmtpSubmissionRule = route.profile ? route.rule
@@ -628,7 +663,9 @@ function syncRuleFiles(paths: SmtpPaths, routes: Route[]): void {
           readFileSync(path, "utf8") === content) continue;
     }
     writeFileAtomic(path, content, { mode: 0o640, owner: { uid: paths.rootUid, gid: route.site.gid } });
+    changed++;
   }
+  return changed;
 }
 
 /** The default PATH leaves out /usr/sbin, where apps that run `sendmail` by name, such as Nodemailer, would not find it. */
@@ -662,9 +699,7 @@ function applyConfiguration(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSit
     withdrawAll(paths, run);
     return 0;
   }
-  applyPostfix(paths, routes, run);
-  syncRuleFiles(paths, routes);
-  return syncPhpIni(paths, true, run) + syncSendmailLink(paths, true);
+  return applyPostfix(paths, routes, run) + syncRuleFiles(paths, routes) + syncPhpIni(paths, true, run) + syncSendmailLink(paths, true);
 }
 
 /** Saves a policy only once the box runs it, and puts the old one back if it could not. */
@@ -757,11 +792,14 @@ function saveProfile(policy: SmtpPolicy, request: ProfileRequest): SmtpPolicy {
   } else {
     profile = findProfile(next, request.id);
   }
-  const saved = profile.relay?.password;
+  const saved = profile.relay;
+  // A saved password goes only to the server and account it was saved for.
+  const keeps = saved && request.relay && saved.host === request.relay.host && saved.username === request.relay.username;
+  if (request.relay && !request.relay.password && saved && !keeps) failAction("enter the password again: the hostname or username changed");
   profile.name = request.name;
   profile.sender = request.sender;
   profile.relay = request.relay
-    ? parseRelay({ ...request.relay, password: request.relay.password || saved })
+    ? parseRelay({ ...request.relay, password: request.relay.password || (keeps ? saved.password : "") })
     : null;
   return next;
 }
@@ -784,9 +822,15 @@ function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], bo
   const php = site.phpVersion !== null;
   const requested = body.from ? smtpAddress(body.from)
     : php ? `wordpress@${route.rule.site}` : senderFor(route.rule.sender, route.rule.site);
-  const path = php ? "PHP's mail path" : "sendmail";
-  const message = Buffer.from(`To: ${recipient}\nFrom: ${requested}\nSubject: CloudPanel SMTP relay test for ${site.domain}\n\n` +
-    `This message was sent as ${site.user} through ${path} and the ${route.profile.name} profile.\n`);
+  const path = php ? "PHP's mail()" : "sendmail";
+  // A pool's own sendmail_path would send the site's web requests around the relay.
+  const pool = php ? join(paths.phpRoot, site.phpVersion!, "fpm/pool.d", `${site.domain}.conf`) : "";
+  if (php && existsSync(pool) && /^\s*php_(?:admin_)?value\[sendmail_path\]/m.test(readFileSync(pool, "utf8"))) {
+    failAction(`${site.domain}'s PHP-FPM pool sets its own sendmail_path, so its web requests bypass the relay; remove it from ${pool}`);
+  }
+  const subject = `CloudPanel SMTP relay test for ${site.domain}`;
+  const text = `This message was sent as ${site.user} through ${path} and the ${route.profile.name} profile.\n`;
+  const message = Buffer.from(`To: ${recipient}\nFrom: ${requested}\nSubject: ${subject}\n\n${text}`);
   // Plain sendmail keeps the From the app wrote; Postfix maps only the envelope.
   let sender = requested;
   let replyTo: string | null = null;
@@ -795,9 +839,13 @@ function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], bo
     sender = prepared.sender;
     replyTo = Buffer.from(prepared.message).toString("utf8").match(/^Reply-To: (.+)$/m)?.[1] ?? null;
   }
-  const command = php ? [CLI_BIN, "smtp-submit", "-t", "-i"] : [SENDMAIL, "-t", "-i"];
+  // PHP itself, so the test also shows its sendmail_path reaches the wrapper.
+  const command = php
+    ? [join(paths.phpBinDir, `php${site.phpVersion}`), "-r", 'exit(mail($argv[1], $argv[2], $argv[3], "From: " . $argv[4]) ? 0 : 1);', "--",
+      recipient, subject, text, requested]
+    : [SENDMAIL, "-t", "-i"];
   const submit = Bun.spawnSync([paths.runuser, "-u", site.user, "--", ...command], {
-    stdin: message, stdout: "pipe", stderr: "pipe", maxBuffer: 64 * 1024, timeout: 30_000,
+    stdin: php ? "ignore" : message, stdout: "pipe", stderr: "pipe", maxBuffer: 64 * 1024, timeout: 30_000,
   });
   if (!submit.success) {
     const detail = Buffer.from(submit.stderr).toString("utf8").trim().replace(/^\[smtp\] /, "");
@@ -821,8 +869,15 @@ function reconcile(paths: SmtpPaths, policy: SmtpPolicy, { sites, skipped }: Sit
     if (known.has(site.id) || next.defaultProfileId === null || next.assignments[site.domain]) continue;
     const candidate = structuredClone(next);
     candidate.assignments[site.domain] = next.defaultProfileId;
-    // A new site whose senders another profile already uses stays out, rather than blocking a site that works.
-    if (newBlock(next, candidate, sites)) continue;
+    // A new site whose senders another profile already uses, or whose From the profile cannot form, stays out.
+    let blocks: string | null;
+    try {
+      blocks = newBlock(next, candidate, sites);
+    } catch (error) {
+      if (!(error instanceof ActionFailure)) throw error;
+      continue;
+    }
+    if (blocks) continue;
     next = candidate;
     joined++;
   }

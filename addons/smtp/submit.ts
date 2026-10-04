@@ -1,6 +1,6 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { CONFIG_DIR } from "../../cli/paths";
-import { senderFor, smtpAddress, type SmtpRewriteRule, type SmtpSubmissionRule } from "./config";
+import { senderFor, smtpAddress, trustedFile, type SmtpRewriteRule, type SmtpSubmissionRule } from "./config";
 
 /** One rule file per site uid, readable only by that site's group. */
 export const RULE_DIR = `${CONFIG_DIR}/smtp`;
@@ -15,8 +15,7 @@ export function rulePathFor(uid: number, dir = RULE_DIR): string {
 /** The site's rule, or null when there is none to apply: Postfix still enforces the envelope either way. */
 function trustedRule(path: string, rootUid: number): SmtpSubmissionRule | null {
   try {
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.uid !== rootUid || (stat.mode & 0o022) !== 0) return null;
+    if (!trustedFile(lstatSync(path), rootUid)) return null;
     const value = JSON.parse(readFileSync(path, "utf8")) as Partial<SmtpSubmissionRule>;
     if (value.version !== 1 || typeof value.site !== "string" || (value.sender !== null && typeof value.sender !== "string") ||
         !Array.isArray(value.allowed) || !value.allowed.every((domain) => typeof domain === "string")) return null;
@@ -26,35 +25,29 @@ function trustedRule(path: string, rootUid: number): SmtpSubmissionRule | null {
   }
 }
 
-/** Whether these are the arguments PHP's `mail()` passes, the only ones the rewrite handles. */
-function plainSubmission(argv: string[]): boolean {
+interface PlainSubmission { flags: string[]; senders: string[] }
+
+/** PHP `mail()`'s arguments, the only ones the rewrite handles, split into flags and envelope senders; null for any others. */
+function plainSubmission(argv: string[]): PlainSubmission | null {
+  const flags: string[] = [];
+  const senders: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
-    if (arg === "-t" || arg === "-i" || arg === "-oi") continue;
-    if (arg === "-f" || arg === "-r") {
-      if (!argv[++i]) return false;
-      continue;
-    }
-    if ((arg.startsWith("-f") || arg.startsWith("-r")) && arg.length > 2) continue;
-    return false;
+    if (arg === "-t" || arg === "-i" || arg === "-oi") flags.push(arg);
+    else if (arg === "-f" || arg === "-r") {
+      const value = argv[++i];
+      if (value === undefined) return null;
+      senders.push(value);
+    } else if (/^-[fr]/.test(arg)) senders.push(arg.slice(2));
+    else return null;
   }
-  return argv.includes("-t");
+  return flags.includes("-t") ? { flags, senders } : null;
 }
 
 /** Drops an envelope sender outside the site's domains, which Postfix would refuse, so the mail goes out under its login. */
-function envelopeWithin(argv: string[], allowed: readonly string[]): string[] {
-  const kept: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
-    if (!/^-[fr]/.test(arg)) {
-      kept.push(arg);
-      continue;
-    }
-    const value = arg.length > 2 ? arg.slice(2) : argv[++i]!;
-    const at = value.lastIndexOf("@");
-    if (at > 0 && allowed.includes(value.slice(at + 1).toLowerCase())) kept.push(...(arg.length > 2 ? [arg] : [arg, value]));
-  }
-  return kept;
+function envelopeWithin({ flags, senders }: PlainSubmission, allowed: readonly string[]): string[] {
+  const inside = (value: string) => value.lastIndexOf("@") > 0 && allowed.includes(value.slice(value.lastIndexOf("@") + 1).toLowerCase());
+  return [...flags, ...senders.filter(inside).flatMap((value) => ["-f", value])];
 }
 
 /** The app's requested From. A display name survives an address that cannot be used. */
@@ -103,7 +96,8 @@ export function prepareSubmission(message: Uint8Array, rule: SmtpRewriteRule): {
   if (boundary < 0 || boundary > MAX_HEADER_BYTES) throw new Error("message has no bounded header section");
   const separatorLength = useCrlf ? 4 : 2;
   const newline = useCrlf ? "\r\n" : "\n";
-  const headers = input.subarray(0, boundary).toString("utf8").split(/\r?\n/);
+  // latin1 maps every byte to one character and back, so headers in any charset come out as they went in.
+  const headers = input.subarray(0, boundary).toString("latin1").split(/\r?\n/);
   const kept: string[] = [];
   let fromRaw: string | null = null;
   let lastWasFrom = false;
@@ -147,12 +141,17 @@ export function prepareSubmission(message: Uint8Array, rule: SmtpRewriteRule): {
     kept.unshift(`Reply-To: ${from!.display ? `${from!.display} <${address}>` : address}`);
   }
   kept.unshift(`From: ${from?.display ? `${from.display} <${sender}>` : sender}`);
-  const head = Buffer.from(kept.join(newline) + newline + newline, "utf8");
+  const head = Buffer.from(kept.join(newline) + newline + newline, "latin1");
   return { message: Buffer.concat([head, input.subarray(boundary + separatorLength)]), sender };
 }
 
 function sendmail(path: string, argv: string[], stdin: Uint8Array | "inherit"): number {
-  return Bun.spawnSync([path, ...argv], { stdin, stdout: "inherit", stderr: "inherit" }).exitCode ?? 1;
+  try {
+    return Bun.spawnSync([path, ...argv], { stdin, stdout: "inherit", stderr: "inherit" }).exitCode ?? 1;
+  } catch (error) {
+    process.stderr.write(`[smtp] cannot run ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
 }
 
 /** Invoked as PHP's `sendmail_path`, as the site's own Unix user. */
@@ -162,9 +161,10 @@ export async function runSmtpSubmit(
 ): Promise<number> {
   const path = options.sendmailPath ?? SENDMAIL;
   const uid = options.uid ?? process.getuid?.();
-  const rule = uid === undefined || !plainSubmission(argv) ? null : trustedRule(rulePathFor(uid, options.ruleDir), options.rootUid ?? 0);
+  const plain = plainSubmission(argv);
+  const rule = uid === undefined || !plain ? null : trustedRule(rulePathFor(uid, options.ruleDir), options.rootUid ?? 0);
   if (!rule) return sendmail(path, argv, options.input ?? "inherit");
-  if (rule.sender === null) return sendmail(path, envelopeWithin(argv, rule.allowed), options.input ?? "inherit");
+  if (rule.sender === null) return sendmail(path, envelopeWithin(plain!, rule.allowed), options.input ?? "inherit");
   let input: Uint8Array;
   try {
     input = options.input ?? await readBoundedSubmission(Bun.stdin.stream());

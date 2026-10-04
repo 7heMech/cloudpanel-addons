@@ -38,7 +38,12 @@ function smtpSyncDelivery() {
   const send = form.elements.namedItem('delivery').value === 'send';
   CLP_ROOT.getElementById('smtp-relay-fields').hidden = !send;
   for (const name of ['host', 'port', 'username', 'sender']) form.elements.namedItem(name).required = send;
-  form.elements.namedItem('password').required = send && form.dataset.savedRelay !== 'yes';
+  // A saved password is kept only for the server and account it was saved for.
+  const keeps = form.dataset.savedRelay !== '' && form.dataset.savedRelay ===
+    JSON.stringify([form.elements.namedItem('host').value.trim().toLowerCase(), form.elements.namedItem('username').value]);
+  const password = form.elements.namedItem('password');
+  password.required = send && !keeps;
+  password.placeholder = keeps ? 'Leave blank to keep the saved password' : 'SMTP password';
 }
 
 function smtpEditProfile(id) {
@@ -52,8 +57,7 @@ function smtpEditProfile(id) {
   form.elements.namedItem('port').value = profile && profile.relay ? profile.relay.port : 587;
   form.elements.namedItem('username').value = profile && profile.relay ? profile.relay.username : '';
   form.elements.namedItem('sender').value = profile ? profile.sender : 'noreply@{site}';
-  form.dataset.savedRelay = profile && profile.relay ? 'yes' : 'no';
-  form.elements.namedItem('password').placeholder = profile && profile.relay ? 'Leave blank to keep the saved password' : 'SMTP password';
+  form.dataset.savedRelay = profile && profile.relay ? JSON.stringify([profile.relay.host, profile.relay.username]) : '';
   smtpSyncDelivery();
   CLP_ROOT.getElementById('smtp-profile-heading').textContent = profile ? 'Edit ' + profile.name : 'New profile';
   CLP_ROOT.getElementById('smtp-profile-dialog').showModal();
@@ -73,7 +77,7 @@ function smtpSaveProfile(event) {
 
 async function smtpDeleteProfile(id) {
   const profile = smtpState.profiles.find(function (item) { return item.id === id; });
-  const details = profile && profile.sites ? [plural(profile.sites, 'site') + ' in it stop being relayed.'] : [];
+  const details = profile && profile.sites ? [plural(profile.sites, 'site') + ' in it ' + (profile.sites === 1 ? 'stops' : 'stop') + ' being relayed.'] : [];
   const accepted = await confirmAction({
     title: 'Delete ' + smtpProfileName(id) + '?',
     text: 'Its SMTP account and From are removed.',
@@ -134,14 +138,14 @@ async function smtpAssignSelected() {
   const accepted = await confirmAction({
     title: id ? 'Send ' + plural(rows.length, 'site') + ' through ' + smtpProfileName(id) + '?' : 'Stop relaying ' + plural(rows.length, 'site') + '?',
     text: id ? 'Their mail goes through this profile\'s SMTP account from now on.' : 'Their mail is no longer relayed.',
-    details: [moving.length + ' of the ' + plural(rows.length, 'selected site') + ' change; the rest are already there.'],
+    details: [moving.length + ' of the ' + plural(rows.length, 'selected site') + (moving.length === 1 ? ' changes' : ' change') + '; the rest are already there.'],
     confirmLabel: id ? 'Assign' : 'Stop relaying',
     danger: !id,
   });
   if (!accepted) return;
   smtpPost('/api/assign', { domains: rows.map(function (row) { return row.dataset.domain; }), profileId: id }, id
-    ? plural(rows.length, 'site') + ' now send through ' + smtpProfileName(id) + '.'
-    : plural(rows.length, 'site') + ' are no longer relayed.');
+    ? plural(rows.length, 'site') + (rows.length === 1 ? ' now sends' : ' now send') + ' through ' + smtpProfileName(id) + '.'
+    : plural(rows.length, 'site') + (rows.length === 1 ? ' is' : ' are') + ' no longer relayed.');
 }
 
 function smtpList(value) {

@@ -1,3 +1,5 @@
+import type { Stats } from "node:fs";
+
 /** Shared by the root action and the PHP mail wrapper, so nothing here may hold a password for the wrapper. */
 export interface SmtpRelay {
   host: string;
@@ -33,6 +35,11 @@ const ADDRESS = new RegExp(`^[A-Za-z0-9._%+'-]+@(${LABEL}(?:\\.${LABEL})+)$`, "i
 
 export const DEFAULT_SENDER = "noreply@{site}";
 export const FALLBACK_LOCAL = "noreply";
+
+/** A regular file, not a link, that only `uid` can have written. */
+export function trustedFile(stat: Stats, uid: number): boolean {
+  return stat.isFile() && stat.uid === uid && (stat.mode & 0o022) === 0;
+}
 
 export function smtpDomain(value: unknown): string {
   if (typeof value !== "string") throw new Error("domain must be a hostname");

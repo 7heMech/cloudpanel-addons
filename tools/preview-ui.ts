@@ -743,10 +743,11 @@ const server = Bun.serve({
       html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {
       // ?profile=<id> (or ?profile= for a new one) and ?domains=<site> open a dialog on load, like ?confirm= does.
-      const opener = url.searchParams.has("profile") ? `smtpEditProfile(${JSON.stringify(url.searchParams.get("profile"))})`
-        : url.searchParams.has("domains") ? `smtpEditGrants(${JSON.stringify(url.searchParams.get("domains"))})` : "";
+      const arg = (name: string) => JSON.stringify(url.searchParams.get(name)).replaceAll("<", "\\u003c");
+      const opener = url.searchParams.has("profile") ? `smtpEditProfile(${arg("profile")})`
+        : url.searchParams.has("domains") ? `smtpEditGrants(${arg("domains")})` : "";
       html = smtpLayout("SMTP Relay", smtpDashboardView(smtpPreviewState(url)), notice)
-        .replace("</body>", opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
+        .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
       html = cloudflareLayout("Cloudflare IP access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {

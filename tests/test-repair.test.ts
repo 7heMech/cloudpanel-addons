@@ -66,6 +66,7 @@ const PROBE = String.raw`
     },
     ensureServiceUser: () => calls.push("ensureServiceUser"),
     ensureTimerArmed: (unit) => calls.push("ensureTimerArmed:" + unit),
+    ensurePathWatching: (unit) => calls.push("ensurePathWatching:" + unit),
     hardenBackups: () => calls.push("hardenBackups"),
     reconcilePanelIdentity: () => { calls.push("reconcilePanelIdentity"); provisioning.sudoers = true; },
     installUnits: () => { calls.push("installUnits"); provisioning.units = true; return false; },
