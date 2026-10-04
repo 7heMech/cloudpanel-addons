@@ -38,7 +38,8 @@ const ROOT_ONLY: Record<string, { verb: string; why: string }[]> = {
     { verb: "prune", why: "retention sweeping, run by the reconcile timer" },
   ],
   smtp: [
-    { verb: "reconcile", why: "run by the regular repair timer" },
+    { verb: "reconcile", why: "run by repair and on enable" },
+    { verb: "sync-sites", why: "run by the new-site watcher" },
     { verb: "deactivate", why: "run locally during disable or uninstall" },
   ],
 };

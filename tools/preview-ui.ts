@@ -49,19 +49,32 @@ const sites: SiteSummary[] = [
 const siteVarnish: Record<string, boolean> = { "www.example.com": true };
 const PREVIEW_PUBLIC_IP = "203.0.113.10";
 
+/** Profiles and a mixed fleet. ?setup shows a first visit, ?empty a box with no sites. */
 function smtpPreviewState(url: URL): SmtpState {
-  const configured = !url.searchParams.has("setup");
+  const setup = url.searchParams.has("setup");
+  const dontSend = { id: "dont-send", name: "Don't send", relay: null, sender: "noreply@{site}", sites: setup ? 0 : 1 };
+  const profiles = setup ? [dontSend] : [
+    { id: "postmark", name: "Postmark", relay: { host: "smtp.postmarkapp.com", port: 587, username: "server-token" }, sender: "{from.local}@{site}", sites: 2 },
+    { id: "agency-gmail", name: "Agency Gmail", relay: { host: "smtp.gmail.com", port: 587, username: "alerts@agency.example" }, sender: "alerts@agency.example", sites: 1 },
+    dontSend,
+  ];
+  const site = (domain: string, user: string, type: string, phpVersion: string | null, profileId: string | null, sender: string | null,
+    grants: string[] = [], blocked: string | null = null) =>
+    ({ domain, user, type, phpVersion, profileId: setup ? null : profileId, sender: setup ? null : sender, grants: setup ? [] : grants, blocked: setup ? null : blocked });
   return {
-    configured,
-    relay: configured ? { host: "mail.example.com", port: 587, username: "cloudpanel-relay@example.com", hasPassword: true } : null,
-    relayOverrides: configured ? { "shop.example.com": { host: "smtp.provider.test", port: 587, username: "shop@example.com", hasPassword: true } } : {},
-    defaultRule: { mode: "force", sender: "noreply@{domain}", domains: [], addresses: [] },
+    profiles,
+    defaultProfileId: setup ? null : "postmark",
     sites: url.searchParams.has("empty") ? [] : [
-      { domain: "www.example.com", user: "example", phpVersion: "8.3", overridden: false,
-        rule: { mode: "force", sender: "noreply@{domain}", domains: [], addresses: [] }, senderPreview: "noreply@www.example.com" },
-      { domain: "shop.example.com", user: "shop", phpVersion: "8.3", overridden: true,
-        rule: { mode: "allow", sender: "noreply@{domain}", domains: ["news.shop.example.com"], addresses: [] }, senderPreview: "noreply@shop.example.com" },
+      site("www.example.com", "example", "php", "8.3", "postmark", "{from.local}@example.com"),
+      site("shop.example.com", "shop", "php", "8.3", "postmark", "{from.local}@shop.example.com", ["news.shop.example.com"]),
+      site("blog.client.org", "blog", "php", "8.2", "agency-gmail", "alerts@agency.example"),
+      site("staging.example.com", "staging", "php", "8.3", "dont-send", "noreply@staging.example.com"),
+      site("news.shop.example.com", "news", "php", "8.3", null, null, [],
+        "shop.example.com sends as news.shop.example.com through Postmark"),
+      site("app.example.com", "app", "nodejs", null, null, null),
+      site("docs.example.com", "docs", "static", null, null, null),
     ],
+    skipped: setup || url.searchParams.has("empty") ? [] : [{ domain: "old.example.com", reason: "it has no Unix account" }],
   };
 }
 
@@ -729,7 +742,12 @@ const server = Bun.serve({
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {
-      html = smtpLayout("SMTP Relay", smtpDashboardView(smtpPreviewState(url)), notice);
+      // ?profile=<id> (or ?profile= for a new one) and ?domains=<site> open a dialog on load, like ?confirm= does.
+      const arg = (name: string) => JSON.stringify(url.searchParams.get(name)).replaceAll("<", "\\u003c");
+      const opener = url.searchParams.has("profile") ? `smtpEditProfile(${arg("profile")})`
+        : url.searchParams.has("domains") ? `smtpEditGrants(${arg("domains")})` : "";
+      html = smtpLayout("SMTP Relay", smtpDashboardView(smtpPreviewState(url)), notice)
+        .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
       html = cloudflareLayout("Cloudflare IP access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {

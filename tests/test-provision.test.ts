@@ -70,6 +70,37 @@ fi
   }
 });
 
+test("path watcher repair restarts a watcher that stopped", () => {
+  const root = mkdtempSync(join(tmpdir(), "path-watch-test-"));
+  const bin = join(root, "bin");
+  const calls = join(root, "systemctl.calls");
+  mkdirSync(bin);
+  const systemctl = join(bin, "systemctl");
+  writeFileSync(systemctl, `#!/bin/sh
+printf '%s\n' "$*" >> "$SYSTEMCTL_CALLS"
+if [ "$1" = "is-enabled" ]; then echo enabled; fi
+if [ "$1" = "restart" ]; then touch "$SYSTEMCTL_CALLS.restarted"; fi
+if [ "$1" = "is-active" ]; then
+  if [ -f "$SYSTEMCTL_CALLS.restarted" ]; then echo active; else echo inactive; exit 3; fi
+fi
+`);
+  chmodSync(systemctl, 0o755);
+  try {
+    execFileSync(process.execPath, ["-e", `
+      import { ensurePathWatching } from "./cli/provision.ts";
+      ensurePathWatching("test-watch.path", true);
+    `], { cwd: REPO, env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, SYSTEMCTL_CALLS: calls } });
+    expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+      "is-enabled test-watch.path",
+      "is-active test-watch.path",
+      "restart test-watch.path",
+      "is-active test-watch.path",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("native backup cron is installed, preserves custom schedules, and is removed on disable", () => {
   const root = mkdtempSync(join(tmpdir(), "instatic-cron-"));
   const path = join(root, "instatic-backup");
