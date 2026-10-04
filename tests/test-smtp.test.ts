@@ -278,7 +278,7 @@ test("a site can never use a sending domain that routes through another profile"
   await act(b, "assign", { domains: ["www.example.com"], profileId: "postmark" });
   await act(b, "assign", { domains: ["shop.test"], profileId: "agency" });
   await expect(act(b, "save-grants", { domain: "shop.test", domains: ["example.com"] }))
-    .rejects.toThrow("shop.test can send as @example.com, which www.example.com sends through the Postmark profile");
+    .rejects.toThrow("shop.test can send as example.com, which www.example.com sends through the Postmark profile");
   await expect(act(b, "save-grants", { domain: "app.test", domains: ["shop.test"] })).rejects.toThrow("Agency profile");
   expect((await act(b, "list") as SmtpState).sites.every((site) => site.grants.length === 0)).toBe(true);
   expect(file(b, "transports")).toContain("/^alerts@agency\\.example$/ smtp:[smtp.gmail.com]:587\n");
@@ -296,9 +296,12 @@ test("a site created onto another profile's domain is blocked, and nothing else 
 
   // It cannot join the default, and in no profile it could still send as news.test through Postmark.
   expect(await act(b, "reconcile")).toEqual({ repaired: 0, joined: 0 });
-  const why = "news.test can send as @news.test, which www.example.com sends through the Postmark profile";
+  const why = "news.test can send as news.test, which www.example.com sends through the Postmark profile";
   expect((await act(b, "list") as SmtpState).sites.find((site) => site.domain === "news.test"))
-    .toMatchObject({ profileId: null, sender: null, blocked: why });
+    .toMatchObject({ profileId: null, sender: null, blocked: "www.example.com sends as news.test through Postmark" });
+  const html = dashboardContent(await act(b, "list") as SmtpState);
+  expect(html).toContain("Blocked: www.example.com sends as news.test through Postmark");
+  expect(html).toContain('<td data-label="Also sends as" class="wide-cell">news.test</td>');
   expect(file(b, "local-senders")).toContain("\nnews news\n");
   expect(JSON.parse(readFileSync(join(b.ruleDir, "2004.json"), "utf8"))).toEqual({ version: 1, site: "news.test", sender: null, allowed: [] });
 

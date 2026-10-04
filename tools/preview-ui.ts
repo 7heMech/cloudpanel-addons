@@ -60,7 +60,7 @@ function smtpPreviewState(url: URL): SmtpState {
   ];
   const site = (domain: string, user: string, type: string, phpVersion: string | null, profileId: string | null, sender: string | null,
     grants: string[] = [], blocked: string | null = null) =>
-    ({ domain, user, type, phpVersion, profileId: setup ? null : profileId, sender: setup ? null : sender, grants, blocked: setup ? null : blocked });
+    ({ domain, user, type, phpVersion, profileId: setup ? null : profileId, sender: setup ? null : sender, grants: setup ? [] : grants, blocked: setup ? null : blocked });
   return {
     profiles,
     defaultProfileId: setup ? null : "postmark",
@@ -70,7 +70,7 @@ function smtpPreviewState(url: URL): SmtpState {
       site("blog.client.org", "blog", "php", "8.2", "agency-gmail", "alerts@agency.example"),
       site("staging.example.com", "staging", "php", "8.3", "dont-send", "noreply@staging.example.com"),
       site("news.shop.example.com", "news", "php", "8.3", null, null, [],
-        "news.shop.example.com can send as @news.shop.example.com, which shop.example.com sends through the Postmark profile"),
+        "shop.example.com sends as news.shop.example.com through Postmark"),
       site("app.example.com", "app", "nodejs", null, null, null),
       site("docs.example.com", "docs", "static", null, null, null),
     ],

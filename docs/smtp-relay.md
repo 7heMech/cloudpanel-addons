@@ -14,7 +14,7 @@ plugin: their `mail()` goes through the relay as it is.
 3. Assign sites to profiles, one at a time or in bulk, and choose the profile new
    sites join. A site in no profile is not relayed. A site marked **Blocked**
    could send as a domain another site sends through a different profile; put
-   both in one profile or remove the domain from that site's **Domains**.
+   both in one profile or remove the domain under **Extra sending domains**.
 4. Send a test to an inbox you control. It runs as the site's own user, through
    PHP's `mail()` for a PHP site and sendmail for any other, and confirms that
    Postfix queued it. Delivery results are in `journalctl -u postfix@-`, or in
@@ -32,8 +32,8 @@ not create mailboxes, verify domains at the provider, or set DNS records.
 | `alerts@agency.com` | `alerts@agency.com` | `alerts@agency.com` |
 
 `{site}` is the site's domain without a leading `www.`. `{from.local}` and
-`{from.domain}` keep the app's From only on the site's own domain or a domain
-added under **Domains**. Whenever the address changes, the original moves to
+`{from.domain}` keep the app's From only on the site's own domain or one of its
+**Extra sending domains**. Whenever the address changes, the original moves to
 `Reply-To`, and the display name is kept.
 
 ## Other apps
@@ -42,12 +42,12 @@ Node.js, Python and other apps send with `sendmail`, which the addon puts on the
 default PATH while any site is relayed, so Nodemailer's `sendmail: true`
 transport works as it is. Their From is sent as written, and Nodemailer also
 uses it as the envelope sender, which Postfix accepts only on the site's domain,
-one added under **Domains**, or the profile's From.
+one of its extra sending domains, or the profile's From.
 
 ## Limits
 
-- Postfix lets each site send only as its own domains and those added under
-  Domains, so a site can only use its own profile. The From header is rewritten
+- Postfix lets each site send only as its own domains and its extra sending
+  domains, so a site can only use its own profile. The From header is rewritten
   only for PHP `mail()`: code that calls sendmail directly can still put another
   domain in From. A shared account allowed to send as many domains, such as one
   Mailcow mailbox permitted to send as all of them, then lets any of its sites

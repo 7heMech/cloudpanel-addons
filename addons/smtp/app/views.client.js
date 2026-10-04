@@ -148,20 +148,41 @@ function smtpList(value) {
   return String(value || '').split(/[\s,]+/).map(function (part) { return part.trim(); }).filter(Boolean);
 }
 
-function smtpEditGrants(domain) {
+function smtpSiteGrants(domain) {
   const site = smtpState.sites.find(function (item) { return item.domain === domain; });
-  if (!site) return;
+  return site ? site.grants : [];
+}
+
+/** With no domain, opens on no site, and choosing one shows the domains it already has. */
+function smtpEditGrants(domain) {
   const form = CLP_ROOT.getElementById('smtp-grants-form');
   form.elements.namedItem('domain').value = domain;
-  form.elements.namedItem('domains').value = site.grants.join('\n');
-  CLP_ROOT.getElementById('smtp-grants-heading').textContent = 'Sending domains for ' + domain;
+  smtpLoadGrants();
   CLP_ROOT.getElementById('smtp-grants-dialog').showModal();
+}
+
+function smtpLoadGrants() {
+  const form = CLP_ROOT.getElementById('smtp-grants-form');
+  form.elements.namedItem('domains').value = smtpSiteGrants(form.elements.namedItem('domain').value).join('\n');
 }
 
 function smtpSaveGrants(event) {
   event.preventDefault();
   const fields = smtpFields(event.currentTarget);
-  smtpPost('/api/grants', { domain: fields.domain, domains: smtpList(fields.domains) }, 'Saved the sending domains of ' + fields.domain + '.');
+  const domains = smtpList(fields.domains);
+  smtpPost('/api/grants', { domain: fields.domain, domains: domains }, domains.length
+    ? fields.domain + ' can now also send as ' + domains.join(', ') + '.'
+    : fields.domain + ' now sends only as its own domain.');
+}
+
+async function smtpRemoveGrants(domain) {
+  const accepted = await confirmAction({
+    title: 'Stop ' + domain + ' sending as ' + smtpSiteGrants(domain).join(', ') + '?',
+    text: 'It then sends only as its own domain.',
+    confirmLabel: 'Remove',
+    danger: true,
+  });
+  if (accepted) smtpPost('/api/grants', { domain: domain, domains: [] }, domain + ' now sends only as its own domain.');
 }
 
 async function smtpSendTest(event) {

@@ -4,12 +4,12 @@
 .default-choice { flex:0 0 260px; max-width:100%; }
 .state-default { color:var(--accent); border-color:var(--accent); margin-left:8px; }
 .numeric { text-align:right; font-variant-numeric:tabular-nums; }
-.smtp-form h2 { margin-bottom:6px; }
-.smtp-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
-.smtp-form label,.smtp-dialog label { display:flex; flex-direction:column; gap:6px; font-weight:600; margin:12px 0; }
-.smtp-form input,.smtp-form select,.smtp-dialog input,.smtp-dialog select,.smtp-dialog textarea { width:100%; box-sizing:border-box; padding:9px 10px; border:1px solid var(--border); border-radius:7px; background:var(--surface); color:var(--text); font:inherit; font-weight:400; }
-.smtp-form .actions { margin-top:12px; }
-.smtp-site-table .hint,.smtp-profile-table .hint { display:block; }
+.card-header p.hint { margin:5px 0 0; }
+.smtp-relay-fields { margin-top:20px; }
+.smtp-test-actions { margin-top:25px; }
+#smtp-grants-dialog { max-width:560px; }
+.card-header > .btn { flex-shrink:0; white-space:nowrap; }
+:is(.smtp-site-table,.smtp-profile-table,.smtp-grants-table) .hint { display:block; }
 .smtp-site-table .mono,.smtp-profile-table .mono { overflow-wrap:anywhere; }
 /* Tables, not cards: a hostname breaks only when it cannot fit its column, and
    a row holding two of them keeps CloudPanel's gutter only at its edges. */
@@ -19,21 +19,19 @@
   :is(.smtp-site-table,.smtp-profile-table) :is(th,td):not(:last-child) { padding-right:12px; }
   .smtp-site-table .type-cell { white-space:nowrap; }
   .smtp-site-table td select { min-width:170px; }
+  :is(.smtp-profile-table,.smtp-grants-table) .action-cell .actions { justify-content:flex-end; }
 }
 .smtp-site-table .blocked { color:var(--warn); }
 .skipped-note { padding:16px 32px 25px; margin:0; }
 .toolbar #bulk-profile { width:auto; min-width:200px; max-width:100%; }
-.smtp-dialog { width:min(650px,calc(100% - 24px)); max-height:calc(100dvh - 24px); overflow:auto; padding:24px; border:1px solid var(--border); border-radius:12px; background:var(--surface); color:var(--text); }
-.smtp-dialog::backdrop { background:rgb(10 20 30 / 55%); }
-.smtp-dialog h2 { margin-top:0; }
 /* fleet-row-selection */
 @media (max-width:760px) {
-  .smtp-grid { grid-template-columns:1fr; gap:0; }
   .default-card { flex-direction:column; gap:12px; }
   .default-choice { flex:1 1 auto; width:100%; }
   .toolbar #bulk-profile { flex:1 1 100%; }
   .toolbar .toolbar-end { margin-left:0; }
   .skipped-note { padding:16px 20px 20px; }
+  .smtp-grants-card > .card-header { flex-direction:column; align-items:flex-start; }
 }
 /* The card each row becomes carries its own selection control. */
 @media (max-width:940px) {

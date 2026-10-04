@@ -85,7 +85,7 @@ export interface SmtpSiteView {
   profileId: string | null;
   /** The From template with {site} filled in, or null when the site's mail is not relayed. */
   sender: string | null;
-  /** Why the site is not relayed although it is in a profile, or may not use its own domains although it is in none. */
+  /** Which site and profile keep this one from being relayed, or from using its own domains when it is in no profile. */
   blocked: string | null;
   grants: string[];
 }
@@ -324,11 +324,13 @@ interface Route {
   rule: SmtpRewriteRule;
   /** Envelope senders this site's login may use, as `@domain` or an exact address. */
   envelopes: string[];
-  /** Why the site's login may send only as its bare name: its senders reach another profile's account. */
-  blocked: string | null;
+  /** Why the site's login may send only as its bare name: it could send as `as`, which `owner` sends through `profile`. */
+  blocked: { as: string; owner: string; profile: string } | null;
 }
 
 const domainOf = (pattern: string): string => pattern.slice(pattern.lastIndexOf("@") + 1);
+const blockReason = ({ site, blocked }: Route): string =>
+  `${site.domain} can send as ${blocked!.as}, which ${blocked!.owner} sends through the ${blocked!.profile} profile`;
 
 /**
  * Each site's rule and envelope senders. A site that could send through
@@ -351,7 +353,7 @@ function routesFor(policy: SmtpPolicy, sites: SmtpSiteRow[]): Route[] {
       const clash = (claims.get(domainOf(pattern)) ?? []).find(([claimed, owner]) => owner.profile!.id !== route.profile?.id &&
         (claimed === pattern || claimed.startsWith("@") || pattern.startsWith("@")));
       if (!clash) continue;
-      route.blocked = `${route.site.domain} can send as ${pattern}, which ${clash[1].site.domain} sends through the ${clash[1].profile!.name} profile`;
+      route.blocked = { as: pattern.replace(/^@/, ""), owner: clash[1].site.domain, profile: clash[1].profile!.name };
       route.profile = null;
       route.envelopes = [];
       break;
@@ -366,7 +368,7 @@ function routesFor(policy: SmtpPolicy, sites: SmtpSiteRow[]): Route[] {
 /** The first site `next` blocks that `before` did not, keyed with its profile so a blocked site moved elsewhere counts. */
 function newBlock(before: SmtpPolicy, next: SmtpPolicy, sites: SmtpSiteRow[]): string | null {
   const blocks = (policy: SmtpPolicy) => new Map(routesFor(policy, sites).filter((route) => route.blocked)
-    .map((route) => [`${route.site.domain} ${policy.assignments[route.site.domain] ?? ""}`, route.blocked!]));
+    .map((route) => [`${route.site.domain} ${policy.assignments[route.site.domain] ?? ""}`, blockReason(route)]));
   const existing = blocks(before);
   return [...blocks(next)].find(([key]) => !existing.has(key))?.[1] ?? null;
 }
@@ -707,7 +709,7 @@ function stateOf(policy: SmtpPolicy, { sites, skipped }: SiteSet): SmtpState {
         domain: site.domain, user: site.user, type: site.type, phpVersion: site.phpVersion,
         profileId: profiles.get(policy.assignments[site.domain] ?? "")?.id ?? null,
         sender: route.profile ? route.profile.sender.replaceAll("{site}", route.rule.site) : null,
-        blocked: route.blocked,
+        blocked: route.blocked && `${route.blocked.owner} sends as ${route.blocked.as} through ${route.blocked.profile}`,
         grants: policy.grants[site.domain] ?? [],
       };
     }),
@@ -776,7 +778,7 @@ function assignRequest(body: Record<string, unknown>): { domains: string[]; prof
 function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], body: Record<string, unknown>): SmtpTestResult {
   const site = requireSite(sites, smtpDomain(body.domain));
   const route = routesFor(policy, sites).find((candidate) => candidate.site === site)!;
-  if (route.blocked) failAction(`${site.domain} is not relayed: ${route.blocked}`);
+  if (route.blocked) failAction(`${site.domain} is not relayed: ${blockReason(route)}`);
   if (!route.profile) failAction(`${site.domain} is in no profile, so its mail is not relayed`);
   const recipient = smtpAddress(body.recipient);
   const php = site.phpVersion !== null;
