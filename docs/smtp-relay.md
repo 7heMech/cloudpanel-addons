@@ -36,6 +36,14 @@ not create mailboxes, verify domains at the provider, or set DNS records.
 added under **Domains**. Whenever the address changes, the original moves to
 `Reply-To`, and the display name is kept.
 
+## Other apps
+
+Node.js, Python and other apps send with `sendmail`, which the addon puts on the
+default PATH while any site is relayed, so Nodemailer's `sendmail: true`
+transport works as it is. Their From is sent as written, and Nodemailer also
+uses it as the envelope sender, which Postfix accepts only on the site's domain,
+one added under **Domains**, or the profile's From.
+
 ## Limits
 
 - Postfix lets each site send only as its own domains and those added under

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closedRelay, executeSmtpAction, type SmtpActionOptions, type SmtpSiteRow, type SmtpState, type SmtpTestResult } from "../addons/smtp/action";
@@ -150,7 +150,7 @@ test("relay restrictions lose only permit_mynetworks", () => {
   expect(closedRelay("permit_mynetworks")).toBe("permit_sasl_authenticated, defer_unauth_destination");
 });
 
-interface Box { options: SmtpActionOptions; settings: Map<string, string>; commands: string[]; dir: string; postfixDir: string; phpRoot: string; ruleDir: string; fpmBinDir: string }
+interface Box { options: SmtpActionOptions; settings: Map<string, string>; commands: string[]; dir: string; postfixDir: string; phpRoot: string; ruleDir: string; fpmBinDir: string; sendmailLink: string }
 
 function box(sites: SmtpSiteRow[]): Box {
   const dir = scratch();
@@ -158,7 +158,9 @@ function box(sites: SmtpSiteRow[]): Box {
   const phpRoot = join(dir, "php");
   const ruleDir = join(dir, "rules");
   const fpmBinDir = join(dir, "sbin");
+  const sendmailLink = join(dir, "bin", "sendmail");
   mkdirSync(postfixDir);
+  mkdirSync(join(dir, "bin"));
   // 7.4's PHP-FPM was removed and its conf.d left behind.
   for (const path of ["8.2/fpm/conf.d", "8.2/cli/conf.d", "8.3/cli/conf.d", "7.4/fpm/conf.d"]) mkdirSync(join(phpRoot, path), { recursive: true });
   mkdirSync(fpmBinDir);
@@ -187,14 +189,14 @@ function box(sites: SmtpSiteRow[]): Box {
   const options: SmtpActionOptions = {
     processUid: 0,
     paths: {
-      phpRoot, fpmBinDir, postfixDir, ruleDir,
+      phpRoot, fpmBinDir, postfixDir, ruleDir, sendmailLink,
       stateFile: join(dir, "state.json"), originalFile: join(dir, "original.json"), lockFile: join(dir, "lock", "smtp.lock"),
       runuser: "/bin/true", rootUid: process.getuid!(),
     },
     sites,
     run,
   };
-  return { options, settings, commands, dir, postfixDir, phpRoot, ruleDir, fpmBinDir };
+  return { options, settings, commands, dir, postfixDir, phpRoot, ruleDir, fpmBinDir, sendmailLink };
 }
 
 const gid = process.getgid!();
@@ -250,6 +252,7 @@ test("routing a site binds every login, relays by sender, closes loopback, and i
     .toEqual({ version: 1, site: "example.com", sender: "{from.local}@{site}", allowed: ["example.com", "www.example.com"] });
   // shop.test is in no profile, so it keeps its From and only an envelope sender Postfix would refuse is dropped.
   expect(JSON.parse(readFileSync(join(b.ruleDir, "2002.json"), "utf8"))).toEqual({ version: 1, site: "shop.test", sender: null, allowed: ["shop.test"] });
+  expect(readlinkSync(b.sendmailLink)).toBe("/usr/sbin/sendmail");
 
   const html = dashboardContent(await act(b, "list") as SmtpState);
   expect(html).not.toContain("pa$1ss");
@@ -263,6 +266,9 @@ test("routing a site binds every login, relays by sender, closes loopback, and i
   b.commands.length = 0;
   await act(b, "sync-sites");
   expect(b.commands).toEqual([]);
+  rmSync(b.sendmailLink);
+  expect(await act(b, "reconcile")).toEqual({ repaired: 1, joined: 0 });
+  expect(readlinkSync(b.sendmailLink)).toBe("/usr/sbin/sendmail");
 });
 
 test("a site can never use a sending domain that routes through another profile", async () => {
@@ -359,7 +365,17 @@ test("new sites join the default profile, and stopping all routing restores Post
   expect(readdirSync(b.postfixDir)).toEqual([]);
   expect(existsSync(join(b.phpRoot, "8.2/fpm/conf.d/99-clp-addons-smtp.ini"))).toBe(false);
   expect(readdirSync(b.ruleDir)).toEqual([]);
+  expect(readdirSync(join(b.dir, "bin"))).toEqual([]);
   expect(existsSync(join(b.dir, "original.json"))).toBe(false);
+});
+
+test("a sendmail the operator already put on the default PATH is left alone", async () => {
+  const b = box(SITES);
+  writeFileSync(b.sendmailLink, "#!/bin/sh\n");
+  await act(b, "save-profile", POSTMARK);
+  await act(b, "assign", { domains: ["app.test"], profileId: "postmark" });
+  await act(b, "deactivate");
+  expect(readFileSync(b.sendmailLink, "utf8")).toBe("#!/bin/sh\n");
 });
 
 test("the test mail goes through the site's own path and reports what the rewrite does", async () => {
@@ -389,4 +405,5 @@ test("deactivate withdraws everything even when the saved policy is unreadable",
   expect(readdirSync(b.postfixDir)).toEqual([]);
   expect(b.settings.get("smtp_tls_policy_maps")).toBe("hash:/etc/postfix/operator-tls");
   expect(existsSync(join(b.phpRoot, "8.2/cli/conf.d/99-clp-addons-smtp.ini"))).toBe(false);
+  expect(readdirSync(join(b.dir, "bin"))).toEqual([]);
 });

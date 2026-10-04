@@ -12,7 +12,7 @@
  * header. Postfix cannot fix a From on another domain without a milter.
  */
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   ActionFailure, emitActionError, emitActionOk, failAction, nameSlug, oneLine, runCommand, withFileLock,
@@ -114,6 +114,7 @@ export interface SmtpPaths {
   lockFile: string;
   ruleDir: string;
   postfixDir: string;
+  sendmailLink: string;
   runuser: string;
   rootUid: number;
 }
@@ -136,6 +137,7 @@ export const DEFAULT_SMTP_PATHS: SmtpPaths = {
   lockFile: "/run/lock/clp-addons/smtp.lock",
   ruleDir: RULE_DIR,
   postfixDir: "/etc/postfix",
+  sendmailLink: "/usr/local/bin/sendmail",
   runuser: "/usr/sbin/runuser",
   rootUid: 0,
 };
@@ -627,6 +629,19 @@ function syncRuleFiles(paths: SmtpPaths, routes: Route[]): void {
   }
 }
 
+/** The default PATH leaves out /usr/sbin, where apps that run `sendmail` by name, such as Nodemailer, would not find it. */
+function syncSendmailLink(paths: SmtpPaths, install: boolean): number {
+  let target: string | null = null;
+  try {
+    target = lstatSync(paths.sendmailLink).isSymbolicLink() ? readlinkSync(paths.sendmailLink) : "";
+  } catch {}
+  // Whatever else is already there is the operator's.
+  if (install && target === null) symlinkSync(SENDMAIL, paths.sendmailLink);
+  else if (!install && target === SENDMAIL) rmSync(paths.sendmailLink);
+  else return 0;
+  return 1;
+}
+
 // ---------------------------------------------------------------------------
 // Applying a policy
 // ---------------------------------------------------------------------------
@@ -634,10 +649,11 @@ function syncRuleFiles(paths: SmtpPaths, routes: Route[]): void {
 function withdrawAll(paths: SmtpPaths, run: Run): void {
   syncPhpIni(paths, false, run);
   syncRuleFiles(paths, []);
+  syncSendmailLink(paths, false);
   withdrawPostfix(paths, run);
 }
 
-/** Converges the box on a policy; returns how many PHP conf.d files it had to write. */
+/** Converges the box on a policy; returns how many of its mail settings it had to put back. */
 function applyConfiguration(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], run: Run): number {
   const routes = routesFor(policy, sites);
   if (!routes.some((route) => route.profile)) {
@@ -646,7 +662,7 @@ function applyConfiguration(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSit
   }
   applyPostfix(paths, routes, run);
   syncRuleFiles(paths, routes);
-  return syncPhpIni(paths, true, run);
+  return syncPhpIni(paths, true, run) + syncSendmailLink(paths, true);
 }
 
 /** Saves a policy only once the box runs it, and puts the old one back if it could not. */

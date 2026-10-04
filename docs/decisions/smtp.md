@@ -69,6 +69,11 @@ original arguments, and Postfix still enforces the envelope. The panel's own
 PHP-FPM reads the 8.1 conf.d and passes through this way. Laravel and Symfony
 sendmail transports run `sendmail -bs` themselves and never reach the wrapper.
 
+Other apps run sendmail themselves, often by name, as Nodemailer does. The
+default PATH leaves out `/usr/sbin`, so while any site is routed,
+`/usr/local/bin/sendmail` links to `/usr/sbin/sendmail`, unless something else
+is already there.
+
 ## State and changes
 
 Credentials live in `/var/lib/clp-addons/smtp/config.json` (0600). The manager

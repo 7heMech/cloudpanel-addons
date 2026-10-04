@@ -20,7 +20,7 @@ export const SMTP_ADDON: AddonDefinition = {
       const result = await executeSmtpAction(["reconcile"], (options ?? {}) as SmtpActionOptions) as { repaired: number; joined: number };
       const done = [
         ...(result.joined ? [`${count(result.joined, "new site")} joined the default profile`] : []),
-        ...(result.repaired ? [`${count(result.repaired, "PHP mail setting")} restored`] : []),
+        ...(result.repaired ? [`${count(result.repaired, "mail setting")} restored`] : []),
       ];
       return done.length ? done.join(", ") : null;
     },
