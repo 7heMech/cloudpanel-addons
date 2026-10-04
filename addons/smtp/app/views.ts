@@ -37,6 +37,9 @@ function bulkOptions(profiles: SmtpProfileView[]): string {
     .join("");
 }
 
+/** Lets an address wrap after its @ rather than inside its name or domain. */
+const wrappable = (address: string): string => esc(address).replace("@", "@<wbr>");
+
 function profileRow(profile: SmtpProfileView, isDefault: boolean): string {
   const through = profile.relay
     ? `${esc(profile.relay.host)}:${profile.relay.port}<span class="hint">${esc(profile.relay.username)}</span>`
@@ -44,7 +47,7 @@ function profileRow(profile: SmtpProfileView, isDefault: boolean): string {
   return `<tr data-profile="${esc(profile.id)}">
     <td class="site-cell"><strong>${esc(profile.name)}</strong>${isDefault ? '<span class="badge state-default">Default for new sites</span>' : ""}</td>
     <td data-label="Sends through" class="wide-cell">${through}</td>
-    <td data-label="From" class="wide-cell">${profile.relay ? `<code>${esc(profile.sender)}</code>` : "—"}</td>
+    <td data-label="From" class="wide-cell">${profile.relay ? `<span class="mono">${wrappable(profile.sender)}</span>` : "—"}</td>
     <td data-label="Sites" class="numeric">${profile.sites}</td>
     <td data-label="Actions" class="action-cell"><div class="actions">
       <button class="btn" type="button" onclick="smtpEditProfile('${esc(profile.id)}')">Edit</button>
@@ -53,12 +56,9 @@ function profileRow(profile: SmtpProfileView, isDefault: boolean): string {
   </tr>`;
 }
 
-/** Lets an address wrap after its @ and dots, so a long one narrows the column instead of widening the table. */
-const wrappable = (address: string): string => esc(address).replace(/[@.]/g, "$&<wbr>");
-
 function siteRow(site: SmtpSiteView, profiles: SmtpProfileView[]): string {
   const from = site.blocked ? `<span class="hint blocked">Blocked: ${esc(site.blocked)}</span>`
-    : site.sender === null ? '<span class="hint">Not relayed</span>' : `<code>${wrappable(site.sender)}</code>`;
+    : site.sender === null ? '<span class="hint">Not relayed</span>' : `<span class="mono">${wrappable(site.sender)}</span>`;
   const grants = site.grants.length ? `<span class="hint">Also sends as ${site.grants.map(esc).join(", ")}</span>` : "";
   return `<tr data-domain="${esc(site.domain)}" data-profile-id="${esc(site.profileId ?? "")}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this, smtpPaintSelection)" onkeydown="toggleSiteSelection(event, this, smtpPaintSelection)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="smtpPaintSelection()" aria-label="Select ${esc(site.domain)}"></td>
