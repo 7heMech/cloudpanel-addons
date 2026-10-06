@@ -569,14 +569,19 @@ export function adminGate(auth: AuthenticatedRequest | null): Response | null {
   return jsonResponse({ ok: false, error: "administrator role required" }, { status: 403 });
 }
 
+/** The CloudPanel session id a request carries, when it is well formed. */
+export function panelSessionId(req: Request): string | null {
+  const sessionId = readCookie(req, SESSION_COOKIE);
+  if (!sessionId || sessionId.length > MAX_SESSION_ID_LENGTH || !SESSION_ID_RE.test(sessionId)) return null;
+  return sessionId;
+}
+
 export async function authenticateRequest(req: Request): Promise<{
   auth: AuthenticatedRequest | null;
   response?: Response;
 }> {
-  const sessionId = readCookie(req, SESSION_COOKIE);
-  if (!sessionId || sessionId.length > MAX_SESSION_ID_LENGTH || !SESSION_ID_RE.test(sessionId)) {
-    return { auth: null, response: redirectToLogin() };
-  }
+  const sessionId = panelSessionId(req);
+  if (!sessionId) return { auth: null, response: redirectToLogin() };
   const result = await callAuthHelper(sessionId);
   if (result.kind === "valid") {
     return { auth: { user: result.session.user, roles: result.session.roles } };

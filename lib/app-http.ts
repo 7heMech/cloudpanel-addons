@@ -285,6 +285,15 @@ export function guardMutation(req: Request): Response | null {
   return null;
 }
 
+const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+/** A hostname from a request, lowercased and without a trailing dot, or null. */
+export function validateDomain(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const domain = value.trim().toLowerCase().replace(/\.$/, "");
+  return domain.length <= 253 && DOMAIN_RE.test(domain) ? domain : null;
+}
+
 /** Escape for interpolation into HTML text or a double-quoted attribute. */
 export function esc(value: unknown): string {
   return Bun.escapeHTML(String(value));

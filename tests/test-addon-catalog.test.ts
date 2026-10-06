@@ -44,7 +44,7 @@ test("every declared injection target is represented in the watch paths", () => 
 });
 
 test("every addon with privileged verbs declares them", () => {
-  for (const name of ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "smtp"]) {
+  for (const name of ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "smtp", "terminal"]) {
     expect(typeof ADDONS[name]!.action).toBe("function");
   }
   // It is markup injected into the panel's login page and has nothing to do as

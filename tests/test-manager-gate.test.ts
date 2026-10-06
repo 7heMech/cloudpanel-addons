@@ -271,3 +271,19 @@ test("a handler fault cannot answer with Bun's error page", () => {
   const source = readFileSync(join(repo, "manager/server.ts"), "utf8");
   expect(source.slice(source.indexOf("async function cmdServe"))).toInclude("development: false");
 });
+
+// A shell as a site's user is an administrator's tool: no role list, no
+// self-scoped route, whatever the other addons let through.
+test("no non-administrator reaches the terminal", () => {
+  const paths = [
+    { path: "/addons/terminal/" },
+    { path: "/addons/terminal/sites/www.example.com" },
+    { path: "/addons/terminal/api/sessions", method: "POST" },
+    { path: "/addons/terminal/api/sessions/AAAAAAAAAAAAAAAAAAAAAA/events" },
+  ];
+  for (const roles of [["ROLE_USER"], ["ROLE_SITE_MANAGER"]]) {
+    for (const result of probe({ user: "someone", roles }, paths, true)) {
+      expect(result.status, `${roles[0]} ${result.path}`).toBe(403);
+    }
+  }
+});

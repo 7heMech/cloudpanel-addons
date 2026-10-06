@@ -2,14 +2,9 @@ import { callGatewayAction, type ActionResult } from "../../../lib/gateway-clien
 import { fetchPanelInfo, type SanitizedSite } from "../../../lib/snapshot-reader";
 import type { SiteContext } from "../../../lib/site-context";
 import type { GlobalMaintenanceStatus, MaintenanceStatus } from "../action";
+import { validateDomain } from "../../../lib/app-http";
 
-const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
-
-export function validateDomain(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const domain = value.trim().toLowerCase().replace(/\.$/, "");
-  return domain.length <= 253 && DOMAIN_RE.test(domain) ? domain : null;
-}
+export { validateDomain };
 
 export interface MaintenanceSiteView extends MaintenanceStatus {
   type: string;

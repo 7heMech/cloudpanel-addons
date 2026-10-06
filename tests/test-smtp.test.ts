@@ -376,7 +376,7 @@ test("a site SMTP cannot bind is listed and left alone instead of stopping the r
   expect(state.sites.map((site) => site.domain)).toEqual(["www.example.com"]);
   expect(state.skipped).toEqual([
     { domain: "under_score.test", reason: "its domain is not one mail can use" },
-    { domain: "panel.test", reason: "its Unix user clp cannot be bound" },
+    { domain: "panel.test", reason: "its Unix user clp cannot be used" },
     { domain: "shop.test", reason: "it shares Unix UID 2002 with another site" },
     { domain: "twin.test", reason: "it shares Unix UID 2002 with another site" },
   ]);

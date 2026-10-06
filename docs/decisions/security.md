@@ -12,10 +12,23 @@ The gateway accepts only fixed addon and verb combinations and starts
 arguments again before deriving paths, locking, or changing the host. Unknown
 addons, verbs, free-form paths, and malformed action replies are rejected.
 
-The gateway's streaming mode is restricted to `watch-job`: it starts one worker,
-pipes its output without interpreting addon data, and kills the worker when the
-manager socket closes. Session re-authorization remains in the manager that
-owns the stream.
+The gateway's streaming mode is restricted to the verbs in
+`STREAM_ALLOWED_VERBS`: it starts one worker, pipes its output without
+interpreting addon data, and stops the worker when the manager socket closes.
+Session re-authorization remains in the manager that owns the stream.
+
+One stream, `terminal:session`, also carries bytes from the manager to the
+worker, and it is the one privileged action the gateway does not take on the
+manager's word. The request carries the CloudPanel session id; the gateway
+checks it as it checks any session, requires an active administrator, and passes
+the user it found to the worker as `--panel-user` -- a manager that names one is
+refused. It checks the session again every 15 seconds and stops the worker when
+that fails. The session id never appears on a command line. Everything after the
+request line is copied to the worker's stdin unread, and the worker hands both
+pipes to `runuser`, so no root process reads what the browser typed. The worker
+gets a fixed `PATH` and nothing else from the gateway's environment, and the
+site user's process never inherits the gateway's stderr. See
+[Terminal](terminal.md).
 
 Maintenance actions also require the normalized domain to exist in
 CloudPanel's site database. The public maintenance directories allow traversal

@@ -1,0 +1,4 @@
+.terminal-toolbar { flex-wrap: wrap; }
+.terminal-toolbar input[type="search"] { flex: 1 1 240px; max-width: 360px; margin-left: auto; font-weight: 400; }
+.terminal-site-table .user-cell { font-family: var(--mono); font-size: 14px; }
+.terminal-none { padding: 25px 32px; color: var(--muted); border-top: 1px solid var(--row-border); }
