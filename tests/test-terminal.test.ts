@@ -138,6 +138,7 @@ describe("the root worker", () => {
         ...asIs,
         paths,
         processUid: 0,
+        env: { CLP_ADDONS_DUPLEX_WORKER: "1" },
         audit: (line) => audit.push(line),
         now: () => (clock += 61_000),
         spawn: ((argv: string[], options: Record<string, unknown>) => {
@@ -166,6 +167,28 @@ describe("the root worker", () => {
       "admin opened www.example.test as example",
       "admin closed www.example.test as example after 1m1s, exit 3",
     ]);
+  });
+
+  test("starts nothing unless the gateway's checked stream started it", async () => {
+    fixture([{ domain: "www.example.test", user: "example", uid: 2001 }]);
+    let spawned = false;
+    const write = process.stdout.write;
+    const errWrite = process.stderr.write;
+    let printed = "";
+    process.stdout.write = ((chunk: string) => { printed += chunk; return true; }) as typeof process.stdout.write;
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    try {
+      const code = await runTerminalAction(
+        ["session", "--domain=www.example.test", "--panel-user=admin", "--cols=80", "--rows=24"],
+        { ...asIs, paths, processUid: 0, env: {}, spawn: (() => { spawned = true; }) as unknown as typeof Bun.spawn },
+      );
+      expect(code).toBe(1);
+    } finally {
+      process.stdout.write = write;
+      process.stderr.write = errWrite;
+    }
+    expect(spawned).toBe(false);
+    expect(JSON.parse(printed).error).toBe("terminal sessions start only through the gateway's stream");
   });
 
   test("never reads its own stdin", () => {

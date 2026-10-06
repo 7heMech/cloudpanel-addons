@@ -15,6 +15,7 @@ import {
   ActionFailure, emitActionError, failAction, validateDomain,
 } from "../../cli/action-common";
 import { CLI_BIN, PANEL_DB } from "../../cli/paths";
+import { DUPLEX_WORKER_MARKER } from "../../lib/gateway-protocol";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids } from "../../lib/site-accounts";
 
@@ -40,6 +41,8 @@ export interface TerminalActionOptions {
   domainValidator?: (value: string) => string;
   /** Test-only child-process override; production uses Bun.spawn. */
   spawn?: typeof Bun.spawn;
+  /** Test-only; production reads the gateway's marker from its own environment. */
+  env?: Record<string, string | undefined>;
   /** Test-only audit sink; production writes to the gateway's journal. */
   audit?: (line: string) => void;
   now?: () => number;
@@ -67,6 +70,11 @@ export interface TerminalTarget {
 
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** What reaches the journal: a refusal may quote an argument, and an argument is not ours. */
+function printable(text: string): string {
+  return text.replace(/[\u0000-\u001f\u007f-\u009f]/g, "?").slice(0, 300);
 }
 
 function dimension(value: string, name: string): number {
@@ -147,7 +155,9 @@ export function resolveTerminalTarget(request: TerminalRequest, paths: TerminalA
   if (!account) failAction(`the site user ${row.user} has no Unix account`);
   const problem = siteAccountProblem({ user: row.user, uid: account.uid, gid: account.gid });
   if (problem) failAction(`${request.domain} cannot be opened: ${problem}`);
-  if (account.uid < MIN_SITE_UID) failAction(`${request.domain} cannot be opened: its Unix account is a system account`);
+  if (account.uid < MIN_SITE_UID || account.gid < MIN_SITE_UID) {
+    failAction(`${request.domain} cannot be opened: its Unix account is a system account`);
+  }
   if (refusesLogin(account.shell)) failAction(`${request.domain} cannot be opened: its Unix user has no login shell`);
   const siteUids = rows.flatMap((site) => {
     const owner = accounts.get(site.user);
@@ -207,16 +217,31 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
   const paths = { ...DEFAULT_TERMINAL_PATHS, ...options.paths };
   try {
     if ((options.processUid ?? process.getuid?.()) !== 0) failAction("terminal actions must run as root");
+    // Only the gateway's duplex stream, which checked the panel session
+    // itself, starts a worker with this set.
+    if ((options.env ?? process.env)[DUPLEX_WORKER_MARKER] !== "1") failAction("terminal sessions start only through the gateway's stream");
     request = parseTerminalRequest(argv, options);
     target = resolveTerminalTarget(request, paths);
   } catch (error) {
-    emitActionError(reason(error), undefined, "terminal");
+    emitActionError(printable(reason(error)), undefined, "terminal");
     return 1;
   }
 
+  // Listening before the child exists, so a stop that arrives while it starts
+  // is passed on rather than ending this process and orphaning the shell.
+  let child: ReturnType<typeof Bun.spawn> | null = null;
+  let stopped = false;
+  const forward = () => {
+    stopped = true;
+    try { child?.kill("SIGTERM"); } catch {}
+  };
+  process.on("SIGTERM", forward);
+  process.on("SIGHUP", forward);
+  process.on("SIGINT", forward);
+
   const started = now();
   audit(`${request.panelUser} opened ${request.domain} as ${target.user}`);
-  const child = (options.spawn ?? Bun.spawn)(runuserCommand(paths, target.user), {
+  child = (options.spawn ?? Bun.spawn)(runuserCommand(paths, target.user), {
     stdin: "inherit",
     stdout: "inherit",
     // A site's shell must not be able to write into the root gateway's journal.
@@ -228,12 +253,7 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
       CLP_PTY_SIZE: `${request.cols}x${request.rows}`,
     },
   });
-  const forward = () => {
-    try { child.kill("SIGTERM"); } catch {}
-  };
-  process.on("SIGTERM", forward);
-  process.on("SIGHUP", forward);
-  process.on("SIGINT", forward);
+  if (stopped) forward();
   try {
     const code = await child.exited;
     const how = child.signalCode ? `signal ${child.signalCode}` : `exit ${code}`;

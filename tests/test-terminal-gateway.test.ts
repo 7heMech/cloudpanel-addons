@@ -123,7 +123,10 @@ test("an administrator's session starts the worker as that user and copies bytes
       "action", "terminal", "session", "--domain=www.example.com", "--cols=80", "--rows=24", "--panel-user=redacted_user",
     ]);
     expect(options.stdin).toBe("pipe");
-    expect(Object.keys(options.env as object)).toEqual(["PATH"]);
+    expect(options.env).toEqual({
+      PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      CLP_ADDONS_DUPLEX_WORKER: "1",
+    });
     // The session id rides on the request, never on a command line.
     expect(argv.join(" ")).not.toContain("live");
     c.socket.end();
@@ -244,6 +247,24 @@ test("other streams still ignore what follows the request line", async () => {
     await c.done;
     expect(c.received).toBe('{"ok":true}\n');
     expect(gw.spawned[0]!.options.stdin).toBe("ignore");
+  } finally {
+    await gw.close();
+  }
+});
+
+test("the one-shot action path refuses the duplex verb, which only a checked stream may start", async () => {
+  setRole("ROLE_ADMIN");
+  const gw = await gateway(["cat"]);
+  try {
+    const c = await gw.connect();
+    c.socket.write(JSON.stringify({
+      kind: "action", addon: "terminal", verb: "session",
+      args: ["--domain=www.example.com", "--cols=80", "--rows=24", "--panel-user=admin"],
+      input: '{"i":"id\\n"}\n',
+    }) + "\n");
+    await c.done;
+    expect(JSON.parse(c.received)).toEqual({ ok: false, error: "invalid verb" });
+    expect(gw.spawned.length).toBe(0);
   } finally {
     await gw.close();
   }

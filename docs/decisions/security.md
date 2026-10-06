@@ -22,8 +22,10 @@ worker, and it is the one privileged action the gateway does not take on the
 manager's word. The request carries the CloudPanel session id; the gateway
 checks it as it checks any session, requires an active administrator, and passes
 the user it found to the worker as `--panel-user` -- a manager that names one is
-refused. It checks the session again every 15 seconds and stops the worker when
-that fails. The session id never appears on a command line. Everything after the
+refused. The one-shot action path refuses that verb outright, and the worker
+refuses to run without an environment marker only the stream sets, so the check
+cannot be skipped by asking the other way. The gateway checks the session again
+every 15 seconds and stops the worker when that fails. The session id never appears on a command line. Everything after the
 request line is copied to the worker's stdin unread, and the worker hands both
 pipes to `runuser`, so no root process reads what the browser typed. The worker
 gets a fixed `PATH` and nothing else from the gateway's environment, and the

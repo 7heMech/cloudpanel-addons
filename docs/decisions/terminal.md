@@ -46,13 +46,16 @@ what the browser typed.
 | `runuser --login` | root, then the site user | Opens the PAM/logind session and drops privileges. |
 | `clp-addons terminal-pty` | the site user | Owns the PTY, decodes input and resizes, runs the shell. |
 
-The worker refuses a site the panel user does not own, a user that is root,
-`clp`, `postfix` or below uid 1000, one whose uid another site shares, one
+The worker runs only when started by the gateway's checked stream. It refuses a
+site the panel user does not own, a user that is root, `clp`, `postfix` or below
+uid or gid 1000, one whose uid another site shares, one
 with no login shell, and a site root that resolves outside the home. Its
 `runuser` argv is fixed; the site directory and size travel in environment
 variables `runuser` is told to keep. `runuser`'s stderr is discarded, so a site
 cannot write into the gateway's journal; the journal has only the worker's
-"opened" and "closed" lines.
+"opened" and "closed" lines, and refusals with control characters replaced.
+Ending a stream closes the helper's stdin as well as signalling the worker, and
+a worker that leaves its stdin full for 30 seconds ends the stream.
 
 The helper runs as the site user through that user's login shell, so a site can
 replace it with anything. That is why the manager accepts only the exact

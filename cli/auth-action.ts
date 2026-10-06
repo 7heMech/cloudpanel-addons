@@ -32,6 +32,7 @@ import {
   STREAM_ALLOWED_VERBS,
   DUPLEX_STREAM_VERBS,
   TERMINAL_ALLOWED_VERBS,
+  DUPLEX_WORKER_MARKER,
 } from "../lib/gateway-protocol";
 import { getLivePanelInfo } from "../lib/panel-snapshot";
 
@@ -238,7 +239,14 @@ const SESSION_RECHECK_MS = 15_000;
 /** How long a stream's worker has after SIGTERM before it is killed. */
 const STREAM_KILL_GRACE_MS = 5_000;
 /** All a duplex worker inherits; it starts nothing that needs more. */
-const DUPLEX_WORKER_ENV = { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" };
+const DUPLEX_WORKER_ENV = {
+  PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+  [DUPLEX_WORKER_MARKER]: "1",
+};
+/** How long a duplex worker may leave its stdin full before the stream is ended. */
+const STALLED_INPUT_MS = 30_000;
+/** How long output may keep arriving after a duplex worker has exited. */
+const OUTPUT_AFTER_EXIT_MS = 1_000;
 
 /** The panel user behind a session, when it is an active administrator's. */
 async function adminSessionUser(sessionId: string, options: AuthActionOptions): Promise<string | null> {
@@ -280,10 +288,12 @@ async function runStreamAction(
   let stopping = false;
   let killTimer: ReturnType<typeof setTimeout> | null = null;
   let recheck: ReturnType<typeof setInterval> | null = null;
+  let endInput = () => {};
   const stop = () => {
     stopping = true;
     if (recheck) clearInterval(recheck);
     recheck = null;
+    endInput();
     if (!proc || proc.exitCode !== null || proc.signalCode !== null || killTimer) return;
     const running = proc;
     try { running.kill("SIGTERM"); } catch {}
@@ -304,26 +314,35 @@ async function runStreamAction(
     if (duplex) {
       const sink = proc.stdin as import("bun").FileSink;
       let inputOpen = true;
+      // The helper's EOF is what hangs its shell up, whoever ends the stream.
+      endInput = () => {
+        if (!inputOpen) return;
+        inputOpen = false;
+        try { void Promise.resolve(sink.end()).catch(() => {}); } catch {}
+      };
       const write = (bytes: Buffer) => {
         if (!inputOpen) return;
         try {
           sink.write(bytes);
           const flushed = sink.flush();
           if (flushed instanceof Promise) {
+            // A paused socket does not see its peer go, so a worker that never
+            // reads cannot hold the stream open past this.
             socket.pause();
-            flushed.then(() => socket.resume(), () => { inputOpen = false; socket.resume(); });
+            const stalled = setTimeout(() => { stop(); socket.destroy(); }, STALLED_INPUT_MS);
+            flushed.then(
+              () => { clearTimeout(stalled); socket.resume(); },
+              () => { clearTimeout(stalled); endInput(); socket.resume(); },
+            );
           }
         } catch {
-          inputOpen = false;
+          endInput();
         }
       };
       for (const bytes of duplex.pending) write(bytes);
       duplex.pending.length = 0;
       duplex.attach(write);
-      socket.on("end", () => {
-        inputOpen = false;
-        try { void sink.end(); } catch {}
-      });
+      socket.on("end", endInput);
       const { sessionId } = duplex;
       recheck = setInterval(async () => {
         if (stopping) return;
@@ -337,6 +356,11 @@ async function runStreamAction(
       throw new Error("streaming action did not provide stdout");
     }
     const reader = proc.stdout.getReader();
+    if (duplex) {
+      // Something the site started can hold the pipe open after the worker
+      // has gone; the stream ends with the worker, not with that.
+      void proc.exited.then(() => setTimeout(() => { void reader.cancel().catch(() => {}); }, OUTPUT_AFTER_EXIT_MS));
+    }
     for (;;) {
       const { done, value } = await reader.read();
       if (done || socket.destroyed) break;
@@ -480,7 +504,9 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             socket.end(JSON.stringify({ ok: false, error: "unknown addon" }) + "\n");
             return;
           }
-          if (!allowed.has(request.verb)) {
+          // A duplex verb is only ever a stream: this path checks no session
+          // and would hand the worker the manager's own arguments and stdin.
+          if (!allowed.has(request.verb) || DUPLEX_STREAM_VERBS.has(`${request.addon}:${request.verb}`)) {
             socket.end(JSON.stringify({ ok: false, error: "invalid verb" }) + "\n");
             return;
           }

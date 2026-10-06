@@ -257,6 +257,7 @@ export async function callGatewayAction<T = unknown>(
 }
 
 const MAX_GATEWAY_STREAM_BUFFER_BYTES = 16 * 1024 * 1024;
+const MAX_GATEWAY_OUTBOX_BYTES = 1024 * 1024;
 
 function streamReply<T>(line: string): ActionResult<T> | null {
   return parseActionReply<T>(line);
@@ -295,6 +296,7 @@ export function streamGatewayAction<T = unknown>(options: {
   const maxLineBytes = options.maxLineBytes ?? MAX_GATEWAY_STREAM_BUFFER_BYTES;
   // What the socket has not yet taken, written out again on drain.
   const outbox: Uint8Array[] = [];
+  let outboxBytes = 0;
   const encoder = new TextEncoder();
 
   const endTransport = () => {
@@ -342,7 +344,8 @@ export function streamGatewayAction<T = unknown>(options: {
   const flushOutbox = () => {
     while (socket && outbox.length > 0 && !closed) {
       const next = outbox[0]!;
-      const written = socket.write(next);
+      const written = Math.max(0, socket.write(next));
+      outboxBytes -= Math.min(written, next.byteLength);
       if (written >= next.byteLength) {
         outbox.shift();
         continue;
@@ -354,7 +357,11 @@ export function streamGatewayAction<T = unknown>(options: {
 
   const write = (line: string) => {
     if (closed || options.sessionId === undefined) return;
-    outbox.push(encoder.encode(line.endsWith("\n") ? line : `${line}\n`));
+    const bytes = encoder.encode(line.endsWith("\n") ? line : `${line}\n`);
+    // A worker that stops reading must not grow this process without bound.
+    if (outboxBytes + bytes.byteLength > MAX_GATEWAY_OUTBOX_BYTES) return finish("the stream stopped taking input");
+    outbox.push(bytes);
+    outboxBytes += bytes.byteLength;
     if (outbox.length === 1) flushOutbox();
   };
 

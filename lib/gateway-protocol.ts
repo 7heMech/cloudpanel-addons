@@ -147,6 +147,12 @@ export const STREAM_ALLOWED_VERBS = new Set(["watch-job", "scan-stream", "sessio
  */
 export const DUPLEX_STREAM_VERBS = new Set(["terminal:session"]);
 
+/**
+ * Set in the environment of a worker the gateway started for a duplex stream,
+ * after checking its session. A duplex worker refuses to run without it.
+ */
+export const DUPLEX_WORKER_MARKER = "CLP_ADDONS_DUPLEX_WORKER";
+
 export interface SanitizedSite {
   domain: string;
   user: string;
