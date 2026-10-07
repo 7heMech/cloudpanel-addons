@@ -8,8 +8,6 @@
 // with deletion, and a snapshot old enough to be stale cannot be trusted to
 // report an absence at all.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { dashboardView, isInstanceMissing } from "../addons/instatic/app/views";
 import type { InstanceView } from "../addons/instatic/app/service";
 import { isSiteMissing, jobsView, jobView } from "../addons/stager/app/views";
@@ -149,11 +147,4 @@ describe("the instatic dashboard", () => {
     expect(html).not.toInclude("CloudPanel site deleted");
     expect(html).toInclude('href="https://inst.example.com"');
   });
-});
-
-// The live answer only reaches a page if the action puts it in the reply.
-test("both actions report panelSite in their JSON output", () => {
-  const repo = join(import.meta.dir, "..");
-  expect(readFileSync(join(repo, "addons/stager/action.ts"), "utf-8")).toInclude("panelSite:");
-  expect(readFileSync(join(repo, "addons/instatic/action.ts"), "utf-8")).toInclude("panelSite:");
 });

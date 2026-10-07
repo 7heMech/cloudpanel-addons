@@ -31,6 +31,9 @@ import type { InstanceView, InstaticJobView } from "../addons/instatic/app/servi
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
 import type { AvailableTags } from "../addons/instatic/app/tags";
 import { withCsrfCookie, SECURITY_HEADERS } from "../lib/app-http";
+import { handle as terminalHandle } from "../addons/terminal/app/index";
+import { dashboardView as terminalDashboardView, layout as terminalLayout } from "../addons/terminal/app/views";
+import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
 
 const versions: AvailableTags = { tags: ["0.0.19", "0.0.18"], latest: "0.0.19", source: "registry" };
 const instances: InstanceView[] = [
@@ -413,7 +416,7 @@ function panelSiteStub(site: SiteContext, activeSlug: string): string {
 ${siteLayoutTarget().snippet("/addons/")}<div class="tab-container">
     <ul>
 ${tabs}
-    </ul>
+    </ul>${twigForSite(TERMINAL_SITE_BUTTON.snippet("/addons/terminal"), site.domain)}
   </div>
         <div class="site-content">
           <p>This is whatever CloudPanel would render for the ${activeSlug} tab.</p>
@@ -433,6 +436,16 @@ ${tabs}
  * panel's own from assets/css/style.css and assets/css/frontend/sites.css.
  */
 const WP_LOGIN_SITES_SCRIPT = WP_LOGIN_TARGETS.find((target) => target.slug === "sites-script")!;
+const TERMINAL_SITES_SCRIPT = TERMINAL_TARGETS.find((target) => target.slug === "sites-script")!;
+const TERMINAL_SITES_ACTION = TERMINAL_TARGETS.find((target) => target.slug === "sites-action")!;
+const TERMINAL_SITE_BUTTON = TERMINAL_TARGETS.find((target) => target.slug === "site-button")!;
+
+/** An injected block as the panel would render it for one site and an administrator. */
+function twigForSite(block: string, domain: string): string {
+  return unwrapTwig(block)
+    .split("{{ site.domainName|url_encode }}").join(encodeURIComponent(domain))
+    .split("{{ site.domainName }}").join(domain);
+}
 const STAGER_SITES_STYLE = STAGER_TARGETS.find((target) => target.slug === "site-list-style")!;
 
 function unwrapTwig(block: string): string {
@@ -449,6 +462,7 @@ function injectedSitesBlocks(state: PanelTweaksState): string {
   return [
     sitesBlock("/addons/panel-tweaks", state.tweaks),
     unwrapTwig(WP_LOGIN_SITES_SCRIPT.snippet("/addons/wp-login")),
+    unwrapTwig(TERMINAL_SITES_SCRIPT.snippet("/addons/terminal")),
     unwrapTwig(STAGER_SITES_STYLE.snippet("/addons/stager")),
   ].join("\n");
 }
@@ -469,7 +483,7 @@ function panelSitesStub(state: PanelTweaksState, dark: boolean): string {
                     <td><a href="/site/${site.domain}/settings">${site.domain}</a></td>
                     <td>${site.user}</td>
                     <td>${site.type.toUpperCase()}</td>
-                    <td class="text-end"><a href="/site/${site.domain}/settings">Manage</a>${WORDPRESS_APPLICATIONS.includes(site.application)
+                    <td class="text-end">${twigForSite(TERMINAL_SITES_ACTION.snippet("/addons/terminal"), site.domain)}<a href="/site/${site.domain}/settings">Manage</a>${WORDPRESS_APPLICATIONS.includes(site.application)
                       ? `<a href="#" class="clp-wp-login" data-clp-domain="${site.domain}">WP Login</a>`
                       : ""}${CLONABLE_TYPES.includes(site.type) ? `<a class="${MENU_ONLY_CLASS}" href="/addons/stager/new?source=${site.domain}">Clone</a>` : ""}</td>
                   </tr>`).join("\n");
@@ -524,6 +538,73 @@ ${rows}
 </html>`;
 }
 
+const terminalPreviewSites = [
+  { domain: "www.example.com", user: "example", type: "php" },
+  { domain: "shop.example.com", user: "shop", type: "php" },
+  { domain: "static.example.com", user: "static", type: "static" },
+  { domain: "pages.example.com", user: "pages", type: "reverse-proxy" },
+  { domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", type: "php" },
+];
+
+const ESC = "\x1b";
+const PROMPT = `${ESC}[1;32mexample@box${ESC}[0m:${ESC}[1;34m~/htdocs/www.example.com${ESC}[0m$ `;
+const TERMINAL_TRANSCRIPT = [
+  `${PROMPT}wp plugin list --status=active`,
+  "+--------------------+--------+-----------+---------+",
+  "| name               | status | update    | version |",
+  "+--------------------+--------+-----------+---------+",
+  `| akismet            | active | ${ESC}[33mavailable${ESC}[0m | 5.3.1   |`,
+  "| redis-cache        | active | none      | 2.5.4   |",
+  "| woocommerce        | active | none      | 9.3.3   |",
+  "+--------------------+--------+-----------+---------+",
+  `${PROMPT}git status --short`,
+  ` ${ESC}[31mM${ESC}[0m wp-content/themes/example/style.css`,
+  `${ESC}[31m??${ESC}[0m wp-content/uploads/2026/10/`,
+  `${PROMPT}ls`,
+  `index.php  license.txt  ${ESC}[1;34mwp-admin${ESC}[0m  wp-config.php  ${ESC}[1;34mwp-content${ESC}[0m  ${ESC}[1;34mwp-includes${ESC}[0m`,
+  PROMPT,
+].join("\r\n");
+
+/** What the next popup shows: `?state=ended|moved|reconnecting` on the popup page sets it. */
+let terminalPreviewState = "";
+
+/**
+ * The terminal popup's API, answered with a canned transcript. The popup page
+ * itself is the real handler's, so this is the only part that is made up.
+ */
+function terminalPreview(req: Request, url: URL): Response | null {
+  const path = url.pathname;
+  if (!path.startsWith("/addons/terminal/")) return null;
+  const popup = /^\/addons\/terminal\/sites\/[^/]+$/.test(path);
+  if (popup && req.method === "GET") {
+    terminalPreviewState = url.searchParams.get("state") ?? "";
+    return null;
+  }
+  if (path.startsWith("/addons/terminal/assets/")) return null;
+  if (path === "/addons/terminal/api/sessions" && req.method === "POST") {
+    return Response.json({ ok: true, data: { id: "preview-session-0000000", user: "example" } });
+  }
+  if (/\/api\/sessions\/[^/]+\/events$/.test(path)) {
+    const encoder = new TextEncoder();
+    const state = terminalPreviewState;
+    const body = new ReadableStream({
+      start(controller) {
+        const send = (chunk: string) => controller.enqueue(encoder.encode(chunk));
+        // A long retry keeps a dropped stream in its reconnecting state.
+        send("retry: 600000\n\n");
+        send(`event: session\ndata: ${JSON.stringify({ domain: "www.example.com", user: "example" })}\n\n`);
+        send(`event: reset\nid: 1\ndata: ${Buffer.from(TERMINAL_TRANSCRIPT).toString("base64")}\n\n`);
+        if (state === "ended") send(`event: ended\ndata: ${JSON.stringify({ reason: "exit", code: 0 })}\n\n`);
+        if (state === "moved") send("event: moved\ndata: {}\n\n");
+        if (state === "ended" || state === "moved" || state === "reconnecting") controller.close();
+      },
+    });
+    return new Response(body, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+  }
+  if (path.startsWith("/addons/terminal/api/sessions/")) return new Response(null, { status: 204 });
+  return null;
+}
+
 let panelAce: string | null = null;
 const panelCss: Record<string, string> = {};
 
@@ -533,6 +614,8 @@ const server = Bun.serve({
   async fetch(req, server) {
     const url = new URL(req.url);
     const path = url.pathname;
+    const terminalReply = terminalPreview(req, url);
+    if (terminalReply) return terminalReply;
     if (req.method !== "GET") return Response.json({ ok: false, error: "UI preview only; no changes were made." }, { status: 409 });
     // These are the same two logo URLs the installed manager gets from its
     // CloudPanel origin. Only this development preview fetches the public demo.
@@ -564,6 +647,10 @@ const server = Bun.serve({
       });
     }
     if (["/", "/dashboard"].includes(path)) return Response.redirect("/addons/");
+    // The popup page and its assets are the real handler's; only its API is canned.
+    if (path.startsWith("/addons/terminal/sites/") || path.startsWith("/addons/terminal/assets/")) {
+      return terminalHandle(req, path.slice("/addons/terminal".length));
+    }
     // /sites stands in for the panel's own site list, with the addon's block in
     // place; /addons/panel-tweaks/api/panel is what that block then asks for.
     if (path === "/sites") {
@@ -688,7 +775,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login", "smtp"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login", "smtp", "terminal"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
@@ -737,6 +824,8 @@ const server = Bun.serve({
       });
     } else if (path === "/addons/panel-tweaks/" || path === "/addons/panel-tweaks") {
       html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url)), notice);
+    } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
+      html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites), notice);
     } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {
       html = wpLoginLayout("WordPress Sign-In", wpLoginDashboardView(wpLoginPreviewSites(url)), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {

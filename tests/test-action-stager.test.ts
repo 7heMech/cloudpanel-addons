@@ -263,35 +263,6 @@ describe("a site the job adopted is not a site the job created", () => {
     expect(region.indexOf("ctx.siteCreated = true")).toBeGreaterThan(field);
   });
 
-  // The reader itself, driven over a reply of the shape the action emits.
-  describe("reading the reply", () => {
-    const CREATED = '{"ok":true,"data":{"domain":"stg.demo.test","port":39001,"tag":"0.0.18",'
-      + '"container":"instatic-stg","siteUser":"addon-stgdemot-abc123","siteCreatedByAddon":true,"status":"running"}}';
-    const ADOPTED = CREATED.replace('true,"status', 'false,"status');
-
-    function read(json: string, field: string): string {
-      try {
-        const value = (JSON.parse(json) as { data?: Record<string, unknown> }).data?.[field];
-        return value === undefined ? "" : String(value);
-      } catch {
-        return "";
-      }
-    }
-
-    test("a created site reads as true and an adopted one as false", () => {
-      expect(read(CREATED, "siteCreatedByAddon")).toBe("true");
-      expect(read(ADOPTED, "siteCreatedByAddon")).toBe("false");
-    });
-
-    test("a reply without the field reads as nothing, which is not true", () => {
-      expect(read('{"ok":true,"data":{"domain":"x"}}', "siteCreatedByAddon")).toBe("");
-    });
-
-    test("the port still reads out of the same helper", () => {
-      expect(read(CREATED, "port")).toBe("39001");
-    });
-  });
-
   // The two unwind questions are separate, because an Instatic clone can have
   // created the instance while adopting the site: that action refuses outright
   // if the container or meta.json already exist, so the container and the data

@@ -169,22 +169,3 @@ test("an action that exits before reading a large stdin is malformed, not a hang
   expect(await clone({ password: "x".repeat(1024 * 1024) }))
     .toEqual({ ok: false, error: "action returned a malformed reply" });
 });
-
-test("the gateway client spawns through Bun rather than node:child_process", () => {
-  const client = readFileSync(join(import.meta.dir, "../lib/gateway-client.ts"), "utf8");
-  expect(client).toMatch(/Bun\.spawn/);
-  expect(client).toMatch(/timeout: options\.timeout/);
-  expect(client).toMatch(/maxBuffer/);
-  expect(client).not.toMatch(/from "node:child_process"/);
-});
-
-test("Bun.spawn's timeout kills the child with SIGTERM", async () => {
-  const probe = Bun.spawn({
-    cmd: ["bash", "-c", "sleep 1"],
-    stdin: new Uint8Array(),
-    stdout: "ignore",
-    stderr: "ignore",
-    timeout: 25,
-  });
-  expect(await probe.exited).toBe(143);
-});

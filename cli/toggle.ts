@@ -126,6 +126,7 @@ function disableAddon(spec: AddonSpec): void {
   if (spec.name === "wp-login") withdrawWpLogin();
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
+  spec.withdrawn?.();
   // Reconciled after the config file is gone, so the injection set is read
   // from the state that now exists rather than described by an `exclude`
   // argument. The Twig cache is purged by the reconciler when the markup

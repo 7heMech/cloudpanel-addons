@@ -1,0 +1,12 @@
+.clp-terminal-open { white-space: nowrap; }
+.tab-container:has(> .clp-terminal-tab) { display: flex; align-items: stretch; }
+.tab-container:has(> .clp-terminal-tab) > ul { flex: 1 1 auto; min-width: 0; }
+.tab-container > .clp-terminal-tab { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 0 20px;
+  border-left: 1px solid #e2e2e2; color: #666; text-decoration: none; }
+.tab-container > .clp-terminal-tab:hover { color: #0078d4; }
+.tab-container > .clp-terminal-tab > span[aria-hidden] { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+html.dark .tab-container > .clp-terminal-tab { border-color: #a8b3cf33; color: #9b9b9b; }
+@media (max-width: 760px) {
+  .tab-container > .clp-terminal-tab { padding: 0 14px; }
+  .clp-terminal-label { display: none; }
+}

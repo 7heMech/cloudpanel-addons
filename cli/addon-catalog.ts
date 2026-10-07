@@ -28,6 +28,7 @@ import { WP_LOGIN_ADDON } from "../addons/wp-login/addon";
 import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
 import { SMTP_ADDON } from "../addons/smtp/addon";
+import { TERMINAL_ADDON } from "../addons/terminal/addon";
 
 export type { AddonTarget };
 
@@ -62,6 +63,8 @@ export interface AddonDefinition {
   action?: (argv: string[], options?: Record<string, unknown>) => Promise<number> | number;
   /** Withdraw changes outside addon state before disabling or uninstalling. */
   deactivate?: () => void;
+  /** Stop what is still running once the config is gone and nothing new can start. */
+  withdrawn?: () => void;
   /** Reapply the kept state outside addon state once enabled again. */
   activate?: () => void;
   /**
@@ -97,6 +100,7 @@ const DEFINITIONS: AddonDefinition[] = [
   PANEL_TWEAKS_ADDON,
   WP_LOGIN_ADDON,
   SMTP_ADDON,
+  TERMINAL_ADDON,
 ];
 
 function specOf(definition: AddonDefinition): AddonSpec {

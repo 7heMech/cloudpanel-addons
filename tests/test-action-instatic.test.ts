@@ -5,7 +5,8 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  makeSnapshot, parseInstaticAction, panelIdentityForInstatic, pruneSnapshots, validateInstaticDomain,
+  DEFAULT_INSTATIC_ACTION_PATHS, makeSnapshot, parseInstaticAction, panelIdentityForInstatic, pruneSnapshots,
+  siteUserTaken, validateInstaticDomain,
 } from "../addons/instatic/action";
 import { dashboardView, newInstanceView } from "../addons/instatic/app/views";
 import type { InstanceView } from "../addons/instatic/app/service";
@@ -61,11 +62,6 @@ test("action stdout is one JSON object and strips control characters from string
   expect(stdout.endsWith("\n")).toBe(true);
   expect(stdout.trim().split("\n")).toHaveLength(1);
   expect(JSON.parse(stdout)).toEqual({ ok: true, data: { text: "beforeafter\nnext" } });
-});
-
-test("the daemon invokes the unified binary action path", () => {
-  const service = readFileSync(join(import.meta.dir, "../addons/instatic/app/service.ts"), "utf8");
-  expect(service).toContain('callGatewayAction<T>("instatic", verb, args');
 });
 
 test("makeSnapshot archives non-SQLite regular data files", () => {
@@ -242,14 +238,6 @@ describe("the TLS certificate option", () => {
     expect(html).toInclude("Request a Let's Encrypt certificate immediately");
   });
 
-  test("the action takes the flag and asks the panel for the certificate", () => {
-    const source = readFileSync(join(import.meta.dir, "../addons/instatic/action.ts"), "utf-8");
-    expect(source).toInclude('flag === "--tls"');
-    expect(source).toInclude('validateFlag(tls, "tls")');
-    expect(source).toInclude('if (tls === "yes")');
-    expect(source).toInclude("lets-encrypt:install:certificate");
-  });
-
   test("the flag validator takes yes and no and nothing else", () => {
     expect(() => validateFlag("yes", "test")).not.toThrow();
     expect(() => validateFlag("no", "test")).not.toThrow();
@@ -263,14 +251,19 @@ describe("the TLS certificate option", () => {
 // createUser fails when the account exists, and CloudPanel validates the site
 // row separately. Asking only getent would offer a name a site already holds,
 // which the panel then rejects with "siteUser: This value already exists".
-test("the site-user guard asks both the passwd database and the panel's site table", () => {
-  const source = readFileSync(join(import.meta.dir, "../addons/instatic/action.ts"), "utf-8");
-  const guard = source.slice(source.indexOf("function siteUserTaken"));
-  const body = guard.slice(0, guard.indexOf("\n}\n") + 2);
-  expect(body).toInclude('runCommand("getent", ["passwd", user])');
-  expect(body).toInclude("SELECT 1 FROM site WHERE user = ? LIMIT 1;");
-  // Both creates pick a free name rather than failing on the first guess.
-  expect(source.match(/availableSiteUser\(domain, \(user\) => siteUserTaken\(user, paths\)\)/g) ?? [])
-    .toHaveLength(2);
-  expect(source).not.toInclude("may be half-created");
+test("a site user is taken when an account or a panel site already has it", () => {
+  const root = mkdtempSync(join(tmpdir(), "instatic-site-user-"));
+  try {
+    const panelDb = join(root, "panel.db");
+    const db = new Database(panelDb);
+    db.run("CREATE TABLE site (user TEXT)");
+    db.run("INSERT INTO site VALUES ('site-only-user')");
+    db.close();
+    const paths = { ...DEFAULT_INSTATIC_ACTION_PATHS, panelDb };
+    expect(siteUserTaken("root", paths)).toBe(true);
+    expect(siteUserTaken("site-only-user", paths)).toBe(true);
+    expect(siteUserTaken("nobody-has-this-user", paths)).toBe(false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

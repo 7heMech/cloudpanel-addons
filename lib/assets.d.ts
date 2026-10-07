@@ -15,3 +15,13 @@ declare module "*/ace-mode-html.js" {
   const source: string;
   export default source;
 }
+
+declare module "*/vendor/xterm.js" {
+  const source: string;
+  export default source;
+}
+
+declare module "*/vendor/addon-fit.js" {
+  const source: string;
+  export default source;
+}

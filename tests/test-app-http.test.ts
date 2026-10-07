@@ -273,11 +273,6 @@ describe("CSRF and origin guard", () => {
     expect(guardMutation(csrf("clp_addons_csrf=left%2Fmiddle", "left/middle"))).toBeNull();
   });
 
-  test("both request guards parse cookies with Bun.CookieMap", () => {
-    expect(repoSource("lib/app-http.ts")).toInclude("new Bun.CookieMap");
-    expect(repoSource("lib/sso-auth.ts")).toInclude("new Bun.CookieMap");
-  });
-
   test("same-origin is accepted with an explicit port and when a proxy strips it", () => {
     expect(guardMutation(mutation({ Origin: "https://panel.example:8443", Host: "panel.example:8443" }))).toBeNull();
     expect(guardMutation(mutation({ Origin: "https://panel.example:8443", Host: "panel.example" }))).toBeNull();

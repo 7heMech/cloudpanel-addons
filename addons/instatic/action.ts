@@ -482,7 +482,7 @@ function siteUserOf(domain: string, paths: InstaticActionPaths): string | null {
  * without a site (a system account, or one left by a half-finished delete), and
  * a row can name an account someone removed by hand.
  */
-function siteUserTaken(user: string, paths: InstaticActionPaths): boolean {
+export function siteUserTaken(user: string, paths: InstaticActionPaths): boolean {
   if (runCommand("getent", ["passwd", user]).ok) return true;
   if (!readable(paths.panelDb)) return false;
   try {

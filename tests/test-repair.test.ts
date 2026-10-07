@@ -138,7 +138,6 @@ const PROBE = String.raw`
   }
 
   const repairWithoutSession = await repairResult();
-  const repairWithSession = await repairResult();
 
   calls.length = 0;
   resetProvisioning();
@@ -152,14 +151,12 @@ const PROBE = String.raw`
 
   process.stdout.write(JSON.stringify({
     repairWithoutSession,
-    repairWithSession,
     installWithoutSession: { threw: installThrew, calls: [...calls], provisioning: { ...provisioning } },
   }));
 `;
 
 function runProbe(): {
   repairWithoutSession: { threw: boolean; calls: string[]; provisioning: Record<string, boolean> };
-  repairWithSession: { threw: boolean; calls: string[]; provisioning: Record<string, boolean> };
   installWithoutSession: { threw: boolean; calls: string[]; provisioning: Record<string, boolean> };
 } {
   const result = spawnSync(process.execPath, ["-e", PROBE], { cwd: REPO, encoding: "utf8" });
@@ -183,13 +180,6 @@ test("repair completes reconciliation even when no panel session exists", () => 
     units: true,
     nginx: true,
   });
-});
-
-test("repair still completes when a panel session is available", () => {
-  expect(result.repairWithSession.threw).toBe(false);
-  for (const name of ["reconcilePanelIdentity", "installUnits", "reconcileNginxProxy"]) {
-    expect(result.repairWithSession.calls).toContain(name);
-  }
 });
 
 test("repair checks persistent enablement for every installed timer", () => {

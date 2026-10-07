@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { readPanelDatabase } from "../lib/panel-snapshot";
+import { getLivePanelInfo, readPanelDatabase } from "../lib/panel-snapshot";
 
 let fixtureDir = "";
 let counter = 0;
@@ -19,10 +19,6 @@ beforeAll(() => {
 afterAll(() => {
   rmSync(fixtureDir, { recursive: true, force: true });
 });
-
-function implementation(): string {
-  return readFileSync(join(import.meta.dir, "../lib/panel-snapshot.ts"), "utf-8");
-}
 
 function fixture(stem: string): string {
   return join(fixtureDir, `${stem}-${counter++}.sqlite`);
@@ -71,34 +67,8 @@ function walDatabase(path: string): Database {
   return db;
 }
 
-test("the snapshot reader uses Bun's read-only SQLite API", () => {
-  expect(implementation()).toInclude('import { Database } from "bun:sqlite"');
-  expect(implementation()).toInclude("{ readonly: true }");
-});
-
-test("the snapshot reader no longer invokes the sqlite3 CLI", () => {
-  expect(implementation()).not.toInclude('"sqlite3"');
-});
-
-test("the snapshot reader creates a SQLite-consistent snapshot", () => {
-  expect(implementation()).toInclude('"VACUUM INTO ?"');
-});
-
-test("the snapshot reader validates snapshot integrity", () => {
-  expect(implementation()).toInclude('"PRAGMA integrity_check;"');
-});
-
-test("the snapshot reader does not copy live database sidecars", () => {
-  expect(implementation()).not.toInclude("copyFileSync");
-});
-
-test("the snapshot reader closes its database connection", () => {
-  expect(implementation()).toInclude("db.close()");
-});
-
-test("the root-only snapshot guard remains", () => {
-  expect(implementation()).toInclude("process.getuid");
-  expect(implementation()).toInclude("must run as root");
+test.skipIf(process.getuid?.() === 0)("the live panel database is read only as root", () => {
+  expect(() => getLivePanelInfo()).toThrow("must run as root");
 });
 
 test("a missing panel database is treated as empty and is not created", () => {

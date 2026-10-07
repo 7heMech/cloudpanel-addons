@@ -219,6 +219,11 @@ reproduced site information takes its column width, gutter and label styling
 from the panel's own `assets/css/frontend/site.css`, so the blocks land where
 the panel puts them.
 
+A page that opens in a window of its own, such as the terminal, uses
+`renderToolWindow`: the same head, palette, theme switch and base script as the
+shell, without the header, navigation or footer, which a small window has no
+room for.
+
 A site-scoped page can also be mounted into the panel's own site page instead
 of reproducing it. The manager injects a loader next to the tab strip: clicking
 an addon's tab fetches that page as a fragment -- stylesheet, markup and script,

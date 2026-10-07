@@ -21,6 +21,7 @@ import {
 import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { log } from "../../cli/util";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { readUnixAccounts, siteAccountProblem, splitSharedUids, TRUSTED_LOGINS } from "../../lib/site-accounts";
 import {
   DEFAULT_SENDER, envelopeGrants, FALLBACK_LOCAL, parseRelay, parseSenderTemplate, senderFor, siteName, smtpAddress, smtpDomain,
   submissionRule, trustedFile, type SmtpProfile, type SmtpRelay, type SmtpRewriteRule, type SmtpSubmissionRule,
@@ -39,7 +40,6 @@ const POSTFIX_KEYS = [
   "sender_canonical_maps", "local_login_sender_maps", "smtpd_relay_restrictions",
 ] as const;
 type PostfixKey = (typeof POSTFIX_KEYS)[number];
-const TRUSTED_LOGINS = ["root", "postfix", "clp"];
 const PHP_INI_NAME = "99-clp-addons-smtp.ini";
 const PHP_INI = `; Managed by clp-addons SMTP Relay\nsendmail_path = ${CLI_BIN} smtp-submit -t -i\n`;
 const DONT_SEND: SmtpProfile = { id: "dont-send", name: "Don't send", relay: null, sender: DEFAULT_SENDER };
@@ -270,29 +270,20 @@ function checkedSites(rows: SmtpSiteRow[], skipped: SiteSet["skipped"] = []): Si
     let domain: string | null = null;
     try { domain = smtpDomain(site.domain); } catch { /* reported as skipped */ }
     const reason = domain === null || !mailable(domain) ? "its domain is not one mail can use"
-      : !/^[a-z_][a-z0-9_-]{0,31}$/.test(site.user) || TRUSTED_LOGINS.includes(site.user) ? `its Unix user ${site.user} cannot be bound`
-      : site.phpVersion !== null && !/^[0-9]+\.[0-9]+$/.test(site.phpVersion) ? "its PHP version is unreadable"
-      : !Number.isInteger(site.uid) || site.uid < 1 || !Number.isInteger(site.gid) || site.gid < 0 ? "its Unix account is invalid"
-      : null;
+      : siteAccountProblem(site)
+        ?? (site.phpVersion !== null && !/^[0-9]+\.[0-9]+$/.test(site.phpVersion) ? "its PHP version is unreadable" : null);
     if (reason) skipped.push({ id: site.id, domain: site.domain, reason });
     else valid.push({ ...site, domain: domain! });
   }
-  const uids = new Map<number, number>();
-  for (const site of valid) uids.set(site.uid, (uids.get(site.uid) ?? 0) + 1);
-  for (const site of valid) {
-    if (uids.get(site.uid)! > 1) skipped.push({ id: site.id, domain: site.domain, reason: `it shares Unix UID ${site.uid} with another site` });
-  }
-  return { sites: valid.filter((site) => uids.get(site.uid) === 1), skipped };
+  const { unique, shared } = splitSharedUids(valid);
+  for (const site of shared) skipped.push({ id: site.id, domain: site.domain, reason: `it shares Unix UID ${site.uid} with another site` });
+  return { sites: unique, skipped };
 }
 
 /** Every CloudPanel site, whatever it runs: anything can call sendmail as its site user. */
 function panelSites(paths: SmtpPaths, fixture?: SmtpSiteRow[]): SiteSet {
   if (fixture) return checkedSites(fixture);
-  const accounts = new Map<string, { uid: number; gid: number }>();
-  for (const line of readFileSync(paths.passwd, "utf8").split("\n")) {
-    const [name, , uid, gid] = line.split(":");
-    if (name && uid && gid) accounts.set(name, { uid: Number(uid), gid: Number(gid) });
-  }
+  const accounts = readUnixAccounts(paths.passwd);
   const db = new Database(paths.panelDb, { readonly: true });
   try {
     const rows = db.query<{ id: number; domain_name: string; user: string; type: string; php_version: string | null }, []>(

@@ -22,6 +22,7 @@ import { executeMaintenanceAction } from "../addons/maintenance/action";
 import { runAuthActionStdin } from "./auth-action";
 import { runManagerAction, type ManagerOps } from "./manager-action";
 import { runSmtpSubmit } from "../addons/smtp/submit";
+import { runTerminalPty } from "../addons/terminal/pty";
 
 /**
  * The privileged half of the three manager verbs.
@@ -58,9 +59,11 @@ function usage(): void {
   clp-addons action maintenance <verb> --domain=<domain>
   clp-addons action git <verb> [--domain=<domain>] [--job=<job>]
   clp-addons action manager <enable|disable|update|job|watch-job> [--addon=<addon>] [--id=<job>]
+  clp-addons action terminal session --domain=<domain> --cols=<n> --rows=<n>   (through the gateway only)
   clp-addons action auth (session id on bounded stdin)
   clp-addons serve
   clp-addons smtp-submit -t -i
+  clp-addons terminal-pty   (as a site user, started by the terminal action)
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}
@@ -139,6 +142,7 @@ async function main(): Promise<number> {
     case "uninstall": cmdUninstall(rest); return 0;
     case "action": return await cmdAction(rest);
     case "smtp-submit": return await runSmtpSubmit(rest);
+    case "terminal-pty": return await runTerminalPty(rest);
     case "serve": return await cmdServe();
     case "help":
     case "--help":

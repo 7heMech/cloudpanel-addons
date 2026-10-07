@@ -131,7 +131,27 @@ export const MANAGER_ALLOWED_VERBS = new Set([
   "reconcile",
 ]);
 
-export const STREAM_ALLOWED_VERBS = new Set(["watch-job", "scan-stream"]);
+/**
+ * One verb: a shell as a site's user. The gateway checks the session itself
+ * before running it, rather than trusting the manager; see
+ * docs/decisions/terminal.md.
+ */
+export const TERMINAL_ALLOWED_VERBS = new Set(["session"]);
+
+export const STREAM_ALLOWED_VERBS = new Set(["watch-job", "scan-stream", "session"]);
+
+/**
+ * The `addon:verb` pairs whose socket carries bytes both ways. Only these
+ * accept, and require, the CloudPanel session id the gateway checks itself;
+ * every other stream ignores what the manager sends after its request line.
+ */
+export const DUPLEX_STREAM_VERBS = new Set(["terminal:session"]);
+
+/**
+ * Set in the environment of a worker the gateway started for a duplex stream,
+ * after checking its session. A duplex worker refuses to run without it.
+ */
+export const DUPLEX_WORKER_MARKER = "CLP_ADDONS_DUPLEX_WORKER";
 
 export interface SanitizedSite {
   domain: string;
@@ -172,7 +192,7 @@ export type GatewayRequest =
       input?: string;
       timeoutMs?: number;
     }
-  | { kind: "stream-action"; addon: string; verb: string; args?: string[] };
+  | { kind: "stream-action"; addon: string; verb: string; args?: string[]; sessionId?: string };
 
 export interface ActionResult<T = unknown> {
   ok: boolean;
@@ -185,9 +205,11 @@ export type GatewayResponse<T = unknown> = ActionResult<T>;
 /**
  * Parses an incoming line from the gateway socket.
  * Supports both JSON request frames and legacy raw `<sessionId>\n` lines.
+ * Only the first line is the request; what follows it is never parsed here.
  */
 export function parseGatewayRequest(raw: string): GatewayRequest | null {
-  const trimmed = raw.trim();
+  const newline = raw.indexOf("\n");
+  const trimmed = (newline < 0 ? raw : raw.slice(0, newline)).trim();
   if (!trimmed) return null;
 
   if (trimmed.startsWith("{")) {
@@ -224,6 +246,7 @@ export function parseGatewayRequest(raw: string): GatewayRequest | null {
           addon: obj.addon,
           verb: obj.verb,
           args: Array.isArray(obj.args) ? obj.args.filter((a: unknown) => typeof a === "string") : undefined,
+          ...(typeof obj.sessionId === "string" ? { sessionId: obj.sessionId } : {}),
         };
       }
     } catch {

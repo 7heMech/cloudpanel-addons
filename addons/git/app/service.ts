@@ -9,6 +9,9 @@ import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
 import { fetchPanelInfo } from "../../../lib/snapshot-reader";
 import type { SiteContext } from "../../../lib/site-context";
 import type { GitHookPayload, GitHookResult, GitJobView, GitSiteStatus, GitWebhook } from "../action";
+import { validateDomain } from "../../../lib/app-http";
+
+export { validateDomain };
 
 export type {
   GitCommit, GitDeployResult, GitHookPayload, GitHookResult, GitJobView, GitSiteConfig, GitSiteStatus, GitWebhook,
@@ -25,14 +28,6 @@ function action<T>(verb: string, args: string[] = [], input?: string): Promise<A
     timeout: TIMEOUTS[verb] ?? DEFAULT_TIMEOUT,
     maxBuffer: 1024 * 1024,
   });
-}
-
-const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
-
-export function validateDomain(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const domain = value.trim().toLowerCase().replace(/\.$/, "");
-  return domain.length <= 253 && DOMAIN_RE.test(domain) ? domain : null;
 }
 
 /** One site's status together with the panel context its page is drawn in. */

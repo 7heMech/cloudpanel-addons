@@ -33,6 +33,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
 | Panel Tweaks | Site search and columns, mobile layouts and theme improvements. |
 | WordPress Sign-In | One-click sign-in to any WordPress on the server, no password needed. |
+| Terminal | A shell as a site's own user, in its own window, for administrators. |
 
 Only CloudPanel administrators see the Addons tab, except that site managers
 also reach Git Deploy. Other panel users get the WordPress Sign-In link on the
@@ -50,7 +51,7 @@ Sites page for their own sites, and nothing else.
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
 Addon names are `cloudflare-ips`, `instatic`, `stager`, `maintenance`,
-`php-resources`, `git`, `panel-tweaks`, `wp-login`, and `smtp`. Run
+`php-resources`, `git`, `panel-tweaks`, `wp-login`, `smtp`, and `terminal`. Run
 `clp-addons --help` for version selection and data removal options.
 
 See [Instatic backup and restore](docs/instatic-backups.md) for CloudPanel Remote

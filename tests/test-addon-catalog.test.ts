@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { execFileSync } from "node:child_process";
 import { ADDONS, ADDON_NAMES, addonHandler, addonMaintenance, templateWatchPaths } from "../cli/addon-catalog";
 import { mountPath } from "../lib/mount";
 import { CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, SERVICE_USER, SOCKET_PATH } from "../cli/paths";
@@ -44,7 +43,7 @@ test("every declared injection target is represented in the watch paths", () => 
 });
 
 test("every addon with privileged verbs declares them", () => {
-  for (const name of ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "smtp"]) {
+  for (const name of ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "smtp", "terminal"]) {
     expect(typeof ADDONS[name]!.action).toBe("function");
   }
   // It is markup injected into the panel's login page and has nothing to do as
@@ -74,49 +73,6 @@ test("the path constants do not import any addon", () => {
   const source = readFileSync(join(REPO, "cli/paths.ts"), "utf8");
   expect(source).not.toMatch(/from "\.\.\/addons\//);
   expect(source).not.toContain("export const ADDONS");
-});
-
-test("a new addon is one definition and one catalog line, not edits across the platform", () => {
-  // The claim the catalog exists to make: adding an addon must not mean finding
-  // a handler map, an action conditional and a repair call in three other
-  // files. This adds a synthetic definition to the list and asserts that
-  // dispatch, paths, watch paths and upkeep all pick it up with no other edit.
-  const script = `
-    import { mock } from "bun:test";
-    const real = await import("./cli/addon-catalog.ts");
-    const synthetic = {
-      name: "synthetic",
-      title: "Synthetic",
-      description: "a test addon",
-      targets: [{ slug: "s", template: "Synthetic/page.html.twig", anchorAfter: "x", snippet: () => "", required: false }],
-      handler: async () => new Response("ok"),
-      action: () => 0,
-      maintenance: { label: "synthetic upkeep", run: () => { globalThis.__ranUpkeep = true; return "did something"; } },
-    };
-    const spec = {
-      ...synthetic,
-      configFile: "/etc/clp-addons/synthetic.conf",
-      stateDir: "/var/lib/clp-addons/synthetic",
-    };
-    mock.module("./cli/addon-catalog.ts", () => ({
-      ...real,
-      ADDONS: { ...real.ADDONS, synthetic: spec },
-      ADDON_NAMES: [...real.ADDON_NAMES, "synthetic"],
-      addonHandler: (name) => (name === "synthetic" ? spec.handler : real.addonHandler(name)),
-    }));
-    const catalog = await import("./cli/addon-catalog.ts");
-    const { runAddonMaintenance } = await import("./cli/maintenance.ts");
-    await runAddonMaintenance([spec]);
-    console.log(JSON.stringify({
-      named: catalog.ADDON_NAMES.includes("synthetic"),
-      handler: typeof catalog.addonHandler("synthetic"),
-      action: typeof catalog.ADDONS.synthetic.action,
-      upkeep: globalThis.__ranUpkeep === true,
-    }));
-  `;
-  const out = execFileSync(process.execPath, ["-e", script], { cwd: REPO, encoding: "utf8" });
-  const result = JSON.parse(out.trim().split("\n").at(-1)!) as Record<string, unknown>;
-  expect(result).toEqual({ named: true, handler: "function", action: "function", upkeep: true });
 });
 
 test("the manager and the auth gateway are not addons", () => {

@@ -1,0 +1,56 @@
+html, body.clp-tool-window { height: 100%; }
+/* Sized to what the on-screen keyboard leaves visible, so the extra keys sit
+   just above it; the script sets both while a keyboard is open. */
+body.clp-tool-window { position: fixed; left: 0; right: 0; top: var(--term-visible-top, 0);
+  height: var(--term-visible-height, 100%); min-height: 0; overflow: hidden; background: var(--panel); }
+.term-bar { flex: 0 0 40px; display: flex; align-items: center; gap: 10px; padding: 0 6px 0 12px; min-width: 0;
+  background: var(--header-bg); border-bottom: 1px solid var(--border); font-size: 14px; }
+.term-logo { flex: 0 0 auto; width: auto; height: 20px; }
+.term-domain { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--heading); }
+.term-user { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.term-bar .badge { flex: 0 0 auto; }
+.term-tools { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.term-tool { display: flex; align-items: center; justify-content: center; min-width: 32px; height: 32px; padding: 0 6px;
+  border: 0; border-radius: 4px; background: transparent; color: var(--header-icon); cursor: pointer; font-size: 14px; }
+.term-tool:hover { color: var(--accent); background: var(--surface); }
+.term-tool:disabled { opacity: .4; cursor: default; color: var(--header-icon); background: transparent; }
+.term-tool > svg { width: 16px; height: 16px; }
+/* Keep reset apart from the size buttons, beside the theme switch. */
+#term-font-reset { margin-left: 16px; }
+#theme-switch .sun { display: none; }
+html.dark #theme-switch .sun { display: block; }
+html.dark #theme-switch .moon { display: none; }
+.term-main { position: relative; flex: 1 1 auto; min-height: 0; background: #fff; }
+html.dark .term-main { background: #1c1f26; }
+#terminal { position: absolute; inset: 6px 4px 4px 10px; }
+/* xterm paints its viewport black; the area below the last row shows it. */
+#terminal .xterm, #terminal .xterm-viewport { height: 100%; background-color: transparent !important; }
+.term-main.is-ended #terminal { opacity: .45; }
+.term-ended { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.term-ended .card { width: min(420px, 100%); margin: 0; text-align: center; }
+.term-ended h2 { margin: 0 0 8px; }
+.term-ended p { margin: 0 0 20px; color: var(--muted); overflow-wrap: anywhere; }
+.term-ended .actions { justify-content: center; }
+/* A plain-text copy of the terminal laid exactly over it while a finger
+   selects; the script sets its box, font and metrics from the terminal's. */
+.term-select { position: absolute; z-index: 10; margin: 0; padding: 0; overflow-y: auto; overflow-x: hidden;
+  scrollbar-width: none; white-space: break-spaces; word-break: break-all; overflow-wrap: anywhere;
+  font-kerning: none; font-variant-ligatures: none;
+  user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; caret-color: transparent; outline: none; }
+.term-select::-webkit-scrollbar { display: none; }
+/* Keys a touch keyboard does not have, for the phones and tablets that need them. */
+.term-keys { display: none; flex: 0 0 auto; gap: 6px; padding: 6px; overflow-x: auto;
+  background: var(--header-bg); border-top: 1px solid var(--border); }
+.term-keys button { flex: 0 0 auto; min-width: 44px; min-height: 36px; padding: 0 10px; border: 1px solid var(--button-border);
+  border-radius: 4px; background: var(--button-bg); color: var(--button-text); font-family: var(--mono); font-size: 14px; }
+/* A long press is a held key, not a text selection or a callout menu. */
+.term-keys button { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+.term-keys button.is-down { background: var(--button-hover); }
+.term-keys button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #fff; }
+@media (pointer: coarse) {
+  .term-keys { display: flex; }
+}
+@media (max-width: 520px) {
+  .term-logo { display: none !important; }
+  .term-user { display: none; }
+}
