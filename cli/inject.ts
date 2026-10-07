@@ -818,7 +818,22 @@ map $realip_remote_addr $clp_maintenance_peer {
     "" $remote_addr;
     default $realip_remote_addr;
 }
-geo $clp_maintenance_peer $clp_cf_peer {
+# A loopback peer is CloudPanel's own front server for a site it proxies to a
+# local backend, such as WordPress; it passes its client in X-Real-IP.
+geo $clp_maintenance_peer $clp_local_peer {
+    default 0;
+    127.0.0.0/8 1;
+    ::1/128 1;
+}
+map $http_x_real_ip $clp_real_ip_header {
+    default "";
+    ~^[0-9A-Fa-f:.]+$ $http_x_real_ip;
+}
+map "$clp_local_peer:$clp_real_ip_header" $clp_maintenance_client {
+    default $clp_maintenance_peer;
+    ~^1:.+$ $clp_real_ip_header;
+}
+geo $clp_maintenance_client $clp_cf_peer {
     default 0;
 ${ranges.map((range) => `    ${range} 1;`).join("\n")}
 }
@@ -827,7 +842,7 @@ map $http_cf_connecting_ip $clp_cf_header_ip {
     ~^[0-9A-Fa-f:.]+$ $http_cf_connecting_ip;
 }
 map "$clp_cf_peer:$clp_cf_header_ip" $clp_maintenance_ip {
-    default $clp_maintenance_peer;
+    default $clp_maintenance_client;
     ~^1:.+$ $clp_cf_header_ip;
 }
 `;
