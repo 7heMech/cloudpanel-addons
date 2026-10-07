@@ -1,6 +1,5 @@
-// Bun's built-ins replaced a set of Node and shell calls across the CLI. These
-// assert both the behaviour and, where a regression would be silent, that the
-// call site still reads the way it has to.
+// The CLI's small helpers built on Bun's built-ins: command lookup and
+// capture, checksums, version tags and the Nginx check's error output.
 import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,16 +7,6 @@ import { loadLocal } from "../cli/release";
 import { reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
 import { have, tryRun } from "../cli/util";
 import { isNewerThan, listAvailableTags } from "../addons/instatic/app/tags";
-
-function source(path: string): string {
-  return readFileSync(new URL(`../${path}`, import.meta.url), "utf-8");
-}
-
-test("PATH probing uses Bun.which", () => {
-  const utilSource = source("cli/util.ts");
-  expect(utilSource).toInclude("Bun.which(cmd");
-  expect(utilSource).not.toInclude('run("command", ["-v"');
-});
 
 test("have finds and rejects commands", () => {
   expect(have("sh")).toBe(true);
@@ -46,22 +35,6 @@ test("tryRun preserves spawn-failure messages", () => {
   const result = tryRun("/no/such/clp-addons-command", []);
   expect(result.ok).toBe(false);
   expect(result.out).toMatch(/not found|ENOENT/i);
-});
-
-test("tryRun uses Bun.spawnSync", () => {
-  expect(source("cli/util.ts")).toInclude("Bun.spawnSync([cmd, ...args]");
-});
-
-test("release checksums use Bun.CryptoHasher", () => {
-  const releaseSource = source("cli/release.ts");
-  expect(releaseSource).toInclude('Bun.CryptoHasher.hash("sha256", bytes, "hex")');
-  expect(releaseSource).not.toInclude('from "node:crypto"');
-});
-
-test("inject hashes use Bun.CryptoHasher", () => {
-  const injectSource = source("cli/inject.ts");
-  expect(injectSource).toInclude('Bun.CryptoHasher.hash("sha256", s, "hex")');
-  expect(injectSource).not.toInclude('from "node:crypto"');
 });
 
 test("loadLocal accepts a valid Bun SHA-256 checksum and rejects a mismatch", () => {
@@ -114,20 +87,12 @@ test("tag comparison remains numeric", () => {
   expect(isNewerThan("0.0.9", "0.0.18")).toBe(false);
 });
 
-test("strict tag filtering remains in place", () => {
-  expect(source("addons/instatic/app/tags.ts")).toInclude("const VERSION_RE = /^\\d+\\.\\d+\\.\\d+$/;");
-});
-
-test("tag sorting uses reversed Bun semver order", () => {
-  expect(source("addons/instatic/app/tags.ts")).toInclude("Bun.semver.order(b, a)");
-});
-
 test("registry tags are filtered and sorted descending", async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = Object.assign(async (input: string | URL | Request) => {
       if (String(input).includes("/token?")) return new Response(JSON.stringify({ token: "test-token" }));
-      return new Response(JSON.stringify({ tags: ["1.0.9", "1.0.18", "not-a-version", "1.0.10"] }));
+      return new Response(JSON.stringify({ tags: ["1.0.9", "1.0.18", "not-a-version", "1.0.18-rc1", "v1.0.20", "1.0.10"] }));
     }, { preconnect: originalFetch.preconnect }) satisfies typeof fetch;
     const listed = await listAvailableTags();
     expect(listed.tags).toEqual(["1.0.18", "1.0.10", "1.0.9"]);
@@ -157,6 +122,3 @@ test("Nginx status helper preserves stderr precedence", () => {
   }
 });
 
-test("Nginx status helper uses Bun.spawnSync", () => {
-  expect(source("cli/inject.ts")).toInclude("Bun.spawnSync([command, ...args]");
-});

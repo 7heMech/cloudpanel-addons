@@ -6,12 +6,10 @@
 // refuses to clone into a target that already has a `queued` or `running`
 // record, so the hostname was permanently blocked until a human ran prune by
 // hand. These tests exercise the automatic entry point (repair) rather than
-// calling cmdPrune directly, which is the exact gap the previous coverage
-// (a source-text check of cmdPrune's own body, not of anything that calls
-// it) left open.
+// calling cmdPrune directly.
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -274,23 +272,40 @@ test.serial("a throwing prune does not stop the rest of repair", () => {
   }
 });
 
-test("cmdRepair runs addon maintenance after nginx/anchor reconciliation, and --anchors-only skips it", () => {
-  const source = readFileSync(join(repo, "cli/repair.ts"), "utf8");
-  const repairStart = source.indexOf("export async function cmdRepair");
-  expect(repairStart).toBeGreaterThan(-1);
-  const repairBody = source.slice(repairStart);
-
+test.serial("repair runs addon maintenance after the anchors and Nginx, and --anchors-only reconciles only those", () => {
   // Stager's prune recovers a vhost a killed clone carried over and runs its
-  // own `nginx -t`; running it before the master vhost is repaired would test a
-  // configuration that is still broken.
-  expect(repairBody.includes("await runAddonMaintenance(all)")).toBe(true);
-  expect(repairBody.indexOf("await runAddonMaintenance(all)"))
-    .toBeGreaterThan(repairBody.indexOf("reconcileNginx(quiet)"));
-  expect(repairBody.indexOf("await runAddonMaintenance(all)"))
-    .toBeGreaterThan(repairBody.indexOf("reconcileAnchors(quiet)"));
-
-  const anchorsOnlyStart = repairBody.indexOf('flags["anchors-only"]');
-  const anchorsOnlyReturn = repairBody.indexOf("return;", anchorsOnlyStart);
-  const anchorsOnlyBranch = repairBody.slice(anchorsOnlyStart, anchorsOnlyReturn);
-  expect(anchorsOnlyBranch.includes("runAddonMaintenance")).toBe(false);
+  // own `nginx -t`; running it before the master vhost is repaired would test
+  // a configuration that is still broken.
+  const script = `${mockPrelude}
+    globalThis.__order = [];
+    mock.module("./cli/inject.ts", () => ({
+      KNOWN_GOOD_PANEL_VERSIONS: [],
+      inspect: () => ({ state: "ok" }),
+      inspectNginxMaintenance: () => ({ state: "ok" }),
+      inspectNginxProxy: () => ({ state: "ok" }),
+      masterVhostHost: () => null,
+      panelVersion: () => "test",
+      purgeTwigCache: () => {},
+      reconcile: () => { globalThis.__order.push("anchors"); return { statuses: [], changed: false }; },
+      reconcileNginxMaintenance: () => { globalThis.__order.push("maintenance"); return { state: "missing", changed: false }; },
+      reconcileNginxProxy: () => { globalThis.__order.push("nginx"); return { state: "ok", changed: false }; },
+    }));
+    const realAction = await import("./addons/stager/action.ts");
+    mock.module("./addons/stager/action.ts", () => ({
+      ...realAction,
+      runStagerAction: async (argv) => { globalThis.__order.push(argv.join(" ")); return 0; },
+    }));
+    const { cmdRepair } = await import("./cli/repair.ts");
+    await cmdRepair([]);
+    const full = globalThis.__order.splice(0);
+    await cmdRepair(["--anchors-only"]);
+    process.stdout.write(JSON.stringify({ full, anchorsOnly: globalThis.__order }));
+  `;
+  const result = spawnSync(process.execPath, ["-e", script], { cwd: repo, encoding: "utf8" });
+  expect(result.status, result.stderr).toBe(0);
+  const output = JSON.parse(result.stdout.trim().split("\n").pop() ?? "") as { full: string[]; anchorsOnly: string[] };
+  expect(output.full.indexOf("prune")).toBeGreaterThan(output.full.lastIndexOf("anchors"));
+  expect(output.full.indexOf("prune")).toBeGreaterThan(output.full.lastIndexOf("nginx"));
+  expect(output.full.filter((step) => step === "prune")).toHaveLength(1);
+  expect(output.anchorsOnly).toEqual(["anchors", "maintenance", "nginx"]);
 });

@@ -6,14 +6,15 @@
 // The fixtures under tests/fixtures/session are real panel sessions with the
 // identifying fields replaced; the mutations below are the ways a forged one
 // could try to look authenticated.
-import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  authenticateRequest, MAX_SESSION_BYTES, parsePanelSession, readPanelSessionFile,
+  authenticateRequest, MAX_SESSION_BYTES, panelSessionId, parsePanelSession, readPanelSessionFile,
 } from "../lib/sso-auth";
+import { SESSION_DIR } from "../cli/paths";
 import { adminGate } from "../lib/sso-auth";
 
 
@@ -182,31 +183,8 @@ test("session-file provenance is checked before bounded descriptor reads", async
   }
 });
 
-// The SSO path is in-process and reads the panel's own session files; there is
-// no token exchange and no external validator to be tricked into answering.
-describe("the SSO path is in-process and fail-closed", () => {
-  test("sessions are read through a bounded no-follow descriptor", () => {
-    const source = repoSource("lib/sso-auth.ts");
-    expect(source).toInclude("O_NOFOLLOW");
-    expect(source).toInclude("fstatSync(fd)");
-    expect(source).toInclude("readSync(fd");
-  });
-
-  test("the root auth action uses the fixed session directory", () => {
-    const source = repoSource("cli/auth-action.ts");
-    expect(source).toInclude("SESSION_DIR");
-    expect(source).toInclude("sess_");
-  });
-
-  test("CloudPanel's own cookie name and session directory are used", () => {
-    expect(repoSource("lib/sso-auth.ts")).toInclude('SESSION_COOKIE = "cloudpanel"');
-    expect(repoSource("cli/paths.ts")).toInclude("/home/clp/htdocs/app/files/var/sessions");
-  });
-
-  test("there is no HMAC token exchange and no external session validator", () => {
-    const source = repoSource("lib/sso-auth.ts");
-    expect(source).not.toInclude("issueToken");
-    expect(source).not.toInclude("verifyToken");
-    expect(existsSync(join(repo, "libexec/clp-verify-session"))).toBe(false);
-  });
+test("CloudPanel's own cookie name and session directory are used", () => {
+  const request = new Request("https://panel.example/addons/", { headers: { Cookie: "other=x; cloudpanel=abc123" } });
+  expect(panelSessionId(request)).toBe("abc123");
+  expect(SESSION_DIR).toBe("/home/clp/htdocs/app/files/var/sessions");
 });

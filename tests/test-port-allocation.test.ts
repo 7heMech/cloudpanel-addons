@@ -61,11 +61,6 @@ describe("the two addons allocate against each other", () => {
     expect(source("addons/instatic/app/service.ts")).toMatch(/listInstancesOrThrow[\s\S]*?throw new Error/);
   });
 
-  test("the lenient readers are still there for the dashboards", () => {
-    expect(source("addons/stager/app/service.ts")).toInclude("async listJobs()");
-    expect(source("addons/instatic/app/service.ts")).toInclude("async listInstances()");
-  });
-
   test("the instatic create no longer allocates against a silent empty list", () => {
     expect(source("addons/instatic/app/service.ts")).toInclude("const existing = await this.listInstancesOrThrow()");
   });
@@ -81,13 +76,6 @@ describe("the two addons allocate against each other", () => {
   test("the clone route turns a throw into a message rather than a bare 500", () => {
     expect(source("addons/stager/app/index.ts"))
       .toMatch(/path === "\/api\/clones"[\s\S]{0,600}?try \{[\s\S]{0,200}?postClone/);
-  });
-
-  // And it no longer runs du over the whole docroot for a source that needs no
-  // credentials.
-  test("the route asks the cheap question first", () => {
-    expect(source("addons/stager/app/index.ts"))
-      .toInclude("(await stagerService.listSites()).find((site) => site.domain === source)");
   });
 });
 

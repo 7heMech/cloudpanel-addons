@@ -713,15 +713,6 @@ test("the path unit watches panel files and Cloudflare range replacements", () =
   expect(watched).toContain("/etc/nginx/cloudflare");
 });
 
-test("the watcher's fast path reconciles maintenance and the proxy", () => {
-  const source = readFileSync(join(import.meta.dir, "..", "cli/repair.ts"), "utf8");
-  const branchStart = source.indexOf('flags["anchors-only"] === true');
-  const branch = source.slice(branchStart, source.indexOf("return;", branchStart));
-  expect(branch.includes("reconcileAnchors(quiet)")).toBe(true);
-  expect(branch.includes("reconcileMaintenanceNginx(quiet)")).toBe(true);
-  expect(branch.includes("reconcileNginx(quiet)")).toBe(true);
-});
-
 test("the panel vhost may be owned by root or the panel user, but never world-writable", () => {
   const panelUid = panelUserUid();
   expect(vhostOwnerAccepted(0, 0o644)).toBe(true);

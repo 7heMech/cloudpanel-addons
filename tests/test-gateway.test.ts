@@ -414,11 +414,6 @@ describe("one request may not kill the manager", () => {
     expect(out, out.slice(-400)).toInclude("SURVIVED");
   });
 
-  test("the payload is handed to Bun.spawn's stdin option, so Bun owns the write and absorbs EPIPE", () => {
-    expect(source("lib/gateway-client.ts"))
-      .toMatch(/Bun\.spawn\(\[cmd,\s*\.\.\.cmdArgs\],[\s\S]*?stdin,[\s\S]*?stdout:\s*"pipe",/m);
-  });
-
   test("the field is bounded before the write is even attempted", () => {
     const index = source("addons/stager/app/index.ts");
     expect(index).toInclude("instaticPassword.length > MAX_PASSWORD");

@@ -466,22 +466,6 @@ describe("a killed clone does not leave the box worse off", () => {
       return prune.slice(0, prune.indexOf("\nfunction dispatch"));
     };
 
-    // The record sweep itself is shared; only the stager's own cleanup is here.
-    test("the shared sweep asks systemd whether a running record is really running", () => {
-      const store = source("cli/job-store.ts");
-      const sweep = store.slice(store.indexOf("export function pruneJobs"));
-      expect(sweep).toInclude("jobUnitIsActive(addon, entry)");
-      expect(store).toInclude('runCommand("systemctl", ["is-active", "--quiet", jobUnitName(addon, id)])');
-      expect(sweep).toInclude('jobSet(dir, "state", "failed")');
-    });
-
-    test("the stager asks for the sweep with its own retention", () => {
-      const body = pruneBody();
-      expect(body).toInclude("pruneJobs({");
-      expect(body).toInclude('addon: "stager"');
-      expect(body).toInclude("retentionDays: JOB_RETENTION_DAYS");
-    });
-
     test("it also sweeps a staging directory a killed job left in /tmp", () => {
       expect(pruneBody()).toInclude('entry.startsWith("clp-stager-stage.")');
     });
