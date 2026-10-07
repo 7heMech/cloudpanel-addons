@@ -44,6 +44,9 @@ html.dark .term-main { background: #1c1f26; }
   background: var(--header-bg); border-top: 1px solid var(--border); }
 .term-keys button { flex: 0 0 auto; min-width: 44px; min-height: 36px; padding: 0 10px; border: 1px solid var(--button-border);
   border-radius: 4px; background: var(--button-bg); color: var(--button-text); font-family: var(--mono); font-size: 14px; }
+/* A long press is a held key, not a text selection or a callout menu. */
+.term-keys button { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+.term-keys button.is-down { background: var(--button-hover); }
 .term-keys button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #fff; }
 @media (pointer: coarse) { .term-keys { display: flex; } }
 @media (max-width: 520px) {

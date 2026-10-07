@@ -288,18 +288,48 @@ function typeText(text) {
 }
 
 function sendKey(name) {
-  if (name === 'select') return openSelect();
-  if (name === 'paste') return pasteClipboard();
   if (name === 'ctrl') {
     ctrlHeld = !ctrlHeld;
     ctrlButton.setAttribute('aria-pressed', String(ctrlHeld));
-    term.focus();
     return;
   }
   const keys = { esc: '\x1b', tab: '\t' };
   typeText(keys[name] || arrowKey(name));
-  term.focus();
 }
+
+// The extra keys act on touch-down and never take focus, so the keyboard
+// stays as it was, open or closed. Arrows repeat while held, as a keyboard's
+// do. Select and Paste wait for the click: reading the clipboard needs one.
+const REPEATING = ['up', 'down', 'left', 'right'];
+document.querySelectorAll('.term-keys button[data-key]').forEach(function (button) {
+  const name = button.dataset.key;
+  if (name === 'select' || name === 'paste') {
+    button.addEventListener('mousedown', function (event) { event.preventDefault(); });
+    button.addEventListener('click', function () { name === 'select' ? openSelect() : pasteClipboard(); });
+    return;
+  }
+  let delay = 0;
+  let repeat = 0;
+  const release = function () {
+    clearTimeout(delay);
+    clearInterval(repeat);
+    button.classList.remove('is-down');
+  };
+  const press = function (event) {
+    event.preventDefault();
+    release();
+    button.classList.add('is-down');
+    sendKey(name);
+    if (REPEATING.indexOf(name) !== -1) {
+      delay = setTimeout(function () { repeat = setInterval(function () { sendKey(name); }, 60); }, 400);
+    }
+  };
+  button.addEventListener('touchstart', press, { passive: false });
+  button.addEventListener('mousedown', press);
+  ['touchend', 'touchcancel', 'mouseup', 'mouseleave'].forEach(function (type) { button.addEventListener(type, release); });
+  // Enter or Space on a focused key arrives as a click with no pointer.
+  button.addEventListener('click', function (event) { if (event.detail === 0) sendKey(name); });
+});
 
 async function pasteClipboard() {
   try {
@@ -308,7 +338,6 @@ async function pasteClipboard() {
   } catch (error) {
     notifyBar('The browser did not allow reading the clipboard.');
   }
-  term.focus();
 }
 
 function notifyBar(text) {
@@ -348,7 +377,6 @@ function openSelect() {
 function closeSelect() {
   selectPanel.hidden = true;
   window.getSelection().removeAllRanges();
-  term.focus();
 }
 
 async function copyAllText() {
