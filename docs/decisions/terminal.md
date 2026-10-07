@@ -40,12 +40,17 @@ own reconnect resumes where it stopped, and a reconnect from further back than
 the ring gets the whole ring instead. The window keeps its session id in
 `sessionStorage`, so a reload reattaches. A session nobody is attached to ends
 after 60 seconds; a window that says it is closing gets 5, which a reload beats.
-Keystrokes go one request at a time, in order. A popup that falls more than
-2 MiB behind is dropped and replays from the ring when it reconnects.
+A second window on the same session, such as a duplicated tab, takes it over,
+and the first says so instead of reconnecting. Keystrokes go one request at a
+time, in order, each batch numbered so a retry after a network error is not
+typed twice. A popup that falls more than 2 MiB behind is dropped and replays
+from the ring when it reconnects.
 
 A session belongs to one panel user and one CloudPanel session cookie; anything
 else is told it does not exist. The manager checks the session every 15 seconds
-while a window is attached, and so does the gateway, independently.
+while a window is attached, and so does the gateway, independently. Each looks
+again a second after a failure before ending the shell, because PHP can
+truncate a session file while rewriting it.
 
 ## Who reads what
 
@@ -64,11 +69,13 @@ what the browser typed.
 The worker runs only when started by the gateway's checked stream. It refuses a
 site the panel user does not own, a user that is root, `clp`, `postfix` or below
 uid or gid 1000, one whose uid another site shares, one
-with no login shell, and a site root that resolves outside the home. Its
-`runuser` argv is fixed; the site directory and size travel in environment
-variables `runuser` is told to keep. `runuser`'s stderr is discarded, so a site
-cannot write into the gateway's journal; the journal has only the worker's
-"opened" and "closed" lines, and refusals with control characters replaced.
+whose login shell is `nologin` or `false`, and a site root that resolves
+outside the home. Its `runuser` argv is fixed; the site directory and size
+travel in environment variables `runuser` is told to keep. Besides the worker's
+"opened" and "closed" lines and its refusals, the journal gets the first 4 KiB
+of what `runuser` and the login wrote to stderr, which is where a failed start
+says why. Every such line is labelled with the site and has its control
+characters replaced, so a site cannot forge a journal line.
 Ending a stream closes the helper's stdin as well as signalling the worker, and
 a worker that leaves its stdin full for 30 seconds ends the stream.
 
@@ -82,7 +89,8 @@ site sends reaches a root process.
 Closing the PTY hangs the shell up, as a dropped SSH connection does. What a
 user deliberately detached, such as `nohup`, outlives the window under their
 logind session, as it would over SSH. Disabling or uninstalling the addon stops
-every worker, which hangs up every shell.
+every worker, which hangs up every shell, once its config is gone, so no worker
+can start after.
 
 ## xterm.js
 

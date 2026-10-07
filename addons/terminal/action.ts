@@ -25,6 +25,8 @@ export const PTY_ENV_NAMES = ["TERM", "CLP_SITE_DIR", "CLP_PTY_SIZE"];
 export const MAX_TERMINAL_SIZE = 1000;
 /** Below this a uid is a system account, never a site's. */
 const MIN_SITE_UID = 1000;
+/** How much of what `runuser` and the login wrote to stderr reaches the journal. */
+const MAX_LOGGED_STDERR = 4 * 1024;
 
 export interface TerminalActionPaths {
   panelDb: string;
@@ -110,9 +112,9 @@ interface SiteRow {
   root_directory: string | null;
 }
 
-/** Whether a login shell is one that refuses logins. */
+/** Whether a login shell is one that refuses logins. An empty field is /bin/sh. */
 function refusesLogin(shell: string): boolean {
-  return !shell.startsWith("/") || /\/(nologin|false)$/.test(shell);
+  return shell !== "" && (!shell.startsWith("/") || /\/(nologin|false)$/.test(shell));
 }
 
 function insideHome(path: string, home: string): boolean {
@@ -197,6 +199,28 @@ export function runuserCommand(paths: TerminalActionPaths, user: string): string
   ];
 }
 
+/** Reads a child's stderr as it comes, keeping the first few KiB for when it exits. */
+function keepStderr(stream: unknown): () => Promise<string> {
+  if (!(stream instanceof ReadableStream)) return async () => "";
+  const reader = (stream as ReadableStream<Uint8Array>).getReader();
+  const kept: Uint8Array[] = [];
+  let size = 0;
+  const drained = (async () => {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      if (size < MAX_LOGGED_STDERR) kept.push(value.subarray(0, MAX_LOGGED_STDERR - size));
+      size += value.byteLength;
+    }
+  })().catch(() => {});
+  return async () => {
+    // Something the site started can hold stderr open after runuser has gone.
+    await Promise.race([drained, Bun.sleep(200)]);
+    void reader.cancel().catch(() => {});
+    return Buffer.concat(kept).toString("utf8");
+  };
+}
+
 function duration(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1000));
   const minutes = Math.floor(seconds / 60);
@@ -244,8 +268,7 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
   child = (options.spawn ?? Bun.spawn)(runuserCommand(paths, target.user), {
     stdin: "inherit",
     stdout: "inherit",
-    // A site's shell must not be able to write into the root gateway's journal.
-    stderr: "ignore",
+    stderr: "pipe",
     env: {
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
       TERM: "xterm-256color",
@@ -254,8 +277,15 @@ export async function runTerminalAction(argv: string[], options: TerminalActionO
     },
   });
   if (stopped) forward();
+  const stderr = keepStderr(child.stderr);
   try {
     const code = await child.exited;
+    // Why a shell failed to start is in what runuser or the login wrote. The
+    // site wrote some of it, so it is bounded and every line made printable
+    // and labelled: it cannot pass for another journal line.
+    for (const line of (await stderr()).split("\n")) {
+      if (line.trim()) audit(`${request.domain} stderr: ${printable(line)}`);
+    }
     const how = child.signalCode ? `signal ${child.signalCode}` : `exit ${code}`;
     audit(`${request.panelUser} closed ${request.domain} as ${target.user} after ${duration(now() - started)}, ${how}`);
     return typeof code === "number" ? code : 1;

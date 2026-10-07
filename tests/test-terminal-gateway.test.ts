@@ -48,7 +48,7 @@ interface Spawned {
 }
 
 /** A gateway whose worker is `command` in place of the CLI, recording each spawn. */
-async function gateway(command: string[], options: { sessionRecheckMs?: number } = {}) {
+async function gateway(command: string[], options: { sessionRecheckMs?: number; sessionConfirmMs?: number } = {}) {
   const spawned: Spawned[] = [];
   const socketPath = `${dir}/gw-${Math.random().toString(36).slice(2)}.sock`;
   const spawn = ((argv: string[], spawnOptions: Record<string, unknown>) => {
@@ -210,7 +210,7 @@ test("the manager cannot name the panel user", async () => {
 
 test("a session that lapses mid-stream stops the worker within one recheck", async () => {
   setRole("ROLE_ADMIN");
-  const gw = await gateway(["sleep", "30"], { sessionRecheckMs: 50 });
+  const gw = await gateway(["sleep", "30"], { sessionRecheckMs: 50, sessionConfirmMs: 20 });
   try {
     const c = await gw.connect();
     c.socket.write(terminalRequest());
@@ -220,6 +220,27 @@ test("a session that lapses mid-stream stops the worker within one recheck", asy
     await gw.spawned[0]!.proc.exited;
     expect(gw.spawned[0]!.proc.signalCode).toBe("SIGTERM");
   } finally {
+    await gw.close();
+  }
+});
+
+test("a session file caught mid-rewrite does not stop the worker", async () => {
+  setRole("ROLE_ADMIN");
+  const gw = await gateway(["sleep", "30"], { sessionRecheckMs: 50, sessionConfirmMs: 400 });
+  try {
+    const c = await gw.connect();
+    c.socket.write(terminalRequest());
+    await until(() => gw.spawned.length === 1);
+    writeFileSync(`${dir}/sess_live`, "");
+    await Bun.sleep(150);
+    writeFileSync(`${dir}/sess_live`, sessionFixture());
+    await Bun.sleep(600);
+    expect(c.closed).toBe(false);
+    expect(gw.spawned[0]!.proc.exitCode).toBeNull();
+    c.socket.end();
+    await c.done;
+  } finally {
+    writeFileSync(`${dir}/sess_live`, sessionFixture());
     await gw.close();
   }
 });

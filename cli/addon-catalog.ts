@@ -63,6 +63,8 @@ export interface AddonDefinition {
   action?: (argv: string[], options?: Record<string, unknown>) => Promise<number> | number;
   /** Withdraw changes outside addon state before disabling or uninstalling. */
   deactivate?: () => void;
+  /** Stop what is still running once the config is gone and nothing new can start. */
+  withdrawn?: () => void;
   /** Reapply the kept state outside addon state once enabled again. */
   activate?: () => void;
   /**

@@ -127,7 +127,7 @@ describe("the root worker", () => {
     expect(resolveTerminalTarget(request("mine.test", "customer"), paths).user).toBe("mine");
   });
 
-  test("runs one fixed runuser, hands it the pipes, and keeps the site's stderr out of the journal", async () => {
+  test("runs one fixed runuser and hands it the pipes", async () => {
     fixture([{ domain: "www.example.test", user: "example", uid: 2001 }]);
     const calls: { argv: string[]; options: Record<string, unknown> }[] = [];
     const audit: string[] = [];
@@ -156,7 +156,7 @@ describe("the root worker", () => {
     ]);
     expect(calls[0]!.options.stdin).toBe("inherit");
     expect(calls[0]!.options.stdout).toBe("inherit");
-    expect(calls[0]!.options.stderr).toBe("ignore");
+    expect(calls[0]!.options.stderr).toBe("pipe");
     expect(calls[0]!.options.env).toEqual({
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
       TERM: "xterm-256color",
@@ -167,6 +167,36 @@ describe("the root worker", () => {
       "admin opened www.example.test as example",
       "admin closed www.example.test as example after 1m1s, exit 3",
     ]);
+  });
+
+  test("logs why a start failed, bounded and unable to pass for another journal line", async () => {
+    fixture([{ domain: "www.example.test", user: "example", uid: 2001 }]);
+    const audit: string[] = [];
+    const code = await runTerminalAction(
+      ["session", "--domain=www.example.test", "--panel-user=admin", "--cols=80", "--rows=24"],
+      {
+        ...asIs,
+        paths,
+        processUid: 0,
+        env: { CLP_ADDONS_DUPLEX_WORKER: "1" },
+        audit: (line) => audit.push(line),
+        spawn: (() => Bun.spawn(
+          ["sh", "-c", "printf 'runuser: cannot open session\\n\\033[2J\\r[terminal] admin opened x\\n' >&2; head -c 100000 /dev/zero | tr '\\0' x >&2; exit 1"],
+          { stderr: "pipe" },
+        )) as unknown as typeof Bun.spawn,
+      },
+    );
+    expect(code).toBe(1);
+    const logged = audit.filter((line) => line.includes(" stderr: "));
+    expect(logged[0]).toBe("www.example.test stderr: runuser: cannot open session");
+    expect(logged[1]).toBe("www.example.test stderr: ?[2J?[terminal] admin opened x");
+    expect(logged.join("").length).toBeLessThan(8 * 1024);
+    expect(audit.at(-1)).toContain("closed www.example.test as example");
+  });
+
+  test("an empty login shell field is /bin/sh, not a refusal", () => {
+    fixture([{ domain: "sh.test", user: "plain", uid: 2001, shell: "" }]);
+    expect(resolveTerminalTarget(request("sh.test"), paths).user).toBe("plain");
   });
 
   test("starts nothing unless the gateway's checked stream started it", async () => {
@@ -245,8 +275,10 @@ describe("the helper", () => {
     });
     proc.stdin.write("not json\n");
     await proc.stdin.flush();
+    // stdin stays open, so only the hang-up ends the shell. dash dies of the
+    // SIGHUP or exits on the closed terminal, depending on which it sees first.
     const last = (await new Response(proc.stdout).text()).trim().split("\n").at(-1)!;
-    expect(JSON.parse(last)).toEqual({ exit: { code: null, signal: "SIGHUP" } });
+    expect([{ code: null, signal: "SIGHUP" }, { code: 0, signal: null }]).toContainEqual(JSON.parse(last).exit);
   });
 });
 
@@ -375,7 +407,7 @@ describe("the manager's sessions", () => {
   });
 
   test("parses only the messages the helper sends", () => {
-    expect(parseHelperLine('{"o":"aGk="}')).toEqual({ kind: "output", bytes: Buffer.from("hi") });
+    expect(parseHelperLine('{"o":"aGk="}')).toEqual({ kind: "output", bytes: Buffer.from("hi"), encoded: "aGk=" });
     expect(parseHelperLine('{"exit":{"code":0,"signal":null}}')).toEqual({ kind: "exit", code: 0, signal: null });
     for (const line of [
       '{"o":"not base64!"}', '{"o":"aGk"}', '{"exit":{"code":256,"signal":null}}', '{"exit":{"code":0,"signal":"kill"}}',
@@ -413,11 +445,49 @@ describe("the manager's sessions", () => {
 
   test("an operator who signs out loses the session", async () => {
     const { opener, streams } = fakeOpener();
-    const store = new TerminalSessions({ opener, authorize: async () => false, authRecheckMs: 20 });
+    const store = new TerminalSessions({ opener, authorize: async () => false, authRecheckMs: 20, authConfirmMs: 10 });
     const { id, stream } = await opened(store, streams);
     const seen = await events(store.attach(id, owner, attachRequest())!, (all) => all.some((item) => item.event === "ended"));
     expect(JSON.parse(seen.at(-1)!.data)).toEqual({ reason: "signed-out", code: null });
     expect(stream.closed).toBe(true);
+  });
+
+  test("one failed check that the next look contradicts keeps the session", async () => {
+    const { opener, streams } = fakeOpener();
+    let checks = 0;
+    const store = new TerminalSessions({ opener, authorize: async () => ++checks !== 1, authRecheckMs: 20, authConfirmMs: 30 });
+    const { id, stream } = await opened(store, streams);
+    const response = store.attach(id, owner, attachRequest())!;
+    await Bun.sleep(150);
+    expect(checks).toBeGreaterThan(2);
+    expect(stream.closed).toBe(false);
+    void response.body!.cancel().catch(() => {});
+  });
+
+  test("a second window takes the session over and the first is told it moved", async () => {
+    const { opener, streams } = fakeOpener();
+    const store = new TerminalSessions({ opener });
+    const { id, stream } = await opened(store, streams);
+    const first = events(store.attach(id, owner, attachRequest())!, () => false);
+    await Bun.sleep(10);
+    const second = events(store.attach(id, owner, attachRequest())!, (seen) => seen.length >= 3);
+    expect((await first).map((item) => item.event)).toEqual(["session", "reset", "moved"]);
+    stream.lines(out("still here"));
+    expect((await second)[2]).toEqual({ event: "message", data: Buffer.from("still here").toString("base64"), id: "10" });
+    expect(stream.closed).toBe(false);
+  });
+
+  test("a batch sent again after a network error is typed once", async () => {
+    const { opener, streams } = fakeOpener();
+    const store = new TerminalSessions({ opener });
+    const { id, stream } = await opened(store, streams);
+    const batch = (writer: string, seq: number) => ({ data: "ls\r", batch: { writer, seq } });
+    expect(store.input(id, owner, batch("a", 1))).toBe(true);
+    expect(store.input(id, owner, batch("a", 1))).toBe(true);
+    expect(store.input(id, owner, batch("a", 2))).toBe(true);
+    // A reloaded window numbers from the start again.
+    expect(store.input(id, owner, batch("b", 1))).toBe(true);
+    expect(stream.written).toHaveLength(3);
   });
 
   test("the shell's exit is the last event, and a popup that missed it is told on return", async () => {

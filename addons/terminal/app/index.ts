@@ -132,7 +132,15 @@ export async function handle(
       if (pair[0] === null || pair[1] === null) return json({ ok: false, error: "size must be [cols, rows]" }, 400);
       dimensions = [pair[0]!, pair[1]!];
     }
-    return terminalSessions.input(id, owner, { data, size: dimensions })
+    let batch: { writer: string; seq: number } | undefined;
+    if (body.writer !== undefined || body.seq !== undefined) {
+      if (typeof body.writer !== "string" || !/^[a-z0-9]{1,32}$/.test(body.writer)
+        || !Number.isSafeInteger(body.seq) || (body.seq as number) < 1) {
+        return json({ ok: false, error: "writer and seq must name one batch" }, 400);
+      }
+      batch = { writer: body.writer, seq: body.seq as number };
+    }
+    return terminalSessions.input(id, owner, { data, size: dimensions, batch })
       ? new Response(null, { status: 204, headers: policyHeaders(null) })
       : NOT_FOUND();
   }

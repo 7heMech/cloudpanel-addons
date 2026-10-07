@@ -565,7 +565,7 @@ const TERMINAL_TRANSCRIPT = [
   PROMPT,
 ].join("\r\n");
 
-/** What the next popup shows: `?state=ended|reconnecting` on the popup page sets it. */
+/** What the next popup shows: `?state=ended|moved|reconnecting` on the popup page sets it. */
 let terminalPreviewState = "";
 
 /**
@@ -595,7 +595,8 @@ function terminalPreview(req: Request, url: URL): Response | null {
         send(`event: session\ndata: ${JSON.stringify({ domain: "www.example.com", user: "example" })}\n\n`);
         send(`event: reset\nid: 1\ndata: ${Buffer.from(TERMINAL_TRANSCRIPT).toString("base64")}\n\n`);
         if (state === "ended") send(`event: ended\ndata: ${JSON.stringify({ reason: "exit", code: 0 })}\n\n`);
-        if (state === "ended" || state === "reconnecting") controller.close();
+        if (state === "moved") send("event: moved\ndata: {}\n\n");
+        if (state === "ended" || state === "moved" || state === "reconnecting") controller.close();
       },
     });
     return new Response(body, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });

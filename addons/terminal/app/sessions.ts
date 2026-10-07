@@ -13,7 +13,6 @@ import { policyHeaders } from "../../../lib/app-http";
 import { streamGatewayAction } from "../../../lib/gateway-client";
 import { SITE_USER_RE } from "../../../lib/site-accounts";
 import { stillAuthorized } from "../../../lib/sso-auth";
-import { MAX_TERMINAL_SIZE } from "../action";
 
 export const RING_BYTES = 256 * 1024;
 /** How long a session waits for its popup to come back before it ends. */
@@ -23,6 +22,8 @@ export const CLOSING_GRACE_MS = 5_000;
 const START_TIMEOUT_MS = 20_000;
 const KEEPALIVE_MS = 15_000;
 const AUTH_RECHECK_MS = 15_000;
+/** How long after a failed recheck the sign-in is looked at once more. */
+const AUTH_CONFIRM_MS = 1_000;
 /** The helper's output is coalesced to 32 KiB, which is under 44 KiB as base64. */
 const MAX_LINE_BYTES = 64 * 1024;
 /** Login noise tolerated before the helper says it is ready. */
@@ -75,7 +76,7 @@ export const gatewayOpener: StreamOpener = (request, handlers) =>
 
 export type HelperMessage =
   | { kind: "ready"; user: string; dir: string }
-  | { kind: "output"; bytes: Buffer }
+  | { kind: "output"; bytes: Buffer; encoded: string }
   | { kind: "exit"; code: number | null; signal: string | null }
   | { kind: "refused"; error: string };
 
@@ -99,7 +100,7 @@ export function parseHelperLine(line: string): HelperMessage | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const message = value as Record<string, unknown>;
   if (exactKeys(message, ["o"]) && typeof message.o === "string" && BASE64_RE.test(message.o)) {
-    return { kind: "output", bytes: Buffer.from(message.o, "base64") };
+    return { kind: "output", bytes: Buffer.from(message.o, "base64"), encoded: message.o };
   }
   if (exactKeys(message, ["ready"]) && message.ready && typeof message.ready === "object") {
     const ready = message.ready as Record<string, unknown>;
@@ -139,9 +140,13 @@ interface Session {
   user: string;
   state: "starting" | "open" | "ended";
   stream: TerminalStream | null;
-  ring: Buffer;
+  /** The last RING_BYTES of output, in the pieces it arrived in. */
+  ring: Buffer[];
+  ringBytes: number;
   /** Bytes of output ever received; the ring holds the last of them. */
   offset: number;
+  /** The last input batch taken from each window, so a retried one is not typed twice. */
+  lastInput: { writer: string; seq: number } | null;
   client: Client | null;
   endTimer: ReturnType<typeof setTimeout> | null;
   endAt: number;
@@ -156,6 +161,7 @@ export interface SessionStoreOptions {
   detachedGraceMs?: number;
   closingGraceMs?: number;
   authRecheckMs?: number;
+  authConfirmMs?: number;
 }
 
 function event(name: string | null, data: string, id?: number): string {
@@ -187,6 +193,7 @@ export class TerminalSessions {
   private readonly detachedGraceMs: number;
   private readonly closingGraceMs: number;
   private readonly authRecheckMs: number;
+  private readonly authConfirmMs: number;
 
   constructor(options: SessionStoreOptions = {}) {
     this.opener = options.opener ?? gatewayOpener;
@@ -194,6 +201,7 @@ export class TerminalSessions {
     this.detachedGraceMs = options.detachedGraceMs ?? DETACHED_GRACE_MS;
     this.closingGraceMs = options.closingGraceMs ?? CLOSING_GRACE_MS;
     this.authRecheckMs = options.authRecheckMs ?? AUTH_RECHECK_MS;
+    this.authConfirmMs = options.authConfirmMs ?? AUTH_CONFIRM_MS;
   }
 
   get size(): number {
@@ -209,8 +217,10 @@ export class TerminalSessions {
       user: "",
       state: "starting",
       stream: null,
-      ring: Buffer.alloc(0),
+      ring: [],
+      ringBytes: 0,
       offset: 0,
+      lastInput: null,
       client: null,
       endTimer: null,
       endAt: Infinity,
@@ -234,7 +244,7 @@ export class TerminalSessions {
 
       this.sessions.set(session.id, session);
       session.stream = this.opener(
-        { ...request, cols: Math.min(request.cols, MAX_TERMINAL_SIZE), rows: Math.min(request.rows, MAX_TERMINAL_SIZE) },
+        request,
         {
           onLine: (line) => {
             if (session.state === "ended") return;
@@ -251,7 +261,7 @@ export class TerminalSessions {
               this.scheduleEnd(session, this.detachedGraceMs, "detached");
               return settle({ ok: true, id: session.id, user: session.user });
             }
-            if (message?.kind === "output") return this.output(session, message.bytes);
+            if (message?.kind === "output") return this.output(session, message.bytes, message.encoded);
             if (message?.kind === "exit") return this.end(session, "exit", message.code);
             this.end(session, "protocol");
           },
@@ -266,12 +276,19 @@ export class TerminalSessions {
     });
   }
 
-  private output(session: Session, bytes: Buffer): void {
+  private output(session: Session, bytes: Buffer, encoded: string): void {
     if (bytes.byteLength === 0) return;
     session.offset += bytes.byteLength;
-    const joined = Buffer.concat([session.ring, bytes]);
-    session.ring = joined.byteLength > RING_BYTES ? joined.subarray(joined.byteLength - RING_BYTES) : joined;
-    session.client?.send(event(null, bytes.toString("base64"), session.offset));
+    session.ring.push(bytes);
+    session.ringBytes += bytes.byteLength;
+    while (session.ringBytes > RING_BYTES) {
+      const excess = session.ringBytes - RING_BYTES;
+      const first = session.ring[0]!;
+      if (first.byteLength <= excess) session.ring.shift();
+      else session.ring[0] = first.subarray(excess);
+      session.ringBytes -= Math.min(excess, first.byteLength);
+    }
+    session.client?.send(event(null, encoded, session.offset));
   }
 
   /** Ends the session at the earliest deadline asked for so far; attaching cancels it. */
@@ -368,16 +385,22 @@ export class TerminalSessions {
             try { controller.close(); } catch {}
           },
         };
-        // One popup per session: a second one takes over from the first.
-        session.client?.close();
+        // One popup per session: a second one takes over, and the first is
+        // told so rather than reconnecting and taking it back.
+        const previous = session.client;
+        if (previous) {
+          previous.send(event("moved", "{}"));
+          previous.close();
+        }
         this.cancelEnd(session);
         client.send(event("session", JSON.stringify({ domain: session.domain, user: session.user })));
-        const start = session.offset - session.ring.byteLength;
+        const ring = Buffer.concat(session.ring, session.ringBytes);
+        const start = session.offset - ring.byteLength;
         const from = lastEventId !== null && /^\d{1,15}$/.test(lastEventId) ? Number(lastEventId) : -1;
         if (from >= start && from <= session.offset) {
-          if (from < session.offset) client.send(event(null, session.ring.subarray(from - start).toString("base64"), session.offset));
+          if (from < session.offset) client.send(event(null, ring.subarray(from - start).toString("base64"), session.offset));
         } else {
-          client.send(event("reset", session.ring.toString("base64"), session.offset));
+          client.send(event("reset", ring.toString("base64"), session.offset));
         }
         if (session.state === "ended") {
           client.send(event("ended", JSON.stringify(session.ended)));
@@ -389,9 +412,18 @@ export class TerminalSessions {
         }
         session.client = client;
         keepalive = setInterval(() => { client?.send(": keepalive\n\n"); }, KEEPALIVE_MS);
+        let checking = false;
         recheck = setInterval(async () => {
-          if (session.client !== client) return;
-          if (await this.authorize(req) === false) this.end(session, "signed-out");
+          if (session.client !== client || checking) return;
+          checking = true;
+          try {
+            // One failed look can be the panel rewriting the session file.
+            if (await this.authorize(req) !== false) return;
+            await Bun.sleep(this.authConfirmMs);
+            if (session.client === client && await this.authorize(req) === false) this.end(session, "signed-out");
+          } finally {
+            checking = false;
+          }
         }, this.authRecheckMs);
       },
       cancel: () => {
@@ -409,10 +441,19 @@ export class TerminalSessions {
     });
   }
 
-  /** Keystrokes and size changes for one session; false when it is not this owner's. */
-  input(id: string, owner: Owner, input: { data?: string; size?: [number, number] }): boolean {
+  /**
+   * Keystrokes and size changes for one session; false when it is not this
+   * owner's. A batch numbered at or below the last one from the same window
+   * is a retry of one already typed, and is accepted without typing it again.
+   */
+  input(id: string, owner: Owner, input: { data?: string; size?: [number, number]; batch?: { writer: string; seq: number } }): boolean {
     const session = this.find(id, owner);
     if (!session || session.state !== "open" || !session.stream) return session !== null;
+    const { batch } = input;
+    if (batch) {
+      if (session.lastInput?.writer === batch.writer && batch.seq <= session.lastInput.seq) return true;
+      session.lastInput = batch;
+    }
     if (input.size) session.stream.write(JSON.stringify({ r: input.size }));
     if (input.data) for (const piece of pieces(input.data)) session.stream.write(JSON.stringify({ i: piece }));
     return true;

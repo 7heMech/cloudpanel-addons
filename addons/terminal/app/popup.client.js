@@ -127,13 +127,17 @@ const END_REASONS = {
   gone: 'This session is no longer running.',
 };
 
-function showEnded(text) {
+function showEnded(text, title) {
   ended = true;
   if (events) events.close();
   events = null;
   sessionId = null;
+  pendingInput = '';
+  pendingSize = null;
+  unconfirmed = null;
   sessionStorage.removeItem(STORE_KEY);
   setStatus('Ended', '');
+  document.getElementById('term-ended-title').textContent = title || 'Session ended';
   document.getElementById('term-ended-text').textContent = text;
   termMain.classList.add('is-ended');
   endedCard.hidden = false;
@@ -183,6 +187,9 @@ function attach(reattaching) {
   });
   events.onmessage = function (event) { term.write(decodeOutput(event.data)); };
   events.addEventListener('ended', function (event) { finish(JSON.parse(event.data)); });
+  events.addEventListener('moved', function () {
+    showEnded('This session was opened in another window.', 'Session moved');
+  });
   events.onerror = function () {
     if (ended || !events) return;
     if (events.readyState !== EventSource.CLOSED) {
@@ -212,10 +219,14 @@ function newSession() {
 }
 
 // Keystrokes go out in order, one request at a time, with whatever was typed
-// meanwhile sent together in the next.
+// meanwhile sent together in the next. Each batch is numbered, so one resent
+// after a network error is not typed twice when it had arrived after all.
+const WRITER = Math.random().toString(36).slice(2, 12) || 'w';
 let pendingInput = '';
 let pendingSize = null;
 let sending = false;
+let inputSeq = 0;
+let unconfirmed = null;
 
 function sendSize() {
   pendingSize = [term.cols, term.rows];
@@ -223,38 +234,44 @@ function sendSize() {
 }
 
 async function pump() {
-  if (sending || ended || !sessionId || (!pendingInput && !pendingSize)) return;
+  if (sending || ended || !sessionId || (!unconfirmed && !pendingInput && !pendingSize)) return;
   sending = true;
-  const body = {};
-  if (pendingSize) body.size = pendingSize;
-  pendingSize = null;
-  if (pendingInput) {
-    let end = Math.min(pendingInput.length, 8192);
-    const last = pendingInput.charCodeAt(end - 1);
-    if (end < pendingInput.length && last >= 0xd800 && last <= 0xdbff) end--;
-    body.data = pendingInput.slice(0, end);
-    pendingInput = pendingInput.slice(end);
+  const id = sessionId;
+  if (!unconfirmed) {
+    unconfirmed = { writer: WRITER, seq: ++inputSeq };
+    if (pendingSize) unconfirmed.size = pendingSize;
+    pendingSize = null;
+    if (pendingInput) {
+      let end = Math.min(pendingInput.length, 8192);
+      const last = pendingInput.charCodeAt(end - 1);
+      if (end < pendingInput.length && last >= 0xd800 && last <= 0xdbff) end--;
+      unconfirmed.data = pendingInput.slice(0, end);
+      pendingInput = pendingInput.slice(end);
+    }
   }
   let response = null;
   try {
-    response = await fetch(CLP_BASE + SESSIONS + '/' + encodeURIComponent(sessionId) + '/input', {
+    response = await fetch(CLP_BASE + SESSIONS + '/' + encodeURIComponent(id) + '/input', {
       method: 'POST',
       redirect: 'manual',
       headers: { 'Content-Type': 'application/json', 'X-CLP-Addons-CSRF': csrf() },
-      body: JSON.stringify(body),
+      body: JSON.stringify(unconfirmed),
     });
   } catch (error) {
-    // Not delivered: put it back in front of anything typed since, and retry.
-    pendingInput = (body.data || '') + pendingInput;
-    if (body.size && !pendingSize) pendingSize = body.size;
+    // Perhaps not delivered: the same batch goes again, ahead of anything since.
     sending = false;
-    setTimeout(pump, 1000);
+    if (sessionId === id) setTimeout(pump, 1000);
+    else pump();
     return;
   }
   sending = false;
+  // A reply about a session this window has since left says nothing about the current one.
+  if (sessionId !== id) return pump();
+  unconfirmed = null;
   if (response.status === 204) return pump();
   if (response.type === 'opaqueredirect') return finish({ reason: 'signed-out' });
-  finish({ reason: 'gone' });
+  // The event stream says how a session ended, and may say it a moment later.
+  setTimeout(function () { if (!ended && sessionId === id) finish({ reason: 'gone' }); }, 1000);
 }
 
 let ctrlHeld = false;
@@ -579,6 +596,14 @@ window.addEventListener('pagehide', function () {
     keepalive: true,
     headers: { 'X-CLP-Addons-CSRF': csrf() },
   }).catch(function () {});
+});
+// A page the browser kept for its Back button said it was closing; it asks
+// again, and starts afresh if the session has gone meanwhile.
+window.addEventListener('pageshow', function (event) {
+  if (!event.persisted || !sessionId || ended) return;
+  if (events) events.close();
+  setStatus('Connecting', 'state-paused');
+  attach(true);
 });
 
 const storedSession = sessionStorage.getItem(STORE_KEY);

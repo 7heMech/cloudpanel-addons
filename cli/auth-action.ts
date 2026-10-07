@@ -76,6 +76,8 @@ export interface AuthActionOptions {
   spawn?: typeof Bun.spawn;
   /** Test-only; production rechecks a duplex stream's session every 15 seconds. */
   sessionRecheckMs?: number;
+  /** Test-only; production looks again a second after a failed recheck. */
+  sessionConfirmMs?: number;
 }
 
 const SOL_SOCKET = 1;
@@ -236,6 +238,8 @@ export async function runAuthAction(
 
 /** How often a duplex stream's panel session is checked again. */
 const SESSION_RECHECK_MS = 15_000;
+/** How long after a failed recheck the session is looked at once more. */
+const SESSION_CONFIRM_MS = 1_000;
 /** How long a stream's worker has after SIGTERM before it is killed. */
 const STREAM_KILL_GRACE_MS = 5_000;
 /** All a duplex worker inherits; it starts nothing that needs more. */
@@ -344,9 +348,19 @@ async function runStreamAction(
       duplex.attach(write);
       socket.on("end", endInput);
       const { sessionId } = duplex;
+      let checking = false;
       recheck = setInterval(async () => {
-        if (stopping) return;
-        if (await adminSessionUser(sessionId, options)) return;
+        if (stopping || checking) return;
+        checking = true;
+        try {
+          // PHP can truncate a session file before rewriting it, so one failed
+          // read is not yet a sign-out; a second look a moment later is.
+          if (await adminSessionUser(sessionId, options)) return;
+          await Bun.sleep(options.sessionConfirmMs ?? SESSION_CONFIRM_MS);
+          if (stopping || await adminSessionUser(sessionId, options)) return;
+        } finally {
+          checking = false;
+        }
         stop();
         if (!socket.destroyed) socket.end();
       }, options.sessionRecheckMs ?? SESSION_RECHECK_MS);

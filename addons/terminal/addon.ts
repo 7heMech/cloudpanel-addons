@@ -10,5 +10,7 @@ export const TERMINAL_ADDON: AddonDefinition = {
   targets: TERMINAL_TARGETS,
   handler: handle,
   action: runTerminalAction,
-  deactivate: () => { endAllTerminals(); },
+  // After the config is gone: a worker started before then is found here, and
+  // none can start after.
+  withdrawn: () => { endAllTerminals(); },
 };
