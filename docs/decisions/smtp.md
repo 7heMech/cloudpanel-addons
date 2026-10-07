@@ -2,12 +2,12 @@
 
 ## Scope
 
-Postfix, which CloudPanel's installer always installs, is the relay client. A
-named profile holds one SMTP account and a From template. Sites are assigned to
-profiles in bulk, and one profile can be the default for new sites, as in PHP
-Resources. A site in no profile is not relayed. The seeded "Don't send" profile
-routes its sites' mail to Postfix's `discard` transport, so it is logged and
-never delivered.
+Postfix, which CloudPanel installs and enabling the addon installs if missing,
+is the relay client. A named profile holds one SMTP account and a From template.
+Sites are assigned to profiles in bulk, and one profile can be the default for
+new sites, as in PHP Resources. A site in no profile is not relayed. The seeded
+"Don't send" profile routes its sites' mail to Postfix's `discard` transport, so
+it is logged and never delivered.
 
 ## Postfix enforces
 
