@@ -4,7 +4,7 @@
 // Plain ES5, because CloudPanel's own pages run it too.
 function clpOpenTerminal(base, domain, fresh) {
   var url = base + "/sites/" + encodeURIComponent(domain);
-  var name = "clp-terminal-" + domain.replace(/[^a-z0-9]+/gi, "-") + (fresh ? "-" + Date.now().toString(36) : "");
+  var name = "clp-terminal-" + encodeURIComponent(domain.toLowerCase()) + (fresh ? "-" + Date.now().toString(36) : "");
   // A phone has no windows, only tabs.
   var phone = window.matchMedia && window.matchMedia("(max-width: 760px) and (pointer: coarse)").matches;
   var target = phone ? window.open(url, name) : window.open("", name, "popup,width=980,height=620");

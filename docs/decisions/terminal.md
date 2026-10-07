@@ -5,8 +5,9 @@
 One shell per site, as that site's Linux user, starting in its site root, in a
 browser window of its own. It opens from a Sites row, from the right end of a
 site's tab strip, and from Addons → Terminal. The window is named after the
-site, so a second click focuses the shell already open; Shift-click opens
-another. On a phone it is a tab.
+site using a lossless encoding of its lowercase domain, so a second click
+focuses the shell already open without confusing dots with hyphens; Shift-click
+opens another. On a phone it is a tab.
 
 The text-size buttons stay together on every screen, with a gap before reset
 beside the theme switch to reduce accidental resets.
