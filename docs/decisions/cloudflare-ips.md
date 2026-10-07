@@ -27,8 +27,9 @@ an undo the action does not implement.
 
 Selection checkboxes stay separate from the per-site switch, and the
 selected-scope actions are unavailable until something is selected. On desktop,
-the checkbox remains visible; on phones, the whole site row selects with a
-highlight and the checkbox disappears to give the site card its width back.
+the checkbox remains visible; below 940px, where rows become cards, the whole
+site row selects with a highlight and the checkbox disappears to give the site
+card its width back.
 Mouse clicks on the row and Enter or Space on its focused row select it, while
 the switch and other controls keep their own actions. A per-site switch acts
 immediately without confirmation, because turning one site off is the ordinary
