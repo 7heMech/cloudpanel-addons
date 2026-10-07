@@ -13,6 +13,7 @@ body.clp-tool-window { position: fixed; left: 0; right: 0; top: var(--term-visib
 .term-tool { display: flex; align-items: center; justify-content: center; min-width: 32px; height: 32px; padding: 0 6px;
   border: 0; border-radius: 4px; background: transparent; color: var(--header-icon); cursor: pointer; font-size: 14px; }
 .term-tool:hover { color: var(--accent); background: var(--surface); }
+.term-tool:disabled { opacity: .4; cursor: default; color: var(--header-icon); background: transparent; }
 .term-tool > svg { width: 16px; height: 16px; }
 #theme-switch .sun { display: none; }
 html.dark #theme-switch .sun { display: block; }

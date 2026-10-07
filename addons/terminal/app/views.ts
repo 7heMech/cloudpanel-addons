@@ -107,6 +107,7 @@ export function popupPage(domain: string): string {
   <span class="badge state-paused" id="term-status" role="status">Connecting</span>
   <div class="term-tools">
     <button class="term-tool" type="button" onclick="changeFont(-1)" aria-label="Smaller text" title="Smaller text">A−</button>
+    <button class="term-tool" id="term-font-reset" type="button" onclick="resetFont()" aria-label="Default text size" title="Default text size">A</button>
     <button class="term-tool" type="button" onclick="changeFont(1)" aria-label="Larger text" title="Larger text">A+</button>
     <button class="term-tool" id="theme-switch" type="button" onclick="toggleTheme()" aria-label="Switch to dark mode" aria-pressed="false">
       ${THEME_SWITCH_ICONS}
