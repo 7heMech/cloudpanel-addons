@@ -47,8 +47,10 @@ html.dark .term-main { background: #1c1f26; }
 .term-keys button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #fff; }
 @media (pointer: coarse) {
   .term-keys { display: flex; }
-  /* On a phone the reset sits apart, left of the pair it resets. */
-  #term-font-reset { order: -1; margin-right: 4px; }
+  /* On a phone the reset sits apart from the pair a thumb keeps tapping,
+     beside the theme switch. */
+  #term-font-reset { order: 1; margin-left: 16px; }
+  #theme-switch { order: 2; }
 }
 @media (max-width: 520px) {
   .term-logo { display: none !important; }
