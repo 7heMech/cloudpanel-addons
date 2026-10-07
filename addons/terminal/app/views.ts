@@ -116,7 +116,7 @@ export function popupPage(domain: string): string {
 </div>
 <div class="term-main" id="term-main">
   <div id="terminal" data-domain="${esc(domain)}"></div>
-  <div class="term-select" id="term-select" hidden></div>
+  <div class="term-select" id="term-select" contenteditable="true" inputmode="none" spellcheck="false" autocorrect="off" autocapitalize="off" aria-label="Terminal text" hidden></div>
   <div class="term-ended" id="term-ended" hidden>
     <div class="card" role="alertdialog" aria-labelledby="term-ended-title" aria-describedby="term-ended-text">
       <h2 id="term-ended-title">Session ended</h2>

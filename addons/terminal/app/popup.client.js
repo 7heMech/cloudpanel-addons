@@ -410,6 +410,7 @@ function hideSelectLayer() {
   selecting = false;
   selectLayer.hidden = true;
   selectLayer.textContent = '';
+  selectLayer.blur();
 }
 
 function hasSelection() {
@@ -438,9 +439,25 @@ function selectWordAt(x, y) {
   }
 }
 
-document.addEventListener('selectionchange', function () {
-  if (selecting && !touchActive && !hasSelection()) hideSelectLayer();
+// The copy is editable, with no keyboard of its own, so the phone's long-press
+// menu offers Paste beside Copy. A paste goes to the shell; nothing else may
+// edit the copy. Copying, cutting or pasting is the end of a selection.
+selectLayer.addEventListener('paste', function (event) {
+  event.preventDefault();
+  const text = event.clipboardData ? event.clipboardData.getData('text/plain') : '';
+  hideSelectLayer();
+  term.paste(text);
+  term.focus();
 });
+selectLayer.addEventListener('beforeinput', function (event) { event.preventDefault(); });
+selectLayer.addEventListener('drop', function (event) { event.preventDefault(); });
+selectLayer.addEventListener('cut', function (event) {
+  event.preventDefault();
+  const selection = window.getSelection();
+  if (event.clipboardData && selection) event.clipboardData.setData('text/plain', selection.toString());
+  setTimeout(hideSelectLayer, 0);
+});
+selectLayer.addEventListener('copy', function () { setTimeout(hideSelectLayer, 0); });
 
 // A swipe scrolls the history, which xterm leaves to a mouse wheel. In a
 // full-screen program such as less or vim there is no history to scroll, so
@@ -453,6 +470,7 @@ let touchActive = false;
 let touchCarry = 0;
 let touchVelocity = 0;
 let touchTime = 0;
+let touchStartedAt = 0;
 let glide = 0;
 let holdTimer = 0;
 let wordTimer = 0;
@@ -487,6 +505,7 @@ termHost.addEventListener('touchstart', function (event) {
   touchCarry = 0;
   touchVelocity = 0;
   touchTime = event.timeStamp;
+  touchStartedAt = performance.now();
   // Shown before the phone's own long-press fires, so that press lands on
   // selectable text; if it does not select anything, select the word here.
   holdTimer = setTimeout(showSelectLayer, 250);
@@ -518,8 +537,10 @@ function touchFinished() {
   if (touchY === null) return;
   touchY = null;
   if (selecting) {
-    // A short hold that selected nothing was a tap after all.
-    setTimeout(function () { if (!hasSelection()) hideSelectLayer(); }, 150);
+    // A hold too short for the phone's long-press, that selected nothing, was
+    // a tap after all. A long one stays: its menu may be offering Paste.
+    const held = performance.now() - touchStartedAt;
+    setTimeout(function () { if (held < 450 && !hasSelection()) hideSelectLayer(); }, 150);
     return;
   }
   // A flick keeps going and slows down; arrow keys do not glide.
@@ -537,10 +558,16 @@ function touchFinished() {
 termHost.addEventListener('touchend', touchFinished, { passive: true, capture: true });
 termHost.addEventListener('touchcancel', touchFinished, { passive: true, capture: true });
 // The layer covers the terminal once it is up, so its own touches end there.
-selectLayer.addEventListener('touchstart', function () { touchActive = true; }, { passive: true });
+// A quick tap that leaves nothing selected is the way back to the terminal.
+let layerTouchAt = 0;
+selectLayer.addEventListener('touchstart', function () {
+  touchActive = true;
+  layerTouchAt = performance.now();
+}, { passive: true });
 selectLayer.addEventListener('touchend', function () {
   touchActive = false;
-  setTimeout(function () { if (!hasSelection()) hideSelectLayer(); }, 150);
+  const quick = performance.now() - layerTouchAt < 300;
+  setTimeout(function () { if (quick && !hasSelection()) hideSelectLayer(); }, 150);
 }, { passive: true });
 
 // Tells the server the window is going; a reload comes back within the grace

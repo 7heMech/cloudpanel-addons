@@ -34,7 +34,7 @@ html.dark .term-main { background: #1c1f26; }
 .term-select { position: absolute; z-index: 10; margin: 0; padding: 0; overflow-y: auto; overflow-x: hidden;
   scrollbar-width: none; white-space: break-spaces; word-break: break-all; overflow-wrap: anywhere;
   font-kerning: none; font-variant-ligatures: none;
-  user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; }
+  user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; caret-color: transparent; outline: none; }
 .term-select::-webkit-scrollbar { display: none; }
 /* Keys a touch keyboard does not have, for the phones and tablets that need them. */
 .term-keys { display: none; flex: 0 0 auto; gap: 6px; padding: 6px; overflow-x: auto;
@@ -45,7 +45,11 @@ html.dark .term-main { background: #1c1f26; }
 .term-keys button { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
 .term-keys button.is-down { background: var(--button-hover); }
 .term-keys button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #fff; }
-@media (pointer: coarse) { .term-keys { display: flex; } }
+@media (pointer: coarse) {
+  .term-keys { display: flex; }
+  /* On a phone the reset sits apart, left of the pair it resets. */
+  #term-font-reset { order: -1; margin-right: 4px; }
+}
 @media (max-width: 520px) {
   .term-logo { display: none !important; }
   .term-user { display: none; }

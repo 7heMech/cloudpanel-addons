@@ -15,7 +15,9 @@ and the arrows repeat while held. A swipe scrolls the history with momentum, or
 sends arrow keys in a full-screen program. xterm's selection needs a mouse, so
 holding a finger on the terminal lays a plain-text copy of it exactly over the
 top -- same font, cell size and scroll position -- for the phone's own
-long-press selection and Copy menu; clearing the selection removes it.
+long-press selection and menu. The copy is editable with `inputmode="none"`, so
+that menu still offers Paste, which goes to the shell; no other edit is
+accepted. Copying, pasting or a tap that clears the selection removes it.
 
 Administrators only, and never root. A shell as a site's user is what SSH
 already gives anyone with that user's key; it is offered to the people who can
