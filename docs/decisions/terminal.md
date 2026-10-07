@@ -8,6 +8,9 @@ site's tab strip, and from Addons → Terminal. The window is named after the
 site, so a second click focuses the shell already open; Shift-click opens
 another. On a phone it is a tab.
 
+The text-size buttons stay together on every screen, with a gap before reset
+beside the theme switch to reduce accidental resets.
+
 On a touch screen the window follows the part the keyboard leaves visible and
 adds the keys a phone keyboard lacks: Esc, Tab, a sticky Ctrl and arrows. They
 act on touch-down without taking focus, so they leave the keyboard as it was,

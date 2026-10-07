@@ -15,6 +15,8 @@ body.clp-tool-window { position: fixed; left: 0; right: 0; top: var(--term-visib
 .term-tool:hover { color: var(--accent); background: var(--surface); }
 .term-tool:disabled { opacity: .4; cursor: default; color: var(--header-icon); background: transparent; }
 .term-tool > svg { width: 16px; height: 16px; }
+/* Keep reset apart from the size buttons, beside the theme switch. */
+#term-font-reset { margin-left: 16px; }
 #theme-switch .sun { display: none; }
 html.dark #theme-switch .sun { display: block; }
 html.dark #theme-switch .moon { display: none; }
@@ -47,10 +49,6 @@ html.dark .term-main { background: #1c1f26; }
 .term-keys button[aria-pressed="true"] { background: var(--primary); border-color: var(--primary); color: #fff; }
 @media (pointer: coarse) {
   .term-keys { display: flex; }
-  /* On a phone the reset sits apart from the pair a thumb keeps tapping,
-     beside the theme switch. */
-  #term-font-reset { order: 1; margin-left: 16px; }
-  #theme-switch { order: 2; }
 }
 @media (max-width: 520px) {
   .term-logo { display: none !important; }
