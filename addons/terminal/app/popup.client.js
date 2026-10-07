@@ -3,6 +3,7 @@ const TERM_DOMAIN = termHost.dataset.domain;
 const SESSIONS = '/api/sessions';
 const STORE_KEY = 'clp-terminal:' + TERM_DOMAIN;
 const FONT_KEY = 'clp-terminal-font-size';
+const MIN_FONT_SIZE = 9;
 const statusBadge = document.getElementById('term-status');
 const userLabel = document.getElementById('term-user');
 const termMain = document.getElementById('term-main');
@@ -33,7 +34,7 @@ function termTheme() {
 
 function storedFontSize() {
   const size = Number(localStorage.getItem(FONT_KEY));
-  return size >= 10 && size <= 24 ? size : 14;
+  return size >= MIN_FONT_SIZE && size <= 24 ? size : 14;
 }
 
 // No title, link or clipboard handling is wired to the terminal: what it
@@ -78,7 +79,7 @@ if (window.visualViewport) {
 }
 
 function changeFont(step) {
-  const size = Math.min(24, Math.max(10, term.options.fontSize + step));
+  const size = Math.min(24, Math.max(MIN_FONT_SIZE, term.options.fontSize + step));
   term.options.fontSize = size;
   localStorage.setItem(FONT_KEY, String(size));
   fitAddon.fit();
