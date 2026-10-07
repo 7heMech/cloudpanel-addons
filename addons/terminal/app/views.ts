@@ -94,7 +94,6 @@ export function inventoryUnavailableView(message: string): string {
 
 const KEYS = [
   ["esc", "Esc"], ["tab", "Tab"], ["ctrl", "Ctrl"], ["left", "←"], ["up", "↑"], ["down", "↓"], ["right", "→"],
-  ["select", "Select"], ["paste", "Paste"],
 ];
 
 export function popupPage(domain: string): string {
@@ -116,14 +115,7 @@ export function popupPage(domain: string): string {
 </div>
 <div class="term-main" id="term-main">
   <div id="terminal" data-domain="${esc(domain)}"></div>
-  <div class="term-select" id="term-select" hidden>
-    <div class="term-select-bar">
-      <span>Select text to copy</span>
-      <button class="btn" type="button" onclick="copyAllText()">Copy all</button>
-      <button class="btn btn-primary" type="button" onclick="closeSelect()">Done</button>
-    </div>
-    <pre id="term-select-text"></pre>
-  </div>
+  <div class="term-select" id="term-select" hidden></div>
   <div class="term-ended" id="term-ended" hidden>
     <div class="card" role="alertdialog" aria-labelledby="term-ended-title" aria-describedby="term-ended-text">
       <h2 id="term-ended-title">Session ended</h2>

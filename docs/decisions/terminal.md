@@ -9,13 +9,13 @@ site, so a second click focuses the shell already open; Shift-click opens
 another. On a phone it is a tab.
 
 On a touch screen the window follows the part the keyboard leaves visible and
-adds a row of keys a phone keyboard lacks: Esc, Tab, a sticky Ctrl, arrows,
-Select and Paste. The keys act on touch-down without taking focus, so they
-leave the keyboard as it was, and the arrows repeat while held. A swipe scrolls
-the history, or sends arrow keys in a full-screen program, where xterm.js's
-own touch scrolling has no history to move. Select shows the
-terminal's text as plain text for the phone's own selection, because xterm's
-selection needs a mouse.
+adds the keys a phone keyboard lacks: Esc, Tab, a sticky Ctrl and arrows. They
+act on touch-down without taking focus, so they leave the keyboard as it was,
+and the arrows repeat while held. A swipe scrolls the history with momentum, or
+sends arrow keys in a full-screen program. xterm's selection needs a mouse, so
+holding a finger on the terminal lays a plain-text copy of it exactly over the
+top -- same font, cell size and scroll position -- for the phone's own
+long-press selection and Copy menu; clearing the selection removes it.
 
 Administrators only, and never root. A shell as a site's user is what SSH
 already gives anyone with that user's key; it is offered to the people who can

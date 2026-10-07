@@ -299,15 +299,10 @@ function sendKey(name) {
 
 // The extra keys act on touch-down and never take focus, so the keyboard
 // stays as it was, open or closed. Arrows repeat while held, as a keyboard's
-// do. Select and Paste wait for the click: reading the clipboard needs one.
+// do.
 const REPEATING = ['up', 'down', 'left', 'right'];
 document.querySelectorAll('.term-keys button[data-key]').forEach(function (button) {
   const name = button.dataset.key;
-  if (name === 'select' || name === 'paste') {
-    button.addEventListener('mousedown', function (event) { event.preventDefault(); });
-    button.addEventListener('click', function () { name === 'select' ? openSelect() : pasteClipboard(); });
-    return;
-  }
   let delay = 0;
   let repeat = 0;
   const release = function () {
@@ -331,71 +326,120 @@ document.querySelectorAll('.term-keys button[data-key]').forEach(function (butto
   button.addEventListener('click', function (event) { if (event.detail === 0) sendKey(name); });
 });
 
-async function pasteClipboard() {
-  try {
-    // Through the terminal's own paste, so bracketed paste mode is honoured.
-    term.paste(await navigator.clipboard.readText());
-  } catch (error) {
-    notifyBar('The browser did not allow reading the clipboard.');
-  }
+// Text selection by touch. xterm's own selection needs a mouse, so holding a
+// finger on the terminal lays a plain-text copy of it exactly over the top --
+// same font, cell size, rows and scroll position -- and the phone's own
+// long-press selection, handles and Copy menu work on that. Clearing the
+// selection takes it away again.
+const selectLayer = document.getElementById('term-select');
+let selecting = false;
+
+function screenBox() {
+  const screen = termHost.querySelector('.xterm-screen');
+  const box = screen.getBoundingClientRect();
+  const main = termMain.getBoundingClientRect();
+  return {
+    left: box.left - main.left, top: box.top - main.top,
+    cellWidth: box.width / term.cols, rowHeight: box.height / term.rows,
+  };
 }
 
-function notifyBar(text) {
-  setStatus(text, 'state-paused');
-  setTimeout(function () {
-    if (ended) return;
-    if (events && events.readyState === EventSource.OPEN) setStatus('Connected', 'state-running');
-  }, 3000);
-}
-
-// Each line once, with the rows a long line wrapped onto joined back up, so
-// a copied command is the command and not the terminal's width.
-function terminalText() {
+/** Every buffer row, with wrapped rows left unbroken so a copy is the real line. */
+function bufferText() {
   const buffer = term.buffer.active;
   const lines = [];
   for (let i = 0; i < buffer.length; i++) {
     const line = buffer.getLine(i);
+    const next = buffer.getLine(i + 1);
     if (!line) continue;
-    const text = line.translateToString(true);
+    // A row that wraps onto the next keeps its trailing spaces, or the rows
+    // after it would start in the wrong column.
+    const text = line.translateToString(!(next && next.isWrapped));
     if (line.isWrapped && lines.length) lines[lines.length - 1] += text;
     else lines.push(text);
   }
-  while (lines.length && lines[lines.length - 1] === '') lines.pop();
   return lines.join('\n');
 }
 
-const selectPanel = document.getElementById('term-select');
-const selectText = document.getElementById('term-select-text');
-
-function openSelect() {
-  term.blur();
-  selectText.textContent = terminalText();
-  selectPanel.hidden = false;
-  selectText.scrollTop = selectText.scrollHeight;
+function naturalCharWidth(font) {
+  const canvas = naturalCharWidth.canvas || (naturalCharWidth.canvas = document.createElement('canvas'));
+  const context = canvas.getContext('2d');
+  context.font = font;
+  return context.measureText('W'.repeat(50)).width / 50;
 }
 
-function closeSelect() {
-  selectPanel.hidden = true;
-  window.getSelection().removeAllRanges();
+function showSelectLayer() {
+  if (selecting) return;
+  const box = screenBox();
+  const theme = termTheme();
+  const font = term.options.fontSize + 'px ' + term.options.fontFamily;
+  const style = selectLayer.style;
+  style.left = box.left + 'px';
+  style.top = box.top + 'px';
+  style.width = box.cellWidth * term.cols + 'px';
+  style.height = box.rowHeight * term.rows + 'px';
+  style.font = font;
+  style.lineHeight = box.rowHeight + 'px';
+  style.letterSpacing = (box.cellWidth - naturalCharWidth(font)) + 'px';
+  style.color = theme.foreground;
+  style.background = theme.background;
+  selectLayer.textContent = bufferText();
+  selectLayer.hidden = false;
+  selectLayer.scrollTop = term.buffer.active.viewportY * box.rowHeight;
+  selecting = true;
 }
 
-async function copyAllText() {
-  try {
-    await navigator.clipboard.writeText(selectText.textContent);
-    notifyBar('Copied');
-  } catch (error) {
-    notifyBar('The browser did not allow copying.');
+function hideSelectLayer() {
+  if (!selecting) return;
+  selecting = false;
+  selectLayer.hidden = true;
+  selectLayer.textContent = '';
+}
+
+function hasSelection() {
+  const selection = window.getSelection();
+  return Boolean(selection && !selection.isCollapsed && selectLayer.contains(selection.anchorNode));
+}
+
+/** The word under a point, for a browser whose long-press did not select one. */
+function selectWordAt(x, y) {
+  let range = null;
+  if (document.caretRangeFromPoint) range = document.caretRangeFromPoint(x, y);
+  else if (document.caretPositionFromPoint) {
+    const position = document.caretPositionFromPoint(x, y);
+    if (position) {
+      range = document.createRange();
+      range.setStart(position.offsetNode, position.offset);
+    }
+  }
+  if (!range || !selectLayer.contains(range.startContainer)) return;
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  if (selection.modify) {
+    selection.modify('move', 'backward', 'word');
+    selection.modify('extend', 'forward', 'word');
   }
 }
+
+document.addEventListener('selectionchange', function () {
+  if (selecting && !touchActive && !hasSelection()) hideSelectLayer();
+});
 
 // A swipe scrolls the history, which xterm leaves to a mouse wheel. In a
 // full-screen program such as less or vim there is no history to scroll, so
 // it moves by arrow keys instead, as phone terminals do.
 let touchY = null;
+let touchStartX = 0;
+let touchStartY = 0;
+let touchMoved = false;
+let touchActive = false;
 let touchCarry = 0;
 let touchVelocity = 0;
 let touchTime = 0;
 let glide = 0;
+let holdTimer = 0;
+let wordTimer = 0;
 
 function rowHeight() {
   const screen = termHost.querySelector('.xterm-screen');
@@ -411,21 +455,40 @@ function scrollByPixels(pixels) {
   else term.scrollLines(lines);
 }
 
+function cancelHold() {
+  clearTimeout(holdTimer);
+  clearTimeout(wordTimer);
+}
+
 termHost.addEventListener('touchstart', function (event) {
   cancelAnimationFrame(glide);
+  cancelHold();
   if (event.touches.length !== 1) return void (touchY = null);
-  touchY = event.touches[0].clientY;
+  touchActive = true;
+  touchMoved = false;
+  touchY = touchStartY = event.touches[0].clientY;
+  touchStartX = event.touches[0].clientX;
   touchCarry = 0;
   touchVelocity = 0;
   touchTime = event.timeStamp;
+  // Shown before the phone's own long-press fires, so that press lands on
+  // selectable text; if it does not select anything, select the word here.
+  holdTimer = setTimeout(showSelectLayer, 250);
+  wordTimer = setTimeout(function () {
+    if (!hasSelection()) selectWordAt(touchStartX, touchStartY);
+  }, 650);
 }, { passive: true, capture: true });
 
 termHost.addEventListener('touchmove', function (event) {
-  if (touchY === null || event.touches.length !== 1) return;
+  // Once the text is up, a moving finger is the browser's to extend the selection with.
+  if (selecting || touchY === null || event.touches.length !== 1) return;
+  const x = event.touches[0].clientX;
   const y = event.touches[0].clientY;
+  if (!touchMoved && Math.hypot(x - touchStartX, y - touchStartY) < 8) return;
+  touchMoved = true;
+  cancelHold();
   const delta = touchY - y;
-  const elapsed = Math.max(1, event.timeStamp - touchTime);
-  touchVelocity = delta / elapsed;
+  touchVelocity = delta / Math.max(1, event.timeStamp - touchTime);
   touchY = y;
   touchTime = event.timeStamp;
   event.preventDefault();
@@ -433,11 +496,18 @@ termHost.addEventListener('touchmove', function (event) {
   scrollByPixels(delta);
 }, { passive: false, capture: true });
 
-termHost.addEventListener('touchend', function () {
+function touchFinished() {
+  touchActive = false;
+  cancelHold();
   if (touchY === null) return;
   touchY = null;
+  if (selecting) {
+    // A short hold that selected nothing was a tap after all.
+    setTimeout(function () { if (!hasSelection()) hideSelectLayer(); }, 150);
+    return;
+  }
   // A flick keeps going and slows down; arrow keys do not glide.
-  if (term.buffer.active.type === 'alternate' || Math.abs(touchVelocity) < 0.3) return;
+  if (!touchMoved || term.buffer.active.type === 'alternate' || Math.abs(touchVelocity) < 0.3) return;
   let velocity = touchVelocity;
   let last = performance.now();
   const step = function (now) {
@@ -447,7 +517,15 @@ termHost.addEventListener('touchend', function () {
     if (Math.abs(velocity) > 0.05) glide = requestAnimationFrame(step);
   };
   glide = requestAnimationFrame(step);
-}, { passive: true, capture: true });
+}
+termHost.addEventListener('touchend', touchFinished, { passive: true, capture: true });
+termHost.addEventListener('touchcancel', touchFinished, { passive: true, capture: true });
+// The layer covers the terminal once it is up, so its own touches end there.
+selectLayer.addEventListener('touchstart', function () { touchActive = true; }, { passive: true });
+selectLayer.addEventListener('touchend', function () {
+  touchActive = false;
+  setTimeout(function () { if (!hasSelection()) hideSelectLayer(); }, 150);
+}, { passive: true });
 
 // Tells the server the window is going; a reload comes back within the grace
 // it allows and carries on.
