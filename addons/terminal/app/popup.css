@@ -28,6 +28,17 @@ html.dark .term-main { background: #1c1f26; }
 .term-ended h2 { margin: 0 0 8px; }
 .term-ended p { margin: 0 0 20px; color: var(--muted); overflow-wrap: anywhere; }
 .term-ended .actions { justify-content: center; }
+/* The terminal's text as plain text, which a phone's own long-press selection
+   can reach; xterm's own selection needs a mouse. */
+.term-select { position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column; background: var(--panel); }
+.term-select-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+  border-bottom: 1px solid var(--border); font-size: 14px; color: var(--muted); }
+.term-select-bar span { margin-right: auto; }
+.term-select-bar .btn { min-height: 34px; padding: 4px 12px; font-size: 14px; }
+#term-select-text { flex: 1 1 auto; margin: 0; padding: 8px 10px; overflow: auto; font-family: var(--mono);
+  max-height: none; border: 0; border-radius: 0; background: transparent;
+  font-size: 13px; line-height: 1.35; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere;
+  user-select: text; -webkit-user-select: text; -webkit-touch-callout: default; }
 /* Keys a touch keyboard does not have, for the phones and tablets that need them. */
 .term-keys { display: none; flex: 0 0 auto; gap: 6px; padding: 6px; overflow-x: auto;
   background: var(--header-bg); border-top: 1px solid var(--border); }

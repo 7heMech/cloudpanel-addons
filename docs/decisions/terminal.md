@@ -8,6 +8,13 @@ site's tab strip, and from Addons → Terminal. The window is named after the
 site, so a second click focuses the shell already open; Shift-click opens
 another. On a phone it is a tab.
 
+On a touch screen the window follows the part the keyboard leaves visible and
+adds a row of keys a phone keyboard lacks: Esc, Tab, a sticky Ctrl, arrows,
+Select and Paste. A swipe scrolls the history, or sends arrow keys in a
+full-screen program, because xterm.js scrolls only by wheel. Select shows the
+terminal's text as plain text for the phone's own selection, because xterm's
+selection needs a mouse.
+
 Administrators only, and never root. A shell as a site's user is what SSH
 already gives anyone with that user's key; it is offered to the people who can
 already create one.

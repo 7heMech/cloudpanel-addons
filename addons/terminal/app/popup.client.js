@@ -277,21 +277,149 @@ term.attachCustomKeyEventHandler(function (event) {
   return event.code !== 'KeyV';
 });
 
+function arrowKey(direction) {
+  return (term.modes.applicationCursorKeysMode ? '\x1bO' : '\x1b[') + { up: 'A', down: 'B', right: 'C', left: 'D' }[direction];
+}
+
+function typeText(text) {
+  if (ended || !sessionId || !text) return;
+  pendingInput += text;
+  pump();
+}
+
 function sendKey(name) {
+  if (name === 'select') return openSelect();
+  if (name === 'paste') return pasteClipboard();
   if (name === 'ctrl') {
     ctrlHeld = !ctrlHeld;
     ctrlButton.setAttribute('aria-pressed', String(ctrlHeld));
     term.focus();
     return;
   }
-  const cursor = term.modes.applicationCursorKeysMode ? '\x1bO' : '\x1b[';
-  const keys = { esc: '\x1b', tab: '\t', up: cursor + 'A', down: cursor + 'B', right: cursor + 'C', left: cursor + 'D' };
-  if (!ended && sessionId && keys[name]) {
-    pendingInput += keys[name];
-    pump();
+  const keys = { esc: '\x1b', tab: '\t' };
+  typeText(keys[name] || arrowKey(name));
+  term.focus();
+}
+
+async function pasteClipboard() {
+  try {
+    // Through the terminal's own paste, so bracketed paste mode is honoured.
+    term.paste(await navigator.clipboard.readText());
+  } catch (error) {
+    notifyBar('The browser did not allow reading the clipboard.');
   }
   term.focus();
 }
+
+function notifyBar(text) {
+  setStatus(text, 'state-paused');
+  setTimeout(function () {
+    if (ended) return;
+    if (events && events.readyState === EventSource.OPEN) setStatus('Connected', 'state-running');
+  }, 3000);
+}
+
+// Each line once, with the rows a long line wrapped onto joined back up, so
+// a copied command is the command and not the terminal's width.
+function terminalText() {
+  const buffer = term.buffer.active;
+  const lines = [];
+  for (let i = 0; i < buffer.length; i++) {
+    const line = buffer.getLine(i);
+    if (!line) continue;
+    const text = line.translateToString(true);
+    if (line.isWrapped && lines.length) lines[lines.length - 1] += text;
+    else lines.push(text);
+  }
+  while (lines.length && lines[lines.length - 1] === '') lines.pop();
+  return lines.join('\n');
+}
+
+const selectPanel = document.getElementById('term-select');
+const selectText = document.getElementById('term-select-text');
+
+function openSelect() {
+  term.blur();
+  selectText.textContent = terminalText();
+  selectPanel.hidden = false;
+  selectText.scrollTop = selectText.scrollHeight;
+}
+
+function closeSelect() {
+  selectPanel.hidden = true;
+  window.getSelection().removeAllRanges();
+  term.focus();
+}
+
+async function copyAllText() {
+  try {
+    await navigator.clipboard.writeText(selectText.textContent);
+    notifyBar('Copied');
+  } catch (error) {
+    notifyBar('The browser did not allow copying.');
+  }
+}
+
+// A swipe scrolls the history, which xterm leaves to a mouse wheel. In a
+// full-screen program such as less or vim there is no history to scroll, so
+// it moves by arrow keys instead, as phone terminals do.
+let touchY = null;
+let touchCarry = 0;
+let touchVelocity = 0;
+let touchTime = 0;
+let glide = 0;
+
+function rowHeight() {
+  const screen = termHost.querySelector('.xterm-screen');
+  return screen && term.rows ? screen.clientHeight / term.rows : 17;
+}
+
+function scrollByPixels(pixels) {
+  touchCarry += pixels;
+  const lines = Math.trunc(touchCarry / rowHeight());
+  if (!lines) return;
+  touchCarry -= lines * rowHeight();
+  if (term.buffer.active.type === 'alternate') typeText(arrowKey(lines > 0 ? 'down' : 'up').repeat(Math.abs(lines)));
+  else term.scrollLines(lines);
+}
+
+termHost.addEventListener('touchstart', function (event) {
+  cancelAnimationFrame(glide);
+  if (event.touches.length !== 1) return void (touchY = null);
+  touchY = event.touches[0].clientY;
+  touchCarry = 0;
+  touchVelocity = 0;
+  touchTime = event.timeStamp;
+}, { passive: true, capture: true });
+
+termHost.addEventListener('touchmove', function (event) {
+  if (touchY === null || event.touches.length !== 1) return;
+  const y = event.touches[0].clientY;
+  const delta = touchY - y;
+  const elapsed = Math.max(1, event.timeStamp - touchTime);
+  touchVelocity = delta / elapsed;
+  touchY = y;
+  touchTime = event.timeStamp;
+  event.preventDefault();
+  event.stopPropagation();
+  scrollByPixels(delta);
+}, { passive: false, capture: true });
+
+termHost.addEventListener('touchend', function () {
+  if (touchY === null) return;
+  touchY = null;
+  // A flick keeps going and slows down; arrow keys do not glide.
+  if (term.buffer.active.type === 'alternate' || Math.abs(touchVelocity) < 0.3) return;
+  let velocity = touchVelocity;
+  let last = performance.now();
+  const step = function (now) {
+    scrollByPixels(velocity * (now - last));
+    velocity *= Math.pow(0.95, (now - last) / 16);
+    last = now;
+    if (Math.abs(velocity) > 0.05) glide = requestAnimationFrame(step);
+  };
+  glide = requestAnimationFrame(step);
+}, { passive: true, capture: true });
 
 // Tells the server the window is going; a reload comes back within the grace
 // it allows and carries on.
