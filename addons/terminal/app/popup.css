@@ -1,5 +1,8 @@
 html, body.clp-tool-window { height: 100%; }
-body.clp-tool-window { min-height: 0; overflow: hidden; background: var(--panel); }
+/* Sized to what the on-screen keyboard leaves visible, so the extra keys sit
+   just above it; the script sets both while a keyboard is open. */
+body.clp-tool-window { position: fixed; left: 0; right: 0; top: var(--term-visible-top, 0);
+  height: var(--term-visible-height, 100%); min-height: 0; overflow: hidden; background: var(--panel); }
 .term-bar { flex: 0 0 40px; display: flex; align-items: center; gap: 10px; padding: 0 6px 0 12px; min-width: 0;
   background: var(--header-bg); border-bottom: 1px solid var(--border); font-size: 14px; }
 .term-logo { flex: 0 0 auto; width: auto; height: 20px; }

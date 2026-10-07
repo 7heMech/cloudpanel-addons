@@ -56,10 +56,26 @@ new MutationObserver(function () { term.options.theme = termTheme(); })
   .observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
 let resizeTimer = 0;
-window.addEventListener('resize', function () {
+function refit() {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(function () { fitAddon.fit(); }, 80);
-});
+}
+window.addEventListener('resize', refit);
+
+// A phone's keyboard covers the bottom of the page without resizing it in
+// every browser, which would leave the extra keys and the prompt beneath it.
+// The window follows the visible part instead, and the terminal refits to it.
+if (window.visualViewport) {
+  const fitVisible = function () {
+    const root = document.documentElement.style;
+    root.setProperty('--term-visible-height', visualViewport.height + 'px');
+    root.setProperty('--term-visible-top', visualViewport.offsetTop + 'px');
+    refit();
+  };
+  visualViewport.addEventListener('resize', fitVisible);
+  visualViewport.addEventListener('scroll', fitVisible);
+  fitVisible();
+}
 
 function changeFont(step) {
   const size = Math.min(24, Math.max(10, term.options.fontSize + step));

@@ -98,7 +98,7 @@ const KEYS = [
 
 export function popupPage(domain: string): string {
   const keys = KEYS.map(([name, label]) =>
-    `<button type="button" ${name === "ctrl" ? 'id="term-ctrl" aria-pressed="false" ' : ""}onclick="sendKey('${name}')">${label}</button>`).join("");
+    `<button type="button" ${name === "ctrl" ? 'id="term-ctrl" aria-pressed="false" ' : ""}onmousedown="event.preventDefault()" onclick="sendKey('${name}')">${label}</button>`).join("");
   const content = `<div class="term-bar">
   <img class="term-logo clp-addon-logo-light" src="/assets/images/logo.svg" alt="CloudPanel" width="100" height="20">
   <img class="term-logo clp-addon-logo-dark" src="/assets/images/logo-dark.svg" alt="CloudPanel" width="100" height="20">
