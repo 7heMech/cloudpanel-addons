@@ -16,7 +16,7 @@ export function layout(title: string, content: string, notice?: { current: strin
   return renderLayout(title, content, { brand: "SMTP Relay", base: BASE, nav: [], css: STYLE, script: CLIENT, updateNotice: notice });
 }
 
-const TEMPLATE_HINT = "<code>{site}</code> is the site's domain, without a leading www. <code>{from.local}</code> and <code>{from.domain}</code> are the name and domain of the From the app asked for, used only when that domain is the site's own or one of its extra sending domains. <code>{from.local}@{site}</code> keeps <code>wordpress@</code> or <code>orders@</code> on the site's domain.";
+const TEMPLATE_HINT = "<code>{site}</code> is the site's domain. A leading www. is removed only when the bare domain is not another CloudPanel site. <code>{from.local}</code> and <code>{from.domain}</code> are the name and domain of the From the app asked for, used only when that domain is the site's own or one of its extra sending domains. <code>{from.local}@{site}</code> keeps <code>wordpress@</code> or <code>orders@</code> on the site's domain.";
 
 const TYPE_LABELS: Record<string, string> = { static: "Static", nodejs: "Node.js", python: "Python", "reverse-proxy": "Reverse proxy" };
 function typeLabel(site: SmtpSiteView): string {

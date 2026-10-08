@@ -266,9 +266,8 @@ installed addon patches that partial.
 ## Browser assets are files
 
 Stylesheets and browser scripts live in `.css` and `.client.js` files beside the
-module that serves them, imported with `with { type: "text" }`. They were
-template literals in TypeScript, where no editor highlighted, formatted or
-linted them.
+module that serves them, imported with `with { type: "text" }`. Keeping them in
+their own files lets editors highlight, format and lint them.
 
 They are served as they are, never bundled or minified. The pages carry inline
 handlers calling top-level functions by name from markup no bundler sees, so

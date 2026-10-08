@@ -76,6 +76,13 @@ describe("the panel-style site user", () => {
   test("a subdomain follows the registrable label, in the order it is written", () => {
     expect(panelSiteUserFor("demo.example.com")).toBe("example-demo");
     expect(panelSiteUserFor("bdn.wpsite.example.test")).toBe("example-bdn-wpsite");
+    expect(panelSiteUserFor("bdn.wpsite.example.local")).toBe("example-bdn-wpsite");
+  });
+
+  test("hyphens in domain labels are preserved without colliding with unhyphenated names", () => {
+    expect(panelSiteUserFor("example-blog.com")).toBe("example-blog");
+    expect(panelSiteUserFor("shop-front.example-blog.com")).toBe("example-blog-shop-front");
+    expect(availableSiteUser("example-blog.com", (user) => user === "exampleblog")).toBe("example-blog");
   });
 
   // The panel reads the registrable domain off the public suffix list, so the
@@ -86,6 +93,19 @@ describe("the panel-style site user", () => {
     expect(panelSiteUserFor("example.co")).toBe("example");
     expect(panelSiteUserFor("co.example.com")).toBe("example-co");
   });
+
+  for (const [domain, expected] of [
+    ["blog.example.uk.com", "example-blog"],
+    ["blog.example.k12.ca.us", "example-blog"],
+    ["blog.example.github.io", "example-blog"],
+    ["blog.foo.ck", "blog"],
+    ["blog.www.ck", "www-blog"],
+    ["www.city.kawasaki.jp", "city"],
+  ] as const) {
+    test(`${domain} resolves private suffixes, wildcard rules and exceptions`, () => {
+      expect(panelSiteUserFor(domain)).toBe(expected);
+    });
+  }
 
   // The panel's own suggestion skips a bare www.
   test("a bare www is not named", () => {
