@@ -42,11 +42,11 @@ export function fleetRowSelectionStyle(tableClass: string): string {
 }
 
 /**
- * Shared selection for the Cloudflare and PHP site tables: which rows there
- * are, which are picked, and the mouse and keyboard ways to pick them.
+ * Shared selection for the Cloudflare, PHP and SMTP site tables: which rows
+ * there are, which are picked, and the mouse and keyboard ways to pick them.
  *
  * Each entry point takes the page's own repaint, because what a selection
- * changes on the page is the one thing the two tables do not agree on.
+ * changes on the page is the one thing the tables do not agree on.
  */
 import FLEET_ROW_SELECTION_JS from "./assets/fleet-row-selection.client.js" with { type: "text" };
 export { FLEET_ROW_SELECTION_JS };

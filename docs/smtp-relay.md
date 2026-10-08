@@ -34,7 +34,7 @@ not create mailboxes, verify domains at the provider, or set DNS records.
 `{site}` is the site's domain without a leading `www.`. `{from.local}` and
 `{from.domain}` keep the app's From only on the site's own domain or one of its
 **Extra sending domains**. Whenever the address changes, the original moves to
-`Reply-To`, and the display name is kept.
+`Reply-To` unless the message already has one, and the display name is kept.
 
 ## Other apps
 
