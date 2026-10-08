@@ -802,6 +802,11 @@ function panelSites(paths: PhpResourcesActionPaths): SiteRow[] {
   }
 }
 
+/** The Unix users CloudPanel runs PHP sites as. */
+export function phpSiteUsers(paths: PhpResourcesActionPaths = DEFAULT_PHP_RESOURCES_ACTION_PATHS): string[] {
+  return [...new Set(panelSites(paths).map((site) => site.user))];
+}
+
 function stateOf(paths: PhpResourcesActionPaths, policy: Policy, sites?: SiteRow[]): PhpResourcesState {
   return {
     categories: policy.categories,
