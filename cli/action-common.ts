@@ -1,5 +1,6 @@
 import { dlopen, FFIType } from "bun:ffi";
 import { createHash } from "node:crypto";
+import { parse as parseDomain } from "tldts";
 import {
   accessSync, closeSync, ftruncateSync, lstatSync, openSync, readFileSync, writeSync, constants as fsConstants,
 } from "node:fs";
@@ -261,23 +262,13 @@ export function siteUserFor(domain: string): string {
   return `addon-${domainStem(domain)}-${domainHash(domain)}`;
 }
 
-// The panel resolves the registrable domain with the public suffix list, so a
-// name ending in one of these before a two-letter country code is part of the
-// suffix and never the registrable label: example.co.uk is example, not co.
-const SECOND_LEVEL_SUFFIXES = new Set([
-  "ac", "ad", "co", "com", "ed", "edu", "go", "gov", "gr", "id", "in", "lg", "ltd",
-  "me", "mil", "ne", "net", "nhs", "nom", "or", "org", "plc", "sch", "web",
-]);
-
 /**
  * The site user CloudPanel's own New Site page would suggest: the registrable
  * label, then any subdomain labels in the order they appear, hyphen-joined.
  * `the.staging.renaissancechurch.com` becomes `renaissancechurch-the-staging`,
  * which is what the panel wrote for that site on this project's staging box.
  *
- * Matching the panel matters because an operator reads these in the panel's own
- * site list beside sites it named itself, and `addon-stagingr-852487` announced
- * which tool made the site rather than which site it is.
+ * Matching the panel keeps names recognizable beside sites it named itself.
  *
  * The name is not unique on its own -- two domains differing only in their TLD
  * produce the same one, and CloudPanel refuses a duplicate with "siteUser: This
@@ -286,11 +277,13 @@ const SECOND_LEVEL_SUFFIXES = new Set([
  */
 export function panelSiteUserFor(domain: string): string {
   const labels = domain.toLowerCase().replace(/\.+$/, "").split(".")
-    .map((label) => label.replace(/[^a-z0-9]/g, ""))
+    .map((label) => label.replace(/[^a-z0-9-]/g, ""))
     .filter((label) => label.length > 0);
-  const suffix = labels.length > 2 && labels[labels.length - 1]!.length === 2
-    && SECOND_LEVEL_SUFFIXES.has(labels[labels.length - 2]!) ? 2 : 1;
-  // Anything with a TLD keeps every label except it; a bare hostname is itself.
+  const parsed = parseDomain(labels.join("."), { allowPrivateDomains: true });
+  const suffix = parsed.publicSuffix ? parsed.publicSuffix.split(".").length : 1;
+  // Slice the original labels so unlisted suffixes also keep every subdomain.
+  // A hostname without a resolvable suffix uses its last label as the suffix;
+  // a bare hostname is itself.
   const named = labels.length > suffix ? labels.slice(0, -suffix) : labels;
   const registrable = named[named.length - 1] ?? "";
   // The panel treats a bare www as noise rather than as a subdomain worth naming.
