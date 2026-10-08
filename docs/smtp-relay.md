@@ -32,7 +32,7 @@ not create mailboxes, verify domains at the provider, or set DNS records.
 | `alerts@agency.com` | `alerts@agency.com` | `alerts@agency.com` |
 
 `{site}` is the site's domain. A leading `www.` is removed only when the bare
-domain is not another CloudPanel site. For example, `www.example.com` uses
+domain contains a dot and is not another CloudPanel site. For example, `www.example.com` uses
 `example.com` unless `example.com` is a separate site, in which case it keeps
 `www.example.com`. `{from.local}` and
 `{from.domain}` keep the app's From only on the site's own domain or one of its
