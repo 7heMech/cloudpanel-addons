@@ -82,6 +82,9 @@ export const PHP_RESOURCES_ALLOWED_VERBS = new Set([
   "set-default",
 ]);
 
+/** Timer upkeep and installation lifecycle verbs cannot be submitted by the manager. */
+export const RESOURCE_GUARD_ALLOWED_VERBS = new Set(["status", "configure", "clean"]);
+
 export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
   "state",
   "set-tweaks",

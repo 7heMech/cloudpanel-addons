@@ -20,6 +20,14 @@ about the same site.
 
 ## Categories
 
+These are per-site process limits, not host CPU, memory or storage quotas.
+Resource Guard owns shared image scratch containment and disk monitoring.
+The presets set `request_terminate_timeout` to 300 seconds: FPM can terminate a
+worker during native image processing before temporary-file cleanup finishes.
+Lower concurrency bounds simultaneous demand but cannot bound files abandoned
+by successive workers. ImageMagick's per-process disk policy has the same
+limitation. The addons therefore keep separate configuration ownership.
+
 Limits belong to a named category, not to a site. A site is put in one, and its
 pool follows that category: editing the category rewrites every pool assigned to
 it. A fleet is then tuned by deciding once what a busy site is, rather than by

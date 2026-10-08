@@ -16,6 +16,7 @@ import { ADDONS, ADDON_NAMES, templateWatchPaths, type AddonSpec } from "./addon
 import { findMasterVhost, panelVhostWatchPath } from "./inject";
 import { panelUserUid } from "../lib/sso-auth";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
+import { resourceGuardUnits, RESOURCE_GUARD_SERVICE, RESOURCE_GUARD_TIMER } from "../addons/resource-guard/action";
 
 
 const LEGACY_MANAGER_AUTH = `${CONFIG_DIR}/manager-auth`;
@@ -831,6 +832,8 @@ export interface UnitChanges {
   cloudflare: "added" | "removed" | null;
   /** The SMTP Relay new-site watcher was added or removed by this pass. */
   smtp: "added" | "removed" | null;
+  /** The independent disk-check timer was added or removed. */
+  guard: "added" | "removed" | null;
   /** The auth socket or service definition differs. */
   auth: boolean;
   /** The Instatic backup cron file was created or removed. */
@@ -913,6 +916,10 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
   const smtp = syncAddonUnits(specs.some((spec) => spec.name === "smtp"), SMTP_RECONCILE_PATH, [
     [SMTP_RECONCILE_SERVICE, smtpUnits.service], [SMTP_RECONCILE_PATH, smtpUnits.path],
   ]);
+  const guardUnits = resourceGuardUnits();
+  const guard = syncAddonUnits(specs.some((spec) => spec.name === "resource-guard"), RESOURCE_GUARD_TIMER, [
+    [RESOURCE_GUARD_SERVICE, guardUnits.service], [RESOURCE_GUARD_TIMER, guardUnits.timer],
+  ]);
 
   const auth = authUnits();
   const authWrites = [
@@ -926,9 +933,10 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
     reconcile: reconcileChanged,
     cloudflare,
     smtp,
+    guard,
     auth: authWrites.some(Boolean),
     cron,
-    systemd: manager || reconcileChanged || cloudflare !== null || smtp !== null || authWrites.some(Boolean) || legacyTemplate,
+    systemd: manager || reconcileChanged || cloudflare !== null || smtp !== null || guard !== null || authWrites.some(Boolean) || legacyTemplate,
   };
   // systemd only needs telling when a definition it reads actually moved. The
   // cron file is not systemd's, so it does not count towards this.
@@ -952,6 +960,10 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
  * has already made the new text the one systemd will use.
  */
 export function applyToggleUnits(changes: UnitChanges): void {
+  if (changes.guard === "added") {
+    run("systemctl", ["enable", RESOURCE_GUARD_TIMER]);
+    run("systemctl", ["restart", RESOURCE_GUARD_TIMER]);
+  }
   if (changes.cloudflare === "added") {
     run("systemctl", ["enable", CLOUDFLARE_RECONCILE_TIMER]);
     run("systemctl", ["restart", CLOUDFLARE_RECONCILE_TIMER]);
@@ -1018,17 +1030,22 @@ export function startUnits(options: StartUnitsOptions = {}): void {
     run("systemctl", ["restart", SMTP_RECONCILE_PATH]);
   }
   ensureTimerArmed(RECONCILE_TIMER);
+  if (existsSync(`${SYSTEMD_DIR}/${RESOURCE_GUARD_TIMER}`)) {
+    run("systemctl", ["enable", RESOURCE_GUARD_TIMER]);
+    run("systemctl", ["restart", RESOURCE_GUARD_TIMER]);
+  }
 }
 
 export function stopUnits(keepShared = false): void {
   if (keepShared) return;
   reconcileInstaticBackupCron(false);
-  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, CLOUDFLARE_RECONCILE_TIMER, SMTP_RECONCILE_PATH,
+  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, CLOUDFLARE_RECONCILE_TIMER, SMTP_RECONCILE_PATH, RESOURCE_GUARD_TIMER,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     tryRun("systemctl", ["disable", "--now", unit]);
   }
   for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE,
     CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, SMTP_RECONCILE_SERVICE, SMTP_RECONCILE_PATH,
+    RESOURCE_GUARD_SERVICE, RESOURCE_GUARD_TIMER,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, "clp-addons-auth@.service"]) {
     rmSync(`${SYSTEMD_DIR}/${unit}`, { force: true });
   }

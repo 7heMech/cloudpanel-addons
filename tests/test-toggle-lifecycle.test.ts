@@ -172,6 +172,7 @@ function fixture(options: { provisioned: boolean; enabled: string[] }): string {
     const units: Record<string, string[]> = {
       "cloudflare-ips": ["clp-addons-cloudflare-ips-reconcile.timer", "clp-addons-cloudflare-ips-reconcile.service"],
       smtp: ["clp-addons-smtp-reconcile.path", "clp-addons-smtp-reconcile.service"],
+      "resource-guard": ["clp-addons-resource-guard.timer", "clp-addons-resource-guard.service"],
     };
     for (const unit of units[name] ?? []) writeFileSync(join(root, "systemd", unit), "# placeholder\n");
   }
@@ -272,6 +273,22 @@ test("the SMTP new-site watcher is started when its units appear and stopped whe
   expect(off.systemd).toContain("disable --now clp-addons-smtp-reconcile.path");
   expect(existsSync(join(off.root, "systemd", "clp-addons-smtp-reconcile.path"))).toBe(false);
   expect(existsSync(join(off.root, "systemd", "clp-addons-smtp-reconcile.service"))).toBe(false);
+});
+
+test("the Resource Guard timer is started and withdrawn with its addon", () => {
+  const on = toggle([{ verb: "enable", addon: "resource-guard" }]);
+  expect(on.error).toBeUndefined();
+  expect(on.systemd).toContain("enable clp-addons-resource-guard.timer");
+  expect(on.systemd).toContain("restart clp-addons-resource-guard.timer");
+  expect(on.cli).toEqual(["action resource-guard reconcile"]);
+  const service = readFileSync(join(on.root, "systemd", "clp-addons-resource-guard.service"), "utf8");
+  expect(service).toContain("action resource-guard check");
+  expect(service).not.toContain("Requires=clp-addons.service");
+  const off = toggle([{ verb: "disable", addon: "resource-guard" }], { enabled: ["resource-guard"] });
+  expect(off.error).toBeUndefined();
+  expect(off.cli).toEqual(["action resource-guard deactivate"]);
+  expect(off.systemd).toContain("disable --now clp-addons-resource-guard.timer");
+  expect(existsSync(join(off.root, "systemd", "clp-addons-resource-guard.timer"))).toBe(false);
 });
 
 test("an addon with no panel markup does not touch the panel templates", () => {

@@ -18,6 +18,7 @@ import { CLIENT_JS as STAGER_CLIENT_JS } from "../addons/stager/app/views";
 import { CLIENT_JS as GIT_CLIENT_JS } from "../addons/git/app/views";
 import { CLIENT_JS as MAINTENANCE_CLIENT_JS, fleetView as maintenanceFleetView } from "../addons/maintenance/app/views";
 import { CLIENT_JS as PHP_RESOURCES_CLIENT_JS } from "../addons/php-resources/app/views";
+import { CLIENT_JS as RESOURCE_GUARD_CLIENT_JS } from "../addons/resource-guard/app/views";
 import { dashboardView as cloudflareDashboardView } from "../addons/cloudflare-ips/app/views";
 
 const repo = join(import.meta.dir, "..");
@@ -33,6 +34,7 @@ const SCRIPTS: { name: string; source: string }[] = [
   { name: "git", source: BASE_CLIENT_JS + GIT_CLIENT_JS },
   { name: "maintenance", source: BASE_CLIENT_JS + MAINTENANCE_CLIENT_JS },
   { name: "php-resources", source: BASE_CLIENT_JS + PHP_RESOURCES_CLIENT_JS },
+  { name: "resource-guard", source: BASE_CLIENT_JS + RESOURCE_GUARD_CLIENT_JS },
   { name: "clp header update notice", source: headerUpdateScript() },
 ];
 

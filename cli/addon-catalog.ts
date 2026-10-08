@@ -26,6 +26,7 @@ import { MAINTENANCE_ADDON } from "../addons/maintenance/addon";
 import { PANEL_TWEAKS_ADDON } from "../addons/panel-tweaks/addon";
 import { WP_LOGIN_ADDON } from "../addons/wp-login/addon";
 import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
+import { RESOURCE_GUARD_ADDON } from "../addons/resource-guard/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
 import { SMTP_ADDON } from "../addons/smtp/addon";
 import { TERMINAL_ADDON } from "../addons/terminal/addon";
@@ -96,6 +97,7 @@ const DEFINITIONS: AddonDefinition[] = [
   STAGER_ADDON,
   MAINTENANCE_ADDON,
   PHP_RESOURCES_ADDON,
+  RESOURCE_GUARD_ADDON,
   GIT_ADDON,
   PANEL_TWEAKS_ADDON,
   WP_LOGIN_ADDON,

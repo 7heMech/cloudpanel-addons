@@ -8,6 +8,8 @@ import { fleetView as gitFleetView, fragment as gitFragment, layout as gitLayout
 import type { GitSiteStatus } from "../addons/git/app/service";
 import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
 import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
+import { dashboardView as guardDashboardView, layout as guardLayout } from "../addons/resource-guard/app/views";
+import { DEFAULT_GUARD_SETTINGS, type GuardState } from "../addons/resource-guard/action";
 import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../addons/smtp/app/views";
 import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
@@ -775,7 +777,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login", "smtp", "terminal"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "resource-guard", "git", "panel-tweaks", "wp-login", "smtp", "terminal"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
@@ -830,6 +832,21 @@ const server = Bun.serve({
       html = wpLoginLayout("WordPress Sign-In", wpLoginDashboardView(wpLoginPreviewSites(url)), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
+    } else if (path === "/addons/resource-guard/" || path === "/addons/resource-guard") {
+      const protectedNow = !url.searchParams.has("off");
+      const pressure = url.searchParams.has("pressure");
+      const guard: GuardState = {
+        settings: { ...DEFAULT_GUARD_SETTINGS, protection: protectedNow }, protected: protectedNow,
+        allocatedMiB: protectedNow ? 2048 : null,
+        scratch: protectedNow ? { paths: ["/var/cache/clpaddons/imagemagick"], total: 2 * 1024 ** 3, available: 1.5 * 1024 ** 3, usedPercent: 25, inodes: 131072, freeInodes: 130992, level: "ok" } : null,
+        disks: [{ paths: ["/", "/tmp", "/var/tmp", "/var/lib/mysql", "/var/lib/redis", "/home/clp/htdocs/app/files/var/sessions"], total: 150 * 1024 ** 3, available: (pressure ? 2 : 112) * 1024 ** 3, usedPercent: pressure ? 98.6 : 25, inodes: 9830400, freeInodes: 9600000, level: pressure ? "critical" : "ok" }],
+        warnings: pressure ? ["CRITICAL: low disk space on /; reclaim space before database writes or panel sessions fail."] : [],
+        files: protectedNow ? { files: 3, bytes: 480 * 1024 ** 2, owners: [{ uid: 1001, user: "example", files: 3, bytes: 480 * 1024 ** 2 }], truncated: false } : null,
+        legacy: { files: 4, bytes: 920 * 1024 ** 2, owners: [{ uid: 1001, user: "example", files: 4, bytes: 920 * 1024 ** 2 }], truncated: false },
+        verifiedPhp: protectedNow ? [{ php: "8.3", diskLimit: 1024 ** 3, version: "ImageMagick 6" }] : [],
+        lastCheck: { at: "2026-10-08T12:00:00Z", cleanup: { removed: 6, bytes: 2 * 1024 ** 3, active: 1, skipped: 3, error: null } },
+      };
+      html = guardLayout(guardDashboardView(guard), notice);
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {
       // ?profile=<id> (or ?profile= for a new one) and ?domains=<site> open a dialog on load, like ?confirm= does.
       const arg = (name: string) => JSON.stringify(url.searchParams.get(name)).replaceAll("<", "\\u003c");

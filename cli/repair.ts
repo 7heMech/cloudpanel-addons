@@ -12,6 +12,7 @@ import {
 } from "./provision";
 import { fatal, log, parseFlags, requireRoot } from "./util";
 import { existsSync } from "node:fs";
+import { RESOURCE_GUARD_TIMER } from "../addons/resource-guard/action";
 /**
  * Reconciles manager provisioning and enabled addon state, or only injected
  * CloudPanel anchors and the Nginx proxy when `--anchors-only` is supplied.
@@ -76,6 +77,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
       ensureTimerArmed(CLOUDFLARE_RECONCILE_TIMER, quiet);
     }
     if (all.some((spec) => spec.name === "smtp")) ensurePathWatching(SMTP_RECONCILE_PATH, quiet);
+    if (all.some((spec) => spec.name === "resource-guard")) ensureTimerArmed(RESOURCE_GUARD_TIMER, quiet);
   }
   reconcileAnchors(quiet);
   if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; run repair after checking global_settings");
