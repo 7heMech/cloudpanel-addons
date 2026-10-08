@@ -7,8 +7,8 @@ numbers — `pm = ondemand`, `pm.max_children = 250`, `pm.max_requests = 100`,
 `request_terminate_timeout = 7200s` — and offers no way to change them. Its own
 PHP Settings form writes `memory_limit` and the other `php.ini` values into the
 site's Nginx vhost as `PHP_VALUE` and never touches the pool. The pool file is
-therefore the only file this addon writes, and the `php.ini` side stays with
-CloudPanel's Settings tab.
+therefore the only configuration this addon writes, and the `php.ini` side stays
+with CloudPanel's Settings tab.
 
 The addon owns nine directives: `pm`, `pm.max_children`, `pm.start_servers`,
 `pm.min_spare_servers`, `pm.max_spare_servers`, `pm.process_idle_timeout`,
@@ -111,6 +111,22 @@ same pass.
 No timer of its own: nothing here is urgent enough to justify one, and a new
 site runs on CloudPanel's values in the meantime, which is what it would have
 run on anyway.
+
+## Abandoned temp files
+
+A PHP request stopped by `max_execution_time` or `request_terminate_timeout`
+skips the cleanup that would remove its scratch files, and a CloudPanel box
+empties `/tmp` only at boot. An image too large for ImageMagick's memory limit
+is cached on disk, so a WordPress image job that keeps timing out leaves close
+to a gigabyte in `/tmp` on every try, and has filled a production disk that way.
+
+The same upkeep removes them. It reads only the top level of `/tmp`, never
+follows a symlink, and removes a regular file only when a PHP site's own user
+owns it, no process has it open or mapped, and it matches one of three names:
+ImageMagick's `magick-*` after two idle hours, and PHP's `php??????` uploads and
+WordPress's `wp_tempnam()` `*-??????.tmp` files after a day, since those are
+closed between being written and being read. Running it before reconciliation
+means a site that keeps failing to reconcile cannot stop it.
 
 ## State and privileges
 
