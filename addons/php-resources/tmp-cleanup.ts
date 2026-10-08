@@ -44,7 +44,7 @@ const RULES: { name: RegExp; idleMs: number }[] = [
   { name: /-[A-Za-z0-9]{6}(-\d+)?\.tmp$/, idleMs: 24 * HOUR_MS },
 ];
 
-/** Every path under `dir` some process has open or mapped. */
+/** Every path under `dir` some process has open or mapped; incomplete scans throw. */
 function openPaths(procDir: string, dir: string): Set<string> {
   const prefix = `${dir}/`;
   const open = new Set<string>();
@@ -55,13 +55,26 @@ function openPaths(procDir: string, dir: string): Set<string> {
         try {
           const target = readlinkSync(join(procDir, pid, "fd", fd));
           if (target.startsWith(prefix)) open.add(target);
-        } catch {}
+        } catch (error) {
+          // A descriptor can close between listing it and reading its link.
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
       }
       for (const line of readFileSync(join(procDir, pid, "maps"), "utf8").split("\n")) {
         const at = line.indexOf(prefix);
         if (at >= 0) open.add(line.slice(at).replace(/ \(deleted\)$/, ""));
       }
-    } catch {}
+    } catch (error) {
+      // A process may exit during the scan. Only skip it once its directory
+      // is gone; an unreadable live process makes deletion unsafe.
+      try {
+        lstatSync(join(procDir, pid));
+      } catch (pidError) {
+        if ((pidError as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw pidError;
+      }
+      throw error;
+    }
   }
   return open;
 }
@@ -106,7 +119,9 @@ export function removeAbandonedTmpFiles(
       unlinkSync(path);
       result.removed++;
       result.bytes += blocks * 512;
-    } catch {}
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
   }
   return result;
 }

@@ -128,6 +128,13 @@ WordPress's `wp_tempnam()` `*-??????.tmp` files after a day, since those are
 closed between being written and being read. Running it before reconciliation
 means a site that keeps failing to reconcile cannot stop it.
 
+Cleanup inspects process file descriptors and memory maps before deleting any
+file. A closed descriptor or a process that has exited can be skipped; an
+inspection failure for a process whose directory still exists stops cleanup
+and logs a warning. Unlink errors also reach that warning logger, except when
+the file has already disappeared. Reconciliation still runs after a cleanup
+failure.
+
 ## State and privileges
 
 Only the root gateway changes a pool. It accepts a fixed verb set, normalizes
