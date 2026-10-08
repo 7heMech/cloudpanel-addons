@@ -1,6 +1,6 @@
 import { dlopen, FFIType } from "bun:ffi";
 import { createHash } from "node:crypto";
-import { parse as parseDomain } from "psl";
+import { parse as parseDomain } from "tldts";
 import {
   accessSync, closeSync, ftruncateSync, lstatSync, openSync, readFileSync, writeSync, constants as fsConstants,
 } from "node:fs";
@@ -279,8 +279,8 @@ export function panelSiteUserFor(domain: string): string {
   const labels = domain.toLowerCase().replace(/\.+$/, "").split(".")
     .map((label) => label.replace(/[^a-z0-9-]/g, ""))
     .filter((label) => label.length > 0);
-  const parsed = parseDomain(labels.join("."));
-  const suffix = !("error" in parsed) && parsed.tld ? parsed.tld.split(".").length : 1;
+  const parsed = parseDomain(labels.join("."), { allowPrivateDomains: true });
+  const suffix = parsed.publicSuffix ? parsed.publicSuffix.split(".").length : 1;
   // Slice the original labels so unlisted suffixes also keep every subdomain.
   // A hostname without a resolvable suffix uses its last label as the suffix;
   // a bare hostname is itself.

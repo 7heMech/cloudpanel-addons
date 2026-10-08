@@ -21,9 +21,9 @@ the panel named itself. CloudPanel allows one site per site
 user, so where two domains want the same name -- they differ only in their TLD
 -- the next free `-2`, `-3` is taken instead.
 
-The addon resolves suffixes with the pinned `psl` package, including private
+The addon resolves suffixes with the pinned `tldts` package, including private
 suffixes, wildcard rules and exceptions. Its list is bundled into the binary;
-site creation needs no network lookup. Updating `psl` updates that snapshot.
+site creation needs no network lookup. Updating `tldts` updates that snapshot.
 An unlisted suffix uses the final domain label, and all preceding subdomain
 labels are retained. Names are limited to 32 characters and prefixed with `s`
 when they do not start with a letter.
