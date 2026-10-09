@@ -1,0 +1,61 @@
+/* Only the Admin header includes these rules. Keep the sidebar's links in the
+   document and move them above the content, so navigation needs no script. */
+@media (max-width: 760px) {
+  body .header .logo { flex: 1 1 0; }
+  body .header .logo > a { min-width: 0; }
+  body #main-container { flex-wrap: wrap; }
+  body #sidebar { width: 100%; flex: 0 0 100%; min-height: 0;
+    border-right: 0; border-bottom: 1px solid #e5e5e5; }
+  html.dark body #sidebar { border-bottom-color: var(--clp-border-color); }
+  body #sidebar .back-to-sites { margin: 12px 20px; }
+  body #sidebar > ul { display: flex; overflow-x: auto; margin: 0; padding: 0 5px; }
+  /* Match the frontend navigation: keep swiping and focused links reachable
+     without reserving a native scrollbar track underneath each row. */
+  body .header .header-instance-information-container,
+  body #sidebar > ul,
+  body #main-container .tab-container { scrollbar-width: none; }
+  body .header .header-instance-information-container::-webkit-scrollbar,
+  body #sidebar > ul::-webkit-scrollbar,
+  body #main-container .tab-container::-webkit-scrollbar { display: none; }
+  body #sidebar > ul > li { flex: 0 0 auto; }
+  body #sidebar > ul > li > a { padding: 12px 15px; white-space: nowrap;
+    border-left: 0; border-right: 0; border-bottom: 3px solid transparent; }
+  body #sidebar > ul > li.active > a,
+  body #sidebar > ul > li > a:hover { border-bottom-color: #0078d4; }
+
+  body #main-container > .container-fluid { min-width: 0; padding: 0 20px; }
+  body #main-container .main-content { margin: 0 0 60px; }
+  body #main-container .page-header { flex-wrap: wrap; gap: 12px; }
+  body #main-container .page-title h1 { font-size: 24px; }
+  body #main-container .card-header { flex-wrap: wrap; gap: 12px; padding: 16px; }
+  body #main-container .card-header .btn { max-width: 100%; white-space: normal; }
+  /* Scroll the table's existing wrapper rather than the whole page. Forms use
+     the same wrapper; their columns stack below and need no sideways scroll. */
+  body #main-container .card-body-no-padding { overflow-x: auto; }
+  body #main-container .tab-container { overflow-x: auto; }
+  body #main-container .tab-container > ul { display: flex; padding: 0 5px; }
+  body #main-container .tab-container > ul > li { flex: 0 0 auto; padding: 0; }
+  body #main-container .tab-container > ul > li > a { display: block;
+    padding: 14px 12px; white-space: nowrap; }
+  body #main-container .multi-input-checkbox-container .form-check { display: flex;
+    min-width: 0; max-width: 100%; margin-right: 0; gap: 8px; }
+  body #main-container .multi-input-checkbox-container .form-check-input { flex: 0 0 1em; margin: 8px 0 0; }
+  body #main-container .multi-input-checkbox-container .form-check-label { min-width: 0; overflow-wrap: anywhere; }
+
+  /* Events has a 380px input and a 720px date picker. Give the input a row of
+     its own and stack the calendars inside a popup bounded by that row. */
+  body #main-container .custom-datetime-range-wrap-container { position: relative; width: 100%; min-width: 0; }
+  body #main-container .datetime-range-input { width: 100%; margin: 0; }
+  body #main-container .custom-datetime-range-container { top: calc(100% + 8px); width: 100%; max-height: 65vh; overflow: auto; }
+  body #main-container .custom-datetimepicker-container { display: block; }
+  body #main-container .custom-datetimepicker-container .datetimepicker { width: 100%; }
+  body #main-container .custom-datetimepicker-container .datetimepicker:first-child {
+    border-right: 0; border-bottom: 1px dashed #dee2e6; }
+  body #main-container .custom-datetime-apply { position: sticky; bottom: 0; padding: 10px;
+    background: inherit; }
+}
+@media (max-width: 576px) {
+  /* Firewall rules use quarters and sixths as well as the usual form halves. */
+  body #main-container .card .row > [class*="col-"] { width: 100%; }
+  body #main-container .card .row { row-gap: 20px; }
+}

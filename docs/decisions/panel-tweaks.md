@@ -106,6 +106,23 @@ container of two-column cards and unstacking halves. Below 760px the container
 becomes the viewport and the cards become one centred column; below 576px,
 Bootstrap's own stacking point, each form half takes the whole row.
 
+The Admin header additionally carries rules for the Admin Area, under the same
+mobile-layout switch and without another template anchor. Below 760px the fixed
+235px sidebar becomes a full-width navigation row above the content; its links
+and the page tabs scroll within their own rows. The instance information,
+navigation and tabs hide their native scrollbar tracks while keeping scrolling,
+as the frontend navigation does. The content loses its desktop
+side margins, card headings wrap, and tables scroll inside their existing body
+wrapper. Below 576px the form columns take the whole row, including the narrow
+columns used for firewall rules. Long site labels wrap beside their checkboxes,
+and the logo can shrink beside the header tools on the smallest phones. Events
+gives its date-range input a full row and stacks the two calendars in a popup
+bounded by that row and 65% of the viewport height, with an inner scroller and
+sticky Apply and Cancel controls. These rules only ship in the Admin header, so
+the shared class names do not alter frontend pages.
+All changes are CSS present before the content is parsed; navigation and forms
+keep CloudPanel's own markup and behavior, and desktop retains its sidebar.
+
 ## Nothing moves once it is on the screen
 
 The narrow-screen rules are keyed on CloudPanel's own `table-sites` class rather
