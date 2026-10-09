@@ -17,6 +17,7 @@
 
 import MENU_STYLE_SOURCE from "./menu.css" with { type: "text" };
 import SITES_SCRIPT_SOURCE from "./sites.client.js" with { type: "text" };
+import ADMIN_MOBILE_STYLE from "./admin-mobile.css" with { type: "text" };
 import type { AddonTarget } from "../../../lib/addon-target";
 import { headerWrapStyle } from "../../../lib/panel-nav";
 import { MENU_ONLY_CLASS, ROW_ACTION_CLASS, ROW_MENU_CLASS } from "../../../lib/row-actions";
@@ -293,14 +294,14 @@ export function deviceThemeSnippet(on: boolean): string {
   return on ? DEVICE_THEME_SCRIPT : "";
 }
 
-/** The narrow-screen header and new-site rules, or nothing at all. */
-export function panelMobileSnippet(on: boolean): string {
-  return on ? `<style>${PANEL_HEADER_STYLE}${NEW_SITE_STYLE}</style>` : "";
+/** The narrow-screen rules for the relevant panel header, or nothing at all. */
+export function panelMobileSnippet(on: boolean, adminArea = false): string {
+  return on ? `<style>${PANEL_HEADER_STYLE}${NEW_SITE_STYLE}${adminArea ? ADMIN_MOBILE_STYLE : ""}</style>` : "";
 }
 
 export const SITES_TEMPLATE = "Frontend/Site/index.html.twig";
 
-/** Both headers carry the same opening tag, and both want the same rules. */
+/** Both headers carry the same opening tag; only Admin gets the sidebar rules. */
 export const HEADER_TEMPLATES = ["Frontend/Partial/header.html.twig", "Admin/Partial/header.html.twig"];
 
 export { sitesSnippet };
@@ -333,6 +334,6 @@ export const PANEL_TWEAKS_TARGETS: AddonTarget[] = [
     // CloudPanel's headers and neither depends on what is in them.
     anchorBefore: '<header class="header d-flex">',
     required: false,
-    snippet: () => panelMobileSnippet(storedTweaks().panelMobile),
+    snippet: () => panelMobileSnippet(storedTweaks().panelMobile, index === 1),
   })),
 ];
