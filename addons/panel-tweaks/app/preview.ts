@@ -24,25 +24,7 @@ import type { PanelTweaksState, TweakSiteView } from "../action";
 /** Enough rows to show a layout, few enough to stay a preview. */
 const ROWS = 5;
 
-const PREVIEW_STYLE = `
-html, body { margin: 0; }
-/* The page holding this frame measures #clp-preview to size it, so the padding
-   is the wrapper's: CloudPanel gives html and body a height of their own, which
-   in a frame is the frame's height and says nothing about the content in it. */
-#clp-preview { max-width: 1200px; margin: 0 auto; padding: 20px 20px 24px; }
-@media (max-width: 760px) {
-  #clp-preview { padding-right: 0; padding-left: 0; }
-}
-/* The desktop Phone button deliberately shows a framed phone, not an actual
-   edge-to-edge mobile page. The parent marks that case after the frame loads. */
-html.clp-preview-framed-phone #clp-preview { padding-right: 20px; padding-left: 20px; }
-.page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 20px; }
-.page-title h1 { margin: 0; font-size: 26px; }
-.preview-note { margin: 16px 0 0; font-size: 13px; }
-/* CloudPanel's own page has a sidebar and a header above this; the frame has
-   neither, so the card is what the top of it is. */
-.card.card-table { overflow: visible; }
-`;
+import PREVIEW_STYLE from "./preview.css" with { type: "text" };
 
 function actionCell(site: TweakSiteView): string {
   return `<a href="/site/${esc(site.domain)}/settings">Manage</a>`;

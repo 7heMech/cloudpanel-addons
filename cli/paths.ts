@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 
-export { PANEL_IDENTITY_PATH } from "./action-constants";
+// Read by cli/action-common.ts, which cannot own it: that module opens FFI at
+// import time, and every consumer of this leaf would then pay for it.
+export const PANEL_IDENTITY_PATH = "/etc/clp-addons/panel-identity.conf";
 
 export { mountPath } from "../lib/mount";
 
@@ -27,7 +29,8 @@ export const AUTH_SOCKET_UNIT = "clp-addons-auth.socket";
 export const AUTH_SERVICE_UNIT = "clp-addons-auth.service";
 export const AUTH_SOCKET_PATH = `${SOCKET_DIR}/auth.sock`;
 export const PANEL_DB = "/home/clp/htdocs/app/data/db.sq3";
-const DISTRO_NGINX_SITES_DIR = "/etc/nginx/sites-enabled";
+/** Site vhosts, which stay with the distro Nginx in both panel layouts. */
+export const DISTRO_NGINX_SITES_DIR = "/etc/nginx/sites-enabled";
 const PANEL_NGINX_DIR = "/home/clp/services/nginx";
 
 export interface NginxLayout {
@@ -61,6 +64,7 @@ export function nginxLayout(panelDir = PANEL_NGINX_DIR): NginxLayout {
 }
 export const NGINX_PROXY_STATE_DIR = "/var/lib/clp-addons/nginx";
 export const NGINX_GLOBAL_SETTINGS = "/etc/nginx/global_settings";
+export const CLOUDFLARE_IPS_PATH = "/etc/nginx/cloudflare/ips";
 export const NGINX_MAINTENANCE_STATE_DIR = "/var/lib/clp-addons/nginx-maintenance";
 
 const PANEL_APP = "/home/clp/htdocs/app/files";
@@ -84,6 +88,8 @@ export const RECONCILE_PATH = "clp-addons-anchor.path";
 export const ANCHOR_SERVICE = "clp-addons-anchor.service";
 export const CLOUDFLARE_RECONCILE_SERVICE = "clp-addons-cloudflare-ips-reconcile.service";
 export const CLOUDFLARE_RECONCILE_TIMER = "clp-addons-cloudflare-ips-reconcile.timer";
+export const SMTP_RECONCILE_SERVICE = "clp-addons-smtp-reconcile.service";
+export const SMTP_RECONCILE_PATH = "clp-addons-smtp-reconcile.path";
 
 
 export const LEGACY_USERS = ["instatic-app"];

@@ -66,7 +66,7 @@ function findChrome(): string | null {
 async function chromeBinary(): Promise<string> {
   const existing = findChrome();
   if (existing) return existing;
-  await run(["bunx", "playwright", "install", "chromium-headless-shell"]);
+  await run(["bunx", "--bun", "playwright", "install", "chromium-headless-shell"]);
   const installed = findChrome();
   if (!installed) throw new Error("no headless chromium found after installing it");
   return installed;
@@ -105,11 +105,14 @@ async function previewIsUp(): Promise<boolean> {
 
 async function ensurePreview(): Promise<void> {
   if (await previewIsUp()) return;
-  Bun.spawn(["bun", join(repo, "tools/preview-ui.ts")], {
+  // Watched, because this server outlives the run that started it and the next
+  // run reuses it: without it a second screenshot of an edited page is taken of
+  // the old one, which looks like the edit having no effect. Bun watches the
+  // stylesheets and browser scripts too, since they are imported as text.
+  Bun.spawn(["bun", "--watch", join(repo, "tools/preview-ui.ts")], {
     env: { ...process.env, PORT: String(port) },
     stdout: "ignore",
     stderr: "ignore",
-    // Outlive this process so the next run reuses the same server.
     stdin: "ignore",
   }).unref();
   for (let attempt = 0; attempt < 20; attempt++) {

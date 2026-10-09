@@ -165,20 +165,7 @@ export const SITE_TAB_TEMPLATE = "Frontend/Site/Partial/tab-container.html.twig"
 // are the other half of the same problem: they are a non-wrapping flex row of
 // 200px-minimum boxes, which overflows the page on a phone whatever the tabs
 // do.
-const SITE_LAYOUT_STYLE = `
-.tab-container ul { display: flex; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden;
-  scrollbar-width: none; }
-.tab-container ul::-webkit-scrollbar { display: none; }
-.tab-container ul li { flex: 0 0 auto; white-space: nowrap; }
-.tab-container ul li a:focus-visible { outline: 2px solid #0078d4; outline-offset: -4px; }
-.site-info-container { flex-wrap: wrap; }
-.site-info-box { max-width: 100%; }
-.site-info-value { overflow-wrap: anywhere; }
-@media (max-width: 760px) {
-  .site-info-container { margin: 20px 0; gap: 20px 0; }
-  .site-info-box { min-width: 0; margin-right: 30px; }
-}
-`;
+import SITE_LAYOUT_STYLE from "./assets/site-layout.css" with { type: "text" };
 
 // A scrolled strip can hide the tab the page is on and the tab the keyboard has
 // reached, which are the two tabs an operator needs to see. Nothing else about

@@ -1,11 +1,10 @@
 import { dlopen, FFIType } from "bun:ffi";
 import { createHash } from "node:crypto";
+import { parse as parseDomain } from "tldts";
 import {
   accessSync, closeSync, ftruncateSync, lstatSync, openSync, readFileSync, writeSync, constants as fsConstants,
 } from "node:fs";
-import { PANEL_IDENTITY_PATH } from "./action-constants";
-
-export { PANEL_IDENTITY_PATH } from "./action-constants";
+import { PANEL_IDENTITY_PATH } from "./paths";
 
 const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
 const HOSTNAME_RE = new RegExp(`^(?:${HOSTNAME_LABEL})(?:\\.${HOSTNAME_LABEL})+$`);
@@ -230,6 +229,27 @@ export function validateMfa(value: string): string {
   return value;
 }
 
+/** One line of plain text: no control characters, no runs of whitespace. */
+export function oneLine(value: unknown, what: string, max: number, required: boolean): string {
+  if (value == null && !required) return "";
+  if (typeof value !== "string") failAction(`${what} must be text`);
+  const text = value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  if (!text && required) failAction(`${what} is required`);
+  if (text.length > max) failAction(`${what} must be at most ${max} characters`);
+  return text;
+}
+
+/**
+ * The stable identifier a named record keeps for its whole life, derived from
+ * the name it was created with. Renaming leaves it alone, so whatever is
+ * assigned to the record does not come loose when it is renamed.
+ */
+export function nameSlug(name: string, what: string, max = 40): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, max).replace(/^-+|-+$/g, "");
+  if (!slug) failAction(`${what} needs at least one letter or digit`);
+  return slug;
+}
+
 function domainStem(domain: string): string {
   return domain.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8);
 }
@@ -240,6 +260,59 @@ function domainHash(domain: string): string {
 
 export function siteUserFor(domain: string): string {
   return `addon-${domainStem(domain)}-${domainHash(domain)}`;
+}
+
+/**
+ * The site user CloudPanel's own New Site page would suggest: the registrable
+ * label, then any subdomain labels in the order they appear, hyphen-joined.
+ * `the.staging.renaissancechurch.com` becomes `renaissancechurch-the-staging`,
+ * which is what the panel wrote for that site on this project's staging box.
+ *
+ * Matching the panel keeps names recognizable beside sites it named itself.
+ *
+ * The name is not unique on its own -- two domains differing only in their TLD
+ * produce the same one, and CloudPanel refuses a duplicate with "siteUser: This
+ * value already exists" -- so a caller creating a site picks through
+ * `availableSiteUser`.
+ */
+export function panelSiteUserFor(domain: string): string {
+  const labels = domain.toLowerCase().replace(/\.+$/, "").split(".")
+    .map((label) => label.replace(/[^a-z0-9-]/g, ""))
+    .filter((label) => label.length > 0);
+  const parsed = parseDomain(labels.join("."), { allowPrivateDomains: true });
+  const suffix = parsed.publicSuffix ? parsed.publicSuffix.split(".").length : 1;
+  // Slice the original labels so unlisted suffixes also keep every subdomain.
+  // A hostname without a resolvable suffix uses its last label as the suffix;
+  // a bare hostname is itself.
+  const named = labels.length > suffix ? labels.slice(0, -suffix) : labels;
+  const registrable = named[named.length - 1] ?? "";
+  // The panel treats a bare www as noise rather than as a subdomain worth naming.
+  const subdomains = named.slice(0, -1);
+  const parts = subdomains.length === 1 && subdomains[0] === "www" ? [] : subdomains;
+  return clampSiteUser([registrable, ...parts].join("-"));
+}
+
+/** A Linux account name: starts with a letter, at most 32 characters. */
+function clampSiteUser(name: string): string {
+  const prefixed = /^[a-z]/.test(name) ? name : `s${name}`;
+  return prefixed.slice(0, 32).replace(/-+$/, "");
+}
+
+/**
+ * The panel-style name, or the first free variation of it. CloudPanel enforces
+ * one site per site user, so the caller supplies the question "is this account
+ * taken" and this answers with one that is not.
+ */
+export function availableSiteUser(domain: string, taken: (user: string) => boolean): string {
+  const base = panelSiteUserFor(domain);
+  if (!taken(base)) return base;
+  // The digits a person would add in the panel, with room kept for them.
+  for (let n = 2; n <= 99; n++) {
+    const suffix = `-${n}`;
+    const candidate = clampSiteUser(base.slice(0, 32 - suffix.length)) + suffix;
+    if (!taken(candidate)) return candidate;
+  }
+  failAction(`could not find a free site user for ${domain}; ${base} and 98 variations of it are taken`);
 }
 
 export function dbNameFor(domain: string): string {

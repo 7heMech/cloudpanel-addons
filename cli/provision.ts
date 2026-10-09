@@ -2,21 +2,21 @@ import {
   chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
-  ANCHOR_SERVICE, CLI_BIN, CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER,
+  ANCHOR_SERVICE, CLI_BIN, CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, DISTRO_NGINX_SITES_DIR,
+  SMTP_RECONCILE_PATH, SMTP_RECONCILE_SERVICE,
   CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS, INSTATIC_BACKUP_CRON,
   AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT,
   PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
-  SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS,
+  SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH,
 } from "./paths";
 import { ADDONS, ADDON_NAMES, templateWatchPaths, type AddonSpec } from "./addon-catalog";
 import { findMasterVhost, panelVhostWatchPath } from "./inject";
 import { panelUserUid } from "../lib/sso-auth";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
 
-export { PANEL_IDENTITY_PATH } from "./paths";
 
 const LEGACY_MANAGER_AUTH = `${CONFIG_DIR}/manager-auth`;
 const LEGACY_PLATFORM_CONFIG = `${CONFIG_DIR}/platform.conf`;
@@ -255,19 +255,52 @@ function installDocker(commands: ProvisionCommandRunner): void {
 
 /**
  * `applyEnable`/`cmdInstall` gate on `requiresUnits` before touching any
- * addon state. Docker is the only unit any addon currently requires, and the
- * installer already knows how to bring it up on a fresh host
- * (`install.sh --install-docker`, via get.docker.com). Enabling instatic
- * later -- from the UI or `clp-addons install instatic` -- should follow the
- * same path instead of just telling the operator to go run that installer's
- * logic by hand.
+ * addon state. Docker and Postfix are installed only when their respective
+ * addons require them. Postfix is used as a local queue and authenticated
+ * outbound relay, not as a listening mail service for customer sites.
  */
 export function ensureRequiredUnits(
   spec: AddonSpec,
   commands: ProvisionCommandRunner = { run, tryRun },
 ): void {
   for (const unit of spec.requiresUnits ?? []) {
-    if (commands.tryRun("systemctl", ["is-active", unit]).ok) continue;
+    const active = commands.tryRun("systemctl", ["is-active", unit]).ok;
+    if (active && unit !== "postfix") continue;
+    if (unit === "postfix") {
+      const loadState = active ? null : commands.tryRun("systemctl", ["show", "postfix", "--property=LoadState", "--value"]);
+      const fresh = loadState !== null && loadState.out.trim() !== "loaded";
+      const modules = commands.tryRun("dpkg-query", ["-W", "-f=${Status}", "libsasl2-modules"]);
+      if (fresh || !modules.ok || modules.out.trim() !== "install ok installed") {
+        log.step("installing Postfix and its SMTP authentication modules");
+        const packages = fresh ? ["postfix", "libsasl2-modules"] : ["libsasl2-modules"];
+        const install = commands.tryRun("env", ["DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", ...packages]);
+        if (!install.ok) fatal(`Postfix SMTP authentication modules could not be installed: ${install.out || "apt-get failed"}`);
+      }
+      const installedModules = commands.tryRun("dpkg-query", ["-W", "-f=${Status}", "libsasl2-modules"]);
+      if (!installedModules.ok || installedModules.out.trim() !== "install ok installed") {
+        fatal("Postfix SMTP authentication requires the libsasl2-modules package");
+      }
+      const clients = commands.tryRun("postconf", ["-A"]);
+      if (!clients.ok || !clients.out.split(/\s+/).includes("cyrus")) {
+        fatal("Postfix SMTP client lacks Cyrus SASL support; install a Postfix build with Cyrus SASL client support");
+      }
+      const saslType = commands.tryRun("postconf", ["-h", "smtp_sasl_type"]);
+      if (!saslType.ok || saslType.out.trim() !== "cyrus") {
+        fatal("Postfix smtp_sasl_type must be cyrus for authenticated SMTP relay");
+      }
+      if (fresh) {
+        const outboundOnly = commands.tryRun("postconf", ["-e", "inet_interfaces=loopback-only"]);
+        if (!outboundOnly.ok) fatal(`Postfix could not be limited to local submissions: ${outboundOnly.out || "postconf failed"}`);
+        if (!commands.tryRun("systemctl", ["restart", "postfix"]).ok) {
+          fatal("Postfix could not be restarted on the loopback interface");
+        }
+      }
+      if (!active && !commands.tryRun("systemctl", ["enable", "--now", "postfix"]).ok) {
+        fatal("Postfix could not be started");
+      }
+      log.ok("Postfix and SMTP authentication ready");
+      continue;
+    }
     if (unit !== "docker") {
       fatal(`${unit} is not active; install and start it before enabling ${spec.name}`);
     }
@@ -690,7 +723,7 @@ RandomizedDelaySec=30
 WantedBy=timers.target
 `,
     path: `[Unit]
-Description=CloudPanel Addons template watcher
+Description=CloudPanel Addons configuration watcher
 
 [Path]
 ${reconcileWatchPaths().map((path) => `PathChanged=${path}`).join("\n")}
@@ -736,15 +769,47 @@ WantedBy=timers.target
 }
 
 /**
- * Everything the watcher reconciles: the addons' Twig anchors and the panel
- * vhost carrying the /addons/ proxy. The vhost belongs here because on the
- * CloudPanel layout it is owned by the panel user, so a panel action can
- * rewrite it at any time; the reconciler puts the block back, but only once
- * something tells it to look.
+ * New sites need SMTP Relay quickly: their login is refused any sender but its
+ * bare name until the sender map lists it. CloudPanel writes a vhost for every
+ * new site, but commits the site row about 200 ms later, so the sync runs
+ * again shortly after to catch a row that was not there yet. A vhost write
+ * that adds or removes no site changes nothing.
+ */
+export function smtpReconcileUnits(): { service: string; path: string } {
+  return {
+    service: `[Unit]
+Description=Apply SMTP Relay to new CloudPanel sites
+ConditionPathExists=${ADDONS.smtp!.configFile}
+
+[Service]
+Type=oneshot
+ExecStart=-${CLI_BIN} action smtp sync-sites
+ExecStart=/bin/sleep 10
+ExecStart=${CLI_BIN} action smtp sync-sites
+`,
+    path: `[Unit]
+Description=Watch for new CloudPanel sites that SMTP Relay must bind
+
+[Path]
+PathChanged=${DISTRO_NGINX_SITES_DIR}
+Unit=${SMTP_RECONCILE_SERVICE}
+
+[Install]
+WantedBy=paths.target
+`,
+  };
+}
+
+/**
+ * Everything the watcher's fast repair reconciles: Twig anchors, the panel
+ * vhost, global Nginx settings, and CloudPanel's Cloudflare range list. Watch
+ * both the range file for in-place writes and its directory for atomic
+ * replacement; either change requires regenerating the maintenance IP map.
  */
 function reconcileWatchPaths(): string[] {
   const vhost = panelVhostWatchPath();
-  return [...templateWatchPaths(), ...(vhost ? [vhost] : []), NGINX_GLOBAL_SETTINGS];
+  return [...templateWatchPaths(), ...(vhost ? [vhost] : []), NGINX_GLOBAL_SETTINGS,
+    CLOUDFLARE_IPS_PATH, dirname(CLOUDFLARE_IPS_PATH)];
 }
 
 /**
@@ -764,6 +829,8 @@ export interface UnitChanges {
   reconcile: boolean;
   /** The Cloudflare timer and service were added or removed by this pass. */
   cloudflare: "added" | "removed" | null;
+  /** The SMTP Relay new-site watcher was added or removed by this pass. */
+  smtp: "added" | "removed" | null;
   /** The auth socket or service definition differs. */
   auth: boolean;
   /** The Instatic backup cron file was created or removed. */
@@ -814,6 +881,16 @@ function removeManaged(path: string): boolean {
   return true;
 }
 
+/**
+ * Writes one addon's own units while it is enabled, and stops and removes them
+ * once it is not. `trigger` is the unit that schedules the rest.
+ */
+function syncAddonUnits(enabled: boolean, trigger: string, units: [string, string][]): "added" | "removed" | null {
+  if (enabled) return units.map(([name, body]) => writeManaged(`${SYSTEMD_DIR}/${name}`, body)).some(Boolean) ? "added" : null;
+  if (existsSync(`${SYSTEMD_DIR}/${trigger}`)) tryRun("systemctl", ["disable", "--now", trigger]);
+  return units.map(([name]) => removeManaged(`${SYSTEMD_DIR}/${name}`)).some(Boolean) ? "removed" : null;
+}
+
 export function installUnits(specs: AddonSpec[]): UnitChanges {
   const cron = reconcileInstaticBackupCron(specs.some((spec) => spec.name === "instatic"));
   const units = reconcileUnits();
@@ -828,24 +905,14 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
   ];
   const reconcileChanged = reconcileWrites.some(Boolean);
 
-  const cloudflareEnabled = specs.some((spec) => spec.name === "cloudflare-ips");
   const cloudflareUnits = cloudflareReconcileUnits();
-  const cloudflareServicePath = `${SYSTEMD_DIR}/${CLOUDFLARE_RECONCILE_SERVICE}`;
-  const cloudflareTimerPath = `${SYSTEMD_DIR}/${CLOUDFLARE_RECONCILE_TIMER}`;
-  let cloudflare: UnitChanges["cloudflare"] = null;
-  if (cloudflareEnabled) {
-    const writes = [
-      writeManaged(cloudflareServicePath, cloudflareUnits.service),
-      writeManaged(cloudflareTimerPath, cloudflareUnits.timer),
-    ];
-    if (writes.some(Boolean)) cloudflare = "added";
-  } else {
-    if (existsSync(cloudflareTimerPath)) {
-      tryRun("systemctl", ["disable", "--now", CLOUDFLARE_RECONCILE_TIMER]);
-    }
-    const removals = [removeManaged(cloudflareServicePath), removeManaged(cloudflareTimerPath)];
-    if (removals.some(Boolean)) cloudflare = "removed";
-  }
+  const cloudflare = syncAddonUnits(specs.some((spec) => spec.name === "cloudflare-ips"), CLOUDFLARE_RECONCILE_TIMER, [
+    [CLOUDFLARE_RECONCILE_SERVICE, cloudflareUnits.service], [CLOUDFLARE_RECONCILE_TIMER, cloudflareUnits.timer],
+  ]);
+  const smtpUnits = smtpReconcileUnits();
+  const smtp = syncAddonUnits(specs.some((spec) => spec.name === "smtp"), SMTP_RECONCILE_PATH, [
+    [SMTP_RECONCILE_SERVICE, smtpUnits.service], [SMTP_RECONCILE_PATH, smtpUnits.path],
+  ]);
 
   const auth = authUnits();
   const authWrites = [
@@ -858,9 +925,10 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
     manager,
     reconcile: reconcileChanged,
     cloudflare,
+    smtp,
     auth: authWrites.some(Boolean),
     cron,
-    systemd: manager || reconcileChanged || cloudflare !== null || authWrites.some(Boolean) || legacyTemplate,
+    systemd: manager || reconcileChanged || cloudflare !== null || smtp !== null || authWrites.some(Boolean) || legacyTemplate,
   };
   // systemd only needs telling when a definition it reads actually moved. The
   // cron file is not systemd's, so it does not count towards this.
@@ -887,6 +955,10 @@ export function applyToggleUnits(changes: UnitChanges): void {
   if (changes.cloudflare === "added") {
     run("systemctl", ["enable", CLOUDFLARE_RECONCILE_TIMER]);
     run("systemctl", ["restart", CLOUDFLARE_RECONCILE_TIMER]);
+  }
+  if (changes.smtp === "added") {
+    run("systemctl", ["enable", SMTP_RECONCILE_PATH]);
+    run("systemctl", ["restart", SMTP_RECONCILE_PATH]);
   }
 }
 
@@ -941,18 +1013,22 @@ export function startUnits(options: StartUnitsOptions = {}): void {
     run("systemctl", ["enable", CLOUDFLARE_RECONCILE_TIMER]);
     run("systemctl", ["restart", CLOUDFLARE_RECONCILE_TIMER]);
   }
+  if (existsSync(`${SYSTEMD_DIR}/${SMTP_RECONCILE_PATH}`)) {
+    run("systemctl", ["enable", SMTP_RECONCILE_PATH]);
+    run("systemctl", ["restart", SMTP_RECONCILE_PATH]);
+  }
   ensureTimerArmed(RECONCILE_TIMER);
 }
 
 export function stopUnits(keepShared = false): void {
   if (keepShared) return;
   reconcileInstaticBackupCron(false);
-  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, CLOUDFLARE_RECONCILE_TIMER,
+  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, CLOUDFLARE_RECONCILE_TIMER, SMTP_RECONCILE_PATH,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     tryRun("systemctl", ["disable", "--now", unit]);
   }
   for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE,
-    CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER,
+    CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, SMTP_RECONCILE_SERVICE, SMTP_RECONCILE_PATH,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, "clp-addons-auth@.service"]) {
     rmSync(`${SYSTEMD_DIR}/${unit}`, { force: true });
   }
@@ -985,6 +1061,19 @@ export function ensureTimerArmed(unit: string, quiet = false): void {
   if (!quiet) log.warn(`${unit} has no scheduled run; restarting it`);
   tryRun("systemctl", ["restart", unit]);
   if (!timerNextElapse(unit) && !quiet) log.err(`${unit} still has no scheduled run`);
+}
+
+/** A path unit only watches while it is active, and nothing else restarts one that stopped. */
+export function ensurePathWatching(unit: string, quiet = false): void {
+  const enabled = tryRun("systemctl", ["is-enabled", unit]);
+  if (!enabled.ok || enabled.out.trim() !== "enabled") {
+    if (!quiet) log.warn(`${unit} is not enabled; enabling it`);
+    run("systemctl", ["enable", unit]);
+  }
+  if (unitActive(unit) === "active") return;
+  if (!quiet) log.warn(`${unit} is not watching; restarting it`);
+  tryRun("systemctl", ["restart", unit]);
+  if (unitActive(unit) !== "active" && !quiet) log.err(`${unit} still is not watching`);
 }
 
 export function purgeTwigCache(): void {

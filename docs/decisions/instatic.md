@@ -10,6 +10,24 @@ port, version, site user, and ownership of the CloudPanel site under
 An existing CloudPanel site is adopted only when it is already a reverse proxy
 to the requested local port. The panel hostname itself is always rejected.
 
+A site the addon creates gets the site user CloudPanel's own New Site page
+would have suggested: the registrable label, then any subdomain labels in the
+order they are written, so `the.staging.example.com` becomes
+`example-the-staging`. The panel reads the registrable label off the public
+suffix list and ignores a bare `www`, so `www.example.co.uk` is `example`.
+Hyphens within domain labels are preserved, so `example-blog.com` is
+`example-blog`. Recognizable names make sites easy to identify beside sites
+the panel named itself. CloudPanel allows one site per site
+user, so where two domains want the same name -- they differ only in their TLD
+-- the next free `-2`, `-3` is taken instead.
+
+The addon resolves suffixes with the pinned `tldts` package, including private
+suffixes, wildcard rules and exceptions. Its list is bundled into the binary;
+site creation needs no network lookup. Updating `tldts` updates that snapshot.
+An unlisted suffix uses the final domain label, and all preceding subdomain
+labels are retained. Names are limited to 32 characters and prefixed with `s`
+when they do not start with a letter.
+
 ## Docker dependency
 
 Instatic declares `requiresUnits: ["docker"]` (`addons/instatic/addon.ts`).

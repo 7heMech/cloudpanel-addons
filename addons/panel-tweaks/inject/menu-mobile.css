@@ -1,0 +1,6 @@
+
+@media (max-width: 860px) {
+  html.clp-tweaks-menu table.table-sites .clp-tweaks-details { padding-bottom: 4px; }
+  html.clp-tweaks-menu table.table-sites td.clp-tweaks-actions { position: absolute; bottom: 16px; right: 20px;
+    width: 30px; height: 30px; padding: 0 !important; }
+}

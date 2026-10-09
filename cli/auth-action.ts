@@ -24,11 +24,15 @@ import {
   MAINTENANCE_ALLOWED_VERBS,
   GIT_ALLOWED_VERBS,
   CLOUDFLARE_IPS_ALLOWED_VERBS,
+  SMTP_ALLOWED_VERBS,
   PHP_RESOURCES_ALLOWED_VERBS,
   PANEL_TWEAKS_ALLOWED_VERBS,
   WP_LOGIN_ALLOWED_VERBS,
   MANAGER_ALLOWED_VERBS,
   STREAM_ALLOWED_VERBS,
+  DUPLEX_STREAM_VERBS,
+  TERMINAL_ALLOWED_VERBS,
+  DUPLEX_WORKER_MARKER,
 } from "../lib/gateway-protocol";
 import { getLivePanelInfo } from "../lib/panel-snapshot";
 
@@ -44,9 +48,11 @@ const ALLOWED_VERBS = new Map<string, Set<string>>([
   ["maintenance", MAINTENANCE_ALLOWED_VERBS],
   ["git", GIT_ALLOWED_VERBS],
   ["cloudflare-ips", CLOUDFLARE_IPS_ALLOWED_VERBS],
+  ["smtp", SMTP_ALLOWED_VERBS],
   ["php-resources", PHP_RESOURCES_ALLOWED_VERBS],
   ["panel-tweaks", PANEL_TWEAKS_ALLOWED_VERBS],
   ["wp-login", WP_LOGIN_ALLOWED_VERBS],
+  ["terminal", TERMINAL_ALLOWED_VERBS],
   ["manager", MANAGER_ALLOWED_VERBS],
 ]);
 
@@ -68,6 +74,10 @@ export interface AuthActionOptions {
   enforcePeer?: boolean;
   /** Test-only child-process override for streaming; production uses Bun.spawn. */
   spawn?: typeof Bun.spawn;
+  /** Test-only; production rechecks a duplex stream's session every 15 seconds. */
+  sessionRecheckMs?: number;
+  /** Test-only; production looks again a second after a failed recheck. */
+  sessionConfirmMs?: number;
 }
 
 const SOL_SOCKET = 1;
@@ -226,6 +236,190 @@ export async function runAuthAction(
   }
 }
 
+/** How often a duplex stream's panel session is checked again. */
+const SESSION_RECHECK_MS = 15_000;
+/** How long after a failed recheck the session is looked at once more. */
+const SESSION_CONFIRM_MS = 1_000;
+/** How long a stream's worker has after SIGTERM before it is killed. */
+const STREAM_KILL_GRACE_MS = 5_000;
+/** All a duplex worker inherits; it starts nothing that needs more. */
+const DUPLEX_WORKER_ENV = {
+  PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+  [DUPLEX_WORKER_MARKER]: "1",
+};
+/** How long a duplex worker may leave its stdin full before the stream is ended. */
+const STALLED_INPUT_MS = 30_000;
+/** How long output may keep arriving after a duplex worker has exited. */
+const OUTPUT_AFTER_EXIT_MS = 1_000;
+
+/** The panel user behind a session, when it is an active administrator's. */
+async function adminSessionUser(sessionId: string, options: AuthActionOptions): Promise<string | null> {
+  try {
+    const reply = JSON.parse(await runAuthAction(sessionId + "\n", options)) as {
+      valid?: unknown; user?: unknown; roles?: unknown;
+    };
+    if (reply.valid !== true || typeof reply.user !== "string") return null;
+    return Array.isArray(reply.roles) && reply.roles.includes("ROLE_ADMIN") ? reply.user : null;
+  } catch {
+    return null;
+  }
+}
+
+interface DuplexInput {
+  /** The session the stream was opened with, checked again while it runs. */
+  sessionId: string;
+  /** Bytes that arrived before the worker did. */
+  pending: Buffer[];
+  /** Route every later socket byte to the worker's stdin. */
+  attach: (write: (bytes: Buffer) => void) => void;
+}
+
+/**
+ * Run one stream action and copy its stdout to the socket until either ends.
+ *
+ * A duplex stream also gets the socket's bytes on the worker's stdin, opaque
+ * and in order, with the socket paused while the pipe is full. Its session is
+ * checked again on a timer, and the worker is stopped when that check fails:
+ * the manager is not trusted to end a shell whose operator has signed out.
+ */
+async function runStreamAction(
+  socket: net.Socket,
+  argv: string[],
+  options: AuthActionOptions,
+  duplex: DuplexInput | null,
+): Promise<void> {
+  let proc: ReturnType<typeof Bun.spawn> | null = null;
+  let stopping = false;
+  let killTimer: ReturnType<typeof setTimeout> | null = null;
+  let recheck: ReturnType<typeof setInterval> | null = null;
+  let endInput = () => {};
+  const stop = () => {
+    stopping = true;
+    if (recheck) clearInterval(recheck);
+    recheck = null;
+    endInput();
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null || killTimer) return;
+    const running = proc;
+    try { running.kill("SIGTERM"); } catch {}
+    killTimer = setTimeout(() => {
+      try { if (running.exitCode === null && running.signalCode === null) running.kill("SIGKILL"); } catch {}
+    }, STREAM_KILL_GRACE_MS);
+    void running.exited.finally(() => { if (killTimer) clearTimeout(killTimer); });
+  };
+  socket.on("close", stop);
+  socket.on("error", stop);
+
+  try {
+    proc = (options.spawn ?? Bun.spawn)(argv, duplex
+      ? { stdin: "pipe", stdout: "pipe", stderr: "inherit", env: DUPLEX_WORKER_ENV }
+      : { stdin: "ignore", stdout: "pipe", stderr: "inherit", env: process.env });
+    if (stopping || socket.destroyed) stop();
+
+    if (duplex) {
+      const sink = proc.stdin as import("bun").FileSink;
+      let inputOpen = true;
+      // The helper's EOF is what hangs its shell up, whoever ends the stream.
+      endInput = () => {
+        if (!inputOpen) return;
+        inputOpen = false;
+        try { void Promise.resolve(sink.end()).catch(() => {}); } catch {}
+      };
+      const write = (bytes: Buffer) => {
+        if (!inputOpen) return;
+        try {
+          sink.write(bytes);
+          const flushed = sink.flush();
+          if (flushed instanceof Promise) {
+            // A paused socket does not see its peer go, so a worker that never
+            // reads cannot hold the stream open past this.
+            socket.pause();
+            const stalled = setTimeout(() => { stop(); socket.destroy(); }, STALLED_INPUT_MS);
+            flushed.then(
+              () => { clearTimeout(stalled); socket.resume(); },
+              () => { clearTimeout(stalled); endInput(); socket.resume(); },
+            );
+          }
+        } catch {
+          endInput();
+        }
+      };
+      for (const bytes of duplex.pending) write(bytes);
+      duplex.pending.length = 0;
+      duplex.attach(write);
+      socket.on("end", endInput);
+      const { sessionId } = duplex;
+      let checking = false;
+      recheck = setInterval(async () => {
+        if (stopping || checking) return;
+        checking = true;
+        try {
+          // PHP can truncate a session file before rewriting it, so one failed
+          // read is not yet a sign-out; a second look a moment later is.
+          if (await adminSessionUser(sessionId, options)) return;
+          await Bun.sleep(options.sessionConfirmMs ?? SESSION_CONFIRM_MS);
+          if (stopping || await adminSessionUser(sessionId, options)) return;
+        } finally {
+          checking = false;
+        }
+        stop();
+        if (!socket.destroyed) socket.end();
+      }, options.sessionRecheckMs ?? SESSION_RECHECK_MS);
+    }
+
+    if (typeof proc.stdout !== "object" || proc.stdout === null) {
+      throw new Error("streaming action did not provide stdout");
+    }
+    const reader = proc.stdout.getReader();
+    if (duplex) {
+      // Something the site started can hold the pipe open after the worker
+      // has gone; the stream ends with the worker, not with that.
+      void proc.exited.then(() => setTimeout(() => { void reader.cancel().catch(() => {}); }, OUTPUT_AFTER_EXIT_MS));
+    }
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done || socket.destroyed) break;
+      if (!socket.write(Buffer.from(value))) {
+        await new Promise<void>((resolve, reject) => {
+          const cleanupBackpressure = () => {
+            socket.off("drain", onDrain);
+            socket.off("close", onClose);
+            socket.off("error", onError);
+          };
+          const onDrain = () => {
+            cleanupBackpressure();
+            resolve();
+          };
+          const onClose = () => {
+            cleanupBackpressure();
+            resolve();
+          };
+          const onError = (error: Error) => {
+            cleanupBackpressure();
+            reject(error);
+          };
+          socket.once("drain", onDrain);
+          socket.once("close", onClose);
+          socket.once("error", onError);
+          if (socket.destroyed) onClose();
+        });
+        if (socket.destroyed) break;
+      }
+    }
+    if (recheck) clearInterval(recheck);
+    recheck = null;
+    if (!socket.destroyed) socket.end();
+    else stop();
+  } catch (error) {
+    stop();
+    if (!socket.destroyed) {
+      socket.end(JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      }) + "\n");
+    }
+  }
+}
+
 /**
  * Creates a socket server for authentication, live panel information, and
  * privileged action requests. Each connection sends one line containing either
@@ -247,6 +441,9 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
     const chunks: Buffer[] = [];
     let total = 0;
     let closed = false;
+    // Set once a duplex stream has been accepted: every later byte from the
+    // manager is the worker's stdin, copied and never read here.
+    let forward: ((bytes: Buffer) => void) | null = null;
 
     let timeout: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
       if (!closed) {
@@ -263,6 +460,10 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
     };
 
     socket.on("data", async (chunk: Buffer) => {
+      if (forward) {
+        forward(chunk);
+        return;
+      }
       if (closed) return;
       if (total + chunk.byteLength > MAX_GATEWAY_INPUT_BYTES) {
         closed = true;
@@ -275,8 +476,10 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
       if (chunk.includes(10)) {
         closed = true;
         cleanup();
-        const full = Buffer.concat(chunks, total).toString("utf8");
-        const request = parseGatewayRequest(full);
+        const received = Buffer.concat(chunks, total);
+        const lineEnd = received.indexOf(10) + 1;
+        const trailing = received.subarray(lineEnd);
+        const request = parseGatewayRequest(received.subarray(0, lineEnd).toString("utf8"));
         if (!request) {
           socket.end(invalidReply());
           return;
@@ -315,7 +518,9 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             socket.end(JSON.stringify({ ok: false, error: "unknown addon" }) + "\n");
             return;
           }
-          if (!allowed.has(request.verb)) {
+          // A duplex verb is only ever a stream: this path checks no session
+          // and would hand the worker the manager's own arguments and stdin.
+          if (!allowed.has(request.verb) || DUPLEX_STREAM_VERBS.has(`${request.addon}:${request.verb}`)) {
             socket.end(JSON.stringify({ ok: false, error: "invalid verb" }) + "\n");
             return;
           }
@@ -382,73 +587,44 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             socket.end(JSON.stringify({ ok: false, error: "invalid verb" }) + "\n");
             return;
           }
-
-          cleanup();
-          let proc: ReturnType<typeof Bun.spawn> | null = null;
-          let peerGone = false;
-          let killSent = false;
-          const kill = () => {
-            peerGone = true;
-            if (proc && !killSent && !proc.killed) {
-              killSent = true;
-              proc.kill();
-            }
-          };
-          socket.on("close", kill);
-          socket.on("error", kill);
-
-          try {
-            proc = (options.spawn ?? Bun.spawn)(
-              [CLI_BIN, "action", request.addon, request.verb, ...(request.args ?? [])],
-              { stdin: "ignore", stdout: "pipe", stderr: "inherit", env: process.env },
-            );
-            if (peerGone || socket.destroyed) kill();
-
-            if (typeof proc.stdout !== "object" || proc.stdout === null) {
-              throw new Error("streaming action did not provide stdout");
-            }
-            const reader = proc.stdout.getReader();
-            for (;;) {
-              const { done, value } = await reader.read();
-              if (done || socket.destroyed) break;
-              if (!socket.write(Buffer.from(value))) {
-                await new Promise<void>((resolve, reject) => {
-                  const cleanupBackpressure = () => {
-                    socket.off("drain", onDrain);
-                    socket.off("close", onClose);
-                    socket.off("error", onError);
-                  };
-                  const onDrain = () => {
-                    cleanupBackpressure();
-                    resolve();
-                  };
-                  const onClose = () => {
-                    cleanupBackpressure();
-                    resolve();
-                  };
-                  const onError = (error: Error) => {
-                    cleanupBackpressure();
-                    reject(error);
-                  };
-                  socket.once("drain", onDrain);
-                  socket.once("close", onClose);
-                  socket.once("error", onError);
-                  if (socket.destroyed) onClose();
-                });
-                if (socket.destroyed) break;
-              }
-            }
-            if (!socket.destroyed) socket.end();
-            else kill();
-          } catch (error) {
-            kill();
-            if (!socket.destroyed) {
-              socket.end(JSON.stringify({
-                ok: false,
-                error: error instanceof Error ? error.message : String(error),
-              }) + "\n");
-            }
+          const duplex = DUPLEX_STREAM_VERBS.has(`${request.addon}:${request.verb}`);
+          if (duplex !== (request.sessionId !== undefined)) {
+            socket.end(JSON.stringify({ ok: false, error: duplex ? "a panel session is required" : "invalid verb" }) + "\n");
+            return;
           }
+          cleanup();
+          if (!duplex) {
+            await runStreamAction(socket, [CLI_BIN, "action", request.addon, request.verb, ...(request.args ?? [])], options, null);
+            return;
+          }
+          // Held until the worker exists, then handed to it in order.
+          const pending: Buffer[] = trailing.byteLength > 0 ? [trailing] : [];
+          let held = trailing.byteLength;
+          forward = (bytes) => {
+            held += bytes.byteLength;
+            if (held > MAX_GATEWAY_INPUT_BYTES) socket.destroy();
+            else pending.push(bytes);
+          };
+          const args = request.args ?? [];
+          if (args.some((arg) => arg.startsWith("--panel-user"))) {
+            socket.end(JSON.stringify({ ok: false, error: "invalid arguments" }) + "\n");
+            return;
+          }
+          const user = await adminSessionUser(request.sessionId!, options);
+          if (!user) {
+            socket.end(JSON.stringify({ ok: false, error: "the panel session is not an active administrator's" }) + "\n");
+            return;
+          }
+          await runStreamAction(
+            socket,
+            [CLI_BIN, "action", request.addon, request.verb, ...args, `--panel-user=${user}`],
+            options,
+            {
+              sessionId: request.sessionId!,
+              pending,
+              attach: (write) => { forward = write; },
+            },
+          );
           return;
         }
       }

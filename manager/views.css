@@ -1,0 +1,20 @@
+
+.addon-card .actions { margin-top: auto; }
+.addon-card .addon-status { align-self: center; }
+.manager-job-status { width: 100%; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.manager-job-status .job-summary { justify-content: space-between; }
+.manager-job-status .step { margin: 6px 0 0; overflow-wrap: anywhere; }
+.job-log-details { margin-top: 10px; }
+.job-log-details summary { color: var(--muted); font-size: 14px; cursor: pointer; }
+.job-log-details pre { max-height: 240px; margin: 10px 0 0; }
+.addon-section { margin-top: 30px; }
+.addon-section h2 { margin: 0 0 20px; font-size: 20px; }
+.update-page { max-width: 800px; margin: 0 auto; }
+.update-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin: 0 0 25px; }
+.update-versions dt { color: var(--muted); font-size: 14px; margin-bottom: 8px; }
+.update-versions dd { margin: 0; font-family: var(--mono); font-size: 22px; overflow-wrap: anywhere; }
+.update-page .card-header { flex-wrap: wrap; }
+.update-page .update-actions { border-top: 1px solid var(--border); padding-top: 20px; margin-top: 25px; }
+@media (max-width: 480px) {
+  .update-versions { grid-template-columns: minmax(0, 1fr); }
+}

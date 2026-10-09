@@ -45,10 +45,10 @@ export type ManagerJobKind = "enable" | "disable" | "update";
  * The privileged work itself, injected rather than imported.
  *
  * Enabling reinstalls units and reconciles Nginx and the Twig anchors, and
- * updating downloads and verifies a release: all of that lives in cli/index.ts
- * beside `cmdInstall` and `cmdUpdate`, which imports this module. Taking the
- * three operations as an argument keeps the dependency pointing one way and
- * lets the job plumbing be tested without provisioning anything.
+ * updating downloads and verifies a release: all of that lives in
+ * cli/toggle.ts and cli/update.ts. Taking the three operations as an argument
+ * keeps the dependency pointing one way and lets the job plumbing be tested
+ * without provisioning anything.
  */
 export interface ManagerOps {
   enable(addon: string): Promise<void> | void;

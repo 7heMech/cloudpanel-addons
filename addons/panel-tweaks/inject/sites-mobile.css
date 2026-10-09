@@ -1,0 +1,78 @@
+
+@media (max-width: 860px) {
+  .clp-tweaks-scroll { overflow-x: visible; }
+  table.table-sites, table.table-sites tbody, table.table-sites tr, table.table-sites td { display: block; }
+  table.table-sites thead { display: none; }
+  /* Block layout overrides the hidden attribute's default styling, and
+     the search below the heading is what sets it. */
+  table.table-sites tr[hidden], table.table-sites td[hidden] { display: none; }
+  /* The cells lose their borders as blocks, so the row draws the only rule left
+     telling one site from the next. The panel's own table border, in both of
+     its themes, rather than a grey of this addon's choosing. */
+  table.table-sites tr { position: relative;
+    padding: 16px 20px; border-top: 1px solid #eaeaea; }
+  html.dark table.table-sites tr { border-top-color: var(--clp-border-color); }
+  table.table-sites tbody tr:first-child { border-top: 0; }
+  /* The panel sets these with html.dark body .table td, which outranks anything
+     scoped to one table, so the reset has to be important -- and so does
+     everything below that puts a border or a padding back. */
+  table.table-sites td { border: 0 !important; padding: 0 !important; text-align: left !important; }
+  table.table-sites td.clp-tweaks-domain { font-size: 16px; font-weight: 600; line-height: 1.5; }
+  table.table-sites td.clp-tweaks-domain > a { white-space: normal; overflow-wrap: anywhere; }
+  table.table-sites td.clp-tweaks-type, table.table-sites td[data-label] { display: none; }
+  table.table-sites .clp-tweaks-mobile-type { display: inline-block; min-width: 0; max-width: 100%;
+    padding: 2px 8px; border: 1px solid #eaeaea; border-radius: 4px; color: #9bacb6;
+    font-size: 12px; font-weight: 400; line-height: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  html.dark table.table-sites .clp-tweaks-mobile-type { border-color: var(--clp-border-color); }
+  /* A type that fits shares the hostname row without changing the hostname's
+     natural one-line width. The script only chooses this layout after both
+     values have been measured at their full widths. */
+  table.table-sites td.clp-tweaks-domain.clp-tweaks-type-at-host { display: grid;
+    grid-template-columns: minmax(0, 1fr) auto; column-gap: 4px; align-items: start; }
+  table.table-sites td.clp-tweaks-domain.clp-tweaks-type-at-host > a { grid-column: 1; }
+  table.table-sites td.clp-tweaks-domain.clp-tweaks-type-at-host > .clp-tweaks-mobile-type {
+    grid-column: 2; justify-self: end; }
+  table.table-sites td.clp-tweaks-domain.clp-tweaks-type-at-host > .clp-tweaks-details { grid-column: 1 / -1; }
+  /* Both column starts come from the card's full inner width. Content in one
+     field can wrap without changing the position of the field beside it. */
+  table.table-sites .clp-tweaks-details { display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px;
+    margin-top: 14px; font-size: 16px; font-weight: 400; line-height: 1.5; }
+  table.table-sites .clp-tweaks-details > [data-label] { min-width: 0;
+    white-space: normal; overflow-wrap: anywhere; }
+  table.table-sites .clp-tweaks-detail-heading { display: flex; align-items: flex-start; gap: 4px;
+    min-height: 23px; }
+  table.table-sites .clp-tweaks-detail-label { flex: 0 0 auto; color: #9bacb6;
+    font-size: 12px; font-weight: 700; line-height: 1.5; text-transform: uppercase; }
+  /* A fallback type visually occupies the gap above this heading while its
+     place in the heading keeps every value at the same coordinates. */
+  table.table-sites .clp-tweaks-detail-heading > .clp-tweaks-mobile-type { flex: 0 1 auto; margin-left: auto;
+    transform: translateY(calc(-100% + 15px)); }
+  table.table-sites .clp-tweaks-details > .clp-tweaks-type-in-empty-field {
+    grid-column: 2; grid-row: 1; justify-self: end; align-self: start;
+    transform: translateY(calc(-100% + 15px)); }
+  table.table-sites .clp-tweaks-detail-value { min-width: 0; }
+  /* Timed certificates keep their normal one-line badge whenever it fits. */
+  table.table-sites td .clp-tweaks-badge { box-sizing: border-box; max-width: 100%; padding: 3px 9px;
+    border: 0; box-shadow: inset 0 0 0 1px currentColor; line-height: 17px;
+    white-space: normal; overflow-wrap: anywhere; }
+  table.table-sites td.clp-tweaks-actions { padding-top: 14px !important; }
+}
+/* A short second hostname line can share its height with Application at any phone
+   width where the full badge fits beside it. */
+table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-detail-heading { display: grid; }
+table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-detail-heading > .clp-tweaks-detail-label {
+  grid-area: 1 / 1; justify-self: start; }
+table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-detail-heading > .clp-tweaks-mobile-type {
+  grid-area: 1 / 1; justify-self: end; transform: translateY(calc(-100% - 12px)); }
+table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-details > .clp-tweaks-type-in-empty-field {
+  transform: translateY(calc(-100% - 12px)); }
+/* A card's badge is half its width, which the full issuer and expiry overrun at
+   every phone size, so it carries the short name and the countdown. The full
+   text remains available to screen readers and in the title. */
+@media (max-width: 860px) {
+  .clp-tweaks-badge-timed > .clp-tweaks-badge-full { position: absolute; width: 1px; height: 1px;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .clp-tweaks-badge-timed > .clp-tweaks-badge-compact { display: block; position: static;
+    width: auto; height: auto; overflow: visible; clip-path: none; white-space: normal; }
+}

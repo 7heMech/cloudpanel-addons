@@ -23,9 +23,10 @@ import {
 } from "../../cli/job-store";
 import {
   ActionCommandFailure, ActionFailure, acquireFileLock, emitActionError, emitActionOk, failAction,
-  PANEL_IDENTITY_PATH, readable, runCommand, validateDomain, validateJob,
+  readable, runCommand, validateDomain, validateJob,
   type FileLockHandle,
 } from "../../cli/action-common";
+import { PANEL_IDENTITY_PATH } from "../../cli/paths";
 
 const JOB_RETENTION_DAYS = 14;
 

@@ -1,100 +1,16 @@
 import { esc } from "../../../lib/app-http";
-import { renderLayout } from "../../../lib/app-ui";
+import { CARRIED_FLASH_JS, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { WpSiteView } from "../action";
 
 const BASE = mountPath("wp-login");
 
 // The cards, the buttons and the narrow-screen table layout are in lib/app-ui.
-const STYLE = `
-.remove-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
-.remove-row p { margin: 0; }
-`;
+import STYLE from "./views.css" with { type: "text" };
 
-const SCRIPT = `
-// The window is opened inside the click, before anything is awaited: one
-// opened after a fetch resolves is a popup the browser blocks.
-async function signIn(button) {
-  const domain = button.dataset.domain;
-  const target = window.open('', '_blank');
-  clearNotice();
-  busy(true);
-  try {
-    const reply = await call('/api/sign-in', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ domain: domain }),
-    });
-    submitToken(target, reply.data);
-    busy(false);
-    notify('Signing in to ' + domain + ' in a new tab.', 'ok');
-  } catch (error) {
-    if (target) target.close();
-    busy(false);
-    notify(error.message, 'error');
-  }
-}
+import SCRIPT_BODY from "./views.client.js" with { type: "text" };
 
-// Posted rather than put in the address bar: a single-use secret in a query
-// string is still a secret in the site's access log and in the browser history.
-function submitToken(target, data) {
-  if (!target) throw new Error('Allow pop-ups for the panel to open WordPress.');
-  const form = target.document.createElement('form');
-  form.method = 'POST';
-  form.action = data.url;
-  const field = target.document.createElement('input');
-  field.type = 'hidden';
-  field.name = data.field;
-  field.value = data.token;
-  form.appendChild(field);
-  target.document.body.appendChild(form);
-  form.submit();
-}
-
-async function removeHelpers(button) {
-  const agreed = await confirmAction({
-    title: 'Remove the sign-in helper',
-    text: 'The must-use plugin is deleted from every site it is in. The next sign-in puts it back.',
-    confirmLabel: 'Remove',
-  });
-  if (!agreed) return;
-  clearNotice();
-  busy(true);
-  try {
-    const reply = await call('/api/remove', { method: 'POST' });
-    const data = reply.data || {};
-    const removed = data.removed || 0;
-    const failed = data.failed || [];
-    let message = removed
-      ? 'Removed from ' + removed + (removed === 1 ? ' site.' : ' sites.')
-      : 'No site had the helper installed.';
-    if (failed.length) message += ' Still in ' + failed.join('; ') + '.';
-    sessionStorage.setItem(FLASH_KEY, JSON.stringify({
-      message: message,
-      kind: failed.length ? 'warn' : 'ok',
-    }));
-    location.reload();
-  } catch (error) {
-    busy(false);
-    notify(error.message, 'error');
-  }
-}
-
-const FLASH_KEY = 'clp-wp-login-flash';
-
-(function showCarriedFlash() {
-  let carried = null;
-  try {
-    carried = sessionStorage.getItem(FLASH_KEY);
-    if (carried) sessionStorage.removeItem(FLASH_KEY);
-  } catch (e) { return; }
-  if (!carried) return;
-  try {
-    const flash = JSON.parse(carried);
-    notify(flash.message, flash.kind);
-  } catch (e) {}
-})();
-`;
+const SCRIPT = `${CARRIED_FLASH_JS}${SCRIPT_BODY}`;
 
 export function layout(
   title: string,
@@ -141,7 +57,7 @@ function sitesCard(sites: WpSiteView[]): string {
         <span class="toolbar-note">${sites.length} site${sites.length === 1 ? "" : "s"}</span>
       </div>
       <div class="table-scroll">
-        <table class="fleet-table">
+        <table class="fleet-table wp-site-table">
           <thead>
             <tr>
               <th>Domain</th>

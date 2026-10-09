@@ -22,6 +22,11 @@ export interface GatewayClientOptions {
 
 export interface GatewayStream { close(): void }
 
+export interface DuplexGatewayStream extends GatewayStream {
+  /** Send one line to a duplex stream's worker; ignored by every other stream. */
+  write(line: string): void;
+}
+
 interface CommandFailure {
   code?: number | null;
   reason?: string;
@@ -208,7 +213,7 @@ async function callGatewaySocket<T>(
  * invokes directly. Otherwise dispatches securely through the root gateway daemon over UNIX socket.
  */
 export async function callGatewayAction<T = unknown>(
-  addon: "stager" | "instatic" | "cloudflare-ips" | "maintenance" | "php-resources" | "git" | "panel-tweaks" | "wp-login" | "manager",
+  addon: "stager" | "instatic" | "cloudflare-ips" | "maintenance" | "php-resources" | "git" | "panel-tweaks" | "wp-login" | "smtp" | "terminal" | "manager",
   verb: string,
   args: string[] = [],
   input?: string,
@@ -252,21 +257,33 @@ export async function callGatewayAction<T = unknown>(
 }
 
 const MAX_GATEWAY_STREAM_BUFFER_BYTES = 16 * 1024 * 1024;
+const MAX_GATEWAY_OUTBOX_BYTES = 1024 * 1024;
 
 function streamReply<T>(line: string): ActionResult<T> | null {
   return parseActionReply<T>(line);
 }
 
-/** Runs one long-lived watch action until its child or gateway socket ends. */
+/**
+ * Runs one long-lived stream action until its child or gateway socket ends.
+ *
+ * `sessionId` makes it a duplex stream: the gateway checks that CloudPanel
+ * session itself, and `write` reaches the worker's stdin. Such a stream has no
+ * direct-spawn fallback, because that fallback is the check it would skip.
+ */
 export function streamGatewayAction<T = unknown>(options: {
-  addon: "stager" | "instatic" | "git" | "panel-tweaks" | "manager";
+  addon: "stager" | "instatic" | "git" | "panel-tweaks" | "terminal" | "manager";
   verb: string;
   args?: string[];
+  sessionId?: string;
   socketPath?: string;
   timeoutMs?: number;
-  onReply: (reply: ActionResult<T>) => void;
+  /** The longest line accepted from the stream before it is closed. */
+  maxLineBytes?: number;
+  /** Each line as it arrived, for a stream whose lines are not action replies. */
+  onLine?: (line: string) => void;
+  onReply?: (reply: ActionResult<T>) => void;
   onClose: (error?: string) => void;
-}): GatewayStream {
+}): DuplexGatewayStream {
   let socket: Bun.Socket | null = null;
   let child: ReturnType<typeof Bun.spawn> | null = null;
   let closed = false;
@@ -276,6 +293,11 @@ export function streamGatewayAction<T = unknown>(options: {
   let buffer = "";
   const decoder = new TextDecoder();
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  const maxLineBytes = options.maxLineBytes ?? MAX_GATEWAY_STREAM_BUFFER_BYTES;
+  // What the socket has not yet taken, written out again on drain.
+  const outbox: Uint8Array[] = [];
+  let outboxBytes = 0;
+  const encoder = new TextEncoder();
 
   const endTransport = () => {
     try {
@@ -306,13 +328,41 @@ export function streamGatewayAction<T = unknown>(options: {
       if (newline < 0) break;
       const line = buffer.slice(0, newline);
       buffer = buffer.slice(newline + 1);
-      const reply = streamReply<T>(line);
-      if (reply) options.onReply(reply);
+      if (options.onLine) {
+        options.onLine(line);
+      } else {
+        const reply = streamReply<T>(line);
+        if (reply) options.onReply?.(reply);
+      }
       if (closed) break;
     }
-    if (Buffer.byteLength(buffer, "utf8") > MAX_GATEWAY_STREAM_BUFFER_BYTES) {
+    if (Buffer.byteLength(buffer, "utf8") > maxLineBytes) {
       finish("gateway stream exceeded maximum buffer");
     }
+  };
+
+  const flushOutbox = () => {
+    while (socket && outbox.length > 0 && !closed) {
+      const next = outbox[0]!;
+      const written = Math.max(0, socket.write(next));
+      outboxBytes -= Math.min(written, next.byteLength);
+      if (written >= next.byteLength) {
+        outbox.shift();
+        continue;
+      }
+      if (written > 0) outbox[0] = next.subarray(written);
+      return;
+    }
+  };
+
+  const write = (line: string) => {
+    if (closed || options.sessionId === undefined) return;
+    const bytes = encoder.encode(line.endsWith("\n") ? line : `${line}\n`);
+    // A worker that stops reading must not grow this process without bound.
+    if (outboxBytes + bytes.byteLength > MAX_GATEWAY_OUTBOX_BYTES) return finish("the stream stopped taking input");
+    outbox.push(bytes);
+    outboxBytes += bytes.byteLength;
+    if (outbox.length === 1) flushOutbox();
   };
 
   const close = () => {
@@ -323,7 +373,7 @@ export function streamGatewayAction<T = unknown>(options: {
     endTransport();
   };
 
-  const stream: GatewayStream = { close };
+  const stream: DuplexGatewayStream = { close, write };
   if (options.timeoutMs !== undefined) {
     timeoutTimer = setTimeout(() => finish("gateway stream request timed out"), options.timeoutMs);
   }
@@ -333,9 +383,15 @@ export function streamGatewayAction<T = unknown>(options: {
     addon: options.addon,
     verb: options.verb,
     args: options.args,
+    ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
   }) + "\n";
 
-  if (process.env.CLP_ADDONS_ACTION_TEST_BIN || (process.getuid?.() === 0 && !existsSync(socketPath))) {
+  const direct = Boolean(process.env.CLP_ADDONS_ACTION_TEST_BIN) || (process.getuid?.() === 0 && !existsSync(socketPath));
+  if (direct && options.sessionId !== undefined) {
+    queueMicrotask(() => finish("this stream needs the root gateway"));
+    return stream;
+  }
+  if (direct) {
     const command = process.env.CLP_ADDONS_ACTION_TEST_BIN ?? DEFAULT_CLI_BIN;
     void (async () => {
       try {
@@ -380,9 +436,13 @@ export function streamGatewayAction<T = unknown>(options: {
           return;
         }
         connection.write(payload);
+        flushOutbox();
       },
       data(_connection, chunk) {
         if (!closed) deliver(chunk);
+      },
+      drain() {
+        flushOutbox();
       },
       close() {
         finish();

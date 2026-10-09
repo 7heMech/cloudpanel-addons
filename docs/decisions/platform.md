@@ -11,16 +11,19 @@ CloudPanel's master Nginx vhost proxies `/addons/` to the manager socket. The
 manager uses the existing `cloudpanel` session and does not create a separate
 site, hostname, or login.
 
+`manager/` holds that process: `server.ts` owns the socket, the request gate
+and the mount dispatch, and `index.ts`, `service.ts` and `views.ts` are the
+Addons page itself, laid out the way an addon's `app/` is. It is not in `cli/`
+because none of it is a command; `cli/index.ts` calls `cmdServe` and otherwise
+knows nothing about it.
+
 ## One catalog, compiled in
 
 `cli/addon-catalog.ts` is the only registration seam. An addon declares itself
 in `addons/<name>/addon.ts` -- title, description, injection targets, required
 systemd units, its manager handler, its privileged action and any repair upkeep
 -- and the catalog derives its config file and state directory from its name, so
-a definition cannot name a file provisioning will not look for. Adding an addon
-used to mean editing the registry in `cli/paths.ts`, the handler map and the
-action conditionals in `cli/index.ts`, and repair's per-addon upkeep calls: four
-files that share nothing but the addon's name.
+a definition cannot name a file provisioning will not look for.
 
 The catalog is an explicit list, not filesystem discovery. This ships as one
 binary; a registry that depended on what happened to be on disk could be wrong.
@@ -213,6 +216,11 @@ reproduced site information takes its column width, gutter and label styling
 from the panel's own `assets/css/frontend/site.css`, so the blocks land where
 the panel puts them.
 
+A page that opens in a window of its own, such as the terminal, uses
+`renderToolWindow`: the same head, palette, theme switch and base script as the
+shell, without the header, navigation or footer, which a small window has no
+room for.
+
 A site-scoped page can also be mounted into the panel's own site page instead
 of reproducing it. The manager injects a loader next to the tab strip: clicking
 an addon's tab fetches that page as a fragment -- stylesheet, markup and script,
@@ -254,6 +262,35 @@ scrollable row and letting the site-information blocks wrap, rather than
 widening the panel's limited-width container, which would only postpone the
 break until the next addon. The rule is injected once, and only while an
 installed addon patches that partial.
+
+## Browser assets are files
+
+Stylesheets and browser scripts live in `.css` and `.client.js` files beside the
+module that serves them, imported with `with { type: "text" }`. Keeping them in
+their own files lets editors highlight, format and lint them.
+
+They are served as they are, never bundled or minified. The pages carry inline
+handlers calling top-level functions by name from markup no bundler sees, so
+tree-shaking and renaming would break them. The panel's nginx already gzips
+these responses, which is where the size saving comes from.
+
+Values a file cannot know -- the addon's mount URL, the shared class names,
+JSON the manager computes -- are bare identifiers or string tokens in the asset,
+substituted by the module that imports it. That keeps each file valid CSS or
+JavaScript on its own.
+
+What stays in TypeScript is what a file could not hold on its own: a one-rule
+string built from a shared class name, a script fragment that is a function
+body rather than a program, and a `<script>` element indented to sit inside a
+Twig template.
+
+Three scripts are shared. Every addon page gets the base helpers; the two fleet
+tables also get the site-selection ones, and the two addons whose change is too
+wide to patch into the page get the pair that carries a message across a reload.
+That pair is not in the base: a page that reloads is the exception here, and a
+page whose switches are modes rather than actions must not be handed the means
+to reload itself. Each shared function takes the page's own repaint, because
+what a change redraws is the one thing the addons do not agree on.
 
 ## Live panel data
 

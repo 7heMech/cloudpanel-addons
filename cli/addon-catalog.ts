@@ -1,12 +1,6 @@
 /**
  * Every fact about an addon, in one place, declared beside the addon.
  *
- * Adding an addon used to mean editing unrelated modules: the registry in
- * `cli/paths.ts`, the handler map in `cli/index.ts`, the action conditionals in
- * `cmdAction`, and repair's hardcoded per-addon upkeep calls. Four edits, in
- * four files that share nothing but the addon's name, is four chances to add
- * three of them.
- *
  * The catalog is explicit and compiled in. There is no filesystem discovery:
  * this ships as a single binary, and a registry that depended on what happened
  * to be on disk would be a registry that could be wrong.
@@ -27,6 +21,8 @@ import { PANEL_TWEAKS_ADDON } from "../addons/panel-tweaks/addon";
 import { WP_LOGIN_ADDON } from "../addons/wp-login/addon";
 import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
+import { SMTP_ADDON } from "../addons/smtp/addon";
+import { TERMINAL_ADDON } from "../addons/terminal/addon";
 
 export type { AddonTarget };
 
@@ -59,6 +55,12 @@ export interface AddonDefinition {
   handler?: AddonHandler;
   /** The privileged verbs this addon runs as root, if it has any. */
   action?: (argv: string[], options?: Record<string, unknown>) => Promise<number> | number;
+  /** Withdraw changes outside addon state before disabling or uninstalling. */
+  deactivate?: () => void;
+  /** Stop what is still running once the config is gone and nothing new can start. */
+  withdrawn?: () => void;
+  /** Reapply the kept state outside addon state once enabled again. */
+  activate?: () => void;
   /**
    * Whether a `ROLE_SITE_MANAGER` session reaches this addon's routes.
    *
@@ -91,6 +93,8 @@ const DEFINITIONS: AddonDefinition[] = [
   GIT_ADDON,
   PANEL_TWEAKS_ADDON,
   WP_LOGIN_ADDON,
+  SMTP_ADDON,
+  TERMINAL_ADDON,
 ];
 
 function specOf(definition: AddonDefinition): AddonSpec {

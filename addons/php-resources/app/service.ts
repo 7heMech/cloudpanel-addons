@@ -1,13 +1,8 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 import type { PhpResourcesResult, PhpResourcesState, PoolSiteState } from "../action";
+import { validateDomain } from "../../../lib/app-http";
 
-const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
-
-export function validateDomain(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const domain = value.trim().toLowerCase().replace(/\.$/, "");
-  return domain.length <= 253 && DOMAIN_RE.test(domain) ? domain : null;
-}
+export { validateDomain };
 
 function call<T>(verb: string, args: string[] = [], input?: string): Promise<ActionResult<T>> {
   // Assigning a fleet writes one file per site and reloads each PHP version

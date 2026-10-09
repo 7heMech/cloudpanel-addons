@@ -1,7 +1,16 @@
 import { handle } from "./app/index";
-import { executePhpResourcesAction, runPhpResourcesAction, type PhpResourcesActionOptions, type ReconcileResult } from "./action";
+import {
+  DEFAULT_PHP_RESOURCES_ACTION_PATHS, executePhpResourcesAction, phpSiteUsers, runPhpResourcesAction,
+  type PhpResourcesActionOptions, type ReconcileResult,
+} from "./action";
 import { PHP_RESOURCES_TARGETS } from "./inject/targets";
+import { removeAbandonedTmpFiles } from "./tmp-cleanup";
 import type { AddonDefinition } from "../../cli/addon-catalog";
+import { log } from "../../cli/util";
+
+function sizeText(bytes: number): string {
+  return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
+}
 
 export const PHP_RESOURCES_ADDON: AddonDefinition = {
   name: "php-resources",
@@ -16,10 +25,16 @@ export const PHP_RESOURCES_ADDON: AddonDefinition = {
   maintenance: {
     label: "php resources",
     run: async (options) => {
-      const result = await executePhpResourcesAction(
-        ["reconcile"],
-        (options ?? {}) as PhpResourcesActionOptions,
-      ) as ReconcileResult;
+      const actionOptions = (options ?? {}) as PhpResourcesActionOptions;
+      // Before reconciling, so a site that keeps failing does not stop it.
+      try {
+        const users = phpSiteUsers({ ...DEFAULT_PHP_RESOURCES_ACTION_PATHS, ...actionOptions.paths });
+        const { removed, bytes } = removeAbandonedTmpFiles(users);
+        if (removed) log.ok(`php resources: ${removed} abandoned temp file${removed === 1 ? "" : "s"} removed from /tmp (${sizeText(bytes)})`);
+      } catch (error) {
+        log.warn(`php resources /tmp cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      const result = await executePhpResourcesAction(["reconcile"], actionOptions) as ReconcileResult;
       if (!result.applied && !result.repaired) return null;
       return `${result.applied} new site${result.applied === 1 ? "" : "s"} categorised, ${result.repaired} restored`;
     },

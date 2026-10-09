@@ -3,7 +3,7 @@
 //
 // It returns a Response only when the root gateway recognised the token in the
 // URL. Everything else -- a stranger, a wrong token, a rotated one, a site with
-// no webhook -- returns null, and the caller in cli/index.ts lets the request
+// no webhook -- returns null, and the caller in manager/server.ts lets the request
 // fall through to the session gate, which answers it with the same redirect any
 // other path under /addons gives a stranger. So there is no oracle here: the
 // URL says nothing about which sites have a webhook.

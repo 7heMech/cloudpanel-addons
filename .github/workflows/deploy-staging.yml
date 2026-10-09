@@ -67,7 +67,7 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Typecheck and the full unit and supplemental regression suite
+      - name: Typecheck and the full test suite
         # tsc and the suite share nothing, so the typecheck rides along inside
         # the suite's runtime rather than adding five seconds ahead of it.
         run: |
