@@ -24,6 +24,10 @@ because the deploy authenticates as root and then runs a command sequence.
 
 ## Verified artifacts
 
+Local, CI, staging, and release builds compile minified ESM without precompiled
+bytecode to keep the binary smaller. The continuously running services do not
+start often enough to justify the extra size for faster startup.
+
 The tag workflow builds one Linux x86-64 binary and publishes it with the
 installer, SHA-256 sums, and GitHub build provenance. Installation and updates
 verify the checksum and repository-bound attestation before replacing the
