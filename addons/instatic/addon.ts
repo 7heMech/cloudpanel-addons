@@ -11,6 +11,9 @@ export const INSTATIC_ADDON: AddonDefinition = {
   targets: INSTATIC_TARGETS,
   handler: handle,
   action: runInstaticAction,
+  // Site managers can create and manage every CloudPanel site. Instatic's
+  // fixed-image containers and site lifecycle belong to that same role.
+  siteManager: true,
   // A creation job killed part-way stays `running` for ever, and `running` is
   // what blocks a retry for that hostname.
   maintenance: {

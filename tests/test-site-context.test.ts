@@ -99,6 +99,22 @@ test("the shell ships one confirmation dialog and one notice holder for every ad
   expect(html).toContain('id="clp-confirm-accept"');
 });
 
+test("a site manager's shell offers its addon tabs without administrator links", () => {
+  const html = renderLayout("Instatic", "<p>content</p>", {
+    brand: "Instatic CMS", base: "/addons/instatic", admin: false,
+    nav: [{ href: "/addons/instatic/new", label: "New site" }], script: "",
+  });
+  expect(html).toContain('href="/addons/instatic/new"');
+  expect(html).toContain('href="/"');
+  expect(html).not.toContain('href="/addons/"');
+  expect(html).not.toContain('id="clp-admin-area"');
+  const admin = renderLayout("Instatic", "", {
+    brand: "Instatic CMS", base: "/addons/instatic", nav: [], script: "",
+  });
+  expect(admin).toContain('href="/addons/"');
+  expect(admin).toContain('id="clp-admin-area"');
+});
+
 test("the reproduced site information carries the panel's own measurements", () => {
   // CloudPanel's assets/css/frontend/site.css. A reproduction that only looks
   // approximately right is what makes an addon page read as a different page:

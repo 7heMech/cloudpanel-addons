@@ -593,16 +593,20 @@ export async function authenticateRequest(req: Request): Promise<{
 }
 
 /**
- * Whether the session behind a request is still an administrator's.
+ * Whether the session behind a request still has the role its stream requires.
  *
  * For a response that outlives the request that opened it. The gateway rechecks
  * status and role against CloudPanel's database, so this also sees a user who
  * was deactivated or demoted rather than only an expired session.
  */
-export async function stillAuthorized(req: Request): Promise<boolean | "unavailable"> {
+export async function stillAuthorized(
+  req: Request,
+  options: { siteManager?: boolean } = {},
+): Promise<boolean | "unavailable"> {
   const gate = await authenticateRequest(req);
   if (gate.auth !== null) {
-    return adminGate(gate.auth) === null;
+    return adminGate(gate.auth) === null
+      || (options.siteManager === true && gate.auth.roles.includes("ROLE_SITE_MANAGER"));
   }
   if (gate.response?.status === 503) {
     return "unavailable";

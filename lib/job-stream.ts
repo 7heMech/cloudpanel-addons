@@ -99,6 +99,8 @@ export interface JobApiRoute<J extends JobProgress> {
   path: string;
   method: string;
   server?: Server<unknown> | null;
+  /** Also admit site managers when rechecking this addon's stream. */
+  siteManager?: boolean;
   getJob: JobReader<J>;
   watchJob?: JobWatcher<J>;
 }
@@ -132,6 +134,7 @@ export async function jobApiRoute<J extends JobProgress>(route: JobApiRoute<J>):
       id,
       req: route.req,
       server: route.server ?? null,
+      siteManager: route.siteManager,
       getJob: route.getJob,
       watchJob: route.watchJob,
     });
@@ -184,6 +187,8 @@ export async function jobEventStream<J extends JobProgress>(options: {
   server?: Server<unknown> | null;
   watchJob?: JobWatcher<J>;
   recheckMs?: number;
+  /** Defaults to administrator-only, as do addons without this opt-in. */
+  siteManager?: boolean;
 }): Promise<Response> {
   const { id, req, getJob, server, watchJob } = options;
   const recheckMs = options.recheckMs ?? AUTH_RECHECK_MS;
@@ -276,7 +281,7 @@ export async function jobEventStream<J extends JobProgress>(options: {
         if (closed || authInFlight) return;
         authInFlight = true;
         try {
-          const auth = await stillAuthorized(req);
+          const auth = await stillAuthorized(req, { siteManager: options.siteManager });
           if (auth === false) {
             send(`event: unauthorized\ndata: ${JSON.stringify({ error: "session is no longer valid" })}\n\n`);
             finish();

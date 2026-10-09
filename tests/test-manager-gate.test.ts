@@ -13,7 +13,7 @@ const repo = join(import.meta.dir, "..");
  */
 function probe(
   auth: { user: string; roles: string[] } | null,
-  requests: Array<{ path: string; method?: string }> = [
+  requests: Array<{ path: string; method?: string; headers?: Record<string, string>; body?: string }> = [
     { path: "/addons/health" }, { path: "/addons/" }, { path: "/addons/stager/" }, { path: "/addons/api/update" },
   ],
   // Resolve mounts instead of recording the attempt, so a request that is let
@@ -55,9 +55,9 @@ mock.module("./lib/mount.ts", () => ({
 const { handleRequest } = await import("./manager/server.ts");
 
 const out = [];
-for (const { path, method } of ${JSON.stringify(requests)}) {
+for (const { path, method, headers, body: requestBody } of ${JSON.stringify(requests)}) {
   reached.length = 0;
-  const res = await handleRequest(new Request("https://panel.example" + path, { method: method || "GET" }), {});
+  const res = await handleRequest(new Request("https://panel.example" + path, { method: method || "GET", headers, body: requestBody }), {});
   let body = null;
   try { body = JSON.parse(await res.text()); } catch (e) { /* the page is HTML */ }
   out.push({ path, method: method || "GET", status: res.status, location: res.headers.get("location"), body, reached: [...reached] });
@@ -120,19 +120,49 @@ test("a site manager reaches the addons that declare the role and nothing else",
   const results = probe({ user: "manager", roles: ["ROLE_SITE_MANAGER"] }, [
     { path: "/addons/git/" },
     { path: "/addons/git/api/sites" },
+    { path: "/addons/instatic/new" },
+    { path: "/addons/instatic/api/instances", method: "POST", headers: {
+      Origin: "https://panel.example", Host: "panel.example",
+      Cookie: "clp_addons_csrf=gate-test", "X-CLP-Addons-CSRF": "gate-test",
+    }, body: JSON.stringify({ domain: "bad", tag: "0.0.20" }) },
+    { path: "/addons/instatic/api/instances/example.com/restart", method: "POST" },
+    { path: "/addons/instatic/api/jobs/invalid" },
     { path: "/addons/stager/" },
     { path: "/addons/" },
     { path: "/addons/api/update", method: "POST" },
   ], true);
   const answered = results.filter((result) => result.status !== 403);
-  // The Git addon answers for itself -- with this test's dead gateway, but
-  // from its own handler, which is what says the gate let the session through.
+  // The addons answer for themselves, even when their data source fails or
+  // their input validation refuses the request.
   expect(answered.map((result) => `${result.method} ${result.path}`)).toEqual([
     "GET /addons/git/",
     "GET /addons/git/api/sites",
+    "GET /addons/instatic/new",
+    "POST /addons/instatic/api/instances",
+    "GET /addons/instatic/api/jobs/invalid",
   ]);
+  const create = results.find((result) => result.path === "/addons/instatic/api/instances")!;
+  expect(create.status).toBe(400);
+  expect(create.body).toEqual({ ok: false, error: "domain is not a valid hostname" });
+  const restart = results.find((result) => result.path === "/addons/instatic/api/instances/example.com/restart")!;
+  expect(restart.status).toBe(403);
+  expect(restart.body).toEqual({ ok: false, error: "missing Origin header" });
   for (const result of results) {
     expect(result.reached).not.toContain("update-check");
+  }
+});
+
+test("an ordinary user cannot create or manage Instatic sites", () => {
+  for (const result of probe({ user: "someone", roles: ["ROLE_USER"] }, [
+    { path: "/addons/instatic/" },
+    { path: "/addons/instatic/new" },
+    { path: "/addons/instatic/api/instances", method: "POST" },
+    { path: "/addons/instatic/api/instances/example.com/delete", method: "POST" },
+    { path: "/addons/instatic/api/jobs/20260910T093000Z-a1b2c3/events" },
+  ], true)) {
+    expect(result.status).toBe(403);
+    expect(result.body).toEqual({ ok: false, error: "administrator role required" });
+    expect(result.reached).toEqual([]);
   }
 });
 
