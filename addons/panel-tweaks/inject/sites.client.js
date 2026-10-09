@@ -342,23 +342,24 @@
       return td;
     }
 
-    function badge(text, tone, title, detail, compact) {
-      var span = document.createElement("span");
-      span.className = "clp-tweaks-badge clp-tweaks-" + tone;
+    function badge(domain, text, tone, title, detail, compact) {
+      var link = document.createElement("a");
+      link.href = "/site/" + encodeURIComponent(domain) + "/certificates";
+      link.className = "clp-tweaks-badge clp-tweaks-" + tone;
       if (detail) {
-        span.classList.add("clp-tweaks-badge-timed");
+        link.classList.add("clp-tweaks-badge-timed");
         var full = document.createElement("span");
         full.className = "clp-tweaks-badge-full";
         full.textContent = text + " · " + detail;
-        span.appendChild(full);
+        link.appendChild(full);
         var short = document.createElement("span");
         short.className = "clp-tweaks-badge-compact";
         short.setAttribute("aria-hidden", "true");
         short.textContent = compact;
-        span.appendChild(short);
-      } else span.textContent = text;
-      if (title) span.title = title;
-      return span;
+        link.appendChild(short);
+      } else link.textContent = text;
+      if (title) link.title = title;
+      return link;
     }
 
     var CERTIFICATE_NAMES = CERTIFICATE_LABELS_JSON;
@@ -386,10 +387,10 @@
     // placeholder it is; only a certificate a browser accepts counts down. An
     // origin certificate runs for years rather than months, and a four-digit
     // day count reads as noise, so a long one counts down in years.
-    function sslCell(site) {
+    function sslCell(site, domain) {
       var td = cell("SSL", "ssl");
       if (!site || !site.certificate) {
-        td.appendChild(badge("None", "none"));
+        td.appendChild(badge(domain, "None", "none"));
         td.setAttribute("data-value", "0");
         return td;
       }
@@ -397,7 +398,7 @@
       // which is the only one the panel's own wording cannot tell apart.
       var name = site.certificate.issuer || certificateName(site.certificate.type);
       if (String(site.certificate.type) === SELF_SIGNED) {
-        td.appendChild(badge(name, "none", site.certificate.expiresAt || ""));
+        td.appendChild(badge(domain, name, "none", site.certificate.expiresAt || ""));
         td.setAttribute("data-value", "1");
         return td;
       }
@@ -406,7 +407,7 @@
       var counted = left < 0 ? "expired" : left >= 730 ? Math.floor(left / 365) + "y" : left + "d";
       var note = left === null ? "" : left < 0 ? "expired" : counted + " left";
       var short = site.certificate.issuer || shortCertificateName(site.certificate.type);
-      td.appendChild(badge(name, tone, site.certificate.expiresAt || "", note,
+      td.appendChild(badge(domain, name, tone, site.certificate.expiresAt || "", note,
         short ? short + " · " + counted : counted));
       td.setAttribute("data-value", String(left === null ? 2 : left + 100000));
       return td;
@@ -513,7 +514,7 @@
       for (var i = 0; i < rows.length; i++) {
         var row = rows[i];
         var actionCell = row.el.lastElementChild;
-        row.el.insertBefore(sslCell(row.site), actionCell);
+        row.el.insertBefore(sslCell(row.site, row.domain), actionCell);
         row.el.insertBefore(runtimeCell(row.site), actionCell);
         if (withDisk) row.el.insertBefore(diskCell(row.site), actionCell);
         row.el.insertBefore(createdCell(row.site), actionCell);
