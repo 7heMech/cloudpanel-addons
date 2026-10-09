@@ -35,9 +35,9 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | WordPress Sign-In | One-click sign-in to any WordPress on the server, no password needed. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
 
-Only CloudPanel administrators see the Addons tab, except that site managers
-also reach Git Deploy. Other panel users get the WordPress Sign-In link on the
-Sites page for their own sites, and nothing else.
+Only CloudPanel administrators see the Addons tab. Site managers can also use
+Git Deploy and create and manage Instatic sites. Other panel users get the
+WordPress Sign-In link on the Sites page for their own sites.
 
 ## Manage
 

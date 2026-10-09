@@ -91,11 +91,12 @@ being named something similar.
 
 An addon may also declare `siteManager` in its catalog definition, which admits
 a `ROLE_SITE_MANAGER` session to that addon's whole mount rather than to a named
-route. Only the Git addon does. CloudPanel does not narrow that role's site
-list, so the addon's pages are already the sites it manages, and everything the
-addon does as root runs as the site's own user. The declaration is read at the
-gate, so an addon that does not make it is refused for that role exactly as
-before, and `ROLE_USER` is admitted by the route list alone.
+route. Git Deploy and Instatic declare it. CloudPanel does not narrow that
+role's site list, so their pages are already the sites it manages. Git commands
+run as the site's own user; Instatic provisions and manages containers from a
+fixed registry image through validated site actions. The declaration is read
+at the gate, so addons without it and the manager's own pages remain
+administrator-only, and `ROLE_USER` is admitted by the route list alone.
 
 One route ahead of it takes a different credential. A `POST` to
 `/addons/git/hook/<domain>/<token>` is a push-to-deploy delivery, and the token
@@ -118,9 +119,10 @@ to go over the top of it, and that was the one thing that told `/addons` apart
 from the rest of the panel. It still applies to everything behind the gate.
 
 A response can outlive the request that authorized it. The job event stream
-rechecks the session as it polls and closes when it is no longer an
-administrator's, because a clone's job record carries the database and Instatic
-passwords it generated.
+rechecks the session every 15 seconds and closes when the account loses access.
+Git Deploy and Instatic also accept an active site manager during that recheck;
+other job streams and Terminal require an administrator. A Stager clone's job
+record carries the database and Instatic passwords it generated.
 
 State-changing HTTP requests also require the expected origin and a CSRF token.
 The token cookie is scoped to the whole panel rather than to `/addons`, because
