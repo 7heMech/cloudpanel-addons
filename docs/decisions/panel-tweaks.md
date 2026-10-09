@@ -109,7 +109,9 @@ Bootstrap's own stacking point, each form half takes the whole row.
 The Admin header additionally carries rules for the Admin Area, under the same
 mobile-layout switch and without another template anchor. Below 760px the fixed
 235px sidebar becomes a full-width navigation row above the content; its links
-and the page tabs scroll within their own rows. The content loses its desktop
+and the page tabs scroll within their own rows. The instance information,
+navigation and tabs hide their native scrollbar tracks while keeping scrolling,
+as the frontend navigation does. The content loses its desktop
 side margins, card headings wrap, and tables scroll inside their existing body
 wrapper. Below 576px the form columns take the whole row, including the narrow
 columns used for firewall rules. Long site labels wrap beside their checkboxes,

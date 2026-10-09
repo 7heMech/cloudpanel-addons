@@ -9,6 +9,14 @@
   html.dark body #sidebar { border-bottom-color: var(--clp-border-color); }
   body #sidebar .back-to-sites { margin: 12px 20px; }
   body #sidebar > ul { display: flex; overflow-x: auto; margin: 0; padding: 0 5px; }
+  /* Match the frontend navigation: keep swiping and focused links reachable
+     without reserving a native scrollbar track underneath each row. */
+  body .header .header-instance-information-container,
+  body #sidebar > ul,
+  body #main-container .tab-container { scrollbar-width: none; }
+  body .header .header-instance-information-container::-webkit-scrollbar,
+  body #sidebar > ul::-webkit-scrollbar,
+  body #main-container .tab-container::-webkit-scrollbar { display: none; }
   body #sidebar > ul > li { flex: 0 0 auto; }
   body #sidebar > ul > li > a { padding: 12px 15px; white-space: nowrap;
     border-left: 0; border-right: 0; border-bottom: 3px solid transparent; }
