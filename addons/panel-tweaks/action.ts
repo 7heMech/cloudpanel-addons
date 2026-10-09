@@ -2,15 +2,15 @@
  * The privileged half of Panel Tweaks: what the panel's own pages cannot ask
  * for themselves.
  *
- * Two of the three tweaks are decoration -- a count, a filter, two extra
- * columns -- and would need no root at all if CloudPanel's Sites template
+ * The site-list tweaks would need no root if CloudPanel's Sites template
  * carried the values. It does not: the certificate, the runtime version and the
  * application are columns of a database the web manager cannot open, so the
  * site list is assembled here and sent as data the injected script paints.
  *
- * The third does touch the host. A disk measurement walks every site's home
- * directory, which only root can read across accounts. It is a verb with a
- * fixed shape, and it accepts no path.
+ * A disk measurement walks every site's home directory, which only root can
+ * read across accounts. It is a verb with a fixed shape, and it accepts no
+ * path. Automatic SSL uses CloudPanel's own
+ * certificate form; this action only stores its switch.
  */
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
@@ -53,6 +53,8 @@ export interface PanelTweaks {
   panelMobile: boolean;
   /** The measured-size column, and the sweep that fills it. */
   diskUsage: boolean;
+  /** Offer a Let's Encrypt certificate after creating a WordPress site. */
+  autoSsl: boolean;
 }
 
 export const DEFAULT_TWEAKS: PanelTweaks = {
@@ -63,18 +65,18 @@ export const DEFAULT_TWEAKS: PanelTweaks = {
   panelMobile: true,
   // Off until asked for: it is the only tweak that reads the whole disk.
   diskUsage: false,
+  autoSsl: false,
 };
 
 /**
  * The switches whose answer is baked into CloudPanel's own templates.
  *
- * Everything else is read at request time by the script on the Sites page.
- * These four cannot be: the login page has no session to ask with, and the
- * other three decide how the page is painted the first time, so waiting for a
- * reply would mean the reader watching the layout move.
+ * The site-table and disk switches are read at request time. The login page
+ * has no session to ask with, the layout switches decide the first paint, and
+ * autoSsl decides whether the creation and completion scripts are present.
  */
 export const TEMPLATE_TWEAK_KEYS: (keyof PanelTweaks)[] =
-  ["deviceTheme", "sitesMobile", "actionMenu", "panelMobile"];
+  ["deviceTheme", "sitesMobile", "actionMenu", "panelMobile", "autoSsl"];
 
 export const TWEAK_KEYS = Object.keys(DEFAULT_TWEAKS) as (keyof PanelTweaks)[];
 
@@ -728,7 +730,7 @@ async function setTweaks(
     writeTweaks(paths, wanted);
     return {
       tweaks: wanted,
-      // Four of the switches are markup in a CloudPanel template, so moving one
+      // The template switches are markup in a CloudPanel template, so moving one
       // of those means rewriting them. The rest are read by the injected script
       // at request time and take effect on the next page.
       reinject: TEMPLATE_TWEAK_KEYS.some((key) => current[key] !== wanted[key]),

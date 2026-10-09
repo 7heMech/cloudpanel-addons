@@ -291,6 +291,7 @@ function panelTweaksPreviewState(url: URL): PanelTweaksState {
       actionMenu: on,
       panelMobile: on,
       diskUsage: on,
+      autoSsl: on,
     },
     diskMeasuredAt: measured ? at : "",
     sites: url.searchParams.has("empty") ? [] : [

@@ -42,6 +42,12 @@ interface TweakCopy {
  */
 const COPY: TweakCopy[] = [
   {
+    key: "autoSsl",
+    category: "Sites",
+    title: "SSL after WordPress creation",
+    description: "Adds a checked Let's Encrypt option to new WordPress sites. Requests a certificate for the entered hostname after creation. Its DNS must point to this server and HTTP must be reachable. You can uncheck it for each site.",
+  },
+  {
     key: "sitesTable",
     category: "Sites",
     title: "Search, sort and extra columns",
