@@ -41,8 +41,8 @@ function submitToken(target, data) {
 async function removeHelpers(button) {
   const agreed = await confirmAction({
     title: 'Remove the sign-in helper',
-    text: 'The must-use plugin is deleted from every site it is in. The next sign-in puts it back.',
-    confirmLabel: 'Remove',
+    text: 'Remove the sign-in helper from every site. The next sign-in installs it again.',
+    confirmLabel: 'Remove helpers',
   });
   if (!agreed) return;
   clearNotice();
@@ -95,7 +95,14 @@ async function setVarnishSite(input) {
 
 async function installVarnish(button) {
   const domain = button.dataset.domain;
-  const agreed = await confirmAction({ title: 'Install or activate CLP Varnish Cache', text: 'Install the official WordPress plugin on ' + domain + ', or activate it if it is already installed.', confirmLabel: 'Install / activate' });
+  const action = button.dataset.varnishAction;
+  const label = action === 'activate' ? 'Activate' : action === 'retry' ? 'Retry' : 'Install';
+  const text = action === 'activate'
+    ? 'Activate CLP Varnish Cache on ' + domain + '. If it is no longer installed, install it first.'
+    : action === 'retry'
+      ? 'Check CLP Varnish Cache on ' + domain + ' again, then install or activate it if needed.'
+      : 'Install and activate the official CLP Varnish Cache plugin on ' + domain + '. An existing installation will be activated.';
+  const agreed = await confirmAction({ title: label + ' CLP Varnish Cache', text: text, confirmLabel: label });
   if (!agreed) return;
   await runVarnishCheck('/api/varnish-install', { domain: domain });
 }
@@ -111,7 +118,7 @@ async function runVarnishCheck(path, body) {
   try {
     const reply = await call(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = reply.data;
-    let message = data.checked + ' site(s) checked. ' + data.installed + ' plugin(s) installed or activated.';
+    let message = data.checked + (data.checked === 1 ? ' site checked. ' : ' sites checked. ') + data.installed + (data.installed === 1 ? ' plugin installed or activated.' : ' plugins installed or activated.');
     if (data.pending) message += ' ' + data.pending + ' remaining; check again to continue.';
     if (data.failed.length) message += ' Failed: ' + data.failed.join('; ');
     reloadWithFlash(FLASH_KEY, message, data.failed.length || data.pending ? 'warn' : 'ok');

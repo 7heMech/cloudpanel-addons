@@ -7,11 +7,13 @@ Enable **WordPress Tools** in Addons. Its command-line name remains `wp-login`.
 Click **Sign in** beside a WordPress site to open its first administrator's
 account in a new tab. Allow pop-ups for CloudPanel. The **WP Login** shortcut
 on CloudPanel's Sites page is also available to panel users for their own sites.
+To clean up helpers, expand **Sign-in helpers** in the sign-in section and
+choose **Remove helpers**. The next sign-in installs the helper again.
 
 ## CLP Varnish Cache
 
-Enable Varnish for a site in CloudPanel, then open WordPress Tools. Enable
-**Install automatically** to install and activate the
+Enable Varnish for a site in CloudPanel, then open WordPress Tools. Turn on
+**CLP Varnish Cache** to automatically install and activate the
 [official CLP Varnish Cache plugin](https://www.cloudpanel.io/docs/v2/frontend-area/varnish-cache/wordpress/plugin/)
 on applicable WordPress sites. Automation starts off. Only actual WordPress
 installations with Varnish enabled qualify; multisite networks are left alone.
@@ -21,8 +23,9 @@ now** applies the policy immediately and reports failures. Large fleets or
 slow downloads may leave sites pending; check again to continue. Plugin status
 on the page reflects the last check, with its time available on the status badge.
 
-Uncheck **Include in automatic installation** on any site you want to manage
-yourself. That keeps its existing plugin unchanged. **Install Varnish** also
+Switch **Varnish tools** to **Excluded** on any site you want to manage
+yourself. That keeps its existing plugin unchanged and hides installation
+actions for that site. **Install Varnish** also
 works for an included site while automation is off.
 
 An existing inactive plugin is never activated automatically. A plugin removed

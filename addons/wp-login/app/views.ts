@@ -30,27 +30,29 @@ export function layout(
 
 function siteRow(site: WpSiteView): string {
   const record = site.varnishPlugin;
-  const labels = { active: "Active", inactive: "Inactive", missing: record?.seen ? "Removed" : "Not installed", unsupported: "Multisite · manage in WordPress", error: "Check failed" };
+  const labels = { active: "Active", inactive: "Inactive", missing: record?.seen ? "Removed" : "Not installed", unsupported: "Multisite", error: "Check failed" };
   const status = record ? labels[record.status] : "Not checked";
+  const statusClass = record?.status === "active" ? "state-done" : record?.status === "inactive" ? "state-paused" : record?.status === "error" ? "state-failed" : "";
   const install = site.varnishCache && !site.varnishExcluded && record?.status !== "active" && record?.status !== "unsupported";
-  const installLabel = record?.status === "inactive" ? "Activate" : record?.status === "error" ? "Retry" : "Install";
+  const action = record?.status === "inactive" ? "activate" : record?.status === "error" ? "retry" : "install";
+  const installLabel = { activate: "Activate", retry: "Retry", install: "Install" }[action];
   return `
               <tr>
-                <td class="site-cell">${esc(site.domain)}</td>
+                <td class="site-cell"><span class="site-copy"><span class="badge mobile-site-type">${esc(site.application || "WordPress")}</span><span class="site-name">${esc(site.domain)}</span></span></td>
                 <td class="type-cell">${esc(site.application || "WordPress")}</td>
                 <td data-label="Site user">${esc(site.user)}</td>
-                <td data-label="Sign-in helper">${site.helper
-                  ? '<span class="badge state-done">Installed</span>'
-                  : '<span class="badge">Not installed</span>'}</td>
                 <td class="varnish-cell" data-label="Varnish">
-                  ${site.varnishCache ? `<div class="varnish-status"${record?.checkedAt ? ` title="Last checked: ${esc(record.checkedAt)}"` : ""}><span class="badge ${record?.status === "active" ? "state-done" : ""}">${esc(status)}</span></div>
+                  ${site.varnishCache ? `<span class="badge ${statusClass}"${record?.checkedAt ? ` title="Last checked: ${esc(record.checkedAt)}"` : ""}>${esc(status)}</span>
+                  ${record?.status === "unsupported" ? '<div class="hint wp-status-note">Manage in WordPress</div>' : ""}
                   ${record?.error ? `<div class="varnish-error">${esc(record.error)}</div>` : ""}
-                  <label class="varnish-include"><input type="checkbox" data-domain="${esc(site.domain)}" ${site.varnishExcluded ? "" : "checked"} onchange="setVarnishSite(this)"> Include in automatic installation</label>`
-                    : '<span class="toolbar-note">Disabled in CloudPanel</span>'}
+                  ` : '<span class="badge">Varnish off</span>'}
                 </td>
+                <td class="varnish-policy-cell" data-label="Varnish tools">${site.varnishCache
+                  ? `<label class="switch-field"><span class="switch"><input type="checkbox" data-domain="${esc(site.domain)}" ${site.varnishExcluded ? "" : "checked"} aria-label="Include ${esc(site.domain)} in Varnish plugin installation" onchange="setVarnishSite(this)"><span></span></span><span class="switch-state">${site.varnishExcluded ? "Excluded" : "Included"}</span></label>`
+                  : '<span class="toolbar-note">Unavailable</span>'}</td>
                 <td class="action-cell"><div class="wp-actions">
-                  ${install ? `<button class="btn" type="button" data-domain="${esc(site.domain)}" onclick="installVarnish(this)">${installLabel} Varnish</button>` : ""}
-                  <button class="btn" type="button" data-domain="${esc(site.domain)}" onclick="signIn(this)">Sign in</button>
+                  ${install ? `<button class="btn" type="button" data-domain="${esc(site.domain)}" data-varnish-action="${action}" onclick="installVarnish(this)">${installLabel} Varnish</button>` : ""}
+                  <button class="btn btn-primary" type="button" data-domain="${esc(site.domain)}" onclick="signIn(this)">Sign in</button>
                 </div></td>
               </tr>`;
 }
@@ -73,12 +75,12 @@ function sitesCard(sites: WpSiteView[]): string {
         <table class="fleet-table wp-site-table">
           <thead>
             <tr>
-              <th>Domain</th>
-              <th>Application</th>
-              <th>Site user</th>
-              <th>Sign-in helper</th>
-              <th>Varnish</th>
-              <th class="text-end">Action</th>
+              <th scope="col">Site</th>
+              <th scope="col">Application</th>
+              <th scope="col">Site user</th>
+              <th scope="col">Varnish</th>
+              <th scope="col">Varnish tools</th>
+              <th scope="col" class="text-end">Actions</th>
             </tr>
           </thead>
           <tbody>${sites.map(siteRow).join("")}
@@ -88,30 +90,33 @@ function sitesCard(sites: WpSiteView[]): string {
     </div>`;
 }
 
-function removeCard(sites: WpSiteView[]): string {
+function helperDetails(sites: WpSiteView[]): string {
   const installed = sites.filter((site) => site.helper).length;
   if (installed === 0) return "";
   return `
-    <div class="card">
-      <div class="card-header"><h2>The helper</h2></div>
-      <div class="remove-row">
-        <p>A must-use plugin sits in ${installed} site${installed === 1 ? "" : "s"} so a sign-in can be accepted. It does nothing on any other request, and uninstalling this addon removes it everywhere.</p>
-        <button class="btn" type="button" onclick="removeHelpers(this)">Remove from every site</button>
+    <details class="wp-helper-details">
+      <summary>Sign-in helpers · ${installed} site${installed === 1 ? "" : "s"}</summary>
+      <div class="wp-helper-body"><p>The helper accepts a one-time sign-in. Removing it clears it from every site; the next sign-in installs it again.</p>
+        <button class="btn btn-danger" type="button" onclick="removeHelpers(this)">Remove helpers</button>
       </div>
-    </div>`;
+    </details>`;
 }
 
-function varnishCard(state: WpVarnishState): string {
-  return `<div class="card">
-    <div class="card-header"><h2>CLP Varnish Cache</h2></div>
-    <div class="varnish-settings">
-      <div class="switch-row"><h3>Install automatically</h3>
-        <label class="switch"><input type="checkbox" aria-label="Install CLP Varnish Cache automatically" ${state.enabled ? "checked" : ""} onchange="setVarnishAutomatic(this)"><span></span></label>
+function toolsCard(sites: WpSiteView[], state: WpVarnishState): string {
+  return `<div class="card wp-tools-card">
+    <section class="wp-tool" aria-labelledby="wp-sign-in-title">
+      <div class="switch-row"><h2 id="wp-sign-in-title">WordPress sign-in</h2><span class="badge state-done">Available</span></div>
+      <p class="hint">Open a site below as its first administrator, without a password.</p>
+      ${helperDetails(sites)}
+    </section>
+    <section class="wp-tool" aria-labelledby="wp-varnish-title">
+      <div class="switch-row"><h2 id="wp-varnish-title">CLP Varnish Cache</h2>
+        <label class="switch-field"><span class="switch-state">${state.enabled ? "On" : "Off"}</span><span class="switch"><input type="checkbox" aria-label="Install CLP Varnish Cache automatically" ${state.enabled ? "checked" : ""} onchange="setVarnishAutomatic(this)"><span></span></span></label>
       </div>
-      <p>Install and activate the official plugin on existing and new WordPress sites with Varnish enabled in CloudPanel.</p>
-      <div class="varnish-settings-footer"><p class="hint">Checks run every 15 minutes. Manual deactivation and removal are respected. Manage plugin updates in WordPress.</p>
+      <p class="hint">Automatically install the official plugin on existing and new WordPress sites with Varnish enabled in CloudPanel.</p>
+      <div class="wp-check-row"><p class="hint">${state.enabled ? "Checks every 15 minutes." : "Automatic installation is off."} Manual deactivation and removal are respected.</p>
         <button class="btn" type="button" ${state.enabled ? "" : "disabled"} onclick="syncVarnishSites(this)">Check sites now</button></div>
-    </div>
+    </section>
   </div>`;
 }
 
@@ -122,5 +127,5 @@ export function dashboardView(sites: WpSiteView[], varnish: WpVarnishState = { e
         <h1>WordPress Tools</h1>
         <p>One-click administrator sign-in and Varnish integration for your WordPress sites.</p>
       </div>
-    </div>${varnishCard(varnish)}${sitesCard(sites)}${removeCard(sites)}`;
+    </div>${toolsCard(sites, varnish)}${sitesCard(sites)}`;
 }

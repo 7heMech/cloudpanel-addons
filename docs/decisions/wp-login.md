@@ -66,6 +66,13 @@ time and bounded error text. Pending sites are handled on subsequent passes.
 Every Varnish route remains administrator-only; the sign-in route's role
 exception does not grant plugin-management access.
 
+The page groups sign-in and Varnish policy in one tools card, then lists sites.
+Sign-in is the primary row action. Per-site Varnish inclusion uses the shared
+switch control and does not imply that the global automation policy is on.
+Helper cleanup is disclosed under sign-in rather than repeated in every row.
+The fleet table uses the shared status colors and becomes labelled site cards
+on narrow screens; installation confirmations match Install, Activate or Retry.
+
 ## What is in the site
 
 A must-use plugin and a one-time secret, both owned by the site's own user.

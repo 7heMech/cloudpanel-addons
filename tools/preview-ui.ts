@@ -470,10 +470,14 @@ function injectedSitesBlocks(state: PanelTweaksState): string {
 /** WordPress everywhere but the static and reverse-proxy sites. */
 function wpLoginPreviewSites(url: URL): WpSiteView[] {
   if (url.searchParams.has("empty")) return [];
+  const status = url.searchParams.get("varnish");
+  const plugin = status && ["inactive", "missing", "unsupported", "error"].includes(status)
+    ? { status: status as "inactive" | "missing" | "unsupported" | "error", seen: true, checkedAt: "2026-10-09T08:45:00Z", error: status === "error" ? "WP-CLI timed out while checking the site. Retry to check again." : "" }
+    : null;
   return [
     { domain: "www.example.com", user: "example", application: "WordPress", helper: true, varnishCache: false, varnishExcluded: false, varnishPlugin: null },
     { domain: "shop.example.com", user: "shop", application: "WooCommerce", helper: true, varnishCache: true, varnishExcluded: false, varnishPlugin: { status: "active", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
-    { domain: "blog.example.com", user: "blog", application: "Generic", helper: false, varnishCache: true, varnishExcluded: false, varnishPlugin: null },
+    { domain: "blog.example.com", user: "blog", application: "Generic", helper: false, varnishCache: true, varnishExcluded: false, varnishPlugin: plugin },
     { domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", application: "WordPress", helper: false, varnishCache: true, varnishExcluded: true, varnishPlugin: { status: "inactive", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
   ];
 }

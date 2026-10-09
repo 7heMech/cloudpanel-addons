@@ -1,28 +1,50 @@
 
-.remove-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
-.remove-row p { margin: 0; }
-.varnish-settings h3 { margin: 0; font-size: 16px; }
-.varnish-settings .switch-row { margin-bottom: 12px; }
-.varnish-settings p { margin: 0; }
-.varnish-settings-footer { display: flex; align-items: center; gap: 20px; margin-top: 20px; }
-.varnish-settings-footer .hint { flex: 1; }
-.varnish-settings-footer .btn { flex-shrink: 0; }
-.varnish-status { margin-bottom: 8px; }
-.varnish-include { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 400; margin: 0; }
-.varnish-error { max-width: 280px; overflow-wrap: anywhere; color: var(--bad); font-size: 12px; margin: 8px 0; }
-.wp-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
-/* Keep the domain and application above the site user and helper, followed
-   by Varnish status and a full-width action row on narrow screens. */
+.wp-tool + .wp-tool { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--row-border); }
+.wp-tool h2 { margin: 0; font-size: 16px; }
+.wp-tool > .hint { margin: 8px 0 0; }
+.wp-check-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 14px; }
+.wp-check-row .hint { margin: 0; }
+.wp-check-row .btn { flex-shrink: 0; }
+.wp-helper-details { margin-top: 12px; font-size: 13px; color: var(--muted); }
+.wp-helper-details summary { cursor: pointer; width: fit-content; }
+.wp-helper-details summary:hover { color: var(--text); }
+.wp-helper-details summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
+.wp-helper-body { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 10px; }
+.wp-helper-body p { margin: 0; }
+.wp-helper-body .btn { flex-shrink: 0; }
+.wp-status-note { margin-top: 6px; font-size: 12px; }
+.varnish-error { max-width: 260px; overflow-wrap: anywhere; color: var(--bad); font-size: 12px; margin-top: 8px; }
+.wp-site-table .switch-field { font-size: 12px; font-weight: 400; }
+.wp-site-table .mobile-site-type { display: none; }
+.wp-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.wp-actions .btn { padding-right: 12px; padding-left: 12px; white-space: nowrap; }
+/* A status change or a long error should not move the hostname and controls. */
+@media (min-width: 941px) {
+  .wp-site-table { table-layout: fixed; }
+  .wp-site-table th, .wp-site-table td { padding-left: 16px; padding-right: 16px; }
+  .wp-site-table th:nth-child(1) { width: 25%; }
+  .wp-site-table th:nth-child(2) { width: 14%; }
+  .wp-site-table th:nth-child(3) { width: 10%; }
+  .wp-site-table th:nth-child(4) { width: 14%; }
+  .wp-site-table th:nth-child(5) { width: 15%; }
+  .wp-site-table th:nth-child(6) { width: 22%; }
+}
+@media (min-width: 941px) and (max-width: 1100px) {
+  .wp-site-table td:not(.site-cell) { font-size: 14px; }
+  .wp-actions .btn { padding-left: 8px; padding-right: 8px; font-size: 13px; }
+}
+/* Domain and application share the heading. The site user and plugin status
+   share the next line; inclusion and actions each have their own full row. */
 @media (max-width: 940px) {
-  .wp-site-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; }
+  .wp-site-table tbody tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
   .wp-site-table td.site-cell { grid-area: 1 / 1 / 2 / 3; }
-  /* The shared 45% cap is measured against the flex row; in its own column
-     it would cut the tag to a third of a word. */
-  .wp-site-table td.type-cell { grid-area: 1 / 3; justify-self: end; align-self: start;
-    max-width: none; margin: 2px 0 0; }
-  .wp-site-table td[data-label="Site user"] { grid-area: 2 / 1; width: auto; max-width: none; }
-  .wp-site-table td[data-label="Sign-in helper"] { grid-area: 2 / 2 / 3 / 4; width: auto; max-width: none; }
-  .wp-site-table td.varnish-cell { grid-area: 3 / 1 / 4 / 4; width: 100%; }
-  .wp-site-table td.action-cell { grid-area: 4 / 1 / 5 / 4; width: 100%; justify-self: end; }
-  .varnish-settings-footer { align-items: flex-start; flex-direction: column; }
+  .wp-site-table td.type-cell { display: none; }
+  .wp-site-table .site-copy { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+  .wp-site-table .mobile-site-type { display: inline-block; color: var(--muted); font-weight: 400; }
+  .wp-site-table td[data-label="Site user"] { grid-area: 2 / 1; }
+  .wp-site-table td.varnish-cell { grid-area: 2 / 2; }
+  .wp-site-table td.varnish-policy-cell { grid-area: 3 / 1 / 4 / 3; }
+  .wp-site-table td.action-cell { grid-area: 4 / 1 / 5 / 3; }
+  .wp-actions .btn { flex: 1 1 0; }
+  .wp-check-row, .wp-helper-body { align-items: flex-start; flex-direction: column; }
 }
