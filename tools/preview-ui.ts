@@ -471,10 +471,10 @@ function injectedSitesBlocks(state: PanelTweaksState): string {
 function wpLoginPreviewSites(url: URL): WpSiteView[] {
   if (url.searchParams.has("empty")) return [];
   return [
-    { domain: "www.example.com", user: "example", application: "WordPress", helper: true },
-    { domain: "shop.example.com", user: "shop", application: "WooCommerce", helper: true },
-    { domain: "blog.example.com", user: "blog", application: "Generic", helper: false },
-    { domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", application: "WordPress", helper: false },
+    { domain: "www.example.com", user: "example", application: "WordPress", helper: true, varnishCache: false, varnishExcluded: false, varnishPlugin: null },
+    { domain: "shop.example.com", user: "shop", application: "WooCommerce", helper: true, varnishCache: true, varnishExcluded: false, varnishPlugin: { status: "active", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
+    { domain: "blog.example.com", user: "blog", application: "Generic", helper: false, varnishCache: true, varnishExcluded: false, varnishPlugin: null },
+    { domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", application: "WordPress", helper: false, varnishCache: true, varnishExcluded: true, varnishPlugin: { status: "inactive", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
   ];
 }
 
@@ -827,7 +827,7 @@ const server = Bun.serve({
     } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
       html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites), notice);
     } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {
-      html = wpLoginLayout("WordPress Sign-In", wpLoginDashboardView(wpLoginPreviewSites(url)), notice);
+      html = wpLoginLayout("WordPress Tools", wpLoginDashboardView(wpLoginPreviewSites(url), { enabled: url.searchParams.has("automatic"), excluded: [], sites: {} }), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {

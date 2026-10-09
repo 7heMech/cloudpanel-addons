@@ -1,24 +1,74 @@
-# WordPress Sign-In
+# WordPress Tools
 
 ## Why it is an addon and not a tweak
 
-It shipped as a fourth switch on [Panel Tweaks](panel-tweaks.md) and was moved
-out. Everything that addon does changes what CloudPanel's own pages look like;
-this writes a file into a customer's site. An operator who installed the one for
-a filterable site list should not thereby have the code that can do the other on
-their box, and the gateway's fixed addon-and-verb table then refuses
+WordPress Tools groups sign-in and optional Varnish plugin installation.
+[Panel Tweaks](panel-tweaks.md) changes what CloudPanel's own pages look like;
+this addon writes into a customer's site. An operator who enables a filterable
+site list does not thereby authorize those actions, and the gateway's fixed
+addon-and-verb table refuses
 `panel-tweaks sign-in` rather than allowing it and checking a stored switch.
 
-Being installed is the whole decision. There is no switch, and no state
-directory: the only trace this addon leaves anywhere is a file inside a site,
-and disabling or uninstalling it takes that file back out of every site it is
-in. An addon that left files behind in somebody else's site would be one an
-operator cannot fully withdraw. A site whose files cannot be deleted does not
-stop the ones after it; the withdrawal names it and the reason.
+The stable identifier, command-line name, config file and mount remain
+`wp-login`, preserving installed sign-in behavior and injected links. Sign-in
+is available whenever the addon is enabled. Automatic Varnish installation is
+a separate opt-in policy, off when no settings exist.
+
+Disabling or uninstalling removes the sign-in helper from every site it is in.
+A site whose files cannot be deleted does not stop the ones after it; withdrawal
+names it and the reason. The official CLP plugin is an ordinary WordPress
+plugin and remains installed when automation or the addon stops. Its updates,
+settings, deactivation and deletion belong to WordPress.
+
+## Varnish installation
+
+The policy, per-domain exclusions and last-check records live in root-owned
+`/var/lib/clp-addons/wp-login/varnish.json`, written atomically with mode `0600`.
+Disabling keeps this state. Missing state means automation off; invalid state
+is an error rather than a reason to reinstall plugins.
+
+The installed addon's maintenance hook runs on the normal 15-minute repair
+timer. An administrator can also request a check or an installation for one
+site. Automatic checks do nothing while the policy is off. A single-site
+explicit installation can run while automation is off, but still honors
+exclusions and eligibility. Only PHP sites with CloudPanel's `varnish_cache`
+flag and `wp-includes` plus `wp-content` on disk are eligible. A panel without
+the Varnish column contributes no eligible sites. Varnish itself is never
+enabled by the addon.
+
+Fixed WP-CLI commands run through `runuser` as the resolved site account,
+refusing uid 0 and reserved logins. They use the site's `php_settings.php_version`
+to choose `/usr/bin/php<version>`, and the installed WP-CLI phar at `/usr/bin/wp`
+or `/usr/local/bin/wp`. Neither dependency is downloaded by the addon.
+Arguments never pass through a shell. The child receives only a fixed PATH,
+its account's HOME and a disabled global WP-CLI config. Plugins, themes and
+WP-CLI packages are skipped; WordPress still loads its config and must-use
+plugins, all after dropping root. WordPress resolves the plugin directory and
+activation status, supporting a customized plugin directory. Multisite is
+reported as unsupported and never installed or activated.
+
+Automation installs the fixed WordPress.org slug `clp-varnish-cache` with
+`--activate` only when absent and never previously observed or attempted.
+Existing active and inactive installations are left unchanged. A persistent
+`seen` bit prevents reinstallation after manual removal. Installation intent
+is saved before execution so interruption cannot erase that protection; an
+interrupted or failed download may therefore need an explicit Retry.
+Explicit installation can reinstall an absent plugin or activate an inactive
+one. There is no force overwrite, plugin update or network activation.
+
+Policy changes and each check hold a dedicated Varnish lock, so a download
+does not block sign-in or helper removal. Each pass processes the least
+recently checked sites first and has a 90-second budget. Each WP-CLI command
+has an external timeout of at most 60 seconds and output bounded to 64 KiB per
+stream. Per-site failures are saved and do not stop subsequent sites. The page
+reads saved status without bootstrapping WordPress; it exposes the last-check
+time and bounded error text. Pending sites are handled on subsequent passes.
+Every Varnish route remains administrator-only; the sign-in route's role
+exception does not grant plugin-management access.
 
 ## What is in the site
 
-A must-use plugin and a one-time secret, both written as the site's own user.
+A must-use plugin and a one-time secret, both owned by the site's own user.
 
 Must-use rather than a normal plugin because it has to be there when the request
 arrives, must not be something a site owner can deactivate by accident, and

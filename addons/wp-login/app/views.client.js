@@ -65,4 +65,60 @@ async function removeHelpers(button) {
 
 const FLASH_KEY = 'clp-wp-login-flash';
 
+async function setVarnishAutomatic(input) {
+  const enabled = input.checked;
+  clearNotice();
+  busy(true);
+  try {
+    await call('/api/varnish-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enabled }) });
+    reloadWithFlash(FLASH_KEY, enabled ? 'Automatic Varnish installation enabled. Check sites now to apply it immediately.' : 'Automatic installation stopped. Existing Varnish plugins remain installed.', 'ok');
+  } catch (error) {
+    input.checked = !enabled;
+    busy(false);
+    notify(error.message, 'error');
+  }
+}
+
+async function setVarnishSite(input) {
+  const included = input.checked;
+  clearNotice();
+  busy(true);
+  try {
+    await call('/api/varnish-site', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain: input.dataset.domain, excluded: !included }) });
+    reloadWithFlash(FLASH_KEY, input.dataset.domain + (included ? ' included in automatic installation.' : ' excluded from automatic installation. Its plugin is unchanged.'), 'ok');
+  } catch (error) {
+    input.checked = !included;
+    busy(false);
+    notify(error.message, 'error');
+  }
+}
+
+async function installVarnish(button) {
+  const domain = button.dataset.domain;
+  const agreed = await confirmAction({ title: 'Install or activate CLP Varnish Cache', text: 'Install the official WordPress plugin on ' + domain + ', or activate it if it is already installed.', confirmLabel: 'Install / activate' });
+  if (!agreed) return;
+  await runVarnishCheck('/api/varnish-install', { domain: domain });
+}
+
+async function syncVarnishSites(button) {
+  await runVarnishCheck('/api/varnish-sync', {});
+}
+
+async function runVarnishCheck(path, body) {
+  clearNotice();
+  busy(true);
+  notify('Checking WordPress sites and installing eligible plugins…', 'ok');
+  try {
+    const reply = await call(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = reply.data;
+    let message = data.checked + ' site(s) checked. ' + data.installed + ' plugin(s) installed or activated.';
+    if (data.pending) message += ' ' + data.pending + ' remaining; check again to continue.';
+    if (data.failed.length) message += ' Failed: ' + data.failed.join('; ');
+    reloadWithFlash(FLASH_KEY, message, data.failed.length || data.pending ? 'warn' : 'ok');
+  } catch (error) {
+    busy(false);
+    notify(error.message, 'error');
+  }
+}
+
 showCarriedFlash(FLASH_KEY);

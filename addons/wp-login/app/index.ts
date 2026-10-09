@@ -38,10 +38,10 @@ export async function handle(
     try {
       const result = await wpLoginService.sites();
       if (!result.ok || !result.data) throw new Error(result.error ?? "the WordPress site list is unavailable");
-      return htmlResponse(layout("WordPress Sign-In", dashboardView(result.data.sites), updateNotice), { csrf });
+      return htmlResponse(layout("WordPress Tools", dashboardView(result.data.sites, result.data.varnish), updateNotice), { csrf });
     } catch (error) {
       return htmlResponse(
-        layout("WordPress Sign-In", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice),
+        layout("WordPress Tools", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice),
         { status: 500, csrf },
       );
     }
@@ -72,6 +72,35 @@ export async function handle(
   if (path === "/api/remove") {
     const result = await wpLoginService.remove();
     return json(result, result.ok ? 200 : 400);
+  }
+
+  if (path.startsWith("/api/varnish-")) {
+    // Only sign-in and its CSRF bootstrap are exceptions to the manager's
+    // administrator gate. Keep that boundary explicit here as well.
+    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
+    if (path === "/api/varnish-sync") {
+      const result = await wpLoginService.varnishSync();
+      return json(result, result.ok ? 200 : 400);
+    }
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req, 4 * 1024); }
+    catch (error) { return bodyErrorResponse(error); }
+    if (path === "/api/varnish-settings") {
+      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+      const result = await wpLoginService.varnishSettings(body.enabled);
+      return json(result, result.ok ? 200 : 400);
+    }
+    const domain = validateDomain(body.domain);
+    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    if (path === "/api/varnish-site") {
+      if (typeof body.excluded !== "boolean") return json({ ok: false, error: "excluded must be true or false" }, 400);
+      const result = await wpLoginService.varnishSite(domain, body.excluded);
+      return json(result, result.ok ? 200 : 400);
+    }
+    if (path === "/api/varnish-install") {
+      const result = await wpLoginService.varnishInstall(domain);
+      return json(result, result.ok ? 200 : 400);
+    }
   }
 
   return json({ ok: false, error: "not found" }, 404);
