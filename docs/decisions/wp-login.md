@@ -37,11 +37,13 @@ would run on every request. It is a `.php` file rather than plain data so that a
 request for it over HTTP executes it and prints nothing, instead of serving its
 contents to whoever asked.
 
-The token reaches the site in a POST body, not a query string: a single-use
-secret in a URL is still a secret in the site's access log and in the browser's
-history. The window is opened inside the click that starts it, before anything
-is awaited, because a window opened after a fetch resolves is a popup the
-browser blocks.
+The token reaches the site in a POST body to `/wp-login.php`, not a query string
+or the root URL: a single-use secret in a URL is still a secret in the site's
+access log and in the browser's history, and posting to `/wp-login.php` avoids
+front-end redirects or firewalls that bounce unauthenticated visitors away from
+the root path before WordPress boots. The window is opened inside the click that
+starts it, before anything is awaited, because a window opened after a fetch
+resolves is a popup the browser blocks.
 
 Directories are created one level at a time and handed to the site user. A
 recursive create runs as root and left a site with a `wp-content` it could no
