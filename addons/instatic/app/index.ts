@@ -36,8 +36,11 @@ export async function handle(
   path: string,
   updateNotice?: { current: string; latest: string } | null,
   server?: Server<unknown> | null,
+  auth?: { user: string; roles: string[] } | null,
 ): Promise<Response> {
   const method = req.method;
+  const page = (title: string, content: string) =>
+    layout(title, content, updateNotice, auth?.roles.includes("ROLE_ADMIN") !== false);
 
   // Liveness probe for systemd. No auth implications: it reports nothing about
   // instances.
@@ -68,18 +71,17 @@ export async function handle(
         // update dialog asked the operator to type a version from memory.
         const available = await listAvailableTags();
         return html(
-          layout("Instatic instances",
-            dashboardView(instances, snapshotAge, panelSites, available, snapshotTakenAt),
-            updateNotice
+          page("Instatic instances",
+            dashboardView(instances, snapshotAge, panelSites, available, snapshotTakenAt)
           ),
           csrf
         );
       }
       const available = await listAvailableTags();
-      return html(layout("New Instatic site", newInstanceView(await instaticService.nextPort(), available), updateNotice), csrf);
+      return html(page("New Instatic site", newInstanceView(await instaticService.nextPort(), available)), csrf);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return html(layout("Error", `<div class="alert">${Bun.escapeHTML(msg)}</div>`, updateNotice), csrf, 500);
+      return html(page("Error", `<div class="alert">${Bun.escapeHTML(msg)}</div>`), csrf, 500);
     }
   }
 
@@ -92,7 +94,7 @@ export async function handle(
     const res = await instaticService.getJob(id);
     if (!res.ok || !res.data) return new Response("Job not found", { status: 404 });
     const csrf = newCsrfToken();
-    return html(layout(`Creating ${res.data.job.domain}`, jobView(res.data.job, res.data.log), updateNotice), csrf);
+    return html(page(`Creating ${res.data.job.domain}`, jobView(res.data.job, res.data.log)), csrf);
   }
 
   if (path === "/api/instances" && method === "GET") {
@@ -124,6 +126,7 @@ export async function handle(
     path,
     method,
     server,
+    siteManager: true,
     getJob: (jobId) => instaticService.getJob(jobId),
     watchJob: (jobId, handlers) => instaticService.watchJob(jobId, handlers),
   });

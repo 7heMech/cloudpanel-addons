@@ -79,8 +79,8 @@ export async function handle(
 ): Promise<Response> {
   const method = req.method;
   const url = new URL(req.url);
-  // A site manager reaches this addon and no other, so the reproduced strip
-  // draws the tab the panel's own strip draws for that session and no more.
+  const admin = auth?.roles.includes("ROLE_ADMIN") !== false;
+  // The reproduced strip draws only the site tabs this role can reach.
   const tabs = auth && !auth.roles.includes("ROLE_ADMIN") ? { addonSlugs: ["git"] } : {};
 
   if (path === "/health") return json({ ok: true, service: "git-manager" });
@@ -96,14 +96,14 @@ export async function handle(
       if (target) return redirectResponse(embedLandingUrl(target, "git"));
     }
     try {
-      if (!selected) return html(layout("Git deploy", fleetView(await gitService.listSites()), updateNotice), csrf);
+      if (!selected) return html(layout("Git deploy", fleetView(await gitService.listSites()), updateNotice, undefined, admin), csrf);
       const domain = validateDomain(selected);
-      if (!domain) return html(layout("Invalid site", '<div class="alert">That is not a valid hostname.</div>', updateNotice), csrf, 400);
+      if (!domain) return html(layout("Invalid site", '<div class="alert">That is not a valid hostname.</div>', updateNotice, undefined, admin), csrf, 400);
       const page = await sitePage(domain);
-      return html(layout(page.title, page.content, updateNotice, { ...page.context, ...tabs }), csrf);
+      return html(layout(page.title, page.content, updateNotice, { ...page.context, ...tabs }, admin), csrf);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return html(layout("Git deploy", errorBlock(error), updateNotice), csrf, /not found/i.test(message) ? 404 : 500);
+      return html(layout("Git deploy", errorBlock(error), updateNotice, undefined, admin), csrf, /not found/i.test(message) ? 404 : 500);
     }
   }
 
@@ -137,6 +137,7 @@ export async function handle(
     path,
     method,
     server,
+    siteManager: true,
     getJob: (id) => gitService.getJob(id),
     watchJob: (id, handlers) => gitService.watchJob(id, handlers),
   });

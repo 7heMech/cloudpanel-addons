@@ -1,5 +1,21 @@
 # Instatic CMS
 
+## Panel access
+
+Administrators and site managers can create and manage Instatic sites. The addon
+declares `siteManager` in its catalog definition, admitting that role to its
+whole mount, including lifecycle actions and job pages. CloudPanel gives site
+managers access to every site, so the instance list is not scoped per account.
+Ordinary users cannot enter the addon, and its New Site tile names only the two
+allowed roles in Twig. The addon header omits Addons and Admin Area links for a
+site manager, keeping Instances and New site available.
+
+Job streams recheck the same roles against the active CloudPanel account every
+15 seconds. Expiry, deactivation, or demotion to an ordinary user closes the
+stream. Installation and addon settings remain on the administrator's manager
+pages. Image selection is limited to exact versions of the fixed Instatic
+registry image; callers cannot supply container commands or mount paths.
+
 ## Instance model
 
 Each site is a CloudPanel reverse proxy backed by a Docker container bound to

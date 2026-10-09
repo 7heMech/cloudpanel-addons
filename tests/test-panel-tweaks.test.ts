@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  applicationLabel, DEFAULT_TWEAKS, executePanelTweaksAction,
+  applicationLabel, DEFAULT_TWEAKS, DEFAULT_PANEL_TWEAKS_PATHS, executePanelTweaksAction,
   scanDiskUsage,
   type PanelTweaksActionOptions, type PanelTweaksState, type ScanResult, type SetTweaksResult,
 } from "../addons/panel-tweaks/action";
@@ -404,6 +404,36 @@ test("the header rules go ahead of both headers and are not required", () => {
   for (const target of headerTargets) {
     expect(target.anchorBefore).toBe('<header class="header d-flex">');
     expect(target.required).toBe(false);
+  }
+});
+
+test("the mobile switch adds the Admin layout only to the Admin header", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "clp-header-tweaks-"));
+  const originalPaths = { ...DEFAULT_PANEL_TWEAKS_PATHS };
+  const paths = { ...originalPaths, tweaksFile: join(directory, "tweaks.json"),
+    lockFile: join(directory, "tweaks.lock"), rootUid: process.getuid?.() ?? 0 };
+  const frontend = headerTargets.find((target) => target.slug === "header-frontend")!;
+  const admin = headerTargets.find((target) => target.slug === "header-admin")!;
+  Object.assign(DEFAULT_PANEL_TWEAKS_PATHS, paths);
+  try {
+    for (const on of [true, false]) {
+      await executePanelTweaksAction(["set-tweaks"], { paths, processUid: 0, emitReply: false,
+        input: JSON.stringify({ panelMobile: on }) });
+      const frontendSnippet = frontend.snippet("/addons/panel-tweaks");
+      const adminSnippet = admin.snippet("/addons/panel-tweaks");
+      if (on) {
+        expect(frontendSnippet).toContain("body .header");
+        expect(frontendSnippet).not.toContain("body #sidebar");
+        expect(adminSnippet).toContain("body .header");
+        expect(adminSnippet).toContain("body #sidebar");
+      } else {
+        expect(frontendSnippet).toBe("");
+        expect(adminSnippet).toBe("");
+      }
+    }
+  } finally {
+    Object.assign(DEFAULT_PANEL_TWEAKS_PATHS, originalPaths);
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

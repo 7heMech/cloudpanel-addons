@@ -14,6 +14,7 @@ export const INSTATIC_TARGETS: AddonTarget[] = [
     anchorAfter: '<div class="site-type-container">',
     required: false,
     snippet: (url) => `
+          {% if is_granted('ROLE_ADMIN') or is_granted('ROLE_SITE_MANAGER') %}
           <div class="application">
             <div class="application-image" style="height:160px;display:flex;align-items:center;justify-content:center">
               <svg role="img" aria-label="Instatic CMS" width="80" height="80" style="display:block;max-width:100%;max-height:100%;margin:auto" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -25,6 +26,7 @@ export const INSTATIC_TARGETS: AddonTarget[] = [
             <div class="deploy-application-container">
               <a href="${url}/new" class="btn btn-white">Create an Instatic site</a>
             </div>
-          </div>`,
+          </div>
+          {% endif %}`,
   },
 ];

@@ -35,7 +35,8 @@ export { CLIENT_JS };
 export function layout(
   title: string,
   content: string,
-  updateNotice?: { current: string; latest: string } | null
+  updateNotice?: { current: string; latest: string } | null,
+  admin = true,
 ): string {
   return renderLayout(title, content, {
     brand: "Instatic CMS",
@@ -47,6 +48,7 @@ export function layout(
     css: STYLE + JOB_STYLE,
     script: JOB_WATCH_JS + CLIENT_JS,
     updateNotice,
+    admin,
   });
 }
 

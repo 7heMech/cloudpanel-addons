@@ -38,6 +38,7 @@ export function layout(
   content: string,
   updateNotice?: { current: string; latest: string } | null,
   site?: SiteContext,
+  admin = true,
 ): string {
   return renderLayout(title, content, {
     brand: "Git Deploy",
@@ -46,6 +47,7 @@ export function layout(
     css: PAGE_STYLE,
     script: PAGE_SCRIPT,
     updateNotice,
+    admin,
     ...(site ? { site: { ...site, activeSlug: "git" } } : {}),
   });
 }
