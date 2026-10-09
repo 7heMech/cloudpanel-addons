@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { sslCertificateSnippet, sslCompleteSnippet, sslFormSnippet, sslTargets } from "../addons/panel-tweaks/inject/ssl";
+import { sslCertificateSnippet, sslCompleteSnippet, sslFormSnippet, sslSitesSnippet, sslTargets, NATIVE_SSL_TYPES } from "../addons/panel-tweaks/inject/ssl";
 
-const KEY = "clp_addons_wordpress_ssl";
+const KEY = "clp_addons_site_ssl";
 const DOMAIN = "blog.example.com";
 const ORIGIN = "https://panel.example:8443";
 const CERTIFICATES = `${ORIGIN}/site/${DOMAIN}/certificates`;
@@ -19,13 +19,18 @@ function storage(store: Map<string, string>, denied = false) {
   };
 }
 
-function creation(denied = false) {
+async function creation(options: { denied?: boolean; domains?: string[]; snapshotFail?: boolean; snapshotPending?: boolean; type?: string; completion?: string } = {}) {
+  const denied = options.denied ?? false;
   const store = new Map([[KEY, "old pending creation"]]);
-  const choice = { checked: true, disabled: false };
+  const choice = { checked: true, disabled: true, closest: () => form,
+    getAttribute: (name: string) => ({ "data-sites-url": "/sites", "data-site-type": options.type ?? "php",
+      "data-completion": options.completion ?? "wordpress" } as Record<string, string>)[name],
+  };
   const domain = { value: " Blog.Example.com " };
   const error = { hidden: true, textContent: "" };
   let submit = () => {};
   const form = {
+    querySelector: (selector: string) => selector.includes("_domainName") ? domain : { value: "blog" },
     addEventListener(event: string, handler: () => void, capture: boolean) {
       expect(event).toBe("submit");
       expect(capture).toBe(true);
@@ -36,9 +41,13 @@ function creation(denied = false) {
     "new-wordpress-site-form": form, "clp-auto-ssl": choice,
     "site_new_word_press_domainName": domain, "clp-auto-ssl-error": error,
   };
-  new Function("document", "sessionStorage", formScript)(
+  new Function("document", "sessionStorage", "fetch", "DOMParser", formScript)(
     { getElementById: (id: string) => elements[id] }, storage(store, denied),
+    () => options.snapshotPending ? new Promise(() => {}) : Promise.resolve({ ok: !options.snapshotFail, text: async () => "sites" }),
+    class { parseFromString() { return { getElementById: () => ({ querySelectorAll: () =>
+      (options.domains ?? []).map((domain) => ({ getAttribute: () => domain })) }) }; } },
   );
+  await new Promise((resolve) => setTimeout(resolve, 0));
   return { store, choice, error, submit: () => submit() };
 }
 
@@ -58,21 +67,30 @@ async function completion(options: {
   store?: Map<string, string>;
   issueUrl?: string;
   denied?: boolean;
+  surface?: "wordpress" | "sites";
+  type?: string;
+  rows?: Array<{ domain: string; user: string; type: string }>;
 } = {}) {
-  const store = options.store ?? new Map([[KEY, options.pending ?? JSON.stringify({ domain: DOMAIN, at: Date.now() })]]);
+  const store = options.store ?? new Map([[KEY, options.pending ?? JSON.stringify({ domain: DOMAIN, user: "blog", type: options.type ?? "php", completion: options.surface ?? "wordpress", at: Date.now() })]]);
+  const attrs: Record<string, string> = { "data-domain": DOMAIN, "data-site-user": "blog", "data-site-type": options.type ?? "php",
+    "data-completion": options.surface ?? "wordpress", "data-certificates-url": CERTIFICATES, "data-issue-url": options.issueUrl ?? ISSUE };
+  const link = { href: "" };
+  const rows = (options.rows ?? [{ domain: DOMAIN, user: "blog", type: options.type ?? "php" }]).map((row) => ({
+    getAttribute: (name: string) => ({ ...attrs, "data-domain": row.domain, "data-site-user": row.user, "data-site-type": row.type })[name],
+  }));
   const result = {
     hidden: true, className: "alert",
     getAttribute(name: string) {
-      return ({ "data-domain": DOMAIN, "data-certificates-url": CERTIFICATES,
-        "data-issue-url": options.issueUrl ?? ISSUE } as Record<string, string>)[name];
+      return attrs[name];
     },
   };
   const message = { textContent: "" };
   const calls: Array<{ url: string; options: RequestInit }> = [];
   const pages = options.pages ?? [{ type: "1" }, { form: {} }, { type: "2" }];
-  const factory = new Function("document", "sessionStorage", "fetch", "DOMParser", "FormData", "location", completeScript);
+  const factory = new Function("document", "sessionStorage", "fetch", "DOMParser", "FormData", "location", "window", "CustomEvent", completeScript);
   factory(
-    { getElementById: (id: string) => id === "clp-auto-ssl-result" ? result : message },
+    { getElementById: (id: string) => ({ "clp-auto-ssl-result": result, "clp-auto-ssl-message": message,
+      "clp-auto-ssl-sites": { querySelectorAll: () => rows }, "clp-auto-ssl-link": link } as Record<string, unknown>)[id] },
     storage(store, options.denied),
     async (url: string, requestOptions: RequestInit) => {
       calls.push({ url, options: requestOptions });
@@ -90,7 +108,8 @@ async function completion(options: {
         return {
           getElementById(id: string) {
             if (id === "clp-auto-ssl-certificate" && page.type !== undefined) return {
-              getAttribute: (name: string) => name === "data-domain" ? page.domain ?? DOMAIN : page.type,
+              getAttribute: (name: string) => name === "data-domain" ? page.domain ?? DOMAIN
+                : name === "data-expires-at" ? "2027-01-07 10:00:00" : page.type,
             };
             if (id === "create-lets-encrypt-certificate-form" && page.form) return {
               method: page.form.method ?? "post",
@@ -112,33 +131,77 @@ async function completion(options: {
         this.append("domains[]", "");
       }
     },
-    { href: `${ORIGIN}/site/new/wordpress/installed`, origin: ORIGIN },
+    { href: `${ORIGIN}/site/installed/wordpress`, origin: ORIGIN },
+    { dispatchEvent: () => {} }, class { constructor(_name: string, _options: unknown) {} },
   );
   // The injected script owns its promise chain, so let it drain before checking.
   await new Promise((resolve) => setTimeout(resolve, 0));
-  return { store, result, message: message.textContent, calls };
+  return { store, result, message: message.textContent, calls, link };
 }
 
 test("SSL snippets are withdrawn together and the checkbox is not a Symfony field", () => {
-  for (const snippet of [sslFormSnippet, sslCompleteSnippet, sslCertificateSnippet]) expect(snippet(false)).toBe("");
+  for (const snippet of [sslFormSnippet, sslCompleteSnippet, sslCertificateSnippet, sslSitesSnippet]) expect(snippet(false)).toBe("");
   const checkbox = sslFormSnippet(true).match(/<input[^>]*>/)![0];
   expect(checkbox).toContain("checked");
   expect(checkbox).not.toMatch(/\bname=/);
   expect(sslTargets(() => true).every((target) => !target.required)).toBe(true);
-  for (const snippet of [sslFormSnippet(true), sslCompleteSnippet(true)]) {
+  for (const snippet of [sslFormSnippet(true), sslCompleteSnippet(true), sslSitesSnippet(true)]) {
     for (const script of snippet.matchAll(/<script>([\s\S]*?)<\/script>/g)) expect(() => new Function(script[1]!)).not.toThrow();
   }
 });
 
-test("creation remembers only a checked choice and clears failed or unchecked attempts", () => {
-  const form = creation();
+test("every native creation template uses the option and the correct completion surface", async () => {
+  const targets = sslTargets(() => true);
+  const expected = ["wordpress", "php", "static", "nodejs", "python", "reverse-proxy"] as const;
+  expect([...NATIVE_SSL_TYPES]).toEqual([...expected]);
+  for (const type of expected) {
+    const target = targets.find((target) => target.template === `Frontend/Site/New/${type}.html.twig`)!;
+    expect(target.snippet("")).toContain('id="clp-auto-ssl"');
+    const completionSurface = type === "wordpress" ? "wordpress" : "sites";
+    const nativeType = type === "wordpress" ? "php" : type;
+    const form = await creation({ type: nativeType, completion: completionSurface });
+    expect(form.choice.disabled).toBe(false);
+    form.submit();
+    expect(JSON.parse(form.store.get(KEY)!)).toMatchObject({ type: nativeType, completion: completionSurface });
+    const done = await completion({ surface: completionSurface, type: nativeType });
+    expect(done.calls.filter((call) => call.options.method === "POST")).toHaveLength(1);
+    expect(done.result.className).toBe("alert alert-success");
+    if (completionSurface === "sites") expect(done.link.href).toBe(CERTIFICATES);
+  }
+});
+
+test("existing domains, failed snapshots and submission before the snapshot finishes cannot queue SSL", async () => {
+  for (const options of [{ domains: [DOMAIN] }, { snapshotFail: true }, { snapshotPending: true }]) {
+    const form = await creation(options);
+    form.submit();
+    expect(form.store.has(KEY)).toBe(false);
+  }
+});
+
+test("the Sites completion must match a newly submitted domain, user, type and surface", async () => {
+  for (const rows of [[], [{ domain: DOMAIN, user: "other", type: "static" }],
+    [{ domain: DOMAIN, user: "blog", type: "php" }], [{ domain: "other.example.com", user: "blog", type: "static" }]]) {
+    const done = await completion({ surface: "sites", type: "static", rows });
+    expect(done.calls).toHaveLength(0);
+    expect(done.store.has(KEY)).toBe(false);
+  }
+  const store = new Map([[KEY, JSON.stringify({ domain: DOMAIN, user: "blog", type: "php", completion: "wordpress", at: Date.now() })]]);
+  const wrongSurface = await completion({ surface: "sites", store });
+  expect(wrongSurface.calls).toHaveLength(0);
+  expect(store.has(KEY)).toBe(true);
+  const wordpress = await completion({ store });
+  expect(wordpress.result.className).toBe("alert alert-success");
+});
+
+test("creation remembers only a checked choice and clears failed or unchecked attempts", async () => {
+  const form = await creation();
   expect(form.store.has(KEY)).toBe(false);
   form.submit();
-  expect(JSON.parse(form.store.get(KEY)!)).toEqual({ domain: DOMAIN, at: expect.any(Number) });
+  expect(JSON.parse(form.store.get(KEY)!)).toEqual({ domain: DOMAIN, user: "blog", type: "php", completion: "wordpress", at: expect.any(Number) });
   form.choice.checked = false;
   form.submit();
   expect(form.store.has(KEY)).toBe(false);
-  const blocked = creation(true);
+  const blocked = await creation({ denied: true });
   expect(blocked.choice.checked).toBe(false);
   expect(blocked.choice.disabled).toBe(true);
   expect(blocked.error.hidden).toBe(false);
@@ -169,7 +232,7 @@ test("missing, corrupt, stale, future, mismatched and unreadable choices cannot 
     { domain: DOMAIN, at: Date.now() + 100000 },
     { domain: DOMAIN, at: "not a time" },
     { domain: "other.example.com", at: Date.now() },
-  ].map((value) => JSON.stringify(value))];
+  ].map((value) => JSON.stringify({ user: "blog", type: "php", completion: "wordpress", ...value }))];
   for (const value of pending) expect((await completion({ pending: value })).calls).toHaveLength(0);
   expect((await completion({ denied: true })).calls).toHaveLength(0);
 });
@@ -206,7 +269,7 @@ test("native DNS failure, login redirect and unconfirmed installation remain sep
   ]) {
     const failed = await completion({ pages: [{ type: "1" }, { form: {} }, reply] });
     expect(failed.result.className).toBe("alert alert-warning");
-    expect(failed.message).toContain("Your WordPress site was created");
+    expect(failed.message).toContain("Your site was created");
     expect(failed.message).not.toContain("SSL certificate installed");
     expect(failed.store.has(KEY)).toBe(false);
     if (reply.error) expect(failed.message).toContain(reply.error);

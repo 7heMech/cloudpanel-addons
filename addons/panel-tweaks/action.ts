@@ -53,7 +53,7 @@ export interface PanelTweaks {
   panelMobile: boolean;
   /** The measured-size column, and the sweep that fills it. */
   diskUsage: boolean;
-  /** Offer a Let's Encrypt certificate after creating a WordPress site. */
+  /** Offer a Let's Encrypt certificate after creating any native site. */
   autoSsl: boolean;
 }
 

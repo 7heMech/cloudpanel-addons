@@ -44,8 +44,8 @@ const COPY: TweakCopy[] = [
   {
     key: "autoSsl",
     category: "Sites",
-    title: "SSL after WordPress creation",
-    description: "Adds a checked Let's Encrypt option to new WordPress sites. Requests a certificate for the entered hostname after creation. Its DNS must point to this server and HTTP must be reachable. You can uncheck it for each site.",
+    title: "SSL after site creation",
+    description: "Adds a checked Let's Encrypt option to every native site creation form: WordPress, PHP, Static HTML, Node.js, Python and Reverse Proxy. Requests a certificate for the entered hostname after creation. Its DNS must point to this server and HTTP must be reachable. You can uncheck it for each site.",
   },
   {
     key: "sitesTable",

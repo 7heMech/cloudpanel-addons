@@ -135,6 +135,24 @@
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { placeTypes(rows); });
     if (document.documentElement.classList.contains("clp-tweaks-menu")) buildMenus(rows);
 
+    // Issuance can finish before the initial site-data request returns. Keep
+    // that confirmed result so a late reply cannot restore the placeholder.
+    var issuedCertificates = Object.create(null);
+    window.addEventListener('clp-addons:ssl-installed', function (event) {
+      var issued = event.detail;
+      if (!issued || !issued.domain || !issued.certificate) return;
+      issuedCertificates[issued.domain] = issued.certificate;
+      for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        if (row.domain !== issued.domain || !row.site) continue;
+        row.site.certificate = issued.certificate;
+        var current = row.el.querySelector('td[data-col="ssl"]');
+        if (current) current.replaceWith(sslCell(row.site));
+        copyDetails([row]);
+        placeTypes([row]);
+      }
+    });
+
     wanted.then(function (payload) {
       if (!payload || payload.ok !== true || !payload.data) return noToolbar();
       apply(payload.data, rows);
@@ -144,7 +162,10 @@
       var tweaks = data.tweaks || {};
       var byDomain = {};
       for (var i = 0; i < data.sites.length; i++) byDomain[data.sites[i].domain] = data.sites[i];
-      for (var r = 0; r < rows.length; r++) rows[r].site = byDomain[rows[r].domain] || null;
+      for (var r = 0; r < rows.length; r++) {
+        rows[r].site = byDomain[rows[r].domain] || null;
+        if (rows[r].site && issuedCertificates[rows[r].domain]) rows[r].site.certificate = issuedCertificates[rows[r].domain];
+      }
 
       nameApplications(rows);
       if (!tweaks.sitesTable) { placeTypes(rows); return noToolbar(); }

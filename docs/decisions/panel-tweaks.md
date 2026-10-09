@@ -125,24 +125,42 @@ the shared class names do not alter frontend pages.
 All changes are CSS present before the content is parsed; navigation and forms
 keep CloudPanel's own markup and behavior, and desktop retains its sidebar.
 
-## SSL after WordPress creation
+## SSL after native site creation
 
 `autoSsl` is off by default. Enabling it adds a checked, unnamed checkbox to
-CloudPanel's WordPress creation form; the operator can uncheck it for a site.
-The checkbox has no form name because Symfony rejects unknown fields. A
-capture-phase submit listener remembers only the entered hostname and time in
-`sessionStorage`, before CloudPanel's existing handler submits the form. Returning
-to the form clears that pending choice, including after validation or installation
-failure. No certificate request is made from the creation form.
+CloudPanel's WordPress, PHP, Static HTML, Node.js, Python, and Reverse Proxy
+creation forms; the operator can uncheck it for a site. The checkbox has no form
+name because Symfony rejects unknown fields. The script finds the enclosing
+native form and its domain and site-user inputs rather than depending on one
+form's IDs.
 
-On the WordPress completion page, the hostname comes from CloudPanel's session
-credentials, using the same translated section and field names as its controller.
-The script requires a matching pending hostname less than an hour old and removes
-the choice before making any requests. Separate tabs have separate choices;
-refreshing or going Back does not issue again. This is a browser completion step,
-so the completion page must stay open until issuance finishes. Disabled browser
-storage prevents automatic issuance and the creation form explains how to install
-the certificate manually.
+Before the checkbox becomes available, the script reads the native Sites page
+with the current session and records the existing domains from a hidden marker
+list. A checked submit remembers only a domain absent from that snapshot, together
+with the site user, native site type, completion surface, and time in
+`sessionStorage`. This prevents a pending or abandoned form from issuing for an
+existing site. Failed or unsupported snapshots disable the option; submitting
+before the snapshot is ready continues normal creation and explains how to install
+SSL manually. A capture-phase listener records the choice before CloudPanel's
+existing submit handler runs. Returning to the form clears any pending choice,
+including after validation or installation failure. No certificate request is
+made from a creation form.
+
+WordPress returns to its credentials page. Its hostname and site user come from
+CloudPanel's session credentials, using the same translated section and field
+names as its controller. The five other native creators redirect to Sites. That
+page's hidden markers report each visible site's domain, site user, native type,
+and native certificate URLs; the completion script must match all three site
+fields and the expected completion surface. No matching row means no issuance.
+The markers use the same `sites` collection as the native table, so they expose
+no extra sites to a panel user. The SSL block works independently of the enhanced
+site-table switch.
+
+A choice must be less than an hour old and is consumed before any certificate
+request. Separate tabs have separate choices; refreshing or going Back does not
+issue again. This is a browser completion step, so the completion page must stay
+open until issuance finishes. Disabled browser storage prevents automatic
+issuance and the creation form explains how to install the certificate manually.
 
 The script reads the site's certificates page first and preserves an existing
 certificate other than the self-signed placeholder. It then fetches CloudPanel's
@@ -154,19 +172,22 @@ for a second hostname the operator may not have configured. The entered hostname
 must resolve to the server and be reachable over HTTP for validation.
 
 A small hidden marker in the certificates template reports the installed
-certificate's domain and type. Success requires the native redirect to that
-page and an installed Let's Encrypt type; translated messages and HTTP 200 alone
-do not prove issuance. Failure is shown beside the still-visible WordPress
-credentials, with a link to the site's native SSL certificates page for checking
-or retrying. There are no automatic retries or background scans of existing
-sites. Issuance, installation, permissions, and renewal belong to CloudPanel;
-this adds no gateway verb or manager route and works for administrators and
-site managers who can create sites in the panel.
+certificate's domain, type, and expiry. Success requires the native redirect to
+that page and an installed Let's Encrypt type; translated messages and HTTP 200
+alone do not prove issuance. On Sites, a completion event updates the enhanced
+table's SSL cell and mobile details without duplicating columns or losing filters.
+The table remembers that result if its initial data request arrives later.
+Failure is shown on the completion page with a link to the site's native SSL
+certificates page for checking or retrying. WordPress credentials remain visible.
+There are no automatic retries or background scans of existing sites. Issuance,
+installation, permissions, and renewal belong to CloudPanel; this adds no gateway
+verb or manager route and works for administrators and site managers who can
+create sites in the panel.
 
-The three SSL template targets are optional. Changing the switch reconciles
-them along with the other addons. An unsupported form, missing token, changed
-certificate page, or failed issuance produces an explicit failure rather than a
-success message or a replacement of a certificate the script cannot identify.
+All SSL template targets are optional. Changing the switch reconciles them along
+with the other addons. An unsupported form, missing token, changed certificate
+page, or failed issuance produces an explicit failure rather than a success
+message or a replacement of a certificate the script cannot identify.
 
 ## Nothing moves once it is on the screen
 
