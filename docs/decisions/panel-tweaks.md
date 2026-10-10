@@ -191,11 +191,8 @@ Cloudflare's origin CA, which is called `CF Origin` because a browser reaching
 the origin directly rejects it exactly as it rejects the self-signed
 placeholder. A certificate that cannot be parsed keeps the panel's own name.
 
-Each SSL badge links to the row's `/site/{domain}/certificates` page, CloudPanel's
-SSL/TLS tab, including the `None` and self-signed states. The domain comes from
-the panel's row and is encoded as a path segment, so a row without certificate
-data still offers the same navigation. The badge is a native link with a visible
-keyboard focus outline and keeps its status colour and expiry text.
+Every SSL badge, `None` included, links to the site's SSL/TLS tab at
+`/site/{domain}/certificates`, using the domain from the panel's own row.
 
 Every value the script writes goes in as text or as an element it built. None of
 it is markup, because all of it came out of somebody's database.

@@ -342,9 +342,8 @@
       return td;
     }
 
-    function badge(domain, text, tone, title, detail, compact) {
+    function badge(text, tone, title, detail, compact) {
       var link = document.createElement("a");
-      link.href = "/site/" + encodeURIComponent(domain) + "/certificates";
       link.className = "clp-tweaks-badge clp-tweaks-" + tone;
       if (detail) {
         link.classList.add("clp-tweaks-badge-timed");
@@ -389,28 +388,26 @@
     // day count reads as noise, so a long one counts down in years.
     function sslCell(site, domain) {
       var td = cell("SSL", "ssl");
-      if (!site || !site.certificate) {
-        td.appendChild(badge(domain, "None", "none"));
-        td.setAttribute("data-value", "0");
+      function show(link, value) {
+        link.href = "/site/" + encodeURIComponent(domain) + "/certificates";
+        td.appendChild(link);
+        td.setAttribute("data-value", value);
         return td;
       }
+      if (!site || !site.certificate) return show(badge("None", "none"), "0");
       // An imported certificate arrives with the name it was issued under,
       // which is the only one the panel's own wording cannot tell apart.
       var name = site.certificate.issuer || certificateName(site.certificate.type);
       if (String(site.certificate.type) === SELF_SIGNED) {
-        td.appendChild(badge(domain, name, "none", site.certificate.expiresAt || ""));
-        td.setAttribute("data-value", "1");
-        return td;
+        return show(badge(name, "none", site.certificate.expiresAt || ""), "1");
       }
       var left = daysUntil(site.certificate.expiresAt);
       var tone = left !== null && left < 14 ? "warn" : "ok";
       var counted = left < 0 ? "expired" : left >= 730 ? Math.floor(left / 365) + "y" : left + "d";
       var note = left === null ? "" : left < 0 ? "expired" : counted + " left";
       var short = site.certificate.issuer || shortCertificateName(site.certificate.type);
-      td.appendChild(badge(domain, name, tone, site.certificate.expiresAt || "", note,
-        short ? short + " · " + counted : counted));
-      td.setAttribute("data-value", String(left === null ? 2 : left + 100000));
-      return td;
+      return show(badge(name, tone, site.certificate.expiresAt || "", note,
+        short ? short + " · " + counted : counted), String(left === null ? 2 : left + 100000));
     }
 
     function runtimeCell(site) {
