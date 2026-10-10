@@ -4,6 +4,8 @@ Extra features for [CloudPanel](https://www.cloudpanel.io/): staging copies,
 maintenance pages, Git deploys, one-click WordPress sign-in, and more. You sign
 in with your existing CloudPanel login.
 
+This is an unofficial project, not affiliated with or endorsed by CloudPanel.
+
 ## Install
 
 Log in to your server as **root** and run:
