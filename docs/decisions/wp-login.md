@@ -18,7 +18,9 @@ stop the ones after it; the withdrawal names it and the reason.
 
 ## What is in the site
 
-A must-use plugin and a one-time secret, both written as the site's own user.
+A must-use plugin and a one-time secret, both written and removed as the site's
+own user through `runuser`, never by root, which would follow any symlink the
+site's user put in the path.
 
 Must-use rather than a normal plugin because it has to be there when the request
 arrives, must not be something a site owner can deactivate by accident, and

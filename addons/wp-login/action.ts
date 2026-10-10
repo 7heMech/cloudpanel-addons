@@ -1,26 +1,28 @@
 /**
  * The privileged half of the WordPress sign-in.
  *
- * This is the only addon that writes into a site's own tree, which is why it is
+ * This is the only addon that puts its own code inside a site, which is why it is
  * an addon rather than a switch on Panel Tweaks: an operator who wants a
  * filterable site list should not have to install the code that can put a file
  * inside a customer's WordPress. Installing this is the decision, and
  * uninstalling it takes the file back out of every site.
  *
- * Everything it writes it writes as the site's own user, into paths built from
- * the account's home directory. It accepts a domain and nothing else -- no
- * paths, no user names, no file contents.
+ * Everything it writes or deletes in a site it does as the site's own user,
+ * through `runuser`, into paths built from the account's home directory. Root
+ * never writes there itself: the site's user controls every name under its
+ * root, so a symlink there would aim a root write or `rm -rf` anywhere on the
+ * box. It accepts a domain and nothing else -- no paths, no user names, no file
+ * contents.
  */
 import { Database } from "bun:sqlite";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { createHash, randomBytes } from "node:crypto";
-import { chownSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ActionFailure, emitActionError, emitActionOk, failAction, validateDomain, withFileLock,
 } from "../../cli/action-common";
 import { PANEL_DB } from "../../cli/paths";
-import { writeFileAtomic } from "../../lib/atomic-write";
 
 export type WpLoginVerb = "sites" | "sign-in" | "remove";
 
@@ -78,6 +80,7 @@ export interface WpLoginActionPaths {
   panelDb: string;
   passwd: string;
   lockFile: string;
+  runuser: string;
 }
 
 export interface WpLoginActionOptions {
@@ -93,6 +96,7 @@ export const DEFAULT_WP_LOGIN_PATHS: WpLoginActionPaths = {
   panelDb: PANEL_DB,
   passwd: "/etc/passwd",
   lockFile: "/run/lock/clp-addons/wp-login.lock",
+  runuser: "/usr/sbin/runuser",
 };
 
 function pathsFor(options: WpLoginActionOptions): WpLoginActionPaths {
@@ -156,10 +160,11 @@ function panelSites(paths: WpLoginActionPaths): PanelSiteRow[] {
 // --- the accounts sites run as -------------------------------------------
 
 interface SiteAccount {
-  uid: number;
-  gid: number;
+  name: string;
   home: string;
 }
+
+const SITE_USER_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
 
 /**
  * A site's Unix account, read from /etc/passwd rather than resolved by name at
@@ -178,11 +183,11 @@ function siteAccounts(passwd: string): Map<string, SiteAccount> {
   for (const line of content.split("\n")) {
     const fields = line.split(":");
     if (fields.length < 6) continue;
-    const uid = Number.parseInt(fields[2] ?? "", 10);
-    const gid = Number.parseInt(fields[3] ?? "", 10);
+    const name = fields[0] ?? "";
     const home = fields[5] ?? "";
-    if (!fields[0] || !Number.isInteger(uid) || !Number.isInteger(gid) || !home.startsWith("/")) continue;
-    accounts.set(fields[0], { uid, gid, home });
+    // The name reaches a `runuser -u` argument, so it is checked rather than trusted.
+    if (!SITE_USER_RE.test(name) || !home.startsWith("/")) continue;
+    accounts.set(name, { name, home });
   }
   return accounts;
 }
@@ -299,26 +304,33 @@ add_action('init', function () {
 }, 1);
 `;
 
-function writeAsSite(path: string, content: string, account: SiteAccount, mode: number): void {
-  writeFileAtomic(path, content, { mode, owner: { uid: account.uid, gid: account.gid } });
+/**
+ * Replaces `$1` with stdin, mode `$2`, unless it already holds exactly that, so
+ * an untouched loader keeps its mtime and nothing reindexes it.
+ */
+const WRITE_SCRIPT = `set -eu
+t=$(mktemp "$1.XXXXXX")
+trap 'rm -f "$t"' EXIT
+cat >"$t"
+chmod "$2" "$t"
+cmp -s "$t" "$1" || mv -f "$t" "$1"`;
+
+function runAsSite(paths: WpLoginActionPaths, account: SiteAccount, command: string[], input?: string): void {
+  const result = Bun.spawnSync([paths.runuser, "-u", account.name, "--", ...command], {
+    cwd: "/",
+    stdin: input === undefined ? "ignore" : new TextEncoder().encode(input),
+    stdout: "pipe",
+    stderr: "pipe",
+    env: process.env,
+  });
+  if (!result.success) {
+    const detail = result.stderr.toString().trim() || `exit ${result.exitCode}`;
+    throw new Error(`${command[0]} as ${account.name} failed: ${detail}`);
+  }
 }
 
-/**
- * One directory, owned by the site.
- *
- * Deliberately not recursive: mkdir runs as root, and a recursive create left
- * the site with a root-owned `wp-content` it could no longer write to. Each
- * level this creates is handed straight over, and a missing parent is a
- * refusal rather than something to invent.
- */
-function ensureOwnedDirectory(path: string, account: SiteAccount): void {
-  if (existsSync(path)) return;
-  try {
-    mkdirSync(path, { mode: 0o755 });
-    chownSync(path, account.uid, account.gid);
-  } catch (error) {
-    failAction(`the site directory ${path} could not be created: ${reason(error)}`);
-  }
+function writeAsSite(paths: WpLoginActionPaths, account: SiteAccount, path: string, content: string, mode: string): void {
+  runAsSite(paths, account, ["/bin/sh", "-c", WRITE_SCRIPT, "sh", path, mode], content);
 }
 
 function mintWpLogin(
@@ -330,29 +342,22 @@ function mintWpLogin(
   if (!site) failAction(`CloudPanel has no site called ${domain} with an account on this host`);
   if (!isWordPress(site.root)) failAction(`${domain} does not look like a WordPress installation`);
 
-  ensureOwnedDirectory(join(site.root, MU_PLUGINS), site.account);
-  ensureOwnedDirectory(join(site.root, SECRET_DIR), site.account);
-
-  const loader = join(site.root, LOADER_FILE);
-  // Rewritten only when it differs, so an untouched site keeps its file's mtime
-  // and nothing reindexes it.
-  let current = "";
-  try {
-    current = readFileSync(loader, "utf8");
-  } catch {
-    current = "";
-  }
-  if (current !== LOADER_PHP) writeAsSite(loader, LOADER_PHP, site.account, 0o644);
-
   const token = randomBytes(32).toString("hex");
   const hash = createHash("sha256").update(token).digest("hex");
   const expires = Math.floor((options.now?.() ?? new Date()).getTime() / 1000) + WP_LOGIN_TTL_SECONDS;
-  writeAsSite(
-    join(site.root, SECRET_FILE),
-    `<?php return array('hash' => '${hash}', 'expires' => ${expires});\n`,
-    site.account,
-    0o600,
-  );
+  try {
+    runAsSite(paths, site.account, ["/bin/sh", "-c", 'umask 022 && mkdir -p -- "$1"', "sh", join(site.root, SECRET_DIR)]);
+    writeAsSite(paths, site.account, join(site.root, LOADER_FILE), LOADER_PHP, "644");
+    writeAsSite(
+      paths,
+      site.account,
+      join(site.root, SECRET_FILE),
+      `<?php return array('hash' => '${hash}', 'expires' => ${expires});\n`,
+      "600",
+    );
+  } catch (error) {
+    failAction(`the sign-in could not be written into ${domain}: ${reason(error)}`);
+  }
 
   return {
     domain,
@@ -378,8 +383,7 @@ export function removeWpLogin(paths: WpLoginActionPaths = DEFAULT_WP_LOGIN_PATHS
     if (!existsSync(loader)) continue;
     // A site that cannot be cleaned must not stop the sites after it.
     try {
-      rmSync(loader, { force: true });
-      rmSync(join(site.root, SECRET_DIR), { recursive: true, force: true });
+      runAsSite(paths, site.account, ["rm", "-rf", "--", loader, join(site.root, SECRET_DIR)]);
       removed++;
     } catch (error) {
       failed.push(`${site.row.domain_name}: ${error instanceof Error ? error.message : String(error)}`);

@@ -36,8 +36,9 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
 
 Only CloudPanel administrators see the Addons tab. Site managers can also use
-Git Deploy and create and manage Instatic sites. Other panel users get the
-WordPress Sign-In link on the Sites page for their own sites.
+Git Deploy and create and manage Instatic sites. Other panel users get Panel
+Tweaks' site search and columns and the WordPress Sign-In link on the Sites
+page, for their own sites.
 
 ## Manage
 

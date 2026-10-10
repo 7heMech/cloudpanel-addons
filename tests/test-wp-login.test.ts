@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -69,6 +69,7 @@ function options(extra: Partial<WpLoginActionOptions> = {}): WpLoginActionOption
       panelDb: join(root, "panel.sq3"),
       passwd: join(root, "passwd"),
       lockFile: join(root, "wp-login.lock"),
+      runuser: join(root, "runuser"),
     },
     ...extra,
   };
@@ -113,10 +114,30 @@ function seedAccounts(): void {
   }
 }
 
+/**
+ * Stands in for runuser, which a test cannot use: records who each command was
+ * meant to run as, then runs it, or with `inert` runs nothing at all.
+ */
+function fakeRunuser(inert = false): void {
+  const runuser = join(root, "runuser");
+  writeFileSync(runuser, `#!/bin/sh
+[ "$1" = "-u" ] && [ "$3" = "--" ] || exit 2
+echo "$2" >> "${join(root, "runuser.log")}"
+shift 3
+${inert ? "exit 0" : 'exec "$@"'}
+`);
+  chmodSync(runuser, 0o755);
+}
+
+function runuserLog(): string[] {
+  return existsSync(join(root, "runuser.log")) ? readFileSync(join(root, "runuser.log"), "utf8").trim().split("\n") : [];
+}
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "clp-wp-login-"));
   seedPanel();
   seedAccounts();
+  fakeRunuser();
 });
 
 afterEach(() => {
@@ -217,6 +238,34 @@ test("remove takes the loader back out of every site that has it", async () => {
   expect(existsSync(join(siteDir("shop", "shop.example.com"), "wp-content"))).toBe(true);
 
   expect((await act<WpRemoveResult>(["remove"])).removed).toBe(0);
+});
+
+// The site's user controls every name under its root, so a symlink there would
+// aim a root write or rm -rf anywhere. Root therefore writes nothing in a site
+// itself; with runuser doing nothing, nothing appears.
+test("every write and delete inside a site runs as that site's user", async () => {
+  const muPlugins = join(siteDir("shop", "shop.example.com"), "wp-content", "mu-plugins");
+  await act(["sign-in", "--domain=shop.example.com"]);
+  await act(["remove"]);
+  expect(new Set(runuserLog())).toEqual(new Set(["shop"]));
+
+  fakeRunuser(true);
+  await act(["sign-in", "--domain=blog.example.com"]);
+  expect(existsSync(join(siteDir("blog", "blog.example.com"), "wp-content", "mu-plugins"))).toBe(false);
+  rmSync(muPlugins, { recursive: true });
+
+  // Even when the site points mu-plugins somewhere else, root deletes nothing.
+  const elsewhere = join(root, "elsewhere");
+  mkdirSync(join(elsewhere, "clp-addons"), { recursive: true });
+  writeFileSync(join(elsewhere, "clp-addons-login.php"), "");
+  symlinkSync(elsewhere, muPlugins);
+  await act(["remove"]);
+  expect(existsSync(join(elsewhere, "clp-addons"))).toBe(true);
+});
+
+test("a site whose writes fail is named rather than half signed in", async () => {
+  writeFileSync(join(root, "runuser"), "#!/bin/sh\necho denied >&2\nexit 1\n");
+  await expect(act(["sign-in", "--domain=shop.example.com"])).rejects.toThrow("could not be written into shop.example.com");
 });
 
 test("an unknown verb, a stray argument and a non-root caller are all refused", async () => {
