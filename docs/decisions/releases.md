@@ -28,6 +28,24 @@ Local, CI, staging, and release builds compile minified ESM without precompiled
 bytecode to keep the binary smaller. The continuously running services do not
 start often enough to justify the extra size for faster startup.
 
+Development, CI, staging, and release builds use Bun 1.4.3, declared in
+`package.json` and pinned in all three workflows. Dependency installation uses
+the frozen `bun.lock`; a runtime upgrade does not require regenerating a
+lockfile that the pinned version already reads.
+
+`bun run typecheck` runs `bun check --project tsconfig.tools.json`, covering
+the CLI, shared libraries, addons, manager, tools, and tests with the existing
+strict compiler options. Bun supplies the checker and standard library types;
+`@types/bun` supplies its API declarations, so a separate `typescript`
+dependency is unnecessary.
+
+`bun run test` uses `bun test --isolate --max-concurrency=1`. Each test file
+gets a fresh global object and module registry, containing its `mock.module`
+overrides and cleaning up its timers and I/O. Tests stay sequential within a
+file because some fixtures share mutable state. Bun discovers the suite and
+accepts file filters through `bun run test ./tests/test-update.test.ts`; a
+failure returns a nonzero exit code to CI.
+
 The tag workflow builds one Linux x86-64 binary and publishes it with the
 installer, SHA-256 sums, and GitHub build provenance. Installation and updates
 verify the checksum and repository-bound attestation before replacing the

@@ -1,6 +1,6 @@
 // Builds the binary and installs it on the staging CloudPanel box.
 //
-// Most of the 85 MB compiled binary is the same Bun runtime every time, so
+// Most of the compiled binary is the same Bun runtime every time, so
 // rsync sends only the blocks that changed, over one multiplexed SSH
 // connection. The swap is a rename, which the running services do not block:
 // they go on serving the old binary from the replaced inode until they are
