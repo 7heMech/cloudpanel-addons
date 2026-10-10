@@ -356,7 +356,7 @@ function mintWpLogin(
 
   return {
     domain,
-    url: `https://${domain}/`,
+    url: `https://${domain}/wp-login.php`,
     token,
     field: WP_LOGIN_FIELD,
     expiresIn: WP_LOGIN_TTL_SECONDS,

@@ -36,10 +36,10 @@ jobs:
         with:
           # Must be able to read bun.lock. The lockfile is lockfileVersion 2,
           # which older Bun cannot parse, so --frozen-lockfile below fails with
-          # a version that is merely "recent enough" by eye. Bump this and the
-          # lockfile together, never one alone, and verify the pinned version
-          # actually reads the lockfile before pushing a tag.
-          bun-version: "1.4.2"
+          # a version that is merely "recent enough" by eye. Keep this in step
+          # with CI, staging, and package.json, and verify the pinned version
+          # reads the frozen lockfile before pushing a tag.
+          bun-version: "1.4.3"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -75,12 +75,11 @@ jobs:
           mkdir -p dist
 
           # One binary: the CLI and every addon's manager, selected at runtime by
-          # `clp-addons serve`. Three artifacts meant three copies of the
-          # same 77.5 MB Bun runtime to carry ~100 KB of code between them.
+          # `clp-addons serve`, sharing one copy of the Bun runtime.
           #
           # recon showed avx2 on the target CPU, so the standard glibc x64
           # target applies rather than the baseline variant.
-          bun build --compile --target=bun-linux-x64 --bytecode --minify --format=esm \
+          bun build --compile --target=bun-linux-x64 --minify --format=esm \
             --define "process.env.CLP_ADDONS_VERSION=\"${VERSION}\"" \
             --outfile dist/clp-addons-linux-x64 cli/index.ts
 

@@ -143,7 +143,7 @@ test("the site list is what is on disk, not what the panel's application column 
 // sites CloudPanel would list for that account.
 test("a named panel user signs in only to the sites that are theirs", async () => {
   const mine = await act<WpLoginResult>(["sign-in", "--domain=shop.example.com", "--as-user=shopkeeper"]);
-  expect(mine.url).toBe("https://shop.example.com/");
+  expect(mine.url).toBe("https://shop.example.com/wp-login.php");
 
   await expect(act(["sign-in", "--domain=shop.example.com", "--as-user=nosy"]))
     .rejects.toThrow("that site is not yours");
@@ -157,7 +157,7 @@ test("a named panel user signs in only to the sites that are theirs", async () =
   // The two roles CloudPanel shows every site to are not narrowed by the map.
   for (const user of ["boss", "manager"]) {
     const all = await act<WpLoginResult>(["sign-in", `--domain=blog.example.com`, `--as-user=${user}`]);
-    expect(all.url).toBe("https://blog.example.com/");
+    expect(all.url).toBe("https://blog.example.com/wp-login.php");
   }
 
   await expect(act(["sign-in", "--domain=shop.example.com", "--as-user=not a name"]))
@@ -167,7 +167,7 @@ test("a named panel user signs in only to the sites that are theirs", async () =
 
 test("a sign-in installs the loader, leaves a single-use secret, and names the site's own URL", async () => {
   const result = await act<WpLoginResult>(["sign-in", "--domain=shop.example.com"]);
-  expect(result.url).toBe("https://shop.example.com/");
+  expect(result.url).toBe("https://shop.example.com/wp-login.php");
   expect(result.field).toBe(WP_LOGIN_FIELD);
   expect(result.token).toMatch(/^[0-9a-f]{64}$/);
 
