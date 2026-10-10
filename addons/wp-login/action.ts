@@ -241,26 +241,35 @@ function resolvedSites(paths: WpLoginActionPaths): { row: PanelSiteRow; account:
   return resolved;
 }
 
-function wordpressSites(paths: WpLoginActionPaths): WpSiteView[] {
-  const state = readVarnishState(paths.varnishState);
+/** Shared discovery and eligibility for the page and plugin installation. */
+function resolvedWordPressSites(paths: WpLoginActionPaths) {
   return resolvedSites(paths)
     .filter((site) => isWordPress(site.root))
+    .map((site) => ({
+      ...site,
+      varnishCache: site.row.type === "php" && Boolean(Number(site.row.varnish_cache)),
+    }));
+}
+
+function wordpressSites(paths: WpLoginActionPaths): WpSiteView[] {
+  const state = readVarnishState(paths.varnishState);
+  return resolvedWordPressSites(paths)
     .map((site) => ({
       domain: site.row.domain_name,
       user: site.row.user,
       application: site.row.application ?? "",
       helper: existsSync(join(site.root, LOADER_FILE)),
-      varnishCache: site.row.type === "php" && Boolean(Number(site.row.varnish_cache)),
+      varnishCache: site.varnishCache,
       varnishExcluded: state.excluded.includes(site.row.domain_name),
       varnishPlugin: state.sites[site.row.domain_name] ?? null,
     }));
 }
 
 function varnishSites(paths: WpLoginActionPaths): VarnishSite[] {
-  return resolvedSites(paths).filter((site) => isWordPress(site.root)).map((site) => ({
+  return resolvedWordPressSites(paths).map((site) => ({
     domain: site.row.domain_name, user: site.row.user, root: site.root, ...site.account,
     phpVersion: String(site.row.php_version ?? ""),
-    eligible: site.row.type === "php" && Boolean(Number(site.row.varnish_cache)),
+    eligible: site.varnishCache,
   }));
 }
 

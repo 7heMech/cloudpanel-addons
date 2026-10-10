@@ -32,7 +32,8 @@ timer. An administrator can also request a check or an installation for one
 site. Automatic checks do nothing while the policy is off. A single-site
 explicit installation can run while automation is off, but still honors
 exclusions and eligibility. Only PHP sites with CloudPanel's `varnish_cache`
-flag and `wp-includes` plus `wp-content` on disk are eligible. A panel without
+flag and `wp-includes` plus `wp-content` on disk are eligible. The page and
+installer share this discovery and eligibility calculation. A panel without
 the Varnish column contributes no eligible sites. Varnish itself is never
 enabled by the addon.
 
