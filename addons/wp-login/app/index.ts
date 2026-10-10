@@ -2,7 +2,7 @@ import {
   bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, readJsonObject, newCsrfToken,
 } from "../../../lib/app-http";
 import { validateDomain, wpLoginService } from "./service";
-import { dashboardView, layout } from "./views";
+import { dashboardBody, dashboardView, layout } from "./views";
 
 function json(body: unknown, status = 200): Response {
   return jsonResponse(body, { status });
@@ -38,13 +38,19 @@ export async function handle(
     try {
       const result = await wpLoginService.sites();
       if (!result.ok || !result.data) throw new Error(result.error ?? "the WordPress site list is unavailable");
-      return htmlResponse(layout("WordPress Tools", dashboardView(result.data.sites, result.data.varnish), updateNotice), { csrf });
+      return htmlResponse(layout("WordPress Tools", dashboardView(result.data.sites, result.data.varnish.enabled), updateNotice), { csrf });
     } catch (error) {
       return htmlResponse(
         layout("WordPress Tools", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice),
         { status: 500, csrf },
       );
     }
+  }
+
+  if (method === "GET" && path === "/api/dashboard") {
+    const result = await wpLoginService.sites();
+    if (!result.ok || !result.data) return json(result, 400);
+    return json({ ok: true, data: { html: dashboardBody(result.data.sites, result.data.varnish.enabled) } });
   }
 
   if (method !== "POST") return json({ ok: false, error: "not found" }, 404);

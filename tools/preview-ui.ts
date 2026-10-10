@@ -20,7 +20,7 @@ import { MENU_ONLY_CLASS } from "../lib/row-actions";
 /** The `site.type` values Stager's own Twig condition offers a Clone for. */
 const CLONABLE_TYPES = ["php", "static", "reverse-proxy"];
 import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
-import { dashboardView as wpLoginDashboardView, layout as wpLoginLayout } from "../addons/wp-login/app/views";
+import { dashboardBody as wpLoginDashboardBody, dashboardView as wpLoginDashboardView, layout as wpLoginLayout } from "../addons/wp-login/app/views";
 import { WORDPRESS_APPLICATIONS, type WpSiteView } from "../addons/wp-login/action";
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
@@ -609,6 +609,41 @@ function terminalPreview(req: Request, url: URL): Response | null {
   return null;
 }
 
+// The WordPress Tools API, acting on the sites the page was last drawn with.
+let wpLoginPreview = { sites: [] as WpSiteView[], automatic: false };
+async function wpLoginPreviewApi(req: Request, path: string): Promise<Response | null> {
+  if (!path.startsWith("/addons/wp-login/api/")) return null;
+  const body = req.method === "POST" ? await req.json().catch(() => ({})) as Record<string, unknown> : {};
+  const ok = (data: unknown) => Response.json({ ok: true, data });
+  const active = () => ({ status: "active" as const, seen: true, checkedAt: new Date().toISOString(), error: "" });
+  const site = wpLoginPreview.sites.find((entry) => entry.domain === body.domain);
+  switch (path.slice("/addons/wp-login/api/".length)) {
+    case "dashboard":
+      return ok({ html: wpLoginDashboardBody(wpLoginPreview.sites, wpLoginPreview.automatic) });
+    case "varnish-settings":
+      wpLoginPreview.automatic = body.enabled === true;
+      return ok({});
+    case "varnish-site":
+      if (site) site.varnishExcluded = body.excluded === true;
+      return ok({});
+    case "varnish-install":
+      if (site) site.varnishPlugin = active();
+      return ok({ installed: 1, checked: 1, pending: 0, failed: [] });
+    case "varnish-sync": {
+      const due = wpLoginPreview.sites.filter((entry) => entry.varnishCache && !entry.varnishExcluded
+        && (!entry.varnishPlugin || (entry.varnishPlugin.status === "missing" && !entry.varnishPlugin.seen)));
+      due.forEach((entry) => { entry.varnishPlugin = active(); });
+      return ok({ installed: due.length, checked: wpLoginPreview.sites.filter((entry) => entry.varnishCache && !entry.varnishExcluded).length, pending: 0, failed: [] });
+    }
+    case "remove": {
+      const removed = wpLoginPreview.sites.filter((entry) => entry.helper);
+      removed.forEach((entry) => { entry.helper = false; });
+      return ok({ removed: removed.length, failed: [] });
+    }
+  }
+  return Response.json({ ok: false, error: "the preview cannot sign in to WordPress" }, { status: 400 });
+}
+
 let panelAce: string | null = null;
 const panelCss: Record<string, string> = {};
 
@@ -662,6 +697,8 @@ const server = Bun.serve({
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
       });
     }
+    const wpLoginApi = await wpLoginPreviewApi(req, path);
+    if (wpLoginApi) return wpLoginApi;
     if (path === "/addons/panel-tweaks/api/panel") {
       // The injected block's URL is fixed, so the fixture the stub was drawn
       // from is named by the page that asked rather than by this request.
@@ -831,7 +868,8 @@ const server = Bun.serve({
     } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
       html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites), notice);
     } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {
-      html = wpLoginLayout("WordPress Tools", wpLoginDashboardView(wpLoginPreviewSites(url), { enabled: url.searchParams.has("automatic"), excluded: [], sites: {} }), notice);
+      wpLoginPreview = { sites: wpLoginPreviewSites(url), automatic: url.searchParams.has("automatic") };
+      html = wpLoginLayout("WordPress Tools", wpLoginDashboardView(wpLoginPreview.sites, wpLoginPreview.automatic), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {

@@ -67,12 +67,13 @@ time and bounded error text. Pending sites are handled on subsequent passes.
 Every Varnish route remains administrator-only; the sign-in route's role
 exception does not grant plugin-management access.
 
-The page groups sign-in and Varnish policy in one tools card, then lists sites.
-Sign-in is the primary row action. Per-site Varnish inclusion uses the shared
-switch control and does not imply that the global automation policy is on.
-Helper cleanup is disclosed under sign-in rather than repeated in every row.
-The fleet table uses the shared status colors and becomes labelled site cards
-on narrow screens; installation confirmations match Install, Activate or Retry.
+The page follows the Cloudflare IPs layout: a policy card for automatic
+installation, the fleet table, then a helper card when any site has the helper.
+Per-site inclusion is a switch and does not imply that the global policy is on.
+Sign-in is the primary row action. After any change the page fetches
+`/api/dashboard`, a server-rendered fragment of everything below the heading,
+and repaints from it, so row status always comes from the same renderer as the
+first load and the page never reloads.
 
 ## What is in the site
 

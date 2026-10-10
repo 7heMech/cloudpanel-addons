@@ -228,5 +228,7 @@ test("the WordPress Tools page emits a valid script with sign-in and Varnish act
   for (const source of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)) expect(() => new Function(source[1]!)).not.toThrow();
   expect(html).toContain("/api/sign-in");
   expect(html).toContain("/api/varnish-settings");
+  expect(html).toContain("/api/dashboard");
+  expect(html).not.toContain("location.reload");
   expect(readFileSync(join(import.meta.dir, "../addons/wp-login/app/views.client.js"), "utf8")).toContain("target.close()");
 });

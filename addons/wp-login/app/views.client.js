@@ -38,94 +38,97 @@ function submitToken(target, data) {
   form.submit();
 }
 
-async function removeHelpers(button) {
+// Make a change, then repaint everything below the heading from the server's
+// answer, so a row that failed or that the change did not reach shows as it is.
+async function change(path, body, describe) {
+  const focused = CLP_ROOT.activeElement && CLP_ROOT.activeElement.id;
+  clearNotice();
+  busy(true);
+  let reply;
+  let failure = '';
+  let html = '';
+  let stale = '';
+  try {
+    reply = await call(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  } catch (error) {
+    failure = error.message;
+  }
+  try {
+    html = (await call('/api/dashboard')).data.html;
+  } catch (error) {
+    stale = error.message;
+  }
+  busy(false);
+  if (html) {
+    CLP_ROOT.getElementById('wp-dashboard').innerHTML = html;
+    const again = focused && CLP_ROOT.getElementById(focused);
+    if (again) again.focus();
+  }
+  if (failure) {
+    notify(failure, 'error');
+    return false;
+  }
+  const done = describe(reply.data || {});
+  notify(stale ? done.text + ' The page may be out of date: ' + stale : done.text, stale ? 'warn' : done.kind || 'ok');
+  return true;
+}
+
+async function setAutomatic(input) {
+  const enabled = input.checked;
+  if (!await change('/api/varnish-settings', { enabled: enabled }, function () {
+    return { text: enabled
+      ? 'Automatic installation is on. Sites are checked every 15 minutes, or now with Check now.'
+      : 'Automatic installation is off. Installed plugins are left as they are.' };
+  })) input.checked = !enabled;
+}
+
+async function setSiteAutomatic(input) {
+  const domain = input.dataset.domain;
+  const included = input.checked;
+  if (!await change('/api/varnish-site', { domain: domain, excluded: !included }, function () {
+    return { text: included
+      ? domain + ' is included in automatic installation.'
+      : domain + ' is excluded from automatic installation. Its plugin is left as it is.' };
+  })) input.checked = !included;
+}
+
+function syncSummary(data) {
+  let text = 'Checked ' + plural(data.checked, 'site') + '; ' + data.installed + ' installed or activated.';
+  if (data.pending) text += ' ' + data.pending + ' still to check; check again to continue.';
+  if (data.failed.length) text += ' ' + data.failed.length + ' failed; see the sites below.';
+  return { text: text, kind: data.failed.length || data.pending ? 'warn' : 'ok' };
+}
+
+function checkSites() {
+  change('/api/varnish-sync', {}, syncSummary);
+}
+
+async function installPlugin(button) {
+  const domain = button.dataset.domain;
   const agreed = await confirmAction({
-    title: 'Remove the sign-in helper',
-    text: 'Remove the sign-in helper from every site. The next sign-in installs it again.',
-    confirmLabel: 'Remove helpers',
+    title: button.textContent + ' CLP Varnish Cache on ' + domain + '?',
+    text: 'CLP Varnish Cache is installed from WordPress.org if it is missing, then activated, as the site\'s own user.',
+    confirmLabel: button.textContent,
   });
   if (!agreed) return;
-  clearNotice();
-  busy(true);
-  try {
-    const reply = await call('/api/remove', { method: 'POST' });
-    const data = reply.data || {};
-    const removed = data.removed || 0;
-    const failed = data.failed || [];
-    let message = removed
-      ? 'Removed from ' + removed + (removed === 1 ? ' site.' : ' sites.')
-      : 'No site had the helper installed.';
-    if (failed.length) message += ' Still in ' + failed.join('; ') + '.';
-    reloadWithFlash(FLASH_KEY, message, failed.length ? 'warn' : 'ok');
-  } catch (error) {
-    busy(false);
-    notify(error.message, 'error');
-  }
+  change('/api/varnish-install', { domain: domain }, function (data) {
+    return data.failed.length
+      ? { text: data.failed[0], kind: 'warn' }
+      : { text: 'CLP Varnish Cache is active on ' + domain + '.' };
+  });
 }
 
-const FLASH_KEY = 'clp-wp-login-flash';
-
-async function setVarnishAutomatic(input) {
-  const enabled = input.checked;
-  clearNotice();
-  busy(true);
-  try {
-    await call('/api/varnish-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enabled }) });
-    reloadWithFlash(FLASH_KEY, enabled ? 'Automatic Varnish installation enabled. Check sites now to apply it immediately.' : 'Automatic installation stopped. Existing Varnish plugins remain installed.', 'ok');
-  } catch (error) {
-    input.checked = !enabled;
-    busy(false);
-    notify(error.message, 'error');
-  }
-}
-
-async function setVarnishSite(input) {
-  const included = input.checked;
-  clearNotice();
-  busy(true);
-  try {
-    await call('/api/varnish-site', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain: input.dataset.domain, excluded: !included }) });
-    reloadWithFlash(FLASH_KEY, input.dataset.domain + (included ? ' included in automatic installation.' : ' excluded from automatic installation. Its plugin is unchanged.'), 'ok');
-  } catch (error) {
-    input.checked = !included;
-    busy(false);
-    notify(error.message, 'error');
-  }
-}
-
-async function installVarnish(button) {
-  const domain = button.dataset.domain;
-  const action = button.dataset.varnishAction;
-  const label = action === 'activate' ? 'Activate' : action === 'retry' ? 'Retry' : 'Install';
-  const text = action === 'activate'
-    ? 'Activate CLP Varnish Cache on ' + domain + '. If it is no longer installed, install it first.'
-    : action === 'retry'
-      ? 'Check CLP Varnish Cache on ' + domain + ' again, then install or activate it if needed.'
-      : 'Install and activate the official CLP Varnish Cache plugin on ' + domain + '. An existing installation will be activated.';
-  const agreed = await confirmAction({ title: label + ' CLP Varnish Cache', text: text, confirmLabel: label });
+async function removeHelpers() {
+  const agreed = await confirmAction({
+    title: 'Remove the sign-in helper?',
+    text: 'The must-use plugin is deleted from every site it is in. The next sign-in puts it back.',
+    confirmLabel: 'Remove',
+  });
   if (!agreed) return;
-  await runVarnishCheck('/api/varnish-install', { domain: domain });
+  change('/api/remove', {}, function (data) {
+    const failed = data.failed || [];
+    let text = data.removed ? 'Removed from ' + plural(data.removed, 'site') + '.' : 'No site had the helper installed.';
+    if (failed.length) text += ' Still in ' + failed.join('; ') + '.';
+    return { text: text, kind: failed.length ? 'warn' : 'ok' };
+  });
 }
-
-async function syncVarnishSites(button) {
-  await runVarnishCheck('/api/varnish-sync', {});
-}
-
-async function runVarnishCheck(path, body) {
-  clearNotice();
-  busy(true);
-  notify('Checking WordPress sites and installing eligible plugins…', 'ok');
-  try {
-    const reply = await call(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const data = reply.data;
-    let message = data.checked + (data.checked === 1 ? ' site checked. ' : ' sites checked. ') + data.installed + (data.installed === 1 ? ' plugin installed or activated.' : ' plugins installed or activated.');
-    if (data.pending) message += ' ' + data.pending + ' remaining; check again to continue.';
-    if (data.failed.length) message += ' Failed: ' + data.failed.join('; ');
-    reloadWithFlash(FLASH_KEY, message, data.failed.length || data.pending ? 'warn' : 'ok');
-  } catch (error) {
-    busy(false);
-    notify(error.message, 'error');
-  }
-}
-
-showCarriedFlash(FLASH_KEY);
