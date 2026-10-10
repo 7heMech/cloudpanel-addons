@@ -1,10 +1,9 @@
 // What Panel Tweaks adds to CloudPanel's own pages.
 //
 // The site-list tweaks -- the count, search, sorting and extra columns -- share
-// one script and one toolbar placed above the
-// sites table, which then edits the table it finds below it. Patching the
-// heading, the table head, the loop body and the action cell separately would
-// have been four more pieces of CloudPanel's markup to match exactly, and four
+// one script and one toolbar placed above the sites table, which then edits the
+// table it finds below it. Patching the heading, the table head, the loop body
+// and the action cell separately would have been four more pieces of CloudPanel's markup to match exactly, and four
 // more ways for a panel release to stop the addon.
 //
 // Most of what is here does not decide what is switched on: the script asks the
@@ -13,8 +12,7 @@
 // reconciliation. The layout switches that decide how a page is painted before
 // any reply could arrive -- the login theme, the two narrow-screen layouts and
 // the row menu -- are read here instead, which is why moving one of those
-// renders the templates again. Automatic SSL has its own creation, completion,
-// and certificate-state targets, also gated when the templates are rendered.
+// renders the templates again. Automatic SSL (ssl.ts) is read here too.
 
 import MENU_STYLE_SOURCE from "./menu.css" with { type: "text" };
 import SITES_SCRIPT_SOURCE from "./sites.client.js" with { type: "text" };

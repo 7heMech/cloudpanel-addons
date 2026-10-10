@@ -9,8 +9,8 @@
  *
  * A disk measurement walks every site's home directory, which only root can
  * read across accounts. It is a verb with a fixed shape, and it accepts no
- * path. Automatic SSL uses CloudPanel's own
- * certificate form; this action only stores its switch.
+ * path. Automatic SSL submits CloudPanel's own certificate form from the
+ * browser; here it is only a switch.
  */
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";

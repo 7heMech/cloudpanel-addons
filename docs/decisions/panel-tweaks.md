@@ -19,11 +19,10 @@ default: several addons put a link in every row, and one button per row reads
 better than the list of links they add up to.
 
 WordPress sign-in is [its own addon](wp-login.md) because it writes a plugin into
-a customer's site. Panel Tweaks enhances CloudPanel's pages and, for automatic
-SSL, submits the panel's own certificate form. An operator who wants a filterable
-site list should not have to install
-the code that can do that, and a switch is a weaker withdrawal than not having
-it on the box.
+a customer's site. Panel Tweaks only changes CloudPanel's pages and, for
+automatic SSL, submits the panel's own certificate form. An operator who wants a
+filterable site list should not have to install the code that can do that, and
+a switch is a weaker withdrawal than not having it on the box.
 
 The page groups those switches by the panel surface they change, in the order
 Dashboard, Login, Sites. The Sites group is last because it is the longest and
@@ -73,15 +72,13 @@ data, so the count, the filter, the extra columns and the measured sizes take
 effect on the next panel page rather than at the next reconciliation.
 
 Five switches cannot work that way. The login page has no session to ask with,
-and every route the manager serves is behind the administrator gate. The other
-three -- the narrow-screen site list, the CloudPanel mobile layout and the
-row menu
--- decide how a page looks the first time it is painted, and a rule that waits
-for a reply is a rule the reader watches arrive. So for those four the switch
-decides whether the markup is there at all. Automatic SSL also decides whether
-its form and completion scripts are present. Moving any of these asks the manager
-to
-render the templates again through a `reconcile` verb. That verb belongs to the
+and every route the manager serves is behind the administrator gate. Three --
+the narrow-screen site list, the CloudPanel mobile layout and the row menu --
+decide how a page looks the first time it is painted, and a rule that waits for
+a reply is a rule the reader watches arrive. Automatic SSL's checkbox and status
+line are Twig, which reads the cookie and site list only while rendering. So for
+these the switch decides whether the markup is there at all, and moving one asks
+the manager to render the templates again through a `reconcile` verb. That verb belongs to the
 manager rather than to the addon because one pass regenerates every addon's
 block in a shared file; an addon that reconciled only its own would strip the
 others.
@@ -127,67 +124,36 @@ keep CloudPanel's own markup and behavior, and desktop retains its sidebar.
 
 ## SSL after native site creation
 
-`autoSsl` is off by default. Enabling it adds a checked, unnamed checkbox to
-CloudPanel's WordPress, PHP, Static HTML, Node.js, Python, and Reverse Proxy
-creation forms; the operator can uncheck it for a site. The checkbox has no form
-name because Symfony rejects unknown fields. The script finds the enclosing
-native form and its domain and site-user inputs rather than depending on one
-form's IDs.
+`autoSsl` is off by default. It adds a checked, unnamed checkbox to the
+WordPress, PHP, Static HTML, Node.js, Python and Reverse Proxy creation forms;
+unnamed because Symfony rejects a field its form does not declare. Everything
+else is CloudPanel's: the browser submits the panel's own Let's Encrypt form
+with its CSRF token and the operator's session, so issuance, permissions and
+renewal stay the panel's, and site managers get it too. There is no gateway verb
+or manager route.
 
-Before the checkbox becomes available, the script reads the native Sites page
-with the current session and records the existing domains from a hidden marker
-list. A checked submit remembers only a domain absent from that snapshot, together
-with the site user, native site type, completion surface, and time in
-`sessionStorage`. This prevents a pending or abandoned form from issuing for an
-existing site. Failed or unsupported snapshots disable the option; submitting
-before the snapshot is ready continues normal creation and explains how to install
-SSL manually. A capture-phase listener records the choice before CloudPanel's
-existing submit handler runs. Returning to the form clears any pending choice,
-including after validation or installation failure. No certificate request is
-made from a creation form.
+Submitting a creation form with the box checked adds its domain to the
+`__Host-clp_addons_ssl` cookie for 15 minutes. `__Host-` means no other host can
+set it. CloudPanel answers a rejected creation by drawing the form again, and
+that page drops the domain, so only a successful creation reaches a completion
+page with it:
 
-WordPress returns to its credentials page. Its hostname and site user come from
-CloudPanel's session credentials, using the same translated section and field
-names as its controller. The five other native creators redirect to Sites. That
-page's hidden markers report each visible site's domain, site user, native type,
-and native certificate URLs; the completion script must match all three site
-fields and the expected completion surface. No matching row means no issuance.
-The markers use the same `sites` collection as the native table, so they expose
-no extra sites to a panel user. The SSL block works independently of the enhanced
-site-table switch.
+- WordPress's credentials page, when the cookie names the domain in CloudPanel's
+  session credentials.
+- Sites, for the other five, when the cookie names a site in the page's own
+  `sites` list whose installed certificate is still the self-signed placeholder.
+  The list is the one the native table draws, so a panel user sees no other
+  sites, and an existing certificate is never replaced.
 
-A choice must be less than an hour old and is consumed before any certificate
-request. Separate tabs have separate choices; refreshing or going Back does not
-issue again. This is a browser completion step, so the completion page must stay
-open until issuance finishes. Disabled browser storage prevents automatic
-issuance and the creation form explains how to install the certificate manually.
-
-The script reads the site's certificates page first and preserves an existing
-certificate other than the self-signed placeholder. It then fetches CloudPanel's
-native Let's Encrypt form and submits that form with its Symfony CSRF token and
-the current session. Both URLs are generated by Twig's native routes and the
-form action must match the expected same-origin URL. Only the entered hostname
-is submitted: the native form's automatic apex and `www` pair would require DNS
-for a second hostname the operator may not have configured. The entered hostname
-must resolve to the server and be reachable over HTTP for validation.
-
-A small hidden marker in the certificates template reports the installed
-certificate's domain, type, and expiry. Success requires the native redirect to
-that page and an installed Let's Encrypt type; translated messages and HTTP 200
-alone do not prove issuance. On Sites, a completion event updates the enhanced
-table's SSL cell and mobile details without duplicating columns or losing filters.
-The table remembers that result if its initial data request arrives later.
-Failure is shown on the completion page with a link to the site's native SSL
-certificates page for checking or retrying. WordPress credentials remain visible.
-There are no automatic retries or background scans of existing sites. Issuance,
-installation, permissions, and renewal belong to CloudPanel; this adds no gateway
-verb or manager route and works for administrators and site managers who can
-create sites in the panel.
-
-All SSL template targets are optional. Changing the switch reconciles them along
-with the other addons. An unsupported form, missing token, changed certificate
-page, or failed issuance produces an explicit failure rather than a success
-message or a replacement of a certificate the script cannot identify.
+Twig draws a status line there, in the shape of CloudPanel's flash messages, and
+the script forgets the domain before any request, so a refresh or Back never
+issues twice. It then fetches the native form and posts it for the created
+domain alone; the form's default `www` name needs DNS the operator may not have.
+CloudPanel redirects to the site's certificate list only on success; anything
+else shows the panel's own error with a link to the site's SSL/TLS tab. The page
+must stay open until it finishes. On Sites, the enhanced table then refetches its
+data and repaints that row's SSL cell. There are no retries and no scans of
+existing sites.
 
 ## Nothing moves once it is on the screen
 

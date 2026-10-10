@@ -1,66 +1,55 @@
 import type { AddonTarget } from "../../../lib/addon-target";
-import FORM_SCRIPT from "./ssl-form.client.js" with { type: "text" };
-import COMPLETE_SCRIPT from "./ssl-complete.client.js" with { type: "text" };
+import SCRIPT from "./ssl.client.js" with { type: "text" };
 
 export const NATIVE_SSL_TYPES = ["wordpress", "php", "static", "nodejs", "python", "reverse-proxy"] as const;
 
-/** No name: this is a browser choice, not an extra Symfony form field. */
-export function sslFormSnippet(on: boolean, type: typeof NATIVE_SSL_TYPES[number] = "wordpress"): string {
+/** The domains whose creation form was submitted with the option checked. */
+const PENDING = `{% set clpSslPending = (app.request.cookies.get('__Host-clp_addons_ssl') ?? '')|split(' ') %}`;
+
+/** No name: Symfony rejects a field its form does not declare. */
+export function sslFormSnippet(on: boolean): string {
   return on ? `
-          <div class="row">
-            <div class="col-12">
-              <div class="form-check">
-                <input class="form-check-input" type="checkbox" id="clp-auto-ssl" checked disabled aria-describedby="clp-auto-ssl-note"
-                  data-sites-url="{{ path('clp_sites') }}" data-site-type="${type === "wordpress" ? "php" : type}"
-                  data-completion="${type === "wordpress" ? "wordpress" : "sites"}">
-                <label class="form-check-label" for="clp-auto-ssl">Install a Let's Encrypt SSL certificate after creation</label>
+            <div class="row">
+              <div class="col-12">
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" id="clp-auto-ssl" checked aria-describedby="clp-auto-ssl-note">
+                  <label class="form-check-label" for="clp-auto-ssl">Install a Let's Encrypt certificate after creation</label>
+                </div>
+                <div class="form-text" id="clp-auto-ssl-note">For this domain name only. Its DNS must point to this server.</div>
               </div>
-              <div class="form-text" id="clp-auto-ssl-note">For the entered hostname only. Its DNS must point to this server and HTTP must be reachable.</div>
-              <div class="form-text" id="clp-auto-ssl-error" role="alert" hidden></div>
             </div>
-          </div>
-          <script>${FORM_SCRIPT}</script>` : "";
+            <script>${SCRIPT}</script>` : "";
 }
 
-export function sslCompleteSnippet(on: boolean): string {
-  return on ? `
-      {% set clpSslSite = (app.session.get('siteCredentials')|default({}))['Site'|trans]|default({}) %}
-      {% set clpSslDomain = (clpSslSite['Domain Name'|trans]|default(''))|replace({'https://': ''}) %}
-      {% if clpSslDomain %}
-      <div id="clp-auto-ssl-result" class="alert" role="status" aria-live="polite" hidden
-        data-completion="wordpress" data-site-type="php" data-site-user="{{ clpSslSite['Site User'|trans]|default('') }}"
-        data-domain="{{ clpSslDomain }}"
-        data-certificates-url="{{ path('clp_site_certificates', {'domainName': clpSslDomain}) }}"
-        data-issue-url="{{ path('clp_site_lets_encrypt_certificate_new', {'domainName': clpSslDomain}) }}">
-        <span id="clp-auto-ssl-message"></span>
-        <a href="{{ path('clp_site_certificates', {'domainName': clpSslDomain}) }}">SSL certificates</a>
-      </div>
-      <script>${COMPLETE_SCRIPT}</script>
-      {% endif %}` : "";
+/** Shaped like CloudPanel's flash messages, which sit directly above it. */
+function status(domain: string): string {
+  return `
+      <div class="alert-container" data-clp-auto-ssl="{{ ${domain} }}"
+        data-certificates-url="{{ path('clp_site_certificates', {'domainName': ${domain}}) }}"
+        data-issue-url="{{ path('clp_site_lets_encrypt_certificate_new', {'domainName': ${domain}}) }}">
+        <div class="alert alert-info" role="status">Installing a Let's Encrypt certificate for {{ ${domain} }}…</div>
+      </div>`;
 }
 
-/** The other native creators redirect here. Also supplies the pre-submit snapshot. */
+/** Where the five other native creators redirect. Only a new site still on its self-signed placeholder qualifies. */
 export function sslSitesSnippet(on: boolean): string {
   return on ? `
-      <div id="clp-auto-ssl-sites" hidden>
-        {% for site in sites %}
-        <span data-domain="{{ site.domainName }}" data-site-user="{{ site.user }}" data-site-type="{{ site.type }}"
-          data-certificates-url="{{ path('clp_site_certificates', {'domainName': site.domainName}) }}"
-          data-issue-url="{{ path('clp_site_lets_encrypt_certificate_new', {'domainName': site.domainName}) }}"></span>
-        {% endfor %}
-      </div>
-      <div id="clp-auto-ssl-result" class="alert" role="status" aria-live="polite" hidden data-completion="sites">
-        <span id="clp-auto-ssl-message"></span>
-        <a id="clp-auto-ssl-link">SSL certificates</a>
-      </div>
-      <script>${COMPLETE_SCRIPT}</script>` : "";
+      ${PENDING}
+      {% for clpSslSite in sites|filter(site => site.domainName|lower in clpSslPending and site.certificate
+        and site.certificate.type == constant('App\\\\Entity\\\\Certificate::TYPE_SELF_SIGNED')) %}${status("clpSslSite.domainName")}
+      {% endfor %}
+      <script>${SCRIPT}</script>` : "";
 }
 
-/** Machine-readable installed state; no translated success-message guessing. */
-export function sslCertificateSnippet(on: boolean): string {
-  return on ? `<span id="clp-auto-ssl-certificate" hidden data-domain="{{ site.domainName }}"
-    data-type="{{ installedCertificate ? installedCertificate.type : '' }}"
-    data-expires-at="{{ installedCertificate ? installedCertificate.expiresAt|date('Y-m-d H:i:s', 'UTC') : '' }}"></span>` : "";
+/** WordPress's credentials page, reached only from a creation that succeeded. */
+export function sslWordPressSnippet(on: boolean): string {
+  return on ? `
+      ${PENDING}
+      {% set clpSslSite = (app.session.get('siteCredentials')|default({}))['Site'|trans]|default({}) %}
+      {% set clpSslDomain = (clpSslSite['Domain Name'|trans]|default(''))|replace({'https://': ''})|lower %}
+      {% if clpSslDomain and clpSslDomain in clpSslPending %}${status("clpSslDomain")}
+      <script>${SCRIPT}</script>
+      {% endif %}` : "";
 }
 
 export function sslTargets(enabled: () => boolean): AddonTarget[] {
@@ -70,28 +59,21 @@ export function sslTargets(enabled: () => boolean): AddonTarget[] {
       template: `Frontend/Site/New/${type}.html.twig`,
       anchorBefore: '            <div class="row">\n              <div class="col-6 text-start">',
       required: false,
-      snippet: () => sslFormSnippet(enabled(), type),
+      snippet: () => sslFormSnippet(enabled()),
     })),
     {
-      slug: "sites-ssl-complete",
+      slug: "sites-ssl",
       template: "Frontend/Site/index.html.twig",
       anchorBefore: '<div class="card card-table">',
       required: false,
       snippet: () => sslSitesSnippet(enabled()),
     },
     {
-      slug: "wordpress-ssl-complete",
+      slug: "wordpress-ssl",
       template: "Frontend/Site/New/wordpress-installed.html.twig",
       anchorBefore: '      <div class="card">',
       required: false,
-      snippet: () => sslCompleteSnippet(enabled()),
-    },
-    {
-      slug: "ssl-installed-state",
-      template: "Frontend/Site/certificates.html.twig",
-      anchorBefore: '      <div class="site-content">',
-      required: false,
-      snippet: () => sslCertificateSnippet(enabled()),
+      snippet: () => sslWordPressSnippet(enabled()),
     },
   ];
 }

@@ -2,12 +2,15 @@
 (function () {
   // Started here rather than inside the handler below, so the request is in
   // flight while the browser is still parsing the table it describes.
-  var wanted = fetch("ADDON_URL/api/panel", {
-    credentials: "same-origin",
-    headers: { Accept: "application/json" }
-  })
-    .then(function (response) { return response.ok ? response.json() : null; })
-    .catch(function () { return null; });
+  var wanted = panel();
+  function panel() {
+    return fetch("ADDON_URL/api/panel", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" }
+    })
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .catch(function () { return null; });
+  }
 
   // --- which columns are on ---------------------------------------------
   //
@@ -135,22 +138,21 @@
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { placeTypes(rows); });
     if (document.documentElement.classList.contains("clp-tweaks-menu")) buildMenus(rows);
 
-    // Issuance can finish before the initial site-data request returns. Keep
-    // that confirmed result so a late reply cannot restore the placeholder.
-    var issuedCertificates = Object.create(null);
-    window.addEventListener('clp-addons:ssl-installed', function (event) {
-      var issued = event.detail;
-      if (!issued || !issued.domain || !issued.certificate) return;
-      issuedCertificates[issued.domain] = issued.certificate;
-      for (var i = 0; i < rows.length; i++) {
-        var row = rows[i];
-        if (row.domain !== issued.domain || !row.site) continue;
-        row.site.certificate = issued.certificate;
-        var current = row.el.querySelector('td[data-col="ssl"]');
-        if (current) current.replaceWith(sslCell(row.site));
-        copyDetails([row]);
-        placeTypes([row]);
-      }
+    // A certificate ssl.client.js installed after creating the site.
+    window.addEventListener("clp-addons:ssl-installed", function (event) {
+      wanted.then(panel).then(function (payload) {
+        var sites = payload && payload.ok === true && payload.data ? payload.data.sites : [];
+        for (var i = 0; i < rows.length; i++) {
+          var current = rows[i].el.querySelector('td[data-col="ssl"]');
+          if (rows[i].domain !== event.detail || !rows[i].site || !current) continue;
+          for (var s = 0; s < sites.length; s++) {
+            if (sites[s].domain === event.detail) rows[i].site.certificate = sites[s].certificate;
+          }
+          current.replaceWith(sslCell(rows[i].site));
+          copyDetails([rows[i]]);
+          placeTypes([rows[i]]);
+        }
+      });
     });
 
     wanted.then(function (payload) {
@@ -162,10 +164,7 @@
       var tweaks = data.tweaks || {};
       var byDomain = {};
       for (var i = 0; i < data.sites.length; i++) byDomain[data.sites[i].domain] = data.sites[i];
-      for (var r = 0; r < rows.length; r++) {
-        rows[r].site = byDomain[rows[r].domain] || null;
-        if (rows[r].site && issuedCertificates[rows[r].domain]) rows[r].site.certificate = issuedCertificates[rows[r].domain];
-      }
+      for (var r = 0; r < rows.length; r++) rows[r].site = byDomain[rows[r].domain] || null;
 
       nameApplications(rows);
       if (!tweaks.sitesTable) { placeTypes(rows); return noToolbar(); }
