@@ -1,19 +1,18 @@
 // What Panel Tweaks adds to CloudPanel's own pages.
 //
-// Two anchors, not six. Every authenticated tweak -- the count, the search, the
-// sorting, the extra columns -- is one script and one toolbar placed above the
-// sites table, which then edits the table it finds below it. Patching the
-// heading, the table head, the loop body and the action cell separately would
-// have been four more pieces of CloudPanel's markup to match exactly, and four
+// The site-list tweaks -- the count, search, sorting and extra columns -- share
+// one script and one toolbar placed above the sites table, which then edits the
+// table it finds below it. Patching the heading, the table head, the loop body
+// and the action cell separately would have been four more pieces of CloudPanel's markup to match exactly, and four
 // more ways for a panel release to stop the addon.
 //
 // Most of what is here does not decide what is switched on: the script asks the
 // addon for the current tweaks along with the site data, so a switch on the
 // addon's page takes effect on the next panel page rather than at the next
-// reconciliation. The four switches that decide how a page is painted before
+// reconciliation. The layout switches that decide how a page is painted before
 // any reply could arrive -- the login theme, the two narrow-screen layouts and
 // the row menu -- are read here instead, which is why moving one of those
-// renders the templates again.
+// renders the templates again. Automatic SSL (ssl.ts) is read here too.
 
 import MENU_STYLE_SOURCE from "./menu.css" with { type: "text" };
 import SITES_SCRIPT_SOURCE from "./sites.client.js" with { type: "text" };
@@ -26,6 +25,7 @@ import {
   DEFAULT_TWEAKS, readTweaks, DEFAULT_PANEL_TWEAKS_PATHS,
 } from "../action";
 import type { PanelTweaks } from "../action";
+import { sslTargets } from "./ssl";
 
 /** Marker that the one-time device default has already been applied. */
 const SEEDED_KEY = "clp_addons_device_theme";
@@ -307,6 +307,7 @@ export const HEADER_TEMPLATES = ["Frontend/Partial/header.html.twig", "Admin/Par
 export { sitesSnippet };
 
 export const PANEL_TWEAKS_TARGETS: AddonTarget[] = [
+  ...sslTargets(() => storedTweaks().autoSsl),
   {
     slug: "login-device-theme",
     template: "Frontend/Login/layout.html.twig",
