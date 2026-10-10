@@ -39,7 +39,7 @@ without directory listing; flag files remain root-only and HTML files are
 readable by Nginx. Custom pages are size-bounded, stripped of active markup,
 and served with a restrictive content security policy.
 
-WordPress Sign-In is the only addon that writes into a site's own tree, and it
+WordPress Sign-In is the only addon that puts its own code inside a site, and it
 is a separate addon for that reason: an operator who does not install it does
 not have that code on the box, and the gateway's addon-and-verb table refuses
 the verb to anything else. It installs a must-use plugin and a one-time secret
