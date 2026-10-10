@@ -1,18 +1,14 @@
 
-.remove-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
-.remove-row p { margin: 0; }
-/* Where the shared fleet table becomes a card, Sign in shares a line with the
-   site user and the helper rather than taking one of its own. A grid rather
-   than the shared flex row, because with flex the line a cell lands on depends
-   on how long the domain above it is, and these cells have to keep their
-   places whatever the hostname. The domain takes both of the flexible columns;
-   the tag and the button share the third, which is as wide as the wider. */
+.wp-card h2 { margin: 0 0 8px; }
+.wp-card p { margin: 0; color: var(--muted); font-size: 14px; }
+.wp-card > .btn, .wp-card-controls { flex-shrink: 0; }
+.wp-card-controls { display: flex; align-items: center; gap: 16px; }
+.varnish-error { max-width: 260px; margin-top: 6px; color: var(--bad); font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
+.row-actions { display: flex; justify-content: flex-end; gap: 8px; }
+@media (max-width: 700px) {
+  .wp-card { flex-direction: column; align-items: flex-start; }
+}
 @media (max-width: 940px) {
-  .wp-site-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; }
-  .wp-site-table td.site-cell { grid-area: 1 / 1 / 2 / 3; }
-  /* The shared 45% cap is measured against the flex row; in its own column
-     it would cut the tag to a third of a word. */
-  .wp-site-table td.type-cell { grid-area: 1 / 3; justify-self: end; align-self: start;
-    max-width: none; margin: 2px 0 0; }
-  .wp-site-table td.action-cell { grid-area: 2 / 3; justify-self: end; }
+  .wp-site-table td:empty { display: none; }
+  .wp-site-table .row-actions .btn { flex: 1 1 0; }
 }

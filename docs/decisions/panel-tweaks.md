@@ -18,12 +18,10 @@ phone and the row menu are each their own switch. The row menu is on by
 default: several addons put a link in every row, and one button per row reads
 better than the list of links they add up to.
 
-What is deliberately not here is the WordPress sign-in, which shipped as a
-fourth switch and is now [its own addon](wp-login.md). Everything here changes
-what CloudPanel's own pages look like; that one writes a file into a customer's
-site. An operator who wants a filterable site list should not have to install
-the code that can do that, and a switch is a weaker withdrawal than not having
-it on the box.
+WordPress sign-in and plugin installation belong to
+[WordPress Tools](wp-login.md). Everything here changes what CloudPanel's own
+pages look like; that addon writes into a customer's site. Enabling a filterable
+site list does not authorize those site-writing actions.
 
 The page groups those switches by the panel surface they change, in the order
 Dashboard, Login, Sites. The Sites group is last because it is the longest and
