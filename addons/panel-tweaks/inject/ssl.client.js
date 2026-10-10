@@ -31,7 +31,7 @@
     var issueUrl = new URL(box.getAttribute('data-issue-url'), location.href).href;
     var certificatesUrl = new URL(box.getAttribute('data-certificates-url'), location.href).href;
     // Forgotten before any request, so a refresh or Back never issues twice.
-    remember(domain, false);
+    remember(domain.toLowerCase(), false);
 
     function show(kind, text, link) {
       alert.className = 'alert alert-' + kind;

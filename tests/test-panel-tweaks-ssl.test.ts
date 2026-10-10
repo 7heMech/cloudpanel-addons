@@ -23,7 +23,7 @@ function cookieJar(initial = "") {
 
 interface Reply { url?: string; token?: boolean; error?: string }
 
-function run(options: { cookie?: string; domainInput?: string; box?: boolean; replies?: Reply[] }) {
+function run(options: { cookie?: string; domainInput?: string; box?: boolean; boxDomain?: string; replies?: Reply[] }) {
   const jar = cookieJar(options.cookie ? encodeURIComponent(options.cookie) : "");
   let submit = () => {};
   const form = {
@@ -35,7 +35,7 @@ function run(options: { cookie?: string; domainInput?: string; box?: boolean; re
     append(_: string, a: { href: string }) { this.links.push(a.href); } };
   const box = {
     querySelector: () => alert,
-    getAttribute: (name: string) => ({ "data-clp-auto-ssl": DOMAIN, "data-certificates-url": CERTIFICATES, "data-issue-url": ISSUE })[name],
+    getAttribute: (name: string) => ({ "data-clp-auto-ssl": options.boxDomain ?? DOMAIN, "data-certificates-url": CERTIFICATES, "data-issue-url": ISSUE })[name],
   };
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const events: unknown[] = [];
@@ -115,15 +115,17 @@ test("a checked submit remembers the domain, an unchecked one or a rejected crea
 });
 
 test("completion posts CloudPanel's own form for the created domain alone", async () => {
-  const done = run({ box: true, cookie: DOMAIN });
+  // A site CloudPanel stored in mixed case is still forgotten.
+  const done = run({ box: true, boxDomain: "Blog.Example.com", cookie: DOMAIN });
   await done.settled();
   expect(done.calls.map((call) => call.url)).toEqual([`${ORIGIN}${ISSUE}`, `${ORIGIN}${ISSUE}`]);
   const body = done.calls[1]!.init.body as FormData;
   expect(done.calls[1]!.init.method).toBe("POST");
-  expect(body.getAll("domains[]")).toEqual([DOMAIN]);
+  expect(body.getAll("domains[]")).toEqual(["Blog.Example.com"]);
   expect(body.get("site_lets_encrypt_certificate[_token]")).toBe("csrf");
   expect(done.alert.className).toBe("alert alert-success");
-  expect(done.events).toEqual([expect.objectContaining({ init: { detail: DOMAIN } })]);
+  expect(done.jar.domains()).toEqual([]);
+  expect(done.events).toEqual([expect.objectContaining({ init: { detail: "Blog.Example.com" } })]);
 });
 
 test("anything but CloudPanel's redirect to the certificate list is a failure", async () => {
