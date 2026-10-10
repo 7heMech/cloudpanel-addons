@@ -45,7 +45,9 @@ html.dark .clp-tweaks-columns-menu input:checked { border-color: #0078d4; backgr
 .clp-tweaks-table th.clp-tweaks-asc::after { content: "\2191"; opacity: 1; }
 .clp-tweaks-table th.clp-tweaks-desc::after { content: "\2193"; opacity: 1; }
 .clp-tweaks-table .clp-tweaks-badge { display: inline-block; vertical-align: top; padding: 2px 8px; border: 1px solid currentColor;
-  border-radius: 4px; font-size: 12px; line-height: 1.4; white-space: nowrap; }
+  border-radius: 4px; font-size: 12px; line-height: 1.4; white-space: nowrap; text-decoration: none; }
+.clp-tweaks-table a.clp-tweaks-badge:hover { background: rgba(127, 143, 153, .14); }
+.clp-tweaks-table a.clp-tweaks-badge:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(0, 120, 212, .35); }
 .clp-tweaks-table .clp-tweaks-ok { color: #23774b; }
 .clp-tweaks-table .clp-tweaks-warn { color: #936319; }
 .clp-tweaks-table .clp-tweaks-none { color: #9bacb6; }
