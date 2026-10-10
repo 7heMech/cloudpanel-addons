@@ -655,6 +655,8 @@ const server = Bun.serve({
     const path = url.pathname;
     const terminalReply = terminalPreview(req, url);
     if (terminalReply) return terminalReply;
+    const wpLoginApi = await wpLoginPreviewApi(req, path);
+    if (wpLoginApi) return wpLoginApi;
     if (req.method !== "GET") return Response.json({ ok: false, error: "UI preview only; no changes were made." }, { status: 409 });
     // These are the same two logo URLs the installed manager gets from its
     // CloudPanel origin. Only this development preview fetches the public demo.
@@ -697,8 +699,6 @@ const server = Bun.serve({
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
       });
     }
-    const wpLoginApi = await wpLoginPreviewApi(req, path);
-    if (wpLoginApi) return wpLoginApi;
     if (path === "/addons/panel-tweaks/api/panel") {
       // The injected block's URL is fixed, so the fixture the stub was drawn
       // from is named by the page that asked rather than by this request.
