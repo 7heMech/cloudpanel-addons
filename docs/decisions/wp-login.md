@@ -47,10 +47,9 @@ the root path before WordPress boots. The window is opened inside the click that
 starts it, before anything is awaited, because a window opened after a fetch
 resolves is a popup the browser blocks.
 
-Directories are created one level at a time and handed to the site user. A
-recursive create runs as root and left a site with a `wp-content` it could no
-longer write to, so a missing `wp-includes` or `wp-content` is a refusal rather
-than something to invent.
+The site user creates `mu-plugins/clp-addons` itself, so every directory it adds
+is that user's. A missing `wp-includes` or `wp-content` is a refusal rather than
+something to invent.
 
 The sign-in is for the site's first administrator by user id. Which
 administrator an operator becomes is not a choice this offers, because the

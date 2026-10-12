@@ -44,11 +44,11 @@ is a separate addon for that reason: an operator who does not install it does
 not have that code on the box, and the gateway's addon-and-verb table refuses
 the verb to anything else. It installs a must-use plugin and a one-time secret,
 and later removes them, through `runuser` as the site's user: the site's user
-controls every name under its root, so a symlink there would turn a root write
-or `rm -rf` on any file on the box. It refuses a domain the panel does not have
-or a root that is not a WordPress. The secret is a SHA-256 of a token that lives
-for a minute, is removed before it is compared, and travels in a POST body
-rather than a URL.
+controls every name under its root, so a symlink there would aim a root write
+or `rm -rf` anywhere on the box. Those commands get only a fixed `PATH`, not
+root's environment. It refuses a domain the panel does not have or a root that
+is not a WordPress. The secret is a SHA-256 of a token that lives for a minute,
+is removed before it is compared, and travels in a POST body rather than a URL.
 Disabling or uninstalling the addon removes the plugin from every site. See
 [WordPress Sign-In](wp-login.md).
 

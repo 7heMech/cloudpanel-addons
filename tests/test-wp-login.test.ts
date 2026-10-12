@@ -122,7 +122,7 @@ function fakeRunuser(inert = false): void {
   const runuser = join(root, "runuser");
   writeFileSync(runuser, `#!/bin/sh
 [ "$1" = "-u" ] && [ "$3" = "--" ] || exit 2
-echo "$2" >> "${join(root, "runuser.log")}"
+echo "$2 $(env | grep -v '^PWD=' | grep -v '^SHLVL=' | grep -v '^_=' | cut -d= -f1 | sort | tr '\\n' ' ')" >> "${join(root, "runuser.log")}"
 shift 3
 ${inert ? "exit 0" : 'exec "$@"'}
 `);
@@ -130,7 +130,7 @@ ${inert ? "exit 0" : 'exec "$@"'}
 }
 
 function runuserLog(): string[] {
-  return existsSync(join(root, "runuser.log")) ? readFileSync(join(root, "runuser.log"), "utf8").trim().split("\n") : [];
+  return existsSync(join(root, "runuser.log")) ? readFileSync(join(root, "runuser.log"), "utf8").trim().split("\n").map((line) => line.trim()) : [];
 }
 
 beforeEach(() => {
@@ -247,7 +247,8 @@ test("every write and delete inside a site runs as that site's user", async () =
   const muPlugins = join(siteDir("shop", "shop.example.com"), "wp-content", "mu-plugins");
   await act(["sign-in", "--domain=shop.example.com"]);
   await act(["remove"]);
-  expect(new Set(runuserLog())).toEqual(new Set(["shop"]));
+  // One call to sign in, one to remove, and nothing of root's environment but PATH.
+  expect(runuserLog()).toEqual(["shop PATH", "shop PATH"]);
 
   fakeRunuser(true);
   await act(["sign-in", "--domain=blog.example.com"]);

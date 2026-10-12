@@ -305,15 +305,24 @@ add_action('init', function () {
 `;
 
 /**
- * Replaces `$1` with stdin, mode `$2`, unless it already holds exactly that, so
- * an untouched loader keeps its mtime and nothing reindexes it.
+ * Creates the secret's directory `$1`, writes the loader `$4` to `$2` and the
+ * secret from stdin to `$3`, in one `runuser` call. A loader already holding
+ * exactly that is left alone, so its mtime holds and nothing reindexes it.
  */
-const WRITE_SCRIPT = `set -eu
-t=$(mktemp "$1.XXXXXX")
-trap 'rm -f "$t"' EXIT
+const INSTALL_SCRIPT = `set -eu
+umask 022
+mkdir -p -- "$1"
+trap 'rm -f "\${t:-}"' EXIT
+t=$(mktemp "$2.XXXXXX")
+printf %s "$4" >"$t"
+chmod 644 "$t"
+if cmp -s "$t" "$2"; then rm -f "$t"; else mv -f "$t" "$2"; fi
+t=$(mktemp "$3.XXXXXX")
 cat >"$t"
-chmod "$2" "$t"
-cmp -s "$t" "$1" || mv -f "$t" "$1"`;
+mv -f "$t" "$3"`;
+
+/** Only `PATH`: whatever else root's environment holds is not the site's to read. */
+const SITE_ENV = { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" };
 
 function runAsSite(paths: WpLoginActionPaths, account: SiteAccount, command: string[], input?: string): void {
   const result = Bun.spawnSync([paths.runuser, "-u", account.name, "--", ...command], {
@@ -321,16 +330,12 @@ function runAsSite(paths: WpLoginActionPaths, account: SiteAccount, command: str
     stdin: input === undefined ? "ignore" : new TextEncoder().encode(input),
     stdout: "pipe",
     stderr: "pipe",
-    env: process.env,
+    env: SITE_ENV,
   });
   if (!result.success) {
     const detail = result.stderr.toString().trim() || `exit ${result.exitCode}`;
     throw new Error(`${command[0]} as ${account.name} failed: ${detail}`);
   }
-}
-
-function writeAsSite(paths: WpLoginActionPaths, account: SiteAccount, path: string, content: string, mode: string): void {
-  runAsSite(paths, account, ["/bin/sh", "-c", WRITE_SCRIPT, "sh", path, mode], content);
 }
 
 function mintWpLogin(
@@ -346,14 +351,14 @@ function mintWpLogin(
   const hash = createHash("sha256").update(token).digest("hex");
   const expires = Math.floor((options.now?.() ?? new Date()).getTime() / 1000) + WP_LOGIN_TTL_SECONDS;
   try {
-    runAsSite(paths, site.account, ["/bin/sh", "-c", 'umask 022 && mkdir -p -- "$1"', "sh", join(site.root, SECRET_DIR)]);
-    writeAsSite(paths, site.account, join(site.root, LOADER_FILE), LOADER_PHP, "644");
-    writeAsSite(
+    runAsSite(
       paths,
       site.account,
-      join(site.root, SECRET_FILE),
+      [
+        "/bin/sh", "-c", INSTALL_SCRIPT, "sh",
+        join(site.root, SECRET_DIR), join(site.root, LOADER_FILE), join(site.root, SECRET_FILE), LOADER_PHP,
+      ],
       `<?php return array('hash' => '${hash}', 'expires' => ${expires});\n`,
-      "600",
     );
   } catch (error) {
     failAction(`the sign-in could not be written into ${domain}: ${reason(error)}`);
