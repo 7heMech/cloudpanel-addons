@@ -5,8 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   executeWpLoginAction, WP_LOGIN_FIELD, WORDPRESS_APPLICATIONS,
-  type WpLoginActionOptions, type WpLoginResult, type WpRemoveResult, type WpSiteView,
+  type WpLoginActionOptions, type WpLoginResult, type WpMaintenanceReply, type WpRemoveResult, type WpSiteView,
 } from "../addons/wp-login/action";
+import { DEFAULT_MAINTENANCE_ACTION_PATHS } from "../addons/maintenance/action";
 import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
 import { ROW_ACTION_CLASS } from "../lib/row-actions";
 
@@ -70,6 +71,13 @@ function options(extra: Partial<WpLoginActionOptions> = {}): WpLoginActionOption
       passwd: join(root, "passwd"),
       lockFile: join(root, "wp-login.lock"),
       runuser: join(root, "runuser"),
+      maintenanceConfig: join(root, "maintenance.conf"),
+      maintenance: {
+        ...DEFAULT_MAINTENANCE_ACTION_PATHS,
+        dataDir: join(root, "maintenance"),
+        lockDir: join(root, "locks"),
+        panelDb: join(root, "panel.sq3"),
+      },
     },
     ...extra,
   };
@@ -275,4 +283,63 @@ test("an unknown verb, a stray argument and a non-root caller are all refused", 
   await expect(act(["sign-in", "--domain=shop.example.com", "--force"])).rejects.toThrow("unexpected argument");
   await expect(executeWpLoginAction(["sites"], { ...options(), processUid: 1000 }))
     .rejects.toThrow("must run as root");
+});
+
+// --- maintenance -------------------------------------------------------------
+
+function maintenanceFile(scope: string, name: string): string {
+  const dir = join(root, "maintenance", scope);
+  mkdirSync(dir, { recursive: true });
+  return join(dir, name);
+}
+
+const SHOP = "--domain=shop.example.com";
+const FROM = "--client-ip=203.0.113.9";
+
+// Nginx answers before WordPress could read the secret, so none is minted for a
+// browser it would turn away; an administrator is offered their own address.
+test("a site in maintenance offers the administrator a bypass instead of a dead secret", async () => {
+  writeFileSync(join(root, "maintenance.conf"), "");
+  writeFileSync(maintenanceFile("shop.example.com", "on"), "");
+
+  const reply = await act<WpMaintenanceReply>(["sign-in", SHOP, FROM]);
+  expect(reply.maintenance).toMatchObject({ ip: "203.0.113.9", canBypass: true });
+  expect(reply.maintenance.message).toContain("203.0.113.9");
+  expect(runuserLog()).toEqual([]);
+
+  const signedIn = await act<WpLoginResult>(["sign-in", SHOP, FROM, "--add-bypass"]);
+  expect(signedIn.token).toMatch(/^[0-9a-f]{64}$/);
+  expect(existsSync(maintenanceFile("shop.example.com", "bypass_203.0.113.9"))).toBe(true);
+  // Bypassed now, so the next sign-in goes straight through.
+  expect((await act<WpLoginResult>(["sign-in", SHOP, FROM])).token).toBeDefined();
+});
+
+test("maintenance is judged as Nginx judges it: global or site, either bypass, addon installed", async () => {
+  writeFileSync(maintenanceFile("_global", "on"), "");
+  // Flags left behind by an uninstalled addon hold nothing back.
+  expect((await act<WpLoginResult>(["sign-in", SHOP, FROM])).token).toBeDefined();
+
+  writeFileSync(join(root, "maintenance.conf"), "");
+  expect((await act<WpMaintenanceReply>(["sign-in", SHOP, FROM])).maintenance.canBypass).toBe(true);
+
+  writeFileSync(maintenanceFile("_global", "bypass_2001:db8::1"), "");
+  expect((await act<WpLoginResult>(["sign-in", SHOP, "--client-ip=2001:DB8:0::1"])).token).toBeDefined();
+});
+
+// Maintenance is an administrator's decision; nobody else may lift it.
+test("only an administrator, from a known address, can add a bypass", async () => {
+  writeFileSync(join(root, "maintenance.conf"), "");
+  writeFileSync(maintenanceFile("shop.example.com", "on"), "");
+
+  const owner = await act<WpMaintenanceReply>(["sign-in", SHOP, FROM, "--as-user=shopkeeper"]);
+  expect(owner.maintenance.canBypass).toBe(false);
+  await expect(act(["sign-in", SHOP, FROM, "--as-user=shopkeeper", "--add-bypass"]))
+    .rejects.toThrow("only an administrator");
+
+  expect((await act<WpMaintenanceReply>(["sign-in", SHOP])).maintenance).toMatchObject({ ip: "", canBypass: false });
+  await expect(act(["sign-in", SHOP, "--add-bypass"])).rejects.toThrow("only an administrator");
+  await expect(act(["sign-in", SHOP, "--client-ip=not-an-ip"])).rejects.toThrow("not an IP address");
+  // Nor is a bypass made for a site that is not there.
+  await expect(act(["sign-in", "--domain=absent.example.com", FROM, "--add-bypass"])).rejects.toThrow("no site called");
+  expect(existsSync(join(root, "maintenance", "absent.example.com"))).toBe(false);
 });

@@ -17,12 +17,16 @@
 import { Database } from "bun:sqlite";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { createHash, randomBytes } from "node:crypto";
+import { isIP } from "node:net";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ActionFailure, emitActionError, emitActionOk, failAction, validateDomain, withFileLock,
 } from "../../cli/action-common";
-import { PANEL_DB } from "../../cli/paths";
+import { CONFIG_DIR, PANEL_DB } from "../../cli/paths";
+import {
+  DEFAULT_MAINTENANCE_ACTION_PATHS, addBypass, maintenanceBlocks, type MaintenanceActionPaths,
+} from "../maintenance/action";
 
 export type WpLoginVerb = "sites" | "sign-in" | "remove";
 
@@ -70,6 +74,23 @@ export interface WpLoginResult {
   expiresIn: number;
 }
 
+/**
+ * What a sign-in answers instead when the site would show this browser its
+ * maintenance page. No secret is minted; `canBypass` says whether this caller
+ * may add `ip` to the site's bypasses and ask again. The wording is made here so
+ * both pages that sign in say the same thing.
+ */
+export interface WpMaintenanceReply {
+  maintenance: { ip: string; canBypass: boolean; message: string };
+}
+
+function maintenanceReply(domain: string, ip: string, admin: boolean): WpMaintenanceReply {
+  const blocked = `${domain} is in maintenance mode, so WordPress would only show its maintenance page.`;
+  if (!admin) return { maintenance: { ip, canBypass: false, message: `${blocked} An administrator can add your IP to its bypasses.` } };
+  if (!ip) return { maintenance: { ip, canBypass: false, message: `${blocked} The panel could not tell your IP, so add a bypass in Maintenance Mode.` } };
+  return { maintenance: { ip, canBypass: true, message: `${blocked} Add your IP ${ip} to its bypasses and sign in?` } };
+}
+
 export interface WpRemoveResult {
   removed: number;
   /** `domain: reason` for each site whose loader could not be deleted. */
@@ -81,6 +102,9 @@ export interface WpLoginActionPaths {
   passwd: string;
   lockFile: string;
   runuser: string;
+  /** Present while the Maintenance Mode addon is installed. */
+  maintenanceConfig: string;
+  maintenance: MaintenanceActionPaths;
 }
 
 export interface WpLoginActionOptions {
@@ -97,6 +121,8 @@ export const DEFAULT_WP_LOGIN_PATHS: WpLoginActionPaths = {
   passwd: "/etc/passwd",
   lockFile: "/run/lock/clp-addons/wp-login.lock",
   runuser: "/usr/sbin/runuser",
+  maintenanceConfig: `${CONFIG_DIR}/maintenance.conf`,
+  maintenance: DEFAULT_MAINTENANCE_ACTION_PATHS,
 };
 
 function pathsFor(options: WpLoginActionOptions): WpLoginActionPaths {
@@ -338,14 +364,21 @@ function runAsSite(paths: WpLoginActionPaths, account: SiteAccount, command: str
   }
 }
 
-function mintWpLogin(
-  paths: WpLoginActionPaths,
-  domain: string,
-  options: WpLoginActionOptions,
-): WpLoginResult {
+type ResolvedSite = ReturnType<typeof resolvedSites>[number];
+
+function wordpressSite(paths: WpLoginActionPaths, domain: string): ResolvedSite {
   const site = resolvedSites(paths).find((candidate) => candidate.row.domain_name === domain);
   if (!site) failAction(`CloudPanel has no site called ${domain} with an account on this host`);
   if (!isWordPress(site.root)) failAction(`${domain} does not look like a WordPress installation`);
+  return site;
+}
+
+function mintWpLogin(
+  paths: WpLoginActionPaths,
+  site: ResolvedSite,
+  options: WpLoginActionOptions,
+): WpLoginResult {
+  const domain = site.row.domain_name;
 
   const token = randomBytes(32).toString("hex");
   const hash = createHash("sha256").update(token).digest("hex");
@@ -404,6 +437,10 @@ interface ParsedAction {
   domain: string;
   /** The panel user the request is on behalf of, when it is not an admin's. */
   asUser: string;
+  /** The browser's address as the panel saw it; empty when it could not tell. */
+  clientIp: string;
+  /** Add `clientIp` to the site's maintenance bypasses before signing in. */
+  addBypass: boolean;
 }
 
 
@@ -416,7 +453,18 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
 
   let domain = "";
   let asUser = "";
+  let clientIp = "";
+  let addBypass = false;
   for (const argument of rest) {
+    if (argument.startsWith("--client-ip=")) {
+      clientIp = argument.slice("--client-ip=".length);
+      if (!isIP(clientIp)) failAction("that is not an IP address");
+      continue;
+    }
+    if (argument === "--add-bypass") {
+      addBypass = true;
+      continue;
+    }
     if (argument.startsWith("--domain=")) {
       domain = argument.slice("--domain=".length);
       continue;
@@ -427,7 +475,10 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
     }
     failAction(`unexpected argument '${argument}'`);
   }
-  if (asUser && verb !== "sign-in") failAction(`'${verb}' takes no --as-user`);
+  if (verb !== "sign-in" && (asUser || clientIp || addBypass)) failAction(`'${verb}' takes no --as-user, --client-ip or --add-bypass`);
+  // Maintenance is an administrator's decision, so only an administrator's
+  // sign-in may lift it, and only for the address it came from.
+  if (addBypass && (asUser || !clientIp)) failAction("only an administrator's sign-in can add its address as a bypass");
   if (asUser && !PANEL_USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
   if (verb === "sign-in") {
     // The panel's own hostname is refused here as it is everywhere else: the
@@ -436,7 +487,7 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
   } else if (domain) {
     failAction(`'${verb}' takes no --domain`);
   }
-  return { verb, domain, asUser };
+  return { verb, domain, asUser, clientIp, addBypass };
 }
 
 export async function executeWpLoginAction(
@@ -445,7 +496,7 @@ export async function executeWpLoginAction(
 ): Promise<unknown> {
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress sign-in actions must run as root");
   const paths = pathsFor(options);
-  const { verb, domain, asUser } = parseAction(argv, options);
+  const { verb, domain, asUser, clientIp, addBypass: bypass } = parseAction(argv, options);
 
   if (verb === "sites") return { sites: wordpressSites(paths) };
   // Both writing paths take the lock: a sign-in that ran while the addon was
@@ -461,8 +512,16 @@ export async function executeWpLoginAction(
   if (asUser && !mayManageSite(paths, asUser, domain)) {
     failAction("that site is not yours to sign in to");
   }
-  return withFileLock(paths.lockFile, 15, "a WordPress sign-in change is still running", async () =>
-    mintWpLogin(paths, domain, options));
+  return withFileLock(paths.lockFile, 15, "a WordPress sign-in change is still running", async () => {
+    // Maintenance answers in Nginx, before WordPress could read the secret, so
+    // a secret minted for a browser it turns away is one nobody can use.
+    const site = wordpressSite(paths, domain);
+    if (existsSync(paths.maintenanceConfig) && maintenanceBlocks(paths.maintenance, domain, clientIp)) {
+      if (!bypass) return maintenanceReply(domain, clientIp, !asUser);
+      await addBypass(paths.maintenance, domain, clientIp);
+    }
+    return mintWpLogin(paths, site, options);
+  });
 }
 
 export async function runWpLoginAction(
