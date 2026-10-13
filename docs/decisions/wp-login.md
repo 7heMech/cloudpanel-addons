@@ -55,6 +55,23 @@ The sign-in is for the site's first administrator by user id. Which
 administrator an operator becomes is not a choice this offers, because the
 operator is already root on the box that serves the site.
 
+## A site in maintenance
+
+Maintenance Mode answers in Nginx, before WordPress could read the secret, so the
+sign-in asks the same question first: while that addon is installed it checks
+the flag and bypass files Nginx checks, for the address the panel saw the
+browser at. If Nginx would turn that browser away, no secret is minted. An
+administrator is offered that address as a site bypass; agreeing is a second
+click, which opens the window and signs in, and cancelling opens nothing. The
+address comes from the request, never the page, and the root action refuses
+`--add-bypass` with `--as-user`: lifting maintenance is an administrator's
+decision. Anyone else is told the site is in maintenance. The wording comes
+from the action, so both pages that sign in say the same thing. On the panel's
+Sites page it is shown in CloudPanel's own Bootstrap modal, as are failures.
+
+A browser that reaches the panel over IPv4 and the site over IPv6 is still
+turned away after the bypass, as it would be after adding the address by hand.
+
 ## Two answers to "which sites are WordPress"
 
 The addon's own page asks the disk: a site is WordPress when its root holds

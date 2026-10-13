@@ -1,7 +1,8 @@
 
 // The window is opened inside the click, before anything is awaited: one
-// opened after a fetch resolves is a popup the browser blocks.
-async function signIn(button) {
+// opened after a fetch resolves is a popup the browser blocks. Agreeing to add
+// a bypass is a click of its own, so the retry opens its window the same way.
+async function signIn(button, addBypass) {
   const domain = button.dataset.domain;
   const target = window.open('', '_blank');
   clearNotice();
@@ -10,8 +11,24 @@ async function signIn(button) {
     const reply = await call('/api/sign-in', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ domain: domain }),
+      body: JSON.stringify({ domain: domain, addBypass: addBypass === true }),
     });
+    const maintenance = reply.data.maintenance;
+    if (maintenance) {
+      if (target) target.close();
+      busy(false);
+      if (!maintenance.canBypass) {
+        notify(maintenance.message, 'error');
+        return;
+      }
+      const agreed = await confirmAction({
+        title: 'Site in maintenance',
+        text: maintenance.message,
+        confirmLabel: 'Add IP and sign in',
+      });
+      if (agreed) signIn(button, true);
+      return;
+    }
     submitToken(target, reply.data);
     busy(false);
     notify('Signing in to ' + domain + ' in a new tab.', 'ok');

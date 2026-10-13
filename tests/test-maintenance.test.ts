@@ -6,7 +6,7 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  DEFAULT_MAINTENANCE_TEMPLATE, executeMaintenanceAction, MAX_TEMPLATE_BYTES, purgeVarnish,
+  DEFAULT_MAINTENANCE_TEMPLATE, MAX_BYPASS_IPS, MAX_TEMPLATE_BYTES, addBypass, executeMaintenanceAction, purgeVarnish,
   type MaintenanceActionPaths, type MaintenanceStatus,
 } from "../addons/maintenance/action";
 import { handle as handleMaintenance } from "../addons/maintenance/app/index";
@@ -815,3 +815,21 @@ test("the maintenance count under a global override covers unreadable sites too"
 
 // /api/tweaks saves the switch and then writes the panel's templates. When only
 // the second half fails it answers 500 with the saved state attached, so putting
+
+// WordPress Sign-In adds one address at a time; it must keep the rest, add an
+// address only once, and stop at the same limit a saved list does.
+test("adding one bypass keeps the list, deduplicates and respects the limit", async () => {
+  const { root, paths } = fixture();
+  try {
+    expect(await addBypass(paths, "example.com", "203.0.113.8")).toEqual(["203.0.113.8"]);
+    expect(await addBypass(paths, "example.com", "2001:0DB8::1")).toEqual(["2001:db8::1", "203.0.113.8"]);
+    expect(await addBypass(paths, "example.com", "203.0.113.8")).toEqual(["2001:db8::1", "203.0.113.8"]);
+
+    const full = Array.from({ length: MAX_BYPASS_IPS }, (_, index) => `198.51.100.${index}`);
+    await executeMaintenanceAction(["set-bypass", "--domain=example.com"], actionOptions(paths, { input: JSON.stringify({ ips: full }) }));
+    await expect(addBypass(paths, "example.com", "203.0.113.200")).rejects.toThrow(`at most ${MAX_BYPASS_IPS}`);
+    expect(await addBypass(paths, "example.com", "198.51.100.0")).toHaveLength(MAX_BYPASS_IPS);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
