@@ -1,6 +1,5 @@
-import { isIP } from "node:net";
 import {
-  SECURITY_HEADERS, bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken,
+  SECURITY_HEADERS, bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, newCsrfToken,
   policyResponse, readJsonObject, redirectResponse, safeDecodePathSegment,
 } from "../../../lib/app-http";
 import { fleetView, fragment, layout, siteView } from "./views";
@@ -25,14 +24,6 @@ function json(body: unknown, status = 200): Response {
 // loads from this addon, so it carries the CSRF cookie its own actions echo.
 function fragmentJson(body: unknown, csrf: string, status = 200): Response {
   return jsonResponse(body, { status, csrf });
-}
-
-function clientIp(req: Request): string {
-  // For the convenience button, prefer the visitor address Cloudflare sends.
-  // The public Nginx bypass independently checks the connection peer before
-  // using this header, so the button itself grants nothing.
-  const candidate = (req.headers.get("cf-connecting-ip") ?? req.headers.get("x-real-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0] ?? "").trim();
-  return isIP(candidate) ? candidate : "";
 }
 
 function decodedDomain(raw: string): string | null {

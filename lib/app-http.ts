@@ -5,6 +5,7 @@
 // same-origin check and a CSRF token stop cross-origin browser requests.
 
 import { randomBytes } from "node:crypto";
+import { isIP } from "node:net";
 import { secretEquals } from "./secret-equals";
 
 const CSRF_COOKIE = "clp_addons_csrf";
@@ -286,6 +287,18 @@ export function guardMutation(req: Request): Response | null {
 }
 
 const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+/**
+ * The browser's address as the panel saw it, preferring the visitor address
+ * Cloudflare sends. The panel's own Nginx takes forwarded addresses from any
+ * peer, so this is what the browser claims rather than something proven: it
+ * only decides what an operator is shown or offered, and the one thing it can
+ * write -- a maintenance bypass -- is one an administrator could add by hand.
+ */
+export function clientIp(req: Request): string {
+  const candidate = (req.headers.get("cf-connecting-ip") ?? req.headers.get("x-real-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0] ?? "").trim();
+  return isIP(candidate) ? candidate : "";
+}
 
 /** A hostname from a request, lowercased and without a trailing dot, or null. */
 export function validateDomain(value: unknown): string | null {

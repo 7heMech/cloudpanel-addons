@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   executeWpLoginAction, WP_LOGIN_FIELD, WORDPRESS_APPLICATIONS,
-  type WpLoginActionOptions, type WpLoginResult, type WpRemoveResult, type WpSiteView,
+  type WpLoginActionOptions, type WpLoginResult, type WpMaintenanceReply, type WpRemoveResult, type WpSiteView,
 } from "../addons/wp-login/action";
+import { DEFAULT_MAINTENANCE_ACTION_PATHS } from "../addons/maintenance/action";
 import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
 import { ROW_ACTION_CLASS } from "../lib/row-actions";
 
@@ -69,6 +70,14 @@ function options(extra: Partial<WpLoginActionOptions> = {}): WpLoginActionOption
       panelDb: join(root, "panel.sq3"),
       passwd: join(root, "passwd"),
       lockFile: join(root, "wp-login.lock"),
+      runuser: join(root, "runuser"),
+      maintenanceConfig: join(root, "maintenance.conf"),
+      maintenance: {
+        ...DEFAULT_MAINTENANCE_ACTION_PATHS,
+        dataDir: join(root, "maintenance"),
+        lockDir: join(root, "locks"),
+        panelDb: join(root, "panel.sq3"),
+      },
     },
     ...extra,
   };
@@ -95,14 +104,17 @@ function seedPanel(): void {
   db.close();
 }
 
-function seedAccounts(): void {
-  const uid = process.getuid?.() ?? 0;
-  const gid = process.getgid?.() ?? 0;
-  const users = ["shop", "docs", "blog"];
+function writePasswd(entries: [user: string, uid: number][]): void {
   writeFileSync(
     join(root, "passwd"),
-    `${users.map((user) => `${user}:x:${uid}:${gid}::${join(root, "home", user)}:/bin/sh`).join("\n")}\n`,
+    `${entries.map(([user, uid]) => `${user}:x:${uid}:${uid}::${join(root, "home", user)}:/bin/sh`).join("\n")}\n`,
   );
+}
+
+function seedAccounts(): void {
+  const users = ["shop", "docs", "blog"];
+  // The fake runuser below ignores the account, so these uids are only data.
+  writePasswd(users.map((user, index) => [user, 2001 + index]));
   for (const user of users) mkdirSync(join(root, "home", user), { recursive: true });
   // What a WordPress install always has, and what the sign-in refuses without:
   // wp-content is the site's own, never something this creates from nothing.
@@ -113,10 +125,30 @@ function seedAccounts(): void {
   }
 }
 
+/**
+ * Stands in for runuser, which a test cannot use: records who each command was
+ * meant to run as, then runs it, or with `inert` runs nothing at all.
+ */
+function fakeRunuser(inert = false): void {
+  const runuser = join(root, "runuser");
+  writeFileSync(runuser, `#!/bin/sh
+[ "$1" = "-u" ] && [ "$3" = "--" ] || exit 2
+echo "$2 $(env | grep -v '^PWD=' | grep -v '^SHLVL=' | grep -v '^_=' | cut -d= -f1 | sort | tr '\\n' ' ')" >> "${join(root, "runuser.log")}"
+shift 3
+${inert ? "exit 0" : 'exec "$@"'}
+`);
+  chmodSync(runuser, 0o755);
+}
+
+function runuserLog(): string[] {
+  return existsSync(join(root, "runuser.log")) ? readFileSync(join(root, "runuser.log"), "utf8").trim().split("\n").map((line) => line.trim()) : [];
+}
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "clp-wp-login-"));
   seedPanel();
   seedAccounts();
+  fakeRunuser();
 });
 
 afterEach(() => {
@@ -143,7 +175,7 @@ test("the site list is what is on disk, not what the panel's application column 
 // sites CloudPanel would list for that account.
 test("a named panel user signs in only to the sites that are theirs", async () => {
   const mine = await act<WpLoginResult>(["sign-in", "--domain=shop.example.com", "--as-user=shopkeeper"]);
-  expect(mine.url).toBe("https://shop.example.com/");
+  expect(mine.url).toBe("https://shop.example.com/wp-login.php");
 
   await expect(act(["sign-in", "--domain=shop.example.com", "--as-user=nosy"]))
     .rejects.toThrow("that site is not yours");
@@ -157,7 +189,7 @@ test("a named panel user signs in only to the sites that are theirs", async () =
   // The two roles CloudPanel shows every site to are not narrowed by the map.
   for (const user of ["boss", "manager"]) {
     const all = await act<WpLoginResult>(["sign-in", `--domain=blog.example.com`, `--as-user=${user}`]);
-    expect(all.url).toBe("https://blog.example.com/");
+    expect(all.url).toBe("https://blog.example.com/wp-login.php");
   }
 
   await expect(act(["sign-in", "--domain=shop.example.com", "--as-user=not a name"]))
@@ -167,7 +199,7 @@ test("a named panel user signs in only to the sites that are theirs", async () =
 
 test("a sign-in installs the loader, leaves a single-use secret, and names the site's own URL", async () => {
   const result = await act<WpLoginResult>(["sign-in", "--domain=shop.example.com"]);
-  expect(result.url).toBe("https://shop.example.com/");
+  expect(result.url).toBe("https://shop.example.com/wp-login.php");
   expect(result.field).toBe(WP_LOGIN_FIELD);
   expect(result.token).toMatch(/^[0-9a-f]{64}$/);
 
@@ -219,10 +251,131 @@ test("remove takes the loader back out of every site that has it", async () => {
   expect((await act<WpRemoveResult>(["remove"])).removed).toBe(0);
 });
 
+// The site's user controls every name under its root, so a symlink there would
+// aim a root write or rm -rf anywhere. Root therefore writes nothing in a site
+// itself; with runuser doing nothing, nothing appears.
+test("every write and delete inside a site runs as that site's user", async () => {
+  const muPlugins = join(siteDir("shop", "shop.example.com"), "wp-content", "mu-plugins");
+  await act(["sign-in", "--domain=shop.example.com"]);
+  await act(["remove"]);
+  // One call to sign in, one to remove, and nothing of root's environment but PATH.
+  expect(runuserLog()).toEqual(["shop PATH", "shop PATH"]);
+
+  fakeRunuser(true);
+  await act(["sign-in", "--domain=blog.example.com"]);
+  expect(existsSync(join(siteDir("blog", "blog.example.com"), "wp-content", "mu-plugins"))).toBe(false);
+  rmSync(muPlugins, { recursive: true });
+
+  // Even when the site points mu-plugins somewhere else, root deletes nothing.
+  const elsewhere = join(root, "elsewhere");
+  mkdirSync(join(elsewhere, "clp-addons"), { recursive: true });
+  writeFileSync(join(elsewhere, "clp-addons-login.php"), "");
+  symlinkSync(elsewhere, muPlugins);
+  await act(["remove"]);
+  expect(existsSync(join(elsewhere, "clp-addons"))).toBe(true);
+});
+
+test("a site whose writes fail is named rather than half signed in", async () => {
+  writeFileSync(join(root, "runuser"), "#!/bin/sh\necho denied >&2\nexit 1\n");
+  await expect(act(["sign-in", "--domain=shop.example.com"])).rejects.toThrow("could not be written into shop.example.com");
+});
+
 test("an unknown verb, a stray argument and a non-root caller are all refused", async () => {
   await expect(act(["login"])).rejects.toThrow("unknown WordPress sign-in verb");
   await expect(act(["sites", "--domain=shop.example.com"])).rejects.toThrow("takes no --domain");
   await expect(act(["sign-in", "--domain=shop.example.com", "--force"])).rejects.toThrow("unexpected argument");
   await expect(executeWpLoginAction(["sites"], { ...options(), processUid: 1000 }))
     .rejects.toThrow("must run as root");
+});
+
+// --- maintenance -------------------------------------------------------------
+
+function maintenanceFile(scope: string, name: string): string {
+  const dir = join(root, "maintenance", scope);
+  mkdirSync(dir, { recursive: true });
+  return join(dir, name);
+}
+
+const SHOP = "--domain=shop.example.com";
+const FROM = "--client-ip=203.0.113.9";
+
+// Nginx answers before WordPress could read the secret, so none is minted for a
+// browser it would turn away; an administrator is offered their own address.
+test("a site in maintenance offers the administrator a bypass instead of a dead secret", async () => {
+  writeFileSync(join(root, "maintenance.conf"), "");
+  writeFileSync(maintenanceFile("shop.example.com", "on"), "");
+
+  const reply = await act<WpMaintenanceReply>(["sign-in", SHOP, FROM]);
+  expect(reply.maintenance).toMatchObject({ ip: "203.0.113.9", canBypass: true });
+  expect(reply.maintenance.message).toContain("203.0.113.9");
+  expect(runuserLog()).toEqual([]);
+
+  const signedIn = await act<WpLoginResult>(["sign-in", SHOP, FROM, "--add-bypass"]);
+  expect(signedIn.token).toMatch(/^[0-9a-f]{64}$/);
+  expect(existsSync(maintenanceFile("shop.example.com", "bypass_203.0.113.9"))).toBe(true);
+  // Bypassed now, so the next sign-in goes straight through.
+  expect((await act<WpLoginResult>(["sign-in", SHOP, FROM])).token).toBeDefined();
+});
+
+test("maintenance is judged as Nginx judges it: global or site, either bypass, addon installed", async () => {
+  writeFileSync(maintenanceFile("_global", "on"), "");
+  // Flags left behind by an uninstalled addon hold nothing back.
+  expect((await act<WpLoginResult>(["sign-in", SHOP, FROM])).token).toBeDefined();
+
+  writeFileSync(join(root, "maintenance.conf"), "");
+  expect((await act<WpMaintenanceReply>(["sign-in", SHOP, FROM])).maintenance.canBypass).toBe(true);
+
+  writeFileSync(maintenanceFile("_global", "bypass_2001:db8::1"), "");
+  expect((await act<WpLoginResult>(["sign-in", SHOP, "--client-ip=2001:DB8:0::1"])).token).toBeDefined();
+});
+
+// Maintenance is an administrator's decision; nobody else may lift it.
+test("only an administrator, from a known address, can add a bypass", async () => {
+  writeFileSync(join(root, "maintenance.conf"), "");
+  writeFileSync(maintenanceFile("shop.example.com", "on"), "");
+
+  const owner = await act<WpMaintenanceReply>(["sign-in", SHOP, FROM, "--as-user=shopkeeper"]);
+  expect(owner.maintenance.canBypass).toBe(false);
+  await expect(act(["sign-in", SHOP, FROM, "--as-user=shopkeeper", "--add-bypass"]))
+    .rejects.toThrow("only an administrator");
+
+  expect((await act<WpMaintenanceReply>(["sign-in", SHOP])).maintenance).toMatchObject({ ip: "", canBypass: false });
+  await expect(act(["sign-in", SHOP, "--add-bypass"])).rejects.toThrow("only an administrator");
+  await expect(act(["sign-in", SHOP, "--client-ip=not-an-ip"])).rejects.toThrow("not an IP address");
+  // Nor is a bypass made for a site that is not there.
+  await expect(act(["sign-in", "--domain=absent.example.com", FROM, "--add-bypass"])).rejects.toThrow("no site called");
+  expect(existsSync(join(root, "maintenance", "absent.example.com"))).toBe(false);
+});
+
+// A failed sign-in must not have lifted maintenance on its way to failing.
+test("a sign-in that fails leaves no bypass behind", async () => {
+  writeFileSync(join(root, "maintenance.conf"), "");
+  writeFileSync(maintenanceFile("shop.example.com", "on"), "");
+  writeFileSync(join(root, "runuser"), "#!/bin/sh\necho denied >&2\nexit 1\n");
+
+  await expect(act(["sign-in", SHOP, FROM, "--add-bypass"])).rejects.toThrow("denied");
+  expect(existsSync(maintenanceFile("shop.example.com", "bypass_203.0.113.9"))).toBe(false);
+});
+
+// Nginx's `-f` follows a symlink, so a linked flag still shows the maintenance page.
+test("a symlinked maintenance flag still blocks, as it does in Nginx", async () => {
+  writeFileSync(join(root, "maintenance.conf"), "");
+  writeFileSync(join(root, "flag"), "on");
+  symlinkSync(join(root, "flag"), maintenanceFile("shop.example.com", "on"));
+  expect((await act<WpMaintenanceReply>(["sign-in", SHOP, FROM])).maintenance.canBypass).toBe(true);
+});
+
+// The same refusals SMTP and Terminal make before acting as a site's user.
+test("a site run by a box account, or one sharing its uid, is never acted as", async () => {
+  writePasswd([["shop", 2001], ["docs", 2001], ["blog", 2003]]);
+  await expect(act(["sign-in", SHOP])).rejects.toThrow("no site called");
+
+  const db = new Database(join(root, "panel.sq3"));
+  db.exec("UPDATE site SET user = 'root' WHERE domain_name = 'blog.example.com';");
+  db.close();
+  writePasswd([["root", 0], ["shop", 2001], ["docs", 2002]]);
+  mkdirSync(join(root, "home", "root", "htdocs", "blog.example.com", "wp-includes"), { recursive: true });
+  mkdirSync(join(root, "home", "root", "htdocs", "blog.example.com", "wp-content"), { recursive: true });
+  await expect(act(["sign-in", "--domain=blog.example.com"])).rejects.toThrow("no site called");
+  expect(runuserLog()).toEqual([]);
 });

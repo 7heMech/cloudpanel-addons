@@ -506,6 +506,7 @@ html.dark table.table-sites th { background: #25282f; }
 table.table-sites td { padding: 18px 32px; border-top: 1px solid #eaeaea; }
 html.dark { --clp-border-color: #a8b3cf33; }
 html.dark table.table-sites td { border-color: var(--clp-border-color); }
+.table tbody td > a:hover { color: #0078d4; text-decoration: underline; }
 .text-end { text-align: right; }
 .form-control, .form-select { padding: 8px 16px; border: 1px solid #ced4da; border-radius: 4px; font: inherit; min-height: 42px; }
 html.dark .form-control, html.dark .form-select { background: #20242c; color: #fff; border-color: #a8b3cf33; }

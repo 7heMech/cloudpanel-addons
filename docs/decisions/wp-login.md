@@ -10,15 +10,19 @@ their box, and the gateway's fixed addon-and-verb table then refuses
 `panel-tweaks sign-in` rather than allowing it and checking a stored switch.
 
 Being installed is the whole decision. There is no switch, and no state
-directory: the only trace this addon leaves anywhere is a file inside a site,
+directory: the only trace this addon leaves of its own is a file inside a site,
 and disabling or uninstalling it takes that file back out of every site it is
 in. An addon that left files behind in somebody else's site would be one an
 operator cannot fully withdraw. A site whose files cannot be deleted does not
-stop the ones after it; the withdrawal names it and the reason.
+stop the ones after it; the withdrawal names it and the reason. A maintenance
+bypass an administrator accepted while signing in belongs to Maintenance Mode:
+it stays in that site's bypass list until removed there.
 
 ## What is in the site
 
-A must-use plugin and a one-time secret, both written as the site's own user.
+A must-use plugin and a one-time secret, both written and removed as the site's
+own user through `runuser`, never by root, which would follow any symlink the
+site's user put in the path.
 
 Must-use rather than a normal plugin because it has to be there when the request
 arrives, must not be something a site owner can deactivate by accident, and
@@ -37,20 +41,43 @@ would run on every request. It is a `.php` file rather than plain data so that a
 request for it over HTTP executes it and prints nothing, instead of serving its
 contents to whoever asked.
 
-The token reaches the site in a POST body, not a query string: a single-use
-secret in a URL is still a secret in the site's access log and in the browser's
-history. The window is opened inside the click that starts it, before anything
-is awaited, because a window opened after a fetch resolves is a popup the
-browser blocks.
+The token reaches the site in a POST body to `/wp-login.php`, not a query string
+or the root URL: a single-use secret in a URL is still a secret in the site's
+access log and in the browser's history, and posting to `/wp-login.php` avoids
+front-end redirects or firewalls that bounce unauthenticated visitors away from
+the root path before WordPress boots. The window is opened inside the click that
+starts it, before anything is awaited, because a window opened after a fetch
+resolves is a popup the browser blocks.
 
-Directories are created one level at a time and handed to the site user. A
-recursive create runs as root and left a site with a `wp-content` it could no
-longer write to, so a missing `wp-includes` or `wp-content` is a refusal rather
-than something to invent.
+The site user creates `mu-plugins/clp-addons` itself, so every directory it adds
+is that user's. A missing `wp-includes` or `wp-content` is a refusal rather than
+something to invent.
 
 The sign-in is for the site's first administrator by user id. Which
 administrator an operator becomes is not a choice this offers, because the
 operator is already root on the box that serves the site.
+
+## A site in maintenance
+
+Maintenance Mode answers in Nginx, before WordPress could read the secret, so the
+sign-in asks the same question first: while that addon is installed it checks
+the flag and bypass files Nginx checks, for the address the panel saw the
+browser at. If Nginx would turn that browser away, no secret is minted. An
+administrator is offered that address as a site bypass; agreeing is a second
+click, which opens the window and signs in, and cancelling opens nothing. The
+secret is minted before the bypass is added, so a sign-in that fails leaves no
+bypass behind. The address comes from the request, never the page, and the
+root action refuses
+`--add-bypass` with `--as-user`: lifting maintenance is an administrator's
+decision. Anyone else is told the site is in maintenance. The wording comes
+from the action, so both pages that sign in say the same thing. On the panel's
+Sites page it is shown in CloudPanel's own Bootstrap modal, as are failures.
+
+A browser that reaches the panel over IPv4 and the site over IPv6 is still
+turned away after the bypass, as it would be after adding the address by hand.
+The panel's Nginx takes forwarded addresses from any peer, so the address is
+the one the browser claims; a browser that forges it only misleads itself,
+since anything it could add is a bypass an administrator could add by hand.
 
 ## Two answers to "which sites are WordPress"
 

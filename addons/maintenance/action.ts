@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { isIP } from "node:net";
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync,
+  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync,
 } from "node:fs";
 import { join } from "node:path";
 import {
@@ -220,7 +220,44 @@ async function replaceBypasses(
   }
   if (!Array.isArray(values)) failAction("the bypass list must contain an ips array");
   if (values.length > MAX_BYPASS_IPS) failAction(`at most ${MAX_BYPASS_IPS} bypass addresses are allowed`);
-  const ips = [...new Set(values.map(normalizeIp))].sort((a, b) => a.localeCompare(b));
+  const ips = values.map(normalizeIp);
+  return writeBypasses(paths, domain, options, () => ips);
+}
+
+/** Adds one address to a site's bypasses, keeping the rest. */
+export function addBypass(
+  paths: MaintenanceActionPaths, domain: string, ip: string, options: MaintenanceActionOptions = {},
+): Promise<string[]> {
+  assertPanelSite(paths, domain);
+  const address = normalizeIp(ip);
+  return writeBypasses(paths, domain, options, (current) => [...current, address]);
+}
+
+function nginxFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether Nginx answers `ip` on `domain` with the maintenance page: the same
+ * files its block tests, read the way its `-f` reads them.
+ */
+export function maintenanceBlocks(paths: MaintenanceActionPaths, domain: string, ip: string): boolean {
+  const dirs = [join(paths.dataDir, "_global"), join(paths.dataDir, domain)];
+  if (!dirs.some((dir) => nginxFile(join(dir, "on")))) return false;
+  if (!isIP(ip)) return true;
+  const bypass = `bypass_${normalizeIp(ip)}`;
+  return !dirs.some((dir) => nginxFile(join(dir, bypass)));
+}
+
+/** Replaces a scope's bypasses with what `next` makes of the current list, under its lock. */
+function writeBypasses(
+  paths: MaintenanceActionPaths, domain: string, options: MaintenanceActionOptions,
+  next: (current: string[]) => string[],
+): Promise<string[]> {
   const dir = siteDir(paths, domain, true);
   assertDirectory(paths.lockDir);
   mkdirSync(paths.lockDir, { recursive: true, mode: 0o700 });
@@ -231,6 +268,8 @@ async function replaceBypasses(
     10,
     `another maintenance update is running for ${domain}`,
     async () => {
+      const ips = [...new Set(next(bypasses(dir)))].sort((a, b) => a.localeCompare(b));
+      if (ips.length > MAX_BYPASS_IPS) failAction(`at most ${MAX_BYPASS_IPS} bypass addresses are allowed`);
       const stage = mkdtempSync(join(dir, ".bypass-stage-"));
       try {
         for (const ip of ips) (options.writeAtomicFn ?? writeAtomic)(join(stage, ip), "", 0o600);
