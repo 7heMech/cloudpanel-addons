@@ -104,14 +104,17 @@ function seedPanel(): void {
   db.close();
 }
 
-function seedAccounts(): void {
-  const uid = process.getuid?.() ?? 0;
-  const gid = process.getgid?.() ?? 0;
-  const users = ["shop", "docs", "blog"];
+function writePasswd(entries: [user: string, uid: number][]): void {
   writeFileSync(
     join(root, "passwd"),
-    `${users.map((user) => `${user}:x:${uid}:${gid}::${join(root, "home", user)}:/bin/sh`).join("\n")}\n`,
+    `${entries.map(([user, uid]) => `${user}:x:${uid}:${uid}::${join(root, "home", user)}:/bin/sh`).join("\n")}\n`,
   );
+}
+
+function seedAccounts(): void {
+  const users = ["shop", "docs", "blog"];
+  // The fake runuser below ignores the account, so these uids are only data.
+  writePasswd(users.map((user, index) => [user, 2001 + index]));
   for (const user of users) mkdirSync(join(root, "home", user), { recursive: true });
   // What a WordPress install always has, and what the sign-in refuses without:
   // wp-content is the site's own, never something this creates from nothing.
@@ -342,4 +345,37 @@ test("only an administrator, from a known address, can add a bypass", async () =
   // Nor is a bypass made for a site that is not there.
   await expect(act(["sign-in", "--domain=absent.example.com", FROM, "--add-bypass"])).rejects.toThrow("no site called");
   expect(existsSync(join(root, "maintenance", "absent.example.com"))).toBe(false);
+});
+
+// A failed sign-in must not have lifted maintenance on its way to failing.
+test("a sign-in that fails leaves no bypass behind", async () => {
+  writeFileSync(join(root, "maintenance.conf"), "");
+  writeFileSync(maintenanceFile("shop.example.com", "on"), "");
+  writeFileSync(join(root, "runuser"), "#!/bin/sh\necho denied >&2\nexit 1\n");
+
+  await expect(act(["sign-in", SHOP, FROM, "--add-bypass"])).rejects.toThrow("denied");
+  expect(existsSync(maintenanceFile("shop.example.com", "bypass_203.0.113.9"))).toBe(false);
+});
+
+// Nginx's `-f` follows a symlink, so a linked flag still shows the maintenance page.
+test("a symlinked maintenance flag still blocks, as it does in Nginx", async () => {
+  writeFileSync(join(root, "maintenance.conf"), "");
+  writeFileSync(join(root, "flag"), "on");
+  symlinkSync(join(root, "flag"), maintenanceFile("shop.example.com", "on"));
+  expect((await act<WpMaintenanceReply>(["sign-in", SHOP, FROM])).maintenance.canBypass).toBe(true);
+});
+
+// The same refusals SMTP and Terminal make before acting as a site's user.
+test("a site run by a box account, or one sharing its uid, is never acted as", async () => {
+  writePasswd([["shop", 2001], ["docs", 2001], ["blog", 2003]]);
+  await expect(act(["sign-in", SHOP])).rejects.toThrow("no site called");
+
+  const db = new Database(join(root, "panel.sq3"));
+  db.exec("UPDATE site SET user = 'root' WHERE domain_name = 'blog.example.com';");
+  db.close();
+  writePasswd([["root", 0], ["shop", 2001], ["docs", 2002]]);
+  mkdirSync(join(root, "home", "root", "htdocs", "blog.example.com", "wp-includes"), { recursive: true });
+  mkdirSync(join(root, "home", "root", "htdocs", "blog.example.com", "wp-content"), { recursive: true });
+  await expect(act(["sign-in", "--domain=blog.example.com"])).rejects.toThrow("no site called");
+  expect(runuserLog()).toEqual([]);
 });

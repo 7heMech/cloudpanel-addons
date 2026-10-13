@@ -22,16 +22,15 @@ It reads the box from `STG_HOST` and its credentials from `STG_SSH_KEY` and
 `STG_SSH_KNOWN_HOSTS`; the host key is pinned rather than learned on connection,
 because the deploy authenticates as root and then runs a command sequence.
 
-## Verified artifacts
+## Toolchain
 
-Local, CI, staging, and release builds compile minified ESM without precompiled
-bytecode to keep the binary smaller. The continuously running services do not
-start often enough to justify the extra size for faster startup.
+Development, CI, staging, and release use the Bun version pinned by
+`packageManager` in `package.json`; the workflows read it from there. Installs
+use the frozen `bun.lock`.
 
-Development, CI, staging, and release builds use Bun 1.4.3, declared in
-`package.json` and pinned in all three workflows. Dependency installation uses
-the frozen `bun.lock`; a runtime upgrade does not require regenerating a
-lockfile that the pinned version already reads.
+Builds compile minified ESM with `--bytecode`. The gateway starts a fresh
+`clp-addons action` process for every request, and bytecode roughly halves that
+startup for about 4% more binary size.
 
 `bun run typecheck` runs `bun check --project tsconfig.tools.json`, covering
 the CLI, shared libraries, addons, manager, tools, and tests with the existing
@@ -45,6 +44,8 @@ overrides and cleaning up its timers and I/O. Tests stay sequential within a
 file because some fixtures share mutable state. Bun discovers the suite and
 accepts file filters through `bun run test ./tests/test-update.test.ts`; a
 failure returns a nonzero exit code to CI.
+
+## Verified artifacts
 
 The tag workflow builds one Linux x86-64 binary and publishes it with the
 installer, SHA-256 sums, and GitHub build provenance. Installation and updates

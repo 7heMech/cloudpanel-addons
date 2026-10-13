@@ -18,12 +18,13 @@ import { Database } from "bun:sqlite";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { createHash, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   ActionFailure, emitActionError, emitActionOk, failAction, validateDomain, withFileLock,
 } from "../../cli/action-common";
 import { CONFIG_DIR, PANEL_DB } from "../../cli/paths";
+import { readUnixAccounts, siteAccountProblem, splitSharedUids, type UnixAccount } from "../../lib/site-accounts";
 import {
   DEFAULT_MAINTENANCE_ACTION_PATHS, addBypass, maintenanceBlocks, type MaintenanceActionPaths,
 } from "../maintenance/action";
@@ -190,32 +191,12 @@ interface SiteAccount {
   home: string;
 }
 
-const SITE_USER_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
-
-/**
- * A site's Unix account, read from /etc/passwd rather than resolved by name at
- * the point of use. Every path this action touches is built from the home
- * directory recorded there, so a site user whose account has gone contributes
- * nothing instead of a guessed `/home/<name>`.
- */
-function siteAccounts(passwd: string): Map<string, SiteAccount> {
-  const accounts = new Map<string, SiteAccount>();
-  let content: string;
+function readAccounts(passwd: string): Map<string, UnixAccount> {
   try {
-    content = readFileSync(passwd, "utf8");
+    return readUnixAccounts(passwd);
   } catch (error) {
     failAction(`the account database could not be read: ${reason(error)}`);
   }
-  for (const line of content.split("\n")) {
-    const fields = line.split(":");
-    if (fields.length < 6) continue;
-    const name = fields[0] ?? "";
-    const home = fields[5] ?? "";
-    // The name reaches a `runuser -u` argument, so it is checked rather than trusted.
-    if (!SITE_USER_RE.test(name) || !home.startsWith("/")) continue;
-    accounts.set(name, { name, home });
-  }
-  return accounts;
 }
 
 function siteRoot(account: SiteAccount, row: PanelSiteRow): string {
@@ -239,13 +220,21 @@ function isWordPress(root: string): boolean {
   return existsSync(join(root, "wp-includes")) && existsSync(join(root, "wp-content"));
 }
 
-/** Every site, with the root the addon would act on, skipping what it cannot. */
+/**
+ * Every site, with the root the addon would act on, skipping what it cannot:
+ * an account that is missing, belongs to the box, or shares its uid with
+ * another site, the same refusals SMTP and Terminal make.
+ */
 function resolvedSites(paths: WpLoginActionPaths): { row: PanelSiteRow; account: SiteAccount; root: string }[] {
-  const accounts = siteAccounts(paths.passwd);
-  const resolved: { row: PanelSiteRow; account: SiteAccount; root: string }[] = [];
-  for (const row of panelSites(paths)) {
+  const accounts = readAccounts(paths.passwd);
+  const rows = panelSites(paths).flatMap((row) => {
     const account = accounts.get(row.user);
-    if (!account) continue;
+    return account ? [{ row, ...account }] : [];
+  });
+  const resolved: { row: PanelSiteRow; account: SiteAccount; root: string }[] = [];
+  for (const { row, uid, gid, home } of splitSharedUids(rows).unique) {
+    if (siteAccountProblem({ user: row.user, uid, gid }) || !home.startsWith("/")) continue;
+    const account = { name: row.user, home };
     try {
       resolved.push({ row, account, root: siteRoot(account, row) });
     } catch {
@@ -357,6 +346,7 @@ function runAsSite(paths: WpLoginActionPaths, account: SiteAccount, command: str
     stdout: "pipe",
     stderr: "pipe",
     env: SITE_ENV,
+    timeout: 30_000,
   });
   if (!result.success) {
     const detail = result.stderr.toString().trim() || `exit ${result.exitCode}`;
@@ -368,7 +358,7 @@ type ResolvedSite = ReturnType<typeof resolvedSites>[number];
 
 function wordpressSite(paths: WpLoginActionPaths, domain: string): ResolvedSite {
   const site = resolvedSites(paths).find((candidate) => candidate.row.domain_name === domain);
-  if (!site) failAction(`CloudPanel has no site called ${domain} with an account on this host`);
+  if (!site) failAction(`CloudPanel has no site called ${domain} with an account this addon can act as`);
   if (!isWordPress(site.root)) failAction(`${domain} does not look like a WordPress installation`);
   return site;
 }
@@ -443,8 +433,6 @@ interface ParsedAction {
   addBypass: boolean;
 }
 
-
-
 function parseAction(argv: string[], options: WpLoginActionOptions): ParsedAction {
   const [rawVerb, ...rest] = argv;
   const verbs: WpLoginVerb[] = ["sites", "sign-in", "remove"];
@@ -516,11 +504,15 @@ export async function executeWpLoginAction(
     // Maintenance answers in Nginx, before WordPress could read the secret, so
     // a secret minted for a browser it turns away is one nobody can use.
     const site = wordpressSite(paths, domain);
-    if (existsSync(paths.maintenanceConfig) && maintenanceBlocks(paths.maintenance, domain, clientIp)) {
-      if (!bypass) return maintenanceReply(domain, clientIp, !asUser);
-      await addBypass(paths.maintenance, domain, clientIp);
+    if (!existsSync(paths.maintenanceConfig) || !maintenanceBlocks(paths.maintenance, domain, clientIp)) {
+      return mintWpLogin(paths, site, options);
     }
-    return mintWpLogin(paths, site, options);
+    if (!bypass) return maintenanceReply(domain, clientIp, !asUser);
+    // Minted first: a sign-in that fails must not leave a bypass behind, while
+    // a secret nobody can use expires on its own.
+    const login = mintWpLogin(paths, site, options);
+    await addBypass(paths.maintenance, domain, clientIp);
+    return login;
   });
 }
 

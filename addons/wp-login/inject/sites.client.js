@@ -15,7 +15,10 @@
 
   // CloudPanel's own Bootstrap modal, built once, so a message looks like the
   // panel's Delete Site dialog rather than the browser's. `onAccept` runs inside
-  // the accepting click, where opening a window is still allowed.
+  // the accepting click, where opening a window is still allowed. Bootstrap
+  // 5.0 ignores show() while the modal is still fading out, so a message that
+  // arrives then waits for it to finish.
+  var hiding = false;
   function dialog(title, text, acceptLabel, onAccept) {
     var Modal = window.bootstrap && window.bootstrap.Modal;
     if (!Modal) {
@@ -38,6 +41,12 @@
         + '<button type="button" class="btn btn-lg btn-blue"></button></div>'
         + '</div></div>';
       document.body.appendChild(el);
+      el.addEventListener("hide.bs.modal", function () { hiding = true; });
+      el.addEventListener("hidden.bs.modal", function () { hiding = false; });
+    }
+    if (hiding) {
+      el.addEventListener("hidden.bs.modal", function () { dialog(title, text, acceptLabel, onAccept); }, { once: true });
+      return;
     }
     // CloudPanel ships Bootstrap 5.0.1, which has no getOrCreateInstance.
     var modal = Modal.getInstance(el) || new Modal(el);
@@ -48,6 +57,7 @@
     accept.hidden = !acceptLabel;
     accept.textContent = acceptLabel || "";
     accept.onclick = function () {
+      accept.onclick = null;
       modal.hide();
       onAccept();
     };

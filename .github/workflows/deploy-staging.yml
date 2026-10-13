@@ -61,8 +61,8 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          # Kept in step with ci.yml and release.yml; see the note there.
-          bun-version: "1.4.3"
+          # The packageManager pin in package.json, as in release.yml.
+          bun-version-file: package.json
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

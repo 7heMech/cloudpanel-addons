@@ -34,12 +34,10 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          # Must be able to read bun.lock. The lockfile is lockfileVersion 2,
-          # which older Bun cannot parse, so --frozen-lockfile below fails with
-          # a version that is merely "recent enough" by eye. Keep this in step
-          # with CI, staging, and package.json, and verify the pinned version
-          # reads the frozen lockfile before pushing a tag.
-          bun-version: "1.4.3"
+          # The packageManager pin in package.json, the one place the version
+          # is set. It must read bun.lock: verify a bump reads the frozen
+          # lockfile before pushing a tag.
+          bun-version-file: package.json
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -79,7 +77,7 @@ jobs:
           #
           # recon showed avx2 on the target CPU, so the standard glibc x64
           # target applies rather than the baseline variant.
-          bun build --compile --target=bun-linux-x64 --minify --format=esm \
+          bun build --compile --target=bun-linux-x64 --bytecode --minify --format=esm \
             --define "process.env.CLP_ADDONS_VERSION=\"${VERSION}\"" \
             --outfile dist/clp-addons-linux-x64 cli/index.ts
 
