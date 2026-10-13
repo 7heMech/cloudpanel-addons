@@ -1,26 +1,32 @@
 /**
  * The privileged half of the WordPress sign-in.
  *
- * This is the only addon that writes into a site's own tree, which is why it is
+ * This is the only addon that puts its own code inside a site, which is why it is
  * an addon rather than a switch on Panel Tweaks: an operator who wants a
  * filterable site list should not have to install the code that can put a file
  * inside a customer's WordPress. Installing this is the decision, and
  * uninstalling it takes the file back out of every site.
  *
- * Everything it writes it writes as the site's own user, into paths built from
- * the account's home directory. It accepts a domain and nothing else -- no
- * paths, no user names, no file contents.
+ * Everything it writes or deletes in a site it does as the site's own user,
+ * through `runuser`, into paths built from the account's home directory. Root
+ * never writes there itself: the site's user controls every name under its
+ * root, so a symlink there would aim a root write or `rm -rf` anywhere on the
+ * box. It accepts a domain and nothing else -- no paths, no user names, no file
+ * contents.
  */
 import { Database } from "bun:sqlite";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { createHash, randomBytes } from "node:crypto";
-import { chownSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { isIP } from "node:net";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ActionFailure, emitActionError, emitActionOk, failAction, validateDomain, withFileLock,
 } from "../../cli/action-common";
-import { PANEL_DB } from "../../cli/paths";
-import { writeFileAtomic } from "../../lib/atomic-write";
+import { CONFIG_DIR, PANEL_DB } from "../../cli/paths";
+import {
+  DEFAULT_MAINTENANCE_ACTION_PATHS, addBypass, maintenanceBlocks, type MaintenanceActionPaths,
+} from "../maintenance/action";
 
 export type WpLoginVerb = "sites" | "sign-in" | "remove";
 
@@ -68,6 +74,23 @@ export interface WpLoginResult {
   expiresIn: number;
 }
 
+/**
+ * What a sign-in answers instead when the site would show this browser its
+ * maintenance page. No secret is minted; `canBypass` says whether this caller
+ * may add `ip` to the site's bypasses and ask again. The wording is made here so
+ * both pages that sign in say the same thing.
+ */
+export interface WpMaintenanceReply {
+  maintenance: { ip: string; canBypass: boolean; message: string };
+}
+
+function maintenanceReply(domain: string, ip: string, admin: boolean): WpMaintenanceReply {
+  const blocked = `${domain} is in maintenance mode, so WordPress would only show its maintenance page.`;
+  if (!admin) return { maintenance: { ip, canBypass: false, message: `${blocked} An administrator can add your IP to its bypasses.` } };
+  if (!ip) return { maintenance: { ip, canBypass: false, message: `${blocked} The panel could not tell your IP, so add a bypass in Maintenance Mode.` } };
+  return { maintenance: { ip, canBypass: true, message: `${blocked} Add your IP ${ip} to its bypasses and sign in?` } };
+}
+
 export interface WpRemoveResult {
   removed: number;
   /** `domain: reason` for each site whose loader could not be deleted. */
@@ -78,6 +101,10 @@ export interface WpLoginActionPaths {
   panelDb: string;
   passwd: string;
   lockFile: string;
+  runuser: string;
+  /** Present while the Maintenance Mode addon is installed. */
+  maintenanceConfig: string;
+  maintenance: MaintenanceActionPaths;
 }
 
 export interface WpLoginActionOptions {
@@ -93,6 +120,9 @@ export const DEFAULT_WP_LOGIN_PATHS: WpLoginActionPaths = {
   panelDb: PANEL_DB,
   passwd: "/etc/passwd",
   lockFile: "/run/lock/clp-addons/wp-login.lock",
+  runuser: "/usr/sbin/runuser",
+  maintenanceConfig: `${CONFIG_DIR}/maintenance.conf`,
+  maintenance: DEFAULT_MAINTENANCE_ACTION_PATHS,
 };
 
 function pathsFor(options: WpLoginActionOptions): WpLoginActionPaths {
@@ -156,10 +186,11 @@ function panelSites(paths: WpLoginActionPaths): PanelSiteRow[] {
 // --- the accounts sites run as -------------------------------------------
 
 interface SiteAccount {
-  uid: number;
-  gid: number;
+  name: string;
   home: string;
 }
+
+const SITE_USER_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
 
 /**
  * A site's Unix account, read from /etc/passwd rather than resolved by name at
@@ -178,11 +209,11 @@ function siteAccounts(passwd: string): Map<string, SiteAccount> {
   for (const line of content.split("\n")) {
     const fields = line.split(":");
     if (fields.length < 6) continue;
-    const uid = Number.parseInt(fields[2] ?? "", 10);
-    const gid = Number.parseInt(fields[3] ?? "", 10);
+    const name = fields[0] ?? "";
     const home = fields[5] ?? "";
-    if (!fields[0] || !Number.isInteger(uid) || !Number.isInteger(gid) || !home.startsWith("/")) continue;
-    accounts.set(fields[0], { uid, gid, home });
+    // The name reaches a `runuser -u` argument, so it is checked rather than trusted.
+    if (!SITE_USER_RE.test(name) || !home.startsWith("/")) continue;
+    accounts.set(name, { name, home });
   }
   return accounts;
 }
@@ -299,60 +330,72 @@ add_action('init', function () {
 }, 1);
 `;
 
-function writeAsSite(path: string, content: string, account: SiteAccount, mode: number): void {
-  writeFileAtomic(path, content, { mode, owner: { uid: account.uid, gid: account.gid } });
+/**
+ * Creates the secret's directory `$1`, writes the loader `$4` to `$2` and the
+ * secret from stdin to `$3`, in one `runuser` call. A loader already holding
+ * exactly that is left alone, so its mtime holds and nothing reindexes it.
+ */
+const INSTALL_SCRIPT = `set -eu
+umask 022
+mkdir -p -- "$1"
+trap 'rm -f "\${t:-}"' EXIT
+t=$(mktemp "$2.XXXXXX")
+printf %s "$4" >"$t"
+chmod 644 "$t"
+if cmp -s "$t" "$2"; then rm -f "$t"; else mv -f "$t" "$2"; fi
+t=$(mktemp "$3.XXXXXX")
+cat >"$t"
+mv -f "$t" "$3"`;
+
+/** Only `PATH`: whatever else root's environment holds is not the site's to read. */
+const SITE_ENV = { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" };
+
+function runAsSite(paths: WpLoginActionPaths, account: SiteAccount, command: string[], input?: string): void {
+  const result = Bun.spawnSync([paths.runuser, "-u", account.name, "--", ...command], {
+    cwd: "/",
+    stdin: input === undefined ? "ignore" : new TextEncoder().encode(input),
+    stdout: "pipe",
+    stderr: "pipe",
+    env: SITE_ENV,
+  });
+  if (!result.success) {
+    const detail = result.stderr.toString().trim() || `exit ${result.exitCode}`;
+    throw new Error(`${command[0]} as ${account.name} failed: ${detail}`);
+  }
 }
 
-/**
- * One directory, owned by the site.
- *
- * Deliberately not recursive: mkdir runs as root, and a recursive create left
- * the site with a root-owned `wp-content` it could no longer write to. Each
- * level this creates is handed straight over, and a missing parent is a
- * refusal rather than something to invent.
- */
-function ensureOwnedDirectory(path: string, account: SiteAccount): void {
-  if (existsSync(path)) return;
-  try {
-    mkdirSync(path, { mode: 0o755 });
-    chownSync(path, account.uid, account.gid);
-  } catch (error) {
-    failAction(`the site directory ${path} could not be created: ${reason(error)}`);
-  }
+type ResolvedSite = ReturnType<typeof resolvedSites>[number];
+
+function wordpressSite(paths: WpLoginActionPaths, domain: string): ResolvedSite {
+  const site = resolvedSites(paths).find((candidate) => candidate.row.domain_name === domain);
+  if (!site) failAction(`CloudPanel has no site called ${domain} with an account on this host`);
+  if (!isWordPress(site.root)) failAction(`${domain} does not look like a WordPress installation`);
+  return site;
 }
 
 function mintWpLogin(
   paths: WpLoginActionPaths,
-  domain: string,
+  site: ResolvedSite,
   options: WpLoginActionOptions,
 ): WpLoginResult {
-  const site = resolvedSites(paths).find((candidate) => candidate.row.domain_name === domain);
-  if (!site) failAction(`CloudPanel has no site called ${domain} with an account on this host`);
-  if (!isWordPress(site.root)) failAction(`${domain} does not look like a WordPress installation`);
-
-  ensureOwnedDirectory(join(site.root, MU_PLUGINS), site.account);
-  ensureOwnedDirectory(join(site.root, SECRET_DIR), site.account);
-
-  const loader = join(site.root, LOADER_FILE);
-  // Rewritten only when it differs, so an untouched site keeps its file's mtime
-  // and nothing reindexes it.
-  let current = "";
-  try {
-    current = readFileSync(loader, "utf8");
-  } catch {
-    current = "";
-  }
-  if (current !== LOADER_PHP) writeAsSite(loader, LOADER_PHP, site.account, 0o644);
+  const domain = site.row.domain_name;
 
   const token = randomBytes(32).toString("hex");
   const hash = createHash("sha256").update(token).digest("hex");
   const expires = Math.floor((options.now?.() ?? new Date()).getTime() / 1000) + WP_LOGIN_TTL_SECONDS;
-  writeAsSite(
-    join(site.root, SECRET_FILE),
-    `<?php return array('hash' => '${hash}', 'expires' => ${expires});\n`,
-    site.account,
-    0o600,
-  );
+  try {
+    runAsSite(
+      paths,
+      site.account,
+      [
+        "/bin/sh", "-c", INSTALL_SCRIPT, "sh",
+        join(site.root, SECRET_DIR), join(site.root, LOADER_FILE), join(site.root, SECRET_FILE), LOADER_PHP,
+      ],
+      `<?php return array('hash' => '${hash}', 'expires' => ${expires});\n`,
+    );
+  } catch (error) {
+    failAction(`the sign-in could not be written into ${domain}: ${reason(error)}`);
+  }
 
   return {
     domain,
@@ -378,8 +421,7 @@ export function removeWpLogin(paths: WpLoginActionPaths = DEFAULT_WP_LOGIN_PATHS
     if (!existsSync(loader)) continue;
     // A site that cannot be cleaned must not stop the sites after it.
     try {
-      rmSync(loader, { force: true });
-      rmSync(join(site.root, SECRET_DIR), { recursive: true, force: true });
+      runAsSite(paths, site.account, ["rm", "-rf", "--", loader, join(site.root, SECRET_DIR)]);
       removed++;
     } catch (error) {
       failed.push(`${site.row.domain_name}: ${error instanceof Error ? error.message : String(error)}`);
@@ -395,6 +437,10 @@ interface ParsedAction {
   domain: string;
   /** The panel user the request is on behalf of, when it is not an admin's. */
   asUser: string;
+  /** The browser's address as the panel saw it; empty when it could not tell. */
+  clientIp: string;
+  /** Add `clientIp` to the site's maintenance bypasses before signing in. */
+  addBypass: boolean;
 }
 
 
@@ -407,7 +453,18 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
 
   let domain = "";
   let asUser = "";
+  let clientIp = "";
+  let addBypass = false;
   for (const argument of rest) {
+    if (argument.startsWith("--client-ip=")) {
+      clientIp = argument.slice("--client-ip=".length);
+      if (!isIP(clientIp)) failAction("that is not an IP address");
+      continue;
+    }
+    if (argument === "--add-bypass") {
+      addBypass = true;
+      continue;
+    }
     if (argument.startsWith("--domain=")) {
       domain = argument.slice("--domain=".length);
       continue;
@@ -418,7 +475,10 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
     }
     failAction(`unexpected argument '${argument}'`);
   }
-  if (asUser && verb !== "sign-in") failAction(`'${verb}' takes no --as-user`);
+  if (verb !== "sign-in" && (asUser || clientIp || addBypass)) failAction(`'${verb}' takes no --as-user, --client-ip or --add-bypass`);
+  // Maintenance is an administrator's decision, so only an administrator's
+  // sign-in may lift it, and only for the address it came from.
+  if (addBypass && (asUser || !clientIp)) failAction("only an administrator's sign-in can add its address as a bypass");
   if (asUser && !PANEL_USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
   if (verb === "sign-in") {
     // The panel's own hostname is refused here as it is everywhere else: the
@@ -427,7 +487,7 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
   } else if (domain) {
     failAction(`'${verb}' takes no --domain`);
   }
-  return { verb, domain, asUser };
+  return { verb, domain, asUser, clientIp, addBypass };
 }
 
 export async function executeWpLoginAction(
@@ -436,7 +496,7 @@ export async function executeWpLoginAction(
 ): Promise<unknown> {
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress sign-in actions must run as root");
   const paths = pathsFor(options);
-  const { verb, domain, asUser } = parseAction(argv, options);
+  const { verb, domain, asUser, clientIp, addBypass: bypass } = parseAction(argv, options);
 
   if (verb === "sites") return { sites: wordpressSites(paths) };
   // Both writing paths take the lock: a sign-in that ran while the addon was
@@ -452,8 +512,16 @@ export async function executeWpLoginAction(
   if (asUser && !mayManageSite(paths, asUser, domain)) {
     failAction("that site is not yours to sign in to");
   }
-  return withFileLock(paths.lockFile, 15, "a WordPress sign-in change is still running", async () =>
-    mintWpLogin(paths, domain, options));
+  return withFileLock(paths.lockFile, 15, "a WordPress sign-in change is still running", async () => {
+    // Maintenance answers in Nginx, before WordPress could read the secret, so
+    // a secret minted for a browser it turns away is one nobody can use.
+    const site = wordpressSite(paths, domain);
+    if (existsSync(paths.maintenanceConfig) && maintenanceBlocks(paths.maintenance, domain, clientIp)) {
+      if (!bypass) return maintenanceReply(domain, clientIp, !asUser);
+      await addBypass(paths.maintenance, domain, clientIp);
+    }
+    return mintWpLogin(paths, site, options);
+  });
 }
 
 export async function runWpLoginAction(

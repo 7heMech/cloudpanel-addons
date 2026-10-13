@@ -5,6 +5,7 @@
 // same-origin check and a CSRF token stop cross-origin browser requests.
 
 import { randomBytes } from "node:crypto";
+import { isIP } from "node:net";
 import { secretEquals } from "./secret-equals";
 
 const CSRF_COOKIE = "clp_addons_csrf";
@@ -288,6 +289,17 @@ export function guardMutation(req: Request): Response | null {
 const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
 /** A hostname from a request, lowercased and without a trailing dot, or null. */
+/**
+ * The browser's address as the panel saw it, preferring the visitor address
+ * Cloudflare sends. It only ever names the address an operator is offered as a
+ * maintenance bypass; the public Nginx check verifies the connection peer before
+ * trusting that header, so naming an address grants nothing.
+ */
+export function clientIp(req: Request): string {
+  const candidate = (req.headers.get("cf-connecting-ip") ?? req.headers.get("x-real-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0] ?? "").trim();
+  return isIP(candidate) ? candidate : "";
+}
+
 export function validateDomain(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const domain = value.trim().toLowerCase().replace(/\.$/, "");

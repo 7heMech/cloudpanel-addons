@@ -18,7 +18,9 @@ stop the ones after it; the withdrawal names it and the reason.
 
 ## What is in the site
 
-A must-use plugin and a one-time secret, both written as the site's own user.
+A must-use plugin and a one-time secret, both written and removed as the site's
+own user through `runuser`, never by root, which would follow any symlink the
+site's user put in the path.
 
 Must-use rather than a normal plugin because it has to be there when the request
 arrives, must not be something a site owner can deactivate by accident, and
@@ -45,14 +47,30 @@ the root path before WordPress boots. The window is opened inside the click that
 starts it, before anything is awaited, because a window opened after a fetch
 resolves is a popup the browser blocks.
 
-Directories are created one level at a time and handed to the site user. A
-recursive create runs as root and left a site with a `wp-content` it could no
-longer write to, so a missing `wp-includes` or `wp-content` is a refusal rather
-than something to invent.
+The site user creates `mu-plugins/clp-addons` itself, so every directory it adds
+is that user's. A missing `wp-includes` or `wp-content` is a refusal rather than
+something to invent.
 
 The sign-in is for the site's first administrator by user id. Which
 administrator an operator becomes is not a choice this offers, because the
 operator is already root on the box that serves the site.
+
+## A site in maintenance
+
+Maintenance Mode answers in Nginx, before WordPress could read the secret, so the
+sign-in asks the same question first: while that addon is installed it checks
+the flag and bypass files Nginx checks, for the address the panel saw the
+browser at. If Nginx would turn that browser away, no secret is minted. An
+administrator is offered that address as a site bypass; agreeing is a second
+click, which opens the window and signs in, and cancelling opens nothing. The
+address comes from the request, never the page, and the root action refuses
+`--add-bypass` with `--as-user`: lifting maintenance is an administrator's
+decision. Anyone else is told the site is in maintenance. The wording comes
+from the action, so both pages that sign in say the same thing. On the panel's
+Sites page it is shown in CloudPanel's own Bootstrap modal, as are failures.
+
+A browser that reaches the panel over IPv4 and the site over IPv6 is still
+turned away after the bypass, as it would be after adding the address by hand.
 
 ## Two answers to "which sites are WordPress"
 
