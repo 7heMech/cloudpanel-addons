@@ -37,8 +37,8 @@ export function sslSitesSnippet(on: boolean): string {
       ${PENDING}
       {% for clpSslSite in sites|filter(site => site.domainName|lower in clpSslPending and site.certificate
         and site.certificate.type == constant('App\\\\Entity\\\\Certificate::TYPE_SELF_SIGNED')) %}${status("clpSslSite.domainName")}
-      {% endfor %}
-      <script>${SCRIPT}</script>` : "";
+      {% if loop.last %}<script>${SCRIPT}</script>{% endif %}
+      {% endfor %}` : "";
 }
 
 /** WordPress's credentials page, reached only from a creation that succeeded. */

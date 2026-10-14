@@ -18,8 +18,7 @@
     var domain = function () { return input ? input.value.trim().toLowerCase() : ''; };
     // CloudPanel answers a rejected creation with this form, the domain still filled in.
     remember(domain(), false);
-    // Capture, so it runs before CloudPanel's own submit handler.
-    choice.form.addEventListener('submit', function () { remember(domain(), choice.checked); }, true);
+    choice.form.addEventListener('submit', function () { remember(domain(), choice.checked); });
   }
 
   var boxes = document.querySelectorAll('[data-clp-auto-ssl]');

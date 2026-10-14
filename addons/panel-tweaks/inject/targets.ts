@@ -3,8 +3,9 @@
 // The site-list tweaks -- the count, search, sorting and extra columns -- share
 // one script and one toolbar placed above the sites table, which then edits the
 // table it finds below it. Patching the heading, the table head, the loop body
-// and the action cell separately would have been four more pieces of CloudPanel's markup to match exactly, and four
-// more ways for a panel release to stop the addon.
+// and the action cell separately would have been four more pieces of
+// CloudPanel's markup to match exactly, and four more ways for a panel release
+// to stop the addon.
 //
 // Most of what is here does not decide what is switched on: the script asks the
 // addon for the current tweaks along with the site data, so a switch on the

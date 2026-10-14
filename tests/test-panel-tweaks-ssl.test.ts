@@ -28,7 +28,7 @@ function run(options: { cookie?: string; domainInput?: string; box?: boolean; bo
   let submit = () => {};
   const form = {
     querySelector: () => ({ value: options.domainInput ?? "" }),
-    addEventListener: (_: string, handler: () => void, capture: boolean) => { expect(capture).toBe(true); submit = handler; },
+    addEventListener: (_: string, handler: () => void) => { submit = handler; },
   };
   const choice = { checked: true, form };
   const alert = { className: "alert alert-info", textContent: "", links: [] as string[],
@@ -100,6 +100,9 @@ test("Sites only completes a pending site that still has the self-signed placeho
   expect(twig).toContain("app.request.cookies.get('__Host-clp_addons_ssl')");
   expect(twig).toContain("site.domainName|lower in clpSslPending");
   expect(twig).toContain("constant('App\\\\Entity\\\\Certificate::TYPE_SELF_SIGNED')");
+  // The script only comes with a status line.
+  expect(twig.indexOf("<script>")).toBeGreaterThan(twig.indexOf("{% if loop.last %}"));
+  expect(twig.indexOf("<script>")).toBeLessThan(twig.indexOf("{% endfor %}"));
   expect(sslWordPressSnippet(true)).toContain("clpSslDomain in clpSslPending");
 });
 

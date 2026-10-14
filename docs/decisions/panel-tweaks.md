@@ -78,10 +78,10 @@ decide how a page looks the first time it is painted, and a rule that waits for
 a reply is a rule the reader watches arrive. Automatic SSL's checkbox and status
 line are Twig, which reads the cookie and site list only while rendering. So for
 these the switch decides whether the markup is there at all, and moving one asks
-the manager to render the templates again through a `reconcile` verb. That verb belongs to the
-manager rather than to the addon because one pass regenerates every addon's
-block in a shared file; an addon that reconciled only its own would strip the
-others.
+the manager to render the templates again through a `reconcile` verb. That
+verb belongs to the manager rather than to the addon because one pass
+regenerates every addon's block in a shared file; an addon that reconciled only
+its own would strip the others.
 
 The header rules are two blocks, one for each of CloudPanel's headers, anchored
 ahead of the `<header>` tag both of them open with rather than inside it. What
