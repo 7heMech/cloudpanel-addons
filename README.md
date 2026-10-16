@@ -31,13 +31,14 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | PHP Resources | Categories of PHP-FPM worker limits, assigned in bulk and to new sites. |
 | [SMTP Relay](docs/smtp-relay.md) | Send each site's mail through SMTP relay profiles, WordPress and PHP included. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
-| Panel Tweaks | Site search and columns, mobile layouts and theme improvements. |
+| Panel Tweaks | Site search and columns, automatic SSL for native sites, mobile layouts and themes. |
 | [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in and optional automatic installation of CLP Varnish Cache. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
 
 Only CloudPanel administrators see the Addons tab. Site managers can also use
-Git Deploy and create and manage Instatic sites. Other panel users get the
-WP Login link on the Sites page for their own sites.
+Git Deploy and create and manage Instatic sites. Other panel users get Panel
+Tweaks' site search and columns and the WP Login link on the Sites page, for
+their own sites.
 
 ## Manage
 
@@ -59,7 +60,7 @@ Backups.
 
 ## Develop
 
-Requires Bun and ShellCheck.
+Requires Bun 1.4.3 and ShellCheck.
 
 ```bash
 bun install

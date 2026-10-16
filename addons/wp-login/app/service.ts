@@ -1,5 +1,5 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
-import type { WpLoginResult, WpRemoveResult, WpSiteView } from "../action";
+import type { WpLoginResult, WpMaintenanceReply, WpRemoveResult, WpSiteView } from "../action";
 import { validateDomain } from "../../../lib/app-http";
 import type { WpVarnishState, VarnishSyncResult } from "../varnish";
 
@@ -20,10 +20,15 @@ export const wpLoginService = {
   // `asUser` is the panel user a non-administrator's request is on behalf of.
   // The root action is what checks it against CloudPanel's own user-to-site
   // mapping; this side only says whose request it is.
-  signIn(domain: string, asUser?: string): Promise<ActionResult<WpLoginResult>> {
+  signIn(
+    domain: string,
+    request: { asUser?: string; clientIp: string; addBypass: boolean },
+  ): Promise<ActionResult<WpLoginResult | WpMaintenanceReply>> {
     const args = [`--domain=${domain}`];
-    if (asUser) args.push(`--as-user=${asUser}`);
-    return call<WpLoginResult>("sign-in", args);
+    if (request.asUser) args.push(`--as-user=${request.asUser}`);
+    if (request.clientIp) args.push(`--client-ip=${request.clientIp}`);
+    if (request.addBypass) args.push("--add-bypass");
+    return call<WpLoginResult | WpMaintenanceReply>("sign-in", args);
   },
 
   remove(): Promise<ActionResult<WpRemoveResult>> {

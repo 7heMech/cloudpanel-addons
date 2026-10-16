@@ -39,12 +39,19 @@ without directory listing; flag files remain root-only and HTML files are
 readable by Nginx. Custom pages are size-bounded, stripped of active markup,
 and served with a restrictive content security policy.
 
-WordPress Tools keeps site-writing WordPress actions separate from Panel
-Tweaks, with fixed verbs under the stable `wp-login` addon identifier. Its
-sign-in installs a must-use plugin and a one-time secret owned by the site's
-user, and refuses a domain the panel does not have or a root that
-is not a WordPress. The secret is a SHA-256 of a token that lives for a minute,
-is removed before it is compared, and travels in a POST body rather than a URL.
+WordPress Tools (addon identifier `wp-login`) is the only addon that puts its
+own code inside a site, and it is a separate addon for that reason: an operator
+who does not install it does not have that code on the box, and the gateway's
+addon-and-verb table refuses its verbs to anything else. It installs a
+must-use plugin and a one-time secret, and later removes them, through
+`runuser` as the site's user: the site's user controls every name under its
+root, so a symlink there would aim a root write or `rm -rf` anywhere on the
+box. Those commands get only a fixed `PATH`, not root's environment, and each
+has 30 seconds. It refuses a domain the panel does not have, a root that is not
+a WordPress, and a site account that belongs to the box or shares its uid with
+another site, as SMTP and Terminal do. The secret is a SHA-256 of a token that
+lives for a minute, is removed before it is compared, and travels in a POST
+body rather than a URL.
 Disabling or uninstalling removes the sign-in helper from every site. Optional
 Varnish automation runs fixed WP-CLI commands after dropping root to the site's
 Unix user, using its configured PHP version. Only administrators can manage
@@ -77,7 +84,7 @@ it, and nothing reads it without a session: the page that polls it has one. The
 two exceptions are below: three named routes, and the Git webhook, which is
 settled ahead of the gate by a credential of its own.
 
-Three routes are named as exceptions. Two are the WordPress sign-in addon's:
+Three routes are named as exceptions. Two are WordPress Tools':
 `POST /wp-login/api/sign-in` and the `GET /wp-login/api/session` that hands out
 the CSRF pair, because the link that uses them is injected into CloudPanel's own
 Sites page, which a non-administrator sees too. The third is Panel Tweaks'

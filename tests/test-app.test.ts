@@ -94,11 +94,11 @@ test("a dialog is usable on a phone", () => {
   expect(BASE_STYLE).toContain("dialog { max-height: calc(100dvh - 40px); }");
 });
 
-// `confirmAction` reads title, text, details, confirmLabel and danger, and
+// `confirmAction` reads title, text, details, confirmLabel, danger and onAccept, and
 // ignores anything else, so a dialog built with the wrong key opens explaining
 // nothing and no type, test or console message says so.
 test("every confirmAction call uses the keys the shared dialog reads", () => {
-  const known = ["title", "text", "details", "confirmLabel", "danger"];
+  const known = ["title", "text", "details", "confirmLabel", "danger", "onAccept"];
   const files = [...ADDON_NAMES.map((name) => `addons/${name}/app/views.client.js`), "manager/views.client.js"]
     .map((file) => join(repo, file)).filter((file) => existsSync(file));
   const unknown = new Set<string>();

@@ -42,6 +42,12 @@ interface TweakCopy {
  */
 const COPY: TweakCopy[] = [
   {
+    key: "autoSsl",
+    category: "Sites",
+    title: "SSL after site creation",
+    description: "Adds a checked Let's Encrypt option to the new-site forms. Once the site is created, its domain gets a certificate while the page is open.",
+  },
+  {
     key: "sitesTable",
     category: "Sites",
     title: "Search, sort and extra columns",

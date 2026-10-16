@@ -22,6 +22,29 @@ It reads the box from `STG_HOST` and its credentials from `STG_SSH_KEY` and
 `STG_SSH_KNOWN_HOSTS`; the host key is pinned rather than learned on connection,
 because the deploy authenticates as root and then runs a command sequence.
 
+## Toolchain
+
+Development, CI, staging, and release use the Bun version pinned by
+`packageManager` in `package.json`; the workflows read it from there. Installs
+use the frozen `bun.lock`.
+
+Builds compile minified ESM with `--bytecode`. The gateway starts a fresh
+`clp-addons action` process for every request, and bytecode roughly halves that
+startup for about 4% more binary size.
+
+`bun run typecheck` runs `bun check --project tsconfig.tools.json`, covering
+the CLI, shared libraries, addons, manager, tools, and tests with the existing
+strict compiler options. Bun supplies the checker and standard library types;
+`@types/bun` supplies its API declarations, so a separate `typescript`
+dependency is unnecessary.
+
+`bun run test` uses `bun test --isolate --max-concurrency=1`. Each test file
+gets a fresh global object and module registry, containing its `mock.module`
+overrides and cleaning up its timers and I/O. Tests stay sequential within a
+file because some fixtures share mutable state. Bun discovers the suite and
+accepts file filters through `bun run test ./tests/test-update.test.ts`; a
+failure returns a nonzero exit code to CI.
+
 ## Verified artifacts
 
 The tag workflow builds one Linux x86-64 binary and publishes it with the

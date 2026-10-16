@@ -1,27 +1,36 @@
 /**
  * The privileged half of WordPress Tools (stable identifier: wp-login).
  *
- * Site-writing WordPress actions are separate from Panel Tweaks. Sign-in is
- * available whenever installed; Varnish automation is independently opt-in.
- * Withdrawal removes the sign-in helper and leaves ordinary plugins managed
- * by WordPress.
+ * This is the only addon that puts its own code inside a site, which is why it is
+ * an addon rather than a switch on Panel Tweaks: an operator who wants a
+ * filterable site list should not have to install the code that can put a file
+ * inside a customer's WordPress. Installing this is the decision, and
+ * uninstalling it takes the file back out of every site. Installing CLP Varnish
+ * Cache is a separate opt-in; that plugin is WordPress's to manage and stays.
  *
- * Site paths come from CloudPanel and the Unix account database. Plugin
- * commands drop root before bootstrapping WordPress. Requests supply fixed
- * verbs, domains, booleans and the checked panel user for sign-in, never paths
- * or file contents.
+ * Everything it writes or deletes in a site it does as the site's own user,
+ * through `runuser`, into paths built from the account's home directory, and
+ * WP-CLI runs the same way. Root never writes there itself: the site's user
+ * controls every name under its root, so a symlink there would aim a root write
+ * or `rm -rf` anywhere on the box. Requests carry a domain, fixed booleans and,
+ * for a sign-in, the checked panel user and browser address -- no paths and no
+ * file contents.
  */
 import { Database } from "bun:sqlite";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { createHash, randomBytes } from "node:crypto";
-import { chownSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { isIP } from "node:net";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   ActionFailure, emitActionError, emitActionOk, failAction, validateDomain, withFileLock,
 } from "../../cli/action-common";
-import { PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { writeFileAtomic } from "../../lib/atomic-write";
-import { readVarnishState, saveVarnishState, syncVarnish, type VarnishSite, type VarnishSiteRecord, type VarnishOptions } from "./varnish";
+import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { readUnixAccounts, siteAccountProblem, splitSharedUids, type UnixAccount } from "../../lib/site-accounts";
+import {
+  DEFAULT_MAINTENANCE_ACTION_PATHS, addBypass, maintenanceBlocks, type MaintenanceActionPaths,
+} from "../maintenance/action";
+import { readVarnishState, saveVarnishState, syncVarnish, type VarnishSite, type VarnishSiteRecord, type VarnishOptions, type VarnishSyncResult } from "./varnish";
 
 export type WpLoginVerb = "sites" | "sign-in" | "remove" | "varnish-settings" | "varnish-site" | "varnish-install" | "varnish-sync";
 
@@ -72,6 +81,23 @@ export interface WpLoginResult {
   expiresIn: number;
 }
 
+/**
+ * What a sign-in answers instead when the site would show this browser its
+ * maintenance page. No secret is minted; `canBypass` says whether this caller
+ * may add `ip` to the site's bypasses and ask again. The wording is made here so
+ * both pages that sign in say the same thing.
+ */
+export interface WpMaintenanceReply {
+  maintenance: { ip: string; canBypass: boolean; message: string };
+}
+
+function maintenanceReply(domain: string, ip: string, admin: boolean): WpMaintenanceReply {
+  const blocked = `${domain} is in maintenance mode, so WordPress would only show its maintenance page.`;
+  if (!admin) return { maintenance: { ip, canBypass: false, message: `${blocked} An administrator can add your IP to its bypasses.` } };
+  if (!ip) return { maintenance: { ip, canBypass: false, message: `${blocked} The panel could not tell your IP, so add a bypass in Maintenance Mode.` } };
+  return { maintenance: { ip, canBypass: true, message: `${blocked} Add your IP ${ip} to its bypasses and sign in?` } };
+}
+
 export interface WpRemoveResult {
   removed: number;
   /** `domain: reason` for each site whose loader could not be deleted. */
@@ -82,6 +108,10 @@ export interface WpLoginActionPaths {
   panelDb: string;
   passwd: string;
   lockFile: string;
+  runuser: string;
+  /** Present while the Maintenance Mode addon is installed. */
+  maintenanceConfig: string;
+  maintenance: MaintenanceActionPaths;
   varnishState: string;
   varnishLockFile: string;
 }
@@ -99,6 +129,9 @@ export const DEFAULT_WP_LOGIN_PATHS: WpLoginActionPaths = {
   panelDb: PANEL_DB,
   passwd: "/etc/passwd",
   lockFile: "/run/lock/clp-addons/wp-login.lock",
+  runuser: "/usr/sbin/runuser",
+  maintenanceConfig: `${CONFIG_DIR}/maintenance.conf`,
+  maintenance: DEFAULT_MAINTENANCE_ACTION_PATHS,
   varnishState: `${STATE_DIR}/wp-login/varnish.json`,
   varnishLockFile: "/run/lock/clp-addons/wp-varnish.lock",
 };
@@ -173,35 +206,16 @@ function panelSites(paths: WpLoginActionPaths): PanelSiteRow[] {
 // --- the accounts sites run as -------------------------------------------
 
 interface SiteAccount {
-  uid: number;
-  gid: number;
+  name: string;
   home: string;
 }
 
-/**
- * A site's Unix account, read from /etc/passwd rather than resolved by name at
- * the point of use. Every path this action touches is built from the home
- * directory recorded there, so a site user whose account has gone contributes
- * nothing instead of a guessed `/home/<name>`.
- */
-function siteAccounts(passwd: string): Map<string, SiteAccount> {
-  const accounts = new Map<string, SiteAccount>();
-  let content: string;
+function readAccounts(passwd: string): Map<string, UnixAccount> {
   try {
-    content = readFileSync(passwd, "utf8");
+    return readUnixAccounts(passwd);
   } catch (error) {
     failAction(`the account database could not be read: ${reason(error)}`);
   }
-  for (const line of content.split("\n")) {
-    const fields = line.split(":");
-    if (fields.length < 6) continue;
-    const uid = Number.parseInt(fields[2] ?? "", 10);
-    const gid = Number.parseInt(fields[3] ?? "", 10);
-    const home = fields[5] ?? "";
-    if (!fields[0] || !Number.isInteger(uid) || !Number.isInteger(gid) || !home.startsWith("/")) continue;
-    accounts.set(fields[0], { uid, gid, home });
-  }
-  return accounts;
 }
 
 function siteRoot(account: SiteAccount, row: PanelSiteRow): string {
@@ -225,13 +239,21 @@ function isWordPress(root: string): boolean {
   return existsSync(join(root, "wp-includes")) && existsSync(join(root, "wp-content"));
 }
 
-/** Every site, with the root the addon would act on, skipping what it cannot. */
+/**
+ * Every site, with the root the addon would act on, skipping what it cannot:
+ * an account that is missing, belongs to the box, or shares its uid with
+ * another site, the same refusals SMTP and Terminal make.
+ */
 function resolvedSites(paths: WpLoginActionPaths): { row: PanelSiteRow; account: SiteAccount; root: string }[] {
-  const accounts = siteAccounts(paths.passwd);
-  const resolved: { row: PanelSiteRow; account: SiteAccount; root: string }[] = [];
-  for (const row of panelSites(paths)) {
+  const accounts = readAccounts(paths.passwd);
+  const rows = panelSites(paths).flatMap((row) => {
     const account = accounts.get(row.user);
-    if (!account) continue;
+    return account ? [{ row, ...account }] : [];
+  });
+  const resolved: { row: PanelSiteRow; account: SiteAccount; root: string }[] = [];
+  for (const { row, uid, gid, home } of splitSharedUids(rows).unique) {
+    if (siteAccountProblem({ user: row.user, uid, gid }) || !home.startsWith("/")) continue;
+    const account = { name: row.user, home };
     try {
       resolved.push({ row, account, root: siteRoot(account, row) });
     } catch {
@@ -267,14 +289,14 @@ function wordpressSites(paths: WpLoginActionPaths): WpSiteView[] {
 
 function varnishSites(paths: WpLoginActionPaths): VarnishSite[] {
   return resolvedWordPressSites(paths).map((site) => ({
-    domain: site.row.domain_name, user: site.row.user, root: site.root, ...site.account,
+    domain: site.row.domain_name, user: site.row.user, root: site.root, home: site.account.home,
     phpVersion: String(site.row.php_version ?? ""),
     eligible: site.varnishCache,
   }));
 }
 
 /** Shared by the explicit check and the installed addon's periodic upkeep. */
-export async function reconcileWpVarnish(options: WpLoginActionOptions = {}): Promise<import("./varnish").VarnishSyncResult> {
+export async function reconcileWpVarnish(options: WpLoginActionOptions = {}): Promise<VarnishSyncResult> {
   const paths = pathsFor(options);
   // With automation off, repair does not need to inspect site roots or the DB.
   if (!readVarnishState(paths.varnishState).enabled) return { installed: 0, checked: 0, pending: 0, failed: [] };
@@ -346,64 +368,77 @@ add_action('init', function () {
 }, 1);
 `;
 
-function writeAsSite(path: string, content: string, account: SiteAccount, mode: number): void {
-  writeFileAtomic(path, content, { mode, owner: { uid: account.uid, gid: account.gid } });
+/**
+ * Creates the secret's directory `$1`, writes the loader `$4` to `$2` and the
+ * secret from stdin to `$3`, in one `runuser` call. A loader already holding
+ * exactly that is left alone, so its mtime holds and nothing reindexes it.
+ */
+const INSTALL_SCRIPT = `set -eu
+umask 022
+mkdir -p -- "$1"
+trap 'rm -f "\${t:-}"' EXIT
+t=$(mktemp "$2.XXXXXX")
+printf %s "$4" >"$t"
+chmod 644 "$t"
+if cmp -s "$t" "$2"; then rm -f "$t"; else mv -f "$t" "$2"; fi
+t=$(mktemp "$3.XXXXXX")
+cat >"$t"
+mv -f "$t" "$3"`;
+
+/** Only `PATH`: whatever else root's environment holds is not the site's to read. */
+const SITE_ENV = { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" };
+
+function runAsSite(paths: WpLoginActionPaths, account: SiteAccount, command: string[], input?: string): void {
+  const result = Bun.spawnSync([paths.runuser, "-u", account.name, "--", ...command], {
+    cwd: "/",
+    stdin: input === undefined ? "ignore" : new TextEncoder().encode(input),
+    stdout: "pipe",
+    stderr: "pipe",
+    env: SITE_ENV,
+    timeout: 30_000,
+  });
+  if (!result.success) {
+    const detail = result.stderr.toString().trim() || `exit ${result.exitCode}`;
+    throw new Error(`${command[0]} as ${account.name} failed: ${detail}`);
+  }
 }
 
-/**
- * One directory, owned by the site.
- *
- * Deliberately not recursive: mkdir runs as root, and a recursive create left
- * the site with a root-owned `wp-content` it could no longer write to. Each
- * level this creates is handed straight over, and a missing parent is a
- * refusal rather than something to invent.
- */
-function ensureOwnedDirectory(path: string, account: SiteAccount): void {
-  if (existsSync(path)) return;
-  try {
-    mkdirSync(path, { mode: 0o755 });
-    chownSync(path, account.uid, account.gid);
-  } catch (error) {
-    failAction(`the site directory ${path} could not be created: ${reason(error)}`);
-  }
+type ResolvedSite = ReturnType<typeof resolvedSites>[number];
+
+function wordpressSite(paths: WpLoginActionPaths, domain: string): ResolvedSite {
+  const site = resolvedSites(paths).find((candidate) => candidate.row.domain_name === domain);
+  if (!site) failAction(`CloudPanel has no site called ${domain} with an account this addon can act as`);
+  if (!isWordPress(site.root)) failAction(`${domain} does not look like a WordPress installation`);
+  return site;
 }
 
 function mintWpLogin(
   paths: WpLoginActionPaths,
-  domain: string,
+  site: ResolvedSite,
   options: WpLoginActionOptions,
 ): WpLoginResult {
-  const site = resolvedSites(paths).find((candidate) => candidate.row.domain_name === domain);
-  if (!site) failAction(`CloudPanel has no site called ${domain} with an account on this host`);
-  if (!isWordPress(site.root)) failAction(`${domain} does not look like a WordPress installation`);
-
-  ensureOwnedDirectory(join(site.root, MU_PLUGINS), site.account);
-  ensureOwnedDirectory(join(site.root, SECRET_DIR), site.account);
-
-  const loader = join(site.root, LOADER_FILE);
-  // Rewritten only when it differs, so an untouched site keeps its file's mtime
-  // and nothing reindexes it.
-  let current = "";
-  try {
-    current = readFileSync(loader, "utf8");
-  } catch {
-    current = "";
-  }
-  if (current !== LOADER_PHP) writeAsSite(loader, LOADER_PHP, site.account, 0o644);
+  const domain = site.row.domain_name;
 
   const token = randomBytes(32).toString("hex");
   const hash = createHash("sha256").update(token).digest("hex");
   const expires = Math.floor((options.now?.() ?? new Date()).getTime() / 1000) + WP_LOGIN_TTL_SECONDS;
-  writeAsSite(
-    join(site.root, SECRET_FILE),
-    `<?php return array('hash' => '${hash}', 'expires' => ${expires});\n`,
-    site.account,
-    0o600,
-  );
+  try {
+    runAsSite(
+      paths,
+      site.account,
+      [
+        "/bin/sh", "-c", INSTALL_SCRIPT, "sh",
+        join(site.root, SECRET_DIR), join(site.root, LOADER_FILE), join(site.root, SECRET_FILE), LOADER_PHP,
+      ],
+      `<?php return array('hash' => '${hash}', 'expires' => ${expires});\n`,
+    );
+  } catch (error) {
+    failAction(`the sign-in could not be written into ${domain}: ${reason(error)}`);
+  }
 
   return {
     domain,
-    url: `https://${domain}/`,
+    url: `https://${domain}/wp-login.php`,
     token,
     field: WP_LOGIN_FIELD,
     expiresIn: WP_LOGIN_TTL_SECONDS,
@@ -425,8 +460,7 @@ export function removeWpLogin(paths: WpLoginActionPaths = DEFAULT_WP_LOGIN_PATHS
     if (!existsSync(loader)) continue;
     // A site that cannot be cleaned must not stop the sites after it.
     try {
-      rmSync(loader, { force: true });
-      rmSync(join(site.root, SECRET_DIR), { recursive: true, force: true });
+      runAsSite(paths, site.account, ["rm", "-rf", "--", loader, join(site.root, SECRET_DIR)]);
       removed++;
     } catch (error) {
       failed.push(`${site.row.domain_name}: ${error instanceof Error ? error.message : String(error)}`);
@@ -442,11 +476,13 @@ interface ParsedAction {
   domain: string;
   /** The panel user the request is on behalf of, when it is not an admin's. */
   asUser: string;
+  /** The browser's address as the panel saw it; empty when it could not tell. */
+  clientIp: string;
+  /** Add `clientIp` to the site's maintenance bypasses before signing in. */
+  addBypass: boolean;
   enabled?: boolean;
   excluded?: boolean;
 }
-
-
 
 function parseAction(argv: string[], options: WpLoginActionOptions): ParsedAction {
   const [rawVerb, ...rest] = argv;
@@ -456,6 +492,8 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
 
   let domain = "";
   let asUser = "";
+  let clientIp = "";
+  let addBypass = false;
   let enabled: boolean | undefined;
   let excluded: boolean | undefined;
   const seen = new Set<string>();
@@ -463,6 +501,15 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
     const key = argument.split("=")[0]!;
     if (seen.has(key)) failAction(`duplicate argument '${key}'`);
     seen.add(key);
+    if (argument.startsWith("--client-ip=")) {
+      clientIp = argument.slice("--client-ip=".length);
+      if (!isIP(clientIp)) failAction("that is not an IP address");
+      continue;
+    }
+    if (argument === "--add-bypass") {
+      addBypass = true;
+      continue;
+    }
     if (argument.startsWith("--domain=")) {
       domain = argument.slice("--domain=".length);
       continue;
@@ -475,7 +522,10 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
     if (/^--excluded=(true|false)$/.test(argument)) { excluded = argument.endsWith("=true"); continue; }
     failAction(`unexpected argument '${argument}'`);
   }
-  if (asUser && verb !== "sign-in") failAction(`'${verb}' takes no --as-user`);
+  if (verb !== "sign-in" && (asUser || clientIp || addBypass)) failAction(`'${verb}' takes no --as-user, --client-ip or --add-bypass`);
+  // Maintenance is an administrator's decision, so only an administrator's
+  // sign-in may lift it, and only for the address it came from.
+  if (addBypass && (asUser || !clientIp)) failAction("only an administrator's sign-in can add its address as a bypass");
   if (asUser && !PANEL_USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
   if (verb === "varnish-settings" ? enabled === undefined : enabled !== undefined) failAction(`'${verb}' has invalid --enabled`);
   if (verb === "varnish-site" ? excluded === undefined : excluded !== undefined) failAction(`'${verb}' has invalid --excluded`);
@@ -486,7 +536,7 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
   } else if (domain) {
     failAction(`'${verb}' takes no --domain`);
   }
-  return { verb, domain, asUser, enabled, excluded };
+  return { verb, domain, asUser, clientIp, addBypass, enabled, excluded };
 }
 
 export async function executeWpLoginAction(
@@ -495,7 +545,7 @@ export async function executeWpLoginAction(
 ): Promise<unknown> {
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress sign-in actions must run as root");
   const paths = pathsFor(options);
-  const { verb, domain, asUser, enabled, excluded } = parseAction(argv, options);
+  const { verb, domain, asUser, clientIp, addBypass: bypass, enabled, excluded } = parseAction(argv, options);
 
   if (verb === "sites") return { sites: wordpressSites(paths), varnish: readVarnishState(paths.varnishState) };
   if (verb === "varnish-sync") return reconcileWpVarnish(options);
@@ -526,8 +576,20 @@ export async function executeWpLoginAction(
   if (asUser && !mayManageSite(paths, asUser, domain)) {
     failAction("that site is not yours to sign in to");
   }
-  return withFileLock(paths.lockFile, 15, "a WordPress sign-in change is still running", async () =>
-    mintWpLogin(paths, domain, options));
+  return withFileLock(paths.lockFile, 15, "a WordPress sign-in change is still running", async () => {
+    // Maintenance answers in Nginx, before WordPress could read the secret, so
+    // a secret minted for a browser it turns away is one nobody can use.
+    const site = wordpressSite(paths, domain);
+    if (!existsSync(paths.maintenanceConfig) || !maintenanceBlocks(paths.maintenance, domain, clientIp)) {
+      return mintWpLogin(paths, site, options);
+    }
+    if (!bypass) return maintenanceReply(domain, clientIp, !asUser);
+    // Minted first: a sign-in that fails must not leave a bypass behind, while
+    // a secret nobody can use expires on its own.
+    const login = mintWpLogin(paths, site, options);
+    await addBypass(paths.maintenance, domain, clientIp);
+    return login;
+  });
 }
 
 export async function runWpLoginAction(

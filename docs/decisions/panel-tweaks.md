@@ -19,9 +19,11 @@ default: several addons put a link in every row, and one button per row reads
 better than the list of links they add up to.
 
 WordPress sign-in and plugin installation belong to
-[WordPress Tools](wp-login.md). Everything here changes what CloudPanel's own
-pages look like; that addon writes into a customer's site. Enabling a filterable
-site list does not authorize those site-writing actions.
+[WordPress Tools](wp-login.md) because they write into a customer's site. Panel
+Tweaks only changes CloudPanel's pages and, for automatic SSL, submits the
+panel's own certificate form. An operator who wants a filterable site list
+should not have to install the code that can do that, and a switch is a weaker
+withdrawal than not having it on the box.
 
 The page groups those switches by the panel surface they change, in the order
 Dashboard, Login, Sites. The Sites group is last because it is the longest and
@@ -45,9 +47,9 @@ recorded the addon as enabled, so writing `panel-tweaks.conf` and removing
 its Twig block goes on the next reconciliation, because the injection set is
 read from the config files rather than from what is in the templates.
 
-## Two anchors, and one of them optional
+## Site-list anchors
 
-Everything the addon adds to an authenticated page is one script and one toolbar
+Everything the addon adds to the Sites table is one script and one toolbar
 injected above the sites table, which then edits the table below it. The
 alternative -- separate anchors for the heading, the table head, the loop body
 and the action cell -- is four more pieces of CloudPanel's markup to match
@@ -70,17 +72,17 @@ The injected script asks the addon for the current switches along with the site
 data, so the count, the filter, the extra columns and the measured sizes take
 effect on the next panel page rather than at the next reconciliation.
 
-Four switches cannot work that way. The login page has no session to ask with,
-and every route the manager serves is behind the administrator gate. The other
-three -- the narrow-screen site list, the CloudPanel mobile layout and the
-row menu
--- decide how a page looks the first time it is painted, and a rule that waits
-for a reply is a rule the reader watches arrive. So for those four the switch
-decides whether the markup is there at all, and moving one asks the manager to
-render the templates again through a `reconcile` verb. That verb belongs to the
-manager rather than to the addon because one pass regenerates every addon's
-block in a shared file; an addon that reconciled only its own would strip the
-others.
+Five switches cannot work that way. The login page has no session to ask with,
+and every route the manager serves is behind the administrator gate. Three --
+the narrow-screen site list, the CloudPanel mobile layout and the row menu --
+decide how a page looks the first time it is painted, and a rule that waits for
+a reply is a rule the reader watches arrive. Automatic SSL's checkbox and status
+line are Twig, which reads the cookie and site list only while rendering. So for
+these the switch decides whether the markup is there at all, and moving one asks
+the manager to render the templates again through a `reconcile` verb. That
+verb belongs to the manager rather than to the addon because one pass
+regenerates every addon's block in a shared file; an addon that reconciled only
+its own would strip the others.
 
 The header rules are two blocks, one for each of CloudPanel's headers, anchored
 ahead of the `<header>` tag both of them open with rather than inside it. What
@@ -120,6 +122,39 @@ sticky Apply and Cancel controls. These rules only ship in the Admin header, so
 the shared class names do not alter frontend pages.
 All changes are CSS present before the content is parsed; navigation and forms
 keep CloudPanel's own markup and behavior, and desktop retains its sidebar.
+
+## SSL after native site creation
+
+`autoSsl` is off by default. It adds a checked, unnamed checkbox to the
+WordPress, PHP, Static HTML, Node.js, Python and Reverse Proxy creation forms;
+unnamed because Symfony rejects a field its form does not declare. Everything
+else is CloudPanel's: the browser submits the panel's own Let's Encrypt form
+with its CSRF token and the operator's session, so issuance, permissions and
+renewal stay the panel's, and site managers get it too. There is no gateway verb
+or manager route.
+
+Submitting a creation form with the box checked adds its domain to the
+`__Host-clp_addons_ssl` cookie for 15 minutes. `__Host-` means no other host can
+set it. CloudPanel answers a rejected creation by drawing the form again, and
+that page drops the domain, so only a successful creation reaches a completion
+page with it:
+
+- WordPress's credentials page, when the cookie names the domain in CloudPanel's
+  session credentials.
+- Sites, for the other five, when the cookie names a site in the page's own
+  `sites` list whose installed certificate is still the self-signed placeholder.
+  The list is the one the native table draws, so a panel user sees no other
+  sites, and an existing certificate is never replaced.
+
+Twig draws a status line there, in the shape of CloudPanel's flash messages, and
+the script forgets the domain before any request, so a refresh or Back never
+issues twice. It then fetches the native form and posts it for the created
+domain alone; the form's default `www` name needs DNS the operator may not have.
+CloudPanel redirects to the site's certificate list only on success; anything
+else shows the panel's own error with a link to the site's SSL/TLS tab. The page
+must stay open until it finishes. On Sites, the enhanced table then refetches its
+data and repaints that row's SSL cell. There are no retries and no scans of
+existing sites.
 
 ## Nothing moves once it is on the screen
 
@@ -188,6 +223,9 @@ its common name -- `ZeroSSL`, not `ZeroSSL RSA Domain Secure Site CA` -- except
 Cloudflare's origin CA, which is called `CF Origin` because a browser reaching
 the origin directly rejects it exactly as it rejects the self-signed
 placeholder. A certificate that cannot be parsed keeps the panel's own name.
+
+Every SSL badge, `None` included, links to the site's SSL/TLS tab at
+`/site/{domain}/certificates`, using the domain from the panel's own row.
 
 Every value the script writes goes in as text or as an element it built. None of
 it is markup, because all of it came out of somebody's database.

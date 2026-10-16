@@ -58,7 +58,10 @@ function usage(): void {
   clp-addons action stager <verb> [options]
   clp-addons action maintenance <verb> --domain=<domain>
   clp-addons action git <verb> [--domain=<domain>] [--job=<job>]
-  clp-addons action manager <enable|disable|update|job|watch-job> [--addon=<addon>] [--id=<job>]
+  clp-addons action php-resources <list|site|save-category|delete-category|assign|set-default|reconcile> [--domain=<domain>]
+  clp-addons action panel-tweaks <state|set-tweaks|scan|scan-stream>
+  clp-addons action wp-login <sites|sign-in|remove|varnish-settings|varnish-site|varnish-install|varnish-sync> [--domain=<domain>] [--enabled=true|false] [--excluded=true|false]
+  clp-addons action manager <enable|disable|update|reconcile|job|watch-job> [--addon=<addon>] [--id=<job>]
   clp-addons action terminal session --domain=<domain> --cols=<n> --rows=<n>   (through the gateway only)
   clp-addons action auth (session id on bounded stdin)
   clp-addons serve

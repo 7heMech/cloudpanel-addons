@@ -1,5 +1,5 @@
 import {
-  bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, readJsonObject, newCsrfToken,
+  bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readJsonObject, newCsrfToken,
 } from "../../../lib/app-http";
 import { validateDomain, wpLoginService } from "./service";
 import { dashboardBody, dashboardView, layout } from "./views";
@@ -71,7 +71,13 @@ export async function handle(
     if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
     const admin = auth?.roles.includes("ROLE_ADMIN") ?? false;
     if (!admin && !auth?.user) return json({ ok: false, error: "not found" }, 404);
-    const result = await wpLoginService.signIn(domain, admin ? undefined : auth!.user);
+    // The address comes from the request, never the body: the page can only
+    // agree to add the one it is being answered from.
+    const result = await wpLoginService.signIn(domain, {
+      asUser: admin ? undefined : auth!.user,
+      clientIp: clientIp(req),
+      addBypass: body.addBypass === true,
+    });
     return json(result, result.ok ? 200 : 400);
   }
 

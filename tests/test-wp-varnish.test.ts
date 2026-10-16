@@ -141,8 +141,7 @@ test("multisite and privileged Unix accounts cannot receive plugin installations
   multisite.clear();
   writeFileSync(join(root, "passwd"), `shop:x:0:0::${join(root, "home/shop") }:/bin/sh\n`);
   commands = [];
-  const result = await act<VarnishSyncResult>("varnish-install", "--domain=shop.example.com");
-  expect(result.failed[0]).toContain("Unix account is invalid");
+  await expect(act("varnish-install", "--domain=shop.example.com")).rejects.toThrow("not eligible");
   expect(commands).toEqual([]);
 });
 

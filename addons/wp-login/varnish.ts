@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
 import { writeFileAtomic } from "../../lib/atomic-write";
-import { siteAccountProblem } from "../../lib/site-accounts";
 
 export const CLP_VARNISH_PLUGIN = "clp-varnish-cache";
 export type VarnishPluginStatus = "active" | "inactive" | "missing" | "unsupported" | "error";
@@ -23,8 +22,7 @@ export interface VarnishSite {
   domain: string;
   user: string;
   root: string;
-  uid: number;
-  gid: number;
+  /** Resolved by the caller, which already refuses the box's own and shared accounts. */
   home: string;
   phpVersion: string;
   eligible: boolean;
@@ -114,8 +112,6 @@ async function commandOutput(command: WpCommand): Promise<string> {
 }
 
 async function wp(site: VarnishSite, args: string[], options: VarnishOptions, deadline: number): Promise<string> {
-  const problem = siteAccountProblem(site);
-  if (problem) throw new Error(problem);
   if (!/^\d+\.\d+$/.test(site.phpVersion)) throw new Error("the site's PHP version is unavailable");
   const php = `/usr/bin/php${site.phpVersion}`;
   const executable = existsSync("/usr/bin/wp") ? "/usr/bin/wp" : "/usr/local/bin/wp";
