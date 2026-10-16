@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeWpLoginAction, reconcileWpVarnish, type WpLoginActionOptions, type WpSiteView } from "../addons/wp-login/action";
-import { readVarnishState, type WpCommand, type VarnishSyncResult } from "../addons/wp-login/varnish";
+import { commandOutput, readVarnishState, type WpCommand, type VarnishSyncResult } from "../addons/wp-login/varnish";
 import { handle } from "../addons/wp-login/app/index";
 import { dashboardView, layout } from "../addons/wp-login/app/views";
 import { WP_LOGIN_ALLOWED_VERBS } from "../lib/gateway-protocol";
@@ -190,6 +190,16 @@ test("interrupted installation records intent and never silently retries a remov
   expect((await act<VarnishSyncResult>("varnish-install", "--domain=shop.example.com")).installed).toBe(1);
 });
 
+test("a process the site detaches cannot hold the root action past its deadline", async () => {
+  const started = Date.now();
+  const detached = { cwd: "/", env: { PATH: "/usr/bin:/bin" }, timeoutMs: 1000 };
+  await expect(commandOutput({ ...detached, argv: ["/bin/sh", "-c", "setsid sleep 3 </dev/null & echo started"] }))
+    .rejects.toThrow("WP-CLI timed out");
+  expect(Date.now() - started).toBeLessThan(5000);
+  await expect(commandOutput({ ...detached, argv: ["/bin/sh", "-c", "printf 'bad\\033[2Jnews\\n' >&2; exit 3"] }))
+    .rejects.toThrow("WP-CLI failed: bad [2Jnews");
+});
+
 test("invalid persisted state and invalid PHP versions do not execute plugin commands", async () => {
   writeFileSync(join(root, "varnish.json"), '{"enabled":true,"excluded":[],"sites":{"shop.example.com":{"status":"active"}}}');
   await expect(act("varnish-sync")).rejects.toThrow("site record is invalid");
@@ -220,6 +230,8 @@ test("Varnish routes remain administrator-only", async () => {
     const response = await handle(request, `/api/varnish-${path}`, undefined, undefined, { user: "site-manager", roles: ["ROLE_SITE_MANAGER"] });
     expect(response.status).toBe(404);
   }
+  const dashboard = new Request("https://panel.example.com/addons/wp-login/api/dashboard", { headers: { Host: "panel.example.com" } });
+  expect((await handle(dashboard, "/api/dashboard", undefined, undefined, { user: "site-manager", roles: ["ROLE_SITE_MANAGER"] })).status).toBe(404);
 });
 
 test("the WordPress Tools page emits a valid script with sign-in and Varnish actions", () => {

@@ -48,6 +48,7 @@ export async function handle(
   }
 
   if (method === "GET" && path === "/api/dashboard") {
+    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
     const result = await wpLoginService.sites();
     if (!result.ok || !result.data) return json(result, 400);
     return json({ ok: true, data: { html: dashboardBody(result.data.sites, result.data.varnish.enabled) } });

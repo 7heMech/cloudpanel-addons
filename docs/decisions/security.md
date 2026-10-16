@@ -54,7 +54,8 @@ lives for a minute, is removed before it is compared, and travels in a POST
 body rather than a URL.
 Disabling or uninstalling removes the sign-in helper from every site. Optional
 Varnish automation runs fixed WP-CLI commands after dropping root to the site's
-Unix user, using its configured PHP version. Only administrators can manage
+Unix user, using its configured PHP version, for the same accounts sign-in
+accepts and under a deadline root enforces itself. Only administrators can manage
 that policy or install the official CLP plugin; sign-in's non-administrator
 exception does not apply. The normal WordPress plugin remains installed when
 automation stops. See [WordPress Tools](wp-login.md).

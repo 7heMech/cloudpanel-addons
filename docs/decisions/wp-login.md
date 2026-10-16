@@ -62,8 +62,12 @@ one. There is no force overwrite, plugin update or network activation.
 Policy changes and each check hold a dedicated Varnish lock, so a download
 does not block sign-in or helper removal. Each pass processes the least
 recently checked sites first and has a 90-second budget. Each WP-CLI command
-has an external timeout of at most 60 seconds and output bounded to 64 KiB per
-stream. Per-site failures are saved and do not stop subsequent sites. The page
+runs under `timeout` for at most 60 seconds, and root kills it and stops
+reading a few seconds later whatever is left: `wp-config.php` is the site's
+code, and a process it detaches could otherwise hold the pipes, the Varnish
+lock and the repair run open. Output is bounded to 64 KiB per stream, and saved
+error text is a 500-character summary with control characters removed.
+Per-site failures are saved and do not stop subsequent sites. The page
 reads saved status without bootstrapping WordPress; it exposes the last-check
 time and bounded error text. Pending sites are handled on subsequent passes.
 Every Varnish route remains administrator-only; the sign-in route's role
