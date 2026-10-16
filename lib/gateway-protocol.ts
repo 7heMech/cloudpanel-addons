@@ -83,6 +83,7 @@ export const PHP_RESOURCES_ALLOWED_VERBS = new Set([
 ]);
 
 export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
+  "request-ssl",
   "state",
   "set-tweaks",
   "scan",
@@ -108,6 +109,10 @@ export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
 
 export const SMTP_ALLOWED_VERBS = new Set([
   "list", "save-profile", "delete-profile", "assign", "set-default", "save-grants", "test",
+]);
+
+export const DOMAINS_ALLOWED_VERBS = new Set([
+  "list", "save-connections", "save-profile", "delete-profile", "assign", "set-default", "plan", "apply", "remove-records", "provision", "retry-ssl",
 ]);
 
 /**

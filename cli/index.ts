@@ -23,6 +23,7 @@ import { runAuthActionStdin } from "./auth-action";
 import { runManagerAction, type ManagerOps } from "./manager-action";
 import { runSmtpSubmit } from "../addons/smtp/submit";
 import { runTerminalPty } from "../addons/terminal/pty";
+import { runNewSiteReconciliation } from "./new-sites";
 
 /**
  * The privileged half of the three manager verbs.
@@ -49,17 +50,19 @@ function usage(): void {
   clp-addons install <addon> [--version=vX.Y.Z] [--skip-attestation] [--local=DIR]
   clp-addons update [--version=vX.Y.Z] [--skip-attestation]   (alias: upgrade)
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
+  clp-addons sync-sites
   clp-addons status
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons maintenance <domain> [on|off|status]
   clp-addons action cloudflare-ips <list|set|policy|reconcile> [options]
+  clp-addons action domains <list|save-connections|save-profile|delete-profile|assign|set-default|plan|apply|remove-records|provision|retry-ssl|reconcile|sync-sites> [--domain=<domain>] [--as-user=<user>]
   clp-addons action smtp <list|save-profile|delete-profile|assign|set-default|save-grants|test|reconcile|sync-sites|deactivate>
   clp-addons action instatic <verb> [options]
   clp-addons action stager <verb> [options]
   clp-addons action maintenance <verb> --domain=<domain>
   clp-addons action git <verb> [--domain=<domain>] [--job=<job>]
   clp-addons action php-resources <list|site|save-category|delete-category|assign|set-default|reconcile> [--domain=<domain>]
-  clp-addons action panel-tweaks <state|set-tweaks|scan|scan-stream>
+  clp-addons action panel-tweaks <state|set-tweaks|scan|scan-stream|request-ssl> [--domain=<domain>] [--as-user=<user>]
   clp-addons action wp-login <sites|sign-in|remove> [--domain=<domain>]
   clp-addons action manager <enable|disable|update|reconcile|job|watch-job> [--addon=<addon>] [--id=<job>]
   clp-addons action terminal session --domain=<domain> --cols=<n> --rows=<n>   (through the gateway only)
@@ -140,6 +143,10 @@ async function main(): Promise<number> {
     case "self-update": fatal("self-update is deprecated; use clp-addons update");
     case "recon": await runRecon(); return 0;
     case "repair": await cmdRepair(rest); return 0;
+    case "sync-sites":
+      requireRoot("sync-sites");
+      if (rest.length) fatal("sync-sites takes no arguments");
+      await runNewSiteReconciliation(installedAddons()); return 0;
     case "status": await cmdStatus(); return 0;
     case "maintenance": await cmdMaintenance(rest); return 0;
     case "uninstall": cmdUninstall(rest); return 0;

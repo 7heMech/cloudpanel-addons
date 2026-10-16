@@ -115,7 +115,11 @@ CloudPanel's legacy distro Nginx layout and its separate panel Nginx layout are
 detected from their files and services rather than a version string.
 
 When Cloudflare IP Access is enabled, a separate one-minute timer applies its
-new-site policy. Disabling the addon removes that timer while keeping the policy
+new-site policy. The shared `clp-addons-sites-reconcile.path` also runs registered
+new-site hooks outside the global lock: DNS & Mail first, then Cloudflare access
+and SMTP, with a second pass ten seconds after the first. DNS & Mail's regular
+repair hook queues a worker without waiting for provider calls under the lock.
+Disabling Cloudflare IP Access removes its timer while keeping the policy
 state for a later re-enable.
 
 The manager's block in CloudPanel's own header also makes room for its update

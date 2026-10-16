@@ -90,6 +90,9 @@ export const CLOUDFLARE_RECONCILE_SERVICE = "clp-addons-cloudflare-ips-reconcile
 export const CLOUDFLARE_RECONCILE_TIMER = "clp-addons-cloudflare-ips-reconcile.timer";
 export const SMTP_RECONCILE_SERVICE = "clp-addons-smtp-reconcile.service";
 export const SMTP_RECONCILE_PATH = "clp-addons-smtp-reconcile.path";
+export const NEW_SITES_SERVICE = "clp-addons-sites-reconcile.service";
+export const NEW_SITES_PATH = "clp-addons-sites-reconcile.path";
+export const DOMAINS_RECONCILE_SERVICE = "clp-addons-domains-reconcile.service";
 
 
 export const LEGACY_USERS = ["instatic-app"];

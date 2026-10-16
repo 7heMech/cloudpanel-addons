@@ -1,5 +1,5 @@
 import { handle } from "./app/index";
-import { runCloudflareAction } from "./action";
+import { runCloudflareAction, reconcileNewSites } from "./action";
 import type { AddonDefinition } from "../../cli/addon-catalog";
 
 export const CLOUDFLARE_IPS_ADDON: AddonDefinition = {
@@ -9,4 +9,5 @@ export const CLOUDFLARE_IPS_ADDON: AddonDefinition = {
   targets: [],
   handler: handle,
   action: runCloudflareAction,
+  newSites: { label: "Cloudflare access", run: async () => { await reconcileNewSites(); return null; } },
 };

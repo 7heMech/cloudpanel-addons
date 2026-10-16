@@ -3,6 +3,7 @@
 - [Platform integration](decisions/platform.md)
 - [Security](decisions/security.md)
 - [Cloudflare IP Access](decisions/cloudflare-ips.md)
+- [DNS & Mail](decisions/domains.md)
 - [Releases and updates](decisions/releases.md)
 - [Instatic CMS](decisions/instatic.md)
 - [Stager](decisions/stager.md)

@@ -128,9 +128,9 @@ keep CloudPanel's own markup and behavior, and desktop retains its sidebar.
 WordPress, PHP, Static HTML, Node.js, Python and Reverse Proxy creation forms;
 unnamed because Symfony rejects a field its form does not declare. Everything
 else is CloudPanel's: the browser submits the panel's own Let's Encrypt form
-with its CSRF token and the operator's session, so issuance, permissions and
-renewal stay the panel's, and site managers get it too. There is no gateway verb
-or manager route.
+with its CSRF token and the operator's session. The completion first records the
+request through `request-ssl`, then calls Domains' scoped provision route when
+that addon is installed. Only a ready reply permits the certificate submission.
 
 Submitting a creation form with the box checked adds its domain to the
 `__Host-clp_addons_ssl` cookie for 15 minutes. `__Host-` means no other host can
@@ -147,13 +147,29 @@ page with it:
 
 Twig draws a status line there, in the shape of CloudPanel's flash messages, and
 the script forgets the domain before any request, so a refresh or Back never
-issues twice. It then fetches the native form and posts it for the created
-domain alone; the form's default `www` name needs DNS the operator may not have.
+issues twice. A session route supplies CSRF; every write checks it. The root
+action checks `panelUserOwnsSite` for a named non-administrator, the enabled
+auto-SSL switch, a site created in the last fifteen minutes, and its installed
+certificate. An existing real certificate ends the flow without replacement.
+The browser then fetches the native form and posts it for the created
+domain, plus www only when Domains confirms it has managed address records.
+Without Domains it still requests the created domain alone, since the form's
+default www name may have no DNS.
 CloudPanel redirects to the site's certificate list only on success; anything
 else shows the panel's own error with a link to the site's SSL/TLS tab. The page
-must stay open until it finishes. On Sites, the enhanced table then refetches its
-data and repaints that row's SSL cell. There are no retries and no scans of
-existing sites.
+must stay open for that initial submission. On Sites, the enhanced table then
+refetches its data and repaints that row's SSL cell.
+
+The request is stored root-only, mode `0600`, in
+`/var/lib/clp-addons/panel-tweaks/auto-ssl.json`, tied to the site's database id.
+Repeating the completion never resets it. Domains uses this intent for bounded
+root-side retries when DNS becomes ready; it waits at least two minutes for the
+browser's first attempt. This also covers a newly created zone awaiting its
+registrar nameservers: the completion shows Domains' reason, submits no
+certificate form, and leaves the request for later reconciliation. With Domains
+absent, the browser still submits the native form directly and nothing retries
+it. The intent is written by a successful completion page, so closing the browser
+before that page runs does not request a retry.
 
 ## Nothing moves once it is on the screen
 

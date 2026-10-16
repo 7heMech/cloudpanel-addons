@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import {
   CLOUDFLARE_IPS_ALLOWED_VERBS, GIT_ALLOWED_VERBS, INSTATIC_ALLOWED_VERBS,
   MAINTENANCE_ALLOWED_VERBS, SMTP_ALLOWED_VERBS, STAGER_ALLOWED_VERBS,
+  DOMAINS_ALLOWED_VERBS,
 } from "../lib/gateway-protocol";
 
 /**
@@ -21,6 +22,7 @@ import {
  * to neither list is not reachable from the web at all and fails at the parser.
  */
 const ROOT_ONLY: Record<string, { verb: string; why: string }[]> = {
+  domains: [{ verb: "reconcile", why: "drift worker" }, { verb: "sync-sites", why: "ordered new-site trigger" }],
   stager: [
     { verb: "run", why: "the job runner, started only by the transient unit the create path launches" },
   ],
@@ -45,6 +47,7 @@ const ROOT_ONLY: Record<string, { verb: string; why: string }[]> = {
 };
 
 const ADDONS = [
+  { addon: "domains", file: "addons/domains/action.ts", union: "DomainsVerb", allowed: DOMAINS_ALLOWED_VERBS },
   { addon: "stager", file: "addons/stager/action.ts", union: "StagerVerb", allowed: STAGER_ALLOWED_VERBS },
   { addon: "instatic", file: "addons/instatic/action.ts", union: "InstaticVerb", allowed: INSTATIC_ALLOWED_VERBS },
   { addon: "maintenance", file: "addons/maintenance/action.ts", union: "MaintenanceVerb", allowed: MAINTENANCE_ALLOWED_VERBS },

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   ANCHOR_SERVICE, CLI_BIN, CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, DISTRO_NGINX_SITES_DIR,
-  SMTP_RECONCILE_PATH, SMTP_RECONCILE_SERVICE,
+  SMTP_RECONCILE_PATH, SMTP_RECONCILE_SERVICE, NEW_SITES_PATH, NEW_SITES_SERVICE, DOMAINS_RECONCILE_SERVICE,
   CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS, INSTATIC_BACKUP_CRON,
   AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT,
   PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
@@ -769,30 +769,27 @@ WantedBy=timers.target
 }
 
 /**
- * New sites need SMTP Relay quickly: their login is refused any sender but its
- * bare name until the sender map lists it. CloudPanel writes a vhost for every
- * new site, but commits the site row about 200 ms later, so the sync runs
- * again shortly after to catch a row that was not there yet. A vhost write
- * that adds or removes no site changes nothing.
+ * CloudPanel commits a new site's row shortly after writing its vhost.
+ * Run twice so registered addons see the committed row, in catalog order.
  */
-export function smtpReconcileUnits(): { service: string; path: string } {
+export function newSiteReconcileUnits(): { service: string; path: string } {
   return {
     service: `[Unit]
-Description=Apply SMTP Relay to new CloudPanel sites
-ConditionPathExists=${ADDONS.smtp!.configFile}
+Description=Provision new CloudPanel sites through enabled addons
 
 [Service]
 Type=oneshot
-ExecStart=-${CLI_BIN} action smtp sync-sites
+TimeoutStartSec=infinity
+ExecStart=-${CLI_BIN} sync-sites
 ExecStart=/bin/sleep 10
-ExecStart=${CLI_BIN} action smtp sync-sites
+ExecStart=${CLI_BIN} sync-sites
 `,
     path: `[Unit]
-Description=Watch for new CloudPanel sites that SMTP Relay must bind
+Description=Watch for new CloudPanel sites
 
 [Path]
 PathChanged=${DISTRO_NGINX_SITES_DIR}
-Unit=${SMTP_RECONCILE_SERVICE}
+Unit=${NEW_SITES_SERVICE}
 
 [Install]
 WantedBy=paths.target
@@ -829,8 +826,10 @@ export interface UnitChanges {
   reconcile: boolean;
   /** The Cloudflare timer and service were added or removed by this pass. */
   cloudflare: "added" | "removed" | null;
-  /** The SMTP Relay new-site watcher was added or removed by this pass. */
+  /** Legacy SMTP watcher units removed during the shared-trigger migration. */
   smtp: "added" | "removed" | null;
+  sites: "added" | "removed" | null;
+  domains: "added" | "removed" | null;
   /** The auth socket or service definition differs. */
   auth: boolean;
   /** The Instatic backup cron file was created or removed. */
@@ -888,6 +887,7 @@ function removeManaged(path: string): boolean {
 function syncAddonUnits(enabled: boolean, trigger: string, units: [string, string][]): "added" | "removed" | null {
   if (enabled) return units.map(([name, body]) => writeManaged(`${SYSTEMD_DIR}/${name}`, body)).some(Boolean) ? "added" : null;
   if (existsSync(`${SYSTEMD_DIR}/${trigger}`)) tryRun("systemctl", ["disable", "--now", trigger]);
+  for (const [name] of units) if (name !== trigger && name.endsWith(".service") && existsSync(`${SYSTEMD_DIR}/${name}`)) tryRun("systemctl", ["stop", name]);
   return units.map(([name]) => removeManaged(`${SYSTEMD_DIR}/${name}`)).some(Boolean) ? "removed" : null;
 }
 
@@ -909,10 +909,22 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
   const cloudflare = syncAddonUnits(specs.some((spec) => spec.name === "cloudflare-ips"), CLOUDFLARE_RECONCILE_TIMER, [
     [CLOUDFLARE_RECONCILE_SERVICE, cloudflareUnits.service], [CLOUDFLARE_RECONCILE_TIMER, cloudflareUnits.timer],
   ]);
-  const smtpUnits = smtpReconcileUnits();
-  const smtp = syncAddonUnits(specs.some((spec) => spec.name === "smtp"), SMTP_RECONCILE_PATH, [
-    [SMTP_RECONCILE_SERVICE, smtpUnits.service], [SMTP_RECONCILE_PATH, smtpUnits.path],
+  const smtp = syncAddonUnits(false, SMTP_RECONCILE_PATH, [
+    [SMTP_RECONCILE_SERVICE, ""], [SMTP_RECONCILE_PATH, ""],
   ]);
+  const sitesUnits = newSiteReconcileUnits();
+  const sites = syncAddonUnits(specs.some((spec) => spec.newSites), NEW_SITES_PATH, [
+    [NEW_SITES_SERVICE, sitesUnits.service], [NEW_SITES_PATH, sitesUnits.path],
+  ]);
+  const domains = syncAddonUnits(specs.some((spec) => spec.name === "domains"), DOMAINS_RECONCILE_SERVICE, [[DOMAINS_RECONCILE_SERVICE, `[Unit]
+Description=Reconcile Cloudflare DNS and Mailcow outside the global repair lock
+ConditionPathExists=${ADDONS.domains!.configFile}
+
+[Service]
+Type=oneshot
+TimeoutStartSec=infinity
+ExecStart=${CLI_BIN} action domains reconcile
+`]]);
 
   const auth = authUnits();
   const authWrites = [
@@ -926,9 +938,11 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
     reconcile: reconcileChanged,
     cloudflare,
     smtp,
+    sites,
+    domains,
     auth: authWrites.some(Boolean),
     cron,
-    systemd: manager || reconcileChanged || cloudflare !== null || smtp !== null || authWrites.some(Boolean) || legacyTemplate,
+    systemd: manager || reconcileChanged || cloudflare !== null || smtp !== null || sites !== null || domains !== null || authWrites.some(Boolean) || legacyTemplate,
   };
   // systemd only needs telling when a definition it reads actually moved. The
   // cron file is not systemd's, so it does not count towards this.
@@ -956,9 +970,9 @@ export function applyToggleUnits(changes: UnitChanges): void {
     run("systemctl", ["enable", CLOUDFLARE_RECONCILE_TIMER]);
     run("systemctl", ["restart", CLOUDFLARE_RECONCILE_TIMER]);
   }
-  if (changes.smtp === "added") {
-    run("systemctl", ["enable", SMTP_RECONCILE_PATH]);
-    run("systemctl", ["restart", SMTP_RECONCILE_PATH]);
+  if (changes.sites === "added") {
+    run("systemctl", ["enable", NEW_SITES_PATH]);
+    run("systemctl", ["restart", NEW_SITES_PATH]);
   }
 }
 
@@ -1013,9 +1027,9 @@ export function startUnits(options: StartUnitsOptions = {}): void {
     run("systemctl", ["enable", CLOUDFLARE_RECONCILE_TIMER]);
     run("systemctl", ["restart", CLOUDFLARE_RECONCILE_TIMER]);
   }
-  if (existsSync(`${SYSTEMD_DIR}/${SMTP_RECONCILE_PATH}`)) {
-    run("systemctl", ["enable", SMTP_RECONCILE_PATH]);
-    run("systemctl", ["restart", SMTP_RECONCILE_PATH]);
+  if (existsSync(`${SYSTEMD_DIR}/${NEW_SITES_PATH}`)) {
+    run("systemctl", ["enable", NEW_SITES_PATH]);
+    run("systemctl", ["restart", NEW_SITES_PATH]);
   }
   ensureTimerArmed(RECONCILE_TIMER);
 }
@@ -1023,12 +1037,13 @@ export function startUnits(options: StartUnitsOptions = {}): void {
 export function stopUnits(keepShared = false): void {
   if (keepShared) return;
   reconcileInstaticBackupCron(false);
-  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, CLOUDFLARE_RECONCILE_TIMER, SMTP_RECONCILE_PATH,
+  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, CLOUDFLARE_RECONCILE_TIMER, SMTP_RECONCILE_PATH, NEW_SITES_PATH, NEW_SITES_SERVICE, DOMAINS_RECONCILE_SERVICE,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     tryRun("systemctl", ["disable", "--now", unit]);
   }
   for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE,
     CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, SMTP_RECONCILE_SERVICE, SMTP_RECONCILE_PATH,
+    NEW_SITES_SERVICE, NEW_SITES_PATH, DOMAINS_RECONCILE_SERVICE,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, "clp-addons-auth@.service"]) {
     rmSync(`${SYSTEMD_DIR}/${unit}`, { force: true });
   }

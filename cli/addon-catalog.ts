@@ -23,6 +23,7 @@ import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
 import { SMTP_ADDON } from "../addons/smtp/addon";
 import { TERMINAL_ADDON } from "../addons/terminal/addon";
+import { DOMAINS_ADDON } from "../addons/domains/addon";
 
 export type { AddonTarget };
 
@@ -71,6 +72,7 @@ export interface AddonDefinition {
    */
   siteManager?: boolean;
   maintenance?: AddonMaintenance;
+  newSites?: AddonMaintenance;
 }
 
 /**
@@ -85,6 +87,7 @@ export interface AddonSpec extends AddonDefinition {
 
 /** Order is the order addons are listed and installed; keep it deliberate. */
 const DEFINITIONS: AddonDefinition[] = [
+  DOMAINS_ADDON,
   CLOUDFLARE_IPS_ADDON,
   INSTATIC_ADDON,
   STAGER_ADDON,

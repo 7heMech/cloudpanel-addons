@@ -1,0 +1,33 @@
+import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { executePanelTweaksAction } from "../addons/panel-tweaks/action";
+import { autoSslRequests } from "../lib/auto-ssl";
+
+const dirs: string[] = [];
+afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+test("auto SSL intent is recent, owned, idempotent, private and never requests replacement of a real certificate", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "auto-ssl-")); dirs.push(dir);
+  const paths = { panelDb: join(dir, "panel.db"), tweaksFile: join(dir, "tweaks.json"), autoSslFile: join(dir, "ssl.json"), autoSslLock: join(dir, "ssl.lock"), domainsConfig: join(dir, "domains.conf"), rootUid: process.getuid!() };
+  writeFileSync(paths.tweaksFile, JSON.stringify({ version: 1, autoSsl: true }));
+  chmodSync(paths.tweaksFile, 0o600);
+  const db = new Database(paths.panelDb);
+  db.exec(`CREATE TABLE certificate (id INTEGER PRIMARY KEY, type INTEGER); CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT, certificate_id INTEGER, created_at TEXT); CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER); CREATE TABLE user_sites (user_id INTEGER, site_id INTEGER);
+    INSERT INTO certificate VALUES (1,1),(2,2); INSERT INTO site VALUES (1,'new.example.com',1,'2026-10-16 12:00:00'),(2,'real.example.com',2,'2026-10-16 12:00:00'),(3,'old.example.com',1,'2026-01-01 12:00:00'); INSERT INTO user VALUES (1,'alice','ROLE_USER',1),(2,'bob','ROLE_USER',1); INSERT INTO user_sites VALUES (1,1);`);
+  const options = { paths, processUid: 0, now: () => new Date("2026-10-16T12:01:00Z") };
+  const request = (domain: string, user?: string) => executePanelTweaksAction(["request-ssl", `--domain=${domain}`, ...(user ? [`--as-user=${user}`] : [])], options);
+  await expect(request("new.example.com", "bob")).rejects.toThrow("not yours");
+  await request("new.example.com", "alice");
+  const first = readFileSync(paths.autoSslFile, "utf8");
+  await request("new.example.com", "alice");
+  expect(readFileSync(paths.autoSslFile, "utf8")).toBe(first);
+  expect(statSync(paths.autoSslFile).mode & 0o777).toBe(0o600);
+  expect(autoSslRequests(paths.autoSslFile, paths.rootUid)["new.example.com"]!.siteId).toBe(1);
+  expect(await request("real.example.com")).toMatchObject({ alreadyInstalled: true });
+  await expect(request("old.example.com")).rejects.toThrow("fifteen minutes");
+  chmodSync(paths.autoSslFile, 0o644);
+  await expect(request("new.example.com")).rejects.toThrow("0600");
+  db.close();
+});
