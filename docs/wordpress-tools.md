@@ -18,10 +18,10 @@ Enable Varnish for a site in CloudPanel, then open WordPress Tools. Turn on
 on applicable WordPress sites. Automation starts off. Only actual WordPress
 installations with Varnish enabled qualify; multisite networks are left alone.
 
-Sites are checked by the normal repair timer every 15 minutes. **Check now**
-applies the policy immediately and reports failures. Large fleets or
-slow downloads may leave sites pending; check again to continue. Plugin status
-on the page reflects the last check, with its time available on the status badge.
+Every 15 minutes the repair timer installs the plugin on sites that have not
+had it yet. **Check now** checks every site, applies the policy immediately and
+refreshes the status shown. Large fleets or slow downloads may leave sites
+pending; check again to continue. The status badge shows when it was checked.
 
 Turn off a site's **Automatic** switch to manage it yourself. That keeps its
 existing plugin unchanged and hides installation actions for that site.
@@ -29,8 +29,8 @@ existing plugin unchanged and hides installation actions for that site.
 
 An existing inactive plugin is never activated automatically. A plugin removed
 after a check is never installed again automatically. Use **Activate**,
-**Install**, or **Retry** to make that choice explicitly. A
-failed installation attempt may require Retry, even if no files were installed.
+**Install**, or **Retry** to make that choice explicitly. A failed download is
+tried again on the next pass.
 
 WP-CLI and the site's matching PHP command must already be installed on the
 server. Use WordPress to configure the plugin and manage its updates. The addon
@@ -41,3 +41,7 @@ uninstalling WordPress Tools removes its sign-in helper and stops automation;
 the CLP plugin remains available in WordPress, where you can deactivate or
 delete it. Kept addon data retains automation settings and exclusions for the
 next enable.
+
+If the page reports that `/var/lib/clp-addons/wp-login/varnish.json` cannot be
+read, sign-in still works. Deleting that file turns automation off and forgets
+exclusions and which plugins were removed on purpose.

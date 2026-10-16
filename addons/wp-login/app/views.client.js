@@ -129,9 +129,8 @@ async function installPlugin(button) {
   });
   if (!agreed) return;
   change('/api/varnish-install', { domain: domain }, function (data) {
-    return data.failed.length
-      ? { text: data.failed[0], kind: 'warn' }
-      : { text: 'CLP Varnish Cache is active on ' + domain + '.' };
+    if (data.installed) return { text: 'CLP Varnish Cache is active on ' + domain + '.' };
+    return { text: data.failed.length ? data.failed[0] : 'Nothing was installed on ' + domain + '; see its status below.', kind: 'warn' };
   });
 }
 

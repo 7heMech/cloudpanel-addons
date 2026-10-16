@@ -7,6 +7,7 @@ import { executeWpLoginAction, reconcileWpVarnish, type WpLoginActionOptions, ty
 import { commandOutput, readVarnishState, type WpCommand, type VarnishSyncResult } from "../addons/wp-login/varnish";
 import { handle } from "../addons/wp-login/app/index";
 import { dashboardView, layout } from "../addons/wp-login/app/views";
+import type { WpDashboard } from "../addons/wp-login/app/service";
 import { WP_LOGIN_ALLOWED_VERBS } from "../lib/gateway-protocol";
 import { withFileLock } from "../cli/action-common";
 
@@ -25,7 +26,8 @@ function options(): WpLoginActionOptions {
       commands.push(command);
       const domain = command.argv.find((arg) => arg.startsWith("--url="))!.slice("--url=https://".length);
       if (failures.has(domain)) throw new Error("download failed");
-      if (command.argv.includes("eval")) return JSON.stringify({ status: statuses[domain] ?? "missing", multisite: multisite.has(domain) });
+      // Whatever the site's own code prints comes before the marked reply.
+      if (command.argv.includes("eval")) return `Notice: a must-use plugin talks\nCLP-ADDONS-VARNISH-STATUS:${JSON.stringify({ status: statuses[domain] ?? "missing", multisite: multisite.has(domain) })}`;
       statuses[domain] = "active";
       return "Success";
     },
@@ -152,8 +154,7 @@ test("one site's failure does not block the rest of the fleet and is visible on 
   const result = await act<VarnishSyncResult>("varnish-sync");
   expect(result.installed).toBe(1);
   expect(result.failed).toEqual(["shop.example.com: download failed"]);
-  const view = await act<{ sites: WpSiteView[] }>("sites");
-  expect(dashboardView(view.sites)).toContain("download failed");
+  expect(dashboardView(await act<WpDashboard>("sites"))).toContain("download failed");
   expect(statuses["blog.example.com"]).toBe("active");
 });
 
@@ -173,21 +174,55 @@ test("old panel schemas retain sign-in listing but offer no eligible Varnish sit
   expect((await act<VarnishSyncResult>("varnish-sync")).checked).toBe(0);
 });
 
-test("interrupted installation records intent and never silently retries a removed plugin", async () => {
+test("intent is saved before installing, and a failed download is retried on the next pass", async () => {
   const config = options();
   const successfulRunner = config.runWpCommand!;
+  let seenDuringInstall: boolean | undefined;
   config.runWpCommand = async (command) => {
-    if (command.argv.includes("install")) throw new Error("download interrupted");
-    return successfulRunner(command);
+    if (!command.argv.includes("install")) return successfulRunner(command);
+    // What a pass killed at this point would leave behind.
+    seenDuringInstall = readVarnishState(join(root, "varnish.json")).sites["shop.example.com"]?.seen;
+    throw new Error("download failed");
   };
   await act("varnish-settings", "--enabled=true");
   const result = await executeWpLoginAction(["varnish-sync"], config) as VarnishSyncResult;
-  expect(result.failed).toEqual(["shop.example.com: download interrupted"]);
-  expect(readVarnishState(join(root, "varnish.json")).sites["shop.example.com"]?.seen).toBe(true);
+  expect(result.failed).toEqual(["shop.example.com: download failed"]);
+  expect(seenDuringInstall).toBe(true);
+  expect(readVarnishState(join(root, "varnish.json")).sites["shop.example.com"]).toMatchObject({ status: "error", seen: false });
+  expect((await reconcileWpVarnish(options(), { dueOnly: true })).installed).toBe(1);
+});
+
+test("the timer checks only sites automation can still act on", async () => {
+  dbRun("UPDATE site SET varnish_cache = 1 WHERE domain_name = 'blog.example.com';");
+  statuses["blog.example.com"] = "inactive";
+  await act("varnish-settings", "--enabled=true");
+  expect((await act<VarnishSyncResult>("varnish-sync")).checked).toBe(2);
   commands = [];
-  expect((await act<VarnishSyncResult>("varnish-sync")).installed).toBe(0);
-  expect(commands.every((command) => command.argv.includes("eval"))).toBe(true);
-  expect((await act<VarnishSyncResult>("varnish-install", "--domain=shop.example.com")).installed).toBe(1);
+  expect((await reconcileWpVarnish(options(), { dueOnly: true })).checked).toBe(0);
+  expect(commands).toEqual([]);
+  expect((await act<VarnishSyncResult>("varnish-sync")).checked).toBe(2);
+});
+
+test("state for a domain the panel no longer has is dropped", async () => {
+  await act("varnish-site", "--domain=shop.example.com", "--excluded=true");
+  await act("varnish-settings", "--enabled=true");
+  dbRun("DELETE FROM site WHERE domain_name = 'shop.example.com';");
+  await act("varnish-sync");
+  const state = readVarnishState(join(root, "varnish.json"));
+  expect(state.excluded).toEqual([]);
+  expect(state.sites["shop.example.com"]).toBeUndefined();
+});
+
+test("unreadable Varnish settings leave sign-in on the page", async () => {
+  writeFileSync(join(root, "varnish.json"), "{");
+  const view = await act<WpDashboard>("sites");
+  expect(view.sites.map((site) => site.domain)).toContain("shop.example.com");
+  expect(view.varnishError).toContain("cannot be read");
+  const html = dashboardView(view);
+  expect(html).toContain("signIn(this)");
+  expect(html).not.toContain("setAutomatic(this)");
+  expect(html).not.toContain("installPlugin(this)");
+  await expect(act("varnish-sync")).rejects.toThrow();
 });
 
 test("a process the site detaches cannot hold the root action past its deadline", async () => {
@@ -235,7 +270,7 @@ test("Varnish routes remain administrator-only", async () => {
 });
 
 test("the WordPress Tools page emits a valid script with sign-in and Varnish actions", () => {
-  const html = layout("WordPress Tools", dashboardView([]));
+  const html = layout("WordPress Tools", dashboardView({ sites: [], varnish: { enabled: false, excluded: [], sites: {} }, varnishError: "" }));
   for (const source of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)) expect(() => new Function(source[1]!)).not.toThrow();
   expect(html).toContain("/api/sign-in");
   expect(html).toContain("/api/varnish-settings");

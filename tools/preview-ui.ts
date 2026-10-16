@@ -612,7 +612,12 @@ function terminalPreview(req: Request, url: URL): Response | null {
 }
 
 // The WordPress Tools API, acting on the sites the page was last drawn with.
-let wpLoginPreview = { sites: [] as WpSiteView[], automatic: false };
+let wpLoginPreview = { sites: [] as WpSiteView[], automatic: false, error: "" };
+const wpLoginPreviewData = () => ({
+  sites: wpLoginPreview.sites,
+  varnish: { enabled: wpLoginPreview.automatic, excluded: [], sites: {} },
+  varnishError: wpLoginPreview.error,
+});
 async function wpLoginPreviewApi(req: Request, path: string): Promise<Response | null> {
   if (!path.startsWith("/addons/wp-login/api/")) return null;
   const body = req.method === "POST" ? await req.json().catch(() => ({})) as Record<string, unknown> : {};
@@ -621,7 +626,7 @@ async function wpLoginPreviewApi(req: Request, path: string): Promise<Response |
   const site = wpLoginPreview.sites.find((entry) => entry.domain === body.domain);
   switch (path.slice("/addons/wp-login/api/".length)) {
     case "dashboard":
-      return ok({ html: wpLoginDashboardBody(wpLoginPreview.sites, wpLoginPreview.automatic) });
+      return ok({ html: wpLoginDashboardBody(wpLoginPreviewData()) });
     case "varnish-settings":
       wpLoginPreview.automatic = body.enabled === true;
       return ok({});
@@ -870,8 +875,13 @@ const server = Bun.serve({
     } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
       html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites), notice);
     } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {
-      wpLoginPreview = { sites: wpLoginPreviewSites(url), automatic: url.searchParams.has("automatic") };
-      html = wpLoginLayout("WordPress Tools", wpLoginDashboardView(wpLoginPreview.sites, wpLoginPreview.automatic), notice);
+      wpLoginPreview = {
+        sites: wpLoginPreviewSites(url),
+        automatic: url.searchParams.has("automatic"),
+        error: url.searchParams.get("varnish") === "unreadable"
+          ? "/var/lib/clp-addons/wp-login/varnish.json cannot be read: the WordPress Varnish settings are invalid" : "",
+      };
+      html = wpLoginLayout("WordPress Tools", wpLoginDashboardView(wpLoginPreviewData()), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {

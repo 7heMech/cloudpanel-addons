@@ -1,6 +1,7 @@
 
 .wp-card h2 { margin: 0 0 8px; }
 .wp-card p { margin: 0; color: var(--muted); font-size: 14px; }
+.wp-card .alert { margin: 0; }
 .wp-card > .btn, .wp-card-controls { flex-shrink: 0; }
 .wp-card-controls { display: flex; align-items: center; gap: 16px; }
 .varnish-error { max-width: 260px; margin-top: 6px; color: var(--bad); font-size: 12px; white-space: normal; overflow-wrap: anywhere; }

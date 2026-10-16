@@ -13,7 +13,7 @@ export const WP_LOGIN_ADDON: AddonDefinition = {
   maintenance: {
     label: "WordPress Varnish",
     run: async () => {
-      const result = await reconcileWpVarnish();
+      const result = await reconcileWpVarnish({}, { dueOnly: true });
       if (result.failed.length) throw new Error(result.failed.join("; "));
       return result.installed ? `${result.installed} plugin installation${result.installed === 1 ? "" : "s"} activated` : null;
     },

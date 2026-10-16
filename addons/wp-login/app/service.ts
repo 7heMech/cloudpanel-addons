@@ -5,6 +5,13 @@ import type { WpVarnishState, VarnishSyncResult } from "../varnish";
 
 export { validateDomain };
 
+/** `varnishError` is set when the Varnish settings cannot be read; sign-in still works. */
+export interface WpDashboard {
+  sites: WpSiteView[];
+  varnish: WpVarnishState;
+  varnishError: string;
+}
+
 function call<T>(verb: string, args: string[] = [], timeout?: number): Promise<ActionResult<T>> {
   return callGatewayAction<T>("wp-login", verb, args, undefined, timeout ? { timeout } : undefined);
 }
@@ -13,8 +20,8 @@ function call<T>(verb: string, args: string[] = [], timeout?: number): Promise<A
 const LIST_TIMEOUT_MS = 60_000;
 
 export const wpLoginService = {
-  sites(): Promise<ActionResult<{ sites: WpSiteView[]; varnish: WpVarnishState }>> {
-    return call<{ sites: WpSiteView[]; varnish: WpVarnishState }>("sites", [], LIST_TIMEOUT_MS);
+  sites(): Promise<ActionResult<WpDashboard>> {
+    return call<WpDashboard>("sites", [], LIST_TIMEOUT_MS);
   },
 
   // `asUser` is the panel user a non-administrator's request is on behalf of.

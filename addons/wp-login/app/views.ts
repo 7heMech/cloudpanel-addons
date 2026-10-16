@@ -3,6 +3,7 @@ import { renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { WpSiteView } from "../action";
 import type { VarnishPluginStatus } from "../varnish";
+import type { WpDashboard } from "./service";
 
 const BASE = mountPath("wp-login");
 
@@ -34,7 +35,8 @@ const PLUGIN_STATUS: Record<VarnishPluginStatus, [label: string, tone: string]> 
   error: ["Check failed", "state-failed"],
 };
 
-function pluginStatus(site: WpSiteView): string {
+function pluginStatus(site: WpSiteView, available: boolean): string {
+  if (!available) return '<span class="toolbar-note">Unavailable</span>';
   if (!site.varnishCache) return '<span class="toolbar-note">Varnish off</span>';
   const record = site.varnishPlugin;
   if (!record) return '<span class="badge">Not checked</span>';
@@ -52,22 +54,22 @@ function pluginButton(site: WpSiteView): string {
   return `<button class="btn" type="button" data-domain="${esc(site.domain)}" onclick="installPlugin(this)">${label}</button>`;
 }
 
-function siteRow(site: WpSiteView): string {
+function siteRow(site: WpSiteView, available: boolean): string {
   const domain = esc(site.domain);
-  const automatic = site.varnishCache
+  const automatic = available && site.varnishCache
     ? `<label class="switch"><input id="auto-${domain}" type="checkbox" data-domain="${domain}" aria-label="Install CLP Varnish Cache automatically on ${domain}" ${site.varnishExcluded ? "" : "checked"} onchange="setSiteAutomatic(this)"><span></span></label>`
     : "";
   return `
               <tr>
                 <td class="site-cell">${domain}<div class="hint">${esc(site.user)}</div></td>
                 <td class="type-cell">${esc(site.application || "WordPress")}</td>
-                <td data-label="Varnish plugin">${pluginStatus(site)}</td>
+                <td data-label="Varnish plugin">${pluginStatus(site, available)}</td>
                 <td data-label="Automatic">${automatic}</td>
-                <td class="action-cell"><span class="row-actions">${pluginButton(site)}<button class="btn btn-primary" type="button" data-domain="${domain}" onclick="signIn(this)">Sign in</button></span></td>
+                <td class="action-cell"><span class="row-actions">${available ? pluginButton(site) : ""}<button class="btn btn-primary" type="button" data-domain="${domain}" onclick="signIn(this)">Sign in</button></span></td>
               </tr>`;
 }
 
-function sitesCard(sites: WpSiteView[]): string {
+function sitesCard(sites: WpSiteView[], available: boolean): string {
   if (sites.length === 0) {
     return `
     <div class="card card-table">
@@ -92,14 +94,21 @@ function sitesCard(sites: WpSiteView[]): string {
               <th scope="col" class="action-cell">Actions</th>
             </tr>
           </thead>
-          <tbody>${sites.map(siteRow).join("")}
+          <tbody>${sites.map((site) => siteRow(site, available)).join("")}
           </tbody>
         </table>
       </div>
     </div>`;
 }
 
-function policyCard(automatic: boolean): string {
+function policyCard(automatic: boolean, error: string): string {
+  if (error) {
+    return `
+    <div class="card wp-card">
+      <h2>Install CLP Varnish Cache automatically</h2>
+      <div class="alert" role="alert">${esc(error)}</div>
+    </div>`;
+  }
   return `
     <div class="card switch-row wp-card">
       <div>
@@ -127,11 +136,12 @@ function helperCard(sites: WpSiteView[]): string {
 }
 
 /** Everything below the heading; the page repaints it from `/api/dashboard` after a change. */
-export function dashboardBody(sites: WpSiteView[], automatic: boolean): string {
-  return `${policyCard(automatic)}${sitesCard(sites)}${helperCard(sites)}`;
+export function dashboardBody(data: WpDashboard): string {
+  const available = !data.varnishError;
+  return `${policyCard(data.varnish.enabled, data.varnishError)}${sitesCard(data.sites, available)}${helperCard(data.sites)}`;
 }
 
-export function dashboardView(sites: WpSiteView[], automatic = false): string {
+export function dashboardView(data: WpDashboard): string {
   return `
     <div class="page-heading">
       <div>
@@ -139,5 +149,5 @@ export function dashboardView(sites: WpSiteView[], automatic = false): string {
         <p>Sign in to any WordPress on this server as its first administrator, and keep CLP Varnish Cache on the sites that use Varnish.</p>
       </div>
     </div>
-    <div id="wp-dashboard">${dashboardBody(sites, automatic)}</div>`;
+    <div id="wp-dashboard">${dashboardBody(data)}</div>`;
 }

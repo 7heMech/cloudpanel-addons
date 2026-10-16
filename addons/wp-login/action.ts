@@ -30,7 +30,10 @@ import { readUnixAccounts, siteAccountProblem, splitSharedUids, type UnixAccount
 import {
   DEFAULT_MAINTENANCE_ACTION_PATHS, addBypass, maintenanceBlocks, type MaintenanceActionPaths,
 } from "../maintenance/action";
-import { readVarnishState, saveVarnishState, syncVarnish, type VarnishSite, type VarnishSiteRecord, type VarnishOptions, type VarnishSyncResult } from "./varnish";
+import {
+  pruneVarnishState, readVarnishState, saveVarnishState, syncVarnish,
+  type VarnishRun, type VarnishSiteRecord, type VarnishOptions, type VarnishSyncResult, type WpVarnishState,
+} from "./varnish";
 
 export type WpLoginVerb = "sites" | "sign-in" | "remove" | "varnish-settings" | "varnish-site" | "varnish-install" | "varnish-sync";
 
@@ -273,8 +276,7 @@ function resolvedWordPressSites(paths: WpLoginActionPaths) {
     }));
 }
 
-function wordpressSites(paths: WpLoginActionPaths): WpSiteView[] {
-  const state = readVarnishState(paths.varnishState);
+function wordpressSites(paths: WpLoginActionPaths, state: WpVarnishState): WpSiteView[] {
   return resolvedWordPressSites(paths)
     .map((site) => ({
       domain: site.row.domain_name,
@@ -287,21 +289,34 @@ function wordpressSites(paths: WpLoginActionPaths): WpSiteView[] {
     }));
 }
 
-function varnishSites(paths: WpLoginActionPaths): VarnishSite[] {
-  return resolvedWordPressSites(paths).map((site) => ({
-    domain: site.row.domain_name, user: site.row.user, root: site.root, home: site.account.home,
-    phpVersion: String(site.row.php_version ?? ""),
-    eligible: site.varnishCache,
-  }));
+/** The sites and the panel's domains a Varnish pass works from. */
+function varnishRun(paths: WpLoginActionPaths, request: { domain?: string; dueOnly?: boolean } = {}): VarnishRun {
+  return {
+    statePath: paths.varnishState,
+    runuser: paths.runuser,
+    sites: resolvedWordPressSites(paths).map((site) => ({
+      domain: site.row.domain_name, user: site.row.user, root: site.root, home: site.account.home,
+      phpVersion: String(site.row.php_version ?? ""),
+      eligible: site.varnishCache,
+    })),
+    domains: new Set(panelSites(paths).map((row) => row.domain_name)),
+    ...request,
+  };
 }
 
-/** Shared by the explicit check and the installed addon's periodic upkeep. */
-export async function reconcileWpVarnish(options: WpLoginActionOptions = {}): Promise<VarnishSyncResult> {
+/**
+ * The page's pass, and the timer's with `dueOnly`: the timer runs inside
+ * repair's operation lock, so it checks only sites automation can still act on.
+ */
+export async function reconcileWpVarnish(
+  options: WpLoginActionOptions = {},
+  request: { dueOnly?: boolean } = {},
+): Promise<VarnishSyncResult> {
   const paths = pathsFor(options);
   // With automation off, repair does not need to inspect site roots or the DB.
   if (!readVarnishState(paths.varnishState).enabled) return { installed: 0, checked: 0, pending: 0, failed: [] };
   return withFileLock(paths.varnishLockFile, 15, "a WordPress Varnish change is still running", async () =>
-    syncVarnish(paths.varnishState, varnishSites(paths), options));
+    syncVarnish(varnishRun(paths, request), options));
 }
 
 // --- the must-use plugin --------------------------------------------------
@@ -547,15 +562,27 @@ export async function executeWpLoginAction(
   const paths = pathsFor(options);
   const { verb, domain, asUser, clientIp, addBypass: bypass, enabled, excluded } = parseAction(argv, options);
 
-  if (verb === "sites") return { sites: wordpressSites(paths), varnish: readVarnishState(paths.varnishState) };
+  if (verb === "sites") {
+    // The optional feature's state must not take sign-in down with it.
+    let varnish: WpVarnishState = { enabled: false, excluded: [], sites: {} };
+    let varnishError = "";
+    try {
+      varnish = readVarnishState(paths.varnishState);
+    } catch (error) {
+      varnishError = `${paths.varnishState} cannot be read: ${reason(error)}`;
+    }
+    return { sites: wordpressSites(paths, varnish), varnish, varnishError };
+  }
   if (verb === "varnish-sync") return reconcileWpVarnish(options);
   if (verb === "varnish-settings" || verb === "varnish-site" || verb === "varnish-install") {
     return withFileLock(paths.varnishLockFile, 15, "a WordPress Varnish change is still running", async () => {
-      if (verb === "varnish-install") return syncVarnish(paths.varnishState, varnishSites(paths), options, domain);
+      if (verb === "varnish-install") return syncVarnish(varnishRun(paths, { domain }), options);
       const state = readVarnishState(paths.varnishState);
+      const run = varnishRun(paths);
+      pruneVarnishState(state, run.domains);
       if (verb === "varnish-settings") state.enabled = enabled!;
       else {
-        if (!varnishSites(paths).some((site) => site.domain === domain)) failAction("that is not a WordPress site on this server");
+        if (!run.sites.some((site) => site.domain === domain)) failAction("that is not a WordPress site on this server");
         state.excluded = state.excluded.filter((entry) => entry !== domain);
         if (excluded) state.excluded.push(domain);
       }

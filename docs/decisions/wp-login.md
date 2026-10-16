@@ -26,12 +26,18 @@ settings, deactivation and deletion belong to WordPress.
 
 The policy, per-domain exclusions and last-check records live in root-owned
 `/var/lib/clp-addons/wp-login/varnish.json`, written atomically with mode `0600`.
-Disabling keeps this state. Missing state means automation off; invalid state
-is an error rather than a reason to reinstall plugins.
+Disabling keeps this state. Entries for a domain the panel no longer has are
+dropped, so a recreated site starts fresh. Missing state means automation off;
+invalid state is an error rather than a reason to reinstall plugins. The page
+then shows that error in place of the Varnish controls and still offers
+sign-in.
 
 The installed addon's maintenance hook runs on the normal 15-minute repair
-timer. An administrator can also request a check or an installation for one
-site. Automatic checks do nothing while the policy is off. A single-site
+timer, inside repair's operation lock, so it checks only sites automation can
+still act on: no record yet, or a plugin not yet seen. It has a 30-second
+budget. **Check now** checks every eligible site within 90 seconds and
+refreshes what the page shows. An administrator can also request an
+installation for one site. Automatic checks do nothing while the policy is off. A single-site
 explicit installation can run while automation is off, but still honors
 exclusions and eligibility. Only PHP sites with CloudPanel's `varnish_cache`
 flag and `wp-includes` plus `wp-content` on disk are eligible. The page and
@@ -40,14 +46,16 @@ the Varnish column contributes no eligible sites. Varnish itself is never
 enabled by the addon.
 
 Fixed WP-CLI commands run through `runuser` as the site account sign-in
-discovery resolved, so the same accounts are refused. They use the site's `php_settings.php_version`
-to choose `/usr/bin/php<version>`, and the installed WP-CLI phar at `/usr/bin/wp`
+discovery resolved, so the same accounts are refused. They use the site's
+`php_settings.php_version` to choose `/usr/bin/php<version>`, and the installed WP-CLI phar at `/usr/bin/wp`
 or `/usr/local/bin/wp`. Neither dependency is downloaded by the addon.
 Arguments never pass through a shell. The child receives only a fixed PATH,
 its account's HOME and a disabled global WP-CLI config. Plugins, themes and
 WP-CLI packages are skipped; WordPress still loads its config and must-use
 plugins, all after dropping root. WordPress resolves the plugin directory and
-activation status, supporting a customized plugin directory. Multisite is
+activation status, supporting a customized plugin directory. The status is
+read from a marked line, so anything the site's own code prints does not break
+it. Multisite is
 reported as unsupported and never installed or activated.
 
 Automation installs the fixed WordPress.org slug `clp-varnish-cache` with
@@ -55,13 +63,14 @@ Automation installs the fixed WordPress.org slug `clp-varnish-cache` with
 Existing active and inactive installations are left unchanged. A persistent
 `seen` bit prevents reinstallation after manual removal. Installation intent
 is saved before execution so interruption cannot erase that protection; an
-interrupted or failed download may therefore need an explicit Retry.
+interrupted run therefore needs an explicit Retry. A command that fails
+outright put nothing there, so its intent is undone and the next pass retries.
 Explicit installation can reinstall an absent plugin or activate an inactive
 one. There is no force overwrite, plugin update or network activation.
 
 Policy changes and each check hold a dedicated Varnish lock, so a download
 does not block sign-in or helper removal. Each pass processes the least
-recently checked sites first and has a 90-second budget. Each WP-CLI command
+recently checked sites first within its budget. Each WP-CLI command
 runs under `timeout` for at most 60 seconds, and root kills it and stops
 reading a few seconds later whatever is left: `wp-config.php` is the site's
 code, and a process it detaches could otherwise hold the pipes, the Varnish

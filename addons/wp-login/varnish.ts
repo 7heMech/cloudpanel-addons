@@ -42,6 +42,17 @@ export interface VarnishOptions {
   now?: () => Date;
 }
 
+/** One pass: every eligible site, only the ones automation can still act on, or one domain. */
+export interface VarnishRun {
+  statePath: string;
+  runuser: string;
+  sites: VarnishSite[];
+  /** Every domain the panel has; state for any other is dropped. */
+  domains: Set<string>;
+  domain?: string;
+  dueOnly?: boolean;
+}
+
 export interface VarnishSyncResult {
   installed: number;
   checked: number;
@@ -66,17 +77,27 @@ export function readVarnishState(path: string): WpVarnishState {
   return state;
 }
 
+/** Forgets domains the panel no longer has, so a recreated site starts fresh. */
+export function pruneVarnishState(state: WpVarnishState, domains: Set<string>): boolean {
+  const before = state.excluded.length + Object.keys(state.sites).length;
+  state.excluded = state.excluded.filter((domain) => domains.has(domain));
+  for (const domain of Object.keys(state.sites)) if (!domains.has(domain)) delete state.sites[domain];
+  return state.excluded.length + Object.keys(state.sites).length !== before;
+}
+
 export function saveVarnishState(path: string, state: WpVarnishState): void {
   writeFileAtomic(path, `${JSON.stringify(state)}\n`, { mode: 0o600, createParent: true });
 }
 
 // WordPress itself resolves its plugin directory and multisite state. This
-// PHP, wp-config.php and must-use plugins all run after dropping root.
+// PHP, wp-config.php and must-use plugins all run after dropping root. The
+// marker sets the reply apart from anything the site's own code prints.
+const STATUS_MARKER = "CLP-ADDONS-VARNISH-STATUS:";
 const STATUS_PHP = `
 if (!function_exists('get_plugins')) { require_once ABSPATH . 'wp-admin/includes/plugin.php'; }
 $plugin = 'clp-varnish-cache/clp-varnish-cache.php';
 $plugins = get_plugins();
-echo wp_json_encode(array(
+echo "\\n" . '${STATUS_MARKER}' . wp_json_encode(array(
   'multisite' => is_multisite(),
   'status' => !isset($plugins[$plugin]) ? 'missing' : (is_plugin_active($plugin) ? 'active' : 'inactive')
 ));`;
@@ -130,7 +151,7 @@ export async function commandOutput(command: WpCommand): Promise<string> {
   return stdout.trim();
 }
 
-async function wp(site: VarnishSite, args: string[], options: VarnishOptions, deadline: number): Promise<string> {
+async function wp(run: VarnishRun, site: VarnishSite, args: string[], options: VarnishOptions, deadline: number): Promise<string> {
   if (!/^\d+\.\d+$/.test(site.phpVersion)) throw new Error("the site's PHP version is unavailable");
   const php = `/usr/bin/php${site.phpVersion}`;
   const executable = existsSync("/usr/bin/wp") ? "/usr/bin/wp" : "/usr/local/bin/wp";
@@ -140,7 +161,7 @@ async function wp(site: VarnishSite, args: string[], options: VarnishOptions, de
   const seconds = Math.min(60, Math.floor((deadline - Date.now()) / 1000));
   if (seconds < 1) throw new Error("the Varnish check reached its time limit; check again to continue");
   return (options.runWpCommand ?? commandOutput)({
-    argv: ["/usr/sbin/runuser", "-u", site.user, "--", "/usr/bin/timeout", "--signal=KILL", String(seconds),
+    argv: [run.runuser, "-u", site.user, "--", "/usr/bin/timeout", "--signal=KILL", String(seconds),
       php, executable, `--path=${site.root}`, `--url=https://${site.domain}`, "--skip-plugins", "--skip-themes",
       "--skip-packages", "--no-color", ...args],
     cwd: "/",
@@ -149,53 +170,64 @@ async function wp(site: VarnishSite, args: string[], options: VarnishOptions, de
   });
 }
 
-async function status(site: VarnishSite, options: VarnishOptions, deadline: number): Promise<VarnishPluginStatus> {
-  const reply = JSON.parse(await wp(site, ["eval", STATUS_PHP], options, deadline)) as { multisite?: unknown; status?: unknown };
+async function status(run: VarnishRun, site: VarnishSite, options: VarnishOptions, deadline: number): Promise<VarnishPluginStatus> {
+  const line = (await wp(run, site, ["eval", STATUS_PHP], options, deadline)).split("\n").findLast((text) => text.startsWith(STATUS_MARKER));
+  let reply: { multisite?: unknown; status?: unknown } = {};
+  try { reply = JSON.parse(line?.slice(STATUS_MARKER.length) ?? ""); } catch { /* reported below */ }
   if (typeof reply.multisite !== "boolean" || typeof reply.status !== "string" || !["active", "inactive", "missing"].includes(reply.status)) {
-    throw new Error("WP-CLI returned an invalid plugin status");
+    throw new Error("WP-CLI returned no plugin status; check that the site loads in WordPress");
   }
   // A shared network needs an activation policy of its own. Do not install or
   // activate globally on behalf of just one CloudPanel domain.
   return reply.multisite ? "unsupported" : reply.status as VarnishPluginStatus;
 }
 
-export async function syncVarnish(
-  path: string,
-  sites: VarnishSite[],
-  options: VarnishOptions = {},
-  explicitDomain?: string,
-): Promise<VarnishSyncResult> {
-  const state = readVarnishState(path);
+export async function syncVarnish(run: VarnishRun, options: VarnishOptions = {}): Promise<VarnishSyncResult> {
+  const state = readVarnishState(run.statePath);
+  if (pruneVarnishState(state, run.domains)) saveVarnishState(run.statePath, state);
   const result: VarnishSyncResult = { installed: 0, checked: 0, pending: 0, failed: [] };
-  if (!state.enabled && !explicitDomain) return result;
-  const candidates = sites.filter((site) => site.eligible && !state.excluded.includes(site.domain)
-    && (!explicitDomain || site.domain === explicitDomain));
-  if (explicitDomain && candidates.length !== 1) throw new Error("that site is not eligible for Varnish installation or is excluded");
-  // Rotate through the least recently checked sites, keeping repair bounded
-  // even when one site's PHP or external download stalls.
-  candidates.sort((a, b) => (state.sites[a.domain]?.checkedAt ?? "").localeCompare(state.sites[b.domain]?.checkedAt ?? ""));
-  const deadline = Date.now() + 90_000;
-  for (const site of candidates) {
+  if (!state.enabled && !run.domain) return result;
+  const candidates = run.sites.filter((site) => site.eligible && !state.excluded.includes(site.domain)
+    && (!run.domain || site.domain === run.domain));
+  if (run.domain && candidates.length !== 1) throw new Error("that site is not eligible for Varnish installation or is excluded");
+  // Once a plugin has been seen, automation never touches that site again, so
+  // the timer leaves it alone; Check now still refreshes what the page shows.
+  const due = run.dueOnly
+    ? candidates.filter((site) => !state.sites[site.domain]?.seen && state.sites[site.domain]?.status !== "unsupported")
+    : candidates;
+  // Rotate through the least recently checked sites, keeping each pass bounded
+  // even when one site's PHP or external download stalls. The timer's pass
+  // holds the operation lock, so it gets the smaller budget.
+  due.sort((a, b) => (state.sites[a.domain]?.checkedAt ?? "").localeCompare(state.sites[b.domain]?.checkedAt ?? ""));
+  const deadline = Date.now() + (run.dueOnly ? 30_000 : 90_000);
+  for (const site of due) {
     if (Date.now() > deadline - 1_000) { result.pending++; continue; }
     const previous = state.sites[site.domain];
     const record: VarnishSiteRecord = {
       status: "error", seen: previous?.seen ?? false, checkedAt: (options.now?.() ?? new Date()).toISOString(), error: "",
     };
     try {
-      record.status = await status(site, options, deadline);
+      record.status = await status(run, site, options, deadline);
       if (record.status === "active" || record.status === "inactive") record.seen = true;
-      const install = record.status === "missing" && (!record.seen || explicitDomain);
-      const activate = record.status === "inactive" && explicitDomain;
+      const install = record.status === "missing" && (!record.seen || Boolean(run.domain));
+      const activate = record.status === "inactive" && Boolean(run.domain);
       if (install || activate) {
         // Mark intent before execution. If interrupted after installing, the
-        // next sweep must not mistake a manual removal for a new site.
+        // next pass must not mistake a manual removal for a new site. A
+        // command that fails outright put nothing there, so it is undone.
+        const seenBefore = record.seen;
         record.seen = true;
         state.sites[site.domain] = record;
-        saveVarnishState(path, state);
-        await wp(site, install
-          ? ["plugin", "install", CLP_VARNISH_PLUGIN, "--activate"]
-          : ["plugin", "activate", CLP_VARNISH_PLUGIN], options, deadline);
-        record.status = await status(site, options, deadline);
+        saveVarnishState(run.statePath, state);
+        try {
+          await wp(run, site, install
+            ? ["plugin", "install", CLP_VARNISH_PLUGIN, "--activate"]
+            : ["plugin", "activate", CLP_VARNISH_PLUGIN], options, deadline);
+        } catch (error) {
+          record.seen = seenBefore;
+          throw error;
+        }
+        record.status = await status(run, site, options, deadline);
         if (record.status !== "active") throw new Error("CLP Varnish Cache was not activated; check the site in WordPress");
         result.installed++;
       }
@@ -205,7 +237,7 @@ export async function syncVarnish(
       result.failed.push(`${site.domain}: ${record.error}`);
     }
     state.sites[site.domain] = record;
-    saveVarnishState(path, state);
+    saveVarnishState(run.statePath, state);
     result.checked++;
   }
   return result;
