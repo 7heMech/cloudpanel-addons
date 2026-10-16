@@ -9,8 +9,7 @@
  *
  * A disk measurement walks every site's home directory, which only root can
  * read across accounts. It is a verb with a fixed shape, and it accepts no
- * path. Automatic SSL submits CloudPanel's own certificate form from the
- * browser; here it is only a switch.
+ * path. Automatic SSL records creation intent before the browser issues it.
  */
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
@@ -19,16 +18,18 @@ import {
   ActionFailure, emitActionError, emitActionOk, failAction, runCommand, withFileLock,
   type CommandResult,
 } from "../../cli/action-common";
-import { PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { certificateIssuer, issuerLabel } from "../../lib/certificate-issuer";
-import { PANEL_USER_NAME_RE, panelUserSites } from "../../lib/panel-users";
+import { PANEL_USER_NAME_RE, panelUserOwnsSite, panelUserSites } from "../../lib/panel-users";
+import { validateDomain } from "../../lib/app-http";
+import { AUTO_SSL_FILE, AUTO_SSL_LOCK, updateAutoSsl } from "../../lib/auto-ssl";
 
 const TWEAKS_VERSION = 1;
 const DISK_VERSION = 1;
 const DISK_SCAN_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "scan-stream";
+export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "scan-stream" | "request-ssl";
 
 /**
  * What the addon does, as independent modes.
@@ -216,6 +217,9 @@ export type ScanStreamEvent =
   | ({ phase: "complete" } & ScanResult);
 
 export interface PanelTweaksActionPaths {
+  autoSslFile: string;
+  autoSslLock: string;
+  domainsConfig: string;
   panelDb: string;
   tweaksFile: string;
   diskFile: string;
@@ -237,6 +241,9 @@ export interface PanelTweaksActionOptions {
 }
 
 export const DEFAULT_PANEL_TWEAKS_PATHS: PanelTweaksActionPaths = {
+  autoSslFile: AUTO_SSL_FILE,
+  autoSslLock: AUTO_SSL_LOCK,
+  domainsConfig: `${CONFIG_DIR}/domains.conf`,
   panelDb: PANEL_DB,
   tweaksFile: `${STATE_DIR}/panel-tweaks/tweaks.json`,
   diskFile: `${STATE_DIR}/panel-tweaks/disk-usage.json`,
@@ -668,25 +675,34 @@ interface ParsedAction {
   verb: PanelTweaksVerb;
   /** The panel user the state is for, when it is not an administrator's. */
   asUser: string;
+  domain: string;
 }
 
 function parseAction(argv: string[]): ParsedAction {
   const [rawVerb, ...rest] = argv;
-  const verbs: PanelTweaksVerb[] = ["state", "set-tweaks", "scan", "scan-stream"];
+  const verbs: PanelTweaksVerb[] = ["state", "set-tweaks", "scan", "scan-stream", "request-ssl"];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown panel tweaks verb '${rawVerb ?? ""}'`);
 
   let asUser = "";
+  let domain = "";
   for (const argument of rest) {
+    if (argument.startsWith("--domain=")) {
+      domain = validateDomain(argument.slice("--domain=".length)) ?? "";
+      if (!domain) failAction("invalid site domain");
+      continue;
+    }
     if (argument.startsWith("--as-user=")) {
       asUser = argument.slice("--as-user=".length);
       continue;
     }
     failAction(`unexpected argument '${argument}'`);
   }
-  if (asUser && verb !== "state") failAction(`'${verb}' takes no --as-user`);
+  if (asUser && verb !== "state" && verb !== "request-ssl") failAction(`'${verb}' takes no --as-user`);
   if (asUser && !PANEL_USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
-  return { verb, asUser };
+  if (verb === "request-ssl" && !domain) failAction("request-ssl requires --domain");
+  if (verb !== "request-ssl" && domain) failAction("unexpected argument --domain");
+  return { verb, asUser, domain };
 }
 
 async function requestTweaks(options: PanelTweaksActionOptions, current: PanelTweaks): Promise<PanelTweaks> {
@@ -744,10 +760,32 @@ export async function executePanelTweaksAction(
 ): Promise<unknown> {
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("panel tweaks actions must run as root");
   const paths = pathsFor(options);
-  const { verb, asUser } = parseAction(argv);
+  const { verb, asUser, domain } = parseAction(argv);
 
   if (verb === "state") return stateOf(paths, asUser);
   if (verb === "set-tweaks") return setTweaks(paths, options);
+  if (verb === "request-ssl") {
+    if (!readTweaks(paths).autoSsl) failAction("automatic SSL is off");
+    const db = new Database(paths.panelDb, { readonly: true });
+    try {
+      db.exec("PRAGMA busy_timeout = 5000");
+      if (asUser && !panelUserOwnsSite(db, asUser, domain)) failAction("that site is not yours to provision");
+      const row = db.query<{ id: number; created_at: string; certificate_type: number | null }, [string]>(
+        "SELECT s.id, s.created_at, c.type AS certificate_type FROM site s LEFT JOIN certificate c ON c.id = s.certificate_id WHERE s.domain_name = ?",
+      ).get(domain);
+      if (!row) failAction("CloudPanel has no such site");
+      if (String(row.certificate_type) !== SELF_SIGNED_CERTIFICATE) return { alreadyInstalled: true, domainsInstalled: existsSync(paths.domainsConfig) };
+      const now = (options.now?.() ?? new Date()).getTime();
+      const stamp = row.created_at.replace(" ", "T");
+      const created = Date.parse(/Z$|[+-]\d\d:\d\d$/i.test(stamp) ? stamp : `${stamp}Z`);
+      if (!Number.isFinite(created) || created > now + 60_000 || now - created > 15 * 60_000) failAction("auto SSL can only be requested for a site created in the last fifteen minutes");
+      await updateAutoSsl((requests) => {
+        if (requests[domain]?.siteId === row.id) return;
+        requests[domain] = { siteId: row.id, requestedAt: now, attempts: 0, state: "Waiting for creation to finish", nextAttemptAt: now + 120_000 };
+      }, paths.autoSslFile, paths.autoSslLock, paths.rootUid);
+      return { requested: true, domainsInstalled: existsSync(paths.domainsConfig) };
+    } finally { db.close(); }
+  }
   return withFileLock(paths.lockFile, 15, "a disk measurement is already running", async () =>
     scanDisk(paths, options));
 }

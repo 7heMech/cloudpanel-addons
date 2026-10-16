@@ -119,6 +119,7 @@ export async function handle(
   const method = req.method;
 
   if (method === "GET" && path === "/health") return json({ ok: true, service: "panel-tweaks-manager" });
+  if (method === "GET" && path === "/api/session") return jsonResponse({ ok: true }, { csrf: newCsrfToken() });
 
   if (method === "GET" && path === "/") {
     const csrf = newCsrfToken();
@@ -165,6 +166,18 @@ export async function handle(
   if (method !== "POST") return json({ ok: false, error: "not found" }, 404);
   const denied = guardMutation(req);
   if (denied) return denied;
+
+  if (path === "/api/ssl-request") {
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req, 4 * 1024); } catch (error) { return bodyErrorResponse(error); }
+    const { validateDomain } = await import("../../../lib/app-http");
+    const domain = validateDomain(body.domain);
+    if (!domain) return json({ ok: false, error: "invalid domain" }, 400);
+    if (!auth?.user) return json({ ok: false, error: "not found" }, 404);
+    const args = [`--domain=${domain}`, ...(!auth.roles.includes("ROLE_ADMIN") ? [`--as-user=${auth.user}`] : [])];
+    const result = await callGatewayAction("panel-tweaks", "request-ssl", args);
+    return json(result, result.ok ? 200 : 400);
+  }
 
   if (path === "/api/tweaks") {
     let body: Record<string, unknown>;

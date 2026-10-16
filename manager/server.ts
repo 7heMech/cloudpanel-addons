@@ -63,6 +63,8 @@ const SELF_SCOPED_ROUTES = new Set([
   "POST /wp-login/api/sign-in",
   "GET /wp-login/api/session",
   "GET /panel-tweaks/api/panel",
+  "GET /panel-tweaks/api/session",
+  "POST /panel-tweaks/api/ssl-request",
 ]);
 
 /**

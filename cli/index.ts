@@ -59,7 +59,7 @@ function usage(): void {
   clp-addons action maintenance <verb> --domain=<domain>
   clp-addons action git <verb> [--domain=<domain>] [--job=<job>]
   clp-addons action php-resources <list|site|save-category|delete-category|assign|set-default|reconcile> [--domain=<domain>]
-  clp-addons action panel-tweaks <state|set-tweaks|scan|scan-stream>
+  clp-addons action panel-tweaks <state|set-tweaks|scan|scan-stream|request-ssl> [--domain=<domain>] [--as-user=<user>]
   clp-addons action wp-login <sites|sign-in|remove> [--domain=<domain>]
   clp-addons action manager <enable|disable|update|reconcile|job|watch-job> [--addon=<addon>] [--id=<job>]
   clp-addons action terminal session --domain=<domain> --cols=<n> --rows=<n>   (through the gateway only)

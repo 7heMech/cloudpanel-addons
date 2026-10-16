@@ -83,6 +83,7 @@ export const PHP_RESOURCES_ALLOWED_VERBS = new Set([
 ]);
 
 export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
+  "request-ssl",
   "state",
   "set-tweaks",
   "scan",

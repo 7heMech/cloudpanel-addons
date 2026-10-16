@@ -23,7 +23,7 @@ function cookieJar(initial = "") {
 
 interface Reply { url?: string; token?: boolean; error?: string }
 
-function run(options: { cookie?: string; domainInput?: string; box?: boolean; boxDomain?: string; replies?: Reply[] }) {
+function run(options: { cookie?: string; domainInput?: string; box?: boolean; boxDomain?: string; replies?: Reply[]; provision?: { ready: boolean; reason?: string; certificateDomains?: string[] }; alreadyInstalled?: boolean }) {
   const jar = cookieJar(options.cookie ? encodeURIComponent(options.cookie) : "");
   let submit = () => {};
   const form = {
@@ -39,6 +39,7 @@ function run(options: { cookie?: string; domainInput?: string; box?: boolean; bo
   };
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const events: unknown[] = [];
+  const apiCalls: string[] = [];
   const replies = options.replies ?? [{ token: true }, { url: CERTIFICATES }];
   const document = {
     get cookie() { return jar.get(); },
@@ -50,6 +51,12 @@ function run(options: { cookie?: string; domainInput?: string; box?: boolean; bo
   const fetch = async (url: string, init: RequestInit) => {
     // The completion forgets its domain before it asks anything.
     expect(jar.domains()).not.toContain(DOMAIN);
+    if (url.startsWith('/addons/')) {
+      apiCalls.push(url);
+      return { ok: true, json: async () => ({ ok: true, data: url.endsWith('ssl-request')
+        ? { domainsInstalled: Boolean(options.provision), alreadyInstalled: options.alreadyInstalled }
+        : options.provision }) };
+    }
     calls.push({ url, init });
     const reply = replies[calls.length - 1]!;
     return { url: `${ORIGIN}${reply.url ?? ISSUE}`, text: async () => JSON.stringify(reply) };
@@ -79,7 +86,7 @@ function run(options: { cookie?: string; domainInput?: string; box?: boolean; bo
     { dispatchEvent: (event: unknown) => events.push(event) },
     class { constructor(_: string, public init: { detail: string }) {} },
   );
-  return { jar, choice, alert, calls, events, submit: () => submit(), settled: () => new Promise((r) => setTimeout(r, 0)) };
+  return { jar, choice, alert, calls, apiCalls, events, submit: () => submit(), settled: () => new Promise((r) => setTimeout(r, 0)) };
 }
 
 test("the option is withdrawn with its switch and is not a field of CloudPanel's form", () => {
@@ -142,4 +149,25 @@ test("anything but CloudPanel's redirect to the certificate list is a failure", 
     expect(failed.events).toEqual([]);
     if (replies[1]?.error) expect(failed.alert.textContent).toContain("DNS points elsewhere");
   }
+});
+
+test("completion records intent and waits for Domains before requesting the certificate", async () => {
+  const done = run({ box: true, provision: { ready: true } });
+  await done.settled();
+  expect(done.apiCalls).toEqual(['/addons/panel-tweaks/api/session', '/addons/panel-tweaks/api/ssl-request', '/addons/domains/api/provision']);
+  expect(done.calls.length).toBe(2);
+  const pending = run({ box: true, provision: { ready: false, reason: 'Zone is pending a nameserver change.' } });
+  await pending.settled();
+  expect(pending.calls).toEqual([]);
+  expect(pending.alert.textContent).toContain('Zone is pending a nameserver change.');
+  expect(pending.alert.className).toBe('alert alert-warning');
+  const installed = run({ box: true, alreadyInstalled: true });
+  await installed.settled();
+  expect(installed.calls).toEqual([]);
+});
+
+test("Domains may add managed www to the native certificate without accepting arbitrary aliases", async () => {
+  const done = run({ box: true, provision: { ready: true, certificateDomains: [DOMAIN, `www.${DOMAIN}`, 'unrelated.example.net'] } });
+  await done.settled();
+  expect((done.calls[1]!.init.body as FormData).getAll('domains[]')).toEqual([DOMAIN, `www.${DOMAIN}`]);
 });
