@@ -1,19 +1,20 @@
 import { isIP } from "node:net";
 import { domain, recordName, type Change, type DnsRecord, type PanelSite, type Profile, type Zone } from "./model";
 import { unquoteTxt, type Dkim } from "./providers";
+import { mergeSpf } from "./spf";
 
-export interface Claim { name: string; type: string; family: "all" | "spf" | "dkim" }
+export interface Claim { name: string; type: string; family: "all" | "spf" | "dkim"; merge?: boolean }
 export interface Desired { records: DnsRecord[]; claims: Claim[]; deferredDkim: boolean; waitingCertificate: boolean }
 const mailTokens = /\{(?:mail\.[^}]+|webmail\.host|spf|dkim|selector)\}/;
 
-export function desiredRecords(p: Profile, site: PanelSite, zone: Zone, ips: { ipv4: string; ipv6: string }, dkim: Dkim | null): Desired {
+export function desiredRecords(p: Profile, site: PanelSite, zone: Zone, ips: { ipv4: string; ipv6: string }, dkim: Dkim | null, current: DnsRecord[] = []): Desired {
   const records: DnsRecord[] = [], claims: Claim[] = [];
   const includes = [...new Set([...p.spfIncludes, ...(p.spfByDomain[site.domain] ?? [])])].map((s) => `include:${s}`);
-  const spf = ["v=spf1", ...includes, ...(p.mailIpv4 ? [`ip4:${p.mailIpv4}`] : []), ...(p.mailIpv6 ? [`ip6:${p.mailIpv6}`] : []), "~all"].join(" ");
+  const spfTerms = [...includes, ...(p.mailIpv4 ? [`ip4:${p.mailIpv4}`] : []), ...(p.mailIpv6 ? [`ip6:${p.mailIpv6}`] : [])];
   const tokens: Record<string, string> = { domain: site.domain, "server.ipv4": p.serverIpv4 || ips.ipv4, "server.ipv6": p.serverIpv6 || ips.ipv6,
     "mail.host": p.mailHost, "mail.ipv4": p.mailIpv4, "mail.ipv6": p.mailIpv6, "webmail.host": p.webmailHost,
-    spf, dkim: dkim?.txt ?? "", selector: dkim?.selector ?? p.dkimSelector };
-  const render = (s: string) => s.replace(/\{([^}]+)\}/g, (_, token: string) => {
+    spf: "", dkim: dkim?.txt ?? "", selector: dkim?.selector ?? p.dkimSelector };
+  const render = (s: string) => s.replace(/(?<!%)\{([^}]+)\}/g, (_, token: string) => {
     if (!(token in tokens)) throw new Error(`Unknown record placeholder {${token}}`);
     return tokens[token]!;
   });
@@ -22,8 +23,13 @@ export function desiredRecords(p: Profile, site: PanelSite, zone: Zone, ips: { i
     if (t.apexOnly && site.domain !== zone.name || !p.mailEnabled && mailTokens.test(`${t.name} ${t.content} ${t.data?.target ?? ""}`)) continue;
     const name = render(t.name).toLowerCase().replace(/\.$/, "");
     if (!recordName(name) || name !== site.domain && !name.endsWith(`.${site.domain}`)) throw new Error("Record templates must stay within their site's domain");
-    const family = t.content.includes("{spf}") ? "spf" : t.content.includes("{dkim}") ? "dkim" : "all";
-    if (!claims.some((c) => c.name === name && c.type === t.type && c.family === family)) claims.push({ name, type: t.type, family });
+    const merge = t.content.includes("{spf}");
+    const family = merge || t.type === "TXT" && /^v=spf1(?:\s|$)/i.test(unquoteTxt(t.content)) ? "spf" : t.content.includes("{dkim}") ? "dkim" : "all";
+    if (merge) {
+      if (t.type !== "TXT" || t.content !== "{spf}") throw new Error("The {spf} placeholder must occupy an entire TXT template");
+      tokens.spf = mergeSpf(spfTerms, current.filter((r) => r.type === "TXT" && r.name === name).map((r) => unquoteTxt(r.content)).filter((v) => /^v=spf1(?:\s|$)/i.test(v)), name);
+    }
+    if (!claims.some((c) => c.name === name && c.type === t.type && c.family === family)) claims.push({ name, type: t.type, family, ...(merge ? { merge } : {}) });
     if (family === "dkim" && !dkim) { deferredDkim = true; continue; }
     const content = render(t.content);
     if (!content && (t.type === "A" || t.type === "AAAA")) continue;
@@ -80,14 +86,16 @@ export function diffRecords(current: DnsRecord[], desired: Desired): Change[] {
     const drift = pool.find((r) => !used.has(r) && r.type === after.type && r.name === after.name);
     if (drift) {
       used.add(drift);
-      changes.push({ action: "update", service: "dns", name: after.name, detail: `Correct ${after.type} drift`, conflict: true, before: drift, after: preservingNotes(drift, after) });
+      const mergingSpf = desired.claims.some((c) => c.name === after.name && c.type === after.type && c.merge);
+      changes.push({ action: "update", service: "dns", name: after.name, detail: mergingSpf ? "Merge SPF; preserve existing senders and ending policy" : `Correct ${after.type} drift`, conflict: true, before: drift, after: preservingNotes(drift, after) });
     } else changes.push({ action: "create", service: "dns", name: after.name, detail: `Create ${after.type}`, after });
   }
   for (const before of pool) {
     if (used.has(before) || desired.deferredDkim && desired.claims.some((c) => c.family === "dkim" && c.name === before.name)) continue;
     const protectedRecord = ["NS", "SOA"].includes(before.type);
+    const mergingSpf = before.type === "TXT" && desired.claims.some((c) => c.name === before.name && c.merge);
     changes.push({ action: protectedRecord ? "conflict" : "delete", service: "dns", name: before.name,
-      detail: protectedRecord ? `Protected ${before.type} prevents this template` : `Delete conflicting ${before.type}`, before, conflict: true });
+      detail: protectedRecord ? `Protected ${before.type} prevents this template` : mergingSpf ? "Delete extra SPF after merging its senders" : `Delete conflicting ${before.type}`, before, conflict: true });
   }
   if (desired.deferredDkim) for (const c of desired.claims.filter((c) => c.family === "dkim")) {
     const candidates = pool.filter((r) => r.name === c.name && !used.has(r));

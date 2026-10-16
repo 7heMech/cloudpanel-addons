@@ -32,9 +32,30 @@ block both sites; identical desired records can be shared.
 Existing matching records are adopted and given a `clp-addons:domains` comment
 or tag. Existing comments and tags are preserved.
 An update corrects a selected record; additional conflicting records are deleted
-before creates. Unrelated names remain dashboard-owned, even if they carry an
+before creates. SPF consolidation saves the union on the retained record before
+deleting duplicate SPF, so a failed update cannot discard another sender's terms.
+Unrelated names remain dashboard-owned, even if they carry an
 addon comment. Quoted TXT chunks and normalized DNS targets compare by value.
 Editing a profile to stop claiming a name leaves those records in place.
+
+The `{spf}` TXT template ensures a minimum set of positive mechanisms: mail IPs
+and global/per-domain includes. Planning and fresh enforcement reads merge these
+with existing mechanisms at each template's exact name. Existing sender order,
+fallback (`all`, `redirect`, or implicit neutral), and modifiers are preserved;
+equivalent terms are deduplicated. New SPF uses `~all`. Compatible duplicate
+records form a deterministic union; different fallback policies or modifier sets
+block the site. A conservative parser also blocks malformed/unsupported syntax,
+macros, non-pass mechanisms other than `all`, and mechanisms after `all` rather
+than reinterpreting an advanced policy. A reviewed literal SPF TXT template is
+the explicit option for advanced policies: its value is enforced exactly, while
+its SPF family claim still preserves other TXT. SPF macros in literal templates
+are distinct from addon placeholders. No recursive SPF lookups are performed.
+This follows [RFC 7208](https://www.rfc-editor.org/rfc/rfc7208.html).
+
+SPF adoption is additive: terms present in DNS remain even after their removal
+from a profile. Revocation requires removing the profile requirement and then
+editing DNS. This avoids guessing whether a dashboard authorization belongs to
+another sender. Required profile terms still return if deleted from DNS.
 
 ## Planning and enforcement
 

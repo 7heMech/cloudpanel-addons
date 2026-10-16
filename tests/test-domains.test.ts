@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, sym
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeDomainsAction, type DomainsActionOptions, type DomainsPaths } from "../addons/domains/action";
-import { PRESET_PROFILE, type PanelSite, type Profile, type Reply, type Zone } from "../addons/domains/model";
+import { PRESET_PROFILE, type PanelSite, type Policy, type Profile, type Reply, type Zone } from "../addons/domains/model";
 import { Cloudflare, Mailcow, unquoteTxt } from "../addons/domains/providers";
 import { desiredRecords, diffRecords } from "../addons/domains/records";
 import { DomainsEngine, matchingZone } from "../addons/domains/reconcile";
@@ -68,22 +68,105 @@ test("Report only plans without provider writes; Enforce requires a current conf
   const writes = f.apis.writes().length; await f.act("reconcile"); expect(f.apis.writes().length).toBe(writes);
 });
 
-test("managed names adopt records, delete conflicting A/CNAME and duplicate SPF, and preserve other TXT and names", async () => {
+test("managed names adopt records, delete conflicting A/CNAME, merge duplicate SPF and preserve other TXT and names", async () => {
   const f = fixture(); await f.setup(); f.apis.mailDomains.add("example.net"); f.apis.key("example.net");
   const old = f.apis.record(f.zone, { name: "example.net", type: "A", content: "192.0.2.99", proxied: true, comment: "Operator note", tags: ["operator:keep"] });
   f.apis.record(f.zone, { name: "example.net", type: "A", content: "192.0.2.98" });
   f.apis.record(f.zone, { name: "www.example.net", type: "CNAME", content: "elsewhere.example.org" });
   f.apis.record(f.zone, { name: "example.net", type: "TXT", content: "v=spf1 include:old.example.org ~all" });
-  f.apis.record(f.zone, { name: "example.net", type: "TXT", content: "v=spf1 -all" });
+  const duplicate = f.apis.record(f.zone, { name: "example.net", type: "TXT", content: '"v=spf1 include:transactional.example.org " "~all"' });
   const verification = f.apis.record(f.zone, { name: "example.net", type: "TXT", content: "google-site-verification=keep" });
   const custom = f.apis.record(f.zone, { name: "dashboard.example.net", type: "A", content: "192.0.2.7", comment: "clp-addons:domains somebody else" });
   const applied = await f.enforce(); expect(applied.sites[0]!.errors).toEqual([]);
   const after = f.apis.records.get(f.zone.id)!;
   expect(after.find((r) => r.id === old.id)?.content).toBe("192.0.2.80");
   expect(after.find((r) => r.id === old.id)).toMatchObject({ comment: "Operator note", tags: ["operator:keep", "clp-addons:domains"] });
-  expect(after.filter((r) => r.type === "TXT" && unquoteTxt(r.content).startsWith("v=spf1"))).toHaveLength(1);
+  const spf = after.filter((r) => r.type === "TXT" && unquoteTxt(r.content).startsWith("v=spf1"));
+  expect(spf).toHaveLength(1);
+  expect(unquoteTxt(spf[0]!.content)).toBe("v=spf1 include:old.example.org include:transactional.example.org ip4:192.0.2.25 ip6:2001:db8::25 ~all");
+  const mergeWrite = f.apis.calls.findIndex((c) => c.method === "PATCH" && c.body?.type === "TXT" && c.body?.content.includes("include:transactional.example.org"));
+  expect(mergeWrite).toBeGreaterThan(-1);
+  expect(f.apis.calls.findIndex((c) => c.method === "DELETE" && c.path.endsWith(duplicate.id!))).toBeGreaterThan(mergeWrite);
   expect(after).toContainEqual(verification); expect(after).toContainEqual(custom);
   expect(after.filter((r) => r.name !== custom.name && r.id !== verification.id).every((r) => r.comment?.startsWith("clp-addons:domains") || r.tags?.includes("clp-addons:domains"))).toBe(true);
+});
+
+test("SPF planning and later drift repair retain dashboard senders and hardfail while ensuring required terms", async () => {
+  const f = fixture(); f.profile.spfIncludes = ["_spf.profile.example.org"]; await f.setup();
+  const original = f.apis.record(f.zone, { name: "example.net", type: "TXT", content: "v=spf1 include:existing.example.org -all" });
+  const planned = await f.act("plan");
+  expect(planned.sites[0]!.changes.find((c) => c.before?.id === original.id)?.after?.content).toBe("v=spf1 include:existing.example.org include:_spf.profile.example.org ip4:192.0.2.25 ip6:2001:db8::25 -all");
+  expect(f.apis.writes()).toEqual([]);
+  await f.enforce();
+  const record = f.apis.records.get(f.zone.id)!.find((r) => r.id === original.id)!;
+  record.content = "v=spf1 include:existing.example.org include:dashboard.example.org -all";
+  const repaired = await f.act("reconcile");
+  expect(repaired.sites[0]!.changes).toEqual([]);
+  const after = unquoteTxt(f.apis.records.get(f.zone.id)!.find((r) => r.id === original.id)!.content);
+  expect(after).toBe("v=spf1 include:existing.example.org include:dashboard.example.org include:_spf.profile.example.org ip4:192.0.2.25 ip6:2001:db8::25 -all");
+  const writes = f.apis.writes().length; await f.act("reconcile"); expect(f.apis.writes()).toHaveLength(writes);
+});
+
+test("ambiguous SPF blocks enforcement and preserves every record without provider writes", async () => {
+  const f = fixture(); await f.setup();
+  f.apis.record(f.zone, { name: "example.net", type: "TXT", content: "v=spf1 include:first.example.org -all" });
+  f.apis.record(f.zone, { name: "example.net", type: "TXT", content: "v=spf1 include:second.example.org ~all" });
+  const before = structuredClone(f.apis.records.get(f.zone.id));
+  const planned = await f.act("plan");
+  expect(planned.sites[0]!.errors.join()).toContain("conflicting ending policies");
+  const review = await f.act("save-profile", { ...f.profile, mode: "enforce" });
+  expect(review.review?.blocked).toBe(true);
+  expect(f.apis.records.get(f.zone.id)).toEqual(before); expect(f.apis.writes()).toEqual([]);
+});
+
+test("enforcement merges SPF from its fresh DNS read, including senders added after planning", async () => {
+  const f = fixture(); await f.setup();
+  const policy: Policy = { version: 1, profiles: [{ ...f.profile, mode: "enforce" }], defaultProfileId: null, assignments: { "example.net": f.profile.id }, knownSiteIds: [1] };
+  const engine = new DomainsEngine({ connections: connection, ips: f.options.ips!(), fetch: f.apis.fetch });
+  const plan = await engine.scan(policy, [site()]);
+  f.apis.record(f.zone, { name: "example.net", type: "TXT", content: "v=spf1 include:concurrent.example.org -all" });
+  const result = await engine.enforce(policy, [site()], plan);
+  expect(result.sites[0]!.errors).toEqual([]); expect(result.sites[0]!.changes).toEqual([]);
+  const spf = f.apis.records.get(f.zone.id)!.filter((r) => r.type === "TXT" && unquoteTxt(r.content).startsWith("v=spf1"));
+  expect(spf).toHaveLength(1);
+  expect(unquoteTxt(spf[0]!.content)).toBe("v=spf1 include:concurrent.example.org ip4:192.0.2.25 ip6:2001:db8::25 -all");
+});
+
+test("SPF merges are isolated to each template name and leave other TXT alone", () => {
+  const p = { ...structuredClone(PRESET_PROFILE), templates: [{ type: "TXT" as const, name: "{domain}", content: "{spf}" }, { type: "TXT" as const, name: "bounce.{domain}", content: "{spf}" }] };
+  const s = site(), z: Zone = { id: "f".repeat(32), name: s.domain, status: "active", nameServers: [] };
+  const current = [{ type: "TXT", name: s.domain, content: "v=spf1 include:apex.example.org -all", ttl: 1 },
+    { type: "TXT", name: `bounce.${s.domain}`, content: "v=spf1 redirect=bounce-policy.example.org", ttl: 1 },
+    { type: "TXT", name: s.domain, content: "google-site-verification=keep", ttl: 1 }];
+  const desired = desiredRecords(p, s, z, { ipv4: "192.0.2.80", ipv6: "" }, null, current);
+  expect(desired.records[0]!.content).toBe("v=spf1 include:apex.example.org ip4:192.0.2.25 ip6:2001:db8::25 -all");
+  expect(desired.records[1]!.content).toBe("v=spf1 ip4:192.0.2.25 ip6:2001:db8::25 redirect=bounce-policy.example.org");
+  expect(diffRecords(current, desired).some((c) => c.before?.content === "google-site-verification=keep")).toBe(false);
+});
+
+test("an explicit advanced SPF template preserves macros and verification TXT while enforcing its reviewed value", () => {
+  const p = { ...structuredClone(PRESET_PROFILE), templates: [{ type: "TXT" as const, name: "{domain}", content: "v=spf1 -exists:%{i}.blocked.example.org ip4:{mail.ipv4} -all" }] };
+  const s = site(), z: Zone = { id: "f".repeat(32), name: s.domain, status: "active", nameServers: [] };
+  const current = [{ type: "TXT", name: s.domain, content: "v=spf1 include:obsolete.example.org ~all", ttl: 1 },
+    { type: "TXT", name: s.domain, content: "google-site-verification=keep", ttl: 1 }];
+  const desired = desiredRecords(p, s, z, { ipv4: "192.0.2.80", ipv6: "" }, null, current);
+  expect(desired.records[0]!.content).toBe("v=spf1 -exists:%{i}.blocked.example.org ip4:192.0.2.25 -all");
+  const changes = diffRecords(current, desired);
+  expect(changes).toHaveLength(1);
+  expect(changes[0]!.detail).toBe("Correct TXT drift");
+  expect(changes[0]!.before?.content).toBe("v=spf1 include:obsolete.example.org ~all");
+});
+
+test("failed SPF consolidation never deletes a duplicate's senders", async () => {
+  const f = fixture(); await f.setup();
+  const first = f.apis.record(f.zone, { name: "example.net", type: "TXT", content: "v=spf1 include:first.example.org ~all" });
+  const second = f.apis.record(f.zone, { name: "example.net", type: "TXT", content: "v=spf1 include:second.example.org ~all" });
+  f.apis.intercept = (url, init) => init.method === "PATCH" && url.pathname.endsWith(`/dns_records/${first.id}`) ? Response.json({ success: false, errors: [{ code: 1000, message: "Update failed" }], result: null }) : undefined;
+  const result = await f.enforce();
+  expect(result.sites[0]!.errors.length).toBeGreaterThan(0);
+  expect(f.apis.records.get(f.zone.id)).toContainEqual(first);
+  expect(f.apis.records.get(f.zone.id)).toContainEqual(second);
+  expect(f.apis.calls.some((c) => c.method === "DELETE" && c.path.endsWith(`/dns_records/${second.id}`))).toBe(false);
 });
 
 test("longest account zone wins and subdomain sites get neither www nor apex-only webmail", async () => {

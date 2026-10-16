@@ -49,7 +49,7 @@ runs first, followed by Cloudflare IP Access and SMTP. WordPress Tools keeps its
 own maintenance cadence.
 
 The default profile creates proxied A/AAAA, www only at the zone apex, one MX,
-one merged SPF ending `~all`, Mailcow DKIM, autoconfig/autodiscover CNAMEs, the
+one merged SPF, Mailcow DKIM, autoconfig/autodiscover CNAMEs, the
 autodiscover SRV, and an apex-only webmail CNAME to your hub. Strict SSL and
 Always use HTTPS are on. Full SSL rules for HTTP-01 and webmail are installed
 before proxying. This works with Cloudflare-only origin access. DNS-only is an
@@ -87,11 +87,30 @@ itself needs its own profile with webmail A/AAAA templates instead of that CNAME
 The addon does not create mail-server A/AAAA, TLSA, PTR or mailbox records.
 
 Enforce corrects managed values and deletes conflicts, including an unexpected
-address, a conflicting CNAME, duplicate SPF and stale DKIM at the selector.
+address, a conflicting CNAME and stale DKIM at the selector.
 Verification TXT beside SPF and records at unrelated names are left alone.
 NS/SOA conflicts block a change. Comments mark records for clarity but do not
 decide ownership. Zone settings apply to every hostname in that zone; individual
 addon rules preserve unrelated entrypoint rules.
+
+The `{spf}` template adds the mail IPs and profile includes to existing SPF,
+preserving its senders and ending policy, including `-all` or `redirect=`. When
+there is no existing SPF, it creates one ending `~all`. Compatible duplicate
+records are combined into one; the merged value is saved before extras are
+deleted. Different ending policies or modifiers block enforcement for that
+site. Malformed records, macros, non-pass mechanisms other than `all`, and
+mechanisms after `all` also require manual review. The plan shows the reason;
+resolve it in DNS or use a fully reviewed literal SPF TXT template for advanced
+SPF. A literal template publishes exactly its configured policy, with no merge;
+other verification TXT records remain untouched.
+These rules follow SPF's [ordered mechanisms and fallback semantics](https://www.rfc-editor.org/rfc/rfc7208.html#section-4.6).
+
+SPF additions are deliberately additive. Removing an include or changing a mail
+IP in a profile does not revoke the old authorization already in DNS. Remove it
+from the profile first, then remove the retired sender in Cloudflare. Additions
+made directly in Cloudflare are retained; required profile terms are restored
+if removed. This is a local merge, not recursive validation of included SPF
+policies or their total DNS lookup count.
 
 Changing a mode, unassigning a site or deleting a profile leaves external state
 in place. Deleting a CloudPanel site lists its tracked DNS as **orphaned**.

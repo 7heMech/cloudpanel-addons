@@ -95,7 +95,7 @@ export class DomainsEngine {
           }
           if (!aclHas(acl, site.domain)) plan.changes.push({ action: "update", service: "mailcow", name: p.sharedMailbox, detail: `Add ${site.domain} to sender ACL; keep existing grants` });
         }
-        const desired = desiredRecords(p, site, zone, this.options.ips, key ?? plannedKey);
+        const desired = desiredRecords(p, site, zone, this.options.ips, key ?? plannedKey, records);
         plan.waitingCertificate = desired.waitingCertificate;
         plan.unproxiedWeb = desired.records.some((r) => r.name === site.domain && ["A", "AAAA", "CNAME"].includes(r.type) && !r.proxied);
         plan.hasWebAddress = desired.records.some((r) => r.name === site.domain && ["A", "AAAA", "CNAME"].includes(r.type));
@@ -193,14 +193,19 @@ export class DomainsEngine {
       for (const s of group) await protect(s, async () => {
         const w = plan.work.get(s.domain)!;
         const key = w.profile.mailEnabled ? await this.mailcow.dkim(s.domain) : null;
-        const desired = desiredRecords(w.profile, w.site, s.zone!, this.options.ips, key);
+        const desired = desiredRecords(w.profile, w.site, s.zone!, this.options.ips, key, records);
         const changes = diffRecords(records, desired);
         if (changes.some((c) => c.deferred || c.action === "conflict")) throw new Error("DNS prerequisites are not ready");
+        const spfUpdates = changes.filter((c) => c.action === "update" && c.after!.type === "TXT" && desired.claims.some((claim) => claim.name === c.name && claim.family === "spf"));
+        for (const c of spfUpdates) {
+          const record = await this.cloudflare.writeRecord(zoneId, c.after!);
+          records = records.filter((r) => r.id !== record.id); records.push(record);
+        }
         for (const c of changes.filter((c) => c.action === "delete")) {
           await this.cloudflare.deleteRecord(zoneId, c.before!.id!);
           records = records.filter((r) => r.id !== c.before!.id);
         }
-        for (const c of changes.filter((c) => c.after)) {
+        for (const c of changes.filter((c) => c.after && !spfUpdates.includes(c))) {
           const record = await this.cloudflare.writeRecord(zoneId, c.after!);
           records = records.filter((r) => r.id !== record.id); records.push(record);
         }
