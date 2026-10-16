@@ -44,7 +44,9 @@ reported as done but possibly out of date rather than as plain success.
 ## New-site policy
 
 The optional policy records CloudPanel site IDs that already existed when the
-policy was enabled. A root-only systemd timer checks once a minute. An unseen
+policy was enabled. The shared Nginx-sites path trigger runs this addon after
+DNS & Mail and before SMTP, with a second pass ten seconds later. A root-only
+systemd timer also checks once a minute as recovery. An unseen
 site ID is treated as a newly created site and receives Cloudflare-only access.
 This also handles deletion and recreation of the same hostname because the new
 site has a new ID.

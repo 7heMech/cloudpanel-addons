@@ -93,12 +93,14 @@ keeps the policy; enabling applies it again.
 
 ## New sites
 
-`clp-addons-smtp-reconcile.path` watches `/etc/nginx/sites-enabled`, where
-CloudPanel writes every new site's vhost. Its service runs `sync-sites`, which
+`clp-addons-sites-reconcile.path` watches `/etc/nginx/sites-enabled`, where
+CloudPanel writes every new site's vhost. Its shared service runs registered
+addons in catalog order: DNS & Mail first, Cloudflare IP Access, then SMTP.
+SMTP's `sync-sites`
 does nothing unless CloudPanel's sites have changed since the last run; then it
 binds new site users, puts new sites in the default profile and drops deleted
 sites. CloudPanel commits the site row about 200 ms after writing the vhost, so
-the service runs it again 10 seconds later, even if the first run failed. Repair
+the service runs all registered addons again 10 seconds later, even if the first run failed. Repair
 runs the full reconcile, which also undoes drift, every 15 minutes, and restarts
 the watcher if it has stopped.
 

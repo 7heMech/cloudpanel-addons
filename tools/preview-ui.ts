@@ -9,6 +9,8 @@ import type { GitSiteStatus } from "../addons/git/app/service";
 import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
 import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
 import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../addons/smtp/app/views";
+import { dashboardView as domainsDashboardView, layout as domainsLayout, reviewContent as domainsReviewContent } from "../addons/domains/app/views";
+import { PRESET_PROFILE as DNS_PROFILE, type State as DomainsState, type Review as DomainsReview } from "../addons/domains/model";
 import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
@@ -36,6 +38,27 @@ import { dashboardView as terminalDashboardView, layout as terminalLayout } from
 import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
 
 const versions: AvailableTags = { tags: ["0.0.19", "0.0.18"], latest: "0.0.19", source: "registry" };
+function domainsPreviewState(url: URL): DomainsState {
+  const profile = { ...structuredClone(DNS_PROFILE), name: "CloudPanel + Mailcow", mode: "enforce" as const, mailHost: "mail.example.net", sharedMailbox: "relay@example.net" };
+  const report = { ...structuredClone(profile), id: "review-first", name: "Review first", mode: "report" as const, webProxied: false };
+  const zone = { id: "1".repeat(32), name: "example.net", status: "active", nameServers: ["alice.ns.cloudflare.com", "bob.ns.cloudflare.com"] };
+  const empty = url.searchParams.get("state") === "empty";
+  return { profiles: [profile, report], defaultProfileId: profile.id,
+    connections: { accountId: "a".repeat(32), mailcowUrl: "https://mail.example.net", hasCloudflareToken: !empty, hasMailcowKey: !empty },
+    detectedIps: { ipv4: "192.0.2.80", ipv6: "2001:db8::80" }, scannedAt: "2026-10-16T12:00:00Z", errors: [], retryAt: 0,
+    sites: empty ? [] : [
+      { domain: "example.net", type: "php", profileId: profile.id, mode: "enforce", certificateReady: true, waitingCertificate: false, zone, changes: [], errors: [], ssl: { requested: true, attempts: 1, state: "Certificate installed", nextAttemptAt: 0 } },
+      { domain: "shop.example.net", type: "php", profileId: report.id, mode: "report", certificateReady: false, waitingCertificate: false, zone, cloudflareOnly: true, unproxiedWeb: true, changes: [
+        { action: "update", service: "dns", name: "shop.example.net", detail: "Correct A drift", conflict: true,
+          before: { id: "2".repeat(32), type: "A", name: "shop.example.net", content: "192.0.2.9", ttl: 1, proxied: false },
+          after: { type: "A", name: "shop.example.net", content: "192.0.2.80", ttl: 1, proxied: false } },
+        { action: "delete", service: "dns", name: "shop.example.net", detail: "Delete duplicate SPF", conflict: true, before: { id: "3".repeat(32), name: "shop.example.net", type: "TXT", content: "v=spf1 include:old.provider.example ~all", ttl: 1 } },
+      ], errors: [] },
+      { domain: "join.example.org", type: "static", profileId: profile.id, mode: "enforce", certificateReady: false, waitingCertificate: false, zone: { ...zone, name: "example.org", status: "pending" }, changes: [], errors: [], ssl: { requested: true, attempts: 0, state: "Waiting for the zone's registrar nameservers", nextAttemptAt: 0 } },
+      { domain: "a-long-customer-domain.example.net", type: "nodejs", profileId: null, mode: "report", certificateReady: false, waitingCertificate: false, zone: null, changes: [], errors: [] },
+    ], orphans: empty ? [] : [{ domain: "retired.example.net", zoneId: zone.id, zoneName: zone.name, records: [{ id: "4".repeat(32), name: "retired.example.net", type: "A", content: "192.0.2.80", ttl: 1, proxied: true }] }],
+  };
+}
 const instances: InstanceView[] = [
   { domain: "pages.example.com", port: 39000, tag: "0.0.19", state: "running" },
   { domain: "docs.example.com", port: 39001, tag: "0.0.18", state: "running" },
@@ -777,7 +800,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login", "smtp", "terminal"].filter((name) => !enabled.includes(name)),
+        available: ["domains", "cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login", "smtp", "terminal"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
@@ -832,6 +855,12 @@ const server = Bun.serve({
       html = wpLoginLayout("WordPress Sign-In", wpLoginDashboardView(wpLoginPreviewSites(url)), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
+    } else if (path === "/addons/domains/" || path === "/addons/domains") {
+      const fixture = domainsPreviewState(url);
+      const dialog = url.searchParams.get("dialog");
+      const review: DomainsReview = { token: "preview-only", title: "Review DNS and mail enforcement", sites: fixture.sites, expiresAt: Date.now() + 900000 };
+      const opener = dialog === "profile" ? "editProfile(document.querySelector('.policy-card button'))" : dialog === "connections" ? "openConnections()" : dialog === "review" ? `pendingReview=${JSON.stringify(review)};document.getElementById('review-content').innerHTML=${JSON.stringify(domainsReviewContent(review))};document.getElementById('review-dialog').showModal()` : "";
+      html = domainsLayout("DNS & Mail", domainsDashboardView(fixture), notice).replace("</body>", () => opener ? `<script>addEventListener('DOMContentLoaded',function(){${opener.replaceAll("<", "\\u003c")}})</script></body>` : "</body>");
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {
       // ?profile=<id> (or ?profile= for a new one) and ?domains=<site> open a dialog on load, like ?confirm= does.
       const arg = (name: string) => JSON.stringify(url.searchParams.get(name)).replaceAll("<", "\\u003c");

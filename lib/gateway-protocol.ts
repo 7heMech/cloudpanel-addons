@@ -111,6 +111,10 @@ export const SMTP_ALLOWED_VERBS = new Set([
   "list", "save-profile", "delete-profile", "assign", "set-default", "save-grants", "test",
 ]);
 
+export const DOMAINS_ALLOWED_VERBS = new Set([
+  "list", "save-connections", "save-profile", "delete-profile", "assign", "set-default", "plan", "apply", "remove-records", "provision", "retry-ssl",
+]);
+
 /**
  * The manager's own privileged verbs: enabling and disabling an addon that
  * already ships inside this binary, and replacing the binary itself.

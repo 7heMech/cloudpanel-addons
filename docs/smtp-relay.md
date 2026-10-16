@@ -20,8 +20,10 @@ plugin: their `mail()` goes through the relay as it is.
    Postfix queued it. Delivery results are in `journalctl -u postfix@-`, or in
    `/var/log/mail.log` where rsyslog is installed.
 
-The provider must accept the addresses a profile's sites send as. The addon does
-not create mailboxes, verify domains at the provider, or set DNS records.
+The provider must accept the addresses a profile's sites send as. For Cloudflare
+and Mailcow, [DNS & Mail](domains.md) sets up domains, DKIM, DNS and the existing
+shared mailbox's sender ACL before SMTP binds a new site. SMTP itself does not
+create mailboxes, verify domains at the provider, or set DNS records.
 
 ## The From address
 

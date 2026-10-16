@@ -7,12 +7,14 @@ import {
   CLOUDFLARE_IPS_ALLOWED_VERBS, GIT_ALLOWED_VERBS, INSTATIC_ALLOWED_VERBS, MAINTENANCE_ALLOWED_VERBS,
   PANEL_TWEAKS_ALLOWED_VERBS, PHP_RESOURCES_ALLOWED_VERBS, SMTP_ALLOWED_VERBS, STAGER_ALLOWED_VERBS,
   TERMINAL_ALLOWED_VERBS, WP_LOGIN_ALLOWED_VERBS,
+  DOMAINS_ALLOWED_VERBS,
 } from "../lib/gateway-protocol";
 import { CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, SERVICE_USER, SOCKET_PATH } from "../cli/paths";
 
 const REPO = join(import.meta.dir, "..");
 
 const GATEWAY_VERBS = new Map<string, Set<string>>([
+  ["domains", DOMAINS_ALLOWED_VERBS],
   ["cloudflare-ips", CLOUDFLARE_IPS_ALLOWED_VERBS], ["git", GIT_ALLOWED_VERBS], ["instatic", INSTATIC_ALLOWED_VERBS],
   ["maintenance", MAINTENANCE_ALLOWED_VERBS], ["panel-tweaks", PANEL_TWEAKS_ALLOWED_VERBS],
   ["php-resources", PHP_RESOURCES_ALLOWED_VERBS], ["smtp", SMTP_ALLOWED_VERBS], ["stager", STAGER_ALLOWED_VERBS],
@@ -72,7 +74,7 @@ test("required systemd dependencies survive into the catalog", () => {
 
 test("repair upkeep is the addons that ask for it, in catalog order", () => {
   const all = ADDON_NAMES.map((name) => ADDONS[name]!);
-  expect(addonMaintenance(all).map((spec) => spec.name)).toEqual(["instatic", "stager", "php-resources", "git", "panel-tweaks", "smtp"]);
+  expect(addonMaintenance(all).map((spec) => spec.name)).toEqual(["domains", "instatic", "stager", "php-resources", "git", "panel-tweaks", "smtp"]);
   // Gated on being installed: repair passes the installed set, not every addon.
   expect(addonMaintenance([ADDONS.stager!]).map((spec) => spec.name)).toEqual(["stager"]);
   expect(addonMaintenance([ADDONS.maintenance!])).toEqual([]);
