@@ -536,13 +536,10 @@ export async function executeWpLoginAction(
     if (maintenance && !bypass) return maintenanceReply(domain, clientIp, !asUser);
     const basicAuth = basicAuthBlocks(paths, domain, clientIp);
     if (basicAuth && !allowBasicAuth) return basicAuthReply(domain, clientIp, !asUser);
-    const mint = () => mintWpLogin(paths, site, options);
-    const finish = async () => {
-      if (maintenance) await addBypass(paths.maintenance, domain, clientIp);
-    };
-    if (basicAuth) return withBasicAuthBypass(paths, domain, clientIp, mint, finish, options.run, options.reloadNginx);
-    const login = mint();
-    await finish();
+    // Mint before taking CloudPanel's write lock; an unused token expires on its own.
+    const login = mintWpLogin(paths, site, options);
+    if (basicAuth) await withBasicAuthBypass(paths, domain, clientIp, options.run, options.reloadNginx);
+    if (maintenance) await addBypass(paths.maintenance, domain, clientIp);
     return login;
   });
 }

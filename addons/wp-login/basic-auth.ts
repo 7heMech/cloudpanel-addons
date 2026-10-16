@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
-import { lstatSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { BlockList, isIP } from "node:net";
 import { join } from "node:path";
 import { failAction, runCommand, type CommandResult } from "../../cli/action-common";
-import { writeFileAtomic } from "../../lib/atomic-write";
+import { commandError, restoreVhosts, trustedVhost, withRecoveryFailures, writeVhost, type VhostBackup } from "../../cli/nginx-vhost";
 
 export interface BasicAuthPaths {
   panelDb: string;
@@ -115,64 +115,47 @@ export async function reloadNginx(
   failAction("Nginx did not finish handing requests to its reloaded workers");
 }
 
-export async function withBasicAuthBypass<T>(
+export async function withBasicAuthBypass(
   paths: BasicAuthPaths,
   domain: string,
   ip: string,
-  mint: () => T,
-  finish: () => Promise<void>,
   run: (command: string, args: string[]) => CommandResult = runCommand,
   reload: typeof reloadNginx = reloadNginx,
-): Promise<T> {
+): Promise<void> {
   const db = new Database(paths.panelDb);
   db.exec("PRAGMA busy_timeout = 5000;");
-  let backup: { path: string; content: string; mode: number; uid: number; gid: number } | undefined;
+  let backup: VhostBackup | undefined;
   let wrote = false;
   let reloaded = false;
   const check = (command: string, args: string[], label: string) => {
     const result = run(command, args);
-    if (!result.ok) throw new Error(`${label}: ${(result.stderr || result.stdout || "command failed").trim()}`);
+    if (!result.ok) throw new Error(commandError(label, result));
   };
   try {
     db.exec("BEGIN IMMEDIATE;");
     const row = settings(db, domain);
     if (!row?.is_active || allows(row.whitelisted_ips, ip)) {
-      const login = mint();
-      await finish();
       db.exec("COMMIT;");
-      return login;
+      return;
     }
     const path = join(paths.nginxVhostDir, `${domain}.conf`);
-    const stat = lstatSync(path);
-    if (!stat.isFile() || stat.uid !== paths.vhostUid || (stat.mode & 0o022) !== 0) {
-      failAction("refusing an untrusted Nginx vhost");
-    }
-    backup = { path, content: readFileSync(path, "utf8"), mode: stat.mode & 0o777, uid: stat.uid, gid: stat.gid };
+    backup = trustedVhost(path, paths.vhostUid);
     const next = [...entries(row.whitelisted_ips), ip];
     const content = basicAuthVhost(backup.content, domain, row.whitelisted_ips, next);
     db.query("UPDATE basic_auth SET whitelisted_ips = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
       .run(next.join(","), row.id);
-    writeFileAtomic(path, content, { mode: backup.mode, owner: backup });
+    writeVhost(backup, content);
     wrote = true;
-    check(paths.nginx, ["-t"], "Nginx validation failed");
-    const login = mint();
+    check(paths.nginx, ["-t"], "Nginx validation");
     reloaded = true;
-    await reload(() => check(paths.systemctl, ["reload", "nginx"], "Nginx reload failed"));
-    await finish();
+    await reload(() => check(paths.systemctl, ["reload", "nginx"], "Nginx reload"));
     db.exec("COMMIT;");
-    return login;
   } catch (error) {
     const failures: string[] = [];
-    try { db.exec("ROLLBACK;"); } catch (e) { failures.push(String(e)); }
-    if (wrote && backup) {
-      try {
-        writeFileAtomic(backup.path, backup.content, { mode: backup.mode, owner: backup });
-        check(paths.nginx, ["-t"], "Nginx rollback validation failed");
-        if (reloaded) await reload(() => check(paths.systemctl, ["reload", "nginx"], "Nginx rollback reload failed"));
-      } catch (e) { failures.push(String(e)); }
-    }
-    if (failures.length) throw new Error(`${error instanceof Error ? error.message : error}; rollback failed: ${failures.join("; ")}`);
-    throw error;
+    try { db.exec("ROLLBACK;"); }
+    catch (rollbackError) { failures.push(`database transaction: ${rollbackError instanceof Error ? rollbackError.message : rollbackError}`); }
+    if (wrote && backup) failures.push(...await restoreVhosts([backup], paths, run, reloaded, reload));
+    throw withRecoveryFailures(error, "rollback failed", failures);
   } finally {
     db.close();
   }

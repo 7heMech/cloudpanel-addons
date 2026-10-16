@@ -478,12 +478,12 @@ for (const failure of ["validation", "mint", "reload"] as const) {
     })).rejects.toThrow(failure === "mint" ? "denied" : "test failure");
     expect(basicAuthIps()).toBe("198.51.100.1");
     expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).toBe(original);
-    expect(commands).toBe(failure === "reload" ? 4 : 2);
-    if (failure === "validation") expect(runuserLog()).toEqual([]);
+    expect(commands).toBe(failure === "reload" ? 4 : failure === "mint" ? 0 : 2);
+    if (failure === "validation") expect(runuserLog()).toEqual(["shop PATH"]);
   });
 }
 
-test("untrusted or customized vhosts are refused before minting or altering protection", async () => {
+test("untrusted or customized vhosts are refused without altering protection", async () => {
   seedBasicAuth();
   const path = join(root, "vhosts", "shop.example.com.conf");
   chmodSync(path, 0o666);
@@ -499,7 +499,7 @@ test("untrusted or customized vhosts are refused before minting or altering prot
   await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand })).rejects.toThrow("untrusted");
   expect(readFileSync(target, "utf8")).toBe(content);
   expect(basicAuthIps()).toBeNull();
-  expect(runuserLog()).toEqual([]);
+  expect(runuserLog()).toEqual(["shop PATH", "shop PATH", "shop PATH"]);
 });
 
 test("maintenance and basic auth need separate consent and neither changes during preflight", async () => {
@@ -521,13 +521,32 @@ test("maintenance and basic auth need separate consent and neither changes durin
   expect(existsSync(maintenanceFile("shop.example.com", "bypass_203.0.113.9"))).toBe(true);
 });
 
-test("a maintenance failure after the native reload also rolls basic auth back", async () => {
+test("maintenance runs after the native bypass commits, so its failure preserves that accepted bypass", async () => {
   const original = seedBasicAuth();
   writeFileSync(join(root, "maintenance.conf"), "");
   writeFileSync(maintenanceFile("shop.example.com", "on"), "");
   writeFileSync(join(root, "locks"), "not a directory");
   await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC, "--add-bypass"], { run: okCommand })).rejects.toThrow();
-  expect(basicAuthIps()).toBeNull();
-  expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).toBe(original);
+  expect(basicAuthIps()).toBe("203.0.113.9");
+  expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).not.toBe(original);
   expect(existsSync(maintenanceFile("shop.example.com", "bypass_203.0.113.9"))).toBe(false);
+});
+
+
+test("minting does not hold CloudPanel's database write lock", async () => {
+  seedBasicAuth();
+  let minted = false;
+  await act(["sign-in", SHOP, FROM, ALLOW_BASIC], {
+    now: () => {
+      const panelWriter = new Database(join(root, "panel.sq3"));
+      try {
+        panelWriter.exec("PRAGMA busy_timeout = 1; BEGIN IMMEDIATE; UPDATE user SET status = status; COMMIT;");
+        minted = true;
+      } finally { panelWriter.close(); }
+      return new Date();
+    },
+    run: okCommand,
+  });
+  expect(minted).toBe(true);
+  expect(basicAuthIps()).toBe("203.0.113.9");
 });

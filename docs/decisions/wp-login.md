@@ -108,16 +108,20 @@ refused with a pointer to the native Security page rather than rewritten.
 Only a regular, root-owned vhost that is not writable by other users can be
 replaced; symlinks are refused. Ownership and mode survive atomic replacement.
 
-Under the sign-in lock and a database write transaction, the action stages the
-allowlist and vhost, validates Nginx, mints as the site user, reloads Nginx, and
-commits. A reload only signals the master, so the action waits up to five
-seconds for active workers from the new generation and for the old workers to
-stop accepting requests, reading `/run/nginx.pid` and `/proc`. Only then is the
-token returned to the browser. Validation, minting or reload failures restore
-the database and vhost;
+Under the sign-in lock, the action first mints as the site user, without holding
+CloudPanel's database write lock. The database write transaction covers only the
+allowlist and vhost update, Nginx validation and reload.
+The trusted-vhost checks, owned atomic replacement, restoration, Nginx recovery
+and error collection are shared with Cloudflare IP Access in `cli/nginx-vhost.ts`.
+A reload only signals the master, so the action waits up to five seconds for
+active workers from the new generation and for the old workers to stop accepting
+requests, reading `/run/nginx.pid` and `/proc`. Only then is the token returned to
+the browser. Validation or reload failures restore the database and vhost;
 reload failures also reload the restored configuration. Recovery failures are
 reported. A token written before a later failure expires after its normal
-minute. Maintenance bypasses are added only after the basic-auth reload succeeds.
+minute. Maintenance bypasses are added after the basic-auth transaction commits,
+so they do not extend its database lock. If that later operation fails, the
+accepted basic-auth allowance remains in CloudPanel's Security settings.
 When both gates block the browser, each needs its own confirmation, and neither
 changes during preflight.
 

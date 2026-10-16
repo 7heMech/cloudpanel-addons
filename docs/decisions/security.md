@@ -54,7 +54,9 @@ An administrator can explicitly allow their request address through CloudPanel's
 native basic-auth IP allowlist. The root action rejects that operation for
 named non-administrator requests, preserves the site's credentials, and updates
 only the native allowlist and a trusted generated vhost, validating and reloading
-Nginx with rollback on failure. Consent to a maintenance bypass does not authorize
+Nginx with rollback on failure through the same vhost machinery as Cloudflare IP
+Access. Minting runs before the basic-auth database transaction, and maintenance
+bypasses run after it commits. Consent to a maintenance bypass does not authorize
 a basic-auth bypass. The WordPress page's CSP allows token forms only to listed
 WordPress HTTPS origins; the shared policy still refuses form submissions.
 Disabling or uninstalling the addon removes the plugin from every site. Accepted
