@@ -1,5 +1,5 @@
 import {
-  bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readJsonObject, newCsrfToken,
+  bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readJsonObject, newCsrfToken, SECURITY_HEADERS,
 } from "../../../lib/app-http";
 import { validateDomain, wpLoginService } from "./service";
 import { dashboardView, layout } from "./views";
@@ -38,7 +38,12 @@ export async function handle(
     try {
       const result = await wpLoginService.sites();
       if (!result.ok || !result.data) throw new Error(result.error ?? "the WordPress site list is unavailable");
-      return htmlResponse(layout("WordPress Sign-In", dashboardView(result.data.sites), updateNotice), { csrf });
+      const targets = result.data.sites.map((site) => validateDomain(site.domain))
+        .filter((domain): domain is string => domain !== null).map((domain) => `https://${domain}`);
+      const csp = SECURITY_HEADERS["Content-Security-Policy"]!.replace("form-action 'none'", `form-action ${targets.join(" ") || "'none'"}`);
+      return htmlResponse(layout("WordPress Sign-In", dashboardView(result.data.sites), updateNotice), {
+        csrf, headers: { "Content-Security-Policy": csp },
+      });
     } catch (error) {
       return htmlResponse(
         layout("WordPress Sign-In", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice),
@@ -71,6 +76,7 @@ export async function handle(
       asUser: admin ? undefined : auth!.user,
       clientIp: clientIp(req),
       addBypass: body.addBypass === true,
+      allowBasicAuth: body.allowBasicAuth === true,
     });
     return json(result, result.ok ? 200 : 400);
   }
