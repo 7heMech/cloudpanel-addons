@@ -31,7 +31,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | PHP Resources | Categories of PHP-FPM worker limits, assigned in bulk and to new sites. |
 | [SMTP Relay](docs/smtp-relay.md) | Send each site's mail through SMTP relay profiles, WordPress and PHP included. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
-| Panel Tweaks | Site search and columns, mobile layouts and theme improvements. |
+| Panel Tweaks | Site search and columns, automatic SSL for native sites, mobile layouts and themes. |
 | WordPress Sign-In | One-click sign-in to any WordPress on the server, no password needed. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
 

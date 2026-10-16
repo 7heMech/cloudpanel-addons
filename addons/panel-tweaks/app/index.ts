@@ -97,7 +97,7 @@ function scanEventStream(req: Request, server?: Server<unknown> | null): Respons
 /**
  * Put the blocks CloudPanel's own templates carry back, or take them away.
  *
- * The login theme, the two narrow-screen layouts and the row menu are markup in
+ * The login theme, mobile layouts, row menu and automatic SSL are markup in
  * a CloudPanel template, so moving one of those switches means the templates
  * have to be rendered again -- and rendering them is the manager's own
  * privileged work, not an addon's: one pass regenerates every addon's block in
