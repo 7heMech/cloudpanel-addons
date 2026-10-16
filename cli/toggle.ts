@@ -4,7 +4,9 @@
 
 import { installedAddons, resolveAddon } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
-import { removeWpLogin } from "../addons/wp-login/action";
+import { requireMainwpClean } from "../addons/wp-login/mainwp";
+import { withFileLockSync } from "./action-common";
+import { removeWpLogin, DEFAULT_WP_LOGIN_PATHS } from "../addons/wp-login/action";
 import { type AddonSpec } from "./addon-catalog";
 import { withOperationLock, withOperationLockSync } from "./operation-lock";
 import {
@@ -120,6 +122,14 @@ export function applyDisable(name: string): void {
 }
 
 function disableAddon(spec: AddonSpec): void {
+  if (spec.name !== "wp-login") return disableAddonContents(spec);
+  withFileLockSync(DEFAULT_WP_LOGIN_PATHS.mainwpLockFile, 15, "a MainWP change is still running", () => {
+    requireMainwpClean(DEFAULT_WP_LOGIN_PATHS.mainwpState);
+    disableAddonContents(spec);
+  });
+}
+
+function disableAddonContents(spec: AddonSpec): void {
   const remaining = installedAddons().filter((item) => item.name !== spec.name);
 
   spec.deactivate?.();

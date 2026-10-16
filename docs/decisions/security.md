@@ -39,19 +39,26 @@ without directory listing; flag files remain root-only and HTML files are
 readable by Nginx. Custom pages are size-bounded, stripped of active markup,
 and served with a restrictive content security policy.
 
-WordPress Sign-In is the only addon that puts its own code inside a site, and it
-is a separate addon for that reason: an operator who does not install it does
-not have that code on the box, and the gateway's addon-and-verb table refuses
-the verb to anything else. It installs a must-use plugin and a one-time secret,
-and later removes them, through `runuser` as the site's user: the site's user
-controls every name under its root, so a symlink there would aim a root write
-or `rm -rf` anywhere on the box. Those commands get only a fixed `PATH`, not
-root's environment, and each has 30 seconds. It refuses a domain the panel
-does not have, a root that is not a WordPress, and a site account that belongs
-to the box or shares its uid with another site, as SMTP and Terminal do. The secret is a SHA-256 of a token that lives for a minute,
-is removed before it is compared, and travels in a POST body rather than a URL.
-Disabling or uninstalling the addon removes the plugin from every site. See
-[WordPress Sign-In](wp-login.md).
+WordPress Tools (addon identifier `wp-login`) is the only addon that puts its
+own code inside a site, and it is a separate addon for that reason: an operator
+who does not install it does not have that code on the box, and the gateway's
+addon-and-verb table refuses its verbs to anything else. It installs a
+must-use plugin and a one-time secret, and later removes them, through
+`runuser` as the site's user: the site's user controls every name under its
+root, so a symlink there would aim a root write or `rm -rf` anywhere on the
+box. Those commands get only a fixed `PATH`, not root's environment, and each
+has 30 seconds. It refuses a domain the panel does not have, a root that is not
+a WordPress, and a site account that belongs to the box or shares its uid with
+another site, as SMTP and Terminal do. The secret is a SHA-256 of a token that
+lives for a minute, is removed before it is compared, and travels in a POST
+body rather than a URL.
+Disabling or uninstalling removes the sign-in helper from every site. Optional
+Varnish automation runs fixed WP-CLI commands after dropping root to the site's
+Unix user, using its configured PHP version, for the same accounts sign-in
+accepts and under a deadline root enforces itself. Only administrators can manage
+that policy or install the official CLP plugin; sign-in's non-administrator
+exception does not apply. The normal WordPress plugin remains installed when
+automation stops. See [WordPress Tools](wp-login.md).
 
 ## CloudPanel authentication
 
@@ -78,7 +85,7 @@ it, and nothing reads it without a session: the page that polls it has one. The
 two exceptions are below: three named routes, and the Git webhook, which is
 settled ahead of the gate by a credential of its own.
 
-Three routes are named as exceptions. Two are the WordPress sign-in addon's:
+Three routes are named as exceptions. Two are WordPress Tools':
 `POST /wp-login/api/sign-in` and the `GET /wp-login/api/session` that hands out
 the CSRF pair, because the link that uses them is injected into CloudPanel's own
 Sites page, which a non-administrator sees too. The third is Panel Tweaks'
@@ -199,3 +206,33 @@ archives, recovery archives, and job results containing generated credentials
 are mode `0600` below non-public directories. Instatic credentials used by a
 Stager clone travel to the action over stdin and are removed from the job after
 source authentication.
+
+## MainWP authority
+
+MainWP enrollment deliberately grants one administrator-selected Dashboard
+administrative control of the enrolled WordPress sites. A compromised Dashboard
+can install/run PHP as each connected site's Unix user. A child receives only
+its own bootstrap ID and the Dashboard public key, never the private key or any
+fleet credential. Its files and replies remain untrusted; they cannot supply
+root commands, paths, plugin names or targets outside CloudPanel's discovered
+sites. Dashboard code is also untrusted and always executes as its own site user.
+
+MainWP uses the shared WP-CLI isolation, output bounds and root-enforced deadline.
+A fixed adapter and JSON stdin keep IDs and baseline metadata out of process
+arguments, the web manager, browser and addon logs; secret-bearing error text is
+fixed rather than copied from PHP. The native MainWP stores the operational ID,
+reconnect credentials and keys in its own WordPress storage. The addon journal
+is atomic root-only `0600`, and only a secret-free projection reaches the page.
+Certificate verification is enforced and firewall/basic-auth restrictions are
+never bypassed. Every MainWP route is administrator-only and CSRF-protected;
+Connect and cleanup additionally require explicit confirmation.
+
+The temporary ID-only bootstrap requires a strong ID before activation and
+journals the administrator's previous authentication setting before changing it.
+It restores that setting on completion/failure and repairs it after crashes even
+when automation is paused. No user is created and no password is changed.
+Ownership is recorded before mutation; independent operator connections are
+never adopted. Cleanup verifies matching identities and preserves its journal
+on failure. Disabling/uninstalling cannot silently discard recovery. Revoking
+MainWP access does not undo prior actions or invalidate separately issued
+WordPress administrator sessions.

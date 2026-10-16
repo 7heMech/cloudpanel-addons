@@ -1,5 +1,8 @@
 // `clp-addons uninstall`.
 
+import { requireMainwpClean } from "../addons/wp-login/mainwp";
+import { DEFAULT_WP_LOGIN_PATHS } from "../addons/wp-login/action";
+import { withFileLockSync } from "./action-common";
 import { resolveAddon } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
 import { withdrawWpLogin } from "./toggle";
@@ -30,6 +33,14 @@ export function cmdUninstall(argv: string[]): void {
 }
 
 function applyUninstall(spec: AddonSpec, flags: Record<string, string | true>): void {
+  if (spec.name !== "wp-login" || flags.yes !== true) return uninstallContents(spec, flags);
+  withFileLockSync(DEFAULT_WP_LOGIN_PATHS.mainwpLockFile, 15, "a MainWP change is still running", () => {
+    requireMainwpClean(DEFAULT_WP_LOGIN_PATHS.mainwpState);
+    uninstallContents(spec, flags);
+  });
+}
+
+function uninstallContents(spec: AddonSpec, flags: Record<string, string | true>): void {
   const purge = flags.purge === true;
   const instances = listInstances(spec);
   const remaining = ADDON_NAMES.filter((name) => name !== spec.name && existsSync(ADDONS[name]!.configFile));

@@ -78,6 +78,8 @@ function options(extra: Partial<WpLoginActionOptions> = {}): WpLoginActionOption
         lockDir: join(root, "locks"),
         panelDb: join(root, "panel.sq3"),
       },
+      varnishState: join(root, "varnish.json"),
+      varnishLockFile: join(root, "wp-varnish.lock"),
     },
     ...extra,
   };

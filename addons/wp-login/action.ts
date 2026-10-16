@@ -1,18 +1,20 @@
 /**
- * The privileged half of the WordPress sign-in.
+ * The privileged half of WordPress Tools (stable identifier: wp-login).
  *
  * This is the only addon that puts its own code inside a site, which is why it is
  * an addon rather than a switch on Panel Tweaks: an operator who wants a
  * filterable site list should not have to install the code that can put a file
  * inside a customer's WordPress. Installing this is the decision, and
- * uninstalling it takes the file back out of every site.
+ * uninstalling it takes the file back out of every site. Installing CLP Varnish
+ * Cache is a separate opt-in; that plugin is WordPress's to manage and stays.
  *
  * Everything it writes or deletes in a site it does as the site's own user,
- * through `runuser`, into paths built from the account's home directory. Root
- * never writes there itself: the site's user controls every name under its
- * root, so a symlink there would aim a root write or `rm -rf` anywhere on the
- * box. It accepts a domain and nothing else -- no paths, no user names, no file
- * contents.
+ * through `runuser`, into paths built from the account's home directory, and
+ * WP-CLI runs the same way. Root never writes there itself: the site's user
+ * controls every name under its root, so a symlink there would aim a root write
+ * or `rm -rf` anywhere on the box. Requests carry a domain, fixed booleans and,
+ * for a sign-in, the checked panel user and browser address -- no paths and no
+ * file contents.
  */
 import { Database } from "bun:sqlite";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
@@ -23,13 +25,19 @@ import { join } from "node:path";
 import {
   ActionFailure, emitActionError, emitActionOk, failAction, validateDomain, withFileLock,
 } from "../../cli/action-common";
-import { CONFIG_DIR, PANEL_DB } from "../../cli/paths";
+import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids, type UnixAccount } from "../../lib/site-accounts";
 import {
   DEFAULT_MAINTENANCE_ACTION_PATHS, addBypass, maintenanceBlocks, type MaintenanceActionPaths,
 } from "../maintenance/action";
+import {
+  pruneVarnishState, readVarnishState, saveVarnishState, syncVarnish,
+  type VarnishRun, type VarnishSiteRecord, type VarnishOptions, type VarnishSyncResult, type WpVarnishState,
+} from "./varnish";
 
-export type WpLoginVerb = "sites" | "sign-in" | "remove";
+import { mainwpAction, readMainwpState, mainwpView, emptyMainwpState, syncMainwp, type MainwpRun, type MainwpResult } from "./mainwp";
+
+export type WpLoginVerb = "sites" | "sign-in" | "remove" | "varnish-settings" | "varnish-site" | "varnish-install" | "varnish-sync";
 
 /** Where the loader and its one-time secret live inside a WordPress site. */
 const MU_PLUGINS = "wp-content/mu-plugins";
@@ -63,6 +71,9 @@ export interface WpSiteView {
   application: string;
   /** Whether the sign-in helper is in the site right now. */
   helper: boolean;
+  varnishCache: boolean;
+  varnishExcluded: boolean;
+  varnishPlugin: VarnishSiteRecord | null;
 }
 
 export interface WpLoginResult {
@@ -106,9 +117,13 @@ export interface WpLoginActionPaths {
   /** Present while the Maintenance Mode addon is installed. */
   maintenanceConfig: string;
   maintenance: MaintenanceActionPaths;
+  varnishState: string;
+  varnishLockFile: string;
+  mainwpState: string;
+  mainwpLockFile: string;
 }
 
-export interface WpLoginActionOptions {
+export interface WpLoginActionOptions extends VarnishOptions {
   paths?: Partial<WpLoginActionPaths>;
   emitReply?: boolean;
   processUid?: number;
@@ -124,6 +139,10 @@ export const DEFAULT_WP_LOGIN_PATHS: WpLoginActionPaths = {
   runuser: "/usr/sbin/runuser",
   maintenanceConfig: `${CONFIG_DIR}/maintenance.conf`,
   maintenance: DEFAULT_MAINTENANCE_ACTION_PATHS,
+  varnishState: `${STATE_DIR}/wp-login/varnish.json`,
+  varnishLockFile: "/run/lock/clp-addons/wp-varnish.lock",
+  mainwpState: `${STATE_DIR}/wp-login/mainwp.json`,
+  mainwpLockFile: "/run/lock/clp-addons/wp-mainwp.lock",
 };
 
 function pathsFor(options: WpLoginActionOptions): WpLoginActionPaths {
@@ -141,6 +160,9 @@ interface PanelSiteRow {
   user: string;
   application: string | null;
   root_directory: string | null;
+  type: string;
+  varnish_cache: number | string | null;
+  php_version: string | null;
 }
 
 function openPanelDatabase(path: string): Database {
@@ -174,8 +196,14 @@ function mayManageSite(paths: WpLoginActionPaths, userName: string, domain: stri
 function panelSites(paths: WpLoginActionPaths): PanelSiteRow[] {
   const db = openPanelDatabase(paths.panelDb);
   try {
+    // Older panels have no Varnish column. Their sign-in behavior is unchanged,
+    // and they contribute no eligible sites to plugin installation.
+    const columns = db.query<{ name: string }, []>("PRAGMA table_info(site);").all();
+    const varnish = columns.some((column) => column.name === "varnish_cache") ? "varnish_cache" : "0 AS varnish_cache";
+    const phpSettings = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'php_settings';").get();
+    const php = phpSettings ? "(SELECT p.php_version FROM php_settings p WHERE p.site_id = site.id LIMIT 1)" : "NULL";
     return db.query<PanelSiteRow, []>(
-      `SELECT domain_name, user, application, root_directory FROM site ORDER BY domain_name;`,
+      `SELECT domain_name, user, application, root_directory, type, ${varnish}, ${php} AS php_version FROM site ORDER BY domain_name;`,
     ).all();
   } catch (error) {
     failAction(`CloudPanel site list could not be read: ${reason(error)}`);
@@ -244,15 +272,69 @@ function resolvedSites(paths: WpLoginActionPaths): { row: PanelSiteRow; account:
   return resolved;
 }
 
-function wordpressSites(paths: WpLoginActionPaths): WpSiteView[] {
+/** Shared discovery and eligibility for the page and plugin installation. */
+function resolvedWordPressSites(paths: WpLoginActionPaths) {
   return resolvedSites(paths)
     .filter((site) => isWordPress(site.root))
+    .map((site) => ({
+      ...site,
+      varnishCache: site.row.type === "php" && Boolean(Number(site.row.varnish_cache)),
+    }));
+}
+
+function wordpressSites(paths: WpLoginActionPaths, state: WpVarnishState): WpSiteView[] {
+  return resolvedWordPressSites(paths)
     .map((site) => ({
       domain: site.row.domain_name,
       user: site.row.user,
       application: site.row.application ?? "",
       helper: existsSync(join(site.root, LOADER_FILE)),
+      varnishCache: site.varnishCache,
+      varnishExcluded: state.excluded.includes(site.row.domain_name),
+      varnishPlugin: state.sites[site.row.domain_name] ?? null,
     }));
+}
+
+/** The sites and the panel's domains a Varnish pass works from. */
+function varnishRun(paths: WpLoginActionPaths, request: { domain?: string; dueOnly?: boolean } = {}): VarnishRun {
+  return {
+    statePath: paths.varnishState,
+    runuser: paths.runuser,
+    sites: resolvedWordPressSites(paths).map((site) => ({
+      domain: site.row.domain_name, user: site.row.user, root: site.root, home: site.account.home,
+      phpVersion: String(site.row.php_version ?? ""),
+      eligible: site.varnishCache,
+    })),
+    domains: new Set(panelSites(paths).map((row) => row.domain_name)),
+    ...request,
+  };
+}
+
+/**
+ * The page's pass, and the timer's with `dueOnly`: the timer runs inside
+ * repair's operation lock, so it checks only sites automation can still act on.
+ */
+export async function reconcileWpVarnish(
+  options: WpLoginActionOptions = {},
+  request: { dueOnly?: boolean } = {},
+): Promise<VarnishSyncResult> {
+  const paths = pathsFor(options);
+  // With automation off, repair does not need to inspect site roots or the DB.
+  if (!readVarnishState(paths.varnishState).enabled) return { installed: 0, checked: 0, pending: 0, failed: [] };
+  return withFileLock(paths.varnishLockFile, 15, "a WordPress Varnish change is still running", async () =>
+    syncVarnish(varnishRun(paths, request), options));
+}
+
+function mainwpRun(paths: WpLoginActionPaths, request: { dueOnly?: boolean } = {}): MainwpRun {
+  const run = varnishRun(paths, request);
+  return { ...run, statePath: paths.mainwpState };
+}
+export async function reconcileWpMainwp(options: WpLoginActionOptions = {}): Promise<MainwpResult> {
+  const paths = pathsFor(options);
+  const state = readMainwpState(paths.mainwpState);
+  if (!state.enabled && !state.cleanup && !state.retired.length && !Object.values(state.sites).some((r) => r.phase)) return { checked: 0, connected: 0, removed: 0, pending: 0, failed: [] };
+  return withFileLock(paths.mainwpLockFile, 1, "a MainWP change is still running", () =>
+    syncMainwp(mainwpRun(paths, { dueOnly: true }), options));
 }
 
 // --- the must-use plugin --------------------------------------------------
@@ -278,7 +360,7 @@ function wordpressSites(paths: WpLoginActionPaths): WpSiteView[] {
 const LOADER_PHP = `<?php
 /*
  * Plugin Name: CloudPanel Addons sign-in
- * Description: Accepts one single-use administrator sign-in minted by CloudPanel. Installed and removed by the WordPress Sign-In addon.
+ * Description: Accepts one single-use administrator sign-in minted by CloudPanel. Installed and removed by the WordPress Tools addon.
  */
 add_action('init', function () {
     if (empty($_POST['${WP_LOGIN_FIELD}']) || !is_string($_POST['${WP_LOGIN_FIELD}'])) {
@@ -431,11 +513,13 @@ interface ParsedAction {
   clientIp: string;
   /** Add `clientIp` to the site's maintenance bypasses before signing in. */
   addBypass: boolean;
+  enabled?: boolean;
+  excluded?: boolean;
 }
 
 function parseAction(argv: string[], options: WpLoginActionOptions): ParsedAction {
   const [rawVerb, ...rest] = argv;
-  const verbs: WpLoginVerb[] = ["sites", "sign-in", "remove"];
+  const verbs: WpLoginVerb[] = ["sites", "sign-in", "remove", "varnish-settings", "varnish-site", "varnish-install", "varnish-sync"];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown WordPress sign-in verb '${rawVerb ?? ""}'`);
 
@@ -443,7 +527,13 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
   let asUser = "";
   let clientIp = "";
   let addBypass = false;
+  let enabled: boolean | undefined;
+  let excluded: boolean | undefined;
+  const seen = new Set<string>();
   for (const argument of rest) {
+    const key = argument.split("=")[0]!;
+    if (seen.has(key)) failAction(`duplicate argument '${key}'`);
+    seen.add(key);
     if (argument.startsWith("--client-ip=")) {
       clientIp = argument.slice("--client-ip=".length);
       if (!isIP(clientIp)) failAction("that is not an IP address");
@@ -461,6 +551,8 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
       asUser = argument.slice("--as-user=".length);
       continue;
     }
+    if (/^--enabled=(true|false)$/.test(argument)) { enabled = argument.endsWith("=true"); continue; }
+    if (/^--excluded=(true|false)$/.test(argument)) { excluded = argument.endsWith("=true"); continue; }
     failAction(`unexpected argument '${argument}'`);
   }
   if (verb !== "sign-in" && (asUser || clientIp || addBypass)) failAction(`'${verb}' takes no --as-user, --client-ip or --add-bypass`);
@@ -468,14 +560,16 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
   // sign-in may lift it, and only for the address it came from.
   if (addBypass && (asUser || !clientIp)) failAction("only an administrator's sign-in can add its address as a bypass");
   if (asUser && !PANEL_USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
-  if (verb === "sign-in") {
+  if (verb === "varnish-settings" ? enabled === undefined : enabled !== undefined) failAction(`'${verb}' has invalid --enabled`);
+  if (verb === "varnish-site" ? excluded === undefined : excluded !== undefined) failAction(`'${verb}' has invalid --excluded`);
+  if (verb === "sign-in" || verb === "varnish-site" || verb === "varnish-install") {
     // The panel's own hostname is refused here as it is everywhere else: the
     // panel is not a site, and nothing of ours writes into it.
     domain = (options.domainValidator ?? ((value: string) => validateDomain(value)))(domain);
   } else if (domain) {
     failAction(`'${verb}' takes no --domain`);
   }
-  return { verb, domain, asUser, clientIp, addBypass };
+  return { verb, domain, asUser, clientIp, addBypass, enabled, excluded };
 }
 
 export async function executeWpLoginAction(
@@ -484,9 +578,46 @@ export async function executeWpLoginAction(
 ): Promise<unknown> {
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress sign-in actions must run as root");
   const paths = pathsFor(options);
-  const { verb, domain, asUser, clientIp, addBypass: bypass } = parseAction(argv, options);
+  if (argv[0]?.startsWith("mainwp-")) {
+    return withFileLock(paths.mainwpLockFile, 15, "a MainWP change is still running", () => {
+      if (!options.runWpCommand && !existsSync(`${CONFIG_DIR}/wp-login.conf`)) failAction("WordPress Tools must be enabled before a MainWP action");
+      return mainwpAction(mainwpRun(paths), argv, options, options.domainValidator ?? ((value) => validateDomain(value)));
+    });
+  }
+  const { verb, domain, asUser, clientIp, addBypass: bypass, enabled, excluded } = parseAction(argv, options);
 
-  if (verb === "sites") return { sites: wordpressSites(paths) };
+  if (verb === "sites") {
+    // The optional feature's state must not take sign-in down with it.
+    let varnish: WpVarnishState = { enabled: false, excluded: [], sites: {} };
+    let varnishError = "";
+    try {
+      varnish = readVarnishState(paths.varnishState);
+    } catch (error) {
+      varnishError = `${paths.varnishState} cannot be read: ${reason(error)}`;
+    }
+    let mainwp = mainwpView(emptyMainwpState());
+    let mainwpError = "";
+    try { mainwp = mainwpView(readMainwpState(paths.mainwpState)); }
+    catch { mainwpError = "the MainWP settings cannot be read; repair the root-owned state before continuing"; }
+    return { sites: wordpressSites(paths, varnish), varnish, varnishError, mainwp, mainwpError };
+  }
+  if (verb === "varnish-sync") return reconcileWpVarnish(options);
+  if (verb === "varnish-settings" || verb === "varnish-site" || verb === "varnish-install") {
+    return withFileLock(paths.varnishLockFile, 15, "a WordPress Varnish change is still running", async () => {
+      if (verb === "varnish-install") return syncVarnish(varnishRun(paths, { domain }), options);
+      const state = readVarnishState(paths.varnishState);
+      const run = varnishRun(paths);
+      pruneVarnishState(state, run.domains);
+      if (verb === "varnish-settings") state.enabled = enabled!;
+      else {
+        if (!run.sites.some((site) => site.domain === domain)) failAction("that is not a WordPress site on this server");
+        state.excluded = state.excluded.filter((entry) => entry !== domain);
+        if (excluded) state.excluded.push(domain);
+      }
+      saveVarnishState(paths.varnishState, state);
+      return { varnish: state };
+    });
+  }
   // Both writing paths take the lock: a sign-in that ran while the addon was
   // being withdrawn would put a loader back into a site it had just left.
   if (verb === "remove") {
