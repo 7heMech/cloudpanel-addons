@@ -2,12 +2,10 @@
 
 ## Why it is an addon and not a tweak
 
-It shipped as a fourth switch on [Panel Tweaks](panel-tweaks.md) and was moved
-out. Everything that addon does changes what CloudPanel's own pages look like;
-this writes a file into a customer's site. An operator who installed the one for
-a filterable site list should not thereby have the code that can do the other on
-their box, and the gateway's fixed addon-and-verb table then refuses
-`panel-tweaks sign-in` rather than allowing it and checking a stored switch.
+[Panel Tweaks](panel-tweaks.md) changes how CloudPanel's own pages look; this
+addon writes a file into a customer's site. Installing the one should not
+authorize the other. WordPress Sign-In therefore has its own installation
+choice and fixed gateway addon-and-verb entry.
 
 Being installed is the whole decision. There is no switch, and no state
 directory: the only trace this addon leaves of its own is a file inside a site,
@@ -16,7 +14,8 @@ in. An addon that left files behind in somebody else's site would be one an
 operator cannot fully withdraw. A site whose files cannot be deleted does not
 stop the ones after it; the withdrawal names it and the reason. A maintenance
 bypass an administrator accepted while signing in belongs to Maintenance Mode:
-it stays in that site's bypass list until removed there.
+it stays in that site's bypass list until removed there. A basic-auth IP bypass
+belongs to CloudPanel's Security settings and stays there until removed.
 
 ## What is in the site
 
@@ -49,6 +48,10 @@ the root path before WordPress boots. The window is opened inside the click that
 starts it, before anything is awaited, because a window opened after a fetch
 resolves is a popup the browser blocks.
 
+The addon's page permits form submissions only to the HTTPS origins of the
+validated WordPress sites it lists. Its blank sign-in window inherits that CSP;
+all other response policies retain their default form refusal.
+
 The site user creates `mu-plugins/clp-addons` itself, so every directory it adds
 is that user's. A missing `wp-includes` or `wp-content` is a refusal rather than
 something to invent.
@@ -78,6 +81,53 @@ turned away after the bypass, as it would be after adding the address by hand.
 The panel's Nginx takes forwarded addresses from any peer, so the address is
 the one the browser claims; a browser that forges it only misleads itself,
 since anything it could add is a bypass an administrator could add by hand.
+
+## A site protected by basic authentication
+
+CloudPanel links `site.basic_auth_id` to `basic_auth`. Its `is_active` and
+comma-separated `whitelisted_ips` fields decide whether the browser needs a
+bypass; the sign-in never reads the basic-auth username or password. Existing
+IP addresses and CIDR networks are honored, including IPv6. This gate is in
+Nginx, before WordPress: without a bypass the browser must answer its HTTP
+basic-auth challenge, and the one-minute token can expire while it does so.
+
+An administrator whose address is not allowed receives a separate confirmation
+before any token is minted. It explains that allowing the address bypasses basic
+authentication for the whole site and everyone sharing that address, until
+removed in Security → Basic Authentication. The exemption includes both
+`/wp-login.php` and `/wp-admin/`, so it also covers the redirect after sign-in.
+CloudPanel's `/.well-known` location already disables basic auth. A password
+prompt cannot deliver the expected password-free panel sign-in; credentials in
+URLs, HTML or process arguments would expose the site's reusable password.
+
+Acceptance updates CloudPanel's existing `whitelisted_ips` list and its rendered
+vhost with the native `satisfy any`, `allow` and `deny all` directives. There is
+no separate bypass rule, credential store or public sign-in endpoint. The
+remaining vhost is preserved. A customized or ambiguous basic-auth block is
+refused with a pointer to the native Security page rather than rewritten.
+Only a regular, root-owned vhost that is not writable by other users can be
+replaced; symlinks are refused. Ownership and mode survive atomic replacement.
+
+Under the sign-in lock and a database write transaction, the action stages the
+allowlist and vhost, validates Nginx, mints as the site user, reloads Nginx, and
+commits. A reload only signals the master, so the action waits up to five
+seconds for active workers from the new generation and for the old workers to
+stop accepting requests, reading `/run/nginx.pid` and `/proc`. Only then is the
+token returned to the browser. Validation, minting or reload failures restore
+the database and vhost;
+reload failures also reload the restored configuration. Recovery failures are
+reported. A token written before a later failure expires after its normal
+minute. Maintenance bypasses are added only after the basic-auth reload succeeds.
+When both gates block the browser, each needs its own confirmation, and neither
+changes during preflight.
+
+`--allow-basic-auth` is distinct from `--add-bypass`, so consenting to lift
+maintenance does not also lift basic auth. Both flags require a known request
+address and reject `--as-user` root-side, including site managers. Other panel
+users receive an explanation and may sign in once their address is already
+allowed; site ownership checks still apply. The address has the same forwarded
+address and IPv4/IPv6 limitations described above for maintenance. No background
+probe adds the server's own address to an allowlist.
 
 ## Two answers to "which sites are WordPress"
 
