@@ -102,6 +102,7 @@ export const WP_LOGIN_ALLOWED_VERBS = new Set([
   "varnish-site",
   "varnish-install",
   "varnish-sync",
+  "mainwp-settings", "mainwp-site", "mainwp-sync", "mainwp-connect", "mainwp-cleanup",
 ]);
 
 export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([

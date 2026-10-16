@@ -2,7 +2,8 @@
 
 ## Why it is an addon and not a tweak
 
-WordPress Tools groups sign-in and optional Varnish plugin installation.
+WordPress Tools groups sign-in, optional Varnish installation and optional
+MainWP Child enrollment.
 [Panel Tweaks](panel-tweaks.md) changes what CloudPanel's own pages look like;
 this addon writes into a customer's site. An operator who enables a filterable
 site list does not thereby authorize those actions, and the gateway's fixed
@@ -209,3 +210,70 @@ restores the order, so the link carries `clp-addons-row-action` from
 Neither is `required`, so a CloudPanel release that renames the sites card or
 the Manage link costs the shortcut rather than stopping the addon from being
 enabled. The addon's own page signs in to the same sites either way.
+
+## MainWP enrollment
+
+MainWP shares the hardened site-user WP-CLI runner with Varnish. Its fixed PHP
+adapter receives bounded JSON over stdin, explicitly loads only the MainWP code
+needed after privileges have been dropped, and emits a marked JSON reply.
+Secret-bearing commands never preserve raw PHP or WP-CLI error output. The
+browser receives a projected view containing status and ownership booleans,
+never baseline settings, Security IDs or connection keys. Listing the page
+never boots WordPress. Sign-in is independent of MainWP state and locks.
+
+A single existing local Dashboard is selected by domain from the same safe site
+discovery. Its MainWP plugin must be active; the adapter runs as its Unix user
+and uses its first WordPress administrator. Child sites use their first
+administrator too. No accounts or passwords are created or changed. The native
+Dashboard PHP handler initiates registration and generates/stores the keys.
+HTTPS verification is enabled for registration and explicitly persisted for the
+new Dashboard record. Existing foreign connections and inconsistent Dashboard
+records are refusals, not takeover requests. External Dashboards are excluded.
+
+The root-only atomic `mainwp.json` stores policy, exclusions, `seen`, separate
+plugin and connection ownership, and enrollment/cleanup recovery. Automatic
+installation applies to missing, never-seen Child plugins on existing or new
+WordPress sites. Installed plugins require a confirmed row Connect. Matching
+public-key fingerprints on the child and selected Dashboard mean Connected;
+without an enrollment journal these are operator-owned. The Dashboard itself,
+multisite, exclusions and manually removed plugins are not automated.
+
+Before any installation the journal records the original activation, Child
+options, relevant administrator metadata, cron events and activity-table
+presence. Installation of an absent plugin owns that plugin. Connecting an
+existing plugin owns only the new connection and the changes needed to create
+it; cleanup restores its original activation and connection settings. Existing
+connections are never adopted. An existing plugin and its unrelated options,
+cron work and tables are never deleted. Root records are the ownership authority;
+site data can only confirm or contradict them. A changed connection fingerprint
+stops cleanup rather than removing the replacement.
+
+A strong per-site Security ID is provisioned before activation. Password-based
+bootstrap is temporarily disabled for the chosen administrator, with the original
+setting journaled before the change. Restoration runs in finally and before
+recovering an interrupted operation, even when automation is off. An enrollment
+interrupted after registration can recognize its own Security ID and matching
+key pair without adding another Dashboard record. An orphaned registration with
+no Dashboard record can be reset only from that enrollment's journal on explicit
+Retry. Failures preserve intent and require row Retry; repair restores temporary
+authentication settings without repeatedly attempting enrollment.
+
+The MainWP lock is independent of Varnish and sign-in. Repair checks only unseen
+eligible sites, interrupted authentication restoration and pending cleanup, with
+a 25-second work budget plus at most a 10-second authentication-restoration
+command. Check now and explicit actions have a 90-second work budget. At most 64 site statuses are requested per pass to keep the Dashboard reply
+bounded; unfinished sites rotate by last-check time. Deleted panel domains are pruned from the fleet
+and exclusions; owned Dashboard connections enter a small retirement queue until
+they can be removed, without retaining site paths or secrets.
+
+The global switch pauses enrollment without removing anything. Confirmed
+cleanup first disables enrollment, withdraws local access and restores owned
+site artifacts, then removes the owned Dashboard record through MainWP's native
+removal path, including its key file, session-cookie jar and site-related records. An empty
+Child uploads directory created during enrollment is removed. The child path
+verifies settings, plugin presence, cron and table restoration; the Dashboard
+path verifies record absence. Failed cleanup keeps its journal and remains
+pending. Lifecycle removal holds the MainWP lock and refuses while ownership or
+cleanup remains, before changing units/configuration or purging state. Operator
+connections and the existing Dashboard plugin and shared cron remain. Cleanup
+is withdrawal, not a rollback of management actions or existing WP sessions.

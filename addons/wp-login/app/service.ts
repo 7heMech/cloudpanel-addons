@@ -1,6 +1,7 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 import type { WpLoginResult, WpMaintenanceReply, WpRemoveResult, WpSiteView } from "../action";
 import { validateDomain } from "../../../lib/app-http";
+import type { MainwpView, MainwpResult } from "../mainwp";
 import type { WpVarnishState, VarnishSyncResult } from "../varnish";
 
 export { validateDomain };
@@ -10,6 +11,8 @@ export interface WpDashboard {
   sites: WpSiteView[];
   varnish: WpVarnishState;
   varnishError: string;
+  mainwp?: MainwpView;
+  mainwpError?: string;
 }
 
 function call<T>(verb: string, args: string[] = [], timeout?: number): Promise<ActionResult<T>> {
@@ -41,6 +44,17 @@ export const wpLoginService = {
   remove(): Promise<ActionResult<WpRemoveResult>> {
     return call<WpRemoveResult>("remove", [], LIST_TIMEOUT_MS);
   },
+  mainwpSettings(enabled: boolean, dashboard?: string) {
+    return call("mainwp-settings", [`--enabled=${enabled}`, ...(dashboard === undefined ? [] : [`--dashboard=${dashboard}`])], 45_000);
+  },
+  mainwpSite(domain: string, excluded: boolean) {
+    return call("mainwp-site", [`--domain=${domain}`, `--excluded=${excluded}`]);
+  },
+  mainwpConnect(domain: string): Promise<ActionResult<MainwpResult>> {
+    return call("mainwp-connect", [`--domain=${domain}`, `--confirm=${domain}`], 120_000);
+  },
+  mainwpSync(): Promise<ActionResult<MainwpResult>> { return call("mainwp-sync", [], 120_000); },
+  mainwpCleanup(): Promise<ActionResult<MainwpResult>> { return call("mainwp-cleanup", ["--confirm=mainwp"], 120_000); },
   varnishSettings(enabled: boolean): Promise<ActionResult<{ varnish: WpVarnishState }>> {
     return call("varnish-settings", [`--enabled=${enabled}`]);
   },

@@ -35,6 +35,8 @@ import {
   type VarnishRun, type VarnishSiteRecord, type VarnishOptions, type VarnishSyncResult, type WpVarnishState,
 } from "./varnish";
 
+import { mainwpAction, readMainwpState, mainwpView, emptyMainwpState, syncMainwp, type MainwpRun, type MainwpResult } from "./mainwp";
+
 export type WpLoginVerb = "sites" | "sign-in" | "remove" | "varnish-settings" | "varnish-site" | "varnish-install" | "varnish-sync";
 
 /** Where the loader and its one-time secret live inside a WordPress site. */
@@ -117,6 +119,8 @@ export interface WpLoginActionPaths {
   maintenance: MaintenanceActionPaths;
   varnishState: string;
   varnishLockFile: string;
+  mainwpState: string;
+  mainwpLockFile: string;
 }
 
 export interface WpLoginActionOptions extends VarnishOptions {
@@ -137,6 +141,8 @@ export const DEFAULT_WP_LOGIN_PATHS: WpLoginActionPaths = {
   maintenance: DEFAULT_MAINTENANCE_ACTION_PATHS,
   varnishState: `${STATE_DIR}/wp-login/varnish.json`,
   varnishLockFile: "/run/lock/clp-addons/wp-varnish.lock",
+  mainwpState: `${STATE_DIR}/wp-login/mainwp.json`,
+  mainwpLockFile: "/run/lock/clp-addons/wp-mainwp.lock",
 };
 
 function pathsFor(options: WpLoginActionOptions): WpLoginActionPaths {
@@ -317,6 +323,18 @@ export async function reconcileWpVarnish(
   if (!readVarnishState(paths.varnishState).enabled) return { installed: 0, checked: 0, pending: 0, failed: [] };
   return withFileLock(paths.varnishLockFile, 15, "a WordPress Varnish change is still running", async () =>
     syncVarnish(varnishRun(paths, request), options));
+}
+
+function mainwpRun(paths: WpLoginActionPaths, request: { dueOnly?: boolean } = {}): MainwpRun {
+  const run = varnishRun(paths, request);
+  return { ...run, statePath: paths.mainwpState };
+}
+export async function reconcileWpMainwp(options: WpLoginActionOptions = {}): Promise<MainwpResult> {
+  const paths = pathsFor(options);
+  const state = readMainwpState(paths.mainwpState);
+  if (!state.enabled && !state.cleanup && !state.retired.length && !Object.values(state.sites).some((r) => r.phase)) return { checked: 0, connected: 0, removed: 0, pending: 0, failed: [] };
+  return withFileLock(paths.mainwpLockFile, 1, "a MainWP change is still running", () =>
+    syncMainwp(mainwpRun(paths, { dueOnly: true }), options));
 }
 
 // --- the must-use plugin --------------------------------------------------
@@ -560,6 +578,12 @@ export async function executeWpLoginAction(
 ): Promise<unknown> {
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress sign-in actions must run as root");
   const paths = pathsFor(options);
+  if (argv[0]?.startsWith("mainwp-")) {
+    return withFileLock(paths.mainwpLockFile, 15, "a MainWP change is still running", () => {
+      if (!options.runWpCommand && !existsSync(`${CONFIG_DIR}/wp-login.conf`)) failAction("WordPress Tools must be enabled before a MainWP action");
+      return mainwpAction(mainwpRun(paths), argv, options, options.domainValidator ?? ((value) => validateDomain(value)));
+    });
+  }
   const { verb, domain, asUser, clientIp, addBypass: bypass, enabled, excluded } = parseAction(argv, options);
 
   if (verb === "sites") {
@@ -571,7 +595,11 @@ export async function executeWpLoginAction(
     } catch (error) {
       varnishError = `${paths.varnishState} cannot be read: ${reason(error)}`;
     }
-    return { sites: wordpressSites(paths, varnish), varnish, varnishError };
+    let mainwp = mainwpView(emptyMainwpState());
+    let mainwpError = "";
+    try { mainwp = mainwpView(readMainwpState(paths.mainwpState)); }
+    catch { mainwpError = "the MainWP settings cannot be read; repair the root-owned state before continuing"; }
+    return { sites: wordpressSites(paths, varnish), varnish, varnishError, mainwp, mainwpError };
   }
   if (verb === "varnish-sync") return reconcileWpVarnish(options);
   if (verb === "varnish-settings" || verb === "varnish-site" || verb === "varnish-install") {

@@ -148,3 +148,33 @@ async function removeHelpers() {
     return { text: text, kind: failed.length ? 'warn' : 'ok' };
   });
 }
+
+function mainwpSummary(data) {
+  let text = 'Checked ' + plural(data.checked, 'site') + '; ' + data.connected + ' connected; ' + data.removed + ' cleaned up.';
+  if (data.pending) text += ' ' + data.pending + ' pending; check again to continue.';
+  if (data.failed.length) text += ' ' + data.failed.length + ' failed; see the sites below.';
+  return { text: text, kind: data.pending || data.failed.length ? 'warn' : 'ok' };
+}
+function setMainwpAutomatic(input) {
+  const enabled = input.checked;
+  change('/api/mainwp-settings', { enabled: enabled }, function () {
+    return { text: enabled ? 'MainWP automation is on. Sites are checked every 15 minutes.' : 'MainWP automation is off. Existing connections remain active until you clean up.' };
+  });
+}
+function setMainwpDashboard(input) {
+  if (!input.value) return;
+  change('/api/mainwp-settings', { enabled: false, dashboard: input.value }, function () { return { text: 'MainWP Dashboard selected. Use Check now to refresh the sites.' }; });
+}
+function setMainwpSite(input) {
+  change('/api/mainwp-site', { domain: input.dataset.domain, excluded: !input.checked }, function () { return { text: 'MainWP automatic installation updated. Existing connections are unchanged.' }; });
+}
+function checkMainwp() { change('/api/mainwp-sync', {}, mainwpSummary); }
+async function connectMainwp(button) {
+  const domain = button.dataset.domain;
+  if (!await confirmAction({ title: 'Connect ' + domain + ' to MainWP?', text: 'MainWP Child is installed if missing and activated, and the selected Dashboard gains administrator access. Cleanup removes only changes owned by WordPress Tools.', confirmLabel: 'Connect' })) return;
+  change('/api/mainwp-connect', { domain: domain, confirm: true }, mainwpSummary);
+}
+async function cleanupMainwp() {
+  if (!await confirmAction({ title: 'Turn off and clean up MainWP?', text: 'Removes managed Dashboard connections and plugins installed by WordPress Tools. Plugins already installed by you stay, with their previous activation and connection settings restored. Existing manual connections are left alone.', confirmLabel: 'Turn off and clean up' })) return;
+  change('/api/mainwp-cleanup', { confirm: true }, mainwpSummary);
+}

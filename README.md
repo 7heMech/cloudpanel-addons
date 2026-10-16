@@ -32,7 +32,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | [SMTP Relay](docs/smtp-relay.md) | Send each site's mail through SMTP relay profiles, WordPress and PHP included. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
 | Panel Tweaks | Site search and columns, automatic SSL for native sites, mobile layouts and themes. |
-| [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in and optional automatic installation of CLP Varnish Cache. |
+| [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in, optional CLP Varnish Cache installation and MainWP Child enrollment. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
 
 Only CloudPanel administrators see the Addons tab. Site managers can also use

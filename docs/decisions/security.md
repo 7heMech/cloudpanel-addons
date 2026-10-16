@@ -206,3 +206,33 @@ archives, recovery archives, and job results containing generated credentials
 are mode `0600` below non-public directories. Instatic credentials used by a
 Stager clone travel to the action over stdin and are removed from the job after
 source authentication.
+
+## MainWP authority
+
+MainWP enrollment deliberately grants one administrator-selected Dashboard
+administrative control of the enrolled WordPress sites. A compromised Dashboard
+can install/run PHP as each connected site's Unix user. A child receives only
+its own bootstrap ID and the Dashboard public key, never the private key or any
+fleet credential. Its files and replies remain untrusted; they cannot supply
+root commands, paths, plugin names or targets outside CloudPanel's discovered
+sites. Dashboard code is also untrusted and always executes as its own site user.
+
+MainWP uses the shared WP-CLI isolation, output bounds and root-enforced deadline.
+A fixed adapter and JSON stdin keep IDs and baseline metadata out of process
+arguments, the web manager, browser and addon logs; secret-bearing error text is
+fixed rather than copied from PHP. The native MainWP stores the operational ID,
+reconnect credentials and keys in its own WordPress storage. The addon journal
+is atomic root-only `0600`, and only a secret-free projection reaches the page.
+Certificate verification is enforced and firewall/basic-auth restrictions are
+never bypassed. Every MainWP route is administrator-only and CSRF-protected;
+Connect and cleanup additionally require explicit confirmation.
+
+The temporary ID-only bootstrap requires a strong ID before activation and
+journals the administrator's previous authentication setting before changing it.
+It restores that setting on completion/failure and repairs it after crashes even
+when automation is paused. No user is created and no password is changed.
+Ownership is recorded before mutation; independent operator connections are
+never adopted. Cleanup verifies matching identities and preserves its journal
+on failure. Disabling/uninstalling cannot silently discard recovery. Revoking
+MainWP access does not undo prior actions or invalidate separately issued
+WordPress administrator sessions.
