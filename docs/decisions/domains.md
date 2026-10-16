@@ -147,6 +147,18 @@ empty. No ACL grant is removed automatically.
 
 ## State, errors and removal
 
+Connections offers Cloudflare's [user API token template URL](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/).
+The fixed Cloudflare dashboard URL encodes the union of all saved profiles'
+permission requirements, including Report only/unassigned profiles: zone read
+and DNS edit, plus settings, configuration rules, WAF, and zone creation only
+when requested by a profile. Zone edit replaces zone read for zone creation.
+The server renders the template and labels with each state reply; opening
+Connections reads the latest data. The browser enables the external link only
+for a valid account ID, scoped to all zones in that account, and clears its href
+when the ID becomes invalid. No wildcard account scope is generated. Profile
+values and credentials never enter the link. It opens without a referrer or
+opener; the operator reviews the scope, creates the token and pastes it back.
+
 Root-only `0600` JSON files in `/var/lib/clp-addons/domains` hold policy,
 credentials, cached plans/inventory and the pending confirmation. Symlinked,
 oversized, non-regular, wrongly owned or incorrectly permissioned files are

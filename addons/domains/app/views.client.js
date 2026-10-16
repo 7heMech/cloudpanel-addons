@@ -51,12 +51,26 @@ function openConnections() {
   form.reset(); form.elements.accountId.value = data.accountId; form.elements.mailcowUrl.value = data.mailcowUrl;
   form.elements.cloudflareToken.placeholder = data.hasCloudflareToken ? 'Saved · leave blank to keep' : 'API token';
   form.elements.mailcowKey.placeholder = data.hasMailcowKey ? 'Saved · leave blank to keep' : 'API key';
+  updateCloudflareTokenLink();
   openDialog('connections-dialog');
+}
+function updateCloudflareTokenLink() {
+  const template = JSON.parse(CLP_ROOT.getElementById('domains-data').dataset.tokenTemplate);
+  const account = CLP_ROOT.getElementById('cf-account').value.trim().toLowerCase();
+  const valid = /^[a-f0-9]{32}$/.test(account);
+  const link = CLP_ROOT.getElementById('cf-create-token');
+  CLP_ROOT.getElementById('cf-token-permissions').textContent = template.permissions.join(', ');
+  CLP_ROOT.getElementById('cf-token-scope').textContent = valid ? 'Preselects all zones in this account. Review the scope in Cloudflare, create the token, then paste it above.' : 'Enter your 32-character Cloudflare account ID to enable token creation.';
+  link.setAttribute('aria-disabled', String(!valid));
+  if (valid) {
+    const url = new URL(template.url); url.searchParams.set('accountId', account); link.href = url.href; link.removeAttribute('tabindex');
+  } else { link.removeAttribute('href'); link.tabIndex = -1; }
 }
 async function saveConnections(event) {
   event.preventDefault();
   const form = CLP_ROOT.getElementById('connections-form');
-  try { await change('connections', Object.fromEntries(new FormData(form))); form.reset(); CLP_ROOT.getElementById('connections-dialog').close(); notify('Connections saved. Profiles are Report only; scan before enabling Enforce.', 'ok'); } catch (e) {}
+  const body = Object.fromEntries(new FormData(form)); body.accountId = String(body.accountId).trim().toLowerCase();
+  try { await change('connections', body); form.reset(); CLP_ROOT.getElementById('connections-dialog').close(); notify('Connections saved. Profiles are Report only; scan before enabling Enforce.', 'ok'); } catch (e) {}
 }
 function profileFrom(button) { return JSON.parse(button.closest('[data-profile]').dataset.profile); }
 function lines(value) { return value.split(/[\s,]+/).map(function (v) { return v.trim(); }).filter(Boolean); }

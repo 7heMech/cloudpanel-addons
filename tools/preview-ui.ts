@@ -40,11 +40,13 @@ import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
 const versions: AvailableTags = { tags: ["0.0.19", "0.0.18"], latest: "0.0.19", source: "registry" };
 function domainsPreviewState(url: URL): DomainsState {
   const profile = { ...structuredClone(DNS_PROFILE), name: "CloudPanel + Mailcow", mode: "enforce" as const, mailHost: "mail.example.net", sharedMailbox: "relay@example.net" };
+  if (url.searchParams.get("token") === "dns") { profile.zoneSettings = false; profile.acmeRule = false; profile.webmailRule = false; }
+  if (url.searchParams.get("token") === "all") { profile.createZones = true; profile.mainwpIps = ["192.0.2.10"]; }
   const report = { ...structuredClone(profile), id: "review-first", name: "Review first", mode: "report" as const, webProxied: false };
   const zone = { id: "1".repeat(32), name: "example.net", status: "active", nameServers: ["alice.ns.cloudflare.com", "bob.ns.cloudflare.com"] };
   const empty = url.searchParams.get("state") === "empty";
   return { profiles: [profile, report], defaultProfileId: profile.id,
-    connections: { accountId: "a".repeat(32), mailcowUrl: "https://mail.example.net", hasCloudflareToken: !empty, hasMailcowKey: !empty },
+    connections: { accountId: empty ? "" : "a".repeat(32), mailcowUrl: "https://mail.example.net", hasCloudflareToken: !empty, hasMailcowKey: !empty },
     detectedIps: { ipv4: "192.0.2.80", ipv6: "2001:db8::80" }, scannedAt: "2026-10-16T12:00:00Z", errors: [], retryAt: 0,
     sites: empty ? [] : [
       { domain: "example.net", type: "php", profileId: profile.id, mode: "enforce", certificateReady: true, waitingCertificate: false, zone, changes: [], errors: [], ssl: { requested: true, attempts: 1, state: "Certificate installed", nextAttemptAt: 0 } },

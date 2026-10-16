@@ -6,8 +6,11 @@ Its settings page is for CloudPanel administrators.
 
 ## Configure once
 
-1. Open **Connections**. Enter your Cloudflare account ID and API token, plus
-   the HTTPS origin and API key of your Mailcow instance. Keys are saved
+1. Open **Connections** and enter your Cloudflare account ID. **Create API token
+   in Cloudflare** opens the token form with the required permissions and all
+   zones in that account preselected. Review the scope, create the token and
+   paste it into Connections. Enter the HTTPS origin and API key of your Mailcow
+   instance too. Keys are saved
    root-only and never shown again. A blank saved key keeps it only for the same
    account/endpoint. Saving connections returns profiles to Report only.
 2. Edit **CloudPanel + Mailcow**, or create profiles for different setups.
@@ -25,6 +28,15 @@ Its settings page is for CloudPanel administrators.
 5. Choose the **default for new sites**. This affects sites created from now on;
    it does not move the existing fleet. A confirmed enforcing profile is needed
    for automatic provisioning.
+
+The token link uses all saved profiles, including Report only and unassigned
+profiles. Save the intended feature settings before creating the token; the
+shipped profile includes HTTPS settings and ACME/webmail rules. Reopen Connections
+after changing profiles to get an updated link. If you enable another feature
+later, update or replace the token's permissions in Cloudflare. You can narrow
+the zone scope there, but future sites and newly created zones must be covered.
+The flow uses Cloudflare's [API token template URLs](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/);
+you still review and create the token in Cloudflare, then paste it into the panel.
 
 Cloudflare token permissions: **Zone Read** and **DNS Edit** on the relevant
 zones. Enable **Zone Settings Edit** only for Strict SSL / Always use HTTPS;
