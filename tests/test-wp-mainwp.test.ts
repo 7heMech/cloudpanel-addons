@@ -13,21 +13,29 @@ let run: MainwpRun;
 let commands: WpCommand[];
 const key = "a".repeat(64);
 const snapshot = () => ({ options: {}, meta: { passwordAuth: null }, admin: 1, active: false, cron: {}, tables: [] });
-const status = () => ({ multisite: false, installed: false, active: false, key: "", securityId: "", admin: "owner", snapshot: snapshot(), auth: true });
+const status = () => ({ multisite: false, installed: false, files: false, active: false, key: "", securityId: "", admin: "owner", snapshot: snapshot(), auth: true });
 let children: Record<string, ReturnType<typeof status>>;
 let connections: Record<string, { id: number; key: string } | null>;
 let fail: string;
+let httpsReady: boolean;
 const options = { runWpCommand: async (command: WpCommand) => {
   commands.push(command);
   const domain = command.argv.find((arg) => arg.startsWith("--url="))!.slice("--url=https://".length);
-  if (command.argv.includes("install")) { children[domain]!.installed = true; return "installed"; }
+  if (command.argv.includes("install")) {
+    if (fail === "install") throw new Error("download unavailable");
+    if (fail === "partial-install") { children[domain]!.files = true; throw new Error("incomplete download"); }
+    children[domain]!.installed = true; children[domain]!.files = true; return "installed";
+  }
   const input = JSON.parse(command.stdin!);
   const child = children[domain];
   let reply: unknown = { ok: true };
   switch (input.op) {
     case "status": reply = structuredClone(child); break;
     case "dashboard-status": reply = { ok: true, sites: Object.fromEntries(input.domains.map((d: string) => [d, connections[d] || null])) }; break;
-    case "prepare": child!.active = true; child!.auth = false; child!.securityId = input.token; break;
+    case "dashboard-ready": reply = { ready: httpsReady }; break;
+    case "prepare":
+      if (fail === "prepare") throw new Error("activation unavailable");
+      child!.active = true; child!.auth = false; child!.securityId = input.token; break;
     case "restore-auth":
       if (fail === "restore") throw new Error("interrupted");
       child!.auth = true;
@@ -42,7 +50,7 @@ const options = { runWpCommand: async (command: WpCommand) => {
       if (child!.key && child!.key !== input.key) throw new Error("ownership changed");
       child!.key = ""; child!.securityId = ""; child!.auth = true;
       child!.active = input.snapshot.active;
-      if (input.removePlugin) child!.installed = false;
+      if (input.removePlugin) { child!.installed = false; child!.files = false; }
       break;
     case "dashboard-remove":
       if (connections[new URL(input.url).hostname]?.key !== input.key) throw new Error("ownership changed");
@@ -53,12 +61,12 @@ const options = { runWpCommand: async (command: WpCommand) => {
 } };
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "clp-mainwp-"));
-  commands = []; children = {}; connections = {}; fail = "";
+  commands = []; children = {}; connections = {}; fail = ""; httpsReady = true;
   run = { statePath: join(root, "mainwp.json"), runuser: "/usr/sbin/runuser", domains: new Set(["dashboard.test", "new.test", "manual.test", "connected.test", "network.test"]),
     sites: ["dashboard.test", "new.test", "manual.test", "connected.test", "network.test"].map((domain, i) => ({ domain, user: `wp${i}`, home: `/home/wp${i}`, root: `/home/wp${i}/htdocs/${domain}`, phpVersion: "8.3" })) };
   for (const site of run.sites) children[site.domain] = status();
-  children["manual.test"]!.installed = true;
-  children["connected.test"]!.installed = true; children["connected.test"]!.active = true; children["connected.test"]!.key = key;
+  children["manual.test"]!.installed = true; children["manual.test"]!.files = true;
+  children["connected.test"]!.installed = true; children["connected.test"]!.files = true; children["connected.test"]!.active = true; children["connected.test"]!.key = key;
   connections["connected.test"] = { id: 1, key };
   children["network.test"]!.multisite = true;
 });
@@ -89,16 +97,68 @@ test("defaults off; only unseen missing children enroll; manual and connected si
   expect(JSON.stringify(mainwpView(state))).not.toContain("snapshot");
 });
 
-test("the timer skips observed sites and does not reinstall a removed Child; Check now refreshes while paused", async () => {
+test("the timer and Check now never reinstall an observed Child that the operator removed", async () => {
   await configured(); await syncMainwp(run, options);
-  children["new.test"]!.installed = false; children["new.test"]!.key = "";
+  children["new.test"]!.installed = false; children["new.test"]!.files = false; children["new.test"]!.key = "";
   commands = [];
   expect((await syncMainwp({ ...run, dueOnly: true }, options)).checked).toBe(0);
   expect(commands).toHaveLength(0);
-  await configureMainwp(run, options, false);
   await syncMainwp(run, options);
   expect(children["new.test"]!.installed).toBe(false);
   expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ status: "missing", seen: true });
+  expect(commands.some((c) => c.argv.includes("install") || c.stdin?.includes('"op":"dashboard-ready"'))).toBe(false);
+  await configureMainwp(run, options, false);
+  await syncMainwp(run, options);
+  expect(children["new.test"]!.installed).toBe(false);
+});
+
+test("a new site waits for Dashboard-side HTTPS without intent or a failure, then the timer connects it", async () => {
+  await configured(); httpsReady = false;
+  const waiting = await syncMainwp({ ...run, dueOnly: true }, options);
+  expect(waiting).toMatchObject({ connected: 0, failed: [] });
+  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ status: "waiting-https", seen: false, ownedPlugin: false, ownedConnection: false, error: "" });
+  expect(readMainwpState(run.statePath).sites["new.test"]!.snapshot).toBeUndefined();
+  expect(children["new.test"]!.installed).toBe(false);
+  expect(commands.some((c) => c.argv.includes("install") || c.stdin?.includes('"op":"prepare"'))).toBe(false);
+  const request = commands.find((c) => c.stdin?.includes('"op":"dashboard-ready"'))!;
+  expect(request.argv).toContain("wp0");
+  expect(JSON.parse(request.stdin!)).toEqual({ op: "dashboard-ready", url: "https://new.test" });
+  expect(request.timeoutMs).toBeLessThanOrEqual(13_000);
+  httpsReady = true; commands = [];
+  expect(await syncMainwp({ ...run, dueOnly: true }, options)).toMatchObject({ checked: 1, connected: 1, failed: [] });
+  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ status: "connected", seen: true, ownedPlugin: true, ownedConnection: true });
+});
+
+test("an outright install failure restores intent and ownership so the next timer pass succeeds", async () => {
+  await configured(); fail = "install";
+  expect((await syncMainwp({ ...run, dueOnly: true }, options)).failed).toHaveLength(1);
+  const record = readMainwpState(run.statePath).sites["new.test"]!;
+  expect(record).toMatchObject({ status: "error", seen: false, ownedPlugin: false, ownedConnection: false });
+  expect(record.snapshot).toBeUndefined(); expect(record.token).toBeUndefined(); expect(record.phase).toBeUndefined();
+  expect(children["new.test"]!.installed).toBe(false);
+  fail = "";
+  expect(await syncMainwp({ ...run, dueOnly: true }, options)).toMatchObject({ checked: 1, connected: 1, failed: [] });
+});
+
+test("an unchanged failed row connection restores its previous ownership and still requires explicit Connect", async () => {
+  await configured(); await syncMainwp(run, options); fail = "prepare";
+  expect((await syncMainwp({ ...run, domain: "manual.test" }, options)).failed).toHaveLength(1);
+  const record = readMainwpState(run.statePath).sites["manual.test"]!;
+  expect(record).toMatchObject({ status: "error", seen: true, ownedPlugin: false, ownedConnection: false });
+  expect(record.snapshot).toBeUndefined(); expect(record.phase).toBeUndefined();
+  fail = "";
+  expect((await syncMainwp({ ...run, dueOnly: true }, options)).checked).toBe(0);
+  expect((await syncMainwp({ ...run, domain: "manual.test" }, options)).connected).toBe(1);
+});
+
+test("partial installation keeps its recovery journal and needs Retry", async () => {
+  await configured(); fail = "partial-install";
+  expect((await syncMainwp({ ...run, dueOnly: true }, options)).failed).toHaveLength(1);
+  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ seen: true, ownedPlugin: true, phase: "install" });
+  fail = ""; commands = [];
+  await syncMainwp({ ...run, dueOnly: true }, options);
+  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ status: "error", seen: true, error: "Enrollment interrupted. Retry to continue." });
+  expect(commands.some((c) => c.argv.includes("install"))).toBe(false);
 });
 
 test("row Connect owns the new connection but preserves an existing plugin and activation state on cleanup", async () => {
@@ -184,8 +244,9 @@ test("MainWP routes require administrator, CSRF, and confirmation before reachin
 
 test("the UI has row Connect, a pause switch and explicit cleanup, with no secrets or selection UI", () => {
   const state = emptyMainwpState(); state.dashboard = "dashboard.test"; state.cleanup = true;
+  state.sites["new.test"] = { status: "waiting-https", seen: false, checkedAt: "", error: "", ownedPlugin: false, ownedConnection: false };
   const html = dashboardView({ sites: run.sites.map((s) => ({ domain: s.domain, user: s.user, application: "WordPress", helper: false, varnishCache: false, varnishExcluded: false, varnishPlugin: null })), varnish: { enabled: false, excluded: [], sites: {} }, varnishError: "", mainwp: mainwpView(state) });
-  expect(html).toContain("Cleanup pending"); expect(html).toContain("mainwp-automatic"); expect(html).not.toContain("Select all");
+  expect(html).toContain("Waiting for HTTPS"); expect(html).toContain("Cleanup pending"); expect(html).toContain("mainwp-automatic"); expect(html).not.toContain("Select all");
 });
 
 test("the shared runner does not disclose secret-bearing stderr", async () => {

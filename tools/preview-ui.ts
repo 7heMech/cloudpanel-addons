@@ -615,13 +615,14 @@ function terminalPreview(req: Request, url: URL): Response | null {
 // The WordPress Tools API, acting on the sites the page was last drawn with.
 function mainwpPreview(url: URL): MainwpView {
   const checkedAt = "2026-10-16T09:00:00Z";
-  const entry = (status: "missing" | "not-connected" | "connected" | "unsupported" | "error", owned = false, seen = true) => ({
+  const entry = (status: MainwpView["sites"][string]["status"], owned = false, seen = true) => ({
     status, seen, checkedAt, error: status === "error" ? "MainWP connection timed out. Retry to continue." : "", ownedPlugin: owned, ownedConnection: owned,
   });
   return { enabled: url.searchParams.get("mainwp") === "states", dashboard: "mainwp.example.com", excluded: ["staging.newsletter.example-church-of-the-hills.com"],
     cleanup: url.searchParams.get("mainwp") === "cleanup", owned: 1, sites: {
       "shop.example.com": entry("connected", true), "www.example.com": entry("connected"), "blog.example.com": entry("not-connected"),
       "staging.newsletter.example-church-of-the-hills.com": entry("not-connected"), "new.example.com": entry("missing", false, false),
+      "waiting.example.com": entry("waiting-https", false, false),
       "removed.example.com": entry("missing"), "network.example.com": entry("unsupported"), "retry.example.com": entry("error"),
     } };
 }
@@ -914,7 +915,7 @@ const server = Bun.serve({
         error: url.searchParams.get("varnish") === "unreadable"
           ? "/var/lib/clp-addons/wp-login/varnish.json cannot be read: the WordPress Varnish settings are invalid" : "",
       };
-      if (!empty) for (const domain of ["mainwp.example.com", "new.example.com", "removed.example.com", "network.example.com", "retry.example.com"]) wpLoginPreview.sites.push({
+      if (!empty) for (const domain of ["mainwp.example.com", "new.example.com", "waiting.example.com", "removed.example.com", "network.example.com", "retry.example.com"]) wpLoginPreview.sites.push({
         domain, user: domain.split(".")[0]!, application: "WordPress", helper: false, varnishCache: false, varnishExcluded: false, varnishPlugin: null,
       });
       html = wpLoginLayout("WordPress Tools", wpLoginDashboardView(wpLoginPreviewData()), notice);

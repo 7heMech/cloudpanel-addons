@@ -230,6 +230,15 @@ HTTPS verification is enabled for registration and explicitly persisted for the
 new Dashboard record. Existing foreign connections and inconsistent Dashboard
 records are refusals, not takeover requests. External Dashboards are excluded.
 
+Before installing or connecting, the Dashboard's site user makes an HTTPS GET
+to the same child URL registration uses, with certificate verification enabled,
+no redirects, a five-second request timeout and a 1 KiB response limit. The
+WP-CLI command also has a root-enforced deadline of at most eight seconds plus
+the runner's five-second termination allowance. A transport/TLS error or a
+response outside 200–399 records Waiting for HTTPS, without setting `seen`,
+claiming ownership or counting an enrollment failure. Repair retries these
+unseen sites on later passes. This needs no DNS or certificate provisioning addon.
+
 The root-only atomic `mainwp.json` stores policy, exclusions, `seen`, separate
 plugin and connection ownership, and enrollment/cleanup recovery. Automatic
 installation applies to missing, never-seen Child plugins on existing or new
@@ -255,8 +264,14 @@ recovering an interrupted operation, even when automation is off. An enrollment
 interrupted after registration can recognize its own Security ID and matching
 key pair without adding another Dashboard record. An orphaned registration with
 no Dashboard record can be reset only from that enrollment's journal on explicit
-Retry. Failures preserve intent and require row Retry; repair restores temporary
-authentication settings without repeatedly attempting enrollment.
+Retry. An outright failed attempt undoes its journal, `seen` and ownership changes
+only after readback verifies unchanged Child installation, plugin-directory
+presence, activation, connection settings and baseline, with no Dashboard record.
+An unseen site can then retry automatically on the next pass. Partial changes,
+uncertain readback and interrupted enrollment preserve intent and require row
+Retry; repair restores temporary authentication settings without repeatedly
+attempting enrollment. A previously observed Child that the operator removes
+keeps `seen` and is never reinstalled automatically.
 
 The MainWP lock is independent of Varnish and sign-in. Repair checks only unseen
 eligible sites, interrupted authentication restoration and pending cleanup, with

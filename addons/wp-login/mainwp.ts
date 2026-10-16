@@ -4,7 +4,7 @@ import { writeFileAtomic } from "../../lib/atomic-write";
 import { runWp, wpReply, type WpOptions, type WpSite } from "./wp-cli";
 import PHP from "./mainwp.php" with { type: "text" };
 
-export type MainwpStatus = "missing" | "not-connected" | "connected" | "unsupported" | "error";
+export type MainwpStatus = "missing" | "waiting-https" | "not-connected" | "connected" | "unsupported" | "error";
 interface Snapshot {
   options: Record<string, string>; meta: Record<string, string | null>; admin: number;
   active: boolean; tables: string[]; cron: Record<string, unknown>; uploads?: boolean;
@@ -30,12 +30,12 @@ export interface MainwpRun {
   domain?: string; dueOnly?: boolean;
 }
 interface ChildStatus {
-  multisite: boolean; installed: boolean; active: boolean; key: string; securityId: string; admin: string; snapshot: Snapshot;
+  multisite: boolean; installed: boolean; files: boolean; active: boolean; key: string; securityId: string; admin: string; snapshot: Snapshot;
 }
 export interface MainwpResult { checked: number; connected: number; removed: number; pending: number; failed: string[] }
 const emptyResult = (): MainwpResult => ({ checked: 0, connected: 0, removed: 0, pending: 0, failed: [] });
 export const emptyMainwpState = (): MainwpState => ({ enabled: false, dashboard: "", excluded: [], cleanup: false, sites: {}, retired: [] });
-const STATUSES: MainwpStatus[] = ["missing", "not-connected", "connected", "unsupported", "error"];
+const STATUSES: MainwpStatus[] = ["missing", "waiting-https", "not-connected", "connected", "unsupported", "error"];
 const keyValid = (value: unknown): value is string => typeof value === "string" && (!value || /^[a-f0-9]{64}$/.test(value));
 const connectionValid = (value: Connection | undefined) => value && Number.isSafeInteger(value.id) && value.id > 0 && keyValid(value.key) && Boolean(value.key);
 export function readMainwpState(path: string): MainwpState {
@@ -88,7 +88,7 @@ async function bridge<T>(run: MainwpRun, site: WpSite, options: WpOptions, deadl
 }
 async function child(run: MainwpRun, site: WpSite, options: WpOptions, deadline: number): Promise<ChildStatus> {
   const data = await bridge<ChildStatus>(run, site, options, deadline, { op: "status" });
-  if (typeof data.multisite !== "boolean" || typeof data.installed !== "boolean" || typeof data.active !== "boolean" || !keyValid(data.key)
+  if (typeof data.multisite !== "boolean" || typeof data.installed !== "boolean" || typeof data.files !== "boolean" || typeof data.active !== "boolean" || !keyValid(data.key)
     || typeof data.securityId !== "string" || typeof data.admin !== "string") throw new Error("MainWP returned an invalid child status");
   return data;
 }
@@ -203,6 +203,10 @@ export async function syncMainwp(run: MainwpRun, options: WpOptions = {}, cleanu
       }
       if (status.key || connection) throw new Error("An existing MainWP connection or Dashboard record needs attention in MainWP before this site can be connected.");
       if (!status.admin || !validSnapshot(status.snapshot)) throw new Error("the site has no administrator available for MainWP");
+      const readiness = await bridge<{ ready: boolean }>(run, dashboard!, options, Math.min(deadline, Date.now() + 8_000), { op: "dashboard-ready", url: `https://${site.domain}` });
+      if (typeof readiness.ready !== "boolean") throw new Error("MainWP returned an invalid HTTPS readiness status");
+      if (!readiness.ready) { record.status = "waiting-https"; continue; }
+      const beforeEnrollment = { ...record };
       if (!record.snapshot) {
         record.snapshot = status.snapshot;
         record.ownedPlugin = !status.installed;
@@ -211,20 +215,35 @@ export async function syncMainwp(run: MainwpRun, options: WpOptions = {}, cleanu
       record.seen = true; record.phase = status.installed ? "connect" : "install";
       saveMainwpState(run.statePath, state);
       try {
-        if (!status.installed) await runWp(run, site, ["plugin", "install", "mainwp-child"], options, deadline, {});
-        record.phase = "connect"; saveMainwpState(run.statePath, state);
-        await bridge(run, site, options, deadline, { op: "prepare", token: record.token, snapshot: record.snapshot });
-        await bridge(run, dashboard!, options, deadline, { op: "dashboard-add", domain: site.domain, url: `https://${site.domain}`, admin: status.admin, token: record.token });
-        const after = await child(run, site, options, deadline);
-        const fresh = (await bridge<{ sites: Record<string, Connection | null> }>(run, dashboard!, options, deadline, { op: "dashboard-status", domains: [site.domain] })).sites[site.domain];
-        if (fresh && !connectionValid(fresh)) throw new Error("MainWP returned an invalid Dashboard record");
-        recoverOwnership(record, after, fresh);
-        if (!record.ownedConnection) throw new Error("MainWP did not verify the new connection; Retry to check it again");
-        record.status = "connected";
-        result.connected++;
-      } finally {
-        await bridge(run, site, options, Date.now() + 10_000, { op: "restore-auth", snapshot: record.snapshot, deactivate: true });
-        if (record.status === "connected") { delete record.phase; delete record.token; }
+        try {
+          if (!status.installed) await runWp(run, site, ["plugin", "install", "mainwp-child"], options, deadline, {});
+          record.phase = "connect"; saveMainwpState(run.statePath, state);
+          await bridge(run, site, options, deadline, { op: "prepare", token: record.token, snapshot: record.snapshot });
+          await bridge(run, dashboard!, options, deadline, { op: "dashboard-add", domain: site.domain, url: `https://${site.domain}`, admin: status.admin, token: record.token });
+          const after = await child(run, site, options, deadline);
+          const fresh = (await bridge<{ sites: Record<string, Connection | null> }>(run, dashboard!, options, deadline, { op: "dashboard-status", domains: [site.domain] })).sites[site.domain];
+          if (fresh && !connectionValid(fresh)) throw new Error("MainWP returned an invalid Dashboard record");
+          recoverOwnership(record, after, fresh);
+          if (!record.ownedConnection) throw new Error("MainWP did not verify the new connection; Retry to check it again");
+          record.status = "connected";
+          result.connected++;
+        } finally {
+          await bridge(run, site, options, Date.now() + 10_000, { op: "restore-auth", snapshot: record.snapshot, deactivate: true });
+          if (record.status === "connected") { delete record.phase; delete record.token; }
+        }
+      } catch (error) {
+        try {
+          const after = await child(run, site, options, deadline);
+          if (after.installed === status.installed && after.files === status.files && after.active === status.active
+            && after.key === status.key && after.securityId === status.securityId && JSON.stringify(after.snapshot) === JSON.stringify(status.snapshot)) {
+            const fresh = await bridge<{ sites: Record<string, Connection | null> }>(run, dashboard!, options, deadline, { op: "dashboard-status", domains: [site.domain] });
+            if (fresh.sites?.[site.domain] === null) {
+              for (const field of ["snapshot", "token", "connection", "phase", "orphanKey"] as const) delete record[field];
+              Object.assign(record, beforeEnrollment);
+            }
+          }
+        } catch { /* Keep the journal if unchanged state cannot be verified. */ }
+        throw error;
       }
     } catch (error) {
       record.status = "error";

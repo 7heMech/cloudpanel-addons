@@ -61,6 +61,14 @@ This includes existing WordPress sites that were never linked. **Check now**
 refreshes the entire included fleet, even while automation is off. Large fleets
 may need another check to finish. Sites already connected are left alone.
 
+Before installation or connection, the Dashboard checks the child's HTTPS URL
+with certificate verification enabled. **Waiting for HTTPS** means DNS, the
+certificate or the HTTPS response is not ready from the Dashboard. No plugin is
+installed and no enrollment failure is counted while waiting. Once the site
+answers successfully, the next automatic pass installs and connects it. You can
+also use **Check now** after fixing HTTPS. This works independently of any DNS
+or certificate provisioning addon.
+
 An existing Child plugin is never connected automatically. Use its confirmed
 **Connect** button, or **Retry** after a failed or interrupted enrollment. An
 existing connection to another Dashboard or an inconsistent Dashboard record
@@ -72,7 +80,9 @@ existing connections. The Dashboard itself and multisite are skipped.
 Connections reuse the first WordPress administrator, as sign-in does. No user
 is created and no password is changed or requested. A temporary ID-based
 connection setting is restored after enrollment, or on the next repair after
-an interruption. A failed operation may need Retry.
+an interruption. A failed attempt verified to have left the site unchanged and
+no Dashboard record releases its enrollment intent; an unseen site retries on
+the next automatic pass. Partial or interrupted enrollment still needs **Retry**.
 
 The global switch only stops automation: MainWP connections remain active.
 **Turn off and clean up…** stops automation and withdraws addon-owned changes.

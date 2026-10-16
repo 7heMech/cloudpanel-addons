@@ -64,7 +64,7 @@ try {
     $op = $input['op'];
     if ($op === 'status') {
         $plugins = get_plugins();
-        clp_reply(array('multisite' => is_multisite(), 'installed' => isset($plugins[$plugin]), 'active' => is_plugin_active($plugin), 'key' => clp_key(get_option('mainwp_child_pubkey', '')), 'securityId' => get_option('mainwp_child_uniqueId', ''), 'admin' => $admin ? $admin->user_login : '', 'snapshot' => clp_snapshot($admin)));
+        clp_reply(array('multisite' => is_multisite(), 'installed' => isset($plugins[$plugin]), 'files' => file_exists(WP_PLUGIN_DIR . '/mainwp-child'), 'active' => is_plugin_active($plugin), 'key' => clp_key(get_option('mainwp_child_pubkey', '')), 'securityId' => get_option('mainwp_child_uniqueId', ''), 'admin' => $admin ? $admin->user_login : '', 'snapshot' => clp_snapshot($admin)));
     } elseif ($op === 'prepare') {
         if (is_multisite() || !$admin || (int)$admin->ID !== $input['snapshot']['admin']) throw new Exception('admin changed');
         if (get_option('mainwp_child_pubkey')) throw new Exception('already connected');
@@ -124,6 +124,10 @@ try {
         $sites = array();
         foreach ($input['domains'] as $domain) $sites[$domain] = clp_site(clp_find($db, 'https://' . $domain));
         clp_reply(array('ok' => true, 'sites' => $sites));
+    } elseif ($op === 'dashboard-ready') {
+        $response = wp_remote_get($input['url'], array('timeout' => 5, 'sslverify' => true, 'redirection' => 0, 'limit_response_size' => 1024));
+        $code = wp_remote_retrieve_response_code($response);
+        clp_reply(array('ready' => !is_wp_error($response) && $code >= 200 && $code < 400));
     } elseif ($op === 'dashboard-add') {
         $db = clp_dashboard();
         if (clp_find($db, $input['url'])) throw new Exception('dashboard record exists');

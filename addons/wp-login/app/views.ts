@@ -144,7 +144,7 @@ function mainwpSection(data: WpDashboard): string {
   const options = data.sites.map((site) => `<option value="${esc(site.domain)}" ${site.domain === dashboard ? "selected" : ""}>${esc(site.domain)}</option>`).join("");
   const labels: Record<MainwpStatus, [string, string]> = {
     missing: ["Not installed", ""], "not-connected": ["Not connected", "state-paused"], connected: ["Connected", "state-done"],
-    unsupported: ["Multisite, skipped", ""], error: ["Check failed", "state-failed"],
+    "waiting-https": ["Waiting for HTTPS", "state-paused"], unsupported: ["Multisite, skipped", ""], error: ["Check failed", "state-failed"],
   };
   const rows = data.sites.map((site) => {
     const record = state?.sites[site.domain];
