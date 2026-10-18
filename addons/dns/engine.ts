@@ -433,8 +433,10 @@ export class DnsRun {
     }
     if (state.error) plan.problems.push(state.error);
 
-    // Any two profiles in a zone that disagree stop it; what this site's plan shows is what its own profile asks.
-    plan.problems.push(...zoneWants(this.zoneProfiles().get(resolved.ref.zone.id) ?? [profile]).problems);
+    // A profile that disagrees with what is enforced in its zone is stopped; Report only profiles never write, so
+    // they do not stop anyone else. What the plan shows is what this site's own profile asks.
+    const enforcing = (this.zoneProfiles().get(resolved.ref.zone.id) ?? []).filter((candidate) => candidate.mode === "enforce");
+    plan.problems.push(...zoneWants([profile, ...enforcing]).problems);
     this.zoneChanges(state, zoneWants([profile]).wants, plan);
 
     const rendered = renderProfile(profile, this.vars(site.domain, resolved.ref.zone.name, profile));
@@ -552,9 +554,9 @@ export class DnsRun {
   private async enforceZone(state: ZoneState, profiles: Profile[], domains: string[]): Promise<void> {
     const api = this.cloudflare.get(state.ref.connectionId)!;
     const zoneId = state.ref.zone.id;
-    if (zoneWants(profiles).problems.length) return;
     // A Report only profile in the same zone is never a reason to write.
-    const { wants } = zoneWants(profiles.filter((profile) => profile.mode === "enforce"));
+    const { wants, problems } = zoneWants(profiles.filter((profile) => profile.mode === "enforce"));
+    if (problems.length) return;
     try {
       for (const wanted of wantedSettings(wants)) {
         if (state.settings.get(wanted.setting) === wanted.value) continue;
@@ -659,8 +661,14 @@ export class DnsRun {
   }
 
   /** Whether any current site's profile writes at a record's name and type, so removing an orphan never takes it. */
-  stillWanted(record: Pick<CfRecord, "name" | "type">): boolean {
-    return [...this.diffs.values()].some((diff) => diff.wanted.some((want) => want.name === record.name && want.type === record.type));
+  stillWanted(record: Pick<CfRecord, "name">): boolean {
+    return [...this.diffs.values()].some((diff) => diff.names.includes(record.name));
+  }
+
+  /** Whether a zone some current site is in could not be read, so what its sites want is unknown. */
+  unread(zoneId: string): boolean {
+    const state = this.zones.get(zoneId);
+    return state !== undefined && (state.records === null || state.error !== null);
   }
 
   /** The zone's records, read now, through the connection that tracked them. */

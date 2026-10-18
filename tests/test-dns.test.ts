@@ -194,17 +194,36 @@ describe("Report only and Enforce", () => {
     expect(env.records()).not.toContain("A shop.example.com 203.0.113.10 proxied");
   });
 
-  test("profiles in one zone that want different SSL modes are reported, and the zone is left alone", async () => {
+  test("a profile that wants another SSL mode than what its zone enforces is stopped", async () => {
     const env = setup();
     await env.connect();
     const state = await env.act("list");
     const mailcow = state.profiles.find((profile) => profile.id === "web-mailcow")!;
-    await env.act("save-profile", { ...mailcow, zone: { ...mailcow.zone, ssl: "full" } });
-    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    await env.act("save-profile", { ...mailcow, mailcow: false, records: mailcow.records.filter((row) => !/mailcow/.test(row.name + row.content)), zone: { ...mailcow.zone, ssl: "full" } });
     await env.act("assign", { domains: ["shop.example.com"], profileId: "web-mailcow" });
+    await env.enforce("web-mailcow");
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    // Report only, it may disagree, and is told so; it stops nothing.
+    const checked = await env.act("check");
+    expect(checked.sites.find((entry) => entry.domain === "example.com")!.plan!.problems).toContain("The profiles in this zone ask for different SSL/TLS modes");
+    expect(checked.sites.find((entry) => entry.domain === "shop.example.com")!.plan!.problems).toEqual([]);
     const blocked = await env.act("set-mode", { id: "web", mode: "enforce" });
     expect(blocked.review!.blocked).toBe(true);
-    expect(blocked.review!.sites[0]!.problems).toContain("The profiles in this zone ask for different SSL/TLS modes");
+    expect(env.cf.settings.get(`${env.cf.zones[0]!.id}:ssl`)).toBe("full");
+  });
+
+  test("records another current site writes at are never removed with a deleted site's", async () => {
+    const env = setup();
+    await env.connect();
+    const state = await env.act("list");
+    const web = state.profiles.find((profile) => profile.id === "web")!;
+    // Both sites publish the same verification value at the zone's own name.
+    await env.act("save-profile", { ...web, records: [...web.records, { type: "TXT", name: "_verify.{zone}", content: "token=1", ttl: 1 }] });
+    await env.act("assign", { domains: ["example.com", "shop.example.com"], profileId: "web" });
+    await env.enforce("web");
+    env.sites.splice(env.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
+    const review = await env.act("remove-records", { domain: "shop.example.com" });
+    expect(review.review!.sites[0]!.changes.map((change) => change.subject).sort()).toEqual(["A shop.example.com", "AAAA shop.example.com"]);
   });
 
   test("a dashboard edit to a managed record is put back by the next check", async () => {
@@ -374,8 +393,8 @@ describe("zones and new sites", () => {
     await env.enforce("web");
     await env.act("set-default", { profileId: "web" });
     env.sites.push(site(7, "fresh.example.com", { createdAt: START }));
-    const synced = await env.act<{ provisioned: string[] }>("sync-sites");
-    expect(synced.provisioned).toEqual(["fresh.example.com"]);
+    const synced = await env.act<{ joined: string[] }>("sync-sites");
+    expect(synced.joined).toEqual(["fresh.example.com"]);
     expect(env.records()).toContain("A fresh.example.com 203.0.113.10 proxied");
     const state = await env.act("list");
     expect(state.sites.find((entry) => entry.domain === "shop.example.com")!.profileId).toBeNull();
@@ -461,10 +480,19 @@ describe("automatic SSL", () => {
     expect(env.issued).toEqual([]);
   });
 
+  test("is dropped once DNS no longer enforces the site", async () => {
+    const env = await pending();
+    await env.act("set-mode", { id: "web", mode: "report" });
+    await env.act("reconcile");
+    expect((await env.act("list")).sites.find((entry) => entry.domain === "brand-new.example.com")!.ssl).toBeNull();
+  });
+
   test("is not recorded for a site that was not just created", async () => {
     const env = setup();
     env.sites.push(site(9, "old.example.com", { createdAt: START - 3_600_000, selfSigned: true }));
     await env.connect();
+    await env.act("assign", { domains: ["old.example.com"], profileId: "web" });
+    await env.enforce("web");
     await env.act("provision", undefined, ["--domain=old.example.com", "--ssl"]);
     expect((await env.act("list")).sites.find((entry) => entry.domain === "old.example.com")!.ssl).toBeNull();
   });

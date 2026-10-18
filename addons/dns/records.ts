@@ -202,6 +202,8 @@ export interface Diff {
   matched: CfRecord[];
   /** The records wanted once SPF is merged, for comparing sites and reporting. */
   wanted: RecordWrite[];
+  /** Every name the profile writes at, wanted or not, which no orphan removal may touch. */
+  names: string[];
   problems: string[];
 }
 
@@ -209,7 +211,7 @@ const PROTECTED = new Set(["NS", "SOA"]);
 
 /** What it takes to turn `published` into what `rendered` wants, without touching anything it does not claim. */
 export function diffRecords(rendered: Rendered, published: CfRecord[]): Diff {
-  const diff: Diff = { ops: [], matched: [], wanted: [], problems: [...rendered.problems] };
+  const diff: Diff = { ops: [], matched: [], wanted: [], names: [...new Set(rendered.claims.map((claim) => claim.name))], problems: [...rendered.problems] };
   for (const record of rendered.records) {
     if (record.type !== "TXT" || !isSpf(record.content)) {
       diff.wanted.push(record);

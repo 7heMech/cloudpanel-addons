@@ -55,7 +55,9 @@ export async function retryCertificates(
 ): Promise<void> {
   for (const [domain, request] of Object.entries(requests)) {
     const site = sites().find((candidate) => candidate.domain === domain);
-    if (!site || site.id !== request.siteId || (request.done && now - request.requestedAt > KEEP_FINISHED)) {
+    const plan = plans.find((candidate) => candidate.domain === domain);
+    // A site that is gone, or that DNS no longer enforces, is no longer DNS's to finish.
+    if (!site || site.id !== request.siteId || plan?.mode !== "enforce" || (request.done && now - request.requestedAt > KEEP_FINISHED)) {
       delete requests[domain];
       continue;
     }
@@ -64,7 +66,6 @@ export async function retryCertificates(
       Object.assign(request, { done: true, state: "A certificate is installed" });
       continue;
     }
-    const plan = plans.find((candidate) => candidate.domain === domain);
     const ready = readiness(plan);
     if (!ready.ready) {
       request.state = `Waiting for DNS: ${ready.reason}`;

@@ -428,14 +428,14 @@ class Action {
   async provision(domain: string, ssl: boolean): Promise<ProvisionReply> {
     await this.syncSites();
     const site = this.site(domain);
-    if (ssl) {
-      const requests = this.files.ssl();
-      if (requestSsl(requests, site, this.now)) this.files.saveSsl(requests);
-    }
     const policy = this.files.policy();
     const profile = policy.profiles.find((candidate) => candidate.id === policy.assignments[domain]);
     if (!profile || profile.mode !== "enforce") {
       return { managed: false, ready: false, reason: profile ? "Its DNS profile is Report only" : "No DNS profile is assigned to this site", certificateNames: [] };
+    }
+    if (ssl) {
+      const requests = this.files.ssl();
+      if (requestSsl(requests, site, this.now)) this.files.saveSsl(requests);
     }
     const run = this.run(policy);
     await run.discover();
@@ -565,6 +565,7 @@ class Action {
     const assigned = this.sites().filter((site) => policy.assignments[site.domain]).map((site) => site.domain);
     await run.load(assigned);
     run.planAll(this.sites());
+    if (run.unread(entry.zoneId)) failAction(`${entry.zoneName} could not be read for the sites in it; check again before removing records`);
     const published = await run.readZone(entry.connectionId, entry.zoneId);
     const ids = entry.records
       .filter((tracked) => published.some((record) => record.id === tracked.id && record.type === tracked.type
@@ -641,7 +642,7 @@ class Action {
     const run = this.run(trial, { cloudflare: { [id]: token }, mailcowKey: "" });
     await run.discover();
     const report = run.connections[0]!;
-    if (!report.active) failAction(redact(report.error ?? "Cloudflare did not accept the token", [token]));
+    if (!report.active) failAction(redact(`Cloudflare did not accept this token: ${(report.error ?? report.status).replace(/^Cloudflare: /, "")}`, [token]));
     const named = oneLine(body.label, "the connection name", 40, false);
     const label = named || report.accounts.map((account) => account.name).filter(Boolean).join(", ").slice(0, 40) || "Cloudflare";
 
@@ -845,7 +846,7 @@ async function perform(
       await action.check(true);
       return { checked: action.sites().length };
     case "sync-sites":
-      return { provisioned: await action.syncSites() };
+      return { joined: await action.syncSites() };
     case "provision":
       return action.provision(provision!.domain, provision!.ssl);
     case "confirm":

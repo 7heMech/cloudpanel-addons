@@ -14,8 +14,8 @@ export const DNS_ADDON: AddonDefinition = {
   newSites: {
     label: "DNS",
     run: async (options) => {
-      const { provisioned } = await executeDnsAction(["sync-sites"], (options ?? {}) as DnsActionOptions) as { provisioned: string[] };
-      return provisioned.length ? `${provisioned.join(", ")} provisioned` : null;
+      const { joined } = await executeDnsAction(["sync-sites"], (options ?? {}) as DnsActionOptions) as { joined: string[] };
+      return joined.length ? `${joined.join(", ")} joined the default profile` : null;
     },
   },
   // The check reads and writes Cloudflare and Mailcow, which can take a while

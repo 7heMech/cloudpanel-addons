@@ -916,7 +916,8 @@ const server = Bun.serve({
       html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
     } else if (path === "/addons/dns/" || path === "/addons/dns") {
       // ?dialog=profile|new|review|site|choose|connection|mailcow|server opens that dialog on load;
-      // ?at=<selector> hides the cards above that one, for a phone screenshot of something below the fold.
+      // ?at=<selector> hides the cards above that one, for a phone screenshot of something below the fold; ?dark
+      // draws the dark theme.
       const state = dnsPreviewState(url);
       const dialog = url.searchParams.get("dialog");
       const at = url.searchParams.get("at");
@@ -930,7 +931,8 @@ const server = Bun.serve({
         mailcow: "dnsEditMailcow()",
         server: "dnsEditServer()",
       };
-      const opener = dialog ? openers[dialog] ?? "" : at ? `const card=document.querySelector(${JSON.stringify(at)})?.closest("#dns-root > *");for(let el=document.getElementById("dns-root").firstElementChild;el&&el!==card;el=el.nextElementSibling)el.style.display="none"` : "";
+      const dark = url.searchParams.has("dark") ? "document.cookie='theme=dark; Path=/';syncTheme();" : "";
+      const opener = dark + (dialog ? openers[dialog] ?? "" : at ? `const card=document.querySelector(${JSON.stringify(at)})?.closest("#dns-root > *");for(let el=document.getElementById("dns-root").firstElementChild;el&&el!==card;el=el.nextElementSibling)el.style.display="none"` : "");
       html = dnsLayout("DNS", dnsDashboardView(state), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener.replaceAll("<", "\\u003c")}})</script></body>` : "</body>");
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {

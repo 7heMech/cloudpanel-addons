@@ -87,18 +87,20 @@ three rules: Full SSL for `/.well-known/acme-challenge/`, Full SSL for
 listed addresses, such as a MainWP Dashboard. Cloudflare cannot skip the free
 Bot Fight Mode this way.
 
-These belong to the whole zone, so they are worked out from every profile in it:
-profiles that disagree stop the zone's sites, and only enforcing profiles' wishes
-are written. Each rule is one zone-wide rule with a fixed `ref`, added to the
-phase's entrypoint beside whatever else is there, or updated in place; a rule
-that already does the same thing, such as one Terraform created, counts as
-present. A zone therefore uses at most one rule of each kind against its plan's
-quota. Rules are written before records, so a proxied record never exists
-without the rule its first certificate needs. The addon never deletes a rule.
+These belong to the whole zone, so only enforcing profiles' wishes are written,
+and a profile that disagrees with what its zone's enforcing profiles ask is
+stopped. A Report only profile never writes, so it stops nobody else. Each rule
+is one zone-wide rule with a fixed `ref`, added to the phase's entrypoint beside
+whatever else is there, or updated in place; a rule that already does the same
+thing, such as one Terraform created, counts as present. A zone therefore uses
+at most one rule of each kind against its plan's quota. Rules are written before
+records, so a proxied record never exists without the rule its first
+certificate needs. The addon never deletes a rule.
 
-Proxied records with the ACME rule are the default because they work with Cloudflare
-IP Access: Let's Encrypt's HTTP-01 request reaches the origin through Cloudflare
-with Full SSL while the origin still has CloudPanel's self-signed certificate.
+Proxied records with the ACME rule are the default because they work with
+Cloudflare IP Access: Let's Encrypt's HTTP-01 request reaches the origin through
+Cloudflare with Full SSL while the origin still has CloudPanel's self-signed
+certificate.
 
 ## Cloudflare connections
 
@@ -146,14 +148,14 @@ non-administrators: the action is told the panel user and refuses a site
 `panelUserOwnsSite` does not give them, and answers with readiness, a reason and
 the certificate names only -- the site and `www` where the profile writes an
 address there. A site in no profile or a Report only one is not DNS's to hold up.
-The call also records that automatic SSL was asked for, for a site created in
-the last fifteen minutes that still has its self-signed certificate. When DNS
-was not ready -- a new zone waiting for its nameservers, say -- the check
-retries it as root with `clpctl lets-encrypt:install:certificate` once the site
-is ready: two minutes after the request, then after 5, 15, 60 and 360 minutes,
-five attempts in all. The attempt is counted before the CLI runs. A site whose
-certificate is no longer the placeholder ends its request, so a real certificate
-is never replaced.
+For an enforced site created in the last fifteen minutes that still has its
+self-signed certificate, the call also records that automatic SSL was asked
+for. When DNS was not ready -- a new zone waiting for its nameservers, say --
+the check retries it as root with `clpctl lets-encrypt:install:certificate`
+once the site is ready: two minutes after the request, then after 5, 15, 60
+and 360 minutes, five attempts in all. The attempt is counted before the CLI
+runs. A site whose certificate is no longer the placeholder ends its request,
+so a real certificate is never replaced; a site DNS stops enforcing drops it.
 
 ## Running
 
@@ -181,8 +183,9 @@ Mailcow address it was saved with.
 
 The records an enforcing site has as wanted are tracked by id. When CloudPanel no
 longer has the site, the page lists them; Remove plans the deletion of those
-still unchanged and written by no current site, and deletes them after the same
-kind of review. Keep forgets them. Neither touches the zone or Mailcow.
+still unchanged and at no name a current site's profile writes, and deletes
+them after the same kind of review. It refuses while a site in that zone could
+not be read. Keep forgets them. Neither touches the zone or Mailcow.
 
 Assigning no profile, Report only, deleting a profile, disabling and
 uninstalling all stop enforcement and change nothing outside the server;
