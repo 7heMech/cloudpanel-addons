@@ -57,12 +57,16 @@ function mountedAddons(): string[] {
  * get from an addon page, and reads nothing. Panel Tweaks' state route is one
  * because the page it enhances is CloudPanel's own Sites page, which every
  * panel user sees; the action narrows the reply to the rows that page would
- * already have drawn for the caller.
+ * already have drawn for the caller. DNS's provision route is called from the
+ * page a new site lands on, by whoever created it; the action refuses a site
+ * that is not the caller's and answers with readiness only.
  */
 const SELF_SCOPED_ROUTES = new Set([
   "POST /wp-login/api/sign-in",
   "GET /wp-login/api/session",
   "GET /panel-tweaks/api/panel",
+  "GET /dns/api/session",
+  "POST /dns/api/provision",
 ]);
 
 /**

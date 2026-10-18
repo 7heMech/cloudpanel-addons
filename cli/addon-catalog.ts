@@ -14,6 +14,7 @@ import type { Server } from "bun";
 import { CONFIG_DIR, STATE_DIR, TEMPLATES_DIR } from "./paths";
 import type { AddonTarget } from "../lib/addon-target";
 import { CLOUDFLARE_IPS_ADDON } from "../addons/cloudflare-ips/addon";
+import { DNS_ADDON } from "../addons/dns/addon";
 import { GIT_ADDON } from "../addons/git/addon";
 import { INSTATIC_ADDON } from "../addons/instatic/addon";
 import { MAINTENANCE_ADDON } from "../addons/maintenance/addon";
@@ -71,6 +72,8 @@ export interface AddonDefinition {
    */
   siteManager?: boolean;
   maintenance?: AddonMaintenance;
+  /** Work for sites CloudPanel has just created, run seconds after it writes their vhost. */
+  newSites?: AddonMaintenance;
 }
 
 /**
@@ -83,9 +86,14 @@ export interface AddonSpec extends AddonDefinition {
   stateDir: string;
 }
 
-/** Order is the order addons are listed and installed; keep it deliberate. */
+/**
+ * Order is the order addons are listed and installed, and the order their
+ * new-site work runs in: DNS before SMTP Relay, and before automatic SSL asks
+ * for a certificate. Keep it deliberate.
+ */
 const DEFINITIONS: AddonDefinition[] = [
   CLOUDFLARE_IPS_ADDON,
+  DNS_ADDON,
   INSTATIC_ADDON,
   STAGER_ADDON,
   MAINTENANCE_ADDON,
@@ -123,6 +131,11 @@ export function templateWatchPaths(): string[] {
     for (const target of spec.targets) paths.add(`${TEMPLATES_DIR}/${target.template}`);
   }
   return [...paths].sort();
+}
+
+/** The installed addons with work for new sites, in catalog order. */
+export function addonNewSites(installed: AddonSpec[]): AddonSpec[] {
+  return installed.filter((spec) => spec.newSites !== undefined);
 }
 
 /** The installed addons that want upkeep during repair, in catalog order. */

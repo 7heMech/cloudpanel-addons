@@ -23,6 +23,7 @@ import { runAuthActionStdin } from "./auth-action";
 import { runManagerAction, type ManagerOps } from "./manager-action";
 import { runSmtpSubmit } from "../addons/smtp/submit";
 import { runTerminalPty } from "../addons/terminal/pty";
+import { runNewSiteWork } from "./maintenance";
 
 /**
  * The privileged half of the three manager verbs.
@@ -49,10 +50,13 @@ function usage(): void {
   clp-addons install <addon> [--version=vX.Y.Z] [--skip-attestation] [--local=DIR]
   clp-addons update [--version=vX.Y.Z] [--skip-attestation]   (alias: upgrade)
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
+  clp-addons sync-sites
   clp-addons status
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons maintenance <domain> [on|off|status]
   clp-addons action cloudflare-ips <list|set|policy|reconcile> [options]
+  clp-addons action dns <list|check|save-profile|delete-profile|set-mode|assign|set-default|confirm|save-connection|remove-connection|choose-zone|save-mailcow|save-server|remove-records|forget-records|reconcile|sync-sites>
+  clp-addons action dns provision --domain=<domain> [--as-user=<user>] [--ssl]
   clp-addons action smtp <list|save-profile|delete-profile|assign|set-default|save-grants|test|reconcile|sync-sites|deactivate>
   clp-addons action instatic <verb> [options]
   clp-addons action stager <verb> [options]
@@ -140,6 +144,11 @@ async function main(): Promise<number> {
     case "self-update": fatal("self-update is deprecated; use clp-addons update");
     case "recon": await runRecon(); return 0;
     case "repair": await cmdRepair(rest); return 0;
+    case "sync-sites":
+      requireRoot("sync-sites");
+      if (rest.length) fatal("sync-sites takes no arguments");
+      await runNewSiteWork(installedAddons());
+      return 0;
     case "status": await cmdStatus(); return 0;
     case "maintenance": await cmdMaintenance(rest); return 0;
     case "uninstall": cmdUninstall(rest); return 0;

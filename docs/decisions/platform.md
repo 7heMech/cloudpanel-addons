@@ -135,6 +135,20 @@ Dashboard chart that fits -- is the addon's alone, and a switch, because that is
 the panel's own shape being changed rather than room being made for something an
 addon added.
 
+## New sites
+
+An addon that has work for a site the moment it exists declares `newSites` in
+its catalog definition. `clp-addons-new-sites.path` watches
+`/etc/nginx/sites-enabled`, where CloudPanel writes every new site's vhost, and
+its service runs `clp-addons sync-sites`: each installed addon's `newSites`, in
+catalog order, so DNS writes a site's records before SMTP Relay binds its user
+and before automatic SSL asks for a certificate. One addon failing does not
+skip the next. CloudPanel commits the site row about 200 ms after writing the
+vhost, so the service runs again 10 seconds later, even if the first run
+failed. The units exist while any installed addon declares `newSites`; repair
+restarts the watcher if it has stopped. It takes no operation lock: each
+addon's work takes its own.
+
 ## One way to watch a job
 
 `lib/job-stream.ts` owns both job-observation routes: `/api/jobs/:id` polls and
