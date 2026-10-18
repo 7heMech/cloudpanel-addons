@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { BlockList, isIP } from "node:net";
 import { join } from "node:path";
+import { normalizeMappedIpv4 } from "../../lib/ip-address";
 import { failAction, runCommand, type CommandResult } from "../../cli/action-common";
 import { commandError, restoreVhosts, trustedVhost, withRecoveryFailures, writeVhost, type VhostBackup } from "../../cli/nginx-vhost";
 
@@ -30,19 +31,27 @@ function entries(value: string | null): string[] {
   return value ? value.split(",").map((ip) => ip.trim()).filter(Boolean) : [];
 }
 
+function normalizedEntries(value: string | null): string[] {
+  return entries(value).map((entry) => entry.includes("/") ? entry : normalizeMappedIpv4(entry));
+}
+
 function allows(value: string | null, ip: string): boolean {
   if (!ip) return false;
   const list = new BlockList();
   for (const entry of entries(value)) {
-    const [address, prefix, extra] = entry.split("/");
-    const version = isIP(address!);
+    const [rawAddress, prefix, extra] = entry.split("/");
+    const address = prefix === undefined ? normalizeMappedIpv4(rawAddress!) : rawAddress!;
+    const version = isIP(address);
     if (!version || extra !== undefined || (prefix !== undefined && !/^\d+$/.test(prefix))) {
       failAction("CloudPanel's basic-auth IP allowlist contains an invalid address");
     }
     try {
       const family = version === 4 ? "ipv4" : "ipv6";
-      if (prefix === undefined) list.addAddress(address!, family);
-      else list.addSubnet(address!, Number(prefix), family);
+      if (prefix === undefined) {
+        // A stored mapped host needs an approved rewrite before it admits IPv4 in Nginx.
+        if (address !== rawAddress && isIP(ip) === 4) continue;
+        list.addAddress(address, family);
+      } else list.addSubnet(address, Number(prefix), family);
     } catch {
       failAction("CloudPanel's basic-auth IP allowlist contains an invalid network");
     }
@@ -140,7 +149,7 @@ export async function withBasicAuthBypass(
     }
     const path = join(paths.nginxVhostDir, `${domain}.conf`);
     backup = trustedVhost(path, paths.vhostUid);
-    const next = [...entries(row.whitelisted_ips), ip];
+    const next = [...new Set([...normalizedEntries(row.whitelisted_ips), ip])];
     const content = basicAuthVhost(backup.content, domain, row.whitelisted_ips, next);
     db.query("UPDATE basic_auth SET whitelisted_ips = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
       .run(next.join(","), row.id);

@@ -56,8 +56,10 @@ named non-administrator requests, preserves the site's credentials, and updates
 only the native allowlist and a trusted generated vhost, validating and reloading
 Nginx with rollback on failure through the same vhost machinery as Cloudflare IP
 Access. Minting runs before the basic-auth database transaction, and maintenance
-bypasses run after it commits. Consent to a maintenance bypass does not authorize
-a basic-auth bypass. The WordPress page's CSP allows token forms only to listed
+bypasses run after it commits. The shared HTTP IP reader normalizes mapped IPv4
+hosts before either gate uses the request address; native basic-auth allowlist
+updates normalize mapped single hosts while preserving CIDRs. Consent to a
+maintenance bypass does not authorize a basic-auth bypass. The WordPress page's CSP allows token forms only to listed
 WordPress HTTPS origins; the shared policy still refuses form submissions.
 Disabling or uninstalling the addon removes the plugin from every site. Accepted
 IP bypasses stay in their respective CloudPanel or Maintenance Mode settings. See

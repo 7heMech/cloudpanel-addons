@@ -9,6 +9,7 @@ import {
 } from "../addons/wp-login/action";
 import { DEFAULT_MAINTENANCE_ACTION_PATHS } from "../addons/maintenance/action";
 import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
+import { clientIp } from "../lib/app-http";
 import { ROW_ACTION_CLASS } from "../lib/row-actions";
 
 const scriptTarget = WP_LOGIN_TARGETS.find((target) => target.slug === "sites-script")!;
@@ -549,4 +550,56 @@ test("minting does not hold CloudPanel's database write lock", async () => {
   });
   expect(minted).toBe(true);
   expect(basicAuthIps()).toBe("203.0.113.9");
+});
+
+
+test("a mapped request address creates IPv4 bypasses for both Nginx gates", async () => {
+  seedBasicAuth();
+  writeFileSync(join(root, "maintenance.conf"), "");
+  writeFileSync(maintenanceFile("shop.example.com", "on"), "");
+  const ip = clientIp(new Request("https://panel.example.com/", { headers: { "X-Real-IP": "::ffff:203.0.113.9" } }));
+  const result = await act<WpLoginResult>(["sign-in", SHOP, `--client-ip=${ip}`, ALLOW_BASIC, "--add-bypass"], { run: okCommand });
+  expect(result.token).toBeDefined();
+  expect(basicAuthIps()).toBe("203.0.113.9");
+  const conf = readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8");
+  expect(conf).toContain("allow 203.0.113.9;");
+  expect(conf).not.toContain("::ffff:");
+  expect(existsSync(maintenanceFile("shop.example.com", "bypass_203.0.113.9"))).toBe(true);
+  expect(existsSync(maintenanceFile("shop.example.com", "bypass_::ffff:cb00:7109"))).toBe(false);
+});
+
+test("native allowlist rewrites normalize mapped hosts while preserving CIDR entries", async () => {
+  seedBasicAuth("::ffff:198.51.100.1,::FFFF:C633:6402,::ffff:198.51.100.0/120,2001:db8::/32");
+  await act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand });
+  expect(basicAuthIps()).toBe("198.51.100.1,198.51.100.2,::ffff:198.51.100.0/120,2001:db8::/32,203.0.113.9");
+  const conf = readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8");
+  expect(conf).toContain("allow 198.51.100.1;");
+  expect(conf).toContain("allow 198.51.100.2;");
+  expect(conf).toContain("allow ::ffff:198.51.100.0/120;");
+  expect(conf).toContain("allow 2001:db8::/32;");
+  expect(conf).not.toContain("allow ::ffff:198.51.100.1;");
+});
+
+for (const stored of ["::ffff:203.0.113.9", "::FFFF:CB00:7109"]) {
+  test(`a stored mapped host ${stored} requires consent to repair its IPv4 bypass`, async () => {
+    const original = seedBasicAuth(stored);
+    expect((await act<WpBasicAuthReply>(["sign-in", SHOP, FROM])).basicAuth.canBypass).toBe(true);
+    expect((await act<WpBasicAuthReply>(["sign-in", SHOP, FROM, "--as-user=shopkeeper"])).basicAuth.canBypass).toBe(false);
+    expect(runuserLog()).toEqual([]);
+    expect(basicAuthIps()).toBe(stored);
+    expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).toBe(original);
+    await act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand });
+    expect(basicAuthIps()).toBe("203.0.113.9");
+    const conf = readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8");
+    expect(conf.match(/allow 203\.0\.113\.9;/g)).toHaveLength(1);
+    expect(conf).not.toContain("::ffff:");
+    expect((await act<WpLoginResult>(["sign-in", SHOP, FROM, "--as-user=shopkeeper"])).token).toBeDefined();
+  });
+}
+
+test("invalid mapped hosts in the native allowlist are refused", async () => {
+  seedBasicAuth("::ffff:256.51.100.1");
+  await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand })).rejects.toThrow("invalid address");
+  expect(runuserLog()).toEqual([]);
+  expect(basicAuthIps()).toBe("::ffff:256.51.100.1");
 });

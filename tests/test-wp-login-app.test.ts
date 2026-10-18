@@ -39,7 +39,7 @@ test("basic-auth consent preserves the authenticated role and takes the IP from 
   for (const roles of [["ROLE_ADMIN"], ["ROLE_USER"], ["ROLE_SITE_MANAGER"]]) {
     const req = new Request("https://panel.example.com/addons/wp-login/api/sign-in", {
       method: "POST",
-      headers: { Host: "panel.example.com", Origin: "https://panel.example.com", Cookie: `clp_addons_csrf=${csrf}`, "X-CLP-Addons-CSRF": csrf, "X-Real-IP": "203.0.113.9", "Content-Type": "application/json" },
+      headers: { Host: "panel.example.com", Origin: "https://panel.example.com", Cookie: `clp_addons_csrf=${csrf}`, "X-CLP-Addons-CSRF": csrf, "X-Real-IP": "::ffff:203.0.113.9", "Content-Type": "application/json" },
       body: JSON.stringify({ domain: "shop.example.com", allowBasicAuth: true, addBypass: true, clientIp: "198.51.100.1", asUser: "boss" }),
     });
     const response = await handle(req, "/api/sign-in", undefined, undefined, { user: "shopkeeper", roles });
