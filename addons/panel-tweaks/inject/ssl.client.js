@@ -46,15 +46,45 @@
       return response.text().then(function (html) { return new DOMParser().parseFromString(html, 'text/html'); });
     }
 
-    fetch(issueUrl, { credentials: 'same-origin' }).then(parse).then(function (doc) {
-      var token = doc.querySelector('input[name="site_lets_encrypt_certificate[_token]"]');
-      if (!token || !token.form) throw new Error('CloudPanel\'s certificate form was not found.');
-      var body = new FormData(token.form);
-      // Only the domain that was created: the form's default www name may have no DNS.
-      body.delete('domains[]');
-      body.append('domains[]', domain);
-      return fetch(issueUrl, { method: 'POST', body: body, credentials: 'same-origin' });
-    }).then(function (response) {
+    // With the DNS addon installed, its records are written first and decide
+    // which names the certificate covers. Without it, only the created domain:
+    // the form's default www name may have no DNS.
+    function dnsNames() {
+      return fetch('/addons/dns/api/session', { credentials: 'same-origin' }).then(function (response) {
+        return response.ok ? response.json().catch(function () { return null; }) : null;
+      }).then(function (session) {
+        if (!session || session.ok !== true) return [domain];
+        show('info', 'Writing the DNS records for ' + domain + '…');
+        var csrf = document.cookie.match(/(?:^|;\s*)clp_addons_csrf=([^;]+)/);
+        return fetch('/addons/dns/api/provision', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', 'X-CLP-Addons-CSRF': csrf ? csrf[1] : '' },
+          body: JSON.stringify({ domain: domain, ssl: true })
+        }).then(function (response) { return response.json(); }).then(function (reply) {
+          if (!reply || !reply.ok) throw new Error(reply && reply.error ? reply.error : 'DNS could not be prepared.');
+          if (!reply.data.managed) return [domain];
+          if (reply.data.ready) return reply.data.certificateNames;
+          show('warning', 'DNS for ' + domain + ' is not ready: ' + reply.data.reason.replace(/\.?$/, '.') +
+            ' The certificate will be requested automatically once it is.', 'Open SSL/TLS');
+          return null;
+        });
+      });
+    }
+
+    dnsNames().then(function (names) {
+      if (!names) return;
+      show('info', 'Installing a Let\'s Encrypt certificate for ' + domain + '…');
+      return fetch(issueUrl, { credentials: 'same-origin' }).then(parse).then(function (doc) {
+        var token = doc.querySelector('input[name="site_lets_encrypt_certificate[_token]"]');
+        if (!token || !token.form) throw new Error('CloudPanel\'s certificate form was not found.');
+        var body = new FormData(token.form);
+        body.delete('domains[]');
+        names.forEach(function (name) { body.append('domains[]', name); });
+        return fetch(issueUrl, { method: 'POST', body: body, credentials: 'same-origin' });
+      }).then(finish);
+    }).catch(fail);
+
+    function finish(response) {
       // CloudPanel redirects to the certificate list only once the certificate is installed.
       if (response.url === certificatesUrl) {
         show('success', 'Let\'s Encrypt certificate installed for ' + domain + '.');
@@ -65,9 +95,11 @@
         var error = doc.querySelector('.alert-container .alert-danger');
         throw new Error(error ? error.textContent.trim() : 'CloudPanel did not confirm it.');
       });
-    }).catch(function (error) {
+    }
+
+    function fail(error) {
       var reason = error.message.replace(/\.?$/, '.');
       show('danger', 'The Let\'s Encrypt certificate for ' + domain + ' was not installed: ' + reason, 'Open SSL/TLS');
-    });
+    }
   }
 })();

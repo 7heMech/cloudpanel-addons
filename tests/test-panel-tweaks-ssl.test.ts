@@ -23,7 +23,10 @@ function cookieJar(initial = "") {
 
 interface Reply { url?: string; token?: boolean; error?: string }
 
-function run(options: { cookie?: string; domainInput?: string; box?: boolean; boxDomain?: string; replies?: Reply[] }) {
+/** What the DNS addon's routes answer; absent means the addon is not installed. */
+interface Dns { provision: unknown }
+
+function run(options: { cookie?: string; domainInput?: string; box?: boolean; boxDomain?: string; replies?: Reply[]; dns?: Dns }) {
   const jar = cookieJar(options.cookie ? encodeURIComponent(options.cookie) : "");
   let submit = () => {};
   const form = {
@@ -38,10 +41,11 @@ function run(options: { cookie?: string; domainInput?: string; box?: boolean; bo
     getAttribute: (name: string) => ({ "data-clp-auto-ssl": options.boxDomain ?? DOMAIN, "data-certificates-url": CERTIFICATES, "data-issue-url": ISSUE })[name],
   };
   const calls: Array<{ url: string; init: RequestInit }> = [];
+  const dnsCalls: Array<{ url: string; init?: RequestInit }> = [];
   const events: unknown[] = [];
   const replies = options.replies ?? [{ token: true }, { url: CERTIFICATES }];
   const document = {
-    get cookie() { return jar.get(); },
+    get cookie() { return `${jar.get()}; clp_addons_csrf=csrf-pair`; },
     set cookie(raw: string) { jar.set(raw); },
     getElementById: (id: string) => (id === "clp-auto-ssl" && options.domainInput !== undefined ? choice : null),
     querySelectorAll: () => (options.box ? [box] : []),
@@ -50,6 +54,11 @@ function run(options: { cookie?: string; domainInput?: string; box?: boolean; bo
   const fetch = async (url: string, init: RequestInit) => {
     // The completion forgets its domain before it asks anything.
     expect(jar.domains()).not.toContain(DOMAIN);
+    if (url.startsWith("/addons/dns/")) {
+      dnsCalls.push({ url, init });
+      if (!options.dns) return { ok: false, json: async () => ({ ok: false }) };
+      return { ok: true, json: async () => url.endsWith("/session") ? { ok: true } : options.dns!.provision };
+    }
     calls.push({ url, init });
     const reply = replies[calls.length - 1]!;
     return { url: `${ORIGIN}${reply.url ?? ISSUE}`, text: async () => JSON.stringify(reply) };
@@ -79,7 +88,7 @@ function run(options: { cookie?: string; domainInput?: string; box?: boolean; bo
     { dispatchEvent: (event: unknown) => events.push(event) },
     class { constructor(_: string, public init: { detail: string }) {} },
   );
-  return { jar, choice, alert, calls, events, submit: () => submit(), settled: () => new Promise((r) => setTimeout(r, 0)) };
+  return { jar, choice, alert, calls, dnsCalls, events, submit: () => submit(), settled: () => new Promise((r) => setTimeout(r, 20)) };
 }
 
 test("the option is withdrawn with its switch and is not a field of CloudPanel's form", () => {
@@ -117,7 +126,7 @@ test("a checked submit remembers the domain, an unchecked one or a rejected crea
   expect(rejected.jar.domains()).toEqual([]);
 });
 
-test("completion posts CloudPanel's own form for the created domain alone", async () => {
+test("without DNS, completion posts CloudPanel's own form for the created domain alone", async () => {
   // A site CloudPanel stored in mixed case is still forgotten.
   const done = run({ box: true, boxDomain: "Blog.Example.com", cookie: DOMAIN });
   await done.settled();
@@ -142,4 +151,35 @@ test("anything but CloudPanel's redirect to the certificate list is a failure", 
     expect(failed.events).toEqual([]);
     if (replies[1]?.error) expect(failed.alert.textContent).toContain("DNS points elsewhere");
   }
+});
+
+test("with DNS installed, its records are written first and name the certificate's domains", async () => {
+  const done = run({ box: true, dns: { provision: { ok: true, data: { managed: true, ready: true, reason: "DNS is in place", certificateNames: [DOMAIN, `www.${DOMAIN}`] } } } });
+  await done.settled();
+  expect(done.dnsCalls.map((call) => call.url)).toEqual(["/addons/dns/api/session", "/addons/dns/api/provision"]);
+  const provision = done.dnsCalls[1]!.init!;
+  expect(JSON.parse(String(provision.body))).toEqual({ domain: DOMAIN, ssl: true });
+  expect((provision.headers as Record<string, string>)["X-CLP-Addons-CSRF"]).toBe("csrf-pair");
+  expect((done.calls[1]!.init.body as FormData).getAll("domains[]")).toEqual([DOMAIN, `www.${DOMAIN}`]);
+  expect(done.alert.className).toBe("alert alert-success");
+});
+
+test("DNS that is not ready asks for no certificate and says why", async () => {
+  const waiting = run({ box: true, dns: { provision: { ok: true, data: { managed: true, ready: false, reason: "Zone example.com is pending; set its nameservers", certificateNames: [] } } } });
+  await waiting.settled();
+  expect(waiting.calls).toEqual([]);
+  expect(waiting.alert.className).toBe("alert alert-warning");
+  expect(waiting.alert.textContent).toContain("Zone example.com is pending; set its nameservers.");
+  expect(waiting.alert.textContent).toContain("requested automatically");
+});
+
+test("a site DNS does not manage gets the created domain alone, and a DNS failure is reported", async () => {
+  const unmanaged = run({ box: true, dns: { provision: { ok: true, data: { managed: false, ready: false, reason: "No DNS profile", certificateNames: [] } } } });
+  await unmanaged.settled();
+  expect((unmanaged.calls[1]!.init.body as FormData).getAll("domains[]")).toEqual([DOMAIN]);
+  const failed = run({ box: true, dns: { provision: { ok: false, error: "DNS is busy checking Cloudflare" } } });
+  await failed.settled();
+  expect(failed.calls).toEqual([]);
+  expect(failed.alert.className).toBe("alert alert-danger");
+  expect(failed.alert.textContent).toContain("DNS is busy checking Cloudflare");
 });
