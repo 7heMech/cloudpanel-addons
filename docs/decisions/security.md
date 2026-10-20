@@ -209,30 +209,17 @@ source authentication.
 
 ## MainWP authority
 
-MainWP enrollment deliberately grants one administrator-selected Dashboard
-administrative control of the enrolled WordPress sites. A compromised Dashboard
-can install/run PHP as each connected site's Unix user. A child receives only
-its own bootstrap ID and the Dashboard public key, never the private key or any
-fleet credential. Its files and replies remain untrusted; they cannot supply
-root commands, paths, plugin names or targets outside CloudPanel's discovered
-sites. Dashboard code is also untrusted and always executes as its own site user.
-
-MainWP uses the shared WP-CLI isolation, output bounds and root-enforced deadline.
-A fixed adapter and JSON stdin keep IDs and baseline metadata out of process
-arguments, the web manager, browser and addon logs; secret-bearing error text is
-fixed rather than copied from PHP. The native MainWP stores the operational ID,
-reconnect credentials and keys in its own WordPress storage. The addon journal
-is atomic root-only `0600`, and only a secret-free projection reaches the page.
-Certificate verification is enforced and firewall/basic-auth restrictions are
-never bypassed. Every MainWP route is administrator-only and CSRF-protected;
-Connect and cleanup additionally require explicit confirmation.
-
-The temporary ID-only bootstrap requires a strong ID before activation and
-journals the administrator's previous authentication setting before changing it.
-It restores that setting on completion/failure and repairs it after crashes even
-when automation is paused. No user is created and no password is changed.
-Ownership is recorded before mutation; independent operator connections are
-never adopted. Cleanup verifies matching identities and preserves its journal
-on failure. Disabling/uninstalling cannot silently discard recovery. Revoking
-MainWP access does not undo prior actions or invalidate separately issued
-WordPress administrator sessions.
+Enrollment deliberately gives one administrator-chosen Dashboard administrative
+control of each connected site: a compromised Dashboard can run PHP as every
+connected site's user. A child receives only its own Security ID and the
+Dashboard's public key. Child and Dashboard code run as their own site users
+through the shared WP-CLI runner, and root only validates their marked replies.
+A child's administrator login reaches the Dashboard only if it matches
+WordPress's strict login characters. The Security ID travels on stdin, never in
+arguments, and stays in the root-only journal only until the connection is
+verified or cleaned up. Adapter failures are fixed codes, so site text never reaches logs or
+the page. Readiness and registration verify certificates, and the record keeps
+verifying. Firewalls, Cloudflare-only rules, basic auth and maintenance pages are
+never bypassed. Every MainWP route is administrator-only behind CSRF; Connect and
+cleanup need explicit confirmation. Revoking MainWP access does not undo what was
+done through it or end WordPress sessions it opened.

@@ -12,28 +12,27 @@ export const WP_LOGIN_ADDON: AddonDefinition = {
   action: runWpLoginAction,
   maintenance: {
     label: "WordPress plugins",
+    // Each policy's failure is reported without stopping the other.
     run: async () => {
-      const passes = [
-        async () => {
-          const result = await reconcileWpVarnish({}, { dueOnly: true });
-          return { changed: result.installed, failed: result.failed };
-        },
-        async () => {
-          const result = await reconcileWpMainwp();
-          return { changed: result.connected + result.removed, failed: result.failed };
-        },
-      ];
       const failed: string[] = [];
-      let changed = 0;
-      for (const pass of passes) {
-        try {
-          const result = await pass();
-          changed += result.changed;
-          failed.push(...result.failed);
-        } catch (error) { failed.push(error instanceof Error ? error.message : String(error)); }
+      const done: string[] = [];
+      try {
+        const varnish = await reconcileWpVarnish({}, { dueOnly: true });
+        failed.push(...varnish.failed);
+        if (varnish.installed) done.push(`${varnish.installed} CLP Varnish Cache installed`);
+      } catch (error) {
+        failed.push(error instanceof Error ? error.message : String(error));
       }
-      if (failed.length) throw new Error(failed.join("; "));
-      return changed ? `${changed} WordPress plugin changes completed` : null;
+      try {
+        const mainwp = await reconcileWpMainwp();
+        failed.push(...mainwp.failed);
+        if (mainwp.connected) done.push(`${mainwp.connected} connected to MainWP`);
+        if (mainwp.removed) done.push(`${mainwp.removed} cleaned up from MainWP`);
+      } catch (error) {
+        failed.push(error instanceof Error ? error.message : String(error));
+      }
+      if (failed.length) throw new Error([...done, ...failed].join("; "));
+      return done.length ? done.join("; ") : null;
     },
   },
 };

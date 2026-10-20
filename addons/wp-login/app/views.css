@@ -12,16 +12,12 @@
 @media (max-width: 940px) {
   .wp-site-table td:empty { display: none; }
   .wp-site-table .row-actions .btn { flex: 1 1 0; }
+  .mainwp-site-table td.site-cell { flex-basis: 100%; }
 }
 .mainwp-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
-.mainwp-controls select { min-width: 0; max-width: 100%; flex: 1; }
-.wp-card .mainwp-pending { margin-top: 14px; }
+.mainwp-controls select { flex: 1; min-width: 0; max-width: 100%; }
+.wp-card .mainwp-note { margin-top: 14px; }
 @media (max-width: 700px) {
-  .mainwp-controls { align-items: stretch; }
   .mainwp-controls label, .mainwp-controls select { flex-basis: 100%; }
   .mainwp-controls .btn { flex: 1; }
-}
-
-@media (max-width: 940px) {
-  .mainwp-site-table td.site-cell { flex-basis: 100%; }
 }

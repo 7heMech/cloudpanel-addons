@@ -21,7 +21,7 @@ import { MENU_ONLY_CLASS } from "../lib/row-actions";
 const CLONABLE_TYPES = ["php", "static", "reverse-proxy"];
 import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
 import { dashboardBody as wpLoginDashboardBody, dashboardView as wpLoginDashboardView, layout as wpLoginLayout } from "../addons/wp-login/app/views";
-import type { MainwpView } from "../addons/wp-login/mainwp";
+import type { MainwpSiteView, MainwpView } from "../addons/wp-login/mainwp";
 import { WORDPRESS_APPLICATIONS, type WpSiteView } from "../addons/wp-login/action";
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
@@ -613,18 +613,31 @@ function terminalPreview(req: Request, url: URL): Response | null {
 }
 
 // The WordPress Tools API, acting on the sites the page was last drawn with.
+// ?mainwp=states turns automation on, ?mainwp=cleanup shows a pending cleanup.
 function mainwpPreview(url: URL): MainwpView {
   const checkedAt = "2026-10-16T09:00:00Z";
-  const entry = (status: MainwpView["sites"][string]["status"], owned = false, seen = true) => ({
-    status, seen, checkedAt, error: status === "error" ? "MainWP connection timed out. Retry to continue." : "", ownedPlugin: owned, ownedConnection: owned,
+  const entry = (status: MainwpSiteView["status"], ownedConnection = false, seen = true): MainwpSiteView => ({
+    status, seen, checkedAt, ownedConnection,
+    error: status === "error" ? "the Dashboard could not connect; check the site's HTTPS, firewall and security plugins" : "",
   });
-  return { enabled: url.searchParams.get("mainwp") === "states", dashboard: "mainwp.example.com", excluded: ["staging.newsletter.example-church-of-the-hills.com"],
-    cleanup: url.searchParams.get("mainwp") === "cleanup", owned: 1, sites: {
-      "shop.example.com": entry("connected", true), "www.example.com": entry("connected"), "blog.example.com": entry("not-connected"),
-      "staging.newsletter.example-church-of-the-hills.com": entry("not-connected"), "new.example.com": entry("missing", false, false),
+  return {
+    enabled: url.searchParams.get("mainwp") === "states",
+    dashboard: "mainwp.example.com",
+    excluded: ["staging.newsletter.example-church-of-the-hills.com"],
+    cleanup: url.searchParams.get("mainwp") === "cleanup",
+    owned: 1,
+    sites: {
+      "shop.example.com": entry("connected", true),
+      "www.example.com": entry("connected"),
+      "blog.example.com": entry("not-connected"),
+      "staging.newsletter.example-church-of-the-hills.com": entry("not-connected"),
+      "new.example.com": entry("missing", false, false),
       "waiting.example.com": entry("waiting-https", false, false),
-      "removed.example.com": entry("missing"), "network.example.com": entry("unsupported"), "retry.example.com": entry("error"),
-    } };
+      "removed.example.com": entry("missing"),
+      "network.example.com": entry("unsupported"),
+      "retry.example.com": entry("error"),
+    },
+  };
 }
 let wpLoginPreview = { sites: [] as WpSiteView[], automatic: false, error: "", mainwp: mainwpPreview(new URL("http://localhost")), mainwpError: "" };
 const wpLoginPreviewData = () => ({
@@ -651,14 +664,18 @@ async function wpLoginPreviewApi(req: Request, path: string): Promise<Response |
       if (body.excluded === true && typeof body.domain === "string") wpLoginPreview.mainwp.excluded.push(body.domain);
       return ok({});
     case "mainwp-connect":
-      if (site) wpLoginPreview.mainwp.sites[site.domain] = { status: "connected", seen: true, ownedPlugin: false, ownedConnection: true, checkedAt: new Date().toISOString(), error: "" };
+      if (site) wpLoginPreview.mainwp.sites[site.domain] = { status: "connected", seen: true, ownedConnection: true, checkedAt: new Date().toISOString(), error: "" };
       return ok({ checked: 1, connected: 1, removed: 0, pending: 0, failed: [] });
     case "mainwp-sync": return ok({ checked: wpLoginPreview.sites.length, connected: 0, removed: 0, pending: 0, failed: [] });
     case "mainwp-cleanup":
       wpLoginPreview.mainwp.enabled = false;
       wpLoginPreview.mainwp.cleanup = false;
       wpLoginPreview.mainwp.owned = 0;
-      for (const record of Object.values(wpLoginPreview.mainwp.sites)) if (record.ownedConnection) { record.status = "missing"; record.ownedConnection = false; record.ownedPlugin = false; }
+      for (const record of Object.values(wpLoginPreview.mainwp.sites)) {
+        if (!record.ownedConnection) continue;
+        record.status = "missing";
+        record.ownedConnection = false;
+      }
       return ok({ checked: 1, connected: 0, removed: 1, pending: 0, failed: [] });
     case "varnish-settings":
       wpLoginPreview.automatic = body.enabled === true;
@@ -915,9 +932,12 @@ const server = Bun.serve({
         error: url.searchParams.get("varnish") === "unreadable"
           ? "/var/lib/clp-addons/wp-login/varnish.json cannot be read: the WordPress Varnish settings are invalid" : "",
       };
-      if (!empty) for (const domain of ["mainwp.example.com", "new.example.com", "waiting.example.com", "removed.example.com", "network.example.com", "retry.example.com"]) wpLoginPreview.sites.push({
-        domain, user: domain.split(".")[0]!, application: "WordPress", helper: false, varnishCache: false, varnishExcluded: false, varnishPlugin: null,
-      });
+      const mainwpOnly = ["mainwp.example.com", "new.example.com", "waiting.example.com", "removed.example.com", "network.example.com", "retry.example.com"];
+      if (!empty) {
+        for (const domain of mainwpOnly) wpLoginPreview.sites.push({
+          domain, user: domain.split(".")[0]!, application: "WordPress", helper: false, varnishCache: false, varnishExcluded: false, varnishPlugin: null,
+        });
+      }
       html = wpLoginLayout("WordPress Tools", wpLoginDashboardView(wpLoginPreviewData()), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);

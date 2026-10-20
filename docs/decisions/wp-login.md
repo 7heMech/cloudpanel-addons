@@ -12,8 +12,8 @@ addon-and-verb table refuses
 
 The stable identifier, command-line name, config file and mount remain
 `wp-login`, preserving installed sign-in behavior and injected links. Sign-in
-is available whenever the addon is enabled. Automatic Varnish installation is
-a separate opt-in policy, off when no settings exist.
+is available whenever the addon is enabled. Automatic Varnish installation and
+MainWP enrollment are separate opt-in policies, off when no settings exist.
 
 Disabling or uninstalling removes the sign-in helper from every site it is in.
 A site whose files cannot be deleted does not stop the ones after it; withdrawal
@@ -213,82 +213,74 @@ enabled. The addon's own page signs in to the same sites either way.
 
 ## MainWP enrollment
 
-MainWP shares the hardened site-user WP-CLI runner with Varnish. Its fixed PHP
-adapter receives bounded JSON over stdin, explicitly loads only the MainWP code
-needed after privileges have been dropped, and emits a marked JSON reply.
-Secret-bearing commands never preserve raw PHP or WP-CLI error output. The
-browser receives a projected view containing status and ownership booleans,
-never baseline settings, Security IDs or connection keys. Listing the page
-never boots WordPress. Sign-in is independent of MainWP state and locks.
+The Dashboard is one WordPress site on this server, chosen from the same
+discovery as everything else. An external Dashboard would need credentials and
+network policy the addon does not manage. Child steps run as the child's site
+user and Dashboard steps as the Dashboard's, through the shared WP-CLI runner.
+A fixed adapter, `mainwp.php`, is passed to `wp eval` with JSON on stdin and
+answers on a marked line. Its failures are fixed codes the addon turns into its
+own messages, so text a site prints is never shown or logged. The adapter loads
+the Dashboard plugin after WordPress and registers through MainWP's own
+`rest_api_add_site`, which generates and stores the keys.
 
-A single existing local Dashboard is selected by domain from the same safe site
-discovery. Its MainWP plugin must be active; the adapter runs as its Unix user
-and uses its first WordPress administrator. Child sites use their first
-administrator too. No accounts or passwords are created or changed. The native
-Dashboard PHP handler initiates registration and generates/stores the keys.
-HTTPS verification is enabled for registration and explicitly persisted for the
-new Dashboard record. Existing foreign connections and inconsistent Dashboard
-records are refusals, not takeover requests. External Dashboards are excluded.
+Connecting uses the child's first administrator, as sign-in does. The adapter
+sets a random Security ID and turns off that administrator's password
+requirement for connecting, which lets MainWP register with the ID alone. The
+previous setting is journaled first. It is restored in `finally`, or by the next
+repair after a crash, even when automation is off or the site is excluded.
+MainWP stores "use the global setting" for a new record's certificate check, so
+the adapter sets it to verify. It also cuts MainWP's request timeout to 20
+seconds, so registration fails inside the addon's deadline instead of being
+killed half-way.
 
-Before installing or connecting, the Dashboard's site user makes an HTTPS GET
-to the same child URL registration uses, with certificate verification enabled,
-no redirects, a five-second request timeout and a 1 KiB response limit. The
-WP-CLI command also has a root-enforced deadline of at most eight seconds plus
-the runner's five-second termination allowance. A transport/TLS error or a
-response outside 200–399 records Waiting for HTTPS, without setting `seen`,
-claiming ownership or counting an enrollment failure. Repair retries these
-unseen sites on later passes. This needs no DNS or certificate provisioning addon.
+Before any change, the Dashboard's user fetches the child's HTTPS URL with
+certificate verification, no redirects, a five-second timeout and a 1 KiB limit.
+Anything but 200–399 is Waiting for HTTPS: no `seen`, no claim, retried on every
+pass. A maintenance page or a Cloudflare-only rule is not ready either.
 
-The root-only atomic `mainwp.json` stores policy, exclusions, `seen`, separate
-plugin and connection ownership, and enrollment/cleanup recovery. Automatic
-installation applies to missing, never-seen Child plugins on existing or new
-WordPress sites. Installed plugins require a confirmed row Connect. Matching
-public-key fingerprints on the child and selected Dashboard mean Connected;
-without an enrollment journal these are operator-owned. The Dashboard itself,
-multisite, exclusions and manually removed plugins are not automated.
+Root-only `/var/lib/clp-addons/wp-login/mainwp.json`, written atomically with
+mode `0600`, holds the policy, exclusions and each site's status, `seen`, and
+separate plugin and connection ownership. While it owns anything it also keeps
+a snapshot of the settings it may change, the Security ID until the connection
+is verified or cleaned up, the Dashboard record's id and key fingerprint, and a phase written
+before each step that changes the site. The page gets a projection without
+snapshots, IDs or keys. Connected means the child's and the Dashboard's
+public-key fingerprints match; with no claim, that connection is the operator's.
 
-Before any installation the journal records the original activation, Child
-options, relevant administrator metadata, cron events and activity-table
-presence. Installation of an absent plugin owns that plugin. Connecting an
-existing plugin owns only the new connection and the changes needed to create
-it; cleanup restores its original activation and connection settings. Existing
-connections are never adopted. An existing plugin and its unrelated options,
-cron work and tables are never deleted. Root records are the ownership authority;
-site data can only confirm or contradict them. A changed connection fingerprint
-stops cleanup rather than removing the replacement.
+Automation installs only a Child that is absent and never seen. An installed
+Child is marked seen and needs Connect, as does a site whose existing
+connection or Dashboard record needs the operator. An attempt whose readback
+shows nothing changed and no Dashboard record gives up its claim and is retried
+on the next pass, like a failed Varnish download. Otherwise the claim stays and
+Retry resumes it, undoing first its own registration the Dashboard never
+recorded. A phase left by a crash is reported as interrupted, after its setting
+is restored.
 
-A strong per-site Security ID is provisioned before activation. Password-based
-bootstrap is temporarily disabled for the chosen administrator, with the original
-setting journaled before the change. Restoration runs in finally and before
-recovering an interrupted operation, even when automation is off. An enrollment
-interrupted after registration can recognize its own Security ID and matching
-key pair without adding another Dashboard record. An orphaned registration with
-no Dashboard record can be reset only from that enrollment's journal on explicit
-Retry. An outright failed attempt undoes its journal, `seen` and ownership changes
-only after readback verifies unchanged Child installation, plugin-directory
-presence, activation, connection settings and baseline, with no Dashboard record.
-An unseen site can then retry automatically on the next pass. Partial changes,
-uncertain readback and interrupted enrollment preserve intent and require row
-Retry; repair restores temporary authentication settings without repeatedly
-attempting enrollment. A previously observed Child that the operator removes
-keeps `seen` and is never reinstalled automatically.
+Cleanup acts on a child only if its key is the recorded one, comes from the
+addon's Security ID, or is gone. A Child someone has connected since is left as
+it is and only forgotten. Where the addon installed the plugin, cleanup deletes
+it and restores every MainWP option (`mainwp_`, `wp_mainwp_` and their
+transients) to the snapshot, with its cron events, tables and an empty uploads
+folder. On an existing plugin it restores the connection options, Security ID,
+activation and the administrator's MainWP metadata; the plugin's other settings,
+tables and events stay. The Dashboard record goes only if its id and key still
+match. It is removed through MainWP's database removal without the request that
+asks the child to deactivate, as MainWP's own Abilities API does, with its key
+file and cookie jar. Settings-backup and request-log rows, which MainWP leaves,
+go too. Both sides verify, and a failure keeps the claim and Cleanup pending.
+Removing a plugin the addon installed clears `seen`, so automation may install
+it again later; one the operator removed stays seen.
 
-The MainWP lock is independent of Varnish and sign-in. Repair checks only unseen
-eligible sites, interrupted authentication restoration and pending cleanup, with
-a 25-second work budget plus at most a 10-second authentication-restoration
-command. Check now and explicit actions have a 90-second work budget. At most 64 site statuses are requested per pass to keep the Dashboard reply
-bounded; unfinished sites rotate by last-check time. Deleted panel domains are pruned from the fleet
-and exclusions; owned Dashboard connections enter a small retirement queue until
-they can be removed, without retaining site paths or secrets.
+MainWP has its own lock, separate from Varnish and sign-in. The repair timer
+looks only at unseen sites, unfinished phases, pending cleanup and retired
+records, and starts sites for 25 seconds; Check now and Connect get 90. An
+enrollment that has started gets up to a minute, so the budget never stops
+registration part-way. A pass asks the Dashboard about at most 64 sites, least
+recently checked first. A deleted site's owned Dashboard record is retired and
+removed on a later pass; a deleted Dashboard took its records with it, and
+cleanup then finishes on the children.
 
-The global switch pauses enrollment without removing anything. Confirmed
-cleanup first disables enrollment, withdraws local access and restores owned
-site artifacts, then removes the owned Dashboard record through MainWP's native
-removal path, including its key file, session-cookie jar and site-related records. An empty
-Child uploads directory created during enrollment is removed. The child path
-verifies settings, plugin presence, cron and table restoration; the Dashboard
-path verifies record absence. Failed cleanup keeps its journal and remains
-pending. Lifecycle removal holds the MainWP lock and refuses while ownership or
-cleanup remains, before changing units/configuration or purging state. Operator
-connections and the existing Dashboard plugin and shared cron remain. Cleanup
-is withdrawal, not a rollback of management actions or existing WP sessions.
+The switch only pauses automation. Disabling or uninstalling leaves the
+connections, as it leaves the Varnish plugin, and refuses only while an
+enrollment stopped before its temporary setting was restored. `--purge`
+forgets which connections the addon made.

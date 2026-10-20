@@ -34,8 +34,9 @@ import {
   pruneVarnishState, readVarnishState, saveVarnishState, syncVarnish,
   type VarnishRun, type VarnishSiteRecord, type VarnishOptions, type VarnishSyncResult, type WpVarnishState,
 } from "./varnish";
-
-import { mainwpAction, readMainwpState, mainwpView, emptyMainwpState, syncMainwp, type MainwpRun, type MainwpResult } from "./mainwp";
+import {
+  emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpView, readMainwpState, syncMainwp, type MainwpResult, type MainwpRun,
+} from "./mainwp";
 
 export type WpLoginVerb = "sites" | "sign-in" | "remove" | "varnish-settings" | "varnish-site" | "varnish-install" | "varnish-sync";
 
@@ -325,14 +326,15 @@ export async function reconcileWpVarnish(
     syncVarnish(varnishRun(paths, request), options));
 }
 
+/** MainWP works from the same sites; Varnish eligibility does not apply. */
 function mainwpRun(paths: WpLoginActionPaths, request: { dueOnly?: boolean } = {}): MainwpRun {
-  const run = varnishRun(paths, request);
-  return { ...run, statePath: paths.mainwpState };
+  return { ...varnishRun(paths, request), statePath: paths.mainwpState };
 }
+
+/** The timer's MainWP pass. It runs inside repair's operation lock, so it does not wait for a page's pass. */
 export async function reconcileWpMainwp(options: WpLoginActionOptions = {}): Promise<MainwpResult> {
   const paths = pathsFor(options);
-  const state = readMainwpState(paths.mainwpState);
-  if (!state.enabled && !state.cleanup && !state.retired.length && !Object.values(state.sites).some((r) => r.phase)) return { checked: 0, connected: 0, removed: 0, pending: 0, failed: [] };
+  if (!mainwpNeedsRepair(readMainwpState(paths.mainwpState))) return { checked: 0, connected: 0, removed: 0, pending: 0, failed: [] };
   return withFileLock(paths.mainwpLockFile, 1, "a MainWP change is still running", () =>
     syncMainwp(mainwpRun(paths, { dueOnly: true }), options));
 }
@@ -597,8 +599,11 @@ export async function executeWpLoginAction(
     }
     let mainwp = mainwpView(emptyMainwpState());
     let mainwpError = "";
-    try { mainwp = mainwpView(readMainwpState(paths.mainwpState)); }
-    catch { mainwpError = "the MainWP settings cannot be read; repair the root-owned state before continuing"; }
+    try {
+      mainwp = mainwpView(readMainwpState(paths.mainwpState));
+    } catch (error) {
+      mainwpError = `${paths.mainwpState} cannot be read: ${reason(error)}`;
+    }
     return { sites: wordpressSites(paths, varnish), varnish, varnishError, mainwp, mainwpError };
   }
   if (verb === "varnish-sync") return reconcileWpVarnish(options);

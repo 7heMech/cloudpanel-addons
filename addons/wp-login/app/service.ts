@@ -11,8 +11,8 @@ export interface WpDashboard {
   sites: WpSiteView[];
   varnish: WpVarnishState;
   varnishError: string;
-  mainwp?: MainwpView;
-  mainwpError?: string;
+  mainwp: MainwpView;
+  mainwpError: string;
 }
 
 function call<T>(verb: string, args: string[] = [], timeout?: number): Promise<ActionResult<T>> {
@@ -21,6 +21,8 @@ function call<T>(verb: string, args: string[] = [], timeout?: number): Promise<A
 
 /** Finding the WordPress sites means a stat of every site root on the box. */
 const LIST_TIMEOUT_MS = 60_000;
+/** A pass has a 90-second budget, after the lock and site discovery. */
+const PASS_TIMEOUT_MS = 120_000;
 
 export const wpLoginService = {
   sites(): Promise<ActionResult<WpDashboard>> {
@@ -44,17 +46,23 @@ export const wpLoginService = {
   remove(): Promise<ActionResult<WpRemoveResult>> {
     return call<WpRemoveResult>("remove", [], LIST_TIMEOUT_MS);
   },
-  mainwpSettings(enabled: boolean, dashboard?: string) {
-    return call("mainwp-settings", [`--enabled=${enabled}`, ...(dashboard === undefined ? [] : [`--dashboard=${dashboard}`])], 45_000);
+
+  mainwpSettings(enabled: boolean, dashboard?: string): Promise<ActionResult<{ mainwp: MainwpView }>> {
+    const choice = dashboard === undefined ? [] : [`--dashboard=${dashboard}`];
+    return call("mainwp-settings", [`--enabled=${enabled}`, ...choice], PASS_TIMEOUT_MS);
   },
-  mainwpSite(domain: string, excluded: boolean) {
+  mainwpSite(domain: string, excluded: boolean): Promise<ActionResult<{ mainwp: MainwpView }>> {
     return call("mainwp-site", [`--domain=${domain}`, `--excluded=${excluded}`]);
   },
   mainwpConnect(domain: string): Promise<ActionResult<MainwpResult>> {
-    return call("mainwp-connect", [`--domain=${domain}`, `--confirm=${domain}`], 120_000);
+    return call("mainwp-connect", [`--domain=${domain}`, `--confirm=${domain}`], PASS_TIMEOUT_MS);
   },
-  mainwpSync(): Promise<ActionResult<MainwpResult>> { return call("mainwp-sync", [], 120_000); },
-  mainwpCleanup(): Promise<ActionResult<MainwpResult>> { return call("mainwp-cleanup", ["--confirm=mainwp"], 120_000); },
+  mainwpSync(): Promise<ActionResult<MainwpResult>> {
+    return call("mainwp-sync", [], PASS_TIMEOUT_MS);
+  },
+  mainwpCleanup(): Promise<ActionResult<MainwpResult>> {
+    return call("mainwp-cleanup", ["--confirm=mainwp"], PASS_TIMEOUT_MS);
+  },
   varnishSettings(enabled: boolean): Promise<ActionResult<{ varnish: WpVarnishState }>> {
     return call("varnish-settings", [`--enabled=${enabled}`]);
   },
@@ -62,9 +70,9 @@ export const wpLoginService = {
     return call("varnish-site", [`--domain=${domain}`, `--excluded=${excluded}`]);
   },
   varnishInstall(domain: string): Promise<ActionResult<VarnishSyncResult>> {
-    return call("varnish-install", [`--domain=${domain}`], 120_000);
+    return call("varnish-install", [`--domain=${domain}`], PASS_TIMEOUT_MS);
   },
   varnishSync(): Promise<ActionResult<VarnishSyncResult>> {
-    return call("varnish-sync", [], 120_000);
+    return call("varnish-sync", [], PASS_TIMEOUT_MS);
   },
 };

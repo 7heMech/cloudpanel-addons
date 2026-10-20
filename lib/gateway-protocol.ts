@@ -91,8 +91,8 @@ export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
 
 /**
  * WordPress Tools keeps its stable wp-login identifier. Sign-in credentials,
- * helper removal and optional Varnish installation each have a fixed verb;
- * none accepts paths, plugin names or arbitrary commands.
+ * helper removal, optional Varnish installation and MainWP enrollment each have
+ * fixed verbs; none accepts paths, plugin names or arbitrary commands.
  */
 export const WP_LOGIN_ALLOWED_VERBS = new Set([
   "sites",
@@ -102,7 +102,11 @@ export const WP_LOGIN_ALLOWED_VERBS = new Set([
   "varnish-site",
   "varnish-install",
   "varnish-sync",
-  "mainwp-settings", "mainwp-site", "mainwp-sync", "mainwp-connect", "mainwp-cleanup",
+  "mainwp-settings",
+  "mainwp-site",
+  "mainwp-sync",
+  "mainwp-connect",
+  "mainwp-cleanup",
 ]);
 
 export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([

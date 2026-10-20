@@ -149,32 +149,64 @@ async function removeHelpers() {
   });
 }
 
-function mainwpSummary(data) {
-  let text = 'Checked ' + plural(data.checked, 'site') + '; ' + data.connected + ' connected; ' + data.removed + ' cleaned up.';
-  if (data.pending) text += ' ' + data.pending + ' pending; check again to continue.';
-  if (data.failed.length) text += ' ' + data.failed.length + ' failed; see the sites below.';
-  return { text: text, kind: data.pending || data.failed.length ? 'warn' : 'ok' };
-}
-function setMainwpAutomatic(input) {
+async function setMainwpAutomatic(input) {
   const enabled = input.checked;
-  change('/api/mainwp-settings', { enabled: enabled }, function () {
-    return { text: enabled ? 'MainWP automation is on. Sites are checked every 15 minutes.' : 'MainWP automation is off. Existing connections remain active until you clean up.' };
+  if (!await change('/api/mainwp-settings', { enabled: enabled }, function () {
+    return { text: enabled
+      ? 'MainWP automation is on. Sites are checked every 15 minutes, or now with Check now.'
+      : 'MainWP automation is off. Connected sites stay connected.' };
+  })) input.checked = !enabled;
+}
+
+function setMainwpDashboard(select) {
+  if (!select.value) return;
+  const enabled = CLP_ROOT.getElementById('mainwp-automatic').checked;
+  change('/api/mainwp-settings', { enabled: enabled, dashboard: select.value }, function () {
+    return { text: select.value + ' is the MainWP Dashboard. Use Check now to see which sites are connected to it.' };
   });
 }
-function setMainwpDashboard(input) {
-  if (!input.value) return;
-  change('/api/mainwp-settings', { enabled: false, dashboard: input.value }, function () { return { text: 'MainWP Dashboard selected. Use Check now to refresh the sites.' }; });
+
+async function setMainwpSite(input) {
+  const domain = input.dataset.domain;
+  const included = input.checked;
+  if (!await change('/api/mainwp-site', { domain: domain, excluded: !included }, function () {
+    return { text: included
+      ? domain + ' is included in MainWP automation.'
+      : domain + ' is excluded from MainWP automation. Its connection is left as it is.' };
+  })) input.checked = !included;
 }
-function setMainwpSite(input) {
-  change('/api/mainwp-site', { domain: input.dataset.domain, excluded: !input.checked }, function () { return { text: 'MainWP automatic installation updated. Existing connections are unchanged.' }; });
+
+function mainwpSummary(data) {
+  let text = 'Checked ' + plural(data.checked, 'site') + '; ' + data.connected + ' connected, ' + data.removed + ' cleaned up.';
+  if (data.pending) text += ' ' + data.pending + ' still to check; check again to continue.';
+  if (data.failed.length) text += ' ' + data.failed.length + ' failed; see the sites below.';
+  return { text: text, kind: data.failed.length || data.pending ? 'warn' : 'ok' };
 }
-function checkMainwp() { change('/api/mainwp-sync', {}, mainwpSummary); }
+
+function checkMainwp() {
+  change('/api/mainwp-sync', {}, mainwpSummary);
+}
+
 async function connectMainwp(button) {
   const domain = button.dataset.domain;
-  if (!await confirmAction({ title: 'Connect ' + domain + ' to MainWP?', text: 'MainWP Child is installed if missing and activated, and the selected Dashboard gains administrator access. Cleanup removes only changes owned by WordPress Tools.', confirmLabel: 'Connect' })) return;
-  change('/api/mainwp-connect', { domain: domain, confirm: true }, mainwpSummary);
+  const agreed = await confirmAction({
+    title: button.textContent + ' ' + domain + ' to MainWP?',
+    text: 'MainWP Child is installed from WordPress.org if it is missing, activated, and connected as the site\'s first administrator. The Dashboard can then manage the site.',
+    confirmLabel: button.textContent,
+  });
+  if (!agreed) return;
+  change('/api/mainwp-connect', { domain: domain, confirm: true }, function (data) {
+    if (data.connected) return { text: domain + ' is connected to MainWP.' };
+    return { text: data.failed.length ? data.failed[0] : domain + ' is not connected yet; see its status below.', kind: 'warn' };
+  });
 }
+
 async function cleanupMainwp() {
-  if (!await confirmAction({ title: 'Turn off and clean up MainWP?', text: 'Removes managed Dashboard connections and plugins installed by WordPress Tools. Plugins already installed by you stay, with their previous activation and connection settings restored. Existing manual connections are left alone.', confirmLabel: 'Turn off and clean up' })) return;
+  const agreed = await confirmAction({
+    title: 'Turn off and clean up MainWP?',
+    text: 'Automation stops. Connections WordPress Tools made are removed from the Dashboard, and Child plugins it installed are deleted. Connections and plugins you set up yourself stay.',
+    confirmLabel: 'Turn off and clean up',
+  });
+  if (!agreed) return;
   change('/api/mainwp-cleanup', { confirm: true }, mainwpSummary);
 }

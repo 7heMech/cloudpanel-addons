@@ -7,6 +7,7 @@ import { executeWpLoginAction, reconcileWpVarnish, type WpLoginActionOptions, ty
 import { commandOutput, readVarnishState, type WpCommand, type VarnishSyncResult } from "../addons/wp-login/varnish";
 import { handle } from "../addons/wp-login/app/index";
 import { dashboardView, layout } from "../addons/wp-login/app/views";
+import { emptyMainwpState, mainwpView } from "../addons/wp-login/mainwp";
 import type { WpDashboard } from "../addons/wp-login/app/service";
 import { WP_LOGIN_ALLOWED_VERBS } from "../lib/gateway-protocol";
 import { withFileLock } from "../cli/action-common";
@@ -270,7 +271,7 @@ test("Varnish routes remain administrator-only", async () => {
 });
 
 test("the WordPress Tools page emits a valid script with sign-in and Varnish actions", () => {
-  const html = layout("WordPress Tools", dashboardView({ sites: [], varnish: { enabled: false, excluded: [], sites: {} }, varnishError: "" }));
+  const html = layout("WordPress Tools", dashboardView({ sites: [], varnish: { enabled: false, excluded: [], sites: {} }, varnishError: "", mainwp: mainwpView(emptyMainwpState()), mainwpError: "" }));
   for (const source of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)) expect(() => new Function(source[1]!)).not.toThrow();
   expect(html).toContain("/api/sign-in");
   expect(html).toContain("/api/varnish-settings");

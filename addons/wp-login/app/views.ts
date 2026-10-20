@@ -3,7 +3,7 @@ import { renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { WpSiteView } from "../action";
 import type { VarnishPluginStatus } from "../varnish";
-import type { MainwpStatus } from "../mainwp";
+import type { MainwpSiteView, MainwpStatus, MainwpView } from "../mainwp";
 import type { WpDashboard } from "./service";
 
 const BASE = mountPath("wp-login");
@@ -136,42 +136,113 @@ function helperCard(sites: WpSiteView[]): string {
     </div>`;
 }
 
-function mainwpSection(data: WpDashboard): string {
-  const state = data.mainwp;
-  const dashboard = state?.dashboard || "";
-  const enabled = state?.enabled || false;
-  const cleanup = state?.cleanup || false;
-  const options = data.sites.map((site) => `<option value="${esc(site.domain)}" ${site.domain === dashboard ? "selected" : ""}>${esc(site.domain)}</option>`).join("");
-  const labels: Record<MainwpStatus, [string, string]> = {
-    missing: ["Not installed", ""], "not-connected": ["Not connected", "state-paused"], connected: ["Connected", "state-done"],
-    "waiting-https": ["Waiting for HTTPS", "state-paused"], unsupported: ["Multisite, skipped", ""], error: ["Check failed", "state-failed"],
-  };
-  const rows = data.sites.map((site) => {
-    const record = state?.sites[site.domain];
-    const isDashboard = site.domain === dashboard;
-    const excluded = state?.excluded.includes(site.domain);
-    const [label, tone] = isDashboard ? ["Dashboard", "state-done"] : record ? record.status === "missing" && record.seen ? ["Removed", ""] : labels[record.status] : ["Not checked", ""];
-    const eligible = !isDashboard && record?.status !== "unsupported" && !data.mainwpError;
-    const action = eligible && !excluded && dashboard && !cleanup && record?.status !== "connected"
-      ? `<button class="btn" type="button" data-domain="${esc(site.domain)}" onclick="connectMainwp(this)">${record?.status === "error" ? "Retry" : "Connect"}</button>` : "";
-    const managed = record?.ownedConnection ? "Managed by WordPress Tools" : record?.status === "connected" ? "Managed in MainWP" : "";
-    return `<tr><td class="site-cell">${esc(site.domain)}<div class="hint">${esc(site.user)}</div></td>
-      <td data-label="MainWP"><span class="badge ${tone}" title="${esc(record?.checkedAt || "")}">${label}</span>${managed ? `<div class="hint">${managed}</div>` : ""}${record?.error ? `<div class="varnish-error">${esc(record.error)}</div>` : ""}</td>
-      <td data-label="Automatic">${eligible ? `<label class="switch"><input type="checkbox" data-domain="${esc(site.domain)}" aria-label="Install MainWP Child automatically on ${esc(site.domain)}" ${excluded ? "" : "checked"} onchange="setMainwpSite(this)"><span></span></label>` : ""}</td>
-      <td class="action-cell">${action}</td></tr>`;
-  }).join("");
-  return `<div class="card wp-card">
-    <div class="switch-row"><div><h2>Install and connect MainWP Child automatically</h2><p>Sites without MainWP Child are installed and connected every 15 minutes. Existing plugins need Connect; removed plugins are left alone.</p></div>
-      <label class="switch"><input id="mainwp-automatic" type="checkbox" aria-label="Install and connect MainWP Child automatically" ${enabled ? "checked" : ""} ${!dashboard || cleanup || data.mainwpError ? "disabled" : ""} onchange="setMainwpAutomatic(this)"><span></span></label></div>
-    ${data.mainwpError ? `<div class="alert" role="alert">${esc(data.mainwpError)}</div>` : `<div class="mainwp-controls"><label for="mainwp-dashboard">MainWP Dashboard</label><select id="mainwp-dashboard" aria-label="MainWP Dashboard" onchange="setMainwpDashboard(this)" ${state?.owned || cleanup ? "disabled" : ""}><option value="">Choose a site…</option>${options}</select><button class="btn" type="button" onclick="checkMainwp()" ${dashboard ? "" : "disabled"}>Check now</button>${state?.owned || cleanup ? `<button class="btn" type="button" onclick="cleanupMainwp()">${cleanup ? "Retry cleanup…" : "Turn off and clean up…"}</button>` : ""}</div>`}
-    ${cleanup ? '<p class="mainwp-pending" role="status">Cleanup pending. Automation is off; retry until every managed connection is removed.</p>' : !enabled && state?.owned ? '<p class="mainwp-pending">Automation is off. Existing MainWP connections remain active until you clean up.</p>' : ""}
-  </div><div class="card card-table"><div class="card-header"><h2>MainWP sites</h2><span class="toolbar-note">${data.sites.length} sites</span></div>${rows ? `<div class="table-scroll"><table class="fleet-table wp-site-table mainwp-site-table"><thead><tr><th scope="col">Site</th><th scope="col">MainWP</th><th scope="col">Automatic</th><th scope="col" class="action-cell">Actions</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No WordPress sites on this server.</div>'}</div>`;
+const MAINWP_STATUS: Record<MainwpStatus, [label: string, tone: string]> = {
+  missing: ["Not installed", ""],
+  "waiting-https": ["Waiting for HTTPS", "state-paused"],
+  "not-connected": ["Not connected", "state-paused"],
+  connected: ["Connected", "state-done"],
+  unsupported: ["Multisite, skipped", ""],
+  error: ["Check failed", "state-failed"],
+};
+
+function mainwpStatus(record: MainwpSiteView | undefined, isDashboard: boolean): string {
+  if (isDashboard) return '<span class="badge state-done">Dashboard</span>';
+  if (!record) return '<span class="badge">Not checked</span>';
+  const [label, tone] = record.status === "missing" && record.seen ? ["Removed", ""] : MAINWP_STATUS[record.status];
+  const owner = record.status !== "connected" ? "" : record.ownedConnection ? "Connected by WordPress Tools" : "Connected in MainWP";
+  const checked = record.checkedAt.replace("T", " ").slice(0, 16);
+  return `<span class="badge ${tone}"${checked ? ` title="Checked ${esc(checked)} UTC"` : ""}>${label}</span>${
+    owner ? `<div class="hint">${owner}</div>` : ""}${record.error ? `<div class="varnish-error">${esc(record.error)}</div>` : ""}`;
+}
+
+function mainwpRow(site: WpSiteView, state: MainwpView): string {
+  const domain = esc(site.domain);
+  const record = state.sites[site.domain];
+  const isDashboard = site.domain === state.dashboard;
+  const excluded = state.excluded.includes(site.domain);
+  const eligible = !isDashboard && record?.status !== "unsupported";
+  const automatic = eligible
+    ? `<label class="switch"><input type="checkbox" data-domain="${domain}" aria-label="Install MainWP Child automatically on ${domain}" ${excluded ? "" : "checked"} onchange="setMainwpSite(this)"><span></span></label>`
+    : "";
+  const connectable = eligible && !excluded && state.dashboard && !state.cleanup && record?.status !== "connected";
+  const action = connectable
+    ? `<button class="btn" type="button" data-domain="${domain}" onclick="connectMainwp(this)">${record?.status === "error" ? "Retry" : "Connect"}</button>`
+    : "";
+  return `
+              <tr>
+                <td class="site-cell">${domain}<div class="hint">${esc(site.user)}</div></td>
+                <td data-label="MainWP">${mainwpStatus(record, isDashboard)}</td>
+                <td data-label="Automatic">${automatic}</td>
+                <td class="action-cell"><span class="row-actions">${action}</span></td>
+              </tr>`;
+}
+
+function mainwpCard(sites: WpSiteView[], state: MainwpView, error: string): string {
+  if (error) {
+    return `
+    <div class="card wp-card">
+      <h2>Install and connect MainWP Child automatically</h2>
+      <div class="alert" role="alert">${esc(error)}</div>
+    </div>`;
+  }
+  const locked = state.owned > 0 || state.cleanup;
+  const options = sites.map((site) =>
+    `<option value="${esc(site.domain)}"${site.domain === state.dashboard ? " selected" : ""}>${esc(site.domain)}</option>`).join("");
+  const cleanup = locked
+    ? `<button class="btn" type="button" onclick="cleanupMainwp()">${state.cleanup ? "Retry cleanup…" : "Turn off and clean up…"}</button>`
+    : "";
+  const note = state.cleanup
+    ? '<p class="mainwp-note" role="status">Cleanup pending. Automation stays off until what WordPress Tools added is removed.</p>'
+    : "";
+  return `
+    <div class="card wp-card">
+      <div class="switch-row">
+        <div>
+          <h2>Install and connect MainWP Child automatically</h2>
+          <p>On every WordPress site that has never had MainWP Child, once it answers over HTTPS, checked every 15 minutes. A Child removed in WordPress is left alone.</p>
+        </div>
+        <label class="switch"><input id="mainwp-automatic" type="checkbox" aria-label="Install and connect MainWP Child automatically" ${state.enabled ? "checked" : ""} ${!state.dashboard || state.cleanup ? "disabled" : ""} onchange="setMainwpAutomatic(this)"><span></span></label>
+      </div>
+      <div class="mainwp-controls">
+        <label class="hint" for="mainwp-dashboard">MainWP Dashboard</label>
+        <select id="mainwp-dashboard" onchange="setMainwpDashboard(this)" ${locked ? "disabled" : ""}><option value="">Choose a site</option>${options}</select>
+        <button class="btn" type="button" onclick="checkMainwp()" ${state.dashboard ? "" : "disabled"}>Check now</button>
+        ${cleanup}
+      </div>
+      ${note}
+    </div>`;
+}
+
+function mainwpSitesCard(sites: WpSiteView[], state: MainwpView, available: boolean): string {
+  if (!available || sites.length === 0) return "";
+  return `
+    <div class="card card-table">
+      <div class="card-header">
+        <h2>MainWP sites</h2>
+        <span class="toolbar-note">${sites.length} site${sites.length === 1 ? "" : "s"}</span>
+      </div>
+      <div class="table-scroll">
+        <table class="fleet-table wp-site-table mainwp-site-table">
+          <thead>
+            <tr>
+              <th scope="col">Site</th>
+              <th scope="col">MainWP</th>
+              <th scope="col">Automatic</th>
+              <th scope="col" class="action-cell">Actions</th>
+            </tr>
+          </thead>
+          <tbody>${sites.map((site) => mainwpRow(site, state)).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
 }
 
 /** Everything below the heading; the page repaints it from `/api/dashboard` after a change. */
 export function dashboardBody(data: WpDashboard): string {
   const available = !data.varnishError;
-  return `${policyCard(data.varnish.enabled, data.varnishError)}${sitesCard(data.sites, available)}${mainwpSection(data)}${helperCard(data.sites)}`;
+  return `${policyCard(data.varnish.enabled, data.varnishError)}${sitesCard(data.sites, available)}${
+    mainwpCard(data.sites, data.mainwp, data.mainwpError)}${mainwpSitesCard(data.sites, data.mainwp, !data.mainwpError)}${helperCard(data.sites)}`;
 }
 
 export function dashboardView(data: WpDashboard): string {

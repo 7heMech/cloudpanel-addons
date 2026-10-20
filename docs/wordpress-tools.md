@@ -48,61 +48,38 @@ exclusions and which plugins were removed on purpose.
 
 ## MainWP Child
 
-Choose an existing **MainWP Dashboard** WordPress on this server, then turn on
-**Install and connect MainWP Child automatically**. The Dashboard plugin must
-already be active. External Dashboards and multisite are unsupported. The
-Dashboard must be able to reach each child's HTTPS URL with a valid certificate;
-allow its address through any firewall or Cloudflare-only restriction yourself.
-The addon never changes those restrictions.
+Choose a **MainWP Dashboard**, a WordPress site on this server with MainWP
+active, then turn on **Install and connect MainWP Child automatically**.
+External Dashboards are not supported.
 
-Every 15 minutes, sites without a previously observed MainWP Child installation
-receive the official `mainwp-child` plugin and connect to the selected Dashboard.
-This includes existing WordPress sites that were never linked. **Check now**
-refreshes the entire included fleet, even while automation is off. Large fleets
-may need another check to finish. Sites already connected are left alone.
+Every 15 minutes, each WordPress site that has never had MainWP Child gets the
+official plugin, activated and connected to that Dashboard as the site's first
+administrator. No user is created and no password is changed. A site the
+Dashboard cannot reach over HTTPS with a valid certificate shows **Waiting for
+HTTPS** and is tried again on the next pass. A firewall, Cloudflare-only rule or
+maintenance page blocks it too; allow the server's own address. **Check now**
+refreshes every included site and, with automation on, connects new ones at once.
 
-Before installation or connection, the Dashboard checks the child's HTTPS URL
-with certificate verification enabled. **Waiting for HTTPS** means DNS, the
-certificate or the HTTPS response is not ready from the Dashboard. No plugin is
-installed and no enrollment failure is counted while waiting. Once the site
-answers successfully, the next automatic pass installs and connects it. You can
-also use **Check now** after fixing HTTPS. This works independently of any DNS
-or certificate provisioning addon.
+A site that already has MainWP Child shows **Connect** instead; nothing connects
+it automatically. A Child connected to another Dashboard must be disconnected in
+MainWP first. A Child removed after a check is never installed again
+automatically; **Connect** puts it back. **Retry** repeats a failed connection.
+The Dashboard's own site, multisite networks and sites with **Automatic** off
+are left alone.
 
-An existing Child plugin is never connected automatically. Use its confirmed
-**Connect** button, or **Retry** after a failed or interrupted enrollment. An
-existing connection to another Dashboard or an inconsistent Dashboard record
-must first be resolved in MainWP. A Child removed after being seen is never
-reinstalled automatically; Connect is an explicit choice to install it again.
-Per-site **Automatic** switches exclude sites from enrollment without changing
-existing connections. The Dashboard itself and multisite are skipped.
+Turning automation off leaves every connection in place. **Turn off and clean
+up…** removes what WordPress Tools added: the Dashboard records it created, with
+their keys and cookies; MainWP Child where it installed it, with its settings,
+tables, scheduled events and an otherwise empty uploads folder; and, on a Child
+you had installed, the connection, Security ID and activation it changed. That
+plugin and its other settings stay. Connections you made, or anyone made since,
+are left alone. **Cleanup pending** means a site or the Dashboard needs
+attention; fix it and retry. Cleanup does not undo work done through MainWP or
+end WordPress sessions it opened.
 
-Connections reuse the first WordPress administrator, as sign-in does. No user
-is created and no password is changed or requested. A temporary ID-based
-connection setting is restored after enrollment, or on the next repair after
-an interruption. A failed attempt verified to have left the site unchanged and
-no Dashboard record releases its enrollment intent; an unseen site retries on
-the next automatic pass. Partial or interrupted enrollment still needs **Retry**.
-
-The global switch only stops automation: MainWP connections remain active.
-**Turn off and clean up…** stops automation and withdraws addon-owned changes.
-An automatically installed Child is removed with its owned settings, reconnect
-credentials, cron events and activity tables. If you explicitly connected an
-existing plugin, that plugin stays and its original activation and connection
-settings are restored. Its unrelated settings and scheduled work stay.
-Dashboard site records, key material and stored session-cookie files created by
-the addon are removed. An otherwise empty Child uploads directory created by
-MainWP is removed too.
-Connections that already existed before enrollment are operator-owned and
-never removed. No administrator is deleted.
-
-Cleanup is verified on both sides. **Cleanup pending** means something remains;
-retry cleanup after fixing the named site or Dashboard. Repair also retries
-pending cleanup. Finish cleanup before changing Dashboard or disabling or
-uninstalling WordPress Tools; those operations refuse to discard managed
-connections or their recovery state. Ordinary uninstall keeps non-secret policy
-and `seen` records; `--purge` removes them after successful cleanup.
-
-Cleanup cannot undo updates, content changes, backups or other work performed
-through MainWP, erase historical server logs/backups, or revoke independently
-issued WordPress administrator sessions. Manage those in WordPress/MainWP.
+Disabling or uninstalling WordPress Tools leaves MainWP connections in place;
+clean up first to remove them. Both refuse while a connection was cut off
+part-way; run `clp-addons repair wp-login` first. If the page reports that
+`/var/lib/clp-addons/wp-login/mainwp.json` cannot be read, sign-in and Varnish
+still work. Deleting that file turns automation off and forgets which
+connections WordPress Tools made, so cleanup can no longer remove them.

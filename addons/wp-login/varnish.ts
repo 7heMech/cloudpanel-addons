@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { runWp as wp, type WpCommand } from "./wp-cli";
 export { commandOutput, type WpCommand } from "./wp-cli";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { leastRecentlyChecked, pruneFleet } from "./fleet";
 
 export const CLP_VARNISH_PLUGIN = "clp-varnish-cache";
 export type VarnishPluginStatus = "active" | "inactive" | "missing" | "unsupported" | "error";
@@ -73,10 +74,8 @@ export function readVarnishState(path: string): WpVarnishState {
 
 /** Forgets domains the panel no longer has, so a recreated site starts fresh. */
 export function pruneVarnishState(state: WpVarnishState, domains: Set<string>): boolean {
-  const before = state.excluded.length + Object.keys(state.sites).length;
-  state.excluded = state.excluded.filter((domain) => domains.has(domain));
-  for (const domain of Object.keys(state.sites)) if (!domains.has(domain)) delete state.sites[domain];
-  return state.excluded.length + Object.keys(state.sites).length !== before;
+  const excluded = state.excluded.length;
+  return Object.keys(pruneFleet(state, domains)).length > 0 || state.excluded.length !== excluded;
 }
 
 export function saveVarnishState(path: string, state: WpVarnishState): void {
@@ -121,12 +120,9 @@ export async function syncVarnish(run: VarnishRun, options: VarnishOptions = {})
   const due = run.dueOnly
     ? candidates.filter((site) => !state.sites[site.domain]?.seen && state.sites[site.domain]?.status !== "unsupported")
     : candidates;
-  // Rotate through the least recently checked sites, keeping each pass bounded
-  // even when one site's PHP or external download stalls. The timer's pass
-  // holds the operation lock, so it gets the smaller budget.
-  due.sort((a, b) => (state.sites[a.domain]?.checkedAt ?? "").localeCompare(state.sites[b.domain]?.checkedAt ?? ""));
+  // The timer's pass holds the operation lock, so it gets the smaller budget.
   const deadline = Date.now() + (run.dueOnly ? 30_000 : 90_000);
-  for (const site of due) {
+  for (const site of leastRecentlyChecked(due, state.sites)) {
     if (Date.now() > deadline - 1_000) { result.pending++; continue; }
     const previous = state.sites[site.domain];
     const record: VarnishSiteRecord = {

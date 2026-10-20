@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { configureMainwp, emptyMainwpState, mainwpAction, mainwpView, readMainwpState, requireMainwpClean, saveMainwpState, syncMainwp, type MainwpRun } from "../addons/wp-login/mainwp";
+import { configureMainwp, emptyMainwpState, mainwpAction, mainwpView, readMainwpState, requireMainwpSettled, saveMainwpState, syncMainwp, type MainwpRun } from "../addons/wp-login/mainwp";
 import type { WpCommand } from "../addons/wp-login/wp-cli";
 import { commandOutput } from "../addons/wp-login/wp-cli";
 import { handle } from "../addons/wp-login/app/index";
@@ -12,12 +12,13 @@ let root: string;
 let run: MainwpRun;
 let commands: WpCommand[];
 const key = "a".repeat(64);
-const snapshot = () => ({ options: {}, meta: { passwordAuth: null }, admin: 1, active: false, cron: {}, tables: [] });
+const snapshot = () => ({ options: {}, meta: { passwordAuth: null }, admin: 1, active: false, cron: {}, tables: [], uploads: false });
 const status = () => ({ multisite: false, installed: false, files: false, active: false, key: "", securityId: "", admin: "owner", snapshot: snapshot(), auth: true });
 let children: Record<string, ReturnType<typeof status>>;
 let connections: Record<string, { id: number; key: string } | null>;
 let fail: string;
 let httpsReady: boolean;
+let nextId: number;
 const options = { runWpCommand: async (command: WpCommand) => {
   commands.push(command);
   const domain = command.argv.find((arg) => arg.startsWith("--url="))!.slice("--url=https://".length);
@@ -30,7 +31,8 @@ const options = { runWpCommand: async (command: WpCommand) => {
   const child = children[domain];
   let reply: unknown = { ok: true };
   switch (input.op) {
-    case "status": reply = structuredClone(child); break;
+    case "status": reply = { ...structuredClone(child), fingerprint: JSON.stringify([child!.snapshot, child!.auth, child!.securityId]) }; break;
+    case "snapshot": reply = { snapshot: structuredClone(child!.snapshot) }; break;
     case "dashboard-status": reply = { ok: true, sites: Object.fromEntries(input.domains.map((d: string) => [d, connections[d] || null])) }; break;
     case "dashboard-ready": reply = { ready: httpsReady }; break;
     case "prepare":
@@ -41,8 +43,8 @@ const options = { runWpCommand: async (command: WpCommand) => {
       child!.auth = true;
       break;
     case "dashboard-add":
-      children[input.domain]!.key = key;
-      connections[input.domain] = { id: 2, key };
+      children[input.name]!.key = key;
+      connections[input.name] = { id: nextId++, key };
       if (fail === "add") throw new Error("interrupted after registration");
       break;
     case "cleanup":
@@ -53,15 +55,14 @@ const options = { runWpCommand: async (command: WpCommand) => {
       if (input.removePlugin) { child!.installed = false; child!.files = false; }
       break;
     case "dashboard-remove":
-      if (connections[new URL(input.url).hostname]?.key !== input.key) throw new Error("ownership changed");
-      delete connections[new URL(input.url).hostname];
+      for (const [domain, record] of Object.entries(connections)) if (record?.id === input.id && record?.key === input.key) delete connections[domain];
       break;
   }
   return `Notice from a must-use plugin\nCLP-ADDONS-MAINWP:${JSON.stringify(reply)}\nmore site output`;
 } };
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "clp-mainwp-"));
-  commands = []; children = {}; connections = {}; fail = ""; httpsReady = true;
+  commands = []; children = {}; connections = {}; fail = ""; httpsReady = true; nextId = 2;
   run = { statePath: join(root, "mainwp.json"), runuser: "/usr/sbin/runuser", domains: new Set(["dashboard.test", "new.test", "manual.test", "connected.test", "network.test"]),
     sites: ["dashboard.test", "new.test", "manual.test", "connected.test", "network.test"].map((domain, i) => ({ domain, user: `wp${i}`, home: `/home/wp${i}`, root: `/home/wp${i}/htdocs/${domain}`, phpVersion: "8.3" })) };
   for (const site of run.sites) children[site.domain] = status();
@@ -154,25 +155,36 @@ test("an unchanged failed row connection restores its previous ownership and sti
 test("partial installation keeps its recovery journal and needs Retry", async () => {
   await configured(); fail = "partial-install";
   expect((await syncMainwp({ ...run, dueOnly: true }, options)).failed).toHaveLength(1);
-  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ seen: true, ownedPlugin: true, phase: "install" });
+  const record = readMainwpState(run.statePath).sites["new.test"]!;
+  expect(record).toMatchObject({ status: "error", seen: true, ownedPlugin: true, error: "incomplete download" });
+  expect(record.phase).toBeUndefined();
   fail = ""; commands = [];
   await syncMainwp({ ...run, dueOnly: true }, options);
-  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ status: "error", seen: true, error: "Enrollment interrupted. Retry to continue." });
-  expect(commands.some((c) => c.argv.includes("install"))).toBe(false);
+  expect(commands).toHaveLength(0);
+  expect((await syncMainwp({ ...run, domain: "new.test" }, options)).connected).toBe(1);
+  expect(commands.find((c) => c.argv.includes("install"))!.argv).toContain("--force");
+});
+
+test("an enrollment cut off before its setting was restored is reported as interrupted", async () => {
+  await configured(); fail = "restore";
+  await syncMainwp({ ...run, domain: "manual.test" }, options);
+  connections["manual.test"] = null; children["manual.test"]!.key = "";
+  fail = "";
+  await syncMainwp({ ...run, dueOnly: true }, options);
+  expect(readMainwpState(run.statePath).sites["manual.test"]).toMatchObject({ status: "error", error: "Enrollment was interrupted. Retry to continue." });
+  expect(children["manual.test"]!.auth).toBe(true);
 });
 
 test("row Connect owns the new connection but preserves an existing plugin and activation state on cleanup", async () => {
   await configured();
   expect((await mainwpAction(run, ["mainwp-connect", "--domain=manual.test", "--confirm=manual.test"], options, (d) => d) as { connected: number }).connected).toBe(1);
   expect(readMainwpState(run.statePath).sites["manual.test"]).toMatchObject({ ownedPlugin: false, ownedConnection: true });
-  expect(() => requireMainwpClean(run.statePath)).toThrow("cleanup is required");
   const result = await syncMainwp(run, options, true);
   expect(result.failed).toEqual([]);
   expect(children["manual.test"]).toMatchObject({ installed: true, active: false, key: "", auth: true });
   expect(connections["manual.test"]).toBeUndefined();
   expect(connections["connected.test"]).toEqual({ id: 1, key });
   expect(readMainwpState(run.statePath)).toMatchObject({ cleanup: false, enabled: false });
-  expect(() => requireMainwpClean(run.statePath)).not.toThrow();
 });
 
 test("a crash after registration restores authentication and recovers ownership without creating a duplicate", async () => {
@@ -194,7 +206,6 @@ test("cleanup is resumable; a failed child never hides its pending state or remo
   fail = "cleanup";
   expect((await syncMainwp(run, options, true)).failed).toHaveLength(1);
   expect(readMainwpState(run.statePath).cleanup).toBe(true);
-  expect(() => requireMainwpClean(run.statePath)).toThrow();
   fail = "";
   expect((await syncMainwp(run, options, true)).failed).toEqual([]);
   expect(children["new.test"]!.installed).toBe(false);
@@ -245,7 +256,7 @@ test("MainWP routes require administrator, CSRF, and confirmation before reachin
 test("the UI has row Connect, a pause switch and explicit cleanup, with no secrets or selection UI", () => {
   const state = emptyMainwpState(); state.dashboard = "dashboard.test"; state.cleanup = true;
   state.sites["new.test"] = { status: "waiting-https", seen: false, checkedAt: "", error: "", ownedPlugin: false, ownedConnection: false };
-  const html = dashboardView({ sites: run.sites.map((s) => ({ domain: s.domain, user: s.user, application: "WordPress", helper: false, varnishCache: false, varnishExcluded: false, varnishPlugin: null })), varnish: { enabled: false, excluded: [], sites: {} }, varnishError: "", mainwp: mainwpView(state) });
+  const html = dashboardView({ sites: run.sites.map((s) => ({ domain: s.domain, user: s.user, application: "WordPress", helper: false, varnishCache: false, varnishExcluded: false, varnishPlugin: null })), varnish: { enabled: false, excluded: [], sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "" });
   expect(html).toContain("Waiting for HTTPS"); expect(html).toContain("Cleanup pending"); expect(html).toContain("mainwp-automatic"); expect(html).not.toContain("Select all");
 });
 
@@ -296,4 +307,48 @@ test("a large fleet leaves a bounded batch pending for the next pass", async () 
   expect(result.pending).toBeGreaterThan(0);
   const request = commands.find((c) => c.stdin?.includes('"op":"dashboard-status"'))!;
   expect(JSON.parse(request.stdin!).domains.length).toBeLessThanOrEqual(64);
+});
+
+test("cleanup leaves a site connected since by someone else, and lets automation reinstall what it removed", async () => {
+  await configured(); await syncMainwp(run, options);
+  await mainwpAction(run, ["mainwp-connect", "--domain=manual.test", "--confirm=manual.test"], options, (d) => d);
+  children["manual.test"]!.key = "b".repeat(64);
+  const result = await syncMainwp(run, options, true);
+  expect(result.failed).toEqual([]);
+  expect(children["manual.test"]).toMatchObject({ installed: true, key: "b".repeat(64) });
+  expect(children["new.test"]!.installed).toBe(false);
+  const state = readMainwpState(run.statePath);
+  expect(state.sites["manual.test"]).toMatchObject({ status: "not-connected", ownedConnection: false });
+  expect(state.sites["manual.test"]!.snapshot).toBeUndefined();
+  expect(state.sites["new.test"]).toMatchObject({ status: "missing", seen: false });
+  expect(connections["manual.test"]).toBeUndefined();
+});
+
+test("a deleted Dashboard does not leave cleanup pending for ever", async () => {
+  await configured(); await syncMainwp(run, options);
+  run.domains.delete("dashboard.test"); run.sites = run.sites.filter((s) => s.domain !== "dashboard.test");
+  expect((await syncMainwp(run, options, true)).failed).toEqual([]);
+  expect(children["new.test"]!.installed).toBe(false);
+  expect(readMainwpState(run.statePath)).toMatchObject({ cleanup: false, dashboard: "", enabled: false });
+});
+
+test("only an interrupted enrollment holds up disabling or uninstalling", async () => {
+  await configured(); await syncMainwp(run, options);
+  expect(() => requireMainwpSettled(run.statePath)).not.toThrow();
+  fail = "restore";
+  await syncMainwp({ ...run, domain: "manual.test" }, options);
+  expect(() => requireMainwpSettled(run.statePath)).toThrow("interrupted");
+  fail = "";
+  await syncMainwp({ ...run, dueOnly: true }, options);
+  expect(() => requireMainwpSettled(run.statePath)).not.toThrow();
+  expect(readMainwpState(run.statePath).enabled).toBe(true);
+});
+
+test("a login the Dashboard would store is checked, and a site's own error text is never repeated", async () => {
+  await configured();
+  children["new.test"]!.admin = "<script>";
+  expect((await syncMainwp({ ...run, domain: "new.test" }, options)).failed[0]).toContain("no administrator");
+  expect(commands.some((c) => c.stdin?.includes('"op":"dashboard-add"'))).toBe(false);
+  const spoofing = { runWpCommand: async () => `CLP-ADDONS-MAINWP:${JSON.stringify({ error: "token 0123 leaked" })}` };
+  expect((await syncMainwp({ ...run, domain: "manual.test" }, spoofing)).failed[0]).not.toContain("leaked");
 });
