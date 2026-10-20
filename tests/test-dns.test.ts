@@ -220,7 +220,10 @@ describe("Report only and Enforce", () => {
     // Both sites publish the same verification value at the zone's own name.
     await env.act("save-profile", { ...web, records: [...web.records, { type: "TXT", name: "_verify.{zone}", content: "token=1", ttl: 1 }] });
     await env.act("assign", { domains: ["example.com", "shop.example.com"], profileId: "web" });
-    await env.enforce("web");
+    const enforced = await env.enforce("web");
+    // The second site finds the record the first one wrote, rather than creating it again.
+    expect(enforced.sites.flatMap((entry) => entry.plan!.problems)).toEqual([]);
+    expect(env.records().filter((record) => record.startsWith("TXT _verify."))).toEqual(['TXT _verify.example.com "token=1"']);
     env.sites.splice(env.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
     const review = await env.act("remove-records", { domain: "shop.example.com" });
     expect(review.review!.sites[0]!.changes.map((change) => change.subject).sort()).toEqual(["A shop.example.com", "AAAA shop.example.com"]);
@@ -322,6 +325,23 @@ describe("Mailcow", () => {
     await env.enforce("web-mailcow");
     expect(env.mc.writes().some((call) => call.path === "/edit/mailbox")).toBe(false);
     expect(env.records()).toContain("MX example.com mail.example.net");
+  });
+
+  test("a new Mailcow address and key are saved together, once their review is confirmed", async () => {
+    const env = await mailSetup();
+    await env.enforce("web-mailcow");
+    const secrets = () => readFileSync(join(env.dir, "state", "secrets.json"), "utf8");
+    env.mc.apiKey = "MC-NEW-KEY-0123456789ABCDEF";
+    const review = await env.act("save-mailcow", {
+      url: "https://mail2.example.net", key: env.mc.apiKey, host: "mail.example.net",
+      dkimSource: "example.net", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "relay@example.net",
+    });
+    expect(review.mailcow.url).toBe("https://mail.example.net");
+    expect(secrets()).toContain(MAILCOW_KEY);
+    expect(secrets()).not.toContain(env.mc.apiKey);
+    const confirmed = await env.act("confirm", { token: review.review!.token });
+    expect(confirmed.mailcow.url).toBe("https://mail2.example.net");
+    expect(secrets()).toContain(env.mc.apiKey);
   });
 });
 

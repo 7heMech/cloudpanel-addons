@@ -72,12 +72,13 @@ on, editing an enforcing profile's rows or options, assigning sites to one, or
 changing the server addresses, Mailcow settings or a zone choice they depend on
 -- is not saved. It is planned against fresh reads and returned as a review of
 every create, update and delete. A root-only pending file holds the proposed
-policy, a random token, a digest of the plan and a hash of the current policy,
-for fifteen minutes. Confirming re-plans; a plan that changed in the meantime
-is shown again rather than applied, and a policy that changed refuses the
-confirmation. A review in which a site has a problem cannot be confirmed: fix
-the problem or take the site out of the profile. A rename, a Report only edit or
-a change of mode to Report only is saved directly.
+policy, with any new Mailcow key that came with it, a random token, a digest of
+the plan and a hash of the current policy, for fifteen minutes. Confirming
+re-plans; a plan that changed in the meantime is shown again rather than
+applied, and a policy that changed refuses the confirmation. A review in which
+a site has a problem cannot be confirmed: fix the problem or take the site out
+of the profile. A rename, a Report only edit or a change of mode to Report only
+is saved directly.
 
 ## Zone options
 

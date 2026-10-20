@@ -138,6 +138,8 @@ interface Pending {
   digest: string;
   domains: string[];
   policy?: Policy;
+  /** A Mailcow key saved with `policy`, so it is not used before that policy is. */
+  mailcowKey?: string;
   removal?: { domain: string; ids: string[] };
 }
 
@@ -279,6 +281,11 @@ class Action {
     const site = this.sites().find((candidate) => candidate.domain === domain);
     if (!site) failAction(`CloudPanel has no site ${domain}`);
     return site;
+  }
+
+  private secretsWith(mailcowKey?: string): Secrets {
+    const secrets = this.files.secrets();
+    return mailcowKey === undefined ? secrets : { ...secrets, mailcowKey };
   }
 
   run(policy: Policy, secrets = this.files.secrets()): DnsRun {
@@ -483,17 +490,18 @@ class Action {
     return hash(plans.map((plan) => [plan.domain, plan.changes, plan.problems]));
   }
 
-  /** Saves `next` straight away, or answers with the review it needs first. */
-  async change(next: Policy, notice: string, refresh: string[] | "all" = []): Promise<DnsReply> {
+  /** Saves `next`, and a new Mailcow key with it, straight away, or answers with the review it needs first. */
+  async change(next: Policy, notice: string, refresh: string[] | "all" = [], mailcowKey?: string): Promise<DnsReply> {
     const before = this.files.policy();
     const domains = this.affected(before, next);
     if (!domains.length) {
       this.files.savePolicy(next);
+      if (mailcowKey !== undefined) this.files.saveSecrets(this.secretsWith(mailcowKey));
       this.files.savePending(null);
       await this.tryRefresh(refresh);
       return this.reply({ notice });
     }
-    return this.review(before, next, domains);
+    return this.review(before, next, domains, undefined, mailcowKey);
   }
 
   private async tryRefresh(domains: string[] | "all"): Promise<void> {
@@ -504,15 +512,15 @@ class Action {
     }
   }
 
-  private async review(before: Policy, next: Policy, domains: string[], notice?: string): Promise<DnsReply> {
-    const run = this.run(next);
+  private async review(before: Policy, next: Policy, domains: string[], notice?: string, mailcowKey?: string): Promise<DnsReply> {
+    const run = this.run(next, this.secretsWith(mailcowKey));
     await run.discover();
     await run.load(domains);
     const plans = run.planAll(this.sites()).filter((plan) => domains.includes(plan.domain));
     const blocked = plans.some((plan) => plan.problems.length > 0);
     const token = blocked ? "" : randomBytes(24).toString("hex");
     this.files.savePending(blocked ? null : {
-      token, expiresAt: this.now + REVIEW_LIFETIME, base: hash(before), digest: this.digest(plans), domains, policy: next,
+      token, expiresAt: this.now + REVIEW_LIFETIME, base: hash(before), digest: this.digest(plans), domains, policy: next, mailcowKey,
     });
     const changes = plans.reduce((count, plan) => count + plan.changes.filter((change) => change.action !== "note").length, 0);
     return this.reply({
@@ -540,14 +548,15 @@ class Action {
     if (pending.base !== hash(current)) failAction("The settings changed after this review; make the change again to see a fresh plan");
     if (pending.removal) return this.confirmRemoval(pending);
     const next = parsePolicy(pending.policy);
-    const run = this.run(next);
+    const run = this.run(next, this.secretsWith(pending.mailcowKey));
     await run.discover();
     await run.load(pending.domains);
     const plans = run.planAll(this.sites()).filter((plan) => pending.domains.includes(plan.domain));
     if (this.digest(plans) !== pending.digest) {
-      return this.review(current, next, pending.domains, "Cloudflare or Mailcow changed after the plan was shown. This is the plan now.");
+      return this.review(current, next, pending.domains, "Cloudflare or Mailcow changed after the plan was shown. This is the plan now.", pending.mailcowKey);
     }
     this.files.savePolicy(next);
+    if (pending.mailcowKey !== undefined) this.files.saveSecrets(this.secretsWith(pending.mailcowKey));
     this.files.savePending(null);
     await run.enforce(this.sites().filter((site) => pending.domains.includes(site.domain)));
     this.record(run, run.planAll(this.sites()), pending.domains);
@@ -689,10 +698,9 @@ class Action {
     } catch (error) {
       failAction(redact(reason(error), [key]));
     }
-    this.files.saveSecrets({ ...secrets, mailcowKey: key });
     const next = { ...structuredClone(policy), mailcow: settings };
     const mailcowSites = this.sites().filter((site) => next.profiles.find((profile) => profile.id === next.assignments[site.domain])?.mailcow);
-    return this.change(next, "Mailcow saved.", mailcowSites.map((site) => site.domain));
+    return this.change(next, "Mailcow saved.", mailcowSites.map((site) => site.domain), key);
   }
 }
 

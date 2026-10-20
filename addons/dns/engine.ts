@@ -519,6 +519,9 @@ export class DnsRun {
       // One zone's writes go in order; zones are independent of each other.
       for (const plan of after.filter((candidate) => candidate.zone!.id === zoneId)) {
         try {
+          // Planned again, since an earlier site in the zone may have written a record this one wants too.
+          const fresh = this.planSite(this.context.sites.find((site) => site.domain === plan.domain)!);
+          if (fresh.problems.length) continue;
           await this.applyRecords(state, this.diffs.get(plan.domain)!.ops);
         } catch (error) {
           this.fail(plan.domain, error);

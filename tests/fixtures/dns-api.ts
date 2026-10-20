@@ -212,6 +212,7 @@ export class FakeMailcow {
   calls: { method: string; path: string; body?: unknown }[] = [];
   /** Mailcow versions before sender_acl was reported. */
   reportsAcl = true;
+  apiKey = MAILCOW_KEY;
 
   key(domain: string, selector = "dkim", publicKey = Buffer.from(`key-of-${domain}`.repeat(12)).toString("base64")): void {
     this.dkim.set(domain, { dkim_selector: selector, pubkey: publicKey, dkim_txt: `v=DKIM1;k=rsa;t=s;s=email;p=${publicKey}`, length: "2048", privkey: "" });
@@ -227,7 +228,7 @@ export class FakeMailcow {
     const body = typeof init.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
     const path = url.pathname.replace("/api/v1", "");
     this.calls.push({ method, path, body });
-    if (new Headers(init.headers).get("x-api-key") !== MAILCOW_KEY) return json({ type: "error", msg: "authentication failed" }, 401);
+    if (new Headers(init.headers).get("x-api-key") !== this.apiKey) return json({ type: "error", msg: "authentication failed" }, 401);
     const success = (msg: string[]) => json([{ type: "success", log: ["fake", body], msg }]);
     const danger = (msg: string[]) => json([{ type: "danger", log: ["fake", body], msg }]);
 
