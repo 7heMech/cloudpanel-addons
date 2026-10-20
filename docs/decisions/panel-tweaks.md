@@ -153,12 +153,14 @@ records cover -- `www` only where it writes one -- or with why DNS is not ready
 yet, in which case no certificate is requested here and DNS retries as root
 later. Without DNS, or for a site DNS does not manage, the certificate is for
 the created domain alone; the form's default `www` name needs DNS the operator
-may not have. The script then fetches the native form and posts it for those
-names. CloudPanel redirects to the site's certificate list only on success;
-anything else shows the panel's own error with a link to the site's SSL/TLS tab.
-The page must stay open until it finishes. On Sites, the enhanced table then
-refetches its data and repaints that row's SSL cell. Panel Tweaks itself never
-retries and never scans existing sites.
+may not have. DNS counts as absent only when its session route answers 404 or
+403; when it does not answer, nothing is requested and the domain is remembered
+again, so a refresh starts over. The script then fetches the native form and
+posts it for those names. CloudPanel redirects to the site's certificate list
+only on success; anything else shows the panel's own error with a link to the
+site's SSL/TLS tab. The page must stay open until it finishes. On Sites, the
+enhanced table then refetches its data and repaints that row's SSL cell. Panel
+Tweaks itself never retries and never scans existing sites.
 
 ## Nothing moves once it is on the screen
 

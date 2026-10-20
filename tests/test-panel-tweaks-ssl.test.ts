@@ -24,7 +24,7 @@ function cookieJar(initial = "") {
 interface Reply { url?: string; token?: boolean; error?: string }
 
 /** What the DNS addon's routes answer; absent means the addon is not installed. */
-interface Dns { provision: unknown }
+interface Dns { provision?: unknown; sessionStatus?: number }
 
 function run(options: { cookie?: string; domainInput?: string; box?: boolean; boxDomain?: string; replies?: Reply[]; dns?: Dns }) {
   const jar = cookieJar(options.cookie ? encodeURIComponent(options.cookie) : "");
@@ -56,8 +56,10 @@ function run(options: { cookie?: string; domainInput?: string; box?: boolean; bo
     expect(jar.domains()).not.toContain(DOMAIN);
     if (url.startsWith("/addons/dns/")) {
       dnsCalls.push({ url, init });
-      if (!options.dns) return { ok: false, json: async () => ({ ok: false }) };
-      return { ok: true, json: async () => url.endsWith("/session") ? { ok: true } : options.dns!.provision };
+      const session = url.endsWith("/session");
+      const status = !options.dns ? 404 : session ? options.dns.sessionStatus ?? 200 : 200;
+      const body = status !== 200 ? { ok: false } : session ? { ok: true } : options.dns!.provision;
+      return { ok: status === 200, status, json: async () => body };
     }
     calls.push({ url, init });
     const reply = replies[calls.length - 1]!;
@@ -182,4 +184,21 @@ test("a site DNS does not manage gets the created domain alone, and a DNS failur
   expect(failed.calls).toEqual([]);
   expect(failed.alert.className).toBe("alert alert-danger");
   expect(failed.alert.textContent).toContain("DNS is busy checking Cloudflare");
+});
+
+test("DNS refusing a non-administrator its session means it is not installed", async () => {
+  const done = run({ box: true, dns: { sessionStatus: 403 } });
+  await done.settled();
+  expect(done.dnsCalls.map((call) => call.url)).toEqual(["/addons/dns/api/session"]);
+  expect((done.calls[1]!.init.body as FormData).getAll("domains[]")).toEqual([DOMAIN]);
+  expect(done.alert.className).toBe("alert alert-success");
+});
+
+test("DNS that does not answer asks for no certificate, and a refresh tries again", async () => {
+  const failed = run({ box: true, cookie: DOMAIN, dns: { sessionStatus: 502 } });
+  await failed.settled();
+  expect(failed.calls).toEqual([]);
+  expect(failed.alert.className).toBe("alert alert-danger");
+  expect(failed.alert.textContent).toContain("Refresh this page to try again.");
+  expect(failed.jar.domains()).toEqual([DOMAIN]);
 });

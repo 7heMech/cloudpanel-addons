@@ -166,6 +166,14 @@ test("an ordinary user cannot create or manage Instatic sites", () => {
   }
 });
 
+test("an addon that is not installed answers 404 to an administrator and 403 to anyone else", () => {
+  // Panel Tweaks' completion script reads exactly these as "DNS is not installed".
+  const session = [{ path: "/addons/dns/api/session" }];
+  expect(probe({ user: "admin", roles: ["ROLE_ADMIN"] }, session)[0]!.status).toBe(404);
+  expect(probe({ user: "someone", roles: ["ROLE_USER"] }, session)[0]!.status).toBe(403);
+  expect(probe({ user: "manager", roles: ["ROLE_SITE_MANAGER"] }, session)[0]!.status).toBe(403);
+});
+
 test("an administrator reaches the probe and the routes behind it", () => {
   const results = probe({ user: "admin", roles: ["ROLE_ADMIN"] });
   const health = results.find((result) => result.path === "/addons/health")!;

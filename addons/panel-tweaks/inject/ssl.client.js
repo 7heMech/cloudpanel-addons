@@ -51,7 +51,14 @@
     // the form's default www name may have no DNS.
     function dnsNames() {
       return fetch('/addons/dns/api/session', { credentials: 'same-origin' }).then(function (response) {
-        return response.ok ? response.json().catch(function () { return null; }) : null;
+        // DNS is not installed: 404 for an administrator, 403 for anyone else.
+        if (response.status === 404 || response.status === 403) return null;
+        if (!response.ok) throw new Error();
+        return response.json();
+      }).catch(function () {
+        // Nothing was requested yet, so a refresh may start over.
+        remember(domain.toLowerCase(), true);
+        throw new Error('the DNS addon did not answer. Refresh this page to try again');
       }).then(function (session) {
         if (!session || session.ok !== true) return [domain];
         show('info', 'Writing the DNS records for ' + domain + '…');
