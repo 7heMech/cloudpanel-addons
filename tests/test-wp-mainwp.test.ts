@@ -393,6 +393,43 @@ test("restoring authentication permits withdrawal even while the Dashboard is un
   expect(readMainwpState(run.statePath).sites["manual.test"]!.phase).toBeUndefined();
 });
 
+test("a Dashboard timeout cannot spend the budget before interrupted authentication is recovered", async () => {
+  await configured();
+  fail = "restore";
+  await syncMainwp({ ...run, domain: "manual.test" }, options);
+  fail = "";
+  for (let index = 0; index < 80; index++) {
+    const domain = `pending${index}.test`;
+    run.sites.push({ ...run.sites[1]!, domain });
+    run.domains.add(domain);
+    children[domain] = status();
+  }
+  const realNow = Date.now;
+  let elapsed = 0;
+  const operations: string[] = [];
+  const timeout = { runWpCommand: async (command: WpCommand) => {
+    const operation = JSON.parse(command.stdin!).op;
+    operations.push(operation);
+    if (operation === "dashboard-status") {
+      elapsed += 25_000;
+      throw new Error("WP-CLI timed out");
+    }
+    return options.runWpCommand(command);
+  } };
+  try {
+    Date.now = () => realNow() + elapsed;
+    for (let pass = 0; pass < 3; pass++) {
+      await syncMainwp({ ...run, dueOnly: true }, timeout);
+      expect(children["manual.test"]!.auth).toBe(true);
+      expect(() => requireMainwpSettled(run.statePath)).not.toThrow();
+    }
+  } finally {
+    Date.now = realNow;
+  }
+  expect(operations[0]).toBe("restore-auth");
+  expect(operations.filter((operation) => operation === "restore-auth")).toHaveLength(1);
+});
+
 test("a login the Dashboard would store is checked, and a site's own error text is never repeated", async () => {
   await configured();
   children["new.test"]!.admin = "<script>";

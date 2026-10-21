@@ -232,8 +232,10 @@ sets a random Security ID and turns off that administrator's password
 requirement for connecting, which lets MainWP register with the ID alone. The
 previous setting is journaled first. It is restored in `finally`, or by the next
 queued pass after a crash, even when automation is off or the site is excluded.
-A successful recovery is journaled as `restored`, so an unavailable Dashboard
-cannot prevent disable or uninstall once authentication is safe.
+Interrupted children are recovered first, within the pass budget and before
+querying the Dashboard. A successful recovery is journaled as `restored`, so an
+unavailable Dashboard cannot prevent disable or uninstall once authentication
+is safe.
 MainWP stores "use the global setting" for a new record's certificate check, so
 the adapter sets it to verify. It also cuts MainWP's request timeout to 20
 seconds, so registration fails inside the addon's deadline instead of being

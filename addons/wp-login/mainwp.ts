@@ -111,6 +111,7 @@ interface Pass {
   /** The Dashboard's record for each selected domain, or null where it has none. */
   connections: Record<string, Connection | null>;
   dashboardError: string;
+  recoveryFailed: Set<string>;
 }
 
 /** How many sites one pass asks the Dashboard about, which bounds its reply. */
@@ -273,9 +274,33 @@ async function httpsReady(pass: Pass, site: WpSite): Promise<boolean> {
   return reply.ready;
 }
 
-/** Given time of its own, so a spent budget never leaves the setting changed. */
-async function restoreAuth(pass: Pass, site: WpSite, record: MainwpRecord): Promise<void> {
-  await bridge(pass, site, { op: "restore-auth", snapshot: record.snapshot }, Date.now() + 10_000);
+/** Enrollment finalization gets its own deadline; recovery uses the pass's remainder. */
+async function restoreAuth(pass: Pass, site: WpSite, record: MainwpRecord, deadline = Date.now() + 10_000): Promise<void> {
+  await bridge(pass, site, { op: "restore-auth", snapshot: record.snapshot }, deadline);
+}
+
+function needsAuthRecovery(record: MainwpRecord | undefined): boolean {
+  return record?.phase === "install" || record?.phase === "connect";
+}
+
+async function recoverAuthentication(pass: Pass, sites: WpSite[]): Promise<void> {
+  for (const site of sites) {
+    const record = pass.state.sites[site.domain];
+    if (!record || !needsAuthRecovery(record)) continue;
+    if (Date.now() > pass.deadline - 1_000) break;
+    try {
+      await restoreAuth(pass, site, record, Math.min(pass.deadline, Date.now() + 10_000));
+      record.phase = "restored";
+    } catch (error) {
+      record.status = "error";
+      record.error = message(error);
+      record.checkedAt = new Date().toISOString();
+      pass.result.failed.push(`${site.domain}: ${record.error}`);
+      pass.result.checked++;
+      pass.recoveryFailed.add(site.domain);
+    }
+    saveMainwpState(pass.run.statePath, pass.state);
+  }
 }
 
 function paired(status: ChildStatus, connection: Connection | null): connection is Connection {
@@ -296,7 +321,8 @@ function forget(record: MainwpRecord): void {
 async function startPass(run: MainwpRun, options: WpOptions, state: MainwpState, selected: WpSite[]): Promise<Pass> {
   // Keep periodic passes short; Check now has time to refresh the whole fleet.
   const deadline = Date.now() + (run.dueOnly ? 25_000 : 90_000);
-  const pass: Pass = { run, options, deadline, state, result: emptyResult(), connections: {}, dashboardError: "" };
+  const pass: Pass = { run, options, deadline, state, result: emptyResult(), connections: {}, dashboardError: "", recoveryFailed: new Set() };
+  await recoverAuthentication(pass, selected);
   if (!state.dashboard) {
     // A deleted Dashboard leaves nothing there to remove, so cleanup carries on.
     if (!state.cleanup) pass.dashboardError = "choose a MainWP Dashboard first";
@@ -338,7 +364,9 @@ export async function syncMainwp(run: MainwpRun, options: WpOptions = {}, cleanu
   const due = leastRecentlyChecked(dueSites(run, state), state.sites);
   let result = emptyResult();
   if (due.length || state.retired.length) {
-    const selected = due.slice(0, BATCH);
+    const interrupted = due.filter((site) => needsAuthRecovery(state.sites[site.domain]));
+    const other = due.filter((site) => !needsAuthRecovery(state.sites[site.domain]));
+    const selected = [...interrupted, ...other].slice(0, BATCH);
     const pass = await startPass(run, options, state, selected);
     result = pass.result;
     result.pending = due.length - selected.length;
@@ -351,6 +379,7 @@ export async function syncMainwp(run: MainwpRun, options: WpOptions = {}, cleanu
 }
 
 async function visit(pass: Pass, site: WpSite): Promise<void> {
+  if (pass.recoveryFailed.has(site.domain)) return;
   if (Date.now() > pass.deadline - 1_000) {
     pass.result.pending++;
     return;
@@ -361,13 +390,7 @@ async function visit(pass: Pass, site: WpSite): Promise<void> {
   };
   pass.state.sites[site.domain] = record;
   try {
-    if (record.snapshot && record.phase && record.phase !== "restored") {
-      await restoreAuth(pass, site, record);
-      if (record.phase !== "cleanup") {
-        record.phase = "restored";
-        saveMainwpState(pass.run.statePath, pass.state);
-      }
-    }
+    if (record.snapshot && record.phase === "cleanup") await restoreAuth(pass, site, record);
     if (pass.dashboardError) throw new Error(pass.dashboardError);
     const status = await childStatus(pass, site);
     if (pass.state.cleanup) await cleanupSite(pass, site, record, status);
@@ -560,7 +583,7 @@ export async function configureMainwp(run: MainwpRun, options: WpOptions, enable
 export function requireMainwpSettled(path: string): void {
   if (!existsSync(path)) return;
   const sites = Object.values(readMainwpState(path).sites);
-  if (sites.some((record) => record.phase === "install" || record.phase === "connect")) {
+  if (sites.some(needsAuthRecovery)) {
     throw new Error("a MainWP enrollment was interrupted; run clp-addons repair wp-login to restore its temporary setting, then retry");
   }
 }
