@@ -30,6 +30,11 @@ systemd units, its manager handler, its privileged action and any repair upkeep
 -- and the catalog derives its config file and state directory from its name, so
 a definition cannot name a file provisioning will not look for.
 
+Repair upkeep runs inside repair's operation lock, so it stays short. Work that
+waits on the network or on a site's own code is queued with `queueAddonPass`
+instead: a transient unit that runs `clp-addons action <addon> <verb>` under a
+runtime bound and is skipped while the previous pass is still running.
+
 The catalog is an explicit list, not filesystem discovery. This ships as one
 binary; a registry that depended on what happened to be on disk could be wrong.
 
