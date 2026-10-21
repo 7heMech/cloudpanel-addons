@@ -7,6 +7,7 @@ import {
   type MaintenanceNginxStatus, type NginxProxyStatus, inspect, inspectNginxMaintenance, inspectNginxProxy,
 } from "./inject";
 import { CLI_BIN, MANAGER_UNIT, SOCKET_PATH, mountPath } from "./paths";
+import { inspectPhpGuard } from "./php-guard";
 import { unitActive, unitPid } from "./provision";
 import { installedInjections } from "./reconcile";
 import { CLI_VERSION } from "./release";
@@ -24,8 +25,15 @@ function nginxStatus(status: NginxProxyStatus): string {
 
 function maintenanceNginxStatus(status: MaintenanceNginxStatus): string {
   if (!existsSync(ADDONS.maintenance!.configFile)) return "Not enabled";
-  if (status.state === "ok") return statusValue("Global Check Injected & Verified ✓", true);
+  if (status.state === "ok") return statusValue("Site Checks Injected & Verified ✓", true);
   return statusValue(status.detail ?? "Needs repair", false);
+}
+
+function phpGuardStatus(): string {
+  const { guarded, unguarded } = inspectPhpGuard();
+  if (guarded.length === 0 && unguarded.length === 0) return "No PHP-FPM found";
+  if (unguarded.length === 0) return statusValue(`upload_progress Off on ${guarded.join(", ")} ✓`, true);
+  return statusValue(`missing on ${unguarded.join(", ")}; run repair`, false);
 }
 
 export function anchorStatus(): string {
@@ -77,6 +85,7 @@ export async function cmdStatus(): Promise<void> {
   log.plain(`   • Nginx       ${nginxStatus(inspectNginxProxy())}`);
   log.plain(`   • Maintenance ${maintenanceNginxStatus(inspectNginxMaintenance())}`);
   log.plain(`   • Anchors     ${anchorStatus()}`);
+  log.plain(`   • PHP guard   ${phpGuardStatus()}`);
   log.plain();
   log.plain(" Installed Addons");
   log.plain("   NAME       ROUTE              ACTION        STATE");

@@ -12,6 +12,7 @@ import {
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
   SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH,
 } from "./paths";
+import { MAINTENANCE_INCLUDE_PATH } from "./maintenance-vhosts";
 import { ADDONS, ADDON_NAMES, templateWatchPaths, type AddonSpec } from "./addon-catalog";
 import { findMasterVhost, panelVhostWatchPath } from "./inject";
 import { panelUserUid } from "../lib/sso-auth";
@@ -802,14 +803,17 @@ WantedBy=paths.target
 
 /**
  * Everything the watcher's fast repair reconciles: Twig anchors, the panel
- * vhost, global Nginx settings, and CloudPanel's Cloudflare range list. Watch
- * both the range file for in-place writes and its directory for atomic
- * replacement; either change requires regenerating the maintenance IP map.
+ * vhost, site vhosts, global settings, and Cloudflare ranges. The service's
+ * delay lets CloudPanel commit a new site's row after creating its vhost.
+ * Watch the range directory for atomic replacements of the IP list.
  */
 function reconcileWatchPaths(): string[] {
   const vhost = panelVhostWatchPath();
-  return [...templateWatchPaths(), ...(vhost ? [vhost] : []), NGINX_GLOBAL_SETTINGS,
-    CLOUDFLARE_IPS_PATH, dirname(CLOUDFLARE_IPS_PATH)];
+  return [
+    ...templateWatchPaths(), ...(vhost ? [vhost] : []), DISTRO_NGINX_SITES_DIR,
+    NGINX_GLOBAL_SETTINGS, MAINTENANCE_INCLUDE_PATH,
+    CLOUDFLARE_IPS_PATH, dirname(CLOUDFLARE_IPS_PATH),
+  ];
 }
 
 /**
