@@ -55,7 +55,10 @@ native basic-auth IP allowlist. The root action rejects that operation for
 named non-administrator requests, preserves the site's credentials, and updates
 only the native allowlist and a trusted generated vhost, validating and reloading
 Nginx with rollback on failure through the same vhost machinery as Cloudflare IP
-Access. Minting runs before the basic-auth database transaction, and maintenance
+Access. Extra access rules and unknown includes in the affected authentication
+scope are refused, including CloudPanel's Cloudflare range include, so adding
+`satisfy any` cannot turn an existing access rule into a public auth bypass.
+Minting runs before the basic-auth database transaction, and maintenance
 bypasses run after it commits. The shared HTTP IP reader normalizes mapped IPv4
 hosts before either gate uses the request address; native basic-auth allowlist
 updates normalize mapped single hosts while preserving CIDRs. Consent to a

@@ -594,6 +594,33 @@ test("only complete generated basic-auth lines can be rewritten", async () => {
   }
 });
 
+test("custom access rules cannot become public access when satisfy any is added", async () => {
+  const original = seedBasicAuth();
+  const path = join(root, "vhosts", "shop.example.com.conf");
+  for (const extra of [
+    "allow all;", "deny all;", "satisfy all;",
+    "include /etc/nginx/cloudflare/ips;", "include /etc/nginx/custom-access.conf;",
+    "location /custom { allow all; }", "location /custom { include /etc/nginx/custom-access.conf; }",
+    'location /custom { auth_basic "Custom"; }',
+  ]) {
+    const customized = original.replace('  auth_basic "Restricted Area";', `${extra}\n  auth_basic "Restricted Area";`);
+    writeFileSync(path, customized);
+    await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand })).rejects.toThrow("customized or ambiguous");
+    expect(basicAuthIps()).toBeNull();
+    expect(readFileSync(path, "utf8")).toBe(customized);
+  }
+});
+
+test("quoted and commented access words and the native maintenance include are preserved", async () => {
+  const original = seedBasicAuth();
+  const path = join(root, "vhosts", "shop.example.com.conf");
+  const prefix = '# allow all; {\n  add_header X-Note "allow all; {";\n  include /etc/nginx/clp-addons-maintenance.conf;\n';
+  writeFileSync(path, original.replace('  auth_basic "Restricted Area";', `${prefix}  auth_basic "Restricted Area";`));
+  await act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand });
+  expect(basicAuthIps()).toBe("203.0.113.9");
+  expect(readFileSync(path, "utf8")).toContain(prefix);
+});
+
 test("disabled basic-auth directives accept whitespace without looking like another active block", async () => {
   const original = seedBasicAuth();
   const path = join(root, "vhosts", "shop.example.com.conf");

@@ -139,12 +139,12 @@ class NginxTransaction {
   }
 
   restore(failures: string[]): boolean {
+    failures.push(...restoreVhosts(this.written));
     if (this.db && this.began) {
       try { this.db.exec("ROLLBACK;"); }
       catch (error) { failures.push(`database transaction: ${errorMessage(error)}`); }
     }
     if (!this.written.length) return false;
-    failures.push(...restoreVhosts(this.written));
     if (this.options.reload === false) return false;
     try {
       const restored = this.command(this.paths.nginx, ["-t"]);

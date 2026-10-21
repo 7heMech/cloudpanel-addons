@@ -105,7 +105,12 @@ Existing allowances still permit their ordinary sign-ins and ownership checks.
 
 Acceptance updates the native allowlist and exactly one complete generated
 `satisfy any`, `allow`, `deny all` and basic-auth block. Customized or ambiguous
-blocks are refused with a pointer to the native Security page. Only a regular,
+blocks are refused with a pointer to the native Security page. Extra access
+rules in that server or its protected locations, and unknown includes, are
+refused because adding `satisfy any` could make them bypass authentication.
+This also refuses CloudPanel's Cloudflare IP range include in the same server:
+otherwise every allowed edge could bypass basic auth. The parser is shared
+with maintenance in `cli/nginx-config.ts`. Only a regular,
 root-owned vhost that is not writable by other users can be replaced. Its mode
 and ownership survive atomic replacement; credentials and other content remain.
 
@@ -116,8 +121,9 @@ Cloudflare IP Access and maintenance in `cli/nginx-transaction.ts`, validates
 and reloads before commit. Each Nginx command is killed after two seconds, and
 each reload waits at most three more seconds for new workers to accept requests
 and old workers to stop accepting, using `/run/nginx.pid` and `/proc`.
-Failure restores the database and vhost, validates them, and, if reload was
-attempted, waits for the restored generation. Recovery errors accompany the
+Failure restores the vhost before releasing SQLite's write lock, then rolls
+back the database and validates the files. If reload was
+attempted, it waits for the restored generation. Recovery errors accompany the
 original failure. These waits, including maintenance's database and lock waits,
 leave recovery time inside the gateway's 60-second deadline.
 

@@ -14,8 +14,8 @@ Every affected vhost must be a trusted regular file. The trust checks, owned
 atomic replacement, restoration and recovery error collection are shared with
 WordPress sign-in in `cli/nginx-transaction.ts`. The action stages all
 changes, runs `nginx -t`, reloads Nginx once, and commits the database only when
-the reload succeeds. On failure it rolls back the database and restores the
-original vhosts. If any recovery step fails, the action attempts the remaining
+the reload succeeds. On failure it restores the original vhosts while holding
+the SQLite write lock, then rolls back the database. If any recovery step fails, the action attempts the remaining
 steps and reports each failure with the original operation error.
 
 ## Dashboard

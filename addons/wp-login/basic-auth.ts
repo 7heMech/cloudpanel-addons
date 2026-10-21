@@ -1,3 +1,4 @@
+import { nginxServers, type NginxBlock } from "../../cli/nginx-config";
 import { Database } from "bun:sqlite";
 import { readFileSync } from "node:fs";
 import { BlockList, isIP } from "node:net";
@@ -89,10 +90,36 @@ export function basicAuthVhost(content: string, domain: string, previous: string
   ];
   const pattern = new RegExp(block.map((line) => `^[ \\t]*${escaped(line)}[ \\t]*$`).join("\\r?\\n"), "gm");
   const matches = [...content.matchAll(pattern)];
-  const authLines = [...content.matchAll(/^[ \t]*auth_basic\s+([^;]+);/gm)]
-    .filter((match) => match[1]!.trim() !== "off");
-  if (matches.length !== 1 || authLines.length !== 1) {
-    failAction("the site's CloudPanel basic-auth block is missing, customized or ambiguous; use Security → Basic Authentication");
+  const refuse = () => failAction("the site's CloudPanel basic-auth block is missing, customized or ambiguous; use Security → Basic Authentication");
+  if (matches.length !== 1) refuse();
+  const match = matches[0]!;
+  const blockStart = match.index;
+  const blockEnd = blockStart + match[0].length;
+  let servers: NginxBlock[];
+  try { servers = nginxServers(content); }
+  catch { return refuse(); }
+  const server = servers.find((server) => server.open <= blockStart && server.end >= blockEnd);
+  if (!server) return refuse();
+  const scopes = [...servers];
+  for (const scope of scopes) scopes.push(...scope.children);
+  const authRules = scopes.flatMap((scope) => scope.directives)
+    .filter(({ words }) => words[0] === "auth_basic" && words[1] !== "off");
+  if (authRules.length !== 1) refuse();
+  if (!server.directives.some(({ words, start }) => words[0] === "auth_basic" && start >= blockStart && start < blockEnd)) refuse();
+  const accessRules = new Set(["satisfy", "allow", "deny", "auth_basic", "auth_basic_user_file"]);
+  const safeIncludes = new Set([
+    "/etc/nginx/global_settings", "/etc/nginx/clp-addons-maintenance.conf",
+    "fastcgi_params", "/etc/nginx/fastcgi_params",
+  ]);
+  const affected = [server];
+  for (const scope of affected) {
+    affected.push(...scope.children);
+    const authOff = scope.directives.some(({ words }) => words[0] === "auth_basic" && words[1] === "off");
+    if (scope !== server && authOff) continue;
+    for (const { words, start, end } of scope.directives) {
+      if (accessRules.has(words[0]!) && (start < blockStart || end > blockEnd)) refuse();
+      if (words[0] === "include" && !safeIncludes.has(words[1]!)) refuse();
+    }
   }
   const replacement = ["satisfy any;", ...next.map((ip) => `allow ${ip};`), "deny all;", ...block.slice(-2)]
     .map((line) => `  ${line}`).join("\n");

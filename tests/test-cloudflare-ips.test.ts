@@ -8,6 +8,7 @@ import {
 } from "../addons/cloudflare-ips/action";
 import { CLIENT_JS, dashboardView, layout } from "../addons/cloudflare-ips/app/views";
 import type { CommandResult } from "../cli/action-common";
+import { trustedVhost, withNginxTransaction } from "../cli/nginx-transaction";
 
 const realUid = process.getuid?.() ?? 0;
 const originalGetuid = process.getuid;
@@ -525,6 +526,44 @@ test("failed Nginx validation rolls the database and vhost back", async () => {
     expect(readFileSync(join(f.paths.nginxVhostDir, "rollback.example.test.conf"), "utf8")).toBe(original);
   } finally {
     try { f.db.close(); } catch {}
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("vhost recovery completes before releasing the database lock to another addon", () => {
+  const f = fixture();
+  let second: Database | undefined;
+  try {
+    addSite(f.db, f.paths, "concurrent.example.test", "concurrent");
+    const path = join(f.paths.nginxVhostDir, "concurrent.example.test.conf");
+    second = new Database(f.paths.panelDb);
+    const execute = f.db.exec.bind(f.db);
+    f.db.exec = (sql, ...bindings) => {
+      const result = execute(sql, ...bindings);
+      if (sql === "ROLLBACK;") {
+        withNginxTransaction(second!, f.paths, successCommand, (changes) => {
+          const backup = trustedVhost(path, realUid);
+          changes.push({ backup, content: transformVhost(backup.content, "concurrent", true) });
+          second!.exec("UPDATE site SET allow_traffic_from_cloudflare_only = 1;");
+        });
+      }
+      return result;
+    };
+    let checks = 0;
+    expect(() => withNginxTransaction(f.db, f.paths, () => checks++ === 0
+      ? { ok: false, stdout: "", stderr: "initial validation failed" } : successCommand(), (changes) => {
+      const backup = trustedVhost(path, realUid);
+      changes.push({ backup, content: `${backup.content}\n# failed WordPress change\n` });
+    })).toThrow("initial validation failed");
+    expect(second.query<{ enabled: number }, []>(
+      "SELECT allow_traffic_from_cloudflare_only AS enabled FROM site;",
+    ).get()!.enabled).toBe(1);
+    const content = readFileSync(path, "utf8");
+    expect(content).toContain("include /etc/nginx/cloudflare/ips;");
+    expect(content).not.toContain("failed WordPress change");
+  } finally {
+    second?.close();
+    f.db.close();
     rmSync(f.root, { recursive: true, force: true });
   }
 });
