@@ -204,7 +204,11 @@ one path of one of the two php2shell CVEs, does nothing for the OOM corruption
 in CVE-2026-109618, and the real remedy is patched PHP packages -- a backported
 build for the end-of-life 8.1 the panel runs. The drop-in is written on install,
 update and repair and removed with the last addon; each changed FPM is config-
-tested and reloaded, the panel FPM with it. `memory_limit` is left to PHP
+tested and reloaded, the panel FPM with it. Config-test and reload failures
+propagate to the caller. Rollback attempts every written file independently;
+when all files are restored, it reloads every service whose reload was attempted,
+including the failing service. Recovery failures are reported alongside the
+original error. `memory_limit` is left to PHP
 Resources and the operator; the project does not set the advisory's incomplete
 `memory_limit=-1` workaround.
 

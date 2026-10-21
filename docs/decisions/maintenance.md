@@ -13,7 +13,8 @@ per-site setting share one row in each mobile site card.
 The global override is a card of its own labelled "Global maintenance", not a
 switch in the table header: it decides what visitors get for every site at once
 and changes nothing a site has saved. Its confirmation names the site count and
-how many have maintenance saved off. While it is on, every site serves 503 and a
+how many have maintenance saved off. While it is on, sites covered by the Nginx
+check serve 503 and a
 site whose own setting is off, or could not be read, shows a "Maintenance
 (Global)" badge and is counted as in maintenance; turning it off returns each
 site to its saved setting. Turning it on or off purges Varnish
@@ -58,7 +59,8 @@ alone. A site whose vhost is untrusted or has no single serving server is
 skipped, so it cannot block the others, and `clp-addons status` names it. Older
 templates retain their existing header settings. Nginx checks
 `/var/lib/clp-addons/maintenance/_global/on` and
-`/var/lib/clp-addons/maintenance/$server_name/on` on every request and clears
+`/var/lib/clp-addons/maintenance/$server_name/on` on requests reaching that server
+block and clears
 the maintenance decision when a matching `bypass_$clp_maintenance_ip` file
 exists in either the global or site's directory.
 CloudPanel writes the database domain first in `server_name`, so aliases share
@@ -123,7 +125,8 @@ use the same transaction helpers as Cloudflare IPs: an immediate SQLite
 transaction, edits to trusted regular vhosts with preserved ownership and
 permissions, then `nginx -t` and a distro Nginx reload before commit. Failure rolls back the
 site rows and changed Nginx files; a failed reload also attempts to reload the
-restored configuration. Missing or ambiguous serving blocks stop reconciliation.
+restored configuration. Missing or ambiguous serving blocks leave that site
+unchanged and are reported as uncovered by status.
 
 Install, enable, repair and the periodic repair timer reconcile these files.
 The existing path watcher also watches the site vhost directory and standalone

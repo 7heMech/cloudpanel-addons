@@ -90,6 +90,75 @@ test("uninstall removes the drop-in everywhere", () => {
   expect(inspectPhpGuard(b.options)).toEqual({ guarded: [], unguarded: ["8.1", "8.3"] });
 });
 
+for (const failedUnit of ["php8.3-fpm.service", "clp-php-fpm.service"]) {
+  test(`a failed ${failedUnit} reload restores files and reloads attempted services`, () => {
+    const units = ["php8.1-fpm.service", "php8.3-fpm.service", "clp-php-fpm.service"];
+    const b = box(["8.1", "8.3"], [], new Set(units));
+    const original = "; previous configuration\nsession.upload_progress.enabled = On\n";
+    writeFileSync(b.dropIn("8.1"), original);
+    let failed = false;
+    b.options.run = (cmd, args) => {
+      b.commands.push(`${cmd} ${args.join(" ")}`);
+      if (failed && cmd === "systemctl") {
+        expect(readFileSync(b.dropIn("8.1"), "utf8")).toBe(original);
+        expect(existsSync(b.dropIn("8.3"))).toBe(false);
+      }
+      if (!failed && cmd === "systemctl" && args[1] === failedUnit) {
+        failed = true;
+        return { ok: false, out: "reload rejected" };
+      }
+      return { ok: true, out: "" };
+    };
+    expect(() => reconcilePhpSessionGuard(true, b.options)).toThrow(`${failedUnit} reload failed: reload rejected`);
+    const attempted = units.slice(0, units.indexOf(failedUnit) + 1).map((unit) => `systemctl reload ${unit}`);
+    expect(b.commands.filter((c) => c.startsWith("systemctl"))).toEqual([...attempted, ...attempted]);
+    expect(inspectPhpGuard(b.options).unguarded).toEqual(["8.1", "8.3"]);
+  });
+}
+
+test("rollback continues after a file restoration fails and preserves the operation error", () => {
+  const b = box(["8.1", "8.3"]);
+  b.options.run = () => {
+    rmSync(b.dropIn("8.1"));
+    mkdirSync(b.dropIn("8.1"));
+    return { ok: false, out: "bad FPM config" };
+  };
+  let failure: Error | undefined;
+  try { reconcilePhpSessionGuard(true, b.options); }
+  catch (error) { failure = error as Error; }
+  expect(failure?.message).toContain("php-fpm8.1 rejected the config: bad FPM config");
+  expect(failure?.message).toContain("PHP guard rollback failed");
+  expect(failure?.message).toContain(b.dropIn("8.1"));
+  expect(existsSync(b.dropIn("8.3"))).toBe(false);
+});
+
+test("rollback reload failures are reported without preventing later recovery reloads", () => {
+  const b = box(["8.1", "8.3"], [], new Set(["php8.1-fpm.service", "php8.3-fpm.service", "clp-php-fpm.service"]));
+  let recovering = false;
+  b.options.run = (cmd, args) => {
+    b.commands.push(`${cmd} ${args.join(" ")}`);
+    if (cmd === "systemctl" && args[1] === "clp-php-fpm.service") {
+      if (!recovering) {
+        recovering = true;
+        return { ok: false, out: "panel reload rejected" };
+      }
+    } else if (recovering && args[1] === "php8.1-fpm.service") {
+      return { ok: false, out: "rollback reload rejected" };
+    }
+    return { ok: true, out: "" };
+  };
+  let failure: Error | undefined;
+  try { reconcilePhpSessionGuard(true, b.options); }
+  catch (error) { failure = error as Error; }
+  expect(failure?.message).toContain("panel reload rejected");
+  expect(failure?.message).toContain("PHP guard rollback failed: php8.1-fpm.service reload failed: rollback reload rejected");
+  expect(b.commands.slice(-3)).toEqual([
+    "systemctl reload php8.1-fpm.service", "systemctl reload php8.3-fpm.service", "systemctl reload clp-php-fpm.service",
+  ]);
+  expect(existsSync(b.dropIn("8.1"))).toBe(false);
+  expect(existsSync(b.dropIn("8.3"))).toBe(false);
+});
+
 test("a symlinked drop-in is distrusted and overwritten with a real file", () => {
   const b = box(["8.1"]);
   const target = b.dropIn("8.1");

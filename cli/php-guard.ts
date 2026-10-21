@@ -12,6 +12,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, rmSync } from "node:f
 import { join } from "node:path";
 import { writeFileAtomic } from "../lib/atomic-write";
 import { PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_ROOT } from "./paths";
+import { errorMessage, withRecoveryFailures } from "./nginx-transaction";
 import { unitActive } from "./provision";
 import { log, tryRun } from "./util";
 
@@ -95,8 +96,8 @@ export function inspectPhpGuard(options: PhpGuardOptions = {}): PhpGuardStatus {
 /**
  * Installs or removes the drop-in on every PHP-FPM, testing and reloading each
  * one it changed. Returns how many files changed. Reloads the panel's own FPM
- * too, since it scans the installed 8.1 `conf.d`. On a failed config test the
- * written files are rolled back and the error is rethrown.
+ * too, since it scans the installed 8.1 `conf.d`. Failures restore written files
+ * and reload services that may have picked up the change.
  */
 export function reconcilePhpSessionGuard(install: boolean, options: PhpGuardOptions = {}): number {
   const paths = { ...DEFAULT_PHP_GUARD_PATHS, ...options.paths };
@@ -112,33 +113,48 @@ export function reconcilePhpSessionGuard(install: boolean, options: PhpGuardOpti
 
   const write = (path: string, content: string | null) =>
     content === null ? rmSync(path, { force: true }) : writeFileAtomic(path, content, { mode: 0o644 });
+  const written: typeof changes = [];
+  const attemptedReloads: string[] = [];
+  const reload = (unit: string) => {
+    const result = run("systemctl", ["reload", unit]);
+    if (!result.ok) throw new Error(`${unit} reload failed: ${result.out}`);
+  };
 
   try {
-    for (const change of changes) write(change.path, change.after);
+    for (const change of changes) {
+      written.push(change);
+      write(change.path, change.after);
+    }
     const reloadable = [...new Set(changes.filter((change) => change.present).map((change) => change.version))];
     for (const version of reloadable) {
       const test = run(join(paths.fpmBinDir, `php-fpm${version}`), ["-t"]);
       if (!test.ok) throw new Error(`php-fpm${version} rejected the config: ${test.out}`);
     }
-    for (const version of reloadable) {
-      if (isActive(`php${version}-fpm.service`)) run("systemctl", ["reload", `php${version}-fpm.service`]);
+    for (const unit of [...reloadable.map((version) => `php${version}-fpm.service`), paths.panelFpmUnit]) {
+      if (!isActive(unit)) continue;
+      attemptedReloads.push(unit);
+      reload(unit);
     }
-    if (isActive(paths.panelFpmUnit)) run("systemctl", ["reload", paths.panelFpmUnit]);
   } catch (error) {
-    for (const change of changes) write(change.path, change.before);
-    throw error;
+    const failures: string[] = [];
+    for (const change of written) {
+      try { write(change.path, change.before); }
+      catch (restoreError) { failures.push(`${change.path}: ${errorMessage(restoreError)}`); }
+    }
+    if (failures.length === 0) {
+      for (const unit of attemptedReloads) {
+        try { reload(unit); }
+        catch (reloadError) { failures.push(errorMessage(reloadError)); }
+      }
+    } else if (attemptedReloads.length) failures.push("rollback reloads skipped because file restoration failed");
+    throw withRecoveryFailures(error, "PHP guard rollback failed", failures);
   }
   return changes.length;
 }
 
-/** Wrapper used by the platform reconcile paths: never aborts the caller, reports what it did. */
 export function reconcilePhpGuard(install: boolean, quiet = false): void {
-  try {
-    const changed = reconcilePhpSessionGuard(install);
-    if (changed > 0 && !quiet) {
-      log.ok(install ? `PHP upload-progress disabled (${changed} updated)` : `PHP upload-progress guard removed (${changed} updated)`);
-    }
-  } catch (error) {
-    log.err(`PHP upload-progress guard failed: ${error instanceof Error ? error.message : String(error)}`);
+  const changed = reconcilePhpSessionGuard(install);
+  if (changed > 0 && !quiet) {
+    log.ok(install ? `PHP upload-progress disabled (${changed} updated)` : `PHP upload-progress guard removed (${changed} updated)`);
   }
 }
