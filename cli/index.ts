@@ -58,7 +58,10 @@ function usage(): void {
   clp-addons action stager <verb> [options]
   clp-addons action maintenance <verb> --domain=<domain>
   clp-addons action git <verb> [--domain=<domain>] [--job=<job>]
-  clp-addons action manager <enable|disable|update|job|watch-job> [--addon=<addon>] [--id=<job>]
+  clp-addons action php-resources <list|site|save-category|delete-category|assign|set-default|reconcile> [--domain=<domain>]
+  clp-addons action panel-tweaks <state|set-tweaks|scan|scan-stream>
+  clp-addons action wp-login <sites|sign-in|remove> [--domain=<domain>]
+  clp-addons action manager <enable|disable|update|reconcile|job|watch-job> [--addon=<addon>] [--id=<job>]
   clp-addons action terminal session --domain=<domain> --cols=<n> --rows=<n>   (through the gateway only)
   clp-addons action auth (session id on bounded stdin)
   clp-addons serve
@@ -100,12 +103,16 @@ async function cmdMaintenance(argv: string[]): Promise<void> {
     const result = await executeMaintenanceAction([verb, `--domain=${rawDomain}`]) as {
       domain: string; enabled: boolean; customTemplate: boolean; bypasses: string[];
     };
+    const global = await executeMaintenanceAction(["global-status"]) as { global: boolean; bypasses: string[] };
     if (operation === "status") {
-      log.plain(`${result.domain}: ${result.enabled ? "maintenance (503)" : "live"}`);
+      const state = result.enabled ? "maintenance (503)" : global.global ? "maintenance (503, global)" : "live";
+      log.plain(`${result.domain}: ${state}`);
       log.plain(`Template: ${result.customTemplate ? "custom" : "default"}`);
       log.plain(`IP bypasses: ${result.bypasses.length ? result.bypasses.join(", ") : "none"}`);
+      if (global.bypasses.length) log.plain(`Global IP bypasses: ${global.bypasses.join(", ")}`);
     } else {
       log.ok(`${result.domain}: maintenance mode ${result.enabled ? "enabled" : "disabled"}`);
+      if (!result.enabled && global.global) log.warn("global maintenance is on, so the site still serves 503");
     }
   } catch (error) {
     fatal(error instanceof Error ? error.message : String(error));

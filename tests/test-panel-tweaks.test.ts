@@ -621,7 +621,7 @@ test("the applications CloudPanel records are named the way they are spelled", (
   expect(applicationLabel("", "static")).toBe("static");
 });
 
-test("a switch is saved, and only the login page's one asks for the templates again", async () => {
+test("data switches take effect at request time and template switches reconcile", async () => {
   const sites = await act<SetTweaksResult>(["set-tweaks"], { input: JSON.stringify({ diskUsage: true }) });
   expect(sites.tweaks.diskUsage).toBe(true);
   expect(sites.reinject).toBe(false);
@@ -630,6 +630,20 @@ test("a switch is saved, and only the login page's one asks for the templates ag
   expect(theme.reinject).toBe(true);
   // The one that moved is saved beside the one that moved before it.
   expect(theme.tweaks).toEqual({ ...DEFAULT_TWEAKS, diskUsage: true, deviceTheme: false });
+});
+
+test("automatic SSL is opt-in, persisted independently of the site table, and reconciled", async () => {
+  expect((await act<PanelTweaksState>(["state"])).tweaks.autoSsl).toBe(false);
+  const on = await act<SetTweaksResult>(["set-tweaks"], {
+    input: JSON.stringify({ autoSsl: true, sitesTable: false }),
+  });
+  expect(on.reinject).toBe(true);
+  expect((await act<PanelTweaksState>(["state"])).tweaks.autoSsl).toBe(true);
+  const unchanged = await act<SetTweaksResult>(["set-tweaks"], { input: '{"autoSsl":true}' });
+  expect(unchanged.reinject).toBe(false);
+  const off = await act<SetTweaksResult>(["set-tweaks"], { input: '{"autoSsl":false}' });
+  expect(off.reinject).toBe(true);
+  await expect(act(["set-tweaks"], { input: '{"autoSsl":"yes"}' })).rejects.toThrow("must be true or false");
 });
 
 test("measured sizes cannot outlive the sites table it belongs to", async () => {

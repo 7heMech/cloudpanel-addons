@@ -6,6 +6,7 @@ import {
   rollbackUpdate,
 } from "./artifacts";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
+import { reconcilePhpGuard } from "./php-guard";
 import { type AddonSpec } from "./addon-catalog";
 import { operationLockEnv, withOperationLock } from "./operation-lock";
 import { CLI_BIN, MANAGER_UNIT } from "./paths";
@@ -37,6 +38,7 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   reconcileAnchors(false);
   if (!reconcileMaintenanceNginx(false)) log.warn("Nginx maintenance check needs manual repair");
   if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
+  reconcilePhpGuard(true);
   startUnits({ beforeManagerRestart });
   return specs;
 }

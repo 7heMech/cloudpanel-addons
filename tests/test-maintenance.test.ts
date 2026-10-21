@@ -147,15 +147,19 @@ test("global-settings reconciliation is idempotent, drift-gated, and reversible"
   const stateDir = join(root, "state");
   const geoPath = join(root, "sites-enabled", "00-clp-addons-maintenance-client-ip.conf");
   const cloudflareIpsPath = join(root, "cloudflare", "ips");
+  const paths = {
+    settingsPath, stateDir, geoPath, cloudflareIpsPath, panelDb: null,
+    includePath: join(root, "maintenance.conf"), vhostUid: process.getuid?.() ?? 0,
+  };
   const original = "client_max_body_size 128m;";
-  writeFileSync(settingsPath, original);
+  writeFileSync(settingsPath, original, { mode: 0o644 });
   mkdirSync(join(root, "cloudflare"));
   writeFileSync(cloudflareIpsPath, "allow 173.245.48.0/20;\nallow 2400:cb00::/32;\ndeny all;\n");
   try {
-    const installed = reconcileNginxMaintenance({ settingsPath, stateDir, geoPath, cloudflareIpsPath, reload: false });
+    const installed = reconcileNginxMaintenance({ ...paths, reload: false });
     expect(installed).toMatchObject({ state: "ok", changed: true });
     expect(readFileSync(settingsPath, "utf8")).toContain(NGINX_MAINTENANCE_BLOCK);
-    expect(inspectNginxMaintenance({ settingsPath, stateDir, geoPath, cloudflareIpsPath }).state).toBe("ok");
+    expect(inspectNginxMaintenance(paths).state).toBe("ok");
     const geo = readFileSync(geoPath, "utf8");
     expect(geo).toContain("173.245.48.0/20 1;");
     expect(geo).toContain("2400:cb00::/32 1;");
@@ -164,18 +168,18 @@ test("global-settings reconciliation is idempotent, drift-gated, and reversible"
     expect(geo).toContain("default $clp_maintenance_client;");
     expect(geo).toContain("~^1:.+$ $clp_cf_header_ip;");
     writeFileSync(cloudflareIpsPath, "allow 173.245.48.0/20;\nallow 2400:cb00::/32;\nallow 104.16.0.0/13;\ndeny all;\n");
-    expect(inspectNginxMaintenance({ settingsPath, stateDir, geoPath, cloudflareIpsPath }).state).toBe("stale-content");
-    expect(reconcileNginxMaintenance({ settingsPath, stateDir, geoPath, cloudflareIpsPath, reload: false }).changed).toBe(true);
+    expect(inspectNginxMaintenance(paths).state).toBe("stale-content");
+    expect(reconcileNginxMaintenance({ ...paths, reload: false }).changed).toBe(true);
     expect(readFileSync(geoPath, "utf8")).toContain("104.16.0.0/13 1;");
 
-    expect(reconcileNginxMaintenance({ settingsPath, stateDir, geoPath, cloudflareIpsPath, reload: false }).changed).toBe(false);
+    expect(reconcileNginxMaintenance({ ...paths, reload: false }).changed).toBe(false);
     writeFileSync(settingsPath, readFileSync(settingsPath, "utf8").replace(original, `${original}\nserver_tokens off;`));
-    const drift = reconcileNginxMaintenance({ settingsPath, stateDir, geoPath, cloudflareIpsPath, reload: false });
+    const drift = reconcileNginxMaintenance({ ...paths, reload: false });
     expect(drift.state).toBe("upstream-changed");
     expect(drift.changed).toBe(false);
 
     writeFileSync(settingsPath, `${original}\n${NGINX_MAINTENANCE_BLOCK}\n`);
-    const removed = reconcileNginxMaintenance({ settingsPath, stateDir, geoPath, cloudflareIpsPath, enabled: false, reload: false });
+    const removed = reconcileNginxMaintenance({ ...paths, enabled: false, reload: false });
     expect(removed).toMatchObject({ state: "missing", changed: true });
     expect(readFileSync(settingsPath, "utf8")).toBe(original);
     expect(existsSync(geoPath)).toBe(false);
@@ -192,13 +196,13 @@ test("global-settings reconciliation never adopts an unverified marked block", (
   const unowned = "client_max_body_size 128m;\n# clp-addons:maintenance:start\nreturn 503;\n# clp-addons:maintenance:end\n";
   writeFileSync(settingsPath, unowned);
   try {
-    expect(reconcileNginxMaintenance({ settingsPath, stateDir, reload: false })).toMatchObject({
+    expect(reconcileNginxMaintenance({ settingsPath, stateDir, panelDb: null, reload: false })).toMatchObject({
       state: "conflict", changed: false,
     });
-    expect(reconcileNginxMaintenance({ settingsPath, stateDir, enabled: false, reload: false })).toMatchObject({
+    expect(reconcileNginxMaintenance({ settingsPath, stateDir, panelDb: null, enabled: false, reload: false })).toMatchObject({
       state: "conflict", changed: false,
     });
-    expect(inspectNginxMaintenance({ settingsPath, stateDir }).state).toBe("conflict");
+    expect(inspectNginxMaintenance({ settingsPath, stateDir, panelDb: null }).state).toBe("conflict");
     expect(readFileSync(settingsPath, "utf8")).toBe(unowned);
     expect(existsSync(stateDir)).toBe(false);
   } finally {

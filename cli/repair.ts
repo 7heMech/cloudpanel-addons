@@ -2,6 +2,7 @@
 
 import { installedAddons, resolveAddon, migrateAbsorbedAddons } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
+import { reconcilePhpGuard } from "./php-guard";
 import { runAddonMaintenance, runManagerMaintenance } from "./maintenance";
 import { withOperationLock } from "./operation-lock";
 import { CLOUDFLARE_RECONCILE_TIMER, MANAGER_UNIT, SMTP_RECONCILE_PATH, SYSTEMD_DIR } from "./paths";
@@ -34,7 +35,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     // unreachable in between. Both reconcilers no-op when nothing drifted, so
     // this stays cheap enough to run on every template write during an upgrade.
     reconcileAnchors(quiet);
-    if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; run repair after checking global_settings");
+    if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; run repair after checking site vhosts and global_settings");
     if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
     return;
   }
@@ -78,8 +79,9 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     if (all.some((spec) => spec.name === "smtp")) ensurePathWatching(SMTP_RECONCILE_PATH, quiet);
   }
   reconcileAnchors(quiet);
-  if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; run repair after checking global_settings");
+  if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; run repair after checking site vhosts and global_settings");
   if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
+  reconcilePhpGuard(true, quiet);
   // Runs after the master-vhost reconciliation above, not before: recovering
   // a carried-over vhost also does its own `nginx -t` before reloading, and
   // skips the reload if that check fails. Running prune first, while the
