@@ -5,6 +5,7 @@ import { DEFAULT_WP_LOGIN_PATHS } from "../addons/wp-login/action";
 import { withFileLockSync } from "./action-common";
 import { resolveAddon } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
+import { reconcilePhpGuard } from "./php-guard";
 import { withdrawWpLogin } from "./toggle";
 import { ADDONS, ADDON_NAMES, type AddonSpec } from "./addon-catalog";
 import { purgeTwigCache } from "./inject";
@@ -101,6 +102,7 @@ function uninstallContents(spec: AddonSpec, flags: Record<string, string | true>
   }
 
   reconcileNginx(true, false);
+  reconcilePhpGuard(false, true);
   stopUnits();
   rmSync(CLI_BIN, { force: true });
   rmSync(LIBEXEC_DIR, { recursive: true, force: true });

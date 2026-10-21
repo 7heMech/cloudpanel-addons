@@ -6,6 +6,7 @@ import { installedAddons, resolveAddon } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
 import { requireMainwpSettled } from "../addons/wp-login/mainwp";
 import { withFileLockSync } from "./action-common";
+import { reconcilePhpGuard } from "./php-guard";
 import { removeWpLogin, DEFAULT_WP_LOGIN_PATHS } from "../addons/wp-login/action";
 import { type AddonSpec } from "./addon-catalog";
 import { withOperationLock, withOperationLockSync } from "./operation-lock";
@@ -41,6 +42,7 @@ export function bootstrapProvision(specs: AddonSpec[]): void {
   if (!reconcileAnchors(false)) fatal("could not safely patch the required CloudPanel templates");
   if (!reconcileMaintenanceNginx(false)) fatal("could not safely inject the Nginx maintenance check");
   if (!reconcileNginx(false)) fatal("could not safely inject the CloudPanel Nginx proxy");
+  reconcilePhpGuard(true);
   startUnits();
 }
 

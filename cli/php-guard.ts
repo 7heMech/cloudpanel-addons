@@ -1,0 +1,160 @@
+// Platform PHP hardening, applied regardless of which addons are enabled.
+//
+// Session upload progress is one of the confirmed consumers of CVE-2026-109619
+// ("php2shell"), is on by default, and needs no session_start(); PHP's advisory
+// names disabling it as the administrative mitigation and recommends keeping it
+// off even after patching, as a hardly-used, hardly-tested feature. This writes
+// that setting on every installed PHP-FPM, the panel's end-of-life 8.1 included,
+// which upstream will not patch. It does not address CVE-2026-109618, whose only
+// real fix is patched PHP; see docs/decisions/security.md.
+
+import { existsSync, lstatSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { writeFileAtomic } from "../lib/atomic-write";
+import { PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_ROOT } from "./paths";
+import { errorMessage, withRecoveryFailures } from "./nginx-transaction";
+import { unitActive } from "./provision";
+import { log, tryRun } from "./util";
+
+const INI_NAME = "99-clp-addons-upload-progress.ini";
+const INI_BODY = "; Managed by clp-addons: CVE-2026-109619 session upload-progress mitigation\nsession.upload_progress.enabled = Off\n";
+const VERSION_RE = /^[0-9]+\.[0-9]+$/;
+
+export interface PhpGuardPaths {
+  phpRoot: string;
+  fpmBinDir: string;
+  panelFpmUnit: string;
+  /** The uid a drop-in must belong to for its contents to be trusted. */
+  rootUid: number;
+}
+
+export const DEFAULT_PHP_GUARD_PATHS: PhpGuardPaths = {
+  phpRoot: PHP_ROOT,
+  fpmBinDir: PHP_FPM_BIN_DIR,
+  panelFpmUnit: PANEL_FPM_UNIT,
+  rootUid: 0,
+};
+
+export interface PhpGuardOptions {
+  paths?: Partial<PhpGuardPaths>;
+  run?: (cmd: string, args: string[]) => { ok: boolean; out: string };
+  isActive?: (unit: string) => boolean;
+}
+
+interface FpmTarget {
+  version: string;
+  path: string;
+  /** False for a version whose FPM package was removed but whose conf.d stayed. */
+  present: boolean;
+}
+
+/** Every `<X.Y>/fpm/conf.d` present under the PHP root, with whether its FPM binary is installed. */
+function fpmTargets(paths: PhpGuardPaths): FpmTarget[] {
+  if (!existsSync(paths.phpRoot)) return [];
+  return readdirSync(paths.phpRoot)
+    .filter((version) => VERSION_RE.test(version) && existsSync(join(paths.phpRoot, version, "fpm", "conf.d")))
+    .sort()
+    .map((version) => ({
+      version,
+      path: join(paths.phpRoot, version, "fpm", "conf.d", INI_NAME),
+      present: existsSync(join(paths.fpmBinDir, `php-fpm${version}`)),
+    }));
+}
+
+/** Current drop-in contents, or null when absent; a symlink or untrusted file is treated as absent so it is overwritten. */
+function current(path: string, rootUid: number): string | null {
+  let info;
+  try {
+    info = lstatSync(path);
+  } catch {
+    return null;
+  }
+  // Owner and mode, not content alone: a drop-in left group- or world-writable,
+  // or replaced by a symlink, is one the next reconcile should rewrite to 0644.
+  if (!info.isFile() || info.uid !== rootUid || (info.mode & 0o022) !== 0) return null;
+  return readFileSync(path, "utf8");
+}
+
+export interface PhpGuardStatus {
+  /** Versions whose FPM binary is installed and whose drop-in is in place. */
+  guarded: string[];
+  /** Installed-FPM versions still missing the drop-in. */
+  unguarded: string[];
+}
+
+export function inspectPhpGuard(options: PhpGuardOptions = {}): PhpGuardStatus {
+  const paths = { ...DEFAULT_PHP_GUARD_PATHS, ...options.paths };
+  const guarded: string[] = [];
+  const unguarded: string[] = [];
+  for (const target of fpmTargets(paths)) {
+    if (!target.present) continue;
+    (current(target.path, paths.rootUid) === INI_BODY ? guarded : unguarded).push(target.version);
+  }
+  return { guarded, unguarded };
+}
+
+/**
+ * Installs or removes the drop-in on every PHP-FPM, testing and reloading each
+ * one it changed. Returns how many files changed. Reloads the panel's own FPM
+ * too, since it scans the installed 8.1 `conf.d`. Failures restore written files
+ * and reload services that may have picked up the change.
+ */
+export function reconcilePhpSessionGuard(install: boolean, options: PhpGuardOptions = {}): number {
+  const paths = { ...DEFAULT_PHP_GUARD_PATHS, ...options.paths };
+  const run = options.run ?? ((cmd: string, args: string[]) => tryRun(cmd, args));
+  const isActive = options.isActive ?? ((unit: string) => unitActive(unit) === "active");
+
+  const changes = fpmTargets(paths).flatMap((target) => {
+    const before = current(target.path, paths.rootUid);
+    const after = install && target.present ? INI_BODY : null;
+    return before === after ? [] : [{ ...target, before, after }];
+  });
+  if (changes.length === 0) return 0;
+
+  const write = (path: string, content: string | null) =>
+    content === null ? rmSync(path, { force: true }) : writeFileAtomic(path, content, { mode: 0o644 });
+  const written: typeof changes = [];
+  const attemptedReloads: string[] = [];
+  const reload = (unit: string) => {
+    const result = run("systemctl", ["reload", unit]);
+    if (!result.ok) throw new Error(`${unit} reload failed: ${result.out}`);
+  };
+
+  try {
+    for (const change of changes) {
+      written.push(change);
+      write(change.path, change.after);
+    }
+    const reloadable = [...new Set(changes.filter((change) => change.present).map((change) => change.version))];
+    for (const version of reloadable) {
+      const test = run(join(paths.fpmBinDir, `php-fpm${version}`), ["-t"]);
+      if (!test.ok) throw new Error(`php-fpm${version} rejected the config: ${test.out}`);
+    }
+    for (const unit of [...reloadable.map((version) => `php${version}-fpm.service`), paths.panelFpmUnit]) {
+      if (!isActive(unit)) continue;
+      attemptedReloads.push(unit);
+      reload(unit);
+    }
+  } catch (error) {
+    const failures: string[] = [];
+    for (const change of written) {
+      try { write(change.path, change.before); }
+      catch (restoreError) { failures.push(`${change.path}: ${errorMessage(restoreError)}`); }
+    }
+    if (failures.length === 0) {
+      for (const unit of attemptedReloads) {
+        try { reload(unit); }
+        catch (reloadError) { failures.push(errorMessage(reloadError)); }
+      }
+    } else if (attemptedReloads.length) failures.push("rollback reloads skipped because file restoration failed");
+    throw withRecoveryFailures(error, "PHP guard rollback failed", failures);
+  }
+  return changes.length;
+}
+
+export function reconcilePhpGuard(install: boolean, quiet = false): void {
+  const changed = reconcilePhpSessionGuard(install);
+  if (changed > 0 && !quiet) {
+    log.ok(install ? `PHP upload-progress disabled (${changed} updated)` : `PHP upload-progress guard removed (${changed} updated)`);
+  }
+}

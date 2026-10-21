@@ -54,6 +54,8 @@ mock.module("./cli/paths.ts", () => ({
   LIBEXEC_DIR: root + "/libexec",
   LOCK_DIR: root + "/lock",
   SOCKET_DIR: root + "/run",
+  PHP_ROOT: root + "/php",
+  PHP_FPM_BIN_DIR: root + "/sbin",
   INSTATIC_BACKUP_CRON: root + "/cron.d/instatic-backup",
   // What an addon's hooks run; nothing here may reach the real binary.
   CLI_BIN: root + "/clp-addons",
