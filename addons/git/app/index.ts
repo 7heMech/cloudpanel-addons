@@ -3,7 +3,6 @@
 // The manager router strips the /addons/git prefix before dispatching here, so
 // a request for /addons/git/api/... arrives as /api/... .
 
-import type { Server } from "bun";
 import {
   bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
   redirectResponse, safeDecodePathSegment,
@@ -74,7 +73,7 @@ export async function handle(
   req: Request,
   path: string,
   updateNotice?: { current: string; latest: string } | null,
-  server?: Server<unknown> | null,
+  _server?: unknown,
   auth?: { user: string; roles: string[] } | null,
 ): Promise<Response> {
   const method = req.method;
@@ -136,7 +135,6 @@ export async function handle(
     req,
     path,
     method,
-    server,
     siteManager: true,
     getJob: (id) => gitService.getJob(id),
     watchJob: (id, handlers) => gitService.watchJob(id, handlers),

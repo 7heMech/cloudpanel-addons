@@ -11,6 +11,11 @@ CloudPanel's master Nginx vhost proxies `/addons/` to the manager socket. The
 manager uses the existing `cloudpanel` session and does not create a separate
 site, hostname, or login.
 
+The manager turns off Bun's idle timeout. Its 10-second default closes a
+connection whose handler is still waiting on the gateway, which a Check now or
+an enforced DNS plan routinely outlasts. Nginx's hour-long read timeout and each
+gateway call's own deadline bound every request instead.
+
 `manager/` holds that process: `server.ts` owns the socket, the request gate
 and the mount dispatch, and `index.ts`, `service.ts` and `views.ts` are the
 Addons page itself, laid out the way an addon's `app/` is. It is not in `cli/`

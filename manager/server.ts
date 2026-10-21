@@ -157,6 +157,11 @@ export async function cmdServe(): Promise<never> {
       // Bun renders its own error page, stack trace included, unless NODE_ENV
       // is production, and the unit sets no NODE_ENV.
       development: false,
+      // Bun's 10-second default drops a request whose gateway call takes
+      // longer; Nginx and each call's own deadline bound the wait instead.
+      // Its types offer idleTimeout to TCP servers only, and per-request
+      // server.timeout() does not reach a Unix socket, but this does.
+      ...({ idleTimeout: 0 } as object),
       error(error) {
         console.error("[clp-addons] request failed:", error);
         return jsonResponse({ ok: false, error: "internal error" }, { status: 500 });

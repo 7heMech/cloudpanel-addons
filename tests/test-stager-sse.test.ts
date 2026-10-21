@@ -58,7 +58,7 @@ describe("Stager SSE job monitoring", () => {
     }
   });
 
-  it("sets SSE response headers and disables Bun idle timeout via server.timeout(req, 0)", async () => {
+  it("sets SSE response headers", async () => {
     const origGetJob = stagerService.getJob;
     stagerService.getJob = async (id: string) => ({
       ok: true,
@@ -66,23 +66,14 @@ describe("Stager SSE job monitoring", () => {
     });
 
     try {
-      let timeoutCalledWith: [Request, number] | null = null;
-      const fakeServer = {
-        timeout(req: Request, ms: number) {
-          timeoutCalledWith = [req, ms];
-        },
-      };
-
       const req = new Request("http://localhost/api/jobs/20260910T093000Z-a1b2c3/events");
-      const res = await handle(req, "/api/jobs/20260910T093000Z-a1b2c3/events", null, fakeServer as any);
+      const res = await handle(req, "/api/jobs/20260910T093000Z-a1b2c3/events");
 
       expect(res.status).toBe(200);
       expect(res.headers.get("Content-Type")).toBe("text/event-stream");
       expect(res.headers.get("Cache-Control")).toBe("no-cache, no-transform");
       expect(res.headers.get("Connection")).toBe("keep-alive");
       expect(res.headers.get("X-Accel-Buffering")).toBe("no");
-      expect(timeoutCalledWith).not.toBeNull();
-      expect(timeoutCalledWith![1]).toBe(0);
     } finally {
       stagerService.getJob = origGetJob;
     }

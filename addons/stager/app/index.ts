@@ -2,7 +2,6 @@
 //
 // The manager router strips the /addons/ prefix before dispatching here.
 
-import type { Server } from "bun";
 import { stagerService, validateDomain, validateJobId, expandTarget } from "./service";
 import type { JobResult, JobView } from "./service";
 import { layout, fragment, jobsView, newCloneView, jobView, promoteListView, promoteView, siteStagingView } from "./views";
@@ -88,7 +87,7 @@ export async function handle(
   req: Request,
   path: string,
   updateNotice?: { current: string; latest: string } | null,
-  server?: Server<unknown> | null,
+  _server?: unknown,
 ): Promise<Response> {
   const url = new URL(req.url);
   const method = req.method;
@@ -290,7 +289,6 @@ export async function handle(
     req,
     path,
     method,
-    server,
     getJob: (jobId) => stagerService.getJob(jobId),
     watchJob: (jobId, handlers) => stagerService.watchJob(jobId, handlers),
   });
