@@ -4,7 +4,10 @@
 
 The compiled `clp-addons` binary contains the CLI, manager, and all addon code.
 `clp-addons serve` runs as the locked `clp-addons` account and serves enabled
-addons from `/run/clp-addons/manager.sock`. A config file under
+addons from `/run/clp-addons/manager.sock`. It refuses to start unless systemd
+launched it as that account: run by hand, it replaced the live daemon's socket
+with one the auth gateway rejects. `status` reports a socket the account does
+not own, and `repair` restarts the manager when it finds one. A config file under
 `/etc/clp-addons/` enables an addon; disabling it keeps the addon's state.
 
 CloudPanel's master Nginx vhost proxies `/addons/` to the manager socket. The
@@ -36,6 +39,15 @@ before the catalog is consulted rather than described by it.
 owning the project's path constants imported every addon's target list in order
 to describe them; the injection-target shape now lives in `lib/addon-target.ts`,
 which both sides import.
+
+## The CLI
+
+`clp-addons` with no arguments in a root terminal is an interactive menu:
+addons toggle through the same enable and disable the Addons page runs, and
+status, repair and update run the commands of those names. Without a terminal or
+root it prints the plain overview. Help lists operator commands only; `serve`,
+`smtp-submit`, `terminal-pty` and the `auth`, `manager` and `terminal` actions
+are started by systemd, Postfix, the gateway or the manager.
 
 ## Enable and disable apply a delta
 

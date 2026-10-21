@@ -3,6 +3,7 @@
 // the catalog is consulted, because neither is an addon.
 import { dashboardUrl, installedAddons } from "./addons";
 import { reconcileAnchors } from "./reconcile";
+import { cmdMenu } from "./menu";
 import { cmdStatus } from "./status";
 import { cmdInstall } from "./install";
 import { cmdRepair } from "./repair";
@@ -46,6 +47,7 @@ export const MANAGER_OPS: ManagerOps = {
 function usage(): void {
   log.plain(`clp-addons ${CLI_VERSION} — CloudPanel Addons
 
+  clp-addons                 (interactive in a root terminal)
   clp-addons install <addon> [--version=vX.Y.Z] [--skip-attestation] [--local=DIR]
   clp-addons update [--version=vX.Y.Z] [--skip-attestation]   (alias: upgrade)
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
@@ -61,12 +63,6 @@ function usage(): void {
   clp-addons action php-resources <list|site|save-category|delete-category|assign|set-default|reconcile> [--domain=<domain>]
   clp-addons action panel-tweaks <state|set-tweaks|scan|scan-stream>
   clp-addons action wp-login <sites|sign-in|remove> [--domain=<domain>]
-  clp-addons action manager <enable|disable|update|reconcile|job|watch-job> [--addon=<addon>] [--id=<job>]
-  clp-addons action terminal session --domain=<domain> --cols=<n> --rows=<n>   (through the gateway only)
-  clp-addons action auth (session id on bounded stdin)
-  clp-addons serve
-  clp-addons smtp-submit -t -i
-  clp-addons terminal-pty   (as a site user, started by the terminal action)
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}
@@ -130,7 +126,8 @@ async function cmdOverview(): Promise<void> {
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
   if (args.length === 0) {
-    await cmdOverview();
+    if (process.stdin.isTTY && process.stdout.isTTY && process.getuid?.() === 0) await cmdMenu();
+    else await cmdOverview();
     return 0;
   }
   const [verb = "help", ...rest] = args;

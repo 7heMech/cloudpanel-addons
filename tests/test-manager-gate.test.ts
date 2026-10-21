@@ -302,6 +302,16 @@ test("a handler fault cannot answer with Bun's error page", () => {
   expect(source.slice(source.indexOf("async function cmdServe"))).toInclude("development: false");
 });
 
+// Run by hand, serve would replace the live daemon's socket before anything
+// could notice it was the wrong account, so it refuses before touching it.
+test("serve refuses to start outside its systemd unit", () => {
+  const env = { ...process.env };
+  delete env.INVOCATION_ID;
+  const result = spawnSync("bun", ["cli/index.ts", "serve"], { cwd: repo, env, encoding: "utf8" });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toInclude("systemctl restart clp-addons.service");
+});
+
 // A shell as a site's user is an administrator's tool: no role list, no
 // self-scoped route, whatever the other addons let through.
 test("no non-administrator reaches the terminal", () => {

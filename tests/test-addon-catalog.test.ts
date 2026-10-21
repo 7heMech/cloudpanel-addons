@@ -101,9 +101,10 @@ test("the manager and the auth gateway are not addons", () => {
 
 // Help is how an operator finds actions from a shell, so every addon with one
 // is listed, and a line that spells out its verbs names each the gateway allows.
+// The terminal's action only runs through the gateway, so a shell has no use for it.
 test("help lists every addon's action and the verbs the gateway allows", () => {
   const source = readFileSync(join(REPO, "cli/index.ts"), "utf8");
-  for (const name of ADDON_NAMES.filter((candidate) => ADDONS[candidate]!.action)) {
+  for (const name of ADDON_NAMES.filter((candidate) => ADDONS[candidate]!.action && candidate !== "terminal")) {
     const line = source.split("\n").find((text) => text.trim().startsWith(`clp-addons action ${name} `));
     expect(line, `help has no action line for ${name}`).toBeDefined();
     const listed = line!.match(/<([a-z-]+(?:\|[a-z-]+)+)>/)?.[1]?.split("|");

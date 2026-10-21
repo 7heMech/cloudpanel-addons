@@ -8,11 +8,11 @@ import {
 } from "./inject";
 import { CLI_BIN, MANAGER_UNIT, SOCKET_PATH, mountPath } from "./paths";
 import { inspectPhpGuard } from "./php-guard";
-import { unitActive, unitPid } from "./provision";
+import { managerSocketProblem, unitActive, unitPid } from "./provision";
 import { installedInjections } from "./reconcile";
 import { CLI_VERSION } from "./release";
 import { log } from "./util";
-import { existsSync, lstatSync } from "node:fs";
+import { existsSync } from "node:fs";
 function statusValue(value: string, ok: boolean): string {
   if (!process.stdout.isTTY) return value;
   return ok ? `\x1b[32m${value}\x1b[0m` : `\x1b[31m${value}\x1b[0m`;
@@ -50,23 +50,8 @@ export function anchorStatus(): string {
 }
 
 function socketStatus(): string {
-  let socket: ReturnType<typeof lstatSync>;
-  try {
-    socket = lstatSync(SOCKET_PATH);
-  } catch {
-    return statusValue(`UNIX Socket (${SOCKET_PATH}) — missing`, false);
-  }
-
-  const mode = socket.mode & 0o777;
-  const modeText = mode.toString(8).padStart(4, "0");
-  const owner = `${socket.uid}:${socket.gid}`;
-  const details = `mode ${modeText}, owner ${owner}`;
-  if (!socket.isSocket()) {
-    return statusValue(`UNIX Socket (${SOCKET_PATH}) — not a socket (${details})`, false);
-  }
-  return mode === 0o660
-    ? statusValue(`UNIX Socket (${SOCKET_PATH}) — ready (${details})`, true)
-    : statusValue(`UNIX Socket (${SOCKET_PATH}) — not ready (${details}; expected mode 0660)`, false);
+  const problem = managerSocketProblem();
+  return statusValue(`UNIX Socket (${SOCKET_PATH}) — ${problem ?? "ready"}`, problem === null);
 }
 
 export async function cmdStatus(): Promise<void> {

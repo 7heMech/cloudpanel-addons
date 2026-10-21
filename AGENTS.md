@@ -11,8 +11,9 @@
 - Add a Decisions category only when none of the existing files fits. Keep
   `docs/DECISIONS.md` as an index.
 - Keep `clp-addons help` terser than any doc: one line per command, with its
-  verbs and options and no explanation. Update it in the same change as a CLI
-  command or action verb.
+  verbs and options and no explanation. Leave out verbs only systemd, Postfix,
+  the gateway or the manager run. Update it in the same change as a CLI command
+  or action verb.
 
 ## Seeing the UI
 
