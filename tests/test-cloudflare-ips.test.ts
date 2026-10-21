@@ -182,6 +182,7 @@ function fakeDashboard(
     textContent: "", className: "", hidden: false, disabled: false, checked: false, indeterminate: false, ...over,
   });
   const byId: Record<string, FakeElement> = {
+    "clp-content": el(),
     "cf-summary": el(), "cf-selection": el(), "select-all": el(),
     "select-all-btn": el({ textContent: "Select all" }),
     "enable-selected": el({ disabled: true }), "disable-selected": el({ disabled: true }),
@@ -240,10 +241,11 @@ function loadDashboard(
     notify?: (message: string, kind: string) => void;
     busy?: (on: boolean) => void;
     reload?: () => void;
+    repaintView?: (holder: unknown, html: string) => void;
   },
 ): DashboardClient {
   const factory = new Function(
-    "CLP_ROOT", "document", "plural", "call", "busy", "notify", "clearNotice", "confirmAction", "location",
+    "CLP_ROOT", "document", "plural", "call", "busy", "notify", "clearNotice", "confirmAction", "location", "repaintView",
     `${CLIENT_JS}\nreturn { setOne, setAllSites, runBulk, siteRows, rowState, paintSummary, selectAllSites, toggleAllSites, toggleSiteSelection };`,
   ) as (...args: unknown[]) => DashboardClient;
   return factory(
@@ -258,6 +260,7 @@ function loadDashboard(
     () => {},
     handlers.confirmAction ?? (async () => true),
     { reload: handlers.reload ?? (() => {}) },
+    handlers.repaintView ?? (() => {}),
   );
 }
 
@@ -399,22 +402,39 @@ test("a site turned off after an enable-all stays off when the page repaints", a
   expect(dom.byId["cf-summary"]!.textContent).toBe("1 of 2 sites allow Cloudflare only.");
 });
 
-test("a changed site inventory reloads instead of repainting rows that are not there", async () => {
-  const dom = fakeDashboard([{ domain: "gone.example.test", enabled: true, excluded: false }]);
+test("a changed site inventory repaints and retains only surviving selections", async () => {
+  const dom = fakeDashboard([
+    { domain: "gone.example.test", enabled: true, excluded: false, selected: true },
+    { domain: "kept.example.test", enabled: true, excluded: false, selected: true },
+  ]);
+  const updated = fakeDashboard([
+    { domain: "kept.example.test", enabled: true, excluded: false },
+    { domain: "new.example.test", enabled: true, excluded: false },
+  ]);
   let reloaded = false;
+  let painted = "";
   const client = loadDashboard(dom, {
     call: async (path, options) => {
       if (options) return { ok: true };
-      return { ok: true, data: { autoEnableNewSites: true, sites: [
+      return { ok: true, html: "fresh inventory", data: { autoEnableNewSites: true, sites: [
+        { domain: "kept.example.test", type: "php", enabled: true, excludedFromAutomatic: false },
         { domain: "new.example.test", type: "php", enabled: true, excludedFromAutomatic: false },
       ] } };
     },
     reload: () => { reloaded = true; },
+    repaintView: (holder, html) => {
+      expect(holder).toBe(dom.byId["clp-content"]);
+      painted = html;
+      dom.rows.splice(0, dom.rows.length, ...updated.rows);
+    },
   });
 
   await client.setOne(dom.rows[0]!.parts.toggle);
 
-  expect(reloaded).toBe(true);
+  expect(reloaded).toBe(false);
+  expect(painted).toBe("fresh inventory");
+  expect(dom.rows.map((row) => row.parts.checkbox.checked)).toEqual([true, false]);
+  expect(dom.byId["cf-selection"]!.textContent).toBe("1 of 2 selected");
 });
 
 test("selection actions stay unavailable until sites are selected", () => {

@@ -32,15 +32,15 @@ export async function handle(
     try {
       const result = await cloudflareService.state();
       if (!result.ok || !result.data) throw new Error(result.error ?? "Cloudflare site state is unavailable");
-      return html(layout("Cloudflare IP access", dashboardView(result.data), updateNotice), csrf);
+      return html(layout("Cloudflare IP Access", dashboardView(result.data), updateNotice), csrf);
     } catch (error) {
-      return html(layout("Cloudflare IP access", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice), csrf, 500);
+      return html(layout("Cloudflare IP Access", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice), csrf, 500);
     }
   }
 
   if (req.method === "GET" && path === "/api/sites") {
     const result = await cloudflareService.state();
-    return json(result, result.ok ? 200 : 500);
+    return json(result.ok && result.data ? { ...result, html: dashboardView(result.data) } : result, result.ok ? 200 : 500);
   }
 
   if (req.method === "POST" && path === "/api/sites") {
