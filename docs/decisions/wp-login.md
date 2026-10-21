@@ -2,12 +2,10 @@
 
 ## Why it is an addon and not a tweak
 
-It shipped as a fourth switch on [Panel Tweaks](panel-tweaks.md) and was moved
-out. Everything that addon does changes what CloudPanel's own pages look like;
-this writes a file into a customer's site. An operator who installed the one for
-a filterable site list should not thereby have the code that can do the other on
-their box, and the gateway's fixed addon-and-verb table then refuses
-`panel-tweaks sign-in` rather than allowing it and checking a stored switch.
+[Panel Tweaks](panel-tweaks.md) changes how CloudPanel's own pages look; this
+addon writes a file into a customer's site. Installing the one should not
+authorize the other. WordPress Sign-In therefore has its own installation
+choice and fixed gateway addon-and-verb entry.
 
 Being installed is the whole decision. There is no switch, and no state
 directory: the only trace this addon leaves of its own is a file inside a site,
@@ -16,7 +14,8 @@ in. An addon that left files behind in somebody else's site would be one an
 operator cannot fully withdraw. A site whose files cannot be deleted does not
 stop the ones after it; the withdrawal names it and the reason. A maintenance
 bypass an administrator accepted while signing in belongs to Maintenance Mode:
-it stays in that site's bypass list until removed there.
+it stays in that site's bypass list until removed there. A basic-auth IP bypass
+belongs to CloudPanel's Security settings and stays there until removed.
 
 ## What is in the site
 
@@ -49,6 +48,13 @@ the root path before WordPress boots. The window is opened inside the click that
 starts it, before anything is awaited, because a window opened after a fetch
 resolves is a popup the browser blocks.
 
+The addon's page refuses form submissions, as every response does by default.
+Its sign-in window opens on the addon's page for that one site, whose policy
+lets a form go only to the site's HTTPS origin, and the token's form is written
+into it once it has loaded. This keeps the response header size independent
+of the site count and within the panel's proxy buffer. CloudPanel's Sites page
+sets no policy, so its link opens a blank window.
+
 The site user creates `mu-plugins/clp-addons` itself, so every directory it adds
 is that user's. A missing `wp-includes` or `wp-content` is a refusal rather than
 something to invent.
@@ -75,9 +81,73 @@ Sites page it is shown in CloudPanel's own Bootstrap modal, as are failures.
 
 A browser that reaches the panel over IPv4 and the site over IPv6 is still
 turned away after the bypass, as it would be after adding the address by hand.
-The panel's Nginx takes forwarded addresses from any peer, so the address is
-the one the browser claims; a browser that forges it only misleads itself,
-since anything it could add is a bypass an administrator could add by hand.
+Maintenance's handling of forwarded addresses is described in
+[Maintenance Mode](maintenance.md).
+
+## A site protected by basic authentication
+
+CloudPanel links `site.basic_auth_id` to `basic_auth`. Its `is_active` and
+comma-separated `whitelisted_ips` decide whether sign-in needs a bypass; the
+site's username and password are never read. IPv4 and IPv6 hosts and CIDRs are
+matched as Nginx matches them. Request addresses, including CLI input, normalize
+mapped IPv4 to dotted IPv4. Accepted updates normalize stored mapped hosts,
+deduplicate them and preserve CIDRs. Mapped IPv6 hosts and networks do not count
+as effective IPv4 allowances until an administrator approves an IPv4 entry.
+
+An administrator whose address is blocked receives a separate confirmation
+before a token is minted. It states that the bypass covers the whole site and
+everyone sharing that address until removed in Security → Basic Authentication,
+and warns about spoofing and Cloudflare. Both `/wp-login.php` and `/wp-admin/`
+are covered. Other panel users cannot add a bypass, including site managers:
+root rejects `--allow-basic-auth` with `--as-user` or without a request address.
+Existing allowances still permit their ordinary sign-ins and ownership checks.
+`--add-bypass` authorizes maintenance alone; both gates require separate consent.
+
+Acceptance updates the native allowlist and exactly one complete generated
+`satisfy any`, `allow`, `deny all` and basic-auth block. Customized or ambiguous
+blocks are refused with a pointer to the native Security page. Extra access
+rules in that server or its protected locations, and unknown includes, are
+refused because adding `satisfy any` could make them bypass authentication.
+This also refuses CloudPanel's Cloudflare IP range include in the same server:
+otherwise every allowed edge could bypass basic auth. The parser is shared
+with maintenance in `cli/nginx-config.ts`. Only a regular,
+root-owned vhost that is not writable by other users can be replaced. Its mode
+and ownership survive atomic replacement; credentials and other content remain.
+
+The sign-in lock waits up to five seconds. Minting as the site user has ten
+seconds and runs before the SQLite write transaction; panel reads and writes
+wait at most one second for database contention. The transaction, shared with
+Cloudflare IP Access and maintenance in `cli/nginx-transaction.ts`, validates
+and reloads before commit. Each Nginx command is killed after two seconds, and
+each reload waits at most three more seconds for new workers to accept requests
+and old workers to stop accepting, using `/run/nginx.pid` and `/proc`.
+Failure restores the vhost before releasing SQLite's write lock, then rolls
+back the database and validates the files. If reload was
+attempted, it waits for the restored generation. Recovery errors accompany the
+original failure. These waits, including maintenance's database and lock waits,
+leave recovery time inside the gateway's 60-second deadline.
+
+A token minted before a later failure expires after its normal minute.
+Maintenance bypasses are added after the basic-auth commit, so a failure there
+leaves the accepted native allowance in CloudPanel's Security settings. Neither
+gate changes during preflight. No probe adds the server's address.
+
+### Native real-IP limits
+
+CloudPanel trusts `X-Real-IP` from every IPv4 peer through
+`set_real_ip_from 0.0.0.0/0` and the default `real_ip_header X-Real-IP`. Anyone
+who knows an allowed address can replay it to bypass basic authentication;
+the IP is not a secret or a reliable identity. With ordinary Cloudflare proxying,
+`CF-Connecting-IP` carries the visitor address but Nginx still sees the edge
+address, so adding the administrator's panel IP may leave the password prompt.
+A panel reached over IPv4 and a site reached over IPv6 can also disagree.
+
+This feature retains native behavior and states both real-IP limits in its
+confirmation. It does not change global `nginx.conf` or install local trust
+rules: those would also change CloudPanel's Cloudflare-only access checks and
+need lifecycle handling to survive vhost regeneration and disappear when the
+native allowance is removed. A native allowlist change persists through
+CloudPanel's regeneration without separate addon state.
 
 ## Two answers to "which sites are WordPress"
 

@@ -1,5 +1,6 @@
+import { signInWindow } from "./sign-in-window";
 import {
-  bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readJsonObject, newCsrfToken,
+  bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readJsonObject, newCsrfToken, safeDecodePathSegment,
 } from "../../../lib/app-http";
 import { validateDomain, wpLoginService } from "./service";
 import { dashboardView, layout } from "./views";
@@ -31,6 +32,13 @@ export async function handle(
   if (method === "GET" && path === "/api/session") {
     const csrf = newCsrfToken();
     return jsonResponse({ ok: true }, { csrf });
+  }
+
+  const windowPage = /^\/sign-in\/([^/]+)$/.exec(path);
+  if (method === "GET" && windowPage) {
+    const domain = validateDomain(safeDecodePathSegment(windowPage[1]!));
+    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    return signInWindow(domain);
   }
 
   if (method === "GET" && path === "/") {
@@ -71,6 +79,7 @@ export async function handle(
       asUser: admin ? undefined : auth!.user,
       clientIp: clientIp(req),
       addBypass: body.addBypass === true,
+      allowBasicAuth: body.allowBasicAuth === true,
     });
     return json(result, result.ok ? 200 : 400);
   }

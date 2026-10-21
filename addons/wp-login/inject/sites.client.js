@@ -87,25 +87,26 @@
   // `target` is opened by the caller inside a click, before anything is
   // awaited: a window opened after a fetch resolves is a popup the browser
   // blocks.
-  function signIn(domain, addBypass, target) {
+  function signIn(domain, addBypass, target, allowBasicAuth) {
     return ready()
       .then(function () {
         return fetch("ADDON_URL/api/sign-in", {
           method: "POST",
           credentials: "same-origin",
           headers: { "Content-Type": "application/json", "X-CLP-Addons-CSRF": csrf(), Accept: "application/json" },
-          body: JSON.stringify({ domain: domain, addBypass: addBypass })
+          body: JSON.stringify({ domain: domain, addBypass: addBypass, allowBasicAuth: allowBasicAuth === true })
         });
       })
       .then(function (response) { return response.json(); })
       .then(function (payload) {
         if (!payload || payload.ok !== true) throw new Error((payload && payload.error) || "sign-in unavailable");
-        var maintenance = payload.data.maintenance;
+        var maintenance = payload.data.maintenance || payload.data.basicAuth;
+        var title = payload.data.basicAuth ? "Site protected by basic authentication" : "Site in maintenance";
         if (!maintenance) return submit(target, payload.data);
         if (target) target.close();
-        if (!maintenance.canBypass) return dialog("Site in maintenance", maintenance.message);
-        dialog("Site in maintenance", maintenance.message, "Add IP and sign in", function () {
-          signIn(domain, true, window.open("", "_blank"));
+        if (!maintenance.canBypass) return dialog(title, maintenance.message);
+        dialog(title, maintenance.message, "Add IP and sign in", function () {
+          signIn(domain, addBypass || !!payload.data.maintenance, window.open("", "_blank"), allowBasicAuth || !!payload.data.basicAuth);
         });
       })
       .catch(function (error) {

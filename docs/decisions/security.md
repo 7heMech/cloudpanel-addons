@@ -46,12 +46,39 @@ the verb to anything else. It installs a must-use plugin and a one-time secret,
 and later removes them, through `runuser` as the site's user: the site's user
 controls every name under its root, so a symlink there would aim a root write
 or `rm -rf` anywhere on the box. Those commands get only a fixed `PATH`, not
-root's environment, and each has 30 seconds. It refuses a domain the panel
+root's environment. Minting has ten seconds and removal has thirty. It refuses a domain the panel
 does not have, a root that is not a WordPress, and a site account that belongs
 to the box or shares its uid with another site, as SMTP and Terminal do. The secret is a SHA-256 of a token that lives for a minute,
 is removed before it is compared, and travels in a POST body rather than a URL.
-Disabling or uninstalling the addon removes the plugin from every site. See
+An administrator can explicitly allow their request address through CloudPanel's
+native basic-auth IP allowlist. The root action rejects that operation for
+named non-administrator requests, preserves the site's credentials, and updates
+only the native allowlist and a trusted generated vhost, validating and reloading
+Nginx with rollback on failure through the same vhost machinery as Cloudflare IP
+Access. Extra access rules and unknown includes in the affected authentication
+scope are refused, including CloudPanel's Cloudflare range include, so adding
+`satisfy any` cannot turn an existing access rule into a public auth bypass.
+Minting runs before the basic-auth database transaction, and maintenance
+bypasses run after it commits. The shared HTTP IP reader normalizes mapped IPv4
+hosts before either gate uses the request address; native basic-auth allowlist
+updates normalize mapped single hosts while preserving CIDRs. Consent to a
+maintenance bypass does not authorize a basic-auth bypass. Nginx commands and
+worker handovers are bounded on both the change and recovery paths, leaving
+recovery time within the gateway's 60-second deadline. Only the sign-in
+window's own page lets a form leave, and only to the one site it signs in to.
+Disabling or uninstalling the addon removes the plugin from every site. Accepted
+IP bypasses stay in their respective CloudPanel or Maintenance Mode settings. See
 [WordPress Sign-In](wp-login.md).
+
+CloudPanel's native basic-auth allowance inherits its global real-IP trust:
+`set_real_ip_from 0.0.0.0/0` accepts a forged `X-Real-IP` from any IPv4 peer.
+Anyone who knows an allowed IP can replay it to bypass authentication. Ordinary
+Cloudflare proxy requests carry the visitor in `CF-Connecting-IP`, which that
+configuration does not use; Nginx sees the edge, so the panel IP may never
+match. Both limits appear in the confirmation. The addon retains native
+behavior and changes neither global `nginx.conf` nor per-site real-IP trust.
+A local override would also alter CloudPanel's Cloudflare-only checks and need
+removal and regeneration handling beyond the native allowlist's lifecycle.
 
 ## CloudPanel authentication
 

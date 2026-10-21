@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   executeWpLoginAction, WP_LOGIN_FIELD, WORDPRESS_APPLICATIONS,
-  type WpLoginActionOptions, type WpLoginResult, type WpMaintenanceReply, type WpRemoveResult, type WpSiteView,
+  type WpBasicAuthReply, type WpLoginActionOptions, type WpLoginResult, type WpMaintenanceReply, type WpRemoveResult, type WpSiteView,
 } from "../addons/wp-login/action";
 import { DEFAULT_MAINTENANCE_ACTION_PATHS } from "../addons/maintenance/action";
 import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
@@ -65,12 +65,15 @@ function options(extra: Partial<WpLoginActionOptions> = {}): WpLoginActionOption
   return {
     processUid: 0,
     emitReply: false,
+    reloadNginx: async (signal) => signal(),
     domainValidator: (value: string) => value,
     paths: {
       panelDb: join(root, "panel.sq3"),
       passwd: join(root, "passwd"),
       lockFile: join(root, "wp-login.lock"),
       runuser: join(root, "runuser"),
+      nginxVhostDir: join(root, "vhosts"),
+      vhostUid: process.getuid!(),
       maintenanceConfig: join(root, "maintenance.conf"),
       maintenance: {
         ...DEFAULT_MAINTENANCE_ACTION_PATHS,
@@ -87,10 +90,11 @@ function seedPanel(): void {
   const db = new Database(join(root, "panel.sq3"), { create: true });
   db.exec(`
     CREATE TABLE site (id INTEGER PRIMARY KEY, type TEXT, domain_name TEXT, root_directory TEXT,
-      user TEXT, application TEXT);
-    INSERT INTO site VALUES (1, 'php', 'shop.example.com', 'shop.example.com', 'shop', 'WordPress');
-    INSERT INTO site VALUES (2, 'static', 'docs.example.com', 'docs.example.com', 'docs', 'Static');
-    INSERT INTO site VALUES (3, 'php', 'blog.example.com', 'blog.example.com', 'blog', 'Generic');
+      user TEXT, application TEXT, basic_auth_id INTEGER);
+    CREATE TABLE basic_auth (id INTEGER PRIMARY KEY, is_active INTEGER, whitelisted_ips TEXT, updated_at TEXT);
+    INSERT INTO site VALUES (1, 'php', 'shop.example.com', 'shop.example.com', 'shop', 'WordPress', NULL);
+    INSERT INTO site VALUES (2, 'static', 'docs.example.com', 'docs.example.com', 'docs', 'Static', NULL);
+    INSERT INTO site VALUES (3, 'php', 'blog.example.com', 'blog.example.com', 'blog', 'Generic', NULL);
     CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER);
     INSERT INTO user VALUES (1, 'boss', 'ROLE_ADMIN', 1);
     INSERT INTO user VALUES (2, 'shopkeeper', 'ROLE_USER', 1);
@@ -378,4 +382,363 @@ test("a site run by a box account, or one sharing its uid, is never acted as", a
   mkdirSync(join(root, "home", "root", "htdocs", "blog.example.com", "wp-content"), { recursive: true });
   await expect(act(["sign-in", "--domain=blog.example.com"])).rejects.toThrow("no site called");
   expect(runuserLog()).toEqual([]);
+});
+
+// --- CloudPanel basic authentication -----------------------------------------
+
+function seedBasicAuth(ips: string | null = null, active = true): string {
+  const db = new Database(join(root, "panel.sq3"));
+  db.query("INSERT INTO basic_auth VALUES (1, ?, ?, CURRENT_TIMESTAMP)").run(active ? 1 : 0, ips);
+  db.exec("UPDATE site SET basic_auth_id = 1 WHERE id = 1");
+  db.close();
+  mkdirSync(join(root, "vhosts"));
+  const access = ips ? `  satisfy any;\n${ips.split(",").map((ip) => `  allow ${ip.trim()};\n`).join("")}  deny all;\n` : "";
+  const content = `server {\n  listen 443 ssl;\n  server_name shop.example.com;\n  location ~ /.well-known {\n    auth_basic off;\n    allow all;\n  }\n${access}  auth_basic "Restricted Area";\n  auth_basic_user_file /etc/nginx/basic-auth/shop.example.com;\n  location / { proxy_pass http://127.0.0.1:8080; }\n}\n`;
+  writeFileSync(join(root, "vhosts", "shop.example.com.conf"), content, { mode: 0o640 });
+  return content;
+}
+
+function basicAuthIps(): string | null {
+  const db = new Database(join(root, "panel.sq3"));
+  try { return db.query<{ whitelisted_ips: string | null }, []>("SELECT whitelisted_ips FROM basic_auth WHERE id = 1").get()!.whitelisted_ips; }
+  finally { db.close(); }
+}
+
+const ALLOW_BASIC = "--allow-basic-auth";
+const okCommand = () => ({ ok: true, stdout: "", stderr: "" });
+
+test("basic auth offers an explicit whole-site bypass without minting a token", async () => {
+  const original = seedBasicAuth();
+  const reply = await act<WpBasicAuthReply>(["sign-in", SHOP, FROM]);
+  expect(reply.basicAuth).toMatchObject({ ip: "203.0.113.9", canBypass: true });
+  expect(reply.basicAuth.message).toContain("whole site");
+  expect(reply.basicAuth.message).toContain("everyone sharing that IP");
+  expect(reply.basicAuth.message).toContain("until removed");
+  expect(reply.basicAuth.message).toContain("forged X-Real-IP");
+  expect(reply.basicAuth.message).toContain("Cloudflare");
+  expect(runuserLog()).toEqual([]);
+  expect(basicAuthIps()).toBeNull();
+  expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).toBe(original);
+});
+
+test("a confirmed basic-auth bypass preserves the native allowlist, checks Nginx and reloads once", async () => {
+  seedBasicAuth("198.51.100.1,2001:db8::/32");
+  const calls: string[] = [];
+  const result = await act<WpLoginResult>(["sign-in", SHOP, FROM, ALLOW_BASIC], {
+    run: (command, args) => { calls.push([command, ...args].join(" ")); return okCommand(); },
+  });
+  expect(result.token).toMatch(/^[0-9a-f]{64}$/);
+  expect(basicAuthIps()).toBe("198.51.100.1,2001:db8::/32,203.0.113.9");
+  const conf = readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8");
+  expect(conf).toContain("satisfy any;\n  allow 198.51.100.1;\n  allow 2001:db8::/32;\n  allow 203.0.113.9;\n  deny all;");
+  expect(conf).toContain("auth_basic off;\n    allow all;");
+  expect(calls).toEqual(["nginx -t", "systemctl reload nginx"]);
+  expect(runuserLog()).toEqual(["shop PATH"]);
+  // Subsequent sign-ins do not edit or reload, including a repeated confirmation.
+  await act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: () => { throw new Error("unexpected command"); } });
+  expect(basicAuthIps()).toBe("198.51.100.1,2001:db8::/32,203.0.113.9");
+});
+
+test("existing native IP and CIDR bypasses include canonical IPv6 and mapped IPv4", async () => {
+  seedBasicAuth("203.0.113.0/24,2001:db8::1");
+  for (const ip of ["203.0.113.9", "2001:0DB8:0:0::1", "::ffff:203.0.113.9"]) {
+    expect((await act<WpLoginResult>(["sign-in", SHOP, `--client-ip=${ip}`])).token).toBeDefined();
+  }
+  expect((await act<WpBasicAuthReply>(["sign-in", SHOP, "--client-ip=198.51.100.2"])).basicAuth.canBypass).toBe(true);
+});
+
+test("only an administrator with an IP can allow basic auth, and site ownership is still checked", async () => {
+  seedBasicAuth();
+  for (const user of ["shopkeeper", "manager", "boss"]) {
+    expect((await act<WpBasicAuthReply>(["sign-in", SHOP, FROM, `--as-user=${user}`])).basicAuth.canBypass).toBe(false);
+    await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC, `--as-user=${user}`])).rejects.toThrow("only an administrator");
+  }
+  expect((await act<WpBasicAuthReply>(["sign-in", SHOP])).basicAuth.canBypass).toBe(false);
+  await expect(act(["sign-in", SHOP, ALLOW_BASIC])).rejects.toThrow("only an administrator");
+  await expect(act(["sign-in", SHOP, FROM, "--as-user=nosy"])).rejects.toThrow("not yours");
+  expect(basicAuthIps()).toBeNull();
+  expect(runuserLog()).toEqual([]);
+});
+
+test("inactive basic auth does not gate sign-in", async () => {
+  seedBasicAuth(null, false);
+  expect((await act<WpLoginResult>(["sign-in", SHOP, FROM])).token).toBeDefined();
+  expect(basicAuthIps()).toBeNull();
+});
+
+for (const failure of ["validation", "mint", "reload"] as const) {
+  test(`a basic-auth ${failure} failure restores the vhost and database`, async () => {
+    const original = seedBasicAuth("198.51.100.1");
+    let commands = 0;
+    if (failure === "mint") writeFileSync(join(root, "runuser"), "#!/bin/sh\necho denied >&2\nexit 1\n");
+    await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], {
+      run: () => {
+        commands++;
+        return commands === (failure === "validation" ? 1 : failure === "reload" ? 2 : -1)
+          ? { ok: false, stdout: "", stderr: "test failure" } : okCommand();
+      },
+    })).rejects.toThrow(failure === "mint" ? "denied" : "test failure");
+    expect(basicAuthIps()).toBe("198.51.100.1");
+    expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).toBe(original);
+    expect(commands).toBe(failure === "reload" ? 4 : failure === "mint" ? 0 : 2);
+    if (failure === "validation") expect(runuserLog()).toEqual(["shop PATH"]);
+  });
+}
+
+test("untrusted or customized vhosts are refused without altering protection", async () => {
+  seedBasicAuth();
+  const path = join(root, "vhosts", "shop.example.com.conf");
+  chmodSync(path, 0o666);
+  await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand })).rejects.toThrow("untrusted");
+  chmodSync(path, 0o640);
+  const content = readFileSync(path, "utf8");
+  writeFileSync(path, content.replace('"Restricted Area"', '"Custom"'));
+  await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand })).rejects.toThrow("customized");
+  rmSync(path);
+  const target = join(root, "linked-vhost");
+  writeFileSync(target, content);
+  symlinkSync(target, path);
+  await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand })).rejects.toThrow("untrusted");
+  expect(readFileSync(target, "utf8")).toBe(content);
+  expect(basicAuthIps()).toBeNull();
+  expect(runuserLog()).toEqual(["shop PATH", "shop PATH", "shop PATH"]);
+});
+
+test("maintenance and basic auth need separate consent and neither changes during preflight", async () => {
+  seedBasicAuth();
+  writeFileSync(join(root, "maintenance.conf"), "");
+  writeFileSync(maintenanceFile("shop.example.com", "on"), "");
+  expect((await act<WpMaintenanceReply>(["sign-in", SHOP, FROM, ALLOW_BASIC])).maintenance).toBeDefined();
+  expect((await act<WpBasicAuthReply>(["sign-in", SHOP, FROM, "--add-bypass"])).basicAuth).toBeDefined();
+  expect(existsSync(maintenanceFile("shop.example.com", "bypass_203.0.113.9"))).toBe(false);
+  expect(basicAuthIps()).toBeNull();
+  expect(runuserLog()).toEqual([]);
+  await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC, "--add-bypass"], {
+    run: () => ({ ok: false, stderr: "Nginx failed", stdout: "" }),
+  })).rejects.toThrow("Nginx failed");
+  expect(existsSync(maintenanceFile("shop.example.com", "bypass_203.0.113.9"))).toBe(false);
+  const result = await act<WpLoginResult>(["sign-in", SHOP, FROM, ALLOW_BASIC, "--add-bypass"], { run: okCommand });
+  expect(result.token).toBeDefined();
+  expect(basicAuthIps()).toBe("203.0.113.9");
+  expect(existsSync(maintenanceFile("shop.example.com", "bypass_203.0.113.9"))).toBe(true);
+});
+
+test("maintenance runs after the native bypass commits, so its failure preserves that accepted bypass", async () => {
+  const original = seedBasicAuth();
+  writeFileSync(join(root, "maintenance.conf"), "");
+  writeFileSync(maintenanceFile("shop.example.com", "on"), "");
+  writeFileSync(join(root, "locks"), "not a directory");
+  await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC, "--add-bypass"], { run: okCommand })).rejects.toThrow();
+  expect(basicAuthIps()).toBe("203.0.113.9");
+  expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).not.toBe(original);
+  expect(existsSync(maintenanceFile("shop.example.com", "bypass_203.0.113.9"))).toBe(false);
+});
+
+
+test("minting does not hold CloudPanel's database write lock", async () => {
+  seedBasicAuth();
+  let minted = false;
+  await act(["sign-in", SHOP, FROM, ALLOW_BASIC], {
+    now: () => {
+      const panelWriter = new Database(join(root, "panel.sq3"));
+      try {
+        panelWriter.exec("PRAGMA busy_timeout = 1; BEGIN IMMEDIATE; UPDATE user SET status = status; COMMIT;");
+        minted = true;
+      } finally { panelWriter.close(); }
+      return new Date();
+    },
+    run: okCommand,
+  });
+  expect(minted).toBe(true);
+  expect(basicAuthIps()).toBe("203.0.113.9");
+});
+
+
+test("a mapped request address creates IPv4 bypasses for both Nginx gates", async () => {
+  seedBasicAuth();
+  writeFileSync(join(root, "maintenance.conf"), "");
+  writeFileSync(maintenanceFile("shop.example.com", "on"), "");
+  const ip = "::ffff:203.0.113.9";
+  const result = await act<WpLoginResult>(["sign-in", SHOP, `--client-ip=${ip}`, ALLOW_BASIC, "--add-bypass"], { run: okCommand });
+  expect(result.token).toBeDefined();
+  expect(basicAuthIps()).toBe("203.0.113.9");
+  const conf = readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8");
+  expect(conf).toContain("allow 203.0.113.9;");
+  expect(conf).not.toContain("::ffff:");
+  expect(existsSync(maintenanceFile("shop.example.com", "bypass_203.0.113.9"))).toBe(true);
+  expect(existsSync(maintenanceFile("shop.example.com", "bypass_::ffff:cb00:7109"))).toBe(false);
+});
+
+test("a mapped IPv6 network does not admit an IPv4 request until its host is allowed", async () => {
+  seedBasicAuth("::ffff:203.0.113.0/120");
+  expect((await act<WpBasicAuthReply>(["sign-in", SHOP, FROM])).basicAuth.canBypass).toBe(true);
+  await act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand });
+  expect(basicAuthIps()).toBe("::ffff:203.0.113.0/120,203.0.113.9");
+});
+
+test("only complete generated basic-auth lines can be rewritten", async () => {
+  const original = seedBasicAuth();
+  const path = join(root, "vhosts", "shop.example.com.conf");
+  for (const customized of [
+    original.replace('  auth_basic "Restricted Area";', '# auth_basic "Restricted Area";'),
+    original.replace('  auth_basic "Restricted Area";', '  #auth_basic "Restricted Area";'),
+    original.replace('  auth_basic "Restricted Area";', '  set $custom 1; auth_basic "Restricted Area";'),
+    original.replace('shop.example.com;\n  location /', 'shop.example.com; # custom\n  location /'),
+    original.replace('shop.example.com;\n  location /', 'shop.example.com; auth_basic off;\n  location /'),
+    original.replace('  location /', '  auth_basic "Another restriction";\n  location /'),
+  ]) {
+    writeFileSync(path, customized);
+    await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand })).rejects.toThrow("customized or ambiguous");
+    expect(readFileSync(path, "utf8")).toBe(customized);
+    expect(basicAuthIps()).toBeNull();
+  }
+});
+
+test("custom access rules cannot become public access when satisfy any is added", async () => {
+  const original = seedBasicAuth();
+  const path = join(root, "vhosts", "shop.example.com.conf");
+  for (const extra of [
+    "allow all;", "deny all;", "satisfy all;",
+    "include /etc/nginx/cloudflare/ips;", "include /etc/nginx/custom-access.conf;",
+    "location /custom { allow all; }", "location /custom { include /etc/nginx/custom-access.conf; }",
+    'location /custom { auth_basic "Custom"; }',
+  ]) {
+    const customized = original.replace('  auth_basic "Restricted Area";', `${extra}\n  auth_basic "Restricted Area";`);
+    writeFileSync(path, customized);
+    await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand })).rejects.toThrow("customized or ambiguous");
+    expect(basicAuthIps()).toBeNull();
+    expect(readFileSync(path, "utf8")).toBe(customized);
+  }
+});
+
+test("quoted and commented access words and the native maintenance include are preserved", async () => {
+  const original = seedBasicAuth();
+  const path = join(root, "vhosts", "shop.example.com.conf");
+  const prefix = '# allow all; {\n  add_header X-Note "allow all; {";\n  include /etc/nginx/clp-addons-maintenance.conf;\n';
+  writeFileSync(path, original.replace('  auth_basic "Restricted Area";', `${prefix}  auth_basic "Restricted Area";`));
+  await act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand });
+  expect(basicAuthIps()).toBe("203.0.113.9");
+  expect(readFileSync(path, "utf8")).toContain(prefix);
+});
+
+test("disabled basic-auth directives accept whitespace without looking like another active block", async () => {
+  const original = seedBasicAuth();
+  const path = join(root, "vhosts", "shop.example.com.conf");
+  writeFileSync(path, original.replace('auth_basic off;', 'auth_basic  \t\n      off \t;').replaceAll('\n', '\r\n'));
+  const result = await act<WpLoginResult>(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand });
+  expect(result.token).toBeDefined();
+  expect(basicAuthIps()).toBe("203.0.113.9");
+  expect(readFileSync(path, "utf8")).toContain('auth_basic  \t\r\n      off \t;');
+});
+
+test("a busy panel writer can finish before the basic-auth update takes its write lock", async () => {
+  seedBasicAuth();
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { Database } = require("bun:sqlite");
+    const db = new Database(process.argv[1]);
+    db.exec("BEGIN IMMEDIATE;");
+    console.log("locked");
+    setTimeout(() => { db.exec("COMMIT;"); db.close(); }, 500);
+  `, join(root, "panel.sq3")], { stdout: "pipe", stderr: "pipe" });
+  try {
+    const reader = child.stdout.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("locked");
+    reader.releaseLock();
+    const result = await act<WpLoginResult>(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand });
+    expect(result.token).toBeDefined();
+    expect(basicAuthIps()).toBe("203.0.113.9");
+  } finally {
+    child.kill();
+    await child.exited;
+  }
+});
+
+test("a commit blocked by a panel reader restores both the vhost and database after reload", async () => {
+  const original = seedBasicAuth();
+  const reader = new Database(join(root, "panel.sq3"));
+  const calls: string[] = [];
+  reader.exec("BEGIN; SELECT * FROM basic_auth;");
+  try {
+    await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], {
+      run: (command, args) => { calls.push([command, ...args].join(" ")); return okCommand(); },
+    })).rejects.toThrow("locked");
+    expect(basicAuthIps()).toBeNull();
+    expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).toBe(original);
+    expect(calls).toEqual(["nginx -t", "systemctl reload nginx", "nginx -t", "systemctl reload nginx"]);
+  } finally {
+    reader.exec("ROLLBACK;");
+    reader.close();
+  }
+});
+
+for (const hangs of ["validation", "reload"] as const) {
+  test(`a hung Nginx ${hangs} is killed and recovery finishes before the gateway deadline`, async () => {
+    const original = seedBasicAuth();
+    const nginx = join(root, "nginx-command");
+    const systemctl = join(root, "systemctl-command");
+    writeFileSync(nginx, hangs === "validation" ? '#!/bin/sh\nexec sleep 20\n' : '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    writeFileSync(systemctl, '#!/bin/sh\nexec sleep 20\n', { mode: 0o700 });
+    const started = Date.now();
+    await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], {
+      paths: { ...options().paths, nginx, systemctl },
+    })).rejects.toThrow(hangs === "validation" ? "Nginx validation failed" : "Nginx reload failed");
+    expect(Date.now() - started).toBeLessThan(8_000);
+    expect(basicAuthIps()).toBeNull();
+    expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).toBe(original);
+  }, 10_000);
+}
+
+test("worker handover failure waits for the restored generation before returning", async () => {
+  const original = seedBasicAuth();
+  let reloads = 0;
+  let recoveryFinished = false;
+  await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], {
+    run: okCommand,
+    reloadNginx: async (signal) => {
+      signal();
+      if (++reloads === 1) throw new Error("handover failed");
+      expect(basicAuthIps()).toBeNull();
+      expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).toBe(original);
+      await Bun.sleep(10);
+      recoveryFinished = true;
+    },
+  })).rejects.toThrow("handover failed");
+  expect(recoveryFinished).toBe(true);
+  expect(reloads).toBe(2);
+});
+
+test("native allowlist rewrites normalize mapped hosts while preserving CIDR entries", async () => {
+  seedBasicAuth("::ffff:198.51.100.1,::FFFF:C633:6402,::ffff:198.51.100.0/120,2001:db8::/32");
+  await act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand });
+  expect(basicAuthIps()).toBe("198.51.100.1,198.51.100.2,::ffff:198.51.100.0/120,2001:db8::/32,203.0.113.9");
+  const conf = readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8");
+  expect(conf).toContain("allow 198.51.100.1;");
+  expect(conf).toContain("allow 198.51.100.2;");
+  expect(conf).toContain("allow ::ffff:198.51.100.0/120;");
+  expect(conf).toContain("allow 2001:db8::/32;");
+  expect(conf).not.toContain("allow ::ffff:198.51.100.1;");
+});
+
+for (const stored of ["::ffff:203.0.113.9", "::FFFF:CB00:7109"]) {
+  test(`a stored mapped host ${stored} requires consent to repair its IPv4 bypass`, async () => {
+    const original = seedBasicAuth(stored);
+    expect((await act<WpBasicAuthReply>(["sign-in", SHOP, FROM])).basicAuth.canBypass).toBe(true);
+    expect((await act<WpBasicAuthReply>(["sign-in", SHOP, FROM, "--as-user=shopkeeper"])).basicAuth.canBypass).toBe(false);
+    expect(runuserLog()).toEqual([]);
+    expect(basicAuthIps()).toBe(stored);
+    expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).toBe(original);
+    await act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand });
+    expect(basicAuthIps()).toBe("203.0.113.9");
+    const conf = readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8");
+    expect(conf.match(/allow 203\.0\.113\.9;/g)).toHaveLength(1);
+    expect(conf).not.toContain("::ffff:");
+    expect((await act<WpLoginResult>(["sign-in", SHOP, FROM, "--as-user=shopkeeper"])).token).toBeDefined();
+  });
+}
+
+test("invalid mapped hosts in the native allowlist are refused", async () => {
+  seedBasicAuth("::ffff:256.51.100.1");
+  await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand })).rejects.toThrow("invalid address");
+  expect(runuserLog()).toEqual([]);
+  expect(basicAuthIps()).toBe("::ffff:256.51.100.1");
 });
