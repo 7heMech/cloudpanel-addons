@@ -51,10 +51,6 @@ export function fleetRowSelectionStyle(tableClass: string): string {
 import FLEET_ROW_SELECTION_JS from "./assets/fleet-row-selection.client.js" with { type: "text" };
 export { FLEET_ROW_SELECTION_JS };
 
-// WordPress Sign-In carries its notice across a reload.
-import CARRIED_FLASH_JS from "./assets/carried-flash.client.js" with { type: "text" };
-export { CARRIED_FLASH_JS };
-
 // Measured against CloudPanel 2.5.1's public demo: dashboard, sites, settings,
 // certificates, logs and new-site forms. Keep these rules independent of the
 // panel's private templates and versioned CSS bundles.

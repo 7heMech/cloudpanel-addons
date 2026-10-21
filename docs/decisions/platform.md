@@ -302,12 +302,10 @@ string built from a shared class name, a script fragment that is a function
 body rather than a program, and a `<script>` element indented to sit inside a
 Twig template.
 
-Three scripts are shared. Every addon page gets the base helpers, `repaintView`
-among them; the fleet tables also get the site-selection ones, and WordPress
-Sign-In, the one page left that reloads after a change, gets the pair that
-carries a message across the reload. Each shared function takes the page's own
-repaint, because what a change redraws is the one thing the addons do not agree
-on.
+Every addon page gets the shared base helpers, including `repaintView` and
+inline notices. Fleet tables also get site-selection helpers, whose entry
+points take the page's own selection repaint. Pages with background jobs get
+the shared job watcher. Theme initialization runs before styles are painted.
 
 ## Live panel data
 
