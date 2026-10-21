@@ -313,7 +313,8 @@ function varnishRun(paths: WpLoginActionPaths, request: { domain?: string; dueOn
 
 /**
  * The page's pass, and the timer's with `dueOnly`: the timer runs inside
- * repair's operation lock, so it checks only sites automation can still act on.
+ * repair's operation lock, so it checks only sites automation can still act on
+ * and does not wait for a page's pass.
  */
 export async function reconcileWpVarnish(
   options: WpLoginActionOptions = {},
@@ -322,7 +323,8 @@ export async function reconcileWpVarnish(
   const paths = pathsFor(options);
   // With automation off, repair does not need to inspect site roots or the DB.
   if (!readVarnishState(paths.varnishState).enabled) return { installed: 0, checked: 0, pending: 0, failed: [] };
-  return withFileLock(paths.varnishLockFile, 15, "a WordPress Varnish change is still running", async () =>
+  const wait = request.dueOnly ? 1 : 15;
+  return withFileLock(paths.varnishLockFile, wait, "a WordPress Varnish change is still running", async () =>
     syncVarnish(varnishRun(paths, request), options));
 }
 

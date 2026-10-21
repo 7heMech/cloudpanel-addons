@@ -100,6 +100,15 @@ test("plugin installation can proceed independently of the sign-in lock", async 
   });
 });
 
+test("the timer's pass does not hold repair waiting for a page's check", async () => {
+  await act("varnish-settings", "--enabled=true");
+  await withFileLock(options().paths!.varnishLockFile!, 1, "a page's check", async () => {
+    const started = Date.now();
+    await expect(reconcileWpVarnish(options(), { dueOnly: true })).rejects.toThrow("still running");
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+});
+
 test("a Generic WordPress becomes eligible when CloudPanel enables Varnish", async () => {
   await act("varnish-settings", "--enabled=true");
   await act("varnish-sync");
