@@ -203,3 +203,4 @@ not be read or planned safely. Keep forgets them. Neither touches the zone or Ma
 Assigning no profile, Report only, deleting a profile, disabling and
 uninstalling all stop enforcement and change nothing outside the server;
 disabling also stops the periodic pass.
+Uninstall removes the enabled flag and stops that pass before purging state.

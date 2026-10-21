@@ -400,3 +400,22 @@ test("a box whose reconcile timer is not armed is bootstrapped too", () => {
   expect(run.error).toBeUndefined();
   expect(run.provision).toContain("startUnits");
 });
+
+test("DNS can be disabled and re-enabled without SMTP, keeping its state", () => {
+  const on = toggle([{ verb: "enable", addon: "dns" }]);
+  expect(on.error).toBeUndefined();
+  expect(on.systemd).toContain("enable clp-addons-new-sites.path");
+  expect(on.calls.some(([cmd, args]) => cmd === "systemctl" && args.includes("postfix"))).toBe(false);
+  const state = join(on.root, "state", "dns");
+  mkdirSync(state, { recursive: true });
+  const policy = join(state, "policy.json");
+  writeFileSync(policy, "kept policy", { mode: 0o600 });
+  const off = toggle([{ verb: "disable", addon: "dns" }], { root: on.root });
+  expect(off.error).toBeUndefined();
+  expect(off.systemd).toContain("stop clp-addon-dns-reconcile");
+  expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.path"))).toBe(false);
+  const again = toggle([{ verb: "enable", addon: "dns" }], { root: on.root });
+  expect(again.error).toBeUndefined();
+  expect(again.systemd).toContain("enable clp-addons-new-sites.path");
+  expect(readFileSync(policy, "utf8")).toBe("kept policy");
+});
