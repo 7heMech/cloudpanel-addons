@@ -32,7 +32,8 @@ IPv6 -- writes nothing but still owns its name, so a stale AAAA is removed. An
 address that cannot be detected -- more than one of a family, or an IPv4 behind
 NAT once CloudPanel's cached one has expired -- stops the sites that use it
 until it is set under Server addresses. A save is checked by rendering every
-row for an apex and a subdomain site.
+row for an apex and a subdomain site. Duplicate records and multiple CNAME
+rows at one name are refused before saving.
 
 Presets only fill the editor: Web (CloudPanel), Mailcow, Google Workspace and
 DMARC. A new install offers two profiles built from them, "Web" and "Web and

@@ -164,8 +164,18 @@ export function renderProfile(profile: Profile, vars: SiteVars): Rendered {
       priority: row.priority,
     });
   });
-  const cnames = new Set(rendered.records.filter((record) => record.type === "CNAME").map((record) => record.name));
-  for (const name of cnames) {
+  const unique = new Set<string>();
+  const cnameNames = new Set<string>();
+  for (const record of rendered.records) {
+    const key = JSON.stringify([record.type, record.name, record.content]);
+    if (unique.has(key)) rendered.problems.push(`${record.type} ${record.name}: remove the duplicate record row`);
+    unique.add(key);
+    if (record.type === "CNAME") {
+      if (cnameNames.has(record.name)) rendered.problems.push(`${record.name}: only one CNAME row may write to a name`);
+      cnameNames.add(record.name);
+    }
+  }
+  for (const name of cnameNames) {
     if (rendered.claims.some((claim) => claim.name === name && claim.type !== "CNAME")) {
       rendered.problems.push(`${name}: a CNAME cannot share its name with other records`);
     }

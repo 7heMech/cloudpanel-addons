@@ -196,3 +196,16 @@ describe("the Cloudflare token template", () => {
     expect(keys).not.toContainEqual({ key: "zone", type: "read" });
   });
 });
+
+test("duplicate records and multiple CNAME targets are refused before they reach Cloudflare", () => {
+  const duplicate = profile([
+    { type: "A", name: "{domain}", content: "{ipv4}" },
+    { type: "A", name: "{sub}.{zone}", content: "{ipv4}", ttl: 300 },
+  ]);
+  expect(renderProfile(duplicate, vars("example.com")).problems).toContain("A example.com: remove the duplicate record row");
+  const aliases = profile([
+    { type: "CNAME", name: "www.{domain}", content: "one.example.net" },
+    { type: "CNAME", name: "www.{domain}", content: "two.example.net" },
+  ]);
+  expect(renderProfile(aliases, vars("example.com")).problems).toContain("www.example.com: only one CNAME row may write to a name");
+});
