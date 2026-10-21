@@ -20,8 +20,8 @@ const CHANGES: Record<string, string> = {
 };
 
 /**
- * `/api/session` and `/api/provision` are the two routes a site manager
- * reaches, from CloudPanel's own page for a site it just created. The action
+ * `/api/session` and `/api/provision` are the two routes a non-administrator
+ * reaches, from CloudPanel's own page for a site they just created. The action
  * checks that the site is theirs and answers with readiness only.
  */
 async function provision(req: Request, auth: { user: string; roles: string[] } | null | undefined): Promise<Response> {

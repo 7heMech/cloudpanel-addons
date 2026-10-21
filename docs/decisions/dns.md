@@ -24,8 +24,8 @@ fleet.
 A row has a type (A, AAAA, CNAME, MX, TXT, SRV, CAA), a name, content, proxy,
 TTL, a priority for MX and SRV, and "apex only", which skips the row when the
 site is not its zone's apex -- what `www` needs. Names and content take
-`{domain}`, `{zone}` and `{sub}`; content also takes `{ipv4}`, `{ipv6}`,
-`{mailcow.host}`, `{mailcow.selector}` and `{mailcow.dkim}`. A rendered name
+`{domain}`, `{zone}`, `{sub}` and `{mailcow.selector}`; content also takes
+`{ipv4}`, `{ipv6}`, `{mailcow.host}` and `{mailcow.dkim}`. A rendered name
 must lie in the site's zone; `{zone}` is how a `www.example.com` site reaches
 `example.com`. A row whose address placeholder is empty -- a server with no
 IPv6 -- writes nothing but still owns its name, so a stale AAAA is removed. A

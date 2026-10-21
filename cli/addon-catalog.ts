@@ -88,8 +88,7 @@ export interface AddonSpec extends AddonDefinition {
 
 /**
  * Order is the order addons are listed and installed, and the order their
- * new-site work runs in: DNS before SMTP Relay, and before automatic SSL asks
- * for a certificate. Keep it deliberate.
+ * new-site work runs in: DNS before SMTP Relay. Keep it deliberate.
  */
 const DEFINITIONS: AddonDefinition[] = [
   CLOUDFLARE_IPS_ADDON,
