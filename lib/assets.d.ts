@@ -25,3 +25,8 @@ declare module "*/vendor/addon-fit.js" {
   const source: string;
   export default source;
 }
+
+declare module "*.php" {
+  const source: string;
+  export default source;
+}

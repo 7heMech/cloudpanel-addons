@@ -20,7 +20,8 @@ import { MENU_ONLY_CLASS } from "../lib/row-actions";
 /** The `site.type` values Stager's own Twig condition offers a Clone for. */
 const CLONABLE_TYPES = ["php", "static", "reverse-proxy"];
 import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
-import { dashboardView as wpLoginDashboardView, layout as wpLoginLayout } from "../addons/wp-login/app/views";
+import { dashboardBody as wpLoginDashboardBody, dashboardView as wpLoginDashboardView, layout as wpLoginLayout } from "../addons/wp-login/app/views";
+import type { MainwpSiteView, MainwpView } from "../addons/wp-login/mainwp";
 import { WORDPRESS_APPLICATIONS, type WpSiteView } from "../addons/wp-login/action";
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
@@ -474,11 +475,15 @@ function injectedSitesBlocks(state: PanelTweaksState): string {
 /** WordPress everywhere but the static and reverse-proxy sites. */
 function wpLoginPreviewSites(url: URL): WpSiteView[] {
   if (url.searchParams.has("empty")) return [];
+  const status = url.searchParams.get("varnish");
+  const plugin = status && ["inactive", "missing", "unsupported", "error"].includes(status)
+    ? { status: status as "inactive" | "missing" | "unsupported" | "error", seen: true, checkedAt: "2026-10-09T08:45:00Z", error: status === "error" ? "WP-CLI timed out while checking the site. Retry to check again." : "" }
+    : null;
   return [
-    { domain: "www.example.com", user: "example", application: "WordPress", helper: true },
-    { domain: "shop.example.com", user: "shop", application: "WooCommerce", helper: true },
-    { domain: "blog.example.com", user: "blog", application: "Generic", helper: false },
-    { domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", application: "WordPress", helper: false },
+    { domain: "www.example.com", user: "example", application: "WordPress", helper: true, varnishCache: false, varnishExcluded: false, varnishPlugin: null },
+    { domain: "shop.example.com", user: "shop", application: "WooCommerce", helper: true, varnishCache: true, varnishExcluded: false, varnishPlugin: { status: "active", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
+    { domain: "blog.example.com", user: "blog", application: "Generic", helper: false, varnishCache: true, varnishExcluded: false, varnishPlugin: plugin },
+    { domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", application: "WordPress", helper: false, varnishCache: true, varnishExcluded: true, varnishPlugin: { status: "inactive", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
   ];
 }
 
@@ -608,6 +613,95 @@ function terminalPreview(req: Request, url: URL): Response | null {
   }
   if (path.startsWith("/addons/terminal/api/sessions/")) return new Response(null, { status: 204 });
   return null;
+}
+
+// The WordPress Tools API, acting on the sites the page was last drawn with.
+// ?mainwp=states turns automation on, ?mainwp=cleanup shows a pending cleanup.
+function mainwpPreview(url: URL): MainwpView {
+  const checkedAt = "2026-10-16T09:00:00Z";
+  const entry = (status: MainwpSiteView["status"], ownedConnection = false, seen = true): MainwpSiteView => ({
+    status, seen, checkedAt, ownedConnection,
+    error: status === "error" ? "the Dashboard could not connect; check the site's HTTPS, firewall and security plugins" : "",
+  });
+  return {
+    enabled: url.searchParams.get("mainwp") === "states",
+    dashboard: "mainwp.example.com",
+    excluded: ["staging.newsletter.example-church-of-the-hills.com"],
+    cleanup: url.searchParams.get("mainwp") === "cleanup",
+    owned: 1,
+    sites: {
+      "shop.example.com": entry("connected", true),
+      "www.example.com": entry("connected"),
+      "blog.example.com": entry("not-connected"),
+      "staging.newsletter.example-church-of-the-hills.com": entry("not-connected"),
+      "new.example.com": entry("missing", false, false),
+      "waiting.example.com": entry("waiting-https", false, false),
+      "removed.example.com": entry("missing"),
+      "network.example.com": entry("unsupported"),
+      "retry.example.com": entry("error"),
+    },
+  };
+}
+let wpLoginPreview = { sites: [] as WpSiteView[], automatic: false, error: "", mainwp: mainwpPreview(new URL("http://localhost")), mainwpError: "" };
+const wpLoginPreviewData = () => ({
+  sites: wpLoginPreview.sites,
+  varnish: { enabled: wpLoginPreview.automatic, excluded: [], sites: {} },
+  varnishError: wpLoginPreview.error,
+  mainwp: wpLoginPreview.mainwp, mainwpError: wpLoginPreview.mainwpError,
+});
+async function wpLoginPreviewApi(req: Request, path: string): Promise<Response | null> {
+  if (!path.startsWith("/addons/wp-login/api/")) return null;
+  const body = req.method === "POST" ? await req.json().catch(() => ({})) as Record<string, unknown> : {};
+  const ok = (data: unknown) => Response.json({ ok: true, data });
+  const active = () => ({ status: "active" as const, seen: true, checkedAt: new Date().toISOString(), error: "" });
+  const site = wpLoginPreview.sites.find((entry) => entry.domain === body.domain);
+  switch (path.slice("/addons/wp-login/api/".length)) {
+    case "dashboard":
+      return ok({ html: wpLoginDashboardBody(wpLoginPreviewData()) });
+    case "mainwp-settings":
+      wpLoginPreview.mainwp.enabled = body.enabled === true;
+      if (typeof body.dashboard === "string") wpLoginPreview.mainwp.dashboard = body.dashboard;
+      return ok({});
+    case "mainwp-site":
+      wpLoginPreview.mainwp.excluded = wpLoginPreview.mainwp.excluded.filter((domain) => domain !== body.domain);
+      if (body.excluded === true && typeof body.domain === "string") wpLoginPreview.mainwp.excluded.push(body.domain);
+      return ok({});
+    case "mainwp-connect":
+      if (site) wpLoginPreview.mainwp.sites[site.domain] = { status: "connected", seen: true, ownedConnection: true, checkedAt: new Date().toISOString(), error: "" };
+      return ok({ checked: 1, connected: 1, removed: 0, pending: 0, failed: [] });
+    case "mainwp-sync": return ok({ checked: wpLoginPreview.sites.length, connected: 0, removed: 0, pending: 0, failed: [] });
+    case "mainwp-cleanup":
+      wpLoginPreview.mainwp.enabled = false;
+      wpLoginPreview.mainwp.cleanup = false;
+      wpLoginPreview.mainwp.owned = 0;
+      for (const record of Object.values(wpLoginPreview.mainwp.sites)) {
+        if (!record.ownedConnection) continue;
+        record.status = "missing";
+        record.ownedConnection = false;
+      }
+      return ok({ checked: 1, connected: 0, removed: 1, pending: 0, failed: [] });
+    case "varnish-settings":
+      wpLoginPreview.automatic = body.enabled === true;
+      return ok({});
+    case "varnish-site":
+      if (site) site.varnishExcluded = body.excluded === true;
+      return ok({});
+    case "varnish-install":
+      if (site) site.varnishPlugin = active();
+      return ok({ installed: 1, checked: 1, pending: 0, failed: [] });
+    case "varnish-sync": {
+      const due = wpLoginPreview.sites.filter((entry) => entry.varnishCache && !entry.varnishExcluded
+        && (!entry.varnishPlugin || (entry.varnishPlugin.status === "missing" && !entry.varnishPlugin.seen)));
+      due.forEach((entry) => { entry.varnishPlugin = active(); });
+      return ok({ installed: due.length, checked: wpLoginPreview.sites.filter((entry) => entry.varnishCache && !entry.varnishExcluded).length, pending: 0, failed: [] });
+    }
+    case "remove": {
+      const removed = wpLoginPreview.sites.filter((entry) => entry.helper);
+      removed.forEach((entry) => { entry.helper = false; });
+      return ok({ removed: removed.length, failed: [] });
+    }
+  }
+  return Response.json({ ok: false, error: "the preview cannot sign in to WordPress" }, { status: 400 });
 }
 
 let panelAce: string | null = null;
@@ -760,6 +854,8 @@ const server = Bun.serve({
     const path = url.pathname;
     const terminalReply = terminalPreview(req, url);
     if (terminalReply) return terminalReply;
+    const wpLoginApi = await wpLoginPreviewApi(req, path);
+    if (wpLoginApi) return wpLoginApi;
     const repaintReply = await repaintPreviewMutation(req, url);
     if (repaintReply) return repaintReply;
     if (req.method !== "GET") return Response.json({ ok: false, error: "UI preview only; no changes were made." }, { status: 409 });
@@ -993,7 +1089,20 @@ const server = Bun.serve({
     } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
       html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites), notice);
     } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {
-      html = wpLoginLayout("WordPress Sign-In", wpLoginDashboardView(wpLoginPreviewSites(url)), notice);
+      wpLoginPreview = {
+        sites: wpLoginPreviewSites(url),
+        mainwp: mainwpPreview(url), mainwpError: url.searchParams.get("mainwp") === "unreadable" ? "The MainWP settings cannot be read." : "",
+        automatic: url.searchParams.has("automatic"),
+        error: url.searchParams.get("varnish") === "unreadable"
+          ? "/var/lib/clp-addons/wp-login/varnish.json cannot be read: the WordPress Varnish settings are invalid" : "",
+      };
+      const mainwpOnly = ["mainwp.example.com", "new.example.com", "waiting.example.com", "removed.example.com", "network.example.com", "retry.example.com"];
+      if (!empty) {
+        for (const domain of mainwpOnly) wpLoginPreview.sites.push({
+          domain, user: domain.split(".")[0]!, application: "WordPress", helper: false, varnishCache: false, varnishExcluded: false, varnishPlugin: null,
+        });
+      }
+      html = wpLoginLayout("WordPress Tools", wpLoginDashboardView(wpLoginPreviewData()), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP Resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice);
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {

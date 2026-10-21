@@ -18,11 +18,12 @@ phone and the row menu are each their own switch. The row menu is on by
 default: several addons put a link in every row, and one button per row reads
 better than the list of links they add up to.
 
-WordPress sign-in is [its own addon](wp-login.md) because it writes a plugin into
-a customer's site. Panel Tweaks only changes CloudPanel's pages and, for
-automatic SSL, submits the panel's own certificate form. An operator who wants a
-filterable site list should not have to install the code that can do that, and
-a switch is a weaker withdrawal than not having it on the box.
+WordPress sign-in and plugin installation belong to
+[WordPress Tools](wp-login.md) because they write into a customer's site. Panel
+Tweaks only changes CloudPanel's pages and, for automatic SSL, submits the
+panel's own certificate form. An operator who wants a filterable site list
+should not have to install the code that can do that, and a switch is a weaker
+withdrawal than not having it on the box.
 
 The page groups those switches by the panel surface they change, in the order
 Dashboard, Login, Sites. The Sites group is last because it is the longest and

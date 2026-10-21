@@ -11,5 +11,5 @@
 - [SMTP Relay](decisions/smtp.md)
 - [Git Deploy](decisions/git.md)
 - [Panel Tweaks](decisions/panel-tweaks.md)
-- [WordPress Sign-In](decisions/wp-login.md)
+- [WordPress Tools](decisions/wp-login.md)
 - [Terminal](decisions/terminal.md)
