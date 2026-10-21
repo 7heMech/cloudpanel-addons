@@ -103,6 +103,22 @@ describe("what has to change", () => {
     ]);
   });
 
+  test("a record that already has the wanted address is updated, never another rewritten to the same address", () => {
+    const rendered = renderProfile(profile([{ type: "A", name: "{domain}", content: "{ipv4}", proxied: true }]), vars("example.com"));
+    const old = published("A", "example.com", "198.51.100.4");
+    const current = published("A", "example.com", "203.0.113.10");
+    expect(diffRecords(rendered, [old, current]).ops.map((op) => `${op.action} ${op.current!.content}`)).toEqual([
+      "update 203.0.113.10", "delete 198.51.100.4",
+    ]);
+    const mx = profile([{ type: "MX", name: "{domain}", content: "mx1.example.net", priority: 10 }, { type: "MX", name: "{domain}", content: "mx2.example.net", priority: 20 }]);
+    const swapped = diffRecords(renderProfile(mx, vars("example.com")), [
+      published("MX", "example.com", "mx2.example.net", { priority: 10 }), published("MX", "example.com", "mx1.example.net", { priority: 20 }),
+    ]);
+    expect(swapped.ops.map((op) => `${op.action} ${op.current!.content} ${op.current!.priority} to ${op.record.priority}`)).toEqual([
+      "update mx1.example.net 20 to 10", "update mx2.example.net 10 to 20",
+    ]);
+  });
+
   test("SPF is merged into the published record, and only SPF TXT is owned", () => {
     const rendered = renderProfile(profile([{ type: "TXT", name: "{domain}", content: "v=spf1 mx ~all" }]), vars("example.com"));
     const spf = published("TXT", "example.com", "v=spf1 include:_spf.mlsend.com -all");

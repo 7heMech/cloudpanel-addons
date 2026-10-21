@@ -239,29 +239,35 @@ export function diffRecords(rendered: Rendered, published: CfRecord[]): Diff {
   }
   const used = new Set<CfRecord>(blocked);
 
-  const updates: RecordOp[] = [];
-  const creates: RecordOp[] = [];
-  for (const record of diff.wanted) {
+  const wanted = diff.wanted.map((record) => {
     const kind = record.type === "TXT" ? txtKind(record.content) : null;
     // A TXT value of no known kind is only ever looked for, among every TXT at its name.
     const candidates = kind === "other"
       ? published.filter((current) => current.type === "TXT" && current.name === record.name && current.content === record.content)
-      : pool;
-    const exact = candidates.find((current) => !used.has(current) && sameRecord(current, record));
-    if (exact) {
-      used.add(exact);
-      diff.matched.push(exact);
-      continue;
-    }
-    const replaceable = candidates.find((current) => !used.has(current) && current.type === record.type
-      && current.name === record.name && (kind === null || txtKind(current.content) === kind));
-    if (replaceable) {
-      used.add(replaceable);
-      updates.push({ action: "update", record, current: replaceable });
-    } else {
-      creates.push({ action: "create", record });
-    }
+      : pool.filter((current) => current.type === record.type && current.name === record.name
+        && (kind === null || txtKind(current.content) === kind));
+    return { record, candidates };
+  });
+  // Exact matches first, then records that differ only in proxy, TTL or priority, then any other: Cloudflare refuses
+  // a second record with the same content, so an update must never give one record another's content.
+  const passes = [
+    (current: CfRecord, record: RecordWrite) => sameRecord(current, record),
+    (current: CfRecord, record: RecordWrite) => canonical(current.type, current.content) === canonical(record.type, record.content),
+    () => true,
+  ];
+  const updates: RecordOp[] = [];
+  let unmatched = wanted;
+  for (const [pass, fits] of passes.entries()) {
+    unmatched = unmatched.filter(({ record, candidates }) => {
+      const current = candidates.find((candidate) => !used.has(candidate) && fits(candidate, record));
+      if (!current) return true;
+      used.add(current);
+      if (pass === 0) diff.matched.push(current);
+      else updates.push({ action: "update", record, current });
+      return false;
+    });
   }
+  const creates: RecordOp[] = unmatched.map(({ record }) => ({ action: "create", record }));
   const deletes: RecordOp[] = pool.filter((current) => !used.has(current)).map((current) => ({ action: "delete", record: current, current }));
   // In place first, so a merged SPF is saved before its duplicates go; then what blocks a create.
   diff.ops = [...updates, ...deletes, ...creates];
