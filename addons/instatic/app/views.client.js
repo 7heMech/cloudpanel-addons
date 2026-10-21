@@ -6,11 +6,14 @@ let currentLogMode = 'container';
 async function act(domain, verb) {
   busy(true);
   try {
-    await call('/api/instances/' + encodeURIComponent(domain) + '/' + verb, { method: 'POST' });
-    location.reload();
+    const reply = await call('/api/instances/' + encodeURIComponent(domain) + '/' + verb, { method: 'POST' });
+    repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+    notify(domain + ': ' + verb + ' completed.', 'ok');
   } catch (e) {
     busy(false);
-    alert(verb + ' failed: ' + e.message);
+    notify(verb + ' failed: ' + e.message, 'error');
+  } finally {
+    busy(false);
   }
 }
 
@@ -108,36 +111,31 @@ function askUpdate(domain, current) {
 
 async function confirmUpdate() {
   const tag = document.getElementById('update-tag').value.trim();
-  if (!/^\d+\.\d+\.\d+$/.test(tag)) { alert('Enter an exact version, for example 0.0.18'); return; }
-  document.getElementById('update-dialog').close();
-  busy(true);
-  let res = null;
-  let body = null;
-  try {
-    res = await fetch(CLP_BASE + '/api/instances/' + encodeURIComponent(pendingUpdate) + '/update', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-CLP-Addons-CSRF': csrf() },
-      body: JSON.stringify({ tag: tag })
-    });
-  } catch (error) {
-    // The dialog is already closed, so a request that never reached the server
-    // would otherwise leave the page disabled with nothing said.
-    busy(false);
-    notify(error.message || 'the update request did not reach the server', 'error');
+  if (!/^\d+\.\d+\.\d+$/.test(tag)) {
+    notify('Enter an exact version, for example 0.0.18.', 'error');
     return;
   }
-  try { body = await res.json(); } catch (e) {}
-  if (res.ok && body && body.ok !== false) { location.reload(); return; }
-
-  busy(false);
-  // A rolled-back update is the case where the container logs are the whole
-  // story, so show them rather than just the failure line.
-  const logs = body && body.data && body.data.logs;
-  document.getElementById('logs-title').textContent =
-    'Update failed \u2014 rolled back to ' + ((body && body.data && body.data.restoredTag) || 'the previous version');
-  document.getElementById('logs-body').textContent =
-    ((body && body.error) || 'update failed') + (logs ? '\n\n--- container logs ---\n' + logs : '');
-  document.getElementById('logs-dialog').showModal();
+  busy(true);
+  try {
+    const reply = await call('/api/instances/' + encodeURIComponent(pendingUpdate) + '/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag: tag }),
+    });
+    repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+    notify(pendingUpdate + ' updated to ' + tag + '.', 'ok');
+  } catch (error) {
+    notify('Update failed: ' + error.message, 'error');
+    const data = error.data;
+    if (data && data.logs) {
+      document.getElementById('logs-title').textContent =
+        'Update failed — rolled back to ' + (data.restoredTag || 'the previous version');
+      document.getElementById('logs-body').textContent = error.message + '\n\n' + data.logs;
+      document.getElementById('logs-dialog').showModal();
+    }
+  } finally {
+    busy(false);
+  }
 }
 
 let pendingDelete = null;
@@ -151,14 +149,16 @@ function askDelete(domain) {
 async function confirmDelete() {
   const typed = document.getElementById('delete-confirm').value.trim();
   if (typed !== pendingDelete) { alert('Type the domain exactly to confirm.'); return; }
-  document.getElementById('delete-dialog').close();
   busy(true);
   try {
-    await call('/api/instances/' + encodeURIComponent(pendingDelete) + '/delete', { method: 'POST' });
-    location.href = CLP_BASE + '/';
+    const reply = await call('/api/instances/' + encodeURIComponent(pendingDelete) + '/delete', { method: 'POST' });
+    repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+    notify(pendingDelete + ' deleted.', 'ok');
   } catch (e) {
     busy(false);
-    alert('Delete failed: ' + e.message);
+    notify('Delete failed: ' + e.message, 'error');
+  } finally {
+    busy(false);
   }
 }
 

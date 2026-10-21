@@ -16,6 +16,11 @@ stream. Installation and addon settings remain on the administrator's manager
 pages. Image selection is limited to exact versions of the fixed Instatic
 registry image; callers cannot supply container commands or mount paths.
 
+Lifecycle actions, updates and deletion return dashboard HTML from the same
+renderer as the first load. The browser closes the completed dialog, repaints
+in place and reports the outcome. Failed updates retain the form and expose
+rollback logs when supplied. Creation job completion repaints its result view.
+
 ## Instance model
 
 Each site is a CloudPanel reverse proxy backed by a Docker container bound to
