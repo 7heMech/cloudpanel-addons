@@ -100,14 +100,14 @@ export async function handle(
       if (target) return redirectResponse(embedLandingUrl(target, "git"));
     }
     try {
-      if (!selected) return html(layout("Git deploy", fleetView(await gitService.listSites()), updateNotice, undefined, admin), csrf);
+      if (!selected) return html(layout("Git Deploy", fleetView(await gitService.listSites()), updateNotice, undefined, admin), csrf);
       const domain = validateDomain(selected);
       if (!domain) return html(layout("Invalid site", '<div class="alert">That is not a valid hostname.</div>', updateNotice, undefined, admin), csrf, 400);
       const page = await sitePage(domain);
       return html(layout(page.title, page.content, updateNotice, { ...page.context, ...tabs }, admin), csrf);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return html(layout("Git deploy", errorBlock(error), updateNotice, undefined, admin), csrf, /not found/i.test(message) ? 404 : 500);
+      return html(layout("Git Deploy", errorBlock(error), updateNotice, undefined, admin), csrf, /not found/i.test(message) ? 404 : 500);
     }
   }
 

@@ -995,7 +995,7 @@ const server = Bun.serve({
     } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {
       html = wpLoginLayout("WordPress Sign-In", wpLoginDashboardView(wpLoginPreviewSites(url)), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
-      html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice);
+      html = phpResourcesLayout("PHP Resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice);
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {
       // ?profile=<id> (or ?profile= for a new one) and ?domains=<site> open a dialog on load, like ?confirm= does.
       const arg = (name: string) => JSON.stringify(url.searchParams.get(name)).replaceAll("<", "\\u003c");
@@ -1004,7 +1004,7 @@ const server = Bun.serve({
       html = smtpLayout("SMTP Relay", smtpDashboardView(smtpPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
-      html = cloudflareLayout("Cloudflare IP access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
+      html = cloudflareLayout("Cloudflare IP Access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {
       html = instaticLayout("Instatic sites", dashboardView(empty ? [] : instances, age,
         sites.map((s) => ({ domain: s.domain, type: s.siteType, user: s.siteUser })), versions), notice);
@@ -1048,7 +1048,7 @@ const server = Bun.serve({
             varnishCache: siteVarnish[site.domain] === true,
             ...(url.searchParams.has("no-ip") ? {} : { publicIp: PREVIEW_PUBLIC_IP }),
           })
-        : gitLayout("Git deploy", gitFleetView(empty ? [] : gitSites.filter((site) => site.configured)), notice);
+        : gitLayout("Git Deploy", gitFleetView(empty ? [] : gitSites.filter((site) => site.configured)), notice);
     } else if (path === "/addons/stager/" || path === "/addons/stager") {
       // ?domain= is the site-scoped page the Staging tab reaches, drawn here
       // with the panel's chrome around it the way the standalone ?embed=0 page
