@@ -263,6 +263,8 @@ class Action {
   readonly now: number;
   private cachedSites: PanelSite[] | null = null;
   private cachedAddresses: Addresses | null = null;
+  private readonly runs: DnsRun[] = [];
+  private mailcowTrial: MailcowApi | null = null;
 
   constructor(readonly paths: DnsPaths, readonly options: DnsActionOptions) {
     this.files = new Files(paths);
@@ -291,10 +293,25 @@ class Action {
   }
 
   run(policy: Policy, secrets = this.files.secrets()): DnsRun {
-    return new DnsRun({
+    const run = new DnsRun({
       policy, secrets, sites: this.sites(), addresses: this.addresses(), fetch: this.options.fetch,
       backoff: this.files.status().backoff,
     });
+    this.runs.push(run);
+    return run;
+  }
+
+  rememberBackoff(): void {
+    if (!this.runs.length && !this.mailcowTrial) return;
+    const status = this.files.status();
+    const backoff = { ...status.backoff };
+    for (const run of this.runs) {
+      const observed = run.backoff();
+      backoff.cloudflare = Math.max(backoff.cloudflare, observed.cloudflare);
+      backoff.mailcow = Math.max(backoff.mailcow, observed.mailcow);
+    }
+    backoff.mailcow = Math.max(backoff.mailcow, this.mailcowTrial?.http.backoff.until ?? 0);
+    if (JSON.stringify(backoff) !== JSON.stringify(status.backoff)) this.files.saveStatus({ ...status, backoff });
   }
 
   /** Writes what a run found for `domains`, keeping what it did not look at. */
@@ -696,7 +713,8 @@ class Action {
     // A saved key is kept only for the Mailcow it was saved for.
     const key = body.key ? secretText(body.key, "The Mailcow API key") : settings.url === policy.mailcow.url ? secrets.mailcowKey : "";
     if (!key) failAction("Enter Mailcow's API key");
-    const api = new MailcowApi(settings.url, key, this.options.fetch);
+    const api = new MailcowApi(settings.url, key, this.options.fetch, { until: this.files.status().backoff.mailcow });
+    this.mailcowTrial = api;
     try {
       if (settings.sharedMailbox) await api.senderAcl(settings.sharedMailbox);
       else await api.hasDomain(settings.host);
@@ -845,6 +863,8 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
       const message = redact(error.message, [...Object.values(secrets.cloudflare), secrets.mailcowKey]);
       if (message === error.message) throw error;
       failAction(message);
+    } finally {
+      action.rememberBackoff();
     }
   });
 }

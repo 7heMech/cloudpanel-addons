@@ -650,6 +650,16 @@ describe("sites CloudPanel no longer has", () => {
 });
 
 describe("limits and failures", () => {
+  test("a token check that is rate limited remembers the wait even though nothing is saved", async () => {
+    const env = setup();
+    env.cf.limit = { after: 0, retryAfter: "600" };
+    await expect(env.connect()).rejects.toThrow("asked to wait");
+    const calls = env.cf.calls.length;
+    await expect(env.connect()).rejects.toThrow("asked to wait");
+    expect(env.cf.calls.length).toBe(calls);
+    expect((await env.act("list")).waitUntil).toBeGreaterThan(Date.now());
+  });
+
   test("a 429 is remembered between runs and no call is made until it passes", async () => {
     const env = setup();
     await env.connect();
