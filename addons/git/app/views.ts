@@ -176,7 +176,7 @@ export function siteView(site: GitSiteStatus, log: string): string {
   return `
     <div class="page-heading">
       <div>
-        <h1>Git deploy</h1>
+        <h1>Git Deploy</h1>
         <p>${site.configured ? "Your checkout, latest deployment, and repository settings." : `Connect a repository to deploy ${esc(site.domain)}.`}</p>
       </div>
       ${deployAction}
@@ -369,7 +369,7 @@ export function fleetView(sites: GitSiteStatus[]): string {
   return `
     <div class="page-heading">
       <div>
-        <h1>Git deploy</h1>
+        <h1>Git Deploy</h1>
         <p>Monitor your deployments and ship updates across your sites.</p>
       </div>
       <a class="btn" href="/">Connect a site</a>

@@ -182,6 +182,11 @@ of the cell it came from: the table sits in a horizontal scroller, which clips
 anything hanging out of it. The links themselves are moved into it rather than
 copied, so another addon's link keeps working with no arrangement between the
 two: the addon does not know what is in the action cell, only that it is a link.
+The table keeps 20px at its outer edges and 10px on each side between columns,
+leaving the action menu visible with the default columns at desktop width.
+With the narrow layout enabled, rows become cards at 1100px, before those
+columns squeeze hostnames into fragments. Additional columns can still use the
+scroller when the table layout is active.
 
 `lib/row-actions.ts` is the whole agreement between the two addons. An addon
 with an action worth a place in the menu but not a link in every row of a list
