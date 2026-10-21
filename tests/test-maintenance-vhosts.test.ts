@@ -207,16 +207,30 @@ test("status reports drift in either persisted or rendered vhosts, missing files
   } finally { f.cleanup(); }
 });
 
-test("untrusted vhosts leave all rows and files unchanged", () => {
+test("an untrusted or unplaceable vhost is skipped and reported without blocking other sites", () => {
   const f = fixture();
   try {
     f.addSite();
+    f.addSite("odd.test", `server { listen 443 ssl; server_name odd.test; }\nserver { listen 443 ssl; server_name odd.test; }\n`);
+    f.addSite("good.test", upstream("v2-Static-Static"));
     chmodSync(join(f.paths.nginxVhostDir, `${domain}.conf`), 0o666);
     const original = f.template();
-    expect(reconcileNginxMaintenance({ ...f.paths, run: f.run }).state).toBe("validation-failed");
+    expect(reconcileNginxMaintenance({ ...f.paths, run: f.run }).state).toBe("ok");
     expect(f.template()).toBe(original);
-    expect(f.commands).toHaveLength(0);
-    expect(existsSync(f.paths.includePath)).toBe(false);
+    expect(f.template("good.test")).toContain(`include ${f.paths.includePath};`);
+    expect(inspectNginxMaintenance(f.paths)).toMatchObject({ state: "uncovered-sites", uncoveredSites: [domain, "odd.test"] });
+  } finally { f.cleanup(); }
+});
+
+test("a vhost that says why it leaves out global_settings is not given the check", () => {
+  const f = fixture();
+  try {
+    const optOut = upstream("v2-Static-Static").replace("index index.html;", "# global_settings (box-wide maintenance) is not included on purpose.\n  index index.html;");
+    f.addSite(domain, optOut);
+    expect(transformMaintenanceVhost(optOut, domain, true)).toBe(optOut);
+    expect(reconcileNginxMaintenance({ ...f.paths, run: f.run }).state).toBe("ok");
+    expect(f.template()).toBe(optOut);
+    expect(inspectNginxMaintenance(f.paths).state).toBe("ok");
   } finally { f.cleanup(); }
 });
 

@@ -52,8 +52,11 @@ marked include of `/etc/nginx/clp-addons-maintenance.conf`, containing the same
 check, in both their database `site.vhost_template` and rendered vhost. The
 include goes at the start of the canonical site's port-8080 backend when present,
 otherwise its main server, never the www redirect. A serving server that already
-includes `global_settings` gets no additional include. Older templates retain
-their existing header settings. Nginx checks
+includes `global_settings` gets no additional include. A vhost that mentions
+`global_settings` without including it has opted out on purpose and is left
+alone. A site whose vhost is untrusted or has no single serving server is
+skipped, so it cannot block the others, and `clp-addons status` names it. Older
+templates retain their existing header settings. Nginx checks
 `/var/lib/clp-addons/maintenance/_global/on` and
 `/var/lib/clp-addons/maintenance/$server_name/on` on every request and clears
 the maintenance decision when a matching `bypass_$clp_maintenance_ip` file

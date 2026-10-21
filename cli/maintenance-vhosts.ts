@@ -60,6 +60,11 @@ function servingBlock(content: string, domain: string): Block {
   return selected[0]!;
 }
 
+/** A vhost that names global_settings, by including it or by saying why it does not, has made its own choice. */
+function optedOut(content: string): boolean {
+  return content.includes("global_settings");
+}
+
 function includes(block: Block, path: string): boolean {
   return block.directives.some(({ words }) => words[0] === "include" && words[1] === path);
 }
@@ -67,9 +72,8 @@ function includes(block: Block, path: string): boolean {
 export function transformMaintenanceVhost(content: string, domain: string, enabled: boolean, includePath = MAINTENANCE_INCLUDE_PATH): string {
   const clean = content.replace(BLOCK, "");
   if (clean.includes(START) || clean.includes(END)) throw new Error(`${domain}: malformed maintenance include marker`);
-  if (!enabled) return clean;
+  if (!enabled || optedOut(clean)) return clean;
   const block = servingBlock(clean, domain);
-  if (includes(block, "/etc/nginx/global_settings")) return clean;
   if (includes(block, includePath)) throw new Error(`${domain}: unmanaged maintenance include`);
   const newline = clean.includes("\r\n") ? "\r\n" : "\n";
   const injected = ["", `  ${START}`, `  include ${includePath};`, `  ${END}`, ""].join(newline);
@@ -92,21 +96,30 @@ export function stageMaintenanceVhosts(db: Database, changes: NginxChange[], pat
   nginxVhostDir: string; vhostUid: number; includePath: string;
 }, enabled: boolean): void {
   for (const site of maintenanceSites(db)) {
-    const domain = siteDomain(site);
-    const template = transformMaintenanceVhost(site.vhost_template, domain, enabled, paths.includePath);
-    const path = join(paths.nginxVhostDir, `${domain}.conf`);
-    let rendered: string | null;
-    try { rendered = readFileSync(path, "utf8"); }
-    catch (error) {
-      if (enabled || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      rendered = null;
+    // A site this cannot place the check in is left as it is and reported by sitesWithoutMaintenance.
+    let staged: { template: string; change: NginxChange | null; domain: string };
+    try {
+      const domain = siteDomain(site);
+      const template = transformMaintenanceVhost(site.vhost_template, domain, enabled, paths.includePath);
+      const path = join(paths.nginxVhostDir, `${domain}.conf`);
+      let rendered: string | null;
+      try { rendered = readFileSync(path, "utf8"); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        rendered = null;
+      }
+      let change: NginxChange | null = null;
+      if (rendered !== null && transformMaintenanceVhost(rendered, domain, enabled, paths.includePath) !== rendered) {
+        const backup = trustedVhost(path, paths.vhostUid);
+        change = { backup, content: transformMaintenanceVhost(backup.content, domain, enabled, paths.includePath) };
+      }
+      staged = { template, change, domain };
+    } catch {
+      continue;
     }
-    if (rendered !== null && transformMaintenanceVhost(rendered, domain, enabled, paths.includePath) !== rendered) {
-      const backup = trustedVhost(path, paths.vhostUid);
-      changes.push({ backup, content: transformMaintenanceVhost(backup.content, domain, enabled, paths.includePath) });
-    }
-    if (template !== site.vhost_template) {
-      db.query("UPDATE site SET vhost_template = ?, updated_at = CURRENT_TIMESTAMP WHERE domain_name = ?;").run(template, domain);
+    if (staged.change) changes.push(staged.change);
+    if (staged.template !== site.vhost_template) {
+      db.query("UPDATE site SET vhost_template = ?, updated_at = CURRENT_TIMESTAMP WHERE domain_name = ?;").run(staged.template, staged.domain);
     }
   }
 }
@@ -118,6 +131,7 @@ export function sitesWithoutMaintenance(db: Database, paths: {
     try {
       const domain = siteDomain(site);
       const rendered = readFileSync(join(paths.nginxVhostDir, `${domain}.conf`), "utf8");
+      if (optedOut(rendered) && !rendered.includes("include /etc/nginx/global_settings")) return [];
       return [rendered, site.vhost_template].every((content) => {
         const block = servingBlock(content, domain);
         return includes(block, "/etc/nginx/global_settings") !== includes(block, paths.includePath);
