@@ -480,10 +480,13 @@ describe("zones and new sites", () => {
     expect(env.records()).toContain("A fresh.example.com 203.0.113.10 proxied");
     const state = await env.act("list");
     expect(state.sites.find((entry) => entry.domain === "shop.example.com")!.profileId).toBeNull();
-    // Nothing new: the watcher's second pass makes no calls at all.
-    const calls = env.cf.calls.length;
-    await env.act("sync-sites");
-    expect(env.cf.calls.length).toBe(calls);
+    // A vhost rewrite can wake this repeatedly without adding a site.
+    const calls = [env.cf.calls.length, env.mc.calls.length];
+    const policyFile = join(env.dir, "state", "policy.json");
+    const inode = statSync(policyFile).ino;
+    for (let pass = 0; pass < 3; pass++) await env.act("sync-sites");
+    expect([env.cf.calls.length, env.mc.calls.length]).toEqual(calls);
+    expect(statSync(policyFile).ino).toBe(inode);
   });
 
   test("provisioning names www for a certificate only at the apex", async () => {
@@ -505,7 +508,7 @@ describe("zones and new sites", () => {
     expect(env.cf.writes()).toEqual([]);
   });
 
-  test("a site manager may provision only their own sites", async () => {
+  test("an ordinary panel user may provision only their own sites", async () => {
     const env = setup();
     const db = new Database(join(env.dir, "db.sq3"));
     db.exec(`CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER);

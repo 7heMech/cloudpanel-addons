@@ -111,7 +111,7 @@ export const SMTP_ALLOWED_VERBS = new Set([
 ]);
 
 /**
- * `provision` is the one verb a non-administrator's request reaches, and
+ * `provision` admits ordinary panel users as well as site managers, and
  * carries `--as-user` so the action holds it to that account's own sites.
  */
 export const DNS_ALLOWED_VERBS = new Set([

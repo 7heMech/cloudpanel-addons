@@ -100,3 +100,13 @@ describe("the gateway allowlist agrees with what each action implements", () => 
     }
   });
 });
+
+test("DNS help lists all action verbs and the shared sync-sites command", () => {
+  const source = readFileSync(new URL("../cli/index.ts", import.meta.url), "utf8");
+  const lines = source.split("\n").filter((line) => line.trim().startsWith("clp-addons action dns "));
+  const listed = lines.flatMap((line) => line.includes("<list|")
+    ? line.match(/<([^>]+)>/)![1]!.split("|")
+    : [line.trim().split(" ")[3]!]);
+  expect(listed.sort()).toEqual(declaredVerbs("addons/dns/action.ts", "DnsVerb"));
+  expect(source.split("\n").some((line) => line.trim() === "clp-addons sync-sites")).toBe(true);
+});

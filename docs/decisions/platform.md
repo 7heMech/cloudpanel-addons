@@ -156,7 +156,9 @@ user. One addon failing does not skip the next. CloudPanel commits the site row
 about 200 ms after writing the vhost, so the service runs again 10 seconds
 later, even if the first run failed. The units exist while any installed addon
 declares `newSites`; repair restarts the watcher if it has stopped. It takes no
-operation lock: each addon's work takes its own.
+operation lock: each addon's work takes its own. Vhost rewrites also wake the
+watcher; when the site set is unchanged, the hooks make no network calls or
+configuration writes.
 
 ## One way to watch a job
 
