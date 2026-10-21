@@ -53,9 +53,9 @@ would otherwise read as a finished install and then start nothing.
 
 A managed definition is rewritten when its text differs, and also when what
 stands at its path is not the plain `0644` file this binary writes -- a
-group-writable unit, or a symlink to a file holding the right text. Rewriting
-unconditionally used to converge that as a side effect, and several managed
-units name no `User=`, so systemd runs what they name as root.
+group-writable unit, or a symlink to a file holding the right text. Comparing
+text alone would leave either in place, and several managed units name no
+`User=`, so systemd runs what they name as root.
 
 `systemctl daemon-reload` runs only when a managed definition was created,
 changed or removed, and a toggle starts only units it created -- never the auth
@@ -161,7 +161,7 @@ Panel information is read through `readPanelSnapshot`, which returns the
 snapshot and its age at receipt. A timestamp that cannot be parsed reads as
 infinitely old rather than as `NaN`: every caller compares the age against a
 staleness threshold, and `NaN` fails every comparison, so an unreadable snapshot
-used to look current. What a given age means stays with each addon.
+would look current. What a given age means stays with each addon.
 
 ## Shared interface
 
