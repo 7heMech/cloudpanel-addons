@@ -1,5 +1,5 @@
 // Local UI review with fictional data. Never starts the manager, reads panel
-// state or invokes an action. Mutating requests are rejected deliberately.
+// state or invokes an action. Supported mutations change fictional data only.
 import { indexPage, updatePage } from "../manager/views";
 import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } from "../addons/cloudflare-ips/app/views";
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
@@ -98,6 +98,8 @@ function gitPreviewLog(site: GitSiteStatus): string {
  * Connected sites and first-time setup. ?first-deploy, ?no-delivery,
  * ?other-provider, ?unavailable, and ?state= cover the expandable controls.
  */
+const gitChanges = new Map<string, GitSiteStatus>();
+
 function gitPreviewSites(url: URL): GitSiteStatus[] {
   const delivered = new Date(Date.now() - 4 * 60_000).toISOString().replace(/\.\d+Z$/, "Z");
   const firstDeploy = url.searchParams.has("first-deploy");
@@ -113,7 +115,7 @@ function gitPreviewSites(url: URL): GitSiteStatus[] {
     result: { branch: "main", directory: "", commit, postDeploy: "composer install --no-dev", postDeployRan: true },
   };
   if (job.state === "failed") job.error = "the post-deploy command failed; the files are deployed and the command did not finish";
-  return [
+  const result: GitSiteStatus[] = [
     {
       domain: "www.example.com", siteUser: "example", siteType: "php",
       path: "/home/example/htdocs/www.example.com", configured: true,
@@ -157,6 +159,7 @@ function gitPreviewSites(url: URL): GitSiteStatus[] {
         error: "The build command failed. Check the deployment output before trying again." },
     },
   ];
+  return result.map((site) => gitChanges.get(site.domain) ?? site);
 }
 
 /**
@@ -610,6 +613,145 @@ function terminalPreview(req: Request, url: URL): Response | null {
 let panelAce: string | null = null;
 const panelCss: Record<string, string> = {};
 
+const finishedPreviewJobs = new Set<string>();
+let previewEnabled: string[] | null = null;
+let phpChanges: PhpResourcesState | null = null;
+const previewDeployments = new Map<string, GitSiteStatus>();
+let previewManagerJob: import("../cli/manager-action").ManagerJobView | null = null;
+let previewJobNumber = 0;
+
+function instaticDashboard(): string {
+  return dashboardView(instances, 30, sites.map((site) => ({ domain: site.domain, type: site.siteType, user: site.siteUser })), versions);
+}
+
+async function repaintPreviewMutation(req: Request, url: URL): Promise<Response | null> {
+  if (req.method === "GET") return null;
+  const path = url.pathname;
+  const source = new URL(req.headers.get("referer") || url);
+  const body = await req.json().catch(() => ({})) as Record<string, any>;
+  return gitPreviewMutation(req, path, source, body)
+    ?? instaticPreviewMutation(path, body)
+    ?? phpPreviewMutation(path, source, body)
+    ?? managerPreviewMutation(path, source);
+}
+
+function gitPreviewMutation(req: Request, path: string, source: URL, body: Record<string, any>): Response | null {
+  const gitRoute = path.match(/^\/addons\/git\/api\/sites\/([^/]+)\/(config|key|webhook)$/);
+  if (gitRoute) {
+    const domain = decodeURIComponent(gitRoute[1]!);
+    const site = structuredClone(gitPreviewSites(source).find((site) => site.domain === domain));
+    if (!site) return Response.json({ ok: false, error: "No preview site" }, { status: 404 });
+    const verb = gitRoute[2];
+    if (verb === "config") {
+      site.configured = req.method !== "DELETE";
+      site.config = site.configured
+        ? {
+            domain, remote: body.remote, branch: body.branch, directory: body.directory || "",
+            postDeploy: body.postDeploy || "", updatedAt: "", webhook: site.config?.webhook ?? null,
+          }
+        : null;
+    } else if (verb === "key") {
+      site.publicKey = "ssh-ed25519 PreviewReplacementKey" + (++previewJobNumber);
+    } else if (site.config) {
+      site.config.webhook = req.method === "DELETE" ? null
+        : { token: "PreviewWebhook" + (++previewJobNumber), lastDeliveryAt: "", lastDelivery: "", lastDeliveryJob: "" };
+    }
+    gitChanges.set(domain, site);
+    return Response.json({ ok: true, data: { site }, html: gitSiteView(site, gitPreviewLog(site)) });
+  }
+  if (path === "/addons/git/api/deployments") {
+    const site = structuredClone(gitPreviewSites(source).find((site) => site.domain === body.domain));
+    if (!site?.config) return Response.json({ ok: false, error: "No repository configured" }, { status: 400 });
+    const id = "20261021T120000Z-" + (++previewJobNumber).toString(16).padStart(6, "0");
+    site.lastJob = {
+      id, domain: site.domain, kind: "deploy", state: "running", step: "Fetching repository", startedBy: "operator",
+      createdAt: new Date().toISOString(), startedAt: "", finishedAt: "", error: "", result: null,
+    };
+    gitChanges.set(site.domain, site);
+    previewDeployments.set(id, site);
+    return Response.json({ ok: true, data: { job: id } });
+  }
+  return null;
+}
+
+function instaticPreviewMutation(path: string, body: Record<string, any>): Response | null {
+  const instanceRoute = path.match(/^\/addons\/instatic\/api\/instances\/([^/]+)\/(start|stop|restart|recreate|update|delete)$/);
+  if (instanceRoute) {
+    const domain = decodeURIComponent(instanceRoute[1]!);
+    const instance = instances.find((instance) => instance.domain === domain);
+    if (!instance) return Response.json({ ok: false, error: "No preview instance" }, { status: 404 });
+    const verb = instanceRoute[2];
+    if (verb === "delete") instances.splice(instances.indexOf(instance), 1);
+    else if (verb === "update") instance.tag = body.tag;
+    else instance.state = verb === "stop" ? "exited" : "running";
+    return Response.json({ ok: true, data: { domain }, html: instaticDashboard() });
+  }
+  return null;
+}
+
+function phpPreviewMutation(path: string, source: URL, body: Record<string, any>): Response | null {
+  if (path.startsWith("/addons/php-resources/api/")) {
+    const state = phpChanges ?? structuredClone(phpResourcesPreviewState(source));
+    if (path.endsWith("/default")) state.defaultCategoryId = body.categoryId;
+    else if (path.endsWith("/assign")) {
+      const category = state.categories.find((category) => category.id === body.categoryId);
+      state.sites.forEach((site) => {
+        if (!body.domains.includes(site.domain)) return;
+        site.categoryId = category?.id ?? null;
+        site.categoryName = category?.name ?? null;
+        site.current = category?.profile ?? STOCK_PROFILE;
+        site.drifted = false;
+      });
+    } else if (path.endsWith("/categories/delete")) {
+      state.categories = state.categories.filter((category) => category.id !== body.id);
+    } else if (path.endsWith("/categories")) {
+      const category = { id: body.id || "preview-category", name: body.name, description: body.description, profile: body.profile };
+      state.categories = state.categories.filter((entry) => entry.id !== category.id).concat(category);
+    } else return null;
+    phpChanges = state;
+    return Response.json({ ok: true, data: { ...state, failures: [] }, html: phpResourcesDashboardView(state) });
+  }
+  return null;
+}
+
+function managerPreviewMutation(path: string, source: URL): Response | null {
+  if (path === "/addons/api/update") {
+    previewManagerJob = {
+      id: "20261021T120000Z-" + (++previewJobNumber).toString(16).padStart(6, "0"), addon: "",
+      kind: "update", state: "running", step: "Downloading", error: "Preview download failed", createdAt: "", startedAt: "", finishedAt: "",
+    };
+    return Response.json({ ok: true, data: { jobId: previewManagerJob.id } });
+  }
+  const managerRoute = path.match(/^\/addons\/api\/addons\/([^/]+)\/(enable|disable)$/);
+  if (managerRoute) {
+    previewEnabled ??= (source.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,php-resources,git").split(",");
+    previewManagerJob = {
+      id: "20261021T120000Z-" + (++previewJobNumber).toString(16).padStart(6, "0"), addon: managerRoute[1]!,
+      kind: managerRoute[2]!, state: "running", step: "Updating addon", error: "", createdAt: "", startedAt: "", finishedAt: "",
+    };
+    return Response.json({ ok: true, data: { jobId: previewManagerJob.id } });
+  }
+  return null;
+}
+
+function finishedPreviewStream(job: { state: string; id: string }, log: string, finish: () => void, state = "done"): Response {
+  let timer: ReturnType<typeof setTimeout>;
+  const stream = new ReadableStream({
+    start(controller) {
+      const send = () => controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ job, log })}\n\n`));
+      send();
+      timer = setTimeout(() => {
+        job.state = state;
+        finish();
+        send();
+        controller.close();
+      }, 500);
+    },
+    cancel() { clearTimeout(timer); },
+  });
+  return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
+}
+
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.PORT || 4100),
@@ -618,6 +760,8 @@ const server = Bun.serve({
     const path = url.pathname;
     const terminalReply = terminalPreview(req, url);
     if (terminalReply) return terminalReply;
+    const repaintReply = await repaintPreviewMutation(req, url);
+    if (repaintReply) return repaintReply;
     if (req.method !== "GET") return Response.json({ ok: false, error: "UI preview only; no changes were made." }, { status: 409 });
     // These are the same two logo URLs the installed manager gets from its
     // CloudPanel origin. Only this development preview fetches the public demo.
@@ -701,9 +845,29 @@ const server = Bun.serve({
         { headers: withCsrfCookie({}, "preview-token") },
       );
     }
+    if (path.startsWith("/addons/api/jobs/") && previewManagerJob) {
+      const job = previewManagerJob;
+      return finishedPreviewStream(job, "Addon updated", () => {
+        if (job.kind === "update") return;
+        previewEnabled = previewEnabled!.filter((addon) => addon !== job.addon);
+        if (job.kind === "enable") previewEnabled.push(job.addon);
+      }, job.kind === "update" ? "failed" : "done");
+    }
+    if (path === "/addons/git/api/view") {
+      const selected = url.searchParams.get("domain");
+      const all = gitPreviewSites(url);
+      const site = all.find((site) => site.domain === selected);
+      return Response.json({ ok: true, html: site ? gitSiteView(site, gitPreviewLog(site)) : gitFleetView(all.filter((site) => site.configured)) });
+    }
     // The job the Git pages watch, so ?state=running can be reviewed as a live
     // view rather than as a stream that never answers.
     if (path.startsWith("/addons/git/api/jobs/")) {
+      const deployment = Array.from(previewDeployments.entries()).find(([id]) => path.includes(id))?.[1];
+      if (deployment?.lastJob) {
+        return finishedPreviewStream(deployment.lastJob, gitPreviewLog(deployment), () => {
+          deployment.lastJob!.finishedAt = new Date().toISOString();
+        });
+      }
       // The watcher URL has no query, so use the page that requested it to keep
       // a running preview running instead of reloading it in a loop as done.
       const source = req.headers.get("referer");
@@ -748,7 +912,7 @@ const server = Bun.serve({
     const notice = url.searchParams.has("update") || path === "/addons/update" ? { current: "0.9.3", latest: "0.9.4" } : null;
     const age = url.searchParams.has("stale") ? 7200 : 30;
     const state = url.searchParams.get("state");
-    const currentJob: JobView = state && ["running", "failed", "queued"].includes(state)
+    const currentJob: JobView = !finishedPreviewJobs.has(job.id) && state && ["running", "failed", "queued"].includes(state)
       ? { ...job, state, result: null, finishedAt: "", step: "Copying files", error: state === "failed" ? "Could not copy the source files. The staging site was removed." : "" }
       : job;
     let html: string;
@@ -758,7 +922,7 @@ const server = Bun.serve({
         current: "0.9.3", latest: url.searchParams.has("current") ? "0.9.3" : "0.9.4", hasUpdate: !url.searchParams.has("current"),
       }, "0.9.3", {
         csrf: "preview-csrf-token",
-        job: jobState ? {
+        job: previewManagerJob?.kind === "update" ? previewManagerJob : jobState ? {
           id: "20260910T093000Z-abc123", kind: "update", addon: "", state: jobState,
           step: "Downloading release", error: jobState === "failed" ? "Could not download the release. Try again later." : "",
           createdAt: "2026-09-10T09:30:00Z", startedAt: "2026-09-10T09:30:01Z", finishedAt: "",
@@ -768,7 +932,7 @@ const server = Bun.serve({
     if (path === "/addons/") {
       // ?enabled= picks which addons are on, so the Available section and the
       // enable/disable buttons can be reviewed without a CloudPanel install.
-      const enabled = empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,php-resources,git").split(",").filter(Boolean);
+      const enabled = previewEnabled ?? (empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,php-resources,git").split(",").filter(Boolean));
       const previewJob = state && ["running", "queued", "failed"].includes(state)
         ? {
             id: "20260910T093000Z-abc123", kind: "enable", addon: "stager", state,
@@ -831,7 +995,7 @@ const server = Bun.serve({
     } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {
       html = wpLoginLayout("WordPress Sign-In", wpLoginDashboardView(wpLoginPreviewSites(url)), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
-      html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
+      html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice);
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {
       // ?profile=<id> (or ?profile= for a new one) and ?domains=<site> open a dialog on load, like ?confirm= does.
       const arg = (name: string) => JSON.stringify(url.searchParams.get(name)).replaceAll("<", "\\u003c");
@@ -847,12 +1011,16 @@ const server = Bun.serve({
     } else if (path === "/addons/instatic/new") {
       html = instaticLayout("New Instatic site", newInstanceView(39003, versions), notice);
     } else if (path === "/addons/instatic/jobs/preview-instatic-job") {
-      html = instaticLayout("Creating blog.example.com", instaticJobView(instaticCreationJob, instaticLogs), notice);
+      html = instaticLayout("Creating blog.example.com", instaticJobView(url.searchParams.has("finish") && !finishedPreviewJobs.has(instaticCreationJob.id) ? { ...instaticCreationJob, state: "running" } : instaticCreationJob, instaticLogs), notice);
     } else if (path.startsWith("/addons/instatic/api/") && path.endsWith("/creation-log")) {
       return Response.json({ ok: true, data: { domain: "pages.example.com", log: instaticLogs } });
     } else if (path.startsWith("/addons/instatic/api/") && path.endsWith("/logs")) {
       return Response.json({ ok: true, data: { logs: "Instatic listening on 127.0.0.1:39000\nReady to accept requests" } });
     } else if (path === "/addons/instatic/api/jobs/preview-instatic-job/events" || (path === "/addons/instatic/api/jobs/preview-instatic-job" && req.headers.get("accept")?.includes("text/event-stream"))) {
+      const source = req.headers.get("referer");
+      if (source && new URL(source).searchParams.has("finish")) {
+        return finishedPreviewStream({ ...instaticCreationJob, state: "running" }, instaticLogs, () => finishedPreviewJobs.add(instaticCreationJob.id));
+      }
       if (server && typeof server.timeout === "function") {
         try { server.timeout(req, 0); } catch {}
       }
@@ -918,6 +1086,10 @@ const server = Bun.serve({
     } else if (path === "/addons/stager/jobs/preview-job") {
       html = stagerLayout("Staging site details", jobView(currentJob, logs), notice);
     } else if (path === "/addons/stager/api/jobs/preview-job/events" || (path === "/addons/stager/api/jobs/preview-job" && req.headers.get("accept")?.includes("text/event-stream"))) {
+      const source = req.headers.get("referer");
+      if (source && new URL(source).searchParams.has("finish")) {
+        return finishedPreviewStream({ ...job, state: "running" }, logs, () => finishedPreviewJobs.add(job.id));
+      }
       if (server && typeof server.timeout === "function") {
         try { server.timeout(req, 0); } catch {}
       }
