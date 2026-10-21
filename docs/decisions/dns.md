@@ -121,7 +121,8 @@ operators to add them manually when listed. Their API permissions are
 [Config Settings Write and Zone WAF Write](https://developers.cloudflare.com/ruleset-engine/rulesets-api/update/).
 
 A token is verified before it is saved (`/user/tokens/verify`, or the account
-route for an account-owned one). Each check then lists every account and zone
+route for an account-owned one, using a zone's account when account listing is
+not permitted). Each check then lists every account and zone
 each connection reaches, an account known from `/accounts` or from its zones. A
 site belongs to the longest zone any connection reaches; moved, deleted and
 deactivated zones are ignored. One zone reached by two tokens is used through

@@ -239,7 +239,12 @@ export class CloudflareApi {
     } catch (error) {
       if (!(error instanceof ProviderError) || error.status === 429) throw error;
     }
-    for (const account of await this.accounts()) {
+    const accounts = await this.accounts();
+    if (!accounts.length) {
+      const known = new Map((await this.zones()).map((zone) => [zone.account.id, zone.account]));
+      accounts.push(...known.values());
+    }
+    for (const account of accounts) {
       try {
         const { result } = await this.call(`/accounts/${account.id}/tokens/verify`);
         const status = text(object(result).status, 40);

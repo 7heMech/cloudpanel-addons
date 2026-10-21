@@ -36,7 +36,6 @@ describe("Cloudflare", () => {
     const api = new CloudflareApi(ACCOUNT_TOKEN, fake.fetch);
     expect(await api.accounts()).toEqual([]);
     expect((await api.zones()).map((zone) => zone.name)).toEqual(["church.example"]);
-    fake.tokens.get(ACCOUNT_TOKEN)!.listAccounts = true;
     expect(await api.verify()).toEqual({ active: true, status: "active" });
     expect(fake.calls.some((call) => call.path === `/accounts/${church}/tokens/verify`)).toBe(true);
   });
