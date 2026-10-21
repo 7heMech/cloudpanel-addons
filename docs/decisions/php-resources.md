@@ -67,6 +67,11 @@ card is empty markup that fills itself from `/addons/php-resources/site-card`
 and stays hidden if it cannot. No site-scoped addon page and no extra tab: a
 form there would promise that one site's limits can be changed on their own.
 
+Successful mutations return dashboard HTML rendered from their returned state,
+including partial write failures. The browser repaints in place, preserves site
+selection, closes the completed dialog and reports the outcome with `notify`.
+A refused change restores its category picker without replacing the view.
+
 ## Writing the pool file
 
 A managed directive already in the file is rewritten where it stands, so the

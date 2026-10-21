@@ -14,7 +14,8 @@ function errorMessage(error: unknown): string {
 
 /** Every change answers with the whole state, so they all reply the same way. */
 async function change(result: Awaited<ReturnType<typeof phpResourcesService.assign>>): Promise<Response> {
-  return json(result, result.ok ? 200 : 400);
+  if (!result.ok || !result.data) return json(result, 400);
+  return json({ ...result, html: dashboardView(result.data) });
 }
 
 export async function handle(
