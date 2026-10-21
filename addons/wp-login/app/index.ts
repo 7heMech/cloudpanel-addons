@@ -1,5 +1,6 @@
+import { signInWindow } from "./sign-in-window";
 import {
-  bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readJsonObject, newCsrfToken, SECURITY_HEADERS,
+  bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readJsonObject, newCsrfToken, safeDecodePathSegment,
 } from "../../../lib/app-http";
 import { validateDomain, wpLoginService } from "./service";
 import { dashboardView, layout } from "./views";
@@ -33,17 +34,19 @@ export async function handle(
     return jsonResponse({ ok: true }, { csrf });
   }
 
+  const windowPage = /^\/sign-in\/([^/]+)$/.exec(path);
+  if (method === "GET" && windowPage) {
+    const domain = validateDomain(safeDecodePathSegment(windowPage[1]!));
+    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    return signInWindow(domain);
+  }
+
   if (method === "GET" && path === "/") {
     const csrf = newCsrfToken();
     try {
       const result = await wpLoginService.sites();
       if (!result.ok || !result.data) throw new Error(result.error ?? "the WordPress site list is unavailable");
-      const targets = result.data.sites.map((site) => validateDomain(site.domain))
-        .filter((domain): domain is string => domain !== null).map((domain) => `https://${domain}`);
-      const csp = SECURITY_HEADERS["Content-Security-Policy"]!.replace("form-action 'none'", `form-action ${targets.join(" ") || "'none'"}`);
-      return htmlResponse(layout("WordPress Sign-In", dashboardView(result.data.sites), updateNotice), {
-        csrf, headers: { "Content-Security-Policy": csp },
-      });
+      return htmlResponse(layout("WordPress Sign-In", dashboardView(result.data.sites), updateNotice), { csrf });
     } catch (error) {
       return htmlResponse(
         layout("WordPress Sign-In", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice),

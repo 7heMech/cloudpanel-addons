@@ -48,9 +48,13 @@ the root path before WordPress boots. The window is opened inside the click that
 starts it, before anything is awaited, because a window opened after a fetch
 resolves is a popup the browser blocks.
 
-The addon's page permits form submissions only to the HTTPS origins of the
-validated WordPress sites it lists. Its blank sign-in window inherits that CSP;
-all other response policies retain their default form refusal.
+The addon's page refuses form submissions, as every response does by default.
+Its sign-in window opens on the addon's page for that one site, whose policy
+lets a form go only to the site's HTTPS origin, and the token's form is written
+into it once it has loaded. A policy on the addon's page listing every site
+would outgrow the 4 KiB response header the panel's Nginx buffers at about a
+hundred sites. CloudPanel's Sites page sets no policy, so its link opens a
+blank window.
 
 The site user creates `mu-plugins/clp-addons` itself, so every directory it adds
 is that user's. A missing `wp-includes` or `wp-content` is a refusal rather than

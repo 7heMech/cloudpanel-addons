@@ -59,8 +59,8 @@ Access. Minting runs before the basic-auth database transaction, and maintenance
 bypasses run after it commits. The shared HTTP IP reader normalizes mapped IPv4
 hosts before either gate uses the request address; native basic-auth allowlist
 updates normalize mapped single hosts while preserving CIDRs. Consent to a
-maintenance bypass does not authorize a basic-auth bypass. The WordPress page's CSP allows token forms only to listed
-WordPress HTTPS origins; the shared policy still refuses form submissions.
+maintenance bypass does not authorize a basic-auth bypass. Only the sign-in
+window's own page lets a form leave, and only to the one site it signs in to.
 Disabling or uninstalling the addon removes the plugin from every site. Accepted
 IP bypasses stay in their respective CloudPanel or Maintenance Mode settings. See
 [WordPress Sign-In](wp-login.md).

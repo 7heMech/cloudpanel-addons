@@ -4,7 +4,7 @@
 // a bypass is a click of its own, which opens the retry's window and passes it.
 async function signIn(button, addBypass, opened, allowBasicAuth) {
   const domain = button.dataset.domain;
-  const target = (addBypass || allowBasicAuth) ? opened : window.open('', '_blank');
+  const target = (addBypass || allowBasicAuth) ? opened : signInWindow(domain);
   clearNotice();
   busy(true);
   try {
@@ -25,10 +25,11 @@ async function signIn(button, addBypass, opened, allowBasicAuth) {
         title: reply.data.basicAuth ? 'Site protected by basic authentication' : 'Site in maintenance',
         text: maintenance.message,
         confirmLabel: 'Add IP and sign in',
-        onAccept: function () { signIn(button, addBypass || !!reply.data.maintenance, window.open('', '_blank'), allowBasicAuth || !!reply.data.basicAuth); },
+        onAccept: function () { signIn(button, addBypass || !!reply.data.maintenance, signInWindow(domain), allowBasicAuth || !!reply.data.basicAuth); },
       });
       return;
     }
+    if (target) await windowLoaded(target, domain);
     submitToken(target, reply.data);
     busy(false);
     notify('Signing in to ' + domain + ' in a new tab.', 'ok');
@@ -37,6 +38,28 @@ async function signIn(button, addBypass, opened, allowBasicAuth) {
     busy(false);
     notify(error.message, 'error');
   }
+}
+
+// The window opens on this addon's page for that one site, whose policy lets
+// the token's form go there; this page refuses every form.
+function signInWindow(domain) {
+  return window.open(CLP_BASE + '/sign-in/' + encodeURIComponent(domain), '_blank');
+}
+
+// The form can only go into that page once it has replaced the window's
+// initial blank document.
+async function windowLoaded(target, domain) {
+  const path = CLP_BASE + '/sign-in/' + encodeURIComponent(domain);
+  for (let waited = 0; waited < 10000; waited += 50) {
+    if (target.closed) throw new Error('The sign-in window was closed.');
+    try {
+      if (target.location.pathname === path && target.document.readyState === 'complete') return;
+    } catch (error) {
+      // A window that failed to load shows a page this one cannot read.
+    }
+    await new Promise(function (resolve) { setTimeout(resolve, 50); });
+  }
+  throw new Error('The sign-in window did not load.');
 }
 
 // Posted rather than put in the address bar: a single-use secret in a query
