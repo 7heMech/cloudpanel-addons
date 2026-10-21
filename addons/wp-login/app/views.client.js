@@ -58,7 +58,6 @@ function submitToken(target, data) {
 // Make a change, then repaint everything below the heading from the server's
 // answer, so a row that failed or that the change did not reach shows as it is.
 async function change(path, body, describe) {
-  const focused = CLP_ROOT.activeElement && CLP_ROOT.activeElement.id;
   clearNotice();
   busy(true);
   let reply;
@@ -76,11 +75,7 @@ async function change(path, body, describe) {
     stale = error.message;
   }
   busy(false);
-  if (html) {
-    CLP_ROOT.getElementById('wp-dashboard').innerHTML = html;
-    const again = focused && CLP_ROOT.getElementById(focused);
-    if (again) again.focus();
-  }
+  if (html) repaintView(CLP_ROOT.getElementById('wp-dashboard'), html);
   if (failure) {
     notify(failure, 'error');
     return false;
@@ -206,6 +201,7 @@ async function cleanupMainwp() {
     title: 'Turn off and clean up MainWP?',
     text: 'Automation stops. Connections WordPress Tools made are removed from the Dashboard, and Child plugins it installed are deleted. Connections and plugins you set up yourself stay.',
     confirmLabel: 'Turn off and clean up',
+    danger: true,
   });
   if (!agreed) return;
   change('/api/mainwp-cleanup', { confirm: true }, mainwpSummary);
