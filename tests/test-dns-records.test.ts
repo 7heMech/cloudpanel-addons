@@ -64,6 +64,16 @@ describe("rendering a profile for a site", () => {
     expect(diff.ops.map((op) => op.action)).toEqual(["delete"]);
   });
 
+  test("an address that could not be detected stops its row rather than removing what is published", () => {
+    const web = profile(PRESETS.find((preset) => preset.id === "web")!.records);
+    const rendered = renderProfile(web, vars("example.com", "example.com", { ipv4: null }));
+    expect(rendered.problems).toEqual([
+      "Record 1 (A {domain}): this server's IPv4 address could not be detected; set it under Server addresses",
+      "Record 3 (A www.{domain}): this server's IPv4 address could not be detected; set it under Server addresses",
+    ]);
+    expect(diffRecords(rendered, [published("A", "example.com", "203.0.113.10")]).ops.filter((op) => op.action === "delete")).toEqual([]);
+  });
+
   test("a DKIM row waits for Mailcow's key and leaves the published key alone meanwhile", () => {
     const rendered = renderProfile(webAndMailcow, vars("example.com", "example.com", { mailcowDkim: null }));
     expect(rendered.waitingDkim).toEqual(["dkim._domainkey.example.com"]);

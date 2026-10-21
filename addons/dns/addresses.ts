@@ -3,10 +3,20 @@
  * IPv4 CloudPanel itself shows, else the one global address of each family on
  * the server's interfaces. More than one global address of a family is not a
  * guess this makes; the page asks for an override instead.
+ *
+ * An address that cannot be told is null, and stops the sites that use it.
+ * Empty means the server has none of that family, so its records are removed;
+ * an IPv4 is never taken to be missing, because a server behind NAT has no
+ * public IPv4 on any interface once CloudPanel's cached one expires.
  */
 import { isIP } from "node:net";
 import { networkInterfaces } from "node:os";
 import { readPanelPublicIp } from "../../lib/panel-public-ip";
+
+export interface Addresses {
+  ipv4: string | null;
+  ipv6: string | null;
+}
 
 function globalAddress(address: string): boolean {
   if (isIP(address) === 4) {
@@ -16,14 +26,18 @@ function globalAddress(address: string): boolean {
   return /^[23][0-9a-f]{0,3}:/i.test(address) && !/^2001:db8:/i.test(address);
 }
 
-export function detectAddresses(): { ipv4: string; ipv6: string } {
-  const addresses = Object.values(networkInterfaces())
+type Interfaces = NodeJS.Dict<{ address: string; family: string; internal: boolean }[]>;
+
+export function detectAddresses(interfaces: Interfaces = networkInterfaces(), panel = readPanelPublicIp()): Addresses {
+  const addresses = Object.values(interfaces)
     .flatMap((entries) => entries ?? [])
     .filter((entry) => !entry.internal && globalAddress(entry.address));
-  const only = (family: string): string => {
-    const found = [...new Set(addresses.filter((entry) => entry.family === family).map((entry) => entry.address.toLowerCase()))];
-    return found.length === 1 ? found[0]! : "";
+  const found = (family: string): string[] =>
+    [...new Set(addresses.filter((entry) => entry.family === family).map((entry) => entry.address.toLowerCase()))];
+  const ipv4 = found("IPv4");
+  const ipv6 = found("IPv6");
+  return {
+    ipv4: isIP(panel) === 4 ? panel : ipv4.length === 1 ? ipv4[0]! : null,
+    ipv6: ipv6.length > 1 ? null : ipv6[0] ?? "",
   };
-  const panel = readPanelPublicIp();
-  return { ipv4: isIP(panel) === 4 ? panel : only("IPv4"), ipv6: only("IPv6") };
 }

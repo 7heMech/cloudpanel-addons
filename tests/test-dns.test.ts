@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeDnsAction, panelSites, type DnsReply, type ProvisionReply } from "../addons/dns/action";
+import { detectAddresses, type Addresses } from "../addons/dns/addresses";
 import type { PanelSite } from "../addons/dns/engine";
 import { FakeCloudflare, FakeMailcow, MAILCOW_KEY, routed } from "./fixtures/dns-api";
 
@@ -33,8 +34,9 @@ function setup() {
   const sites: PanelSite[] = [site(1, "example.com"), site(2, "shop.example.com")];
   const issued: { domain: string; alternatives: string[] }[] = [];
   const clock = { now: START, issue: false };
+  const addresses: Addresses = { ipv4: "203.0.113.10", ipv6: "2001:db8::10" };
   const env = {
-    dir, cf, mc, agency, church, sites, issued, clock,
+    dir, cf, mc, agency, church, sites, issued, clock, addresses,
     async act<T = DnsReply>(verb: string, body?: unknown, args: string[] = []): Promise<T> {
       return await executeDnsAction([verb, ...args], {
         paths: { stateDir: join(dir, "state"), lockFile: join(dir, "dns.lock"), panelDb: join(dir, "db.sq3"), rootUid: process.getuid!(), clpctl: "/bin/false" },
@@ -42,7 +44,7 @@ function setup() {
         input: body === undefined ? undefined : JSON.stringify(body),
         fetch: routed(cf, mc),
         sites: () => sites,
-        addresses: () => ({ ipv4: "203.0.113.10", ipv6: "2001:db8::10" }),
+        addresses: () => ({ ...addresses }),
         issue: async (domain, alternatives) => {
           issued.push({ domain, alternatives });
           return clock.issue;
@@ -239,6 +241,25 @@ describe("Report only and Enforce", () => {
     a.proxied = false;
     await env.act("check");
     expect(env.records()).toContain("A example.com 203.0.113.10 proxied");
+  });
+
+  test("an address that can no longer be detected stops its sites rather than removing their records", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    await env.enforce("web");
+    const before = env.records();
+    // CloudPanel's cached public IPv4 expired on a server behind NAT, and a second IPv6 appeared.
+    env.addresses.ipv4 = null;
+    env.addresses.ipv6 = null;
+    const state = await env.act("check");
+    expect(env.records()).toEqual(before);
+    expect(state.sites.find((entry) => entry.domain === "example.com")!.plan!.problems[0]).toContain("IPv4 address could not be detected");
+    // A server with no IPv6 at all is different: its AAAA records go.
+    env.addresses.ipv4 = "203.0.113.10";
+    env.addresses.ipv6 = "";
+    await env.act("check");
+    expect(env.records().filter((record) => record.startsWith("AAAA"))).toEqual([]);
   });
 
   test("editing an enforcing profile's records is reviewed, renaming it is not", async () => {
@@ -596,4 +617,16 @@ test("CloudPanel's sites are read with their certificate and creation time", () 
     { id: 1, domain: "example.com", type: "wordpress", createdAt: Date.parse("2026-10-18T09:59:00Z"), selfSigned: true, cloudflareOnly: true },
     { id: 2, domain: "shop.example.com", type: "php", createdAt: Date.parse("2026-01-01T00:00:00Z"), selfSigned: false, cloudflareOnly: false },
   ]);
+});
+
+test("an address is detected only when it can be told, and an IPv4 is never taken to be missing", () => {
+  const nic = (...addresses: string[]) => ({
+    eth0: addresses.map((address) => ({ address, family: address.includes(":") ? "IPv6" : "IPv4", internal: false })),
+    lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+  });
+  expect(detectAddresses(nic("46.225.93.37", "2a01:4f8:c2c:7b9::1", "fe80::1"), "")).toEqual({ ipv4: "46.225.93.37", ipv6: "2a01:4f8:c2c:7b9::1" });
+  // Behind NAT, once CloudPanel's cached address has expired.
+  expect(detectAddresses(nic("10.0.0.5"), "")).toEqual({ ipv4: null, ipv6: "" });
+  expect(detectAddresses(nic("10.0.0.5"), "203.0.113.10")).toEqual({ ipv4: "203.0.113.10", ipv6: "" });
+  expect(detectAddresses(nic("203.0.113.10", "203.0.113.11", "2001:4860::1", "2001:4860::2"), "")).toEqual({ ipv4: null, ipv6: null });
 });

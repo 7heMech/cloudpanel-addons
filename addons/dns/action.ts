@@ -16,7 +16,7 @@ import {
 } from "../../cli/action-common";
 import { PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
-import { detectAddresses } from "./addresses";
+import { detectAddresses, type Addresses } from "./addresses";
 import { DnsRun, readiness, type ConnectionReport, type ManagedRecords, type PanelSite, type SitePlan } from "./engine";
 import { type ApiFetch, redact } from "./http";
 import { MailcowApi } from "./mailcow";
@@ -59,7 +59,7 @@ export interface DnsActionOptions {
   fetch?: ApiFetch;
   /** Test fixtures may provide sites without a CloudPanel database. */
   sites?: () => PanelSite[];
-  addresses?: () => { ipv4: string; ipv6: string };
+  addresses?: () => Addresses;
   issue?: Issue;
   now?: () => number;
 }
@@ -102,7 +102,7 @@ export interface DnsState {
   connections: (ConnectionReport & { hasToken: boolean })[];
   accounts: { connectionId: string; accountId: string; label: string }[];
   mailcow: MailcowSettings & { hasKey: boolean };
-  server: { ipv4: string; ipv6: string; detected: { ipv4: string; ipv6: string } };
+  server: { ipv4: string; ipv6: string; detected: Addresses };
   orphans: { domain: string; zone: string; records: number }[];
   checkedAt: string | null;
   waitUntil: number;
@@ -260,7 +260,7 @@ class Action {
   readonly files: Files;
   readonly now: number;
   private cachedSites: PanelSite[] | null = null;
-  private cachedAddresses: { ipv4: string; ipv6: string } | null = null;
+  private cachedAddresses: Addresses | null = null;
 
   constructor(readonly paths: DnsPaths, readonly options: DnsActionOptions) {
     this.files = new Files(paths);
@@ -272,7 +272,7 @@ class Action {
     return this.cachedSites;
   }
 
-  addresses(): { ipv4: string; ipv6: string } {
+  addresses(): Addresses {
     this.cachedAddresses ??= this.options.addresses?.() ?? detectAddresses();
     return this.cachedAddresses;
   }

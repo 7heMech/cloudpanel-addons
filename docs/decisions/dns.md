@@ -28,8 +28,11 @@ site is not its zone's apex -- what `www` needs. Names and content take
 `{ipv4}`, `{ipv6}`, `{mailcow.host}` and `{mailcow.dkim}`. A rendered name
 must lie in the site's zone; `{zone}` is how a `www.example.com` site reaches
 `example.com`. A row whose address placeholder is empty -- a server with no
-IPv6 -- writes nothing but still owns its name, so a stale AAAA is removed. A
-save is checked by rendering every row for an apex and a subdomain site.
+IPv6 -- writes nothing but still owns its name, so a stale AAAA is removed. An
+address that cannot be detected -- more than one of a family, or an IPv4 behind
+NAT once CloudPanel's cached one has expired -- stops the sites that use it
+until it is set under Server addresses. A save is checked by rendering every
+row for an apex and a subdomain site.
 
 Presets only fill the editor: Web (CloudPanel), Mailcow, Google Workspace and
 DMARC. A new install offers two profiles built from them, "Web" and "Web and

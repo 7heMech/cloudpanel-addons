@@ -16,8 +16,9 @@ import { isSpf, mergeSpf } from "./spf";
 export interface SiteVars {
   domain: string;
   zone: string;
-  ipv4: string;
-  ipv6: string;
+  /** Empty when the server has none of that family; null when it could not be told. */
+  ipv4: string | null;
+  ipv6: string | null;
   mailcowHost: string;
   /** Null when the profile does not use Mailcow, or the selector is not known yet. */
   mailcowSelector: string | null;
@@ -127,6 +128,11 @@ export function renderProfile(profile: Profile, vars: SiteVars): Rendered {
     }
     if (!dnsName(name) || (name !== vars.zone && !name.endsWith(`.${vars.zone}`))) {
       rendered.problems.push(`${where}: ${name || "its name"} is not a name in the ${vars.zone} zone`);
+      return;
+    }
+    const unknown = (["ipv4", "ipv6"] as const).find((family) => vars[family] === null && row.content.includes(`{${family}}`));
+    if (unknown) {
+      rendered.problems.push(`${where}: this server's ${unknown === "ipv4" ? "IPv4" : "IPv6"} address could not be detected; set it under Server addresses`);
       return;
     }
     const content = fill(row.content, vars);

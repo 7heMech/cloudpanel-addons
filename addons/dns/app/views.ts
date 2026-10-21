@@ -110,9 +110,11 @@ function connectionRow(connection: DnsState["connections"][number]): string {
   </tr>`;
 }
 
-function address(value: string, detected: string, placeholder: string): string {
-  if (value) return `<span class="mono">${esc(placeholder)}</span> ${esc(value)}`;
-  return detected ? `<span class="mono">${esc(placeholder)}</span> ${esc(detected)} <span class="hint inline">detected</span>` : `<span class="mono">${esc(placeholder)}</span> <span class="tone-warn">not found</span>`;
+function address(value: string, detected: string | null, placeholder: string): string {
+  const name = `<span class="mono">${esc(placeholder)}</span>`;
+  if (value) return `${name} ${esc(value)}`;
+  if (detected) return `${name} ${esc(detected)} <span class="hint inline">detected</span>`;
+  return `${name} <span class="tone-warn">${detected === null ? "not detected" : "none"}</span>`;
 }
 
 function settingsCard(state: DnsState): string {

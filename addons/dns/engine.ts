@@ -7,6 +7,7 @@
  * write, and plan again for its report without reading everything twice.
  */
 import { getDomain } from "tldts";
+import type { Addresses } from "./addresses";
 import { CloudflareApi, type CfAccount, type CfRecord, type CfRuleset, type CfZone } from "./cloudflare";
 import { type ApiFetch, ProviderError } from "./http";
 import { aclAllows, MailcowApi, type MailcowDkim } from "./mailcow";
@@ -83,7 +84,7 @@ export interface RunContext {
   policy: Policy;
   secrets: Secrets;
   sites: PanelSite[];
-  addresses: { ipv4: string; ipv6: string };
+  addresses: Addresses;
   fetch?: ApiFetch;
   /** When each provider asked to be left alone until, carried between runs. */
   backoff: { cloudflare: number; mailcow: number };
