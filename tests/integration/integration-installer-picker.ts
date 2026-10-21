@@ -89,7 +89,7 @@ function extractPicker(source: string): string {
 
 function buildHarness(picker: string): string {
   return `set -euo pipefail
-AVAILABLE_ADDONS=(cloudflare-ips instatic stager panel-tweaks)
+AVAILABLE_ADDONS=(cloudflare-ips maintenance panel-tweaks terminal)
 SELECTED=""
 ASSUME_YES=0
 say() { printf '%s\\n' "$*"; }
@@ -108,13 +108,14 @@ interface Case {
 }
 
 const CASES: Case[] = [
-  { name: "all by default", keys: "\n", expected: "cloudflare-ips,instatic,stager,panel-tweaks", term: "xterm" },
-  { name: "arrow and space", keys: "\x1b[B \n", expected: "cloudflare-ips,stager,panel-tweaks", term: "xterm" },
+  { name: "default selection", keys: "\n", expected: "maintenance,panel-tweaks,terminal", term: "xterm" },
+  { name: "arrow and space", keys: "\x1b[B \n", expected: "panel-tweaks,terminal", term: "xterm" },
   { name: "clear and choose", keys: "n \n", expected: "cloudflare-ips", term: "xterm" },
-  { name: "select all hotkey", keys: "na\n", expected: "cloudflare-ips,instatic,stager,panel-tweaks", term: "xterm" },
-  { name: "empty cannot submit", keys: "n\na\n", expected: "cloudflare-ips,instatic,stager,panel-tweaks", term: "xterm" },
+  { name: "select all hotkey", keys: "na\n", expected: "cloudflare-ips,maintenance,panel-tweaks,terminal", term: "xterm" },
+  { name: "empty cannot submit", keys: "n\na\n", expected: "cloudflare-ips,maintenance,panel-tweaks,terminal", term: "xterm" },
   { name: "cancel", keys: "q", expected: null, term: "xterm" },
-  { name: "plain terminal", keys: "2\n", expected: "instatic", term: "dumb" },
+  { name: "plain terminal", keys: "1\n", expected: "cloudflare-ips", term: "dumb" },
+  { name: "plain terminal default", keys: "\n", expected: "maintenance,panel-tweaks,terminal", term: "dumb" },
 ];
 
 interface CaseResult {
@@ -174,9 +175,9 @@ async function runCase(c: Case): Promise<CaseResult> {
       }
       output += decoder.decode(chunk.value, { stream: true });
 
-      if (!sent && (output.includes("[x] stager") || output.includes("[all]:"))) {
-        if (output.includes("[x] stager")) sawCheckboxUi = true;
-        if (output.includes("[all]:")) sawNumberedFallback = true;
+      if (!sent && (output.includes("[x] panel-tweaks") || output.includes("[default]:"))) {
+        if (output.includes("[x] panel-tweaks")) sawCheckboxUi = true;
+        if (output.includes("[default]:")) sawNumberedFallback = true;
         proc.stdin.write(c.keys);
         await proc.stdin.flush();
         sent = true;
@@ -299,7 +300,7 @@ async function main(): Promise<void> {
       // own assertions above passed.
       if (c.term === "xterm" && !result.sawCheckboxUi) {
         console.log(
-          `FAIL ${c.name}: expected the checkbox UI ('[x] stager') to render under TERM=xterm, ` +
+          `FAIL ${c.name}: expected the checkbox UI ('[x] panel-tweaks') to render under TERM=xterm, ` +
             `but it did not (saw numbered fallback: ${result.sawNumberedFallback}). ` +
             "TERM may not be propagating to the child process.",
         );
@@ -307,7 +308,7 @@ async function main(): Promise<void> {
         caseFailed = true;
       }
       if (c.term === "dumb" && !result.sawNumberedFallback) {
-        console.log(`FAIL ${c.name}: expected the numbered fallback prompt ('[all]:') to render under TERM=dumb.`);
+        console.log(`FAIL ${c.name}: expected the numbered fallback prompt ('[default]:') to render under TERM=dumb.`);
         failedChecks++;
         caseFailed = true;
       }
