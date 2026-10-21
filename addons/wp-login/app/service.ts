@@ -23,6 +23,8 @@ function call<T>(verb: string, args: string[] = [], timeout?: number): Promise<A
 const LIST_TIMEOUT_MS = 60_000;
 /** A pass has a 90-second budget, after the lock and site discovery. */
 const PASS_TIMEOUT_MS = 120_000;
+/** A MainWP pass can end in an enrollment's own minute and the restore after it. */
+const MAINWP_TIMEOUT_MS = 210_000;
 
 export const wpLoginService = {
   sites(): Promise<ActionResult<WpDashboard>> {
@@ -55,13 +57,13 @@ export const wpLoginService = {
     return call("mainwp-site", [`--domain=${domain}`, `--excluded=${excluded}`]);
   },
   mainwpConnect(domain: string): Promise<ActionResult<MainwpResult>> {
-    return call("mainwp-connect", [`--domain=${domain}`, `--confirm=${domain}`], PASS_TIMEOUT_MS);
+    return call("mainwp-connect", [`--domain=${domain}`, `--confirm=${domain}`], MAINWP_TIMEOUT_MS);
   },
   mainwpSync(): Promise<ActionResult<MainwpResult>> {
-    return call("mainwp-sync", [], PASS_TIMEOUT_MS);
+    return call("mainwp-sync", [], MAINWP_TIMEOUT_MS);
   },
   mainwpCleanup(): Promise<ActionResult<MainwpResult>> {
-    return call("mainwp-cleanup", ["--confirm=mainwp"], PASS_TIMEOUT_MS);
+    return call("mainwp-cleanup", ["--confirm=mainwp"], MAINWP_TIMEOUT_MS);
   },
   varnishSettings(enabled: boolean): Promise<ActionResult<{ varnish: WpVarnishState }>> {
     return call("varnish-settings", [`--enabled=${enabled}`]);
