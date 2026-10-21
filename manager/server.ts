@@ -1,7 +1,7 @@
 // The long-lived process behind `clp-addons serve`: one Unix socket, one
 // request gate, and every addon mounted behind it.
 import type { Server } from "bun";
-import { chmodSync, chownSync, existsSync, unlinkSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { userInfo } from "node:os";
 import { ADDONS, ADDON_NAMES, addonHandler } from "../cli/addon-catalog";
@@ -150,7 +150,10 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
 export async function cmdServe(): Promise<never> {
   // Anything else replaces the live daemon's socket with one the auth gateway
   // will not answer for, which takes every addon page down until a restart.
-  if (!process.env.INVOCATION_ID || userInfo().username !== SERVICE_USER) {
+  // The unit's cgroup is set by systemd, where an environment variable is not.
+  const cgroups = readFileSync("/proc/self/cgroup", "utf-8").split("\n");
+  const inUnit = cgroups.some((line) => line.endsWith(`/${MANAGER_UNIT}`));
+  if (!inUnit || userInfo().username !== SERVICE_USER) {
     fatal(`'serve' runs only as the ${MANAGER_UNIT} unit; to restart the manager: systemctl restart ${MANAGER_UNIT}`);
   }
   const socketDir = SOCKET_PATH.slice(0, SOCKET_PATH.lastIndexOf("/"));

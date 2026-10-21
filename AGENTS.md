@@ -10,10 +10,10 @@
   `docs/instatic-backups.md`; keep implementation detail in Decisions.
 - Add a Decisions category only when none of the existing files fits. Keep
   `docs/DECISIONS.md` as an index.
-- Keep `clp-addons help` terser than any doc: one line per command, with its
-  verbs and options and no explanation. Leave out verbs only systemd, Postfix,
-  the gateway or the manager run. Update it in the same change as a CLI command
-  or action verb.
+- Keep `clp-addons help` terser than any doc: one line per operator command,
+  with its options and no explanation. Leave out `action` and the commands only
+  systemd, Postfix or the gateway run. Update it in the same change as an
+  operator command.
 
 ## Seeing the UI
 

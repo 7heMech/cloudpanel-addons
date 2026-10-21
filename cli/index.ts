@@ -54,15 +54,6 @@ function usage(): void {
   clp-addons status
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons maintenance <domain> [on|off|status]
-  clp-addons action cloudflare-ips <list|set|policy|reconcile> [options]
-  clp-addons action smtp <list|save-profile|delete-profile|assign|set-default|save-grants|test|reconcile|sync-sites|deactivate>
-  clp-addons action instatic <verb> [options]
-  clp-addons action stager <verb> [options]
-  clp-addons action maintenance <verb> --domain=<domain>
-  clp-addons action git <verb> [--domain=<domain>] [--job=<job>]
-  clp-addons action php-resources <list|site|save-category|delete-category|assign|set-default|reconcile> [--domain=<domain>]
-  clp-addons action panel-tweaks <state|set-tweaks|scan|scan-stream>
-  clp-addons action wp-login <sites|sign-in|remove> [--domain=<domain>]
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}

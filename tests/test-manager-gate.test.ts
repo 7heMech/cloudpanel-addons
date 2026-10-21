@@ -305,8 +305,8 @@ test("a handler fault cannot answer with Bun's error page", () => {
 // Run by hand, serve would replace the live daemon's socket before anything
 // could notice it was the wrong account, so it refuses before touching it.
 test("serve refuses to start outside its systemd unit", () => {
-  const env = { ...process.env };
-  delete env.INVOCATION_ID;
+  // Claiming a systemd invocation in the environment is not enough.
+  const env = { ...process.env, INVOCATION_ID: "0123456789abcdef0123456789abcdef" };
   const result = spawnSync("bun", ["cli/index.ts", "serve"], { cwd: repo, env, encoding: "utf8" });
   expect(result.status).toBe(1);
   expect(result.stderr).toInclude("systemctl restart clp-addons.service");

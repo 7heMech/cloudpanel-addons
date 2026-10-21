@@ -1060,7 +1060,8 @@ export function managerSocketProblem(): string | null {
   if (!socket.isSocket()) return `not a socket (${details})`;
   if (mode !== 0o660) return `not ready (${details}; expected mode 0660)`;
   const serviceUid = tryRun("id", ["-u", SERVICE_USER]);
-  if (serviceUid.ok && String(socket.uid) !== serviceUid.out) return `not ready (${details}; expected owner ${SERVICE_USER})`;
+  if (!serviceUid.ok) return `not ready (${details}; ${SERVICE_USER} has no uid)`;
+  if (String(socket.uid) !== serviceUid.out) return `not ready (${details}; expected owner ${SERVICE_USER})`;
   return null;
 }
 
