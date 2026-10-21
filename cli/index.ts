@@ -107,12 +107,16 @@ async function cmdMaintenance(argv: string[]): Promise<void> {
     const result = await executeMaintenanceAction([verb, `--domain=${rawDomain}`]) as {
       domain: string; enabled: boolean; customTemplate: boolean; bypasses: string[];
     };
+    const global = await executeMaintenanceAction(["global-status"]) as { global: boolean; bypasses: string[] };
     if (operation === "status") {
-      log.plain(`${result.domain}: ${result.enabled ? "maintenance (503)" : "live"}`);
+      const state = result.enabled ? "maintenance (503)" : global.global ? "maintenance (503, global)" : "live";
+      log.plain(`${result.domain}: ${state}`);
       log.plain(`Template: ${result.customTemplate ? "custom" : "default"}`);
       log.plain(`IP bypasses: ${result.bypasses.length ? result.bypasses.join(", ") : "none"}`);
+      if (global.bypasses.length) log.plain(`Global IP bypasses: ${global.bypasses.join(", ")}`);
     } else {
       log.ok(`${result.domain}: maintenance mode ${result.enabled ? "enabled" : "disabled"}`);
+      if (!result.enabled && global.global) log.warn("global maintenance is on, so the site still serves 503");
     }
   } catch (error) {
     fatal(error instanceof Error ? error.message : String(error));

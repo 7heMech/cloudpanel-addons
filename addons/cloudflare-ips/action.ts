@@ -8,7 +8,9 @@ import {
   type CommandResult,
 } from "../../cli/action-common";
 import { PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { writeFileAtomic } from "../../lib/atomic-write";
+import {
+  errorMessage, openPanelDatabase, trustedVhost, withNginxTransaction, withRecoveryFailures, writeAtomicOwned,
+} from "../../cli/nginx-transaction";
 
 const POLICY_VERSION = 1;
 const MAX_SITES_PER_REQUEST = 10_000;
@@ -61,14 +63,6 @@ interface Policy {
 interface ParsedAction {
   verb: CloudflareVerb;
   enabled: boolean | null;
-}
-
-interface VhostBackup {
-  path: string;
-  content: string;
-  mode: number;
-  uid: number;
-  gid: number;
 }
 
 export const DEFAULT_CLOUDFLARE_ACTION_PATHS: CloudflareActionPaths = {
@@ -129,13 +123,6 @@ function readPolicy(path: string, expectedUid: number): Policy {
   return stablePolicy(policy as Policy);
 }
 
-function writeAtomicOwned(path: string, content: string, mode: number, uid: number, gid: number): void {
-  // The vhosts and the policy file belong to accounts this action is not: the
-  // panel owns its Nginx tree, and inheriting root here would make a file the
-  // panel can no longer rewrite. Ownership is passed, never defaulted.
-  writeFileAtomic(path, content, { mode, owner: { uid, gid }, createParent: true });
-}
-
 function writePolicy(path: string, policy: Policy, expectedUid: number): void {
   let uid = expectedUid;
   let gid = process.getgid?.() ?? 0;
@@ -148,16 +135,6 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
     gid = stat.gid;
   }
   writeAtomicOwned(path, `${JSON.stringify(stablePolicy(policy), null, 2)}\n`, 0o600, uid, gid);
-}
-
-function openPanelDatabase(path: string): Database {
-  try {
-    const db = new Database(path, { create: false, readwrite: true });
-    db.exec("PRAGMA busy_timeout = 5000;");
-    return db;
-  } catch (error) {
-    failAction(`CloudPanel database could not be opened: ${error instanceof Error ? error.message : String(error)}`);
-  }
 }
 
 function siteRows(db: Database): SiteRow[] {
@@ -201,20 +178,6 @@ function requestedDomains(input: string | undefined): string[] {
   return [...new Set(domains as string[])];
 }
 
-function trustedVhost(path: string, expectedUid: number): VhostBackup {
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
-    failAction(`refusing untrusted Nginx vhost ${path}`);
-  }
-  return {
-    path,
-    content: readFileSync(path, "utf8"),
-    mode: stat.mode & 0o777,
-    uid: stat.uid,
-    gid: stat.gid,
-  };
-}
-
 function escapedRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -238,34 +201,6 @@ export function transformVhost(content: string, siteUser: string, enabled: boole
   return result;
 }
 
-function commandError(label: string, result: CommandResult): string {
-  return `${label} failed: ${(result.stderr || result.stdout || `exit ${result.exitCode ?? "unknown"}`).trim()}`;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function withRecoveryFailures(primary: unknown, label: string, failures: string[]): Error {
-  const original = primary instanceof Error ? primary : new Error(String(primary));
-  if (failures.length === 0) return original;
-  const message = `${original.message}; ${label}: ${failures.join("; ")}`;
-  if (original instanceof ActionFailure) return new ActionFailure(message, original.data);
-  return new Error(message, { cause: original });
-}
-
-function restoreVhosts(backups: VhostBackup[]): string[] {
-  const failures: string[] = [];
-  for (const backup of backups) {
-    try {
-      writeAtomicOwned(backup.path, backup.content, backup.mode, backup.uid, backup.gid);
-    } catch (error) {
-      failures.push(`vhost ${backup.path}: ${errorMessage(error)}`);
-    }
-  }
-  return failures;
-}
-
 /** Updates selected DB rows and rendered vhosts, validating and reloading once. */
 async function updateSites(
   paths: CloudflareActionPaths,
@@ -274,74 +209,33 @@ async function updateSites(
   command: (command: string, args: string[]) => CommandResult,
 ): Promise<{ changed: number; sites: SiteRow[] }> {
   const db = openPanelDatabase(paths.panelDb);
-  const backups: VhostBackup[] = [];
-  let wroteVhosts = false;
-  let attemptedReload = false;
   try {
-    db.exec("BEGIN IMMEDIATE;");
-    const allSites = siteRows(db);
-    const wanted = new Set(domains);
-    const selected = allSites.filter((site) => wanted.has(site.domain_name));
-    const found = new Set(selected.map((site) => site.domain_name));
-    const missing = domains.filter((domain) => !found.has(domain));
-    if (missing.length) failAction(`no CloudPanel site found for: ${missing.join(", ")}`);
+    return withNginxTransaction(db, paths, command, (changes) => {
+      const allSites = siteRows(db);
+      const wanted = new Set(domains);
+      const selected = allSites.filter((site) => wanted.has(site.domain_name));
+      const found = new Set(selected.map((site) => site.domain_name));
+      const missing = domains.filter((domain) => !found.has(domain));
+      if (missing.length) failAction(`no CloudPanel site found for: ${missing.join(", ")}`);
 
-    const staged = selected.map((site) => {
-      const domain = normalizeDomain(site.domain_name);
-      if (!domain || domain !== site.domain_name) failAction(`CloudPanel returned an invalid site domain '${site.domain_name}'`);
-      const backup = trustedVhost(join(paths.nginxVhostDir, `${domain}.conf`), paths.vhostUid);
-      backups.push(backup);
-      return { backup, content: transformVhost(backup.content, site.user, enabled) };
-    });
+      const staged = selected.map((site) => {
+        const domain = normalizeDomain(site.domain_name);
+        if (!domain || domain !== site.domain_name) failAction(`CloudPanel returned an invalid site domain '${site.domain_name}'`);
+        const backup = trustedVhost(join(paths.nginxVhostDir, `${domain}.conf`), paths.vhostUid);
+        return { backup, content: transformVhost(backup.content, site.user, enabled) };
+      });
 
-    const update = db.query("UPDATE site SET allow_traffic_from_cloudflare_only = ?, updated_at = CURRENT_TIMESTAMP WHERE domain_name = ?;");
-    for (const site of selected) update.run(enabled ? 1 : 0, site.domain_name);
-    for (const item of staged) {
-      if (item.content === item.backup.content) continue;
-      writeAtomicOwned(item.backup.path, item.content, item.backup.mode, item.backup.uid, item.backup.gid);
-      wroteVhosts = true;
-    }
+      const update = db.query("UPDATE site SET allow_traffic_from_cloudflare_only = ?, updated_at = CURRENT_TIMESTAMP WHERE domain_name = ?;");
+      for (const site of selected) update.run(enabled ? 1 : 0, site.domain_name);
+      changes.push(...staged);
 
-    const checked = command(paths.nginx, ["-t"]);
-    if (!checked.ok) throw new Error(commandError("Nginx validation", checked));
-    const reloaded = command(paths.systemctl, ["reload", "nginx"]);
-    attemptedReload = true;
-    if (!reloaded.ok) throw new Error(commandError("Nginx reload", reloaded));
-    db.exec("COMMIT;");
-
-    return {
-      changed: selected.filter((site) => Boolean(site.allow_traffic_from_cloudflare_only) !== enabled).length,
-      sites: allSites.map((site) => wanted.has(site.domain_name)
-        ? { ...site, allow_traffic_from_cloudflare_only: enabled ? 1 : 0 }
-        : site),
-    };
-  } catch (error) {
-    const rollbackFailures: string[] = [];
-    try {
-      db.exec("ROLLBACK;");
-    } catch (rollbackError) {
-      rollbackFailures.push(`database transaction: ${errorMessage(rollbackError)}`);
-    }
-    if (wroteVhosts) {
-      rollbackFailures.push(...restoreVhosts(backups));
-      let restoredConfigIsValid = false;
-      try {
-        const restored = command(paths.nginx, ["-t"]);
-        restoredConfigIsValid = restored.ok;
-        if (!restored.ok) rollbackFailures.push(commandError("Nginx rollback validation", restored));
-      } catch (validationError) {
-        rollbackFailures.push(`Nginx rollback validation failed: ${errorMessage(validationError)}`);
-      }
-      if (restoredConfigIsValid && attemptedReload) {
-        try {
-          const reloaded = command(paths.systemctl, ["reload", "nginx"]);
-          if (!reloaded.ok) rollbackFailures.push(commandError("Nginx rollback reload", reloaded));
-        } catch (reloadError) {
-          rollbackFailures.push(`Nginx rollback reload failed: ${errorMessage(reloadError)}`);
-        }
-      }
-    }
-    throw withRecoveryFailures(error, "rollback failed", rollbackFailures);
+      return {
+        changed: selected.filter((site) => Boolean(site.allow_traffic_from_cloudflare_only) !== enabled).length,
+        sites: allSites.map((site) => wanted.has(site.domain_name)
+          ? { ...site, allow_traffic_from_cloudflare_only: enabled ? 1 : 0 }
+          : site),
+      };
+    }, { alwaysValidate: true }).value;
   } finally {
     db.close();
   }

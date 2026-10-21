@@ -14,6 +14,17 @@ const REPO = join(import.meta.dir, "..");
 // later test file when the test runner discovers files in a different order.
 const PROBE = String.raw`
   import { mock } from "bun:test";
+  import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+  import { tmpdir } from "node:os";
+  import { join } from "node:path";
+
+  const phpFixture = mkdtempSync(join(tmpdir(), "clp-repair-php-"));
+  const realPaths = await import("./cli/paths.ts");
+  mock.module("./cli/paths.ts", () => ({
+    ...realPaths,
+    PHP_ROOT: join(phpFixture, "php"),
+    PHP_FPM_BIN_DIR: join(phpFixture, "sbin"),
+  }));
 
   const calls = [];
   let hasInstalledAddon = true;
@@ -104,11 +115,11 @@ const PROBE = String.raw`
   mock.module("./cli/util.ts", () => ({
     Fatal: TestFatal,
     fatal: (message) => { throw new TestFatal(message); },
-    log: { step: () => {}, ok: () => {}, warn: () => {}, err: () => {}, plain: () => {} },
+    log: { step: () => {}, ok: (message) => calls.push("ok:" + message), warn: () => {}, err: () => {}, plain: () => {} },
     parseFlags,
     requireRoot: () => {},
     run: () => "",
-    tryRun: () => ({ ok: true, out: "" }),
+    tryRun: (cmd) => ({ ok: !cmd.startsWith(phpFixture), out: "fixture FPM rejected configuration" }),
     writeAtomic: () => {},
   }));
 
@@ -149,15 +160,31 @@ const PROBE = String.raw`
     installThrew = error instanceof TestFatal;
   }
 
+  const installWithoutSession = { threw: installThrew, calls: [...calls], provisioning: { ...provisioning } };
+  mkdirSync(join(phpFixture, "php/8.3/fpm/conf.d"), { recursive: true });
+  mkdirSync(join(phpFixture, "sbin"));
+  writeFileSync(join(phpFixture, "sbin/php-fpm8.3"), "");
+  hasInstalledAddon = true;
+  calls.length = 0;
+  let guardFailure;
+  try { await cmdRepair([]); }
+  catch (error) { guardFailure = error.message; }
+  const failedRepairCalls = [...calls];
+  rmSync(phpFixture, { recursive: true, force: true });
+
   process.stdout.write(JSON.stringify({
     repairWithoutSession,
-    installWithoutSession: { threw: installThrew, calls: [...calls], provisioning: { ...provisioning } },
+    installWithoutSession,
+    guardFailure,
+    failedRepairCalls,
   }));
 `;
 
 function runProbe(): {
   repairWithoutSession: { threw: boolean; calls: string[]; provisioning: Record<string, boolean> };
   installWithoutSession: { threw: boolean; calls: string[]; provisioning: Record<string, boolean> };
+  guardFailure: string;
+  failedRepairCalls: string[];
 } {
   const result = spawnSync(process.execPath, ["-e", PROBE], { cwd: REPO, encoding: "utf8" });
   expect(result.status, result.stderr).toBe(0);
@@ -165,6 +192,11 @@ function runProbe(): {
 }
 
 const result = runProbe();
+
+test("repair propagates a real PHP guard failure without claiming completion", () => {
+  expect(result.guardFailure).toContain("php-fpm8.3 rejected the config: fixture FPM rejected configuration");
+  expect(result.failedRepairCalls.some((call) => call.startsWith("ok:repair complete"))).toBe(false);
+});
 
 test("repair completes reconciliation even when no panel session exists", () => {
   expect(result.repairWithoutSession.threw).toBe(false);

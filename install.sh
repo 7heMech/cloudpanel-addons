@@ -7,6 +7,7 @@ ARTIFACTS=("${CLI_ARTIFACT}")
 CLI_TARGET="/usr/local/bin/clp-addons"
 GH_PRIVATE="/usr/local/libexec/clp-addons/gh"
 AVAILABLE_ADDONS=("cloudflare-ips" "instatic" "stager" "maintenance" "php-resources" "git" "panel-tweaks" "wp-login" "smtp" "terminal")
+DEFAULT_ADDONS=("panel-tweaks" "maintenance" "terminal")
 VERSION="latest"
 SELECTED=""
 ASSUME_YES=0
@@ -37,6 +38,7 @@ clp-addons installer
   --help
 
 Available addons: ${AVAILABLE_ADDONS[*]}
+Default addons:   ${DEFAULT_ADDONS[*]}
 USAGE
 }
 
@@ -65,6 +67,8 @@ ok "dependencies available"
 
 have_tty() { [[ -r /dev/tty && -w /dev/tty ]]; }
 
+DEFAULT_ADDONS=("panel-tweaks" "maintenance" "terminal")
+
 if [[ -z $SELECTED ]]; then
   if (( ASSUME_YES )) || ! have_tty; then
     die "no addons selected and no terminal to ask on. Pass --addons=${AVAILABLE_ADDONS[0]}"
@@ -72,7 +76,12 @@ if [[ -z $SELECTED ]]; then
 
   if [[ ${TERM:-dumb} != dumb ]] && [[ -t 1 ]]; then
     selected=(); cursor=0
-    for i in "${!AVAILABLE_ADDONS[@]}"; do selected[i]=1; done
+    for i in "${!AVAILABLE_ADDONS[@]}"; do
+      selected[i]=0
+      for def in "${DEFAULT_ADDONS[@]}"; do
+        if [[ ${AVAILABLE_ADDONS[i]} == "$def" ]]; then selected[i]=1; break; fi
+      done
+    done
     say "Which addons should be installed?"
     say "↑/↓ move · Space toggle · a select all · n clear · Enter install · q cancel"
     while :; do
@@ -114,10 +123,18 @@ if [[ -z $SELECTED ]]; then
     for i in "${!AVAILABLE_ADDONS[@]}"; do
       printf '  %d) %s\n' "$((i + 1))" "${AVAILABLE_ADDONS[i]}"
     done
-    printf 'Enter numbers separated by spaces, or "all" [all]: '
+    printf 'Enter numbers separated by spaces, or "all" [default]: '
     read -r reply < /dev/tty || die "terminal closed"
-    reply=${reply:-all}
-    if [[ $reply == all ]]; then
+    reply=${reply:-default}
+    if [[ $reply == default ]]; then
+      picked=()
+      for i in "${!AVAILABLE_ADDONS[@]}"; do
+        for def in "${DEFAULT_ADDONS[@]}"; do
+          if [[ ${AVAILABLE_ADDONS[i]} == "$def" ]]; then picked+=("${AVAILABLE_ADDONS[i]}"); break; fi
+        done
+      done
+      SELECTED=$(IFS=,; printf '%s' "${picked[*]}")
+    elif [[ $reply == all ]]; then
       SELECTED=$(IFS=,; printf '%s' "${AVAILABLE_ADDONS[*]}")
     else
       picked=()
