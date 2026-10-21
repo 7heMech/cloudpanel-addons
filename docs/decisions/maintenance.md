@@ -46,8 +46,14 @@ stays the editor if a panel release stops serving Ace.
 
 ## Request handling
 
-The addon installs one marked block in `/etc/nginx/global_settings`, which all
-customer site templates include. Nginx checks
+The addon keeps a marked check in `/etc/nginx/global_settings` for sites whose
+serving server includes it (CloudPanel's http3 templates). Other sites get a
+marked include of `/etc/nginx/clp-addons-maintenance.conf`, containing the same
+check, in both their database `site.vhost_template` and rendered vhost. The
+include goes at the start of the canonical site's port-8080 backend when present,
+otherwise its main server, never the www redirect. A serving server that already
+includes `global_settings` gets no additional include. Older templates retain
+their existing header settings. Nginx checks
 `/var/lib/clp-addons/maintenance/_global/on` and
 `/var/lib/clp-addons/maintenance/$server_name/on` on every request and clears
 the maintenance decision when a matching `bypass_$clp_maintenance_ip` file
@@ -102,13 +108,25 @@ The state root, global directory, and per-domain directories are mode `0711`,
 which lets Nginx traverse a known path without listing domains or bypasses.
 Per-site toggle and all bypass files are mode `0600`; the global toggle and
 public HTML files are mode `0644`. Disabling or
-uninstalling the addon removes the global Nginx block and client-IP map, and keeps site state
-unless purge was requested.
+uninstalling the addon removes the marked includes from templates and rendered
+vhosts, the standalone check, the global Nginx block and the client-IP map. Site
+state remains unless purge was requested.
 
 ## Reconciliation
 
-The global-settings reconciler records the pristine file and its SHA-256 hash.
-It renders only when the current unmarked content still matches that baseline,
-runs `nginx -t`, reloads the distro Nginx service, and restores the prior
-settings and client-IP map on validation or reload failure. Repair and the path
-watcher reconcile this block alongside Twig and the CloudPanel manager proxy.
+The global-settings reconciler records the pristine file and its SHA-256 hash
+and renders only when the unmarked content matches that baseline. Site edits
+use the same transaction helpers as Cloudflare IPs: an immediate SQLite
+transaction, edits to trusted regular vhosts with preserved ownership and
+permissions, then `nginx -t` and a distro Nginx reload before commit. Failure rolls back the
+site rows and changed Nginx files; a failed reload also attempts to reload the
+restored configuration. Missing or ambiguous serving blocks stop reconciliation.
+
+Install, enable, repair and the periodic repair timer reconcile these files.
+The existing path watcher also watches the site vhost directory and standalone
+include. Its two-second delay lets CloudPanel commit a new site's row after
+writing its vhost; periodic repair is the fallback. The database is not watched:
+even a no-op write transaction emits close-write events and would retrigger
+repair. Unchanged runs do not reload Nginx. Status checks both the persisted templates and rendered vhosts and reports the domains
+without the check rather than claiming verification from `global_settings`
+alone.

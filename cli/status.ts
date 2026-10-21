@@ -25,7 +25,7 @@ function nginxStatus(status: NginxProxyStatus): string {
 
 function maintenanceNginxStatus(status: MaintenanceNginxStatus): string {
   if (!existsSync(ADDONS.maintenance!.configFile)) return "Not enabled";
-  if (status.state === "ok") return statusValue("Global Check Injected & Verified ✓", true);
+  if (status.state === "ok") return statusValue("Site Checks Injected & Verified ✓", true);
   return statusValue(status.detail ?? "Needs repair", false);
 }
 
