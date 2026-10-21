@@ -37,7 +37,8 @@ function normalizedEntries(value: string | null): string[] {
 
 function allows(value: string | null, ip: string): boolean {
   if (!ip) return false;
-  const list = new BlockList();
+  ip = normalizeMappedIpv4(ip);
+  let allowed = false;
   for (const entry of entries(value)) {
     const [rawAddress, prefix, extra] = entry.split("/");
     const address = prefix === undefined ? normalizeMappedIpv4(rawAddress!) : rawAddress!;
@@ -47,16 +48,21 @@ function allows(value: string | null, ip: string): boolean {
     }
     try {
       const family = version === 4 ? "ipv4" : "ipv6";
+      const entryList = new BlockList();
       if (prefix === undefined) {
         // A stored mapped host needs an approved rewrite before it admits IPv4 in Nginx.
         if (address !== rawAddress && isIP(ip) === 4) continue;
-        list.addAddress(address, family);
-      } else list.addSubnet(address, Number(prefix), family);
+        entryList.addAddress(address, family);
+      } else {
+        entryList.addSubnet(address, Number(prefix), family);
+      }
+      if (version === 6 && isIP(ip) === 4) continue;
+      if (entryList.check(ip, isIP(ip) === 4 ? "ipv4" : "ipv6")) allowed = true;
     } catch {
       failAction("CloudPanel's basic-auth IP allowlist contains an invalid network");
     }
   }
-  return list.check(ip, isIP(ip) === 4 ? "ipv4" : "ipv6");
+  return allowed;
 }
 
 export function basicAuthBlocks(paths: BasicAuthPaths, domain: string, ip: string): boolean {
@@ -81,9 +87,10 @@ export function basicAuthVhost(content: string, domain: string, previous: string
     'auth_basic "Restricted Area";',
     `auth_basic_user_file /etc/nginx/basic-auth/${domain};`,
   ];
-  const pattern = new RegExp(block.map((line) => `[ \\t]*${escaped(line)}[ \\t]*`).join("\\r?\\n"), "g");
+  const pattern = new RegExp(block.map((line) => `^[ \\t]*${escaped(line)}[ \\t]*$`).join("\\r?\\n"), "gm");
   const matches = [...content.matchAll(pattern)];
-  const authLines = [...content.matchAll(/^[ \t]*auth_basic[ \t]+(?!off\s*;)/gm)];
+  const authLines = [...content.matchAll(/^[ \t]*auth_basic\s+([^;]+);/gm)]
+    .filter((match) => match[1]!.trim() !== "off");
   if (matches.length !== 1 || authLines.length !== 1) {
     failAction("the site's CloudPanel basic-auth block is missing, customized or ambiguous; use Security → Basic Authentication");
   }
@@ -131,6 +138,7 @@ export async function withBasicAuthBypass(
   run: (command: string, args: string[]) => CommandResult = runCommand,
   reload: typeof reloadNginx = reloadNginx,
 ): Promise<void> {
+  ip = normalizeMappedIpv4(ip);
   const db = openPanelDatabase(paths.panelDb, false, 1000);
   try {
     await withNginxTransactionAsync(db, paths, run, (changes) => {

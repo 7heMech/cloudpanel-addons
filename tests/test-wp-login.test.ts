@@ -9,7 +9,6 @@ import {
 } from "../addons/wp-login/action";
 import { DEFAULT_MAINTENANCE_ACTION_PATHS } from "../addons/maintenance/action";
 import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
-import { clientIp } from "../lib/app-http";
 import { ROW_ACTION_CLASS } from "../lib/row-actions";
 
 const scriptTarget = WP_LOGIN_TARGETS.find((target) => target.slug === "sites-script")!;
@@ -557,7 +556,7 @@ test("a mapped request address creates IPv4 bypasses for both Nginx gates", asyn
   seedBasicAuth();
   writeFileSync(join(root, "maintenance.conf"), "");
   writeFileSync(maintenanceFile("shop.example.com", "on"), "");
-  const ip = clientIp(new Request("https://panel.example.com/", { headers: { "X-Real-IP": "::ffff:203.0.113.9" } }));
+  const ip = "::ffff:203.0.113.9";
   const result = await act<WpLoginResult>(["sign-in", SHOP, `--client-ip=${ip}`, ALLOW_BASIC, "--add-bypass"], { run: okCommand });
   expect(result.token).toBeDefined();
   expect(basicAuthIps()).toBe("203.0.113.9");
@@ -566,6 +565,41 @@ test("a mapped request address creates IPv4 bypasses for both Nginx gates", asyn
   expect(conf).not.toContain("::ffff:");
   expect(existsSync(maintenanceFile("shop.example.com", "bypass_203.0.113.9"))).toBe(true);
   expect(existsSync(maintenanceFile("shop.example.com", "bypass_::ffff:cb00:7109"))).toBe(false);
+});
+
+test("a mapped IPv6 network does not admit an IPv4 request until its host is allowed", async () => {
+  seedBasicAuth("::ffff:203.0.113.0/120");
+  expect((await act<WpBasicAuthReply>(["sign-in", SHOP, FROM])).basicAuth.canBypass).toBe(true);
+  await act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand });
+  expect(basicAuthIps()).toBe("::ffff:203.0.113.0/120,203.0.113.9");
+});
+
+test("only complete generated basic-auth lines can be rewritten", async () => {
+  const original = seedBasicAuth();
+  const path = join(root, "vhosts", "shop.example.com.conf");
+  for (const customized of [
+    original.replace('  auth_basic "Restricted Area";', '# auth_basic "Restricted Area";'),
+    original.replace('  auth_basic "Restricted Area";', '  #auth_basic "Restricted Area";'),
+    original.replace('  auth_basic "Restricted Area";', '  set $custom 1; auth_basic "Restricted Area";'),
+    original.replace('shop.example.com;\n  location /', 'shop.example.com; # custom\n  location /'),
+    original.replace('shop.example.com;\n  location /', 'shop.example.com; auth_basic off;\n  location /'),
+    original.replace('  location /', '  auth_basic "Another restriction";\n  location /'),
+  ]) {
+    writeFileSync(path, customized);
+    await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand })).rejects.toThrow("customized or ambiguous");
+    expect(readFileSync(path, "utf8")).toBe(customized);
+    expect(basicAuthIps()).toBeNull();
+  }
+});
+
+test("disabled basic-auth directives accept whitespace without looking like another active block", async () => {
+  const original = seedBasicAuth();
+  const path = join(root, "vhosts", "shop.example.com.conf");
+  writeFileSync(path, original.replace('auth_basic off;', 'auth_basic  \t\n      off \t;').replaceAll('\n', '\r\n'));
+  const result = await act<WpLoginResult>(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand });
+  expect(result.token).toBeDefined();
+  expect(basicAuthIps()).toBe("203.0.113.9");
+  expect(readFileSync(path, "utf8")).toContain('auth_basic  \t\r\n      off \t;');
 });
 
 test("native allowlist rewrites normalize mapped hosts while preserving CIDR entries", async () => {

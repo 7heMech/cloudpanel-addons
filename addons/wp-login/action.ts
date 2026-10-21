@@ -18,6 +18,7 @@ import { Database } from "bun:sqlite";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { createHash, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
+import { normalizeMappedIpv4 } from "../../lib/ip-address";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -472,6 +473,7 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
     if (argument.startsWith("--client-ip=")) {
       clientIp = argument.slice("--client-ip=".length);
       if (!isIP(clientIp)) failAction("that is not an IP address");
+      clientIp = normalizeMappedIpv4(clientIp);
       continue;
     }
     if (argument === "--allow-basic-auth") {

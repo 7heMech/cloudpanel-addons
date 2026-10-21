@@ -91,13 +91,13 @@ since anything it could add is a bypass an administrator could add by hand.
 CloudPanel links `site.basic_auth_id` to `basic_auth`. Its `is_active` and
 comma-separated `whitelisted_ips` fields decide whether the browser needs a
 bypass; the sign-in never reads the basic-auth username or password. Existing
-IP addresses and CIDR networks are honored, including IPv6. The shared HTTP
-request IP reader converts IPv4-mapped IPv6 hosts to dotted IPv4 before either
-sign-in gate sees them, so Basic Authentication and Maintenance Mode save the
+IP addresses and CIDR networks are honored, including IPv6. Request addresses, including CLI input, normalize mapped IPv4 to dotted IPv4
+before either sign-in gate sees them, so Basic Authentication and Maintenance Mode save the
 same IPv4 address. Native allowlist updates also convert mapped single-host
 entries, preserving CIDRs and matching the original vhost block before rewriting
-it. An existing mapped host does not count as an effective IPv4 bypass until an
-administrator approves that rewrite; duplicate normalized hosts are saved once.
+it. Mapped IPv6 hosts and networks do not count as effective IPv4 allowances until
+an administrator approves an IPv4 entry; duplicate normalized hosts are saved
+once.
 This gate is in Nginx, before WordPress: without a bypass the browser must answer its HTTP
 basic-auth challenge, and the one-minute token can expire while it does so.
 
