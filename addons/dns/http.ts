@@ -100,6 +100,11 @@ export class ProviderHttp {
       clearTimeout(timer);
     }
   }
+
+  /** Text from a reply, without the credential this client sends, which a provider's error may repeat. */
+  clean(text: string): string {
+    return redact(text, Object.values(this.headers).map((value) => value.replace(/^Bearer /, "")));
+  }
 }
 
 /** Removes every secret from text that may reach a page or a log. */

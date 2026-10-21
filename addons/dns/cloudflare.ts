@@ -197,7 +197,7 @@ export class CloudflareApi {
     if (reply.success === true && status < 400) return { result: reply.result, info: reply.result_info, status };
     const errors = Array.isArray(reply.errors) ? reply.errors as { code?: unknown; message?: unknown }[] : [];
     const reasons = errors
-      .map((error) => `${typeof error.message === "string" ? error.message.slice(0, 160) : "error"}${Number.isInteger(error.code) ? ` (${error.code})` : ""}`)
+      .map((error) => `${typeof error.message === "string" ? this.http.clean(error.message).slice(0, 160) : "error"}${Number.isInteger(error.code) ? ` (${error.code})` : ""}`)
       .join("; ");
     throw new ProviderError("Cloudflare", reasons || `HTTP ${status}`, status);
   }

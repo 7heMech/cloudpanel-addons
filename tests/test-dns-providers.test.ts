@@ -92,6 +92,15 @@ describe("Cloudflare", () => {
     await expect(api.zones()).rejects.toThrow("HTTP 502 without a JSON reply");
   });
 
+  test("an error that repeats the token is redacted before it is kept or shown", async () => {
+    const api = new CloudflareApi(USER_TOKEN, async (_url, init) => Response.json({
+      success: false, errors: [{ code: 6003, message: `${"x".repeat(130)} rejected ${new Headers(init.headers).get("authorization")}` }],
+    }, { status: 400 }));
+    const message = await api.zones().then(() => "", (caught: Error) => caught.message);
+    expect(message).toContain("[redacted]");
+    expect(message).not.toContain(USER_TOKEN.slice(0, 12));
+  });
+
   test("TXT values are written as quoted strings of at most 255 characters", () => {
     const long = "v=DKIM1;k=rsa;p=" + "A".repeat(400);
     const quoted = quoteTxt(long);
@@ -143,6 +152,11 @@ describe("Mailcow", () => {
     const api = new MailcowApi(origin, MAILCOW_KEY, async (url, init) => { seen.push(init); expect(url).not.toContain(MAILCOW_KEY); return fake.fetch(url, init); });
     await api.hasDomain("example.com");
     expect(new Headers(seen[0]!.headers).get("x-api-key")).toBe(MAILCOW_KEY);
+  });
+
+  test("a refusal that repeats the key is redacted", async () => {
+    const api = new MailcowApi(origin, MAILCOW_KEY, async (_url, init) => Response.json({ type: "danger", msg: ["key_invalid", new Headers(init.headers).get("x-api-key")] }));
+    await expect(api.hasDomain("example.com")).rejects.toThrow("Mailcow: key_invalid [redacted]");
   });
 
   test("a sender list Mailcow does not report reads as unknown, not empty", async () => {

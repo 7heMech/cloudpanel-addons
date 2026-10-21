@@ -29,7 +29,7 @@ function refusal(value: unknown): string | null {
     const { type, msg } = entry as { type?: unknown; msg?: unknown };
     if (type === "danger" || type === "error") {
       const words = Array.isArray(msg) ? msg.filter((part) => typeof part === "string").join(" ") : typeof msg === "string" ? msg : "";
-      return words.slice(0, 160) || "refused the request";
+      return words || "refused the request";
     }
   }
   return null;
@@ -42,21 +42,22 @@ export class MailcowApi {
     this.http = new ProviderHttp("Mailcow", `${origin}/api/v1`, { "X-API-Key": key }, fetcher, backoff);
   }
 
-  private async read(path: string): Promise<unknown> {
-    const { status, json } = await this.http.request(path);
+  private refuse(status: number, json: unknown): void {
     if (status === 401 || status === 403) throw new ProviderError("Mailcow", "refused the API key", status);
     if (status >= 400) throw new ProviderError("Mailcow", `HTTP ${status}`, status);
     const refused = refusal(json);
-    if (refused) throw new ProviderError("Mailcow", refused, status);
+    if (refused) throw new ProviderError("Mailcow", this.http.clean(refused).slice(0, 160), status);
+  }
+
+  private async read(path: string): Promise<unknown> {
+    const { status, json } = await this.http.request(path);
+    this.refuse(status, json);
     return json;
   }
 
   private async write(path: string, body: unknown): Promise<void> {
     const { status, json } = await this.http.request(path, "POST", body);
-    if (status === 401 || status === 403) throw new ProviderError("Mailcow", "refused the API key", status);
-    if (status >= 400) throw new ProviderError("Mailcow", `HTTP ${status}`, status);
-    const refused = refusal(json);
-    if (refused) throw new ProviderError("Mailcow", refused, status);
+    this.refuse(status, json);
     const entries = Array.isArray(json) ? json : [json];
     if (!entries.some((entry) => entry && typeof entry === "object" && (entry as { type?: unknown }).type === "success")) {
       throw new ProviderError("Mailcow", "did not confirm the change", status);
