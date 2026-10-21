@@ -10,7 +10,6 @@ async function act(domain, verb) {
     repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
     notify(domain + ': ' + verb + ' completed.', 'ok');
   } catch (e) {
-    busy(false);
     notify(verb + ' failed: ' + e.message, 'error');
   } finally {
     busy(false);
@@ -111,10 +110,8 @@ function askUpdate(domain, current) {
 
 async function confirmUpdate() {
   const tag = document.getElementById('update-tag').value.trim();
-  if (!/^\d+\.\d+\.\d+$/.test(tag)) {
-    notify('Enter an exact version, for example 0.0.18.', 'error');
-    return;
-  }
+  if (!/^\d+\.\d+\.\d+$/.test(tag)) { alert('Enter an exact version, for example 0.0.18'); return; }
+  document.getElementById('update-dialog').close();
   busy(true);
   try {
     const reply = await call('/api/instances/' + encodeURIComponent(pendingUpdate) + '/update', {
@@ -149,13 +146,13 @@ function askDelete(domain) {
 async function confirmDelete() {
   const typed = document.getElementById('delete-confirm').value.trim();
   if (typed !== pendingDelete) { alert('Type the domain exactly to confirm.'); return; }
+  document.getElementById('delete-dialog').close();
   busy(true);
   try {
     const reply = await call('/api/instances/' + encodeURIComponent(pendingDelete) + '/delete', { method: 'POST' });
     repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
     notify(pendingDelete + ' deleted.', 'ok');
   } catch (e) {
-    busy(false);
     notify('Delete failed: ' + e.message, 'error');
   } finally {
     busy(false);

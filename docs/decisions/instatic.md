@@ -17,9 +17,9 @@ pages. Image selection is limited to exact versions of the fixed Instatic
 registry image; callers cannot supply container commands or mount paths.
 
 Lifecycle actions, updates and deletion return dashboard HTML from the same
-renderer as the first load. The browser closes the completed dialog, repaints
-in place and reports the outcome. Failed updates retain the form and expose
-rollback logs when supplied. Creation job completion repaints its result view.
+renderer as the first load, and the page repaints in place and reports the
+outcome. A rolled-back update shows its container logs. A finished creation job
+repaints its result view.
 
 ## Instance model
 
