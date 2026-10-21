@@ -208,8 +208,16 @@ card the page does not carry -- an update watched from the index -- takes a card
 of its own under the heading and above the rest, whether the page was drawn
 during the job or a duplicate request told the browser about it, so a job is
 never reported under the action the operator happened to click. The shared
-watcher scopes its updates to that card; a completed job still reloads the page
-so the server remains the source of the result view.
+watcher scopes its updates to that card. A finished job asks the server for the
+page again and swaps in the view it draws, so the server remains the source of
+the result view. A successful update reloads instead: the page's script and
+styles belong to the release it replaced.
+
+Mutations that replace a view return `html` from the renderer used on first
+load. `repaintView` swaps it into `#clp-content`, closes finished dialogs, and
+preserves scroll, focus and disclosure state for elements with stable IDs.
+Addon clients retain their fleet selections and report outcomes with `notify`.
+Failed mutations leave the view intact.
 
 A page reached from a site's tab strip is drawn in site mode instead: the shell
 shows CloudPanel's site information and the applicable site tabs with the addon's
@@ -289,13 +297,9 @@ string built from a shared class name, a script fragment that is a function
 body rather than a program, and a `<script>` element indented to sit inside a
 Twig template.
 
-Three scripts are shared. Every addon page gets the base helpers; the two fleet
-tables also get the site-selection ones, and the two addons whose change is too
-wide to patch into the page get the pair that carries a message across a reload.
-That pair is not in the base: a page that reloads is the exception here, and a
-page whose switches are modes rather than actions must not be handed the means
-to reload itself. Each shared function takes the page's own repaint, because
-what a change redraws is the one thing the addons do not agree on.
+Every addon page gets the base helpers. Fleet tables also get shared site
+selection helpers. WordPress Sign-In uses the carried-flash helper for its
+reload; repainting pages show mutation outcomes in place.
 
 ## Live panel data
 
