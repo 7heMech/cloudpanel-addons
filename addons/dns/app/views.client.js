@@ -277,7 +277,7 @@ async function dnsSetDefault(select) {
 
 async function dnsCheck(button) {
   button.textContent = 'Checking…';
-  await dnsPost('/api/check', {});
+  if (!await dnsPost('/api/check', {})) button.textContent = 'Check now';
 }
 
 // --- plans and reviews ------------------------------------------------------
