@@ -103,7 +103,7 @@ function basicAuthReply(domain: string, ip: string, admin: boolean): WpBasicAuth
   const blocked = `${domain} is protected by CloudPanel basic authentication.`;
   if (!admin) return { basicAuth: { ip, canBypass: false, message: `${blocked} An administrator can allow your IP in Security → Basic Authentication.` } };
   if (!ip) return { basicAuth: { ip, canBypass: false, message: `${blocked} The panel could not tell your IP, so manage its allowlist in Security → Basic Authentication.` } };
-  return { basicAuth: { ip, canBypass: true, message: `${blocked} Allow your IP ${ip} and sign in? This bypasses basic authentication for the whole site, for everyone sharing that IP, until removed in Security → Basic Authentication.` } };
+  return { basicAuth: { ip, canBypass: true, message: `${blocked} Allow your IP ${ip} for the whole site and everyone sharing that IP, until removed in Security → Basic Authentication? CloudPanel accepts forged X-Real-IP, so anyone who knows an allowed IP can bypass it. Behind Cloudflare, your IP may not match.` } };
 }
 
 export interface WpRemoveResult {

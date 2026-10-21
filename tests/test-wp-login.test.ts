@@ -414,6 +414,8 @@ test("basic auth offers an explicit whole-site bypass without minting a token", 
   expect(reply.basicAuth.message).toContain("whole site");
   expect(reply.basicAuth.message).toContain("everyone sharing that IP");
   expect(reply.basicAuth.message).toContain("until removed");
+  expect(reply.basicAuth.message).toContain("forged X-Real-IP");
+  expect(reply.basicAuth.message).toContain("Cloudflare");
   expect(runuserLog()).toEqual([]);
   expect(basicAuthIps()).toBeNull();
   expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).toBe(original);

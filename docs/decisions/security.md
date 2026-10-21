@@ -67,6 +67,16 @@ Disabling or uninstalling the addon removes the plugin from every site. Accepted
 IP bypasses stay in their respective CloudPanel or Maintenance Mode settings. See
 [WordPress Sign-In](wp-login.md).
 
+CloudPanel's native basic-auth allowance inherits its global real-IP trust:
+`set_real_ip_from 0.0.0.0/0` accepts a forged `X-Real-IP` from any IPv4 peer.
+Anyone who knows an allowed IP can replay it to bypass authentication. Ordinary
+Cloudflare proxy requests carry the visitor in `CF-Connecting-IP`, which that
+configuration does not use; Nginx sees the edge, so the panel IP may never
+match. Both limits appear in the confirmation. The addon retains native
+behavior and changes neither global `nginx.conf` nor per-site real-IP trust.
+A local override would also alter CloudPanel's Cloudflare-only checks and need
+removal and regeneration handling beyond the native allowlist's lifecycle.
+
 ## CloudPanel authentication
 
 The gateway reads the bounded `cloudpanel` session file without following

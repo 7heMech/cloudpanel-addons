@@ -51,10 +51,9 @@ resolves is a popup the browser blocks.
 The addon's page refuses form submissions, as every response does by default.
 Its sign-in window opens on the addon's page for that one site, whose policy
 lets a form go only to the site's HTTPS origin, and the token's form is written
-into it once it has loaded. A policy on the addon's page listing every site
-would outgrow the 4 KiB response header the panel's Nginx buffers at about a
-hundred sites. CloudPanel's Sites page sets no policy, so its link opens a
-blank window.
+into it once it has loaded. This keeps the response header size independent
+of the site count and within the panel's proxy buffer. CloudPanel's Sites page
+sets no policy, so its link opens a blank window.
 
 The site user creates `mu-plugins/clp-addons` itself, so every directory it adds
 is that user's. A missing `wp-includes` or `wp-content` is a refusal rather than
@@ -82,41 +81,33 @@ Sites page it is shown in CloudPanel's own Bootstrap modal, as are failures.
 
 A browser that reaches the panel over IPv4 and the site over IPv6 is still
 turned away after the bypass, as it would be after adding the address by hand.
-The panel's Nginx takes forwarded addresses from any peer, so the address is
-the one the browser claims; a browser that forges it only misleads itself,
-since anything it could add is a bypass an administrator could add by hand.
+Maintenance's handling of forwarded addresses is described in
+[Maintenance Mode](maintenance.md).
 
 ## A site protected by basic authentication
 
 CloudPanel links `site.basic_auth_id` to `basic_auth`. Its `is_active` and
-comma-separated `whitelisted_ips` fields decide whether the browser needs a
-bypass; the sign-in never reads the basic-auth username or password. Existing
-IP addresses and CIDR networks are honored, including IPv6. Request addresses, including CLI input, normalize mapped IPv4 to dotted IPv4
-before either sign-in gate sees them, so Basic Authentication and Maintenance Mode save the
-same IPv4 address. Native allowlist updates also convert mapped single-host
-entries, preserving CIDRs and matching the original vhost block before rewriting
-it. Mapped IPv6 hosts and networks do not count as effective IPv4 allowances until
-an administrator approves an IPv4 entry; duplicate normalized hosts are saved
-once.
-This gate is in Nginx, before WordPress: without a bypass the browser must answer its HTTP
-basic-auth challenge, and the one-minute token can expire while it does so.
+comma-separated `whitelisted_ips` decide whether sign-in needs a bypass; the
+site's username and password are never read. IPv4 and IPv6 hosts and CIDRs are
+matched as Nginx matches them. Request addresses, including CLI input, normalize
+mapped IPv4 to dotted IPv4. Accepted updates normalize stored mapped hosts,
+deduplicate them and preserve CIDRs. Mapped IPv6 hosts and networks do not count
+as effective IPv4 allowances until an administrator approves an IPv4 entry.
 
-An administrator whose address is not allowed receives a separate confirmation
-before any token is minted. It explains that allowing the address bypasses basic
-authentication for the whole site and everyone sharing that address, until
-removed in Security → Basic Authentication. The exemption includes both
-`/wp-login.php` and `/wp-admin/`, so it also covers the redirect after sign-in.
-CloudPanel's `/.well-known` location already disables basic auth. A password
-prompt cannot deliver the expected password-free panel sign-in; credentials in
-URLs, HTML or process arguments would expose the site's reusable password.
+An administrator whose address is blocked receives a separate confirmation
+before a token is minted. It states that the bypass covers the whole site and
+everyone sharing that address until removed in Security → Basic Authentication,
+and warns about spoofing and Cloudflare. Both `/wp-login.php` and `/wp-admin/`
+are covered. Other panel users cannot add a bypass, including site managers:
+root rejects `--allow-basic-auth` with `--as-user` or without a request address.
+Existing allowances still permit their ordinary sign-ins and ownership checks.
+`--add-bypass` authorizes maintenance alone; both gates require separate consent.
 
-Acceptance updates CloudPanel's existing `whitelisted_ips` list and its rendered
-vhost with the native `satisfy any`, `allow` and `deny all` directives. There is
-no separate bypass rule, credential store or public sign-in endpoint. The
-remaining vhost is preserved. A customized or ambiguous basic-auth block is
-refused with a pointer to the native Security page rather than rewritten.
-Only a regular, root-owned vhost that is not writable by other users can be
-replaced; symlinks are refused. Ownership and mode survive atomic replacement.
+Acceptance updates the native allowlist and exactly one complete generated
+`satisfy any`, `allow`, `deny all` and basic-auth block. Customized or ambiguous
+blocks are refused with a pointer to the native Security page. Only a regular,
+root-owned vhost that is not writable by other users can be replaced. Its mode
+and ownership survive atomic replacement; credentials and other content remain.
 
 The sign-in lock waits up to five seconds. Minting as the site user has ten
 seconds and runs before the SQLite write transaction; panel reads and writes
@@ -135,13 +126,22 @@ Maintenance bypasses are added after the basic-auth commit, so a failure there
 leaves the accepted native allowance in CloudPanel's Security settings. Neither
 gate changes during preflight. No probe adds the server's address.
 
-`--allow-basic-auth` is distinct from `--add-bypass`, so consenting to lift
-maintenance does not also lift basic auth. Both flags require a known request
-address and reject `--as-user` root-side, including site managers. Other panel
-users receive an explanation and may sign in once their address is already
-allowed; site ownership checks still apply. The address has the same forwarded
-address and IPv4/IPv6 limitations described above for maintenance. No background
-probe adds the server's own address to an allowlist.
+### Native real-IP limits
+
+CloudPanel trusts `X-Real-IP` from every IPv4 peer through
+`set_real_ip_from 0.0.0.0/0` and the default `real_ip_header X-Real-IP`. Anyone
+who knows an allowed address can replay it to bypass basic authentication;
+the IP is not a secret or a reliable identity. With ordinary Cloudflare proxying,
+`CF-Connecting-IP` carries the visitor address but Nginx still sees the edge
+address, so adding the administrator's panel IP may leave the password prompt.
+A panel reached over IPv4 and a site reached over IPv6 can also disagree.
+
+This feature retains native behavior and states both real-IP limits in its
+confirmation. It does not change global `nginx.conf` or install local trust
+rules: those would also change CloudPanel's Cloudflare-only access checks and
+need lifecycle handling to survive vhost regeneration and disappear when the
+native allowance is removed. A native allowlist change persists through
+CloudPanel's regeneration without separate addon state.
 
 ## Two answers to "which sites are WordPress"
 
