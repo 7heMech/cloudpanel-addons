@@ -1,12 +1,7 @@
 /**
- * The link that opens Cloudflare's own token form with the permissions the
- * saved profiles need already ticked. It is a user-owned token template, so
- * the operator picks the accounts and zones on Cloudflare's screen and no
- * account ID is needed here.
+ * Only documented keys go in Cloudflare's token-template URL. Rule permissions
+ * are listed for the operator to add in the form.
  * https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/
- *
- * Cloudflare ignores a permission key it does not recognise, so each one is
- * also listed beside the link for the operator to check.
  */
 import type { Profile } from "./model";
 
@@ -16,7 +11,7 @@ export interface TokenTemplate {
 }
 
 interface Permission {
-  key: string;
+  key?: string;
   type: "read" | "edit";
   label: string;
 }
@@ -32,12 +27,12 @@ export function tokenTemplate(profiles: Profile[]): TokenTemplate {
     permissions.push({ key: "zone_settings", type: "edit", label: "Zone Settings: Edit" });
   }
   if (profiles.some((profile) => profile.zone.acmeFullSsl || profile.zone.webmailFullSsl)) {
-    permissions.push({ key: "config_settings", type: "edit", label: "Config Rules: Edit" });
+    permissions.push({ type: "edit", label: "Config Rules: Edit" });
   }
   if (profiles.some((profile) => profile.zone.skipFirewallIps.length)) {
-    permissions.push({ key: "zone_waf", type: "edit", label: "Zone WAF: Edit" });
+    permissions.push({ type: "edit", label: "Zone WAF: Edit" });
   }
-  const keys = encodeURIComponent(JSON.stringify(permissions.map(({ key, type }) => ({ key, type }))));
+  const keys = encodeURIComponent(JSON.stringify(permissions.filter((permission) => permission.key).map(({ key, type }) => ({ key, type }))));
   return {
     url: `https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=${keys}&accountId=%2A&zoneId=all&name=${encodeURIComponent("CloudPanel DNS")}`,
     permissions: permissions.map((permission) => permission.label),

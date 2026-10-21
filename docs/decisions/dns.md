@@ -114,8 +114,11 @@ template (`/profile/api-tokens` with `permissionGroupKeys`, `accountId=*` and
 screen and never types an account ID. The permissions are the union of what the
 saved profiles use: Account Settings Read, DNS Edit, Zone Read (Zone Edit if a
 profile creates zones), Zone Settings Edit, Config Rules Edit and Zone WAF Edit
-for the features that need them. Cloudflare silently ignores a key it does not
-know, so the permissions are also listed beside the link.
+for the features that need them. The URL uses only keys in Cloudflare's
+[template reference](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/).
+Config Rules and Zone WAF have no documented template key, so the page asks
+operators to add them manually when listed. Their API permissions are
+[Config Settings Write and Zone WAF Write](https://developers.cloudflare.com/ruleset-engine/rulesets-api/update/).
 
 A token is verified before it is saved (`/user/tokens/verify`, or the account
 route for an account-owned one). Each check then lists every account and zone
