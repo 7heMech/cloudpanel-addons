@@ -83,8 +83,8 @@ time and bounded error text. Pending sites are handled on subsequent passes.
 Every Varnish route remains administrator-only; the sign-in route's role
 exception does not grant plugin-management access.
 
-The page follows the Cloudflare IPs layout: a policy card for automatic
-installation, the fleet table, then a helper card when any site has the helper.
+The page follows the Cloudflare IPs layout: a policy card and a fleet table for
+Varnish, the same for MainWP, then a helper card when any site has the helper.
 Per-site inclusion is a switch and does not imply that the global policy is on.
 Sign-in is the primary row action. After any change the page fetches
 `/api/dashboard`, a server-rendered fragment of everything below the heading,
@@ -219,7 +219,8 @@ network policy the addon does not manage. Child steps run as the child's site
 user and Dashboard steps as the Dashboard's, through the shared WP-CLI runner.
 A fixed adapter, `mainwp.php`, is passed to `wp eval` with JSON on stdin and
 answers on a marked line. Its failures are fixed codes the addon turns into its
-own messages, so text a site prints is never shown or logged. The adapter loads
+own messages, so text a site prints in reply is never shown or logged; a failed
+plugin download keeps WP-CLI's bounded summary, as Varnish's does. The adapter loads
 the Dashboard plugin after WordPress and registers through MainWP's own
 `rest_api_add_site`, which generates and stores the keys.
 

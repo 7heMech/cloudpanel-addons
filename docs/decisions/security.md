@@ -216,9 +216,10 @@ Dashboard's public key. Child and Dashboard code run as their own site users
 through the shared WP-CLI runner, and root only validates their marked replies.
 A child's administrator login reaches the Dashboard only if it matches
 WordPress's strict login characters. The Security ID travels on stdin, never in
-arguments, and stays in the root-only journal only until the connection is
-verified or cleaned up. Adapter failures are fixed codes, so site text never reaches logs or
-the page. Readiness and registration verify certificates, and the record keeps
+arguments, and stays in root-only state only until the connection is verified or
+cleaned up. Adapter failures are fixed codes, so no adapter reply text reaches
+logs or the page; a failed plugin download keeps WP-CLI's bounded summary, as
+Varnish's does. Readiness and registration verify certificates, and the record keeps
 verifying. Firewalls, Cloudflare-only rules, basic auth and maintenance pages are
 never bypassed. Every MainWP route is administrator-only behind CSRF; Connect and
 cleanup need explicit confirmation. Revoking MainWP access does not undo what was
