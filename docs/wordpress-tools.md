@@ -20,8 +20,9 @@ installations with Varnish enabled qualify; multisite networks are left alone.
 
 Every 15 minutes the repair timer queues a background pass to install the
 plugin on sites that have not had it yet. **Check now** checks every site,
-applies the policy immediately and refreshes the status shown. Large fleets or slow downloads may leave sites
-pending; check again to continue. The status badge shows when it was checked.
+applies the policy immediately and refreshes the status shown. Large fleets or
+slow downloads may leave sites pending; check again to continue. The status badge
+shows when it was checked.
 
 Turn off a site's **Automatic** switch to manage it yourself. That keeps its
 existing plugin unchanged and hides installation actions for that site.
@@ -78,9 +79,9 @@ attention; fix it and retry. Cleanup does not undo work done through MainWP or
 end WordPress sessions it opened.
 
 Disabling or uninstalling WordPress Tools leaves MainWP connections in place;
-clean up first to remove them. Both refuse while a connection was cut off
-part-way; run `clp-addons repair wp-login` and let its background pass finish
-before retrying. If `/var/lib/clp-addons/wp-login/mainwp.json` cannot be read,
-sign-in and Varnish
-still work. Deleting that file turns automation off and forgets which
-connections WordPress Tools made, so cleanup can no longer remove them.
+clean up first to remove them. Both refuse while an interrupted connection's
+temporary authentication setting needs recovery. Run `clp-addons repair wp-login`
+and let its background pass finish before retrying. If the page reports that
+`/var/lib/clp-addons/wp-login/mainwp.json` cannot be read, sign-in and Varnish
+still work. Deleting that file turns automation off and forgets which connections
+WordPress Tools made, so cleanup can no longer remove them.

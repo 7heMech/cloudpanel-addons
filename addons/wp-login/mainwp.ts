@@ -41,8 +41,8 @@ export interface MainwpRecord {
   /** The Security ID of an enrollment that is not verified yet. */
   token?: string;
   connection?: Connection;
-  /** Written before a step changes the site, cleared once its result is known. */
-  phase?: "install" | "connect" | "cleanup";
+  /** `restored` keeps connection recovery pending after authentication is safe. */
+  phase?: "install" | "connect" | "restored" | "cleanup";
 }
 
 export interface MainwpState {
@@ -174,7 +174,7 @@ function isRecord(value: unknown): value is MainwpRecord {
     || typeof record.ownedPlugin !== "boolean" || typeof record.ownedConnection !== "boolean") return false;
   if (record.token !== undefined && !HEX64.test(record.token)) return false;
   if (record.connection !== undefined && !isConnection(record.connection)) return false;
-  if (record.phase !== undefined && !["install", "connect", "cleanup"].includes(record.phase)) return false;
+  if (record.phase !== undefined && !["install", "connect", "restored", "cleanup"].includes(record.phase)) return false;
   const owns = record.ownedPlugin || record.ownedConnection || record.phase !== undefined;
   return record.snapshot === undefined ? !owns : isSnapshot(record.snapshot);
 }
@@ -361,7 +361,13 @@ async function visit(pass: Pass, site: WpSite): Promise<void> {
   };
   pass.state.sites[site.domain] = record;
   try {
-    if (record.snapshot && record.phase) await restoreAuth(pass, site, record);
+    if (record.snapshot && record.phase && record.phase !== "restored") {
+      await restoreAuth(pass, site, record);
+      if (record.phase !== "cleanup") {
+        record.phase = "restored";
+        saveMainwpState(pass.run.statePath, pass.state);
+      }
+    }
     if (pass.dashboardError) throw new Error(pass.dashboardError);
     const status = await childStatus(pass, site);
     if (pass.state.cleanup) await cleanupSite(pass, site, record, status);
@@ -495,6 +501,8 @@ async function cleanupSite(pass: Pass, site: WpSite, record: MainwpRecord, statu
   }
   const ours = !status.key || status.key === record.connection?.key || record.token === status.securityId;
   record.phase = "cleanup";
+  // Persist removal intent before the child disappears, including across retries.
+  if (ours && record.ownedPlugin && status.installed) record.seen = false;
   saveMainwpState(pass.run.statePath, pass.state);
   if (ours) {
     await bridge(pass, site, { op: "cleanup", snapshot: record.snapshot, key: status.key, removePlugin: record.ownedPlugin });
@@ -505,8 +513,6 @@ async function cleanupSite(pass: Pass, site: WpSite, record: MainwpRecord, statu
   if (!ours) record.status = paired(status, connection) ? "connected" : "not-connected";
   else if (record.ownedPlugin) {
     record.status = "missing";
-    // The addon removed what it put there, so automation may install it again.
-    if (status.installed) record.seen = false;
   } else record.status = "not-connected";
   forget(record);
   pass.result.removed++;

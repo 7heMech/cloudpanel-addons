@@ -231,7 +231,9 @@ Connecting uses the child's first administrator, as sign-in does. The adapter
 sets a random Security ID and turns off that administrator's password
 requirement for connecting, which lets MainWP register with the ID alone. The
 previous setting is journaled first. It is restored in `finally`, or by the next
-repair after a crash, even when automation is off or the site is excluded.
+queued pass after a crash, even when automation is off or the site is excluded.
+A successful recovery is journaled as `restored`, so an unavailable Dashboard
+cannot prevent disable or uninstall once authentication is safe.
 MainWP stores "use the global setting" for a new record's certificate check, so
 the adapter sets it to verify. It also cuts MainWP's request timeout to 20
 seconds, so registration fails inside the addon's deadline instead of being
@@ -271,9 +273,12 @@ tables and events stay. The Dashboard record goes only if its id and key still
 match. It is removed through MainWP's database removal without the request that
 asks the child to deactivate, as MainWP's own Abilities API does, with its key
 file and cookie jar. Settings-backup and request-log rows, which MainWP leaves,
-go too. Both sides verify, and a failure keeps the claim and Cleanup pending.
-Removing a plugin the addon installed clears `seen`, so automation may install
-it again later; one the operator removed stays seen.
+go too. A retry finishes those artifacts even when the Dashboard record is
+already gone. Both sides verify, and a failure keeps the claim and Cleanup
+pending. Cleanup journals removal intent by clearing `seen` before deleting a
+plugin the addon installed, so automation may install it again after a completed
+cleanup, even if cleanup needed retries. One already removed by the operator
+stays seen.
 
 MainWP has its own lock, separate from Varnish and sign-in. The queued pass
 looks only at unseen sites, unfinished phases, pending cleanup and retired

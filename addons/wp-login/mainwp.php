@@ -279,12 +279,14 @@ function clp_mainwp_dashboard_remove($input) {
     $db = clp_mainwp_dashboard();
     $id = (int) $input['id'];
     $site = $db->get_website_by_id($id);
-    if (!$site || clp_mainwp_key($site->pubkey) !== $input['key']) return array('ok' => true);
+    if ($site && clp_mainwp_key($site->pubkey) !== $input['key']) return array('ok' => true);
     $key_file = \MainWP\Dashboard\MainWP_Encrypt_Data_Lib::get_key_file($id, true);
-    \MainWP\Dashboard\MainWP_Manage_Sites_Handler::delete_website_favicon($site);
+    if ($site) \MainWP\Dashboard\MainWP_Manage_Sites_Handler::delete_website_favicon($site);
     if ($db->remove_website($id) === false) clp_mainwp_fail('dashboard-cleanup-incomplete');
-    foreach (array('mainwp_delete_site', 'mainwp_site_deleted') as $hook) {
-        try { do_action($hook, $site); } catch (Throwable $error) { /* as MainWP's own removal */ }
+    if ($site) {
+        foreach (array('mainwp_delete_site', 'mainwp_site_deleted') as $hook) {
+            try { do_action($hook, $site); } catch (Throwable $error) { /* as MainWP's own removal */ }
+        }
     }
     \MainWP\Dashboard\MainWP_Encrypt_Data_Lib::remove_key_file($id);
     foreach (clp_mainwp_cookie_files($id) as $file) {

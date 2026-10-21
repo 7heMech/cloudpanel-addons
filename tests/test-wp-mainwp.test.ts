@@ -332,6 +332,32 @@ test("a deleted Dashboard does not leave cleanup pending for ever", async () => 
   expect(readMainwpState(run.statePath)).toMatchObject({ cleanup: false, dashboard: "", enabled: false });
 });
 
+test("cleanup resumes after the Dashboard row disappears and preserves plugin removal intent", async () => {
+  await configured();
+  await syncMainwp(run, options);
+  let artifact = true;
+  let interrupted = true;
+  const retryOptions = { runWpCommand: async (command: WpCommand) => {
+    const reply = await options.runWpCommand(command);
+    if (command.stdin && JSON.parse(command.stdin).op === "dashboard-remove") {
+      if (interrupted) throw new Error("the Dashboard key file could not be removed");
+      artifact = false;
+    }
+    return reply;
+  } };
+  expect((await syncMainwp(run, retryOptions, true)).failed).toHaveLength(1);
+  expect(connections["new.test"]).toBeUndefined();
+  expect(children["new.test"]!.installed).toBe(false);
+  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ seen: false, phase: "cleanup" });
+  expect(artifact).toBe(true);
+  interrupted = false;
+  expect((await syncMainwp(run, retryOptions, true)).failed).toEqual([]);
+  expect(artifact).toBe(false);
+  expect(readMainwpState(run.statePath).cleanup).toBe(false);
+  await configureMainwp(run, options, true);
+  expect((await syncMainwp({ ...run, dueOnly: true }, options)).connected).toBe(1);
+});
+
 test("only an interrupted enrollment holds up disabling or uninstalling", async () => {
   await configured(); await syncMainwp(run, options);
   expect(() => requireMainwpSettled(run.statePath)).not.toThrow();
@@ -342,6 +368,29 @@ test("only an interrupted enrollment holds up disabling or uninstalling", async 
   await syncMainwp({ ...run, dueOnly: true }, options);
   expect(() => requireMainwpSettled(run.statePath)).not.toThrow();
   expect(readMainwpState(run.statePath).enabled).toBe(true);
+});
+
+test("restoring authentication permits withdrawal even while the Dashboard is unavailable", async () => {
+  await configured();
+  fail = "restore";
+  await syncMainwp({ ...run, domain: "manual.test" }, options);
+  expect(() => requireMainwpSettled(run.statePath)).toThrow("interrupted");
+  fail = "";
+  const unavailable = { runWpCommand: async (command: WpCommand) => {
+    if (command.stdin && JSON.parse(command.stdin).op === "dashboard-status") {
+      return 'CLP-ADDONS-MAINWP:{"error":"dashboard-unavailable"}';
+    }
+    return options.runWpCommand(command);
+  } };
+  await syncMainwp({ ...run, dueOnly: true }, unavailable);
+  expect(children["manual.test"]!.auth).toBe(true);
+  expect(() => requireMainwpSettled(run.statePath)).not.toThrow();
+  expect(readMainwpState(run.statePath).sites["manual.test"]).toMatchObject({ phase: "restored", ownedConnection: true });
+  commands = [];
+  await syncMainwp({ ...run, dueOnly: true }, unavailable);
+  expect(commands.some((command) => command.stdin?.includes('"op":"restore-auth"'))).toBe(false);
+  await syncMainwp({ ...run, dueOnly: true }, options);
+  expect(readMainwpState(run.statePath).sites["manual.test"]!.phase).toBeUndefined();
 });
 
 test("a login the Dashboard would store is checked, and a site's own error text is never repeated", async () => {
