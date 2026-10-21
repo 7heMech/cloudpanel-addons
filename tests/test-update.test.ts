@@ -8,6 +8,7 @@ import { ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, LOCK_DIR } 
 import * as realProvision from "../cli/provision";
 
 const calls: string[] = [];
+mock.module("../cli/php-guard", () => ({ reconcilePhpGuard: () => calls.push("reconcilePhpGuard") }));
 let hasInstalledAddon = true;
 let artifactsAvailable = false;
 let artifactTampered = false;

@@ -31,11 +31,14 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync, statSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  NGINX_GLOBAL_SETTINGS, NGINX_MAINTENANCE_STATE_DIR, NGINX_PROXY_STATE_DIR, nginxLayout,
+  DISTRO_NGINX_SITES_DIR, PANEL_DB, NGINX_GLOBAL_SETTINGS, NGINX_MAINTENANCE_STATE_DIR, NGINX_PROXY_STATE_DIR, nginxLayout,
   TEMPLATE_STATE_DIR, TEMPLATES_DIR, TWIG_CACHE_DIR,
 } from "./paths";
 import type { AddonTarget } from "../lib/addon-target";
 import { writeAtomic } from "./util";
+import { runCommand, type CommandResult } from "./action-common";
+import { nginxFileChange, openPanelDatabase, withNginxTransaction } from "./nginx-transaction";
+import { MAINTENANCE_INCLUDE_PATH, sitesWithoutMaintenance, stageMaintenanceVhosts } from "./maintenance-vhosts";
 
 // CloudPanel versions this patch's markup assumptions were verified against.
 // A version outside this list is not fatal, but the hash gate below is what
@@ -853,6 +856,10 @@ export interface MaintenanceNginxPaths {
   stateDir?: string;
   geoPath?: string;
   cloudflareIpsPath?: string;
+  panelDb?: string | null;
+  nginxVhostDir?: string;
+  includePath?: string;
+  vhostUid?: number;
 }
 
 export type MaintenanceNginxState =
@@ -861,11 +868,13 @@ export type MaintenanceNginxState =
   | "stale-content"
   | "upstream-changed"
   | "conflict"
-  | "validation-failed";
+  | "validation-failed"
+  | "uncovered-sites";
 
 export interface MaintenanceNginxStatus {
   state: MaintenanceNginxState;
   settingsPath: string;
+  uncoveredSites?: string[];
   detail?: string;
 }
 
@@ -897,10 +906,14 @@ function maintenanceBaseline(
   }
 }
 
-function maintenancePath(options: MaintenanceNginxPaths): { settingsPath: string; stateDir: string; geoPath: string; cloudflareIpsPath: string } {
+function maintenancePath(options: MaintenanceNginxPaths) {
   const settingsPath = options.settingsPath ?? NGINX_GLOBAL_SETTINGS;
   return {
     settingsPath,
+    panelDb: options.panelDb === undefined ? PANEL_DB : options.panelDb,
+    nginxVhostDir: options.nginxVhostDir ?? DISTRO_NGINX_SITES_DIR,
+    includePath: options.includePath ?? MAINTENANCE_INCLUDE_PATH,
+    vhostUid: options.vhostUid ?? 0,
     stateDir: options.stateDir ?? NGINX_MAINTENANCE_STATE_DIR,
     geoPath: options.geoPath ?? join(dirname(settingsPath), "sites-enabled", "00-clp-addons-maintenance-client-ip.conf"),
     cloudflareIpsPath: options.cloudflareIpsPath ?? join(dirname(settingsPath), "cloudflare", "ips"),
@@ -908,7 +921,8 @@ function maintenancePath(options: MaintenanceNginxPaths): { settingsPath: string
 }
 
 export function inspectNginxMaintenance(options: MaintenanceNginxPaths = {}): MaintenanceNginxStatus {
-  const { settingsPath, stateDir, geoPath, cloudflareIpsPath } = maintenancePath(options);
+  const paths = maintenancePath(options);
+  const { settingsPath, stateDir, geoPath, cloudflareIpsPath, includePath, panelDb } = paths;
   const content = readNginxFile(settingsPath);
   if (content === null) return { state: "missing", settingsPath, detail: `Nginx global settings do not exist: ${settingsPath}` };
   const files = maintenanceNginxFiles(stateDir);
@@ -940,14 +954,32 @@ export function inspectNginxMaintenance(options: MaintenanceNginxPaths = {}): Ma
   if (readNginxFile(geoPath) !== maintenanceGeoContent(cloudflareRanges(cloudflareIpsPath))) {
     return { state: "stale-content", settingsPath, detail: "maintenance client IP map is missing or outdated" };
   }
+  if (panelDb !== null) {
+    try {
+      const db = openPanelDatabase(panelDb, true);
+      try {
+        const uncoveredSites = sitesWithoutMaintenance(db, paths);
+        if (uncoveredSites.length) return {
+          state: "uncovered-sites", settingsPath, uncoveredSites,
+          detail: `Injected, ${uncoveredSites.length} sites without the check: ${uncoveredSites.join(", ")}`,
+        };
+      } finally { db.close(); }
+    } catch (error) {
+      return { state: "uncovered-sites", settingsPath, detail: `Site maintenance checks could not be verified: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
+  if (readNginxFile(includePath) !== `${NGINX_MAINTENANCE_BLOCK}\n`) {
+    return { state: "stale-content", settingsPath, detail: "maintenance server include is missing or outdated" };
+  }
   return { state: "ok", settingsPath };
 }
 
 export function reconcileNginxMaintenance(
-  options: MaintenanceNginxPaths & { enabled?: boolean; reload?: boolean } = {},
+  options: MaintenanceNginxPaths & { enabled?: boolean; reload?: boolean; run?: (command: string, args: string[]) => CommandResult } = {},
 ): MaintenanceNginxResult {
-  const { enabled = true, reload = true, ...pathOptions } = options;
-  const { settingsPath: selectedPath, stateDir, geoPath, cloudflareIpsPath } = maintenancePath(pathOptions);
+  const { enabled = true, reload = true, run = runCommand, ...pathOptions } = options;
+  const paths = maintenancePath(pathOptions);
+  const { settingsPath: selectedPath, stateDir, geoPath, cloudflareIpsPath, includePath, panelDb } = paths;
   const read = readNginxFile(selectedPath);
   if (read === null) {
     return { state: "missing", changed: false, settingsPath: selectedPath, detail: `Nginx global settings do not exist: ${selectedPath}` };
@@ -982,6 +1014,10 @@ export function reconcileNginxMaintenance(
   if (oldGeo !== null && !oldGeo.startsWith(`${MAINTENANCE_GEO_MARKER}\n`)) {
     return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unowned maintenance client IP map exists" };
   }
+  const oldInclude = readNginxFile(includePath);
+  if (oldInclude !== null && !oldInclude.startsWith("# clp-addons:maintenance:start\n")) {
+    return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unowned maintenance server include exists" };
+  }
   if (!baseline && (enabled || read.includes("# clp-addons:maintenance:start"))) {
     mkdirSync(stateDir, { recursive: true });
     writeAtomic(files.pristine, upstream, 0o600);
@@ -992,45 +1028,21 @@ export function reconcileNginxMaintenance(
     ? `${upstream}\n${NGINX_MAINTENANCE_BLOCK}\n`
     : upstream;
   const newGeo = enabled ? maintenanceGeoContent(cloudflareRanges(cloudflareIpsPath)) : null;
-  if (rendered === read && newGeo === oldGeo) {
-    if (!enabled) removeNginxState(files);
-    return { state: enabled ? "ok" : "missing", changed: false, settingsPath: selectedPath };
-  }
-  const mode = statSync(settingsPath).mode & 0o777;
-  const restoreGeo = () => {
-    if (newGeo === oldGeo) return;
-    if (oldGeo === null) rmSync(geoPath, { force: true });
-    else writeAtomic(geoPath, oldGeo, 0o644);
-  };
   try {
-    if (newGeo !== oldGeo) {
-      if (newGeo === null) rmSync(geoPath, { force: true });
-      else {
-        mkdirSync(dirname(geoPath), { recursive: true });
-        writeAtomic(geoPath, newGeo, 0o644);
-      }
-    }
-    if (rendered !== read) writeAtomic(settingsPath, rendered, mode);
+    const db = panelDb === null ? null : openPanelDatabase(panelDb);
+    try {
+      const result = withNginxTransaction(db, { nginx: "nginx", systemctl: "systemctl" }, run, (changes) => {
+        if (db) stageMaintenanceVhosts(db, changes, paths, enabled);
+        changes.push(
+          nginxFileChange(settingsPath, rendered, statSync(settingsPath).uid),
+          nginxFileChange(geoPath, newGeo, paths.vhostUid),
+          nginxFileChange(includePath, enabled ? `${NGINX_MAINTENANCE_BLOCK}\n` : null, paths.vhostUid),
+        );
+      }, { reload });
+      if (!enabled) removeNginxState(files);
+      return { state: enabled ? "ok" : "missing", changed: result.changed, settingsPath: selectedPath };
+    } finally { db?.close(); }
   } catch (error) {
-    restoreGeo();
-    throw error;
+    return { state: "validation-failed", changed: false, settingsPath: selectedPath, detail: error instanceof Error ? error.message : String(error) };
   }
-  if (!reload) {
-    if (!enabled) removeNginxState(files);
-    return { state: enabled ? "ok" : "missing", changed: true, settingsPath: selectedPath };
-  }
-  const tested = commandFailure("nginx", ["-t"]);
-  if (tested) {
-    restoreNginxContent(settingsPath, read);
-    restoreGeo();
-    return { state: "validation-failed", changed: false, settingsPath: selectedPath, detail: `nginx -t failed: ${tested}` };
-  }
-  const reloaded = commandFailure("systemctl", ["reload", "nginx"]);
-  if (reloaded) {
-    restoreNginxContent(settingsPath, read);
-    restoreGeo();
-    return { state: "validation-failed", changed: false, settingsPath: selectedPath, detail: `nginx reload failed: ${reloaded}` };
-  }
-  if (!enabled) removeNginxState(files);
-  return { state: enabled ? "ok" : "missing", changed: true, settingsPath: selectedPath };
 }
