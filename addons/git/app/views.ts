@@ -135,7 +135,7 @@ function jobCard(job: GitJobView | null, log = ""): string {
         · ${job?.startedBy === "push" ? "Triggered by a push" : "Manual deployment"}</div>
       <div class="step" id="job-step" style="margin-top:0.5rem;">${esc(job && !finished ? job.step : "")}</div>
       ${job?.error ? `<div class="alert" id="git-job-error" style="margin-top:0.75rem;">${esc(job.error)}</div>` : ""}
-      <details class="git-output"${job && job.state === "failed" ? " open" : ""}>
+      <details id="git-output" class="git-output"${job && job.state === "failed" ? " open" : ""}>
         <summary>Deployment output</summary>
         <pre id="job-log">${esc(log || "(no output yet)")}</pre>
       </details>
@@ -209,7 +209,7 @@ function repositoryForm(site: GitSiteStatus): string {
               placeholder="main" value="${esc(config?.branch ?? "main")}">
           </div>
         </div>
-        <details class="git-disclosure git-advanced">
+        <details id="git-advanced" class="git-disclosure git-advanced">
           <summary><span><span class="git-summary-title">Advanced</span><span class="hint">${esc(custom.join(" · ") || "Post-deploy command and deploy directory")}</span></span></summary>
           <div class="form-grid">
             <div class="form-field">
@@ -287,7 +287,7 @@ function webhookSection(site: GitSiteStatus): string {
       <li>Send push events to deploy <strong>${esc(branch)}</strong>.</li>
     </ol>`;
   const url = !webhook ? "" : `
-      <details class="git-disclosure git-webhook-setup">
+      <details id="git-webhook-setup" class="git-disclosure git-webhook-setup">
         <summary>Webhook setup</summary>
         <div class="git-hook-label">Webhook URL</div>
         <div class="key-block">
@@ -298,9 +298,9 @@ function webhookSection(site: GitSiteStatus): string {
           </div>
         </div>
         <div class="hint">Keep this URL private. Anyone with it can deploy this site.</div>
-        ${github ? githubSteps : `<details class="git-disclosure git-webhook-setup"><summary>GitHub</summary>${githubSteps}</details>`}
+        ${github ? githubSteps : `<details id="git-webhook-github" class="git-disclosure git-webhook-setup"><summary>GitHub</summary>${githubSteps}</details>`}
       </details>
-      <details class="git-disclosure git-webhook-setup">
+      <details id="git-webhook-providers" class="git-disclosure git-webhook-setup">
         <summary>Other providers &amp; CI</summary>
         <p class="hint">Send a POST request to deploy the configured branch from your CI job or another service.</p>
         <pre class="hook-curl mono" id="git-webhook-curl">curl -X POST ${esc(path)}</pre>
@@ -332,7 +332,7 @@ export function fleetView(sites: GitSiteStatus[]): string {
   const row = (site: GitSiteStatus): string => {
     const job = site.lastJob;
     return `
-      <tr>
+      <tr${running(site) ? ` data-job="${esc(job!.id)}"` : ""}>
         <td class="site-select">
           <input class="git-select" type="checkbox" data-domain="${esc(site.domain)}"
             aria-label="Select ${esc(site.domain)}"${available(site) ? "" : " disabled"}>

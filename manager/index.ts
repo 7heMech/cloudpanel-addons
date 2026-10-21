@@ -1,6 +1,5 @@
 // The manager's own API: update status, enable, disable, update, and
 // following the job each mutation starts.
-import type { Server } from "bun";
 import { guardMutation, jsonResponse, safeDecodePathSegment } from "../lib/app-http";
 import { streamGatewayAction } from "../lib/gateway-client";
 import { jobEventStream, type JobWatcher } from "../lib/job-stream";
@@ -29,7 +28,7 @@ function managerJson(body: unknown, status = 200): Response {
 export async function handleManagerRoute(
   req: Request,
   path: string,
-  server: Server<unknown>,
+  _server: unknown,
   update: CliUpdateInfo | null = null,
 ): Promise<Response | null> {
   if (path === "/api/update" && req.method === "GET") {
@@ -79,7 +78,7 @@ export async function handleManagerRoute(
       });
     };
     if (jobRoute[2] || req.headers.get("accept")?.includes("text/event-stream")) {
-      return jobEventStream({ id, req, server, getJob, watchJob });
+      return jobEventStream({ id, req, getJob, watchJob });
     }
     const result = await getJob(id);
     return managerJson(result, result.ok ? 200 : 404);

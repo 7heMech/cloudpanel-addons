@@ -17,12 +17,13 @@ async function saveGitConfig(domain) {
   }
   busy(true);
   try {
-    await call('/api/sites/' + encodeURIComponent(domain) + '/config', {
+    const reply = await call('/api/sites/' + encodeURIComponent(domain) + '/config', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    location.reload();
+    paintGit(reply.html);
+    notify('Repository settings saved.', 'ok');
   } catch (e) {
     busy(false);
     notify('Could not save: ' + e.message, 'error');
@@ -41,8 +42,9 @@ async function forgetGitSite(domain) {
   if (!accepted) return;
   busy(true);
   try {
-    await call('/api/sites/' + encodeURIComponent(domain) + '/config', { method: 'DELETE' });
-    location.reload();
+    const reply = await call('/api/sites/' + encodeURIComponent(domain) + '/config', { method: 'DELETE' });
+    paintGit(reply.html);
+    notify('Repository disconnected.', 'ok');
   } catch (e) {
     busy(false);
     notify('Could not remove the settings: ' + e.message, 'error');
@@ -62,12 +64,13 @@ async function generateGitKey(domain, replace) {
   }
   busy(true);
   try {
-    await call('/api/sites/' + encodeURIComponent(domain) + '/key', {
+    const reply = await call('/api/sites/' + encodeURIComponent(domain) + '/key', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ replace: replace === true }),
     });
-    location.reload();
+    paintGit(reply.html);
+    notify('Deploy key generated. Add it to your repository before deploying.', 'ok');
   } catch (e) {
     busy(false);
     notify('Could not generate the key: ' + e.message, 'error');
@@ -99,9 +102,10 @@ function copyGitBlock(id, what) {
 async function setGitWebhook(domain, on) {
   busy(true);
   try {
-    await call('/api/sites/' + encodeURIComponent(domain) + '/webhook',
+    const reply = await call('/api/sites/' + encodeURIComponent(domain) + '/webhook',
       on ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' } : { method: 'DELETE' });
-    location.reload();
+    paintGit(reply.html);
+    notify('Push to deploy updated.', 'ok');
   } catch (e) {
     busy(false);
     const box = CLP_ROOT.getElementById('git-webhook-toggle');
@@ -121,12 +125,13 @@ async function rotateGitWebhook(domain) {
   if (!accepted) return;
   busy(true);
   try {
-    await call('/api/sites/' + encodeURIComponent(domain) + '/webhook', {
+    const reply = await call('/api/sites/' + encodeURIComponent(domain) + '/webhook', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ replace: true }),
     });
-    location.reload();
+    paintGit(reply.html);
+    notify('Webhook URL rotated. Update it in your repository.', 'ok');
   } catch (e) {
     busy(false);
     notify('Could not rotate the URL: ' + e.message, 'error');
@@ -142,24 +147,9 @@ async function deployGitSite(domain) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain: domain }),
     });
-    const card = CLP_ROOT.getElementById('git-job-card');
-    if (!card) {
-      location.reload();
-      return;
-    }
-    // Watched where it was started rather than on a page of its own: this view
-    // is mounted inside the CloudPanel site page, and navigating away from it
-    // would leave the panel behind to show a log.
-    card.hidden = false;
-    busy(false);
-    const button = CLP_ROOT.getElementById('git-deploy');
-    if (button) { button.disabled = true; button.textContent = 'Deploying…'; }
-    const meta = CLP_ROOT.getElementById('git-job-meta');
-    if (meta) meta.textContent = 'Started just now · Manual deployment';
-    const error = CLP_ROOT.getElementById('git-job-error');
-    if (error) error.hidden = true;
-    updateJobUI({ state: 'queued', step: 'queued' }, '', card);
-    watchJob(body.data.job, card);
+    watchJob(body.data.job, null, gitJobFinished);
+    await refreshGit();
+    notify('Deployment started for ' + domain + '.', 'ok');
   } catch (e) {
     busy(false);
     notify('Could not start the deployment: ' + e.message, 'error');
@@ -212,21 +202,28 @@ async function deployGitSelected() {
   if (!accepted) return;
   busy(true);
   const failed = [];
+  const jobs = [];
   for (const domain of domains) {
     try {
-      await call('/api/deployments', {
+      const reply = await call('/api/deployments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ domain: domain }),
       });
+      jobs.push(reply.data.job);
     } catch (e) {
       failed.push(domain + ': ' + e.message);
     }
   }
+  try {
+    if (jobs.length) await refreshGit();
+  } catch (e) {
+    failed.push('Could not refresh deployments: ' + e.message);
+  }
   busy(false);
+  jobs.forEach(function (id) { watchJob(id, null, gitJobFinished); });
   if (failed.length) notify('Some deployments did not start. ' + failed.join(' '), 'error');
   else notify('Started ' + domains.length + ' deployment' + (domains.length === 1 ? '' : 's') + '.', 'ok');
-  setTimeout(function () { location.reload(); }, 1200);
 }
 
 // The path is completed to a URL by the browser, which knows exactly which
@@ -241,6 +238,35 @@ function initGitWebhookUrl() {
   if (curl) curl.textContent = 'curl -X POST ' + url;
 }
 
+function paintGit(html) {
+  const selected = Array.from(CLP_ROOT.querySelectorAll('.git-select:checked')).map(function (box) {
+    return box.getAttribute('data-domain');
+  });
+  repaintView(CLP_ROOT.getElementById('clp-content'), html);
+  busy(false);
+  CLP_ROOT.querySelectorAll('.git-select').forEach(function (box) {
+    box.checked = selected.includes(box.getAttribute('data-domain'));
+  });
+  initGit();
+}
+
+async function refreshGit() {
+  const domain = new URLSearchParams(location.search).get('domain');
+  const reply = await call('/api/view' + (domain ? '?domain=' + encodeURIComponent(domain) : ''));
+  paintGit(reply.html);
+}
+
+async function gitJobFinished(job) {
+  try {
+    await refreshGit();
+    notify(job.state === 'done' ? 'Deployment completed.' : 'Deployment failed: ' + (job.error || job.step),
+      job.state === 'done' ? 'ok' : 'error');
+  } catch (e) {
+    busy(false);
+    notify('Could not refresh the deployment: ' + e.message, 'error');
+  }
+}
+
 function initGit() {
   initGitWebhookUrl();
   CLP_ROOT.querySelectorAll('.git-select').forEach(function (box) {
@@ -248,7 +274,10 @@ function initGit() {
   });
   gitSelectionChanged();
   const watch = CLP_ROOT.getElementById('job-watch');
-  if (watch) watchJob(watch.getAttribute('data-job'), CLP_ROOT.getElementById('git-job-card'));
+  if (watch) watchJob(watch.getAttribute('data-job'), null, gitJobFinished);
+  CLP_ROOT.querySelectorAll('tr[data-job]').forEach(function (row) {
+    watchJob(row.getAttribute('data-job'), null, gitJobFinished);
+  });
 }
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', initGit);

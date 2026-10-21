@@ -741,9 +741,8 @@ test("unattended measurements reuse the result for six hours", async () => {
   expect(measurements).toBe(4);
 });
 
-test("the operator-pressed sweep is exempt from Bun's idle request timeout", async () => {
+test("the operator-pressed sweep streams its progress as server-sent events", async () => {
   const originalScanStream = panelTweaksService.scanStream;
-  const calls: Array<[Request, number]> = [];
   const token = "panel-tweaks-test-token";
   const req = new Request("https://panel.example:8443/addons/panel-tweaks/api/scan", {
     method: "POST",
@@ -763,11 +762,7 @@ test("the operator-pressed sweep is exempt from Bun's idle request timeout", asy
       handlers.onEvent({ phase: "complete", measured: 25, skipped: 1, measuredAt: "2026-09-20T15:00:00Z" });
       return { close() {} };
     };
-    const response = await handlePanelTweaks(req, "/api/scan", null, {
-      timeout(request: Request, seconds: number) {
-        calls.push([request, seconds]);
-      },
-    } as any);
+    const response = await handlePanelTweaks(req, "/api/scan", null);
     expect(response.headers.get("Content-Type")).toBe("text/event-stream");
     expect(response.headers.get("X-Accel-Buffering")).toBe("no");
     const events = await response.text();
@@ -777,8 +772,6 @@ test("the operator-pressed sweep is exempt from Bun's idle request timeout", asy
   } finally {
     panelTweaksService.scanStream = originalScanStream;
   }
-
-  expect(calls).toEqual([[req, 0]]);
 });
 
 test("a site whose account has gone is skipped rather than guessed at", async () => {

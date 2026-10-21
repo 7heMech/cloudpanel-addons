@@ -39,12 +39,13 @@ Its scan status and manual scan button live in that row rather than taking a
 card of their own. The compact button follows the timestamp on desktop; status
 and button stack on phones to fit within the indentation.
 
-`login-theme` used to be its own addon and is the device-theme switch here.
-`install`, `update` and `repair` carry a box over: the old config file is what
-recorded the addon as enabled, so writing `panel-tweaks.conf` and removing
-`login-theme.conf` is the whole migration. Its state directory held nothing, and
-its Twig block goes on the next reconciliation, because the injection set is
-read from the config files rather than from what is in the templates.
+The device-theme switch replaces the separate `login-theme` addon of older
+releases. `install`, `update` and `repair` carry a box over: the old config file
+is what recorded the addon as enabled, so writing `panel-tweaks.conf` and
+removing `login-theme.conf` is the whole migration. Its state directory held
+nothing, and its Twig block goes on the next reconciliation, because the
+injection set is read from the config files rather than from what is in the
+templates.
 
 ## Site-list anchors
 
@@ -401,7 +402,8 @@ large enough to exceed it gets its sizes from the unattended sweep instead,
 which has no deadline. The pressed sweep streams compact progress events through
 the root gateway and SSE response: the site being measured, the completed and
 total counts, and the measured/skipped counts. It never streams `du` output or
-filesystem paths. The manager disables Bun's idle timeout for this request so a
-single large site may stay quiet for longer than ten seconds; the gateway's
-four-minute deadline remains the bound on the operation, and a disconnected
-browser closes the gateway stream and its action process.
+filesystem paths. A single large site may stay quiet for longer than ten
+seconds, because the manager runs without Bun's idle timeout (see
+[Platform integration](platform.md)); the gateway's four-minute deadline remains
+the bound on the operation, and a disconnected browser closes the gateway stream
+and its action process.
