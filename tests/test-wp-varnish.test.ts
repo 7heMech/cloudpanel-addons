@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeWpLoginAction, reconcileWpVarnish, type WpLoginActionOptions, type WpSiteView } from "../addons/wp-login/action";
 import { commandOutput, readVarnishState, type WpCommand, type VarnishSyncResult } from "../addons/wp-login/varnish";
 import { handle } from "../addons/wp-login/app/index";
 import { dashboardView, layout } from "../addons/wp-login/app/views";
-import { emptyMainwpState, mainwpView } from "../addons/wp-login/mainwp";
+import { emptyMainwpState, mainwpView, saveMainwpState } from "../addons/wp-login/mainwp";
+import { WP_LOGIN_ADDON } from "../addons/wp-login/addon";
 import type { WpDashboard } from "../addons/wp-login/app/service";
 import { WP_LOGIN_ALLOWED_VERBS } from "../lib/gateway-protocol";
 import { withFileLock } from "../cli/action-common";
@@ -21,7 +22,11 @@ let failures: Set<string>;
 function options(): WpLoginActionOptions {
   return {
     processUid: 0,
-    paths: { panelDb: join(root, "panel.sq3"), passwd: join(root, "passwd"), lockFile: join(root, "wp.lock"), varnishState: join(root, "varnish.json"), varnishLockFile: join(root, "wp-varnish.lock") },
+    paths: {
+      configFile: join(root, "wp-login.conf"), panelDb: join(root, "panel.sq3"), passwd: join(root, "passwd"),
+      lockFile: join(root, "wp.lock"), varnishState: join(root, "varnish.json"), varnishLockFile: join(root, "wp-varnish.lock"),
+      mainwpState: join(root, "mainwp.json"), mainwpLockFile: join(root, "wp-mainwp.lock"),
+    },
     domainValidator: (domain) => domain,
     runWpCommand: async (command) => {
       commands.push(command);
@@ -46,6 +51,7 @@ function dbRun(sql: string): void {
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "clp-wp-varnish-"));
+  writeFileSync(join(root, "wp-login.conf"), "");
   commands = [];
   statuses = {};
   multisite = new Set();
@@ -100,13 +106,84 @@ test("plugin installation can proceed independently of the sign-in lock", async 
   });
 });
 
-test("the timer's pass does not hold repair waiting for a page's check", async () => {
+test("the queued pass skips a page's running check", async () => {
   await act("varnish-settings", "--enabled=true");
   await withFileLock(options().paths!.varnishLockFile!, 1, "a page's check", async () => {
     const started = Date.now();
     await expect(reconcileWpVarnish(options(), { dueOnly: true })).rejects.toThrow("still running");
     expect(Date.now() - started).toBeLessThan(5_000);
   });
+});
+
+test("repair queues a bounded policy pass without running site code", async () => {
+  const spawn = Bun.spawnSync;
+  const calls: string[][] = [];
+  try {
+    // @ts-expect-error test mock
+    Bun.spawnSync = (args: string[]) => {
+      calls.push(args);
+      return { success: args[0] === "systemd-run", stdout: "", stderr: "", exitCode: 0 };
+    };
+    expect(await WP_LOGIN_ADDON.maintenance!.run()).toBe("plugin policy pass queued");
+    expect(calls).toHaveLength(2);
+    const queued = calls[1]!;
+    expect(queued).toContain("--no-block");
+    expect(queued).toContain("--property=RuntimeMaxSec=180");
+    expect(queued.slice(queued.indexOf("--") + 1)).toEqual(["/usr/local/bin/clp-addons", "action", "wp-login", "sync"]);
+    expect(commands).toEqual([]);
+  } finally {
+    Bun.spawnSync = spawn;
+  }
+});
+
+test("a queued pass leaves absent policy state off without discovering sites", async () => {
+  rmSync(join(root, "panel.sq3"));
+  await act("sync");
+  expect(commands).toEqual([]);
+  expect(existsSync(join(root, "varnish.json"))).toBe(false);
+  expect(existsSync(join(root, "mainwp.json"))).toBe(false);
+});
+
+test("a queued pass skips disabled or uninstalled addons before reading state or sites", async () => {
+  await act("varnish-settings", "--enabled=true");
+  const state = { ...emptyMainwpState(), enabled: true, dashboard: "blog.example.com", cleanup: true };
+  saveMainwpState(join(root, "mainwp.json"), state);
+  const varnish = readFileSync(join(root, "varnish.json"), "utf8");
+  rmSync(join(root, "wp-login.conf"));
+  rmSync(join(root, "panel.sq3"));
+  await act("sync");
+  expect(commands).toEqual([]);
+  expect(readFileSync(join(root, "varnish.json"), "utf8")).toBe(varnish);
+  expect(JSON.parse(readFileSync(join(root, "mainwp.json"), "utf8"))).toEqual(state);
+  rmSync(join(root, "mainwp.json"));
+  rmSync(join(root, "varnish.json"));
+  await act("sync");
+  expect(existsSync(join(root, "varnish.json"))).toBe(false);
+  expect(existsSync(join(root, "mainwp.json"))).toBe(false);
+});
+
+test("a Varnish failure does not prevent the queued MainWP pass", async () => {
+  writeFileSync(join(root, "varnish.json"), "invalid");
+  saveMainwpState(join(root, "mainwp.json"), { ...emptyMainwpState(), enabled: true, dashboard: "blog.example.com" });
+  const checked: string[] = [];
+  const config = options();
+  config.runWpCommand = async (command) => {
+    const input = JSON.parse(command.stdin!);
+    checked.push(input.op);
+    const reply = input.op === "dashboard-status" ? { sites: { "shop.example.com": null } } : {
+      multisite: true, installed: false, files: false, active: false, key: "", securityId: "", admin: "admin", fingerprint: "",
+    };
+    return `CLP-ADDONS-MAINWP:${JSON.stringify(reply)}`;
+  };
+  await expect(executeWpLoginAction(["sync"], config)).rejects.toThrow();
+  expect(checked).toEqual(["dashboard-status", "status"]);
+});
+
+test("the periodic verb refuses arguments and stays outside the gateway", async () => {
+  expect(WP_LOGIN_ALLOWED_VERBS.has("sync")).toBe(false);
+  for (const arg of ["--domain=shop.example.com", "--enabled=true", "--as-user=admin"]) {
+    await expect(act("sync", arg)).rejects.toThrow();
+  }
 });
 
 test("a Generic WordPress becomes eligible when CloudPanel enables Varnish", async () => {

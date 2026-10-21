@@ -38,7 +38,7 @@ import {
   emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpView, readMainwpState, syncMainwp, type MainwpResult, type MainwpRun,
 } from "./mainwp";
 
-export type WpLoginVerb = "sites" | "sign-in" | "remove" | "varnish-settings" | "varnish-site" | "varnish-install" | "varnish-sync";
+export type WpLoginVerb = "sites" | "sign-in" | "remove" | "sync" | "varnish-settings" | "varnish-site" | "varnish-install" | "varnish-sync";
 
 /** Where the loader and its one-time secret live inside a WordPress site. */
 const MU_PLUGINS = "wp-content/mu-plugins";
@@ -111,6 +111,7 @@ export interface WpRemoveResult {
 }
 
 export interface WpLoginActionPaths {
+  configFile: string;
   panelDb: string;
   passwd: string;
   lockFile: string;
@@ -134,6 +135,7 @@ export interface WpLoginActionOptions extends VarnishOptions {
 }
 
 export const DEFAULT_WP_LOGIN_PATHS: WpLoginActionPaths = {
+  configFile: `${CONFIG_DIR}/wp-login.conf`,
   panelDb: PANEL_DB,
   passwd: "/etc/passwd",
   lockFile: "/run/lock/clp-addons/wp-login.lock",
@@ -312,20 +314,21 @@ function varnishRun(paths: WpLoginActionPaths, request: { domain?: string; dueOn
 }
 
 /**
- * The page's pass, and the timer's with `dueOnly`: the timer runs inside
- * repair's operation lock, so it checks only sites automation can still act on
- * and does not wait for a page's pass.
+ * The page's pass, and the queued timer's with `dueOnly`, which checks only
+ * sites automation can still act on and does not wait for a page's pass.
  */
 export async function reconcileWpVarnish(
   options: WpLoginActionOptions = {},
   request: { dueOnly?: boolean } = {},
 ): Promise<VarnishSyncResult> {
   const paths = pathsFor(options);
-  // With automation off, repair does not need to inspect site roots or the DB.
-  if (!readVarnishState(paths.varnishState).enabled) return { installed: 0, checked: 0, pending: 0, failed: [] };
   const wait = request.dueOnly ? 1 : 15;
-  return withFileLock(paths.varnishLockFile, wait, "a WordPress Varnish change is still running", async () =>
-    syncVarnish(varnishRun(paths, request), options));
+  return withFileLock(paths.varnishLockFile, wait, "a WordPress Varnish change is still running", async () => {
+    if (!existsSync(paths.configFile) || !readVarnishState(paths.varnishState).enabled) {
+      return { installed: 0, checked: 0, pending: 0, failed: [] };
+    }
+    return syncVarnish(varnishRun(paths, request), options);
+  });
 }
 
 /** MainWP works from the same sites; Varnish eligibility does not apply. */
@@ -333,12 +336,36 @@ function mainwpRun(paths: WpLoginActionPaths, request: { dueOnly?: boolean } = {
   return { ...varnishRun(paths, request), statePath: paths.mainwpState };
 }
 
-/** The timer's MainWP pass. It runs inside repair's operation lock, so it does not wait for a page's pass. */
+/** The queued timer's MainWP pass does not wait for a page's pass. */
 export async function reconcileWpMainwp(options: WpLoginActionOptions = {}): Promise<MainwpResult> {
   const paths = pathsFor(options);
-  if (!mainwpNeedsRepair(readMainwpState(paths.mainwpState))) return { checked: 0, connected: 0, removed: 0, pending: 0, failed: [] };
-  return withFileLock(paths.mainwpLockFile, 1, "a MainWP change is still running", () =>
-    syncMainwp(mainwpRun(paths, { dueOnly: true }), options));
+  return withFileLock(paths.mainwpLockFile, 1, "a MainWP change is still running", async () => {
+    if (!existsSync(paths.configFile) || !mainwpNeedsRepair(readMainwpState(paths.mainwpState))) {
+      return { checked: 0, connected: 0, removed: 0, pending: 0, failed: [] };
+    }
+    return syncMainwp(mainwpRun(paths, { dueOnly: true }), options);
+  });
+}
+
+/** Run both policies even when one fails; systemd bounds the whole pass. */
+async function syncPolicies(options: WpLoginActionOptions): Promise<unknown> {
+  const failed: string[] = [];
+  let varnish: VarnishSyncResult | undefined;
+  let mainwp: MainwpResult | undefined;
+  try {
+    varnish = await reconcileWpVarnish(options, { dueOnly: true });
+    failed.push(...varnish.failed);
+  } catch (error) {
+    failed.push(reason(error));
+  }
+  try {
+    mainwp = await reconcileWpMainwp(options);
+    failed.push(...mainwp.failed);
+  } catch (error) {
+    failed.push(reason(error));
+  }
+  if (failed.length) failAction(failed.join("; "));
+  return { varnish, mainwp };
 }
 
 // --- the must-use plugin --------------------------------------------------
@@ -523,7 +550,7 @@ interface ParsedAction {
 
 function parseAction(argv: string[], options: WpLoginActionOptions): ParsedAction {
   const [rawVerb, ...rest] = argv;
-  const verbs: WpLoginVerb[] = ["sites", "sign-in", "remove", "varnish-settings", "varnish-site", "varnish-install", "varnish-sync"];
+  const verbs: WpLoginVerb[] = ["sites", "sign-in", "remove", "sync", "varnish-settings", "varnish-site", "varnish-install", "varnish-sync"];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown WordPress sign-in verb '${rawVerb ?? ""}'`);
 
@@ -584,11 +611,12 @@ export async function executeWpLoginAction(
   const paths = pathsFor(options);
   if (argv[0]?.startsWith("mainwp-")) {
     return withFileLock(paths.mainwpLockFile, 15, "a MainWP change is still running", () => {
-      if (!options.runWpCommand && !existsSync(`${CONFIG_DIR}/wp-login.conf`)) failAction("WordPress Tools must be enabled before a MainWP action");
+      if (!existsSync(paths.configFile)) failAction("WordPress Tools must be enabled before a MainWP action");
       return mainwpAction(mainwpRun(paths), argv, options, options.domainValidator ?? ((value) => validateDomain(value)));
     });
   }
   const { verb, domain, asUser, clientIp, addBypass: bypass, enabled, excluded } = parseAction(argv, options);
+  if (verb === "sync") return syncPolicies(options);
 
   if (verb === "sites") {
     // The optional feature's state must not take sign-in down with it.
@@ -611,6 +639,7 @@ export async function executeWpLoginAction(
   if (verb === "varnish-sync") return reconcileWpVarnish(options);
   if (verb === "varnish-settings" || verb === "varnish-site" || verb === "varnish-install") {
     return withFileLock(paths.varnishLockFile, 15, "a WordPress Varnish change is still running", async () => {
+      if (!existsSync(paths.configFile)) failAction("WordPress Tools must be enabled before a Varnish action");
       if (verb === "varnish-install") return syncVarnish(varnishRun(paths, { domain }), options);
       const state = readVarnishState(paths.varnishState);
       const run = varnishRun(paths);

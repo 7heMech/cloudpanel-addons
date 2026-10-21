@@ -18,9 +18,9 @@ Enable Varnish for a site in CloudPanel, then open WordPress Tools. Turn on
 on applicable WordPress sites. Automation starts off. Only actual WordPress
 installations with Varnish enabled qualify; multisite networks are left alone.
 
-Every 15 minutes the repair timer installs the plugin on sites that have not
-had it yet. **Check now** checks every site, applies the policy immediately and
-refreshes the status shown. Large fleets or slow downloads may leave sites
+Every 15 minutes the repair timer queues a background pass to install the
+plugin on sites that have not had it yet. **Check now** checks every site,
+applies the policy immediately and refreshes the status shown. Large fleets or slow downloads may leave sites
 pending; check again to continue. The status badge shows when it was checked.
 
 Turn off a site's **Automatic** switch to manage it yourself. That keeps its
@@ -52,8 +52,8 @@ Choose a **MainWP Dashboard**, a WordPress site on this server with MainWP
 active, then turn on **Install and connect MainWP Child automatically**.
 External Dashboards are not supported.
 
-Every 15 minutes, each WordPress site that has never had MainWP Child gets the
-official plugin, activated and connected to that Dashboard as the site's first
+Every 15 minutes the repair timer queues a background pass to install,
+activate and connect MainWP Child on new WordPress sites as each site's first
 administrator. No user is created and no password is changed. A site the
 Dashboard cannot reach over HTTPS with a valid certificate shows **Waiting for
 HTTPS** and is tried again on the next pass. A firewall, Cloudflare-only rule or
@@ -79,7 +79,8 @@ end WordPress sessions it opened.
 
 Disabling or uninstalling WordPress Tools leaves MainWP connections in place;
 clean up first to remove them. Both refuse while a connection was cut off
-part-way; run `clp-addons repair wp-login` first. If the page reports that
-`/var/lib/clp-addons/wp-login/mainwp.json` cannot be read, sign-in and Varnish
+part-way; run `clp-addons repair wp-login` and let its background pass finish
+before retrying. If `/var/lib/clp-addons/wp-login/mainwp.json` cannot be read,
+sign-in and Varnish
 still work. Deleting that file turns automation off and forgets which
 connections WordPress Tools made, so cleanup can no longer remove them.

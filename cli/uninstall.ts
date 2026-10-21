@@ -37,7 +37,7 @@ function applyUninstall(spec: AddonSpec, flags: Record<string, string | true>): 
   if (spec.name !== "wp-login" || flags.yes !== true) return uninstallContents(spec, flags);
   withFileLockSync(DEFAULT_WP_LOGIN_PATHS.mainwpLockFile, 15, "a MainWP change is still running", () => {
     requireMainwpSettled(DEFAULT_WP_LOGIN_PATHS.mainwpState);
-    uninstallContents(spec, flags);
+    withFileLockSync(DEFAULT_WP_LOGIN_PATHS.varnishLockFile, 15, "a WordPress Varnish change is still running", () => uninstallContents(spec, flags));
   });
 }
 

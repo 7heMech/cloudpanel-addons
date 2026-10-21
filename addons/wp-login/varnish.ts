@@ -120,7 +120,7 @@ export async function syncVarnish(run: VarnishRun, options: VarnishOptions = {})
   const due = run.dueOnly
     ? candidates.filter((site) => !state.sites[site.domain]?.seen && state.sites[site.domain]?.status !== "unsupported")
     : candidates;
-  // The timer's pass holds the operation lock, so it gets the smaller budget.
+  // Keep periodic passes short; Check now has time to refresh the whole fleet.
   const deadline = Date.now() + (run.dueOnly ? 30_000 : 90_000);
   for (const site of leastRecentlyChecked(due, state.sites)) {
     if (Date.now() > deadline - 1_000) { result.pending++; continue; }

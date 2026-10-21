@@ -242,5 +242,8 @@ logs or the page; a failed plugin download keeps WP-CLI's bounded summary, as
 Varnish's does. Readiness and registration verify certificates, and the record keeps
 verifying. Firewalls, Cloudflare-only rules, basic auth and maintenance pages are
 never bypassed. Every MainWP route is administrator-only behind CSRF; Connect and
-cleanup need explicit confirmation. Revoking MainWP access does not undo what was
-done through it or end WordPress sessions it opened.
+cleanup need explicit confirmation. Repair only queues a runtime-bounded policy
+pass; site code and enrollment run outside the global operation lock. Each
+policy checks the enabled config under its lock, and disable and uninstall hold
+both policy locks while withdrawing it. Revoking MainWP access does not undo
+what was done through it or end WordPress sessions it opened.

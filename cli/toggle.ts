@@ -127,7 +127,7 @@ function disableAddon(spec: AddonSpec): void {
   if (spec.name !== "wp-login") return disableAddonContents(spec);
   withFileLockSync(DEFAULT_WP_LOGIN_PATHS.mainwpLockFile, 15, "a MainWP change is still running", () => {
     requireMainwpSettled(DEFAULT_WP_LOGIN_PATHS.mainwpState);
-    disableAddonContents(spec);
+    withFileLockSync(DEFAULT_WP_LOGIN_PATHS.varnishLockFile, 15, "a WordPress Varnish change is still running", () => disableAddonContents(spec));
   });
 }
 

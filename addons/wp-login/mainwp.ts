@@ -294,7 +294,7 @@ function forget(record: MainwpRecord): void {
 }
 
 async function startPass(run: MainwpRun, options: WpOptions, state: MainwpState, selected: WpSite[]): Promise<Pass> {
-  // The timer's pass holds repair's operation lock, so it gets the smaller budget.
+  // Keep periodic passes short; Check now has time to refresh the whole fleet.
   const deadline = Date.now() + (run.dueOnly ? 25_000 : 90_000);
   const pass: Pass = { run, options, deadline, state, result: emptyResult(), connections: {}, dashboardError: "" };
   if (!state.dashboard) {

@@ -33,11 +33,14 @@ invalid state is an error rather than a reason to reinstall plugins. The page
 then shows that error in place of the Varnish controls and still offers
 sign-in.
 
-The installed addon's maintenance hook runs on the normal 15-minute repair
-timer, inside repair's operation lock, so it checks only sites automation can
-still act on: no record yet, or a plugin not yet seen. It has a 30-second
-budget. **Check now** checks every eligible site within 90 seconds and
-refreshes what the page shows. An administrator can also request an
+Every 15 minutes repair queues `clp-addons action wp-login sync` through
+`queueAddonPass`. That pass runs outside repair's operation lock. The transient
+unit has a 180-second runtime limit and skips an already running pass. Each policy checks
+the enabled config under its own lock before reading state or discovering sites;
+disable and uninstall hold both locks while removing config and state. The
+Varnish pass checks only sites automation can still act on: no record yet, or a
+plugin not yet seen. It has a 30-second budget. **Check now** checks every
+eligible site within 90 seconds and refreshes what the page shows. An administrator can also request an
 installation for one site. Automatic checks do nothing while the policy is off. A single-site
 explicit installation can run while automation is off, but still honors
 exclusions and eligibility. Only PHP sites with CloudPanel's `varnish_cache`
@@ -75,7 +78,7 @@ recently checked sites first within its budget. Each WP-CLI command
 runs under `timeout` for at most 60 seconds, and root kills it and stops
 reading a few seconds later whatever is left: `wp-config.php` is the site's
 code, and a process it detaches could otherwise hold the pipes, the Varnish
-lock and the repair run open. Output is bounded to 64 KiB per stream, and saved
+lock and the pass open. Output is bounded to 64 KiB per stream, and saved
 error text is a 500-character summary with control characters removed.
 Per-site failures are saved and do not stop subsequent sites. The page
 reads saved status without bootstrapping WordPress; it exposes the last-check
@@ -272,7 +275,7 @@ go too. Both sides verify, and a failure keeps the claim and Cleanup pending.
 Removing a plugin the addon installed clears `seen`, so automation may install
 it again later; one the operator removed stays seen.
 
-MainWP has its own lock, separate from Varnish and sign-in. The repair timer
+MainWP has its own lock, separate from Varnish and sign-in. The queued pass
 looks only at unseen sites, unfinished phases, pending cleanup and retired
 records, and starts sites for 25 seconds; Check now and Connect get 90. An
 enrollment that has started gets up to a minute, so the budget never stops
