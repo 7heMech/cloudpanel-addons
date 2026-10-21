@@ -170,7 +170,7 @@ interface PanelSiteRow {
 function openPanelDatabase(path: string): Database {
   try {
     const db = new Database(path, { readonly: true });
-    db.exec("PRAGMA busy_timeout = 5000;");
+    db.exec("PRAGMA busy_timeout = 1000;");
     return db;
   } catch (error) {
     failAction(`CloudPanel database could not be opened: ${reason(error)}`);
@@ -363,14 +363,15 @@ mv -f "$t" "$3"`;
 /** Only `PATH`: whatever else root's environment holds is not the site's to read. */
 const SITE_ENV = { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" };
 
-function runAsSite(paths: WpLoginActionPaths, account: SiteAccount, command: string[], input?: string): void {
+function runAsSite(paths: WpLoginActionPaths, account: SiteAccount, command: string[], input?: string, timeoutMs = 30_000): void {
   const result = Bun.spawnSync([paths.runuser, "-u", account.name, "--", ...command], {
     cwd: "/",
     stdin: input === undefined ? "ignore" : new TextEncoder().encode(input),
     stdout: "pipe",
     stderr: "pipe",
     env: SITE_ENV,
-    timeout: 30_000,
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
   });
   if (!result.success) {
     const detail = result.stderr.toString().trim() || `exit ${result.exitCode}`;
@@ -406,6 +407,7 @@ function mintWpLogin(
         join(site.root, SECRET_DIR), join(site.root, LOADER_FILE), join(site.root, SECRET_FILE), LOADER_PHP,
       ],
       `<?php return array('hash' => '${hash}', 'expires' => ${expires});\n`,
+      10_000,
     );
   } catch (error) {
     failAction(`the sign-in could not be written into ${domain}: ${reason(error)}`);
@@ -530,7 +532,7 @@ export async function executeWpLoginAction(
   if (asUser && !mayManageSite(paths, asUser, domain)) {
     failAction("that site is not yours to sign in to");
   }
-  return withFileLock(paths.lockFile, 15, "a WordPress sign-in change is still running", async () => {
+  return withFileLock(paths.lockFile, 5, "a WordPress sign-in change is still running", async () => {
     // Maintenance answers in Nginx, before WordPress could read the secret, so
     // a secret minted for a browser it turns away is one nobody can use.
     const site = wordpressSite(paths, domain);

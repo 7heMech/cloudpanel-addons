@@ -103,7 +103,7 @@ export async function reloadNginx(
   signal: () => void,
   pidFile = "/run/nginx.pid",
   procDir = "/proc",
-  timeoutMs = 5_000,
+  timeoutMs = 3_000,
 ): Promise<void> {
   const master = readFileSync(pidFile, "utf8").trim();
   if (!/^[1-9]\d*$/.test(master)) failAction("Nginx's master PID could not be read");
@@ -135,7 +135,7 @@ export async function withBasicAuthBypass(
   paths: BasicAuthPaths,
   domain: string,
   ip: string,
-  run: (command: string, args: string[]) => CommandResult = runCommand,
+  run: (command: string, args: string[]) => CommandResult = (command, args) => runCommand(command, args, 2_000),
   reload: typeof reloadNginx = reloadNginx,
 ): Promise<void> {
   ip = normalizeMappedIpv4(ip);

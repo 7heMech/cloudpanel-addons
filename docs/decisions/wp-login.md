@@ -118,22 +118,22 @@ refused with a pointer to the native Security page rather than rewritten.
 Only a regular, root-owned vhost that is not writable by other users can be
 replaced; symlinks are refused. Ownership and mode survive atomic replacement.
 
-Under the sign-in lock, the action first mints as the site user, without holding
-CloudPanel's database write lock. The database write transaction covers only the
-allowlist and vhost update, Nginx validation and reload.
-The trusted-vhost checks, owned atomic replacement, restoration, Nginx recovery
-and error collection are shared with Cloudflare IP Access in `cli/nginx-transaction.ts`.
-A reload only signals the master, so the action waits up to five seconds for
-active workers from the new generation and for the old workers to stop accepting
-requests, reading `/run/nginx.pid` and `/proc`. Only then is the token returned to
-the browser. Validation or reload failures restore the database and vhost;
-reload failures also reload the restored configuration. Recovery failures are
-reported. A token written before a later failure expires after its normal
-minute. Maintenance bypasses are added after the basic-auth transaction commits,
-so they do not extend its database lock. If that later operation fails, the
-accepted basic-auth allowance remains in CloudPanel's Security settings.
-When both gates block the browser, each needs its own confirmation, and neither
-changes during preflight.
+The sign-in lock waits up to five seconds. Minting as the site user has ten
+seconds and runs before the SQLite write transaction; panel reads and writes
+wait at most one second for database contention. The transaction, shared with
+Cloudflare IP Access and maintenance in `cli/nginx-transaction.ts`, validates
+and reloads before commit. Each Nginx command is killed after two seconds, and
+each reload waits at most three more seconds for new workers to accept requests
+and old workers to stop accepting, using `/run/nginx.pid` and `/proc`.
+Failure restores the database and vhost, validates them, and, if reload was
+attempted, waits for the restored generation. Recovery errors accompany the
+original failure. These waits, including maintenance's database and lock waits,
+leave recovery time inside the gateway's 60-second deadline.
+
+A token minted before a later failure expires after its normal minute.
+Maintenance bypasses are added after the basic-auth commit, so a failure there
+leaves the accepted native allowance in CloudPanel's Security settings. Neither
+gate changes during preflight. No probe adds the server's address.
 
 `--allow-basic-auth` is distinct from `--add-bypass`, so consenting to lift
 maintenance does not also lift basic auth. Both flags require a known request

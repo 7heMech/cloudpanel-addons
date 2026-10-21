@@ -602,6 +602,82 @@ test("disabled basic-auth directives accept whitespace without looking like anot
   expect(readFileSync(path, "utf8")).toContain('auth_basic  \t\r\n      off \t;');
 });
 
+test("a busy panel writer can finish before the basic-auth update takes its write lock", async () => {
+  seedBasicAuth();
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { Database } = require("bun:sqlite");
+    const db = new Database(process.argv[1]);
+    db.exec("BEGIN IMMEDIATE;");
+    console.log("locked");
+    setTimeout(() => { db.exec("COMMIT;"); db.close(); }, 500);
+  `, join(root, "panel.sq3")], { stdout: "pipe", stderr: "pipe" });
+  try {
+    const reader = child.stdout.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toContain("locked");
+    reader.releaseLock();
+    const result = await act<WpLoginResult>(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand });
+    expect(result.token).toBeDefined();
+    expect(basicAuthIps()).toBe("203.0.113.9");
+  } finally {
+    child.kill();
+    await child.exited;
+  }
+});
+
+test("a commit blocked by a panel reader restores both the vhost and database after reload", async () => {
+  const original = seedBasicAuth();
+  const reader = new Database(join(root, "panel.sq3"));
+  const calls: string[] = [];
+  reader.exec("BEGIN; SELECT * FROM basic_auth;");
+  try {
+    await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], {
+      run: (command, args) => { calls.push([command, ...args].join(" ")); return okCommand(); },
+    })).rejects.toThrow("locked");
+    expect(basicAuthIps()).toBeNull();
+    expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).toBe(original);
+    expect(calls).toEqual(["nginx -t", "systemctl reload nginx", "nginx -t", "systemctl reload nginx"]);
+  } finally {
+    reader.exec("ROLLBACK;");
+    reader.close();
+  }
+});
+
+for (const hangs of ["validation", "reload"] as const) {
+  test(`a hung Nginx ${hangs} is killed and recovery finishes before the gateway deadline`, async () => {
+    const original = seedBasicAuth();
+    const nginx = join(root, "nginx-command");
+    const systemctl = join(root, "systemctl-command");
+    writeFileSync(nginx, hangs === "validation" ? '#!/bin/sh\nexec sleep 20\n' : '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    writeFileSync(systemctl, '#!/bin/sh\nexec sleep 20\n', { mode: 0o700 });
+    const started = Date.now();
+    await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], {
+      paths: { ...options().paths, nginx, systemctl },
+    })).rejects.toThrow(hangs === "validation" ? "Nginx validation failed" : "Nginx reload failed");
+    expect(Date.now() - started).toBeLessThan(8_000);
+    expect(basicAuthIps()).toBeNull();
+    expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).toBe(original);
+  }, 10_000);
+}
+
+test("worker handover failure waits for the restored generation before returning", async () => {
+  const original = seedBasicAuth();
+  let reloads = 0;
+  let recoveryFinished = false;
+  await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], {
+    run: okCommand,
+    reloadNginx: async (signal) => {
+      signal();
+      if (++reloads === 1) throw new Error("handover failed");
+      expect(basicAuthIps()).toBeNull();
+      expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8")).toBe(original);
+      await Bun.sleep(10);
+      recoveryFinished = true;
+    },
+  })).rejects.toThrow("handover failed");
+  expect(recoveryFinished).toBe(true);
+  expect(reloads).toBe(2);
+});
+
 test("native allowlist rewrites normalize mapped hosts while preserving CIDR entries", async () => {
   seedBasicAuth("::ffff:198.51.100.1,::FFFF:C633:6402,::ffff:198.51.100.0/120,2001:db8::/32");
   await act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand });
