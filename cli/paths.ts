@@ -23,6 +23,13 @@ export const SOCKET_PATH = `${SOCKET_DIR}/manager.sock`;
 export const SESSION_DIR = "/home/clp/htdocs/app/files/var/sessions";
 /** The php.ini the panel's own FPM pool runs with, per clp-php-fpm.service. */
 export const PANEL_PHP_INI = "/home/clp/services/php-fpm/fpm/php.ini";
+/** Per-version PHP config root; each `<X.Y>/fpm/conf.d` is scanned by that FPM. */
+export const PHP_ROOT = "/etc/php";
+/** Where the `php-fpm<X.Y>` binaries live, used to test a config before reload. */
+export const PHP_FPM_BIN_DIR = "/usr/sbin";
+/** The panel's own PHP-FPM service. It scans the installed 8.1 `conf.d`, so a
+ *  drop-in written there reaches the panel and the root File Manager pool. */
+export const PANEL_FPM_UNIT = "clp-php-fpm.service";
 
 export const MANAGER_UNIT = "clp-addons.service";
 export const AUTH_SOCKET_UNIT = "clp-addons-auth.socket";

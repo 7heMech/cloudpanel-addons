@@ -192,6 +192,22 @@ credential already on disk. A file a command is about to write a secret into is
 created with `O_EXCL` rather than truncated, so nothing can leave a symlink at
 that name first.
 
+## PHP session upload progress
+
+Any installation disables `session.upload_progress.enabled` through a managed
+`99-clp-addons-upload-progress.ini` in every `/etc/php/<ver>/fpm/conf.d`, the
+panel's own PHP 8.1 included -- its FPM scans that directory, so one drop-in
+reaches the panel and the root File Manager pool. Session upload progress is a
+confirmed consumer of CVE-2026-109619, is on by default, and PHP's advisory
+recommends leaving it off even after patching. This is not a fix: it addresses
+one path of one of the two php2shell CVEs, does nothing for the OOM corruption
+in CVE-2026-109618, and the real remedy is patched PHP packages -- a backported
+build for the end-of-life 8.1 the panel runs. The drop-in is written on install,
+update and repair and removed with the last addon; each changed FPM is config-
+tested and reloaded, the panel FPM with it. `memory_limit` is left to PHP
+Resources and the operator; the project does not set the advisory's incomplete
+`memory_limit=-1` workaround.
+
 ## Files and secrets
 
 Addon metadata and job records are root-owned. Local snapshots, deletion
