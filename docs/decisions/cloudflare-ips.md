@@ -12,7 +12,7 @@ ranges in `/etc/nginx/cloudflare/ips`.
 Bulk changes take one exclusive addon lock and one immediate SQLite transaction.
 Every affected vhost must be a trusted regular file. The trust checks, owned
 atomic replacement, restoration and recovery error collection are shared with
-WordPress sign-in in `cli/nginx-vhost.ts`. The action stages all
+WordPress sign-in in `cli/nginx-transaction.ts`. The action stages all
 changes, runs `nginx -t`, reloads Nginx once, and commits the database only when
 the reload succeeds. On failure it rolls back the database and restores the
 original vhosts. If any recovery step fails, the action attempts the remaining

@@ -122,7 +122,7 @@ Under the sign-in lock, the action first mints as the site user, without holding
 CloudPanel's database write lock. The database write transaction covers only the
 allowlist and vhost update, Nginx validation and reload.
 The trusted-vhost checks, owned atomic replacement, restoration, Nginx recovery
-and error collection are shared with Cloudflare IP Access in `cli/nginx-vhost.ts`.
+and error collection are shared with Cloudflare IP Access in `cli/nginx-transaction.ts`.
 A reload only signals the master, so the action waits up to five seconds for
 active workers from the new generation and for the old workers to stop accepting
 requests, reading `/run/nginx.pid` and `/proc`. Only then is the token returned to

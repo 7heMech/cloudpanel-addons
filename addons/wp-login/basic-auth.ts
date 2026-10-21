@@ -4,7 +4,7 @@ import { BlockList, isIP } from "node:net";
 import { join } from "node:path";
 import { normalizeMappedIpv4 } from "../../lib/ip-address";
 import { failAction, runCommand, type CommandResult } from "../../cli/action-common";
-import { commandError, restoreVhosts, trustedVhost, withRecoveryFailures, writeVhost, type VhostBackup } from "../../cli/nginx-vhost";
+import { openPanelDatabase, trustedVhost, withNginxTransactionAsync } from "../../cli/nginx-transaction";
 
 export interface BasicAuthPaths {
   panelDb: string;
@@ -60,7 +60,7 @@ function allows(value: string | null, ip: string): boolean {
 }
 
 export function basicAuthBlocks(paths: BasicAuthPaths, domain: string, ip: string): boolean {
-  const db = new Database(paths.panelDb, { readonly: true });
+  const db = openPanelDatabase(paths.panelDb, true, 1000);
   try {
     const row = settings(db, domain);
     return Boolean(row?.is_active && !allows(row.whitelisted_ips, ip));
@@ -131,40 +131,19 @@ export async function withBasicAuthBypass(
   run: (command: string, args: string[]) => CommandResult = runCommand,
   reload: typeof reloadNginx = reloadNginx,
 ): Promise<void> {
-  const db = new Database(paths.panelDb);
-  db.exec("PRAGMA busy_timeout = 5000;");
-  let backup: VhostBackup | undefined;
-  let wrote = false;
-  let reloaded = false;
-  const check = (command: string, args: string[], label: string) => {
-    const result = run(command, args);
-    if (!result.ok) throw new Error(commandError(label, result));
-  };
+  const db = openPanelDatabase(paths.panelDb, false, 1000);
   try {
-    db.exec("BEGIN IMMEDIATE;");
-    const row = settings(db, domain);
-    if (!row?.is_active || allows(row.whitelisted_ips, ip)) {
-      db.exec("COMMIT;");
-      return;
-    }
-    const path = join(paths.nginxVhostDir, `${domain}.conf`);
-    backup = trustedVhost(path, paths.vhostUid);
-    const next = [...new Set([...normalizedEntries(row.whitelisted_ips), ip])];
-    const content = basicAuthVhost(backup.content, domain, row.whitelisted_ips, next);
-    db.query("UPDATE basic_auth SET whitelisted_ips = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-      .run(next.join(","), row.id);
-    writeVhost(backup, content);
-    wrote = true;
-    check(paths.nginx, ["-t"], "Nginx validation");
-    reloaded = true;
-    await reload(() => check(paths.systemctl, ["reload", "nginx"], "Nginx reload"));
-    db.exec("COMMIT;");
-  } catch (error) {
-    const failures: string[] = [];
-    try { db.exec("ROLLBACK;"); }
-    catch (rollbackError) { failures.push(`database transaction: ${rollbackError instanceof Error ? rollbackError.message : rollbackError}`); }
-    if (wrote && backup) failures.push(...await restoreVhosts([backup], paths, run, reloaded, reload));
-    throw withRecoveryFailures(error, "rollback failed", failures);
+    await withNginxTransactionAsync(db, paths, run, (changes) => {
+      const row = settings(db, domain);
+      if (!row?.is_active || allows(row.whitelisted_ips, ip)) return;
+      const path = join(paths.nginxVhostDir, `${domain}.conf`);
+      const backup = trustedVhost(path, paths.vhostUid);
+      const next = [...new Set([...normalizedEntries(row.whitelisted_ips), ip])];
+      const content = basicAuthVhost(backup.content, domain, row.whitelisted_ips, next);
+      db.query("UPDATE basic_auth SET whitelisted_ips = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .run(next.join(","), row.id);
+      changes.push({ backup, content });
+    }, reload);
   } finally {
     db.close();
   }
