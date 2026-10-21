@@ -77,7 +77,7 @@ export interface ManagedRecords {
   zoneId: string;
   zoneName: string;
   connectionId: string;
-  records: Pick<CfRecord, "id" | "type" | "name" | "content">[];
+  records: CfRecord[];
 }
 
 export interface RunContext {
@@ -658,7 +658,7 @@ export class DnsRun {
         zoneId: plan.zone.id,
         zoneName: plan.zone.name,
         connectionId: state.ref.connectionId,
-        records: diff.matched.map(({ id, type, name, content }) => ({ id, type, name, content })),
+        records: diff.matched.map((record) => ({ ...record })),
       };
     }
     return result;

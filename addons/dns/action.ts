@@ -25,7 +25,7 @@ import {
   ipAddress, cloudflareId, type MailcowSettings, type Policy, type Profile, type Secrets,
 } from "./model";
 import { PRESETS, seededPolicy, type Preset } from "./presets";
-import { renderProfile } from "./records";
+import { describeRecord, renderProfile, sameRecord } from "./records";
 import { clpctlIssue, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "./store";
 import { tokenTemplate, type TokenTemplate } from "./token";
@@ -575,18 +575,21 @@ class Action {
     await run.discover();
     const assigned = this.sites().filter((site) => policy.assignments[site.domain]).map((site) => site.domain);
     await run.load(assigned);
-    run.planAll(this.sites());
+    const currentPlans = run.planAll(this.sites());
     if (run.unread(entry.zoneId)) failAction(`${entry.zoneName} could not be read for the sites in it; check again before removing records`);
+    const uncertain = currentPlans.some((plan) => plan.profileId && plan.problems.length
+      && (plan.zone ? plan.zone.id === entry.zoneId : plan.domain === entry.zoneName || plan.domain.endsWith(`.${entry.zoneName}`)));
+    if (uncertain) failAction(`${entry.zoneName} could not be planned for the sites in it; resolve their problems before removing records`);
     const published = await run.readZone(entry.connectionId, entry.zoneId);
     const ids = entry.records
-      .filter((tracked) => published.some((record) => record.id === tracked.id && record.type === tracked.type
-        && record.name === tracked.name && record.content === tracked.content))
+      .filter((tracked) => published.some((record) => record.id === tracked.id && sameRecord(record, tracked)
+        && record.comment === tracked.comment))
       .filter((tracked) => !run.stillWanted(tracked))
       .map((tracked) => tracked.id);
     const plans: SitePlan[] = [{
       domain, profileId: null, mode: "enforce", zone: null, problems: [], zoneChoices: [], certificateNames: [],
       changes: entry.records.filter((tracked) => ids.includes(tracked.id)).map((tracked) => ({
-        action: "delete", subject: `${tracked.type} ${tracked.name}`, detail: tracked.content,
+        action: "delete", subject: `${tracked.type} ${tracked.name}`, detail: describeRecord(tracked),
       })),
     }];
     return { run, entry, ids, plans };

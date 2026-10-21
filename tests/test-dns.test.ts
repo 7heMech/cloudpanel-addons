@@ -581,6 +581,44 @@ describe("automatic SSL", () => {
 });
 
 describe("sites CloudPanel no longer has", () => {
+  test("cleanup preserves records whose proxy, TTL, priority or comment was edited", async () => {
+    const env = setup();
+    await env.connect();
+    const { profiles } = await env.act("list");
+    const web = profiles.find((profile) => profile.id === "web")!;
+    await env.act("save-profile", { ...web, records: [
+      ...web.records,
+      { type: "MX", name: "{domain}", content: "mail.example.net", priority: 10, ttl: 300 },
+      { type: "TXT", name: "{domain}", content: "verify-me", ttl: 300 },
+    ] });
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    await env.enforce("web");
+    const records = env.cf.recordsOf("example.com");
+    records.find((record) => record.type === "A" && record.name === "example.com")!.proxied = false;
+    records.find((record) => record.type === "TXT")!.ttl = 600;
+    records.find((record) => record.type === "MX")!.priority = 20;
+    records.find((record) => record.type === "AAAA" && record.name === "example.com")!.comment = "Keep this record";
+    env.sites.splice(0, 1);
+    const review = await env.act("remove-records", { domain: "example.com" });
+    expect(review.review!.sites[0]!.changes.map((change) => change.subject)).toEqual(["A www.example.com", "AAAA www.example.com"]);
+  });
+
+  test("cleanup refuses while a current site's record names cannot be planned safely", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    await env.enforce("web");
+    env.sites.push(site(3, "www.example.com"));
+    const assignment = await env.act("assign", { domains: ["www.example.com"], profileId: "web" });
+    await env.act("confirm", { token: assignment.review!.token });
+    env.sites.splice(0, 1);
+    env.addresses.ipv4 = null;
+    env.addresses.ipv6 = null;
+    const writes = env.cf.writes().length;
+    await expect(env.act("remove-records", { domain: "example.com" })).rejects.toThrow("could not be planned");
+    expect(env.cf.writes().length).toBe(writes);
+  });
+
   test("their records are removed only after review, and only the unchanged ones", async () => {
     const env = setup();
     await env.connect();

@@ -191,11 +191,12 @@ and travel only in request headers: never in arguments, page replies or logs,
 and error text is redacted of them. A saved Mailcow key is kept only for the
 Mailcow address it was saved with.
 
-The records an enforcing site has as wanted are tracked by id. When CloudPanel no
+The records an enforcing site has as wanted are tracked by id and their full
+record values, including priority, proxy, TTL and comment. When CloudPanel no
 longer has the site, the page lists them; Remove plans the deletion of those
 still unchanged and at no name a current site's profile writes, and deletes
 them after the same kind of review. It refuses while a site in that zone could
-not be read. Keep forgets them. Neither touches the zone or Mailcow.
+not be read or planned safely. Keep forgets them. Neither touches the zone or Mailcow.
 
 Assigning no profile, Report only, deleting a profile, disabling and
 uninstalling all stop enforcement and change nothing outside the server;
