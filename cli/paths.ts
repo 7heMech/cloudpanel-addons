@@ -97,7 +97,6 @@ export const CLOUDFLARE_RECONCILE_SERVICE = "clp-addons-cloudflare-ips-reconcile
 export const CLOUDFLARE_RECONCILE_TIMER = "clp-addons-cloudflare-ips-reconcile.timer";
 export const NEW_SITES_SERVICE = "clp-addons-new-sites.service";
 export const NEW_SITES_PATH = "clp-addons-new-sites.path";
-export const DNS_RECONCILE_SERVICE = "clp-addons-dns.service";
 
 
 export const LEGACY_USERS = ["instatic-app"];
@@ -108,5 +107,6 @@ export const LEGACY_UNITS = [
   // SMTP Relay's own new-site watcher, before the shared one.
   "clp-addons-smtp-reconcile.path",
   "clp-addons-smtp-reconcile.service",
+  "clp-addons-dns.service",
 ];
 

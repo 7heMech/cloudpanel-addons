@@ -174,7 +174,7 @@ function fixture(options: { provisioned: boolean; enabled: string[] }): string {
     const units: Record<string, string[]> = {
       "cloudflare-ips": ["clp-addons-cloudflare-ips-reconcile.timer", "clp-addons-cloudflare-ips-reconcile.service"],
       smtp: ["clp-addons-new-sites.path", "clp-addons-new-sites.service"],
-      dns: ["clp-addons-new-sites.path", "clp-addons-new-sites.service", "clp-addons-dns.service"],
+      dns: ["clp-addons-new-sites.path", "clp-addons-new-sites.service"],
     };
     for (const unit of units[name] ?? []) writeFileSync(join(root, "systemd", unit), "# placeholder\n");
   }
@@ -277,17 +277,15 @@ test("the shared new-site watcher is started when its units appear and stopped w
   expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.service"))).toBe(false);
 });
 
-test("the watcher stays while another addon still uses it, and the DNS worker goes with DNS", () => {
+test("the watcher stays while SMTP still uses it, and disabling DNS stops its transient pass", () => {
   const on = toggle([{ verb: "enable", addon: "dns" }], { enabled: ["smtp"] });
   expect(on.error).toBeUndefined();
-  const worker = readFileSync(join(on.root, "systemd", "clp-addons-dns.service"), "utf8");
-  expect(worker).toContain("action dns reconcile");
-  expect(worker).toContain("ConditionPathExists=");
+  expect(existsSync(join(on.root, "systemd", "clp-addons-dns.service"))).toBe(false);
 
   const off = toggle([{ verb: "disable", addon: "dns" }], { enabled: ["smtp", "dns"] });
   expect(off.error).toBeUndefined();
   // Disabling stops a check that is running and changes nothing in Cloudflare.
-  expect(off.systemd).toContain("disable --now clp-addons-dns.service");
+  expect(off.systemd).toContain("stop clp-addon-dns-reconcile");
   expect(existsSync(join(off.root, "systemd", "clp-addons-dns.service"))).toBe(false);
   expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.path"))).toBe(true);
   expect(off.cli).toEqual([]);

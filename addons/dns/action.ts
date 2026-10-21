@@ -9,12 +9,12 @@
  */
 import { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import {
   ActionFailure, emitActionError, emitActionOk, failAction, nameSlug, oneLine, withFileLock,
 } from "../../cli/action-common";
-import { PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { detectAddresses, type Addresses } from "./addresses";
 import { DnsRun, readiness, type ConnectionReport, type ManagedRecords, type PanelSite, type SitePlan } from "./engine";
@@ -44,6 +44,7 @@ const REVIEW_LIFETIME = 15 * 60_000;
 const SELF_SIGNED = "1";
 
 export interface DnsPaths {
+  configFile: string;
   panelDb: string;
   stateDir: string;
   lockFile: string;
@@ -65,6 +66,7 @@ export interface DnsActionOptions {
 }
 
 export const DEFAULT_DNS_PATHS: DnsPaths = {
+  configFile: `${CONFIG_DIR}/dns.conf`,
   panelDb: PANEL_DB,
   stateDir: `${STATE_DIR}/dns`,
   lockFile: "/run/lock/clp-addons/dns.lock",
@@ -831,6 +833,7 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
   // Long enough for a check of the whole fleet; a page action waits less and says so.
   const wait = verb === "reconcile" || verb === "sync-sites" || verb === "provision" ? 240 : 30;
   return withFileLock(paths.lockFile, wait, "DNS is busy checking Cloudflare; try again in a moment", async () => {
+    if ((verb === "reconcile" || verb === "sync-sites") && !existsSync(paths.configFile)) return { checked: 0, joined: [] };
     try {
       return await perform(action, verb, body, provision);
     } catch (error) {

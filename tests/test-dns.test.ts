@@ -1,10 +1,11 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeDnsAction, panelSites, type DnsReply, type ProvisionReply } from "../addons/dns/action";
 import { detectAddresses, type Addresses } from "../addons/dns/addresses";
+import { DNS_ADDON } from "../addons/dns/addon";
 import type { PanelSite } from "../addons/dns/engine";
 import { FakeCloudflare, FakeMailcow, MAILCOW_KEY, routed } from "./fixtures/dns-api";
 
@@ -24,6 +25,7 @@ function site(id: number, domain: string, extra: Partial<PanelSite> = {}): Panel
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), "dns-test-"));
   dirs.push(dir);
+  writeFileSync(join(dir, "dns.conf"), "enabled");
   const cf = new FakeCloudflare();
   const mc = new FakeMailcow();
   const agency = cf.account("Agency");
@@ -39,7 +41,7 @@ function setup() {
     dir, cf, mc, agency, church, sites, issued, clock, addresses,
     async act<T = DnsReply>(verb: string, body?: unknown, args: string[] = []): Promise<T> {
       return await executeDnsAction([verb, ...args], {
-        paths: { stateDir: join(dir, "state"), lockFile: join(dir, "dns.lock"), panelDb: join(dir, "db.sq3"), rootUid: process.getuid!(), clpctl: "/bin/false" },
+        paths: { configFile: join(dir, "dns.conf"), stateDir: join(dir, "state"), lockFile: join(dir, "dns.lock"), panelDb: join(dir, "db.sq3"), rootUid: process.getuid!(), clpctl: "/bin/false" },
         processUid: 0,
         input: body === undefined ? undefined : JSON.stringify(body),
         fetch: routed(cf, mc),
@@ -68,6 +70,45 @@ function setup() {
   };
   return env;
 }
+
+test("repair queues DNS with a runtime bound and leaves a running pass alone", () => {
+  const original = Bun.spawnSync;
+  const calls: string[][] = [];
+  let active = false;
+  try {
+    // @ts-expect-error test mock
+    Bun.spawnSync = (args: string[]) => {
+      calls.push(args);
+      const ok = args[0] !== "systemctl" || active;
+      return { success: ok, stdout: "", stderr: "", exitCode: ok ? 0 : 3 };
+    };
+    DNS_ADDON.maintenance!.run();
+    expect(calls[1]).toContain("--unit=clp-addon-dns-reconcile");
+    expect(calls[1]).toContain("--property=RuntimeMaxSec=1800");
+    expect(calls[1]!.slice(-4)).toEqual(["/usr/local/bin/clp-addons", "action", "dns", "reconcile"]);
+    active = true;
+    calls.length = 0;
+    DNS_ADDON.maintenance!.run();
+    expect(calls).toEqual([["systemctl", "is-active", "--quiet", "clp-addon-dns-reconcile"]]);
+  } finally {
+    Bun.spawnSync = original;
+  }
+});
+
+test("queued DNS work does nothing after DNS has been disabled", async () => {
+  const env = setup();
+  await env.connect();
+  await env.act("assign", { domains: ["example.com"], profileId: "web" });
+  await env.enforce("web");
+  const before = readFileSync(join(env.dir, "state", "status.json"), "utf8");
+  const calls = env.cf.calls.length;
+  rmSync(join(env.dir, "dns.conf"));
+  env.sites.push(site(3, "new.example.com"));
+  await env.act("reconcile");
+  await env.act("sync-sites");
+  expect(env.cf.calls.length).toBe(calls);
+  expect(readFileSync(join(env.dir, "state", "status.json"), "utf8")).toBe(before);
+});
 
 describe("connecting Cloudflare", () => {
   test("a first visit offers the seeded profiles in Report only", async () => {

@@ -1,6 +1,6 @@
 import type { AddonDefinition } from "../../cli/addon-catalog";
-import { runCommand } from "../../cli/action-common";
-import { DNS_RECONCILE_SERVICE } from "../../cli/paths";
+import { queueAddonPass } from "../../cli/job-store";
+import { tryRun } from "../../cli/util";
 import { executeDnsAction, runDnsAction, type DnsActionOptions } from "./action";
 import { handle } from "./app/index";
 
@@ -11,6 +11,9 @@ export const DNS_ADDON: AddonDefinition = {
   targets: [],
   handler: handle,
   action: runDnsAction,
+  withdrawn: () => {
+    tryRun("systemctl", ["stop", "clp-addon-dns-reconcile"]);
+  },
   newSites: {
     label: "DNS",
     run: async (options) => {
@@ -18,13 +21,10 @@ export const DNS_ADDON: AddonDefinition = {
       return joined.length ? `${joined.join(", ")} joined the default profile` : null;
     },
   },
-  // The check reads and writes Cloudflare and Mailcow, which can take a while
-  // for a large fleet, so repair only queues it rather than holding its lock.
   maintenance: {
     label: "DNS",
     run: () => {
-      const result = runCommand("systemctl", ["start", "--no-block", DNS_RECONCILE_SERVICE]);
-      if (!result.ok) throw new Error(`could not queue ${DNS_RECONCILE_SERVICE}`);
+      queueAddonPass({ addon: "dns", verb: "reconcile", description: "Check and enforce DNS for CloudPanel sites", runtime: 1800 });
       return null;
     },
   },

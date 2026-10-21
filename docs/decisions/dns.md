@@ -163,8 +163,10 @@ so a real certificate is never replaced; a site DNS stops enforcing drops it.
 
 ## Running
 
-Repair queues `clp-addons-dns.service` rather than running the check, so the
-global operation lock is never held for Cloudflare calls. The service runs the
+Repair uses `queueAddonPass` to start the transient `clp-addon-dns-reconcile`
+unit with a thirty-minute runtime bound, skipping a pass still running. A queued
+pass checks that DNS is enabled after taking its lock. The global operation lock
+is never held for Cloudflare calls. The pass runs the
 full check: new sites, every assigned site read, enforcing sites enforced,
 automatic SSL retried. Every action that writes takes DNS's own lock; the page
 reads the last check without it. Zones are read and written in parallel, one
@@ -193,4 +195,4 @@ not be read. Keep forgets them. Neither touches the zone or Mailcow.
 
 Assigning no profile, Report only, deleting a profile, disabling and
 uninstalling all stop enforcement and change nothing outside the server;
-disabling also stops a running check.
+disabling also stops the periodic pass.

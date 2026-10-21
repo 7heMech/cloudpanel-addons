@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   ANCHOR_SERVICE, CLI_BIN, CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, DISTRO_NGINX_SITES_DIR,
-  DNS_RECONCILE_SERVICE, NEW_SITES_PATH, NEW_SITES_SERVICE,
+  NEW_SITES_PATH, NEW_SITES_SERVICE,
   CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS, INSTATIC_BACKUP_CRON,
   AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT,
   PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
@@ -802,19 +802,6 @@ WantedBy=paths.target
   };
 }
 
-/** Queued by repair rather than run inside it, so its Cloudflare calls never hold repair's lock. */
-export function dnsReconcileUnit(): string {
-  return `[Unit]
-Description=Check and enforce DNS for CloudPanel sites
-ConditionPathExists=${ADDONS.dns!.configFile}
-
-[Service]
-Type=oneshot
-TimeoutStartSec=30min
-ExecStart=${CLI_BIN} action dns reconcile
-`;
-}
-
 /**
  * Everything the watcher's fast repair reconciles: Twig anchors, the panel
  * vhost, site vhosts, global settings, and Cloudflare ranges. The service's
@@ -849,8 +836,6 @@ export interface UnitChanges {
   cloudflare: "added" | "removed" | null;
   /** The shared new-site watcher was added or removed by this pass. */
   newSites: "added" | "removed" | null;
-  /** The DNS worker was added or removed by this pass. */
-  dns: "added" | "removed" | null;
   /** The auth socket or service definition differs. */
   auth: boolean;
   /** The Instatic backup cron file was created or removed. */
@@ -933,9 +918,6 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
   const newSites = syncAddonUnits(specs.some((spec) => spec.newSites), NEW_SITES_PATH, [
     [NEW_SITES_SERVICE, siteUnits.service], [NEW_SITES_PATH, siteUnits.path],
   ]);
-  const dns = syncAddonUnits(specs.some((spec) => spec.name === "dns"), DNS_RECONCILE_SERVICE, [
-    [DNS_RECONCILE_SERVICE, dnsReconcileUnit()],
-  ]);
 
   const auth = authUnits();
   const authWrites = [
@@ -949,10 +931,9 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
     reconcile: reconcileChanged,
     cloudflare,
     newSites,
-    dns,
     auth: authWrites.some(Boolean),
     cron,
-    systemd: manager || reconcileChanged || cloudflare !== null || newSites !== null || dns !== null || authWrites.some(Boolean) || legacyTemplate,
+    systemd: manager || reconcileChanged || cloudflare !== null || newSites !== null || authWrites.some(Boolean) || legacyTemplate,
   };
   // systemd only needs telling when a definition it reads actually moved. The
   // cron file is not systemd's, so it does not count towards this.
@@ -1048,11 +1029,11 @@ export function stopUnits(keepShared = false): void {
   if (keepShared) return;
   reconcileInstaticBackupCron(false);
   for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, CLOUDFLARE_RECONCILE_TIMER, NEW_SITES_PATH,
-    DNS_RECONCILE_SERVICE, AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
+    AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     tryRun("systemctl", ["disable", "--now", unit]);
   }
   for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE,
-    CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, NEW_SITES_SERVICE, NEW_SITES_PATH, DNS_RECONCILE_SERVICE,
+    CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, NEW_SITES_SERVICE, NEW_SITES_PATH,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, "clp-addons-auth@.service"]) {
     rmSync(`${SYSTEMD_DIR}/${unit}`, { force: true });
   }
@@ -1108,12 +1089,15 @@ export function purgeTwigCache(): void {
 }
 
 export function removeLegacyUnits(quiet = false): void {
+  let removed = false;
   for (const unit of LEGACY_UNITS) {
     const path = `${SYSTEMD_DIR}/${unit}`;
     if (!existsSync(path)) continue;
     if (!quiet) log.warn(`removing legacy unit ${unit}`);
     tryRun("systemctl", ["disable", "--now", unit]);
     rmSync(path, { force: true });
+    removed = true;
   }
+  if (removed) run("systemctl", ["daemon-reload"]);
   removeLegacySudoers();
 }
