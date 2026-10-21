@@ -179,11 +179,13 @@ test("a site DNS does not manage gets the created domain alone, and a DNS failur
   const unmanaged = run({ box: true, dns: { provision: { ok: true, data: { managed: false, ready: false, reason: "No DNS profile", certificateNames: [] } } } });
   await unmanaged.settled();
   expect((unmanaged.calls[1]!.init.body as FormData).getAll("domains[]")).toEqual([DOMAIN]);
-  const failed = run({ box: true, dns: { provision: { ok: false, error: "DNS is busy checking Cloudflare" } } });
+  const failed = run({ box: true, cookie: DOMAIN, dns: { provision: { ok: false, error: "DNS is busy checking Cloudflare" } } });
   await failed.settled();
   expect(failed.calls).toEqual([]);
   expect(failed.alert.className).toBe("alert alert-danger");
-  expect(failed.alert.textContent).toContain("DNS is busy checking Cloudflare");
+  expect(failed.alert.textContent).toContain("DNS is busy checking Cloudflare. Refresh this page to try again.");
+  // Nothing was requested, and DNS may not have recorded the request either, so a refresh starts over.
+  expect(failed.jar.domains()).toEqual([DOMAIN]);
 });
 
 test("DNS refusing a non-administrator its session means it is not installed", async () => {

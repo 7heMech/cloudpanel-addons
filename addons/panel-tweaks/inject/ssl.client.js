@@ -67,8 +67,15 @@
           method: 'POST', credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json', 'X-CLP-Addons-CSRF': csrf ? csrf[1] : '' },
           body: JSON.stringify({ domain: domain, ssl: true })
-        }).then(function (response) { return response.json(); }).then(function (reply) {
-          if (!reply || !reply.ok) throw new Error(reply && reply.error ? reply.error : 'DNS could not be prepared.');
+        }).then(function (response) {
+          return response.json();
+        }).catch(function () {
+          return null;
+        }).then(function (reply) {
+          if (!reply || !reply.ok) {
+            remember(domain.toLowerCase(), true);
+            throw new Error((reply && reply.error ? reply.error : 'DNS could not be prepared').replace(/\.?$/, '.') + ' Refresh this page to try again');
+          }
           if (!reply.data.managed) return [domain];
           if (reply.data.ready) return reply.data.certificateNames;
           show('warning', 'DNS for ' + domain + ' is not ready: ' + reply.data.reason.replace(/\.?$/, '.') +
