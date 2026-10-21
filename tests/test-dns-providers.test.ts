@@ -23,7 +23,7 @@ describe("provider HTTP bounds", () => {
 
   test("the deadline aborts both an unanswered request and a stalled reply body", async () => {
     const timer = globalThis.setTimeout;
-    globalThis.setTimeout = ((handler, delay, ...args) => timer(handler, delay === 15_000 ? 5 : delay, ...args)) as typeof setTimeout;
+    globalThis.setTimeout = ((handler: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => timer(handler, delay === 15_000 ? 5 : delay, ...args)) as typeof setTimeout;
     try {
       for (const stalledBody of [false, true]) {
         let signal: AbortSignal | null | undefined;

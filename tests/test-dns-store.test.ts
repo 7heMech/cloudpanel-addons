@@ -25,7 +25,7 @@ test("DNS secrets remain owner-only through atomic replacement", () => {
   writeState(path, secrets, uid);
   expect(statSync(path).uid).toBe(uid);
   expect(statSync(path).mode & 0o7777).toBe(0o600);
-  expect(readState(path, uid, () => null)).toEqual(secrets);
+  expect(readState<typeof secrets | null>(path, uid, () => null)).toEqual(secrets);
   expect(readdirSync(dir)).toEqual(["secrets.json"]);
 });
 
@@ -41,5 +41,5 @@ test("DNS refuses loose permissions, another owner and symlinks without reading 
   symlinkSync(path, link);
   expect(() => readState(link, uid, () => null)).toThrow("untrusted DNS state");
   expect(() => writeState(link, {}, uid)).toThrow("untrusted DNS state");
-  expect(readState(path, uid, () => null)).toEqual(secrets);
+  expect(readState<typeof secrets | null>(path, uid, () => null)).toEqual(secrets);
 });
