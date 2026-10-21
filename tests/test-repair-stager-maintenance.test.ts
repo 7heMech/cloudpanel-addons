@@ -38,6 +38,7 @@ const mockPrelude = String.raw`
 
   const realPaths = await import("./cli/paths.ts");
   mock.module("./cli/paths.ts", () => ({ ...realPaths }));
+  mock.module("./cli/php-guard.ts", () => ({ reconcilePhpGuard: () => {} }));
   mock.module("./cli/release.ts", () => ({
     CLI_VERSION: "1.0.0",
     fetchVerified: async () => [],
