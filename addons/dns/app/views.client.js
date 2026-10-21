@@ -43,7 +43,7 @@ async function dnsPost(path, body, from) {
   try {
     const reply = await call(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
     if (reply.html) {
-      CLP_ROOT.getElementById('dns-root').innerHTML = reply.html;
+      repaintView(CLP_ROOT.getElementById('dns-root'), reply.html);
       dnsState = reply.data;
       dnsPaintSelection();
     }

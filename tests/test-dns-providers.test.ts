@@ -1,11 +1,50 @@
 import { describe, expect, test } from "bun:test";
 import { CloudflareApi, quoteTxt, unquoteTxt } from "../addons/dns/cloudflare";
-import { ProviderError } from "../addons/dns/http";
+import { ProviderError, ProviderHttp } from "../addons/dns/http";
 import { MailcowApi } from "../addons/dns/mailcow";
 import { FakeCloudflare, FakeMailcow, MAILCOW_KEY } from "./fixtures/dns-api";
 
 const USER_TOKEN = "cf-user-token-0123456789abcdef";
 const ACCOUNT_TOKEN = "cf-account-token-0123456789abcdef";
+
+describe("provider HTTP bounds", () => {
+  test("oversized replies are cancelled with or without a declared length", async () => {
+    for (const declared of [false, true]) {
+      let cancelled = false;
+      const response = new Response(new ReadableStream({
+        start(controller) { controller.enqueue(new Uint8Array(declared ? 1 : 8 * 1024 * 1024 + 1)); },
+        cancel() { cancelled = true; },
+      }), { headers: declared ? { "Content-Length": String(8 * 1024 * 1024 + 1) } : {} });
+      const api = new ProviderHttp("Test", "https://provider.test", {}, async () => response);
+      await expect(api.request("/")).rejects.toThrow("too large");
+      expect(cancelled).toBe(true);
+    }
+  });
+
+  test("the deadline aborts both an unanswered request and a stalled reply body", async () => {
+    const timer = globalThis.setTimeout;
+    globalThis.setTimeout = ((handler, delay, ...args) => timer(handler, delay === 15_000 ? 5 : delay, ...args)) as typeof setTimeout;
+    try {
+      for (const stalledBody of [false, true]) {
+        let signal: AbortSignal | null | undefined;
+        const api = new ProviderHttp("Test", "https://provider.test", {}, async (_url, init) => {
+          signal = init.signal;
+          expect(init.redirect).toBe("error");
+          if (!stalledBody) {
+            return new Promise<Response>((_resolve, reject) => signal!.addEventListener("abort", () => reject(new Error("aborted"))));
+          }
+          return new Response(new ReadableStream({
+            start(controller) { signal!.addEventListener("abort", () => controller.error(new Error("aborted"))); },
+          }));
+        });
+        await expect(api.request("/")).rejects.toBeInstanceOf(ProviderError);
+        expect(signal?.aborted).toBe(true);
+      }
+    } finally {
+      globalThis.setTimeout = timer;
+    }
+  });
+});
 
 function cloudflare(): { fake: FakeCloudflare; agency: string; church: string } {
   const fake = new FakeCloudflare();

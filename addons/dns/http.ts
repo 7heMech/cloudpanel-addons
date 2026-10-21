@@ -3,6 +3,8 @@
  * deadline for every request, a bounded reply, and a provider's 429 kept as
  * the time to try again. Credentials go only into request headers.
  */
+import { readBoundedText } from "../../lib/app-http";
+
 export type ApiFetch = (url: string, init: RequestInit) => Promise<Response>;
 
 const TIMEOUT_MS = 15_000;
@@ -29,24 +31,6 @@ function retryTime(header: string | null, now: number): number {
   return Number.isFinite(date) && date > now ? date : now + DEFAULT_BACKOFF_MS;
 }
 
-async function boundedText(response: Response): Promise<string> {
-  const reader = response.body?.getReader();
-  if (!reader) return "";
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > MAX_REPLY_BYTES) {
-      await reader.cancel();
-      throw new Error("too large");
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 export class ProviderHttp {
   constructor(
     readonly provider: string,
@@ -65,8 +49,9 @@ export class ProviderHttp {
     }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    let response: Response | undefined;
     try {
-      const response = await this.fetcher(`${this.base}${path}`, {
+      response = await this.fetcher(`${this.base}${path}`, {
         method,
         headers: {
           ...this.headers,
@@ -84,7 +69,7 @@ export class ProviderHttp {
       }
       let text: string;
       try {
-        text = await boundedText(response);
+        text = await readBoundedText(response, MAX_REPLY_BYTES);
       } catch {
         throw new ProviderError(this.provider, "the reply was too large or could not be read", response.status);
       }
@@ -98,6 +83,7 @@ export class ProviderHttp {
       throw new ProviderError(this.provider, controller.signal.aborted ? "the request timed out" : "the request failed; check the address and the network");
     } finally {
       clearTimeout(timer);
+      await response?.body?.cancel().catch(() => {});
     }
   }
 

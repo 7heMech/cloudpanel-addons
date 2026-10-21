@@ -142,7 +142,7 @@ export class BodyError extends Error {
 export const MAX_BODY_BYTES = 64 * 1024;
 
 /**
- * Read a request body as text, refusing anything larger than `maxBytes`.
+ * Read an HTTP body as text, refusing anything larger than `maxBytes`.
  *
  * The declared length is checked first so an oversized body can be refused
  * before a byte of it is read. That check alone is not enough: `Content-Length`
@@ -151,7 +151,7 @@ export const MAX_BODY_BYTES = 64 * 1024;
  * could measure it. So the stream is counted as it arrives and abandoned the
  * moment it passes the limit.
  */
-export async function readBoundedText(req: Request, maxBytes = MAX_BODY_BYTES): Promise<string> {
+export async function readBoundedText(req: Request | Response, maxBytes = MAX_BODY_BYTES): Promise<string> {
   const declared = req.headers.get("content-length");
   if (declared !== null) {
     // RFC 9110 gives Content-Length as 1*DIGIT. Number() would take "0x40",

@@ -173,10 +173,10 @@ pass checks that DNS is enabled after taking its lock. The global operation lock
 is never held for Cloudflare calls. The pass runs the
 full check: new sites, every assigned site read, enforcing sites enforced,
 automatic SSL retried. Every action that writes takes DNS's own lock; the page
-reads the last check without it. Zones are read and written in parallel, one
+reads the last check without it and uses the shared `repaintView` after changes. Zones are read and written in parallel, one
 zone's writes in order. There is no concurrency cap or rate limit of the
 addon's own: each request has a 15-second deadline and an 8 MiB reply limit, no
-redirects, and a 429 stores Cloudflare's or Mailcow's `Retry-After` (five
+redirects, and the shared bounded HTTP body reader. A 429 stores Cloudflare's or Mailcow's `Retry-After` (five
 minutes if absent), after which no request is made to that provider until it
 passes, across runs. A page whose paging changes mid-read, or repeats an entry,
 is refused rather than used.
