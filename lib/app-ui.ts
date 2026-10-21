@@ -51,14 +51,7 @@ export function fleetRowSelectionStyle(tableClass: string): string {
 import FLEET_ROW_SELECTION_JS from "./assets/fleet-row-selection.client.js" with { type: "text" };
 export { FLEET_ROW_SELECTION_JS };
 
-/**
- * Carrying a message across the reload a change needed, for the addons whose
- * change is too wide to patch into the page in nine places.
- *
- * Not in BASE_CLIENT_JS: a page that reloads is the exception here, and the
- * pages whose switches are modes rather than actions must not be handed the
- * means to reload themselves.
- */
+// WordPress Sign-In carries its notice across a reload.
 import CARRIED_FLASH_JS from "./assets/carried-flash.client.js" with { type: "text" };
 export { CARRIED_FLASH_JS };
 
@@ -100,7 +93,9 @@ export { JOB_STYLE };
  * Appended to an addon's own script, which calls `watchJob(id)` once the page
  * announces a job to follow. A caller can pass a containing element as the
  * second argument when a page has more than one job surface; the manager uses
- * that to keep updates in the card whose action started the job. The markup
+ * that to keep updates in the card whose action started the job. A third
+ * argument overrides the finished job's repaint, for embedded Git views and
+ * successful manager updates that replace this page's code. The markup
  * contract is four ids -- `job-state`, `job-step`, `job-log` and a hidden
  * `job-watch` carrying `data-job` -- and an addon that draws only some of them
  * still works: each element is optional.
@@ -143,6 +138,11 @@ export const THEME_SWITCH_ICONS = `<svg class="moon" viewBox="0 0 384 512" fill=
 /** The inline notice holder every page carries, above its content. */
 const FLASH_HTML = '<div id="clp-flash" hidden></div>';
 
+/** What the addon's view drew, in the holder a change repaints in place. */
+function viewRoot(content: string): string {
+  return `<div id="clp-content">${content}</div>`;
+}
+
 /** The one confirmation dialog every page carries. */
 const CONFIRM_HTML = `<dialog id="clp-confirm" aria-labelledby="clp-confirm-title">
   <div class="dialog-header"><h2 id="clp-confirm-title">Are you sure?</h2></div>
@@ -167,7 +167,7 @@ export function renderFragment(title: string, content: string, chrome: Chrome): 
     ok: true,
     title,
     css: shadowStyle(`${BASE_STYLE}${chrome.css ?? ""}`),
-    html: `${FLASH_HTML}${content}${CONFIRM_HTML}`,
+    html: `${FLASH_HTML}${viewRoot(content)}${CONFIRM_HTML}`,
     script: `const CLP_BASE = "${escJs(chrome.base)}";\n${BASE_CLIENT_JS}${chrome.script}`,
   };
 }
@@ -245,7 +245,7 @@ ${primaryNav}
     </div>
   </div>
 </header>
-<main>${contextualHeader}${FLASH_HTML}${content}</main>
+<main>${contextualHeader}${FLASH_HTML}${viewRoot(content)}</main>
 ${CONFIRM_HTML}
 <footer class="clp-addon-footer">
   <a href="https://www.cloudpanel.io/blog/" target="_blank" rel="noopener noreferrer">Blog</a>

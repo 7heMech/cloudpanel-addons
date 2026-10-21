@@ -143,6 +143,11 @@ reproduce the panel's own site creation -- PHP version, vhost template, site
 user, TLS -- and drift with every CloudPanel release. The link in the site list
 is the panel-native answer to the same wish.
 
+Settings mutations return the site renderer's HTML alongside their data. The
+browser repaints in its document or shadow root and rebuilds webhook URLs from
+its own origin. Deployment starts and completions read the view API; fleet
+selections and named disclosures survive repainting.
+
 ## Who reaches it
 
 Administrators, and CloudPanel's site managers. The addon declares

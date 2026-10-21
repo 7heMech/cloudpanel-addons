@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createJobDir, createJobLog, jobCommonFields, jobDir, jobGet, jobSet, jobTimestamp,
-  JOB_ID_RE, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
+  JOB_ID_RE, listJobIds, newJobId, pruneJobs, queueAddonPass, readJobLog, startJobUnit,
 } from "../cli/job-store";
 
 function withJobsDir<T>(fn: (jobsDir: string) => T): T {
@@ -222,5 +222,43 @@ describe("starting transient job units", () => {
     } finally {
       Bun.spawnSync = origSpawnSync;
     }
+  });
+});
+
+describe("queueing an addon's periodic pass", () => {
+  function queued(active: boolean[], started = true): { calls: string[][]; result: boolean } {
+    const origSpawnSync = Bun.spawnSync;
+    const calls: string[][] = [];
+    try {
+      // @ts-expect-error test mock
+      Bun.spawnSync = (args: string[]) => {
+        calls.push(args);
+        const ok = args[0] === "systemctl" ? active.shift() ?? false : started;
+        return { success: ok, stdout: "", stderr: ok ? "" : "already loaded", exitCode: ok ? 0 : 1 };
+      };
+      const result = queueAddonPass({ addon: "dns", verb: "reconcile", description: "DNS pass", runtime: 1800 });
+      return { calls, result };
+    } finally {
+      Bun.spawnSync = origSpawnSync;
+    }
+  }
+
+  it("starts the pass in a transient unit with a runtime bound and returns at once", () => {
+    const { calls, result } = queued([false]);
+    expect(result).toBe(true);
+    const run = calls.find((args) => args[0] === "systemd-run")!;
+    expect(run).toContain("--unit=clp-addon-dns-reconcile");
+    expect(run).toContain("--no-block");
+    expect(run).toContain("--property=RuntimeMaxSec=1800");
+    expect(run.slice(run.indexOf("--") + 1)).toEqual(["/usr/local/bin/clp-addons", "action", "dns", "reconcile"]);
+  });
+
+  it("leaves a pass that is still running alone", () => {
+    expect(queued([true])).toEqual({ calls: [["systemctl", "is-active", "--quiet", "clp-addon-dns-reconcile"]], result: false });
+    expect(queued([false, true], false).result).toBe(false);
+  });
+
+  it("reports a pass systemd would not start", () => {
+    expect(() => queued([false, false], false)).toThrow("could not queue clp-addon-dns-reconcile");
   });
 });

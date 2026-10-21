@@ -114,7 +114,7 @@ export function dashboardView(
     <span class="badge ${stateClass(i.state)}">${esc(i.state)}</span>
     ${missing ? '<span class="badge" style="color:var(--bad);border-color:var(--bad);margin-left:0.25rem;">deleted</span>' : ''}
   </td>
-  <td class="action-cell"><details class="row-actions"><summary>Manage</summary><div class="actions">
+  <td class="action-cell"><details id="instance-actions-${esc(i.domain)}" class="row-actions"><summary>Manage</summary><div class="actions">
     ${
       i.state === "running"
         ? `<button class="btn" onclick="act('${escJs(i.domain)}','stop')">Stop</button>`
@@ -171,7 +171,7 @@ export function dashboardView(
   }
 </div>
 
-<details class="card site-inventory">
+<details id="site-inventory" class="card site-inventory">
   <summary>
     All CloudPanel sites on this server (${panelSites.length})
   </summary>

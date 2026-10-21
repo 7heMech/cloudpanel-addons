@@ -8,7 +8,6 @@
  * the bytes it carries reach only the browser's terminal emulator.
  */
 import { createHash, randomBytes } from "node:crypto";
-import type { Server } from "bun";
 import { policyHeaders } from "../../../lib/app-http";
 import { streamGatewayAction } from "../../../lib/gateway-client";
 import { SITE_USER_RE } from "../../../lib/site-accounts";
@@ -335,12 +334,9 @@ export class TerminalSessions {
   }
 
   /** Server-sent events for one popup, or null when the session is not this owner's. */
-  attach(id: string, owner: Owner, req: Request, server?: Server<unknown> | null): Response | null {
+  attach(id: string, owner: Owner, req: Request): Response | null {
     const session = this.find(id, owner);
     if (!session) return null;
-    if (server && typeof server.timeout === "function") {
-      try { server.timeout(req, 0); } catch {}
-    }
     const lastEventId = req.headers.get("last-event-id");
     let client: Client | null = null;
     let keepalive: ReturnType<typeof setInterval> | null = null;
