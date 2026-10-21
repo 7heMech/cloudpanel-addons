@@ -336,6 +336,12 @@ function mainwpRun(paths: WpLoginActionPaths, request: { dueOnly?: boolean } = {
   return { ...varnishRun(paths, request), statePath: paths.mainwpState };
 }
 
+/** Whether the timer has anything to queue: automation is on, or MainWP still owes a site work. */
+export function wpPoliciesActive(options: WpLoginActionOptions = {}): boolean {
+  const paths = pathsFor(options);
+  return readVarnishState(paths.varnishState).enabled || mainwpNeedsRepair(readMainwpState(paths.mainwpState));
+}
+
 /** The queued timer's MainWP pass does not wait for a page's pass. */
 export async function reconcileWpMainwp(options: WpLoginActionOptions = {}): Promise<MainwpResult> {
   const paths = pathsFor(options);

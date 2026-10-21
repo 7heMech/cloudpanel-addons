@@ -1,5 +1,5 @@
 import { handle } from "./app/index";
-import { runWpLoginAction } from "./action";
+import { runWpLoginAction, wpPoliciesActive, type WpLoginActionOptions } from "./action";
 import { queueAddonPass } from "../../cli/job-store";
 import { WP_LOGIN_TARGETS } from "./inject/targets";
 import type { AddonDefinition } from "../../cli/addon-catalog";
@@ -13,7 +13,10 @@ export const WP_LOGIN_ADDON: AddonDefinition = {
   action: runWpLoginAction,
   maintenance: {
     label: "WordPress plugins",
-    run: () => queueAddonPass({ addon: "wp-login", verb: "sync", description: "WordPress plugin policies", runtime: 180 })
-      ? "plugin policy pass queued" : null,
+    run: (options) => {
+      if (!wpPoliciesActive((options ?? {}) as WpLoginActionOptions)) return null;
+      return queueAddonPass({ addon: "wp-login", verb: "sync", description: "WordPress plugin policies", runtime: 180 })
+        ? "plugin policy pass queued" : null;
+    },
   },
 };
