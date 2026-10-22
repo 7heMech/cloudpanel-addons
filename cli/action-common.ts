@@ -336,13 +336,15 @@ function outputText(value: unknown): string {
   return value == null ? "" : String(value);
 }
 
-export function runCommand(command: string, args: string[]): CommandResult {
+export function runCommand(command: string, args: string[], timeoutMs?: number): CommandResult {
   try {
     const result = Bun.spawnSync([command, ...args], {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
       env: process.env,
+      timeout: timeoutMs,
+      killSignal: "SIGKILL",
     });
     return {
       ok: result.success,

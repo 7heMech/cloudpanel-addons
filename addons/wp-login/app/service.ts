@@ -1,5 +1,5 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
-import type { WpLoginResult, WpMaintenanceReply, WpRemoveResult, WpSiteView } from "../action";
+import type { WpLoginResult, WpMaintenanceReply, WpBasicAuthReply, WpRemoveResult, WpSiteView } from "../action";
 import { validateDomain } from "../../../lib/app-http";
 
 export { validateDomain };
@@ -21,13 +21,14 @@ export const wpLoginService = {
   // mapping; this side only says whose request it is.
   signIn(
     domain: string,
-    request: { asUser?: string; clientIp: string; addBypass: boolean },
-  ): Promise<ActionResult<WpLoginResult | WpMaintenanceReply>> {
+    request: { asUser?: string; clientIp: string; addBypass: boolean; allowBasicAuth?: boolean },
+  ): Promise<ActionResult<WpLoginResult | WpMaintenanceReply | WpBasicAuthReply>> {
     const args = [`--domain=${domain}`];
     if (request.asUser) args.push(`--as-user=${request.asUser}`);
     if (request.clientIp) args.push(`--client-ip=${request.clientIp}`);
     if (request.addBypass) args.push("--add-bypass");
-    return call<WpLoginResult | WpMaintenanceReply>("sign-in", args);
+    if (request.allowBasicAuth) args.push("--allow-basic-auth");
+    return call<WpLoginResult | WpMaintenanceReply | WpBasicAuthReply>("sign-in", args);
   },
 
   remove(): Promise<ActionResult<WpRemoveResult>> {
