@@ -170,6 +170,7 @@ export const SECURITY_KEYS_ALLOWED_VERBS = new Set([
   "remove",
   "users",
   "revoke",
+  "settings",
 ]);
 
 /**

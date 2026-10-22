@@ -37,7 +37,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | Panel Tweaks | Site search and columns, automatic SSL for native sites, mobile layouts and themes. |
 | [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in, optional CLP Varnish Cache installation and MainWP Child enrollment. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
-| Security Keys | Sign in with a passkey or a hardware key such as a YubiKey instead of a password. Needs the panel on a hostname with a valid certificate. |
+| Security Keys | Sign in with a passkey or a hardware key such as a YubiKey instead of a password, for the roles an administrator allows. Needs the panel on a hostname with a valid certificate. |
 
 Only CloudPanel administrators see the Addons tab. Site managers can also use
 Git Deploy and create and manage Instatic sites. Other panel users get Panel

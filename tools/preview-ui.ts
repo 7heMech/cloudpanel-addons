@@ -1069,7 +1069,9 @@ const server = Bun.serve({
     if (path === "/addons/security-keys/api/keys") {
       const asked = req.headers.get("referer");
       const users = securityKeysPreviewUsers(asked ? new URL(asked) : url);
-      return Response.json({ ok: true, data: { keys: users[0]?.keys ?? [] } });
+      // ?role-off draws the card for an account whose role has keys turned off.
+      const off = asked ? new URL(asked).searchParams.has("role-off") : false;
+      return Response.json({ ok: true, data: { keys: users[0]?.keys ?? [], canAdd: !off, syncedPasskeys: true } });
     }
     if (path === "/addons/panel-tweaks/api/panel") {
       // The injected block's URL is fixed, so the fixture the stub was drawn
@@ -1305,7 +1307,14 @@ const server = Bun.serve({
       html = smtpLayout("SMTP Relay", smtpDashboardView(smtpPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/security-keys/" || path === "/addons/security-keys") {
-      html = securityKeysLayout("Security Keys", securityKeysDashboardView(securityKeysPreviewUsers(url)), notice);
+      // ?hardware-only turns synced passkeys off; ?admins-only leaves one role on.
+      html = securityKeysLayout("Security Keys", securityKeysDashboardView({
+        users: securityKeysPreviewUsers(url),
+        settings: {
+          roles: url.searchParams.has("admins-only") ? ["ROLE_ADMIN"] : ["ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"],
+          syncedPasskeys: !url.searchParams.has("hardware-only"),
+        },
+      }), notice);
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
       html = cloudflareLayout("Cloudflare IP Access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {

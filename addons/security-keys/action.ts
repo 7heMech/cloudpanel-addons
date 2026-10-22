@@ -18,12 +18,15 @@ import {
  * `keys`, `register-options`, `register` and `remove` act on the caller's own
  * account: the gateway checks the CloudPanel session itself and passes
  * `--panel-user`. `login-options` and `sign-in` have no session yet; the key's
- * signature is their credential. `users` and `revoke` are the administrator's.
+ * signature is their credential. `users`, `revoke` and `settings` are the
+ * administrator's.
  */
 export type SecurityKeysVerb =
-  | "login-options" | "sign-in" | "keys" | "register-options" | "register" | "remove" | "users" | "revoke";
+  | "login-options" | "sign-in" | "keys" | "register-options" | "register" | "remove" | "users" | "revoke" | "settings";
 
-const VERBS: SecurityKeysVerb[] = ["login-options", "sign-in", "keys", "register-options", "register", "remove", "users", "revoke"];
+const VERBS: SecurityKeysVerb[] = [
+  "login-options", "sign-in", "keys", "register-options", "register", "remove", "users", "revoke", "settings",
+];
 const OWN_ACCOUNT_VERBS = new Set<SecurityKeysVerb>(["keys", "register-options", "register", "remove"]);
 
 const STORE_VERSION = 1;
@@ -90,6 +93,19 @@ interface Challenge {
   userId?: number;
   handle?: string;
 }
+
+export const PANEL_ROLES = ["ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"] as const;
+export type PanelRole = (typeof PANEL_ROLES)[number];
+
+/** What an administrator decides for the whole panel. */
+export interface Settings {
+  /** The CloudPanel roles that may add keys and sign in with them. */
+  roles: PanelRole[];
+  /** Whether keys a password manager or platform syncs between devices are accepted. */
+  syncedPasskeys: boolean;
+}
+
+const DEFAULT_SETTINGS: Settings = { roles: [...PANEL_ROLES], syncedPasskeys: true };
 
 export interface KeyView {
   id: string;
@@ -176,6 +192,34 @@ function writeStore(paths: SecurityKeysPaths, store: Store): void {
   writeAtomicOwned(storePath(paths), `${JSON.stringify({ version: STORE_VERSION, users }, null, 2)}\n`, 0o600, paths.stateUid, process.getgid?.() ?? 0);
 }
 
+function settingsPath(paths: SecurityKeysPaths): string {
+  return join(paths.stateDir, "settings.json");
+}
+
+function parseSettings(value: unknown): Settings | null {
+  const raw = value as Partial<Settings> | null;
+  if (typeof raw !== "object" || raw === null || typeof raw.syncedPasskeys !== "boolean" || !Array.isArray(raw.roles)
+    || !raw.roles.every((role) => (PANEL_ROLES as readonly unknown[]).includes(role))) return null;
+  return { roles: PANEL_ROLES.filter((role) => raw.roles!.includes(role)), syncedPasskeys: raw.syncedPasskeys };
+}
+
+function readSettings(paths: SecurityKeysPaths): Settings {
+  const path = settingsPath(paths);
+  if (!existsSync(path)) return { ...DEFAULT_SETTINGS, roles: [...DEFAULT_SETTINGS.roles] };
+  trustedFile(path, paths.stateUid);
+  let raw: unknown;
+  try { raw = JSON.parse(readFileSync(path, "utf8")); } catch { failAction(`${path} is not valid JSON`); }
+  return parseSettings(raw) ?? failAction(`${path} is malformed`);
+}
+
+function writeSettings(paths: SecurityKeysPaths, settings: Settings): void {
+  writeAtomicOwned(settingsPath(paths), `${JSON.stringify(settings, null, 2)}\n`, 0o600, paths.stateUid, process.getgid?.() ?? 0);
+}
+
+function allowedRole(settings: Settings, account: PanelAccount): boolean {
+  return (settings.roles as string[]).includes(account.role ?? "");
+}
+
 function withStoreLock<T>(paths: SecurityKeysPaths, body: () => T): T {
   mkdirSync(dirname(paths.lockFile), { recursive: true });
   chmodSync(dirname(paths.lockFile), 0o700);
@@ -185,15 +229,16 @@ function withStoreLock<T>(paths: SecurityKeysPaths, body: () => T): T {
 interface PanelAccount {
   id: number;
   active: boolean;
+  role: string | null;
 }
 
 function panelAccounts(paths: SecurityKeysPaths): Map<string, PanelAccount> {
   const db = openPanelDatabase(paths.panelDb, true);
   try {
-    const rows = db.query<{ id: number; user_name: string; status: number | boolean | null }, []>(
-      "SELECT id, user_name, status FROM user",
+    const rows = db.query<{ id: number; user_name: string; status: number | boolean | null; role: string | null }, []>(
+      "SELECT id, user_name, status, role FROM user",
     ).all();
-    return new Map(rows.map((row) => [row.user_name, { id: Number(row.id), active: Number(row.status) === 1 }]));
+    return new Map(rows.map((row) => [row.user_name, { id: Number(row.id), active: Number(row.status) === 1, role: row.role }]));
   } finally {
     db.close();
   }
@@ -306,6 +351,11 @@ function signIn(paths: SecurityKeysPaths, input: Record<string, unknown>, now: n
     const account = activeAccount(paths, user);
     if (account.id !== entry.userId) failAction("this key belongs to a CloudPanel account that no longer exists");
     const key = entry.keys.find((candidate) => candidate.id === credentialId)!;
+    const settings = readSettings(paths);
+    if (!allowedRole(settings, account)) failAction("security keys are turned off for your account; sign in with your password");
+    if (key.synced && !settings.syncedPasskeys) {
+      failAction("this panel no longer accepts synced passkeys; use a hardware key or your password");
+    }
     const { signCount } = verifyAssertion({
       clientDataJSON: fromB64url(input.clientDataJSON, "clientDataJSON"),
       authenticatorData: fromB64url(input.authenticatorData, "authenticatorData"),
@@ -324,12 +374,17 @@ function signIn(paths: SecurityKeysPaths, input: Record<string, unknown>, now: n
 
 function registerOptions(paths: SecurityKeysPaths, user: string, now: number) {
   const account = activeAccount(paths, user);
+  const settings = readSettings(paths);
+  if (!allowedRole(settings, account)) failAction("security keys are turned off for your account");
   const store = readStore(paths);
   const entry = store.users[user];
   const current = entry && entry.userId === account.id ? entry : null;
   const handle = current?.handle ?? randomBytes(16).toString("base64url");
   const issued = issueChallenge(paths, now, { purpose: "register", user, userId: account.id, handle });
-  return { ...issued, user: { id: handle, name: user }, exclude: current?.keys.map((key) => key.id) ?? [] };
+  return {
+    ...issued, user: { id: handle, name: user }, exclude: current?.keys.map((key) => key.id) ?? [],
+    syncedPasskeys: settings.syncedPasskeys,
+  };
 }
 
 function register(paths: SecurityKeysPaths, user: string, input: Record<string, unknown>, now: number): { keys: KeyView[] } {
@@ -346,6 +401,11 @@ function register(paths: SecurityKeysPaths, user: string, input: Record<string, 
   return withStoreLock(paths, () => {
     const account = activeAccount(paths, user);
     if (account.id !== challenge.userId) failAction("the registration was started by a different account");
+    const settings = readSettings(paths);
+    if (!allowedRole(settings, account)) failAction("security keys are turned off for your account");
+    if (registration.backupEligible && !settings.syncedPasskeys) {
+      failAction("this panel accepts only hardware keys, not passkeys synced by a password manager or your devices");
+    }
     const store = readStore(paths);
     if (Object.values(store.users).some((entry) => entry.keys.some((key) => key.id === registration.credentialId))) {
       failAction("this key is already registered");
@@ -381,10 +441,22 @@ function removeKey(paths: SecurityKeysPaths, user: string, id: unknown): boolean
   });
 }
 
-function allUsers(paths: SecurityKeysPaths): { users: UserKeysView[] } {
+function ownView(paths: SecurityKeysPaths, user: string, account: PanelAccount) {
+  const settings = readSettings(paths);
+  return { keys: ownKeys(readStore(paths), user, account), canAdd: allowedRole(settings, account), syncedPasskeys: settings.syncedPasskeys };
+}
+
+function saveSettings(paths: SecurityKeysPaths, input: Record<string, unknown>): void {
+  const settings = parseSettings(input);
+  if (!settings) failAction("roles must be CloudPanel roles and syncedPasskeys true or false");
+  withStoreLock(paths, () => writeSettings(paths, settings));
+}
+
+function allUsers(paths: SecurityKeysPaths): { users: UserKeysView[]; settings: Settings } {
   const store = readStore(paths);
   const accounts = panelAccounts(paths);
   return {
+    settings: readSettings(paths),
     users: Object.entries(store.users).map(([user, entry]) => {
       const account = accounts.get(user);
       return { user, active: Boolean(account?.active && account.id === entry.userId), keys: entry.keys.map(keyView) };
@@ -402,15 +474,18 @@ export async function runSecurityKeysAction(argv: string[], options: SecurityKey
     let data: unknown;
     if (verb === "login-options") data = issueChallenge(paths, now, { purpose: "login" });
     else if (verb === "sign-in") data = signIn(paths, readInput(options), now);
-    else if (verb === "keys") data = { keys: ownKeys(readStore(paths), panelUser!, activeAccount(paths, panelUser!)) };
+    else if (verb === "keys") data = ownView(paths, panelUser!, activeAccount(paths, panelUser!));
     else if (verb === "register-options") data = registerOptions(paths, panelUser!, now);
     else if (verb === "register") data = register(paths, panelUser!, readInput(options), now);
     else if (verb === "remove") {
       const account = activeAccount(paths, panelUser!);
       removeKey(paths, panelUser!, readInput(options).id);
-      data = { keys: ownKeys(readStore(paths), panelUser!, account) };
+      data = ownView(paths, panelUser!, account);
     } else if (verb === "users") data = allUsers(paths);
-    else {
+    else if (verb === "settings") {
+      saveSettings(paths, readInput(options));
+      data = allUsers(paths);
+    } else {
       const input = readInput(options);
       if (typeof input.user !== "string" || !PANEL_USER_NAME_RE.test(input.user)) failAction("choose a user");
       removeKey(paths, input.user, input.id);

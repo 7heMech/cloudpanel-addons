@@ -14,6 +14,7 @@ const ORIGIN = "https://panel.example.com:8443";
 const UP = 0x01;
 const UV = 0x04;
 const AT = 0x40;
+const BE = 0x08;
 
 function encodeCbor(value: unknown): Buffer {
   const head = (major: number, length: number): Buffer => {
@@ -138,11 +139,11 @@ describe("the root action", () => {
   let paths: SecurityKeysPaths;
   let now = Date.UTC(2026, 9, 22, 12);
 
-  function account(name: string, id: number, status = 1): void {
+  function account(name: string, id: number, status = 1, role = "ROLE_USER"): void {
     const db = new Database(paths.panelDb);
     db.run("CREATE TABLE IF NOT EXISTS user (id INTEGER, user_name TEXT, role TEXT, status INTEGER)");
     db.query("DELETE FROM user WHERE user_name = ?").run(name);
-    db.query("INSERT INTO user VALUES (?, ?, 'ROLE_USER', ?)").run(id, name, status);
+    db.query("INSERT INTO user VALUES (?, ?, ?, ?)").run(id, name, role, status);
     db.close();
   }
 
@@ -161,11 +162,11 @@ describe("the root action", () => {
     return JSON.parse(out);
   }
 
-  async function register(user: string, key: SoftKey, name = "YubiKey") {
+  async function register(user: string, key: SoftKey, name = "YubiKey", flags = UP | UV | AT) {
     const options = await run(["register-options", `--panel-user=${user}`]);
-    expect(options.ok).toBe(true);
+    if (!options.ok) return options;
     key.handle.value = options.data.user.id;
-    const made = key.create(options.data.challenge);
+    const made = key.create(options.data.challenge, { flags });
     return run(["register", `--panel-user=${user}`], {
       challengeId: options.data.challengeId, name, origin: ORIGIN,
       clientDataJSON: b64(made.clientDataJSON), attestationObject: b64(made.attestationObject),
@@ -274,6 +275,46 @@ describe("the root action", () => {
     expect((await run(["remove", "--panel-user=alice"], { id: b64(one.id) })).data.keys).toEqual([]);
     expect((await run(["revoke"], { user: "bob", id: b64(two.id) })).data.users).toEqual([]);
     expect(await signIn(two)).toMatchObject({ ok: false });
+  });
+
+  test("every role may use keys until an administrator turns one off", async () => {
+    account("root-admin", 1, 1, "ROLE_ADMIN");
+    const key = new SoftKey();
+    expect((await register("alice", key)).ok).toBe(true);
+    expect(await run(["keys", "--panel-user=alice"])).toMatchObject({ data: { canAdd: true, syncedPasskeys: true } });
+    expect((await run(["users"])).data.settings).toEqual({ roles: ["ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"], syncedPasskeys: true });
+
+    const saved = await run(["settings"], { roles: ["ROLE_ADMIN"], syncedPasskeys: true });
+    expect(saved.data.settings.roles).toEqual(["ROLE_ADMIN"]);
+    expect(await run(["keys", "--panel-user=alice"])).toMatchObject({ data: { canAdd: false } });
+    expect(await signIn(key)).toMatchObject({ ok: false, error: expect.stringMatching(/turned off for your account/) });
+    expect(await register("alice", new SoftKey())).toMatchObject({ ok: false, error: expect.stringMatching(/turned off/) });
+    expect((await register("root-admin", new SoftKey())).ok).toBe(true);
+    // Kept, and still the user's to remove.
+    expect((await run(["keys", "--panel-user=alice"])).data.keys).toHaveLength(1);
+
+    await run(["settings"], { roles: ["ROLE_USER", "ROLE_ADMIN"], syncedPasskeys: true });
+    expect((await signIn(key)).ok).toBe(true);
+    expect((await run(["users"])).data.settings.roles).toEqual(["ROLE_ADMIN", "ROLE_USER"]);
+  });
+
+  test("with synced passkeys off, only device-bound keys are added or accepted", async () => {
+    const synced = new SoftKey("es256", false);
+    expect((await register("alice", synced, "Bitwarden", UP | UV | AT | BE)).ok).toBe(true);
+    await run(["settings"], { roles: ["ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"], syncedPasskeys: false });
+    expect(await signIn(synced)).toMatchObject({ ok: false, error: expect.stringMatching(/synced passkeys/) });
+    expect(await register("alice", new SoftKey(), "Phone", UP | UV | AT | BE))
+      .toMatchObject({ ok: false, error: expect.stringMatching(/hardware keys/) });
+    const hardware = new SoftKey();
+    expect((await register("alice", hardware)).ok).toBe(true);
+    expect((await signIn(hardware)).ok).toBe(true);
+  });
+
+  test("settings are only CloudPanel's roles and a boolean", async () => {
+    expect(await run(["settings"], { roles: ["ROLE_ROOT"], syncedPasskeys: true })).toMatchObject({ ok: false });
+    expect(await run(["settings"], { roles: [], syncedPasskeys: "yes" })).toMatchObject({ ok: false });
+    expect(await run(["settings", "--panel-user=alice"], { roles: [], syncedPasskeys: true })).toMatchObject({ ok: false });
+    expect((await run(["settings"], { roles: [], syncedPasskeys: true })).data.settings.roles).toEqual([]);
   });
 
   test("own-account verbs need --panel-user and nothing else takes it", async () => {

@@ -5,12 +5,29 @@
 A "Sign in with a security key" button under CloudPanel's login form, and a
 Security Keys card under Two-Factor Authentication on Account → Security, where
 every panel user adds, lists and removes their own keys. Administrators see
-everyone's keys on Addons → Security Keys and can remove any of them.
+everyone's keys on Addons → Security Keys, can remove any of them, and set the
+panel-wide settings below. Nobody else can change those.
 
 It is passwordless sign-in, not a second factor. The password and CloudPanel's
 own TOTP still work exactly as before; a key is another way in. Requiring a key
 on top of the password would need a gate in front of every panel request, which
 this does not add.
+
+## Settings
+
+Two, in root-owned `settings.json`, changed only through the administrator's
+page and checked by root on every registration and sign-in:
+
+- Which CloudPanel roles may use keys: administrators, site managers and users,
+  all on by default. An account whose role is off cannot add a key or sign in
+  with one; its keys are kept, it can still remove them, and its password works.
+- Whether synced passkeys are accepted, on by default. A synced passkey is one
+  whose authenticator reports it backup-eligible (Bitwarden, iCloud Keychain,
+  Google Password Manager). Off, such keys are refused at registration and
+  sign-in, and the account card asks the browser for a hardware key first.
+
+The account card asks root what the account may do with every list, so it
+follows a change without the page being told.
 
 ## Sign-in
 
@@ -67,5 +84,5 @@ another site can neither start nor finish a sign-in in the visitor's browser.
 `keys`, `register-options`, `register` and `remove` act on the caller's own
 account. The manager sends them with the CloudPanel session id, and the gateway
 checks that session itself and appends `--panel-user`; see
-[Security](security.md#privileged-actions). `users` and `revoke` are
-administrator verbs behind the usual gate.
+[Security](security.md#privileged-actions). `users`, `revoke` and
+`settings` are administrator verbs behind the usual gate.

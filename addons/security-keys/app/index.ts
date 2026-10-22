@@ -2,7 +2,7 @@ import {
   bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
 } from "../../../lib/app-http";
 import { panelSessionId } from "../../../lib/sso-auth";
-import { securityKeysService } from "./service";
+import { securityKeysService, type Settings } from "./service";
 import { dashboardView, layout } from "./views";
 
 function json(body: unknown, status = 200): Response {
@@ -71,7 +71,7 @@ export async function handle(
         { status: 500, csrf },
       );
     }
-    return htmlResponse(layout("Security Keys", dashboardView(result.data.users), updateNotice), { csrf });
+    return htmlResponse(layout("Security Keys", dashboardView(result.data), updateNotice), { csrf });
   }
 
   if (method === "POST" && path === "/api/revoke") {
@@ -81,7 +81,19 @@ export async function handle(
     try { body = await readJsonObject(req, 4 * 1024); } catch (error) { return bodyErrorResponse(error); }
     if (typeof body.user !== "string" || typeof body.id !== "string") return json({ ok: false, error: "choose a key to remove" }, 400);
     const result = await securityKeysService.revoke(body.user, body.id);
-    return json(result.ok && result.data ? { ...result, html: dashboardView(result.data.users) } : result, result.ok ? 200 : 400);
+    return json(result.ok && result.data ? { ...result, html: dashboardView(result.data) } : result, result.ok ? 200 : 400);
+  }
+
+  if (method === "POST" && path === "/api/settings") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req, 4 * 1024); } catch (error) { return bodyErrorResponse(error); }
+    if (!Array.isArray(body.roles) || typeof body.syncedPasskeys !== "boolean") {
+      return json({ ok: false, error: "roles must be a list and syncedPasskeys true or false" }, 400);
+    }
+    const result = await securityKeysService.settings({ roles: body.roles as Settings["roles"], syncedPasskeys: body.syncedPasskeys });
+    return json(result.ok && result.data ? { ...result, html: dashboardView(result.data) } : result, result.ok ? 200 : 400);
   }
 
   return json({ ok: false, error: "not found" }, 404);

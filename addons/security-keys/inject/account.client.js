@@ -5,8 +5,7 @@ if (card) {
   var nameInput = form.querySelector("input");
   var errorBox = card.querySelector(".clp-sk-error");
   var usable = keysUsable();
-  card.querySelector(".clp-sk-unsupported").hidden = usable;
-  form.hidden = !usable;
+  var syncedPasskeys = true;
 
   var csrfHeader = function () {
     var match = document.cookie.match(/(?:^|;\s*)clp_addons_csrf=([^;]+)/);
@@ -20,7 +19,19 @@ if (card) {
     return iso ? new Date(iso).toLocaleString() : "Never";
   };
 
-  var render = function (keys) {
+  // What root says this account may do, painted with every reply.
+  var applyPolicy = function (data) {
+    if (data.canAdd === undefined) return;
+    syncedPasskeys = data.syncedPasskeys;
+    card.querySelector(".clp-sk-unsupported").hidden = usable || !data.canAdd;
+    card.querySelector(".clp-sk-off").hidden = data.canAdd;
+    card.querySelector(".clp-sk-hardware").hidden = !usable || !data.canAdd || data.syncedPasskeys;
+    form.hidden = !usable || !data.canAdd;
+  };
+
+  var render = function (data) {
+    applyPolicy(data);
+    var keys = data.keys;
     list.textContent = "";
     if (!keys.length) {
       var none = document.createElement("p");
@@ -48,7 +59,7 @@ if (card) {
         showError("");
         remove.disabled = true;
         postJson("ADDON_URL/api/remove", { id: key.id }, csrfHeader()).then(function (reply) {
-          render(reply.data.keys);
+          render(reply.data);
         }).catch(function (error) {
           remove.disabled = false;
           showError(error.message);
@@ -61,7 +72,7 @@ if (card) {
 
   fetch("ADDON_URL/api/keys", { credentials: "same-origin", headers: { Accept: "application/json" } })
     .then(readReply)
-    .then(function (reply) { render(reply.data.keys); })
+    .then(function (reply) { render(reply.data); })
     .catch(function (error) { showError(error.message); });
 
   form.addEventListener("submit", function (event) {
@@ -85,6 +96,8 @@ if (card) {
           excludeCredentials: started.exclude.map(function (id) { return { type: "public-key", id: fromB64(id) }; }),
           authenticatorSelection: { residentKey: "required", requireResidentKey: true, userVerification: "required" },
           attestation: "none",
+          // Asks the browser to offer a plugged-in key before a password manager.
+          hints: syncedPasskeys ? [] : ["security-key"],
           timeout: 120000,
         },
       });
@@ -99,7 +112,7 @@ if (card) {
       }, csrfHeader());
     }).then(function (reply) {
       nameInput.value = "";
-      render(reply.data.keys);
+      render(reply.data);
     }).catch(function (error) {
       showError(keyError(error, "The key could not be added."));
     }).then(function () {
