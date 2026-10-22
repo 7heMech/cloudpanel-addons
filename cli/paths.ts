@@ -95,8 +95,8 @@ export const RECONCILE_PATH = "clp-addons-anchor.path";
 export const ANCHOR_SERVICE = "clp-addons-anchor.service";
 export const CLOUDFLARE_RECONCILE_SERVICE = "clp-addons-cloudflare-ips-reconcile.service";
 export const CLOUDFLARE_RECONCILE_TIMER = "clp-addons-cloudflare-ips-reconcile.timer";
-export const SMTP_RECONCILE_SERVICE = "clp-addons-smtp-reconcile.service";
-export const SMTP_RECONCILE_PATH = "clp-addons-smtp-reconcile.path";
+export const NEW_SITES_SERVICE = "clp-addons-new-sites.service";
+export const NEW_SITES_PATH = "clp-addons-new-sites.path";
 
 
 export const LEGACY_USERS = ["instatic-app"];
@@ -104,5 +104,9 @@ export const LEGACY_UNITS = [
   "clp-addon-instatic.service",
   "clp-addon-stager.service",
   "clp-addons-auth@.service",
+  // SMTP Relay's own new-site watcher, before the shared one.
+  "clp-addons-smtp-reconcile.path",
+  "clp-addons-smtp-reconcile.service",
+  "clp-addons-dns.service",
 ];
 

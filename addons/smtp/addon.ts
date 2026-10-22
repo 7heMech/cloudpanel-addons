@@ -14,6 +14,13 @@ export const SMTP_ADDON: AddonDefinition = {
   action: runSmtpAction,
   deactivate: deactivateSmtp,
   activate: activateSmtp,
+  newSites: {
+    label: "SMTP relay",
+    run: async (options) => {
+      const result = await executeSmtpAction(["sync-sites"], (options ?? {}) as SmtpActionOptions) as { joined: number };
+      return result.joined ? `${count(result.joined, "new site")} joined the default profile` : null;
+    },
+  },
   maintenance: {
     label: "SMTP relay",
     run: async (options) => {

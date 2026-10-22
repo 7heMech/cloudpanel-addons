@@ -110,22 +110,24 @@ login page, and authentication failures do not fall back to anonymous access.
 The gate is where a request goes by default, after the URL is taken apart and
 before the route is chosen. The liveness probe the update page polls is inside
 it, and nothing reads it without a session: the page that polls it has one. The
-two exceptions are below: three named routes, and the Git webhook, which is
+two exceptions are below: five named routes, and the Git webhook, which is
 settled ahead of the gate by a credential of its own.
 
-Three routes are named as exceptions. Two are WordPress Tools':
+Five routes are named as exceptions. Two are WordPress Tools':
 `POST /wp-login/api/sign-in` and the `GET /wp-login/api/session` that hands out
 the CSRF pair, because the link that uses them is injected into CloudPanel's own
 Sites page, which a non-administrator sees too. The third is Panel Tweaks'
 read-only `GET /panel-tweaks/api/panel`, which answers the script injected into
-that same page with the sites CloudPanel would list for the caller.
+that same page with the sites CloudPanel would list for the caller. The last two
+are DNS's `POST /dns/api/provision` and its `GET /dns/api/session`, which Panel
+Tweaks' script calls on the page a new site lands on, for whoever created it.
 
 A session that only clears the gate this way is dispatched straight to that
 addon, ahead of the update check and the manager's own routes, so nothing else
 in the manager runs for it. The authorisation it skips here is made up for as
-root: the sign-in action is told which panel user the request is for and refuses
-any site CloudPanel would not list for that account. The set is a literal of
-three strings rather than a prefix or a pattern, so a route cannot join it by
+root: the sign-in and provision actions are told which panel user the request is
+for and refuse any site CloudPanel would not list for that account. The set is a
+literal of five strings rather than a prefix or a pattern, so a route cannot join it by
 being named something similar.
 
 An addon may also declare `siteManager` in its catalog definition, which admits

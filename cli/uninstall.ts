@@ -87,10 +87,10 @@ function uninstallContents(spec: AddonSpec, flags: Record<string, string | true>
   }
   removeSudoers();
   if (spec.name === "wp-login") withdrawWpLogin();
-  if (purge) rmSync(spec.stateDir, { recursive: true, force: true });
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
   spec.withdrawn?.();
+  if (purge) rmSync(spec.stateDir, { recursive: true, force: true });
 
   if (remaining.length > 0) {
     ensureDirs(remaining.map((name) => ADDONS[name]!));
