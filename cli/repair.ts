@@ -8,7 +8,7 @@ import { withOperationLock } from "./operation-lock";
 import { CLOUDFLARE_RECONCILE_TIMER, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "./paths";
 import {
   ensureAuthHelperReady, ensureDirs, ensurePathWatching, ensureServiceUser, ensureTimerArmed, hardenBackups, installUnits,
-  reconcilePanelIdentity, removeLegacyInstall, removeLegacyUnits, removeLegacyUsers, startUnits,
+  managerSocketProblem, reconcilePanelIdentity, removeLegacyInstall, removeLegacyUnits, removeLegacyUsers, startUnits,
   unitActive, warnIfPanelSessionUnreadable, writeConfig,
 } from "./provision";
 import { fatal, log, parseFlags, requireRoot } from "./util";
@@ -70,7 +70,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
   reconcilePanelIdentity(quiet);
   const unitChanges = installUnits(all);
   ensureDirs(all);
-  if (unitChanges.systemd || unitActive(MANAGER_UNIT) !== "active") startUnits();
+  if (unitChanges.systemd || unitActive(MANAGER_UNIT) !== "active" || managerSocketProblem() !== null) startUnits();
   else {
     ensureTimerArmed("clp-addons-reconcile.timer", quiet);
     if (all.some((spec) => spec.name === "cloudflare-ips")) {

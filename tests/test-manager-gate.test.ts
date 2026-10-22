@@ -324,6 +324,16 @@ test("a slow gateway call is not cut off by Bun's idle timeout", () => {
   expect(source.slice(source.indexOf("async function cmdServe"))).toInclude("idleTimeout: 0");
 });
 
+// Run by hand, serve would replace the live daemon's socket before anything
+// could notice it was the wrong account, so it refuses before touching it.
+test("serve refuses to start outside its systemd unit", () => {
+  // Claiming a systemd invocation in the environment is not enough.
+  const env = { ...process.env, INVOCATION_ID: "0123456789abcdef0123456789abcdef" };
+  const result = spawnSync("bun", ["cli/index.ts", "serve"], { cwd: repo, env, encoding: "utf8" });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toInclude("systemctl restart clp-addons.service");
+});
+
 // A shell as a site's user is an administrator's tool: no role list, no
 // self-scoped route, whatever the other addons let through.
 test("no non-administrator reaches the terminal", () => {

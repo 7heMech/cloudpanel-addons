@@ -10,7 +10,7 @@ import {
   AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT,
   PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
-  SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH,
+  SOCKET_PATH, SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH,
 } from "./paths";
 import { MAINTENANCE_INCLUDE_PATH } from "./maintenance-vhosts";
 import { ADDONS, ADDON_NAMES, templateWatchPaths, type AddonSpec } from "./addon-catalog";
@@ -1042,6 +1042,31 @@ export function stopUnits(keepShared = false): void {
 
 export function unitActive(unit: string): string {
   return tryRun("systemctl", ["is-active", unit]).out || "unknown";
+}
+
+/**
+ * Why the manager socket is not the one the unit serves, or null when it is.
+ * A `serve` run by hand left a root-owned socket behind while the unit kept
+ * running on the one it had replaced, so ownership is part of the answer.
+ */
+export function managerSocketProblem(): string | null {
+  let socket: ReturnType<typeof lstatSync>;
+  try {
+    socket = lstatSync(SOCKET_PATH);
+  } catch {
+    return "missing";
+  }
+  const mode = socket.mode & 0o777;
+  const details = `mode ${mode.toString(8).padStart(4, "0")}, owner ${socket.uid}:${socket.gid}`;
+  if (!socket.isSocket()) return `not a socket (${details})`;
+  if (mode !== 0o660) return `not ready (${details}; expected mode 0660)`;
+  const serviceUid = tryRun("id", ["-u", SERVICE_USER]);
+  if (!serviceUid.ok) return `not ready (${details}; ${SERVICE_USER} has no uid)`;
+  if (String(socket.uid) !== serviceUid.out) return `not ready (${details}; expected owner ${SERVICE_USER})`;
+  // The panel's Nginx reaches the socket through its group.
+  const panelGid = tryRun("getent", ["group", PANEL_GROUP]).out.split(":")[2] ?? "";
+  if (String(socket.gid) !== panelGid) return `not ready (${details}; expected group ${PANEL_GROUP})`;
+  return null;
 }
 
 export function unitPid(unit: string): string | null {
