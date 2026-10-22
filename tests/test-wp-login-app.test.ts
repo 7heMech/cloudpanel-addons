@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { handle } from "../addons/wp-login/app";
 import { wpLoginService } from "../addons/wp-login/app/service";
+import { emptyMainwpState, mainwpView } from "../addons/wp-login/mainwp";
 import { SECURITY_HEADERS } from "../lib/app-http";
 
 const originalSites = wpLoginService.sites;
@@ -11,9 +12,16 @@ afterEach(() => {
 });
 
 test("the WordPress page refuses every form, so its header does not grow with the fleet", async () => {
-  wpLoginService.sites = async () => ({ ok: true, data: { sites: Array.from({ length: 500 }, (_, i) => ({
-    domain: `site${i}.example.com`, user: `site${i}`, application: "WordPress", helper: false,
-  })) } });
+  wpLoginService.sites = async () => ({ ok: true, data: {
+    sites: Array.from({ length: 500 }, (_, i) => ({
+      domain: `site${i}.example.com`, user: `site${i}`, application: "WordPress", helper: false,
+      varnishCache: false, varnishExcluded: false, varnishPlugin: null,
+    })),
+    varnish: { enabled: false, excluded: [], sites: {} },
+    varnishError: "",
+    mainwp: mainwpView(emptyMainwpState()),
+    mainwpError: "",
+  } });
   const response = await handle(new Request("https://panel.example.com/addons/wp-login/"), "/");
   expect(response.status).toBe(200);
   expect(response.headers.get("Content-Security-Policy")).toBe(SECURITY_HEADERS["Content-Security-Policy"]!);
