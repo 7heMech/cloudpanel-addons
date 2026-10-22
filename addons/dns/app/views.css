@@ -1,0 +1,152 @@
+.default-card { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; }
+.default-card h2 { margin:0 0 8px; }
+.default-card p { margin:0; }
+.default-choice { flex:0 0 260px; max-width:100%; }
+.state-default { color:var(--accent); border-color:var(--accent); margin-left:8px; }
+.numeric { text-align:right; font-variant-numeric:tabular-nums; }
+.card-header p.hint { margin:5px 0 0; }
+.card-header > .btn { flex-shrink:0; white-space:nowrap; }
+.fleet-table .hint { display:block; }
+.hint.inline { display:inline; margin-left:6px; }
+.tone-ok { color:var(--ok); }
+.tone-warn { color:var(--warn); }
+.tone-bad { color:var(--bad); }
+.tone-muted { color:var(--muted); }
+.dns-setup { display:flex; justify-content:space-between; align-items:center; gap:24px; border-color:var(--primary); }
+.dns-setup h2 { margin:0 0 8px; }
+.dns-setup p { margin:0; color:var(--muted); font-size:14px; max-width:720px; }
+.dns-setup .btn { flex-shrink:0; }
+.card-footer { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:16px 32px; border-top:1px solid var(--row-border); }
+.card-footer .hint { margin:0; }
+.toolbar #bulk-profile { width:auto; min-width:200px; max-width:100%; }
+.dns-site-table td select { min-width:190px; }
+.dns-status { min-width:180px; }
+.dns-settings-table td:first-child { width:220px; white-space:nowrap; }
+.dns-settings-table .mono { color:var(--muted); font-size:13px; }
+.dns-profile-table .switch-state { font-weight:400; color:var(--muted); min-width:84px; }
+.dns-profile-table .action-cell .actions { flex-wrap:nowrap; }
+@media (max-width:1200px) {
+  .dns-site-table td select { min-width:150px; }
+  .dns-status { min-width:0; }
+}
+/* Tables, not cards: a hostname breaks only when it cannot fit its column. */
+@media (min-width:941px) {
+  .dns-site-table .site-cell, .dns-profile-table .site-cell { overflow-wrap:break-word; }
+  :is(.dns-site-table,.dns-profile-table,.dns-connection-table) :is(th,td):not(:first-child) { padding-left:12px; }
+  :is(.dns-site-table,.dns-profile-table,.dns-connection-table) :is(th,td):not(:last-child) { padding-right:12px; }
+  .dns-site-table .type-cell { white-space:nowrap; color:var(--muted); }
+  :is(.dns-profile-table,.dns-connection-table,.dns-orphan-table,.dns-settings-table) .action-cell .actions { justify-content:flex-end; }
+}
+
+/* The profile editor */
+.dns-wide-dialog { max-width:1100px; }
+#dns-review-dialog { max-width:900px; }
+#dns-site-dialog { max-width:760px; }
+.dns-section-head { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin:28px 0 12px; }
+.dns-section-head h3 { margin:0; }
+.dns-section-head select { width:auto; min-height:38px; padding-top:6px; padding-bottom:6px; font-size:14px; }
+.dns-section-head .btn { padding:6px 16px; }
+h3.dns-section { margin:30px 0 12px; }
+.dns-rows-wrap { border:1px solid var(--row-border); border-radius:4px; overflow:hidden; }
+.dns-rows { table-layout:fixed; }
+.dns-rows th { padding:10px 8px; font-size:12px; }
+.dns-rows th:first-child, .dns-rows td:first-child { padding-left:12px; }
+.dns-rows td { padding:6px 8px; border-top:1px solid var(--row-border); }
+.dns-rows tbody tr:first-child td { border-top:0; }
+.dns-rows :is(input:not([type="checkbox"]), select) { min-height:36px; padding:6px 10px; font-size:14px; }
+.dns-rows select { padding-right:30px; background-position:right 8px center; }
+.dns-rows .dns-name input, .dns-rows .dns-content input { font-family:var(--mono); font-size:13px; }
+.dns-rows th:nth-child(1) { width:112px; }
+.dns-rows th:nth-child(2) { width:31%; }
+.dns-rows th:nth-child(4) { width:86px; }
+.dns-rows th:nth-child(5) { width:112px; }
+.dns-rows th:nth-child(6) { width:66px; }
+.dns-rows th:nth-child(7) { width:86px; }
+.dns-rows th:nth-child(8) { width:46px; }
+.dns-rows input:disabled, .dns-rows select:disabled { opacity:.45; }
+.dns-rows .switch { width:44px; height:24px; vertical-align:middle; }
+.dns-rows .switch span::after { width:18px; height:18px; }
+.dns-rows .switch input:checked + span::after { transform:translateX(20px); }
+.dns-remove-btn { padding:4px 0; width:32px; font-size:18px; line-height:1; }
+.dns-empty-rows { margin:12px 0 0; }
+.visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+.dns-placeholders { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:12px; }
+.dns-placeholders .hint { margin:0 4px 0 0; }
+.dns-chip { font:12px/1.4 var(--mono); padding:3px 8px; border:1px solid var(--button-border); border-radius:4px; background:var(--surface); color:var(--text); cursor:pointer; }
+.dns-chip:hover { border-color:var(--accent); color:var(--accent); }
+.dns-switch-row { display:flex; align-items:flex-start; gap:14px; margin:0 0 16px; cursor:pointer; }
+.dns-switch-row .switch { margin-top:2px; }
+.dns-switch-row strong { display:block; font-weight:500; }
+.dns-switch-row .hint { margin-top:2px; }
+.dns-zone-grid { margin-top:4px; }
+.dns-inline { display:flex; gap:10px; }
+.dns-inline select { width:auto; flex-shrink:0; }
+.dns-inline .btn { white-space:nowrap; }
+p.dns-dialog-note { margin:20px 0 0; }
+.form-grid + .dns-switch-row { margin-top:22px; }
+
+/* Plans */
+.dns-changes { list-style:none; margin:0; padding:0; }
+.dns-changes li { display:flex; gap:12px; align-items:flex-start; padding:10px 0; border-top:1px solid var(--row-border); }
+.dns-changes li:first-child { border-top:0; }
+.dns-changes li > div { min-width:0; }
+.dns-changes .badge { flex:0 0 58px; text-align:center; margin-top:2px; }
+.dns-changes strong { display:block; font-weight:600; overflow-wrap:anywhere; }
+.dns-change-detail { display:block; font:13px/1.5 var(--mono); overflow-wrap:anywhere; }
+.badge.dns-create { color:var(--ok); border-color:currentColor; }
+.badge.dns-update { color:var(--accent); border-color:currentColor; }
+.badge.dns-delete { color:var(--bad); border-color:currentColor; }
+.badge.dns-note { color:var(--muted); }
+.dns-review-site { padding:16px 0 4px; border-top:1px solid var(--border); }
+.dns-review-site:first-child { border-top:0; padding-top:0; }
+.dns-review-site h3 { margin:0 0 8px; overflow-wrap:anywhere; }
+#dns-review-text { margin:0 0 20px; }
+.dns-facts { display:grid; grid-template-columns:130px minmax(0,1fr); gap:6px 16px; margin:0 0 20px; }
+.dns-facts dt { color:var(--muted); }
+.dns-facts dd { margin:0; overflow-wrap:anywhere; }
+.dns-choice { margin:0 0 20px; }
+.dns-choice .dns-inline select { flex:1 1 auto; width:100%; }
+#dns-site-body .alert { margin-bottom:16px; }
+
+/* Connecting */
+#dns-connection-dialog, #dns-mailcow-dialog, #dns-server-dialog { max-width:760px; }
+.dns-steps { margin:0; padding-left:22px; }
+.dns-steps > li { margin-bottom:24px; }
+.dns-steps > li:last-child { margin-bottom:0; }
+.dns-steps p { margin:6px 0 12px; }
+.dns-token-grid { margin-top:12px; }
+#dns-token-link { white-space:normal; }
+/* fleet-row-selection */
+
+@media (max-width:940px) {
+  .fleet-table.dns-site-table td.site-select { display:none; }
+  .dns-site-table td select { min-width:0; }
+  .card-footer { padding:16px 20px; }
+}
+/* The editor's rows become cards: type, name and the remove button on top, content beneath, then the rest. */
+@media (max-width:760px) {
+  .default-card, .dns-setup { flex-direction:column; align-items:stretch; gap:12px; }
+  .card-header:has(> .btn) { flex-direction:column; align-items:flex-start; }
+  .default-choice { flex:1 1 auto; width:100%; }
+  .toolbar #bulk-profile { flex:1 1 100%; }
+  .toolbar .toolbar-end { margin-left:0; }
+  .card-footer { flex-direction:column; align-items:stretch; }
+  .dns-rows-wrap { border:0; overflow:visible; }
+  .dns-rows, .dns-rows tbody { display:block; }
+  .dns-rows thead { display:none; }
+  .dns-rows tr { display:grid; grid-template-columns:84px minmax(0,1fr) 50px 66px; gap:8px; padding:12px; margin-bottom:10px;
+    border:1px solid var(--row-border); border-radius:4px; background:var(--surface); }
+  .dns-rows td, .dns-rows td:first-child { display:block; padding:0; border:0; }
+  .dns-rows .dns-name { grid-column:2 / 4; }
+  .dns-rows .dns-content { grid-column:1 / -1; }
+  .dns-rows .dns-priority:has(input:disabled) { visibility:hidden; }
+  .dns-rows :is(.dns-priority,.dns-ttl,.dns-flag)::before { content:attr(data-label); display:block; margin-bottom:3px;
+    color:var(--table-heading); font-size:11px; font-weight:700; text-transform:uppercase; white-space:nowrap; }
+  .dns-rows .dns-remove { grid-column:4; grid-row:1; text-align:right; }
+  .dns-remove-btn { width:40px; height:36px; }
+  .dns-section-head .actions { width:100%; }
+  .dns-section-head select { flex:1 1 auto; }
+  .dns-facts { grid-template-columns:minmax(0,1fr); gap:0; }
+  .dns-facts dd { margin-bottom:8px; }
+  .dns-inline { flex-wrap:wrap; }
+}

@@ -131,8 +131,8 @@ WordPress, PHP, Static HTML, Node.js, Python and Reverse Proxy creation forms;
 unnamed because Symfony rejects a field its form does not declare. Everything
 else is CloudPanel's: the browser submits the panel's own Let's Encrypt form
 with its CSRF token and the operator's session, so issuance, permissions and
-renewal stay the panel's, and site managers get it too. There is no gateway verb
-or manager route.
+renewal stay the panel's, and site managers get it too. Panel Tweaks has no
+gateway verb or manager route for it.
 
 Submitting a creation form with the box checked adds its domain to the
 `__Host-clp_addons_ssl` cookie for 15 minutes. `__Host-` means no other host can
@@ -149,13 +149,21 @@ page with it:
 
 Twig draws a status line there, in the shape of CloudPanel's flash messages, and
 the script forgets the domain before any request, so a refresh or Back never
-issues twice. It then fetches the native form and posts it for the created
-domain alone; the form's default `www` name needs DNS the operator may not have.
-CloudPanel redirects to the site's certificate list only on success; anything
-else shows the panel's own error with a link to the site's SSL/TLS tab. The page
-must stay open until it finishes. On Sites, the enhanced table then refetches its
-data and repaints that row's SSL cell. There are no retries and no scans of
-existing sites.
+issues twice. When the DNS addon is installed, the script first asks it to
+write the new site's records (see [DNS](dns.md)). DNS answers with the names its
+records cover -- `www` only where it writes one -- or with why DNS is not ready
+yet, in which case no certificate is requested here and DNS retries as root
+later. Without DNS, or for a site DNS does not manage, the certificate is for
+the created domain alone; the form's default `www` name needs DNS the operator
+may not have. DNS counts as absent only when its session route answers 404 or
+403; when it does not answer, or cannot write the records, nothing is requested
+and the domain is remembered again, so a refresh starts over. The script then
+fetches the native form and posts it for those names. CloudPanel redirects to
+the site's certificate list only on success; anything else shows the panel's
+own error with a link to the site's SSL/TLS tab. The page must stay open until
+it finishes. On Sites, the enhanced table then refetches its data and repaints
+that row's SSL cell. Panel Tweaks itself never retries and never scans existing
+sites.
 
 ## Nothing moves once it is on the screen
 
