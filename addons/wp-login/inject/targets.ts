@@ -1,4 +1,4 @@
-// What the WordPress Sign-In addon adds to CloudPanel's own Sites page.
+// What the WordPress Tools addon adds to CloudPanel's own Sites page.
 //
 // Two blocks, because the page has two places for them. The link belongs in the
 // action cell, which is inside the template's `{% for site in sites %}` loop, so
