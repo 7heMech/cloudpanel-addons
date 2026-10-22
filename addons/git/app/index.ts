@@ -41,9 +41,11 @@ async function sitePage(domain: string): Promise<{ title: string; content: strin
   return { title: `Git — ${domain}`, content: siteView(page.site, log), context: page.context };
 }
 
+/** The change has landed even when its view cannot be drawn; the page then asks for the view again. */
 async function change(domain: string, result: { ok: boolean }): Promise<Response> {
   if (!result.ok) return json(result, 400);
-  return json({ ...result, html: (await sitePage(domain)).content });
+  const html = await sitePage(domain).then((page) => page.content, () => undefined);
+  return json(html === undefined ? result : { ...result, html });
 }
 
 function settingsFrom(body: Record<string, unknown>): GitSettings | string {

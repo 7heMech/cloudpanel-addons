@@ -174,7 +174,7 @@ export function siteView(site: GitSiteStatus, log: string): string {
   const settings = repositoryForm(site);
   const key = deployKeySection(site);
   return `
-    <div class="page-heading">
+    <div class="page-heading" data-git-domain="${esc(site.domain)}">
       <div>
         <h1>Git Deploy</h1>
         <p>${site.configured ? "Your checkout, latest deployment, and repository settings." : `Connect a repository to deploy ${esc(site.domain)}.`}</p>

@@ -56,6 +56,20 @@ describe("Git view replies", () => {
     expect((await gitHandle(request("/api/view?domain=bad"), "/api/view")).status).toBe(400);
   });
 
+  test("a change that landed still succeeds when its view cannot be read", async () => {
+    spyOn(gitService, "site").mockRejectedValue(new Error("panel info unavailable"));
+    spyOn(gitService, "forget").mockResolvedValue({ ok: true, data: {} } as never);
+    const path = `/api/sites/${site.domain}/config`;
+    const response = await gitHandle(request(path, "DELETE"), path);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, data: {} });
+  });
+
+  test("the site page names its site for the repaint, and the fleet page names none", () => {
+    expect(siteView(site, "")).toContain(`data-git-domain="${site.domain}"`);
+    expect(fleetView([site])).not.toContain("data-git-domain");
+  });
+
   test("rejected and unguarded changes have no view and do not read status", async () => {
     const read = gitReader();
     const change = spyOn(gitService, "forget").mockResolvedValue({ ok: false, error: "refused" });
