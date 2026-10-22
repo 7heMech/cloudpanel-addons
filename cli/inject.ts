@@ -410,6 +410,19 @@ function readNginxFile(path: string): string | null {
   }
 }
 
+class NginxReadError extends Error {}
+
+/** Null only when the path does not exist; any other failure must not look like an absent file. */
+function readIfPresent(path: string): string | null {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    throw new NginxReadError(`${path} could not be read: ${errorMessage(error)}`);
+  }
+}
+
 type MasterVhostResolution =
   | { path: string; content: string }
   | { state: "missing" | "ambiguous"; path?: string; detail: string };
@@ -921,9 +934,17 @@ function maintenancePath(options: MaintenanceNginxPaths) {
 }
 
 export function inspectNginxMaintenance(options: MaintenanceNginxPaths = {}): MaintenanceNginxStatus {
+  try { return inspectMaintenance(options); }
+  catch (error) {
+    if (!(error instanceof NginxReadError)) throw error;
+    return { state: "validation-failed", settingsPath: options.settingsPath ?? NGINX_GLOBAL_SETTINGS, detail: error.message };
+  }
+}
+
+function inspectMaintenance(options: MaintenanceNginxPaths): MaintenanceNginxStatus {
   const paths = maintenancePath(options);
   const { settingsPath, stateDir, geoPath, cloudflareIpsPath, includePath, panelDb } = paths;
-  const content = readNginxFile(settingsPath);
+  const content = readIfPresent(settingsPath);
   if (content !== null) {
     const files = maintenanceNginxFiles(stateDir);
     const hasState = hasNginxState(files);
@@ -954,7 +975,7 @@ export function inspectNginxMaintenance(options: MaintenanceNginxPaths = {}): Ma
       return { state: "stale-content", settingsPath, detail: "maintenance block differs from the managed definition" };
     }
   }
-  if (readNginxFile(geoPath) !== maintenanceGeoContent(cloudflareRanges(cloudflareIpsPath))) {
+  if (readIfPresent(geoPath) !== maintenanceGeoContent(cloudflareRanges(cloudflareIpsPath))) {
     return { state: "stale-content", settingsPath, detail: "maintenance client IP map is missing or outdated" };
   }
   if (panelDb !== null) {
@@ -971,7 +992,7 @@ export function inspectNginxMaintenance(options: MaintenanceNginxPaths = {}): Ma
       return { state: "uncovered-sites", settingsPath, detail: `Site maintenance checks could not be verified: ${error instanceof Error ? error.message : String(error)}` };
     }
   }
-  if (readNginxFile(includePath) !== `${NGINX_MAINTENANCE_BLOCK}\n`) {
+  if (readIfPresent(includePath) !== `${NGINX_MAINTENANCE_BLOCK}\n`) {
     return { state: "stale-content", settingsPath, detail: "maintenance server include is missing or outdated" };
   }
   return { state: "ok", settingsPath };
@@ -982,13 +1003,21 @@ function uncoveredDetail(sites: string[], settingsMissing: boolean, settingsPath
   return settingsMissing ? `${settingsPath} does not exist, ${listed}` : `Injected, ${listed}`;
 }
 
-export function reconcileNginxMaintenance(
-  options: MaintenanceNginxPaths & { enabled?: boolean; reload?: boolean; run?: (command: string, args: string[]) => CommandResult } = {},
-): MaintenanceNginxResult {
+type ReconcileOptions = MaintenanceNginxPaths & { enabled?: boolean; reload?: boolean; run?: (command: string, args: string[]) => CommandResult };
+
+export function reconcileNginxMaintenance(options: ReconcileOptions = {}): MaintenanceNginxResult {
+  try { return reconcileMaintenance(options); }
+  catch (error) {
+    if (!(error instanceof NginxReadError)) throw error;
+    return { state: "validation-failed", changed: false, settingsPath: options.settingsPath ?? NGINX_GLOBAL_SETTINGS, detail: error.message };
+  }
+}
+
+function reconcileMaintenance(options: ReconcileOptions): MaintenanceNginxResult {
   const { enabled = true, reload = true, run = runCommand, ...pathOptions } = options;
   const paths = maintenancePath(pathOptions);
   const { settingsPath: selectedPath, stateDir, geoPath, cloudflareIpsPath, includePath, panelDb } = paths;
-  const read = readNginxFile(selectedPath);
+  const read = readIfPresent(selectedPath);
   const settingsPath = (() => {
     try { return realpathSync(selectedPath); } catch { return selectedPath; }
   })();
@@ -1019,11 +1048,11 @@ export function reconcileNginxMaintenance(
       return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unmanaged maintenance variable or location already exists" };
     }
   }
-  const oldGeo = readNginxFile(geoPath);
+  const oldGeo = readIfPresent(geoPath);
   if (oldGeo !== null && !oldGeo.startsWith(`${MAINTENANCE_GEO_MARKER}\n`)) {
     return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unowned maintenance client IP map exists" };
   }
-  const oldInclude = readNginxFile(includePath);
+  const oldInclude = readIfPresent(includePath);
   if (oldInclude !== null && !oldInclude.startsWith("# clp-addons:maintenance:start\n")) {
     return { state: "conflict", changed: false, settingsPath: selectedPath, detail: "an unowned maintenance server include exists" };
   }

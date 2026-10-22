@@ -362,6 +362,39 @@ test("a vhost that includes the missing global_settings is reported as uncovered
   } finally { f.cleanup(); }
 });
 
+test("a global_settings that cannot be read is not treated as absent", () => {
+  const f = fixture();
+  try {
+    f.addSite();
+    const original = f.template();
+    rmSync(f.paths.settingsPath);
+    mkdirSync(f.paths.settingsPath);
+    const result = reconcileNginxMaintenance({ ...f.paths, run: f.run });
+    expect(result).toMatchObject({ state: "validation-failed", changed: false });
+    expect(result.detail).toContain(`${f.paths.settingsPath} could not be read`);
+    expect(inspectNginxMaintenance(f.paths)).toMatchObject({ state: "validation-failed", detail: result.detail });
+    expect(f.template()).toBe(original);
+    expect(existsSync(f.paths.includePath)).toBe(false);
+    expect(f.commands).toEqual([]);
+  } finally { f.cleanup(); }
+});
+
+test("a vhost that includes the missing global_settings fails Nginx validation and rolls everything back", () => {
+  const f = fixture();
+  try {
+    rmSync(f.paths.settingsPath);
+    f.addSite();
+    f.addSite("http3.test", upstream("v2-http3-WordPress-WordPress"));
+    const original = f.template();
+    const invalid = (command: string, args: string[]): CommandResult => (
+      args[0] === "-t" ? { ok: false, exitCode: 1, stdout: "", stderr: `open() "${f.paths.settingsPath}" failed` } : f.run(command, args)
+    );
+    expect(reconcileNginxMaintenance({ ...f.paths, run: invalid })).toMatchObject({ state: "validation-failed", changed: false });
+    expect(f.template()).toBe(original);
+    expect(existsSync(f.paths.includePath)).toBe(false);
+  } finally { f.cleanup(); }
+});
+
 test("a group-writable global_settings is refused with the reason and the fix, and nothing is written", () => {
   const f = fixture();
   try {

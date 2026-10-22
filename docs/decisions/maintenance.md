@@ -56,8 +56,10 @@ otherwise its main server, never the www redirect. A serving server that already
 includes `global_settings` gets no additional include. `global_settings` is
 optional: when it does not exist the addon neither creates it nor records a
 baseline for it, still stages the includes and client-IP map, and reports a vhost
-that includes the missing file as uncovered (Nginx would reject that vhost
-anyway). A vhost that mentions `global_settings` without including it has opted out on purpose and is left
+that includes the missing file as uncovered. Nginx rejects such a rendered vhost,
+so with validation on the run fails with Nginx's error and rolls back. A
+`global_settings` that exists but cannot be read fails validation rather than
+counting as missing. A vhost that mentions `global_settings` without including it has opted out on purpose and is left
 alone. A site whose vhost is untrusted or has no single serving server is
 skipped, so it cannot block the others, and `clp-addons status` names it. Older
 templates retain their existing header settings. Nginx checks
@@ -136,9 +138,10 @@ restored configuration. Missing or ambiguous serving blocks leave that site
 unchanged and are reported as uncovered by status. The transaction refuses a
 `global_settings` or vhost that is a symlink, not a regular file or group- or
 world-writable, and a vhost owned by the wrong user, without changing mode or
-owner (a writable Nginx config may already be tampered with). The error names the
-file, the reason and the `chown` or `chmod` that fixes it, and repair and status
-print it.
+owner (a writable Nginx config may already be tampered with). For
+`global_settings` the error names the file, the reason and the `chown` or `chmod`
+that fixes it, and repair and status print it. A refused site vhost is skipped
+and status lists only its domain.
 
 Install, enable, repair and the periodic repair timer reconcile these files.
 The existing path watcher also watches the site vhost directory and standalone
