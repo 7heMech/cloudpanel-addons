@@ -1,5 +1,6 @@
 import { callGatewayAction, streamGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
 import type { PanelTweaks, PanelTweaksState, ScanResult, ScanStreamEvent, SetTweaksResult } from "../action";
+import type { PanelPhpStatus } from "../panel-php";
 
 function call<T>(verb: string, args: string[] = [], input?: string, timeout?: number): Promise<ActionResult<T>> {
   return callGatewayAction<T>("panel-tweaks", verb, args, input, timeout ? { timeout } : undefined);
@@ -13,6 +14,9 @@ function call<T>(verb: string, args: string[] = [], input?: string, timeout?: nu
  */
 const SCAN_TIMEOUT_MS = 240_000;
 
+/** A config test, a restart, up to 20 s for the panel to answer, and the same again to undo it. */
+const PANEL_PHP_TIMEOUT_MS = 90_000;
+
 export const panelTweaksService = {
   // `asUser` narrows the site list to that panel user's own sites; an
   // administrator's request names nobody and is not narrowed.
@@ -22,6 +26,14 @@ export const panelTweaksService = {
 
   setTweaks(wanted: Partial<PanelTweaks>): Promise<ActionResult<SetTweaksResult>> {
     return call<SetTweaksResult>("set-tweaks", [], JSON.stringify(wanted));
+  },
+
+  panelPhp(): Promise<ActionResult<PanelPhpStatus>> {
+    return call<PanelPhpStatus>("panel-php");
+  },
+
+  setPanelPhp(php: string): Promise<ActionResult<PanelPhpStatus>> {
+    return call<PanelPhpStatus>("set-panel-php", [], JSON.stringify({ php }), PANEL_PHP_TIMEOUT_MS);
   },
 
   scan(): Promise<ActionResult<ScanResult>> {

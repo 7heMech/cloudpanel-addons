@@ -171,3 +171,29 @@ function toggleNote(button) {
   const open = row.classList.toggle('is-open');
   button.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
+
+async function setPanelPhp(select) {
+  const before = select.dataset.current || '';
+  const label = select.options[select.selectedIndex].textContent;
+  clearNotice();
+  busy(true);
+  select.disabled = true;
+  notify('Switching the panel to ' + label + '…', 'warn');
+  clearTimeout(clpFlashTimer);
+  try {
+    const reply = await call('/api/panel-php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ php: select.value }),
+    });
+    select.dataset.current = select.value;
+    document.getElementById('panel-php-status').textContent = reply.line || '';
+    notify('The panel answers on ' + label + '.', 'ok');
+  } catch (error) {
+    select.value = before;
+    notify(error.message, 'error');
+  } finally {
+    select.disabled = false;
+    busy(false);
+  }
+}

@@ -32,6 +32,7 @@ import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
 import { PRESET_CATEGORIES, STOCK_PROFILE, type PhpResourcesState, type PoolSiteState } from "../addons/php-resources/action";
 import type { PanelTweaksState } from "../addons/panel-tweaks/action";
+import type { PanelPhpStatus } from "../addons/panel-tweaks/panel-php";
 import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { type: "text" };
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
@@ -357,6 +358,23 @@ function phpResourcesPreviewState(url: URL): PhpResourcesState {
     categories: url.searchParams.has("no-categories") ? [] : PRESET_CATEGORIES,
     defaultCategoryId: url.searchParams.get("default") === "off" ? null : "standard",
     sites: url.searchParams.has("empty") ? [] : phpPoolSites,
+  };
+}
+
+/** The panel moved to 8.4 with an update waiting; `?off` is CloudPanel's own 8.1. */
+function panelPhpPreviewStatus(url: URL): PanelPhpStatus {
+  const moved = !url.searchParams.has("off");
+  return {
+    wanted: moved ? "8.4" : "",
+    stock: "8.1",
+    running: moved ? "8.4" : "8.1",
+    choices: [
+      { version: "8.1", installed: "8.1.34" },
+      { version: "8.2", installed: "8.2.35" },
+      { version: "8.3", installed: "8.3.36" },
+      { version: "8.4", installed: "8.4.25", available: "8.4.27" },
+      { version: "8.5", installed: "8.5.12" },
+    ],
   };
 }
 
@@ -1167,7 +1185,7 @@ const server = Bun.serve({
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
       });
     } else if (path === "/addons/panel-tweaks/" || path === "/addons/panel-tweaks") {
-      html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url)), notice);
+      html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url), panelPhpPreviewStatus(url)), notice);
     } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
       html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites), notice);
     } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {

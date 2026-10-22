@@ -23,12 +23,13 @@ import { PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { certificateIssuer, issuerLabel } from "../../lib/certificate-issuer";
 import { PANEL_USER_NAME_RE, panelUserSites } from "../../lib/panel-users";
+import { panelPhpStatus, reconcilePanelPhp, setPanelPhp, type PanelPhpOptions } from "./panel-php";
 
 const TWEAKS_VERSION = 1;
 const DISK_VERSION = 1;
 const DISK_SCAN_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "scan-stream";
+export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "scan-stream" | "panel-php" | "set-panel-php";
 
 /**
  * What the addon does, as independent modes.
@@ -234,6 +235,7 @@ export interface PanelTweaksActionOptions {
   run?: (command: string, args: string[]) => CommandResult;
   now?: () => Date;
   onProgress?: (event: Extract<ScanStreamEvent, { phase: "progress" }>) => void;
+  panelPhp?: PanelPhpOptions;
 }
 
 export const DEFAULT_PANEL_TWEAKS_PATHS: PanelTweaksActionPaths = {
@@ -672,7 +674,7 @@ interface ParsedAction {
 
 function parseAction(argv: string[]): ParsedAction {
   const [rawVerb, ...rest] = argv;
-  const verbs: PanelTweaksVerb[] = ["state", "set-tweaks", "scan", "scan-stream"];
+  const verbs: PanelTweaksVerb[] = ["state", "set-tweaks", "scan", "scan-stream", "panel-php", "set-panel-php"];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown panel tweaks verb '${rawVerb ?? ""}'`);
 
@@ -714,6 +716,20 @@ async function requestTweaks(options: PanelTweaksActionOptions, current: PanelTw
   return withTweakDependencies(wanted);
 }
 
+async function requestPanelPhp(options: PanelTweaksActionOptions): Promise<string> {
+  const raw = options.input !== undefined ? options.input : await Bun.stdin.text();
+  if (Buffer.byteLength(raw, "utf8") > MAX_INPUT_BYTES) failAction("the request is too large");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    failAction("the request must be JSON");
+  }
+  const php = (parsed as { php?: unknown } | null)?.php;
+  if (typeof php !== "string") failAction("php must be a version such as 8.4, or empty for CloudPanel's own");
+  return php;
+}
+
 export interface SetTweaksResult {
   tweaks: PanelTweaks;
   /** Whether what the panel has injected into its own templates must change. */
@@ -748,6 +764,8 @@ export async function executePanelTweaksAction(
 
   if (verb === "state") return stateOf(paths, asUser);
   if (verb === "set-tweaks") return setTweaks(paths, options);
+  if (verb === "panel-php") return panelPhpStatus(options.panelPhp);
+  if (verb === "set-panel-php") return setPanelPhp(await requestPanelPhp(options), options.panelPhp);
   return withFileLock(paths.lockFile, 15, "a disk measurement is already running", async () =>
     scanDisk(paths, options));
 }
@@ -776,7 +794,23 @@ export async function runPanelTweaksAction(
   }
 }
 
-/** The repair hook checks every fifteen minutes but performs a sweep only when due. */
+/** The repair hook: keep the panel's PHP to the stored choice, then sweep the disk when due. */
+export async function panelTweaksUpkeep(options: PanelTweaksActionOptions = {}): Promise<string | null> {
+  const lines: string[] = [];
+  let failure: unknown = null;
+  try {
+    const php = await reconcilePanelPhp(options.panelPhp);
+    if (php) lines.push(php);
+  } catch (error) {
+    failure = error;
+  }
+  const disk = await scanDiskUsage(options);
+  if (disk) lines.push(disk);
+  if (failure) throw new Error([`panel PHP: ${reason(failure)}`, ...lines].join("; "));
+  return lines.join("; ") || null;
+}
+
+/** Checked every fifteen minutes, but a sweep runs only when due. */
 export async function scanDiskUsage(options: PanelTweaksActionOptions = {}): Promise<string | null> {
   const paths = pathsFor(options);
   if (!readTweaks(paths).diskUsage) return null;

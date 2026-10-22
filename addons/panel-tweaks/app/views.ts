@@ -2,6 +2,7 @@ import { esc } from "../../../lib/app-http";
 import { renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { PanelTweaks, PanelTweaksState } from "../action";
+import type { PanelPhpChoice, PanelPhpStatus } from "../panel-php";
 
 const BASE = mountPath("panel-tweaks");
 
@@ -141,6 +142,50 @@ export function sinceText(iso: string): string {
   return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
+function phpOption(choice: PanelPhpChoice, stock: string | null, selected: boolean): string {
+  const release = choice.installed ? ` (${choice.installed})` : "";
+  const label = choice.version === stock ? `CloudPanel's own: PHP ${choice.version}${release}` : `PHP ${choice.version}${release}`;
+  return `<option value="${choice.version === stock ? "" : esc(choice.version)}"${selected ? " selected" : ""}>${esc(label)}</option>`;
+}
+
+/** What the panel runs on now, said once, under the picker. */
+export function panelPhpLine(status: PanelPhpStatus): string {
+  const lines: string[] = [];
+  if (status.overriddenBy) lines.push(`${status.overriddenBy} sets this already. Remove it to choose here.`);
+  if (status.running) lines.push(`Running on PHP ${status.running}.`);
+  const chosen = status.choices.find((choice) => choice.version === (status.wanted || status.stock));
+  if (chosen?.available) lines.push(`${chosen.available} is available; run apt upgrade to install it.`);
+  if (status.failure && status.failure.php === status.wanted) {
+    lines.push(`PHP ${status.failure.php} failed ${sinceText(status.failure.at)}: ${status.failure.error}`);
+  }
+  return lines.join(" ");
+}
+
+function panelPhpCard(status: PanelPhpStatus | { error: string }): string {
+  if ("error" in status) {
+    return `
+    <div class="card"><div class="card-header"><h2>Panel PHP</h2></div>
+      <div class="alert" role="alert">${esc(status.error)}</div></div>`;
+  }
+  const eol = status.stock === "8.1" ? ", which no longer gets security fixes" : "";
+  const body = status.stock === null
+    ? `<p class="hint">CloudPanel's PHP-FPM unit is not one this addon recognises, so the panel keeps the PHP CloudPanel chose.</p>`
+    : `<p class="hint">CloudPanel runs its pages, phpMyAdmin and the File Manager on PHP ${esc(status.stock)}${eol}.
+      A newer installed PHP can run them instead. CloudPanel has not tested this, so after a change the panel is
+      asked for its login page and File Manager, and the change is undone if either fails.</p>
+      <div class="panel-php-choice">
+        <label class="hint" for="panel-php">Panel runs on</label>
+        <select id="panel-php" data-current="${esc(status.wanted)}" onchange="setPanelPhp(this)"${status.overriddenBy ? " disabled" : ""}>${status.choices
+    .map((choice) => phpOption(choice, status.stock, (status.wanted || status.stock) === choice.version)).join("")}</select>
+      </div>`;
+  return `
+    <div class="card">
+      <div class="card-header"><h2>Panel PHP</h2></div>
+      ${body}
+      <p class="hint" id="panel-php-status">${esc(panelPhpLine(status))}</p>
+    </div>`;
+}
+
 function previewCard(state: PanelTweaksState): string {
   const sites = state.sites.length;
   return `
@@ -162,7 +207,7 @@ function previewCard(state: PanelTweaksState): string {
     </div>`;
 }
 
-export function dashboardView(state: PanelTweaksState): string {
+export function dashboardView(state: PanelTweaksState, php?: PanelPhpStatus | { error: string }): string {
   return `
     <div class="page-heading">
       <div>
@@ -174,5 +219,5 @@ export function dashboardView(state: PanelTweaksState): string {
       <div class="card-header"><h2>What it adds</h2></div>
       <div class="tweak-list">${tweakList(state)}
       </div>
-    </div>${previewCard(state)}`;
+    </div>${php ? panelPhpCard(php) : ""}${previewCard(state)}`;
 }
