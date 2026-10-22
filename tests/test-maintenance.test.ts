@@ -820,7 +820,7 @@ test("the maintenance count under a global override covers unreadable sites too"
 // /api/tweaks saves the switch and then writes the panel's templates. When only
 // the second half fails it answers 500 with the saved state attached, so putting
 
-// WordPress Sign-In adds one address at a time; it must keep the rest, add an
+// WordPress Tools adds one address at a time; it must keep the rest, add an
 // address only once, and stop at the same limit a saved list does.
 test("adding one bypass keeps the list, deduplicates and respects the limit", async () => {
   const { root, paths } = fixture();

@@ -538,11 +538,8 @@ test("php-resources site cards and select-all keep selection in sync", () => {
     },
   };
   const fakeDoc = { readyState: "complete", addEventListener: () => {} };
-  // showCarriedFlash comes from BASE_CLIENT_JS, which the page prepends and this
-  // test does not: the script calls it as it loads, and it has no say in what a
-  // selection does.
-  const factory = new Function("CLP_ROOT", "document", "showCarriedFlash", `${CLIENT_JS}\nreturn { toggleAllSites, selectAllSites, paintSelection, selectedRows, siteRows, toggleSiteSelection };`);
-  const client = factory(CLP_ROOT, fakeDoc, () => {});
+  const factory = new Function("CLP_ROOT", "document", `${CLIENT_JS}\nreturn { toggleAllSites, selectAllSites, paintSelection, selectedRows, siteRows, toggleSiteSelection };`);
+  const client = factory(CLP_ROOT, fakeDoc);
   client.paintSelection();
   expect(byId["select-all-btn"].textContent).toBe("Select all");
 

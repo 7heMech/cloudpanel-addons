@@ -90,14 +90,23 @@ export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
 ]);
 
 /**
- * `sign-in` mints a credential for somebody else's WordPress and `remove`
- * deletes a file from every site, so both are named here as narrowly as the
- * rest: a verb, at most one `--domain`, and no path anywhere.
+ * WordPress Tools keeps its stable wp-login identifier. Sign-in credentials,
+ * helper removal, optional Varnish installation and MainWP enrollment each have
+ * fixed verbs; none accepts paths, plugin names or arbitrary commands.
  */
 export const WP_LOGIN_ALLOWED_VERBS = new Set([
   "sites",
   "sign-in",
   "remove",
+  "varnish-settings",
+  "varnish-site",
+  "varnish-install",
+  "varnish-sync",
+  "mainwp-settings",
+  "mainwp-site",
+  "mainwp-sync",
+  "mainwp-connect",
+  "mainwp-cleanup",
 ]);
 
 export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
