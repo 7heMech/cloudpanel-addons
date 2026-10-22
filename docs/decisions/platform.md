@@ -11,6 +11,11 @@ CloudPanel's master Nginx vhost proxies `/addons/` to the manager socket. The
 manager uses the existing `cloudpanel` session and does not create a separate
 site, hostname, or login.
 
+The manager turns off Bun's idle timeout. Its 10-second default closes a
+connection whose handler is still waiting on the gateway, which a Check now or
+an enforced DNS plan routinely outlasts. Nginx's hour-long read timeout and each
+gateway call's own deadline bound every request instead.
+
 `manager/` holds that process: `server.ts` owns the socket, the request gate
 and the mount dispatch, and `index.ts`, `service.ts` and `views.ts` are the
 Addons page itself, laid out the way an addon's `app/` is. It is not in `cli/`
@@ -24,6 +29,11 @@ in `addons/<name>/addon.ts` -- title, description, injection targets, required
 systemd units, its manager handler, its privileged action and any repair upkeep
 -- and the catalog derives its config file and state directory from its name, so
 a definition cannot name a file provisioning will not look for.
+
+Repair upkeep runs inside repair's operation lock, so it stays short. Work that
+waits on the network or on a site's own code is queued with `queueAddonPass`
+instead: a transient unit that runs `clp-addons action <addon> <verb>` under a
+runtime bound and is skipped while the previous pass is still running.
 
 The catalog is an explicit list, not filesystem discovery. This ships as one
 binary; a registry that depended on what happened to be on disk could be wrong.
@@ -53,9 +63,9 @@ would otherwise read as a finished install and then start nothing.
 
 A managed definition is rewritten when its text differs, and also when what
 stands at its path is not the plain `0644` file this binary writes -- a
-group-writable unit, or a symlink to a file holding the right text. Rewriting
-unconditionally used to converge that as a side effect, and several managed
-units name no `User=`, so systemd runs what they name as root.
+group-writable unit, or a symlink to a file holding the right text. Comparing
+text alone would leave either in place, and several managed units name no
+`User=`, so systemd runs what they name as root.
 
 `systemctl daemon-reload` runs only when a managed definition was created,
 changed or removed, and a toggle starts only units it created -- never the auth
@@ -161,7 +171,7 @@ Panel information is read through `readPanelSnapshot`, which returns the
 snapshot and its age at receipt. A timestamp that cannot be parsed reads as
 infinitely old rather than as `NaN`: every caller compares the age against a
 staleness threshold, and `NaN` fails every comparison, so an unreadable snapshot
-used to look current. What a given age means stays with each addon.
+would look current. What a given age means stays with each addon.
 
 ## Shared interface
 
@@ -194,7 +204,11 @@ bounded by the visual viewport so a phone's collapsing address bar cannot cover
 them. 940px rather than a phone width because a fleet table is five or six
 columns wide: below that the columns are narrower than the hostnames in them and
 a domain wrapped a character at a time. Cell padding comes down from 1200px for
-the same reason. Two-column card and field grids hold until 760px, where the
+the same reason. Instatic's instance and inventory lists and Stager's clone,
+source and promotion lists use the same fleet rows, with labels on secondary
+cells so their meaning survives the hidden table heading. Empty cells disappear
+and the site and type lead each card. Page and form actions wrap within the
+available width. Two-column card and field grids hold until 760px, where the
 tables have already given way. Live enable, disable and update jobs
 put their state, current step and output in the manager card that owns the job,
 with the log auto-expanding as output arrives so the operator can see the live
@@ -203,8 +217,16 @@ card the page does not carry -- an update watched from the index -- takes a card
 of its own under the heading and above the rest, whether the page was drawn
 during the job or a duplicate request told the browser about it, so a job is
 never reported under the action the operator happened to click. The shared
-watcher scopes its updates to that card; a completed job still reloads the page
-so the server remains the source of the result view.
+watcher scopes its updates to that card. A finished job asks the server for the
+page again and swaps in the view it draws, so the server remains the source of
+the result view. A successful update reloads instead: the page's script and
+styles belong to the release it replaced.
+
+Mutations that replace a view return `html` from the renderer used on first
+load. `repaintView` swaps it into `#clp-content`, closes finished dialogs, and
+preserves scroll, focus and disclosure state for elements with stable IDs.
+Addon clients retain their fleet selections and report outcomes with `notify`.
+Failed mutations leave the view intact.
 
 A page reached from a site's tab strip is drawn in site mode instead: the shell
 shows CloudPanel's site information and the applicable site tabs with the addon's
@@ -284,13 +306,12 @@ string built from a shared class name, a script fragment that is a function
 body rather than a program, and a `<script>` element indented to sit inside a
 Twig template.
 
-Three scripts are shared. Every addon page gets the base helpers; the two fleet
-tables also get the site-selection ones, and the two addons whose change is too
-wide to patch into the page get the pair that carries a message across a reload.
-That pair is not in the base: a page that reloads is the exception here, and a
-page whose switches are modes rather than actions must not be handed the means
-to reload itself. Each shared function takes the page's own repaint, because
-what a change redraws is the one thing the addons do not agree on.
+Three scripts are shared. Every addon page gets the base helpers, `repaintView`
+among them; the fleet tables also get the site-selection ones, and WordPress
+Sign-In, the one page left that reloads after a change, gets the pair that
+carries a message across the reload. Each shared function takes the page's own
+repaint, because what a change redraws is the one thing the addons do not agree
+on.
 
 ## Live panel data
 

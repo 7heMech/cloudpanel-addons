@@ -197,3 +197,11 @@ test("a rejected request carries the state the route says it reached", async () 
   const plain = await refused.call("/api/tweaks", { method: "POST" }).catch((e: Error & { data?: unknown }) => e);
   expect(plain.data).toBeUndefined();
 });
+
+test("converted addon actions repaint without carrying notices through a reload", () => {
+  for (const script of [GIT_CLIENT_JS, INSTATIC_CLIENT_JS, PHP_RESOURCES_CLIENT_JS]) {
+    expect(script).not.toContain("location.reload");
+    expect(script).not.toContain("reloadWithFlash");
+    expect(script).toContain("repaintView(");
+  }
+});

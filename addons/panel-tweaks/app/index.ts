@@ -2,7 +2,6 @@ import {
   SECURITY_HEADERS, bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken,
   policyHeaders, readJsonObject,
 } from "../../../lib/app-http";
-import type { Server } from "bun";
 import { callGatewayAction } from "../../../lib/gateway-client";
 import { panelTweaksService } from "./service";
 import { previewPage } from "./preview";
@@ -33,13 +32,7 @@ function errorMessage(error: unknown): string {
 }
 
 /** Bridge the privileged scan's compact JSON lines to browser-facing SSE. */
-function scanEventStream(req: Request, server?: Server<unknown> | null): Response {
-  if (server && typeof server.timeout === "function") {
-    try {
-      server.timeout(req, 0);
-    } catch {}
-  }
-
+function scanEventStream(req: Request): Response {
   let transport: ReturnType<typeof panelTweaksService.scanStream> | null = null;
   let closed = false;
   const body = new ReadableStream<string>({
@@ -113,7 +106,7 @@ export async function handle(
   req: Request,
   path: string,
   updateNotice?: { current: string; latest: string } | null,
-  server?: Server<unknown> | null,
+  _server?: unknown,
   auth?: { user: string; roles: string[] } | null,
 ): Promise<Response> {
   const method = req.method;
@@ -185,7 +178,7 @@ export async function handle(
   }
 
   if (path === "/api/scan") {
-    return scanEventStream(req, server);
+    return scanEventStream(req);
   }
 
   return json({ ok: false, error: "not found" }, 404);

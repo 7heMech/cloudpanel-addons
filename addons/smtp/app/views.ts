@@ -97,7 +97,7 @@ export function dashboardContent(state: SmtpState): string {
     `<div class="form-field${full ? " form-field-full" : ""}"><label for="${id}">${label}</label>${control}${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
   const dialogActions = (save: string) => `<div class="actions dialog-actions"><button class="btn" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-primary" type="submit">${save}</button></div>`;
   return `<script type="application/json" id="smtp-state">${data}</script>
-    <div class="page-heading"><div><h1>SMTP relay</h1>
+    <div class="page-heading"><div><h1>SMTP Relay</h1>
       <p>Send each site's mail through its profile's SMTP account. Postfix lets a site send only as its own domains, so never through another profile.</p></div>
       <button class="btn btn-primary" type="button" onclick="smtpEditProfile('')">New profile</button></div>
     <div class="card default-card">

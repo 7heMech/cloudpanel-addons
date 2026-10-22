@@ -109,19 +109,19 @@ export function jobsView(
         const missing = isSiteMissing(j, snapshotAge, panelSites, snapshotTakenAt);
         return `
         <tr>
-          <td>
+          <td class="site-cell">
             <a href="${BASE}/jobs/${esc(j.id)}">${esc(j.target)}</a>
             ${j.kind === "promote" ? '<div class="hint">promoted to live</div>' : ""}
             ${missing ? '<div class="hint">CloudPanel site deleted</div>' : ""}
           </td>
-          <td>${esc(j.source)}</td>
-          <td>${esc(j.result ? typeLabel(j.result.siteType) : "—")}</td>
-          <td>
+          <td class="wide-cell" data-label="From">${esc(j.source)}</td>
+          <td class="type-cell">${esc(j.result ? typeLabel(j.result.siteType) : "—")}</td>
+          <td data-label="State">
             <span class="badge ${stateClass(j.state)}">${esc(j.state)}</span>
             ${missing ? '<span class="badge" style="color:var(--bad);border-color:var(--bad);margin-left:0.25rem;">deleted</span>' : ""}
           </td>
-          <td class="step">${esc(j.state === "done" ? "" : j.step)}</td>
-          <td class="step">${esc(when(j.createdAt))}</td>
+          <td class="step wide-cell" data-label="Step">${esc(j.state === "done" ? "" : j.step)}</td>
+          <td class="step wide-cell" data-label="Started">${esc(when(j.createdAt))}</td>
         </tr>`;
       }
     )
@@ -139,7 +139,7 @@ export function jobsView(
       ${
         jobs.length === 0
           ? `<div class="empty">No clones yet. Start one from the Sites list in CloudPanel, or with the button above.</div>`
-          : `<table>
+          : `<table class="fleet-table">
         <thead><tr><th scope="col">Site</th><th scope="col">From</th><th scope="col">Type</th><th scope="col">State</th><th scope="col">Step</th><th scope="col">Started</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`
@@ -176,13 +176,13 @@ export function siteStagingView(
     const missing = isSiteMissing(j, snapshotAge, panelSites, snapshotTakenAt);
     return `
         <tr>
-          <td>
+          <td class="site-cell wide-cell">
             <a href="${BASE}/jobs/${esc(j.id)}">${esc(j.target)}</a>
             ${missing ? '<div class="hint">CloudPanel site deleted</div>' : ""}
           </td>
-          <td><span class="badge ${stateClass(j.state)}">${esc(j.state)}</span></td>
-          <td class="step">${esc(j.state === "done" ? "" : j.step)}</td>
-          <td class="step">${esc(when(j.createdAt))}</td>
+          <td data-label="State"><span class="badge ${stateClass(j.state)}">${esc(j.state)}</span></td>
+          <td class="step wide-cell" data-label="Step">${esc(j.state === "done" ? "" : j.step)}</td>
+          <td class="step wide-cell" data-label="Started">${esc(when(j.createdAt))}</td>
         </tr>`;
   };
 
@@ -205,7 +205,7 @@ export function siteStagingView(
                 ? `No staging copies of ${esc(domain)} yet.`
                 : `A ${esc(domain)} site cannot be cloned, so it has no staging copies.`
             }</div>`
-          : `<table>
+          : `<table class="fleet-table">
         <thead><tr><th scope="col">Staging site</th><th scope="col">State</th><th scope="col">Step</th><th scope="col">Started</th></tr></thead>
         <tbody>${clonesFrom.map(row).join("")}</tbody>
       </table>`
@@ -247,10 +247,10 @@ function typeLabel(t: string): string {
 export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], error?: string): string {
   if (!source) {
     const options = sites
-      .map((s) => `<tr><td><a href="${BASE}/new?source=${encodeURIComponent(s.domain)}">${esc(s.domain)}</a></td>
-        <td>${esc(typeLabel(s.siteType))}${s.phpVersion ? ` ${esc(s.phpVersion)}` : ""}</td>
-        <td>${esc(s.application || "Generic")}</td>
-        <td class="action-cell"><a href="${BASE}/new?source=${encodeURIComponent(s.domain)}">Clone</a></td></tr>`)
+      .map((s) => `<tr><td class="site-cell"><a href="${BASE}/new?source=${encodeURIComponent(s.domain)}">${esc(s.domain)}</a></td>
+        <td class="type-cell">${esc(typeLabel(s.siteType))}${s.phpVersion ? ` ${esc(s.phpVersion)}` : ""}</td>
+        <td data-label="Application">${esc(s.application || "Generic")}</td>
+        <td class="action-cell" data-label="Action"><a href="${BASE}/new?source=${encodeURIComponent(s.domain)}">Clone</a></td></tr>`)
       .join("");
     return `
       <div class="page-heading"><div><h1>New staging site</h1><p>Choose the site you want to clone.</p></div></div>
@@ -259,7 +259,7 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
         ${
           sites.length === 0
             ? `<div class="empty">No clonable sites found in CloudPanel.</div>`
-            : `<table><thead><tr><th scope="col">Domain</th><th scope="col">Type</th><th scope="col">Application</th><th scope="col" class="action-cell">Action</th></tr></thead><tbody>${options}</tbody></table>`
+            : `<table class="fleet-table"><thead><tr><th scope="col">Domain</th><th scope="col">Type</th><th scope="col">Application</th><th scope="col" class="action-cell">Action</th></tr></thead><tbody>${options}</tbody></table>`
         }
       </div>`;
   }
@@ -355,11 +355,11 @@ export function promoteListView(jobs: JobView[]): string {
   const promotable = jobs.filter((j) => j.kind !== "promote" && j.state === "done");
   const rows = promotable
     .map((j) => `<tr>
-      <td><a href="${BASE}/jobs/${esc(j.id)}">${esc(j.target)}</a></td>
-      <td>${esc(j.source)}</td>
-      <td>${esc(j.result ? typeLabel(j.result.siteType) : "—")}</td>
-      <td>${esc(when(j.finishedAt || j.createdAt))}</td>
-      <td class="action-cell"><a href="${BASE}/promote?job=${encodeURIComponent(j.id)}">Promote</a></td>
+      <td class="site-cell"><a href="${BASE}/jobs/${esc(j.id)}">${esc(j.target)}</a></td>
+      <td class="wide-cell" data-label="Live site">${esc(j.source)}</td>
+      <td class="type-cell">${esc(j.result ? typeLabel(j.result.siteType) : "—")}</td>
+      <td class="wide-cell" data-label="Cloned">${esc(when(j.finishedAt || j.createdAt))}</td>
+      <td class="action-cell" data-label="Action"><a href="${BASE}/promote?job=${encodeURIComponent(j.id)}">Promote</a></td>
     </tr>`)
     .join("");
 
@@ -374,7 +374,7 @@ export function promoteListView(jobs: JobView[]): string {
     <div class="card card-table">
       ${promotable.length === 0
         ? `<div class="empty">No finished clones to promote. Clone a site first; a promote is the return leg of a clone.</div>`
-        : `<table><thead><tr><th scope="col">Staging site</th><th scope="col">Live site</th><th scope="col">Type</th><th scope="col">Cloned</th><th scope="col" class="action-cell">Action</th></tr></thead><tbody>${rows}</tbody></table>`}
+        : `<table class="fleet-table"><thead><tr><th scope="col">Staging site</th><th scope="col">Live site</th><th scope="col">Type</th><th scope="col">Cloned</th><th scope="col" class="action-cell">Action</th></tr></thead><tbody>${rows}</tbody></table>`}
     </div>`;
 }
 
