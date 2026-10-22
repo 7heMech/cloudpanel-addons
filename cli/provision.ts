@@ -1063,6 +1063,9 @@ export function managerSocketProblem(): string | null {
   const serviceUid = tryRun("id", ["-u", SERVICE_USER]);
   if (!serviceUid.ok) return `not ready (${details}; ${SERVICE_USER} has no uid)`;
   if (String(socket.uid) !== serviceUid.out) return `not ready (${details}; expected owner ${SERVICE_USER})`;
+  // The panel's Nginx reaches the socket through its group.
+  const panelGid = tryRun("getent", ["group", PANEL_GROUP]).out.split(":")[2] ?? "";
+  if (String(socket.gid) !== panelGid) return `not ready (${details}; expected group ${PANEL_GROUP})`;
   return null;
 }
 
