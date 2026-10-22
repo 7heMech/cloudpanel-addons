@@ -35,7 +35,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     // unreachable in between. Both reconcilers no-op when nothing drifted, so
     // this stays cheap enough to run on every template write during an upgrade.
     reconcileAnchors(quiet);
-    if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; run repair after checking site vhosts and global_settings");
+    if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");
     if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
     return;
   }
@@ -79,7 +79,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     if (all.some((spec) => spec.newSites)) ensurePathWatching(NEW_SITES_PATH, quiet);
   }
   reconcileAnchors(quiet);
-  if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; run repair after checking site vhosts and global_settings");
+  if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");
   if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
   reconcilePhpGuard(true, quiet);
   // Runs after the master-vhost reconciliation above, not before: recovering

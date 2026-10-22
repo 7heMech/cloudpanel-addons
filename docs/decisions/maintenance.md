@@ -53,8 +53,11 @@ marked include of `/etc/nginx/clp-addons-maintenance.conf`, containing the same
 check, in both their database `site.vhost_template` and rendered vhost. The
 include goes at the start of the canonical site's port-8080 backend when present,
 otherwise its main server, never the www redirect. A serving server that already
-includes `global_settings` gets no additional include. A vhost that mentions
-`global_settings` without including it has opted out on purpose and is left
+includes `global_settings` gets no additional include. `global_settings` is
+optional: when it does not exist the addon neither creates it nor records a
+baseline for it, still stages the includes and client-IP map, and reports a vhost
+that includes the missing file as uncovered (Nginx would reject that vhost
+anyway). A vhost that mentions `global_settings` without including it has opted out on purpose and is left
 alone. A site whose vhost is untrusted or has no single serving server is
 skipped, so it cannot block the others, and `clp-addons status` names it. Older
 templates retain their existing header settings. Nginx checks
@@ -130,7 +133,12 @@ transaction, edits to trusted regular vhosts with preserved ownership and
 permissions, then `nginx -t` and a distro Nginx reload before commit. Failure rolls back the
 site rows and changed Nginx files; a failed reload also attempts to reload the
 restored configuration. Missing or ambiguous serving blocks leave that site
-unchanged and are reported as uncovered by status.
+unchanged and are reported as uncovered by status. The transaction refuses a
+`global_settings` or vhost that is a symlink, not a regular file or group- or
+world-writable, and a vhost owned by the wrong user, without changing mode or
+owner (a writable Nginx config may already be tampered with). The error names the
+file, the reason and the `chown` or `chmod` that fixes it, and repair and status
+print it.
 
 Install, enable, repair and the periodic repair timer reconcile these files.
 The existing path watcher also watches the site vhost directory and standalone

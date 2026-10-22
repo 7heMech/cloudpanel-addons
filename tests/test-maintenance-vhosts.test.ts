@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance } from "../cli/inject";
 import { MAINTENANCE_INCLUDE_PATH, transformMaintenanceVhost } from "../cli/maintenance-vhosts";
+import { trustedVhost } from "../cli/nginx-transaction";
 import { reconcileUnits } from "../cli/provision";
 import { PANEL_DB } from "../cli/paths";
 import type { CommandResult } from "../cli/action-common";
@@ -308,4 +309,95 @@ test("failed removal restores the installed check and both stored and rendered i
     expect(inspectNginxMaintenance(f.paths).state).toBe("ok");
     expect(reconcileNginxMaintenance({ ...f.paths, enabled: false, run: f.run }).state).toBe("missing");
   } finally { f.cleanup(); }
+});
+
+test("a missing global_settings does not stop the per-site includes", () => {
+  const f = fixture();
+  try {
+    rmSync(f.paths.settingsPath);
+    f.addSite();
+    f.addSite("good.test", upstream("v2-Static-Static"));
+    expect(reconcileNginxMaintenance({ ...f.paths, run: f.run })).toMatchObject({ state: "ok", changed: true });
+    expect(f.template()).toContain(`include ${f.paths.includePath};`);
+    expect(f.template("good.test")).toContain(`include ${f.paths.includePath};`);
+    expect(readFileSync(f.paths.includePath, "utf8")).toBe(`${NGINX_MAINTENANCE_BLOCK}\n`);
+    expect(existsSync(f.paths.geoPath)).toBe(true);
+    expect(existsSync(f.paths.settingsPath)).toBe(false);
+    expect(existsSync(f.paths.stateDir)).toBe(false);
+    expect(inspectNginxMaintenance(f.paths).state).toBe("ok");
+    expect(reconcileNginxMaintenance({ ...f.paths, run: f.run }).changed).toBe(false);
+
+    // The file appearing later is adopted as usual, with its baseline recorded.
+    writeFileSync(f.paths.settingsPath, "client_max_body_size 128m;", { mode: 0o644 });
+    expect(inspectNginxMaintenance(f.paths).state).toBe("missing");
+    expect(reconcileNginxMaintenance({ ...f.paths, run: f.run })).toMatchObject({ state: "ok", changed: true });
+    expect(readFileSync(f.paths.settingsPath, "utf8")).toContain(NGINX_MAINTENANCE_BLOCK);
+    expect(existsSync(join(f.paths.stateDir, "global-settings.sha256"))).toBe(true);
+
+    rmSync(f.paths.settingsPath);
+    expect(reconcileNginxMaintenance({ ...f.paths, run: f.run }).state).toBe("ok");
+    expect(existsSync(join(f.paths.stateDir, "global-settings.sha256"))).toBe(false);
+    expect(reconcileNginxMaintenance({ ...f.paths, enabled: false, run: f.run }).state).toBe("missing");
+    expect(existsSync(f.paths.includePath)).toBe(false);
+    expect(existsSync(f.paths.geoPath)).toBe(false);
+    expect(f.template("good.test")).not.toContain(f.paths.includePath);
+    expect(existsSync(f.paths.settingsPath)).toBe(false);
+  } finally { f.cleanup(); }
+});
+
+test("a vhost that includes the missing global_settings is reported as uncovered", () => {
+  const f = fixture();
+  try {
+    rmSync(f.paths.settingsPath);
+    f.addSite();
+    f.addSite("http3.test", upstream("v2-http3-WordPress-WordPress"));
+    const http3 = f.template("http3.test");
+    const result = reconcileNginxMaintenance({ ...f.paths, run: f.run });
+    expect(result).toMatchObject({ state: "uncovered-sites", uncoveredSites: ["http3.test"] });
+    expect(result.detail).toContain("does not exist");
+    expect(f.template()).toContain(`include ${f.paths.includePath};`);
+    expect(f.template("http3.test")).toBe(http3);
+    expect(inspectNginxMaintenance(f.paths)).toMatchObject({ state: "uncovered-sites", uncoveredSites: ["http3.test"] });
+    expect(existsSync(f.paths.settingsPath)).toBe(false);
+  } finally { f.cleanup(); }
+});
+
+test("a group-writable global_settings is refused with the reason and the fix, and nothing is written", () => {
+  const f = fixture();
+  try {
+    f.addSite();
+    const original = f.template();
+    chmodSync(f.paths.settingsPath, 0o664);
+    const result = reconcileNginxMaintenance({ ...f.paths, run: f.run });
+    expect(result.state).toBe("validation-failed");
+    expect(result.detail).toBe(`refusing ${f.paths.settingsPath}: group-writable (mode 664); run chmod go-w ${f.paths.settingsPath}`);
+    expect(inspectNginxMaintenance(f.paths)).toMatchObject({ state: "validation-failed", detail: result.detail });
+    expect(f.template()).toBe(original);
+    expect(existsSync(f.paths.includePath)).toBe(false);
+    expect(existsSync(f.paths.geoPath)).toBe(false);
+    expect(readFileSync(f.paths.settingsPath, "utf8")).toBe("client_max_body_size 128m;");
+    expect(f.commands).toEqual([]);
+    chmodSync(f.paths.settingsPath, 0o644);
+    expect(reconcileNginxMaintenance({ ...f.paths, run: f.run }).state).toBe("ok");
+  } finally { f.cleanup(); }
+});
+
+test("a refused vhost says whether it is a symlink, not a file, owned by someone else or writable", () => {
+  const root = mkdtempSync(join(tmpdir(), "trusted-vhost-"));
+  const uid = process.getuid?.() ?? 0;
+  try {
+    const file = join(root, "a.conf");
+    writeFileSync(file, "x", { mode: 0o644 });
+    expect(trustedVhost(file, uid).content).toBe("x");
+    expect(() => trustedVhost(file, uid + 1)).toThrow(`refusing ${file}: owned by uid ${uid}, expected uid ${uid + 1}; run chown ${uid + 1} ${file}`);
+    if (uid !== 0) expect(() => trustedVhost(file, 0)).toThrow(`owned by uid ${uid}, expected root (0); run chown root:root ${file}`);
+    chmodSync(file, 0o666);
+    expect(() => trustedVhost(file, uid)).toThrow("group- and world-writable (mode 666); run chmod go-w");
+    chmodSync(file, 0o646);
+    expect(() => trustedVhost(file, uid)).toThrow("world-writable (mode 646)");
+    const link = join(root, "link.conf");
+    symlinkSync(file, link);
+    expect(() => trustedVhost(link, uid)).toThrow(`refusing ${link}: it is a symlink`);
+    expect(() => trustedVhost(root, uid)).toThrow(`refusing ${root}: it is not a regular file`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
