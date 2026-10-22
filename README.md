@@ -47,6 +47,7 @@ their own sites.
 
 | Command | Purpose |
 | --- | --- |
+| `clp-addons` | As root, toggle addons and run status, repair or update. |
 | `clp-addons status` | Check services and CloudPanel integration. |
 | `clp-addons install <addon>` | Enable an addon, installing Docker if it needs it. |
 | `clp-addons update` | Install the latest verified release. |

@@ -90,6 +90,7 @@ const PROBE = String.raw`
     startUnits: () => calls.push("startUnits"),
     stopUnits: () => calls.push("stopUnits"),
     unitActive: () => "active",
+    managerSocketProblem: () => null,
     unitPid: () => 1234,
     writeConfig: (spec) => calls.push("writeConfig:" + spec.name),
   }));

@@ -67,6 +67,7 @@ const mockPrelude = String.raw`
     startUnits: () => {},
     stopUnits: () => {},
     unitActive: () => "active",
+    managerSocketProblem: () => null,
     unitPid: () => null,
     warnIfPanelSessionUnreadable: () => {},
     writeConfig: () => {},

@@ -3,6 +3,7 @@
 // the catalog is consulted, because neither is an addon.
 import { dashboardUrl, installedAddons } from "./addons";
 import { reconcileAnchors } from "./reconcile";
+import { cmdMenu } from "./menu";
 import { cmdStatus } from "./status";
 import { cmdInstall } from "./install";
 import { cmdRepair } from "./repair";
@@ -47,30 +48,13 @@ export const MANAGER_OPS: ManagerOps = {
 function usage(): void {
   log.plain(`clp-addons ${CLI_VERSION} — CloudPanel Addons
 
+  clp-addons                 (interactive in a root terminal)
   clp-addons install <addon> [--version=vX.Y.Z] [--skip-attestation] [--local=DIR]
   clp-addons update [--version=vX.Y.Z] [--skip-attestation]   (alias: upgrade)
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
-  clp-addons sync-sites
   clp-addons status
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons maintenance <domain> [on|off|status]
-  clp-addons action cloudflare-ips <list|set|policy|reconcile> [options]
-  clp-addons action dns <list|check|save-profile|delete-profile|set-mode|assign|set-default|confirm|save-connection|remove-connection|choose-zone|save-mailcow|save-server|remove-records|forget-records|reconcile|sync-sites>
-  clp-addons action dns provision --domain=<domain> [--as-user=<user>] [--ssl]
-  clp-addons action smtp <list|save-profile|delete-profile|assign|set-default|save-grants|test|reconcile|sync-sites|deactivate>
-  clp-addons action instatic <verb> [options]
-  clp-addons action stager <verb> [options]
-  clp-addons action maintenance <verb> --domain=<domain>
-  clp-addons action git <verb> [--domain=<domain>] [--job=<job>]
-  clp-addons action php-resources <list|site|save-category|delete-category|assign|set-default|reconcile> [--domain=<domain>]
-  clp-addons action panel-tweaks <state|set-tweaks|scan|scan-stream>
-  clp-addons action wp-login <sites|sign-in|remove|sync|varnish-settings|varnish-site|varnish-install|varnish-sync|mainwp-settings|mainwp-site|mainwp-sync|mainwp-connect|mainwp-cleanup> [--domain=<domain>] [--as-user=<user>] [--client-ip=<ip>] [--add-bypass] [--allow-basic-auth] [--dashboard=<domain>] [--enabled=true|false] [--excluded=true|false] [--confirm=<domain>|mainwp]
-  clp-addons action manager <enable|disable|update|reconcile|job|watch-job> [--addon=<addon>] [--id=<job>]
-  clp-addons action terminal session --domain=<domain> --cols=<n> --rows=<n>   (through the gateway only)
-  clp-addons action auth (session id on bounded stdin)
-  clp-addons serve
-  clp-addons smtp-submit -t -i
-  clp-addons terminal-pty   (as a site user, started by the terminal action)
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}
@@ -134,7 +118,8 @@ async function cmdOverview(): Promise<void> {
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
   if (args.length === 0) {
-    await cmdOverview();
+    if (process.stdin.isTTY && process.stdout.isTTY && process.getuid?.() === 0) await cmdMenu();
+    else await cmdOverview();
     return 0;
   }
   const [verb = "help", ...rest] = args;
