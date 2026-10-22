@@ -55,7 +55,7 @@ const mockPrelude = String.raw`
     ensurePathWatching: () => {},
     hardenBackups: () => {},
     reconcilePanelIdentity: () => {},
-    installUnits: () => ({ manager: false, reconcile: false, cloudflare: null, smtp: null, auth: false, cron: false, systemd: false }),
+    installUnits: () => ({ manager: false, reconcile: false, cloudflare: null, newSites: null, dns: null, auth: false, cron: false, systemd: false }),
     applyToggleUnits: () => {},
     platformProvisioned: () => true,
     installedConfig: (spec) => spec.name === "stager",

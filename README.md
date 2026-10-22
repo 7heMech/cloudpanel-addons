@@ -25,6 +25,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | Addon | Description |
 | --- | --- |
 | Cloudflare IP Access | Allow traffic from Cloudflare only, across all sites and for new ones. |
+| [DNS](docs/dns.md) | Each site's Cloudflare records kept to a profile, with Mailcow set up for its mail. |
 | [Instatic CMS](https://github.com/CoreBunch/Instatic) | Instatic CMS sites on CloudPanel. |
 | Stager | Staging copies of WordPress, PHP, static and Instatic sites, and promotion back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
 | Maintenance Mode | A customizable 503 page per site, with instant toggles and IP bypasses. |
@@ -51,7 +52,7 @@ their own sites.
 | `clp-addons maintenance <domain> [on\|off\|status]` | Control or inspect maintenance mode for a site. |
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
-Addon names are `cloudflare-ips`, `instatic`, `stager`, `maintenance`,
+Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,
 `php-resources`, `git`, `panel-tweaks`, `wp-login`, `smtp`, and `terminal`. Run
 `clp-addons --help` for version selection and data removal options.
 

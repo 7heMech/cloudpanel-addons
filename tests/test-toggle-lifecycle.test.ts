@@ -173,7 +173,8 @@ function fixture(options: { provisioned: boolean; enabled: string[] }): string {
     // find them to stop and remove them.
     const units: Record<string, string[]> = {
       "cloudflare-ips": ["clp-addons-cloudflare-ips-reconcile.timer", "clp-addons-cloudflare-ips-reconcile.service"],
-      smtp: ["clp-addons-smtp-reconcile.path", "clp-addons-smtp-reconcile.service"],
+      smtp: ["clp-addons-new-sites.path", "clp-addons-new-sites.service"],
+      dns: ["clp-addons-new-sites.path", "clp-addons-new-sites.service"],
     };
     for (const unit of units[name] ?? []) writeFileSync(join(root, "systemd", unit), "# placeholder\n");
   }
@@ -256,24 +257,38 @@ test("the Cloudflare timer is started when its units appear and stopped when the
   expect(existsSync(join(off.root, "systemd", "clp-addons-cloudflare-ips-reconcile.service"))).toBe(false);
 });
 
-test("the SMTP new-site watcher is started when its units appear and stopped when they go", () => {
+test("the shared new-site watcher is started when its units appear and stopped when they go", () => {
   const on = toggle([{ verb: "enable", addon: "smtp" }]);
   expect(on.error).toBeUndefined();
-  expect(on.systemd).toContain("enable clp-addons-smtp-reconcile.path");
-  expect(on.systemd).toContain("restart clp-addons-smtp-reconcile.path");
+  expect(on.systemd).toContain("enable clp-addons-new-sites.path");
+  expect(on.systemd).toContain("restart clp-addons-new-sites.path");
   // Disable withdrew the saved policy, so enable puts it back.
   expect(on.cli).toEqual(["action smtp reconcile"]);
-  const service = readFileSync(join(on.root, "systemd", "clp-addons-smtp-reconcile.service"), "utf8");
+  const service = readFileSync(join(on.root, "systemd", "clp-addons-new-sites.service"), "utf8");
   // CloudPanel commits a new site's row after writing its vhost, so it runs twice, and a failed first run still waits for the second.
-  expect(service).toMatch(/ExecStart=-\S+ action smtp sync-sites\nExecStart=\/bin\/sleep 10\nExecStart=\/\S+ action smtp sync-sites\n/);
-  expect(readFileSync(join(on.root, "systemd", "clp-addons-smtp-reconcile.path"), "utf8")).toContain("PathChanged=/etc/nginx/sites-enabled");
+  expect(service).toMatch(/ExecStart=-\S+ sync-sites\nExecStart=\/bin\/sleep 10\nExecStart=\/\S+ sync-sites\n/);
+  expect(readFileSync(join(on.root, "systemd", "clp-addons-new-sites.path"), "utf8")).toContain("PathChanged=/etc/nginx/sites-enabled");
 
   const off = toggle([{ verb: "disable", addon: "smtp" }], { enabled: ["smtp"] });
   expect(off.error).toBeUndefined();
   expect(off.cli).toEqual(["action smtp deactivate"]);
-  expect(off.systemd).toContain("disable --now clp-addons-smtp-reconcile.path");
-  expect(existsSync(join(off.root, "systemd", "clp-addons-smtp-reconcile.path"))).toBe(false);
-  expect(existsSync(join(off.root, "systemd", "clp-addons-smtp-reconcile.service"))).toBe(false);
+  expect(off.systemd).toContain("disable --now clp-addons-new-sites.path");
+  expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.path"))).toBe(false);
+  expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.service"))).toBe(false);
+});
+
+test("the watcher stays while SMTP still uses it, and disabling DNS stops its transient pass", () => {
+  const on = toggle([{ verb: "enable", addon: "dns" }], { enabled: ["smtp"] });
+  expect(on.error).toBeUndefined();
+  expect(existsSync(join(on.root, "systemd", "clp-addons-dns.service"))).toBe(false);
+
+  const off = toggle([{ verb: "disable", addon: "dns" }], { enabled: ["smtp", "dns"] });
+  expect(off.error).toBeUndefined();
+  // Disabling stops a check that is running and changes nothing in Cloudflare.
+  expect(off.systemd).toContain("stop clp-addon-dns-reconcile");
+  expect(existsSync(join(off.root, "systemd", "clp-addons-dns.service"))).toBe(false);
+  expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.path"))).toBe(true);
+  expect(off.cli).toEqual([]);
 });
 
 test("an addon with no panel markup does not touch the panel templates", () => {
@@ -384,4 +399,23 @@ test("a box whose reconcile timer is not armed is bootstrapped too", () => {
   });
   expect(run.error).toBeUndefined();
   expect(run.provision).toContain("startUnits");
+});
+
+test("DNS can be disabled and re-enabled without SMTP, keeping its state", () => {
+  const on = toggle([{ verb: "enable", addon: "dns" }]);
+  expect(on.error).toBeUndefined();
+  expect(on.systemd).toContain("enable clp-addons-new-sites.path");
+  expect(on.calls.some(([cmd, args]) => cmd === "systemctl" && args.includes("postfix"))).toBe(false);
+  const state = join(on.root, "state", "dns");
+  mkdirSync(state, { recursive: true });
+  const policy = join(state, "policy.json");
+  writeFileSync(policy, "kept policy", { mode: 0o600 });
+  const off = toggle([{ verb: "disable", addon: "dns" }], { root: on.root });
+  expect(off.error).toBeUndefined();
+  expect(off.systemd).toContain("stop clp-addon-dns-reconcile");
+  expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.path"))).toBe(false);
+  const again = toggle([{ verb: "enable", addon: "dns" }], { root: on.root });
+  expect(again.error).toBeUndefined();
+  expect(again.systemd).toContain("enable clp-addons-new-sites.path");
+  expect(readFileSync(policy, "utf8")).toBe("kept policy");
 });

@@ -63,6 +63,10 @@ const spec = {
   deactivate: () => {
     if (process.env.CLP_TEST_DEACTIVATE_FAIL === "1") throw new Error("simulated SMTP cleanup failure");
   },
+  withdrawn: () => {
+    if (existsSync(configFile)) throw new Error("workers stopped before the addon was disabled");
+    if (!existsSync(stateDir)) throw new Error("state purged before workers stopped");
+  },
 };
 let removeSudoersCalls = 0;
 

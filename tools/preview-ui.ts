@@ -10,6 +10,11 @@ import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, lay
 import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
 import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../addons/smtp/app/views";
 import type { SmtpState } from "../addons/smtp/action";
+import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addons/dns/app/views";
+import type { DnsState, Review as DnsReview } from "../addons/dns/action";
+import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
+import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
+import { tokenTemplate as dnsTokenTemplate } from "../addons/dns/token";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { sitesBlock } from "../addons/panel-tweaks/inject/targets";
@@ -52,6 +57,83 @@ const sites: SiteSummary[] = [
 // is the widest strip a site can have.
 const siteVarnish: Record<string, boolean> = { "www.example.com": true };
 const PREVIEW_PUBLIC_IP = "203.0.113.10";
+
+/** Two connections and a mixed fleet. ?setup shows a first visit with nothing connected. */
+function dnsPreviewState(url: URL): DnsState {
+  const setup = url.searchParams.has("setup");
+  const seeded = dnsSeededPolicy().profiles;
+  const web = { ...seeded[0]!, mode: "enforce" as const };
+  const mailcow = { ...seeded[1]!, zone: { ...seeded[1]!.zone, skipFirewallIps: ["203.0.113.7"] } };
+  const zone = (name: string, status = "active") => ({
+    id: "0".repeat(32), name, status, nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+    account: "Example Agency", connection: "Agency",
+  });
+  const plan = (domain: string, extra: Partial<DnsSitePlan>): DnsSitePlan => ({
+    domain, profileId: "web", mode: "enforce", zone: zone("example.com"), changes: [], problems: [], zoneChoices: [],
+    certificateNames: [domain], ...extra,
+  });
+  const sites = setup ? [
+    { domain: "example.com", type: "wordpress", profileId: null, plan: null, ssl: null },
+    { domain: "shop.example.com", type: "php", profileId: null, plan: null, ssl: null },
+  ] : [
+    { domain: "example.com", type: "wordpress", profileId: "web", plan: plan("example.com", { certificateNames: ["example.com", "www.example.com"] }), ssl: null },
+    { domain: "shop.example.com", type: "php", profileId: "web", plan: plan("shop.example.com", { changes: [
+      { action: "update", subject: "A shop.example.com", detail: "203.0.113.10 · proxied", before: "198.51.100.4 · DNS only" },
+      { action: "create", subject: "AAAA shop.example.com", detail: "2001:db8::10 · proxied" },
+      { action: "delete", subject: "CNAME shop.example.com", detail: "shops.myshopify.com · DNS only" },
+    ] }), ssl: null },
+    { domain: "new-client.example.org", type: "wordpress", profileId: "web", plan: plan("new-client.example.org", { zone: zone("example.org", "pending") }),
+      ssl: "Waiting for DNS: Zone example.org is pending; set its nameservers at the registrar" },
+    { domain: "a-rather-long-customer-hostname.staging.example.net", type: "nodejs", profileId: "web-mailcow", plan: plan("a-rather-long-customer-hostname.staging.example.net", {
+      profileId: "web-mailcow", mode: "report", zone: null,
+      problems: ["example.net is reachable through more than one connection; choose which one manages it"],
+      zoneChoices: [
+        { zone: "example.net", connectionId: "cf-1", zoneId: "1".repeat(32), label: "Agency · Example Agency (active)" },
+        { zone: "example.net", connectionId: "cf-2", zoneId: "1".repeat(32), label: "Church · Church account (active)" },
+      ] }), ssl: null },
+    { domain: "mail.example.org", type: "php", profileId: "web-mailcow", plan: plan("mail.example.org", {
+      profileId: "web-mailcow", mode: "report", zone: zone("example.org"),
+      changes: [
+        { action: "create", subject: "Mailcow domain", detail: "mail.example.org" },
+        { action: "create", subject: "MX mail.example.org", detail: "mail.example.net · priority 10" },
+        { action: "update", subject: "TXT mail.example.org", detail: "v=spf1 include:_spf.mlsend.com mx ~all", before: "v=spf1 include:_spf.mlsend.com ~all" },
+      ] }), ssl: null },
+    { domain: "docs.example.com", type: "static", profileId: null, plan: null, ssl: null },
+  ];
+  const profiles = [web, mailcow].map((profile) => ({ ...profile, sites: sites.filter((site) => site.profileId === profile.id).length }));
+  return {
+    profiles,
+    defaultProfileId: setup ? null : "web",
+    sites,
+    connections: setup ? [] : [
+      { id: "cf-1", label: "Agency", active: true, status: "active", accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }], zones: 42, error: null, hasToken: true },
+      { id: "cf-2", label: "Church", active: true, status: "active", accounts: [{ id: "c".repeat(32), name: "Church account" }], zones: 7, error: null, hasToken: true },
+    ],
+    accounts: setup ? [] : [
+      { connectionId: "cf-1", accountId: "a".repeat(32), label: "Example Agency (Agency)" },
+      { connectionId: "cf-1", accountId: "b".repeat(32), label: "Clients (Agency)" },
+      { connectionId: "cf-2", accountId: "c".repeat(32), label: "Church account (Church)" },
+    ],
+    mailcow: setup
+      ? { url: "", host: "", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "", hasKey: false }
+      : { url: "https://mail.example.net", host: "mail.example.net", dkimSource: "example.net", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "relay@example.net", hasKey: true },
+    server: { ipv4: "", ipv6: "", detected: { ipv4: "203.0.113.10", ipv6: "2001:db8::10" } },
+    orphans: setup ? [] : [{ domain: "retired.example.com", zone: "example.com", records: 4 }],
+    checkedAt: setup ? null : new Date(Date.now() - 4 * 60_000).toISOString(),
+    waitUntil: 0,
+    token: dnsTokenTemplate([web, mailcow]),
+    presets: DNS_PRESETS,
+  };
+}
+
+function dnsPreviewReview(state: DnsState): DnsReview {
+  const sites = state.sites.filter((site) => site.plan).map((site) => ({ ...site.plan!, problems: [], zoneChoices: [] }));
+  return {
+    token: "preview", title: `Enforce on ${sites.length} sites`,
+    text: "4 changes will be made now, and the profile will keep these records as they are from then on. Records at names the profile does not write are left alone.",
+    sites, blocked: false, confirmLabel: "Confirm and enforce", danger: true,
+  };
+}
 
 /** Profiles and a mixed fleet. ?setup shows a first visit, ?empty a box with no sites. */
 function smtpPreviewState(url: URL): SmtpState {
@@ -1037,7 +1119,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login", "smtp", "terminal"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login", "smtp", "terminal"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
@@ -1105,6 +1187,27 @@ const server = Bun.serve({
       html = wpLoginLayout("WordPress Tools", wpLoginDashboardView(wpLoginPreviewData()), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP Resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice);
+    } else if (path === "/addons/dns/" || path === "/addons/dns") {
+      // ?dialog=profile|new|review|site|choose|connection|mailcow|server opens that dialog on load;
+      // ?at=<selector> hides the cards above that one, for a phone screenshot of something below the fold; ?dark
+      // draws the dark theme.
+      const state = dnsPreviewState(url);
+      const dialog = url.searchParams.get("dialog");
+      const at = url.searchParams.get("at");
+      const openers: Record<string, string> = {
+        profile: "dnsEditProfile('web-mailcow')",
+        new: "dnsEditProfile('')",
+        review: `dnsShowReview(${JSON.stringify(dnsPreviewReview(state))})`,
+        site: "dnsShowSite('shop.example.com')",
+        choose: "dnsShowSite('a-rather-long-customer-hostname.staging.example.net')",
+        connection: "dnsEditConnection('')",
+        mailcow: "dnsEditMailcow()",
+        server: "dnsEditServer()",
+      };
+      const dark = url.searchParams.has("dark") ? "document.cookie='theme=dark; Path=/';syncTheme();" : "";
+      const opener = dark + (dialog ? openers[dialog] ?? "" : at ? `const card=document.querySelector(${JSON.stringify(at)})?.closest("#dns-root > *");for(let el=document.getElementById("dns-root").firstElementChild;el&&el!==card;el=el.nextElementSibling)el.style.display="none"` : "");
+      html = dnsLayout("DNS", dnsDashboardView(state), notice)
+        .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener.replaceAll("<", "\\u003c")}})</script></body>` : "</body>");
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {
       // ?profile=<id> (or ?profile= for a new one) and ?domains=<site> open a dialog on load, like ?confirm= does.
       const arg = (name: string) => JSON.stringify(url.searchParams.get(name)).replaceAll("<", "\\u003c");
