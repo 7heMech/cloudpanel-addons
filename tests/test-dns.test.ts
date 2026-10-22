@@ -428,6 +428,22 @@ describe("several connections", () => {
     expect(env.cf.writes().every((call) => env.cf.calls.find((entry) => entry === call)!.token === TOKEN)).toBe(true);
   });
 
+  test("a zone only a failing connection reaches is not created again in another account", async () => {
+    const env = setup();
+    env.cf.zone("example.net", env.church);
+    env.sites.push(site(3, "example.net"));
+    await env.connect();
+    await env.act("save-connection", { token: SECOND_TOKEN, label: "Church" });
+    const state = await env.act("list");
+    const web = state.profiles.find((profile) => profile.id === "web")!;
+    await env.act("save-profile", { ...web, zone: { ...web.zone, createIn: { connectionId: state.connections[0]!.id, accountId: env.agency } } });
+    await env.act("assign", { domains: ["example.net"], profileId: "web" });
+    env.cf.tokens.delete(SECOND_TOKEN);
+    const reply = await env.act("set-mode", { id: "web", mode: "enforce" });
+    if (reply.review && !reply.review.blocked) await env.act("confirm", { token: reply.review.token });
+    expect(env.cf.zones.filter((zone) => zone.name === "example.net")).toHaveLength(1);
+  });
+
   test("two zones with one name must be chosen between, and the choice is where records go", async () => {
     const env = setup();
     const theirs = env.cf.zone("example.net", env.agency);

@@ -130,8 +130,10 @@ deactivated zones are ignored. One zone reached by two tokens is used through
 the first connection until the operator chooses another; two zones with the
 same name, in different accounts, must be chosen between before either is
 written. A profile can create a missing zone, for the registrable domain, in an
-account chosen from the ones its connections reach. A new zone's nameservers are
-shown; changing them at the registrar is the operator's.
+account chosen from the ones its connections reach. While any connection cannot
+be read, a site with no zone found is unreachable rather than missing, so a zone
+only that connection reaches is never created again elsewhere. A new zone's
+nameservers are shown; changing them at the registrar is the operator's.
 
 ## Mailcow
 

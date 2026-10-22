@@ -185,7 +185,8 @@ export class DnsRun {
     if (!matches.length) {
       const failed = this.connections.filter((connection) => !connection.active);
       if (!this.connections.length) return { kind: "unreachable", reason: "Add a Cloudflare connection first" };
-      if (failed.length === this.connections.length) return { kind: "unreachable", reason: `Cloudflare could not be read: ${failed.map((c) => c.error).join("; ")}` };
+      // A zone only a failed connection reaches would look missing, and be created again elsewhere.
+      if (failed.length) return { kind: "unreachable", reason: `Cloudflare could not be read: ${failed.map((c) => c.error).join("; ")}` };
       const name = getDomain(domain, { allowPrivateDomains: false }) ?? domain;
       return { kind: "missing", name, createIn: profile.zone.createIn };
     }
