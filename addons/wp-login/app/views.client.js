@@ -2,18 +2,18 @@
 // The window is opened inside the click, before anything is awaited: one
 // opened after a fetch resolves is a popup the browser blocks. Agreeing to add
 // a bypass is a click of its own, which opens the retry's window and passes it.
-async function signIn(button, addBypass, opened) {
+async function signIn(button, addBypass, opened, allowBasicAuth) {
   const domain = button.dataset.domain;
-  const target = addBypass ? opened : window.open('', '_blank');
+  const target = (addBypass || allowBasicAuth) ? opened : signInWindow(domain);
   clearNotice();
   busy(true);
   try {
     const reply = await call('/api/sign-in', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ domain: domain, addBypass: addBypass === true }),
+      body: JSON.stringify({ domain: domain, addBypass: addBypass === true, allowBasicAuth: allowBasicAuth === true }),
     });
-    const maintenance = reply.data.maintenance;
+    const maintenance = reply.data.maintenance || reply.data.basicAuth;
     if (maintenance) {
       if (target) target.close();
       busy(false);
@@ -22,13 +22,14 @@ async function signIn(button, addBypass, opened) {
         return;
       }
       confirmAction({
-        title: 'Site in maintenance',
+        title: reply.data.basicAuth ? 'Site protected by basic authentication' : 'Site in maintenance',
         text: maintenance.message,
         confirmLabel: 'Add IP and sign in',
-        onAccept: function () { signIn(button, true, window.open('', '_blank')); },
+        onAccept: function () { signIn(button, addBypass || !!reply.data.maintenance, signInWindow(domain), allowBasicAuth || !!reply.data.basicAuth); },
       });
       return;
     }
+    if (target) await windowLoaded(target, domain);
     submitToken(target, reply.data);
     busy(false);
     notify('Signing in to ' + domain + ' in a new tab.', 'ok');
@@ -37,6 +38,28 @@ async function signIn(button, addBypass, opened) {
     busy(false);
     notify(error.message, 'error');
   }
+}
+
+// The window opens on this addon's page for that one site, whose policy lets
+// the token's form go there; this page refuses every form.
+function signInWindow(domain) {
+  return window.open(CLP_BASE + '/sign-in/' + encodeURIComponent(domain), '_blank');
+}
+
+// The form can only go into that page once it has replaced the window's
+// initial blank document.
+async function windowLoaded(target, domain) {
+  const path = CLP_BASE + '/sign-in/' + encodeURIComponent(domain);
+  for (let waited = 0; waited < 10000; waited += 50) {
+    if (target.closed) throw new Error('The sign-in window was closed.');
+    try {
+      if (target.location.pathname === path && target.document.readyState === 'complete') return;
+    } catch (error) {
+      // A window that failed to load shows a page this one cannot read.
+    }
+    await new Promise(function (resolve) { setTimeout(resolve, 50); });
+  }
+  throw new Error('The sign-in window did not load.');
 }
 
 // Posted rather than put in the address bar: a single-use secret in a query
@@ -55,31 +78,154 @@ function submitToken(target, data) {
   form.submit();
 }
 
-async function removeHelpers(button) {
+// Make a change, then repaint everything below the heading from the server's
+// answer, so a row that failed or that the change did not reach shows as it is.
+async function change(path, body, describe) {
+  clearNotice();
+  busy(true);
+  let reply;
+  let failure = '';
+  let html = '';
+  let stale = '';
+  try {
+    reply = await call(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  } catch (error) {
+    failure = error.message;
+  }
+  try {
+    html = (await call('/api/dashboard')).data.html;
+  } catch (error) {
+    stale = error.message;
+  }
+  busy(false);
+  if (html) repaintView(CLP_ROOT.getElementById('wp-dashboard'), html);
+  if (failure) {
+    notify(failure, 'error');
+    return false;
+  }
+  const done = describe(reply.data || {});
+  notify(stale ? done.text + ' The page may be out of date: ' + stale : done.text, stale ? 'warn' : done.kind || 'ok');
+  return true;
+}
+
+async function setAutomatic(input) {
+  const enabled = input.checked;
+  if (!await change('/api/varnish-settings', { enabled: enabled }, function () {
+    return { text: enabled
+      ? 'Automatic installation is on. Sites are checked every 15 minutes, or now with Check now.'
+      : 'Automatic installation is off. Installed plugins are left as they are.' };
+  })) input.checked = !enabled;
+}
+
+async function setSiteAutomatic(input) {
+  const domain = input.dataset.domain;
+  const included = input.checked;
+  if (!await change('/api/varnish-site', { domain: domain, excluded: !included }, function () {
+    return { text: included
+      ? domain + ' is included in automatic installation.'
+      : domain + ' is excluded from automatic installation. Its plugin is left as it is.' };
+  })) input.checked = !included;
+}
+
+function syncSummary(data) {
+  let text = 'Checked ' + plural(data.checked, 'site') + '; ' + data.installed + ' installed or activated.';
+  if (data.pending) text += ' ' + data.pending + ' still to check; check again to continue.';
+  if (data.failed.length) text += ' ' + data.failed.length + ' failed; see the sites below.';
+  return { text: text, kind: data.failed.length || data.pending ? 'warn' : 'ok' };
+}
+
+function checkSites() {
+  change('/api/varnish-sync', {}, syncSummary);
+}
+
+async function installPlugin(button) {
+  const domain = button.dataset.domain;
   const agreed = await confirmAction({
-    title: 'Remove the sign-in helper',
+    title: button.textContent + ' CLP Varnish Cache on ' + domain + '?',
+    text: 'CLP Varnish Cache is installed from WordPress.org if it is missing, then activated, as the site\'s own user.',
+    confirmLabel: button.textContent,
+  });
+  if (!agreed) return;
+  change('/api/varnish-install', { domain: domain }, function (data) {
+    if (data.installed) return { text: 'CLP Varnish Cache is active on ' + domain + '.' };
+    return { text: data.failed.length ? data.failed[0] : 'Nothing was installed on ' + domain + '; see its status below.', kind: 'warn' };
+  });
+}
+
+async function removeHelpers() {
+  const agreed = await confirmAction({
+    title: 'Remove the sign-in helper?',
     text: 'The must-use plugin is deleted from every site it is in. The next sign-in puts it back.',
     confirmLabel: 'Remove',
   });
   if (!agreed) return;
-  clearNotice();
-  busy(true);
-  try {
-    const reply = await call('/api/remove', { method: 'POST' });
-    const data = reply.data || {};
-    const removed = data.removed || 0;
+  change('/api/remove', {}, function (data) {
     const failed = data.failed || [];
-    let message = removed
-      ? 'Removed from ' + removed + (removed === 1 ? ' site.' : ' sites.')
-      : 'No site had the helper installed.';
-    if (failed.length) message += ' Still in ' + failed.join('; ') + '.';
-    reloadWithFlash(FLASH_KEY, message, failed.length ? 'warn' : 'ok');
-  } catch (error) {
-    busy(false);
-    notify(error.message, 'error');
-  }
+    let text = data.removed ? 'Removed from ' + plural(data.removed, 'site') + '.' : 'No site had the helper installed.';
+    if (failed.length) text += ' Still in ' + failed.join('; ') + '.';
+    return { text: text, kind: failed.length ? 'warn' : 'ok' };
+  });
 }
 
-const FLASH_KEY = 'clp-wp-login-flash';
+async function setMainwpAutomatic(input) {
+  const enabled = input.checked;
+  if (!await change('/api/mainwp-settings', { enabled: enabled }, function () {
+    return { text: enabled
+      ? 'MainWP automation is on. Sites are checked every 15 minutes, or now with Check now.'
+      : 'MainWP automation is off. Connected sites stay connected.' };
+  })) input.checked = !enabled;
+}
 
-showCarriedFlash(FLASH_KEY);
+function setMainwpDashboard(select) {
+  if (!select.value) return;
+  const enabled = CLP_ROOT.getElementById('mainwp-automatic').checked;
+  change('/api/mainwp-settings', { enabled: enabled, dashboard: select.value }, function () {
+    return { text: select.value + ' is the MainWP Dashboard. Use Check now to see which sites are connected to it.' };
+  });
+}
+
+async function setMainwpSite(input) {
+  const domain = input.dataset.domain;
+  const included = input.checked;
+  if (!await change('/api/mainwp-site', { domain: domain, excluded: !included }, function () {
+    return { text: included
+      ? domain + ' is included in MainWP automation.'
+      : domain + ' is excluded from MainWP automation. Its connection is left as it is.' };
+  })) input.checked = !included;
+}
+
+function mainwpSummary(data) {
+  let text = 'Checked ' + plural(data.checked, 'site') + '; ' + data.connected + ' connected, ' + data.removed + ' cleaned up.';
+  if (data.pending) text += ' ' + data.pending + ' still to check; check again to continue.';
+  if (data.failed.length) text += ' ' + data.failed.length + ' failed; see the sites below.';
+  return { text: text, kind: data.failed.length || data.pending ? 'warn' : 'ok' };
+}
+
+function checkMainwp() {
+  change('/api/mainwp-sync', {}, mainwpSummary);
+}
+
+async function connectMainwp(button) {
+  const domain = button.dataset.domain;
+  const agreed = await confirmAction({
+    title: button.textContent + ' ' + domain + ' to MainWP?',
+    text: 'MainWP Child is installed from WordPress.org if it is missing, activated, and connected as the site\'s first administrator. The Dashboard can then manage the site.',
+    confirmLabel: button.textContent,
+  });
+  if (!agreed) return;
+  change('/api/mainwp-connect', { domain: domain, confirm: true }, function (data) {
+    if (data.connected) return { text: domain + ' is connected to MainWP.' };
+    return { text: data.failed.length ? data.failed[0] : domain + ' is not connected yet; see its status below.', kind: 'warn' };
+  });
+}
+
+async function cleanupMainwp() {
+  const agreed = await confirmAction({
+    title: 'Turn off and clean up MainWP?',
+    text: 'Automation stops. Connections WordPress Tools made are removed from the Dashboard, and Child plugins it installed are deleted. Connections and plugins you set up yourself stay.',
+    confirmLabel: 'Turn off and clean up',
+    danger: true,
+  });
+  if (!agreed) return;
+  change('/api/mainwp-cleanup', { confirm: true }, mainwpSummary);
+}

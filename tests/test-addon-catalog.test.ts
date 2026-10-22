@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ADDONS, ADDON_NAMES, addonHandler, addonMaintenance, templateWatchPaths } from "../cli/addon-catalog";
+import { ADDONS, ADDON_NAMES, addonHandler, addonMaintenance, addonNewSites, templateWatchPaths } from "../cli/addon-catalog";
 import { mountPath } from "../lib/mount";
 import { CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, SERVICE_USER, SOCKET_PATH } from "../cli/paths";
 
@@ -60,10 +60,16 @@ test("required systemd dependencies survive into the catalog", () => {
 
 test("repair upkeep is the addons that ask for it, in catalog order", () => {
   const all = ADDON_NAMES.map((name) => ADDONS[name]!);
-  expect(addonMaintenance(all).map((spec) => spec.name)).toEqual(["instatic", "stager", "php-resources", "git", "panel-tweaks", "smtp"]);
+  expect(addonMaintenance(all).map((spec) => spec.name)).toEqual(["dns", "instatic", "stager", "php-resources", "git", "panel-tweaks", "wp-login", "smtp"]);
   // Gated on being installed: repair passes the installed set, not every addon.
   expect(addonMaintenance([ADDONS.stager!]).map((spec) => spec.name)).toEqual(["stager"]);
   expect(addonMaintenance([ADDONS.maintenance!])).toEqual([]);
+});
+
+test("new-site work runs DNS before SMTP Relay, and only for installed addons", () => {
+  const all = ADDON_NAMES.map((name) => ADDONS[name]!);
+  expect(addonNewSites(all).map((spec) => spec.name)).toEqual(["dns", "smtp"]);
+  expect(addonNewSites([ADDONS.smtp!]).map((spec) => spec.name)).toEqual(["smtp"]);
 });
 
 test("the path constants do not import any addon", () => {

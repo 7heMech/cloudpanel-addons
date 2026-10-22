@@ -1,6 +1,6 @@
 // The upkeep `repair` and the reconcile timer run, per addon and for the manager's own job records.
 
-import { type AddonSpec, addonMaintenance } from "./addon-catalog";
+import { type AddonSpec, addonMaintenance, addonNewSites } from "./addon-catalog";
 import { pruneManagerJobs } from "./manager-action";
 import { log } from "./util";
 /**
@@ -19,6 +19,23 @@ export async function runAddonMaintenance(
     const task = spec.maintenance!;
     try {
       const line = await task.run(options);
+      if (line) log.ok(`${task.label}: ${line}`);
+    } catch (error) {
+      log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
+/**
+ * What the new-site watcher runs: each installed addon's work for sites
+ * CloudPanel has just created, in catalog order. One addon failing does not
+ * keep the next from its turn.
+ */
+export async function runNewSiteWork(installed: AddonSpec[]): Promise<void> {
+  for (const spec of addonNewSites(installed)) {
+    const task = spec.newSites!;
+    try {
+      const line = await task.run();
       if (line) log.ok(`${task.label}: ${line}`);
     } catch (error) {
       log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);

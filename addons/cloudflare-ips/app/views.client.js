@@ -53,12 +53,16 @@ function paintSummary() {
 // Repaint from the server's answer rather than from what was asked for: the
 // row that failed, the row somebody else changed and the exception bookkeeping
 // all come back in the same reply.
-function applyState(state) {
+function applyState(state, html) {
   const rows = new Map(siteRows().map(function (row) { return [row.dataset.domain, row]; }));
   const domains = (state.sites || []).map(function (site) { return site.domain; });
   if (domains.length !== rows.size || domains.some(function (domain) { return !rows.has(domain); })) {
-    // The inventory itself moved; only a reload can draw rows that are not here.
-    location.reload();
+    const selected = new Set(selectedRows().map(function (row) { return row.dataset.domain; }));
+    repaintView(CLP_ROOT.getElementById('clp-content'), html);
+    siteRows().forEach(function (row) {
+      row.querySelector('.site-checkbox').checked = selected.has(row.dataset.domain);
+    });
+    paintSummary();
     return;
   }
   state.sites.forEach(function (site) {
@@ -76,7 +80,8 @@ function applyState(state) {
 /** The state the server holds now, or why it could not be read. */
 async function readState() {
   try {
-    return { ok: true, data: (await call('/api/sites')).data };
+    const reply = await call('/api/sites');
+    return { ok: true, data: reply.data, html: reply.html };
   } catch (error) {
     return { ok: false, error: error.message };
   }
@@ -107,7 +112,7 @@ async function setDomains(domains, enabled) {
   } finally {
     busy(false);
   }
-  if (state.ok) applyState(state.data);
+  if (state.ok) applyState(state.data, state.html);
   if (failure) {
     notify('Could not update the Cloudflare setting: ' + failure, 'error');
     return false;
@@ -222,7 +227,7 @@ async function setAutomatic(input) {
   } finally {
     busy(false);
   }
-  if (state.ok) applyState(state.data);
+  if (state.ok) applyState(state.data, state.html);
   if (failure) {
     notify('Could not update the automatic policy: ' + failure, 'error');
     return;

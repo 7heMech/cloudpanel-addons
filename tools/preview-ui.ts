@@ -1,5 +1,5 @@
 // Local UI review with fictional data. Never starts the manager, reads panel
-// state or invokes an action. Mutating requests are rejected deliberately.
+// state or invokes an action. Supported mutations change fictional data only.
 import { indexPage, updatePage } from "../manager/views";
 import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } from "../addons/cloudflare-ips/app/views";
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
@@ -10,6 +10,11 @@ import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, lay
 import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
 import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../addons/smtp/app/views";
 import type { SmtpState } from "../addons/smtp/action";
+import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addons/dns/app/views";
+import type { DnsState, Review as DnsReview } from "../addons/dns/action";
+import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
+import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
+import { tokenTemplate as dnsTokenTemplate } from "../addons/dns/token";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { sitesBlock } from "../addons/panel-tweaks/inject/targets";
@@ -20,7 +25,8 @@ import { MENU_ONLY_CLASS } from "../lib/row-actions";
 /** The `site.type` values Stager's own Twig condition offers a Clone for. */
 const CLONABLE_TYPES = ["php", "static", "reverse-proxy"];
 import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
-import { dashboardView as wpLoginDashboardView, layout as wpLoginLayout } from "../addons/wp-login/app/views";
+import { dashboardBody as wpLoginDashboardBody, dashboardView as wpLoginDashboardView, layout as wpLoginLayout } from "../addons/wp-login/app/views";
+import type { MainwpSiteView, MainwpView } from "../addons/wp-login/mainwp";
 import { WORDPRESS_APPLICATIONS, type WpSiteView } from "../addons/wp-login/action";
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
@@ -51,6 +57,83 @@ const sites: SiteSummary[] = [
 // is the widest strip a site can have.
 const siteVarnish: Record<string, boolean> = { "www.example.com": true };
 const PREVIEW_PUBLIC_IP = "203.0.113.10";
+
+/** Two connections and a mixed fleet. ?setup shows a first visit with nothing connected. */
+function dnsPreviewState(url: URL): DnsState {
+  const setup = url.searchParams.has("setup");
+  const seeded = dnsSeededPolicy().profiles;
+  const web = { ...seeded[0]!, mode: "enforce" as const };
+  const mailcow = { ...seeded[1]!, zone: { ...seeded[1]!.zone, skipFirewallIps: ["203.0.113.7"] } };
+  const zone = (name: string, status = "active") => ({
+    id: "0".repeat(32), name, status, nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"],
+    account: "Example Agency", connection: "Agency",
+  });
+  const plan = (domain: string, extra: Partial<DnsSitePlan>): DnsSitePlan => ({
+    domain, profileId: "web", mode: "enforce", zone: zone("example.com"), changes: [], problems: [], zoneChoices: [],
+    certificateNames: [domain], ...extra,
+  });
+  const sites = setup ? [
+    { domain: "example.com", type: "wordpress", profileId: null, plan: null, ssl: null },
+    { domain: "shop.example.com", type: "php", profileId: null, plan: null, ssl: null },
+  ] : [
+    { domain: "example.com", type: "wordpress", profileId: "web", plan: plan("example.com", { certificateNames: ["example.com", "www.example.com"] }), ssl: null },
+    { domain: "shop.example.com", type: "php", profileId: "web", plan: plan("shop.example.com", { changes: [
+      { action: "update", subject: "A shop.example.com", detail: "203.0.113.10 · proxied", before: "198.51.100.4 · DNS only" },
+      { action: "create", subject: "AAAA shop.example.com", detail: "2001:db8::10 · proxied" },
+      { action: "delete", subject: "CNAME shop.example.com", detail: "shops.myshopify.com · DNS only" },
+    ] }), ssl: null },
+    { domain: "new-client.example.org", type: "wordpress", profileId: "web", plan: plan("new-client.example.org", { zone: zone("example.org", "pending") }),
+      ssl: "Waiting for DNS: Zone example.org is pending; set its nameservers at the registrar" },
+    { domain: "a-rather-long-customer-hostname.staging.example.net", type: "nodejs", profileId: "web-mailcow", plan: plan("a-rather-long-customer-hostname.staging.example.net", {
+      profileId: "web-mailcow", mode: "report", zone: null,
+      problems: ["example.net is reachable through more than one connection; choose which one manages it"],
+      zoneChoices: [
+        { zone: "example.net", connectionId: "cf-1", zoneId: "1".repeat(32), label: "Agency · Example Agency (active)" },
+        { zone: "example.net", connectionId: "cf-2", zoneId: "1".repeat(32), label: "Church · Church account (active)" },
+      ] }), ssl: null },
+    { domain: "mail.example.org", type: "php", profileId: "web-mailcow", plan: plan("mail.example.org", {
+      profileId: "web-mailcow", mode: "report", zone: zone("example.org"),
+      changes: [
+        { action: "create", subject: "Mailcow domain", detail: "mail.example.org" },
+        { action: "create", subject: "MX mail.example.org", detail: "mail.example.net · priority 10" },
+        { action: "update", subject: "TXT mail.example.org", detail: "v=spf1 include:_spf.mlsend.com mx ~all", before: "v=spf1 include:_spf.mlsend.com ~all" },
+      ] }), ssl: null },
+    { domain: "docs.example.com", type: "static", profileId: null, plan: null, ssl: null },
+  ];
+  const profiles = [web, mailcow].map((profile) => ({ ...profile, sites: sites.filter((site) => site.profileId === profile.id).length }));
+  return {
+    profiles,
+    defaultProfileId: setup ? null : "web",
+    sites,
+    connections: setup ? [] : [
+      { id: "cf-1", label: "Agency", active: true, status: "active", accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }], zones: 42, error: null, hasToken: true },
+      { id: "cf-2", label: "Church", active: true, status: "active", accounts: [{ id: "c".repeat(32), name: "Church account" }], zones: 7, error: null, hasToken: true },
+    ],
+    accounts: setup ? [] : [
+      { connectionId: "cf-1", accountId: "a".repeat(32), label: "Example Agency (Agency)" },
+      { connectionId: "cf-1", accountId: "b".repeat(32), label: "Clients (Agency)" },
+      { connectionId: "cf-2", accountId: "c".repeat(32), label: "Church account (Church)" },
+    ],
+    mailcow: setup
+      ? { url: "", host: "", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "", hasKey: false }
+      : { url: "https://mail.example.net", host: "mail.example.net", dkimSource: "example.net", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "relay@example.net", hasKey: true },
+    server: { ipv4: "", ipv6: "", detected: { ipv4: "203.0.113.10", ipv6: "2001:db8::10" } },
+    orphans: setup ? [] : [{ domain: "retired.example.com", zone: "example.com", records: 4 }],
+    checkedAt: setup ? null : new Date(Date.now() - 4 * 60_000).toISOString(),
+    waitUntil: 0,
+    token: dnsTokenTemplate([web, mailcow]),
+    presets: DNS_PRESETS,
+  };
+}
+
+function dnsPreviewReview(state: DnsState): DnsReview {
+  const sites = state.sites.filter((site) => site.plan).map((site) => ({ ...site.plan!, problems: [], zoneChoices: [] }));
+  return {
+    token: "preview", title: `Enforce on ${sites.length} sites`,
+    text: "4 changes will be made now, and the profile will keep these records as they are from then on. Records at names the profile does not write are left alone.",
+    sites, blocked: false, confirmLabel: "Confirm and enforce", danger: true,
+  };
+}
 
 /** Profiles and a mixed fleet. ?setup shows a first visit, ?empty a box with no sites. */
 function smtpPreviewState(url: URL): SmtpState {
@@ -98,6 +181,8 @@ function gitPreviewLog(site: GitSiteStatus): string {
  * Connected sites and first-time setup. ?first-deploy, ?no-delivery,
  * ?other-provider, ?unavailable, and ?state= cover the expandable controls.
  */
+const gitChanges = new Map<string, GitSiteStatus>();
+
 function gitPreviewSites(url: URL): GitSiteStatus[] {
   const delivered = new Date(Date.now() - 4 * 60_000).toISOString().replace(/\.\d+Z$/, "Z");
   const firstDeploy = url.searchParams.has("first-deploy");
@@ -113,7 +198,7 @@ function gitPreviewSites(url: URL): GitSiteStatus[] {
     result: { branch: "main", directory: "", commit, postDeploy: "composer install --no-dev", postDeployRan: true },
   };
   if (job.state === "failed") job.error = "the post-deploy command failed; the files are deployed and the command did not finish";
-  return [
+  const result: GitSiteStatus[] = [
     {
       domain: "www.example.com", siteUser: "example", siteType: "php",
       path: "/home/example/htdocs/www.example.com", configured: true,
@@ -157,6 +242,7 @@ function gitPreviewSites(url: URL): GitSiteStatus[] {
         error: "The build command failed. Check the deployment output before trying again." },
     },
   ];
+  return result.map((site) => gitChanges.get(site.domain) ?? site);
 }
 
 /**
@@ -471,11 +557,15 @@ function injectedSitesBlocks(state: PanelTweaksState): string {
 /** WordPress everywhere but the static and reverse-proxy sites. */
 function wpLoginPreviewSites(url: URL): WpSiteView[] {
   if (url.searchParams.has("empty")) return [];
+  const status = url.searchParams.get("varnish");
+  const plugin = status && ["inactive", "missing", "unsupported", "error"].includes(status)
+    ? { status: status as "inactive" | "missing" | "unsupported" | "error", seen: true, checkedAt: "2026-10-09T08:45:00Z", error: status === "error" ? "WP-CLI timed out while checking the site. Retry to check again." : "" }
+    : null;
   return [
-    { domain: "www.example.com", user: "example", application: "WordPress", helper: true },
-    { domain: "shop.example.com", user: "shop", application: "WooCommerce", helper: true },
-    { domain: "blog.example.com", user: "blog", application: "Generic", helper: false },
-    { domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", application: "WordPress", helper: false },
+    { domain: "www.example.com", user: "example", application: "WordPress", helper: true, varnishCache: false, varnishExcluded: false, varnishPlugin: null },
+    { domain: "shop.example.com", user: "shop", application: "WooCommerce", helper: true, varnishCache: true, varnishExcluded: false, varnishPlugin: { status: "active", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
+    { domain: "blog.example.com", user: "blog", application: "Generic", helper: false, varnishCache: true, varnishExcluded: false, varnishPlugin: plugin },
+    { domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", application: "WordPress", helper: false, varnishCache: true, varnishExcluded: true, varnishPlugin: { status: "inactive", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
   ];
 }
 
@@ -607,8 +697,236 @@ function terminalPreview(req: Request, url: URL): Response | null {
   return null;
 }
 
+// The WordPress Tools API, acting on the sites the page was last drawn with.
+// ?mainwp=states turns automation on, ?mainwp=cleanup shows a pending cleanup.
+function mainwpPreview(url: URL): MainwpView {
+  const checkedAt = "2026-10-16T09:00:00Z";
+  const entry = (status: MainwpSiteView["status"], ownedConnection = false, seen = true): MainwpSiteView => ({
+    status, seen, checkedAt, ownedConnection,
+    error: status === "error" ? "the Dashboard could not connect; check the site's HTTPS, firewall and security plugins" : "",
+  });
+  return {
+    enabled: url.searchParams.get("mainwp") === "states",
+    dashboard: "mainwp.example.com",
+    excluded: ["staging.newsletter.example-church-of-the-hills.com"],
+    cleanup: url.searchParams.get("mainwp") === "cleanup",
+    owned: 1,
+    sites: {
+      "shop.example.com": entry("connected", true),
+      "www.example.com": entry("connected"),
+      "blog.example.com": entry("not-connected"),
+      "staging.newsletter.example-church-of-the-hills.com": entry("not-connected"),
+      "new.example.com": entry("missing", false, false),
+      "waiting.example.com": entry("waiting-https", false, false),
+      "removed.example.com": entry("missing"),
+      "network.example.com": entry("unsupported"),
+      "retry.example.com": entry("error"),
+    },
+  };
+}
+let wpLoginPreview = { sites: [] as WpSiteView[], automatic: false, error: "", mainwp: mainwpPreview(new URL("http://localhost")), mainwpError: "" };
+const wpLoginPreviewData = () => ({
+  sites: wpLoginPreview.sites,
+  varnish: { enabled: wpLoginPreview.automatic, excluded: [], sites: {} },
+  varnishError: wpLoginPreview.error,
+  mainwp: wpLoginPreview.mainwp, mainwpError: wpLoginPreview.mainwpError,
+});
+async function wpLoginPreviewApi(req: Request, path: string): Promise<Response | null> {
+  if (!path.startsWith("/addons/wp-login/api/")) return null;
+  const body = req.method === "POST" ? await req.json().catch(() => ({})) as Record<string, unknown> : {};
+  const ok = (data: unknown) => Response.json({ ok: true, data });
+  const active = () => ({ status: "active" as const, seen: true, checkedAt: new Date().toISOString(), error: "" });
+  const site = wpLoginPreview.sites.find((entry) => entry.domain === body.domain);
+  switch (path.slice("/addons/wp-login/api/".length)) {
+    case "dashboard":
+      return ok({ html: wpLoginDashboardBody(wpLoginPreviewData()) });
+    case "mainwp-settings":
+      wpLoginPreview.mainwp.enabled = body.enabled === true;
+      if (typeof body.dashboard === "string") wpLoginPreview.mainwp.dashboard = body.dashboard;
+      return ok({});
+    case "mainwp-site":
+      wpLoginPreview.mainwp.excluded = wpLoginPreview.mainwp.excluded.filter((domain) => domain !== body.domain);
+      if (body.excluded === true && typeof body.domain === "string") wpLoginPreview.mainwp.excluded.push(body.domain);
+      return ok({});
+    case "mainwp-connect":
+      if (site) wpLoginPreview.mainwp.sites[site.domain] = { status: "connected", seen: true, ownedConnection: true, checkedAt: new Date().toISOString(), error: "" };
+      return ok({ checked: 1, connected: 1, removed: 0, pending: 0, failed: [] });
+    case "mainwp-sync": return ok({ checked: wpLoginPreview.sites.length, connected: 0, removed: 0, pending: 0, failed: [] });
+    case "mainwp-cleanup":
+      wpLoginPreview.mainwp.enabled = false;
+      wpLoginPreview.mainwp.cleanup = false;
+      wpLoginPreview.mainwp.owned = 0;
+      for (const record of Object.values(wpLoginPreview.mainwp.sites)) {
+        if (!record.ownedConnection) continue;
+        record.status = "missing";
+        record.ownedConnection = false;
+      }
+      return ok({ checked: 1, connected: 0, removed: 1, pending: 0, failed: [] });
+    case "varnish-settings":
+      wpLoginPreview.automatic = body.enabled === true;
+      return ok({});
+    case "varnish-site":
+      if (site) site.varnishExcluded = body.excluded === true;
+      return ok({});
+    case "varnish-install":
+      if (site) site.varnishPlugin = active();
+      return ok({ installed: 1, checked: 1, pending: 0, failed: [] });
+    case "varnish-sync": {
+      const due = wpLoginPreview.sites.filter((entry) => entry.varnishCache && !entry.varnishExcluded
+        && (!entry.varnishPlugin || (entry.varnishPlugin.status === "missing" && !entry.varnishPlugin.seen)));
+      due.forEach((entry) => { entry.varnishPlugin = active(); });
+      return ok({ installed: due.length, checked: wpLoginPreview.sites.filter((entry) => entry.varnishCache && !entry.varnishExcluded).length, pending: 0, failed: [] });
+    }
+    case "remove": {
+      const removed = wpLoginPreview.sites.filter((entry) => entry.helper);
+      removed.forEach((entry) => { entry.helper = false; });
+      return ok({ removed: removed.length, failed: [] });
+    }
+  }
+  return Response.json({ ok: false, error: "the preview cannot sign in to WordPress" }, { status: 400 });
+}
+
 let panelAce: string | null = null;
 const panelCss: Record<string, string> = {};
+
+const finishedPreviewJobs = new Set<string>();
+let previewEnabled: string[] | null = null;
+let phpChanges: PhpResourcesState | null = null;
+const previewDeployments = new Map<string, GitSiteStatus>();
+let previewManagerJob: import("../cli/manager-action").ManagerJobView | null = null;
+let previewJobNumber = 0;
+
+function instaticDashboard(): string {
+  return dashboardView(instances, 30, sites.map((site) => ({ domain: site.domain, type: site.siteType, user: site.siteUser })), versions);
+}
+
+async function repaintPreviewMutation(req: Request, url: URL): Promise<Response | null> {
+  if (req.method === "GET") return null;
+  const path = url.pathname;
+  const source = new URL(req.headers.get("referer") || url);
+  const body = await req.json().catch(() => ({})) as Record<string, any>;
+  return gitPreviewMutation(req, path, source, body)
+    ?? instaticPreviewMutation(path, body)
+    ?? phpPreviewMutation(path, source, body)
+    ?? managerPreviewMutation(path, source);
+}
+
+function gitPreviewMutation(req: Request, path: string, source: URL, body: Record<string, any>): Response | null {
+  const gitRoute = path.match(/^\/addons\/git\/api\/sites\/([^/]+)\/(config|key|webhook)$/);
+  if (gitRoute) {
+    const domain = decodeURIComponent(gitRoute[1]!);
+    const site = structuredClone(gitPreviewSites(source).find((site) => site.domain === domain));
+    if (!site) return Response.json({ ok: false, error: "No preview site" }, { status: 404 });
+    const verb = gitRoute[2];
+    if (verb === "config") {
+      site.configured = req.method !== "DELETE";
+      site.config = site.configured
+        ? {
+            domain, remote: body.remote, branch: body.branch, directory: body.directory || "",
+            postDeploy: body.postDeploy || "", updatedAt: "", webhook: site.config?.webhook ?? null,
+          }
+        : null;
+    } else if (verb === "key") {
+      site.publicKey = "ssh-ed25519 PreviewReplacementKey" + (++previewJobNumber);
+    } else if (site.config) {
+      site.config.webhook = req.method === "DELETE" ? null
+        : { token: "PreviewWebhook" + (++previewJobNumber), lastDeliveryAt: "", lastDelivery: "", lastDeliveryJob: "" };
+    }
+    gitChanges.set(domain, site);
+    return Response.json({ ok: true, data: { site }, html: gitSiteView(site, gitPreviewLog(site)) });
+  }
+  if (path === "/addons/git/api/deployments") {
+    const site = structuredClone(gitPreviewSites(source).find((site) => site.domain === body.domain));
+    if (!site?.config) return Response.json({ ok: false, error: "No repository configured" }, { status: 400 });
+    const id = "20261021T120000Z-" + (++previewJobNumber).toString(16).padStart(6, "0");
+    site.lastJob = {
+      id, domain: site.domain, kind: "deploy", state: "running", step: "Fetching repository", startedBy: "operator",
+      createdAt: new Date().toISOString(), startedAt: "", finishedAt: "", error: "", result: null,
+    };
+    gitChanges.set(site.domain, site);
+    previewDeployments.set(id, site);
+    return Response.json({ ok: true, data: { job: id } });
+  }
+  return null;
+}
+
+function instaticPreviewMutation(path: string, body: Record<string, any>): Response | null {
+  const instanceRoute = path.match(/^\/addons\/instatic\/api\/instances\/([^/]+)\/(start|stop|restart|recreate|update|delete)$/);
+  if (instanceRoute) {
+    const domain = decodeURIComponent(instanceRoute[1]!);
+    const instance = instances.find((instance) => instance.domain === domain);
+    if (!instance) return Response.json({ ok: false, error: "No preview instance" }, { status: 404 });
+    const verb = instanceRoute[2];
+    if (verb === "delete") instances.splice(instances.indexOf(instance), 1);
+    else if (verb === "update") instance.tag = body.tag;
+    else instance.state = verb === "stop" ? "exited" : "running";
+    return Response.json({ ok: true, data: { domain }, html: instaticDashboard() });
+  }
+  return null;
+}
+
+function phpPreviewMutation(path: string, source: URL, body: Record<string, any>): Response | null {
+  if (path.startsWith("/addons/php-resources/api/")) {
+    const state = phpChanges ?? structuredClone(phpResourcesPreviewState(source));
+    if (path.endsWith("/default")) state.defaultCategoryId = body.categoryId;
+    else if (path.endsWith("/assign")) {
+      const category = state.categories.find((category) => category.id === body.categoryId);
+      state.sites.forEach((site) => {
+        if (!body.domains.includes(site.domain)) return;
+        site.categoryId = category?.id ?? null;
+        site.categoryName = category?.name ?? null;
+        site.current = category?.profile ?? STOCK_PROFILE;
+        site.drifted = false;
+      });
+    } else if (path.endsWith("/categories/delete")) {
+      state.categories = state.categories.filter((category) => category.id !== body.id);
+    } else if (path.endsWith("/categories")) {
+      const category = { id: body.id || "preview-category", name: body.name, description: body.description, profile: body.profile };
+      state.categories = state.categories.filter((entry) => entry.id !== category.id).concat(category);
+    } else return null;
+    phpChanges = state;
+    return Response.json({ ok: true, data: { ...state, failures: [] }, html: phpResourcesDashboardView(state) });
+  }
+  return null;
+}
+
+function managerPreviewMutation(path: string, source: URL): Response | null {
+  if (path === "/addons/api/update") {
+    previewManagerJob = {
+      id: "20261021T120000Z-" + (++previewJobNumber).toString(16).padStart(6, "0"), addon: "",
+      kind: "update", state: "running", step: "Downloading", error: "Preview download failed", createdAt: "", startedAt: "", finishedAt: "",
+    };
+    return Response.json({ ok: true, data: { jobId: previewManagerJob.id } });
+  }
+  const managerRoute = path.match(/^\/addons\/api\/addons\/([^/]+)\/(enable|disable)$/);
+  if (managerRoute) {
+    previewEnabled ??= (source.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,php-resources,git").split(",");
+    previewManagerJob = {
+      id: "20261021T120000Z-" + (++previewJobNumber).toString(16).padStart(6, "0"), addon: managerRoute[1]!,
+      kind: managerRoute[2]!, state: "running", step: "Updating addon", error: "", createdAt: "", startedAt: "", finishedAt: "",
+    };
+    return Response.json({ ok: true, data: { jobId: previewManagerJob.id } });
+  }
+  return null;
+}
+
+function finishedPreviewStream(job: { state: string; id: string }, log: string, finish: () => void, state = "done"): Response {
+  let timer: ReturnType<typeof setTimeout>;
+  const stream = new ReadableStream({
+    start(controller) {
+      const send = () => controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ job, log })}\n\n`));
+      send();
+      timer = setTimeout(() => {
+        job.state = state;
+        finish();
+        send();
+        controller.close();
+      }, 500);
+    },
+    cancel() { clearTimeout(timer); },
+  });
+  return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
+}
 
 const server = Bun.serve({
   hostname: "127.0.0.1",
@@ -618,6 +936,10 @@ const server = Bun.serve({
     const path = url.pathname;
     const terminalReply = terminalPreview(req, url);
     if (terminalReply) return terminalReply;
+    const wpLoginApi = await wpLoginPreviewApi(req, path);
+    if (wpLoginApi) return wpLoginApi;
+    const repaintReply = await repaintPreviewMutation(req, url);
+    if (repaintReply) return repaintReply;
     if (req.method !== "GET") return Response.json({ ok: false, error: "UI preview only; no changes were made." }, { status: 409 });
     // These are the same two logo URLs the installed manager gets from its
     // CloudPanel origin. Only this development preview fetches the public demo.
@@ -701,9 +1023,29 @@ const server = Bun.serve({
         { headers: withCsrfCookie({}, "preview-token") },
       );
     }
+    if (path.startsWith("/addons/api/jobs/") && previewManagerJob) {
+      const job = previewManagerJob;
+      return finishedPreviewStream(job, "Addon updated", () => {
+        if (job.kind === "update") return;
+        previewEnabled = previewEnabled!.filter((addon) => addon !== job.addon);
+        if (job.kind === "enable") previewEnabled.push(job.addon);
+      }, job.kind === "update" ? "failed" : "done");
+    }
+    if (path === "/addons/git/api/view") {
+      const selected = url.searchParams.get("domain");
+      const all = gitPreviewSites(url);
+      const site = all.find((site) => site.domain === selected);
+      return Response.json({ ok: true, html: site ? gitSiteView(site, gitPreviewLog(site)) : gitFleetView(all.filter((site) => site.configured)) });
+    }
     // The job the Git pages watch, so ?state=running can be reviewed as a live
     // view rather than as a stream that never answers.
     if (path.startsWith("/addons/git/api/jobs/")) {
+      const deployment = Array.from(previewDeployments.entries()).find(([id]) => path.includes(id))?.[1];
+      if (deployment?.lastJob) {
+        return finishedPreviewStream(deployment.lastJob, gitPreviewLog(deployment), () => {
+          deployment.lastJob!.finishedAt = new Date().toISOString();
+        });
+      }
       // The watcher URL has no query, so use the page that requested it to keep
       // a running preview running instead of reloading it in a loop as done.
       const source = req.headers.get("referer");
@@ -748,7 +1090,7 @@ const server = Bun.serve({
     const notice = url.searchParams.has("update") || path === "/addons/update" ? { current: "0.9.3", latest: "0.9.4" } : null;
     const age = url.searchParams.has("stale") ? 7200 : 30;
     const state = url.searchParams.get("state");
-    const currentJob: JobView = state && ["running", "failed", "queued"].includes(state)
+    const currentJob: JobView = !finishedPreviewJobs.has(job.id) && state && ["running", "failed", "queued"].includes(state)
       ? { ...job, state, result: null, finishedAt: "", step: "Copying files", error: state === "failed" ? "Could not copy the source files. The staging site was removed." : "" }
       : job;
     let html: string;
@@ -758,7 +1100,7 @@ const server = Bun.serve({
         current: "0.9.3", latest: url.searchParams.has("current") ? "0.9.3" : "0.9.4", hasUpdate: !url.searchParams.has("current"),
       }, "0.9.3", {
         csrf: "preview-csrf-token",
-        job: jobState ? {
+        job: previewManagerJob?.kind === "update" ? previewManagerJob : jobState ? {
           id: "20260910T093000Z-abc123", kind: "update", addon: "", state: jobState,
           step: "Downloading release", error: jobState === "failed" ? "Could not download the release. Try again later." : "",
           createdAt: "2026-09-10T09:30:00Z", startedAt: "2026-09-10T09:30:01Z", finishedAt: "",
@@ -768,7 +1110,7 @@ const server = Bun.serve({
     if (path === "/addons/") {
       // ?enabled= picks which addons are on, so the Available section and the
       // enable/disable buttons can be reviewed without a CloudPanel install.
-      const enabled = empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,php-resources,git").split(",").filter(Boolean);
+      const enabled = previewEnabled ?? (empty ? [] : (url.searchParams.get("enabled") ?? "cloudflare-ips,instatic,stager,maintenance,php-resources,git").split(",").filter(Boolean));
       const previewJob = state && ["running", "queued", "failed"].includes(state)
         ? {
             id: "20260910T093000Z-abc123", kind: "enable", addon: "stager", state,
@@ -777,7 +1119,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login", "smtp", "terminal"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login", "smtp", "terminal"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
@@ -829,9 +1171,43 @@ const server = Bun.serve({
     } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
       html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites), notice);
     } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {
-      html = wpLoginLayout("WordPress Sign-In", wpLoginDashboardView(wpLoginPreviewSites(url)), notice);
+      wpLoginPreview = {
+        sites: wpLoginPreviewSites(url),
+        mainwp: mainwpPreview(url), mainwpError: url.searchParams.get("mainwp") === "unreadable" ? "The MainWP settings cannot be read." : "",
+        automatic: url.searchParams.has("automatic"),
+        error: url.searchParams.get("varnish") === "unreadable"
+          ? "/var/lib/clp-addons/wp-login/varnish.json cannot be read: the WordPress Varnish settings are invalid" : "",
+      };
+      const mainwpOnly = ["mainwp.example.com", "new.example.com", "waiting.example.com", "removed.example.com", "network.example.com", "retry.example.com"];
+      if (!empty) {
+        for (const domain of mainwpOnly) wpLoginPreview.sites.push({
+          domain, user: domain.split(".")[0]!, application: "WordPress", helper: false, varnishCache: false, varnishExcluded: false, varnishPlugin: null,
+        });
+      }
+      html = wpLoginLayout("WordPress Tools", wpLoginDashboardView(wpLoginPreviewData()), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
-      html = phpResourcesLayout("PHP resources", phpResourcesDashboardView(phpResourcesPreviewState(url)), notice);
+      html = phpResourcesLayout("PHP Resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice);
+    } else if (path === "/addons/dns/" || path === "/addons/dns") {
+      // ?dialog=profile|new|review|site|choose|connection|mailcow|server opens that dialog on load;
+      // ?at=<selector> hides the cards above that one, for a phone screenshot of something below the fold; ?dark
+      // draws the dark theme.
+      const state = dnsPreviewState(url);
+      const dialog = url.searchParams.get("dialog");
+      const at = url.searchParams.get("at");
+      const openers: Record<string, string> = {
+        profile: "dnsEditProfile('web-mailcow')",
+        new: "dnsEditProfile('')",
+        review: `dnsShowReview(${JSON.stringify(dnsPreviewReview(state))})`,
+        site: "dnsShowSite('shop.example.com')",
+        choose: "dnsShowSite('a-rather-long-customer-hostname.staging.example.net')",
+        connection: "dnsEditConnection('')",
+        mailcow: "dnsEditMailcow()",
+        server: "dnsEditServer()",
+      };
+      const dark = url.searchParams.has("dark") ? "document.cookie='theme=dark; Path=/';syncTheme();" : "";
+      const opener = dark + (dialog ? openers[dialog] ?? "" : at ? `const card=document.querySelector(${JSON.stringify(at)})?.closest("#dns-root > *");for(let el=document.getElementById("dns-root").firstElementChild;el&&el!==card;el=el.nextElementSibling)el.style.display="none"` : "");
+      html = dnsLayout("DNS", dnsDashboardView(state), notice)
+        .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener.replaceAll("<", "\\u003c")}})</script></body>` : "</body>");
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {
       // ?profile=<id> (or ?profile= for a new one) and ?domains=<site> open a dialog on load, like ?confirm= does.
       const arg = (name: string) => JSON.stringify(url.searchParams.get(name)).replaceAll("<", "\\u003c");
@@ -840,19 +1216,23 @@ const server = Bun.serve({
       html = smtpLayout("SMTP Relay", smtpDashboardView(smtpPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
-      html = cloudflareLayout("Cloudflare IP access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
+      html = cloudflareLayout("Cloudflare IP Access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {
       html = instaticLayout("Instatic sites", dashboardView(empty ? [] : instances, age,
         sites.map((s) => ({ domain: s.domain, type: s.siteType, user: s.siteUser })), versions), notice);
     } else if (path === "/addons/instatic/new") {
       html = instaticLayout("New Instatic site", newInstanceView(39003, versions), notice);
     } else if (path === "/addons/instatic/jobs/preview-instatic-job") {
-      html = instaticLayout("Creating blog.example.com", instaticJobView(instaticCreationJob, instaticLogs), notice);
+      html = instaticLayout("Creating blog.example.com", instaticJobView(url.searchParams.has("finish") && !finishedPreviewJobs.has(instaticCreationJob.id) ? { ...instaticCreationJob, state: "running" } : instaticCreationJob, instaticLogs), notice);
     } else if (path.startsWith("/addons/instatic/api/") && path.endsWith("/creation-log")) {
       return Response.json({ ok: true, data: { domain: "pages.example.com", log: instaticLogs } });
     } else if (path.startsWith("/addons/instatic/api/") && path.endsWith("/logs")) {
       return Response.json({ ok: true, data: { logs: "Instatic listening on 127.0.0.1:39000\nReady to accept requests" } });
     } else if (path === "/addons/instatic/api/jobs/preview-instatic-job/events" || (path === "/addons/instatic/api/jobs/preview-instatic-job" && req.headers.get("accept")?.includes("text/event-stream"))) {
+      const source = req.headers.get("referer");
+      if (source && new URL(source).searchParams.has("finish")) {
+        return finishedPreviewStream({ ...instaticCreationJob, state: "running" }, instaticLogs, () => finishedPreviewJobs.add(instaticCreationJob.id));
+      }
       if (server && typeof server.timeout === "function") {
         try { server.timeout(req, 0); } catch {}
       }
@@ -880,7 +1260,7 @@ const server = Bun.serve({
             varnishCache: siteVarnish[site.domain] === true,
             ...(url.searchParams.has("no-ip") ? {} : { publicIp: PREVIEW_PUBLIC_IP }),
           })
-        : gitLayout("Git deploy", gitFleetView(empty ? [] : gitSites.filter((site) => site.configured)), notice);
+        : gitLayout("Git Deploy", gitFleetView(empty ? [] : gitSites.filter((site) => site.configured)), notice);
     } else if (path === "/addons/stager/" || path === "/addons/stager") {
       // ?domain= is the site-scoped page the Staging tab reaches, drawn here
       // with the panel's chrome around it the way the standalone ?embed=0 page
@@ -918,6 +1298,10 @@ const server = Bun.serve({
     } else if (path === "/addons/stager/jobs/preview-job") {
       html = stagerLayout("Staging site details", jobView(currentJob, logs), notice);
     } else if (path === "/addons/stager/api/jobs/preview-job/events" || (path === "/addons/stager/api/jobs/preview-job" && req.headers.get("accept")?.includes("text/event-stream"))) {
+      const source = req.headers.get("referer");
+      if (source && new URL(source).searchParams.has("finish")) {
+        return finishedPreviewStream({ ...job, state: "running" }, logs, () => finishedPreviewJobs.add(job.id));
+      }
       if (server && typeof server.timeout === "function") {
         try { server.timeout(req, 0); } catch {}
       }

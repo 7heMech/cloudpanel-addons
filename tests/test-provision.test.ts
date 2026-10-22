@@ -865,3 +865,42 @@ test("a failed ownership change is not swallowed", () => {
   ], { cwd: REPO, encoding: "utf8" });
   expect(result.trim()).toBe("EPERM");
 });
+
+test("repair removes legacy SMTP and DNS units and reloads systemd only when needed", () => {
+  const root = mkdtempSync(join(tmpdir(), "legacy-units-"));
+  const legacy = ["clp-addons-smtp-reconcile.path", "clp-addons-smtp-reconcile.service", "clp-addons-dns.service"];
+  for (const unit of legacy) writeFileSync(join(root, unit), "old unit");
+  try {
+    const output = execFileSync(process.execPath, ["-e", `
+      import { mock } from "bun:test";
+      const fs = await import("node:fs");
+      const remove = fs.rmSync;
+      mock.module("node:fs", () => ({ ...fs, rmSync: (path, options) => {
+        if (!String(path).startsWith("/etc/sudoers.d/")) remove(path, options);
+      } }));
+      const paths = await import("./cli/paths.ts");
+      mock.module("./cli/paths.ts", () => ({ ...paths, SYSTEMD_DIR: ${JSON.stringify(root)} }));
+      const util = await import("./cli/util.ts");
+      const calls = [];
+      mock.module("./cli/util.ts", () => ({ ...util,
+        run: (command, args) => calls.push([command, ...args]),
+        tryRun: (command, args) => { calls.push([command, ...args]); return { ok: true, out: "" }; },
+      }));
+      const { removeLegacyUnits } = await import("./cli/provision.ts");
+      removeLegacyUnits(true);
+      const first = [...calls];
+      calls.length = 0;
+      removeLegacyUnits(true);
+      console.log(JSON.stringify({ first, second: calls }));
+    `], { cwd: REPO, encoding: "utf8" });
+    const result = JSON.parse(output);
+    expect(result.first).toEqual([
+      ...legacy.map((unit) => ["systemctl", "disable", "--now", unit]),
+      ["systemctl", "daemon-reload"],
+    ]);
+    expect(result.second).toEqual([]);
+    for (const unit of legacy) expect(lstatSync(join(root, unit), { throwIfNoEntry: false })).toBeUndefined();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

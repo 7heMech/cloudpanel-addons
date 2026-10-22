@@ -24,6 +24,7 @@ import { runAuthActionStdin } from "./auth-action";
 import { runManagerAction, type ManagerOps } from "./manager-action";
 import { runSmtpSubmit } from "../addons/smtp/submit";
 import { runTerminalPty } from "../addons/terminal/pty";
+import { runNewSiteWork } from "./maintenance";
 
 /**
  * The privileged half of the three manager verbs.
@@ -132,6 +133,11 @@ async function main(): Promise<number> {
     case "self-update": fatal("self-update is deprecated; use clp-addons update");
     case "recon": await runRecon(); return 0;
     case "repair": await cmdRepair(rest); return 0;
+    case "sync-sites":
+      requireRoot("sync-sites");
+      if (rest.length) fatal("sync-sites takes no arguments");
+      await runNewSiteWork(installedAddons());
+      return 0;
     case "status": await cmdStatus(); return 0;
     case "maintenance": await cmdMaintenance(rest); return 0;
     case "uninstall": cmdUninstall(rest); return 0;

@@ -105,6 +105,8 @@ main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 25px 12px 40px; 
 .page-heading h1 { margin: 0; overflow-wrap: anywhere; }
 .page-heading p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
 .page-heading > .btn { flex-shrink: 0; }
+.page-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; max-width: 100%; }
+.page-actions > .btn { min-height: 50px; padding: 8px 30px; }
 .card { min-width: 0; background: var(--panel); border: 1px solid var(--card-border);
   border-radius: 4px; box-shadow: var(--shadow); padding: 25px; margin-bottom: 30px; }
 .card-header { display: flex; align-items: center; justify-content: space-between; gap: 16px;
@@ -298,6 +300,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .clp-addon-tabs { padding: 0 5px; margin-bottom: 24px; }
   .page-heading { flex-wrap: wrap; }
   .page-heading h1 { font-size: 26px; }
+  .form-actions { flex-wrap: wrap; }
+  .form-actions > .btn { max-width: 100%; }
   .card { padding: 20px; }
   .card-header { margin: -20px -20px 20px; padding: 20px; }
   .card-table { padding: 0; }
@@ -314,17 +318,19 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .fleet-table td { border: 0; padding: 0; max-width: none; text-align: left; white-space: normal; }
   /* Keep the checkbox column a known size so the domain starts beside it, even
      when a panel stylesheet gives table cells an unexpected intrinsic width. */
-  .fleet-table td.site-select { display: flex; flex: 0 0 42px; width: 42px; justify-content: center; }
+  .fleet-table td.site-select { display: flex; flex: 0 0 42px; width: 42px; justify-content: center; order: -3; }
   /* The domain takes the first line, with what the site is as a tag beside it. */
-  .fleet-table td.site-cell { flex: 1 1 calc(100% - 200px); min-width: 0; font-size: 16px; }
+  .fleet-table td.site-cell { flex: 1 1 calc(100% - 200px); min-width: 0; font-size: 16px; order: -2; }
   .fleet-table td.type-cell { flex: 0 1 auto; max-width: 45%; margin: 2px 0 0 auto; padding: 2px 6px;
     border: 1px solid var(--border); border-radius: 4px; color: var(--muted);
-    font-size: 11px; line-height: 1.3; white-space: nowrap; }
+    font-size: 11px; line-height: 1.3; white-space: nowrap; order: -1; }
   /* Half the row each, whatever they hold: a cell that widens with its content
      reflowed the whole row, so switching a site into maintenance -- where the
      status badge grows by half its width -- moved every cell under it. */
   .fleet-table td[data-label] { flex: 1 1 calc(50% - 6px); min-width: 0; }
   .fleet-table td.wide-cell { flex-basis: 100%; }
+  .fleet-table td:empty { display: none; }
+  .fleet-table .row-actions .actions { justify-content: flex-start; margin-left: 0; max-width: none; }
   /* Two buttons do not fit half a phone's width, and a badge wider than its
      half would reach into the cell beside it. */
   .fleet-table td.action-cell:has(.btn) { flex-basis: 100%; }

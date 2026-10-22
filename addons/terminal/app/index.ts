@@ -1,4 +1,3 @@
-import type { Server } from "bun";
 import {
   bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, policyResponse, readJsonObject,
   policyHeaders, safeDecodePathSegment, SECURITY_HEADERS, validateDomain,
@@ -44,7 +43,7 @@ export async function handle(
   req: Request,
   path: string,
   updateNotice?: { current: string; latest: string } | null,
-  server?: Server<unknown> | null,
+  _server?: unknown,
   auth?: { user: string; roles: string[] } | null,
 ): Promise<Response> {
   const method = req.method;
@@ -110,7 +109,7 @@ export async function handle(
   const id = match[1]!;
 
   if (match[2] === "/events" && method === "GET") {
-    return terminalSessions.attach(id, owner, req, server) ?? NOT_FOUND();
+    return terminalSessions.attach(id, owner, req) ?? NOT_FOUND();
   }
 
   const denied = guardMutation(req);

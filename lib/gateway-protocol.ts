@@ -90,14 +90,23 @@ export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
 ]);
 
 /**
- * `sign-in` mints a credential for somebody else's WordPress and `remove`
- * deletes a file from every site, so both are named here as narrowly as the
- * rest: a verb, at most one `--domain`, and no path anywhere.
+ * WordPress Tools keeps its stable wp-login identifier. Sign-in credentials,
+ * helper removal, optional Varnish installation and MainWP enrollment each have
+ * fixed verbs; none accepts paths, plugin names or arbitrary commands.
  */
 export const WP_LOGIN_ALLOWED_VERBS = new Set([
   "sites",
   "sign-in",
   "remove",
+  "varnish-settings",
+  "varnish-site",
+  "varnish-install",
+  "varnish-sync",
+  "mainwp-settings",
+  "mainwp-site",
+  "mainwp-sync",
+  "mainwp-connect",
+  "mainwp-cleanup",
 ]);
 
 export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
@@ -108,6 +117,16 @@ export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
 
 export const SMTP_ALLOWED_VERBS = new Set([
   "list", "save-profile", "delete-profile", "assign", "set-default", "save-grants", "test",
+]);
+
+/**
+ * `provision` admits ordinary panel users as well as site managers, and
+ * carries `--as-user` so the action holds it to that account's own sites.
+ */
+export const DNS_ALLOWED_VERBS = new Set([
+  "list", "check", "save-profile", "delete-profile", "set-mode", "assign", "set-default", "confirm",
+  "save-connection", "remove-connection", "choose-zone", "save-mailcow", "save-server", "remove-records", "forget-records",
+  "provision",
 ]);
 
 /**

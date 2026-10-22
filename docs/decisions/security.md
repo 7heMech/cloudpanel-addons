@@ -39,19 +39,54 @@ without directory listing; flag files remain root-only and HTML files are
 readable by Nginx. Custom pages are size-bounded, stripped of active markup,
 and served with a restrictive content security policy.
 
-WordPress Sign-In is the only addon that puts its own code inside a site, and it
-is a separate addon for that reason: an operator who does not install it does
-not have that code on the box, and the gateway's addon-and-verb table refuses
-the verb to anything else. It installs a must-use plugin and a one-time secret,
-and later removes them, through `runuser` as the site's user: the site's user
-controls every name under its root, so a symlink there would aim a root write
-or `rm -rf` anywhere on the box. Those commands get only a fixed `PATH`, not
-root's environment, and each has 30 seconds. It refuses a domain the panel
-does not have, a root that is not a WordPress, and a site account that belongs
-to the box or shares its uid with another site, as SMTP and Terminal do. The secret is a SHA-256 of a token that lives for a minute,
-is removed before it is compared, and travels in a POST body rather than a URL.
-Disabling or uninstalling the addon removes the plugin from every site. See
-[WordPress Sign-In](wp-login.md).
+WordPress Tools (addon identifier `wp-login`) is the only addon that puts its
+own code inside a site, and it is a separate addon for that reason: an operator
+who does not install it does not have that code on the box, and the gateway's
+addon-and-verb table refuses its verbs to anything else. It installs a
+must-use plugin and a one-time secret, and later removes them, through
+`runuser` as the site's user: the site's user controls every name under its
+root, so a symlink there would aim a root write or `rm -rf` anywhere on the
+box. Those commands get only a fixed `PATH`, not root's environment. Minting
+has ten seconds and removal has thirty. It refuses a domain the panel does not
+have, a root that is not a WordPress, and a site account that belongs to the
+box or shares its uid with another site, as SMTP and Terminal do. The secret is
+a SHA-256 of a token that lives for a minute, is removed before it is compared,
+and travels in a POST body rather than a URL.
+An administrator can explicitly allow their request address through CloudPanel's
+native basic-auth IP allowlist. The root action rejects that operation for
+named non-administrator requests, preserves the site's credentials, and updates
+only the native allowlist and a trusted generated vhost, validating and reloading
+Nginx with rollback on failure through the same vhost machinery as Cloudflare IP
+Access. Extra access rules and unknown includes in the affected authentication
+scope are refused, including CloudPanel's Cloudflare range include, so adding
+`satisfy any` cannot turn an existing access rule into a public auth bypass.
+Minting runs before the basic-auth database transaction, and maintenance
+bypasses run after it commits. The shared HTTP IP reader normalizes mapped IPv4
+hosts before either gate uses the request address; native basic-auth allowlist
+updates normalize mapped single hosts while preserving CIDRs. Consent to a
+maintenance bypass does not authorize a basic-auth bypass. Nginx commands and
+worker handovers are bounded on both the change and recovery paths, leaving
+recovery time within the gateway's 60-second deadline. Only the sign-in
+window's own page lets a form leave, and only to the one site it signs in to.
+Disabling or uninstalling removes the sign-in helper from every site. Accepted
+IP bypasses stay in their respective CloudPanel or Maintenance Mode settings.
+Optional
+Varnish automation runs fixed WP-CLI commands after dropping root to the site's
+Unix user, using its configured PHP version, for the same accounts sign-in
+accepts and under a deadline root enforces itself. Only administrators can manage
+that policy or install the official CLP plugin; sign-in's non-administrator
+exception does not apply. The normal WordPress plugin remains installed when
+automation stops. See [WordPress Tools](wp-login.md).
+
+CloudPanel's native basic-auth allowance inherits its global real-IP trust:
+`set_real_ip_from 0.0.0.0/0` accepts a forged `X-Real-IP` from any IPv4 peer.
+Anyone who knows an allowed IP can replay it to bypass authentication. Ordinary
+Cloudflare proxy requests carry the visitor in `CF-Connecting-IP`, which that
+configuration does not use; Nginx sees the edge, so the panel IP may never
+match. Both limits appear in the confirmation. The addon retains native
+behavior and changes neither global `nginx.conf` nor per-site real-IP trust.
+A local override would also alter CloudPanel's Cloudflare-only checks and need
+removal and regeneration handling beyond the native allowlist's lifecycle.
 
 ## CloudPanel authentication
 
@@ -75,22 +110,24 @@ login page, and authentication failures do not fall back to anonymous access.
 The gate is where a request goes by default, after the URL is taken apart and
 before the route is chosen. The liveness probe the update page polls is inside
 it, and nothing reads it without a session: the page that polls it has one. The
-two exceptions are below: three named routes, and the Git webhook, which is
+two exceptions are below: five named routes, and the Git webhook, which is
 settled ahead of the gate by a credential of its own.
 
-Three routes are named as exceptions. Two are the WordPress sign-in addon's:
+Five routes are named as exceptions. Two are WordPress Tools':
 `POST /wp-login/api/sign-in` and the `GET /wp-login/api/session` that hands out
 the CSRF pair, because the link that uses them is injected into CloudPanel's own
 Sites page, which a non-administrator sees too. The third is Panel Tweaks'
 read-only `GET /panel-tweaks/api/panel`, which answers the script injected into
-that same page with the sites CloudPanel would list for the caller.
+that same page with the sites CloudPanel would list for the caller. The last two
+are DNS's `POST /dns/api/provision` and its `GET /dns/api/session`, which Panel
+Tweaks' script calls on the page a new site lands on, for whoever created it.
 
 A session that only clears the gate this way is dispatched straight to that
 addon, ahead of the update check and the manager's own routes, so nothing else
 in the manager runs for it. The authorisation it skips here is made up for as
-root: the sign-in action is told which panel user the request is for and refuses
-any site CloudPanel would not list for that account. The set is a literal of
-three strings rather than a prefix or a pattern, so a route cannot join it by
+root: the sign-in and provision actions are told which panel user the request is
+for and refuse any site CloudPanel would not list for that account. The set is a
+literal of five strings rather than a prefix or a pattern, so a route cannot join it by
 being named something similar.
 
 An addon may also declare `siteManager` in its catalog definition, which admits
@@ -219,3 +256,24 @@ archives, recovery archives, and job results containing generated credentials
 are mode `0600` below non-public directories. Instatic credentials used by a
 Stager clone travel to the action over stdin and are removed from the job after
 source authentication.
+
+## MainWP authority
+
+Enrollment deliberately gives one administrator-chosen Dashboard administrative
+control of each connected site: a compromised Dashboard can run PHP as every
+connected site's user. A child receives only its own Security ID and the
+Dashboard's public key. Child and Dashboard code run as their own site users
+through the shared WP-CLI runner, and root only validates their marked replies.
+A child's administrator login reaches the Dashboard only if it matches
+WordPress's strict login characters. The Security ID travels on stdin, never in
+arguments, and stays in root-only state only until the connection is verified or
+cleaned up. Adapter failures are fixed codes, so no adapter reply text reaches
+logs or the page; a failed plugin download keeps WP-CLI's bounded summary, as
+Varnish's does. Readiness and registration verify certificates, and the record keeps
+verifying. Firewalls, Cloudflare-only rules, basic auth and maintenance pages are
+never bypassed. Every MainWP route is administrator-only behind CSRF; Connect and
+cleanup need explicit confirmation. Repair only queues a runtime-bounded policy
+pass; site code and enrollment run outside the global operation lock. Each
+policy checks the enabled config under its lock, and disable and uninstall hold
+both policy locks while withdrawing it. Revoking MainWP access does not undo
+what was done through it or end WordPress sessions it opened.

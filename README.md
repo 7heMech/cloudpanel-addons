@@ -4,6 +4,8 @@ Extra features for [CloudPanel](https://www.cloudpanel.io/): staging copies,
 maintenance pages, Git deploys, one-click WordPress sign-in, and more. You sign
 in with your existing CloudPanel login.
 
+This is an unofficial project, not affiliated with or endorsed by CloudPanel.
+
 ## Install
 
 Log in to your server as **root** and run:
@@ -25,6 +27,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | Addon | Description |
 | --- | --- |
 | Cloudflare IP Access | Allow traffic from Cloudflare only, across all sites and for new ones. |
+| [DNS](docs/dns.md) | Each site's Cloudflare records kept to a profile, with Mailcow set up for its mail. |
 | [Instatic CMS](https://github.com/CoreBunch/Instatic) | Instatic CMS sites on CloudPanel. |
 | Stager | Staging copies of WordPress, PHP, static and Instatic sites, and promotion back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
 | Maintenance Mode | A customizable 503 page per site, with instant toggles and IP bypasses. |
@@ -32,13 +35,13 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | [SMTP Relay](docs/smtp-relay.md) | Send each site's mail through SMTP relay profiles, WordPress and PHP included. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
 | Panel Tweaks | Site search and columns, automatic SSL for native sites, mobile layouts and themes. |
-| WordPress Sign-In | One-click sign-in to any WordPress on the server, no password needed. |
+| [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in, optional CLP Varnish Cache installation and MainWP Child enrollment. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
 
 Only CloudPanel administrators see the Addons tab. Site managers can also use
 Git Deploy and create and manage Instatic sites. Other panel users get Panel
-Tweaks' site search and columns and the WordPress Sign-In link on the Sites
-page, for their own sites.
+Tweaks' site search and columns and the WP Login link on the Sites page, for
+their own sites.
 
 ## Manage
 
@@ -52,7 +55,7 @@ page, for their own sites.
 | `clp-addons maintenance <domain> [on\|off\|status]` | Control or inspect maintenance mode for a site. |
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
-Addon names are `cloudflare-ips`, `instatic`, `stager`, `maintenance`,
+Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,
 `php-resources`, `git`, `panel-tweaks`, `wp-login`, `smtp`, and `terminal`. Run
 `clp-addons --help` for version selection and data removal options.
 

@@ -42,10 +42,20 @@ function writeProfile(profile) {
   paintProfileModes();
 }
 
-// A change here rewrites pool files, renames rows and moves counts between
-// categories, so the page is drawn again by the server rather than patched in
-// nine places. The message survives the reload, so what happened is still said.
-const FLASH_KEY = 'clp-php-resources-flash';
+function paintResources(html) {
+  const selected = selectedRows().map(function (row) { return row.dataset.domain; });
+  const category = CLP_ROOT.getElementById('bulk-category')?.value || '';
+  repaintView(CLP_ROOT.getElementById('clp-content'), html);
+  busy(false);
+  siteRows().forEach(function (row) {
+    row.querySelector('.site-checkbox').checked = selected.includes(row.dataset.domain);
+  });
+  const picker = CLP_ROOT.getElementById('bulk-category');
+  if (picker && Array.from(picker.options).some(function (option) { return option.value === category; })) {
+    picker.value = category;
+  }
+  paintSelection();
+}
 
 /** What to say when a change landed on some sites and not on others. */
 function withFailures(message, failures) {
@@ -66,10 +76,13 @@ async function send(path, body, done) {
       body: JSON.stringify(body),
     });
     const flash = withFailures(done, (reply.data || {}).failures);
-    reloadWithFlash(FLASH_KEY, flash.message, flash.kind);
+    paintResources(reply.html);
+    notify(flash.message, flash.kind);
+    return true;
   } catch (error) {
     notify(error.message, 'error');
     busy(false);
+    return false;
   }
 }
 
@@ -140,9 +153,13 @@ async function deleteCategory(button) {
 async function setDefaultCategory(select) {
   const id = select.value || null;
   const label = select.options[select.selectedIndex].textContent;
-  await send('/api/default', { categoryId: id }, id
+  const saved = await send('/api/default', { categoryId: id }, id
     ? 'New sites will join ' + label + '. Sites that already exist are unchanged.'
     : 'New sites will keep the CloudPanel limits. Sites that already exist are unchanged.');
+  if (!saved) {
+    const previous = Array.from(select.options).find(function (option) { return option.defaultSelected; });
+    select.value = previous ? previous.value : '';
+  }
 }
 
 // --- sites ----------------------------------------------------------------
@@ -182,9 +199,10 @@ function categoryLabel(id) {
 async function assignRow(select) {
   const row = select.closest('tr[data-domain]');
   const id = select.value || null;
-  await send('/api/assign', { domains: [row.dataset.domain], categoryId: id }, id
+  const saved = await send('/api/assign', { domains: [row.dataset.domain], categoryId: id }, id
     ? row.dataset.domain + ' is now in ' + categoryLabel(id) + '.'
     : row.dataset.domain + ' is back on the CloudPanel limits.');
+  if (!saved) select.value = row.dataset.categoryId || '';
 }
 
 async function assignSelected() {
@@ -243,6 +261,7 @@ async function repairDrifted() {
   busy(true);
   const failures = [];
   let repaired = 0;
+  let html = null;
   for (const entry of groups) {
     try {
       const reply = await call('/api/assign', {
@@ -250,6 +269,7 @@ async function repairDrifted() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ domains: entry[1], categoryId: entry[0] }),
       });
+      html = reply.html;
       const written = (reply.data || {}).failures || [];
       written.forEach(function (failure) { failures.push(failure); });
       repaired += entry[1].length - written.length;
@@ -258,12 +278,13 @@ async function repairDrifted() {
     }
   }
   const flash = withFailures(plural(repaired, 'site') + ' are back on the limits of their category.', failures);
-  reloadWithFlash(FLASH_KEY, flash.message, flash.kind);
+  if (html !== null) paintResources(html);
+  busy(false);
+  notify(flash.message, flash.kind);
 }
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', function () { showCarriedFlash(FLASH_KEY); paintSelection(); });
+  document.addEventListener('DOMContentLoaded', paintSelection);
 } else {
-  showCarriedFlash(FLASH_KEY);
   paintSelection();
 }

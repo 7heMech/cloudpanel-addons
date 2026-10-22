@@ -7,6 +7,7 @@
 import { randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import { secretEquals } from "./secret-equals";
+import { normalizeMappedIpv4 } from "./ip-address";
 
 const CSRF_COOKIE = "clp_addons_csrf";
 const CSRF_HEADER = "x-clp-addons-csrf";
@@ -142,7 +143,7 @@ export class BodyError extends Error {
 export const MAX_BODY_BYTES = 64 * 1024;
 
 /**
- * Read a request body as text, refusing anything larger than `maxBytes`.
+ * Read an HTTP body as text, refusing anything larger than `maxBytes`.
  *
  * The declared length is checked first so an oversized body can be refused
  * before a byte of it is read. That check alone is not enough: `Content-Length`
@@ -151,7 +152,7 @@ export const MAX_BODY_BYTES = 64 * 1024;
  * could measure it. So the stream is counted as it arrives and abandoned the
  * moment it passes the limit.
  */
-export async function readBoundedText(req: Request, maxBytes = MAX_BODY_BYTES): Promise<string> {
+export async function readBoundedText(req: Request | Response, maxBytes = MAX_BODY_BYTES): Promise<string> {
   const declared = req.headers.get("content-length");
   if (declared !== null) {
     // RFC 9110 gives Content-Length as 1*DIGIT. Number() would take "0x40",
@@ -292,12 +293,12 @@ const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-
  * The browser's address as the panel saw it, preferring the visitor address
  * Cloudflare sends. The panel's own Nginx takes forwarded addresses from any
  * peer, so this is what the browser claims rather than something proven: it
- * only decides what an operator is shown or offered, and the one thing it can
- * write -- a maintenance bypass -- is one an administrator could add by hand.
+ * only decides what an operator is shown or offered. Any maintenance or basic-
+ * auth bypass requires an administrator, who could add it by hand.
  */
 export function clientIp(req: Request): string {
   const candidate = (req.headers.get("cf-connecting-ip") ?? req.headers.get("x-real-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0] ?? "").trim();
-  return isIP(candidate) ? candidate : "";
+  return isIP(candidate) ? normalizeMappedIpv4(candidate) : "";
 }
 
 /** A hostname from a request, lowercased and without a trailing dot, or null. */

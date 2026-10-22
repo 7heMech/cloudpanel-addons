@@ -89,7 +89,7 @@ test("an authenticated non-administrator gets no further than the gate", () => {
 // The one carve-out in the blanket gate. The route is not answered here --
 // splitMount is mocked away -- but reaching the dispatch is what says the gate
 // let it past, and the neighbouring wp-login routes show it is that route only.
-test("a non-administrator reaches the WordPress sign-in and nothing else", () => {
+test("a non-administrator reaches only the named self-scoped routes", () => {
   const results = probe({ user: "someone", roles: ["ROLE_USER"] }, [
     { path: "/addons/wp-login/api/sign-in", method: "POST" },
     { path: "/addons/wp-login/api/session" },
@@ -97,6 +97,13 @@ test("a non-administrator reaches the WordPress sign-in and nothing else", () =>
     { path: "/addons/wp-login/api/remove", method: "POST" },
     { path: "/addons/wp-login/api/sign-in", method: "GET" },
     { path: "/addons/panel-tweaks/api/panel" },
+    { path: "/addons/dns/api/session" },
+    { path: "/addons/dns/api/provision", method: "POST" },
+    { path: "/addons/dns/" },
+    { path: "/addons/dns/api/check", method: "POST" },
+    { path: "/addons/dns/api/provision", method: "GET" },
+    { path: "/addons/dns/api/session", method: "POST" },
+    { path: "/addons/dns/api/provision-extra", method: "POST" },
     { path: "/addons/panel-tweaks/", method: "GET" },
     { path: "/addons/panel-tweaks/api/tweaks", method: "POST" },
   ]);
@@ -105,6 +112,8 @@ test("a non-administrator reaches the WordPress sign-in and nothing else", () =>
     "POST /addons/wp-login/api/sign-in",
     "GET /addons/wp-login/api/session",
     "GET /addons/panel-tweaks/api/panel",
+    "GET /addons/dns/api/session",
+    "POST /addons/dns/api/provision",
   ]);
   for (const result of results) {
     // Nothing else the manager does runs for this session, dispatched or not.
@@ -164,6 +173,14 @@ test("an ordinary user cannot create or manage Instatic sites", () => {
     expect(result.body).toEqual({ ok: false, error: "administrator role required" });
     expect(result.reached).toEqual([]);
   }
+});
+
+test("an addon that is not installed answers 404 to an administrator and 403 to anyone else", () => {
+  // Panel Tweaks' completion script reads exactly these as "DNS is not installed".
+  const session = [{ path: "/addons/dns/api/session" }];
+  expect(probe({ user: "admin", roles: ["ROLE_ADMIN"] }, session)[0]!.status).toBe(404);
+  expect(probe({ user: "someone", roles: ["ROLE_USER"] }, session)[0]!.status).toBe(403);
+  expect(probe({ user: "manager", roles: ["ROLE_SITE_MANAGER"] }, session)[0]!.status).toBe(403);
 });
 
 test("an administrator reaches the probe and the routes behind it", () => {
@@ -300,6 +317,11 @@ test("a wrong webhook token is answered exactly as a stranger is", async () => {
 test("a handler fault cannot answer with Bun's error page", () => {
   const source = readFileSync(join(repo, "manager/server.ts"), "utf8");
   expect(source.slice(source.indexOf("async function cmdServe"))).toInclude("development: false");
+});
+
+test("a slow gateway call is not cut off by Bun's idle timeout", () => {
+  const source = readFileSync(join(repo, "manager/server.ts"), "utf8");
+  expect(source.slice(source.indexOf("async function cmdServe"))).toInclude("idleTimeout: 0");
 });
 
 // Run by hand, serve would replace the live daemon's socket before anything

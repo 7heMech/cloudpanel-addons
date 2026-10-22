@@ -171,7 +171,7 @@ function managerPage(
     css: JOB_STYLE + MANAGER_INDEX_CSS,
     script: MANAGER_INDEX_JS + JOB_WATCH_JS + (live ? `
 const managerJobTarget = CLP_ROOT.querySelector('[data-manager-job-status]');
-watchJob('${escJs(live.id)}', managerJobTarget ? managerJobTarget.closest('[data-manager-job-card]') : null);
+watchJob('${escJs(live.id)}', managerJobTarget ? managerJobTarget.closest('[data-manager-job-card]') : null, managerJobFinished);
 ` : ""),
     updateNotice: update,
   }), { csrf: options.csrf });
