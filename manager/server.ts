@@ -13,6 +13,7 @@ import { splitMount } from "../lib/mount";
 import { adminGate, authenticateRequest } from "../lib/sso-auth";
 import { checkCliUpdate } from "../lib/update-check";
 import { GIT_HOOK_PREFIX, handleGitHook } from "../addons/git/app/hook";
+import { SIGN_IN_PREFIX, handleSignIn } from "../addons/security-keys/app/sign-in";
 import { handleManagerRoute } from "./index";
 import { latestManagerJobView } from "./service";
 import { indexPage, updatePage } from "./views";
@@ -60,7 +61,9 @@ function mountedAddons(): string[] {
  * panel user sees; the action narrows the reply to the rows that page would
  * already have drawn for the caller. DNS's provision route is called from the
  * page a new site lands on, by whoever created it; the action refuses a site
- * that is not the caller's and answers with readiness only.
+ * that is not the caller's and answers with readiness only. Security Keys'
+ * routes are the caller's own keys, managed from CloudPanel's Security page;
+ * the gateway reads whose they are from the session itself.
  */
 const SELF_SCOPED_ROUTES = new Set([
   "POST /wp-login/api/sign-in",
@@ -68,6 +71,10 @@ const SELF_SCOPED_ROUTES = new Set([
   "GET /panel-tweaks/api/panel",
   "GET /dns/api/session",
   "POST /dns/api/provision",
+  "GET /security-keys/api/keys",
+  "POST /security-keys/api/register-options",
+  "POST /security-keys/api/register",
+  "POST /security-keys/api/remove",
 ]);
 
 /**
@@ -87,6 +94,13 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   if (req.method === "POST" && path.startsWith(GIT_HOOK_PREFIX) && mountedAddons().includes("git")) {
     const delivery = await handleGitHook(req, path);
     if (delivery) return delivery;
+  }
+
+  // Passkey sign-in, from the login page: there is no session yet, and the
+  // key's signature, checked as root, is the credential.
+  if (path.startsWith(SIGN_IN_PREFIX) && mountedAddons().includes("security-keys")) {
+    const signIn = await handleSignIn(req, path);
+    if (signIn) return signIn;
   }
 
   // Nothing else is answered before this, not even the liveness probe: a route

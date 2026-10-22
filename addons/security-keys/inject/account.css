@@ -1,0 +1,11 @@
+.clp-security-keys { margin-top: 20px; }
+.clp-sk-add { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px; }
+.clp-sk-add input { flex: 1 1 220px; max-width: 360px; }
+.clp-sk-table td:last-child { text-align: right; }
+.clp-sk-none { color: #9ca3af; }
+@media (max-width: 575px) {
+  .clp-sk-table thead { display: none; }
+  .clp-sk-table tr { display: block; padding: 10px 0; }
+  .clp-sk-table td { display: block; border: 0; padding: 2px 0; text-align: left !important; }
+  .clp-sk-table td[data-label]::before { content: attr(data-label) ": "; font-weight: 600; }
+}

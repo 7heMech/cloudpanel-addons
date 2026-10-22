@@ -33,6 +33,14 @@ gets a fixed `PATH` and nothing else from the gateway's environment, and the
 site user's process never inherits the gateway's stderr. See
 [Terminal](terminal.md).
 
+The one-shot actions in `OWN_ACCOUNT_VERBS` -- Security Keys' `keys`,
+`register-options`, `register` and `remove` -- are checked the same way for any
+active account rather than an administrator: the request carries the session
+id, the gateway appends the `--panel-user` it found, a manager that names one is
+refused, and every other action refuses a session id instead of ignoring it.
+These verbs have no direct-spawn fallback in the client. See
+[Security Keys](security-keys.md).
+
 Maintenance actions also require the normalized domain to exist in
 CloudPanel's site database. The public maintenance directories allow traversal
 without directory listing; flag files remain root-only and HTML files are
@@ -92,7 +100,12 @@ removal and regeneration handling beyond the native allowlist's lifecycle.
 
 The gateway reads the bounded `cloudpanel` session file without following
 symlinks, verifies its owner and size, and parses only the expected Symfony
-token shape with depth and item limits. It checks expiry and MFA state. On a
+token shape with depth and item limits. It checks expiry, and refuses a session
+whose `mfaAuthenticated` marker is anything but `true`, which is what a pending
+TOTP challenge leaves. An absent marker is accepted: CloudPanel's own
+`/autologin`, which Security Keys uses after a verified key and which only root
+or the panel's user can mint a token for, never writes one, and neither does a
+login from before TOTP was turned on. CloudPanel serves both sessions. On a
 normal CloudPanel installation it also rechecks the user's active status and
 role in CloudPanel's database for every request.
 
@@ -110,10 +123,10 @@ login page, and authentication failures do not fall back to anonymous access.
 The gate is where a request goes by default, after the URL is taken apart and
 before the route is chosen. The liveness probe the update page polls is inside
 it, and nothing reads it without a session: the page that polls it has one. The
-two exceptions are below: five named routes, and the Git webhook, which is
-settled ahead of the gate by a credential of its own.
+exceptions are below: nine named routes, and two routes settled ahead of the
+gate by a credential of their own.
 
-Five routes are named as exceptions. Two are WordPress Tools':
+Nine routes are named as exceptions. Two are WordPress Tools':
 `POST /wp-login/api/sign-in` and the `GET /wp-login/api/session` that hands out
 the CSRF pair, because the link that uses them is injected into CloudPanel's own
 Sites page, which a non-administrator sees too. The third is Panel Tweaks'
@@ -121,13 +134,16 @@ read-only `GET /panel-tweaks/api/panel`, which answers the script injected into
 that same page with the sites CloudPanel would list for the caller. The last two
 are DNS's `POST /dns/api/provision` and its `GET /dns/api/session`, which Panel
 Tweaks' script calls on the page a new site lands on, for whoever created it.
+The remaining four are Security Keys' own-account routes, called from the card
+on CloudPanel's Security page; the gateway reads whose keys they are from the
+session itself.
 
 A session that only clears the gate this way is dispatched straight to that
 addon, ahead of the update check and the manager's own routes, so nothing else
 in the manager runs for it. The authorisation it skips here is made up for as
 root: the sign-in and provision actions are told which panel user the request is
 for and refuse any site CloudPanel would not list for that account. The set is a
-literal of five strings rather than a prefix or a pattern, so a route cannot join it by
+literal of nine strings rather than a prefix or a pattern, so a route cannot join it by
 being named something similar.
 
 An addon may also declare `siteManager` in its catalog definition, which admits
@@ -151,6 +167,13 @@ about the URL says whether a site has a webhook. The token is compared with
 cannot read it, so verifying the delivery and queueing its deployment are one
 gateway call. This route is necessarily outside `guardMutation`: a repository
 sends no CSRF token and its Origin is not the panel.
+
+The other is passkey sign-in, `POST /addons/security-keys/login/options` and
+`/login/verify`, called from the login page before there is a session. The
+key's signature is the credential, checked as root against a root-held,
+single-use challenge. Both routes exist only while the addon is installed and
+require the panel's own Origin; every other request under that prefix meets the
+gate. See [Security Keys](security-keys.md).
 
 What a stranger gets back is the redirect Symfony sends for any path CloudPanel
 will not serve them, reproduced byte for byte: same status, same headers, same

@@ -157,6 +157,33 @@ export const MANAGER_ALLOWED_VERBS = new Set([
  */
 export const TERMINAL_ALLOWED_VERBS = new Set(["session"]);
 
+/**
+ * Passkey sign-in. `login-options` and `sign-in` are answered before there is
+ * a session; the account verbs are in `OWN_ACCOUNT_VERBS`.
+ */
+export const SECURITY_KEYS_ALLOWED_VERBS = new Set([
+  "login-options",
+  "sign-in",
+  "keys",
+  "register-options",
+  "register",
+  "remove",
+  "users",
+  "revoke",
+]);
+
+/**
+ * The `addon:verb` actions that act on the caller's own panel account. Only
+ * these accept, and require, the CloudPanel session id; the gateway checks it
+ * itself and passes the user it found as `--panel-user`.
+ */
+export const OWN_ACCOUNT_VERBS = new Set([
+  "security-keys:keys",
+  "security-keys:register-options",
+  "security-keys:register",
+  "security-keys:remove",
+]);
+
 export const STREAM_ALLOWED_VERBS = new Set(["watch-job", "scan-stream", "session"]);
 
 /**
@@ -210,6 +237,7 @@ export type GatewayRequest =
       args?: string[];
       input?: string;
       timeoutMs?: number;
+      sessionId?: string;
     }
   | { kind: "stream-action"; addon: string; verb: string; args?: string[]; sessionId?: string };
 
@@ -253,6 +281,7 @@ export function parseGatewayRequest(raw: string): GatewayRequest | null {
           args: Array.isArray(obj.args) ? obj.args.filter((a: unknown) => typeof a === "string") : undefined,
           input: typeof obj.input === "string" ? obj.input : undefined,
           timeoutMs: typeof obj.timeoutMs === "number" ? obj.timeoutMs : undefined,
+          ...(typeof obj.sessionId === "string" ? { sessionId: obj.sessionId } : {}),
         };
       }
       if (

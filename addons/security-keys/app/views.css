@@ -1,0 +1,3 @@
+.security-key-table time { white-space: nowrap; }
+.security-key-table td.mono { overflow-wrap: anywhere; }
+.security-key-table td.action-cell { text-align: right; }

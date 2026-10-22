@@ -69,7 +69,6 @@ function depthBomb(): Buffer {
 
 const DENIED: Record<string, () => Buffer> = {
   "the pending-MFA session": () => fixture("pending-mfa"),
-  "mfaAuthenticated absent": noMfa,
   "mfaAuthenticated is string 1": () => withReplacement(authenticated(), 's:16:"mfaAuthenticated";b:1;', 's:16:"mfaAuthenticated";s:1:"1";'),
   "mfaAuthenticated is explicit null": () => withReplacement(authenticated(), 's:16:"mfaAuthenticated";b:1;', 's:16:"mfaAuthenticated";N;'),
   "duplicate mfaAuthenticated marker": () => withReplacement(
@@ -109,6 +108,12 @@ for (const [label, build] of Object.entries(DENIED)) {
 
 test("an oversized session is denied", () => {
   expect(parsePanelSession(Buffer.alloc(MAX_SESSION_BYTES + 1))).toBeNull();
+});
+
+// CloudPanel's /autologin, which Security Keys uses after a verified passkey,
+// never runs the listener that writes the marker.
+test("an MFA-enabled user without the completion marker is accepted", () => {
+  expect(parsePanelSession(noMfa())?.user).toBe("redacted_user");
 });
 
 test("an MFA-disabled user without the completion marker is accepted", () => {
