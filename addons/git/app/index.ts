@@ -41,9 +41,11 @@ async function sitePage(domain: string): Promise<{ title: string; content: strin
   return { title: `Git — ${domain}`, content: siteView(page.site, log), context: page.context };
 }
 
+/** The change has landed even when its view cannot be drawn; the page then asks for the view again. */
 async function change(domain: string, result: { ok: boolean }): Promise<Response> {
   if (!result.ok) return json(result, 400);
-  return json({ ...result, html: (await sitePage(domain)).content });
+  const html = await sitePage(domain).then((page) => page.content, () => undefined);
+  return json(html === undefined ? result : { ...result, html });
 }
 
 function settingsFrom(body: Record<string, unknown>): GitSettings | string {
@@ -100,14 +102,14 @@ export async function handle(
       if (target) return redirectResponse(embedLandingUrl(target, "git"));
     }
     try {
-      if (!selected) return html(layout("Git deploy", fleetView(await gitService.listSites()), updateNotice, undefined, admin), csrf);
+      if (!selected) return html(layout("Git Deploy", fleetView(await gitService.listSites()), updateNotice, undefined, admin), csrf);
       const domain = validateDomain(selected);
       if (!domain) return html(layout("Invalid site", '<div class="alert">That is not a valid hostname.</div>', updateNotice, undefined, admin), csrf, 400);
       const page = await sitePage(domain);
       return html(layout(page.title, page.content, updateNotice, { ...page.context, ...tabs }, admin), csrf);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return html(layout("Git deploy", errorBlock(error), updateNotice, undefined, admin), csrf, /not found/i.test(message) ? 404 : 500);
+      return html(layout("Git Deploy", errorBlock(error), updateNotice, undefined, admin), csrf, /not found/i.test(message) ? 404 : 500);
     }
   }
 

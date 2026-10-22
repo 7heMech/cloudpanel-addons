@@ -60,7 +60,7 @@ function usage(): void {
   clp-addons action git <verb> [--domain=<domain>] [--job=<job>]
   clp-addons action php-resources <list|site|save-category|delete-category|assign|set-default|reconcile> [--domain=<domain>]
   clp-addons action panel-tweaks <state|set-tweaks|scan|scan-stream>
-  clp-addons action wp-login <sites|sign-in|remove|sync|varnish-settings|varnish-site|varnish-install|varnish-sync|mainwp-settings|mainwp-site|mainwp-sync|mainwp-connect|mainwp-cleanup> [--domain=<domain>] [--as-user=<user>] [--client-ip=<ip>] [--add-bypass] [--dashboard=<domain>] [--enabled=true|false] [--excluded=true|false] [--confirm=<domain>|mainwp]
+  clp-addons action wp-login <sites|sign-in|remove|sync|varnish-settings|varnish-site|varnish-install|varnish-sync|mainwp-settings|mainwp-site|mainwp-sync|mainwp-connect|mainwp-cleanup> [--domain=<domain>] [--as-user=<user>] [--client-ip=<ip>] [--add-bypass] [--allow-basic-auth] [--dashboard=<domain>] [--enabled=true|false] [--excluded=true|false] [--confirm=<domain>|mainwp]
   clp-addons action manager <enable|disable|update|reconcile|job|watch-job> [--addon=<addon>] [--id=<job>]
   clp-addons action terminal session --domain=<domain> --cols=<n> --rows=<n>   (through the gateway only)
   clp-addons action auth (session id on bounded stdin)

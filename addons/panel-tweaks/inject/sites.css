@@ -65,6 +65,8 @@ html.dark .clp-tweaks-columns-menu input:checked { border-color: #0078d4; backgr
 .clp-tweaks-scroll { overflow-x: auto; }
 .card .card-body-no-padding table.table-sites th,
 .card .card-body-no-padding table.table-sites td { padding-left: 20px; padding-right: 20px; }
+.card .card-body-no-padding table.table-sites :is(th, td):not(:first-child) { padding-left: 10px; }
+.card .card-body-no-padding table.table-sites :is(th, td):not(:last-child) { padding-right: 10px; }
 @media (max-width: 860px) {
   .clp-tweaks-toolbar .clp-tweaks-summary { margin-left: 0; flex-basis: 100%; }
 }

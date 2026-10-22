@@ -157,5 +157,5 @@ describe("Docker is required only by the addons that need it", () => {
 test("the installer offers every addon, in catalog order", () => {
   const source = readFileSync(join(import.meta.dir, "..", "install.sh"), "utf-8");
   const list = source.match(/^AVAILABLE_ADDONS=\(([^)]*)\)$/m)?.[1] ?? "";
-  expect([...list.matchAll(/"([^"]+)"/g)].map((match) => match[1])).toEqual(ADDON_NAMES);
+  expect(list.trim().split(/\s+/).map((entry) => entry.replace(/^"(.*)"$/, "$1"))).toEqual(ADDON_NAMES);
 });

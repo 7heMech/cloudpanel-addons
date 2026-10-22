@@ -22,8 +22,7 @@ async function saveGitConfig(domain) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    paintGit(reply.html);
-    notify('Repository settings saved.', 'ok');
+    await showGitChange(reply, 'Repository settings saved.');
   } catch (e) {
     busy(false);
     notify('Could not save: ' + e.message, 'error');
@@ -43,8 +42,7 @@ async function forgetGitSite(domain) {
   busy(true);
   try {
     const reply = await call('/api/sites/' + encodeURIComponent(domain) + '/config', { method: 'DELETE' });
-    paintGit(reply.html);
-    notify('Repository disconnected.', 'ok');
+    await showGitChange(reply, 'Repository disconnected.');
   } catch (e) {
     busy(false);
     notify('Could not remove the settings: ' + e.message, 'error');
@@ -69,8 +67,7 @@ async function generateGitKey(domain, replace) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ replace: replace === true }),
     });
-    paintGit(reply.html);
-    notify('Deploy key generated. Add it to your repository before deploying.', 'ok');
+    await showGitChange(reply, 'Deploy key generated. Add it to your repository before deploying.');
   } catch (e) {
     busy(false);
     notify('Could not generate the key: ' + e.message, 'error');
@@ -104,8 +101,7 @@ async function setGitWebhook(domain, on) {
   try {
     const reply = await call('/api/sites/' + encodeURIComponent(domain) + '/webhook',
       on ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' } : { method: 'DELETE' });
-    paintGit(reply.html);
-    notify('Push to deploy updated.', 'ok');
+    await showGitChange(reply, 'Push to deploy updated.');
   } catch (e) {
     busy(false);
     const box = CLP_ROOT.getElementById('git-webhook-toggle');
@@ -130,8 +126,7 @@ async function rotateGitWebhook(domain) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ replace: true }),
     });
-    paintGit(reply.html);
-    notify('Webhook URL rotated. Update it in your repository.', 'ok');
+    await showGitChange(reply, 'Webhook URL rotated. Update it in your repository.');
   } catch (e) {
     busy(false);
     notify('Could not rotate the URL: ' + e.message, 'error');
@@ -148,8 +143,7 @@ async function deployGitSite(domain) {
       body: JSON.stringify({ domain: domain }),
     });
     watchJob(body.data.job, null, gitJobFinished);
-    await refreshGit();
-    notify('Deployment started for ' + domain + '.', 'ok');
+    await showGitChange({}, 'Deployment started for ' + domain + '.');
   } catch (e) {
     busy(false);
     notify('Could not start the deployment: ' + e.message, 'error');
@@ -250,10 +244,24 @@ function paintGit(html) {
   initGit();
 }
 
+// The site page names its site; the fleet page names none.
 async function refreshGit() {
-  const domain = new URLSearchParams(location.search).get('domain');
+  const site = CLP_ROOT.querySelector('[data-git-domain]');
+  const domain = site ? site.getAttribute('data-git-domain') : '';
   const reply = await call('/api/view' + (domain ? '?domain=' + encodeURIComponent(domain) : ''));
   paintGit(reply.html);
+}
+
+// A change that landed is reported as done, with a warning if the page could not be redrawn.
+async function showGitChange(reply, done) {
+  try {
+    if (reply.html) paintGit(reply.html);
+    else await refreshGit();
+    notify(done, 'ok');
+  } catch (e) {
+    busy(false);
+    notify(done + ' The page could not be refreshed: ' + e.message, 'warn');
+  }
 }
 
 async function gitJobFinished(job) {

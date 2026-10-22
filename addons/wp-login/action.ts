@@ -20,10 +20,11 @@ import { Database } from "bun:sqlite";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { createHash, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
+import { normalizeMappedIpv4 } from "../../lib/ip-address";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, validateDomain, withFileLock,
+  ActionFailure, emitActionError, emitActionOk, failAction, validateDomain, withFileLock, type CommandResult,
 } from "../../cli/action-common";
 import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids, type UnixAccount } from "../../lib/site-accounts";
@@ -37,6 +38,8 @@ import {
 import {
   emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpView, readMainwpState, syncMainwp, type MainwpResult, type MainwpRun,
 } from "./mainwp";
+
+import { basicAuthBlocks, withBasicAuthBypass, type reloadNginx } from "./basic-auth";
 
 export type WpLoginVerb = "sites" | "sign-in" | "remove" | "sync" | "varnish-settings" | "varnish-site" | "varnish-install" | "varnish-sync";
 
@@ -104,6 +107,17 @@ function maintenanceReply(domain: string, ip: string, admin: boolean): WpMainten
   return { maintenance: { ip, canBypass: true, message: `${blocked} Add your IP ${ip} to its bypasses and sign in?` } };
 }
 
+export interface WpBasicAuthReply {
+  basicAuth: { ip: string; canBypass: boolean; message: string };
+}
+
+function basicAuthReply(domain: string, ip: string, admin: boolean): WpBasicAuthReply {
+  const blocked = `${domain} is protected by CloudPanel basic authentication.`;
+  if (!admin) return { basicAuth: { ip, canBypass: false, message: `${blocked} An administrator can allow your IP in Security → Basic Authentication.` } };
+  if (!ip) return { basicAuth: { ip, canBypass: false, message: `${blocked} The panel could not tell your IP, so manage its allowlist in Security → Basic Authentication.` } };
+  return { basicAuth: { ip, canBypass: true, message: `${blocked} Allow your IP ${ip} for the whole site and everyone sharing that IP, until removed in Security → Basic Authentication? CloudPanel accepts forged X-Real-IP, so anyone who knows an allowed IP can bypass it. Behind Cloudflare, your IP may not match.` } };
+}
+
 export interface WpRemoveResult {
   removed: number;
   /** `domain: reason` for each site whose loader could not be deleted. */
@@ -119,6 +133,10 @@ export interface WpLoginActionPaths {
   /** Present while the Maintenance Mode addon is installed. */
   maintenanceConfig: string;
   maintenance: MaintenanceActionPaths;
+  nginxVhostDir: string;
+  nginx: string;
+  systemctl: string;
+  vhostUid: number;
   varnishState: string;
   varnishLockFile: string;
   mainwpState: string;
@@ -130,6 +148,8 @@ export interface WpLoginActionOptions extends VarnishOptions {
   emitReply?: boolean;
   processUid?: number;
   now?: () => Date;
+  run?: (command: string, args: string[]) => CommandResult;
+  reloadNginx?: typeof reloadNginx;
   /** Test-only; production always guards against the panel's own hostname. */
   domainValidator?: (value: string) => string;
 }
@@ -142,6 +162,10 @@ export const DEFAULT_WP_LOGIN_PATHS: WpLoginActionPaths = {
   runuser: "/usr/sbin/runuser",
   maintenanceConfig: `${CONFIG_DIR}/maintenance.conf`,
   maintenance: DEFAULT_MAINTENANCE_ACTION_PATHS,
+  nginxVhostDir: "/etc/nginx/sites-enabled",
+  nginx: "nginx",
+  systemctl: "systemctl",
+  vhostUid: 0,
   varnishState: `${STATE_DIR}/wp-login/varnish.json`,
   varnishLockFile: "/run/lock/clp-addons/wp-varnish.lock",
   mainwpState: `${STATE_DIR}/wp-login/mainwp.json`,
@@ -171,7 +195,7 @@ interface PanelSiteRow {
 function openPanelDatabase(path: string): Database {
   try {
     const db = new Database(path, { readonly: true });
-    db.exec("PRAGMA busy_timeout = 5000;");
+    db.exec("PRAGMA busy_timeout = 1000;");
     return db;
   } catch (error) {
     failAction(`CloudPanel database could not be opened: ${reason(error)}`);
@@ -458,14 +482,15 @@ mv -f "$t" "$3"`;
 /** Only `PATH`: whatever else root's environment holds is not the site's to read. */
 const SITE_ENV = { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" };
 
-function runAsSite(paths: WpLoginActionPaths, account: SiteAccount, command: string[], input?: string): void {
+function runAsSite(paths: WpLoginActionPaths, account: SiteAccount, command: string[], input?: string, timeoutMs = 30_000): void {
   const result = Bun.spawnSync([paths.runuser, "-u", account.name, "--", ...command], {
     cwd: "/",
     stdin: input === undefined ? "ignore" : new TextEncoder().encode(input),
     stdout: "pipe",
     stderr: "pipe",
     env: SITE_ENV,
-    timeout: 30_000,
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
   });
   if (!result.success) {
     const detail = result.stderr.toString().trim() || `exit ${result.exitCode}`;
@@ -501,6 +526,7 @@ function mintWpLogin(
         join(site.root, SECRET_DIR), join(site.root, LOADER_FILE), join(site.root, SECRET_FILE), LOADER_PHP,
       ],
       `<?php return array('hash' => '${hash}', 'expires' => ${expires});\n`,
+      10_000,
     );
   } catch (error) {
     failAction(`the sign-in could not be written into ${domain}: ${reason(error)}`);
@@ -550,6 +576,7 @@ interface ParsedAction {
   clientIp: string;
   /** Add `clientIp` to the site's maintenance bypasses before signing in. */
   addBypass: boolean;
+  allowBasicAuth: boolean;
   enabled?: boolean;
   excluded?: boolean;
 }
@@ -564,6 +591,7 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
   let asUser = "";
   let clientIp = "";
   let addBypass = false;
+  let allowBasicAuth = false;
   let enabled: boolean | undefined;
   let excluded: boolean | undefined;
   const seen = new Set<string>();
@@ -574,6 +602,11 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
     if (argument.startsWith("--client-ip=")) {
       clientIp = argument.slice("--client-ip=".length);
       if (!isIP(clientIp)) failAction("that is not an IP address");
+      clientIp = normalizeMappedIpv4(clientIp);
+      continue;
+    }
+    if (argument === "--allow-basic-auth") {
+      allowBasicAuth = true;
       continue;
     }
     if (argument === "--add-bypass") {
@@ -592,10 +625,9 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
     if (/^--excluded=(true|false)$/.test(argument)) { excluded = argument.endsWith("=true"); continue; }
     failAction(`unexpected argument '${argument}'`);
   }
-  if (verb !== "sign-in" && (asUser || clientIp || addBypass)) failAction(`'${verb}' takes no --as-user, --client-ip or --add-bypass`);
-  // Maintenance is an administrator's decision, so only an administrator's
-  // sign-in may lift it, and only for the address it came from.
-  if (addBypass && (asUser || !clientIp)) failAction("only an administrator's sign-in can add its address as a bypass");
+  if (verb !== "sign-in" && (asUser || clientIp || addBypass || allowBasicAuth)) failAction(`'${verb}' takes no --as-user, --client-ip, --add-bypass or --allow-basic-auth`);
+  // Only an administrator may lift either Nginx gate for their request address.
+  if ((addBypass || allowBasicAuth) && (asUser || !clientIp)) failAction("only an administrator's sign-in can add its address as a bypass");
   if (asUser && !PANEL_USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
   if (verb === "varnish-settings" ? enabled === undefined : enabled !== undefined) failAction(`'${verb}' has invalid --enabled`);
   if (verb === "varnish-site" ? excluded === undefined : excluded !== undefined) failAction(`'${verb}' has invalid --excluded`);
@@ -606,7 +638,7 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
   } else if (domain) {
     failAction(`'${verb}' takes no --domain`);
   }
-  return { verb, domain, asUser, clientIp, addBypass, enabled, excluded };
+  return { verb, domain, asUser, clientIp, addBypass, allowBasicAuth, enabled, excluded };
 }
 
 export async function executeWpLoginAction(
@@ -621,7 +653,7 @@ export async function executeWpLoginAction(
       return mainwpAction(mainwpRun(paths), argv, options, options.domainValidator ?? ((value) => validateDomain(value)));
     });
   }
-  const { verb, domain, asUser, clientIp, addBypass: bypass, enabled, excluded } = parseAction(argv, options);
+  const { verb, domain, asUser, clientIp, addBypass: bypass, allowBasicAuth, enabled, excluded } = parseAction(argv, options);
   if (verb === "sync") return syncPolicies(options);
 
   if (verb === "sites") {
@@ -673,18 +705,18 @@ export async function executeWpLoginAction(
   if (asUser && !mayManageSite(paths, asUser, domain)) {
     failAction("that site is not yours to sign in to");
   }
-  return withFileLock(paths.lockFile, 15, "a WordPress sign-in change is still running", async () => {
+  return withFileLock(paths.lockFile, 5, "a WordPress sign-in change is still running", async () => {
     // Maintenance answers in Nginx, before WordPress could read the secret, so
     // a secret minted for a browser it turns away is one nobody can use.
     const site = wordpressSite(paths, domain);
-    if (!existsSync(paths.maintenanceConfig) || !maintenanceBlocks(paths.maintenance, domain, clientIp)) {
-      return mintWpLogin(paths, site, options);
-    }
-    if (!bypass) return maintenanceReply(domain, clientIp, !asUser);
-    // Minted first: a sign-in that fails must not leave a bypass behind, while
-    // a secret nobody can use expires on its own.
+    const maintenance = existsSync(paths.maintenanceConfig) && maintenanceBlocks(paths.maintenance, domain, clientIp);
+    if (maintenance && !bypass) return maintenanceReply(domain, clientIp, !asUser);
+    const basicAuth = basicAuthBlocks(paths, domain, clientIp);
+    if (basicAuth && !allowBasicAuth) return basicAuthReply(domain, clientIp, !asUser);
+    // Mint before taking CloudPanel's write lock; an unused token expires on its own.
     const login = mintWpLogin(paths, site, options);
-    await addBypass(paths.maintenance, domain, clientIp);
+    if (basicAuth) await withBasicAuthBypass(paths, domain, clientIp, options.run, options.reloadNginx);
+    if (maintenance) await addBypass(paths.maintenance, domain, clientIp);
     return login;
   });
 }

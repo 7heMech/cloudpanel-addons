@@ -204,7 +204,11 @@ bounded by the visual viewport so a phone's collapsing address bar cannot cover
 them. 940px rather than a phone width because a fleet table is five or six
 columns wide: below that the columns are narrower than the hostnames in them and
 a domain wrapped a character at a time. Cell padding comes down from 1200px for
-the same reason. Two-column card and field grids hold until 760px, where the
+the same reason. Instatic's instance and inventory lists and Stager's clone,
+source and promotion lists use the same fleet rows, with labels on secondary
+cells so their meaning survives the hidden table heading. Empty cells disappear
+and the site and type lead each card. Page and form actions wrap within the
+available width. Two-column card and field grids hold until 760px, where the
 tables have already given way. Live enable, disable and update jobs
 put their state, current step and output in the manager card that owns the job,
 with the log auto-expanding as output arrives so the operator can see the live
