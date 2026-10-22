@@ -3,7 +3,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash, generateKeyPairSync, randomBytes, sign, type KeyObject } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runSecurityKeysAction, type SecurityKeysPaths } from "../addons/security-keys/action";
@@ -233,6 +234,46 @@ describe("the root action", () => {
     })).toMatchObject({ ok: false, error: expect.stringMatching(/expired/) });
   });
 
+  test("asking for a sign-in writes nothing, and a challenge id cannot be stretched", async () => {
+    for (let i = 0; i < 25; i++) expect((await run(["login-options"])).ok).toBe(true);
+    expect(readdirSync(paths.stateDir)).toEqual(["secret"]);
+
+    const key = new SoftKey();
+    await register("alice", key);
+    const options = await run(["login-options"]);
+    const [expiry, nonce] = options.data.challengeId.split(".");
+    const proof = key.get(options.data.challenge);
+    expect(await run(["sign-in"], {
+      challengeId: `${Number(expiry) + 3_600_000}.${nonce}`, id: b64(key.id), userHandle: key.handle.value,
+      clientDataJSON: b64(proof.clientDataJSON), authenticatorData: b64(proof.authenticatorData), signature: b64(proof.signature),
+    })).toMatchObject({ ok: false, error: expect.stringMatching(/challenge does not match/) });
+  });
+
+  test("a registration started before the account was recreated does not finish", async () => {
+    const options = await run(["register-options", "--panel-user=alice"]);
+    account("alice", 8);
+    const made = new SoftKey().create(options.data.challenge);
+    expect(await run(["register", "--panel-user=alice"], {
+      challengeId: options.data.challengeId, origin: ORIGIN,
+      clientDataJSON: b64(made.clientDataJSON), attestationObject: b64(made.attestationObject),
+    })).toMatchObject({ ok: false, error: expect.stringMatching(/challenge does not match/) });
+  });
+
+  test("a pipe or link planted at a token's name is skipped, not read", async () => {
+    const key = new SoftKey();
+    await register("alice", key);
+    const fifo = join(paths.panelVarDir, `.token_${"c".repeat(64)}`);
+    expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
+    const outside = join(dir, "outside.json");
+    writeFileSync(outside, JSON.stringify({ expiration: 0 }));
+    const link = join(paths.panelVarDir, `.token_${"d".repeat(64)}`);
+    symlinkSync(outside, link);
+    expect((await signIn(key)).ok).toBe(true);
+    expect(existsSync(fifo)).toBe(true);
+    expect(existsSync(link)).toBe(true);
+    expect(existsSync(outside)).toBe(true);
+  });
+
   test("a key stops working for a deactivated account and for a recreated one of the same name", async () => {
     const key = new SoftKey();
     await register("alice", key);
@@ -261,7 +302,7 @@ describe("the root action", () => {
     expect(await run(["register", "--panel-user=bob"], {
       challengeId: options.data.challengeId, origin: ORIGIN,
       clientDataJSON: b64(made.clientDataJSON), attestationObject: b64(made.attestationObject),
-    })).toMatchObject({ ok: false, error: expect.stringMatching(/different account/) });
+    })).toMatchObject({ ok: false, error: expect.stringMatching(/challenge does not match/) });
   });
 
   test("a user removes their own key; an administrator removes anyone's", async () => {

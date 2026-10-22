@@ -71,9 +71,18 @@ that is deleted and created again does not inherit the old keys, and a
 deactivated account cannot sign in with one. The administrator page marks
 both.
 
-Challenges are root's too: one file each under `challenges/`, single use
-(whoever unlinks it wins), five minutes long, and swept when the next is
-issued. The manager never decides what was signed.
+Challenges are root's too, and cost nothing to issue: a challenge is an HMAC,
+under a root-only `secret`, of an id carrying its own five-minute expiry, bound
+for registration to the account, its `user.id` and its handle. Asking for one
+writes nothing, so the pre-session route's cost does not grow with how often it
+is asked. A challenge is spent under the store lock only after a key has
+answered it, in `spent.json`, which therefore grows with real sign-ins. User
+handles for new accounts are derived from the same secret and `user.id`. The
+manager never decides what was signed.
+
+Expired sign-in tokens are swept from the panel's `var`, which its user owns,
+by opening each candidate without following a link or blocking, and reading it
+only when it is a small regular file of that user's.
 
 `login-options` and `sign-in` are answered ahead of the session gate, because
 there is no session yet. They are matched before the gate only while the addon

@@ -1,7 +1,7 @@
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import {
-  chmodSync, closeSync, constants as fs, existsSync, fchmodSync, fchownSync, lstatSync, mkdirSync, openSync, readdirSync,
-  readFileSync, rmSync, unlinkSync, writeSync,
+  chmodSync, closeSync, constants as fs, existsSync, fchmodSync, fchownSync, fstatSync, lstatSync, mkdirSync, openSync,
+  readdirSync, readFileSync, readSync, rmSync, writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
@@ -34,7 +34,9 @@ const CHALLENGE_TTL_MS = 5 * 60_000;
 /** How long CloudPanel will honour the sign-in token once it is written. */
 const TOKEN_TTL_SECONDS = 60;
 const TOKEN_FILE_RE = /^\.token_[0-9a-f]{64}$/;
-const CHALLENGE_ID_RE = /^[0-9a-f]{32}$/;
+/** `<expiry in ms>.<random>`: the challenge itself is root's HMAC of this. */
+const CHALLENGE_ID_RE = /^(\d{13})\.[0-9a-f]{32}$/;
+const MAX_TOKEN_FILE_BYTES = 4096;
 const MAX_INPUT_BYTES = 64 * 1024;
 
 export interface SecurityKeysPaths {
@@ -83,15 +85,6 @@ interface StoredUser {
 interface Store {
   version: 1;
   users: Record<string, StoredUser>;
-}
-
-interface Challenge {
-  challenge: string;
-  purpose: "login" | "register";
-  expiresAt: number;
-  user?: string;
-  userId?: number;
-  handle?: string;
 }
 
 export const PANEL_ROLES = ["ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"] as const;
@@ -250,49 +243,66 @@ function activeAccount(paths: SecurityKeysPaths, user: string): PanelAccount {
   return account;
 }
 
-function challengeDir(paths: SecurityKeysPaths): string {
-  return join(paths.stateDir, "challenges");
+/**
+ * Root's own key for challenges and user handles, made on first use. A
+ * challenge is an HMAC of its id, so issuing one writes nothing: the sign-in
+ * route answers anyone who can reach the panel, and what it costs must not
+ * grow with how often it is asked.
+ */
+function secret(paths: SecurityKeysPaths): Buffer {
+  const path = join(paths.stateDir, "secret");
+  mkdirSync(paths.stateDir, { recursive: true, mode: 0o700 });
+  try {
+    const fd = openSync(path, fs.O_WRONLY | fs.O_CREAT | fs.O_EXCL | fs.O_NOFOLLOW, 0o600);
+    try { writeSync(fd, randomBytes(32)); } finally { closeSync(fd); }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  trustedFile(path, paths.stateUid);
+  const key = readFileSync(path);
+  if (key.length !== 32) failAction(`${path} is malformed`);
+  return key;
 }
 
-function issueChallenge(paths: SecurityKeysPaths, now: number, record: Omit<Challenge, "challenge" | "expiresAt">): { challengeId: string; challenge: string } {
-  const dir = challengeDir(paths);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodSync(dir, 0o700);
-  // Every expired challenge goes here, so the directory holds only the last
-  // few minutes' worth however many were asked for.
-  for (const name of readdirSync(dir)) {
-    const path = join(dir, name);
-    try {
-      const old = JSON.parse(readFileSync(path, "utf8")) as Challenge;
-      if (!(old.expiresAt > now)) rmSync(path, { force: true });
-    } catch {
-      rmSync(path, { force: true });
-    }
-  }
-  const challengeId = randomBytes(16).toString("hex");
-  const challenge = randomBytes(32).toString("base64url");
-  const fd = openSync(join(dir, challengeId), fs.O_WRONLY | fs.O_CREAT | fs.O_EXCL | fs.O_NOFOLLOW, 0o600);
-  try {
-    writeSync(fd, JSON.stringify({ ...record, challenge, expiresAt: now + CHALLENGE_TTL_MS }));
-  } finally {
-    closeSync(fd);
-  }
-  return { challengeId, challenge };
+function mac(paths: SecurityKeysPaths, ...parts: (string | number)[]): Buffer {
+  return createHmac("sha256", secret(paths)).update(parts.join("\0")).digest();
 }
 
-/** The challenge, removed so it can be answered once; whoever removes it wins. */
-function consumeChallenge(paths: SecurityKeysPaths, id: unknown, purpose: Challenge["purpose"], now: number): Challenge {
-  if (typeof id !== "string" || !CHALLENGE_ID_RE.test(id)) failAction("the sign-in request has expired; try again");
-  const path = join(challengeDir(paths), id);
-  let record: Challenge;
-  try {
-    record = JSON.parse(readFileSync(path, "utf8"));
-    unlinkSync(path);
-  } catch {
-    failAction("the sign-in request has expired; try again");
+/** The handle a new account's keys are made under: stable for that `user.id`, and nothing else. */
+function handleFor(paths: SecurityKeysPaths, userId: number): string {
+  return mac(paths, "handle", userId).subarray(0, 16).toString("base64url");
+}
+
+function issueChallenge(paths: SecurityKeysPaths, now: number, ...binding: (string | number)[]): { challengeId: string; challenge: string } {
+  const challengeId = `${now + CHALLENGE_TTL_MS}.${randomBytes(16).toString("hex")}`;
+  return { challengeId, challenge: mac(paths, ...binding, challengeId).toString("base64url") };
+}
+
+/** The challenge a key must have signed for this id and purpose, if the id is still current. */
+function expectedChallenge(paths: SecurityKeysPaths, id: unknown, now: number, ...binding: (string | number)[]): string {
+  const match = typeof id === "string" ? CHALLENGE_ID_RE.exec(id) : null;
+  if (!match || !(Number(match[1]) > now)) failAction("the sign-in request has expired; try again");
+  return mac(paths, ...binding, id as string).toString("base64url");
+}
+
+/**
+ * Spend a challenge, under the store lock: refuse one already spent, then
+ * record it only once `answered` has accepted the key's reply, so the list
+ * grows with real sign-ins rather than with requests.
+ */
+function spendChallenge<T>(paths: SecurityKeysPaths, id: string, now: number, answered: () => T): T {
+  const path = join(paths.stateDir, "spent.json");
+  let spent: Record<string, number> = {};
+  if (existsSync(path)) {
+    trustedFile(path, paths.stateUid);
+    try { spent = JSON.parse(readFileSync(path, "utf8")); } catch { spent = {}; }
   }
-  if (record.purpose !== purpose || !(record.expiresAt > now)) failAction("the sign-in request has expired; try again");
-  return record;
+  const live = Object.fromEntries(Object.entries(spent).filter(([, expiresAt]) => typeof expiresAt === "number" && expiresAt > now));
+  if (id in live) failAction("the sign-in request has expired; try again");
+  const result = answered();
+  live[id] = Number(id.split(".")[0]);
+  writeAtomicOwned(path, JSON.stringify(live), 0o600, paths.stateUid, process.getgid?.() ?? 0);
+  return result;
 }
 
 function keyView(key: StoredKey): KeyView {
@@ -318,12 +328,22 @@ function mintPanelToken(paths: SecurityKeysPaths, user: string, now: number): st
   for (const name of readdirSync(paths.panelVarDir)) {
     if (!TOKEN_FILE_RE.test(name)) continue;
     const path = join(paths.panelVarDir, name);
+    // The panel's user can put anything at this name, so root reads only a
+    // small regular file of theirs, opened without following a link or
+    // waiting on a pipe.
+    let fd: number | null = null;
     try {
-      const stat = lstatSync(path);
-      const expiration = Number((JSON.parse(readFileSync(path, "utf8")) as { expiration?: unknown }).expiration);
-      if (stat.isFile() && stat.uid === dir.uid && expiration * 1000 < now) rmSync(path, { force: true });
+      fd = openSync(path, fs.O_RDONLY | fs.O_NOFOLLOW | fs.O_NONBLOCK);
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.uid !== dir.uid || stat.size > MAX_TOKEN_FILE_BYTES) continue;
+      const bytes = Buffer.alloc(stat.size);
+      readSync(fd, bytes, 0, stat.size, 0);
+      const expiration = Number((JSON.parse(bytes.toString("utf8")) as { expiration?: unknown }).expiration);
+      if (expiration * 1000 < now) rmSync(path, { force: true });
     } catch {
       // Not ours to judge.
+    } finally {
+      if (fd !== null) closeSync(fd);
     }
   }
   const token = randomBytes(32).toString("hex");
@@ -339,7 +359,7 @@ function mintPanelToken(paths: SecurityKeysPaths, user: string, now: number): st
 }
 
 function signIn(paths: SecurityKeysPaths, input: Record<string, unknown>, now: number): { token: string; user: string } {
-  const challenge = consumeChallenge(paths, input.challengeId, "login", now);
+  const challenge = expectedChallenge(paths, input.challengeId, now, "login");
   const credentialId = typeof input.id === "string" && input.id.length <= 1400 ? input.id : failAction("the key sent no credential id");
   return withStoreLock(paths, () => {
     const store = readStore(paths);
@@ -356,15 +376,15 @@ function signIn(paths: SecurityKeysPaths, input: Record<string, unknown>, now: n
     if (key.synced && !settings.syncedPasskeys) {
       failAction("this panel no longer accepts synced passkeys; use a hardware key or your password");
     }
-    const { signCount } = verifyAssertion({
+    const { signCount } = spendChallenge(paths, input.challengeId as string, now, () => verifyAssertion({
       clientDataJSON: fromB64url(input.clientDataJSON, "clientDataJSON"),
       authenticatorData: fromB64url(input.authenticatorData, "authenticatorData"),
       signature: fromB64url(input.signature, "signature"),
-      challenge: challenge.challenge,
+      challenge,
       origin: key.origin,
       publicKey: key.publicKey,
       signCount: key.signCount,
-    });
+    }));
     key.signCount = signCount;
     key.lastUsedAt = new Date(now).toISOString();
     writeStore(paths, store);
@@ -379,40 +399,50 @@ function registerOptions(paths: SecurityKeysPaths, user: string, now: number) {
   const store = readStore(paths);
   const entry = store.users[user];
   const current = entry && entry.userId === account.id ? entry : null;
-  const handle = current?.handle ?? randomBytes(16).toString("base64url");
-  const issued = issueChallenge(paths, now, { purpose: "register", user, userId: account.id, handle });
+  const handle = current?.handle ?? handleFor(paths, account.id);
+  const issued = issueChallenge(paths, now, "register", user, account.id, handle);
   return {
     ...issued, user: { id: handle, name: user }, exclude: current?.keys.map((key) => key.id) ?? [],
     syncedPasskeys: settings.syncedPasskeys,
   };
 }
 
+/** The handle this account's keys are, or would be, made under. */
+function currentHandle(paths: SecurityKeysPaths, store: Store, user: string, account: PanelAccount): string {
+  const entry = store.users[user];
+  return entry && entry.userId === account.id ? entry.handle : handleFor(paths, account.id);
+}
+
 function register(paths: SecurityKeysPaths, user: string, input: Record<string, unknown>, now: number): { keys: KeyView[] } {
-  const challenge = consumeChallenge(paths, input.challengeId, "register", now);
-  if (challenge.user !== user) failAction("the registration was started by a different account");
   const name = oneLine(input.name ?? "", "key name", 64, false) || "Security key";
   const origin = normalizeOrigin(input.origin);
+  // Bound to the account and handle it was issued for, so a challenge from
+  // another account, or from before this name was recreated, does not match.
+  const started = activeAccount(paths, user);
+  const handle = currentHandle(paths, readStore(paths), user, started);
   const registration = verifyRegistration({
     clientDataJSON: fromB64url(input.clientDataJSON, "clientDataJSON"),
     attestationObject: fromB64url(input.attestationObject, "attestationObject"),
-    challenge: challenge.challenge,
+    challenge: expectedChallenge(paths, input.challengeId, now, "register", user, started.id, handle),
   });
   if (registration.origin !== origin) failAction("the key was created for a different panel address");
   return withStoreLock(paths, () => {
     const account = activeAccount(paths, user);
-    if (account.id !== challenge.userId) failAction("the registration was started by a different account");
     const settings = readSettings(paths);
     if (!allowedRole(settings, account)) failAction("security keys are turned off for your account");
     if (registration.backupEligible && !settings.syncedPasskeys) {
       failAction("this panel accepts only hardware keys, not passkeys synced by a password manager or your devices");
     }
     const store = readStore(paths);
+    if (account.id !== started.id || currentHandle(paths, store, user, account) !== handle) {
+      failAction("the registration is out of date; try again");
+    }
     if (Object.values(store.users).some((entry) => entry.keys.some((key) => key.id === registration.credentialId))) {
       failAction("this key is already registered");
     }
+    spendChallenge(paths, input.challengeId as string, now, () => {});
     let entry = store.users[user];
-    if (!entry || entry.userId !== account.id) entry = store.users[user] = { userId: account.id, handle: challenge.handle!, keys: [] };
-    if (entry.handle !== challenge.handle) failAction("the registration is out of date; try again");
+    if (!entry || entry.userId !== account.id) entry = store.users[user] = { userId: account.id, handle, keys: [] };
     entry.keys.push({
       id: registration.credentialId,
       name,
@@ -472,7 +502,7 @@ export async function runSecurityKeysAction(argv: string[], options: SecurityKey
     const now = (options.now ?? Date.now)();
     const { verb, panelUser } = parseArgs(argv);
     let data: unknown;
-    if (verb === "login-options") data = issueChallenge(paths, now, { purpose: "login" });
+    if (verb === "login-options") data = issueChallenge(paths, now, "login");
     else if (verb === "sign-in") data = signIn(paths, readInput(options), now);
     else if (verb === "keys") data = ownView(paths, panelUser!, activeAccount(paths, panelUser!));
     else if (verb === "register-options") data = registerOptions(paths, panelUser!, now);

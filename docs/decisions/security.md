@@ -170,8 +170,8 @@ sends no CSRF token and its Origin is not the panel.
 
 The other is passkey sign-in, `POST /addons/security-keys/login/options` and
 `/login/verify`, called from the login page before there is a session. The
-key's signature is the credential, checked as root against a root-held,
-single-use challenge. Both routes exist only while the addon is installed and
+key's signature is the credential, checked as root against a single-use
+challenge root signed, so issuing one writes nothing. Both routes exist only while the addon is installed and
 require the panel's own Origin; every other request under that prefix meets the
 gate. See [Security Keys](security-keys.md).
 
