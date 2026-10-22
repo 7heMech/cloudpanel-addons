@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
 import { fastCgiRequest, parseCgiResponse } from "../lib/fastcgi";
 import { DEFAULT_TWEAKS } from "../addons/panel-tweaks/action";
@@ -118,11 +118,21 @@ test("status lists CloudPanel's own PHP and every newer installed one, with pend
     stock: "8.1",
     running: "8.1",
     choices: [
-      { version: "8.1", installed: "8.1.34" },
-      { version: "8.3", installed: "8.3.36" },
-      { version: "8.4", installed: "8.4.25", available: "8.4.27" },
+      { version: "8.1", installed: "8.1.34-1+clp-bookworm" },
+      { version: "8.3", installed: "8.3.36-1" },
+      { version: "8.4", installed: "8.4.25-1+clp-bookworm", available: "8.4.27-1+clp-bookworm" },
     ],
   });
+});
+
+test("a new package revision of the same release counts as an update, and a replaced binary is still the running version", () => {
+  const env = box();
+  env.releases["8.4"] = ["8.4.25-1", "8.4.25-2"];
+  expect(panelPhpStatus(env.options).choices.at(-1)).toEqual({ version: "8.4", installed: "8.4.25-1", available: "8.4.25-2" });
+  const exe = join(env.options.paths!.procRoot!, "4242", "exe");
+  rmSync(exe);
+  symlinkSync(`${join(env.options.paths!.fpmBinDir!, "php-fpm8.1")} (deleted)`, exe);
+  expect(panelPhpStatus(env.options).running).toBe("8.1");
 });
 
 test("choosing a version writes a drop-in with CloudPanel's own arguments and proves the panel answers", async () => {
@@ -186,7 +196,7 @@ test("repair reapplies the choice, records a failure once, and retries after an 
   rmSync(env.dropIn);
   env.broken.add("8.4");
   await expect(reconcilePanelPhp(env.options)).rejects.toThrow("the panel is back on PHP 8.1");
-  expect(panelPhpStatus(env.options).failure).toMatchObject({ php: "8.4", release: "8.4.25" });
+  expect(panelPhpStatus(env.options).failure).toMatchObject({ php: "8.4", release: "8.4.25-1+clp-bookworm" });
   env.commands.length = 0;
   expect(await reconcilePanelPhp(env.options)).toBeNull();
   expect(env.commands.some((command) => command.includes("restart"))).toBe(false);
@@ -195,6 +205,49 @@ test("repair reapplies the choice, records a failure once, and retries after an 
   env.releases["8.4"] = ["8.4.27-1+clp-bookworm", "8.4.27-1+clp-bookworm"];
   expect(await reconcilePanelPhp(env.options)).toBe("panel runs on PHP 8.4");
   expect(panelPhpStatus(env.options).failure).toBeUndefined();
+});
+
+test("a repair run picks up a choice saved while it waited for the lock", async () => {
+  const env = box();
+  await setPanelPhp("8.4", env.options);
+  const request = env.options.request!;
+  let reached!: () => void;
+  let open!: () => void;
+  const hit = new Promise<void>((resolve) => { reached = resolve; });
+  const gate = new Promise<void>((resolve) => { open = resolve; });
+  let first = true;
+  env.options.request = async (socket, params) => {
+    if (first) { first = false; reached(); await gate; }
+    return request(socket, params);
+  };
+  const change = setPanelPhp("8.3", env.options);
+  await hit;
+  const repair = reconcilePanelPhp(env.options);
+  open();
+  await change;
+  await repair;
+  expect(readFileSync(env.dropIn, "utf8")).toContain("/php-fpm8.3 ");
+  expect(panelPhpStatus(env.options)).toMatchObject({ wanted: "8.3", running: "8.3" });
+});
+
+test("a drop-in at our path that is not root's to trust is removed when none is wanted", async () => {
+  const env = box();
+  mkdirSync(dirname(env.dropIn), { recursive: true });
+  const evil = "[Service]\nExecStart=\nExecStart=/tmp/evil\n";
+  writeFileSync(env.dropIn, evil, { mode: 0o666 });
+  chmodSync(env.dropIn, 0o666);
+  expect(await reconcilePanelPhp(env.options)).toBe("panel runs on PHP 8.1");
+  expect(existsSync(env.dropIn)).toBe(false);
+
+  writeFileSync(env.dropIn, evil, { mode: 0o666 });
+  chmodSync(env.dropIn, 0o666);
+  withdrawPanelPhp(env.options);
+  expect(existsSync(env.dropIn)).toBe(false);
+
+  writeFileSync(env.dropIn, evil, { mode: 0o666 });
+  chmodSync(env.dropIn, 0o666);
+  await setPanelPhp("", env.options);
+  expect(existsSync(env.dropIn)).toBe(false);
 });
 
 test("once CloudPanel itself moves past the choice, the drop-in goes", async () => {
@@ -258,6 +311,11 @@ test("the page offers the installed versions and says what the panel runs on", (
   expect(page).toContain(`<option value="8.4" selected>PHP 8.4 (8.4.25)</option>`);
   expect(page).toContain("which no longer gets security fixes");
   expect(panelPhpLine(status)).toBe("Running on PHP 8.4. 8.4.27 is available; run apt upgrade to install it.");
+
+  const gone = dashboardView({ tweaks: DEFAULT_TWEAKS, sites: [], diskMeasuredAt: "" }, { ...status, wanted: "8.3" });
+  expect(gone).toContain(`<option value="8.3" selected disabled>PHP 8.3 (unavailable)</option>`);
+  expect(gone).not.toContain(`<option value="8.4" selected>`);
+  expect(page).not.toContain("(unavailable)");
 
   const blocked = dashboardView({ tweaks: DEFAULT_TWEAKS, sites: [], diskMeasuredAt: "" },
     { ...status, wanted: "", running: "8.2", overriddenBy: "/etc/systemd/system/clp-php-fpm.service.d/override.conf" });

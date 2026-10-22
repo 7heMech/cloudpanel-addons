@@ -176,7 +176,9 @@ function panelPhpCard(status: PanelPhpStatus | { error: string }): string {
       <div class="panel-php-choice">
         <label class="hint" for="panel-php">Panel runs on</label>
         <select id="panel-php" data-current="${esc(status.wanted)}" onchange="setPanelPhp(this)"${status.overriddenBy ? " disabled" : ""}>${status.choices
-    .map((choice) => phpOption(choice, status.stock, (status.wanted || status.stock) === choice.version)).join("")}</select>
+    .map((choice) => phpOption(choice, status.stock, (status.wanted || status.stock) === choice.version)).join("")}${
+    status.wanted && !status.choices.some((choice) => choice.version === status.wanted)
+      ? `<option value="${esc(status.wanted)}" selected disabled>PHP ${esc(status.wanted)} (unavailable)</option>` : ""}</select>
       </div>`;
   return `
     <div class="card">

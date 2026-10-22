@@ -15,7 +15,7 @@ import type { DnsState, Review as DnsReview } from "../addons/dns/action";
 import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
 import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
 import { tokenTemplate as dnsTokenTemplate } from "../addons/dns/token";
-import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
+import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout, panelPhpLine } from "../addons/panel-tweaks/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { sitesBlock } from "../addons/panel-tweaks/inject/targets";
 import { previewPage as panelTweaksPreviewPage } from "../addons/panel-tweaks/app/preview";
@@ -362,18 +362,20 @@ function phpResourcesPreviewState(url: URL): PhpResourcesState {
 }
 
 /** The panel moved to 8.4 with an update waiting; `?off` is CloudPanel's own 8.1. */
+let panelPhpChoice: string | null = null;
+
 function panelPhpPreviewStatus(url: URL): PanelPhpStatus {
-  const moved = !url.searchParams.has("off");
+  const wanted = panelPhpChoice ?? (url.searchParams.has("off") ? "" : "8.4");
   return {
-    wanted: moved ? "8.4" : "",
+    wanted,
     stock: "8.1",
-    running: moved ? "8.4" : "8.1",
+    running: wanted || "8.1",
     choices: [
-      { version: "8.1", installed: "8.1.34" },
-      { version: "8.2", installed: "8.2.35" },
-      { version: "8.3", installed: "8.3.36" },
-      { version: "8.4", installed: "8.4.25", available: "8.4.27" },
-      { version: "8.5", installed: "8.5.12" },
+      { version: "8.1", installed: "8.1.34-1" },
+      { version: "8.2", installed: "8.2.35-1" },
+      { version: "8.3", installed: "8.3.36-1" },
+      { version: "8.4", installed: "8.4.25-1", available: "8.4.27-1" },
+      { version: "8.5", installed: "8.5.12-1" },
     ],
   };
 }
@@ -823,6 +825,11 @@ async function repaintPreviewMutation(req: Request, url: URL): Promise<Response 
   const path = url.pathname;
   const source = new URL(req.headers.get("referer") || url);
   const body = await req.json().catch(() => ({})) as Record<string, any>;
+  if (path === "/addons/panel-tweaks/api/panel-php") {
+    panelPhpChoice = String(body.php ?? "");
+    const status = panelPhpPreviewStatus(source);
+    return Response.json({ ok: true, data: status, line: panelPhpLine(status) });
+  }
   return gitPreviewMutation(req, path, source, body)
     ?? instaticPreviewMutation(path, body)
     ?? phpPreviewMutation(path, source, body)

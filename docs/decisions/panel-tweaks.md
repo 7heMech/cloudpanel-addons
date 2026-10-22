@@ -445,4 +445,10 @@ drop-in is removed. A drop-in someone else wrote that sets `ExecStart`, such
 as a hand-made `override.conf`, wins: the card says so and refuses a choice.
 Disabling the addon removes the drop-in and keeps the choice, which enabling
 reapplies through the reconcile service. The card also shows a newer package
-release when apt has one, because a newer minor is no fix until it is patched.
+version when apt has one, revision included, because a newer minor is no fix
+until it is patched, and a failure is retried once that version changes.
+
+A choice and its drop-in change under one lock, and a repair run reads the
+choice only after it holds the lock. A file at the drop-in path that is not
+root's, or that others can write, is never trusted: it is replaced when a
+version is wanted and removed when none is.

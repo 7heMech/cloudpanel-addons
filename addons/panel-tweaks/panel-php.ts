@@ -56,7 +56,7 @@ export interface PanelPhpOptions {
 export interface PanelPhpChoice {
   /** `8.4`. */
   version: string;
-  /** The installed release, `8.4.25`, or "" when the package manager does not say. */
+  /** The installed package version, `8.4.25-1+clp-bookworm`, or "" when the package manager does not say. */
   installed: string;
   /** A newer release the package manager can install, when there is one. */
   available?: string;
@@ -136,6 +136,15 @@ function trustedText(path: string, rootUid: number): string | null {
   return readFileSync(path, "utf8");
 }
 
+function present(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function readChoice(paths: PanelPhpPaths): StoredChoice {
   try {
     const text = trustedText(paths.stateFile, paths.rootUid);
@@ -189,7 +198,7 @@ function installedVersions(ctx: Context): string[] {
 }
 
 function release(version: string): string {
-  return /^(?:[0-9]+:)?([0-9]+\.[0-9]+\.[0-9]+)/.exec(version)?.[1] ?? "";
+  return version === "(none)" ? "" : version;
 }
 
 /** Installed and candidate releases of each `phpX.Y-fpm`, from one `apt-cache policy`. */
@@ -213,7 +222,7 @@ function runningVersion(ctx: Context): string | null {
   const pid = ctx.run("systemctl", ["show", "-p", "MainPID", "--value", ctx.paths.unit]).stdout.trim();
   if (!/^[1-9][0-9]*$/.test(pid)) return null;
   try {
-    return /php-fpm([0-9]+\.[0-9]+)$/.exec(readlinkSync(join(ctx.paths.procRoot, pid, "exe")))?.[1] ?? null;
+    return /php-fpm([0-9]+\.[0-9]+)(?: \(deleted\))?$/.exec(readlinkSync(join(ctx.paths.procRoot, pid, "exe")))?.[1] ?? null;
   } catch {
     return null;
   }
@@ -304,7 +313,7 @@ async function apply(ctx: Context, php: string): Promise<string | null> {
   const override = foreignOverride(ctx, unit);
   if (override) {
     if (php) failAction(`${override} already sets the panel's PHP; remove it to choose the version here`);
-    if (before !== null) {
+    if (present(ctx.paths.dropInFile)) {
       install(ctx, null);
       check(ctx.run("systemctl", ["restart", ctx.paths.unit]), `restarting ${ctx.paths.unit} failed`);
     }
@@ -312,7 +321,7 @@ async function apply(ctx: Context, php: string): Promise<string | null> {
   }
   const target = php && newer(php, unit.stock) ? php : unit.stock;
   const desired = target === unit.stock ? null : dropInFor(ctx, target, unit);
-  if (desired === before) return null;
+  if (desired === before && (desired !== null || !present(ctx.paths.dropInFile))) return null;
 
   if (desired !== null) {
     const binary = join(ctx.paths.fpmBinDir, `php-fpm${target}`);
@@ -378,9 +387,9 @@ export async function setPanelPhp(php: string, options: PanelPhpOptions = {}): P
  */
 export async function reconcilePanelPhp(options: PanelPhpOptions = {}): Promise<string | null> {
   const ctx = contextOf(options);
-  const choice = readChoice(ctx.paths);
-  if (!choice.php && trustedText(ctx.paths.dropInFile, ctx.paths.rootUid) === null) return null;
+  if (!readChoice(ctx.paths).php && !present(ctx.paths.dropInFile)) return null;
   return withFileLock(ctx.paths.lockFile, 30, "another panel PHP change is still running", async () => {
+    const choice = readChoice(ctx.paths);
     const current = choice.php ? releases(ctx, [choice.php]).get(choice.php)?.installed ?? "" : "";
     if (choice.failure && choice.failure.php === choice.php && choice.failure.release === current) return null;
     try {
@@ -397,7 +406,7 @@ export async function reconcilePanelPhp(options: PanelPhpOptions = {}): Promise<
 /** Disabling the addon gives CloudPanel its own unit back and keeps the choice for later. */
 export function withdrawPanelPhp(options: PanelPhpOptions = {}): void {
   const ctx = contextOf(options);
-  if (trustedText(ctx.paths.dropInFile, ctx.paths.rootUid) === null) return;
+  if (!present(ctx.paths.dropInFile)) return;
   rmSync(ctx.paths.dropInFile, { force: true });
   ctx.run("systemctl", ["daemon-reload"]);
   ctx.run("systemctl", ["restart", ctx.paths.unit]);
