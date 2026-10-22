@@ -102,12 +102,16 @@ without assuming it was scheduled or promising a recovery time.
 
 ## State and privileges
 
+The shared HTTP request IP reader converts IPv4-mapped IPv6 hosts to dotted
+IPv4, so the page's current-IP shortcut and a bypass accepted during WordPress
+sign-in save the IPv4 address used by the site's connection.
+
 Only the root gateway changes maintenance state. It accepts a fixed verb set,
 normalizes domains and IP addresses, checks that site-scoped domains are current
 CloudPanel sites, and bounds a custom template at 256 KiB. Each bypass update
 replaces the complete list for its scope and allows at most 64 addresses.
-WordPress Sign-In adds one address to a site's list through the same locked
-writer, when an administrator agrees; see [WordPress Sign-In](wp-login.md).
+WordPress Tools adds one address to a site's list through the same locked
+writer, when an administrator agrees; see [WordPress Tools](wp-login.md).
 
 The state root, global directory, and per-domain directories are mode `0711`,
 which lets Nginx traverse a known path without listing domains or bypasses.

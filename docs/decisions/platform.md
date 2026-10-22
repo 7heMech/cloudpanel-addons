@@ -219,7 +219,11 @@ bounded by the visual viewport so a phone's collapsing address bar cannot cover
 them. 940px rather than a phone width because a fleet table is five or six
 columns wide: below that the columns are narrower than the hostnames in them and
 a domain wrapped a character at a time. Cell padding comes down from 1200px for
-the same reason. Two-column card and field grids hold until 760px, where the
+the same reason. Instatic's instance and inventory lists and Stager's clone,
+source and promotion lists use the same fleet rows, with labels on secondary
+cells so their meaning survives the hidden table heading. Empty cells disappear
+and the site and type lead each card. Page and form actions wrap within the
+available width. Two-column card and field grids hold until 760px, where the
 tables have already given way. Live enable, disable and update jobs
 put their state, current step and output in the manager card that owns the job,
 with the log auto-expanding as output arrives so the operator can see the live
@@ -317,12 +321,10 @@ string built from a shared class name, a script fragment that is a function
 body rather than a program, and a `<script>` element indented to sit inside a
 Twig template.
 
-Three scripts are shared. Every addon page gets the base helpers, `repaintView`
-among them; the fleet tables also get the site-selection ones, and WordPress
-Sign-In, the one page left that reloads after a change, gets the pair that
-carries a message across the reload. Each shared function takes the page's own
-repaint, because what a change redraws is the one thing the addons do not agree
-on.
+Every addon page gets the shared base helpers, including `repaintView` and
+inline notices. Fleet tables also get site-selection helpers, whose entry
+points take the page's own selection repaint. Pages with background jobs get
+the shared job watcher. Theme initialization runs before styles are painted.
 
 ## Live panel data
 

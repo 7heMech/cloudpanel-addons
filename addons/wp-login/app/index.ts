@@ -1,8 +1,9 @@
+import { signInWindow } from "./sign-in-window";
 import {
-  bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readJsonObject, newCsrfToken,
+  bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readJsonObject, newCsrfToken, safeDecodePathSegment,
 } from "../../../lib/app-http";
 import { validateDomain, wpLoginService } from "./service";
-import { dashboardView, layout } from "./views";
+import { dashboardBody, dashboardView, layout } from "./views";
 
 function json(body: unknown, status = 200): Response {
   return jsonResponse(body, { status });
@@ -33,18 +34,32 @@ export async function handle(
     return jsonResponse({ ok: true }, { csrf });
   }
 
+  const windowPage = /^\/sign-in\/([^/]+)$/.exec(path);
+  if (method === "GET" && windowPage) {
+    const domain = validateDomain(safeDecodePathSegment(windowPage[1]!));
+    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    return signInWindow(domain);
+  }
+
   if (method === "GET" && path === "/") {
     const csrf = newCsrfToken();
     try {
       const result = await wpLoginService.sites();
       if (!result.ok || !result.data) throw new Error(result.error ?? "the WordPress site list is unavailable");
-      return htmlResponse(layout("WordPress Sign-In", dashboardView(result.data.sites), updateNotice), { csrf });
+      return htmlResponse(layout("WordPress Tools", dashboardView(result.data), updateNotice), { csrf });
     } catch (error) {
       return htmlResponse(
-        layout("WordPress Sign-In", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice),
+        layout("WordPress Tools", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice),
         { status: 500, csrf },
       );
     }
+  }
+
+  if (method === "GET" && path === "/api/dashboard") {
+    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
+    const result = await wpLoginService.sites();
+    if (!result.ok || !result.data) return json(result, 400);
+    return json({ ok: true, data: { html: dashboardBody(result.data) } });
   }
 
   if (method !== "POST") return json({ ok: false, error: "not found" }, 404);
@@ -71,6 +86,7 @@ export async function handle(
       asUser: admin ? undefined : auth!.user,
       clientIp: clientIp(req),
       addBypass: body.addBypass === true,
+      allowBasicAuth: body.allowBasicAuth === true,
     });
     return json(result, result.ok ? 200 : 400);
   }
@@ -78,6 +94,64 @@ export async function handle(
   if (path === "/api/remove") {
     const result = await wpLoginService.remove();
     return json(result, result.ok ? 200 : 400);
+  }
+
+  if (path.startsWith("/api/mainwp-")) {
+    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req, 4 * 1024); }
+    catch (error) { return bodyErrorResponse(error); }
+    let result;
+    if (path === "/api/mainwp-settings") {
+      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+      const dashboard = body.dashboard === undefined ? undefined : validateDomain(body.dashboard);
+      if (dashboard === null) return json({ ok: false, error: "choose a valid Dashboard hostname" }, 400);
+      result = await wpLoginService.mainwpSettings(body.enabled, dashboard);
+    } else if (path === "/api/mainwp-sync") result = await wpLoginService.mainwpSync();
+    else if (path === "/api/mainwp-cleanup") {
+      if (body.confirm !== true) return json({ ok: false, error: "confirm MainWP cleanup" }, 400);
+      result = await wpLoginService.mainwpCleanup();
+    } else {
+      const domain = validateDomain(body.domain);
+      if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+      if (path === "/api/mainwp-site") {
+        if (typeof body.excluded !== "boolean") return json({ ok: false, error: "excluded must be true or false" }, 400);
+        result = await wpLoginService.mainwpSite(domain, body.excluded);
+      } else if (path === "/api/mainwp-connect") {
+        if (body.confirm !== true) return json({ ok: false, error: "confirm the MainWP connection" }, 400);
+        result = await wpLoginService.mainwpConnect(domain);
+      }
+    }
+    return result ? json(result, result.ok ? 200 : 400) : json({ ok: false, error: "not found" }, 404);
+  }
+
+  if (path.startsWith("/api/varnish-")) {
+    // Only sign-in and its CSRF bootstrap are exceptions to the manager's
+    // administrator gate. Keep that boundary explicit here as well.
+    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
+    if (path === "/api/varnish-sync") {
+      const result = await wpLoginService.varnishSync();
+      return json(result, result.ok ? 200 : 400);
+    }
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req, 4 * 1024); }
+    catch (error) { return bodyErrorResponse(error); }
+    if (path === "/api/varnish-settings") {
+      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+      const result = await wpLoginService.varnishSettings(body.enabled);
+      return json(result, result.ok ? 200 : 400);
+    }
+    const domain = validateDomain(body.domain);
+    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    if (path === "/api/varnish-site") {
+      if (typeof body.excluded !== "boolean") return json({ ok: false, error: "excluded must be true or false" }, 400);
+      const result = await wpLoginService.varnishSite(domain, body.excluded);
+      return json(result, result.ok ? 200 : 400);
+    }
+    if (path === "/api/varnish-install") {
+      const result = await wpLoginService.varnishInstall(domain);
+      return json(result, result.ok ? 200 : 400);
+    }
   }
 
   return json({ ok: false, error: "not found" }, 404);

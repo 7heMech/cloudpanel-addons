@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  BodyError, MAX_BODY_BYTES, SECURITY_HEADERS, bodyErrorResponse, esc, escJs, guardMutation, htmlResponse,
+  BodyError, MAX_BODY_BYTES, SECURITY_HEADERS, bodyErrorResponse, clientIp, esc, escJs, guardMutation, htmlResponse,
   jsonResponse, newCsrfToken, policyHeaders, policyResponse, readJsonObject, redirectResponse,
   safeDecodePathSegment,
 } from "../lib/app-http";
@@ -297,5 +297,31 @@ describe("CSRF and origin guard", () => {
       Host: "panel.example:8443",
       "X-Forwarded-Host": "evil.example:8443",
     }))?.status).toBe(403);
+  });
+});
+
+
+describe("request IP addresses", () => {
+  test("all supported forwarding headers normalize IPv4-mapped hosts", () => {
+    for (const header of ["CF-Connecting-IP", "X-Real-IP", "X-Forwarded-For"]) {
+      for (const value of ["::ffff:203.0.113.9", "::FFFF:CB00:7109", "0:0:0:0:0:ffff:203.0.113.9"]) {
+        const forwarded = header === "X-Forwarded-For" ? `${value}, 198.51.100.1` : value;
+        const req = new Request("https://panel.example.com/", { headers: { [header]: forwarded } });
+        expect(clientIp(req)).toBe("203.0.113.9");
+      }
+    }
+  });
+
+  test("normalization preserves header precedence, ordinary addresses and invalid-IP refusals", () => {
+    expect(clientIp(new Request("https://panel.example.com/", { headers: {
+      "CF-Connecting-IP": "::ffff:203.0.113.9", "X-Real-IP": "198.51.100.1", "X-Forwarded-For": "198.51.100.2",
+    } }))).toBe("203.0.113.9");
+    for (const [value, expected] of [
+      ["203.0.113.9", "203.0.113.9"], ["2001:DB8::1", "2001:DB8::1"],
+      ["::203.0.113.9", "::203.0.113.9"], ["fe80::1%lo", "fe80::1%lo"],
+      ["::ffff:256.0.113.9", ""], ["::ffff:203.0.113.009", ""], ["not-an-ip", ""], ["", ""],
+    ]) {
+      expect(clientIp(new Request("https://panel.example.com/", { headers: { "X-Real-IP": value! } }))).toBe(expected!);
+    }
   });
 });

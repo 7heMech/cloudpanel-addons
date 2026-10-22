@@ -223,7 +223,7 @@ export function dashboardView(state: PhpResourcesState): string {
   const siteRows = state.sites.map((site) => siteTableRow(site, state.categories)).join("");
 
   return `<div class="page-heading">
-    <div><h1>PHP resources</h1>
+    <div><h1>PHP Resources</h1>
       <p>Put PHP sites into categories, and give each category its PHP-FPM worker limits.</p>
       <p class="hint">Limits apply to every site separately. Assigning one category to many sites multiplies its possible workers.</p></div>
     <button class="btn btn-primary" type="button" onclick="openCategoryDialog(this)">New category</button>

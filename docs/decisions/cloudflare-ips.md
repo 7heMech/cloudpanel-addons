@@ -10,10 +10,12 @@ reverses those rendered-vhost changes. CloudPanel remains the source of the IP
 ranges in `/etc/nginx/cloudflare/ips`.
 
 Bulk changes take one exclusive addon lock and one immediate SQLite transaction.
-Every affected vhost must be a trusted regular file. The action stages all
+Every affected vhost must be a trusted regular file. The trust checks, owned
+atomic replacement, restoration and recovery error collection are shared with
+WordPress sign-in in `cli/nginx-transaction.ts`. The action stages all
 changes, runs `nginx -t`, reloads Nginx once, and commits the database only when
-the reload succeeds. On failure it rolls back the database and restores the
-original vhosts. If any recovery step fails, the action attempts the remaining
+the reload succeeds. On failure it restores the original vhosts while holding
+the SQLite write lock, then rolls back the database. If any recovery step fails, the action attempts the remaining
 steps and reports each failure with the original operation error.
 
 ## Dashboard
@@ -36,7 +38,8 @@ turning one site off is the ordinary correction after a fleet-wide change.
 
 After any change the page repaints from a fresh read rather than from what was
 requested, keeping selection and scroll, and does the same after a failure so
-the displayed state is the server's. A changed site inventory reloads instead.
+the displayed state is the server's. A changed site inventory replaces the view
+with the HTML returned by that read, preserving selections for surviving sites.
 That read is part of the change: the controls stay disabled until it returns, so
 a second action cannot overtake the first, and a change whose read failed is
 reported as done but possibly out of date rather than as plain success.
