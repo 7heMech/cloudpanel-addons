@@ -75,12 +75,26 @@ async function startManagerJob(path, title, source, key) {
     const jobKey = running && running.kind === 'update' ? 'update' : (running && running.addon) || 'manager-job';
     const jobCard = existing ? managerJobCard(null, jobKey, true) : card;
     showJob(existing ? describeManagerJob(running) : title, jobCard);
-    watchJob(id, jobCard);
+    watchJob(id, jobCard, managerJobFinished);
   } catch (err) {
     busy(false);
     // In the page rather than in a modal the browser owns, which would cover
     // the card it is talking about and lose it on dismissal.
     notify(err.message, 'error');
+  }
+}
+
+// A successful update replaces this page's script and styles.
+async function managerJobFinished(job) {
+  if (job && job.kind === 'update' && job.state === 'done') {
+    location.reload();
+    return;
+  }
+  const shown = await repaintPage();
+  if (shown && job && job.state === 'done') {
+    notify((job.kind === 'disable' ? 'Disabled ' : 'Enabled ') + (job.addon || 'the addon') + '.', 'ok');
+  } else if (shown && job) {
+    notify('Job failed: ' + (job.error || job.step), 'error');
   }
 }
 

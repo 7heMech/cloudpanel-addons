@@ -302,6 +302,11 @@ test("a handler fault cannot answer with Bun's error page", () => {
   expect(source.slice(source.indexOf("async function cmdServe"))).toInclude("development: false");
 });
 
+test("a slow gateway call is not cut off by Bun's idle timeout", () => {
+  const source = readFileSync(join(repo, "manager/server.ts"), "utf8");
+  expect(source.slice(source.indexOf("async function cmdServe"))).toInclude("idleTimeout: 0");
+});
+
 // A shell as a site's user is an administrator's tool: no role list, no
 // self-scoped route, whatever the other addons let through.
 test("no non-administrator reaches the terminal", () => {

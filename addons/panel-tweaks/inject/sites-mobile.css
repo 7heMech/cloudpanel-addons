@@ -1,5 +1,5 @@
 
-@media (max-width: 860px) {
+@media (max-width: 1100px) {
   .clp-tweaks-scroll { overflow-x: visible; }
   table.table-sites, table.table-sites tbody, table.table-sites tr, table.table-sites td { display: block; }
   table.table-sites thead { display: none; }
@@ -70,7 +70,7 @@ table.table-sites .clp-tweaks-type-beside-last-host-line .clp-tweaks-details > .
 /* A card's badge is half its width, which the full issuer and expiry overrun at
    every phone size, so it carries the short name and the countdown. The full
    text remains available to screen readers and in the title. */
-@media (max-width: 860px) {
+@media (max-width: 1100px) {
   .clp-tweaks-badge-timed > .clp-tweaks-badge-full { position: absolute; width: 1px; height: 1px;
     overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .clp-tweaks-badge-timed > .clp-tweaks-badge-compact { display: block; position: static;

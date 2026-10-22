@@ -2,7 +2,6 @@
 //
 // The manager router strips the /addons/ prefix before dispatching here.
 
-import type { Server } from "bun";
 import { instaticService, validateDomain, validateTag, validateJobId } from "./service";
 import { layout, dashboardView, newInstanceView, jobView } from "./views";
 import {
@@ -21,6 +20,25 @@ function json(body: unknown, status = 200): Response {
   return jsonResponse(body, { status });
 }
 
+async function dashboard(): Promise<string> {
+  const instances = await instaticService.listInstances();
+  let panelSites: SanitizedSite[] = [];
+  let snapshotAge = Infinity;
+  let snapshotTakenAt = "";
+  try {
+    const { snap, ageSeconds } = await instaticService.snapshot();
+    panelSites = snap.sites;
+    snapshotAge = ageSeconds;
+    snapshotTakenAt = snap.updatedAt;
+  } catch {}
+  return dashboardView(instances, snapshotAge, panelSites, await listAvailableTags(), snapshotTakenAt);
+}
+
+async function change(result: { ok: boolean }): Promise<Response> {
+  if (!result.ok) return json(result, 400);
+  return json({ ...result, html: await dashboard() });
+}
+
 const MUTATING_VERBS = new Set(["start", "stop", "restart", "recreate", "delete", "snapshot", "update"]);
 
 /**
@@ -35,7 +53,7 @@ export async function handle(
   req: Request,
   path: string,
   updateNotice?: { current: string; latest: string } | null,
-  server?: Server<unknown> | null,
+  _server?: unknown,
   auth?: { user: string; roles: string[] } | null,
 ): Promise<Response> {
   const method = req.method;
@@ -52,30 +70,7 @@ export async function handle(
     const csrf = newCsrfToken();
     try {
       if (path === "/") {
-        const instances = await instaticService.listInstances();
-        let panelSites: SanitizedSite[] = [];
-        let snapshotAge = Infinity;
-        let snapshotTakenAt = "";
-        try {
-          const { snap, ageSeconds } = await instaticService.snapshot();
-          panelSites = snap.sites;
-          snapshotAge = ageSeconds;
-          snapshotTakenAt = snap.updatedAt;
-        } catch {
-          // Panel inventory unavailable; the action binary already supplied
-          // live instance data above.
-        }
-        // The dashboard needs the registry listing too, not just /new. Without
-        // it the page showed each instance's pinned tag with nothing to compare
-        // it against, so a new Instatic release was invisible here and the
-        // update dialog asked the operator to type a version from memory.
-        const available = await listAvailableTags();
-        return html(
-          page("Instatic instances",
-            dashboardView(instances, snapshotAge, panelSites, available, snapshotTakenAt)
-          ),
-          csrf
-        );
+        return html(page("Instatic instances", await dashboard()), csrf);
       }
       const available = await listAvailableTags();
       return html(page("New Instatic site", newInstanceView(await instaticService.nextPort(), available)), csrf);
@@ -125,7 +120,6 @@ export async function handle(
     req,
     path,
     method,
-    server,
     siteManager: true,
     getJob: (jobId) => instaticService.getJob(jobId),
     watchJob: (jobId, handlers) => instaticService.watchJob(jobId, handlers),
@@ -158,7 +152,7 @@ export async function handle(
         case "restart":
         case "recreate": {
           const res = await instaticService.lifecycle(domain, verb);
-          return json(res, res.ok ? 200 : 400);
+          return change(res);
         }
         case "snapshot": {
           const res = await instaticService.snapshotInstance(domain);
@@ -166,7 +160,7 @@ export async function handle(
         }
         case "delete": {
           const res = await instaticService.deleteInstance(domain);
-          return json(res, res.ok ? 200 : 400);
+          return change(res);
         }
         case "update": {
           // Only the read is guarded: an oversized body is a 413 the reader
@@ -181,7 +175,7 @@ export async function handle(
           const tag = validateTag(body.tag);
           if (!tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
           const res = await instaticService.updateInstance(domain, tag);
-          return json(res, res.ok ? 200 : 400);
+          return change(res);
         }
       }
     }

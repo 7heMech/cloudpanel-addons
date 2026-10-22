@@ -1,6 +1,6 @@
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
-import { CARRIED_FLASH_JS, FLEET_ROW_SELECTION_JS, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
+import { FLEET_ROW_SELECTION_JS, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import {
   DEFAULT_CATEGORY_PROFILE, PM_MODES, STOCK_PROFILE,
@@ -143,7 +143,7 @@ function profileForm(profile: PoolProfile): string {
 }
 
 export const CLIENT_JS = `
-${FLEET_ROW_SELECTION_JS}${CARRIED_FLASH_JS}
+${FLEET_ROW_SELECTION_JS}
 ${CLIENT_JS_BODY}`;
 
 export function layout(
@@ -204,7 +204,7 @@ function siteTableRow(site: PoolSiteState, categories: PoolCategory[]): string {
       site.drifted ? '<div class="hint">Its pool file no longer matches this category.</div>' : ""
     }</td>
     <td class="type-cell">PHP ${esc(site.phpVersion)}</td>
-    <td data-label="Category"><select aria-label="Category for ${esc(site.domain)}" onchange="assignRow(this)">${categoryOptions(categories, site.categoryId)}</select></td>
+    <td data-label="Category"><select id="category-${esc(site.domain)}" aria-label="Category for ${esc(site.domain)}" onchange="assignRow(this)">${categoryOptions(categories, site.categoryId)}</select></td>
     <td class="limit-cell wide-cell" data-label="Now running">${esc(workerSummary(site.current))}</td>
   </tr>`;
 }
@@ -223,7 +223,7 @@ export function dashboardView(state: PhpResourcesState): string {
   const siteRows = state.sites.map((site) => siteTableRow(site, state.categories)).join("");
 
   return `<div class="page-heading">
-    <div><h1>PHP resources</h1>
+    <div><h1>PHP Resources</h1>
       <p>Put PHP sites into categories, and give each category its PHP-FPM worker limits.</p>
       <p class="hint">Limits apply to every site separately. Assigning one category to many sites multiplies its possible workers.</p></div>
     <button class="btn btn-primary" type="button" onclick="openCategoryDialog(this)">New category</button>
