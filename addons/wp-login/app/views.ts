@@ -117,7 +117,7 @@ function policyCard(automatic: boolean, error: string): string {
         <p>On WordPress sites with Varnish enabled in CloudPanel, checked every 15 minutes. A plugin deactivated or removed in WordPress is left alone.</p>
       </div>
       <div class="wp-card-controls">
-        ${automatic ? '<button class="btn" type="button" onclick="checkSites()">Check now</button>' : ""}
+        ${automatic ? '<button class="btn" id="varnish-check" type="button" onclick="checkSites()">Check now</button>' : ""}
         <label class="switch"><input id="varnish-automatic" type="checkbox" aria-label="Install CLP Varnish Cache automatically" ${automatic ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
       </div>
     </div>`;
@@ -206,7 +206,7 @@ function mainwpCard(sites: WpSiteView[], state: MainwpView, error: string): stri
       <div class="mainwp-controls">
         <label class="hint" for="mainwp-dashboard">MainWP Dashboard</label>
         <select id="mainwp-dashboard" onchange="setMainwpDashboard(this)" ${locked ? "disabled" : ""}><option value="">Choose a site</option>${options}</select>
-        <button class="btn" type="button" onclick="checkMainwp()" ${state.dashboard ? "" : "disabled"}>Check now</button>
+        <button class="btn" id="mainwp-check" type="button" onclick="checkMainwp()" ${state.dashboard ? "" : "disabled"}>Check now</button>
         ${cleanup}
       </div>
       ${note}
