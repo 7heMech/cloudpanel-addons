@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, mock, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -313,6 +313,67 @@ test("a timer that cannot be enabled undoes the drop-in and the timers enabled b
   expect(existsSync(b.dropIn)).toBe(false);
   expect(b.timers.get("apt-daily.timer")).toBe("disabled");
   expect(existsSync(b.settingsFile)).toBe(false);
+});
+
+test("the gateway waits for the longest an install can take", async () => {
+  const gatewayTimeouts: number[] = [];
+  mock.module("../lib/gateway-client", () => ({
+    callGatewayAction: async (_addon: string, _verb: string, _args: string[], _input?: string, options?: { timeout?: number }) => {
+      gatewayTimeouts.push(options?.timeout ?? 60_000);
+      return { ok: true };
+    },
+  }));
+  const { systemTweaksService } = await import("../addons/system-tweaks/app/service");
+  await systemTweaksService.installUpdates();
+
+  // Every command hangs until it is stopped, and the first install fails, so
+  // the action takes the update and the retry too: as long as it ever can.
+  const b = box({ installed: false });
+  const base = b.options.updates!.run!;
+  let clock = 0;
+  let installs = 0;
+  const hanging = (command: string, args: string[], env?: Record<string, string>, timeoutMs?: number): CommandResult => {
+    clock += timeoutMs ?? (command === "apt-get" ? 280_000 : 30_000);
+    if (command === "apt-get" && args[0] === "install" && installs++ === 0) return { ok: false, stdout: "", stderr: "404" };
+    return base(command, args, env);
+  };
+  b.options = {
+    ...b.options,
+    now: () => clock,
+    updates: { ...b.options.updates, run: hanging },
+    uploadProgress: { ...b.options.uploadProgress, run: hanging },
+  };
+  await act(b, ["install-updates"]).catch(() => {});
+  expect(clock).toBeGreaterThan(0);
+  expect(clock).toBeLessThan(gatewayTimeouts[0]!);
+});
+
+test("the install notice stays up until the reply, which repaints the page", async () => {
+  const source = readFileSync(join(import.meta.dir, "../addons/system-tweaks/app/views.client.js"), "utf8");
+  const events: string[] = [];
+  let reply!: (body: unknown) => void;
+  const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer",
+    `${source}\nreturn { installUpdates };`)(
+    () => new Promise((resolve) => { reply = resolve; }),
+    () => {},
+    (message: string, kind: string) => events.push(`${kind}: ${message}`),
+    () => events.push("cleared"),
+    (_holder: unknown, html: string) => events.push(`repaint: ${html}`),
+    { getElementById: () => ({}) },
+    0,
+  ) as { installUpdates: () => Promise<void> };
+
+  const pending = client.installUpdates();
+  await Promise.resolve();
+  expect(events).toEqual(["warn: Installing unattended-upgrades…"]);
+  reply({ ok: true, html: "<p>installed</p>" });
+  await pending;
+  expect(events).toEqual([
+    "warn: Installing unattended-upgrades…",
+    "repaint: <p>installed</p>",
+    "ok: unattended-upgrades is installed.",
+  ]);
+  expect(source).not.toContain("location.reload");
 });
 
 test("a missing package is reported, refused, and installed only when asked", async () => {

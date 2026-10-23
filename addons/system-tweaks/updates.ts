@@ -12,6 +12,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync } fr
 import { basename, join } from "node:path";
 import { failAction, type CommandResult } from "../../cli/action-common";
 import { writeFileAtomic } from "../../lib/atomic-write";
+import { APT_STEP_MS, COMMAND_MS } from "./limits";
 
 export const CLOUDPANEL_ORIGIN = "packages-v1.cloudpanel.io";
 const MARKER = "// Managed by clp-addons System Tweaks. Switching automatic updates off there removes this file.";
@@ -54,9 +55,12 @@ export const DEFAULT_UPDATES_PATHS: UpdatesPaths = {
   osRelease: "/etc/os-release",
 };
 
+/** A command runner; `timeoutMs` overrides the command's own guard. */
+export type Run = (command: string, args: string[], env?: Record<string, string>, timeoutMs?: number) => CommandResult;
+
 export interface UpdatesOptions {
   paths?: Partial<UpdatesPaths>;
-  run?: (command: string, args: string[], env?: Record<string, string>) => CommandResult;
+  run?: Run;
 }
 
 export interface CoverageRow {
@@ -98,24 +102,40 @@ export interface UpdatesStatus {
 
 interface Context {
   paths: UpdatesPaths;
-  run: (command: string, args: string[], env?: Record<string, string>) => CommandResult;
+  run: Run;
 }
 
 function contextOf(options: UpdatesOptions): Context {
   return {
     paths: { ...DEFAULT_UPDATES_PATHS, ...options.paths },
-    run: options.run ?? defaultRun,
+    run: options.run ?? systemRun,
   };
 }
 
-function defaultRun(command: string, args: string[], env?: Record<string, string>): CommandResult {
+function guardOf(command: string): number {
+  return command === "apt-get" ? APT_STEP_MS : COMMAND_MS;
+}
+
+/**
+ * A runner that holds every command to one deadline: each gets its own guard
+ * or what is left, whichever is shorter, and none starts once it has passed.
+ */
+export function withDeadline(run: Run, deadline: number, now: () => number = Date.now): Run {
+  return (command, args, env) => {
+    const remaining = deadline - now();
+    if (remaining <= 0) failAction("the install ran out of time; try again, or install unattended-upgrades with apt");
+    return run(command, args, env, Math.min(guardOf(command), remaining));
+  };
+}
+
+export function systemRun(command: string, args: string[], env?: Record<string, string>, timeoutMs?: number): CommandResult {
   try {
     const result = Bun.spawnSync([command, ...args], {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
       env: { ...process.env, ...env },
-      timeout: command === "apt-get" ? 280_000 : 30_000,
+      timeout: timeoutMs ?? guardOf(command),
       killSignal: "SIGKILL",
     });
     return { ok: result.success, stdout: result.stdout.toString(), stderr: result.stderr.toString(), exitCode: result.exitCode };

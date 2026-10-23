@@ -3,7 +3,8 @@
 ## Automatic updates
 
 1. Open **Addons → System Tweaks**. If `unattended-upgrades` is missing, choose
-   **Install unattended-upgrades**.
+   **Install unattended-upgrades**. It can take up to ten minutes when apt is
+   busy.
 2. Switch on **Install updates automatically**. It runs once a day, from
    `apt-daily-upgrade.timer`, and installs the distro's security updates and
    every PHP version CloudPanel ships. Nginx is included by default; MySQL and

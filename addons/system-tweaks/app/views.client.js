@@ -6,8 +6,9 @@ async function post(path, body) {
   });
 }
 
-async function change(input, path, body, done) {
-  clearNotice();
+// A progress notice the caller put up stays until the reply replaces it.
+async function change(input, path, body, done, keepNotice) {
+  if (!keepNotice) clearNotice();
   busy(true);
   try {
     const reply = await post(path, body);
@@ -32,5 +33,5 @@ function setUploadGuard(input) {
 function installUpdates() {
   notify('Installing unattended-upgrades…', 'warn');
   clearTimeout(clpFlashTimer);
-  return change(null, '/api/install-updates', {}, 'unattended-upgrades is installed.');
+  return change(null, '/api/install-updates', {}, 'unattended-upgrades is installed.', true);
 }

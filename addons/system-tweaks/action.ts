@@ -14,9 +14,10 @@ import { ROOT_UID, STATE_DIR } from "../../cli/paths";
 import { reconcilePhpGuard, type PhpGuardOptions } from "../../cli/php-guard";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import {
-  DEFAULT_UPDATE_SETTINGS, UPDATE_SETTING_KEYS, applyUpdates, effectiveReboot, installUnattendedUpgrades, unattendedUpgradesInstalled, updatesStatus,
+  DEFAULT_UPDATE_SETTINGS, UPDATE_SETTING_KEYS, applyUpdates, effectiveReboot, installUnattendedUpgrades, systemRun, unattendedUpgradesInstalled, updatesStatus, withDeadline,
   type UpdateSettings, type UpdatesOptions, type UpdatesStatus,
 } from "./updates";
+import { INSTALL_DEADLINE_MS } from "./limits";
 import { uploadProgressStatus, type FpmUploadProgress, type UploadProgressOptions } from "./upload-progress";
 
 const SETTINGS_VERSION = 1;
@@ -58,6 +59,7 @@ export interface SystemTweaksOptions {
   updates?: UpdatesOptions;
   uploadProgress?: UploadProgressOptions;
   phpGuard?: PhpGuardOptions;
+  now?: () => number;
 }
 
 function pathsFor(options: SystemTweaksOptions): SystemTweaksPaths {
@@ -188,9 +190,14 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "state") return stateOf(options);
   if (verb === "set-updates") return setUpdates(options);
   if (verb === "set-upload-guard") return setUploadGuard(options);
+  // One deadline for the install and the state read that answers it, which the
+  // gateway's timeout is sized from.
+  const now = options.now ?? Date.now;
+  const run = withDeadline(options.updates?.run ?? systemRun, now() + INSTALL_DEADLINE_MS, now);
+  const bounded = { ...options, updates: { ...options.updates, run }, uploadProgress: { ...options.uploadProgress, run } };
   await withFileLock(pathsFor(options).lockFile, 15, "another system tweaks change is still running", async () =>
-    installUnattendedUpgrades(options.updates));
-  return stateOf(options);
+    installUnattendedUpgrades(bounded.updates));
+  return stateOf(bounded);
 }
 
 export async function runSystemTweaksAction(argv: string[], options: SystemTweaksOptions = {}): Promise<number> {

@@ -43,7 +43,14 @@ enabling it again restores both.
 
 If `unattended-upgrades` is missing, the page says so and offers an install
 button. That button runs a fixed `apt-get install unattended-upgrades` and
-nothing else; the gateway verb takes no package name. Ubuntu's postinst may turn
+nothing else; the gateway verb takes no package name. If the install fails, it
+runs `apt-get update` and tries once more. The whole action, including the state
+read its reply carries, has one ten-minute deadline (`addons/system-tweaks/limits.ts`).
+Each command gets its own guard or what is left, whichever is shorter: 280 s for
+apt-get, of which 120 s may be waiting for dpkg's lock, and 30 s for a query. The
+gateway, which kills an action at its timeout, waits 30 s longer, so it never
+stops a root action that is still installing. The page keeps its "Installing"
+notice up until the reply repaints it. Ubuntu's postinst may turn
 updates on by itself, and the page then reports that as configured outside
 System Tweaks.
 

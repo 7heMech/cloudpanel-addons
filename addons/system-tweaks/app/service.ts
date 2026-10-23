@@ -1,12 +1,10 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 import type { SystemTweaksState } from "../action";
+import { INSTALL_GATEWAY_TIMEOUT_MS } from "../limits";
 
 function call(verb: string, input?: string, timeout?: number): Promise<ActionResult<SystemTweaksState>> {
   return callGatewayAction<SystemTweaksState>("system-tweaks", verb, [], input, timeout ? { timeout } : undefined);
 }
-
-/** apt-get waits up to two minutes for dpkg's lock, then downloads and installs. */
-const INSTALL_TIMEOUT_MS = 300_000;
 
 export const systemTweaksService = {
   state(): Promise<ActionResult<SystemTweaksState>> {
@@ -18,7 +16,7 @@ export const systemTweaksService = {
   },
 
   installUpdates(): Promise<ActionResult<SystemTweaksState>> {
-    return call("install-updates", undefined, INSTALL_TIMEOUT_MS);
+    return call("install-updates", undefined, INSTALL_GATEWAY_TIMEOUT_MS);
   },
 
   setUploadGuard(enabled: boolean): Promise<ActionResult<SystemTweaksState>> {
