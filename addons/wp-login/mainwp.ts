@@ -518,6 +518,9 @@ async function untouched(pass: Pass, site: WpSite, before: ChildStatus): Promise
 /** Withdraws what the addon added to one site, and leaves a connection someone has made since. */
 async function cleanupSite(pass: Pass, site: WpSite, record: MainwpRecord, status: ChildStatus): Promise<void> {
   if (!record.snapshot) return;
+  // An unconfirmed enrollment may have left a Dashboard record only the
+  // Dashboard can name; forgetting its Security ID would orphan that record.
+  if (pass.dashboardError && record.token && !record.ownedConnection) throw new Error(pass.dashboardError);
   const connection = pass.connections[site.domain] ?? null;
   if (enrolledBy(record, status, connection)) {
     record.ownedConnection = true;
@@ -531,9 +534,9 @@ async function cleanupSite(pass: Pass, site: WpSite, record: MainwpRecord, statu
   if (ours) {
     await bridge(pass, site, { op: "cleanup", snapshot: record.snapshot, key: status.key, removePlugin: record.ownedPlugin });
   }
-  if (pass.dashboard && record.ownedConnection && record.connection) {
+  if (record.ownedConnection && record.connection) {
     if (pass.dashboardError) pass.state.retired.push({ domain: site.domain, connection: record.connection });
-    else await bridge(pass, pass.dashboard, { op: "dashboard-remove", id: record.connection.id, key: record.connection.key });
+    else if (pass.dashboard) await bridge(pass, pass.dashboard, { op: "dashboard-remove", id: record.connection.id, key: record.connection.key });
   }
   if (!ours) record.status = paired(status, connection) ? "connected" : "not-connected";
   else if (record.ownedPlugin) {

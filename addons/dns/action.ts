@@ -473,8 +473,9 @@ class Action {
     const plan = plans.find((candidate) => candidate.domain === domain);
     const ready = readiness(plan);
     // A plan's problems can name other customers' sites and quote Cloudflare
-    // or Mailcow errors, which are an administrator's to read.
-    if (asUser && !ready.ready) ready.reason = "an administrator can see why on the DNS page";
+    // or Mailcow errors, which are an administrator's to read. The rest, such
+    // as the nameservers a pending zone needs, are the site owner's to act on.
+    if (asUser && plan?.problems.length) ready.reason = "an administrator can see why on the DNS page";
     return { managed: true, ...ready, certificateNames: ready.ready ? plan!.certificateNames : [] };
   }
 

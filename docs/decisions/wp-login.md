@@ -350,8 +350,9 @@ file and cookie jar. Settings-backup and request-log rows, which MainWP leaves,
 go too. A retry finishes those artifacts even when the Dashboard record is
 already gone. Both sides verify, and a failure keeps the claim and Cleanup
 pending. While the Dashboard cannot be read, cleanup still restores each child
-and retires its Dashboard record, which a later pass removes once the Dashboard
-answers. Cleanup journals removal intent by clearing `seen` before deleting a
+whose connection is recorded, and retires that Dashboard record for a later pass
+to remove once the Dashboard answers. A child with an unconfirmed enrollment
+waits for the Dashboard, since only it can name the record that may exist. Cleanup journals removal intent by clearing `seen` before deleting a
 plugin the addon installed, so automation may install it again after a completed
 cleanup, even if cleanup needed retries. One already removed by the operator
 stays seen.

@@ -157,8 +157,8 @@ Panel Tweaks' completion page calls `POST /addons/dns/api/provision` before it
 asks for a certificate. The route, and its CSRF session route, are reachable by
 non-administrators: the action is told the panel user and refuses a site
 `panelUserOwnsSite` does not give them, and answers with readiness, a reason (a
-fixed one for a non-administrator, since a plan's problems can name other sites
-and quote provider errors) and the certificate names only -- the site and `www` where the profile writes an
+fixed one when a non-administrator's site has a problem, since a plan's problems
+can name other sites and quote provider errors) and the certificate names only -- the site and `www` where the profile writes an
 address there. A site in no profile or a Report only one is not DNS's to hold up.
 For an enforced site created in the last fifteen minutes that still has its
 self-signed certificate, the call also records that automatic SSL was asked

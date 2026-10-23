@@ -393,6 +393,24 @@ test("cleanup restores children while the Dashboard is down and removes its reco
   expect(readMainwpState(run.statePath)).toMatchObject({ cleanup: false, retired: [] });
 });
 
+test("cleanup waits for the Dashboard when only it can name an unconfirmed enrollment's record", async () => {
+  await configured(); fail = "add";
+  await syncMainwp({ ...run, domain: "new.test" }, options);
+  fail = "";
+  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ ownedConnection: false });
+  expect(connections["new.test"]).toBeDefined();
+  const unavailable = { runWpCommand: async (command: WpCommand) => {
+    if (command.stdin && JSON.parse(command.stdin).op === "dashboard-status") return 'CLP-ADDONS-MAINWP:{"error":"dashboard-unavailable"}';
+    return options.runWpCommand(command);
+  } };
+  expect((await syncMainwp(run, unavailable, true)).failed).toHaveLength(1);
+  expect(readMainwpState(run.statePath).sites["new.test"]!.token).toBeDefined();
+  expect(readMainwpState(run.statePath).cleanup).toBe(true);
+  await syncMainwp(run, options, true);
+  expect(connections["new.test"]).toBeUndefined();
+  expect(readMainwpState(run.statePath)).toMatchObject({ cleanup: false, retired: [] });
+});
+
 test("restoring authentication permits withdrawal even while the Dashboard is unavailable", async () => {
   await configured();
   fail = "restore";

@@ -430,11 +430,14 @@ export function withdrawPanelPhp(options: PanelPhpOptions = {}): void {
       ok = back();
     }
     if (ok) return;
+    let restored = "";
     if (before !== null) {
       install(ctx, before);
-      ctx.run("systemctl", ["restart", ctx.paths.unit]);
+      restored = ctx.run("systemctl", ["restart", ctx.paths.unit]).ok
+        ? "; the override was put back"
+        : `; the override was put back, but ${ctx.paths.unit} did not restart on it either`;
     }
-    failAction(`${ctx.paths.unit} did not come back on PHP ${unit?.stock ?? "CloudPanel's own version"}${before !== null ? "; the override was put back" : ""}`);
+    failAction(`${ctx.paths.unit} did not come back on PHP ${unit?.stock ?? "CloudPanel's own version"}${restored}`);
   });
 }
 

@@ -567,6 +567,12 @@ describe("zones and new sites", () => {
     expect(admin.reason).toContain("Cloudflare could not be read");
     expect(await env.act<ProvisionReply>("provision", undefined, ["--domain=shop.example.com", "--as-user=bob"]))
       .toEqual({ managed: true, ready: false, reason: "an administrator can see why on the DNS page", certificateNames: [] });
+
+    // What the owner can act on, such as a pending zone's nameservers, they still see.
+    env.cf.token(TOKEN, { owner: "user", accounts: [env.agency], zoneEdit: true });
+    env.cf.zones[0]!.status = "pending";
+    expect((await env.act<ProvisionReply>("provision", undefined, ["--domain=shop.example.com", "--as-user=bob"])).reason)
+      .toContain("set its nameservers at the registrar");
   });
 });
 
