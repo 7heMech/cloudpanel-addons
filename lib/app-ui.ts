@@ -82,6 +82,11 @@ export { BASE_CLIENT_JS };
 import JOB_STYLE from "./assets/job.css" with { type: "text" };
 export { JOB_STYLE };
 
+/** A list of settings, one switch each; the client half opens a setting's wording on a phone. */
+import TWEAK_ROW_STYLE from "./assets/tweak-rows.css" with { type: "text" };
+import TWEAK_ROW_JS from "./assets/tweak-rows.client.js" with { type: "text" };
+export { TWEAK_ROW_STYLE, TWEAK_ROW_JS };
+
 /**
  * The client half of the job progress page: paint an update, and follow a job
  * until it reaches a state that will not change again.

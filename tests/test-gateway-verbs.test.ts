@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
   CLOUDFLARE_IPS_ALLOWED_VERBS, DNS_ALLOWED_VERBS, GIT_ALLOWED_VERBS, INSTATIC_ALLOWED_VERBS,
-  MAINTENANCE_ALLOWED_VERBS, OWN_ACCOUNT_VERBS, SECURITY_KEYS_ALLOWED_VERBS, SMTP_ALLOWED_VERBS, STAGER_ALLOWED_VERBS,
+  MAINTENANCE_ALLOWED_VERBS, OWN_ACCOUNT_VERBS, SECURITY_KEYS_ALLOWED_VERBS, SYSTEM_TWEAKS_ALLOWED_VERBS, SMTP_ALLOWED_VERBS, STAGER_ALLOWED_VERBS,
 } from "../lib/gateway-protocol";
 
 /**
@@ -47,6 +47,7 @@ const ROOT_ONLY: Record<string, { verb: string; why: string }[]> = {
     { verb: "deactivate", why: "run locally during disable or uninstall" },
   ],
   "security-keys": [],
+  "system-tweaks": [],
 };
 
 const ADDONS = [
@@ -58,6 +59,7 @@ const ADDONS = [
   { addon: "smtp", file: "addons/smtp/action.ts", union: "SmtpVerb", allowed: SMTP_ALLOWED_VERBS },
   { addon: "dns", file: "addons/dns/action.ts", union: "DnsVerb", allowed: DNS_ALLOWED_VERBS },
   { addon: "security-keys", file: "addons/security-keys/action.ts", union: "SecurityKeysVerb", allowed: SECURITY_KEYS_ALLOWED_VERBS },
+  { addon: "system-tweaks", file: "addons/system-tweaks/action.ts", union: "SystemTweaksVerb", allowed: SYSTEM_TWEAKS_ALLOWED_VERBS },
 ];
 
 /** The string members of a `type XVerb = "a" | "b" | ...` declaration. */

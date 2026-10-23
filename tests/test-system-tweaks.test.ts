@@ -1,0 +1,429 @@
+import { afterEach, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { CommandResult } from "../cli/action-common";
+import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
+import {
+  executeSystemTweaksAction, restoreGuardAfterWithdrawal, restoreSystemTweaks, withdrawSystemTweaks,
+  type SystemTweaksOptions, type SystemTweaksState,
+} from "../addons/system-tweaks/action";
+import {
+  allowedPatterns, coverageOf, dropInFor, fnmatch, parseAptConfig, parsePolicy, updatesStatus, DEFAULT_UPDATE_SETTINGS,
+} from "../addons/system-tweaks/updates";
+import { iniBoolean, iniSetting, uploadProgressStatus } from "../addons/system-tweaks/upload-progress";
+import { dashboardView } from "../addons/system-tweaks/app/views";
+
+const dirs: string[] = [];
+afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+
+function tempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "clp-system-tweaks-"));
+  dirs.push(dir);
+  return dir;
+}
+
+const DEBIAN_POLICY = `Package files:
+ 100 /var/lib/dpkg/status
+     release a=now
+1000 https://d17k9fuiwb52nc.cloudfront.net bookworm/php-8.3 amd64 Packages
+     release o=packages-v1.cloudpanel.io,n=bookworm,c=php-8.3,b=amd64
+     origin d17k9fuiwb52nc.cloudfront.net
+1000 https://d17k9fuiwb52nc.cloudfront.net bookworm/php-8.1 amd64 Packages
+     release o=packages-v1.cloudpanel.io,n=bookworm,c=php-8.1,b=amd64
+     origin d17k9fuiwb52nc.cloudfront.net
+1000 https://d17k9fuiwb52nc.cloudfront.net bookworm/nginx amd64 Packages
+     release o=packages-v1.cloudpanel.io,n=bookworm,c=nginx,b=amd64
+     origin d17k9fuiwb52nc.cloudfront.net
+1000 https://d17k9fuiwb52nc.cloudfront.net bookworm/percona-server-server-8.0 amd64 Packages
+     release o=packages-v1.cloudpanel.io,n=bookworm,c=percona-server-server-8.0,b=amd64
+     origin d17k9fuiwb52nc.cloudfront.net
+1000 https://d17k9fuiwb52nc.cloudfront.net bookworm/main amd64 Packages
+     release o=packages-v1.cloudpanel.io,n=bookworm,c=main,b=amd64
+     origin d17k9fuiwb52nc.cloudfront.net
+ 500 http://mirror.hetzner.com/debian/security bookworm-security/main amd64 Packages
+     release v=12,o=Debian,a=oldstable-security,n=bookworm-security,l=Debian-Security,c=main,b=amd64
+     origin mirror.hetzner.com
+ 500 http://mirror.hetzner.com/debian/packages bookworm-updates/main amd64 Packages
+     release v=12-updates,o=Debian,a=oldstable-updates,n=bookworm-updates,l=Debian,c=main,b=amd64
+     origin mirror.hetzner.com
+ 500 http://mirror.hetzner.com/debian/packages bookworm/main amd64 Packages
+     release v=12.15,o=Debian,a=oldstable,n=bookworm,l=Debian,c=main,b=amd64
+     origin mirror.hetzner.com
+Pinned packages:
+`;
+
+const DEBIAN_STOCK_DUMP = `APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";
+Unattended-Upgrade::Origins-Pattern "";
+Unattended-Upgrade::Origins-Pattern:: "origin=Debian,codename=\${distro_codename},label=Debian";
+Unattended-Upgrade::Origins-Pattern:: "origin=Debian,codename=\${distro_codename},label=Debian-Security";
+Unattended-Upgrade::Origins-Pattern:: "origin=Debian,codename=\${distro_codename}-security,label=Debian-Security";
+`;
+
+const debian = { id: "Debian", codename: "bookworm" };
+
+function covered(rows: ReturnType<typeof coverageOf>): Record<string, string> {
+  return Object.fromEntries(rows.map((row) => [row.name, row.covered]));
+}
+
+test("Debian's own patterns leave every CloudPanel repository uncovered", () => {
+  const rows = coverageOf(parsePolicy(DEBIAN_POLICY), allowedPatterns(parseAptConfig(DEBIAN_STOCK_DUMP)), debian);
+  expect(covered(rows)).toEqual({
+    "CloudPanel PHP": "none",
+    Nginx: "none",
+    MySQL: "none",
+    CloudPanel: "none",
+    "Debian bookworm-security": "all",
+    "Debian bookworm-updates": "none",
+    "Debian bookworm": "all",
+  });
+  expect(rows.find((row) => row.name === "CloudPanel PHP")!.detail).toBe("8.1, 8.3");
+});
+
+test("the drop-in adds PHP and Nginx by default, and the database and panel only when asked", () => {
+  const patterns = (settings: typeof DEFAULT_UPDATE_SETTINGS) => [
+    ...allowedPatterns(parseAptConfig(DEBIAN_STOCK_DUMP)),
+    ...[...dropInFor(settings, "Debian").matchAll(/^\t"(.*)";$/gm)].map((match) => match[1]!),
+  ];
+  const sources = parsePolicy(DEBIAN_POLICY);
+  const defaults = covered(coverageOf(sources, patterns({ ...DEFAULT_UPDATE_SETTINGS, enabled: true }), debian));
+  expect(defaults["CloudPanel PHP"]).toBe("all");
+  expect(defaults.Nginx).toBe("all");
+  expect(defaults.MySQL).toBe("none");
+  expect(defaults.CloudPanel).toBe("none");
+  const everything = covered(coverageOf(sources, patterns({ ...DEFAULT_UPDATE_SETTINGS, enabled: true, database: true, panel: true }), debian));
+  expect(everything.MySQL).toBe("all");
+  expect(everything.CloudPanel).toBe("all");
+  expect(dropInFor(DEFAULT_UPDATE_SETTINGS, "Debian")).toContain('Unattended-Upgrade::Automatic-Reboot "false";');
+});
+
+test("Ubuntu's Allowed-Origins and the drop-in's Ubuntu pattern both match its security pocket", () => {
+  const sources = parsePolicy(` 500 http://security.ubuntu.com/ubuntu jammy-security/main amd64 Packages
+     release v=22.04,o=Ubuntu,a=jammy-security,n=jammy,l=Ubuntu,c=main,b=amd64
+     origin security.ubuntu.com
+ 500 http://archive.ubuntu.com/ubuntu jammy-backports/main amd64 Packages
+     release v=22.04,o=Ubuntu,a=jammy-backports,n=jammy,l=Ubuntu,c=main,b=amd64
+     origin archive.ubuntu.com
+`);
+  const ubuntu = { id: "Ubuntu", codename: "jammy" };
+  const stock = allowedPatterns(parseAptConfig('Unattended-Upgrade::Allowed-Origins:: "${distro_id}:${distro_codename}-security";\n'));
+  expect(stock).toEqual(["o=${distro_id},a=${distro_codename}-security"]);
+  expect(coverageOf(sources, stock, ubuntu).map((row) => [row.name, row.covered])).toEqual([
+    ["Ubuntu jammy-security", "all"],
+    ["Ubuntu jammy-backports", "none"],
+  ]);
+  const ours = [...dropInFor(DEFAULT_UPDATE_SETTINGS, "Ubuntu").matchAll(/^\t"(.*)";$/gm)].map((match) => match[1]!);
+  expect(coverageOf(sources, ours, ubuntu).map((row) => row.covered)).toEqual(["all", "none"]);
+});
+
+test("fnmatch follows Python's fnmatchcase", () => {
+  expect(fnmatch("php-8.3", "php-*")).toBe(true);
+  expect(fnmatch("php8.3", "php-*")).toBe(false);
+  expect(fnmatch("PHP-8.3", "php-*")).toBe(false);
+  expect(fnmatch("a.b", "a?b")).toBe(true);
+  expect(fnmatch("axb", "a.b")).toBe(false);
+  expect(fnmatch("c", "[abc]")).toBe(true);
+  expect(fnmatch("c", "[!abc]")).toBe(false);
+});
+
+// --- a fake box ---------------------------------------------------------------
+
+interface Box {
+  options: SystemTweaksOptions;
+  aptDir: string;
+  dropIn: string;
+  commands: string[];
+  timers: Map<string, string>;
+  phpRoot: string;
+  guardConfig: string;
+  settingsFile: string;
+  installed: { value: boolean };
+}
+
+/** apt-config dump over the box's files, enough of apt's syntax for these drop-ins. */
+function dumpOf(aptDir: string): string {
+  const out: string[] = [];
+  for (const name of readdirSync(aptDir).sort()) {
+    const text = readFileSync(join(aptDir, name), "utf8");
+    let list = "";
+    for (const line of text.split("\n")) {
+      const open = /^(\S+) \{$/.exec(line.trim());
+      if (open) { list = open[1]!; continue; }
+      if (line.trim() === "};") { list = ""; continue; }
+      const item = /^"(.*)";$/.exec(line.trim());
+      if (list && item) { out.push(`${list}:: "${item[1]}";`); continue; }
+      const scalar = /^(\S+) "(.*)";$/.exec(line.trim());
+      if (scalar) out.push(`${scalar[1]} "${scalar[2]}";`);
+    }
+  }
+  return out.join("\n");
+}
+
+function box(options: { installed?: boolean; timers?: Record<string, string>; log?: string } = {}): Box {
+  const dir = tempDir();
+  const aptDir = join(dir, "apt.conf.d");
+  mkdirSync(aptDir);
+  writeFileSync(join(aptDir, "20auto-upgrades"), 'APT::Periodic::Update-Package-Lists "0";\nAPT::Periodic::Unattended-Upgrade "0";\n');
+  writeFileSync(join(aptDir, "50unattended-upgrades"), 'Unattended-Upgrade::Origins-Pattern {\n\t"origin=Debian,codename=${distro_codename}-security,label=Debian-Security";\n};\n');
+  const phpRoot = join(dir, "php");
+  const sbin = join(dir, "sbin");
+  mkdirSync(sbin);
+  for (const version of ["8.1", "8.3"]) {
+    mkdirSync(join(phpRoot, version, "fpm", "conf.d"), { recursive: true });
+    mkdirSync(join(phpRoot, version, "fpm", "pool.d"), { recursive: true });
+    writeFileSync(join(phpRoot, version, "fpm", "php.ini"), "[Session]\n;session.upload_progress.enabled = On\n");
+    writeFileSync(join(sbin, `php-fpm${version}`), "");
+  }
+  if (options.log) {
+    mkdirSync(join(dir, "log"));
+    writeFileSync(join(dir, "log", "unattended-upgrades.log"), options.log);
+  }
+  const timers = new Map(Object.entries(options.timers ?? { "apt-daily.timer": "enabled", "apt-daily-upgrade.timer": "enabled" }));
+  const installed = { value: options.installed !== false };
+  const commands: string[] = [];
+  const ok = (stdout = ""): CommandResult => ({ ok: true, stdout, stderr: "" });
+  const run = (command: string, args: string[]): CommandResult => {
+    commands.push(`${command} ${args.join(" ")}`);
+    if (command === "dpkg-query") return installed.value ? ok("install ok installed\t2.9.1+nmu3") : { ok: false, stdout: "", stderr: "" };
+    if (command === "lsb_release") return ok(args[0] === "-i" ? "Debian\n" : "bookworm\n");
+    if (command === "apt-config") return ok(dumpOf(aptDir));
+    if (command === "apt-cache") return ok(DEBIAN_POLICY);
+    if (command === "apt-get") {
+      if (args[0] === "install") installed.value = true;
+      return ok();
+    }
+    if (command === "systemctl" && args[0] === "is-enabled") return ok(`${timers.get(args[1]!) ?? ""}\n`);
+    if (command === "systemctl" && args[0] === "enable") { timers.set(args[2]!, "enabled"); return ok(); }
+    if (command === "systemctl" && args[0] === "disable") { timers.set(args[2]!, "disabled"); return ok(); }
+    if (command === "systemctl" && args[0] === "show" && args[1] === "clp-php-fpm.service") {
+      return ok(`{ path=${sbin}/php-fpm8.3 ; argv[]=${sbin}/php-fpm8.3 -R -F -y ${dir}/clp/php-fpm.conf -c ${dir}/clp/php.ini ; ignore_errors=no }`);
+    }
+    if (command === "systemctl" && args[0] === "show") return ok("Sat 2026-10-24 06:32:16 UTC\n");
+    return ok();
+  };
+  mkdirSync(join(dir, "clp", "pool.d"), { recursive: true });
+  writeFileSync(join(dir, "clp", "php.ini"), "");
+  const guardConfig = join(dir, "system-tweaks.conf");
+  writeFileSync(guardConfig, "");
+  const settingsFile = join(dir, "state", "settings.json");
+  const uid = process.getuid!();
+  const phpGuard: PhpGuardOptions = {
+    run: () => ({ ok: true, out: "" }),
+    isActive: () => false,
+    paths: { phpRoot, fpmBinDir: sbin, rootUid: uid, optOutConfig: guardConfig, optOutSettings: settingsFile },
+  };
+  return {
+    aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed,
+    dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
+    options: {
+      processUid: 0,
+      paths: { settingsFile, lockFile: join(dir, "lock"), rootUid: uid },
+      updates: {
+        run,
+        paths: {
+          aptConfDir: aptDir, aptConf: join(dir, "apt.conf"), dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
+          rebootRequired: join(dir, "reboot-required"), logFile: join(dir, "log", "unattended-upgrades.log"),
+          osRelease: join(dir, "os-release"),
+        },
+      },
+      uploadProgress: { run, paths: { phpRoot, fpmBinDir: sbin, panelUnit: "clp-php-fpm.service" } },
+      phpGuard,
+    },
+  };
+}
+
+async function act(b: Box, argv: string[], input?: unknown): Promise<SystemTweaksState> {
+  return executeSystemTweaksAction(argv, { ...b.options, input: input === undefined ? undefined : JSON.stringify(input) }) as Promise<SystemTweaksState>;
+}
+
+test("a box whose operator already turned updates on reads as configured outside System Tweaks", async () => {
+  const b = box();
+  writeFileSync(join(b.aptDir, "20auto-upgrades"), 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n');
+  const state = await act(b, ["state"]);
+  expect(state.updates.enabled).toBe(true);
+  expect(state.updates.managed).toBe(false);
+  expect(state.updates.outsideSource).toBe("20auto-upgrades");
+  expect(state.settings.enabled).toBe(false);
+  expect(dashboardView(state)).toContain("Configured outside System Tweaks in 20auto-upgrades");
+});
+
+test("switching on writes only the drop-in, and switching off restores the operator's own setup", async () => {
+  const b = box();
+  const before = readFileSync(join(b.aptDir, "20auto-upgrades"), "utf8");
+  let state = await act(b, ["set-updates"], { enabled: true });
+  expect(existsSync(b.dropIn)).toBe(true);
+  expect(state.updates.enabled).toBe(true);
+  expect(state.updates.managed).toBe(true);
+  expect(state.updates.coverage.find((row) => row.name === "CloudPanel PHP")!.covered).toBe("all");
+  expect(state.updates.coverage.find((row) => row.name === "MySQL")!.covered).toBe("none");
+
+  state = await act(b, ["set-updates"], { enabled: false });
+  expect(existsSync(b.dropIn)).toBe(false);
+  expect(state.updates.enabled).toBe(false);
+  expect(readFileSync(join(b.aptDir, "20auto-upgrades"), "utf8")).toBe(before);
+});
+
+test("the first switch-on keeps the reboot policy the box already had", async () => {
+  const b = box();
+  writeFileSync(join(b.aptDir, "60reboot"), 'Unattended-Upgrade::Automatic-Reboot "true";\n');
+  const state = await act(b, ["set-updates"], { enabled: true });
+  expect(state.settings.reboot).toBe(true);
+  expect(readFileSync(b.dropIn, "utf8")).toContain('Automatic-Reboot "true"');
+});
+
+test("a later operator file that turns updates off is named", async () => {
+  const b = box();
+  await act(b, ["set-updates"], { enabled: true });
+  writeFileSync(join(b.aptDir, "99local"), 'APT::Periodic::Unattended-Upgrade "0";\n');
+  const state = await act(b, ["state"]);
+  expect(state.updates.managed).toBe(true);
+  expect(state.updates.enabled).toBe(false);
+  expect(state.updates.overriddenBy).toBe("99local");
+});
+
+test("timers that were off are enabled with the switch and disabled again without it", async () => {
+  const b = box({ timers: { "apt-daily.timer": "enabled", "apt-daily-upgrade.timer": "disabled" } });
+  await act(b, ["set-updates"], { enabled: true });
+  expect(b.timers.get("apt-daily-upgrade.timer")).toBe("enabled");
+  expect(JSON.parse(readFileSync(b.settingsFile, "utf8")).enabledTimers).toEqual(["apt-daily-upgrade.timer"]);
+  await act(b, ["set-updates"], { enabled: false });
+  expect(b.timers.get("apt-daily-upgrade.timer")).toBe("disabled");
+  expect(b.timers.get("apt-daily.timer")).toBe("enabled");
+});
+
+test("a missing package is reported, refused, and installed only when asked", async () => {
+  const b = box({ installed: false });
+  let state = await act(b, ["state"]);
+  expect(state.updates.installed).toBe(false);
+  expect(b.commands.some((command) => command.startsWith("apt-get"))).toBe(false);
+  await expect(act(b, ["set-updates"], { enabled: true })).rejects.toThrow("not installed");
+  state = await act(b, ["install-updates"]);
+  expect(b.commands).toContain("apt-get install -y -o DPkg::Lock::Timeout=120 unattended-upgrades");
+  expect(state.updates.installed).toBe(true);
+  expect(state.updates.enabled).toBe(false);
+});
+
+test("the last run and a pending reboot are read from the log and the flag file", async () => {
+  const b = box({
+    log: [
+      "2026-10-22 06:10:01,100 INFO Starting unattended upgrades script",
+      "2026-10-22 06:10:05,100 INFO No packages found that can be upgraded unattended and no pending auto-removals",
+      "2026-10-23 06:12:01,123 INFO Starting unattended upgrades script",
+      "2026-10-23 06:12:03,000 INFO Packages that will be upgraded: php8.3-cli php8.3-fpm",
+      "2026-10-23 06:12:40,000 INFO All upgrades installed",
+    ].join("\n"),
+  });
+  writeFileSync(b.options.updates!.paths!.rebootRequired!, "");
+  writeFileSync(`${b.options.updates!.paths!.rebootRequired!}.pkgs`, "linux-image-6.1.0-53-amd64\nlinux-image-6.1.0-53-amd64\n");
+  const status = updatesStatus(b.options.updates);
+  expect(status.lastRun).toEqual({ at: "2026-10-23 06:12:01", outcome: "upgraded", packages: ["php8.3-cli", "php8.3-fpm"], message: "" });
+  expect(status.rebootRequired?.packages).toEqual(["linux-image-6.1.0-53-amd64"]);
+});
+
+test("disabling the addon withdraws the drop-in and enabling it again restores it", async () => {
+  const b = box();
+  await act(b, ["set-updates"], { enabled: true, database: true });
+  withdrawSystemTweaks(b.options);
+  expect(existsSync(b.dropIn)).toBe(false);
+  restoreSystemTweaks(b.options);
+  expect(readFileSync(b.dropIn, "utf8")).toContain("component=percona-*");
+});
+
+// --- upload progress ----------------------------------------------------------
+
+test("ini values are read the way PHP reads them", () => {
+  expect(iniSetting("session.upload_progress.enabled = Off ; mitigated\n")).toBe("Off");
+  expect(iniSetting('session.upload_progress.enabled="1"\n')).toBe("1");
+  expect(iniSetting("[PATH=/var/www]\nsession.upload_progress.enabled = On\n")).toBeUndefined();
+  expect(iniSetting("[PHP]\nsession.upload_progress.enabled = 0\n[Session]\nsession.upload_progress.enabled = yes\n")).toBe("yes");
+  expect(["On", "1", "yes", "TRUE", "2"].map(iniBoolean)).toEqual([true, true, true, true, true]);
+  expect(["Off", "0", "", "none", "false"].map(iniBoolean)).toEqual([false, false, false, false, false]);
+});
+
+test("each FPM's effective state says who set it, the panel's own FPM included", () => {
+  const b = box();
+  const conf = (version: string) => join(b.phpRoot, version, "fpm", "conf.d");
+  writeFileSync(join(conf("8.1"), "99-clp-addons-upload-progress.ini"), "session.upload_progress.enabled = Off\n");
+  writeFileSync(join(conf("8.1"), "30-custom.ini"), "session.upload_progress.enabled = Off\n");
+  writeFileSync(join(conf("8.3"), "30-custom.ini"), "session.upload_progress.enabled = Off\n");
+  // Sorted after the guard, so it wins.
+  writeFileSync(join(conf("8.3"), "99-zz-local.ini"), "session.upload_progress.enabled = On\n");
+  writeFileSync(join(b.phpRoot, "8.3", "fpm", "pool.d", "site.conf"), "[site]\nphp_admin_flag[session.upload_progress.enabled] = on\n");
+  const rows = uploadProgressStatus(b.options.uploadProgress);
+  expect(rows.map((row) => [row.label, row.enabled, row.setBy])).toEqual([
+    ["PHP 8.1", false, "clp-addons"],
+    ["PHP 8.3", true, "config"],
+    ["CloudPanel (PHP 8.3)", true, "config"],
+  ]);
+  expect(rows[0]!.offWithoutGuard).toBe(true);
+  expect(rows[1]!.source).toEndWith("99-zz-local.ini");
+  expect(rows[1]!.poolsOn).toEqual(["site"]);
+  expect(rows[2]!.poolsOn).toEqual([]);
+});
+
+test("with nothing set anywhere PHP's default leaves it on", () => {
+  const b = box();
+  expect(uploadProgressStatus(b.options.uploadProgress)[0]).toMatchObject({ enabled: true, setBy: "default", offWithoutGuard: false });
+});
+
+// --- guard continuity ---------------------------------------------------------
+
+function guardFile(b: Box, version: string): string {
+  return join(b.phpRoot, version, "fpm", "conf.d", "99-clp-addons-upload-progress.ini");
+}
+
+test("an existing installation keeps the guard without System Tweaks", () => {
+  const b = box();
+  rmSync(b.guardConfig);
+  reconcilePhpGuard(true, true, b.options.phpGuard);
+  expect(existsSync(guardFile(b, "8.1"))).toBe(true);
+  // A stored opt-out counts for nothing while System Tweaks is not enabled.
+  mkdirSync(join(b.settingsFile, ".."), { recursive: true });
+  writeFileSync(b.settingsFile, JSON.stringify({ version: 1, uploadProgressGuard: false }), { mode: 0o600 });
+  reconcilePhpGuard(true, true, b.options.phpGuard);
+  expect(existsSync(guardFile(b, "8.3"))).toBe(true);
+  expect(inspectPhpGuard(b.options.phpGuard).optedOut).toBe(false);
+});
+
+test("opting out in System Tweaks removes the guard, and repair keeps it removed", async () => {
+  const b = box();
+  reconcilePhpGuard(true, true, b.options.phpGuard);
+  writeFileSync(join(b.phpRoot, "8.3", "fpm", "conf.d", "30-custom.ini"), "session.upload_progress.enabled = Off\n");
+  const state = await act(b, ["set-upload-guard"], { enabled: false });
+  expect(state.uploadProgress.guard).toBe(false);
+  expect(existsSync(guardFile(b, "8.1"))).toBe(false);
+  expect(state.uploadProgress.fpms.map((row) => [row.label, row.enabled, row.setBy])).toEqual([
+    ["PHP 8.1", true, "default"],
+    ["PHP 8.3", false, "config"],
+    ["CloudPanel (PHP 8.3)", false, "config"],
+  ]);
+  reconcilePhpGuard(true, true, b.options.phpGuard);
+  expect(existsSync(guardFile(b, "8.1"))).toBe(false);
+  expect(inspectPhpGuard(b.options.phpGuard).optedOut).toBe(true);
+
+  // Disabling System Tweaks puts it back, because the opt-out no longer counts.
+  rmSync(b.guardConfig);
+  restoreGuardAfterWithdrawal(b.options);
+  expect(existsSync(guardFile(b, "8.1"))).toBe(true);
+
+  // Enabling it again honours the stored opt-out.
+  writeFileSync(b.guardConfig, "");
+  restoreSystemTweaks(b.options);
+  expect(existsSync(guardFile(b, "8.1"))).toBe(false);
+});
+
+test("a guard change that fails to reload keeps the previous setting", async () => {
+  const b = box();
+  reconcilePhpGuard(true, true, b.options.phpGuard);
+  b.options.phpGuard = { ...b.options.phpGuard, run: () => ({ ok: false, out: "bad config" }) };
+  await expect(act(b, ["set-upload-guard"], { enabled: false })).rejects.toThrow("rejected the config");
+  expect(existsSync(guardFile(b, "8.1"))).toBe(true);
+  expect(JSON.parse(readFileSync(b.settingsFile, "utf8")).uploadProgressGuard).toBe(true);
+});
+
+test("actions refuse to run as anyone but root", async () => {
+  const b = box();
+  await expect(executeSystemTweaksAction(["state"], { ...b.options, processUid: 1000 })).rejects.toThrow("must run as root");
+  await expect(act(b, ["state", "--extra"])).rejects.toThrow("unexpected argument");
+});

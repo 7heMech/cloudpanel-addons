@@ -35,6 +35,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | [SMTP Relay](docs/smtp-relay.md) | Send each site's mail through SMTP relay profiles, WordPress and PHP included. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
 | Panel Tweaks | Site search and columns, automatic SSL for native sites, mobile layouts, themes, and a newer PHP for the panel itself. |
+| [System Tweaks](docs/system-tweaks.md) | Automatic security updates for the system and CloudPanel's PHP, and the PHP upload-progress mitigation. |
 | [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in, optional CLP Varnish Cache installation and MainWP Child enrollment. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
 | Security Keys | Sign in with a passkey or a hardware key such as a YubiKey instead of a password, for the roles an administrator allows. Needs the panel on a hostname with a valid certificate. |
@@ -58,7 +59,7 @@ Security, in the roles an administrator allows.
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
 Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,
-`php-resources`, `git`, `panel-tweaks`, `wp-login`, `smtp`, `terminal`, and
+`php-resources`, `git`, `panel-tweaks`, `system-tweaks`, `wp-login`, `smtp`, `terminal`, and
 `security-keys`. Run
 `clp-addons --help` for version selection and data removal options.
 

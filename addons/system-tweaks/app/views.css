@@ -1,0 +1,20 @@
+.tweak-list > .tweak-row:first-child { padding-top: 0; border-top: 0; }
+.st-status { margin-top: 10px !important; }
+.st-status .badge { margin-right: 6px; }
+.st-install { margin-top: 12px; }
+.st-inline-notice { margin: 12px 0 0 !important; padding: 10px 14px; color: var(--warn) !important; }
+.st-kv { display: grid; grid-template-columns: minmax(110px, 180px) minmax(0, 1fr); gap: 10px 25px; align-items: baseline;
+  margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--row-border); font-size: 14px; }
+.st-kv dt { color: var(--muted); }
+.st-kv dd { margin: 0; overflow-wrap: anywhere; }
+.st-table th, .st-table td { padding: 12px 20px; vertical-align: top; }
+.st-table th:first-child, .st-table td:first-child { padding-left: 0; }
+.st-table th:last-child, .st-table td:last-child { padding-right: 0; }
+.st-table .hint { font-size: 13px; }
+.st-detail { display: block; margin-top: 2px; }
+.st-name { font-weight: 600; }
+.st-state { text-align: right; white-space: nowrap; }
+@media (max-width: 760px) {
+  .st-kv { grid-template-columns: minmax(80px, 110px) minmax(0, 1fr); gap: 10px 12px; }
+  .st-table th, .st-table td { padding: 10px 8px; }
+}

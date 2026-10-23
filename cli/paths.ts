@@ -30,6 +30,8 @@ export const PHP_FPM_BIN_DIR = "/usr/sbin";
 /** The panel's own PHP-FPM service. It scans the installed 8.1 `conf.d`, so a
  *  drop-in written there reaches the panel and the root File Manager pool. */
 export const PANEL_FPM_UNIT = "clp-php-fpm.service";
+/** The platform's upload-progress guard, written into every `<X.Y>/fpm/conf.d`. */
+export const PHP_GUARD_INI_NAME = "99-clp-addons-upload-progress.ini";
 
 export const MANAGER_UNIT = "clp-addons.service";
 export const AUTH_SOCKET_UNIT = "clp-addons-auth.socket";

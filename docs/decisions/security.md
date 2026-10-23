@@ -266,8 +266,12 @@ confirmed consumer of CVE-2026-109619, is on by default, and PHP's advisory
 recommends leaving it off even after patching. This is not a fix: it addresses
 one path of one of the two php2shell CVEs, does nothing for the OOM corruption
 in CVE-2026-109618, and the real remedy is patched PHP packages -- a backported
-build for the end-of-life 8.1, or moving the panel off it. The drop-in is written on install,
-update and repair and removed with the last addon; each changed FPM is config-
+build for the end-of-life 8.1, or moving the panel off it; System Tweaks'
+[automatic updates](system-tweaks.md#automatic-updates) install CloudPanel's PHP
+builds as they ship. The drop-in is written on install,
+update and repair and removed with the last addon. [System Tweaks](system-tweaks.md#php-upload-progress-mitigation)
+shows each FPM's effective value and is the only opt-out, which counts only while
+it is enabled. Each changed FPM is config-
 tested and reloaded, the panel FPM with it. Config-test and reload failures
 propagate to the caller. Rollback attempts every written file independently;
 when all files are restored, it reloads every service whose reload was attempted,

@@ -44,6 +44,8 @@ import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
 import { dashboardView as securityKeysDashboardView, layout as securityKeysLayout } from "../addons/security-keys/app/views";
 import { SECURITY_KEYS_TARGETS } from "../addons/security-keys/inject/targets";
 import type { UserKeysView } from "../addons/security-keys/action";
+import { dashboardView as systemTweaksDashboardView, layout as systemTweaksLayout } from "../addons/system-tweaks/app/views";
+import type { SystemTweaksState } from "../addons/system-tweaks/action";
 
 const versions: AvailableTags = { tags: ["0.0.19", "0.0.18"], latest: "0.0.19", source: "registry" };
 const instances: InstanceView[] = [
@@ -366,6 +368,90 @@ function phpResourcesPreviewState(url: URL): PhpResourcesState {
 
 /** The panel moved to 8.4 with an update waiting; `?off` is CloudPanel's own 8.1. */
 let panelPhpChoice: string | null = null;
+
+let systemTweaksPreview: SystemTweaksState | null = null;
+
+/**
+ * ?updates=missing|outside|off|on picks how unattended-upgrades stands, and
+ * ?guard=off shows the upload-progress mitigation opted out.
+ */
+function systemTweaksPreviewState(url: URL): SystemTweaksState {
+  if (systemTweaksPreview) return systemTweaksPreview;
+  const mode = url.searchParams.get("updates") ?? "outside";
+  const guard = url.searchParams.get("guard") !== "off";
+  const managed = mode === "on";
+  const enabled = mode === "on" || mode === "outside";
+  const php = ["7.4", "8.1", "8.2", "8.3", "8.4"];
+  return {
+    settings: { enabled: managed, nginx: true, database: false, panel: false, reboot: false },
+    updates: {
+      installed: mode !== "missing",
+      version: mode === "missing" ? "" : "2.9.1+nmu3",
+      distro: { id: "Debian", codename: "bookworm" },
+      managed,
+      enabled,
+      outsideSource: mode === "outside" ? "20auto-upgrades" : "",
+      overriddenBy: "",
+      listsUpdated: enabled,
+      reboot: false,
+      rebootTime: "",
+      timer: { state: "enabled", next: "Sat 2026-10-24 06:32:16 UTC" },
+      coverage: [
+        { name: "CloudPanel PHP", detail: php.join(", "), covered: managed ? "all" : "none" },
+        { name: "Nginx", detail: "nginx", covered: managed ? "all" : "none" },
+        { name: "CloudPanel", detail: "main", covered: "none" },
+        { name: "MySQL", detail: "percona-server-server-8.0", covered: "none" },
+        { name: "varnish-7", detail: "varnish-7", covered: "none" },
+        { name: "Debian bookworm-security", detail: "main, contrib, non-free", covered: "all" },
+        { name: "Debian bookworm", detail: "main, contrib, non-free, non-free-firmware", covered: "all" },
+        { name: "Debian bookworm-updates", detail: "main", covered: "none" },
+      ],
+      lastRun: enabled ? { at: "2026-10-23 06:41:09", outcome: "upgraded", packages: ["php8.3-fpm", "php8.3-cli"], message: "" } : null,
+      rebootRequired: { since: "2026-10-20T06:41:09Z", packages: ["linux-image-6.1.0-53-amd64"] },
+    },
+    uploadProgress: {
+      guard,
+      fpms: [...php.map((version) => ({
+        label: `PHP ${version}`, version, enabled: !guard && version !== "7.4",
+        setBy: (guard ? "clp-addons" : version === "7.4" ? "config" : "default") as "clp-addons" | "config" | "default",
+        source: guard ? `/etc/php/${version}/fpm/conf.d/99-clp-addons-upload-progress.ini` : version === "7.4" ? "/etc/php/7.4/fpm/php.ini" : "",
+        offWithoutGuard: version === "7.4", poolsOn: version === "8.2" ? ["legacy.example.com"] : [],
+      })), {
+        label: "CloudPanel (PHP 8.4)", version: "8.4", enabled: !guard, setBy: guard ? "clp-addons" : "default",
+        source: guard ? "/etc/php/8.4/fpm/conf.d/99-clp-addons-upload-progress.ini" : "", offWithoutGuard: false, poolsOn: [],
+      }],
+    },
+  };
+}
+
+function systemTweaksPreviewMutation(path: string, source: URL, body: Record<string, any>): Response | null {
+  if (!path.startsWith("/addons/system-tweaks/api/")) return null;
+  const state = structuredClone(systemTweaksPreviewState(source));
+  if (path.endsWith("/install-updates")) {
+    state.updates.installed = true;
+    state.updates.version = "2.9.1+nmu3";
+  } else if (path.endsWith("/upload-guard")) {
+    state.uploadProgress.guard = body.enabled === true;
+    for (const row of state.uploadProgress.fpms) {
+      row.enabled = !state.uploadProgress.guard && !row.offWithoutGuard;
+      row.setBy = state.uploadProgress.guard ? "clp-addons" : row.offWithoutGuard ? "config" : "default";
+    }
+  } else {
+    Object.assign(state.settings, body);
+    state.updates.managed = state.settings.enabled;
+    state.updates.enabled = state.settings.enabled || state.updates.outsideSource !== "";
+    for (const row of state.updates.coverage) {
+      const wanted = row.name === "CloudPanel PHP" ? state.settings.enabled
+        : row.name === "Nginx" ? state.settings.enabled && state.settings.nginx
+        : row.name === "MySQL" ? state.settings.enabled && state.settings.database
+        : row.name === "CloudPanel" ? state.settings.enabled && state.settings.panel
+        : row.covered !== "none";
+      row.covered = wanted ? "all" : "none";
+    }
+  }
+  systemTweaksPreview = state;
+  return Response.json({ ok: true, html: systemTweaksDashboardView(state) });
+}
 
 function panelPhpPreviewStatus(url: URL): PanelPhpStatus {
   const wanted = panelPhpChoice ?? (url.searchParams.has("off") ? "" : "8.4");
@@ -927,6 +1013,7 @@ async function repaintPreviewMutation(req: Request, url: URL): Promise<Response 
   return gitPreviewMutation(req, path, source, body)
     ?? instaticPreviewMutation(path, body)
     ?? phpPreviewMutation(path, source, body)
+    ?? systemTweaksPreviewMutation(path, source, body)
     ?? managerPreviewMutation(path, source);
 }
 
@@ -1251,7 +1338,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login", "smtp", "terminal", "security-keys"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "system-tweaks", "wp-login", "smtp", "terminal", "security-keys"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
@@ -1300,6 +1387,9 @@ const server = Bun.serve({
       });
     } else if (path === "/addons/panel-tweaks/" || path === "/addons/panel-tweaks") {
       html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url), panelPhpPreviewStatus(url)), notice);
+    } else if (path === "/addons/system-tweaks/" || path === "/addons/system-tweaks") {
+      systemTweaksPreview = null;
+      html = systemTweaksLayout("System Tweaks", systemTweaksDashboardView(systemTweaksPreviewState(url)), notice);
     } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
       html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites), notice);
     } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {

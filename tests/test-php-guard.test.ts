@@ -32,7 +32,10 @@ function box(fpmVersions: string[], orphanVersions: string[] = [], active = new 
     options: {
       run,
       isActive: (unit) => active.has(unit),
-      paths: { phpRoot, fpmBinDir, panelFpmUnit: "clp-php-fpm.service", rootUid: process.getuid!() },
+      paths: {
+        phpRoot, fpmBinDir, panelFpmUnit: "clp-php-fpm.service", rootUid: process.getuid!(),
+        optOutConfig: join(dir, "system-tweaks.conf"), optOutSettings: join(dir, "settings.json"),
+      },
     },
   };
 }
@@ -56,7 +59,7 @@ test("a second install is a no-op and reloads nothing", () => {
   b.commands.length = 0;
   expect(reconcilePhpSessionGuard(true, b.options)).toBe(0);
   expect(b.commands).toEqual([]);
-  expect(inspectPhpGuard(b.options)).toEqual({ guarded: ["8.1"], unguarded: [] });
+  expect(inspectPhpGuard(b.options)).toEqual({ guarded: ["8.1"], unguarded: [], optedOut: false });
 });
 
 test("an orphaned conf.d without its FPM binary is left untouched", () => {
@@ -87,7 +90,7 @@ test("uninstall removes the drop-in everywhere", () => {
   expect(removed).toBe(2);
   expect(existsSync(b.dropIn("8.1"))).toBe(false);
   expect(existsSync(b.dropIn("8.3"))).toBe(false);
-  expect(inspectPhpGuard(b.options)).toEqual({ guarded: [], unguarded: ["8.1", "8.3"] });
+  expect(inspectPhpGuard(b.options)).toEqual({ guarded: [], unguarded: ["8.1", "8.3"], optedOut: false });
 });
 
 for (const failedUnit of ["php8.3-fpm.service", "clp-php-fpm.service"]) {
@@ -180,5 +183,5 @@ test("a group-writable drop-in is distrusted and rewritten to 0644", () => {
   // The same content under the wrong mode is still a change: reconcile restores 0644.
   expect(reconcilePhpSessionGuard(true, b.options)).toBe(1);
   expect(statSync(b.dropIn("8.1")).mode & 0o777).toBe(0o644);
-  expect(inspectPhpGuard(b.options)).toEqual({ guarded: ["8.1"], unguarded: [] });
+  expect(inspectPhpGuard(b.options)).toEqual({ guarded: ["8.1"], unguarded: [], optedOut: false });
 });
