@@ -289,8 +289,9 @@ enabled. The addon's own page signs in to the same sites either way.
 ## MainWP enrollment
 
 The Dashboard is one WordPress site on this server, chosen from the same
-discovery as everything else. An external Dashboard would need credentials and
-network policy the addon does not manage. Child steps run as the child's site
+discovery as everything else, or "on another server". Connecting to an external
+Dashboard would need its credentials and network policy, which the addon does
+not manage, so for one it only installs the Child; see below. Child steps run as the child's site
 user and Dashboard steps as the Dashboard's, through the shared WP-CLI runner.
 A fixed adapter, `mainwp.php`, is passed to `wp eval` with JSON on stdin and
 answers on a marked line. Its failures are fixed codes the addon turns into its
@@ -356,6 +357,24 @@ waits for the Dashboard, since only it can name the record that may exist. Clean
 plugin the addon installed, so automation may install it again after a completed
 cleanup, even if cleanup needed retries. One already removed by the operator
 stays seen.
+
+For a Dashboard on another server the addon never registers anything.
+Automation installs MainWP Child on an unseen site and leaves it inactive:
+MainWP Child deactivates itself on an admin page load once it has been
+unconnected for `mainwp_child_ttl_active_unconnected_site` minutes (20 by
+default), so a Child activated in advance would be off by the time the operator
+connects it. The row action activates it, after clearing
+`mainwp_child_lasttime_not_connected` so that timeout starts afresh, and the
+operator adds the site from their Dashboard with the administrator's own login.
+Neither path sets a Security ID or changes the password requirement, so the
+Child is no easier to claim than the site's admin account. A Child with a public
+key is reported connected, to whichever Dashboard holds it. The install is
+journaled as phase `child`, which needs no authentication recovery; an interrupt
+needs Retry, like an enrollment's. Cleanup uses the same snapshot rules, so it
+deletes a Child it installed and restores the activation of one it found,
+unless a Dashboard has connected it since. Moving to a Dashboard elsewhere
+requires cleaning up the connections the addon made; moving back does not,
+since an installed Child belongs to no Dashboard.
 
 MainWP has its own lock, separate from Varnish and sign-in. The queued pass
 looks only at unseen sites, unfinished phases, pending cleanup and retired

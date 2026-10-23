@@ -371,7 +371,7 @@ export async function reconcileWpMainwp(options: WpLoginActionOptions = {}): Pro
   const paths = pathsFor(options);
   return withFileLock(paths.mainwpLockFile, 1, "a MainWP change is still running", async () => {
     if (!existsSync(paths.configFile) || !mainwpNeedsRepair(readMainwpState(paths.mainwpState))) {
-      return { checked: 0, connected: 0, removed: 0, pending: 0, failed: [] };
+      return { checked: 0, installed: 0, connected: 0, removed: 0, pending: 0, failed: [] };
     }
     return syncMainwp(mainwpRun(paths, { dueOnly: true }), options);
   });

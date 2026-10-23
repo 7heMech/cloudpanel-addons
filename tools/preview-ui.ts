@@ -796,19 +796,35 @@ function terminalPreview(req: Request, url: URL): Response | null {
 }
 
 // The WordPress Tools API, acting on the sites the page was last drawn with.
-// ?mainwp=states turns automation on, ?mainwp=cleanup shows a pending cleanup.
+// ?mainwp=states turns automation on, ?mainwp=cleanup shows a pending cleanup,
+// ?mainwp=remote a Dashboard on another server.
 function mainwpPreview(url: URL): MainwpView {
   const checkedAt = "2026-10-16T09:00:00Z";
   const entry = (status: MainwpSiteView["status"], ownedConnection = false, seen = true): MainwpSiteView => ({
     status, seen, checkedAt, ownedConnection,
     error: status === "error" ? "the Dashboard could not connect; check the site's HTTPS, firewall and security plugins" : "",
   });
+  const remote = url.searchParams.get("mainwp") === "remote";
+  if (remote) {
+    return {
+      enabled: true, dashboard: "", remote: true, excluded: [], cleanup: false, owned: 2, connections: 0,
+      sites: {
+        "shop.example.com": entry("connected"),
+        "www.example.com": entry("not-connected"),
+        "blog.example.com": entry("inactive"),
+        "new.example.com": entry("missing", false, false),
+        "removed.example.com": entry("missing"),
+        "network.example.com": entry("unsupported"),
+      },
+    };
+  }
   return {
     enabled: url.searchParams.get("mainwp") === "states",
     dashboard: "mainwp.example.com",
+    remote: false,
     excluded: ["staging.newsletter.example-church-of-the-hills.com"],
     cleanup: url.searchParams.get("mainwp") === "cleanup",
-    owned: 1,
+    owned: 1, connections: 1,
     sites: {
       "shop.example.com": entry("connected", true),
       "www.example.com": entry("connected"),

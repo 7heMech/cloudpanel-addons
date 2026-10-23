@@ -138,6 +138,7 @@ function helperCard(sites: WpSiteView[]): string {
 
 const MAINWP_STATUS: Record<MainwpStatus, [label: string, tone: string]> = {
   missing: ["Not installed", ""],
+  inactive: ["Installed, inactive", ""],
   "waiting-https": ["Waiting for HTTPS", "state-paused"],
   "not-connected": ["Not connected", "state-paused"],
   connected: ["Connected", "state-done"],
@@ -145,10 +146,11 @@ const MAINWP_STATUS: Record<MainwpStatus, [label: string, tone: string]> = {
   error: ["Check failed", "state-failed"],
 };
 
-function mainwpStatus(record: MainwpSiteView | undefined, isDashboard: boolean): string {
+function mainwpStatus(record: MainwpSiteView | undefined, isDashboard: boolean, remote: boolean): string {
   if (isDashboard) return '<span class="badge state-done">Dashboard</span>';
   if (!record) return '<span class="badge">Not checked</span>';
-  const [label, tone] = record.status === "missing" && record.seen ? ["Removed", ""] : MAINWP_STATUS[record.status];
+  const [label, tone] = record.status === "missing" && record.seen ? ["Removed", ""]
+    : remote && record.status === "not-connected" ? ["Active, not connected", "state-paused"] : MAINWP_STATUS[record.status];
   const owner = record.status !== "connected" ? "" : record.ownedConnection ? "Connected by WordPress Tools" : "Connected in MainWP";
   const checked = record.checkedAt.replace("T", " ").slice(0, 16);
   return `<span class="badge ${tone}"${checked ? ` title="Checked ${esc(checked)} UTC"` : ""}>${label}</span>${
@@ -164,14 +166,19 @@ function mainwpRow(site: WpSiteView, state: MainwpView): string {
   const automatic = eligible
     ? `<label class="switch"><input type="checkbox" data-domain="${domain}" aria-label="Install MainWP Child automatically on ${domain}" ${excluded ? "" : "checked"} onchange="setMainwpSite(this)"><span></span></label>`
     : "";
-  const connectable = eligible && !excluded && state.dashboard && !state.cleanup && record?.status !== "connected";
-  const action = connectable
-    ? `<button class="btn" type="button" data-domain="${domain}" onclick="connectMainwp(this)">${record?.status === "error" ? "Retry" : "Connect"}</button>`
+  const usable = eligible && !excluded && !state.cleanup && record?.status !== "connected";
+  // A Dashboard elsewhere connects the site itself; here the Child is only installed and activated.
+  const label = record?.status === "error" ? "Retry"
+    : !state.remote ? "Connect"
+    : !record || record.status === "missing" ? "Install"
+    : record.status === "inactive" ? "Activate" : "";
+  const action = usable && (state.dashboard || state.remote) && label
+    ? `<button class="btn" type="button" data-domain="${domain}"${state.remote ? " data-remote" : ""} onclick="connectMainwp(this)">${label}</button>`
     : "";
   return `
               <tr>
                 <td class="site-cell">${domain}<div class="hint">${esc(site.user)}</div></td>
-                <td data-label="MainWP">${mainwpStatus(record, isDashboard)}</td>
+                <td data-label="MainWP">${mainwpStatus(record, isDashboard, state.remote)}</td>
                 <td data-label="Automatic">${automatic}</td>
                 <td class="action-cell"><span class="row-actions">${action}</span></td>
               </tr>`;
@@ -185,10 +192,16 @@ function mainwpCard(sites: WpSiteView[], state: MainwpView, error: string): stri
       <div class="alert" role="alert">${esc(error)}</div>
     </div>`;
   }
-  const locked = state.owned > 0 || state.cleanup;
-  const options = sites.map((site) =>
+  const locked = state.connections > 0 || state.cleanup;
+  const cleanable = state.owned > 0 || state.cleanup;
+  const options = `<option value="@remote"${state.remote ? " selected" : ""}>On another server</option>` + sites.map((site) =>
     `<option value="${esc(site.domain)}"${site.domain === state.dashboard ? " selected" : ""}>${esc(site.domain)}</option>`).join("");
-  const cleanup = locked
+  const chosen = Boolean(state.dashboard) || state.remote;
+  const title = state.remote ? "Install MainWP Child automatically" : "Install and connect MainWP Child automatically";
+  const summary = state.remote
+    ? "On every WordPress site that has never had MainWP Child, checked every 15 minutes. It is left inactive, because MainWP Child turns itself off when no Dashboard connects soon after activation: activate a site below just before adding it in your Dashboard with the site's administrator login. A Child removed in WordPress is left alone."
+    : "On every WordPress site that has never had MainWP Child, once it answers over HTTPS, checked every 15 minutes. A Child removed in WordPress is left alone.";
+  const cleanup = cleanable
     ? `<button class="btn" type="button" onclick="cleanupMainwp()">${state.cleanup ? "Retry cleanup…" : "Turn off and clean up…"}</button>`
     : "";
   const note = state.cleanup
@@ -198,15 +211,15 @@ function mainwpCard(sites: WpSiteView[], state: MainwpView, error: string): stri
     <div class="card wp-card">
       <div class="switch-row">
         <div>
-          <h2>Install and connect MainWP Child automatically</h2>
-          <p>On every WordPress site that has never had MainWP Child, once it answers over HTTPS, checked every 15 minutes. A Child removed in WordPress is left alone.</p>
+          <h2>${title}</h2>
+          <p>${summary}</p>
         </div>
-        <label class="switch"><input id="mainwp-automatic" type="checkbox" aria-label="Install and connect MainWP Child automatically" ${state.enabled ? "checked" : ""} ${!state.dashboard || state.cleanup ? "disabled" : ""} onchange="setMainwpAutomatic(this)"><span></span></label>
+        <label class="switch"><input id="mainwp-automatic" type="checkbox" aria-label="${title}" ${state.enabled ? "checked" : ""} ${!chosen || state.cleanup ? "disabled" : ""} onchange="setMainwpAutomatic(this)"><span></span></label>
       </div>
       <div class="mainwp-controls">
         <label class="hint" for="mainwp-dashboard">MainWP Dashboard</label>
         <select id="mainwp-dashboard" onchange="setMainwpDashboard(this)" ${locked ? "disabled" : ""}><option value="">Choose a site</option>${options}</select>
-        <button class="btn" id="mainwp-check" type="button" onclick="checkMainwp()" ${state.dashboard ? "" : "disabled"}>Check now</button>
+        <button class="btn" id="mainwp-check" type="button" onclick="checkMainwp()" ${chosen ? "" : "disabled"}>Check now</button>
         ${cleanup}
       </div>
       ${note}

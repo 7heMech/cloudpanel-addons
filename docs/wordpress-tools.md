@@ -50,8 +50,8 @@ exclusions and which plugins were removed on purpose.
 ## MainWP Child
 
 Choose a **MainWP Dashboard**, a WordPress site on this server with MainWP
-active, then turn on **Install and connect MainWP Child automatically**.
-External Dashboards are not supported.
+active, then turn on **Install and connect MainWP Child automatically**. For a
+Dashboard on another server, see below.
 
 Every 15 minutes the repair timer queues a background pass to install,
 activate and connect MainWP Child on new WordPress sites as each site's first
@@ -77,6 +77,22 @@ plugin and its other settings stay. Connections you made, or anyone made since,
 are left alone. **Cleanup pending** means a site or the Dashboard needs
 attention; fix it and retry. Cleanup does not undo work done through MainWP or
 end WordPress sessions it opened.
+
+### A Dashboard on another server
+
+Choose **On another server** as the Dashboard, then turn on **Install MainWP
+Child automatically**. Every 15 minutes, sites that have never had MainWP Child
+get it installed but left inactive: MainWP Child turns itself off when no
+Dashboard connects within its connection timeout, 20 minutes unless changed in
+its settings. To connect a site, click **Activate** (or **Install**) beside it,
+then add it in your MainWP Dashboard with the site's administrator username and
+password. It shows **Connected** after the next check. WordPress Tools does not
+contact that Dashboard; your Dashboard must reach the site over HTTPS, so allow
+it through any firewall or Cloudflare-only rule.
+
+**Turn off and clean up…** deletes the MainWP Child plugins WordPress Tools
+installed and deactivates any it activated, except on sites a Dashboard has
+connected since.
 
 Disabling or uninstalling WordPress Tools leaves MainWP connections in place;
 clean up first to remove them. Both refuse while an interrupted connection's

@@ -38,6 +38,9 @@ const options = { runWpCommand: async (command: WpCommand) => {
     case "prepare":
       if (fail === "prepare") throw new Error("activation unavailable");
       child!.active = true; child!.auth = false; child!.securityId = input.token; break;
+    case "activate":
+      if (fail === "activate") throw new Error("activation unavailable");
+      child!.active = true; break;
     case "restore-auth":
       if (fail === "restore") throw new Error("interrupted");
       child!.auth = true;
@@ -478,4 +481,83 @@ test("a login the Dashboard would store is checked, and a site's own error text 
   expect(commands.some((c) => c.stdin?.includes('"op":"dashboard-add"'))).toBe(false);
   const spoofing = { runWpCommand: async () => `CLP-ADDONS-MAINWP:${JSON.stringify({ error: "token 0123 leaked" })}` };
   expect((await syncMainwp({ ...run, domain: "manual.test" }, spoofing)).failed[0]).not.toContain("leaked");
+});
+
+const ops = () => commands.map((command) => command.stdin ? JSON.parse(command.stdin).op : command.argv.find((arg) => arg === "install"));
+
+test("a Dashboard on another server: automation installs the Child inactive and touches nothing else", async () => {
+  await configureMainwp(run, options, true, undefined, true);
+  expect(readMainwpState(run.statePath)).toMatchObject({ remote: true, dashboard: "", enabled: true });
+  commands = [];
+  const result = await syncMainwp({ ...run, dueOnly: true }, options);
+  expect(result).toMatchObject({ installed: 2, connected: 0, failed: [] });
+  expect(children["new.test"]).toMatchObject({ installed: true, active: false, securityId: "", auth: true });
+  const state = readMainwpState(run.statePath);
+  expect(state.sites["new.test"]).toMatchObject({ status: "inactive", seen: true, ownedPlugin: true, ownedConnection: false });
+  expect(state.sites["manual.test"]).toMatchObject({ status: "inactive", seen: true, ownedPlugin: false });
+  expect(state.sites["connected.test"]).toMatchObject({ status: "connected" });
+  expect(ops().filter((op) => /^(dashboard-|prepare|activate)/.test(String(op)))).toEqual([]);
+
+  // Seen once, never reinstalled by automation.
+  children["new.test"]!.installed = false; children["new.test"]!.files = false;
+  commands = [];
+  await syncMainwp({ ...run, dueOnly: true }, options);
+  expect(ops()).not.toContain("install");
+});
+
+test("activating for a remote Dashboard changes no authentication, and cleanup undoes only what it did", async () => {
+  await configureMainwp(run, options, false, undefined, true);
+  await mainwpAction(run, ["mainwp-connect", "--domain=new.test", "--confirm=new.test"], options, (d) => d);
+  await mainwpAction(run, ["mainwp-connect", "--domain=manual.test", "--confirm=manual.test"], options, (d) => d);
+  expect(children["new.test"]).toMatchObject({ installed: true, active: true, securityId: "", auth: true });
+  expect(children["manual.test"]).toMatchObject({ active: true, securityId: "", auth: true });
+  expect(readMainwpState(run.statePath).sites["manual.test"]).toMatchObject({ status: "not-connected", ownedPlugin: false });
+  expect(ops()).not.toContain("prepare");
+
+  // Someone connects one of them from their Dashboard.
+  children["new.test"]!.key = key;
+  expect((await syncMainwp(run, options, true)).failed).toEqual([]);
+  expect(children["new.test"]).toMatchObject({ installed: true, key });
+  expect(children["manual.test"]).toMatchObject({ installed: true, active: false });
+  expect(readMainwpState(run.statePath)).toMatchObject({ cleanup: false, remote: true });
+  expect(readMainwpState(run.statePath).sites["manual.test"]!.status).toBe("inactive");
+});
+
+test("a Dashboard on another server needs this one's connections cleaned up first, but not the reverse", async () => {
+  await configured();
+  await mainwpAction(run, ["mainwp-connect", "--domain=manual.test", "--confirm=manual.test"], options, (d) => d);
+  await expect(configureMainwp(run, options, false, undefined, true)).rejects.toThrow("clean up the MainWP connections");
+  await syncMainwp(run, options, true);
+  await configureMainwp(run, options, false, undefined, true);
+  await syncMainwp({ ...run, domain: "new.test" }, options);
+  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ ownedPlugin: true, ownedConnection: false });
+  const local = await configureMainwp(run, options, true, "dashboard.test");
+  expect(local).toMatchObject({ remote: false, dashboard: "dashboard.test" });
+  await expect(mainwpAction(run, ["mainwp-settings", "--enabled=true", "--remote=false"], options, (d) => d)).rejects.toThrow("either");
+});
+
+test("an unconfirmed registration ties the addon to its Dashboard until cleanup", async () => {
+  await configured(); fail = "add";
+  await syncMainwp({ ...run, domain: "new.test" }, options);
+  fail = "";
+  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ ownedConnection: false });
+  expect(mainwpView(readMainwpState(run.statePath)).connections).toBe(1);
+  await expect(configureMainwp(run, options, false, undefined, true)).rejects.toThrow("clean up the MainWP connections");
+});
+
+test("state written before the remote mode reads as a Dashboard on this server", () => {
+  const { remote: _remote, ...old } = emptyMainwpState();
+  saveMainwpState(run.statePath, old as never);
+  expect(readMainwpState(run.statePath).remote).toBe(false);
+});
+
+test("the page offers a Dashboard on another server and Install or Activate per site", () => {
+  const state = { ...emptyMainwpState(), remote: true, enabled: true };
+  state.sites["new.test"] = { status: "inactive", seen: true, checkedAt: "", error: "", ownedPlugin: true, ownedConnection: false };
+  const page = dashboardView({ sites: run.sites.map((site) => ({ domain: site.domain, user: site.user, varnish: false, helper: false })),
+    varnish: { enabled: false, excluded: [], sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "" } as never);
+  expect(page).toContain('<option value="@remote" selected>On another server</option>');
+  expect(page).toContain("Install MainWP Child automatically");
+  expect(page).toMatch(/data-domain="new.test" data-remote onclick="connectMainwp\(this\)">Activate</);
+  expect(page).toMatch(/data-domain="manual.test" data-remote onclick="connectMainwp\(this\)">Install</);
 });
