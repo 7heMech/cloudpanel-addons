@@ -9,7 +9,7 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { failAction, runCommand, withFileLock, withFileLockSync, type CommandResult } from "../../cli/action-common";
-import { PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, RECONCILE_SERVICE, STATE_DIR, SYSTEMD_DIR } from "../../cli/paths";
+import { CONFIG_DIR, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, RECONCILE_SERVICE, STATE_DIR, SYSTEMD_DIR } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { fastCgiRequest, type FastCgiResponse } from "../../lib/fastcgi";
 
@@ -23,6 +23,8 @@ export interface PanelPhpPaths {
   fpmBinDir: string;
   stateFile: string;
   lockFile: string;
+  /** Panel Tweaks' own config, which exists only while the addon is installed. */
+  configFile: string;
   panelRoot: string;
   panelSocket: string;
   fileManagerSocket: string;
@@ -36,6 +38,7 @@ export const DEFAULT_PANEL_PHP_PATHS: PanelPhpPaths = {
   fpmBinDir: PHP_FPM_BIN_DIR,
   stateFile: `${STATE_DIR}/panel-tweaks/panel-php.json`,
   lockFile: "/run/lock/clp-addons/panel-php.lock",
+  configFile: `${CONFIG_DIR}/panel-tweaks.conf`,
   panelRoot: "/home/clp/htdocs/app/files/public",
   panelSocket: "/run/clp-php-fpm.sock",
   fileManagerSocket: "/run/clp-fm-php-fpm.sock",
@@ -376,7 +379,10 @@ export async function setPanelPhp(php: string, options: PanelPhpOptions = {}): P
   const ctx = contextOf(options);
   if (php !== "" && !VERSION_RE.test(php)) failAction("choose a PHP version such as 8.4");
   await withFileLock(ctx.paths.lockFile, 30, "another panel PHP change is still running", async () => {
-    if (readChoice(ctx.paths).withdrawn) failAction("Panel Tweaks is disabled; enable it to choose the panel's PHP");
+    // Purging removes the withdrawn mark with the state, but not before the config.
+    if (readChoice(ctx.paths).withdrawn || !existsSync(ctx.paths.configFile)) {
+      failAction("Panel Tweaks is disabled; enable it to choose the panel's PHP");
+    }
     await apply(ctx, php);
     writeChoice(ctx.paths, { php });
   });
@@ -393,7 +399,7 @@ export async function reconcilePanelPhp(options: PanelPhpOptions = {}): Promise<
   if (!readChoice(ctx.paths).php && !present(ctx.paths.dropInFile)) return null;
   return withFileLock(ctx.paths.lockFile, 30, "another panel PHP change is still running", async () => {
     const choice = readChoice(ctx.paths);
-    if (choice.withdrawn) return null;
+    if (choice.withdrawn || !existsSync(ctx.paths.configFile)) return null;
     const current = choice.php ? releases(ctx, [choice.php]).get(choice.php)?.installed ?? "" : "";
     if (choice.failure && choice.failure.php === choice.php && choice.failure.release === current) return null;
     try {
@@ -428,33 +434,53 @@ export function withdrawPanelPhp(options: PanelPhpOptions = {}): void {
   });
 }
 
+/** The binary, arguments and version the unit starts once the addon's drop-in is gone. */
+function withoutDropIn(ctx: Context, unit: BaseUnit): { binary: string; args: string[]; version: string } {
+  const override = foreignOverride(ctx, unit);
+  const start = override ? [...(trustedText(override, ctx.paths.rootUid) ?? "").matchAll(/^ExecStart=(\S+)(.*)$/gm)].at(-1) : undefined;
+  const version = start && /php-fpm([0-9]+\.[0-9]+)$/.exec(start[1]!)?.[1];
+  if (start && version) return { binary: start[1]!, args: start[2]!.trim().split(/\s+/).filter(Boolean), version };
+  return { binary: join(ctx.paths.fpmBinDir, `php-fpm${unit.stock}`), args: unit.args, version: unit.stock };
+}
+
 function withdraw(ctx: Context): void {
   if (!present(ctx.paths.dropInFile)) return;
   const unit = baseUnit(ctx);
-  if (unit) {
-    check(ctx.run(join(ctx.paths.fpmBinDir, `php-fpm${unit.stock}`), ["-t", ...unit.args]),
-      `PHP ${unit.stock} rejected CloudPanel's FPM config, so the panel keeps its PHP override`);
+  const next = unit ? withoutDropIn(ctx, unit) : null;
+  if (next) {
+    check(ctx.run(next.binary, ["-t", ...next.args]),
+      `PHP ${next.version} rejected CloudPanel's FPM config, so the panel keeps its PHP override`);
   }
   const before = trustedText(ctx.paths.dropInFile, ctx.paths.rootUid);
-  install(ctx, null);
-  const restarted = ctx.run("systemctl", ["restart", ctx.paths.unit]);
-  const deadline = ctx.now().getTime() + ctx.healthTimeoutMs;
   const back = () => ctx.run("systemctl", ["is-active", ctx.paths.unit]).stdout.trim() === "active"
-    && (!unit || runningVersion(ctx) === unit.stock);
-  let ok = restarted.ok && back();
-  while (restarted.ok && !ok && ctx.now().getTime() < deadline) {
-    Bun.sleepSync(500);
-    ok = back();
+    && (!next || runningVersion(ctx) === next.version);
+  let ok = false;
+  try {
+    install(ctx, null);
+    if (ctx.run("systemctl", ["restart", ctx.paths.unit]).ok) {
+      const deadline = ctx.now().getTime() + ctx.healthTimeoutMs;
+      ok = back();
+      while (!ok && ctx.now().getTime() < deadline) {
+        Bun.sleepSync(500);
+        ok = back();
+      }
+    }
+  } catch {
+    ok = false;
   }
   if (ok) return;
   let restored = "";
   if (before !== null) {
-    install(ctx, before);
-    restored = ctx.run("systemctl", ["restart", ctx.paths.unit]).ok
-      ? "; the override was put back"
-      : `; the override was put back, but ${ctx.paths.unit} did not restart on it either`;
+    try {
+      install(ctx, before);
+      restored = ctx.run("systemctl", ["restart", ctx.paths.unit]).ok
+        ? "; the override was put back"
+        : `; the override was put back, but ${ctx.paths.unit} did not restart on it either`;
+    } catch (error) {
+      restored = `; putting the override back failed: ${reason(error)}`;
+    }
   }
-  failAction(`${ctx.paths.unit} did not come back on PHP ${unit?.stock ?? "CloudPanel's own version"}${restored}`);
+  failAction(`${ctx.paths.unit} did not come back on PHP ${next?.version ?? "CloudPanel's own version"}${restored}`);
 }
 
 /** Enabling it again asks the reconcile service to reapply a stored choice. */

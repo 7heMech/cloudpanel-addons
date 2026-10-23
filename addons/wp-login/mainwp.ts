@@ -592,7 +592,7 @@ export function requireMainwpSettled(path: string): void {
     state = readMainwpState(path);
   } catch (error) {
     // It is the only record of a site whose temporary setting is still changed.
-    throw new Error(`${path} cannot be read (${message(error)}); repair or remove it, then retry`);
+    throw new Error(`${path} cannot be read (${message(error)}); restore it from a backup and retry. Remove it only after checking each MainWP site's connection settings, since it is the only record of a setting an interrupted connection changed`);
   }
   const sites = Object.values(state.sites);
   if (sites.some(needsAuthRecovery)) {

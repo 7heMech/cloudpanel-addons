@@ -361,7 +361,7 @@ test("cleanup resumes after the Dashboard row disappears and preserves plugin re
 test("an unreadable MainWP state holds up disabling and says how to proceed", () => {
   writeFileSync(run.statePath, "{");
   expect(() => requireMainwpSettled(run.statePath)).toThrow(`${run.statePath} cannot be read`);
-  expect(() => requireMainwpSettled(run.statePath)).toThrow("repair or remove it, then retry");
+  expect(() => requireMainwpSettled(run.statePath)).toThrow("restore it from a backup and retry");
 });
 
 test("only an interrupted enrollment holds up disabling or uninstalling", async () => {

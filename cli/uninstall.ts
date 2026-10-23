@@ -61,7 +61,39 @@ function uninstallContents(spec: AddonSpec, flags: Record<string, string | true>
   }
 
   spec.deactivate?.();
+  try {
+    removeAddonFiles(spec, purge, instances, remaining);
+  } catch (error) {
+    // Still installed, so what deactivating withdrew goes back.
+    try {
+      spec.activate?.();
+    } catch (restoreError) {
+      log.warn(`${spec.name} could not be reactivated: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+    }
+    throw error;
+  }
+  spec.withdrawn?.();
+  if (purge) rmSync(spec.stateDir, { recursive: true, force: true });
 
+  if (remaining.length > 0) {
+    ensureDirs(remaining.map((name) => ADDONS[name]!));
+    reconcilePanelIdentity();
+    installUnits(remaining.map((name) => ADDONS[name]!));
+    startUnits();
+    log.ok(`${spec.name} removed; remaining addons are still available`);
+    return;
+  }
+
+  reconcileNginx(true, false);
+  reconcilePhpGuard(false, true);
+  stopUnits();
+  rmSync(CLI_BIN, { force: true });
+  rmSync(LIBEXEC_DIR, { recursive: true, force: true });
+  log.ok(`${spec.name} removed`);
+}
+
+/** Everything up to removing the config file, after which the addon is no longer installed. */
+function removeAddonFiles(spec: AddonSpec, purge: boolean, instances: string[], remaining: string[]): void {
   if (!reconcileMaintenanceNginx(true, remaining.includes("maintenance"))) {
     fatal("could not safely update the Nginx maintenance check; no addon files were removed");
   }
@@ -89,22 +121,4 @@ function uninstallContents(spec: AddonSpec, flags: Record<string, string | true>
   if (spec.name === "wp-login") withdrawWpLogin();
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
-  spec.withdrawn?.();
-  if (purge) rmSync(spec.stateDir, { recursive: true, force: true });
-
-  if (remaining.length > 0) {
-    ensureDirs(remaining.map((name) => ADDONS[name]!));
-    reconcilePanelIdentity();
-    installUnits(remaining.map((name) => ADDONS[name]!));
-    startUnits();
-    log.ok(`${spec.name} removed; remaining addons are still available`);
-    return;
-  }
-
-  reconcileNginx(true, false);
-  reconcilePhpGuard(false, true);
-  stopUnits();
-  rmSync(CLI_BIN, { force: true });
-  rmSync(LIBEXEC_DIR, { recursive: true, force: true });
-  log.ok(`${spec.name} removed`);
 }

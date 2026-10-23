@@ -445,11 +445,15 @@ drop-in is removed. A drop-in someone else wrote that sets `ExecStart`, such
 as a hand-made `override.conf`, wins: the card says so and refuses a choice.
 Disabling the addon removes the drop-in and keeps the choice, which enabling
 reapplies through the reconcile service. Disabling is synchronous, so it cannot
-ask the pools for a page: under the same lock, it config-tests CloudPanel's own
-PHP first and requires the unit to come back on that version, and otherwise
-puts the drop-in back and refuses to disable. While the addon is disabled the
-stored choice is marked withdrawn, so a change that was waiting for the lock
-refuses rather than writing the drop-in again; enabling clears the mark. The card also shows a newer package
+ask the pools for a page: under the same lock, it config-tests the PHP the unit
+will start without the drop-in, CloudPanel's own or an operator's override, and
+requires the unit to come back running it. Otherwise, including a failed
+`daemon-reload`, it puts the drop-in back and refuses to disable; an uninstall
+that aborts later reactivates the addon. While the addon is disabled the stored
+choice is marked withdrawn, and a change that was waiting for the lock refuses,
+as it does once the addon's config is gone, so neither can write the drop-in
+again; enabling clears the mark. The page check is the one thing withdrawal
+does not repeat: a PHP that starts but answers 500 is not caught. The card also shows a newer package
 version when apt has one, revision included, because a newer minor is no fix
 until it is patched, and a failure is retried once that version changes.
 

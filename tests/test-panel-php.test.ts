@@ -26,6 +26,9 @@ interface Box {
   rejected: Set<string>;
   /** Versions systemd cannot start. */
   dead: Set<string>;
+  /** Make `systemctl daemon-reload` fail. */
+  reloadFails: boolean;
+  configFile: string;
   releases: Record<string, [string, string]>;
   fragment: string;
   setStock(version: string): void;
@@ -65,6 +68,8 @@ function box(): Box {
     broken: new Set(),
     rejected: new Set(),
     dead: new Set(),
+    reloadFails: false,
+    configFile: join(root, "panel-tweaks.conf"),
     releases: { "8.1": ["8.1.34-1+clp-bookworm", "8.1.34-1+clp-bookworm"], "8.3": ["8.3.36-1", "8.3.36-1"], "8.4": ["8.4.25-1+clp-bookworm", "8.4.27-1+clp-bookworm"] },
     fragment,
     setStock,
@@ -77,10 +82,11 @@ function box(): Box {
   };
   const ok = (stdout = ""): CommandResult => ({ ok: true, stdout, stderr: "" });
   const running = () => /php-fpm([0-9.]+)$/.exec(effective())![1]!;
+  writeFileSync(state.configFile, "enabled\n");
   state.options = {
     paths: {
       dropInFile: dropIn, fpmBinDir: bin, stateFile: state.stateFile, lockFile: join(root, "panel-php.lock"),
-      procRoot: proc, rootUid: process.getuid!(),
+      procRoot: proc, rootUid: process.getuid!(), configFile: state.configFile,
     },
     healthTimeoutMs: 0,
     sleep: async () => {},
@@ -97,6 +103,7 @@ function box(): Box {
         return ok();
       }
       if (command === "systemctl" && args[0] === "is-active") return ok("active\n");
+      if (command === "systemctl" && args[0] === "daemon-reload" && state.reloadFails) return { ok: false, stdout: "", stderr: "reload failed" };
       if (command === "systemctl") return ok();
       if (command === "apt-cache") {
         return ok(args.slice(1).map((pkg) => {
@@ -312,6 +319,34 @@ test("a refused disable leaves choosing the panel's PHP available", async () => 
   env.rejected.clear();
   await setPanelPhp("8.3", env.options);
   expect(readFileSync(env.dropIn, "utf8")).toContain("php-fpm8.3 ");
+});
+
+test("a change admitted before an uninstall purged its state still finds the addon gone", async () => {
+  const env = box();
+  await setPanelPhp("8.4", env.options);
+  withdrawPanelPhp(env.options);
+  rmSync(env.configFile);
+  rmSync(env.stateFile);
+  await expect(setPanelPhp("8.3", env.options)).rejects.toThrow("Panel Tweaks is disabled");
+  expect(existsSync(env.dropIn)).toBe(false);
+});
+
+test("a failed daemon-reload while disabling keeps the working override", async () => {
+  const env = box();
+  await setPanelPhp("8.4", env.options);
+  const dropIn = readFileSync(env.dropIn, "utf8");
+  env.reloadFails = true;
+  expect(() => withdrawPanelPhp(env.options)).toThrow("did not come back on PHP 8.1");
+  expect(readFileSync(env.dropIn, "utf8")).toBe(dropIn);
+});
+
+test("disabling expects the PHP an operator's own override selects", async () => {
+  const env = box();
+  await setPanelPhp("8.4", env.options);
+  env.addDropIn("override.conf", `[Service]\nExecStart=\nExecStart=${env.options.paths!.fpmBinDir}/php-fpm8.3 ${ARGS}\n`);
+  withdrawPanelPhp(env.options);
+  expect(existsSync(env.dropIn)).toBe(false);
+  expect(panelPhpStatus(env.options).running).toBe("8.3");
 });
 
 test("an unfamiliar CloudPanel unit is not touched", async () => {
