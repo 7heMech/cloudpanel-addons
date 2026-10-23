@@ -118,8 +118,24 @@ p.dns-dialog-note { margin:20px 0 0; }
 #dns-token-link { white-space:normal; }
 /* fleet-row-selection */
 
+.dns-card-sites { display:none; }
 @media (max-width:940px) {
   .fleet-table.dns-site-table td.site-select { display:none; }
+  /* A site card: the status and its hints get the full width, then the
+     profile picker with Details beside it. */
+  .fleet-table.dns-site-table td.dns-status { flex-basis:100%; }
+  .fleet-table.dns-site-table td.dns-profile-cell { flex:1 1 0; order:1; }
+  .fleet-table.dns-site-table td.action-cell:has(.btn) { flex:0 0 auto; order:2; align-self:flex-end; }
+  /* A profile card: name, site count and its buttons on the first line;
+     records beside enforce; the zone settings last. */
+  .fleet-table.dns-profile-table td.site-cell { flex:1 1 calc(100% - 220px); }
+  .fleet-table.dns-profile-table .dns-card-sites { display:inline; color:var(--muted); font-weight:400; }
+  .fleet-table.dns-profile-table .state-default { display:table; margin:6px 0 0; }
+  .fleet-table.dns-profile-table td.action-cell { flex:0 0 auto; order:-1; }
+  .fleet-table.dns-profile-table td.action-cell::before { display:none; }
+  .fleet-table.dns-profile-table td.dns-enforce-cell { order:1; }
+  .fleet-table.dns-profile-table td.wide-cell { order:2; }
+  .fleet-table.dns-profile-table td.dns-sites-cell { display:none; }
   .dns-site-table td select { min-width:0; }
   .card-footer { padding:16px 20px; }
 }
