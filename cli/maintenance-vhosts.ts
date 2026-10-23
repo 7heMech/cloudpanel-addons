@@ -85,8 +85,9 @@ export function stageMaintenanceVhosts(db: Database, changes: NginxChange[], pat
   }
 }
 
+/** With `settingsMissing`, a vhost that includes the absent global_settings is not covered by it. */
 export function sitesWithoutMaintenance(db: Database, paths: {
-  nginxVhostDir: string; vhostUid: number; includePath: string;
+  nginxVhostDir: string; vhostUid: number; includePath: string; settingsMissing?: boolean;
 }): string[] {
   return maintenanceSites(db).flatMap((site) => {
     try {
@@ -95,7 +96,8 @@ export function sitesWithoutMaintenance(db: Database, paths: {
       if (optedOut(rendered) && !rendered.includes("include /etc/nginx/global_settings")) return [];
       return [rendered, site.vhost_template].every((content) => {
         const block = servingBlock(content, domain);
-        return includes(block, "/etc/nginx/global_settings") !== includes(block, paths.includePath);
+        const viaSettings = includes(block, "/etc/nginx/global_settings");
+        return paths.settingsMissing ? !viaSettings && includes(block, paths.includePath) : viaSettings !== includes(block, paths.includePath);
       }) ? [] : [domain];
     } catch { return [site.domain_name]; }
   });
