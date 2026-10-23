@@ -32,6 +32,18 @@ connections. The database is off because an update restarts MySQL. `main` is off
 because CloudPanel updates itself with `clp-update`. Varnish, ProFTPD and anything
 else stay uncovered, and the page shows them as uncovered.
 
+Ubuntu 22.04 (jammy), 24.04 (noble) and 26.04 (resolute) use the same
+archive-based security pattern. The additive drop-in preserves Ubuntu's
+`Allowed-Origins`, including existing `UbuntuESMApps` and `UbuntuESM` entries;
+it does not enroll the machine in Ubuntu Pro or enable a repository. Coverage
+comes from the repositories actually present. Ubuntu commonly enables automatic
+updates already, so this is reported as an outside configuration until the
+operator selects System Tweaks. See [Ubuntu's automatic updates guide](https://ubuntu.com/server/docs/how-to/software/automatic-updates/).
+`bun tests/integration/integration-system-tweaks-ubuntu.ts` checks the generated
+drop-in against each release's real `unattended-upgrades` matcher in Docker.
+The containers do not boot systemd; timer ownership and restoration are tested
+separately with the action fixtures.
+
 Each write is parsed with `apt-config dump` before it is kept; a rejected file is
 put back as it was. If `apt-daily.timer` or `apt-daily-upgrade.timer` is
 disabled, switching on enables it and records that in the settings; switching
@@ -77,6 +89,56 @@ The page never reports what the drop-in meant to do. It reads the result:
   `/var/log/unattended-upgrades/unattended-upgrades.log`, or in `.1.gz` just after
   logrotate empties it.
 - **Reboot**: `/var/run/reboot-required` and `.pkgs`.
+
+## Cloudflare connection check
+
+System Tweaks owns the optional **Check Cloudflare connections** switch.
+Cloudflare IP Access continues to manage CloudPanel's per-site flag, access-log
+format and include. The check also works for sites enabled through CloudPanel
+without the Cloudflare IP Access addon. It defaults off because another proxy
+or tunnel between Cloudflare and Nginx changes the connection peer.
+
+CloudPanel's broad real-IP trust can replace `$remote_addr` from a request
+header before its access rules run. The extra check uses
+[`$realip_remote_addr`](https://nginx.org/en/docs/http/ngx_http_realip_module.html#embedded_variables),
+which retains the original connection address. Its lookup lives in the owned
+HTTP-context file `/etc/nginx/sites-enabled/00-clp-addons-cloudflare-peer.conf`.
+A marked block at the start of `/etc/nginx/cloudflare/ips` rejects peers outside
+that lookup with 403. The rest of CloudPanel's include stays byte-for-byte
+intact, so its existing address checks still apply too. The addon does not
+change global real-IP trust, visitor-IP headers, logs or PHP's `REMOTE_ADDR`.
+
+Ranges come from the trusted, root-owned CloudPanel include. Only numeric IPv4
+and IPv6 `allow` rules followed by `deny all` are accepted; custom directives,
+untrusted files, modified markers and an unrelated lookup file are refused.
+An operator's access rule elsewhere remains in place; the page reports whether
+this addon's check is configured, not whether every possible outside protection
+exists. No local-network or loopback exemption is added. CloudPanel's normal
+WordPress/Varnish backend has no Cloudflare include and is unaffected. A server
+that puts that include in a backend must remove it there or leave this switch
+off. Direct ACME requests are rejected too; validation must reach the site via
+Cloudflare or use DNS. Unrestricted sites do not use the check.
+
+The shared Nginx transaction writes both files, tests the complete configuration
+and reloads once. Validation or reload failure restores both files and the
+stored choice. Each Nginx command has a 30-second timeout; the gateway allows
+450 seconds for validation/reload, possible rollback, state queries and lock
+waiting. Both limits are in `addons/system-tweaks/limits.ts`.
+
+Activation, repair and `repair --anchors-only` restore an opted-in check. The
+existing path watcher watches the include and its directory, so a CloudPanel
+range replacement refreshes the lookup and puts the block back. This is eventual
+repair: a replacement loaded before the watcher finishes temporarily has only
+CloudPanel's rules. The page reports missing or stale configuration as needing
+repair, and watcher failures are logged. It reports configuration on disk,
+not a probe of live Nginx workers. Disabling the switch or addon removes only
+the exact marked block and owned lookup, preserving the current ranges rather
+than restoring an old copy. Re-enabling the addon restores its saved choice.
+
+`bun tests/integration/integration-cloudflare-peer.ts` tests the generated
+configuration with real Nginx in an isolated Docker network: the original header
+bypass, rejection after the fix, IPv4/IPv6 trusted peers, local backend proxying,
+direct ACME requests and unrestricted sites.
 
 ## PHP upload-progress mitigation
 

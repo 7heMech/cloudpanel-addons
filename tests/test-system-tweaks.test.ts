@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
 import {
-  executeSystemTweaksAction, restoreSystemTweaks, withdrawSystemTweaks,
+  executeSystemTweaksAction, restoreSystemTweaks, withdrawSystemTweaks, systemTweaksNginxUpkeep,
   type SystemTweaksOptions, type SystemTweaksState,
 } from "../addons/system-tweaks/action";
 import {
@@ -13,6 +13,7 @@ import {
 } from "../addons/system-tweaks/updates";
 import { iniBoolean, iniSetting, uploadProgressStatus } from "../addons/system-tweaks/upload-progress";
 import { dashboardView } from "../addons/system-tweaks/app/views";
+import { appRequest } from "./app-request";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -233,6 +234,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
       },
       uploadProgress: { run, paths: { phpRoot, fpmBinDir: sbin, panelUnit: "clp-php-fpm.service" } },
       phpGuard,
+      cloudflarePeer: { run, paths: { ips: join(dir, "cloudflare-ips"), geo: join(dir, "cloudflare-geo"), rootUid: uid } },
     },
   };
 }
@@ -240,6 +242,80 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
 async function act(b: Box, argv: string[], input?: unknown): Promise<SystemTweaksState> {
   return executeSystemTweaksAction(argv, { ...b.options, input: input === undefined ? undefined : JSON.stringify(input) }) as Promise<SystemTweaksState>;
 }
+
+for (const codename of ["jammy", "noble", "resolute"]) {
+  test(`Ubuntu ${codename}: preserve stock security and ESM origins, add CloudPanel PHP, and restore either on or off`, async () => {
+    for (const originallyOn of [true, false]) {
+      const b = box();
+      const periodic = `APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "${originallyOn ? 1 : 0}";\n`;
+      const stock = 'Unattended-Upgrade::Allowed-Origins {\n' + [
+        "${distro_id}:${distro_codename}", "${distro_id}:${distro_codename}-security",
+        "${distro_id}ESMApps:${distro_codename}-apps-security", "${distro_id}ESM:${distro_codename}-infra-security",
+      ].map((value) => `\t"${value}";`).join("\n") + '\n};\n';
+      writeFileSync(join(b.aptDir, "20auto-upgrades"), periodic);
+      writeFileSync(join(b.aptDir, "50unattended-upgrades"), stock);
+      const baseRun = b.options.updates!.run!;
+      const policy = [
+        ["Ubuntu", codename], ["Ubuntu", `${codename}-security`], ["Ubuntu", `${codename}-updates`],
+        ["Ubuntu", `${codename}-backports`], ["UbuntuESMApps", `${codename}-apps-security`],
+        ["UbuntuESM", `${codename}-infra-security`],
+      ].map(([origin, archive]) => ` 500 https://example.test/ubuntu ${archive}/main amd64 Packages\n     release o=${origin},a=${archive},n=${codename},l=${origin},c=main,b=amd64\n     origin example.test\n`).join("") +
+        DEBIAN_POLICY.slice(DEBIAN_POLICY.indexOf("1000"), DEBIAN_POLICY.indexOf(" 500")).replaceAll("bookworm", codename);
+      b.options.updates!.run = (command, args, env) => {
+        if (command === "lsb_release") return { ok: true, stdout: args[0] === "-i" ? "Ubuntu" : codename, stderr: "" };
+        if (command === "apt-cache") return { ok: true, stdout: policy, stderr: "" };
+        return baseRun(command, args, env);
+      };
+      const before = await act(b, ["state"]);
+      expect(before.updates.enabled).toBe(originallyOn);
+      expect(before.updates.managed).toBe(false);
+      const enabled = await act(b, ["set-updates"], { enabled: true });
+      expect(enabled.updates.enabled).toBe(true);
+      expect(covered(enabled.updates.coverage)).toMatchObject({
+        [`Ubuntu ${codename}-security`]: "all",
+        [`Ubuntu ${codename}-updates`]: "none",
+        [`Ubuntu ${codename}-backports`]: "none",
+        [`UbuntuESMApps ${codename}-apps-security`]: "all",
+        [`UbuntuESM ${codename}-infra-security`]: "all",
+        "CloudPanel PHP": "all", Nginx: "all", MySQL: "none", CloudPanel: "none",
+      });
+      const restored = await act(b, ["set-updates"], { enabled: false });
+      expect(restored.updates.enabled).toBe(originallyOn);
+      expect(restored.updates.coverage).toEqual(before.updates.coverage);
+      expect(restored.updates.outsideSource).toBe(originallyOn ? "20auto-upgrades" : "");
+      expect(readFileSync(join(b.aptDir, "20auto-upgrades"), "utf8")).toBe(periodic);
+      expect(readFileSync(join(b.aptDir, "50unattended-upgrades"), "utf8")).toBe(stock);
+      expect(b.timers.get("apt-daily-upgrade.timer")).toBe("enabled");
+    }
+  });
+}
+
+test("Cloudflare connection checks are opt-in, survive repair, withdraw and restore with the addon", async () => {
+  const b = box();
+  const ips = b.options.cloudflarePeer!.paths!.ips!;
+  const stock = "allow 173.245.48.0/20;\nallow 2400:cb00::/32;\ndeny all;\n";
+  writeFileSync(ips, stock, { mode: 0o644 });
+  expect((await act(b, ["state"])).cloudflarePeer.wanted).toBe(false);
+  expect((await act(b, ["set-cloudflare-peer"], { enabled: true })).cloudflarePeer.configured).toBe(true);
+  expect(dashboardView(await act(b, ["state"]))).toContain("Check Cloudflare connections");
+  writeFileSync(ips, stock);
+  expect((await act(b, ["state"])).cloudflarePeer.configured).toBe(false);
+  expect(systemTweaksNginxUpkeep(b.options)).toBe("Cloudflare connection check restored");
+  withdrawSystemTweaks(b.options);
+  expect(readFileSync(ips, "utf8")).toBe(stock);
+  restoreSystemTweaks(b.options);
+  expect((await act(b, ["state"])).cloudflarePeer.configured).toBe(true);
+  expect((await act(b, ["set-cloudflare-peer"], { enabled: false })).cloudflarePeer.wanted).toBe(false);
+  expect(systemTweaksNginxUpkeep(b.options)).toBe(null);
+  expect(readFileSync(ips, "utf8")).toBe(stock);
+});
+
+test("a failed Cloudflare change restores its setting and rejects non-boolean input", async () => {
+  const b = box();
+  await expect(act(b, ["set-cloudflare-peer"], { enabled: "true" })).rejects.toThrow("true or false");
+  await expect(act(b, ["set-cloudflare-peer"], { enabled: true })).rejects.toThrow("IP list is missing");
+  expect((await act(b, ["state"])).cloudflarePeer.wanted).toBe(false);
+});
 
 test("a box whose operator already turned updates on reads as configured outside System Tweaks", async () => {
   const b = box();
@@ -510,4 +586,22 @@ test("actions refuse to run as anyone but root", async () => {
   const b = box();
   await expect(executeSystemTweaksAction(["state"], { ...b.options, processUid: 1000 })).rejects.toThrow("must run as root");
   await expect(act(b, ["state", "--extra"])).rejects.toThrow("unexpected argument");
+});
+
+test("the Cloudflare page action requires CSRF and a boolean, and repaints from the gateway reply", async () => {
+  const state = await act(box(), ["state"]);
+  state.cloudflarePeer = { wanted: true, configured: true, available: true, problem: "" };
+  const calls: boolean[] = [];
+  mock.module("../addons/system-tweaks/app/service", () => ({ systemTweaksService: {
+    setCloudflarePeer: async (enabled: boolean) => { calls.push(enabled); return { ok: true, data: state }; },
+  } }));
+  const { handle } = await import("../addons/system-tweaks/app/index");
+  const path = "/api/cloudflare-peer";
+  expect((await handle(appRequest(path, "POST", { enabled: true }, false), path)).status).toBe(403);
+  expect((await handle(appRequest(path, "POST", { enabled: "true" }), path)).status).toBe(400);
+  expect(calls).toEqual([]);
+  const response = await handle(appRequest(path, "POST", { enabled: true }), path);
+  expect(response.status).toBe(200);
+  expect(calls).toEqual([true]);
+  expect(await response.json()).toEqual({ ok: true, html: dashboardView(state) });
 });

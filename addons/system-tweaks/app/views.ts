@@ -207,6 +207,7 @@ function uploadProgressCard(state: SystemTweaksState): string {
 }
 
 export function dashboardView(state: SystemTweaksState): string {
+  const peer = state.cloudflarePeer;
   return `
     <div class="page-heading">
       <div>
@@ -218,5 +219,17 @@ export function dashboardView(state: SystemTweaksState): string {
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates)}
-    </div>${coverageCard(state.updates)}${uploadProgressCard(state)}`;
+    </div>${coverageCard(state.updates)}
+    <div class="card">
+      <div class="card-header"><h2>Cloudflare</h2></div>
+      <div class="tweak-list">${switchRow({
+        key: "cloudflarePeer",
+        title: "Check Cloudflare connections",
+        description: "On sites using Cloudflare only, require the connection itself to come from CloudPanel's Cloudflare IP list. Forwarded IP headers cannot pass this check. Use this when Cloudflare connects directly to this server; another load balancer or tunnel in between will be blocked. Direct certificate validation requests are also blocked. Manage which sites use Cloudflare only in Cloudflare IP Access or the site's Security page.",
+        checked: peer.wanted,
+        disabled: !peer.available && !peer.wanted,
+        onchange: "setCloudflarePeer(this)",
+        extra: `<p class="st-status">${badge(peer.configured ? "Configured" : peer.wanted ? "Needs repair" : "Off", peer.configured ? "ok" : peer.wanted ? "warn" : "plain")} <span>${esc(peer.problem || (peer.configured ? "Checks the connecting address on Cloudflare-only sites." : "Existing CloudPanel and operator access rules still apply."))}</span></p>`,
+      })}</div>
+    </div>${uploadProgressCard(state)}`;
 }

@@ -1,14 +1,7 @@
-/**
- * The privileged half of System Tweaks: server-wide settings that only root
- * can read in full or change.
- *
- * One settings file holds what the operator chose. The apt drop-in and the PHP
- * guard are what those choices put on the box, and both are rebuilt from it by
- * the repair timer, by enabling the addon, and by the action that changed it.
- */
+/** Root actions and lifecycle hooks for server-wide update, PHP and Cloudflare settings. */
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, withFileLock,
+  ActionFailure, emitActionError, emitActionOk, failAction, withFileLock, withFileLockSync,
 } from "../../cli/action-common";
 import { ROOT_UID, STATE_DIR } from "../../cli/paths";
 import { reconcilePhpGuard, type PhpGuardOptions } from "../../cli/php-guard";
@@ -19,11 +12,12 @@ import {
 } from "./updates";
 import { INSTALL_DEADLINE_MS } from "./limits";
 import { uploadProgressStatus, type FpmUploadProgress, type UploadProgressOptions } from "./upload-progress";
+import { applyCloudflarePeer, cloudflarePeerStatus, type CloudflarePeerOptions, type CloudflarePeerStatus } from "./cloudflare-peer";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
 
-export type SystemTweaksVerb = "state" | "set-updates" | "install-updates" | "set-upload-guard";
+export type SystemTweaksVerb = "state" | "set-updates" | "install-updates" | "set-upload-guard" | "set-cloudflare-peer";
 
 export interface SystemTweaksSettings {
   updates: UpdateSettings;
@@ -31,12 +25,14 @@ export interface SystemTweaksSettings {
   enabledTimers: string[];
   /** The platform's PHP upload-progress guard; false is the only opt-out there is. */
   uploadProgressGuard: boolean;
+  cloudflarePeer: boolean;
 }
 
 export interface SystemTweaksState {
   updates: UpdatesStatus;
   settings: UpdateSettings;
   uploadProgress: { guard: boolean; fpms: FpmUploadProgress[] };
+  cloudflarePeer: CloudflarePeerStatus;
 }
 
 export interface SystemTweaksPaths {
@@ -59,6 +55,7 @@ export interface SystemTweaksOptions {
   updates?: UpdatesOptions;
   uploadProgress?: UploadProgressOptions;
   phpGuard?: PhpGuardOptions;
+  cloudflarePeer?: CloudflarePeerOptions;
   now?: () => number;
 }
 
@@ -75,6 +72,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     updates: { ...DEFAULT_UPDATE_SETTINGS },
     enabledTimers: [],
     uploadProgressGuard: true,
+    cloudflarePeer: false,
   };
   if (!existsSync(paths.settingsFile)) return settings;
   const info = lstatSync(paths.settingsFile);
@@ -95,6 +93,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
       timer === "apt-daily.timer" || timer === "apt-daily-upgrade.timer");
   }
   if (stored.uploadProgressGuard === false) settings.uploadProgressGuard = false;
+  if (stored.cloudflarePeer === true) settings.cloudflarePeer = true;
   return settings;
 }
 
@@ -116,6 +115,7 @@ function stateOf(options: SystemTweaksOptions): SystemTweaksState {
   return {
     updates: updatesStatus(options.updates),
     settings: settings.updates,
+    cloudflarePeer: cloudflarePeerStatus(settings.cloudflarePeer, options.cloudflarePeer),
     uploadProgress: {
       guard: settings.uploadProgressGuard,
       fpms: uploadProgressStatus(options.uploadProgress),
@@ -175,9 +175,26 @@ async function setUploadGuard(options: SystemTweaksOptions): Promise<SystemTweak
   return stateOf(options);
 }
 
+async function setCloudflarePeer(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const paths = pathsFor(options);
+  const body = await requestBody(options);
+  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
+  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    const settings = readSettings(paths);
+    writeSettings(paths, { ...settings, cloudflarePeer: body.enabled as boolean });
+    try {
+      applyCloudflarePeer(body.enabled as boolean, options.cloudflarePeer);
+    } catch (error) {
+      writeSettings(paths, settings);
+      throw error;
+    }
+  });
+  return stateOf(options);
+}
+
 function parseVerb(argv: string[]): SystemTweaksVerb {
   const [rawVerb, ...rest] = argv;
-  const verbs: SystemTweaksVerb[] = ["state", "set-updates", "install-updates", "set-upload-guard"];
+  const verbs: SystemTweaksVerb[] = ["state", "set-updates", "install-updates", "set-upload-guard", "set-cloudflare-peer"];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown system tweaks verb '${rawVerb ?? ""}'`);
   if (rest.length > 0) failAction(`unexpected argument '${rest[0]}'`);
@@ -190,6 +207,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "state") return stateOf(options);
   if (verb === "set-updates") return setUpdates(options);
   if (verb === "set-upload-guard") return setUploadGuard(options);
+  if (verb === "set-cloudflare-peer") return setCloudflarePeer(options);
   // One deadline for the install and the state read that answers it, which the
   // gateway's timeout is sized from.
   const now = options.now ?? Date.now;
@@ -214,31 +232,47 @@ export async function runSystemTweaksAction(argv: string[], options: SystemTweak
   }
 }
 
-/** The repair hook: put the apt drop-in back to the stored choice when it drifted. */
+function withSettingsLock<T>(options: SystemTweaksOptions, body: (paths: SystemTweaksPaths, settings: SystemTweaksSettings) => T): T {
+  const paths = pathsFor(options);
+  return withFileLockSync(paths.lockFile, 15, "another system tweaks change is still running", () => body(paths, readSettings(paths)));
+}
+
 export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | null {
-  const paths = pathsFor(options);
-  const settings = readSettings(paths);
-  if (!settings.updates.enabled || !unattendedUpgradesInstalled(options.updates)) return null;
-  const applied = applyUpdates(settings.updates, settings.enabledTimers, options.updates);
-  if (applied.enabledTimers.length !== settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: applied.enabledTimers });
-  return applied.changed ? "automatic updates config restored" : null;
+  return withSettingsLock(options, (paths, settings) => {
+    const notices: string[] = [];
+    if (settings.cloudflarePeer && applyCloudflarePeer(true, options.cloudflarePeer)) notices.push("Cloudflare connection check restored");
+    if (settings.updates.enabled && unattendedUpgradesInstalled(options.updates)) {
+      const applied = applyUpdates(settings.updates, settings.enabledTimers, options.updates);
+      if (applied.enabledTimers.length !== settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: applied.enabledTimers });
+      if (applied.changed) notices.push("automatic updates config restored");
+    }
+    return notices.join("; ") || null;
+  });
 }
 
-/** Disabling the addon takes its apt drop-in and the timers it enabled away, and keeps the choice. */
+/** The path watcher also runs this after CloudPanel replaces its IP list. */
+export function systemTweaksNginxUpkeep(options: SystemTweaksOptions = {}): string | null {
+  return withSettingsLock(options, (_paths, settings) => {
+    if (!settings.cloudflarePeer) return null;
+    return applyCloudflarePeer(true, options.cloudflarePeer) ? "Cloudflare connection check restored" : null;
+  });
+}
+
 export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
-  const paths = pathsFor(options);
-  const settings = readSettings(paths);
-  applyUpdates({ ...settings.updates, enabled: false }, settings.enabledTimers, options.updates);
-  if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
+  withSettingsLock(options, (paths, settings) => {
+    applyCloudflarePeer(false, options.cloudflarePeer);
+    applyUpdates({ ...settings.updates, enabled: false }, settings.enabledTimers, options.updates);
+    if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
+  });
 }
 
-/** Enabling it again puts both back as they were chosen. */
 export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
-  const paths = pathsFor(options);
-  const settings = readSettings(paths);
-  if (settings.updates.enabled && unattendedUpgradesInstalled(options.updates)) {
-    const applied = applyUpdates(settings.updates, settings.enabledTimers, options.updates);
-    writeSettings(paths, { ...settings, enabledTimers: applied.enabledTimers });
-  }
-  if (!settings.uploadProgressGuard) reconcilePhpGuard(true, false, guardOptions(options));
+  withSettingsLock(options, (paths, settings) => {
+    if (settings.cloudflarePeer) applyCloudflarePeer(true, options.cloudflarePeer);
+    if (settings.updates.enabled && unattendedUpgradesInstalled(options.updates)) {
+      const applied = applyUpdates(settings.updates, settings.enabledTimers, options.updates);
+      writeSettings(paths, { ...settings, enabledTimers: applied.enabledTimers });
+    }
+    if (!settings.uploadProgressGuard) reconcilePhpGuard(true, false, guardOptions(options));
+  });
 }

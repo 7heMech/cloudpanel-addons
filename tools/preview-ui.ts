@@ -409,6 +409,7 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
       lastRun: enabled ? { at: "2026-10-23 06:41:09", outcome: "upgraded", packages: ["php8.3-fpm", "php8.3-cli"], message: "" } : null,
       rebootRequired: { since: "2026-10-20T06:41:09Z", packages: ["linux-image-6.1.0-53-amd64"] },
     },
+    cloudflarePeer: { wanted: true, configured: true, available: true, problem: "" },
     uploadProgress: {
       guard,
       fpms: [...php.map((version) => ({
@@ -436,6 +437,9 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
       row.enabled = !state.uploadProgress.guard && !row.offWithoutGuard;
       row.setBy = state.uploadProgress.guard ? "clp-addons" : row.offWithoutGuard ? "config" : "default";
     }
+  } else if (path.endsWith("/cloudflare-peer")) {
+    state.cloudflarePeer.wanted = body.enabled === true;
+    state.cloudflarePeer.configured = body.enabled === true;
   } else {
     Object.assign(state.settings, body);
     state.updates.managed = state.settings.enabled;

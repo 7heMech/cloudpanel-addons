@@ -100,6 +100,7 @@ export const SYSTEM_TWEAKS_ALLOWED_VERBS = new Set([
   "set-updates",
   "install-updates",
   "set-upload-guard",
+  "set-cloudflare-peer",
 ]);
 
 /**

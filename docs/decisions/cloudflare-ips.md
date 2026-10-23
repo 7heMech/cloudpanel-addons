@@ -9,6 +9,10 @@ from `main` to `cloudflare`, and adds
 reverses those rendered-vhost changes. CloudPanel remains the source of the IP
 ranges in `/etc/nginx/cloudflare/ips`.
 
+The optional connection-address check is owned by
+[System Tweaks](system-tweaks.md#cloudflare-connection-check). It hardens the
+shared include without changing which sites this addon selects.
+
 Bulk changes take one exclusive addon lock and one immediate SQLite transaction.
 Every affected vhost must be a trusted regular file. The trust checks, owned
 atomic replacement, restoration and recovery error collection are shared with
