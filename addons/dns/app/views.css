@@ -142,7 +142,7 @@ p.dns-dialog-note { margin:20px 0 0; }
 /* The editor's rows become cards: type, name and the remove button on top, content beneath, then the rest. */
 @media (max-width:760px) {
   .default-card, .dns-setup { flex-direction:column; align-items:stretch; gap:12px; }
-  .card-header:has(> .btn) { flex-direction:column; align-items:flex-start; }
+  .card-header:not(.toolbar):has(> .btn) { flex-direction:column; align-items:flex-start; }
   .default-choice { flex:1 1 auto; width:100%; }
   .toolbar #bulk-profile { flex:1 1 100%; }
   .toolbar .toolbar-end { margin-left:0; }
