@@ -2,6 +2,9 @@
 .clp-sk-add { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px; }
 .clp-sk-add input { flex: 1 1 220px; max-width: 360px; }
 .clp-sk-table td:last-child { text-align: right; }
+/* Bootstrap 5.0 colours every .table #212529, and the panel's dark theme only
+   undoes that in cards without padding. */
+html.dark .clp-sk-table { color: var(--clp-text, #fff); }
 .clp-sk-none { color: #9ca3af; }
 @media (max-width: 575px) {
   .clp-sk-table thead { display: none; }
