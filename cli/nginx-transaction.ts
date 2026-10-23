@@ -28,8 +28,18 @@ export function openPanelDatabase(path: string, readOnly = false, busyTimeoutMs 
 
 export function trustedVhost(path: string, expectedUid: number): NginxFileBackup & { content: string } {
   const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
-    failAction(`refusing untrusted Nginx vhost ${path}`);
+  const refuse = (reason: string, fix: string) => failAction(`refusing ${path}: ${reason}; ${fix}`);
+  if (stat.isSymbolicLink()) refuse("it is a symlink", "replace it with a regular file");
+  if (!stat.isFile()) refuse("it is not a regular file", "replace it with a regular file");
+  if (stat.uid !== expectedUid) {
+    refuse(
+      `owned by uid ${stat.uid}, expected ${expectedUid === 0 ? "root (0)" : `uid ${expectedUid}`}`,
+      expectedUid === 0 ? `run chown root:root ${path}` : `run chown ${expectedUid} ${path}`,
+    );
+  }
+  if ((stat.mode & 0o022) !== 0) {
+    const who = [(stat.mode & 0o020) !== 0 ? "group" : "", (stat.mode & 0o002) !== 0 ? "world" : ""].filter(Boolean).join("- and ");
+    refuse(`${who}-writable (mode ${(stat.mode & 0o777).toString(8)})`, `run chmod go-w ${path}`);
   }
   return {
     path,

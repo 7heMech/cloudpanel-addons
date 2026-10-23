@@ -491,7 +491,7 @@ test("untrusted or customized vhosts are refused without altering protection", a
   seedBasicAuth();
   const path = join(root, "vhosts", "shop.example.com.conf");
   chmodSync(path, 0o666);
-  await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand })).rejects.toThrow("untrusted");
+  await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand })).rejects.toThrow("group- and world-writable (mode 666)");
   chmodSync(path, 0o640);
   const content = readFileSync(path, "utf8");
   writeFileSync(path, content.replace('"Restricted Area"', '"Custom"'));
@@ -500,7 +500,7 @@ test("untrusted or customized vhosts are refused without altering protection", a
   const target = join(root, "linked-vhost");
   writeFileSync(target, content);
   symlinkSync(target, path);
-  await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand })).rejects.toThrow("untrusted");
+  await expect(act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: okCommand })).rejects.toThrow("it is a symlink");
   expect(readFileSync(target, "utf8")).toBe(content);
   expect(basicAuthIps()).toBeNull();
   expect(runuserLog()).toEqual(["shop PATH", "shop PATH", "shop PATH"]);
