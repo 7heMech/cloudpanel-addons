@@ -111,9 +111,10 @@ test("an oversized session is denied", () => {
 });
 
 // CloudPanel's /autologin, which Security Keys uses after a verified passkey,
-// never runs the listener that writes the marker.
-test("an MFA-enabled user without the completion marker is accepted", () => {
-  expect(parsePanelSession(noMfa())?.user).toBe("redacted_user");
+// never runs the listener that writes the marker; only that addon relaxes this.
+test("an MFA-enabled user without the completion marker is accepted only with Security Keys", () => {
+  expect(parsePanelSession(noMfa())).toBeNull();
+  expect(parsePanelSession(noMfa(), { unmarkedMfa: true })?.user).toBe("redacted_user");
 });
 
 test("an MFA-disabled user without the completion marker is accepted", () => {

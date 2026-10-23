@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { ADDONS, ADDON_NAMES, addonHandler, addonMaintenance, addonNewSites, templateWatchPaths } from "../cli/addon-catalog";
+import { ADDONS, ADDON_NAMES, addonHandler, addonMaintenance, addonNewSites, templateWatchPaths, type AddonSpec } from "../cli/addon-catalog";
+import { runNewSiteWork } from "../cli/maintenance";
 import { mountPath } from "../lib/mount";
 import { CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, SERVICE_USER, SOCKET_PATH } from "../cli/paths";
 
@@ -102,4 +103,17 @@ test("the active layout has one binary and direct helpers", () => {
   expect(SOCKET_PATH).toBe("/run/clp-addons/manager.sock");
   expect(SERVICE_USER).toBe("clp-addons");
   expect(CLI_ARTIFACT).toBe("clp-addons-linux-x64");
+});
+
+test("new-site work starts in catalog order and a slow addon only gets a head start", async () => {
+  const events: string[] = [];
+  const spec = (label: string, ms: number) => ({
+    newSites: { label, run: async () => { events.push(`${label} start`); await Bun.sleep(ms); events.push(`${label} end`); return null; } },
+  }) as unknown as AddonSpec;
+  await runNewSiteWork([spec("DNS", 150), spec("SMTP", 1)], 20);
+  expect(events).toEqual(["DNS start", "SMTP start", "SMTP end", "DNS end"]);
+
+  events.length = 0;
+  await runNewSiteWork([spec("DNS", 1), spec("SMTP", 1)], 1000);
+  expect(events).toEqual(["DNS start", "DNS end", "SMTP start", "SMTP end"]);
 });

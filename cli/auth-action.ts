@@ -9,7 +9,7 @@ import { existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSy
 import { dlopen, FFIType } from "bun:ffi";
 import { Database } from "bun:sqlite";
 import { requireRoot } from "./util";
-import { CLI_BIN, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR } from "./paths";
+import { CLI_BIN, CONFIG_DIR, PANEL_DB, SERVICE_GROUP, SERVICE_USER, SESSION_DIR } from "./paths";
 import {
   MAX_SESSION_ID_LENGTH,
   parsePanelSession,
@@ -71,6 +71,8 @@ export interface AuthActionOptions {
   ownerUid?: number | null;
   /** Test-only database override; production uses PANEL_DB. */
   panelDb?: string;
+  /** Test-only override; production checks whether Security Keys is enabled. */
+  securityKeys?: boolean;
   /** Test-only socket path override for daemon mode; production uses systemd FD 3. */
   listenPath?: string;
   /** Test-only panel info reader override. */
@@ -218,7 +220,8 @@ export async function runAuthAction(
       ownerUid: options.ownerUid,
       warn: () => {},
     });
-    const session = sessionBytes ? parsePanelSession(sessionBytes) : null;
+    const unmarkedMfa = options.securityKeys ?? existsSync(`${CONFIG_DIR}/security-keys.conf`);
+    const session = sessionBytes ? parsePanelSession(sessionBytes, { unmarkedMfa }) : null;
     if (!session) return invalidReply();
 
     const dbPath = options.panelDb ?? PANEL_DB;

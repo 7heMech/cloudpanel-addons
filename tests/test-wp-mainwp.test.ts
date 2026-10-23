@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configureMainwp, emptyMainwpState, mainwpAction, mainwpView, readMainwpState, requireMainwpSettled, saveMainwpState, syncMainwp, type MainwpRun } from "../addons/wp-login/mainwp";
@@ -358,6 +358,12 @@ test("cleanup resumes after the Dashboard row disappears and preserves plugin re
   expect((await syncMainwp({ ...run, dueOnly: true }, options)).connected).toBe(1);
 });
 
+test("an unreadable MainWP state holds up disabling and says how to proceed", () => {
+  writeFileSync(run.statePath, "{");
+  expect(() => requireMainwpSettled(run.statePath)).toThrow(`${run.statePath} cannot be read`);
+  expect(() => requireMainwpSettled(run.statePath)).toThrow("repair or remove it, then retry");
+});
+
 test("only an interrupted enrollment holds up disabling or uninstalling", async () => {
   await configured(); await syncMainwp(run, options);
   expect(() => requireMainwpSettled(run.statePath)).not.toThrow();
@@ -368,6 +374,23 @@ test("only an interrupted enrollment holds up disabling or uninstalling", async 
   await syncMainwp({ ...run, dueOnly: true }, options);
   expect(() => requireMainwpSettled(run.statePath)).not.toThrow();
   expect(readMainwpState(run.statePath).enabled).toBe(true);
+});
+
+test("cleanup restores children while the Dashboard is down and removes its records once it answers", async () => {
+  await configured(); await syncMainwp(run, options);
+  expect(connections["new.test"]).toBeDefined();
+  const unavailable = { runWpCommand: async (command: WpCommand) => {
+    if (command.stdin && JSON.parse(command.stdin).op === "dashboard-status") return 'CLP-ADDONS-MAINWP:{"error":"dashboard-unavailable"}';
+    return options.runWpCommand(command);
+  } };
+  await syncMainwp(run, unavailable, true);
+  expect(children["new.test"]).toMatchObject({ installed: false, key: "" });
+  expect(readMainwpState(run.statePath)).toMatchObject({ cleanup: true, retired: [{ domain: "new.test" }] });
+  expect(connections["new.test"]).toBeDefined();
+  await syncMainwp(run, options, true);
+  expect(connections["new.test"]).toBeUndefined();
+  expect(connections["connected.test"]).toEqual({ id: 1, key });
+  expect(readMainwpState(run.statePath)).toMatchObject({ cleanup: false, retired: [] });
 });
 
 test("restoring authentication permits withdrawal even while the Dashboard is unavailable", async () => {

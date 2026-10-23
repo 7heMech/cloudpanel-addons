@@ -163,8 +163,11 @@ An addon that has work for a site the moment it exists declares `newSites` in
 its catalog definition. `clp-addons-new-sites.path` watches
 `/etc/nginx/sites-enabled`, where CloudPanel writes every new site's vhost, and
 its service runs `clp-addons sync-sites`: each installed addon's `newSites`, in
-catalog order, so DNS writes a site's records before SMTP Relay binds its
-user. One addon failing does not skip the next. CloudPanel commits the site row
+catalog order, so DNS normally writes a site's records before SMTP Relay binds
+its user. Each gets a 15-second head start rather than waiting for the one
+before it to finish: DNS can wait minutes for its lock behind a fleet check, and
+until SMTP Relay binds the site its mail login is refused. One addon failing
+does not skip the next. CloudPanel commits the site row
 about 200 ms after writing the vhost, so the service runs again 10 seconds
 later, even if the first run failed. The units exist while any installed addon
 declares `newSites`; repair restarts the watcher if it has stopped. It takes no

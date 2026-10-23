@@ -391,7 +391,8 @@ async function visit(pass: Pass, site: WpSite): Promise<void> {
   pass.state.sites[site.domain] = record;
   try {
     if (record.snapshot && record.phase === "cleanup") await restoreAuth(pass, site, record);
-    if (pass.dashboardError) throw new Error(pass.dashboardError);
+    // Cleanup restores the child without the Dashboard; only its record there waits.
+    if (pass.dashboardError && !pass.state.cleanup) throw new Error(pass.dashboardError);
     const status = await childStatus(pass, site);
     if (pass.state.cleanup) await cleanupSite(pass, site, record, status);
     else if (status.multisite) record.status = "unsupported";
@@ -531,7 +532,8 @@ async function cleanupSite(pass: Pass, site: WpSite, record: MainwpRecord, statu
     await bridge(pass, site, { op: "cleanup", snapshot: record.snapshot, key: status.key, removePlugin: record.ownedPlugin });
   }
   if (pass.dashboard && record.ownedConnection && record.connection) {
-    await bridge(pass, pass.dashboard, { op: "dashboard-remove", id: record.connection.id, key: record.connection.key });
+    if (pass.dashboardError) pass.state.retired.push({ domain: site.domain, connection: record.connection });
+    else await bridge(pass, pass.dashboard, { op: "dashboard-remove", id: record.connection.id, key: record.connection.key });
   }
   if (!ours) record.status = paired(status, connection) ? "connected" : "not-connected";
   else if (record.ownedPlugin) {
@@ -582,7 +584,14 @@ export async function configureMainwp(run: MainwpRun, options: WpOptions, enable
  */
 export function requireMainwpSettled(path: string): void {
   if (!existsSync(path)) return;
-  const sites = Object.values(readMainwpState(path).sites);
+  let state: MainwpState;
+  try {
+    state = readMainwpState(path);
+  } catch (error) {
+    // It is the only record of a site whose temporary setting is still changed.
+    throw new Error(`${path} cannot be read (${message(error)}); repair or remove it, then retry`);
+  }
+  const sites = Object.values(state.sites);
   if (sites.some(needsAuthRecovery)) {
     throw new Error("a MainWP enrollment was interrupted; run clp-addons repair wp-login to restore its temporary setting, then retry");
   }

@@ -8,7 +8,7 @@
  */
 import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { failAction, runCommand, withFileLock, type CommandResult } from "../../cli/action-common";
+import { failAction, runCommand, withFileLock, withFileLockSync, type CommandResult } from "../../cli/action-common";
 import { PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, RECONCILE_SERVICE, STATE_DIR, SYSTEMD_DIR } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { fastCgiRequest, type FastCgiResponse } from "../../lib/fastcgi";
@@ -403,13 +403,39 @@ export async function reconcilePanelPhp(options: PanelPhpOptions = {}): Promise<
   });
 }
 
-/** Disabling the addon gives CloudPanel its own unit back and keeps the choice for later. */
+/**
+ * Disabling the addon gives CloudPanel its own unit back and keeps the choice
+ * for later. It runs inside the synchronous disable, so it cannot ask the pools
+ * for a page; it config-tests CloudPanel's own PHP first and requires the unit
+ * to come back on it, or puts the override back and refuses.
+ */
 export function withdrawPanelPhp(options: PanelPhpOptions = {}): void {
   const ctx = contextOf(options);
-  if (!present(ctx.paths.dropInFile)) return;
-  rmSync(ctx.paths.dropInFile, { force: true });
-  ctx.run("systemctl", ["daemon-reload"]);
-  ctx.run("systemctl", ["restart", ctx.paths.unit]);
+  withFileLockSync(ctx.paths.lockFile, 90, "a panel PHP change is still running", () => {
+    if (!present(ctx.paths.dropInFile)) return;
+    const unit = baseUnit(ctx);
+    if (unit) {
+      check(ctx.run(join(ctx.paths.fpmBinDir, `php-fpm${unit.stock}`), ["-t", ...unit.args]),
+        `PHP ${unit.stock} rejected CloudPanel's FPM config, so the panel keeps its PHP override`);
+    }
+    const before = trustedText(ctx.paths.dropInFile, ctx.paths.rootUid);
+    install(ctx, null);
+    const restarted = ctx.run("systemctl", ["restart", ctx.paths.unit]);
+    const deadline = ctx.now().getTime() + ctx.healthTimeoutMs;
+    const back = () => ctx.run("systemctl", ["is-active", ctx.paths.unit]).stdout.trim() === "active"
+      && (!unit || runningVersion(ctx) === unit.stock);
+    let ok = restarted.ok && back();
+    while (restarted.ok && !ok && ctx.now().getTime() < deadline) {
+      Bun.sleepSync(500);
+      ok = back();
+    }
+    if (ok) return;
+    if (before !== null) {
+      install(ctx, before);
+      ctx.run("systemctl", ["restart", ctx.paths.unit]);
+    }
+    failAction(`${ctx.paths.unit} did not come back on PHP ${unit?.stock ?? "CloudPanel's own version"}${before !== null ? "; the override was put back" : ""}`);
+  });
 }
 
 /** Enabling it again asks the reconcile service to reapply a stored choice. */

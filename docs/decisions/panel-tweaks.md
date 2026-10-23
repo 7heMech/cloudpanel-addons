@@ -444,7 +444,10 @@ CloudPanel's own unit starts a version at least as new as the choice, the
 drop-in is removed. A drop-in someone else wrote that sets `ExecStart`, such
 as a hand-made `override.conf`, wins: the card says so and refuses a choice.
 Disabling the addon removes the drop-in and keeps the choice, which enabling
-reapplies through the reconcile service. The card also shows a newer package
+reapplies through the reconcile service. Disabling is synchronous, so it cannot
+ask the pools for a page: under the same lock, it config-tests CloudPanel's own
+PHP first and requires the unit to come back on that version, and otherwise
+puts the drop-in back and refuses to disable. The card also shows a newer package
 version when apt has one, revision included, because a newer minor is no fix
 until it is patched, and a failure is retried once that version changes.
 

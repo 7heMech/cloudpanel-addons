@@ -451,7 +451,8 @@ class Action {
     return joined.map((site) => site.domain);
   }
 
-  async provision(domain: string, ssl: boolean): Promise<ProvisionReply> {
+  /** `asUser` names a non-administrator, who is told whether DNS is ready but not why. */
+  async provision(domain: string, ssl: boolean, asUser = ""): Promise<ProvisionReply> {
     await this.syncSites();
     const site = this.site(domain);
     const policy = this.files.policy();
@@ -471,6 +472,9 @@ class Action {
     this.record(run, plans, [domain]);
     const plan = plans.find((candidate) => candidate.domain === domain);
     const ready = readiness(plan);
+    // A plan's problems can name other customers' sites and quote Cloudflare
+    // or Mailcow errors, which are an administrator's to read.
+    if (asUser && !ready.ready) ready.reason = "an administrator can see why on the DNS page";
     return { managed: true, ...ready, certificateNames: ready.ready ? plan!.certificateNames : [] };
   }
 
@@ -855,16 +859,21 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
   const wait = verb === "reconcile" || verb === "sync-sites" || verb === "provision" ? 240 : 30;
   return withFileLock(paths.lockFile, wait, "DNS is busy checking Cloudflare; try again in a moment", async () => {
     if ((verb === "reconcile" || verb === "sync-sites") && !existsSync(paths.configFile)) return { checked: 0, joined: [] };
+    let failed = false;
     try {
       return await perform(action, verb, body, provision);
     } catch (error) {
+      failed = true;
       if (!(error instanceof Error)) throw error;
-      const secrets = action.files.secrets();
+      // Redaction is best effort: state that cannot be read now must not
+      // replace the failure the operator needs to see.
+      let secrets;
+      try { secrets = action.files.secrets(); } catch { throw error; }
       const message = redact(error.message, [...Object.values(secrets.cloudflare), secrets.mailcowKey]);
       if (message === error.message) throw error;
       failAction(message);
     } finally {
-      action.rememberBackoff();
+      try { action.rememberBackoff(); } catch (backoffError) { if (!failed) throw backoffError; }
     }
   });
 }
@@ -882,7 +891,7 @@ async function perform(
     case "sync-sites":
       return { joined: await action.syncSites() };
     case "provision":
-      return action.provision(provision!.domain, provision!.ssl);
+      return action.provision(provision!.domain, provision!.ssl, provision!.asUser);
     case "confirm":
       return action.confirm(body.token);
     case "save-connection":

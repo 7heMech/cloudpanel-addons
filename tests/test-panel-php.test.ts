@@ -24,6 +24,8 @@ interface Box {
   broken: Set<string>;
   /** Versions whose `php-fpm -t` fails. */
   rejected: Set<string>;
+  /** Versions systemd cannot start. */
+  dead: Set<string>;
   releases: Record<string, [string, string]>;
   fragment: string;
   setStock(version: string): void;
@@ -62,6 +64,7 @@ function box(): Box {
     stateFile: join(root, "state", "panel-php.json"),
     broken: new Set(),
     rejected: new Set(),
+    dead: new Set(),
     releases: { "8.1": ["8.1.34-1+clp-bookworm", "8.1.34-1+clp-bookworm"], "8.3": ["8.3.36-1", "8.3.36-1"], "8.4": ["8.4.25-1+clp-bookworm", "8.4.27-1+clp-bookworm"] },
     fragment,
     setStock,
@@ -88,7 +91,11 @@ function box(): Box {
         const dropIns = [...extraDropIns, ...(existsSync(dropIn) ? [dropIn] : [])];
         return ok(`FragmentPath=${fragment}\nDropInPaths=${dropIns.join(" ")}\n`);
       }
-      if (command === "systemctl" && args[0] === "restart") { start(); return ok(); }
+      if (command === "systemctl" && args[0] === "restart") {
+        if (state.dead.has(/php-fpm([0-9.]+)$/.exec(effective())![1]!)) return { ok: false, stdout: "", stderr: "Job failed" };
+        start();
+        return ok();
+      }
       if (command === "systemctl" && args[0] === "is-active") return ok("active\n");
       if (command === "systemctl") return ok();
       if (command === "apt-cache") {
@@ -265,6 +272,22 @@ test("disabling the addon removes the drop-in and keeps the choice", async () =>
   withdrawPanelPhp(env.options);
   expect(existsSync(env.dropIn)).toBe(false);
   expect(panelPhpStatus(env.options)).toMatchObject({ wanted: "8.4", running: "8.1" });
+});
+
+test("disabling keeps the override when CloudPanel's own PHP cannot take the panel back", async () => {
+  const env = box();
+  await setPanelPhp("8.4", env.options);
+  const dropIn = readFileSync(env.dropIn, "utf8");
+
+  env.rejected.add("8.1");
+  expect(() => withdrawPanelPhp(env.options)).toThrow("PHP 8.1 rejected CloudPanel's FPM config, so the panel keeps its PHP override");
+  expect(readFileSync(env.dropIn, "utf8")).toBe(dropIn);
+
+  env.rejected.clear();
+  env.dead.add("8.1");
+  expect(() => withdrawPanelPhp(env.options)).toThrow("did not come back on PHP 8.1; the override was put back");
+  expect(readFileSync(env.dropIn, "utf8")).toBe(dropIn);
+  expect(panelPhpStatus(env.options).running).toBe("8.4");
 });
 
 test("an unfamiliar CloudPanel unit is not touched", async () => {
