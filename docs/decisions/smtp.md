@@ -67,7 +67,7 @@ Postfix would refuse, so the mail still goes out under its login.
 When it cannot apply a rule (no rule file, an untrusted one, unknown flags, or a
 message it cannot parse), it passes the message to `/usr/sbin/sendmail` with the
 original arguments, and Postfix still enforces the envelope. The panel's own
-PHP-FPM reads the 8.1 conf.d and passes through this way. Laravel and Symfony
+PHP-FPM reads its version's conf.d and passes through this way. Laravel and Symfony
 sendmail transports run `sendmail -bs` themselves and never reach the wrapper.
 
 Other apps run sendmail themselves, often by name, as Nodemailer does. The

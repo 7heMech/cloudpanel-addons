@@ -87,6 +87,8 @@ export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
   "set-tweaks",
   "scan",
   "scan-stream",
+  "panel-php",
+  "set-panel-php",
 ]);
 
 /**

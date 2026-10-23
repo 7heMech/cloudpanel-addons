@@ -15,7 +15,7 @@ import type { DnsState, Review as DnsReview } from "../addons/dns/action";
 import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
 import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
 import { tokenTemplate as dnsTokenTemplate } from "../addons/dns/token";
-import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
+import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout, panelPhpLine } from "../addons/panel-tweaks/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { sitesBlock } from "../addons/panel-tweaks/inject/targets";
 import { previewPage as panelTweaksPreviewPage } from "../addons/panel-tweaks/app/preview";
@@ -32,6 +32,7 @@ import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
 import { PRESET_CATEGORIES, STOCK_PROFILE, type PhpResourcesState, type PoolSiteState } from "../addons/php-resources/action";
 import type { PanelTweaksState } from "../addons/panel-tweaks/action";
+import type { PanelPhpStatus } from "../addons/panel-tweaks/panel-php";
 import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { type: "text" };
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
@@ -360,6 +361,25 @@ function phpResourcesPreviewState(url: URL): PhpResourcesState {
     categories: url.searchParams.has("no-categories") ? [] : PRESET_CATEGORIES,
     defaultCategoryId: url.searchParams.get("default") === "off" ? null : "standard",
     sites: url.searchParams.has("empty") ? [] : phpPoolSites,
+  };
+}
+
+/** The panel moved to 8.4 with an update waiting; `?off` is CloudPanel's own 8.1. */
+let panelPhpChoice: string | null = null;
+
+function panelPhpPreviewStatus(url: URL): PanelPhpStatus {
+  const wanted = panelPhpChoice ?? (url.searchParams.has("off") ? "" : "8.4");
+  return {
+    wanted,
+    stock: "8.1",
+    running: wanted || "8.1",
+    choices: [
+      { version: "8.1", installed: "8.1.34-1" },
+      { version: "8.2", installed: "8.2.35-1" },
+      { version: "8.3", installed: "8.3.36-1" },
+      { version: "8.4", installed: "8.4.25-1", available: "8.4.27-1" },
+      { version: "8.5", installed: "8.5.12-1" },
+    ],
   };
 }
 
@@ -883,6 +903,11 @@ async function repaintPreviewMutation(req: Request, url: URL): Promise<Response 
   const path = url.pathname;
   const source = new URL(req.headers.get("referer") || url);
   const body = await req.json().catch(() => ({})) as Record<string, any>;
+  if (path === "/addons/panel-tweaks/api/panel-php") {
+    panelPhpChoice = String(body.php ?? "");
+    const status = panelPhpPreviewStatus(source);
+    return Response.json({ ok: true, data: status, line: panelPhpLine(status) });
+  }
   return gitPreviewMutation(req, path, source, body)
     ?? instaticPreviewMutation(path, body)
     ?? phpPreviewMutation(path, source, body)
@@ -1258,7 +1283,7 @@ const server = Bun.serve({
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
       });
     } else if (path === "/addons/panel-tweaks/" || path === "/addons/panel-tweaks") {
-      html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url)), notice);
+      html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url), panelPhpPreviewStatus(url)), notice);
     } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
       html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites), notice);
     } else if (path === "/addons/wp-login/" || path === "/addons/wp-login") {
