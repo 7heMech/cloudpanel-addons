@@ -15,8 +15,8 @@ if (card) {
     errorBox.textContent = message;
     errorBox.hidden = !message;
   };
-  var when = function (iso) {
-    return iso ? new Date(iso).toLocaleString() : "Never";
+  var day = function (iso) {
+    return new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
   };
 
   // What root says this account may do, painted with every reply.
@@ -40,20 +40,25 @@ if (card) {
       list.appendChild(none);
       return;
     }
-    var table = document.createElement("table");
-    table.className = "table clp-sk-table";
-    table.innerHTML = "<thead><tr><th>Name</th><th>Added</th><th>Last used</th><th></th></tr></thead><tbody></tbody>";
+    var items = document.createElement("ul");
+    items.className = "clp-sk-keys";
     keys.forEach(function (key) {
-      var row = table.tBodies[0].insertRow();
-      [key.name, when(key.createdAt), when(key.lastUsedAt)].forEach(function (text, index) {
-        var cell = row.insertCell();
-        cell.textContent = text;
-        cell.setAttribute("data-label", ["Name", "Added", "Last used"][index]);
-      });
+      var item = document.createElement("li");
+      var about = document.createElement("div");
+      var name = document.createElement("strong");
+      name.textContent = key.name;
+      var meta = document.createElement("span");
+      meta.className = "clp-sk-meta";
+      meta.textContent = "Added " + day(key.createdAt) + " \u00b7 " + (key.lastUsedAt ? "Last used " + day(key.lastUsedAt) : "Never used");
+      meta.title = "Added " + new Date(key.createdAt).toLocaleString() +
+        (key.lastUsedAt ? "\nLast used " + new Date(key.lastUsedAt).toLocaleString() : "");
+      about.appendChild(name);
+      about.appendChild(meta);
       var remove = document.createElement("button");
       remove.type = "button";
       remove.className = "btn btn-white";
       remove.textContent = "Remove";
+      remove.setAttribute("aria-label", "Remove " + key.name);
       remove.addEventListener("click", function () {
         if (!confirm('Remove "' + key.name + '"? You will no longer be able to sign in with it.')) return;
         showError("");
@@ -65,9 +70,11 @@ if (card) {
           showError(error.message);
         });
       });
-      row.insertCell().appendChild(remove);
+      item.appendChild(about);
+      item.appendChild(remove);
+      items.appendChild(item);
     });
-    list.appendChild(table);
+    list.appendChild(items);
   };
 
   fetch("ADDON_URL/api/keys", { credentials: "same-origin", headers: { Accept: "application/json" } })
