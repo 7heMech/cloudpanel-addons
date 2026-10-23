@@ -1,6 +1,6 @@
 .clp-security-keys { margin-top: 20px; }
 /* One bordered list, a row per key, in the panel's own border colours. */
-.clp-sk-keys { margin: 20px 0 0; padding: 0; list-style: none; border: 1px solid #eaeaea; border-radius: 4px; }
+.clp-sk-keys { margin: 0 0 16px; padding: 0; list-style: none; border: 1px solid #eaeaea; border-radius: 4px; }
 .clp-sk-keys li { display: flex; align-items: center; justify-content: space-between; gap: 16px;
   padding: 14px 16px; border-top: 1px solid #eaeaea; }
 .clp-sk-keys li:first-child { border-top: 0; }
@@ -10,8 +10,10 @@
 .clp-sk-keys .btn { flex: 0 0 auto; }
 html.dark .clp-sk-keys, html.dark .clp-sk-keys li { border-color: var(--clp-border-color); }
 html.dark .clp-sk-meta { color: var(--clp-text-secondary, #9b9b9b); }
-.clp-sk-none { margin: 20px 0 0; color: #9ca3af; }
-.clp-sk-add { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.clp-sk-none { margin: 0 0 16px; color: #9ca3af; }
+/* Every gap in the card is the 16px CloudPanel leaves under a paragraph,
+   including between the name field and its button once they stack. */
+.clp-sk-add { display: flex; flex-wrap: wrap; gap: 16px 10px; }
 .clp-sk-add input { flex: 1 1 220px; max-width: 360px; }
 @media (max-width: 575px) {
   .clp-sk-add input { max-width: none; }
