@@ -225,6 +225,29 @@ export function safeDecodePathSegment(segment: string): string | null {
 
 /** Returns null when the request may proceed, or a Response to send instead. */
 export function guardMutation(req: Request): Response | null {
+  const denied = guardOrigin(req);
+  if (denied) return denied;
+
+  const sent = req.headers.get(CSRF_HEADER);
+  const cookie = readCookie(req, CSRF_COOKIE);
+  if (!sent || !cookie || !secretEquals(sent, cookie)) {
+    // The cookie is set Secure, so a browser on plain http never stores it.
+    return jsonResponse({
+      ok: false,
+      error: cookie
+        ? "CSRF token mismatched; reload the page and try again"
+        : "CSRF cookie missing. It is set Secure, so use the CloudPanel HTTPS URL.",
+    }, { status: 403 });
+  }
+
+  return null;
+}
+
+/**
+ * The same-origin half of `guardMutation`, for the sign-in routes that are
+ * answered before there is a session or a CSRF cookie to compare.
+ */
+export function guardOrigin(req: Request): Response | null {
   const origin = req.headers.get("origin");
   const host = req.headers.get("host");
 
@@ -270,18 +293,6 @@ export function guardMutation(req: Request): Response | null {
   const strippedPortProxy = hostUrl.port === "" && originUrl.port === "8443" && originUrl.hostname === hostUrl.hostname;
   if (!exactMatch && !strippedPortProxy) {
     return jsonResponse({ ok: false, error: "cross-origin request refused" }, { status: 403 });
-  }
-
-  const sent = req.headers.get(CSRF_HEADER);
-  const cookie = readCookie(req, CSRF_COOKIE);
-  if (!sent || !cookie || !secretEquals(sent, cookie)) {
-    // The cookie is set Secure, so a browser on plain http never stores it.
-    return jsonResponse({
-      ok: false,
-      error: cookie
-        ? "CSRF token mismatched; reload the page and try again"
-        : "CSRF cookie missing. It is set Secure, so use the CloudPanel HTTPS URL.",
-    }, { status: 403 });
   }
 
   return null;

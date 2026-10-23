@@ -24,6 +24,7 @@ import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
 import { SMTP_ADDON } from "../addons/smtp/addon";
 import { TERMINAL_ADDON } from "../addons/terminal/addon";
+import { SECURITY_KEYS_ADDON } from "../addons/security-keys/addon";
 
 export type { AddonTarget };
 
@@ -102,6 +103,7 @@ const DEFINITIONS: AddonDefinition[] = [
   WP_LOGIN_ADDON,
   SMTP_ADDON,
   TERMINAL_ADDON,
+  SECURITY_KEYS_ADDON,
 ];
 
 function specOf(definition: AddonDefinition): AddonSpec {

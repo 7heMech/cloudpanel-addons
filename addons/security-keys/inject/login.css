@@ -1,0 +1,5 @@
+.clp-passkey { margin-top: 20px; }
+.clp-passkey .btn-login { width: 100%; }
+.clp-passkey .alert { margin-bottom: 15px; }
+.clp-passkey-or { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; color: #9ca3af; font-size: 13px; }
+.clp-passkey-or::before, .clp-passkey-or::after { content: ""; flex: 1; border-top: 1px solid currentColor; opacity: .5; }

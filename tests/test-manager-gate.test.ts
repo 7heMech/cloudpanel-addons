@@ -310,6 +310,80 @@ test("a wrong webhook token is answered exactly as a stranger is", async () => {
   });
 });
 
+/**
+ * Passkey sign-in is the other thing answered before the gate. It reaches root
+ * only from the panel's own origin, carries the challenge in a cookie another
+ * site cannot send, and is nothing at all while the addon is not installed.
+ */
+function signInProbe(installed: boolean): Array<Record<string, unknown>> {
+  const script = `
+import { mock } from "bun:test";
+const realSso = await import("./lib/sso-auth.ts");
+mock.module("./lib/sso-auth.ts", () => ({
+  ...realSso,
+  authenticateRequest: async () => ({ auth: null, response: realSso.redirectToLogin() }),
+}));
+mock.module("./lib/update-check.ts", () => ({ checkCliUpdate: async () => null }));
+const asked = [];
+mock.module("./lib/gateway-client.ts", () => ({
+  callGatewayAction: async (addon, verb, args, input) => {
+    asked.push(verb + " " + (input ?? ""));
+    if (verb === "login-options") return { ok: true, data: { challengeId: "c".repeat(32), challenge: "xyz" } };
+    return JSON.parse(input).challengeId === "c".repeat(32)
+      ? { ok: true, data: { token: "f".repeat(64), user: "alice" } }
+      : { ok: false, error: "the sign-in request has expired; try again" };
+  },
+  streamGatewayAction: () => ({ close() {} }),
+}));
+const realCatalog = await import("./cli/addon-catalog.ts");
+mock.module("./cli/addon-catalog.ts", () => ({
+  ...realCatalog,
+  ADDONS: { ...realCatalog.ADDONS, "security-keys": { ...realCatalog.ADDONS["security-keys"], configFile: ${installed ? '"./package.json"' : '"./absent.conf"'} } },
+}));
+const { handleRequest } = await import("./manager/server.ts");
+const url = "https://panel.example:8443/addons/security-keys/login/";
+const post = (route, headers) => new Request(url + route, {
+  method: "POST", body: JSON.stringify({ id: "k", response: {} }), headers: { host: "panel.example:8443", ...headers },
+});
+const out = [];
+for (const [label, req] of [
+  ["options", post("options", { origin: "https://panel.example:8443" })],
+  ["cross-site", post("options", { origin: "https://evil.example" })],
+  ["no-cookie", post("verify", { origin: "https://panel.example:8443" })],
+  ["verify", post("verify", { origin: "https://panel.example:8443", cookie: "clp_addons_passkey=" + "c".repeat(32) })],
+  ["get", new Request(url + "options")],
+]) {
+  const before = asked.length;
+  const res = await handleRequest(req, {});
+  out.push({ label, status: res.status, cookie: res.headers.get("set-cookie"), body: await res.text(), asked: asked.slice(before) });
+}
+console.log(JSON.stringify(out));
+`;
+  const run = spawnSync("bun", ["-e", script], { cwd: repo, encoding: "utf-8" });
+  if (run.status !== 0) throw new Error(run.stderr || "sign-in probe failed");
+  return JSON.parse(run.stdout.trim().split("\n").at(-1)!);
+}
+
+test("passkey sign-in is answered before the gate, from the panel's own origin only", () => {
+  const results = Object.fromEntries(signInProbe(true).map((result) => [result.label, result]));
+  expect(results.options).toMatchObject({ status: 200, asked: ["login-options "] });
+  expect(JSON.parse(String(results.options!.body))).toEqual({ ok: true, challenge: "xyz" });
+  expect(results.options!.cookie).toBe(
+    `clp_addons_passkey=${"c".repeat(32)}; Path=/addons/security-keys/login; Max-Age=300; HttpOnly; Secure; SameSite=Strict`,
+  );
+  expect(results["cross-site"]).toMatchObject({ status: 403, asked: [] });
+  expect(results["no-cookie"]).toMatchObject({ status: 400 });
+  expect(JSON.parse(String(results.verify!.body))).toEqual({ ok: true, redirect: `/autologin?token=${"f".repeat(64)}` });
+  expect(String(results.verify!.cookie)).toStartWith("clp_addons_passkey=; Path=/addons/security-keys/login; Max-Age=0");
+  expect(results.get).toMatchObject({ status: 302, asked: [] });
+});
+
+test("passkey sign-in does not exist while the addon is not installed", () => {
+  for (const result of signInProbe(false)) {
+    expect(result, String(result.label)).toMatchObject({ status: 302, asked: [] });
+  }
+});
+
 // The tests above drive real requests through the gate. This one is about an
 // argument to Bun.serve, which no request can reach: with `development` on,
 // Bun answers a handler fault with its own error page, which would put a stack

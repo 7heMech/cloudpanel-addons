@@ -40,6 +40,9 @@ import { withCsrfCookie, SECURITY_HEADERS } from "../lib/app-http";
 import { handle as terminalHandle } from "../addons/terminal/app/index";
 import { dashboardView as terminalDashboardView, layout as terminalLayout } from "../addons/terminal/app/views";
 import { TERMINAL_TARGETS } from "../addons/terminal/inject/targets";
+import { dashboardView as securityKeysDashboardView, layout as securityKeysLayout } from "../addons/security-keys/app/views";
+import { SECURITY_KEYS_TARGETS } from "../addons/security-keys/inject/targets";
+import type { UserKeysView } from "../addons/security-keys/action";
 
 const versions: AvailableTags = { tags: ["0.0.19", "0.0.18"], latest: "0.0.19", source: "registry" };
 const instances: InstanceView[] = [
@@ -517,6 +520,81 @@ ${tabs}
 }
 
 /**
+ * Security Keys' fictional keys, and stand-ins for the two CloudPanel pages it
+ * adds to. The stand-ins load the panel's real stylesheets, which this preview
+ * borrows from the public demo, so the injected blocks sit among the panel's
+ * own rules. Open them on http://localhost:4100 rather than 127.0.0.1: browsers
+ * refuse WebAuthn on an IP address, and the blocks say so.
+ */
+function securityKeysPreviewUsers(url: URL): UserKeysView[] {
+  if (url.searchParams.has("empty")) return [];
+  const origin = "https://panel.example.com:8443";
+  return [
+    { user: "admin", active: true, keys: [
+      { id: "a1", name: "YubiKey 5C", origin, synced: false, createdAt: "2026-09-02T08:14:00.000Z", lastUsedAt: "2026-10-22T07:51:00.000Z" },
+      { id: "a2", name: "Bitwarden", origin, synced: true, createdAt: "2026-09-10T16:40:00.000Z", lastUsedAt: null },
+    ] },
+    { user: "jane", active: true, keys: [
+      { id: "j1", name: "MacBook Touch ID", origin, synced: true, createdAt: "2026-10-01T11:02:00.000Z", lastUsedAt: "2026-10-21T18:30:00.000Z" },
+    ] },
+    { user: "former-contractor", active: false, keys: [
+      { id: "f1", name: "Security key", origin, synced: false, createdAt: "2026-06-12T09:00:00.000Z", lastUsedAt: "2026-07-01T10:12:00.000Z" },
+    ] },
+  ];
+}
+
+function panelPageStub(title: string, bodyClass: string, stylesheets: string[], body: string, dark: boolean): string {
+  return `<!doctype html>
+<html lang="en"${dark ? ' class="dark"' : ""}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<title>${title}</title>
+${["bootstrap.min.css", "style.css", "style-dark.css", ...stylesheets].map((sheet) => `<link href="/assets/css/${sheet}" rel="stylesheet">`).join("\n")}
+</head>
+<body class="${bodyClass}">
+${body}
+</body>
+</html>`;
+}
+
+function panelLoginStub(dark: boolean): string {
+  const block = SECURITY_KEYS_TARGETS.find((target) => target.slug === "login-button")!.snippet("/addons/security-keys");
+  return panelPageStub("Log In", "", ["frontend/login.css"], `<div class="login-container">
+  <div class="logo"><a title="CloudPanel" href="/login"><img alt="CloudPanel" src="/assets/images/logo.svg" height="75"></a></div>
+  <div class="login-form-container">
+    <div class="form-container">
+      <form action="/login" method="post">
+        <div class="row"><div class="col"><input type="text" name="userName" required="required" autocomplete="username" class="form-control form-control-lg" placeholder="User Name"></div></div>
+        <div class="row"><div class="col"><input type="password" name="password" required="required" autocomplete="current-password" class="form-control form-control-lg" placeholder="Password"></div></div>
+        <div class="row"><div class="col"><button type="submit" name="submit" class="btn btn-blue btn-login">Log In</button></div></div>
+      </form>${block.replace("{% verbatim %}", "").replace("{% endverbatim %}", "")}
+    </div>
+  </div>
+</div>`, dark);
+}
+
+function panelSecurityStub(dark: boolean): string {
+  const block = SECURITY_KEYS_TARGETS.find((target) => target.slug === "account-card")!.snippet("/addons/security-keys");
+  return panelPageStub("Two-Factor Authentication", "", ["frontend/account.css"], `<main class="main-container"><div class="container-fluid container-limited-width">
+<div class="account-container">
+  <div class="page-header"><div class="page-title"><h1>Account</h1></div></div>
+  <div class="page-content">
+    <div class="account-content-container">
+      <div class="tab-container"><ul><li><a href="#">Settings</a></li><li class="active"><a href="/security">Security</a></li></ul></div>
+      <div class="card">
+        <div class="card-header">Two-Factor Authentication</div>
+        <div class="card-body">
+          <p>Two-Factor authentication adds an extra layer of security to your account. Whenever you sign in, you’ll need to enter both your password and also a security code.</p>
+          <a href="#" class="btn btn-blue btn-lg">Enable Two-Factor Authentication</a>
+        </div>
+       </div>${block.replace("{% verbatim %}", "").replace("{% endverbatim %}", "")}
+    </div>
+  </div>
+</div></div></main>`, dark);
+}
+
+/**
  * A stand-in for CloudPanel's own Sites page, so the block Panel Tweaks injects
  * there can be reviewed without a panel. The markup is
  * Frontend/Site/index.html.twig with its Twig evaluated, and the rules are the
@@ -982,6 +1060,19 @@ const server = Bun.serve({
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
       });
     }
+    if (path === "/login" || path === "/security") {
+      const dark = url.searchParams.has("dark");
+      return new Response(path === "/login" ? panelLoginStub(dark) : panelSecurityStub(dark), {
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+      });
+    }
+    if (path === "/addons/security-keys/api/keys") {
+      const asked = req.headers.get("referer");
+      const users = securityKeysPreviewUsers(asked ? new URL(asked) : url);
+      // ?role-off draws the card for an account whose role has keys turned off.
+      const off = asked ? new URL(asked).searchParams.has("role-off") : false;
+      return Response.json({ ok: true, data: { keys: users[0]?.keys ?? [], canAdd: !off, syncedPasskeys: true } });
+    }
     if (path === "/addons/panel-tweaks/api/panel") {
       // The injected block's URL is fixed, so the fixture the stub was drawn
       // from is named by the page that asked rather than by this request.
@@ -1119,7 +1210,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login", "smtp", "terminal"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "wp-login", "smtp", "terminal", "security-keys"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
       });
@@ -1215,6 +1306,15 @@ const server = Bun.serve({
         : url.searchParams.has("domains") ? `smtpEditGrants(${arg("domains")})` : "";
       html = smtpLayout("SMTP Relay", smtpDashboardView(smtpPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
+    } else if (path === "/addons/security-keys/" || path === "/addons/security-keys") {
+      // ?hardware-only turns synced passkeys off; ?admins-only leaves one role on.
+      html = securityKeysLayout("Security Keys", securityKeysDashboardView({
+        users: securityKeysPreviewUsers(url),
+        settings: {
+          roles: url.searchParams.has("admins-only") ? ["ROLE_ADMIN"] : ["ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"],
+          syncedPasskeys: !url.searchParams.has("hardware-only"),
+        },
+      }), notice);
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
       html = cloudflareLayout("Cloudflare IP Access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {
