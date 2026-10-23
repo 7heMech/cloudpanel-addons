@@ -495,6 +495,15 @@ test("a Dashboard on another server needs this one's connections cleaned up firs
   await expect(mainwpAction(run, ["mainwp-settings", "--enabled=true", "--remote=false"], options, (d) => d)).rejects.toThrow("either");
 });
 
+test("an unconfirmed registration ties the addon to its Dashboard until cleanup", async () => {
+  await configured(); fail = "add";
+  await syncMainwp({ ...run, domain: "new.test" }, options);
+  fail = "";
+  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ ownedConnection: false });
+  expect(mainwpView(readMainwpState(run.statePath)).connections).toBe(1);
+  await expect(configureMainwp(run, options, false, undefined, true)).rejects.toThrow("clean up the MainWP connections");
+});
+
 test("state written before the remote mode reads as a Dashboard on this server", () => {
   const { remote: _remote, ...old } = emptyMainwpState();
   saveMainwpState(run.statePath, old as never);

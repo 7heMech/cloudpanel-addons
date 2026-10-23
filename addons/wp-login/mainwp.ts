@@ -216,9 +216,13 @@ function ownedCount(state: MainwpState): number {
   return Object.values(state.sites).filter((record) => record.snapshot).length + state.retired.length;
 }
 
-/** Dashboard records the addon made; a Child it only installed belongs to no Dashboard. */
+/**
+ * Dashboard records the addon made, or may have made: an enrollment it never
+ * confirmed keeps its Security ID until the Dashboard says either way. A Child
+ * it only installed belongs to no Dashboard.
+ */
 function ownedConnections(state: MainwpState): number {
-  return Object.values(state.sites).filter((record) => record.ownedConnection).length + state.retired.length;
+  return Object.values(state.sites).filter((record) => record.ownedConnection || record.token).length + state.retired.length;
 }
 
 /** Whether the repair timer has anything to do, so that it skips site discovery otherwise. */
