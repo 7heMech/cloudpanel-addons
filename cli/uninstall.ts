@@ -64,11 +64,18 @@ function uninstallContents(spec: AddonSpec, flags: Record<string, string | true>
   try {
     removeAddonFiles(spec, purge, instances, remaining);
   } catch (error) {
-    // Still installed, so what deactivating withdrew goes back.
-    try {
-      spec.activate?.();
-    } catch (restoreError) {
-      log.warn(`${spec.name} could not be reactivated: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+    // Still installed, so what deactivating withdrew goes back, and the shared
+    // units the last addon's uninstall had already stopped start again.
+    if (existsSync(spec.configFile)) {
+      try {
+        spec.activate?.();
+        if (remaining.length === 0) {
+          installUnits([spec]);
+          startUnits();
+        }
+      } catch (restoreError) {
+        log.warn(`${spec.name} could not be reactivated: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`);
+      }
     }
     throw error;
   }
@@ -119,6 +126,7 @@ function removeAddonFiles(spec: AddonSpec, purge: boolean, instances: string[], 
   }
   removeSudoers();
   if (spec.name === "wp-login") withdrawWpLogin();
-  rmSync(spec.configFile, { force: true });
+  // The config last: once it is gone the addon is no longer installed.
   rmSync(`${spec.configFile}.new`, { force: true });
+  rmSync(spec.configFile, { force: true });
 }

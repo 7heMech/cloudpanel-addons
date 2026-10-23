@@ -63,6 +63,7 @@ const spec = {
   deactivate: () => {
     if (process.env.CLP_TEST_DEACTIVATE_FAIL === "1") throw new Error("simulated SMTP cleanup failure");
   },
+  activate: () => { writeFileSync(root + "/activated", "1"); },
   withdrawn: () => {
     if (existsSync(configFile)) throw new Error("workers stopped before the addon was disabled");
     if (!existsSync(stateDir)) throw new Error("state purged before workers stopped");
@@ -142,7 +143,7 @@ mock.module("./cli/provision.ts", () => ({
     removeSudoersCalls++;
     rmSync(identityPath, { force: true });
   },
-  startUnits: () => {},
+  startUnits: () => { writeFileSync(root + "/started", "1"); },
   stopUnits: () => { writeFileSync(stopsPath, "stopped"); },
   unitActive: () => "inactive",
   unitPid: () => null,
@@ -213,6 +214,8 @@ function resetFixture(): void {
   rmSync(callsPath, { force: true });
   rmSync(stopsPath, { force: true });
   rmSync(identityReadsPath, { force: true });
+  rmSync(join(root, "activated"), { force: true });
+  rmSync(join(root, "started"), { force: true });
   failureDomain = undefined;
 }
 
@@ -249,6 +252,7 @@ test.serial("a failed deactivation stops uninstall before shared services change
   expect(existsSync(stopsPath)).toBe(false);
   expect(existsSync(configFile)).toBe(true);
   expect(existsSync(identityPath)).toBe(true);
+  expect(existsSync(join(root, "activated"))).toBe(false);
 });
 
 test.serial("purge deletes every instance before removing panel identity", () => {
@@ -279,6 +283,9 @@ test.serial("purge preserves state and identity when an instance delete fails", 
   expect(existsSync(join(stateDir, failureDomain ?? "", "meta.json"))).toBe(true);
   expect(existsSync(configFile)).toBe(true);
   expect(existsSync(actionBin)).toBe(true);
+  // Still installed: deactivation is undone and the stopped shared units start again.
+  expect(existsSync(join(root, "activated"))).toBe(true);
+  expect(existsSync(join(root, "started"))).toBe(true);
 });
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
