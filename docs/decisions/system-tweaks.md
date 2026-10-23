@@ -83,8 +83,8 @@ The page never reports what the drop-in meant to do. It reads the result:
   `${distro_codename}` macros. Repositories are grouped by suite. A Debian pocket
   is named by its codename (`bookworm-security`) and an Ubuntu pocket by its
   archive (`jammy-security`), because Ubuntu gives every pocket the release
-  codename. On staging, this matched `unattended-upgrade --dry-run -d`'s
-  allowed and not-allowed list exactly.
+  codename. Coverage must match the allowed and not-allowed origins reported by
+  `unattended-upgrade --dry-run -d`.
 - **Last run**: the last `Starting unattended upgrades script` block in
   `/var/log/unattended-upgrades/unattended-upgrades.log`, or in `.1.gz` just after
   logrotate empties it.
@@ -136,8 +136,8 @@ the exact marked block and owned lookup, preserving the current ranges rather
 than restoring an old copy. Re-enabling the addon restores its saved choice.
 
 `bun tests/integration/integration-cloudflare-peer.ts` tests the generated
-configuration with real Nginx in an isolated Docker network: the original header
-bypass, rejection after the fix, IPv4/IPv6 trusted peers, local backend proxying,
+configuration with real Nginx in an isolated Docker network: rejection of
+requests from untrusted peers, IPv4/IPv6 trusted peers, local backend proxying,
 direct ACME requests and unrestricted sites.
 
 ## PHP upload-progress mitigation
