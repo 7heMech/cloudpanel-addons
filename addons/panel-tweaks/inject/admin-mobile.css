@@ -58,4 +58,10 @@
   /* Firewall rules use quarters and sixths as well as the usual form halves. */
   body #main-container .card .row > [class*="col-"] { width: 100%; }
   body #main-container .card .row { row-gap: 20px; }
+  /* Except a form's Back and submit row: two buttons fit side by side, each
+     column as wide as its button, so a label like "Creating: 32%" stays on one line. */
+  body #main-container .card .row:has(> .col-6.text-start + .col-6.text-end) { justify-content: space-between; }
+  body #main-container .card .row:has(> .col-6.text-start + .col-6.text-end) > [class*="col-"] { width: auto; }
+  body #main-container .card .row:has(> .col-6.text-start + .col-6.text-end) > .text-end { margin-left: auto; }
+  body #main-container .card .row:has(> .col-6.text-start + .col-6.text-end) .btn { white-space: nowrap; }
 }
