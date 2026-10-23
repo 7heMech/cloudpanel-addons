@@ -18,6 +18,12 @@ export interface GatewayClientOptions {
   timeout?: number;
   maxBuffer?: number;
   socketPath?: string;
+  /**
+   * For an `OWN_ACCOUNT_VERBS` action: the CloudPanel session the gateway
+   * checks itself. Such an action has no direct-spawn fallback, because that
+   * fallback is the check it would skip.
+   */
+  sessionId?: string;
 }
 
 export interface GatewayStream { close(): void }
@@ -213,7 +219,7 @@ async function callGatewaySocket<T>(
  * invokes directly. Otherwise dispatches securely through the root gateway daemon over UNIX socket.
  */
 export async function callGatewayAction<T = unknown>(
-  addon: "stager" | "instatic" | "cloudflare-ips" | "maintenance" | "php-resources" | "git" | "panel-tweaks" | "wp-login" | "smtp" | "dns" | "terminal" | "manager",
+  addon: "stager" | "instatic" | "cloudflare-ips" | "maintenance" | "php-resources" | "git" | "panel-tweaks" | "wp-login" | "smtp" | "dns" | "terminal" | "security-keys" | "manager",
   verb: string,
   args: string[] = [],
   input?: string,
@@ -221,6 +227,9 @@ export async function callGatewayAction<T = unknown>(
 ): Promise<ActionResult<T>> {
   const socketPath = options.socketPath ?? GATEWAY_SOCKET_PATH;
   const timeoutMs = options.timeout ?? DEFAULT_GATEWAY_TIMEOUT_MS;
+
+  const direct = Boolean(process.env.CLP_ADDONS_ACTION_TEST_BIN) || (process.getuid?.() === 0 && !existsSync(socketPath));
+  if (direct && options.sessionId !== undefined) return { ok: false, error: "this action needs the root gateway" };
 
   // 1. Hermetic test runner override
   if (process.env.CLP_ADDONS_ACTION_TEST_BIN) {
@@ -250,6 +259,7 @@ export async function callGatewayAction<T = unknown>(
     args,
     input,
     timeoutMs,
+    ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
   };
 
   const clientTimeoutMs = timeoutMs + 2_500;

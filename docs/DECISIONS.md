@@ -14,3 +14,4 @@
 - [Panel Tweaks](decisions/panel-tweaks.md)
 - [WordPress Tools](decisions/wp-login.md)
 - [Terminal](decisions/terminal.md)
+- [Security Keys](decisions/security-keys.md)

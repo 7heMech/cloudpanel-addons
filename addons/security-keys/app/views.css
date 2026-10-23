@@ -1,0 +1,13 @@
+.security-key-table time { white-space: nowrap; }
+.security-key-table td.action-cell { text-align: right; }
+.settings-card { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+.settings-card h2 { margin: 0 0 8px; }
+.settings-card > div > p { margin: 0 0 12px; }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-top: 1px solid var(--row-border); }
+.setting-row label:not(.switch) { font-weight: 500; }
+@media (max-width: 760px) {
+  .settings-card { grid-template-columns: 1fr; gap: 24px; }
+}
+@media (max-width: 940px) {
+  .security-key-table td.mono { overflow-wrap: anywhere; }
+}

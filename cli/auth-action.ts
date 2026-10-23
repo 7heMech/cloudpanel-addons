@@ -33,6 +33,8 @@ import {
   STREAM_ALLOWED_VERBS,
   DUPLEX_STREAM_VERBS,
   TERMINAL_ALLOWED_VERBS,
+  SECURITY_KEYS_ALLOWED_VERBS,
+  OWN_ACCOUNT_VERBS,
   DUPLEX_WORKER_MARKER,
 } from "../lib/gateway-protocol";
 import { getLivePanelInfo } from "../lib/panel-snapshot";
@@ -55,6 +57,7 @@ const ALLOWED_VERBS = new Map<string, Set<string>>([
   ["panel-tweaks", PANEL_TWEAKS_ALLOWED_VERBS],
   ["wp-login", WP_LOGIN_ALLOWED_VERBS],
   ["terminal", TERMINAL_ALLOWED_VERBS],
+  ["security-keys", SECURITY_KEYS_ALLOWED_VERBS],
   ["manager", MANAGER_ALLOWED_VERBS],
 ]);
 
@@ -74,7 +77,7 @@ export interface AuthActionOptions {
   getPanelInfo?: (panelDb?: string) => import("../lib/gateway-protocol").PanelSnapshot;
   /** Test-only override; production socket activation always enforces the peer check. */
   enforcePeer?: boolean;
-  /** Test-only child-process override for streaming; production uses Bun.spawn. */
+  /** Test-only child-process override; production uses Bun.spawn. */
   spawn?: typeof Bun.spawn;
   /** Test-only; production rechecks a duplex stream's session every 15 seconds. */
   sessionRecheckMs?: number;
@@ -254,17 +257,23 @@ const STALLED_INPUT_MS = 30_000;
 /** How long output may keep arriving after a duplex worker has exited. */
 const OUTPUT_AFTER_EXIT_MS = 1_000;
 
-/** The panel user behind a session, when it is an active administrator's. */
-async function adminSessionUser(sessionId: string, options: AuthActionOptions): Promise<string | null> {
+/** The panel user behind a session, when it is an active account's. */
+async function sessionUser(sessionId: string, options: AuthActionOptions, role?: string): Promise<string | null> {
   try {
     const reply = JSON.parse(await runAuthAction(sessionId + "\n", options)) as {
       valid?: unknown; user?: unknown; roles?: unknown;
     };
     if (reply.valid !== true || typeof reply.user !== "string") return null;
-    return Array.isArray(reply.roles) && reply.roles.includes("ROLE_ADMIN") ? reply.user : null;
+    if (role === undefined) return reply.user;
+    return Array.isArray(reply.roles) && reply.roles.includes(role) ? reply.user : null;
   } catch {
     return null;
   }
+}
+
+/** The panel user behind a session, when it is an active administrator's. */
+function adminSessionUser(sessionId: string, options: AuthActionOptions): Promise<string | null> {
+  return sessionUser(sessionId, options, "ROLE_ADMIN");
 }
 
 interface DuplexInput {
@@ -527,6 +536,27 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
             return;
           }
 
+          // An own-account verb is told whose account by the session it was
+          // sent with, which this checks itself, never by the manager.
+          const ownAccount = OWN_ACCOUNT_VERBS.has(`${request.addon}:${request.verb}`);
+          if (ownAccount !== (request.sessionId !== undefined)) {
+            socket.end(JSON.stringify({ ok: false, error: ownAccount ? "a panel session is required" : "invalid verb" }) + "\n");
+            return;
+          }
+          let args = request.args ?? [];
+          if (ownAccount) {
+            if (args.some((arg) => arg.startsWith("--panel-user"))) {
+              socket.end(JSON.stringify({ ok: false, error: "invalid arguments" }) + "\n");
+              return;
+            }
+            const user = await sessionUser(request.sessionId!, options);
+            if (!user) {
+              socket.end(JSON.stringify({ ok: false, error: "the panel session is not valid" }) + "\n");
+              return;
+            }
+            args = [...args, `--panel-user=${user}`];
+          }
+
           const actionTimeout = request.timeoutMs ?? DEFAULT_GATEWAY_TIMEOUT_MS;
           timeout = setTimeout(() => {
             try {
@@ -538,8 +568,8 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
 
           try {
             const stdin = request.input !== undefined ? new Blob([request.input]) : "ignore";
-            const proc = Bun.spawn(
-              [CLI_BIN, "action", request.addon, request.verb, ...(request.args ?? [])],
+            const proc = (options.spawn ?? Bun.spawn)(
+              [CLI_BIN, "action", request.addon, request.verb, ...args],
               {
                 stdin,
                 stdout: "pipe",
