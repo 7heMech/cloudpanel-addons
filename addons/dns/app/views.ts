@@ -54,13 +54,13 @@ function zoneSummary(profile: Profile): string {
 function profileRow(profile: DnsState["profiles"][number], isDefault: boolean): string {
   const enforcing = profile.mode === "enforce";
   return `<tr data-profile="${esc(profile.id)}">
-    <td class="site-cell"><strong>${esc(profile.name)}</strong>${isDefault ? '<span class="badge state-default">Default for new sites</span>' : ""}</td>
+    <td class="site-cell"><strong>${esc(profile.name)}</strong><span class="dns-card-sites"> · ${plural(profile.sites, "site")}</span>${isDefault ? '<span class="badge state-default">Default for new sites</span>' : ""}</td>
     <td data-label="Records">${recordSummary(profile)}</td>
     <td data-label="Zone" class="wide-cell">${zoneSummary(profile)}</td>
-    <td data-label="Enforce">
+    <td data-label="Enforce" class="dns-enforce-cell">
       <label class="switch-field"><span class="switch"><input type="checkbox" aria-label="Enforce ${esc(profile.name)}"${enforcing ? " checked" : ""} onchange="dnsSetMode(this, '${esc(profile.id)}')"><span></span></span><span class="switch-state">${enforcing ? "On" : "Report only"}</span></label>
     </td>
-    <td data-label="Sites" class="numeric">${profile.sites}</td>
+    <td data-label="Sites" class="numeric dns-sites-cell">${profile.sites}</td>
     <td data-label="Actions" class="action-cell"><div class="actions">
       <button class="btn" type="button" onclick="dnsEditProfile('${esc(profile.id)}')">Edit</button>
       <button class="btn btn-danger" type="button" onclick="dnsDeleteProfile('${esc(profile.id)}')">Delete</button>
@@ -89,7 +89,7 @@ function siteRow(site: SiteView, state: DnsState): string {
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="dnsPaintSelection()" aria-label="Select ${esc(site.domain)}"></td>
     <td class="site-cell"><strong>${esc(site.domain)}</strong></td>
     <td class="type-cell">${esc(TYPE_LABELS[site.type] ?? site.type)}</td>
-    <td data-label="Profile"><select aria-label="Profile for ${esc(site.domain)}" onchange="dnsAssignRow(this)">${profileOptions(state.profiles, site.profileId, NO_PROFILE)}</select></td>
+    <td data-label="Profile" class="dns-profile-cell"><select aria-label="Profile for ${esc(site.domain)}" onchange="dnsAssignRow(this)">${profileOptions(state.profiles, site.profileId, NO_PROFILE)}</select></td>
     <td data-label="DNS" class="dns-status"><span class="tone-${status.tone}">${esc(status.label)}</span>${status.hint ? `<span class="hint">${esc(status.hint)}</span>` : ""}${site.ssl ? `<span class="hint">${esc(site.ssl.startsWith("Waiting for DNS") ? "Certificate requested; waits for DNS" : `Certificate: ${site.ssl}`)}</span>` : ""}</td>
     <td class="action-cell">${site.profileId ? `<button class="btn" type="button" onclick="dnsShowSite('${esc(site.domain)}')">Details</button>` : ""}</td>
   </tr>`;
