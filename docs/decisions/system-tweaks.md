@@ -35,8 +35,9 @@ else stay uncovered, and the page shows them as uncovered.
 Each write is parsed with `apt-config dump` before it is kept; a rejected file is
 put back as it was. If `apt-daily.timer` or `apt-daily-upgrade.timer` is
 disabled, switching on enables it and records that in the settings; switching
-off disables only the timers it enabled. A masked timer is refused rather than
-unmasked. The repair timer rewrites the drop-in when it has drifted from the
+off disables only the timers it enabled. Both timers are read before anything
+changes: a masked one is refused, not unmasked, and a timer that will not enable
+undoes the drop-in and any timer that switch-on had enabled. The repair timer rewrites the drop-in when it has drifted from the
 stored choice. Disabling the addon removes the drop-in and those timers, and
 enabling it again restores both.
 
@@ -77,7 +78,12 @@ install, update and repair write it whenever any addon is installed. System
 Tweaks is where it is shown and the only place to opt out. The opt-out is
 `uploadProgressGuard: false` in `/var/lib/clp-addons/system-tweaks/settings.json`,
 and `cli/php-guard.ts` honours it only while `system-tweaks.conf` exists.
-Disabling or uninstalling System Tweaks puts the guard back. So an existing box
+The shared disable and uninstall paths reconcile the guard once the config is
+gone. Disabling puts it back even when no addon is left, because the binary
+stays and repair keeps the guard while it is installed. Uninstalling puts it
+back while another addon remains, and the last uninstall removes it with the
+binary. A failure there warns and leaves the guard to the repair timer, since
+the addon is already withdrawn. So an existing box
 keeps its protection after an update without anyone enabling System Tweaks, and
 no box loses the guard because an addon it never had was missing.
 

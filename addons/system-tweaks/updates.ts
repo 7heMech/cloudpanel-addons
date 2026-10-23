@@ -491,25 +491,36 @@ export function applyUpdates(settings: UpdateSettings, enabledTimers: string[], 
     return { changed: before !== null || enabledTimers.length > 0, enabledTimers: [] };
   }
   if (!packageVersion(ctx)) failAction("unattended-upgrades is not installed");
+  const states = TIMERS.map((timer) => ({ timer, state: ctx.run("systemctl", ["is-enabled", timer]).stdout.trim() }));
+  const masked = states.find(({ state }) => state === "masked");
+  if (masked) failAction(`${masked.timer} is masked; unmask it to use automatic updates`);
+
   const after = dropInFor(settings, distroOf(ctx).id);
+  const restore = () => {
+    if (before === after) return;
+    if (before === null) rmSync(ctx.paths.dropIn, { force: true });
+    else writeFileAtomic(ctx.paths.dropIn, before, { mode: 0o644 });
+  };
   if (before !== after) {
     writeFileAtomic(ctx.paths.dropIn, after, { mode: 0o644 });
     const check = ctx.run("apt-config", ["dump"]);
     if (!check.ok) {
-      if (before === null) rmSync(ctx.paths.dropIn, { force: true });
-      else writeFileAtomic(ctx.paths.dropIn, before, { mode: 0o644 });
+      restore();
       failAction(`apt rejected the configuration: ${(check.stderr || check.stdout).trim()}`);
     }
   }
-  const timers = [...enabledTimers];
-  for (const timer of TIMERS) {
-    const state = ctx.run("systemctl", ["is-enabled", timer]).stdout.trim();
-    if (state === "masked") failAction(`${timer} is masked; unmask it to use automatic updates`);
+  const enabledNow: string[] = [];
+  for (const { timer, state } of states) {
     if (state !== "disabled") continue;
     const enable = ctx.run("systemctl", ["enable", "--now", timer]);
-    if (!enable.ok) failAction(`${timer} could not be enabled: ${enable.stderr.trim()}`);
-    if (!timers.includes(timer)) timers.push(timer);
+    if (!enable.ok) {
+      for (const done of enabledNow) ctx.run("systemctl", ["disable", "--now", done]);
+      restore();
+      failAction(`${timer} could not be enabled: ${enable.stderr.trim()}`);
+    }
+    enabledNow.push(timer);
   }
+  const timers = [...new Set([...enabledTimers, ...enabledNow])];
   return { changed: before !== after || timers.length !== enabledTimers.length, enabledTimers: timers };
 }
 

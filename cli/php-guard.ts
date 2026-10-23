@@ -13,7 +13,7 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "../lib/atomic-write";
-import { CONFIG_DIR, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_GUARD_INI_NAME, PHP_ROOT, STATE_DIR } from "./paths";
+import { CONFIG_DIR, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_GUARD_INI_NAME, PHP_ROOT, ROOT_UID, STATE_DIR } from "./paths";
 import { errorMessage, withRecoveryFailures } from "./nginx-transaction";
 import { unitActive } from "./provision";
 import { log, tryRun } from "./util";
@@ -37,7 +37,7 @@ export const DEFAULT_PHP_GUARD_PATHS: PhpGuardPaths = {
   phpRoot: PHP_ROOT,
   fpmBinDir: PHP_FPM_BIN_DIR,
   panelFpmUnit: PANEL_FPM_UNIT,
-  rootUid: 0,
+  rootUid: ROOT_UID,
   optOutConfig: `${CONFIG_DIR}/system-tweaks.conf`,
   optOutSettings: `${STATE_DIR}/system-tweaks/settings.json`,
 };
@@ -172,6 +172,19 @@ export function reconcilePhpSessionGuard(install: boolean, options: PhpGuardOpti
     throw withRecoveryFailures(error, "PHP guard rollback failed", failures);
   }
   return changes.length;
+}
+
+/**
+ * After a disable, or an uninstall that leaves the binary: System Tweaks'
+ * opt-out may just have stopped counting. The addon is already gone, so a
+ * failure warns and leaves the guard to the repair timer.
+ */
+export function settlePhpGuard(): void {
+  try {
+    reconcilePhpGuard(true);
+  } catch (error) {
+    log.warn(`PHP upload-progress guard not reconciled, repair will retry: ${errorMessage(error)}`);
+  }
 }
 
 /** `install` is whether any addon is installed; System Tweaks' opt-out can still keep it off. */

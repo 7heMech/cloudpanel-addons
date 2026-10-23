@@ -84,6 +84,8 @@ export const TWIG_CACHE_DIR = `${PANEL_APP}/var/cache`;
 /** Where Symfony's filesystem cache pool keeps the panel's own cached values. */
 export const PANEL_CACHE_POOL_DIR = `${PANEL_APP}/var/cache/prod/pools/app`;
 
+/** Who must own a file this project wrote as root for it to be trusted. */
+export const ROOT_UID = 0;
 export const CONFIG_DIR = "/etc/clp-addons";
 export const STATE_DIR = "/var/lib/clp-addons";
 export const ARTIFACT_MANIFEST_PATH = `${STATE_DIR}/artifacts.json`;

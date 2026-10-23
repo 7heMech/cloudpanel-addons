@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
 import {
-  executeSystemTweaksAction, restoreGuardAfterWithdrawal, restoreSystemTweaks, withdrawSystemTweaks,
+  executeSystemTweaksAction, restoreSystemTweaks, withdrawSystemTweaks,
   type SystemTweaksOptions, type SystemTweaksState,
 } from "../addons/system-tweaks/action";
 import {
@@ -160,7 +160,7 @@ function dumpOf(aptDir: string): string {
   return out.join("\n");
 }
 
-function box(options: { installed?: boolean; timers?: Record<string, string>; log?: string } = {}): Box {
+function box(options: { installed?: boolean; timers?: Record<string, string>; failEnable?: string[]; log?: string } = {}): Box {
   const dir = tempDir();
   const aptDir = join(dir, "apt.conf.d");
   mkdirSync(aptDir);
@@ -194,7 +194,11 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; lo
       return ok();
     }
     if (command === "systemctl" && args[0] === "is-enabled") return ok(`${timers.get(args[1]!) ?? ""}\n`);
-    if (command === "systemctl" && args[0] === "enable") { timers.set(args[2]!, "enabled"); return ok(); }
+    if (command === "systemctl" && args[0] === "enable") {
+      if (options.failEnable?.includes(args[2]!)) return { ok: false, stdout: "", stderr: "Failed to enable unit" };
+      timers.set(args[2]!, "enabled");
+      return ok();
+    }
     if (command === "systemctl" && args[0] === "disable") { timers.set(args[2]!, "disabled"); return ok(); }
     if (command === "systemctl" && args[0] === "show" && args[1] === "clp-php-fpm.service") {
       return ok(`{ path=${sbin}/php-fpm8.3 ; argv[]=${sbin}/php-fpm8.3 -R -F -y ${dir}/clp/php-fpm.conf -c ${dir}/clp/php.ini ; ignore_errors=no }`);
@@ -290,6 +294,25 @@ test("timers that were off are enabled with the switch and disabled again withou
   await act(b, ["set-updates"], { enabled: false });
   expect(b.timers.get("apt-daily-upgrade.timer")).toBe("disabled");
   expect(b.timers.get("apt-daily.timer")).toBe("enabled");
+});
+
+test("a masked timer is refused before anything is written or enabled", async () => {
+  const b = box({ timers: { "apt-daily.timer": "disabled", "apt-daily-upgrade.timer": "masked" } });
+  await expect(act(b, ["set-updates"], { enabled: true })).rejects.toThrow("apt-daily-upgrade.timer is masked");
+  expect(existsSync(b.dropIn)).toBe(false);
+  expect(b.timers.get("apt-daily.timer")).toBe("disabled");
+  expect((await act(b, ["state"])).settings.enabled).toBe(false);
+});
+
+test("a timer that cannot be enabled undoes the drop-in and the timers enabled before it", async () => {
+  const b = box({
+    timers: { "apt-daily.timer": "disabled", "apt-daily-upgrade.timer": "disabled" },
+    failEnable: ["apt-daily-upgrade.timer"],
+  });
+  await expect(act(b, ["set-updates"], { enabled: true })).rejects.toThrow("apt-daily-upgrade.timer could not be enabled");
+  expect(existsSync(b.dropIn)).toBe(false);
+  expect(b.timers.get("apt-daily.timer")).toBe("disabled");
+  expect(existsSync(b.settingsFile)).toBe(false);
 });
 
 test("a missing package is reported, refused, and installed only when asked", async () => {
@@ -402,9 +425,9 @@ test("opting out in System Tweaks removes the guard, and repair keeps it removed
   expect(existsSync(guardFile(b, "8.1"))).toBe(false);
   expect(inspectPhpGuard(b.options.phpGuard).optedOut).toBe(true);
 
-  // Disabling System Tweaks puts it back, because the opt-out no longer counts.
+  // Without System Tweaks' config the opt-out no longer counts.
   rmSync(b.guardConfig);
-  restoreGuardAfterWithdrawal(b.options);
+  reconcilePhpGuard(true, true, b.options.phpGuard);
   expect(existsSync(guardFile(b, "8.1"))).toBe(true);
 
   // Enabling it again honours the stored opt-out.

@@ -10,7 +10,7 @@ import { existsSync, lstatSync, readFileSync } from "node:fs";
 import {
   ActionFailure, emitActionError, emitActionOk, failAction, withFileLock,
 } from "../../cli/action-common";
-import { STATE_DIR } from "../../cli/paths";
+import { ROOT_UID, STATE_DIR } from "../../cli/paths";
 import { reconcilePhpGuard, type PhpGuardOptions } from "../../cli/php-guard";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import {
@@ -47,7 +47,7 @@ export interface SystemTweaksPaths {
 export const DEFAULT_SYSTEM_TWEAKS_PATHS: SystemTweaksPaths = {
   settingsFile: `${STATE_DIR}/system-tweaks/settings.json`,
   lockFile: "/run/lock/clp-addons/system-tweaks.lock",
-  rootUid: 0,
+  rootUid: ROOT_UID,
 };
 
 export interface SystemTweaksOptions {
@@ -223,12 +223,6 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
   const settings = readSettings(paths);
   applyUpdates({ ...settings.updates, enabled: false }, settings.enabledTimers, options.updates);
   if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
-}
-
-/** Once the config is gone the opt-out no longer counts, so the guard goes back. */
-export function restoreGuardAfterWithdrawal(options: SystemTweaksOptions = {}): void {
-  if (readSettings(pathsFor(options)).uploadProgressGuard) return;
-  reconcilePhpGuard(true, false, guardOptions(options));
 }
 
 /** Enabling it again puts both back as they were chosen. */

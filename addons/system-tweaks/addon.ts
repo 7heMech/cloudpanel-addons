@@ -1,5 +1,5 @@
 import { handle } from "./app/index";
-import { restoreGuardAfterWithdrawal, restoreSystemTweaks, runSystemTweaksAction, systemTweaksUpkeep, withdrawSystemTweaks } from "./action";
+import { restoreSystemTweaks, runSystemTweaksAction, systemTweaksUpkeep, withdrawSystemTweaks } from "./action";
 import type { AddonDefinition } from "../../cli/addon-catalog";
 
 export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
@@ -14,6 +14,5 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
     run: () => systemTweaksUpkeep(),
   },
   deactivate: () => withdrawSystemTweaks(),
-  withdrawn: () => restoreGuardAfterWithdrawal(),
   activate: () => restoreSystemTweaks(),
 };
