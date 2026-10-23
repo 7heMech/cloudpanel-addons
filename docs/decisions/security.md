@@ -102,10 +102,12 @@ The gateway reads the bounded `cloudpanel` session file without following
 symlinks, verifies its owner and size, and parses only the expected Symfony
 token shape with depth and item limits. It checks expiry, and refuses a session
 whose `mfaAuthenticated` marker is anything but `true`, which is what a pending
-TOTP challenge leaves. An absent marker is accepted: CloudPanel's own
-`/autologin`, which Security Keys uses after a verified key and which only root
-or the panel's user can mint a token for, never writes one, and neither does a
-login from before TOTP was turned on. CloudPanel serves both sessions. On a
+TOTP challenge leaves. An absent marker is accepted for a user without TOTP.
+For a user with TOTP it is accepted only while Security Keys is enabled:
+CloudPanel's own `/autologin`, which that addon uses after a verified key and
+which only root or the panel's user can mint a token for, never writes one, and
+neither does a login from before TOTP was turned on. CloudPanel serves both
+sessions; without the addon, the gateway keeps refusing them. On a
 normal CloudPanel installation it also rechecks the user's active status and
 role in CloudPanel's database for every request.
 

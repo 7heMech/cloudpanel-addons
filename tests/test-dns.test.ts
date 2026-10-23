@@ -1,12 +1,13 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeDnsAction, panelSites, type DnsReply, type ProvisionReply } from "../addons/dns/action";
 import { detectAddresses, type Addresses } from "../addons/dns/addresses";
 import { DNS_ADDON } from "../addons/dns/addon";
-import type { PanelSite } from "../addons/dns/engine";
+import type { PanelSite, SitePlan } from "../addons/dns/engine";
+import { MAX_ATTEMPTS, retryCertificates, type SslRequest } from "../addons/dns/ssl";
 import { FakeCloudflare, FakeMailcow, MAILCOW_KEY, routed } from "./fixtures/dns-api";
 
 const TOKEN = "cf-agency-token-0123456789abcdef";
@@ -36,15 +37,23 @@ function setup() {
   const sites: PanelSite[] = [site(1, "example.com"), site(2, "shop.example.com")];
   const issued: { domain: string; alternatives: string[] }[] = [];
   const clock = { now: START, issue: false };
+  /** Milliseconds each token's Cloudflare calls take, to reorder concurrent reads. */
+  const latency = new Map<string, number>();
+  const fetch = routed(cf, mc);
   const addresses: Addresses = { ipv4: "203.0.113.10", ipv6: "2001:db8::10" };
   const env = {
-    dir, cf, mc, agency, church, sites, issued, clock, addresses,
+    dir, cf, mc, agency, church, sites, issued, clock, addresses, latency,
     async act<T = DnsReply>(verb: string, body?: unknown, args: string[] = []): Promise<T> {
       return await executeDnsAction([verb, ...args], {
         paths: { configFile: join(dir, "dns.conf"), stateDir: join(dir, "state"), lockFile: join(dir, "dns.lock"), panelDb: join(dir, "db.sq3"), rootUid: process.getuid!(), clpctl: "/bin/false" },
         processUid: 0,
         input: body === undefined ? undefined : JSON.stringify(body),
-        fetch: routed(cf, mc),
+        fetch: async (address, init) => {
+          const token = new Headers(init?.headers).get("authorization")?.replace(/^Bearer /, "") ?? "";
+          const delay = latency.get(token);
+          if (delay) await Bun.sleep(delay);
+          return fetch(address, init);
+        },
         sites: () => sites,
         addresses: () => ({ ...addresses }),
         issue: async (domain, alternatives) => {
@@ -428,6 +437,17 @@ describe("several connections", () => {
     expect(env.cf.writes().every((call) => env.cf.calls.find((entry) => entry === call)!.token === TOKEN)).toBe(true);
   });
 
+  test("the first connection writes a shared zone even when another answers sooner", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("save-connection", { token: SECOND_TOKEN, label: "Church" });
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    env.latency.set(TOKEN, 25);
+    await env.enforce("web");
+    expect(env.cf.writes().length).toBeGreaterThan(0);
+    expect(env.cf.writes().every((call) => env.cf.calls.find((entry) => entry === call)!.token === TOKEN)).toBe(true);
+  });
+
   test("a zone only a failing connection reaches is not created again in another account", async () => {
     const env = setup();
     env.cf.zone("example.net", env.church);
@@ -537,6 +557,22 @@ describe("zones and new sites", () => {
     await env.connect();
     await expect(env.act("provision", undefined, ["--domain=example.com", "--as-user=bob"])).rejects.toThrow("not one of yours");
     expect(await env.act<ProvisionReply>("provision", undefined, ["--domain=shop.example.com", "--as-user=bob"])).toMatchObject({ managed: false });
+
+    // Why DNS is not ready can quote Cloudflare's errors; only an administrator reads it.
+    await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
+    await env.enforce("web");
+    env.cf.tokens.delete(TOKEN);
+    const admin = await env.act<ProvisionReply>("provision", undefined, ["--domain=shop.example.com"]);
+    expect(admin).toMatchObject({ managed: true, ready: false });
+    expect(admin.reason).toContain("Cloudflare could not be read");
+    expect(await env.act<ProvisionReply>("provision", undefined, ["--domain=shop.example.com", "--as-user=bob"]))
+      .toEqual({ managed: true, ready: false, reason: "an administrator can see why on the DNS page", certificateNames: [] });
+
+    // What the owner can act on, such as a pending zone's nameservers, they still see.
+    env.cf.token(TOKEN, { owner: "user", accounts: [env.agency], zoneEdit: true });
+    env.cf.zones[0]!.status = "pending";
+    expect((await env.act<ProvisionReply>("provision", undefined, ["--domain=shop.example.com", "--as-user=bob"])).reason)
+      .toContain("set its nameservers at the registrar");
   });
 });
 
@@ -737,4 +773,26 @@ test("an address is detected only when it can be told, and an IPv4 is never take
   expect(detectAddresses(nic("10.0.0.5"), "")).toEqual({ ipv4: null, ipv6: "" });
   expect(detectAddresses(nic("10.0.0.5"), "203.0.113.10")).toEqual({ ipv4: "203.0.113.10", ipv6: "" });
   expect(detectAddresses(nic("203.0.113.10", "203.0.113.11", "2001:4860::1", "2001:4860::2"), "")).toEqual({ ipv4: null, ipv6: null });
+});
+
+test("an attempt cut short still counts toward the certificate limit", async () => {
+  const domain = "brand-new.example.com";
+  const requests: Record<string, SslRequest> = {
+    [domain]: { siteId: 7, requestedAt: START, attempts: MAX_ATTEMPTS, nextAttemptAt: 0, state: "Requesting a certificate", done: false },
+  };
+  const plan = {
+    domain, profileId: "web", mode: "enforce", problems: [], changes: [], certificateNames: [domain],
+    zone: { name: "example.com", status: "active", nameServers: [] },
+  } as unknown as SitePlan;
+  let issued = 0;
+  await retryCertificates(requests, [plan], () => [site(7, domain, { selfSigned: true })], async () => { issued++; return false; }, START, () => {});
+  expect(issued).toBe(0);
+  expect(requests[domain]).toMatchObject({ done: true, attempts: MAX_ATTEMPTS });
+});
+
+test("state that cannot be read while redacting does not hide the failure", async () => {
+  const env = setup();
+  await env.connect();
+  chmodSync(join(env.dir, "state", "secrets.json"), 0o666);
+  await expect(env.act("set-mode", { id: "web", mode: "sometimes" })).rejects.toThrow("The mode must be Report only or Enforce");
 });

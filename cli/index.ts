@@ -10,7 +10,6 @@ import { cmdRepair } from "./repair";
 import { applyDisable, applyEnable } from "./toggle";
 import { cmdUninstall } from "./uninstall";
 import { cmdUpdate } from "./update";
-import { mountPath } from "./paths";
 import { ADDONS, ADDON_NAMES } from "./addon-catalog";
 import { CLI_VERSION } from "./release";
 import { installedConfig } from "./provision";
@@ -48,7 +47,7 @@ export const MANAGER_OPS: ManagerOps = {
 function usage(): void {
   log.plain(`clp-addons ${CLI_VERSION} — CloudPanel Addons
 
-  clp-addons                 (interactive in a root terminal)
+  clp-addons
   clp-addons install <addon> [--version=vX.Y.Z] [--skip-attestation] [--local=DIR]
   clp-addons update [--version=vX.Y.Z] [--skip-attestation]   (alias: upgrade)
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
@@ -57,13 +56,7 @@ function usage(): void {
   clp-addons maintenance <domain> [on|off|status]
   clp-addons --version
 
-Addons: ${ADDON_NAMES.join(", ")}
-
-Install enables bundled addon code without downloading a release. Use update
-to upgrade the binary, or install --version to explicitly select a release.
-
-The manager is served at ${mountPath("instatic").replace("/instatic", "")} through
-the CloudPanel master vhost and authenticates with the CloudPanel cloudpanel session.`);
+Addons: ${ADDON_NAMES.join(", ")}`);
 }
 
 async function cmdAction(argv: string[]): Promise<number> {

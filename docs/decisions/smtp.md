@@ -94,7 +94,8 @@ keeps the policy; enabling applies it again.
 ## New sites
 
 SMTP's `sync-sites` runs from the shared new-site watcher
-(see [Platform integration](platform.md#new-sites)), after DNS. It does nothing
+(see [Platform integration](platform.md#new-sites)), after DNS, or after
+fifteen seconds if DNS is still waiting. It does nothing
 unless CloudPanel's sites have changed since the last run; then it binds new
 site users, puts new sites in the default profile and drops deleted sites.
 Repair runs the full reconcile, which also undoes drift, every 15 minutes.

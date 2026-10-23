@@ -153,7 +153,7 @@ export class DnsRun {
   // -------------------------------------------------------------------------
 
   async discover(): Promise<void> {
-    const reports = await Promise.all(this.context.policy.connections.map(async (connection): Promise<ConnectionReport> => {
+    const reports = await Promise.all(this.context.policy.connections.map(async (connection): Promise<ConnectionReport & { refs?: ZoneRef[] }> => {
       const report: ConnectionReport = { id: connection.id, label: connection.label, active: false, status: "missing", accounts: [], zones: 0, error: null };
       const api = this.cloudflare.get(connection.id);
       if (!api) return { ...report, error: "No token is saved for this connection" };
@@ -163,16 +163,18 @@ export class DnsRun {
         if (!verified.active) return { ...report, error: `Cloudflare reports this token as ${verified.status}` };
         const [zones, accounts] = await Promise.all([api.zones(), api.accounts()]);
         const known = new Map(accounts.map((account) => [account.id, account]));
-        for (const zone of zones) {
-          if (!known.has(zone.account.id)) known.set(zone.account.id, zone.account);
-          this.zoneRefs.push({ zone, connectionId: connection.id });
-        }
-        return { ...report, active: true, accounts: [...known.values()], zones: zones.length };
+        for (const zone of zones) if (!known.has(zone.account.id)) known.set(zone.account.id, zone.account);
+        return { ...report, active: true, accounts: [...known.values()], zones: zones.length, refs: zones.map((zone) => ({ zone, connectionId: connection.id })) };
       } catch (error) {
         return { ...report, status: "error", error: reason(error) };
       }
     }));
-    this.connections.push(...reports);
+    // In the configured order, not the order the reads finished: the first
+    // connection reaching a zone is the one that writes it.
+    for (const { refs, ...report } of reports) {
+      if (refs) this.zoneRefs.push(...refs);
+      this.connections.push(report);
+    }
   }
 
   private connectionLabel(id: string): string {
