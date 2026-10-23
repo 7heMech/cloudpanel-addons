@@ -447,7 +447,9 @@ Disabling the addon removes the drop-in and keeps the choice, which enabling
 reapplies through the reconcile service. Disabling is synchronous, so it cannot
 ask the pools for a page: under the same lock, it config-tests CloudPanel's own
 PHP first and requires the unit to come back on that version, and otherwise
-puts the drop-in back and refuses to disable. The card also shows a newer package
+puts the drop-in back and refuses to disable. While the addon is disabled the
+stored choice is marked withdrawn, so a change that was waiting for the lock
+refuses rather than writing the drop-in again; enabling clears the mark. The card also shows a newer package
 version when apt has one, revision included, because a newer minor is no fix
 until it is patched, and a failure is retried once that version changes.
 

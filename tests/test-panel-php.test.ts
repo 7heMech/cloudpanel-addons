@@ -8,7 +8,7 @@ import { fastCgiRequest, parseCgiResponse } from "../lib/fastcgi";
 import { DEFAULT_TWEAKS } from "../addons/panel-tweaks/action";
 import { dashboardView, panelPhpLine } from "../addons/panel-tweaks/app/views";
 import {
-  panelPhpStatus, reconcilePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions,
+  panelPhpStatus, reconcilePanelPhp, restorePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions,
 } from "../addons/panel-tweaks/panel-php";
 
 const ARGS = "-R -F -y /home/clp/services/php-fpm/fpm/php-fpm.conf -c /home/clp/services/php-fpm/fpm/php.ini";
@@ -250,6 +250,7 @@ test("a drop-in at our path that is not root's to trust is removed when none is 
   chmodSync(env.dropIn, 0o666);
   withdrawPanelPhp(env.options);
   expect(existsSync(env.dropIn)).toBe(false);
+  restorePanelPhp(env.options);
 
   writeFileSync(env.dropIn, evil, { mode: 0o666 });
   chmodSync(env.dropIn, 0o666);
@@ -288,6 +289,29 @@ test("disabling keeps the override when CloudPanel's own PHP cannot take the pan
   expect(() => withdrawPanelPhp(env.options)).toThrow("did not come back on PHP 8.1; the override was put back");
   expect(readFileSync(env.dropIn, "utf8")).toBe(dropIn);
   expect(panelPhpStatus(env.options).running).toBe("8.4");
+});
+
+test("a change queued behind disabling cannot put the override back, and enabling allows it again", async () => {
+  const env = box();
+  await setPanelPhp("8.4", env.options);
+  withdrawPanelPhp(env.options);
+  await expect(setPanelPhp("8.3", env.options)).rejects.toThrow("Panel Tweaks is disabled");
+  expect(await reconcilePanelPhp(env.options)).toBeNull();
+  expect(existsSync(env.dropIn)).toBe(false);
+
+  restorePanelPhp(env.options);
+  expect(env.commands.at(-1)).toContain("clp-addons-reconcile.service");
+  expect(await reconcilePanelPhp(env.options)).toBe("panel runs on PHP 8.4");
+});
+
+test("a refused disable leaves choosing the panel's PHP available", async () => {
+  const env = box();
+  await setPanelPhp("8.4", env.options);
+  env.rejected.add("8.1");
+  expect(() => withdrawPanelPhp(env.options)).toThrow("rejected");
+  env.rejected.clear();
+  await setPanelPhp("8.3", env.options);
+  expect(readFileSync(env.dropIn, "utf8")).toContain("php-fpm8.3 ");
 });
 
 test("an unfamiliar CloudPanel unit is not touched", async () => {

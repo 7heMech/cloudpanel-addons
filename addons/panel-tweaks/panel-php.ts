@@ -87,6 +87,8 @@ export interface PanelPhpStatus {
 interface StoredChoice {
   php: string;
   failure?: PanelPhpFailure;
+  /** Set while the addon is disabled, so a change queued behind the withdrawal does not undo it. */
+  withdrawn?: true;
 }
 
 interface BaseUnit {
@@ -152,7 +154,7 @@ function readChoice(paths: PanelPhpPaths): StoredChoice {
     if (parsed?.version !== STATE_VERSION || typeof parsed.php !== "string") return { php: "" };
     const php = VERSION_RE.test(parsed.php) ? parsed.php : "";
     const failure = parsed.failure && typeof parsed.failure.error === "string" ? parsed.failure as PanelPhpFailure : undefined;
-    return failure ? { php, failure } : { php };
+    return { php, ...(failure ? { failure } : {}), ...(parsed.withdrawn === true ? { withdrawn: true as const } : {}) };
   } catch {
     return { php: "" };
   }
@@ -374,6 +376,7 @@ export async function setPanelPhp(php: string, options: PanelPhpOptions = {}): P
   const ctx = contextOf(options);
   if (php !== "" && !VERSION_RE.test(php)) failAction("choose a PHP version such as 8.4");
   await withFileLock(ctx.paths.lockFile, 30, "another panel PHP change is still running", async () => {
+    if (readChoice(ctx.paths).withdrawn) failAction("Panel Tweaks is disabled; enable it to choose the panel's PHP");
     await apply(ctx, php);
     writeChoice(ctx.paths, { php });
   });
@@ -390,6 +393,7 @@ export async function reconcilePanelPhp(options: PanelPhpOptions = {}): Promise<
   if (!readChoice(ctx.paths).php && !present(ctx.paths.dropInFile)) return null;
   return withFileLock(ctx.paths.lockFile, 30, "another panel PHP change is still running", async () => {
     const choice = readChoice(ctx.paths);
+    if (choice.withdrawn) return null;
     const current = choice.php ? releases(ctx, [choice.php]).get(choice.php)?.installed ?? "" : "";
     if (choice.failure && choice.failure.php === choice.php && choice.failure.release === current) return null;
     try {
@@ -412,37 +416,54 @@ export async function reconcilePanelPhp(options: PanelPhpOptions = {}): Promise<
 export function withdrawPanelPhp(options: PanelPhpOptions = {}): void {
   const ctx = contextOf(options);
   withFileLockSync(ctx.paths.lockFile, 90, "a panel PHP change is still running", () => {
-    if (!present(ctx.paths.dropInFile)) return;
-    const unit = baseUnit(ctx);
-    if (unit) {
-      check(ctx.run(join(ctx.paths.fpmBinDir, `php-fpm${unit.stock}`), ["-t", ...unit.args]),
-        `PHP ${unit.stock} rejected CloudPanel's FPM config, so the panel keeps its PHP override`);
+    const choice = readChoice(ctx.paths);
+    writeChoice(ctx.paths, { ...choice, withdrawn: true });
+    try {
+      withdraw(ctx);
+    } catch (error) {
+      // Refused: the addon stays enabled, and so does choosing its PHP.
+      writeChoice(ctx.paths, choice);
+      throw error;
     }
-    const before = trustedText(ctx.paths.dropInFile, ctx.paths.rootUid);
-    install(ctx, null);
-    const restarted = ctx.run("systemctl", ["restart", ctx.paths.unit]);
-    const deadline = ctx.now().getTime() + ctx.healthTimeoutMs;
-    const back = () => ctx.run("systemctl", ["is-active", ctx.paths.unit]).stdout.trim() === "active"
-      && (!unit || runningVersion(ctx) === unit.stock);
-    let ok = restarted.ok && back();
-    while (restarted.ok && !ok && ctx.now().getTime() < deadline) {
-      Bun.sleepSync(500);
-      ok = back();
-    }
-    if (ok) return;
-    let restored = "";
-    if (before !== null) {
-      install(ctx, before);
-      restored = ctx.run("systemctl", ["restart", ctx.paths.unit]).ok
-        ? "; the override was put back"
-        : `; the override was put back, but ${ctx.paths.unit} did not restart on it either`;
-    }
-    failAction(`${ctx.paths.unit} did not come back on PHP ${unit?.stock ?? "CloudPanel's own version"}${restored}`);
   });
+}
+
+function withdraw(ctx: Context): void {
+  if (!present(ctx.paths.dropInFile)) return;
+  const unit = baseUnit(ctx);
+  if (unit) {
+    check(ctx.run(join(ctx.paths.fpmBinDir, `php-fpm${unit.stock}`), ["-t", ...unit.args]),
+      `PHP ${unit.stock} rejected CloudPanel's FPM config, so the panel keeps its PHP override`);
+  }
+  const before = trustedText(ctx.paths.dropInFile, ctx.paths.rootUid);
+  install(ctx, null);
+  const restarted = ctx.run("systemctl", ["restart", ctx.paths.unit]);
+  const deadline = ctx.now().getTime() + ctx.healthTimeoutMs;
+  const back = () => ctx.run("systemctl", ["is-active", ctx.paths.unit]).stdout.trim() === "active"
+    && (!unit || runningVersion(ctx) === unit.stock);
+  let ok = restarted.ok && back();
+  while (restarted.ok && !ok && ctx.now().getTime() < deadline) {
+    Bun.sleepSync(500);
+    ok = back();
+  }
+  if (ok) return;
+  let restored = "";
+  if (before !== null) {
+    install(ctx, before);
+    restored = ctx.run("systemctl", ["restart", ctx.paths.unit]).ok
+      ? "; the override was put back"
+      : `; the override was put back, but ${ctx.paths.unit} did not restart on it either`;
+  }
+  failAction(`${ctx.paths.unit} did not come back on PHP ${unit?.stock ?? "CloudPanel's own version"}${restored}`);
 }
 
 /** Enabling it again asks the reconcile service to reapply a stored choice. */
 export function restorePanelPhp(options: PanelPhpOptions = {}): void {
   const ctx = contextOf(options);
-  if (readChoice(ctx.paths).php) ctx.run("systemctl", ["start", "--no-block", RECONCILE_SERVICE]);
+  const { withdrawn: _withdrawn, ...choice } = withFileLockSync(ctx.paths.lockFile, 90, "a panel PHP change is still running", () => {
+    const stored = readChoice(ctx.paths);
+    if (stored.withdrawn) writeChoice(ctx.paths, { php: stored.php, ...(stored.failure ? { failure: stored.failure } : {}) });
+    return stored;
+  });
+  if (choice.php) ctx.run("systemctl", ["start", "--no-block", RECONCILE_SERVICE]);
 }
