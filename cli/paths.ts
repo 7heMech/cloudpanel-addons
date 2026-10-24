@@ -10,7 +10,10 @@ export const REPO = "7heMech/cloudpanel-addons";
 export const CLI_ARTIFACT = "clp-addons-linux-x64";
 export const CLI_BIN = "/usr/local/bin/clp-addons";
 export const LIBEXEC_DIR = "/usr/local/libexec/clp-addons";
-export const GH_PRIVATE = `${LIBEXEC_DIR}/gh`;
+/** Sigstore's trusted keys, cached where only root can write. */
+export const SIGSTORE_DIR = `${LIBEXEC_DIR}/sigstore`;
+/** The GitHub CLI that verified updates before the binary did it itself. */
+export const LEGACY_GH = `${LIBEXEC_DIR}/gh`;
 
 export const SERVICE_USER = "clp-addons";
 export const SERVICE_GROUP = "clp-addons";

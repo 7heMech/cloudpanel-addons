@@ -125,9 +125,10 @@ jobs:
 
       - name: Publish the sigstore bundles alongside the artifacts
         # An update verifies against these bundles, and the attestations API
-        # returns them wrapped in an envelope. Shipping them as an asset lets gh
-        # read this file directly, and a single .jsonl of every bundle verifies
-        # any one of the artifacts, install.sh included for anyone checking it.
+        # returns them wrapped in an envelope. Shipping them as an asset lets the
+        # binary read this file directly, and a single .jsonl of every bundle
+        # verifies any one of the artifacts, install.sh included for anyone
+        # checking it with gh.
         #
         # Not in SHA256SUMS, and it does not need to be. A bundle is signed and
         # bound to its subject's digest, so it cannot vouch for anything but the

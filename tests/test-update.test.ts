@@ -144,6 +144,7 @@ mock.module("node:fs", () => ({
       present.delete(key);
       return undefined;
     }
+    if (key === `${LIBEXEC_DIR}/gh`) return void calls.push(`rm:${key}`);
     return originalRmSync(path as any, options);
   },
   lstatSync(path: string | URL, ...rest: unknown[]) {
@@ -589,6 +590,7 @@ test("the handed-off target binary finalizes all provisioning before restarting 
     "ensureDirs",
     "reconcilePanelIdentity",
     "removeLegacyUnits",
+    `rm:${LIBEXEC_DIR}/gh`,
     "installUnits",
     "reconcile",
     "reconcileNginxProxy",

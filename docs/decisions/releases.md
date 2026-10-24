@@ -52,9 +52,16 @@ installer, SHA-256 sums, and GitHub build provenance. Updates verify the
 checksum and repository-bound attestation before replacing the binary.
 `--skip-attestation` is an explicit operator override.
 
-If an attestation-capable GitHub CLI is unavailable, the binary downloads
-GitHub CLI's official archive, checks its published checksum, tests the
-candidate, and installs it in `/usr/local/libexec/clp-addons/`.
+The binary checks provenance itself with Sigstore's `@sigstore/verify`, the
+checks `gh attestation verify --repo --signer-workflow` makes: a SLSA
+provenance statement naming the artifact's SHA-256, signed in Sigstore's public
+log by a GitHub Actions certificate for this repository's `release.yml` on a tag,
+with this repository as its source. Sigstore's trusted keys come through its TUF
+repository, `tuf-repo-cdn.sigstore.dev`, and are cached in
+`/usr/local/libexec/clp-addons/sigstore`, where only root can write. They are
+not frozen into the binary: a rotated key would then refuse the very update
+that carries the new one. An update removes the GitHub CLI earlier releases
+kept in `/usr/local/libexec/clp-addons/gh`.
 
 ## Installer
 

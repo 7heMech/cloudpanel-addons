@@ -1,5 +1,6 @@
 // `clp-addons update`, and the rollback a failed one runs.
 
+import { rmSync } from "node:fs";
 import { installedAddons, migrateOldAddonNames, revertAddonRenames } from "./addons";
 import {
   artifactNames, currentArtifactsMatch, installArtifacts, keepPreviousArtifacts, replaceArtifacts,
@@ -9,7 +10,7 @@ import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./r
 import { reconcilePhpGuard } from "./php-guard";
 import { type AddonSpec } from "./addon-catalog";
 import { operationLockEnv, withOperationLock } from "./operation-lock";
-import { CLI_BIN, MANAGER_UNIT } from "./paths";
+import { CLI_BIN, LEGACY_GH, MANAGER_UNIT } from "./paths";
 import {
   ensureAuthHelperReady, ensureDirs, ensureServiceUser, installUnits, reconcilePanelIdentity,
   removeLegacyUnits, startUnits, unitActive, writeConfig,
@@ -35,6 +36,7 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
     for (const spec of specs) writeConfig(spec, true);
     reconcilePanelIdentity();
     removeLegacyUnits(true);
+    rmSync(LEGACY_GH, { force: true });
     installUnits(specs);
     ensureDirs(specs);
     reconcileAnchors(false);
