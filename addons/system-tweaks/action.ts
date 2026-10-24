@@ -263,13 +263,22 @@ function withSettingsLock<T>(options: SystemTweaksOptions, body: (paths: SystemT
  * that failed is not retried until its package release changes.
  */
 export async function systemTweaksMaintenance(options: SystemTweaksOptions = {}): Promise<string | null> {
-  const lines = [systemTweaksUpkeep(options)];
+  const lines: string[] = [];
+  const failures: string[] = [];
   try {
-    lines.push(await reconcilePanelPhp(options.panelPhp));
+    const upkeep = systemTweaksUpkeep(options);
+    if (upkeep) lines.push(upkeep);
   } catch (error) {
-    throw new Error([`panel PHP: ${reason(error)}`, ...lines.filter(Boolean)].join("; "));
+    failures.push(reason(error));
   }
-  return lines.filter(Boolean).join("; ") || null;
+  try {
+    const php = await reconcilePanelPhp(options.panelPhp);
+    if (php) lines.push(php);
+  } catch (error) {
+    failures.push(`panel PHP: ${reason(error)}`);
+  }
+  if (failures.length) throw new Error([...failures, ...lines].join("; "));
+  return lines.join("; ") || null;
 }
 
 export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | null {

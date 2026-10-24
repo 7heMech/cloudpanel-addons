@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
 import {
-  executeSystemTweaksAction, restoreSystemTweaks, systemTweaksUpkeep, withdrawSystemTweaks,
+  executeSystemTweaksAction, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksUpkeep, withdrawSystemTweaks,
   type SystemTweaksOptions, type SystemTweaksState,
 } from "../addons/system-tweaks/action";
 import {
@@ -831,4 +831,23 @@ test("System Tweaks exposes panel PHP state and validates its change action", as
   await expect(act(b, ["set-panel-php"], { php: 8.4 })).rejects.toThrow("php must be a version");
   await expect(act(b, ["set-panel-php"], { php: "8.4" })).rejects.toThrow("is not the CloudPanel PHP-FPM unit");
   expect(dashboardView(state)).toContain("<h2>Panel PHP</h2>");
+});
+
+test("systemTweaksMaintenance still reconciles panel PHP when upkeep fails", async () => {
+  const b = box();
+  writeFileSync(b.nginxConf, CLOUDPANEL_NGINX_CONF);
+  b.nginx.fail = true;
+  writeFileSync(b.options.panelPhp!.paths!.stateFile!, JSON.stringify({ version: 1, php: "8.4" }), { mode: 0o600 });
+  let phpCalled = false;
+  b.options.panelPhp = {
+    ...b.options.panelPhp,
+    run: () => {
+      phpCalled = true;
+      return { ok: false, stdout: "", stderr: "no panel unit in this fixture" };
+    },
+  };
+  await expect(systemTweaksMaintenance(b.options)).rejects.toThrow(
+    "Nginx validation failed: emerg; panel PHP: clp-php-fpm.service is not the CloudPanel PHP-FPM unit this addon knows",
+  );
+  expect(phpCalled).toBe(true);
 });
