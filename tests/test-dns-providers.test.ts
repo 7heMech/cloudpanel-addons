@@ -139,6 +139,17 @@ describe("Cloudflare", () => {
     expect(message).not.toContain(USER_TOKEN.slice(0, 12));
   });
 
+  test("a refused rules or settings call names the permission the token lacks", async () => {
+    const rule = { ref: "clp_dns_acme", action: "set_config", expression: "true", description: "x", enabled: true, action_parameters: { ssl: "full" } };
+    const api = new CloudflareApi(USER_TOKEN, async () => Response.json({
+      success: false, errors: [{ code: 10000, message: "Authentication error" }],
+    }, { status: 403 }));
+    await expect(api.entrypoint("a".repeat(32), "http_config_settings")).rejects.toThrow("lacks Config Rules: Edit");
+    await expect(api.entrypoint("a".repeat(32), "http_request_firewall_custom")).rejects.toThrow("lacks Zone WAF: Edit");
+    await expect(api.setting("a".repeat(32), "ssl")).rejects.toThrow("lacks Zone Settings: Edit");
+    await expect(api.addRule("a".repeat(32), "http_config_settings", "b".repeat(32), rule)).rejects.toThrow("lacks Config Rules: Edit");
+  });
+
   test("TXT values are written as quoted strings of at most 255 characters", () => {
     const long = "v=DKIM1;k=rsa;p=" + "A".repeat(400);
     const quoted = quoteTxt(long);
@@ -154,7 +165,7 @@ describe("Cloudflare", () => {
     const rule = { ref: "clp_dns_acme", action: "set_config", expression: "true", description: "x", enabled: true, action_parameters: { ssl: "full" } };
     expect(await api.entrypoint(zone.id, "http_config_settings")).toBeNull();
     const created = await api.createEntrypoint(zone.id, "http_config_settings", [{ ...rule, ref: "theirs" }]);
-    const added = await api.addRule(zone.id, created.id, rule);
+    const added = await api.addRule(zone.id, "http_config_settings", created.id, rule);
     expect(added.rules.map((entry) => entry.ref)).toEqual(["theirs", "clp_dns_acme"]);
   });
 });
