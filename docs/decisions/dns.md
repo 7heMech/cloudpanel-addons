@@ -189,8 +189,10 @@ addon's own: each request has a 15-second deadline and an 8 MiB reply limit, no
 redirects, and the shared bounded HTTP body reader. A 429 stores Cloudflare's or Mailcow's `Retry-After` (five
 minutes if absent), after which no request is made to that provider until it
 passes, across runs, including failed connection checks and unconfirmed plans.
-A page whose paging changes mid-read, or repeats an entry,
-is refused rather than used.
+A listing whose count changes mid-read, or that repeats or
+misses an entry, is read again after half a second and then a second and a
+half, since Cloudflare's list can lag its count just after a write, and is
+refused if it still disagrees.
 
 ## State, secrets and removal
 

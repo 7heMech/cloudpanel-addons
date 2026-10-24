@@ -98,13 +98,18 @@ describe("Cloudflare", () => {
     expect(records.find((record) => record.type === "SRV")).toMatchObject({ content: "0 443 mail.example.net", priority: 0 });
   });
 
-  test("a page that changes while it is read is refused rather than used", async () => {
+  test("a listing that changes while it is read is read again, and refused if it keeps changing", async () => {
     const { fake, agency } = cloudflare();
     for (let n = 0; n < 60; n++) fake.zone(`z${n}.example`, agency);
     const inner = fake.fetch;
     let pages = 0;
     fake.fetch = async (url, init) => {
       if (new URL(url).pathname.endsWith("/zones") && ++pages === 2) fake.zone("late.example", agency);
+      return inner(url, init);
+    };
+    expect(await new CloudflareApi(USER_TOKEN, fake.fetch).zones()).toHaveLength(61);
+    fake.fetch = async (url, init) => {
+      if (new URL(url).pathname.endsWith("/zones") && ++pages % 2 === 0) fake.zone(`late${pages}.example`, agency);
       return inner(url, init);
     };
     await expect(new CloudflareApi(USER_TOKEN, fake.fetch).zones()).rejects.toThrow("changed while it was being read");

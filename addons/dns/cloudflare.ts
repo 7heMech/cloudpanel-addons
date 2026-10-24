@@ -8,6 +8,11 @@ import { dnsName } from "./model";
 
 const API = "https://api.cloudflare.com/client/v4";
 const MAX_INVENTORY = 100_000;
+/** Cloudflare's list can disagree with its own count for a moment after a write. */
+const REREAD_DELAYS_MS = [500, 1500];
+
+/** A listing that was not consistent from first page to last. */
+class InconsistentRead extends ProviderError {}
 
 export interface CfAccount {
   id: string;
@@ -220,7 +225,20 @@ export class CloudflareApi {
     throw new ProviderError("Cloudflare", reasons || `HTTP ${status}`, status);
   }
 
+  /** Every page of a listing, read again from the start when it was not consistent. */
   private async pages<T>(path: string, perPage: number, parse: (value: unknown) => T & { id: string }): Promise<T[]> {
+    for (const delay of REREAD_DELAYS_MS) {
+      try {
+        return await this.readPages(path, perPage, parse);
+      } catch (error) {
+        if (!(error instanceof InconsistentRead)) throw error;
+        await Bun.sleep(delay);
+      }
+    }
+    return this.readPages(path, perPage, parse);
+  }
+
+  private async readPages<T>(path: string, perPage: number, parse: (value: unknown) => T & { id: string }): Promise<T[]> {
     const items: T[] = [];
     const seen = new Set<string>();
     let total: number | null = null;
@@ -233,18 +251,18 @@ export class CloudflareApi {
       }
       const count = meta.total_count as number;
       if (count > MAX_INVENTORY) throw new ProviderError("Cloudflare", "returned more entries than this addon reads");
-      if (total !== null && count !== total) throw new ProviderError("Cloudflare", "changed while it was being read; check again");
+      if (total !== null && count !== total) throw new InconsistentRead("Cloudflare", "changed while it was being read; check again");
       total = count;
       for (const entry of result) {
         const item = parse(entry);
-        if (seen.has(item.id)) throw new ProviderError("Cloudflare", "returned the same entry twice while paging; check again");
+        if (seen.has(item.id)) throw new InconsistentRead("Cloudflare", "returned the same entry twice while paging; check again");
         seen.add(item.id);
         items.push(item);
       }
       if (page >= (meta.total_pages as number)) break;
-      if (result.length === 0) throw new ProviderError("Cloudflare", "stopped returning entries part way through");
+      if (result.length === 0) throw new InconsistentRead("Cloudflare", "stopped returning entries part way through");
     }
-    if (items.length !== total) throw new ProviderError("Cloudflare", "returned fewer entries than it counted; check again");
+    if (items.length !== total) throw new InconsistentRead("Cloudflare", "returned fewer entries than it counted; check again");
     return items;
   }
 
