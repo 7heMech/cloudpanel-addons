@@ -7,7 +7,7 @@ import { masterVhostHost } from "./inject";
 import { CONFIG_DIR, STATE_DIR } from "./paths";
 import { installedConfig, writeConfig } from "./provision";
 import { fatal, log } from "./util";
-import { existsSync, readdirSync, renameSync, rmSync, rmdirSync } from "node:fs";
+import { chownSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 export function resolveAddon(name: string | undefined): AddonSpec {
   const key = name ?? "";
   const spec = ADDONS[key];
@@ -40,21 +40,40 @@ const ABSORBED_ADDONS: Record<string, string> = { "login-theme": "panel-tweaks" 
  */
 const RENAMED_ADDONS: Record<string, string> = { "wp-login": "wp-tools" };
 
-export function migrateOldAddonNames(quiet = false): void {
+/** What a rename moved, so a failed update can hand it back to the binary it restores. */
+export interface AddonRename {
+  from: string;
+  to: string;
+  /** The old config, or null when the addon was disabled. */
+  config: { text: string; uid: number; gid: number } | null;
+  stateMoved: boolean;
+}
+
+export function migrateOldAddonNames(quiet = false): AddonRename[] {
+  const renames: AddonRename[] = [];
   for (const [from, to] of Object.entries(RENAMED_ADDONS)) {
     const legacyConfig = `${CONFIG_DIR}/${from}.conf`;
     const legacyState = `${STATE_DIR}/${from}`;
     // A disabled addon has no config but keeps its state for re-enabling.
     if (!existsSync(legacyConfig) && !existsSync(legacyState)) continue;
     const spec = ADDONS[to]!;
-    if (existsSync(legacyState)) {
-      if (existsSync(spec.stateDir) && readdirSync(spec.stateDir).length === 0) rmdirSync(spec.stateDir);
-      if (existsSync(spec.stateDir)) log.warn(`${legacyState} was left in place because ${spec.stateDir} already has state`);
-      else renameSync(legacyState, spec.stateDir);
+    if (existsSync(legacyState) && existsSync(spec.stateDir) && readdirSync(spec.stateDir).length > 0) {
+      log.warn(`${from} was not renamed: ${legacyState} and ${spec.stateDir} both hold state. ` +
+        `Keep the current one under ${spec.stateDir}, remove ${legacyState}, then run 'clp-addons repair'`);
+      continue;
     }
-    if (existsSync(legacyConfig) && !installedConfig(spec)) writeConfig(spec, true);
+    const config = existsSync(legacyConfig)
+      ? { text: readFileSync(legacyConfig, "utf8"), uid: statSync(legacyConfig).uid, gid: statSync(legacyConfig).gid }
+      : null;
+    const stateMoved = existsSync(legacyState);
+    if (stateMoved) {
+      rmSync(spec.stateDir, { recursive: true, force: true });
+      renameSync(legacyState, spec.stateDir);
+    }
+    if (config !== null && !installedConfig(spec)) writeConfig(spec, true);
     rmSync(legacyConfig, { force: true });
     rmSync(`${legacyConfig}.new`, { force: true });
+    renames.push({ from, to, config, stateMoved });
     if (!quiet) log.ok(`${from} is ${to} now and was carried over`);
   }
   for (const [from, into] of Object.entries(ABSORBED_ADDONS)) {
@@ -66,6 +85,21 @@ export function migrateOldAddonNames(quiet = false): void {
     rmSync(`${legacyConfig}.new`, { force: true });
     rmSync(`${STATE_DIR}/${from}`, { recursive: true, force: true });
     if (!quiet) log.ok(`${from} is part of ${into} now and was carried over`);
+  }
+  return renames;
+}
+
+/** Puts renamed addons back under their old names for the earlier binary a rollback restores. */
+export function revertAddonRenames(renames: AddonRename[]): void {
+  for (const { from, to, config, stateMoved } of renames) {
+    const spec = ADDONS[to]!;
+    if (stateMoved && existsSync(spec.stateDir) && !existsSync(`${STATE_DIR}/${from}`)) renameSync(spec.stateDir, `${STATE_DIR}/${from}`);
+    if (config !== null) {
+      writeFileSync(`${CONFIG_DIR}/${from}.conf`, config.text, { mode: 0o640 });
+      chownSync(`${CONFIG_DIR}/${from}.conf`, config.uid, config.gid);
+    }
+    rmSync(spec.configFile, { force: true });
+    log.warn(`${to} was put back as ${from} for the earlier version`);
   }
 }
 

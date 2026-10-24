@@ -17,7 +17,7 @@ function fixture(): string {
 }
 
 /** Runs the migration with the paths, config writer and log pointed at `root`. */
-function migrate(root: string): { warnings: string[] } {
+function migrate(root: string, revert = false): { warnings: string[] } {
   const script = `
     import { mock } from "bun:test";
     import { writeFileSync } from "node:fs";
@@ -35,8 +35,9 @@ function migrate(root: string): { warnings: string[] } {
       ...realUtil,
       log: { ...realUtil.log, ok: () => {}, warn: (message) => { warnings.push(message); } },
     }));
-    const { migrateOldAddonNames } = await import("./cli/addons.ts");
-    migrateOldAddonNames();
+    const { migrateOldAddonNames, revertAddonRenames } = await import("./cli/addons.ts");
+    const renames = migrateOldAddonNames();
+    if (${revert}) revertAddonRenames(renames);
     process.stdout.write(JSON.stringify({ warnings }));
   `;
   const result = spawnSync(process.execPath, ["-e", script], { cwd: repo, encoding: "utf8" });
@@ -66,14 +67,28 @@ test("a disabled wp-login keeps its state for re-enabling, and stays disabled", 
   expect(readFileSync(join(root, "state", "wp-tools", "varnish.json"), "utf8")).toBe("{}");
 });
 
-test("state already under the new name is never overwritten", () => {
+test("with state under both names nothing is renamed, and the operator is told which to keep", () => {
   const root = fixture();
-  writeFileSync(join(root, "etc", "wp-login.conf"), "");
+  writeFileSync(join(root, "etc", "wp-login.conf"), "# clp-addons: wp-login\n");
   mkdirSync(join(root, "state", "wp-login"));
   writeFileSync(join(root, "state", "wp-login", "mainwp.json"), "old");
   mkdirSync(join(root, "state", "wp-tools"));
   writeFileSync(join(root, "state", "wp-tools", "mainwp.json"), "new");
-  expect(migrate(root).warnings[0]).toContain("was left in place");
+  expect(migrate(root).warnings[0]).toContain("both hold state");
+  expect(readFileSync(join(root, "etc", "wp-login.conf"), "utf8")).toBe("# clp-addons: wp-login\n");
+  expect(existsSync(join(root, "etc", "wp-tools.conf"))).toBe(false);
   expect(readFileSync(join(root, "state", "wp-tools", "mainwp.json"), "utf8")).toBe("new");
   expect(readFileSync(join(root, "state", "wp-login", "mainwp.json"), "utf8")).toBe("old");
+});
+
+test("a failed update hands the addon back under its old name to the binary it restores", () => {
+  const root = fixture();
+  writeFileSync(join(root, "etc", "wp-login.conf"), "# clp-addons: wp-login\nRUN_AS=clp-addons\n");
+  mkdirSync(join(root, "state", "wp-login"));
+  writeFileSync(join(root, "state", "wp-login", "mainwp.json"), "{}");
+  migrate(root, true);
+  expect(readFileSync(join(root, "etc", "wp-login.conf"), "utf8")).toBe("# clp-addons: wp-login\nRUN_AS=clp-addons\n");
+  expect(existsSync(join(root, "etc", "wp-tools.conf"))).toBe(false);
+  expect(readFileSync(join(root, "state", "wp-login", "mainwp.json"), "utf8")).toBe("{}");
+  expect(existsSync(join(root, "state", "wp-tools"))).toBe(false);
 });

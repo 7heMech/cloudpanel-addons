@@ -13,8 +13,11 @@ addon-and-verb table refuses
 Its identifier was `wp-login` before 2.0.0. `update` and `repair` move
 `wp-login.conf` and `/var/lib/clp-addons/wp-login/` to the new name, the state
 also when the addon is disabled, since it holds the MainWP connections and any
-login setting an enrollment changed. State already under `wp-tools` is never
-overwritten. The old name is not accepted anywhere else.
+login setting an enrollment changed. When both directories hold state, nothing
+is renamed and update and repair say which to keep. If the update fails after
+the move, it puts both back under `wp-login` first, because the binary the
+rollback restores knows only that name. The old name is not accepted anywhere
+else.
 
 Sign-in is available whenever the addon is enabled. Automatic Varnish installation and
 MainWP enrollment are separate opt-in policies, off when no settings exist.
