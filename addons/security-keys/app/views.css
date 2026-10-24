@@ -9,5 +9,8 @@
   .settings-card { grid-template-columns: 1fr; gap: 24px; }
 }
 @media (max-width: 940px) {
+  .fleet-table.security-key-table td.site-cell { flex: 1 1 calc(100% - 130px); align-self: center; }
+  .fleet-table.security-key-table td.action-cell:has(.btn) { flex: 0 0 auto; order: -1; }
+  .fleet-table.security-key-table td .badge { display: table; margin-top: 6px; }
   .security-key-table td.mono { overflow-wrap: anywhere; }
 }
