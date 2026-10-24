@@ -1,13 +1,18 @@
 .clp-security-keys { margin-top: 20px; }
 /* One bordered list, a row per key, in the panel's own border colours. */
 .clp-sk-keys { margin: 0 0 16px; padding: 0; list-style: none; border: 1px solid #eaeaea; border-radius: 4px; }
-.clp-sk-keys li { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+/* Remove sits on the name's line; what is known about the key runs the full width under both. */
+.clp-sk-keys li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 16px;
   padding: 14px 16px; border-top: 1px solid #eaeaea; }
 .clp-sk-keys li:first-child { border-top: 0; }
-.clp-sk-keys li > div { min-width: 0; }
-.clp-sk-keys strong { display: block; overflow-wrap: anywhere; }
-.clp-sk-meta { display: block; margin-top: 2px; color: #9bacb6; font-size: 14px; }
-.clp-sk-keys .btn { flex: 0 0 auto; }
+.clp-sk-keys li > div { display: contents; }
+.clp-sk-keys strong { grid-column: 1; overflow-wrap: anywhere; }
+.clp-sk-keys .btn { grid-column: 2; grid-row: 1; }
+.clp-sk-meta, .clp-sk-refused { grid-column: 1 / -1; font-size: 14px; }
+.clp-sk-meta { color: #9bacb6; }
+.clp-sk-meta span { white-space: nowrap; }
+.clp-sk-dot { margin: 0 6px; }
+.clp-sk-refused { color: #dc3545; }
 html.dark .clp-sk-keys, html.dark .clp-sk-keys li { border-color: var(--clp-border-color); }
 html.dark .clp-sk-meta { color: var(--clp-text-secondary, #9b9b9b); }
 .clp-sk-none { margin: 0 0 16px; color: #9ca3af; }
@@ -16,6 +21,8 @@ html.dark .clp-sk-meta { color: var(--clp-text-secondary, #9b9b9b); }
 .clp-sk-add { display: flex; flex-wrap: wrap; gap: 16px 10px; }
 .clp-sk-add input { flex: 1 1 220px; max-width: 360px; }
 @media (max-width: 575px) {
+  .clp-sk-meta span { display: block; }
+  .clp-sk-meta .clp-sk-dot { display: none; }
   .clp-sk-add input { max-width: none; }
   .clp-sk-add .btn { flex: 1 1 100%; }
 }
