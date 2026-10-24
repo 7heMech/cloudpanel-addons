@@ -120,6 +120,8 @@ for the features that need them. The URL uses only keys in Cloudflare's
 Config Rules and Zone WAF have no documented template key, so the page asks
 operators to add them manually when listed. Their API permissions are
 [Config Settings Write and Zone WAF Write](https://developers.cloudflare.com/ruleset-engine/rulesets-api/update/).
+Cloudflare refuses a missing permission with a bare "Authentication error", so
+a refused settings or rules call is reported with the permission it needs.
 
 A token is verified before it is saved (`/user/tokens/verify`, or the account
 route for an account-owned one, using a zone's account when account listing is

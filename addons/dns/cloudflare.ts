@@ -183,6 +183,23 @@ function recordBody(record: RecordWrite): Record<string, unknown> {
   return body;
 }
 
+/** The token permission each ruleset phase this addon writes needs. */
+const PHASE_PERMISSIONS: Record<string, string> = {
+  http_config_settings: "Config Rules: Edit",
+  http_request_firewall_custom: "Zone WAF: Edit",
+};
+
+/** Cloudflare refuses a permission the token lacks with a bare "Authentication error"; name the permission instead. */
+async function needs<T>(permission: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (!(error instanceof ProviderError) || error.status !== 403) throw error;
+    const reason = error.message.replace(/^Cloudflare: /, "");
+    throw new ProviderError("Cloudflare", `the token lacks ${permission} for this zone; add it to the token in Cloudflare (${reason})`, 403);
+  }
+}
+
 export class CloudflareApi {
   readonly http: ProviderHttp;
 
@@ -290,18 +307,18 @@ export class CloudflareApi {
   }
 
   async setting(zoneId: string, setting: string): Promise<string> {
-    const { result } = await this.call(`/zones/${id(zoneId)}/settings/${setting}`);
+    const { result } = await needs("Zone Settings: Edit", () => this.call(`/zones/${id(zoneId)}/settings/${setting}`));
     return text(object(result).value, 40);
   }
 
   async setSetting(zoneId: string, setting: string, value: string): Promise<void> {
-    await this.call(`/zones/${id(zoneId)}/settings/${setting}`, "PATCH", { value });
+    await needs("Zone Settings: Edit", () => this.call(`/zones/${id(zoneId)}/settings/${setting}`, "PATCH", { value }));
   }
 
   /** The zone's ruleset for one phase, or null when it has none yet. */
   async entrypoint(zoneId: string, phase: string): Promise<CfRuleset | null> {
     try {
-      const { result } = await this.call(`/zones/${id(zoneId)}/rulesets/phases/${phase}/entrypoint`);
+      const { result } = await needs(PHASE_PERMISSIONS[phase] ?? "rules permissions", () => this.call(`/zones/${id(zoneId)}/rulesets/phases/${phase}/entrypoint`));
       return parseRuleset(result);
     } catch (error) {
       if (error instanceof ProviderError && error.status === 404) return null;
