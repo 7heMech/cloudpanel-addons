@@ -64,5 +64,6 @@ Cloudflare traffic and CloudPanel's own proxying are unaffected. It never holds
 an update back: automatic updates still install Nginx, and CloudPanel when that
 is switched on.
 
-Switch it off if a load balancer or proxy on a public address sits in front of
-this server or its panel.
+A panel behind Cloudflare keeps its visitors' addresses. Switch the setting off
+only if a load balancer or proxy other than Cloudflare, on a public address,
+sits in front of this server or its panel.

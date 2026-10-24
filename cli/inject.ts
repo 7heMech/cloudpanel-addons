@@ -37,7 +37,7 @@ import {
 import type { AddonTarget } from "../lib/addon-target";
 import { writeAtomic } from "./util";
 import { runCommand, type CommandResult } from "./action-common";
-import { errorMessage, nginxFileChange, openPanelDatabase, trustedVhost, withNginxTransaction, writeAtomicOwned } from "./nginx-transaction";
+import { cloudflareRanges, errorMessage, nginxFileChange, openPanelDatabase, trustedVhost, withNginxTransaction, writeAtomicOwned } from "./nginx-transaction";
 import { MAINTENANCE_INCLUDE_PATH, sitesWithoutMaintenance, stageMaintenanceVhosts } from "./maintenance-vhosts";
 
 // CloudPanel versions this patch's markup assumptions were verified against.
@@ -817,15 +817,6 @@ const NGINX_MAINTENANCE_BLOCK_RE = /\r?\n?[ \t]*# clp-addons:maintenance:start[\
 const MAINTENANCE_GEO_MARKER = "# clp-addons:maintenance-client-ip";
 
 /** CloudPanel keeps these ranges for its own Cloudflare-only vhost setting. */
-function cloudflareRanges(path: string): string[] {
-  let content: string;
-  try { content = readFileSync(path, "utf8"); } catch { return []; }
-  return content.split(/\r?\n/).flatMap((line) => {
-    const match = line.match(/^\s*allow\s+([0-9a-fA-F.:/]+)\s*;/);
-    return match ? [match[1]!] : [];
-  });
-}
-
 function maintenanceGeoContent(ranges: string[]): string {
   return `${MAINTENANCE_GEO_MARKER}
 # Preserve the connection peer even if CloudPanel's broad real_ip settings
