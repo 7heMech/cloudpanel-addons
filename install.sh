@@ -7,7 +7,7 @@ ARTIFACTS=("${CLI_ARTIFACT}")
 CLI_TARGET="/usr/local/bin/clp-addons"
 GH_PRIVATE="/usr/local/libexec/clp-addons/gh"
 AVAILABLE_ADDONS=("cloudflare-ips" "dns" "instatic" "stager" "maintenance" "php-resources" "git" "panel-tweaks" "system-tweaks" "wp-login" "smtp" "terminal" "security-keys")
-DEFAULT_ADDONS=("panel-tweaks" "system-tweaks" "maintenance" "terminal")
+DEFAULT_ADDONS=("panel-tweaks" "system-tweaks" "maintenance" "terminal" "security-keys")
 VERSION="latest"
 SELECTED=""
 ASSUME_YES=0
@@ -67,7 +67,7 @@ ok "dependencies available"
 
 have_tty() { [[ -r /dev/tty && -w /dev/tty ]]; }
 
-DEFAULT_ADDONS=("panel-tweaks" "system-tweaks" "maintenance" "terminal")
+DEFAULT_ADDONS=("panel-tweaks" "system-tweaks" "maintenance" "terminal" "security-keys")
 
 if [[ -z $SELECTED ]]; then
   if (( ASSUME_YES )) || ! have_tty; then
