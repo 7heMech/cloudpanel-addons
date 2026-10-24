@@ -262,7 +262,7 @@ const DIALOGS = `
     <input type="hidden" name="id">
     <ol class="dns-steps">
       <li id="dns-token-step"><strong>Create a token in Cloudflare</strong>
-        <p class="hint">Check these permissions: <span id="dns-token-permissions"></span>. Add Config Rules and Zone WAF manually when listed. Choose the accounts and zones there; All zones also covers zones you add later.</p>
+        <p class="hint">Check these permissions: <span id="dns-token-permissions"></span>. Choose the accounts and zones there; All zones also covers zones you add later.</p>
         <a class="btn" id="dns-token-link" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Create token in Cloudflare ↗</a></li>
       <li><strong>Paste it here</strong>
         <div class="form-grid dns-token-grid">
