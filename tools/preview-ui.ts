@@ -644,14 +644,14 @@ function securityKeysPreviewUsers(url: URL): UserKeysView[] {
   if (url.searchParams.has("empty")) return [];
   const origin = "https://panel.example.com:8443";
   return [
-    { user: "admin", active: true, keys: [
+    { user: "admin", active: true, role: "ROLE_ADMIN", keys: [
       { id: "a1", name: "YubiKey 5C", origin, synced: false, createdAt: "2026-09-02T08:14:00.000Z", lastUsedAt: "2026-10-22T07:51:00.000Z" },
       { id: "a2", name: "Bitwarden", origin, synced: true, createdAt: "2026-09-10T16:40:00.000Z", lastUsedAt: null },
     ] },
-    { user: "jane", active: true, keys: [
+    { user: "jane", active: true, role: "ROLE_SITE_MANAGER", keys: [
       { id: "j1", name: "MacBook Touch ID", origin, synced: true, createdAt: "2026-10-01T11:02:00.000Z", lastUsedAt: "2026-10-21T18:30:00.000Z" },
     ] },
-    { user: "former-contractor", active: false, keys: [
+    { user: "former-contractor", active: false, role: null, keys: [
       { id: "f1", name: "Security key", origin, synced: false, createdAt: "2026-06-12T09:00:00.000Z", lastUsedAt: "2026-07-01T10:12:00.000Z" },
     ] },
   ];

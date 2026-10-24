@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runSecurityKeysAction, type SecurityKeysPaths } from "../addons/security-keys/action";
 import { SECURITY_KEYS_TARGETS } from "../addons/security-keys/inject/targets";
+import { dashboardView } from "../addons/security-keys/app/views";
 import { decodeCbor, verifyAssertion, verifyRegistration } from "../addons/security-keys/webauthn";
 
 const ORIGIN = "https://panel.example.com:8443";
@@ -389,4 +390,26 @@ test("the injected blocks are opaque to Twig", () => {
     expect(inner).not.toContain("endverbatim");
     expect(inner).not.toContain("ADDON_URL");
   }
+});
+
+test("the admin list groups keys by user and marks what needs review", () => {
+  const now = Date.parse("2026-10-24T12:00:00Z");
+  const key = (id: string, name: string, synced: boolean, lastUsedAt: string | null) =>
+    ({ id, name, synced, lastUsedAt, origin: "https://panel.example.com:8443", createdAt: "2026-01-02T00:00:00Z" });
+  const users = [
+    { user: "admin", active: true, role: "ROLE_ADMIN", keys: [key("a", "YubiKey", false, "2026-10-23T08:00:00Z"), key("b", "Bitwarden", true, null)] },
+    { user: "gone", active: false, role: null, keys: [key("c", "Old key", false, "2026-03-01T00:00:00Z")] },
+    { user: "nobody", active: true, role: "ROLE_USER", keys: [] },
+  ];
+  const page = dashboardView({ users, settings: { roles: ["ROLE_ADMIN"], syncedPasskeys: false } }, now);
+  expect(page.match(/class="sk-group"/g)).toHaveLength(2);
+  expect(page).toContain("<strong>admin</strong> <span class=\"hint\">Administrator · 2 keys</span>");
+  expect(page).toContain("<strong>gone</strong> <span class=\"hint\">1 key</span> <span class=\"sk-refused\">No longer signs in</span>");
+  expect(page).not.toContain("nobody");
+  expect(page).toContain("3 keys for 2 users");
+  expect(page).toContain("Synced passkey, not accepted");
+  expect(page).toContain(">Yesterday</time>");
+  expect(page.match(/sk-key is-stale/g)).toHaveLength(2);
+  expect(page).not.toContain("<span class=\"badge");
+  expect(dashboardView({ users: [], settings: { roles: [], syncedPasskeys: true } }, now)).toContain("No security keys yet.");
 });
