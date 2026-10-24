@@ -144,6 +144,7 @@ mock.module("node:fs", () => ({
       present.delete(key);
       return undefined;
     }
+    if (key === `${LIBEXEC_DIR}/gh`) return void calls.push(`rm:${key}`);
     return originalRmSync(path as any, options);
   },
   lstatSync(path: string | URL, ...rest: unknown[]) {
@@ -313,18 +314,6 @@ test("install enables bundled addons with no release checks or gh, even when all
   }
 });
 
-test("install with an explicit release verifies artifacts before replacing the binary", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  hasInstalledAddon = false;
-  await cmdInstall(["stager", "--version=v1.2.3"]);
-  expect(calls).toContain("resolveRelease");
-  expect(calls).toContain("fetchVerified");
-  expect(calls).toContain("verifyAttestation");
-  expect(calls.indexOf(`writeAtomic:${CLI_BIN}`)).toBeGreaterThan(calls.indexOf("verifyAttestation"));
-  expect(calls).toContain("startUnits");
-});
-
 test("bootstrap local artifacts are checked without invoking the remote verifier", async () => {
   calls.length = 0;
   resetProvisioning();
@@ -336,7 +325,32 @@ test("bootstrap local artifacts are checked without invoking the remote verifier
   expect(calls).toContain("startUnits");
 });
 
-test.each([{ flags: ["--version"] }, { flags: ["--local"] }, { flags: ["--version=v1.2.3", "--local=/tmp/bootstrap"] }])("install refuses incomplete or conflicting artifact flags %j", async ({ flags }) => {
+test("install enables every addon it is given", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  await cmdInstall(["stager", "terminal"]);
+  expect(calls).toContain("writeConfig:stager");
+  expect(calls).toContain("writeConfig:terminal");
+  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} install`))).toBe(false);
+});
+
+test("install.sh's binary is recorded once and then enables every addon", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  await cmdInstall(["stager", "terminal", "security-keys", "--local=/tmp/bootstrap"]);
+  expect(calls.filter((call) => call === "loadLocal")).toHaveLength(1);
+  expect(calls.indexOf("writeConfig:security-keys")).toBeGreaterThan(calls.indexOf(`writeAtomic:${CLI_BIN}`));
+  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} install`))).toBe(false);
+});
+
+test("install refuses an unknown addon before installing any", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  await expect(cmdInstall(["stager", "nonesuch"])).rejects.toThrow("unknown addon 'nonesuch'");
+  expect(calls).not.toContain("writeConfig:stager");
+});
+
+test.each([{ flags: ["--local"] }, { flags: ["--version=v1.2.3"] }, { flags: ["--skip-attestation"] }])("install refuses %j", async ({ flags }) => {
   calls.length = 0;
   await expect(cmdInstall(["stager", ...flags])).rejects.toThrow();
   expect(calls).not.toContain("writeConfig:stager");
@@ -576,6 +590,7 @@ test("the handed-off target binary finalizes all provisioning before restarting 
     "ensureDirs",
     "reconcilePanelIdentity",
     "removeLegacyUnits",
+    `rm:${LIBEXEC_DIR}/gh`,
     "installUnits",
     "reconcile",
     "reconcileNginxProxy",

@@ -7,6 +7,7 @@ export const PANEL_TWEAKS_ADDON: AddonDefinition = {
   name: "panel-tweaks",
   title: "Panel Tweaks",
   description: "Site search and columns, automatic SSL for native sites, mobile layouts and theme improvements.",
+  preselected: true,
   targets: PANEL_TWEAKS_TARGETS,
   handler: handle,
   action: runPanelTweaksAction,

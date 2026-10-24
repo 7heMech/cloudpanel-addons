@@ -48,9 +48,6 @@ jobs:
       - name: Full test suite
         run: bun run test
 
-      - name: Installer keyboard selection
-        run: bun run test:installer
-
       - name: Lint shell scripts
         # install.sh is the only shell script left in the repo, and a finding
         # here is a release blocker, not a style note: it is the bootstrap a
@@ -127,11 +124,11 @@ jobs:
             dist/install.sh
 
       - name: Publish the sigstore bundles alongside the artifacts
-        # The bootstrap installer needs a bundle to verify offline, and the
-        # attestations API returns it wrapped in an envelope -- which meant the
-        # installer carried a JSON parser just to unwrap it. Shipping the
-        # bundles as an asset removes that: gh reads this file directly, and a
-        # single .jsonl of every bundle verifies any one of the artifacts.
+        # An update verifies against these bundles, and the attestations API
+        # returns them wrapped in an envelope. Shipping them as an asset lets the
+        # binary read this file directly, and a single .jsonl of every bundle
+        # verifies any one of the artifacts, install.sh included for anyone
+        # checking it with gh.
         #
         # Not in SHA256SUMS, and it does not need to be. A bundle is signed and
         # bound to its subject's digest, so it cannot vouch for anything but the

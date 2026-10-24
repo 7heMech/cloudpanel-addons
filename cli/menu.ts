@@ -1,6 +1,7 @@
 // `clp-addons` with no arguments, in a root terminal: the addons, their
 // state, and the few things an operator does to them, one key each. Toggles go
-// through the same enable and disable the Addons page runs.
+// through the same enable and disable the Addons page runs. The installer's
+// picker is the same list.
 
 import { dashboardUrl } from "./addons";
 import { ADDONS, ADDON_NAMES } from "./addon-catalog";
@@ -15,6 +16,8 @@ import { log } from "./util";
 import { checkCliUpdate, type CliUpdateInfo } from "../lib/update-check";
 
 const KEYS = "↑/↓ move · Space toggle · Enter apply · s status · r repair · u update · q quit";
+const PICK_KEYS = "↑/↓ move · Space toggle · a all · n none · Enter install · q cancel";
+const QUIT_KEYS = ["q", "\x1b", "\x03", "\x04"];
 
 const paint = (code: string, text: string) => `\x1b[${code}m${text}\x1b[0m`;
 
@@ -45,6 +48,31 @@ function fit(line: string, width: number): string {
   return out;
 }
 
+/** A checkbox per addon, with its description or, once changed, what will happen to it. */
+function addonRows(cursor: number, wanted: Set<string>, changed: (name: string) => boolean = () => false): string[] {
+  const nameWidth = Math.max(...ADDON_NAMES.map((name) => name.length));
+  return ADDON_NAMES.map((name, index) => {
+    const on = wanted.has(name);
+    const mark = on ? "[x]" : "[ ]";
+    const pointer = index === cursor ? paint("36", "›") : " ";
+    const label = `${mark} ${name.padEnd(nameWidth)}`;
+    const note = changed(name) ? paint("33", on ? "enable" : "disable") : paint("2", ADDONS[name]!.description);
+    return ` ${pointer} ${changed(name) ? paint("33", label) : index === cursor ? paint("1", label) : label}  ${note}`;
+  });
+}
+
+/** The cursor after an up or down key, or null for any other key. */
+function moved(key: string, cursor: number): number | null {
+  if (key === "\x1b[A" || key === "k") return (cursor + ADDON_NAMES.length - 1) % ADDON_NAMES.length;
+  if (key === "\x1b[B" || key === "j") return (cursor + 1) % ADDON_NAMES.length;
+  return null;
+}
+
+function toggle(wanted: Set<string>, name: string): void {
+  if (wanted.has(name)) wanted.delete(name);
+  else wanted.add(name);
+}
+
 function frame(state: MenuState): string[] {
   const manager = state.manager;
   const header = [
@@ -52,25 +80,87 @@ function frame(state: MenuState): string[] {
     manager === "active" ? paint("32", "● manager active") : paint("31", `● manager ${manager}`),
     state.update?.hasUpdate ? paint("33", `v${state.update.latest} available`) : "",
   ].filter(Boolean).join("  ");
-  const nameWidth = Math.max(...ADDON_NAMES.map((name) => name.length));
-  const rows = ADDON_NAMES.map((name, index) => {
-    const on = state.wanted.has(name);
-    const changed = on !== state.enabled.has(name);
-    const mark = on ? "[x]" : "[ ]";
-    const pointer = index === state.cursor ? paint("36", "›") : " ";
-    const label = `${mark} ${name.padEnd(nameWidth)}`;
-    const note = changed ? paint("33", on ? "enable" : "disable") : paint("2", ADDONS[name]!.description);
-    return ` ${pointer} ${changed ? paint("33", label) : index === state.cursor ? paint("1", label) : label}  ${note}`;
-  });
-  const pending = ADDON_NAMES.filter((name) => state.wanted.has(name) !== state.enabled.has(name)).length;
+  const changed = (name: string) => state.wanted.has(name) !== state.enabled.has(name);
+  const pending = ADDON_NAMES.filter(changed).length;
   return [
     ` ${header}`,
     ` ${paint("2", dashboardUrl())}`,
     "",
-    ...rows,
+    ...addonRows(state.cursor, state.wanted, changed),
     "",
     ` ${paint("2", KEYS)}${pending ? paint("33", `  ·  ${pending} pending`) : ""}`,
   ];
+}
+
+export interface Terminal {
+  input: Pick<NodeJS.ReadStream, "setRawMode" | "resume" | "pause" | "on" | "off">;
+  output: { write(text: string): unknown; columns?: number };
+}
+
+const TTY: Terminal = { input: process.stdin, output: process.stdout };
+
+/** A block of lines redrawn in place, with keys read raw while captured. */
+function screen({ input, output }: Terminal) {
+  let drawn = 0;
+  return {
+    get drawn() { return drawn; },
+    draw(lines: string[]) {
+      const width = Math.max(20, (output.columns ?? 80) - 1);
+      output.write(`${drawn ? `\x1b[${drawn}A\r` : ""}\x1b[J${lines.map((line) => fit(line, width)).join("\n")}\n`);
+      drawn = lines.length;
+    },
+    /** Leaves the block where it is, so the next draw starts a new one below. */
+    leave() { drawn = 0; },
+    capture() {
+      output.write("\x1b[?25l");
+      input.setRawMode(true);
+      input.resume();
+    },
+    release() {
+      input.setRawMode(false);
+      input.pause();
+      output.write("\x1b[?25h");
+    },
+  };
+}
+
+/** The installer's question, starting from the preselected addons. Null when cancelled. */
+export function pickAddons(terminal: Terminal = TTY): Promise<string[] | null> {
+  const wanted = new Set(ADDON_NAMES.filter((name) => ADDONS[name]!.preselected));
+  const view = screen(terminal);
+  let cursor = 0;
+  const draw = () => view.draw([
+    ` ${paint("1", "Which addons should be installed?")}`,
+    "",
+    ...addonRows(cursor, wanted),
+    "",
+    ` ${paint("2", PICK_KEYS)}`,
+  ]);
+
+  return new Promise((resolve) => {
+    const finish = (picked: string[] | null) => {
+      terminal.input.off("data", onKey);
+      view.release();
+      resolve(picked);
+    };
+    const onKey = (chunk: Buffer) => {
+      const key = chunk.toString("utf-8");
+      const next = moved(key, cursor);
+      if (next !== null) cursor = next;
+      else if (key === " ") toggle(wanted, ADDON_NAMES[cursor]!);
+      else if (key === "a") for (const name of ADDON_NAMES) wanted.add(name);
+      else if (key === "n") wanted.clear();
+      else if (key === "\r" || key === "\n") {
+        if (wanted.size > 0) finish(ADDON_NAMES.filter((name) => wanted.has(name)));
+        return;
+      } else if (QUIT_KEYS.includes(key)) return finish(null);
+      else return;
+      draw();
+    };
+    view.capture();
+    terminal.input.on("data", onKey);
+    draw();
+  });
 }
 
 export async function cmdMenu(): Promise<void> {
@@ -80,33 +170,18 @@ export async function cmdMenu(): Promise<void> {
   };
   const input = process.stdin;
   const out = process.stdout;
-  let drawn = 0;
+  const view = screen(TTY);
   let busy = false;
 
-  const draw = () => {
-    const width = Math.max(20, (out.columns ?? 80) - 1);
-    const lines = frame(state).map((line) => fit(line, width));
-    out.write(`${drawn ? `\x1b[${drawn}A\r` : ""}\x1b[J${lines.join("\n")}\n`);
-    drawn = lines.length;
-  };
-
-  const release = () => {
-    input.setRawMode(false);
-    input.pause();
-    out.write("\x1b[?25h");
-  };
-  const capture = () => {
-    out.write("\x1b[?25l");
-    input.setRawMode(true);
-    input.resume();
-  };
+  const draw = () => view.draw(frame(state));
+  const { release, capture } = view;
 
   // Each runs below the menu with the terminal back in cooked mode, so its
   // output and Ctrl-C behave as they would for the command typed out.
   const run = async (task: () => unknown | Promise<unknown>): Promise<void> => {
     busy = true;
     release();
-    drawn = 0;
+    view.leave();
     out.write("\n");
     try {
       await task();
@@ -144,14 +219,10 @@ export async function cmdMenu(): Promise<void> {
       const key = chunk.toString("utf-8");
       const name = ADDON_NAMES[state.cursor]!;
       switch (key) {
-        case "\x1b[A": case "k":
-          state.cursor = (state.cursor + ADDON_NAMES.length - 1) % ADDON_NAMES.length; break;
-        case "\x1b[B": case "j":
-          state.cursor = (state.cursor + 1) % ADDON_NAMES.length; break;
+        case "\x1b[A": case "k": case "\x1b[B": case "j":
+          state.cursor = moved(key, state.cursor)!; break;
         case " ":
-          if (state.wanted.has(name)) state.wanted.delete(name);
-          else state.wanted.add(name);
-          break;
+          toggle(state.wanted, name); break;
         case "\r": case "\n":
           if (ADDON_NAMES.every((item) => state.wanted.has(item) === state.enabled.has(item))) return;
           apply().catch(reject); return;
@@ -168,9 +239,8 @@ export async function cmdMenu(): Promise<void> {
           out.write("\n");
           cmdUpdate([]).then(resolve, reject);
           return;
-        case "q": case "\x1b": case "\x03": case "\x04":
-          quit(); return;
         default:
+          if (QUIT_KEYS.includes(key)) quit();
           return;
       }
       draw();
@@ -181,7 +251,7 @@ export async function cmdMenu(): Promise<void> {
     draw();
     checkCliUpdate(CLI_VERSION).then((update) => {
       state.update = update;
-      if (!busy && drawn) draw();
+      if (!busy && view.drawn) draw();
     }, () => {});
   });
 }

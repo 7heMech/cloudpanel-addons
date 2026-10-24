@@ -54,9 +54,6 @@ jobs:
           bun run test
           wait "$typecheck"
 
-      - name: Installer keyboard selection
-        run: bun run test:installer
-
       - name: Lint shell scripts
         # install.sh is the only shell script left in the repo, and a finding
         # here is a release blocker, not a style note: it is the bootstrap a

@@ -14,9 +14,9 @@ Log in to your server as **root** and run:
 curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download/install.sh | bash
 ```
 
-The installer asks which addons you want, checks that the download is genuine,
-and installs Docker or Postfix when a selected addon needs it. Requires an
-x86-64 CloudPanel host.
+The installer asks which addons you want, and installs Docker or Postfix when a
+selected addon needs it. Updates are checked against GitHub build provenance.
+Requires an x86-64 CloudPanel host.
 
 When it finishes, open the new **Addons** tab in CloudPanel.
 
