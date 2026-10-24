@@ -15,8 +15,12 @@ if (card) {
     errorBox.textContent = message;
     errorBox.hidden = !message;
   };
+  // This year's dates leave the year out, so a key's dates fit one line on a phone.
   var day = function (iso) {
-    return new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
+    var date = new Date(iso);
+    return date.getFullYear() === new Date().getFullYear()
+      ? date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+      : date.toLocaleDateString(undefined, { dateStyle: "medium" });
   };
 
   // What root says this account may do, painted with every reply.
@@ -49,7 +53,7 @@ if (card) {
       name.textContent = key.name;
       var meta = document.createElement("span");
       meta.className = "clp-sk-meta";
-      // On a phone each date takes its own line, so neither breaks in the middle.
+      // Each part stays whole, so a line too narrow for both breaks at the dot.
       [["Added " + day(key.createdAt)], ["\u00b7", "clp-sk-dot"], [key.lastUsedAt ? "Last used " + day(key.lastUsedAt) : "Never used"]]
         .forEach(function (part) {
           var span = document.createElement("span");

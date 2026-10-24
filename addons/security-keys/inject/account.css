@@ -21,8 +21,6 @@ html.dark .clp-sk-meta { color: var(--clp-text-secondary, #9b9b9b); }
 .clp-sk-add { display: flex; flex-wrap: wrap; gap: 16px 10px; }
 .clp-sk-add input { flex: 1 1 220px; max-width: 360px; }
 @media (max-width: 575px) {
-  .clp-sk-meta span { display: block; }
-  .clp-sk-meta .clp-sk-dot { display: none; }
   .clp-sk-add input { max-width: none; }
   .clp-sk-add .btn { flex: 1 1 100%; }
 }
