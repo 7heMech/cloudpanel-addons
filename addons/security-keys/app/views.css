@@ -1,5 +1,5 @@
 .security-key-table time { white-space: nowrap; }
-.security-key-table td .badge { display: table; margin-bottom: 3px; }
+.security-key-table td .badge { display: block; width: fit-content; margin-bottom: 1px; padding: 1px 4px; border-radius: 3px; font-size: 10px; font-weight: 400; line-height: 1.1; }
 .security-key-table td.action-cell { text-align: right; }
 .settings-card { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
 .settings-card h2 { margin: 0 0 8px; }
