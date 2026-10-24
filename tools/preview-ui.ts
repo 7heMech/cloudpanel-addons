@@ -15,7 +15,7 @@ import type { DnsState, Review as DnsReview } from "../addons/dns/action";
 import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
 import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
 import { tokenTemplate as dnsTokenTemplate } from "../addons/dns/token";
-import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout, panelPhpLine } from "../addons/panel-tweaks/app/views";
+import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { siteLayoutTarget } from "../lib/panel-nav";
 import { sitesBlock } from "../addons/panel-tweaks/inject/targets";
 import { previewPage as panelTweaksPreviewPage } from "../addons/panel-tweaks/app/preview";
@@ -32,7 +32,7 @@ import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
 import { PRESET_CATEGORIES, STOCK_PROFILE, type PhpResourcesState, type PoolSiteState } from "../addons/php-resources/action";
 import type { PanelTweaksState } from "../addons/panel-tweaks/action";
-import type { PanelPhpStatus } from "../addons/panel-tweaks/panel-php";
+import type { PanelPhpStatus } from "../addons/system-tweaks/panel-php";
 import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { type: "text" };
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
@@ -412,6 +412,7 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
       lastRun: url.searchParams.has("failed") ? { at: "2026-10-23 16:11:29", outcome: "failed", packages: [], message: "An error occurred: 404 Not Found [IP: 2001:db8::1 443]\nThe URI https://packages.example.test/php8.2-bcmath.deb failed to download, aborting" } : enabled ? { at: "2026-10-23 06:41:09", outcome: "upgraded", packages: ["php8.3-fpm", "php8.3-cli"], message: "" } : null,
       rebootRequired: { since: "2026-10-20T06:41:09Z", packages: ["linux-image-6.1.0-53-amd64"] },
     },
+    panelPhp: panelPhpPreviewStatus(url),
     realIp: { blockForged: url.searchParams.get("realip") !== "off", trustsAnyAddress: url.searchParams.get("realip") === "off", problem: "" },
     uploadProgress: {
       guard,
@@ -1013,10 +1014,11 @@ async function repaintPreviewMutation(req: Request, url: URL): Promise<Response 
   const path = url.pathname;
   const source = new URL(req.headers.get("referer") || url);
   const body = await req.json().catch(() => ({})) as Record<string, any>;
-  if (path === "/addons/panel-tweaks/api/panel-php") {
+  if (path === "/addons/system-tweaks/api/panel-php") {
     panelPhpChoice = String(body.php ?? "");
-    const status = panelPhpPreviewStatus(source);
-    return Response.json({ ok: true, data: status, line: panelPhpLine(status) });
+    const state = { ...systemTweaksPreviewState(source), panelPhp: panelPhpPreviewStatus(source) };
+    systemTweaksPreview = state;
+    return Response.json({ ok: true, html: systemTweaksDashboardView(state) });
   }
   return gitPreviewMutation(req, path, source, body)
     ?? instaticPreviewMutation(path, body)
@@ -1394,7 +1396,7 @@ const server = Bun.serve({
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
       });
     } else if (path === "/addons/panel-tweaks/" || path === "/addons/panel-tweaks") {
-      html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url), panelPhpPreviewStatus(url)), notice);
+      html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url)), notice);
     } else if (path === "/addons/system-tweaks/" || path === "/addons/system-tweaks") {
       systemTweaksPreview = null;
       html = systemTweaksLayout("System Tweaks", systemTweaksDashboardView(systemTweaksPreviewState(url)), notice);

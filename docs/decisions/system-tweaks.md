@@ -2,8 +2,8 @@
 
 System Tweaks holds settings for the server rather than for CloudPanel's pages,
 which stay with [Panel Tweaks](panel-tweaks.md). PHP worker limits stay with
-[PHP Resources](php-resources.md), and the panel's own PHP version with Panel
-Tweaks.
+[PHP Resources](php-resources.md). System Tweaks also owns the PHP version
+that runs the panel itself.
 
 ## Automatic updates
 
@@ -109,6 +109,60 @@ The page never reports what the drop-in meant to do. It reads the result:
   logrotate empties it.
 - **Reboot**: `/var/run/reboot-required` and `.pkgs`.
 
+## The panel's own PHP
+
+CloudPanel runs its pages, phpMyAdmin and the root File Manager pool in
+`clp-php-fpm`, started on PHP 8.1, which upstream no longer patches. The Panel
+PHP card lets an administrator run that unit on any newer installed PHP-FPM.
+It is a choice rather than a switch because the panel is CloudPanel's
+code and was not tested on 8.2+: two pinned dependencies declare `php <8.2`.
+Symfony then logs deprecation notices to `/home/clp/logs/php/error.log`.
+
+The change is a systemd drop-in, `clp-php-fpm.service.d/clp-addons-php.conf`,
+that replaces only the binary in CloudPanel's own `ExecStart` and keeps its
+arguments, config and `php.ini`. Deleting it is the whole undo, and it survives
+CloudPanel rewriting its unit. The FPM then scans that version's
+`/etc/php/X.Y/fpm/conf.d`, the same directory the sites on it use, which is
+where the [upload-progress guard](security.md#php-session-upload-progress)
+already is.
+
+A change is config-tested with the new binary first. After the restart, both
+pools are asked for a page directly over their sockets with FastCGI: the login
+page must answer 200 and the File Manager below 400. A request through Nginx
+would meet the panel's optional basic auth instead of PHP. If either fails
+within 20 seconds, the previous drop-in goes back and the panel restarts on it.
+
+The repair timer keeps the unit to the stored choice. A version that failed
+is recorded with its package release and is not retried every fifteen minutes,
+only after that package is upgraded or the operator chooses again. Once
+CloudPanel's own unit starts a version at least as new as the choice, the
+drop-in is removed. A drop-in someone else wrote that sets `ExecStart`, such
+as a hand-made `override.conf`, wins: the card says so and refuses a choice.
+Disabling System Tweaks removes the drop-in and keeps the choice, which enabling
+reapplies through the reconcile service. Disabling is synchronous, so it cannot
+ask the pools for a page: under the same lock, it config-tests the PHP the unit
+will start without the drop-in, CloudPanel's own or an operator's override, and
+requires the unit to come back running it. Otherwise, including a failed
+`daemon-reload`, it puts the drop-in back and refuses to disable; an uninstall
+that aborts later reactivates the addon. While the addon is disabled the stored
+choice is marked withdrawn, and a change that was waiting for the lock refuses,
+as it does once the addon's config is gone, so neither can write the drop-in
+again; enabling clears the mark. The page check is the one thing withdrawal
+does not repeat: a PHP that starts but answers 500 is not caught. The card also shows a newer package
+version when apt has one, revision included, because a newer minor is no fix
+until it is patched, and a failure is retried once that version changes.
+
+A choice and its drop-in change under one lock, and a repair run reads the
+choice only after it holds the lock. A file at the drop-in path that is not
+root's, or that others can write, is never trusted: it is replaced when a
+version is wanted and removed when none is.
+
+The choice is stored in `/var/lib/clp-addons/system-tweaks/panel-php.json`.
+The System Tweaks state action includes its status; `set-panel-php` accepts
+`{"php":"8.4"}` (or an empty string for CloudPanel's own version). Its gateway
+request allows 90 seconds for switching and rollback. Panel Tweaks does not
+read, change or reconcile this setting.
+
 ## PHP upload-progress mitigation
 
 The guard stays platform-wide (see [Security](security.md#php-session-upload-progress)):
@@ -137,7 +191,7 @@ byte order, and the last assignment wins. Sections `[PATH=]` and `[HOST=]` are
 skipped because they do not apply server-wide. Values are read as PHP reads
 booleans. Pools whose `php_value` or `php_admin_value` (or `_flag`) turns the
 setting back on are named per pool. The panel's FPM is read from
-`systemctl show clp-php-fpm -p ExecStart`, so it follows Panel Tweaks moving it
+`systemctl show clp-php-fpm -p ExecStart`, so it follows System Tweaks moving it
 to another version.
 
 Reading the files, rather than asking `php-fpm -i`, tells the page which file

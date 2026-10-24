@@ -87,8 +87,6 @@ export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
   "set-tweaks",
   "scan",
   "scan-stream",
-  "panel-php",
-  "set-panel-php",
 ]);
 
 /**
@@ -101,6 +99,7 @@ export const SYSTEM_TWEAKS_ALLOWED_VERBS = new Set([
   "install-updates",
   "set-upload-guard",
   "set-real-ip",
+  "set-panel-php",
 ]);
 
 /**

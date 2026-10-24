@@ -13,11 +13,14 @@ import {
 import { INSTALL_DEADLINE_MS } from "./limits";
 import { uploadProgressStatus, type FpmUploadProgress, type UploadProgressOptions } from "./upload-progress";
 import { applyRealIp, realIpStatus, type RealIpOptions, type RealIpStatus } from "./real-ip";
+import {
+  panelPhpStatus, reconcilePanelPhp, restorePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions, type PanelPhpStatus,
+} from "./panel-php";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
 
-export type SystemTweaksVerb = "state" | "set-updates" | "install-updates" | "set-upload-guard" | "set-real-ip";
+export type SystemTweaksVerb = "state" | "set-updates" | "install-updates" | "set-upload-guard" | "set-real-ip" | "set-panel-php";
 
 export interface SystemTweaksSettings {
   updates: UpdateSettings;
@@ -34,6 +37,7 @@ export interface SystemTweaksState {
   settings: UpdateSettings;
   uploadProgress: { guard: boolean; fpms: FpmUploadProgress[] };
   realIp: RealIpStatus & { blockForged: boolean };
+  panelPhp: PanelPhpStatus | { error: string };
 }
 
 export interface SystemTweaksPaths {
@@ -57,6 +61,7 @@ export interface SystemTweaksOptions {
   uploadProgress?: UploadProgressOptions;
   phpGuard?: PhpGuardOptions;
   realIp?: RealIpOptions;
+  panelPhp?: PanelPhpOptions;
   now?: () => number;
 }
 
@@ -122,7 +127,13 @@ function stateOf(options: SystemTweaksOptions): SystemTweaksState {
       fpms: uploadProgressStatus(options.uploadProgress),
     },
     realIp: { ...realIpStatus(options.realIp), blockForged: settings.blockForgedRealIp },
+    panelPhp: panelPhpOrError(options.panelPhp),
   };
+}
+
+function panelPhpOrError(options?: PanelPhpOptions): PanelPhpStatus | { error: string } {
+  try { return panelPhpStatus(options); }
+  catch (error) { return { error: reason(error) }; }
 }
 
 async function requestBody(options: SystemTweaksOptions): Promise<Record<string, unknown>> {
@@ -194,9 +205,16 @@ async function setRealIp(options: SystemTweaksOptions): Promise<SystemTweaksStat
   return stateOf(options);
 }
 
+async function changePanelPhp(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const body = await requestBody(options);
+  if (typeof body.php !== "string") failAction("php must be a version such as 8.4, or empty for CloudPanel's own");
+  await setPanelPhp(body.php, options.panelPhp);
+  return stateOf(options);
+}
+
 function parseVerb(argv: string[]): SystemTweaksVerb {
   const [rawVerb, ...rest] = argv;
-  const verbs: SystemTweaksVerb[] = ["state", "set-updates", "install-updates", "set-upload-guard", "set-real-ip"];
+  const verbs: SystemTweaksVerb[] = ["state", "set-updates", "install-updates", "set-upload-guard", "set-real-ip", "set-panel-php"];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown system tweaks verb '${rawVerb ?? ""}'`);
   if (rest.length > 0) failAction(`unexpected argument '${rest[0]}'`);
@@ -210,6 +228,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "set-updates") return setUpdates(options);
   if (verb === "set-upload-guard") return setUploadGuard(options);
   if (verb === "set-real-ip") return setRealIp(options);
+  if (verb === "set-panel-php") return changePanelPhp(options);
   // One deadline for the install and the state read that answers it, which the
   // gateway's timeout is sized from.
   const now = options.now ?? Date.now;
@@ -239,6 +258,20 @@ function withSettingsLock<T>(options: SystemTweaksOptions, body: (paths: SystemT
   return withFileLockSync(paths.lockFile, 15, "another system tweaks change is still running", () => body(paths, readSettings(paths)));
 }
 
+/**
+ * The repair hook: the box's own settings, then the panel's PHP. A version
+ * that failed is not retried until its package release changes.
+ */
+export async function systemTweaksMaintenance(options: SystemTweaksOptions = {}): Promise<string | null> {
+  const lines = [systemTweaksUpkeep(options)];
+  try {
+    lines.push(await reconcilePanelPhp(options.panelPhp));
+  } catch (error) {
+    throw new Error([`panel PHP: ${reason(error)}`, ...lines.filter(Boolean)].join("; "));
+  }
+  return lines.filter(Boolean).join("; ") || null;
+}
+
 export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | null {
   return withSettingsLock(options, (paths, settings) => {
     const notices: string[] = [];
@@ -253,6 +286,8 @@ export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | 
 }
 
 export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
+  // First, because it refuses when CloudPanel's own PHP would not come back.
+  withdrawPanelPhp(options.panelPhp);
   withSettingsLock(options, (paths, settings) => {
     applyUpdates({ ...settings.updates, enabled: false }, settings.enabledTimers, options.updates);
     if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
@@ -269,4 +304,5 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
     if (!settings.uploadProgressGuard) reconcilePhpGuard(true, false, guardOptions(options));
     if (settings.blockForgedRealIp) applyRealIp(true, options.realIp);
   });
+  restorePanelPhp(options.panelPhp);
 }

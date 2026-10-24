@@ -5,7 +5,7 @@ import {
 import { callGatewayAction } from "../../../lib/gateway-client";
 import { panelTweaksService } from "./service";
 import { previewPage } from "./preview";
-import { dashboardView, layout, panelPhpLine } from "./views";
+import { dashboardView, layout } from "./views";
 
 function json(body: unknown, status = 200): Response {
   return jsonResponse(body, { status });
@@ -116,9 +116,9 @@ export async function handle(
   if (method === "GET" && path === "/") {
     const csrf = newCsrfToken();
     try {
-      const [result, php] = await Promise.all([panelTweaksService.state(), panelTweaksService.panelPhp()]);
+      const result = await panelTweaksService.state();
       if (!result.ok || !result.data) throw new Error(result.error ?? "the panel tweaks state is unavailable");
-      const view = dashboardView(result.data, php.ok && php.data ? php.data : { error: php.error ?? "the panel PHP status is unavailable" });
+      const view = dashboardView(result.data);
       return htmlResponse(layout("Panel Tweaks", view, updateNotice), {
         csrf,
         headers: { "Content-Security-Policy": pageCsp() },
@@ -176,19 +176,6 @@ export async function handle(
       if (failure) return json({ ok: false, error: failure, data: result.data }, 500);
     }
     return json(result);
-  }
-
-  if (path === "/api/panel-php") {
-    let body: Record<string, unknown>;
-    try {
-      body = await readJsonObject(req, 1024);
-    } catch (error) {
-      return bodyErrorResponse(error);
-    }
-    if (typeof body.php !== "string") return json({ ok: false, error: "php must be a version such as 8.4" }, 400);
-    const result = await panelTweaksService.setPanelPhp(body.php);
-    if (!result.ok || !result.data) return json(result, 500);
-    return json({ ...result, line: panelPhpLine(result.data) });
   }
 
   if (path === "/api/scan") {
