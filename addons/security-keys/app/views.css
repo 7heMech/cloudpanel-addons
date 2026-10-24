@@ -22,7 +22,7 @@
 .sk-table time { white-space: nowrap; }
 .is-stale .sk-used { color: var(--warn); }
 .sk-table .action-cell { text-align: right; }
-.sk-table .action-cell .btn { padding: 4px 10px; font-size: 13px; }
+.sk-table .action-cell .btn { padding: 5px 10px; }
 
 @media (max-width: 760px) {
   .settings-card { grid-template-columns: 1fr; gap: 24px; }
@@ -33,18 +33,16 @@
   .sk-table, .sk-table tbody, .sk-table tr { display: block; }
   .sk-table tbody[hidden], .sk-table tr[hidden] { display: none; }
   .sk-group-head th { display: block; padding: 16px 16px 4px; }
-  /* A key is its name across the row, then what kind it is and when it was
-     last used, with Remove beside those. */
-  .sk-table tr.sk-key { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 16px 10px 28px; }
+  /* A key's details stack, with Remove centred beside them. */
+  .sk-table tr.sk-key { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding: 10px 16px 10px 28px; }
   .sk-table td { display: block; padding: 0; border: 0; }
   .sk-table td.sk-name { display: contents; }
-  .sk-name > span { grid-column: 1; }
-  .sk-name > span:first-child { grid-column: 1 / -1; }
+  .sk-name > span, .sk-table td.sk-host, .sk-table td.sk-used { grid-column: 1; }
+  .sk-name > span + span, .sk-table td.sk-host, .sk-table td.sk-used { margin-top: 2px; }
   .sk-table td:nth-child(3) { display: none; }
   /* The address matters only when it is not the one the panel is open on. */
-  .sk-table td.sk-host { display: none; grid-column: 1; overflow-wrap: anywhere; font-size: 12px; }
+  .sk-table td.sk-host { display: none; overflow-wrap: anywhere; font-size: 12px; }
   .sk-table td.sk-host.is-elsewhere { display: block; }
-  .sk-table td.sk-used { grid-column: 1; font-size: 13px; }
-  .sk-table td.action-cell { grid-column: 2; grid-row: 2 / span 3; align-self: center; }
-  .sk-table .action-cell .btn { padding: 6px 14px; font-size: 14px; }
+  .sk-table td.sk-used { font-size: 13px; }
+  .sk-table td.action-cell { grid-column: 2; grid-row: 1 / span 4; align-self: center; }
 }

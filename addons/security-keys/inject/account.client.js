@@ -53,7 +53,7 @@ if (card) {
       name.textContent = key.name;
       var meta = document.createElement("span");
       meta.className = "clp-sk-meta";
-      // Each part stays whole, so a line too narrow for both breaks at the dot.
+      // Each part stays whole; on a phone they stack and the dot goes.
       [["Added " + day(key.createdAt)], ["\u00b7", "clp-sk-dot"], [key.lastUsedAt ? "Last used " + day(key.lastUsedAt) : "Never used"]]
         .forEach(function (part) {
           var span = document.createElement("span");
