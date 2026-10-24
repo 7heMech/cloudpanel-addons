@@ -122,7 +122,7 @@ form accepts. The dashboard drops an unknown key without saying so, which is
 why the page also lists the permissions. Their API permissions are
 [Config Settings Write and Zone WAF Write](https://developers.cloudflare.com/ruleset-engine/rulesets-api/update/).
 Cloudflare refuses a missing permission with a bare "Authentication error", so
-a refused settings or rules call is reported with the permission it needs.
+a refused settings or rules read or write is reported with the permission it needs.
 
 A token is verified before it is saved (`/user/tokens/verify`, or the account
 route for an account-owned one, using a zone's account when account listing is

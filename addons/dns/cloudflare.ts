@@ -188,6 +188,7 @@ const PHASE_PERMISSIONS: Record<string, string> = {
   http_config_settings: "Config Rules: Edit",
   http_request_firewall_custom: "Zone WAF: Edit",
 };
+const rulesPermission = (phase: string) => PHASE_PERMISSIONS[phase] ?? "rules permissions";
 
 /** Cloudflare refuses a permission the token lacks with a bare "Authentication error"; name the permission instead. */
 async function needs<T>(permission: string, run: () => Promise<T>): Promise<T> {
@@ -318,7 +319,7 @@ export class CloudflareApi {
   /** The zone's ruleset for one phase, or null when it has none yet. */
   async entrypoint(zoneId: string, phase: string): Promise<CfRuleset | null> {
     try {
-      const { result } = await needs(PHASE_PERMISSIONS[phase] ?? "rules permissions", () => this.call(`/zones/${id(zoneId)}/rulesets/phases/${phase}/entrypoint`));
+      const { result } = await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/phases/${phase}/entrypoint`));
       return parseRuleset(result);
     } catch (error) {
       if (error instanceof ProviderError && error.status === 404) return null;
@@ -327,18 +328,18 @@ export class CloudflareApi {
   }
 
   async createEntrypoint(zoneId: string, phase: string, rules: RuleWrite[]): Promise<CfRuleset> {
-    const { result } = await this.call(`/zones/${id(zoneId)}/rulesets`, "POST", { name: "CloudPanel DNS", kind: "zone", phase, rules });
+    const { result } = await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets`, "POST", { name: "CloudPanel DNS", kind: "zone", phase, rules }));
     return parseRuleset(result);
   }
 
   /** Adds one rule, leaving the phase's other rules alone. */
-  async addRule(zoneId: string, rulesetId: string, rule: RuleWrite): Promise<CfRuleset> {
-    const { result } = await this.call(`/zones/${id(zoneId)}/rulesets/${rulesetId}/rules`, "POST", rule);
+  async addRule(zoneId: string, phase: string, rulesetId: string, rule: RuleWrite): Promise<CfRuleset> {
+    const { result } = await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/${rulesetId}/rules`, "POST", rule));
     return parseRuleset(result);
   }
 
-  async updateRule(zoneId: string, rulesetId: string, ruleId: string, rule: RuleWrite): Promise<CfRuleset> {
-    const { result } = await this.call(`/zones/${id(zoneId)}/rulesets/${rulesetId}/rules/${ruleId}`, "PATCH", rule);
+  async updateRule(zoneId: string, phase: string, rulesetId: string, ruleId: string, rule: RuleWrite): Promise<CfRuleset> {
+    const { result } = await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/${rulesetId}/rules/${ruleId}`, "PATCH", rule));
     return parseRuleset(result);
   }
 
