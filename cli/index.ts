@@ -49,7 +49,7 @@ function usage(): void {
   log.plain(`clp-addons ${CLI_VERSION} — CloudPanel Addons
 
   clp-addons
-  clp-addons install [<addon>...] [--version=vX.Y.Z] [--skip-attestation] [--local=DIR]
+  clp-addons install [<addon>...] [--local=DIR]
   clp-addons update [--version=vX.Y.Z] [--skip-attestation]
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status

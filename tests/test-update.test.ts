@@ -313,18 +313,6 @@ test("install enables bundled addons with no release checks or gh, even when all
   }
 });
 
-test("install with an explicit release verifies artifacts before replacing the binary", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  hasInstalledAddon = false;
-  await cmdInstall(["stager", "--version=v1.2.3"]);
-  expect(calls).toContain("resolveRelease");
-  expect(calls).toContain("fetchVerified");
-  expect(calls).toContain("verifyAttestation");
-  expect(calls.indexOf(`writeAtomic:${CLI_BIN}`)).toBeGreaterThan(calls.indexOf("verifyAttestation"));
-  expect(calls).toContain("startUnits");
-});
-
 test("bootstrap local artifacts are checked without invoking the remote verifier", async () => {
   calls.length = 0;
   resetProvisioning();
@@ -345,13 +333,13 @@ test("install enables every addon it is given", async () => {
   expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} install`))).toBe(false);
 });
 
-test("after replacing the binary, install leaves the other addons to the new one", async () => {
+test("install.sh's binary is recorded once and then enables every addon", async () => {
   calls.length = 0;
   resetProvisioning();
   await cmdInstall(["stager", "terminal", "security-keys", "--local=/tmp/bootstrap"]);
-  const handoff = `run:${CLI_BIN} install terminal security-keys`;
-  expect(calls.indexOf(handoff)).toBeGreaterThan(calls.indexOf(`writeAtomic:${CLI_BIN}`));
-  expect(calls).not.toContain("writeConfig:terminal");
+  expect(calls.filter((call) => call === "loadLocal")).toHaveLength(1);
+  expect(calls.indexOf("writeConfig:security-keys")).toBeGreaterThan(calls.indexOf(`writeAtomic:${CLI_BIN}`));
+  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} install`))).toBe(false);
 });
 
 test("install refuses an unknown addon before installing any", async () => {
@@ -361,7 +349,7 @@ test("install refuses an unknown addon before installing any", async () => {
   expect(calls).not.toContain("writeConfig:stager");
 });
 
-test.each([{ flags: ["--version"] }, { flags: ["--local"] }, { flags: ["--version=v1.2.3", "--local=/tmp/bootstrap"] }])("install refuses incomplete or conflicting artifact flags %j", async ({ flags }) => {
+test.each([{ flags: ["--local"] }, { flags: ["--version=v1.2.3"] }, { flags: ["--skip-attestation"] }])("install refuses %j", async ({ flags }) => {
   calls.length = 0;
   await expect(cmdInstall(["stager", ...flags])).rejects.toThrow();
   expect(calls).not.toContain("writeConfig:stager");
