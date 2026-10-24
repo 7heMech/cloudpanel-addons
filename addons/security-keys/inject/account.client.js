@@ -53,14 +53,7 @@ if (card) {
       name.textContent = key.name;
       var meta = document.createElement("span");
       meta.className = "clp-sk-meta";
-      // Each part stays whole; on a phone they stack and the dot goes.
-      [["Added " + day(key.createdAt)], ["\u00b7", "clp-sk-dot"], [key.lastUsedAt ? "Last used " + day(key.lastUsedAt) : "Never used"]]
-        .forEach(function (part) {
-          var span = document.createElement("span");
-          span.textContent = part[0];
-          if (part[1]) span.className = part[1];
-          meta.appendChild(span);
-        });
+      meta.textContent = "Added " + day(key.createdAt) + " \u00b7 " + (key.lastUsedAt ? "Last used " + day(key.lastUsedAt) : "Never used");
       meta.title = "Added " + new Date(key.createdAt).toLocaleString() +
         (key.lastUsedAt ? "\nLast used " + new Date(key.lastUsedAt).toLocaleString() : "");
       about.appendChild(name);
