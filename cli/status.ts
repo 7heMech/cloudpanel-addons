@@ -30,8 +30,9 @@ function maintenanceNginxStatus(status: MaintenanceNginxStatus): string {
 }
 
 function phpGuardStatus(): string {
-  const { guarded, unguarded } = inspectPhpGuard();
+  const { guarded, unguarded, optedOut } = inspectPhpGuard();
   if (guarded.length === 0 && unguarded.length === 0) return "No PHP-FPM found";
+  if (optedOut) return statusValue("off in System Tweaks", false);
   if (unguarded.length === 0) return statusValue(`upload_progress Off on ${guarded.join(", ")} ✓`, true);
   return statusValue(`missing on ${unguarded.join(", ")}; run repair`, false);
 }

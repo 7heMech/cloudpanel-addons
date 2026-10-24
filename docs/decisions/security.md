@@ -86,15 +86,15 @@ that policy or install the official CLP plugin; sign-in's non-administrator
 exception does not apply. The normal WordPress plugin remains installed when
 automation stops. See [WordPress Tools](wp-login.md).
 
-CloudPanel's native basic-auth allowance inherits its global real-IP trust:
-`set_real_ip_from 0.0.0.0/0` accepts a forged `X-Real-IP` from any IPv4 peer.
-Anyone who knows an allowed IP can replay it to bypass authentication. Ordinary
+CloudPanel's native basic-auth allowance inherits its global real-IP trust.
+Stock CloudPanel's `set_real_ip_from 0.0.0.0/0` accepts a forged `X-Real-IP` from
+any IPv4 peer, so anyone who knows an allowed IP can replay it to bypass
+authentication. [System Tweaks](system-tweaks.md#forged-visitor-ips) removes that
+line by default; a box without it keeps the native trust. Ordinary
 Cloudflare proxy requests carry the visitor in `CF-Connecting-IP`, which that
 configuration does not use; Nginx sees the edge, so the panel IP may never
-match. Both limits appear in the confirmation. The addon retains native
-behavior and changes neither global `nginx.conf` nor per-site real-IP trust.
-A local override would also alter CloudPanel's Cloudflare-only checks and need
-removal and regeneration handling beyond the native allowlist's lifecycle.
+match. Both limits appear in the confirmation. WordPress sign-in itself changes
+no real-IP trust.
 
 ## CloudPanel authentication
 
@@ -266,8 +266,12 @@ confirmed consumer of CVE-2026-109619, is on by default, and PHP's advisory
 recommends leaving it off even after patching. This is not a fix: it addresses
 one path of one of the two php2shell CVEs, does nothing for the OOM corruption
 in CVE-2026-109618, and the real remedy is patched PHP packages -- a backported
-build for the end-of-life 8.1, or moving the panel off it. The drop-in is written on install,
-update and repair and removed with the last addon; each changed FPM is config-
+build for the end-of-life 8.1, or moving the panel off it; System Tweaks'
+[automatic updates](system-tweaks.md#automatic-updates) install CloudPanel's PHP
+builds as they ship. The drop-in is written on install,
+update and repair and removed with the last addon. [System Tweaks](system-tweaks.md#php-upload-progress-mitigation)
+shows each FPM's effective value and is the only opt-out, which counts only while
+it is enabled. Each changed FPM is config-
 tested and reloaded, the panel FPM with it. Config-test and reload failures
 propagate to the caller. Rollback attempts every written file independently;
 when all files are restored, it reloads every service whose reload was attempted,

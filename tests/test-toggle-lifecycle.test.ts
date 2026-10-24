@@ -27,6 +27,7 @@ interface Run {
   cron: boolean;
   /** What addon hooks ran through the CLI binary. */
   cli: string[];
+  warnings: string[];
   error?: string;
 }
 
@@ -40,6 +41,7 @@ const calls = [];
 const failing = JSON.parse(process.env.CLP_TEST_FAILING ?? "[]");
 const provision = [];
 const inject = [];
+const warnings = [];
 const record = (bucket, name) => (...args) => { bucket.push(name); return undefined; };
 
 // Only the paths are redirected. The catalog derives each addon's config file
@@ -59,6 +61,8 @@ mock.module("./cli/paths.ts", () => ({
   INSTATIC_BACKUP_CRON: root + "/cron.d/instatic-backup",
   // What an addon's hooks run; nothing here may reach the real binary.
   CLI_BIN: root + "/clp-addons",
+  // The fixture's files are the test's own, not root's.
+  ROOT_UID: process.getuid(),
 }));
 
 const realUtil = await import("./cli/util.ts");
@@ -67,7 +71,7 @@ mock.module("./cli/util.ts", () => ({
   ...realUtil,
   Fatal: TestFatal,
   fatal: (message) => { throw new TestFatal(message); },
-  log: { step: () => {}, ok: () => {}, warn: () => {}, err: () => {}, plain: () => {} },
+  log: { step: () => {}, ok: () => {}, warn: (message) => { warnings.push(message); }, err: () => {}, plain: () => {} },
   requireRoot: () => {},
   run: (cmd, args) => { calls.push([cmd, args]); return cmd === "id" ? "0" : ""; },
   tryRun: (cmd, args) => {
@@ -137,6 +141,7 @@ try {
   for (const step of JSON.parse(process.env.CLP_TEST_STEPS)) {
     if (step.verb === "enable") await cli.applyEnable(step.addon);
     else if (step.verb === "disable") cli.applyDisable(step.addon);
+    else if (step.verb === "uninstall") (await import("./cli/uninstall.ts")).cmdUninstall([step.addon, "--yes"]);
     // A between-steps nudge, so a test can spoil a unit file the way something
     // outside this binary would and watch the next toggle put it back.
     else chmodSync(root + "/systemd/" + step.addon, step.mode);
@@ -153,6 +158,7 @@ console.log(JSON.stringify({
     .map(([, args]) => args.join(" ")),
   cron: existsSync(root + "/cron.d/instatic-backup"),
   cli: existsSync(root + "/cli-calls") ? readFileSync(root + "/cli-calls", "utf8").trim().split("\n") : [],
+  warnings,
   error,
 }));
 `;
@@ -182,7 +188,7 @@ function fixture(options: { provisioned: boolean; enabled: string[] }): string {
 }
 
 type Step =
-  | { verb: "enable" | "disable"; addon: string }
+  | { verb: "enable" | "disable" | "uninstall"; addon: string }
   | { verb: "chmod"; addon: string; mode: number };
 
 function toggle(
@@ -248,10 +254,12 @@ test("re-enabling an addon that is already on changes and reloads nothing", () =
 
 test("the Cloudflare timer is started when its units appear and stopped when they go", () => {
   const on = toggle([{ verb: "enable", addon: "cloudflare-ips" }]);
+  expect(on.error).toBeUndefined();
   expect(on.systemd).toContain("enable clp-addons-cloudflare-ips-reconcile.timer");
   expect(on.systemd).toContain("restart clp-addons-cloudflare-ips-reconcile.timer");
 
   const off = toggle([{ verb: "disable", addon: "cloudflare-ips" }], { enabled: ["cloudflare-ips"] });
+  expect(off.error).toBeUndefined();
   expect(off.systemd).toContain("disable --now clp-addons-cloudflare-ips-reconcile.timer");
   expect(existsSync(join(off.root, "systemd", "clp-addons-cloudflare-ips-reconcile.timer"))).toBe(false);
   expect(existsSync(join(off.root, "systemd", "clp-addons-cloudflare-ips-reconcile.service"))).toBe(false);
@@ -418,4 +426,50 @@ test("DNS can be disabled and re-enabled without SMTP, keeping its state", () =>
   expect(again.error).toBeUndefined();
   expect(again.systemd).toContain("enable clp-addons-new-sites.path");
   expect(readFileSync(policy, "utf8")).toBe("kept policy");
+});
+
+// --- the PHP upload-progress guard ---------------------------------------------
+
+/** One PHP-FPM, with System Tweaks enabled and its guard opted out. */
+function optedOutFixture(alsoEnabled: string[] = []): { root: string; guard: string } {
+  const root = fixture({ provisioned: true, enabled: ["system-tweaks", ...alsoEnabled] });
+  mkdirSync(join(root, "php", "8.3", "fpm", "conf.d"), { recursive: true });
+  mkdirSync(join(root, "sbin"), { recursive: true });
+  writeFileSync(join(root, "sbin", "php-fpm8.3"), "");
+  mkdirSync(join(root, "state", "system-tweaks"), { recursive: true });
+  writeFileSync(join(root, "state", "system-tweaks", "settings.json"), JSON.stringify({ version: 1, uploadProgressGuard: false }), { mode: 0o600 });
+  return { root, guard: join(root, "php", "8.3", "fpm", "conf.d", "99-clp-addons-upload-progress.ini") };
+}
+
+const guardTests = (run: Run) => run.calls.filter(([cmd, args]) => cmd.endsWith("php-fpm8.3") && args[0] === "-t");
+
+test("disabling System Tweaks puts its opted-out guard back, even with no addon left", () => {
+  const { root, guard } = optedOutFixture();
+  const run = toggle([{ verb: "disable", addon: "system-tweaks" }], { root });
+  expect(run.error).toBeUndefined();
+  expect(existsSync(guard)).toBe(true);
+});
+
+test("a guard that fails its config test does not stop a disable", () => {
+  const { root, guard } = optedOutFixture(["maintenance"]);
+  const run = toggle([{ verb: "disable", addon: "system-tweaks" }], { root, failing: ["php-fpm8.3 -t"] });
+  expect(run.error).toBeUndefined();
+  expect(existsSync(join(root, "etc", "system-tweaks.conf"))).toBe(false);
+  expect(existsSync(guard)).toBe(false);
+  expect(run.warnings.some((line) => line.includes("repair will retry"))).toBe(true);
+});
+
+test("uninstalling the last addon never writes the guard it is about to remove", () => {
+  const { root, guard } = optedOutFixture();
+  const run = toggle([{ verb: "uninstall", addon: "system-tweaks" }], { root });
+  expect(run.error).toBeUndefined();
+  expect(guardTests(run)).toEqual([]);
+  expect(existsSync(guard)).toBe(false);
+});
+
+test("uninstalling System Tweaks while another addon remains puts the guard back", () => {
+  const { root, guard } = optedOutFixture(["maintenance"]);
+  const run = toggle([{ verb: "uninstall", addon: "system-tweaks" }], { root });
+  expect(run.error).toBeUndefined();
+  expect(existsSync(guard)).toBe(true);
 });

@@ -92,6 +92,18 @@ export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
 ]);
 
 /**
+ * `install-updates` installs one fixed package; no verb takes a package name,
+ * a path or an apt option.
+ */
+export const SYSTEM_TWEAKS_ALLOWED_VERBS = new Set([
+  "state",
+  "set-updates",
+  "install-updates",
+  "set-upload-guard",
+  "set-real-ip",
+]);
+
+/**
  * WordPress Tools keeps its stable wp-login identifier. Sign-in credentials,
  * helper removal, optional Varnish installation and MainWP enrollment each have
  * fixed verbs; none accepts paths, plugin names or arbitrary commands.

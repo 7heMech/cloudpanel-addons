@@ -1,0 +1,67 @@
+# System Tweaks
+
+## Automatic updates
+
+1. Open **Addons → System Tweaks**. If `unattended-upgrades` is missing, choose
+   **Install unattended-upgrades**. It can take up to ten minutes when apt is
+   busy.
+2. Switch on **Install updates automatically**. It runs once a day, from
+   `apt-daily-upgrade.timer`, and installs the distro's security updates and
+   every PHP version CloudPanel ships. Nginx is included by default; MySQL and
+   CloudPanel itself only if you switch them on.
+3. Check **Repositories**: it lists every apt source and whether it is covered.
+   An uncovered source still needs `apt upgrade`.
+
+**Last run** shows the last result from
+`/var/log/unattended-upgrades/unattended-upgrades.log`. Expand **Failure details**
+for the complete error, including the package URL if recorded. HTTP 404 means
+the repository did not provide the requested package; it is not a successful
+update. **Reboot** shows when
+an update such as a kernel needs a restart. Switch on **Reboot when required**
+to allow automatic restarts. Under **Reboot timing**, choose **After the update
+run** or **At a specific time**, enter a 24-hour time, and select **Save time**.
+The time uses the server timezone shown next to the control, not your phone or
+browser timezone. A required reboot is scheduled for the next occurrence of
+that time after the update run.
+
+**Use existing configuration** leaves the reboot time to your other apt files
+(or immediately after the run if no time is configured). This is the default
+for existing and new installations. **Automatic reboot** shows the effective
+timing; a later operator file may override your choice. Changes affect future
+update runs and do not reschedule or cancel an already queued shutdown.
+
+If updates were already on before System Tweaks, the page says **Configured
+outside System Tweaks** and names your file. Switching on adds CloudPanel's PHP
+to that setup. Switching off removes only
+`/etc/apt/apt.conf.d/52clp-addons-unattended-upgrades`, so your own setup is
+left as it was. Disabling System Tweaks removes it too.
+
+On Ubuntu 22.04, 24.04 and 26.04 this uses Ubuntu's security pocket and preserves
+any existing Ubuntu Pro/ESM update rules. It does not activate Ubuntu Pro. Ubuntu
+may already have automatic updates on; check **Repositories** because that alone
+does not cover CloudPanel's PHP builds.
+
+To try a run without installing anything:
+
+```bash
+unattended-upgrade --dry-run -d
+```
+
+## PHP upload-progress mitigation
+
+Every installation turns off `session.upload_progress.enabled` on each PHP-FPM,
+CloudPanel's own included, with `99-clp-addons-upload-progress.ini`. The table
+shows each FPM's effective value and which file set it. Switching the mitigation
+off removes only that file. It comes back if System Tweaks is disabled.
+
+## Forged visitor IPs
+
+**Block forged visitor IPs** is on by default. Without it, any client can claim
+another IP address with an `X-Real-IP` header, and sites, logs, basic auth and
+**Allow traffic from Cloudflare only** believe it. It comments out
+`set_real_ip_from 0.0.0.0/0` in `/etc/nginx/nginx.conf`. Cloudflare traffic and
+CloudPanel's own proxying are unaffected.
+
+Switch it off if a load balancer on a public address sits in front of this
+server. If unattended-upgrades reports a conffile prompt for `nginx-common`,
+switch it off, run `apt upgrade`, and switch it on again.

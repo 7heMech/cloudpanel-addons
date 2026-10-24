@@ -12,6 +12,7 @@
 - [SMTP Relay](decisions/smtp.md)
 - [Git Deploy](decisions/git.md)
 - [Panel Tweaks](decisions/panel-tweaks.md)
+- [System Tweaks](decisions/system-tweaks.md)
 - [WordPress Tools](decisions/wp-login.md)
 - [Terminal](decisions/terminal.md)
 - [Security Keys](decisions/security-keys.md)

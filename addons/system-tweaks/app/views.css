@@ -1,0 +1,27 @@
+.tweak-list > .tweak-row:first-child { padding-top: 0; border-top: 0; }
+.st-status { margin-top: 10px !important; }
+.st-status .badge { margin-right: 6px; }
+.st-install { margin-top: 12px; }
+.st-inline-notice { margin: 12px 0 0 !important; padding: 10px 14px; color: var(--warn) !important; }
+.st-kv { display: grid; grid-template-columns: minmax(110px, 180px) minmax(0, 1fr); gap: 10px 25px; align-items: baseline;
+  margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--row-border); font-size: 14px; }
+.st-kv dt { color: var(--muted); }
+.st-kv dd { margin: 0; overflow-wrap: anywhere; }
+.st-table th, .st-table td { padding: 12px 16px; vertical-align: top; }
+.st-table .hint { font-size: 13px; }
+.st-detail { display: block; margin-top: 2px; }
+.st-name { font-weight: 600; }
+.st-state { text-align: right; white-space: nowrap; }
+.st-run-details { margin-top: 8px; }
+.st-run-details summary { cursor: pointer; color: var(--muted); }
+.st-run-details pre { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+@media (max-width: 760px) {
+  .st-kv { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .st-kv dt:not(:first-child) { margin-top: 12px; }
+  .st-table th, .st-table td { padding: 10px 12px; }
+}
+
+.st-reboot-time { margin-top: 14px; }
+.st-reboot-controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; align-items: center; }
+.st-reboot-controls select { flex: 1 1 210px; min-width: 0; }
+.st-reboot-controls input { flex: 0 1 180px; min-width: 0; }

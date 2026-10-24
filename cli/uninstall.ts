@@ -5,7 +5,7 @@ import { DEFAULT_WP_LOGIN_PATHS } from "../addons/wp-login/action";
 import { withFileLockSync } from "./action-common";
 import { resolveAddon } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
-import { reconcilePhpGuard } from "./php-guard";
+import { reconcilePhpGuard, settlePhpGuard } from "./php-guard";
 import { withdrawWpLogin } from "./toggle";
 import { ADDONS, ADDON_NAMES, type AddonSpec } from "./addon-catalog";
 import { purgeTwigCache } from "./inject";
@@ -87,6 +87,7 @@ function uninstallContents(spec: AddonSpec, flags: Record<string, string | true>
     reconcilePanelIdentity();
     installUnits(remaining.map((name) => ADDONS[name]!));
     startUnits();
+    settlePhpGuard();
     log.ok(`${spec.name} removed; remaining addons are still available`);
     return;
   }

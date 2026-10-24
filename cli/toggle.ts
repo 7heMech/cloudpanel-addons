@@ -6,7 +6,7 @@ import { installedAddons, resolveAddon } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
 import { requireMainwpSettled } from "../addons/wp-login/mainwp";
 import { withFileLockSync } from "./action-common";
-import { reconcilePhpGuard } from "./php-guard";
+import { reconcilePhpGuard, settlePhpGuard } from "./php-guard";
 import { removeWpLogin, DEFAULT_WP_LOGIN_PATHS } from "../addons/wp-login/action";
 import { type AddonSpec } from "./addon-catalog";
 import { withOperationLock, withOperationLockSync } from "./operation-lock";
@@ -139,6 +139,8 @@ function disableAddonContents(spec: AddonSpec): void {
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
   spec.withdrawn?.();
+  // Even with no addon left the binary stays, and repair keeps the guard.
+  settlePhpGuard();
   // Reconciled after the config file is gone, so the injection set is read
   // from the state that now exists rather than described by an `exclude`
   // argument. The Twig cache is purged by the reconciler when the markup

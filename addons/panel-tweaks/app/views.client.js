@@ -166,12 +166,6 @@ function setPreviewWidth(button) {
   fitPreview();
 }
 
-function toggleNote(button) {
-  const row = button.closest('.tweak-row');
-  const open = row.classList.toggle('is-open');
-  button.setAttribute('aria-expanded', open ? 'true' : 'false');
-}
-
 async function setPanelPhp(select) {
   const before = select.dataset.current || '';
   const label = select.options[select.selectedIndex].textContent;
