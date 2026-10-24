@@ -18,7 +18,17 @@ for the complete error, including the package URL if recorded. HTTP 404 means
 the repository did not provide the requested package; it is not a successful
 update. **Reboot** shows when
 an update such as a kernel needs a restart. Switch on **Reboot when required**
-to restart right after that run.
+to allow automatic restarts. Under **Reboot timing**, choose **After the update
+run** or **At a specific time**, enter a 24-hour time, and select **Save time**.
+The time uses the server timezone shown next to the control, not your phone or
+browser timezone. A required reboot is scheduled for the next occurrence of
+that time after the update run.
+
+**Use existing configuration** leaves the reboot time to your other apt files
+(or immediately after the run if no time is configured). This is the default
+for existing and new installations. **Automatic reboot** shows the effective
+timing; a later operator file may override your choice. Changes affect future
+update runs and do not reschedule or cancel an already queued shutdown.
 
 If updates were already on before System Tweaks, the page says **Configured
 outside System Tweaks** and names your file. Switching on adds CloudPanel's PHP

@@ -7,7 +7,7 @@ import { ROOT_UID, STATE_DIR } from "../../cli/paths";
 import { reconcilePhpGuard, type PhpGuardOptions } from "../../cli/php-guard";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import {
-  DEFAULT_UPDATE_SETTINGS, UPDATE_SETTING_KEYS, applyUpdates, effectiveReboot, installUnattendedUpgrades, systemRun, unattendedUpgradesInstalled, updatesStatus, withDeadline,
+  DEFAULT_UPDATE_SETTINGS, UPDATE_SETTING_KEYS, applyUpdates, validRebootTime, effectiveReboot, installUnattendedUpgrades, systemRun, unattendedUpgradesInstalled, updatesStatus, withDeadline,
   type UpdateSettings, type UpdatesOptions, type UpdatesStatus,
 } from "./updates";
 import { INSTALL_DEADLINE_MS } from "./limits";
@@ -83,6 +83,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
   if (stored?.version !== SETTINGS_VERSION) return settings;
   const updates = (stored.updates ?? {}) as Record<string, unknown>;
   for (const key of UPDATE_SETTING_KEYS) if (typeof updates[key] === "boolean") settings.updates[key] = updates[key];
+  if (validRebootTime(updates.rebootTime)) settings.updates.rebootTime = updates.rebootTime;
   if (Array.isArray(stored.enabledTimers)) {
     settings.enabledTimers = stored.enabledTimers.filter((timer): timer is string =>
       timer === "apt-daily.timer" || timer === "apt-daily-upgrade.timer");
@@ -140,6 +141,11 @@ async function setUpdates(options: SystemTweaksOptions): Promise<SystemTweaksSta
       if (body[key] === undefined) continue;
       if (typeof body[key] !== "boolean") failAction(`${key} must be true or false`);
       wanted[key] = body[key];
+      named++;
+    }
+    if (body.rebootTime !== undefined) {
+      if (!validRebootTime(body.rebootTime)) failAction("rebootTime must be null, now or HH:MM (00:00–23:59)");
+      wanted.rebootTime = body.rebootTime;
       named++;
     }
     if (named === 0) failAction("no setting was named");

@@ -35,8 +35,8 @@ export const cloudflareService = {
   async setAutomatic(enabled: boolean): Promise<ActionResult<{ autoEnableNewSites: boolean }>> {
     return call<{ autoEnableNewSites: boolean }>("policy", ["--enabled", enabled ? "yes" : "no"]);
   },
-  async setProtection(enabled: boolean): Promise<ActionResult<CloudflareState>> {
-    return callGatewayAction<CloudflareState>("cloudflare-ips", "protection", ["--enabled", enabled ? "yes" : "no"], undefined,
+  async setProtection(enabled: boolean): Promise<ActionResult<{ protection: CloudflarePeerStatus }>> {
+    return callGatewayAction<{ protection: CloudflarePeerStatus }>("cloudflare-ips", "protection", ["--enabled", enabled ? "yes" : "no"], undefined,
       { timeout: PROTECTION_GATEWAY_TIMEOUT_MS });
   },
 };

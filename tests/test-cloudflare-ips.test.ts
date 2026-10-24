@@ -225,6 +225,7 @@ function fakeDashboard(
 }
 
 interface DashboardClient {
+  setProtection(input: unknown): Promise<void>;
   setOne(input: unknown): Promise<void>;
   setAllSites(enabled: boolean): void;
   runBulk(rows: unknown[], enabled: boolean, scope: string): Promise<void>;
@@ -249,7 +250,7 @@ function loadDashboard(
 ): DashboardClient {
   const factory = new Function(
     "CLP_ROOT", "document", "plural", "call", "busy", "notify", "clearNotice", "confirmAction", "location", "repaintView",
-    `${CLIENT_JS}\nreturn { setOne, setAllSites, runBulk, siteRows, rowState, paintSummary, selectAllSites, toggleAllSites, toggleSiteSelection };`,
+    `${CLIENT_JS}\nreturn { setProtection, setOne, setAllSites, runBulk, siteRows, rowState, paintSummary, selectAllSites, toggleAllSites, toggleSiteSelection };`,
   ) as (...args: unknown[]) => DashboardClient;
   return factory(
     // BASE_CLIENT_JS supplies these; on this page, which never mounts in a
@@ -816,4 +817,45 @@ test("failed bypass-protection changes restore both the policy and Nginx files",
     expect(cloudflareProtectionUpkeep(options)).toBe(null);
     expect(existsSync(paths.peerGeo)).toBe(true);
   } finally { db.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a completed protection change succeeds even if the panel database becomes unreadable", async () => {
+  const { root, paths, db } = fixture();
+  db.close();
+  try {
+    writeFileSync(paths.cloudflareIps, "allow 173.245.48.0/20;\ndeny all;\n", { mode: 0o644 });
+    const run = (command: string, args: string[]) => {
+      if (args[0] === "reload") writeFileSync(paths.panelDb, "not a SQLite database");
+      return successCommand();
+    };
+    const result = await captureActionFailure(() => runCloudflareAction(["protection", "--enabled", "yes"], { paths, run, emitReply: false }));
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(readFileSync(paths.policyFile, "utf8")).blockBypass).toBe(true);
+    expect(readFileSync(paths.cloudflareIps, "utf8")).toContain("if ($clp_system_cf_peer = 0)");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("a protection acknowledgement repaints without reading an unavailable site inventory", async () => {
+  const dom = fakeDashboard([{ domain: "unchanged.test", enabled: false, excluded: true }]);
+  dom.byId["bypass-protection"] = { ...dom.byId["automatic-policy"]!, checked: true };
+  dom.byId["cf-protection-status"] = { ...dom.byId["cf-summary"]! };
+  dom.byId["cf-protection-problem"] = { ...dom.byId["cf-summary"]! };
+  const requests: string[] = [];
+  const messages: string[] = [];
+  const client = loadDashboard(dom, {
+    call: async (path) => {
+      requests.push(path);
+      if (path !== "/api/protection") throw new Error("site database unavailable");
+      return { ok: true, data: { protection: { wanted: true, configured: true, available: true, problem: "" } } };
+    },
+    notify: message => messages.push(message),
+  });
+  await client.setProtection(dom.byId["bypass-protection"]);
+  expect(requests).toEqual(["/api/protection"]);
+  expect(dom.byId["bypass-protection"]!.checked).toBe(true);
+  expect(dom.byId["cf-protection-status"]!.textContent).toBe("Protection configured.");
+  expect(dom.rows[0]!.dataset.enabled).toBe("false");
+  expect(messages).toEqual(["Bypass protection saved. It only applies to Cloudflare-only sites."]);
 });

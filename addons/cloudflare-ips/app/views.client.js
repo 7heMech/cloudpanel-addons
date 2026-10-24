@@ -74,16 +74,20 @@ function applyState(state, html) {
   });
   const policy = document.getElementById('automatic-policy');
   if (policy) policy.checked = Boolean(state.autoEnableNewSites);
-  if (state.protection) {
-    const protection = document.getElementById('bypass-protection');
-    if (protection) protection.checked = state.protection.wanted;
-    const status = document.getElementById('cf-protection-status');
-    if (status) status.textContent = state.protection.configured ? 'Protection configured.'
-      : state.protection.wanted ? 'Protection needs repair.' : 'Bypass protection is off.';
-    const problem = document.getElementById('cf-protection-problem');
-    if (problem) { problem.textContent = state.protection.problem; problem.hidden = !state.protection.problem; }
-  }
+  applyProtection(state.protection);
   paintSummary();
+}
+
+function applyProtection(state) {
+  if (state) {
+    const protection = document.getElementById('bypass-protection');
+    if (protection) protection.checked = state.wanted;
+    const status = document.getElementById('cf-protection-status');
+    if (status) status.textContent = state.configured ? 'Protection configured.'
+      : state.wanted ? 'Protection needs repair.' : 'Bypass protection is off.';
+    const problem = document.getElementById('cf-protection-problem');
+    if (problem) { problem.textContent = state.problem; problem.hidden = !state.problem; }
+  }
 }
 
 async function setProtection(input) {
@@ -94,7 +98,7 @@ async function setProtection(input) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: input.checked }),
     });
     busy(false);
-    applyState(reply.data, reply.html);
+    applyProtection(reply.data.protection);
     notify('Bypass protection saved. It only applies to Cloudflare-only sites.', 'ok');
   } catch (error) {
     const state = await readState();

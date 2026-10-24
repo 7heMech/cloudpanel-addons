@@ -2,6 +2,7 @@ import {
   bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
 } from "../../../lib/app-http";
 import type { ActionResult } from "../../../lib/gateway-client";
+import { validRebootTime } from "../updates";
 import type { SystemTweaksState } from "../action";
 import { systemTweaksService } from "./service";
 import { dashboardView, layout } from "./views";
@@ -55,8 +56,13 @@ export async function handle(
   }
 
   if (path === "/api/updates") {
-    const wanted: Record<string, boolean> = {};
+    const wanted: Record<string, boolean | string | null> = {};
     for (const [key, value] of Object.entries(body)) {
+      if (key === "rebootTime") {
+        if (!validRebootTime(value)) return json({ ok: false, error: "rebootTime must be null, now or HH:MM (00:00–23:59)" }, 400);
+        wanted[key] = value;
+        continue;
+      }
       if (typeof value !== "boolean") return json({ ok: false, error: `${key} must be true or false` }, 400);
       wanted[key] = value;
     }

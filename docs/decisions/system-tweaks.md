@@ -27,7 +27,10 @@ the operator's previous setup comes back. The file sets:
 - `nginx`, on by default; `percona-*`/`mysql-*`/`mariadb-*` and `main`, off by
   default;
 - `Automatic-Reboot`, off by default. The first switch-on copies the box's
-  effective value, so a policy the operator already had stays in place.
+  effective value, so a policy the operator already had stays in place;
+- `Automatic-Reboot-Time` only when explicitly chosen: `now` or a validated
+  24-hour `HH:MM`. Missing or null `rebootTime` leaves this directive out,
+  preserving outside policy on existing installations and on first activation.
 
 PHP is always in because CloudPanel's PHP builds come only from its own
 repository. Debian's security pocket alone would not have patched the php2shell
@@ -70,6 +73,17 @@ stops a root action that is still installing. The page keeps its "Installing"
 notice up until the reply repaints it. Ubuntu's postinst may turn
 updates on by itself, and the page then reports that as configured outside
 System Tweaks.
+
+Reboot timing uses unattended-upgrades’ existing scheduling behavior on both
+Debian and Ubuntu; no separate timer or direct shutdown command is added. The
+HTTP boundary, root action and drop-in generator validate explicit times before
+writing them. The control offers existing configuration, immediate-after-run,
+and a clock time, saved independently of the reboot switch. Server timezone
+comes from the root process’s system timezone (`Intl.DateTimeFormat`); effective
+timing comes from `apt-config dump`. Outside relative values such as `+15` are
+displayed without changing them. Later apt files remain authoritative and a
+different effective time is reported next to the control. Settings changes do
+not change an already queued shutdown. See [Ubuntu’s reboot documentation](https://ubuntu.com/server/docs/how-to/software/automatic-updates/#reboots).
 
 ### Reading the effective state
 

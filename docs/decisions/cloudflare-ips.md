@@ -36,7 +36,7 @@ focused row select it, while the switch and other controls keep their own
 actions. A per-site switch acts immediately without confirmation, because
 turning one site off is the ordinary correction after a fleet-wide change.
 
-After any change the page repaints from a fresh read rather than from what was
+After a site or new-site policy change the page repaints from a fresh read rather than from what was
 requested, keeping selection and scroll, and does the same after a failure so
 the displayed state is the server's. A changed site inventory replaces the view
 with the HTML returned by that read, preserving selections for surviving sites.
@@ -106,7 +106,10 @@ not a probe of live Nginx workers. Disabling the switch or addon removes only
 the exact marked block and owned lookup, preserving the current ranges rather
 than restoring an old copy. Re-enabling the addon restores its saved choice.
 The policy lock serializes protection changes with site and new-site policy
-changes.
+changes. A protection mutation returns its effective protection state directly,
+without reading the panel database. The browser paints that acknowledgement; a
+site inventory failure cannot turn a completed protection change into a failed
+mutation or reverse the switch on screen.
 
 `bun tests/integration/integration-cloudflare-peer.ts` tests the generated
 configuration with real Nginx in an isolated Docker network: rejection of

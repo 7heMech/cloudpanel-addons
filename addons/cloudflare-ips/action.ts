@@ -307,7 +307,7 @@ async function setProtection(paths: CloudflareActionPaths, enabled: boolean, run
       } catch (rollbackError) { failures.push(errorMessage(rollbackError)); }
       throw withRecoveryFailures(error, "policy rollback failed", failures);
     }
-    return listState(paths);
+    return { protection: cloudflarePeerStatus(enabled, peerOptions(paths)) };
   });
 }
 

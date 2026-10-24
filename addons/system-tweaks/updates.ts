@@ -25,6 +25,7 @@ export interface UpdateSettings {
   database: boolean;
   panel: boolean;
   reboot: boolean;
+  rebootTime: string | null;
 }
 
 export const DEFAULT_UPDATE_SETTINGS: UpdateSettings = {
@@ -33,9 +34,14 @@ export const DEFAULT_UPDATE_SETTINGS: UpdateSettings = {
   database: false,
   panel: false,
   reboot: false,
+  rebootTime: null,
 };
 
-export const UPDATE_SETTING_KEYS = Object.keys(DEFAULT_UPDATE_SETTINGS) as (keyof UpdateSettings)[];
+export const UPDATE_SETTING_KEYS = ["enabled", "nginx", "database", "panel", "reboot"] as const;
+
+export function validRebootTime(value: unknown): value is string | null {
+  return value === null || value === "now" || (typeof value === "string" && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value));
+}
 
 export interface UpdatesPaths {
   aptConfDir: string;
@@ -94,6 +100,7 @@ export interface UpdatesStatus {
   listsUpdated: boolean;
   reboot: boolean;
   rebootTime: string;
+  timezone: string;
   timer: { state: string; next: string };
   coverage: CoverageRow[];
   lastRun: LastRun | null;
@@ -318,6 +325,7 @@ export function securityPattern(distroId: string): string | null {
 }
 
 export function dropInFor(settings: UpdateSettings, distroId: string): string {
+  if (!validRebootTime(settings.rebootTime)) failAction("rebootTime must be null, now or HH:MM (00:00–23:59)");
   const cloudpanel = (component: string) => `origin=${CLOUDPANEL_ORIGIN},codename=\${distro_codename},component=${component}`;
   const patterns = [
     securityPattern(distroId),
@@ -334,6 +342,7 @@ export function dropInFor(settings: UpdateSettings, distroId: string): string {
     ...patterns.map((pattern) => `\t"${pattern}";`),
     "};",
     `Unattended-Upgrade::Automatic-Reboot "${settings.reboot ? "true" : "false"}";`,
+    ...(settings.rebootTime === null ? [] : [`Unattended-Upgrade::Automatic-Reboot-Time "${settings.rebootTime}";`]),
     "",
   ].join("\n");
 }
@@ -471,6 +480,7 @@ export function updatesStatus(options: UpdatesOptions = {}): UpdatesStatus {
     listsUpdated: lists !== "" && lists !== "0",
     reboot: truthy(scalar(config, "Unattended-Upgrade::Automatic-Reboot")),
     rebootTime: scalar(config, "Unattended-Upgrade::Automatic-Reboot-Time"),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     timer,
     coverage: coverageOf(policy.ok ? parsePolicy(policy.stdout) : [], allowedPatterns(config), distro),
     lastRun: lastRun(ctx),

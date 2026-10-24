@@ -22,3 +22,8 @@
   .st-kv dt:not(:first-child) { margin-top: 12px; }
   .st-table th, .st-table td { padding: 10px 8px; }
 }
+
+.st-reboot-time { margin-top: 14px; }
+.st-reboot-controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; align-items: center; }
+.st-reboot-controls select { flex: 1 1 210px; min-width: 0; }
+.st-reboot-controls input { flex: 0 1 180px; min-width: 0; }

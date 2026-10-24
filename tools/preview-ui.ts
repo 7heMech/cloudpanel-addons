@@ -403,7 +403,7 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
   const enabled = mode === "on" || mode === "outside";
   const php = ["7.4", "8.1", "8.2", "8.3", "8.4"];
   return {
-    settings: { enabled: managed, nginx: true, database: false, panel: false, reboot: false },
+    settings: { enabled: managed, nginx: true, database: false, panel: false, reboot: url.searchParams.has("reboot"), rebootTime: null },
     updates: {
       installed: mode !== "missing",
       version: mode === "missing" ? "" : "2.9.1+nmu3",
@@ -413,8 +413,9 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
       outsideSource: mode === "outside" ? "20auto-upgrades" : "",
       overriddenBy: "",
       listsUpdated: enabled,
-      reboot: false,
+      reboot: url.searchParams.has("reboot"),
       rebootTime: "",
+      timezone: "Europe/Berlin",
       timer: { state: "enabled", next: "Sat 2026-10-24 06:32:16 UTC" },
       coverage: [
         { name: "CloudPanel PHP", detail: php.join(", "), covered: managed ? "all" : "none" },
@@ -458,6 +459,8 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
     }
   } else {
     Object.assign(state.settings, body);
+    state.updates.reboot = state.settings.reboot;
+    state.updates.rebootTime = state.settings.rebootTime ?? "";
     state.updates.managed = state.settings.enabled;
     state.updates.enabled = state.settings.enabled || state.updates.outsideSource !== "";
     for (const row of state.updates.coverage) {
@@ -1472,6 +1475,7 @@ const server = Bun.serve({
         },
       }), notice);
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
+      cloudflarePreview = null;
       html = cloudflareLayout("Cloudflare IP Access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {
       html = instaticLayout("Instatic sites", dashboardView(empty ? [] : instances, age,

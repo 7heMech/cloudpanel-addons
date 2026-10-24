@@ -80,6 +80,27 @@ function updatesLine(status: UpdatesStatus): string {
   return `${badge("Off", "warn")} <span>${why}</span>`;
 }
 
+function rebootTiming(status: UpdatesStatus, settings: UpdateSettings, locked: boolean): string {
+  if (!settings.reboot && !status.reboot) return "";
+  const mode = settings.rebootTime === null ? "existing" : settings.rebootTime === "now" ? "now" : "time";
+  const value = /^\d{2}:\d{2}$/.test(settings.rebootTime ?? status.rebootTime) ? (settings.rebootTime ?? status.rebootTime) : "";
+  const overridden = settings.rebootTime !== null && (status.rebootTime || "now") !== settings.rebootTime;
+  return `<form class="st-reboot-time" onsubmit="saveRebootTime(event, this)">
+    <label for="reboot-mode">Reboot timing</label>
+    <div class="st-reboot-controls">
+      <select id="reboot-mode" name="mode" onchange="rebootModeChanged(this)"${locked ? " disabled" : ""}>
+        <option value="existing"${mode === "existing" ? " selected" : ""}>Use existing configuration</option>
+        <option value="now"${mode === "now" ? " selected" : ""}>After the update run</option>
+        <option value="time"${mode === "time" ? " selected" : ""}>At a specific time</option>
+      </select>
+      <input type="time" name="time" aria-label="Reboot time" value="${esc(value)}"${mode !== "time" ? " hidden disabled" : locked ? " disabled" : " required"}>
+      <button class="btn" type="submit"${locked ? " disabled" : ""}>Save time</button>
+    </div>
+    <p class="hint">Server timezone: ${esc(status.timezone)}. Only reboots when an update requires it. Changes apply to future update runs.</p>
+    ${overridden ? '<p class="notice st-inline-notice">Another apt configuration overrides your saved reboot time. The effective timing is shown below.</p>' : ""}
+  </form>`;
+}
+
 function updateRows(status: UpdatesStatus, settings: UpdateSettings): string {
   const locked = !status.installed || !status.managed;
   const install = status.installed ? "" : `
@@ -118,8 +139,9 @@ function updateRows(status: UpdatesStatus, settings: UpdateSettings): string {
     switchRow({
       key: "reboot",
       title: "Reboot when required",
-      description: "Restarts the server right after a run that installed something needing it, such as a new kernel.",
+      description: "Allows unattended-upgrades to restart the server when required, using the reboot timing below.",
       checked: settings.reboot, disabled: locked, onchange: "setUpdates(this)",
+      extra: rebootTiming(status, settings, locked),
     }),
   ].join("");
 }
@@ -144,7 +166,7 @@ function statusList(status: UpdatesStatus): string {
       ? ` for ${esc(status.rebootRequired.packages.join(", "))}` : ""}.`
     : "Not required.";
   const automatic = status.reboot
-    ? `On${status.rebootTime && status.rebootTime !== "now" ? `, at ${esc(status.rebootTime)}` : ", right after the run"}.`
+    ? `On${status.rebootTime && status.rebootTime !== "now" ? `, ${/^\+\d+$/.test(status.rebootTime) ? `${esc(status.rebootTime.slice(1))} minutes after the run` : `at ${esc(status.rebootTime)} (${esc(status.timezone)})`}` : ", right after the run"}.`
     : "Off.";
   const failure = status.lastRun?.outcome === "failed"
     ? `<details class="st-run-details"><summary>Failure details</summary><pre>${esc(status.lastRun.message)}</pre></details>` : "";

@@ -27,20 +27,18 @@ test("bypass protection requires CSRF and an explicit boolean before reaching ro
   expect(calls).toEqual([]);
 });
 
-test("bypass protection replies contain the actual state and HTML for repainting", async () => {
+test("bypass protection replies acknowledge the applied state without requiring site inventory", async () => {
   const calls: boolean[] = [];
   const state: CloudflareState = {
     sites: [{ domain: "open.example.com", type: "PHP", enabled: false, excludedFromAutomatic: false }],
     autoEnableNewSites: false,
     protection: { wanted: true, configured: true, available: true, problem: "" },
   };
-  cloudflareService.setProtection = async (enabled) => { calls.push(enabled); return { ok: true, data: state }; };
+  cloudflareService.setProtection = async (enabled) => { calls.push(enabled); return { ok: true, data: { protection: state.protection } }; };
   const response = await handle(request({ enabled: true }), "/api/protection");
   expect(response.status).toBe(200);
-  const reply = await response.json() as { data: CloudflareState; html: string };
+  const reply = await response.json() as { data: { protection: CloudflareState["protection"] }; html?: string };
   expect(calls).toEqual([true]);
-  expect(reply.data).toEqual(state);
-  expect(reply.html).toContain("Mitigate Cloudflare-only bypass");
-  expect(reply.html).toContain("Sites with it off are not restricted by this protection.");
-  expect(reply.html).toContain("open.example.com");
+  expect(reply.data).toEqual({ protection: state.protection });
+  expect(reply.html).toBeUndefined();
 });

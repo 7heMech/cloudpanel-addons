@@ -574,3 +574,87 @@ test("failed downloads retain the package URL in expandable details and escape t
   expect(html).toContain("php8.2-bcmath.deb failed to download, aborting &lt;script&gt;");
   expect(html).not.toContain("<script>");
 });
+
+test("reboot timing preserves outside policy until explicitly set, and restores it on removal", async () => {
+  const b = box();
+  const outside = 'Unattended-Upgrade::Automatic-Reboot "true";\nUnattended-Upgrade::Automatic-Reboot-Time "04:15";\n';
+  writeFileSync(join(b.aptDir, "50unattended-upgrades"), outside);
+  let state = await act(b, ["set-updates"], { enabled: true });
+  expect(state.settings.rebootTime).toBe(null);
+  expect(state.updates.rebootTime).toBe("04:15");
+  expect(readFileSync(b.dropIn, "utf8")).not.toContain("Automatic-Reboot-Time");
+  for (const time of ["00:00", "03:30", "23:59", "now"]) {
+    state = await act(b, ["set-updates"], { rebootTime: time });
+    expect(state.settings.rebootTime).toBe(time);
+    expect(state.updates.rebootTime).toBe(time);
+    expect(JSON.parse(readFileSync(b.settingsFile, "utf8")).updates.rebootTime).toBe(time);
+    expect(readFileSync(join(b.aptDir, "50unattended-upgrades"), "utf8")).toBe(outside);
+  }
+  state = await act(b, ["set-updates"], { rebootTime: null });
+  expect(state.updates.rebootTime).toBe("04:15");
+  await act(b, ["set-updates"], { rebootTime: "03:30" });
+  withdrawSystemTweaks(b.options);
+  expect(updatesStatus(b.options.updates).rebootTime).toBe("04:15");
+  restoreSystemTweaks(b.options);
+  expect(updatesStatus(b.options.updates).rebootTime).toBe("03:30");
+  state = await act(b, ["set-updates"], { enabled: false });
+  expect(state.updates.rebootTime).toBe("04:15");
+  expect(b.commands.some(command => /shutdown|reboot/.test(command))).toBe(false);
+});
+
+test("invalid reboot times cannot change settings or inject apt directives", async () => {
+  const b = box();
+  await act(b, ["set-updates"], { enabled: true });
+  const before = readFileSync(b.dropIn, "utf8");
+  const settings = readFileSync(b.settingsFile, "utf8");
+  for (const rebootTime of ["", "3:30", "24:00", "12:60", "+5", false, 330, '03:30";\nAPT::Periodic::Enable "0']) {
+    await expect(act(b, ["set-updates"], { rebootTime })).rejects.toThrow("rebootTime must be");
+    expect(readFileSync(b.dropIn, "utf8")).toBe(before);
+    expect(readFileSync(b.settingsFile, "utf8")).toBe(settings);
+  }
+});
+
+test("old saved settings preserve outside timing and later apt files remain authoritative", async () => {
+  const b = box();
+  await act(b, ["set-updates"], { enabled: true, reboot: true });
+  const saved = JSON.parse(readFileSync(b.settingsFile, "utf8"));
+  delete saved.updates.rebootTime;
+  writeFileSync(b.settingsFile, JSON.stringify(saved));
+  writeFileSync(join(b.aptDir, "90operator"), 'Unattended-Upgrade::Automatic-Reboot-Time "+15";\n');
+  let state = await act(b, ["state"]);
+  expect(state.settings.rebootTime).toBe(null);
+  expect(state.updates.rebootTime).toBe("+15");
+  state = await act(b, ["set-updates"], { rebootTime: "02:00" });
+  expect(state.updates.rebootTime).toBe("+15");
+  const html = dashboardView(state);
+  expect(html).toContain("overrides your saved reboot time");
+  expect(html).toContain("15 minutes after the run");
+  expect(html).toContain(`Server timezone: ${state.updates.timezone}`);
+});
+
+test("the reboot-time API validates input and returns replacement HTML from the action reply", async () => {
+  const { handle } = await import("../addons/system-tweaks/app");
+  const { systemTweaksService } = await import("../addons/system-tweaks/app/service");
+  const b = box();
+  const state = await act(b, ["set-updates"], { enabled: true, reboot: true, rebootTime: "03:30" });
+  const original = systemTweaksService.setUpdates;
+  const calls: unknown[] = [];
+  systemTweaksService.setUpdates = async (body) => { calls.push(body); return { ok: true, data: state }; };
+  const request = (rebootTime: unknown, csrf = true) => new Request("https://panel.example.com/addons/system-tweaks/api/updates", {
+    method: "POST",
+    headers: { Host: "panel.example.com", Origin: "https://panel.example.com", "Content-Type": "application/json",
+      ...(csrf ? { Cookie: `clp_addons_csrf=${"a".repeat(64)}`, "X-CLP-Addons-CSRF": "a".repeat(64) } : {}) },
+    body: JSON.stringify({ rebootTime }),
+  });
+  try {
+    expect((await handle(request("03:30", false), "/api/updates")).status).toBe(403);
+    expect((await handle(request("24:30"), "/api/updates")).status).toBe(400);
+    expect(calls).toEqual([]);
+    for (const rebootTime of ["03:30", "now", null]) {
+      const response = await handle(request(rebootTime), "/api/updates");
+      expect(response.status).toBe(200);
+      expect((await response.json() as { html: string }).html).toBe(dashboardView(state));
+    }
+    expect(calls).toEqual([{ rebootTime: "03:30" }, { rebootTime: "now" }, { rebootTime: null }]);
+  } finally { systemTweaksService.setUpdates = original; }
+});
