@@ -8,6 +8,16 @@ every panel user adds, lists and removes their own keys. Administrators see
 everyone's keys on Addons → Security Keys, can remove any of them, and set the
 panel-wide settings below. Nobody else can change those.
 
+That list groups keys under the user they belong to, with the role only while
+the CloudPanel account is still the one the keys were made for. Search and a
+filter for keys unused in 90 days, synced passkeys, and accounts that no longer
+sign in hide rows in the browser; every key is already on the page. A key works
+only at the address it was added on, so on a phone that address shows only when
+it differs from the one the panel is open on.
+
+A user's own card leaves out the key type, except to mark a synced passkey the
+panel no longer accepts, the one case where the type changes what a key can do.
+
 It is passwordless sign-in, not a second factor. The password and CloudPanel's
 own TOTP still work exactly as before; a key is another way in. Requiring a key
 on top of the password would need a gate in front of every panel request, which

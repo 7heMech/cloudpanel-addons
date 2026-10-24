@@ -113,6 +113,8 @@ export interface UserKeysView {
   user: string;
   /** Whether the CloudPanel account the keys were made for still signs in. */
   active: boolean;
+  /** That account's CloudPanel role, or null once it is not the same account. */
+  role: string | null;
   keys: KeyView[];
 }
 
@@ -489,7 +491,8 @@ function allUsers(paths: SecurityKeysPaths): { users: UserKeysView[]; settings: 
     settings: readSettings(paths),
     users: Object.entries(store.users).map(([user, entry]) => {
       const account = accounts.get(user);
-      return { user, active: Boolean(account?.active && account.id === entry.userId), keys: entry.keys.map(keyView) };
+      const same = account?.id === entry.userId;
+      return { user, active: Boolean(same && account?.active), role: same ? account?.role ?? null : null, keys: entry.keys.map(keyView) };
     }),
   };
 }

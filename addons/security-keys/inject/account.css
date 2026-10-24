@@ -6,7 +6,9 @@
 .clp-sk-keys li:first-child { border-top: 0; }
 .clp-sk-keys li > div { min-width: 0; }
 .clp-sk-keys strong { display: block; overflow-wrap: anywhere; }
-.clp-sk-meta { display: block; margin-top: 2px; color: #9bacb6; font-size: 14px; }
+.clp-sk-meta, .clp-sk-refused { display: block; margin-top: 2px; font-size: 14px; }
+.clp-sk-meta { color: #9bacb6; }
+.clp-sk-refused { color: #dc3545; }
 .clp-sk-keys .btn { flex: 0 0 auto; }
 html.dark .clp-sk-keys, html.dark .clp-sk-keys li { border-color: var(--clp-border-color); }
 html.dark .clp-sk-meta { color: var(--clp-text-secondary, #9b9b9b); }

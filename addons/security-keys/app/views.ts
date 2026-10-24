@@ -3,7 +3,7 @@ import STYLE from "./views.css" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import { renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
-import type { Settings, UserKeysView } from "./service";
+import type { KeyView, Settings, UserKeysView } from "./service";
 
 export function layout(title: string, content: string, updateNotice?: { current: string; latest: string } | null): string {
   return renderLayout(title, content, {
@@ -16,9 +16,27 @@ export function layout(title: string, content: string, updateNotice?: { current:
   });
 }
 
-function when(iso: string | null, length: 10 | 16): string {
-  return iso ? `<time datetime="${esc(iso)}" title="${esc(iso)}">${esc(iso.slice(0, length).replace("T", " "))}</time>` : "Never";
+const DAY_MS = 86_400_000;
+/** A key unused this long, or never, is one an administrator should look at. */
+const STALE_DAYS = 90;
+
+function added(iso: string): string {
+  return `<time datetime="${esc(iso)}">${esc(iso.slice(0, 10))}</time>`;
 }
+
+function lastUsed(iso: string | null, now: number): string {
+  if (!iso) return "Never used";
+  // Calendar days in UTC, the zone the exact time on hover is given in.
+  const days = Math.floor(now / DAY_MS) - Math.floor(Date.parse(iso) / DAY_MS);
+  const text = days < 1 ? "Today" : days === 1 ? "Yesterday" : days < 60 ? `${days} days ago` : `${Math.round(days / 30)} months ago`;
+  return `<time datetime="${esc(iso)}" title="${esc(iso.slice(0, 16).replace("T", " "))} UTC">${text}</time>`;
+}
+
+function stale(key: KeyView, now: number): boolean {
+  return !key.lastUsedAt || now - Date.parse(key.lastUsedAt) > STALE_DAYS * DAY_MS;
+}
+
+const ROLE_NAMES: Record<string, string> = { ROLE_ADMIN: "Administrator", ROLE_SITE_MANAGER: "Site manager", ROLE_USER: "User" };
 
 const ROLE_LABELS: [Settings["roles"][number], string][] = [
   ["ROLE_ADMIN", "Administrators"],
@@ -47,17 +65,33 @@ function settingsCard(settings: Settings): string {
     </div>`;
 }
 
-export function dashboardView({ users, settings }: { users: UserKeysView[]; settings: Settings }): string {
-  const rows = users.flatMap((entry) => entry.keys.map((key) => `
-    <tr>
-      <td class="site-cell">${esc(entry.user)}${entry.active ? "" : ' <span class="badge state-failed">No longer signs in</span>'}</td>
-      <td data-label="Key">${esc(key.name)}${key.synced ? ` <span class="badge${settings.syncedPasskeys ? "" : " state-failed"}">Synced passkey</span>` : ""}</td>
-      <td data-label="Panel address" class="mono">${esc(new URL(key.origin).host)}</td>
-      <td data-label="Added">${when(key.createdAt, 10)}</td>
-      <td data-label="Last used (UTC)">${when(key.lastUsedAt, 16)}</td>
-      <td class="action-cell"><button class="btn btn-danger" type="button" data-user="${esc(entry.user)}" data-id="${esc(key.id)}" data-name="${esc(key.name)}" onclick="revokeKey(this)">Remove</button></td>
-    </tr>`)).join("");
-  const count = users.reduce((total, entry) => total + entry.keys.length, 0);
+function keyType(key: KeyView, settings: Settings): string {
+  if (!key.synced) return '<span class="hint">Device-bound</span>';
+  return settings.syncedPasskeys
+    ? '<span class="hint">Synced passkey</span>'
+    : '<span class="sk-refused">Synced passkey, not accepted</span>';
+}
+
+function userGroup(entry: UserKeysView, settings: Settings, now: number): string {
+  const count = `${entry.keys.length} key${entry.keys.length === 1 ? "" : "s"}`;
+  const about = entry.active ? `${ROLE_NAMES[entry.role ?? ""] ?? "Panel user"} · ${count}` : count;
+  return `
+          <tbody class="sk-group"${entry.active ? "" : " data-inactive"}>
+            <tr class="sk-group-head"><th colspan="5" scope="rowgroup"><strong>${esc(entry.user)}</strong> <span class="hint">${about}</span>${entry.active ? "" : ' <span class="sk-refused">No longer signs in</span>'}</th></tr>${entry.keys.map((key) => `
+            <tr class="sk-key${stale(key, now) ? " is-stale" : ""}" data-find="${esc(`${entry.user} ${key.name}`.toLowerCase())}"${key.synced ? " data-synced" : ""}>
+              <td class="sk-name"><span>${esc(key.name)}</span>${keyType(key, settings)}</td>
+              <td class="mono sk-host" data-host="${esc(new URL(key.origin).host)}">${esc(new URL(key.origin).host)}</td>
+              <td>${added(key.createdAt)}</td>
+              <td class="sk-used">${lastUsed(key.lastUsedAt, now)}</td>
+              <td class="action-cell"><button class="btn btn-danger" type="button" data-user="${esc(entry.user)}" data-id="${esc(key.id)}" data-name="${esc(key.name)}" onclick="revokeKey(this)">Remove</button></td>
+            </tr>`).join("")}
+          </tbody>`;
+}
+
+export function dashboardView({ users, settings }: { users: UserKeysView[]; settings: Settings }, now = Date.now()): string {
+  const owners = users.filter((entry) => entry.keys.length > 0);
+  const count = owners.reduce((total, entry) => total + entry.keys.length, 0);
+  const summary = `${count} key${count === 1 ? "" : "s"} for ${owners.length} user${owners.length === 1 ? "" : "s"}`;
 
   return `
     <div class="page-heading">
@@ -68,11 +102,19 @@ export function dashboardView({ users, settings }: { users: UserKeysView[]; sett
     <div class="card card-table">
       ${count === 0
         ? '<div class="empty">No security keys yet.</div>'
-        : `<table class="fleet-table security-key-table">
-            <thead><tr>
-              <th scope="col">User</th><th scope="col">Key</th><th scope="col">Panel address</th><th scope="col">Added</th><th scope="col">Last used (UTC)</th><th scope="col" class="action-cell"></th>
-            </tr></thead>
-            <tbody>${rows}</tbody>
-          </table>`}
+        : `<div class="sk-toolbar">
+            <input type="search" id="sk-find" placeholder="Find a user or key" aria-label="Find a user or key" oninput="filterKeys()">
+            <select id="sk-show" aria-label="Show" onchange="filterKeys()">
+              <option value="all">All keys</option>
+              <option value="stale">Not used in ${STALE_DAYS} days</option>
+              <option value="synced">Synced passkeys</option>
+              <option value="inactive">Accounts that no longer sign in</option>
+            </select>
+            <span class="hint" id="sk-summary" data-all="${esc(summary)}">${esc(summary)}</span>
+          </div>
+          <table class="sk-table">
+            <thead><tr><th scope="col">Key</th><th scope="col">Panel address</th><th scope="col">Added</th><th scope="col">Last used</th><th scope="col" class="action-cell"></th></tr></thead>${owners.map((entry) => userGroup(entry, settings, now)).join("")}
+          </table>
+          <div class="empty" id="sk-none" hidden>No key matches.</div>`}
     </div>`;
 }

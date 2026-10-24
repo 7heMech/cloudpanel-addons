@@ -15,8 +15,12 @@ if (card) {
     errorBox.textContent = message;
     errorBox.hidden = !message;
   };
+  // This year's dates leave the year out.
   var day = function (iso) {
-    return new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
+    var date = new Date(iso);
+    return date.getFullYear() === new Date().getFullYear()
+      ? date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+      : date.toLocaleDateString(undefined, { dateStyle: "medium" });
   };
 
   // What root says this account may do, painted with every reply.
@@ -49,11 +53,19 @@ if (card) {
       name.textContent = key.name;
       var meta = document.createElement("span");
       meta.className = "clp-sk-meta";
-      meta.textContent = "Added " + day(key.createdAt) + " \u00b7 " + (key.lastUsedAt ? "Last used " + day(key.lastUsedAt) : "Never used");
+      // A narrow row breaks only between the two dates, never inside one.
+      var whole = function (text) { return text.replace(/ /g, "\u00a0"); };
+      meta.textContent = whole("Added " + day(key.createdAt)) + " \u00b7 " + whole(key.lastUsedAt ? "Last used " + day(key.lastUsedAt) : "Never used");
       meta.title = "Added " + new Date(key.createdAt).toLocaleString() +
         (key.lastUsedAt ? "\nLast used " + new Date(key.lastUsedAt).toLocaleString() : "");
       about.appendChild(name);
       about.appendChild(meta);
+      if (key.synced && !syncedPasskeys) {
+        var refused = document.createElement("span");
+        refused.className = "clp-sk-refused";
+        refused.textContent = "A synced passkey, which this panel no longer accepts.";
+        about.appendChild(refused);
+      }
       var remove = document.createElement("button");
       remove.type = "button";
       remove.className = "btn btn-white";

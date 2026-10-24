@@ -645,14 +645,15 @@ function securityKeysPreviewUsers(url: URL): UserKeysView[] {
   if (url.searchParams.has("empty")) return [];
   const origin = "https://panel.example.com:8443";
   return [
-    { user: "admin", active: true, keys: [
+    { user: "admin", active: true, role: "ROLE_ADMIN", keys: [
       { id: "a1", name: "YubiKey 5C", origin, synced: false, createdAt: "2026-09-02T08:14:00.000Z", lastUsedAt: "2026-10-22T07:51:00.000Z" },
       { id: "a2", name: "Bitwarden", origin, synced: true, createdAt: "2026-09-10T16:40:00.000Z", lastUsedAt: null },
+      { id: "a3", name: "The thing is, kids will never know how notorious this man was. H", origin, synced: false, createdAt: "2026-10-24T09:00:00.000Z", lastUsedAt: "2026-10-24T10:00:00.000Z" },
     ] },
-    { user: "jane", active: true, keys: [
+    { user: "jane", active: true, role: "ROLE_SITE_MANAGER", keys: [
       { id: "j1", name: "MacBook Touch ID", origin, synced: true, createdAt: "2026-10-01T11:02:00.000Z", lastUsedAt: "2026-10-21T18:30:00.000Z" },
     ] },
-    { user: "former-contractor", active: false, keys: [
+    { user: "former-contractor", active: false, role: null, keys: [
       { id: "f1", name: "Security key", origin, synced: false, createdAt: "2026-06-12T09:00:00.000Z", lastUsedAt: "2026-07-01T10:12:00.000Z" },
     ] },
   ];
@@ -1209,7 +1210,9 @@ const server = Bun.serve({
       const users = securityKeysPreviewUsers(asked ? new URL(asked) : url);
       // ?role-off draws the card for an account whose role has keys turned off.
       const off = asked ? new URL(asked).searchParams.has("role-off") : false;
-      return Response.json({ ok: true, data: { keys: users[0]?.keys ?? [], canAdd: !off, syncedPasskeys: true } });
+      // ?hardware-only draws it on a panel that no longer accepts synced passkeys.
+      const hardwareOnly = asked ? new URL(asked).searchParams.has("hardware-only") : false;
+      return Response.json({ ok: true, data: { keys: users[0]?.keys ?? [], canAdd: !off, syncedPasskeys: !hardwareOnly } });
     }
     if (path === "/addons/panel-tweaks/api/panel") {
       // The injected block's URL is fixed, so the fixture the stub was drawn
