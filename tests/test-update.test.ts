@@ -336,6 +336,31 @@ test("bootstrap local artifacts are checked without invoking the remote verifier
   expect(calls).toContain("startUnits");
 });
 
+test("install enables every addon it is given", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  await cmdInstall(["stager", "terminal"]);
+  expect(calls).toContain("writeConfig:stager");
+  expect(calls).toContain("writeConfig:terminal");
+  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} install`))).toBe(false);
+});
+
+test("after replacing the binary, install leaves the other addons to the new one", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  await cmdInstall(["stager", "terminal", "security-keys", "--local=/tmp/bootstrap"]);
+  const handoff = `run:${CLI_BIN} install terminal security-keys`;
+  expect(calls.indexOf(handoff)).toBeGreaterThan(calls.indexOf(`writeAtomic:${CLI_BIN}`));
+  expect(calls).not.toContain("writeConfig:terminal");
+});
+
+test("install refuses an unknown addon before installing any", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  await expect(cmdInstall(["stager", "nonesuch"])).rejects.toThrow("unknown addon 'nonesuch'");
+  expect(calls).not.toContain("writeConfig:stager");
+});
+
 test.each([{ flags: ["--version"] }, { flags: ["--local"] }, { flags: ["--version=v1.2.3", "--local=/tmp/bootstrap"] }])("install refuses incomplete or conflicting artifact flags %j", async ({ flags }) => {
   calls.length = 0;
   await expect(cmdInstall(["stager", ...flags])).rejects.toThrow();

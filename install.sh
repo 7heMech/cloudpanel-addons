@@ -6,13 +6,10 @@ CLI_ARTIFACT="clp-addons-linux-x64"
 ARTIFACTS=("${CLI_ARTIFACT}")
 CLI_TARGET="/usr/local/bin/clp-addons"
 GH_PRIVATE="/usr/local/libexec/clp-addons/gh"
-AVAILABLE_ADDONS=("cloudflare-ips" "dns" "instatic" "stager" "maintenance" "php-resources" "git" "panel-tweaks" "system-tweaks" "wp-tools" "smtp" "terminal" "security-keys")
-DEFAULT_ADDONS=("panel-tweaks" "system-tweaks" "maintenance" "terminal" "security-keys")
 VERSION="latest"
 SELECTED=""
 ASSUME_YES=0
 SKIP_ATTESTATION=0
-INSTALL_DOCKER=0
 
 if [[ -t 1 ]]; then
   DIM=$'\033[2m'; RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; N=$'\033[0m'
@@ -34,11 +31,7 @@ clp-addons installer
   --version=vX.Y.Z      install a specific release (default: latest)
   --yes                 non-interactive; requires --addons
   --skip-attestation    accept checksum-only verification
-  --install-docker      install Docker if instatic needs it
   --help
-
-Available addons: ${AVAILABLE_ADDONS[*]}
-Default addons:   ${DEFAULT_ADDONS[*]}
 USAGE
 }
 
@@ -48,7 +41,6 @@ for arg in "$@"; do
     --version=*)        VERSION="${arg#*=}" ;;
     --yes|-y)           ASSUME_YES=1 ;;
     --skip-attestation) SKIP_ATTESTATION=1 ;;
-    --install-docker)   INSTALL_DOCKER=1 ;;
     --help|-h)          usage; exit 0 ;;
     *)                  die "unknown option: $arg" ;;
   esac
@@ -63,128 +55,11 @@ done
 command -v clpctl >/dev/null || die "clpctl not found; this installer expects a CloudPanel host"
 ok "dependencies available"
 
-# --- choose addons ----------------------------------------------------------
-
-have_tty() { [[ -r /dev/tty && -w /dev/tty ]]; }
-
-DEFAULT_ADDONS=("panel-tweaks" "system-tweaks" "maintenance" "terminal" "security-keys")
-
-if [[ -z $SELECTED ]]; then
-  if (( ASSUME_YES )) || ! have_tty; then
-    die "no addons selected and no terminal to ask on. Pass --addons=${AVAILABLE_ADDONS[0]}"
-  fi
-
-  if [[ ${TERM:-dumb} != dumb ]] && [[ -t 1 ]]; then
-    selected=(); cursor=0
-    for i in "${!AVAILABLE_ADDONS[@]}"; do
-      selected[i]=0
-      for def in "${DEFAULT_ADDONS[@]}"; do
-        if [[ ${AVAILABLE_ADDONS[i]} == "$def" ]]; then selected[i]=1; break; fi
-      done
-    done
-    say "Which addons should be installed?"
-    say "↑/↓ move · Space toggle · a select all · n clear · Enter install · q cancel"
-    while :; do
-      for i in "${!AVAILABLE_ADDONS[@]}"; do
-        pointer=" "; mark=" "
-        (( i == cursor )) && pointer=">"
-        (( selected[i] )) && mark="x"
-        printf '\r\033[2K %s [%s] %s\n' "$pointer" "$mark" "${AVAILABLE_ADDONS[i]}"
-      done
-      key=""
-      IFS= read -rsn1 key < /dev/tty || die "terminal closed"
-      if [[ $key == $'\033' ]]; then
-        sequence=""
-        IFS= read -rsn2 -t 0.2 sequence < /dev/tty || true
-        key+=$sequence
-      fi
-      case "$key" in
-        $'\033[A'|k) cursor=$(( (cursor + ${#AVAILABLE_ADDONS[@]} - 1) % ${#AVAILABLE_ADDONS[@]} )) ;;
-        $'\033[B'|j) cursor=$(( (cursor + 1) % ${#AVAILABLE_ADDONS[@]} )) ;;
-        ' ') selected[cursor]=$((1 - selected[cursor])) ;;
-        a|A) for i in "${!AVAILABLE_ADDONS[@]}"; do selected[i]=1; done ;;
-        n|N) for i in "${!AVAILABLE_ADDONS[@]}"; do selected[i]=0; done ;;
-        q|Q) die "installation cancelled" ;;
-        '')
-          picked=()
-          for i in "${!AVAILABLE_ADDONS[@]}"; do
-            if (( selected[i] )); then picked+=("${AVAILABLE_ADDONS[i]}"); fi
-          done
-          if (( ${#picked[@]} )); then
-            SELECTED=$(IFS=,; printf '%s' "${picked[*]}")
-            break
-          fi
-          ;;
-      esac
-      printf '\033[%dA' "${#AVAILABLE_ADDONS[@]}"
-    done
-  else
-    say "Which addons should be installed?"
-    for i in "${!AVAILABLE_ADDONS[@]}"; do
-      printf '  %d) %s\n' "$((i + 1))" "${AVAILABLE_ADDONS[i]}"
-    done
-    printf 'Enter numbers separated by spaces, or "all" [default]: '
-    read -r reply < /dev/tty || die "terminal closed"
-    reply=${reply:-default}
-    if [[ $reply == default ]]; then
-      picked=()
-      for i in "${!AVAILABLE_ADDONS[@]}"; do
-        for def in "${DEFAULT_ADDONS[@]}"; do
-          if [[ ${AVAILABLE_ADDONS[i]} == "$def" ]]; then picked+=("${AVAILABLE_ADDONS[i]}"); break; fi
-        done
-      done
-      SELECTED=$(IFS=,; printf '%s' "${picked[*]}")
-    elif [[ $reply == all ]]; then
-      SELECTED=$(IFS=,; printf '%s' "${AVAILABLE_ADDONS[*]}")
-    else
-      picked=()
-      for n in $reply; do
-        [[ $n =~ ^[1-9][0-9]*$ && ${#n} -le 3 ]] || die "not a selection: '$n'"
-        idx=$((10#$n - 1))
-        [[ -n ${AVAILABLE_ADDONS[idx]:-} ]] || die "no addon numbered $n"
-        picked+=("${AVAILABLE_ADDONS[idx]}")
-      done
-      SELECTED=$(IFS=,; printf '%s' "${picked[*]}")
-    fi
-  fi
-fi
-
+# The binary asks which addons once it is verified, on the terminal this
+# script was started from: under `curl | bash` its own stdin is the script.
 IFS=',' read -r -a ADDON_LIST <<< "$SELECTED"
-(( ${#ADDON_LIST[@]} > 0 )) || die "no addons selected"
-for addon in "${ADDON_LIST[@]}"; do
-  found=0
-  for known in "${AVAILABLE_ADDONS[@]}"; do
-    [[ $addon == "$known" ]] && found=1
-  done
-  (( found )) || die "unknown addon '$addon'. Available: ${AVAILABLE_ADDONS[*]}"
-done
-ok "selected: ${ADDON_LIST[*]}"
-
-addon_needs_docker() {
-  local addon
-  for addon in "$@"; do [[ $addon == "instatic" ]] && return 0; done
-  return 1
-}
-
-if addon_needs_docker "${ADDON_LIST[@]}" && ! command -v docker >/dev/null; then
-  if (( ! INSTALL_DOCKER )); then
-    if (( ASSUME_YES )) || ! have_tty; then
-      die "Docker is required by instatic. Install it first or pass --install-docker"
-    fi
-    printf 'Install Docker now via get.docker.com? [y/N]: '
-    read -r reply < /dev/tty || reply=""
-    [[ $reply =~ ^[Yy]$ ]] || die "Docker was not installed"
-  fi
-  docker_tmp=$(mktemp -d)
-  trap 'rm -rf "$docker_tmp"' EXIT
-  step "installing Docker"
-  curl -fsSL https://get.docker.com -o "${docker_tmp}/get-docker.sh" || die "could not download Docker"
-  sh "${docker_tmp}/get-docker.sh" || die "Docker installation failed"
-  rm -rf "$docker_tmp"
-fi
-if addon_needs_docker "${ADDON_LIST[@]}"; then
-  systemctl is-active --quiet docker || systemctl enable --now docker || die "could not start Docker"
-  ok "Docker is active"
+if (( ${#ADDON_LIST[@]} == 0 )) && { (( ASSUME_YES )) || [[ ! -r /dev/tty || ! -w /dev/tty ]]; }; then
+  die "no addons selected and no terminal to ask on. Pass --addons=panel-tweaks,maintenance"
 fi
 
 api() {
@@ -283,15 +158,8 @@ else
 fi
 
 install -o root -g root -m 0755 "${TMP}/${CLI_ARTIFACT}" "$CLI_TARGET"
-for i in "${!ADDON_LIST[@]}"; do
-  if (( i == 0 )); then
-    "$CLI_TARGET" install "${ADDON_LIST[i]}" --local="$TMP"
-  else
-    "$CLI_TARGET" install "${ADDON_LIST[i]}"
-  fi
-done
-
-say ""
-ok "Successfully installed!"
-say "  Access addons inside CloudPanel at: https://<cloudpanel-host>/addons/"
-say "  Check the integration with: clp-addons status"
+if (( ${#ADDON_LIST[@]} )); then
+  "$CLI_TARGET" install "${ADDON_LIST[@]}" --local="$TMP"
+else
+  "$CLI_TARGET" install --local="$TMP" < /dev/tty
+fi

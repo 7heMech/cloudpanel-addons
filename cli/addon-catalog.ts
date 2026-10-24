@@ -53,6 +53,8 @@ export interface AddonDefinition {
   description: string;
   /** systemd units this addon cannot work without, such as `docker`. */
   requiresUnits?: string[];
+  /** Ticked when the installer asks which addons to install. */
+  preselected?: boolean;
   targets: AddonTarget[];
   /** The manager routes this addon mounts, if it has any. */
   handler?: AddonHandler;

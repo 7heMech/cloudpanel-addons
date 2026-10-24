@@ -7,6 +7,7 @@ export const MAINTENANCE_ADDON: AddonDefinition = {
   name: "maintenance",
   title: "Maintenance Mode",
   description: "Show a per-site maintenance page with instant toggles and IP bypasses.",
+  preselected: true,
   targets: MAINTENANCE_TARGETS,
   handler: handle,
   action: runMaintenanceAction,

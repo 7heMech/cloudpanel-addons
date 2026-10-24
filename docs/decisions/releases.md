@@ -56,10 +56,21 @@ If an attestation-capable GitHub CLI is unavailable, the installer or binary
 downloads GitHub CLI's official archive, checks its published checksum, tests
 the candidate, and installs it in `/usr/local/libexec/clp-addons/`.
 
+## Installer
+
+`install.sh` does only what must happen before the binary can be trusted: it
+checks the host, resolves the release, verifies the binary's checksum and
+provenance, and installs it. It then runs `clp-addons install --local=DIR` with
+the addons from `--addons`, or with none on the terminal the script was started
+from, so the binary asks. The question, the addon names and what each addon
+needs, such as Docker, live only in the binary, and the picker is the same list
+as the `clp-addons` menu. When `install` replaces the binary, the new binary
+enables the remaining addons.
+
 ## Default selection
 
 The installer preselects Panel Tweaks, System Tweaks, Maintenance Mode, Terminal
-and Security Keys. A default is useful on almost any box, needs no outside
+and Security Keys, each marked `preselected` in its addon definition. A default is useful on almost any box, needs no outside
 account, and changes nothing until used unless the change is itself protective.
 Addons that need a Cloudflare token or relay account, manage Postfix, or serve
 one task (Stager, Instatic, Git Deploy, PHP Resources) are chosen by hand, as are

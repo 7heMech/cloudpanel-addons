@@ -17,8 +17,7 @@
     "test": "bun test --isolate --max-concurrency=1",
     "test:app": "bun test ./tests/test-app.test.ts",
     "test:delete": "bun test ./tests/test-delete.test.ts",
-    "test:inject": "bun test ./tests/test-inject.test.ts",
-    "test:installer": "bun tests/integration/integration-installer-picker.ts"
+    "test:inject": "bun test ./tests/test-inject.test.ts"
   },
   "type": "module",
   "dependencies": {

@@ -6,6 +6,7 @@ export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   name: "system-tweaks",
   title: "System Tweaks",
   description: "Automatic security updates, the PHP upload-progress mitigation and forged visitor-IP blocking.",
+  preselected: true,
   targets: [],
   handler: handle,
   action: runSystemTweaksAction,
