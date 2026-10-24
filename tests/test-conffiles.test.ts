@@ -17,6 +17,13 @@ function tempDir(): string {
 
 const ok = (stdout: string): CommandResult => ({ ok: true, stdout, stderr: "" });
 
+function service(state: string) {
+  return (command: string, args: string[]): CommandResult => {
+    expect(`${command} ${args.join(" ")}`).toBe("systemctl is-active apt-daily-upgrade.service");
+    return { ok: state === "active", stdout: `${state}\n`, stderr: "" };
+  };
+}
+
 function apt(installed: string, candidate: string) {
   const calls: string[] = [];
   const run = (command: string, args: string[]): CommandResult => {
@@ -53,18 +60,24 @@ test("only edited files with an upgrade waiting are released, after the flag hol
   expect(existsSync(flag)).toBe(false);
   expect(releaseConffiles(edits, apt("1", "2").run, flag)).toEqual([edited]);
   expect(flagUp).toEqual([true]);
-  expect(conffilesReleased(flag)).toBe(true);
+  expect(conffilesReleased(flag, service("activating"))).toBe(true);
   expect(endConffileRelease(flag)).toBe(true);
-  expect(conffilesReleased(flag)).toBe(false);
+  expect(conffilesReleased(flag, service("activating"))).toBe(false);
   expect(endConffileRelease(flag)).toBe(false);
 });
 
-test("a release that never reached its post hook stops holding repair off", () => {
+test("the release holds repair off for as long as the upgrade runs, and not after it stopped without post", () => {
   const flag = join(tempDir(), "released");
   writeFileSync(flag, "");
   const old = new Date(Date.now() - 7 * 60 * 60 * 1000);
   utimesSync(flag, old, old);
-  expect(conffilesReleased(flag)).toBe(false);
+  expect(conffilesReleased(flag, service("activating"))).toBe(true);
+  expect(conffilesReleased(flag, service("deactivating"))).toBe(true);
+  expect(conffilesReleased(flag, service("inactive"))).toBe(false);
+  expect(conffilesReleased(flag, service("failed"))).toBe(false);
+  expect(conffilesReleased(flag, service(""))).toBe(false);
+  writeFileSync(flag, "");
+  expect(conffilesReleased(flag, service(""))).toBe(true);
 });
 
 test("the unattended-upgrades service runs the hook before and after, and its failures never stop the run", () => {

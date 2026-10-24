@@ -77,9 +77,8 @@ export function realIpStatus(options: RealIpOptions = {}): RealIpStatus {
   return { trustsAnyAddress, problem: problems.join("; ") };
 }
 
-function applyTo(instance: Instance, blockForged: boolean, options: RealIpOptions, reload: boolean): boolean {
+function applyTo(instance: Instance, wanted: (content: string) => string, options: RealIpOptions, reload: boolean): boolean {
   const paths = { ...DEFAULT_REAL_IP_PATHS, ...options.paths };
-  const wanted = blockForged ? withoutAnyAddress : withAnyAddress;
   let current: string;
   try { current = readFileSync(instance.conf, "utf8"); }
   catch (error) {
@@ -101,12 +100,14 @@ function applyTo(instance: Instance, blockForged: boolean, options: RealIpOption
 /** Puts both files in the wanted state, validating and reloading each instance only on a change. */
 export function applyRealIp(blockForged: boolean, options: RealIpOptions = {}): boolean {
   const { sites, panel } = instances(options);
-  const changed = applyTo(sites, blockForged, options, true);
+  const wanted = blockForged ? withoutAnyAddress : withAnyAddress;
+  const before = existsSync(sites.conf) ? readFileSync(sites.conf, "utf8") : null;
+  const changed = applyTo(sites, wanted, options, true);
   try {
-    return (panel ? applyTo(panel, blockForged, options, true) : false) || changed;
+    return (panel ? applyTo(panel, wanted, options, true) : false) || changed;
   } catch (error) {
-    // Both or neither: the panel's refusal also undoes the sites' half.
-    if (changed) applyTo(sites, !blockForged, options, true);
+    // Both or neither: the panel's refusal puts the sites' file back as it was.
+    if (changed && before !== null) applyTo(sites, () => before, options, true);
     throw error;
   }
 }
@@ -116,5 +117,5 @@ export function applyRealIp(blockForged: boolean, options: RealIpOptions = {}): 
  * reload, so a package upgrade can replace it. The panel's file is not a conffile.
  */
 export function releaseRealIp(options: RealIpOptions = {}): boolean {
-  return applyTo(instances(options).sites, false, options, false);
+  return applyTo(instances(options).sites, withAnyAddress, options, false);
 }

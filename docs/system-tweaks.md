@@ -60,8 +60,9 @@ off removes only that file. It comes back if System Tweaks is disabled.
 another IP address with a header, and sites, logs, basic auth, the panel and
 **Allow traffic from Cloudflare only** believe it. It comments out
 `set_real_ip_from 0.0.0.0/0` in the sites' and the panel's `nginx.conf`.
-Cloudflare traffic and CloudPanel's own proxying are unaffected, and Nginx and
-CloudPanel updates still install automatically.
+Cloudflare traffic and CloudPanel's own proxying are unaffected. It never holds
+an update back: automatic updates still install Nginx, and CloudPanel when that
+is switched on.
 
 Switch it off if a load balancer or proxy on a public address sits in front of
 this server or its panel.

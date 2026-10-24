@@ -414,6 +414,15 @@ test("a timer that cannot be enabled undoes the drop-in and the timers enabled b
   expect(existsSync(b.settingsFile)).toBe(false);
 });
 
+test("a panel refusal puts a half-edited sites file back exactly, without reopening what was closed", async () => {
+  const b = box();
+  const half = CLOUDPANEL_NGINX_CONF.replace("    set_real_ip_from 0.0.0.0/0;\n", "    #clp-addons:untrusted set_real_ip_from 0.0.0.0/0;\n    set_real_ip_from ::/0;\n");
+  writeFileSync(b.nginxConf, half);
+  b.nginx.failPanel = true;
+  await expect(act(b, ["set-real-ip"], { enabled: true })).rejects.toThrow("Nginx validation failed");
+  expect(readFileSync(b.nginxConf, "utf8")).toBe(half);
+});
+
 test("a panel Nginx that rejects the change takes the sites' half back too", async () => {
   const b = box();
   b.nginx.failPanel = true;

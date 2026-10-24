@@ -173,7 +173,9 @@ writes the package text back without a reload. Maintenance Mode's block comes
 out only while the rest of the file still matches its recorded baseline, which is
 then forgotten. `post` clears the flag and runs repair, which records what the
 upgrade installed as the new baseline and edits it again. Repair does nothing
-while the flag is up, or until it is six hours old. Between the two, a reload by
+while the flag is up and the service still runs, however long it takes; a flag
+left by a run that stopped without `post` holds nothing off. Only when systemd
+cannot answer does the flag lapse after six hours. Between the two, a reload by
 the Nginx package itself runs the package text: maintenance pages and narrowed
 IP trust are off for the rest of that run. An interactive `apt upgrade` still
 gets dpkg's prompt. `bun tests/integration/integration-conffile-upgrade.ts`

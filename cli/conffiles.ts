@@ -9,8 +9,9 @@ import { dirname } from "node:path";
 import { runCommand, type CommandResult } from "./action-common";
 import { CONFFILES_RELEASED_FLAG } from "./paths";
 
-/** A run that never reached `post` (a crash; /run empties on reboot) stops holding repair off after this. */
+/** Only when systemd cannot say whether the upgrade service still runs. */
 const STALE_MS = 6 * 60 * 60 * 1000;
+const UPGRADE_SERVICE = "apt-daily-upgrade.service";
 const COMMAND_MS = 30_000;
 
 export interface ConffileEdit {
@@ -53,10 +54,19 @@ export function releaseConffiles(edits: ConffileEdit[], run: Run = defaultRun, f
   return due.filter((edit) => edit.release()).map((edit) => edit.path);
 }
 
-/** While an upgrade run has the files, repair must not put the edits back. */
-export function conffilesReleased(flag = CONFFILES_RELEASED_FLAG, now = Date.now()): boolean {
-  try { return now - statSync(flag).mtimeMs < STALE_MS; }
+/**
+ * While an upgrade run has the files, repair must not put the edits back,
+ * however long it runs. A flag the service left behind when it stopped without
+ * `post` holds nothing off.
+ */
+export function conffilesReleased(flag = CONFFILES_RELEASED_FLAG, run: Run = defaultRun, now = Date.now()): boolean {
+  let raised: number;
+  try { raised = statSync(flag).mtimeMs; }
   catch { return false; }
+  const state = run("systemctl", ["is-active", UPGRADE_SERVICE]).stdout.trim();
+  if (["activating", "active", "deactivating", "reloading"].includes(state)) return true;
+  if (["inactive", "failed"].includes(state)) return false;
+  return now - raised < STALE_MS;
 }
 
 /** Whether a release was outstanding; repair may run again either way. */
