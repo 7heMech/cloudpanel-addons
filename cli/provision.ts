@@ -6,8 +6,8 @@ import { dirname, join } from "node:path";
 import {
   ANCHOR_SERVICE, CLI_BIN, CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, DISTRO_NGINX_SITES_DIR,
   NEW_SITES_PATH, NEW_SITES_SERVICE,
-  CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS, INSTATIC_BACKUP_CRON,
-  AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT,
+  CONFIG_DIR, LIBEXEC_DIR, INSTATIC_BACKUP_CRON, LEGACY_UNITS,
+  AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LOCK_DIR, MANAGER_UNIT,
   PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
   SOCKET_PATH, SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH,
@@ -20,10 +20,6 @@ import { panelUserUid } from "../lib/sso-auth";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
 
 
-const LEGACY_MANAGER_AUTH = `${CONFIG_DIR}/manager-auth`;
-const LEGACY_PLATFORM_CONFIG = `${CONFIG_DIR}/platform.conf`;
-const LEGACY_SITE_MARKER = `${STATE_DIR}/.site-created-by-addons`;
-const LEGACY_LIBRARY_DIR = "/usr/local/lib/clp-addons";
 const BACKUP_DIR = "/var/backups/clp-addons";
 
 export function instaticBackupCron(): string {
@@ -358,53 +354,6 @@ export function ensureServiceUser(
   }
 }
 
-export function removeLegacyUsers(quiet = false): void {
-  for (const user of LEGACY_USERS) {
-    if (!tryRun("id", ["-u", user]).ok) continue;
-    tryRun("gpasswd", ["-d", user, "docker"]);
-    rmSync(`/etc/sudoers.d/clp-addon-${user}`, { force: true });
-    const result = tryRun("userdel", [user]);
-    if (!result.ok && !quiet) log.warn(`could not remove legacy user ${user}: ${result.out}`);
-  }
-}
-
-export function removeLegacyInstall(quiet = false): void {
-  if (existsSync(LEGACY_SITE_MARKER)) {
-    const domain = readFileSync(LEGACY_SITE_MARKER, "utf-8").trim();
-    const validDomain = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(domain);
-    if (validDomain) {
-      const result = tryRun("clpctl", ["site:delete", `--domainName=${domain}`, "--force"]);
-      if (result.ok) {
-        if (!quiet) log.ok(`removed the legacy manager site ${domain}`);
-        rmSync(LEGACY_SITE_MARKER, { force: true });
-      } else if (!quiet) {
-        log.warn(`could not remove the legacy manager site ${domain}: ${result.out}`);
-      }
-    } else {
-      rmSync(LEGACY_SITE_MARKER, { force: true });
-    }
-  }
-
-  for (const path of [LEGACY_MANAGER_AUTH, LEGACY_PLATFORM_CONFIG]) rmSync(path, { force: true });
-  for (const path of [
-    `${LEGACY_LIBRARY_DIR}/releases`,
-    `${LEGACY_LIBRARY_DIR}/current`,
-    `${LEGACY_LIBRARY_DIR}/gh`,
-  ]) rmSync(path, { recursive: true, force: true });
-  try {
-    for (const entry of readdirSync(LEGACY_LIBRARY_DIR)) {
-      if (entry.startsWith("clp-action-")) rmSync(`${LEGACY_LIBRARY_DIR}/${entry}`, { force: true });
-    }
-  } catch {
-    // The legacy directory is optional on a fresh installation.
-  }
-  tryRun("rmdir", [LEGACY_LIBRARY_DIR]);
-}
-
-function removeLegacySudoers(): void {
-  for (const name of ADDON_NAMES) rmSync(`/etc/sudoers.d/clp-addon-${name}`, { force: true });
-}
-
 export function ensurePanelSessionReadable(
   commands: ProvisionCommandRunner = { run, tryRun },
   sessionDir = SESSION_DIR,
@@ -563,30 +512,16 @@ export function hardenBackups(spec: AddonSpec, quiet = false): void {
 }
 
 /**
- * Record who the panel is, and scrub anything an older install left behind.
- *
- * This used to install a sudoers rule, and was called `installSudoers` long
- * after it had stopped doing that: the root gateway daemon replaced sudo
- * entirely, so the manager holds no sudo privileges at all and there is no rule
- * to write. What is left is the panel identity file the root action binary
- * reads to refuse operating on the panel's own hostname, plus the removal of
- * any `/etc/sudoers.d` drop-in a pre-gateway version of this project installed.
- * That removal has to keep happening for as long as an upgrade from one of
- * those versions is possible; the name it was hiding under did not.
+ * Record who the panel is: the root action binary reads this to refuse
+ * operating on the panel's own hostname.
  */
 export function reconcilePanelIdentity(quiet = false, specs: AddonSpec[] = installedAddonSpecs()): void {
-  removeSudoers();
   if (specs.length > 0) {
     ensurePanelIdentity(quiet);
   } else {
     rmSync(PANEL_IDENTITY_PATH, { force: true });
   }
   if (!quiet) log.ok("panel identity reconciled; the manager dispatches via the root gateway and holds no sudo rule");
-}
-
-export function removeSudoers(): void {
-  rmSync("/etc/sudoers.d/clp-addons", { force: true });
-  removeLegacySudoers();
 }
 
 function configBody(spec: AddonSpec): string {
@@ -935,7 +870,6 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
     writeManaged(`${SYSTEMD_DIR}/${AUTH_SOCKET_UNIT}`, auth.socket),
     writeManaged(`${SYSTEMD_DIR}/${AUTH_SERVICE_UNIT}`, auth.service),
   ];
-  const legacyTemplate = removeManaged(`${SYSTEMD_DIR}/clp-addons-auth@.service`);
 
   const changes: UnitChanges = {
     manager,
@@ -944,7 +878,7 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
     newSites,
     auth: authWrites.some(Boolean),
     cron,
-    systemd: manager || reconcileChanged || cloudflare !== null || newSites !== null || authWrites.some(Boolean) || legacyTemplate,
+    systemd: manager || reconcileChanged || cloudflare !== null || newSites !== null || authWrites.some(Boolean),
   };
   // systemd only needs telling when a definition it reads actually moved. The
   // cron file is not systemd's, so it does not count towards this.
@@ -1045,7 +979,7 @@ export function stopUnits(keepShared = false): void {
   }
   for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE,
     CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, NEW_SITES_SERVICE, NEW_SITES_PATH,
-    AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, "clp-addons-auth@.service"]) {
+    AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     rmSync(`${SYSTEMD_DIR}/${unit}`, { force: true });
   }
   rmSync(`${SYSTEMD_DIR}/${APT_UPGRADE_DROPIN}`, { force: true });
@@ -1136,5 +1070,4 @@ export function removeLegacyUnits(quiet = false): void {
     removed = true;
   }
   if (removed) run("systemctl", ["daemon-reload"]);
-  removeLegacySudoers();
 }

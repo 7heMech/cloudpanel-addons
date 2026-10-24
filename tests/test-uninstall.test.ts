@@ -69,7 +69,7 @@ const spec = {
     if (!existsSync(stateDir)) throw new Error("state purged before workers stopped");
   },
 };
-let removeSudoersCalls = 0;
+let identityRemovals = 0;
 
 function parseFlags(argv) {
   const positional = [];
@@ -132,17 +132,15 @@ mock.module("./cli/provision.ts", () => ({
   ensureServiceUser: () => {},
   ensureTimerArmed: () => {},
   hardenBackups: () => {},
-  reconcilePanelIdentity: () => {},
+  reconcilePanelIdentity: (_quiet, specs) => {
+    if (specs?.length !== 0) return;
+    identityRemovals++;
+    rmSync(identityPath, { force: true });
+  },
   installUnits: () => {},
   installedConfig: () => existsSync(configFile),
   purgeTwigCache: () => {},
-  removeLegacyInstall: () => {},
   removeLegacyUnits: () => {},
-  removeLegacyUsers: () => {},
-  removeSudoers: () => {
-    removeSudoersCalls++;
-    rmSync(identityPath, { force: true });
-  },
   startUnits: () => { writeFileSync(root + "/started", "1"); },
   stopUnits: () => { writeFileSync(stopsPath, "stopped"); },
   unitActive: () => "inactive",
@@ -189,12 +187,12 @@ mock.module("./lib/update-check.ts", () => ({ checkCliUpdate: async () => null }
 const { cmdUninstall } = await import("./cli/uninstall.ts");
 try {
   cmdUninstall(["instatic", "--yes", "--purge"]);
-  console.log(JSON.stringify({ ok: true, removeSudoersCalls }));
+  console.log(JSON.stringify({ ok: true, identityRemovals }));
 } catch (error) {
   console.log(JSON.stringify({
     ok: false,
     error: error instanceof Error ? error.message : String(error),
-    removeSudoersCalls,
+    identityRemovals,
   }));
 }
 `;
@@ -219,7 +217,7 @@ function resetFixture(): void {
   failureDomain = undefined;
 }
 
-function runUninstall(deactivateFail = false): { ok: boolean; error?: string; removeSudoersCalls: number } {
+function runUninstall(deactivateFail = false): { ok: boolean; error?: string; identityRemovals: number } {
   const result = spawnSync(process.execPath, ["-e", childScript], {
     cwd: repo,
     encoding: "utf8",
@@ -241,14 +239,14 @@ function runUninstall(deactivateFail = false): { ok: boolean; error?: string; re
   if (result.status !== 0) {
     throw new Error(`uninstall harness failed: ${result.stderr || result.stdout}`);
   }
-  return JSON.parse(result.stdout.trim()) as { ok: boolean; error?: string; removeSudoersCalls: number };
+  return JSON.parse(result.stdout.trim()) as { ok: boolean; error?: string; identityRemovals: number };
 }
 
 beforeEach(resetFixture);
 
 test.serial("a failed deactivation stops uninstall before shared services change", () => {
   const result = runUninstall(true);
-  expect(result).toEqual({ ok: false, error: "simulated SMTP cleanup failure", removeSudoersCalls: 0 });
+  expect(result).toEqual({ ok: false, error: "simulated SMTP cleanup failure", identityRemovals: 0 });
   expect(existsSync(stopsPath)).toBe(false);
   expect(existsSync(configFile)).toBe(true);
   expect(existsSync(identityPath)).toBe(true);
@@ -257,7 +255,7 @@ test.serial("a failed deactivation stops uninstall before shared services change
 
 test.serial("purge deletes every instance before removing panel identity", () => {
   const result = runUninstall();
-  expect(result).toEqual({ ok: true, removeSudoersCalls: 1 });
+  expect(result).toEqual({ ok: true, identityRemovals: 1 });
   expect(readFileSync(callsPath, "utf8").trim().split("\n")).toEqual(domains);
   const identityReads = readFileSync(identityReadsPath, "utf8");
   for (const domain of domains) {
@@ -271,7 +269,7 @@ test.serial("purge preserves state and identity when an instance delete fails", 
   failureDomain = domains[1];
   const result = runUninstall();
   expect(result.ok).toBe(false);
-  expect(result.removeSudoersCalls).toBe(0);
+  expect(result.identityRemovals).toBe(0);
   expect(result.error).toBe(`could not remove instatic instances; state preserved for retry: ${failureDomain}`);
   expect(readFileSync(callsPath, "utf8").trim().split("\n")).toEqual(domains);
   const identityReads = readFileSync(identityReadsPath, "utf8");

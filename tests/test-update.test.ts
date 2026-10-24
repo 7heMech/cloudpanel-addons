@@ -46,11 +46,9 @@ function installedOnBox(binary: boolean, manifest = binary): void {
 }
 const provisioning = {
   serviceUser: false,
-  legacyInstall: true,
   dirs: false,
   sudoers: false,
   legacyUnits: true,
-  legacyUsers: true,
   units: false,
   running: false,
   anchors: false,
@@ -68,11 +66,9 @@ function resetProvisioning(): void {
   installedOnBox(true);
   Object.assign(provisioning, {
     serviceUser: false,
-    legacyInstall: true,
     dirs: false,
     sudoers: false,
     legacyUnits: true,
-    legacyUsers: true,
     units: false,
     running: false,
     anchors: false,
@@ -222,10 +218,7 @@ mock.module("../cli/provision", () => ({
   installUnits: () => { calls.push("installUnits"); provisioning.units = true; },
   installedConfig: () => hasInstalledAddon,
   purgeTwigCache: record("purgeTwigCache"),
-  removeLegacyInstall: () => { calls.push("removeLegacyInstall"); provisioning.legacyInstall = false; },
   removeLegacyUnits: () => { calls.push("removeLegacyUnits"); provisioning.legacyUnits = false; },
-  removeLegacyUsers: () => { calls.push("removeLegacyUsers"); provisioning.legacyUsers = false; },
-  removeSudoers: record("removeSudoers"),
   startUnits: (options?: { beforeManagerRestart?: () => void }) => {
     options?.beforeManagerRestart?.();
     calls.push("startUnits");
@@ -366,11 +359,9 @@ test("an update hands provisioning to the installed target binary", async () => 
   expect(calls).not.toContain("startUnits");
   expect(provisioning).toEqual({
     serviceUser: false,
-    legacyInstall: true,
     dirs: false,
     sudoers: false,
     legacyUnits: true,
-    legacyUsers: true,
     units: false,
     running: false,
     anchors: false,
@@ -582,11 +573,9 @@ test("the handed-off target binary finalizes all provisioning before restarting 
 
   for (const name of [
     "ensureServiceUser",
-    "removeLegacyInstall",
     "ensureDirs",
     "reconcilePanelIdentity",
     "removeLegacyUnits",
-    "removeLegacyUsers",
     "installUnits",
     "reconcile",
     "reconcileNginxProxy",
@@ -602,11 +591,9 @@ test("the handed-off target binary finalizes all provisioning before restarting 
   expect(calls.indexOf("startUnits")).toBeGreaterThan(calls.indexOf("reconcileNginxProxy"));
   expect(provisioning).toEqual({
     serviceUser: true,
-    legacyInstall: false,
     dirs: true,
     sudoers: true,
     legacyUnits: false,
-    legacyUsers: false,
     units: true,
     running: true,
     anchors: true,
@@ -683,11 +670,9 @@ test("an up-to-date update with no addons keeps the no-service branch", async ()
   expect(calls).toContain("log.ok:clp-addons 1.2.3 is up to date");
   expect(provisioning).toEqual({
     serviceUser: true,
-    legacyInstall: false,
     dirs: true,
     sudoers: true,
     legacyUnits: false,
-    legacyUsers: false,
     units: true,
     running: true,
     anchors: true,
@@ -713,11 +698,9 @@ test("updating from a fully disabled state still hands off to the target binary"
   expect(calls.some((call) => call.startsWith("log.ok:clp-addons updated"))).toBe(false);
   expect(provisioning).toEqual({
     serviceUser: false,
-    legacyInstall: true,
     dirs: false,
     sudoers: false,
     legacyUnits: true,
-    legacyUsers: true,
     units: false,
     running: false,
     anchors: false,

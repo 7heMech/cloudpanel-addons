@@ -40,14 +40,6 @@ Its scan status and manual scan button live in that row rather than taking a
 card of their own. The compact button follows the timestamp on desktop; status
 and button stack on phones to fit within the indentation.
 
-The device-theme switch replaces the separate `login-theme` addon of older
-releases. `install`, `update` and `repair` carry a box over: the old config file
-is what recorded the addon as enabled, so writing `panel-tweaks.conf` and
-removing `login-theme.conf` is the whole migration. Its state directory held
-nothing, and its Twig block goes on the next reconciliation, because the
-injection set is read from the config files rather than from what is in the
-templates.
-
 ## Site-list anchors
 
 Everything the addon adds to the Sites table is one script and one toolbar

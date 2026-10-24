@@ -12,7 +12,7 @@ import { operationLockEnv, withOperationLock } from "./operation-lock";
 import { CLI_BIN, MANAGER_UNIT } from "./paths";
 import {
   ensureAuthHelperReady, ensureDirs, ensureServiceUser, installUnits, reconcilePanelIdentity,
-  removeLegacyInstall, removeLegacyUnits, removeLegacyUsers, startUnits, unitActive, writeConfig,
+  removeLegacyUnits, startUnits, unitActive, writeConfig,
 } from "./provision";
 import {
   CLI_VERSION, type FetchedArtifact, fetchVerified, resolveRelease, verifyAttestation,
@@ -30,13 +30,11 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   try {
     const specs = installedAddons();
     ensureServiceUser();
-    removeLegacyInstall();
     ensureDirs(specs);
     ensureAuthHelperReady();
     for (const spec of specs) writeConfig(spec, true);
     reconcilePanelIdentity();
     removeLegacyUnits(true);
-    removeLegacyUsers(true);
     installUnits(specs);
     ensureDirs(specs);
     reconcileAnchors(false);

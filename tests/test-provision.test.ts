@@ -444,15 +444,8 @@ test("nothing in the tree grants the manager a sudo rule", () => {
   expect(granting.stdout.toString().trim()).toBe("");
 });
 
-test("every sudoers path the provisioner names is one it deletes", () => {
-  const provision = readFileSync(join(REPO, "cli/provision.ts"), "utf8");
-  const mentions = provision
-    .split("\n")
-    .filter((line) => line.includes("/etc/sudoers.d") && !line.trimStart().startsWith("*"));
-  expect(mentions.length).toBeGreaterThan(0);
-  // Removal has to keep happening for as long as an upgrade from a pre-gateway
-  // version is possible. Writing one must not come back with it.
-  for (const mention of mentions) expect(mention).toContain("rmSync");
+test("the provisioner never writes a sudoers rule", () => {
+  expect(readFileSync(join(REPO, "cli/provision.ts"), "utf8")).not.toContain("/etc/sudoers.d");
 });
 
 test("panel identity extraction normalizes exact, alias, and wildcard names", () => {
@@ -866,9 +859,9 @@ test("a failed ownership change is not swallowed", () => {
   expect(result.trim()).toBe("EPERM");
 });
 
-test("repair removes legacy SMTP and DNS units and reloads systemd only when needed", () => {
+test("repair removes SMTP Relay's old watcher units and reloads systemd only when needed", () => {
   const root = mkdtempSync(join(tmpdir(), "legacy-units-"));
-  const legacy = ["clp-addons-smtp-reconcile.path", "clp-addons-smtp-reconcile.service", "clp-addons-dns.service"];
+  const legacy = ["clp-addons-smtp-reconcile.path", "clp-addons-smtp-reconcile.service"];
   for (const unit of legacy) writeFileSync(join(root, unit), "old unit");
   try {
     const output = execFileSync(process.execPath, ["-e", `

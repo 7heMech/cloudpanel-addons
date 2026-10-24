@@ -194,8 +194,6 @@ function isRecord(value: unknown): value is MainwpRecord {
 export function readMainwpState(path: string): MainwpState {
   if (!existsSync(path)) return emptyMainwpState();
   const state = JSON.parse(readFileSync(path, "utf8")) as MainwpState;
-  // Written before the Child-only mode existed.
-  if (state && state.remote === undefined) state.remote = false;
   if (!state || typeof state.enabled !== "boolean" || typeof state.remote !== "boolean" || typeof state.dashboard !== "string" || typeof state.cleanup !== "boolean"
     || !Array.isArray(state.excluded) || !state.excluded.every((domain) => typeof domain === "string")
     || !state.sites || typeof state.sites !== "object" || Array.isArray(state.sites) || !Array.isArray(state.retired)) {

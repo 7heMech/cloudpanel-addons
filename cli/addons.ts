@@ -20,23 +20,10 @@ export function installedAddons(): AddonSpec[] {
 }
 
 /**
- * Addons that are now part of another addon.
- *
- * `login-theme` was a whole addon for one script in the login page's <head>.
- * It is a switch inside Panel Tweaks now, and a box that had it enabled
- * should come out of an update with the device theme still working rather than
- * with an addon that no longer exists. The config file is the enabled flag, so
- * moving it is the whole migration: the state directory held nothing, and the Twig
- * block goes when the templates are next rendered, because the injection set is
- * read from the config files.
- */
-const ABSORBED_ADDONS: Record<string, string> = { "login-theme": "panel-tweaks" };
-
-/**
  * `wp-login` became `wp-tools` when the addon outgrew sign-in. Its state is
  * moved rather than dropped: it holds the MainWP connections the addon made and
  * any login setting an enrollment changed for a moment. Templates follow on the
- * next render, as above.
+ * next render, because the injection set is read from the config files.
  */
 const RENAMED_ADDONS: Record<string, string> = { "wp-login": "wp-tools" };
 
@@ -75,16 +62,6 @@ export function migrateOldAddonNames(quiet = false): AddonRename[] {
     rmSync(`${legacyConfig}.new`, { force: true });
     renames.push({ from, to, config, stateMoved });
     if (!quiet) log.ok(`${from} is ${to} now and was carried over`);
-  }
-  for (const [from, into] of Object.entries(ABSORBED_ADDONS)) {
-    const legacyConfig = `${CONFIG_DIR}/${from}.conf`;
-    if (!existsSync(legacyConfig)) continue;
-    const spec = ADDONS[into];
-    if (spec && !installedConfig(spec)) writeConfig(spec, true);
-    rmSync(legacyConfig, { force: true });
-    rmSync(`${legacyConfig}.new`, { force: true });
-    rmSync(`${STATE_DIR}/${from}`, { recursive: true, force: true });
-    if (!quiet) log.ok(`${from} is part of ${into} now and was carried over`);
   }
   return renames;
 }
