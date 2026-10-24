@@ -2,6 +2,7 @@
  * CloudPanel's nginx.conf trusts X-Real-IP from every address. Commenting out
  * that one line leaves loopback and private-network proxies trusted.
  */
+import { readFileSync } from "node:fs";
 import { runCommand, type CommandResult } from "../../cli/action-common";
 import { nginxFileChange, trustedVhost, withNginxTransaction } from "../../cli/nginx-transaction";
 import { ROOT_UID } from "../../cli/paths";
@@ -51,11 +52,20 @@ export function realIpStatus(options: RealIpOptions = {}): RealIpStatus {
 /** Puts nginx.conf in the wanted state, validating and reloading only on a change. */
 export function applyRealIp(blockForged: boolean, options: RealIpOptions = {}): boolean {
   const paths = { ...DEFAULT_REAL_IP_PATHS, ...options.paths };
+  const wanted = blockForged ? withoutAnyAddress : withAnyAddress;
+  let current: string;
+  try { current = readFileSync(paths.nginxConf, "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  // Nothing to change needs no trust check, validation or reload.
+  if (wanted(current) === current) return false;
   const run = options.run ?? ((command, args) => runCommand(command, args, COMMAND_MS));
   return withNginxTransaction(null, paths, run, (changes) => {
     const conf = nginxFileChange(paths.nginxConf, null, paths.rootUid);
     if (conf.backup.content === null) return;
-    conf.content = blockForged ? withoutAnyAddress(conf.backup.content) : withAnyAddress(conf.backup.content);
+    conf.content = wanted(conf.backup.content);
     changes.push(conf);
   }).changed;
 }
