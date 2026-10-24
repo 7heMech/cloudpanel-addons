@@ -26,7 +26,8 @@ export function openPanelDatabase(path: string, readOnly = false, busyTimeoutMs 
   }
 }
 
-export function trustedVhost(path: string, expectedUid: number): NginxFileBackup & { content: string } {
+/** `groupWritable` accepts a file its owning account's group may write, as CloudPanel's panel files are. */
+export function trustedVhost(path: string, expectedUid: number, groupWritable = false): NginxFileBackup & { content: string } {
   const stat = lstatSync(path);
   const refuse = (reason: string, fix: string) => failAction(`refusing ${path}: ${reason}; ${fix}`);
   if (stat.isSymbolicLink()) refuse("it is a symlink", "replace it with a regular file");
@@ -37,7 +38,7 @@ export function trustedVhost(path: string, expectedUid: number): NginxFileBackup
       expectedUid === 0 ? `run chown root:root ${path}` : `run chown ${expectedUid} ${path}`,
     );
   }
-  if ((stat.mode & 0o022) !== 0) {
+  if ((stat.mode & (groupWritable ? 0o002 : 0o022)) !== 0) {
     const who = [(stat.mode & 0o020) !== 0 ? "group" : "", (stat.mode & 0o002) !== 0 ? "world" : ""].filter(Boolean).join("- and ");
     refuse(`${who}-writable (mode ${(stat.mode & 0o777).toString(8)})`, `run chmod go-w ${path}`);
   }
@@ -84,15 +85,27 @@ export interface NginxChange {
   content: string | null;
 }
 
-export function nginxFileChange(path: string, content: string | null, expectedUid: number): NginxChange {
+export function nginxFileChange(path: string, content: string | null, expectedUid: number, groupWritable = false): NginxChange {
   let backup: NginxFileBackup;
   try {
-    backup = trustedVhost(path, expectedUid);
+    backup = trustedVhost(path, expectedUid, groupWritable);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     backup = { path, content: null, mode: 0o644, uid: expectedUid, gid: process.getgid?.() ?? 0 };
   }
   return { backup, content };
+}
+
+/** Which Nginx to validate and reload: the sites' by default, or one with its own config and unit. */
+export interface NginxInstance {
+  nginx: string;
+  systemctl: string;
+  config?: string;
+  service?: string;
+}
+
+function testArgs(paths: NginxInstance): string[] {
+  return paths.config ? ["-t", "-c", paths.config] : ["-t"];
 }
 
 interface NginxTransactionOptions {
@@ -108,7 +121,7 @@ class NginxTransaction {
 
   constructor(
     private db: Database | null,
-    private paths: { nginx: string; systemctl: string },
+    private paths: NginxInstance,
     private command: (command: string, args: string[]) => CommandResult,
     private options: NginxTransactionOptions,
   ) {}
@@ -132,7 +145,7 @@ class NginxTransaction {
     const changed = rowsChanged || this.written.length > 0;
     this.needsReload = this.options.reload !== false && (changed || this.options.alwaysValidate === true);
     if (this.needsReload) {
-      const checked = this.command(this.paths.nginx, ["-t"]);
+      const checked = this.command(this.paths.nginx, testArgs(this.paths));
       if (!checked.ok) throw new Error(commandError("Nginx validation", checked));
     }
     return { value, changed };
@@ -140,7 +153,7 @@ class NginxTransaction {
 
   reload(label = "Nginx reload"): void {
     this.attemptedReload = true;
-    const reloaded = this.command(this.paths.systemctl, ["reload", "nginx"]);
+    const reloaded = this.command(this.paths.systemctl, ["reload", this.paths.service ?? "nginx"]);
     if (!reloaded.ok) throw new Error(commandError(label, reloaded));
   }
 
@@ -157,7 +170,7 @@ class NginxTransaction {
     if (!this.written.length) return false;
     if (this.options.reload === false) return false;
     try {
-      const restored = this.command(this.paths.nginx, ["-t"]);
+      const restored = this.command(this.paths.nginx, testArgs(this.paths));
       if (!restored.ok) failures.push(commandError("Nginx rollback validation", restored));
       else return this.attemptedReload;
     } catch (error) {
@@ -170,7 +183,7 @@ class NginxTransaction {
 /** Commits panel rows and Nginx files together, recovering both on failure. */
 export function withNginxTransaction<T>(
   db: Database | null,
-  paths: { nginx: string; systemctl: string },
+  paths: NginxInstance,
   command: (command: string, args: string[]) => CommandResult,
   stage: (changes: NginxChange[]) => T,
   options: NginxTransactionOptions = {},
@@ -194,7 +207,7 @@ export function withNginxTransaction<T>(
 /** Waits for a caller's reload acknowledgement before committing or finishing recovery. */
 export async function withNginxTransactionAsync<T>(
   db: Database | null,
-  paths: { nginx: string; systemctl: string },
+  paths: NginxInstance,
   command: (command: string, args: string[]) => CommandResult,
   stage: (changes: NginxChange[]) => T,
   reload: (signal: () => void) => Promise<void>,

@@ -57,11 +57,11 @@ off removes only that file. It comes back if System Tweaks is disabled.
 ## Forged visitor IPs
 
 **Block forged visitor IPs** is on by default. Without it, any client can claim
-another IP address with an `X-Real-IP` header, and sites, logs, basic auth and
+another IP address with a header, and sites, logs, basic auth, the panel and
 **Allow traffic from Cloudflare only** believe it. It comments out
-`set_real_ip_from 0.0.0.0/0` in `/etc/nginx/nginx.conf`. Cloudflare traffic and
-CloudPanel's own proxying are unaffected.
+`set_real_ip_from 0.0.0.0/0` in the sites' and the panel's `nginx.conf`.
+Cloudflare traffic and CloudPanel's own proxying are unaffected, and Nginx and
+CloudPanel updates still install automatically.
 
-Switch it off if a load balancer on a public address sits in front of this
-server. If unattended-upgrades reports a conffile prompt for `nginx-common`,
-switch it off, run `apt upgrade`, and switch it on again.
+Switch it off if a load balancer or proxy on a public address sits in front of
+this server or its panel.

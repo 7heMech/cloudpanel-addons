@@ -242,6 +242,7 @@ test("enabling on a box that was never installed runs the full bootstrap", () =>
   expect(run.provision).toContain("ensureAuthHelperReady");
   expect(run.provision).toContain("startUnits");
   expect(run.inject).toContain("proxy");
+  expect(readFileSync(join(run.root, "systemd", "apt-daily-upgrade.service.d", "50-clp-addons.conf"), "utf8")).toContain("apt-hook pre");
 });
 
 test("re-enabling an addon that is already on changes and reloads nothing", () => {

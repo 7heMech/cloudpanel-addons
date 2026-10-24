@@ -157,6 +157,29 @@ Dashboard chart that fits -- is the addon's alone, and a switch, because that is
 the panel's own shape being changed rather than room being made for something an
 addon added.
 
+### Package conffiles
+
+`/etc/nginx/global_settings` (Maintenance Mode) and `/etc/nginx/nginx.conf`
+(System Tweaks) are dpkg conffiles of `nginx-common`. unattended-upgrades holds
+back a package whose modified conffile the upgrade would replace, because nobody
+is there to answer dpkg's prompt, so these edits could keep an Nginx security
+update out. A drop-in on `apt-daily-upgrade.service`, installed with the binary,
+runs `clp-addons apt-hook pre` before each run and `apt-hook post` after it,
+both allowed to fail without stopping the run (`cli/conffiles.ts`).
+
+`pre` acts only on an edited file whose package `apt-cache policy` shows a
+different candidate. It raises `/run/clp-addons/conffiles-released` first, then
+writes the package text back without a reload. Maintenance Mode's block comes
+out only while the rest of the file still matches its recorded baseline, which is
+then forgotten. `post` clears the flag and runs repair, which records what the
+upgrade installed as the new baseline and edits it again. Repair does nothing
+while the flag is up, or until it is six hours old. Between the two, a reload by
+the Nginx package itself runs the package text: maintenance pages and narrowed
+IP trust are off for the rest of that run. An interactive `apt upgrade` still
+gets dpkg's prompt. `bun tests/integration/integration-conffile-upgrade.ts`
+shows on Debian's real unattended-upgrades that an edited conffile holds the
+package back and a released one is upgraded with its new conffile.
+
 ## New sites
 
 An addon that has work for a site the moment it exists declares `newSites` in

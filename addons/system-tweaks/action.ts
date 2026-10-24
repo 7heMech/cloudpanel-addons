@@ -247,7 +247,7 @@ export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | 
       if (applied.enabledTimers.length !== settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: applied.enabledTimers });
       if (applied.changed) notices.push("automatic updates config restored");
     }
-    if (settings.blockForgedRealIp && applyRealIp(true, options.realIp)) notices.push("X-Real-IP trust narrowed again");
+    if (settings.blockForgedRealIp && applyRealIp(true, options.realIp)) notices.push("visitor-IP trust narrowed again");
     return notices.join("; ") || null;
   });
 }

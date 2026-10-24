@@ -1,19 +1,25 @@
 /**
- * CloudPanel's nginx.conf trusts X-Real-IP from every address. Commenting out
- * that one line leaves loopback and private-network proxies trusted.
+ * CloudPanel's two nginx.conf files, the sites' and the panel's, trust the
+ * client IP header from every address. Commenting out that one line in each
+ * leaves loopback and private-network proxies trusted.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { runCommand, type CommandResult } from "../../cli/action-common";
 import { nginxFileChange, trustedVhost, withNginxTransaction } from "../../cli/nginx-transaction";
-import { ROOT_UID } from "../../cli/paths";
+import { ROOT_UID, nginxLayout } from "../../cli/paths";
+import { panelUserUid } from "../../lib/sso-auth";
 import { COMMAND_MS } from "./limits";
 
-const MARK = "#clp-addons:untrusted ";
+export const REAL_IP_MARKER = "#clp-addons:untrusted ";
+const MARK = REAL_IP_MARKER;
 const ANY = /^([ \t]*)(set_real_ip_from[ \t]+(?:0\.0\.0\.0\/0|::\/0)[ \t]*;)[ \t]*$/gm;
 const MARKED = new RegExp(`^([ \\t]*)${MARK}(set_real_ip_from[ \\t]+(?:0\\.0\\.0\\.0\\/0|::\\/0)[ \\t]*;)[ \\t]*$`, "gm");
 
 export const DEFAULT_REAL_IP_PATHS = {
   nginxConf: "/etc/nginx/nginx.conf",
+  /** CloudPanel 6's own Nginx; null on the older layout, where the panel shares the sites' instance. */
+  panelConf: nginxLayout().configFile as string | null,
+  panelUid: null as number | null,
   nginx: "nginx",
   systemctl: "systemctl",
   rootUid: ROOT_UID,
@@ -25,10 +31,18 @@ export interface RealIpOptions {
 }
 
 export interface RealIpStatus {
-  /** Whether nginx.conf still lets any address set the visitor IP. */
+  /** Whether either nginx.conf still lets any address set the visitor IP. */
   trustsAnyAddress: boolean;
-  /** The file could not be read as a trusted root file; `problem` says why. */
+  /** A file could not be read as a trusted one; says why. */
   problem: string;
+}
+
+interface Instance {
+  conf: string;
+  uid: number;
+  groupWritable: boolean;
+  config?: string;
+  service?: string;
 }
 
 export function withoutAnyAddress(content: string): string {
@@ -39,22 +53,35 @@ export function withAnyAddress(content: string): string {
   return content.replace(MARKED, (_line, indent: string, directive: string) => `${indent}${directive}`);
 }
 
-export function realIpStatus(options: RealIpOptions = {}): RealIpStatus {
+function instances(options: RealIpOptions): { sites: Instance; panel: Instance | null } {
   const paths = { ...DEFAULT_REAL_IP_PATHS, ...options.paths };
-  try {
-    const { content } = trustedVhost(paths.nginxConf, paths.rootUid);
-    return { trustsAnyAddress: withoutAnyAddress(content) !== content, problem: "" };
-  } catch (error) {
-    return { trustsAnyAddress: false, problem: error instanceof Error ? error.message : String(error) };
-  }
+  const sites = { conf: paths.nginxConf, uid: paths.rootUid, groupWritable: false };
+  if (!paths.panelConf || !existsSync(paths.panelConf)) return { sites, panel: null };
+  // The panel's files belong to its own account, mode 770.
+  const uid = paths.panelUid ?? panelUserUid() ?? paths.rootUid;
+  return { sites, panel: { conf: paths.panelConf, uid, groupWritable: true, config: paths.panelConf, service: "clp-nginx" } };
 }
 
-/** Puts nginx.conf in the wanted state, validating and reloading only on a change. */
-export function applyRealIp(blockForged: boolean, options: RealIpOptions = {}): boolean {
+export function realIpStatus(options: RealIpOptions = {}): RealIpStatus {
+  const { sites, panel } = instances(options);
+  const problems: string[] = [];
+  let trustsAnyAddress = false;
+  for (const instance of panel ? [sites, panel] : [sites]) {
+    try {
+      const { content } = trustedVhost(instance.conf, instance.uid, instance.groupWritable);
+      if (withoutAnyAddress(content) !== content) trustsAnyAddress = true;
+    } catch (error) {
+      problems.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  return { trustsAnyAddress, problem: problems.join("; ") };
+}
+
+function applyTo(instance: Instance, blockForged: boolean, options: RealIpOptions, reload: boolean): boolean {
   const paths = { ...DEFAULT_REAL_IP_PATHS, ...options.paths };
   const wanted = blockForged ? withoutAnyAddress : withAnyAddress;
   let current: string;
-  try { current = readFileSync(paths.nginxConf, "utf8"); }
+  try { current = readFileSync(instance.conf, "utf8"); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
@@ -62,10 +89,32 @@ export function applyRealIp(blockForged: boolean, options: RealIpOptions = {}): 
   // Nothing to change needs no trust check, validation or reload.
   if (wanted(current) === current) return false;
   const run = options.run ?? ((command, args) => runCommand(command, args, COMMAND_MS));
-  return withNginxTransaction(null, paths, run, (changes) => {
-    const conf = nginxFileChange(paths.nginxConf, null, paths.rootUid);
+  const nginx = { nginx: paths.nginx, systemctl: paths.systemctl, config: instance.config, service: instance.service };
+  return withNginxTransaction(null, nginx, run, (changes) => {
+    const conf = nginxFileChange(instance.conf, null, instance.uid, instance.groupWritable);
     if (conf.backup.content === null) return;
     conf.content = wanted(conf.backup.content);
     changes.push(conf);
-  }).changed;
+  }, { reload }).changed;
+}
+
+/** Puts both files in the wanted state, validating and reloading each instance only on a change. */
+export function applyRealIp(blockForged: boolean, options: RealIpOptions = {}): boolean {
+  const { sites, panel } = instances(options);
+  const changed = applyTo(sites, blockForged, options, true);
+  try {
+    return (panel ? applyTo(panel, blockForged, options, true) : false) || changed;
+  } catch (error) {
+    // Both or neither: the panel's refusal also undoes the sites' half.
+    if (changed) applyTo(sites, !blockForged, options, true);
+    throw error;
+  }
+}
+
+/**
+ * Gives the sites' nginx.conf, a dpkg conffile, back its package text without a
+ * reload, so a package upgrade can replace it. The panel's file is not a conffile.
+ */
+export function releaseRealIp(options: RealIpOptions = {}): boolean {
+  return applyTo(instances(options).sites, false, options, false);
 }
