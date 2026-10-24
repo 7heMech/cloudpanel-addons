@@ -3,7 +3,7 @@
 System Tweaks holds settings for the server rather than for CloudPanel's pages,
 which stay with [Panel Tweaks](panel-tweaks.md). PHP worker limits stay with
 [PHP Resources](php-resources.md), and the panel's own PHP version with Panel
-Tweaks. It is in the installer's default selection.
+Tweaks.
 
 ## Automatic updates
 
