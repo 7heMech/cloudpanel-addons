@@ -679,6 +679,7 @@ test("reboot timing preserves outside policy until explicitly set, and restores 
   expect(updatesStatus(b.options.updates).rebootTime).toBe("03:30");
   state = await act(b, ["set-updates"], { enabled: false });
   expect(state.updates.rebootTime).toBe("04:15");
+  expect(dashboardView(state)).not.toContain("overrides your saved reboot time");
   expect(b.commands.some(command => /shutdown|reboot/.test(command))).toBe(false);
 });
 

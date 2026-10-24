@@ -84,7 +84,7 @@ function rebootTiming(status: UpdatesStatus, settings: UpdateSettings, locked: b
   if (!settings.reboot && !status.reboot) return "";
   const mode = settings.rebootTime === null ? "existing" : settings.rebootTime === "now" ? "now" : "time";
   const value = /^\d{2}:\d{2}$/.test(settings.rebootTime ?? status.rebootTime) ? (settings.rebootTime ?? status.rebootTime) : "";
-  const overridden = settings.rebootTime !== null && (status.rebootTime || "now") !== settings.rebootTime;
+  const overridden = !locked && settings.rebootTime !== null && (status.rebootTime || "now") !== settings.rebootTime;
   return `<form class="st-reboot-time" onsubmit="saveRebootTime(event, this)">
     <label for="reboot-mode">Reboot timing</label>
     <div class="st-reboot-controls">
