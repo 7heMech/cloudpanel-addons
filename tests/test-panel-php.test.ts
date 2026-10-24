@@ -5,11 +5,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
 import { fastCgiRequest, parseCgiResponse } from "../lib/fastcgi";
-import { DEFAULT_TWEAKS } from "../addons/panel-tweaks/action";
-import { dashboardView, panelPhpLine } from "../addons/panel-tweaks/app/views";
+import { panelPhpCard, panelPhpLine } from "../addons/system-tweaks/app/views";
 import {
   panelPhpStatus, reconcilePanelPhp, restorePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions,
-} from "../addons/panel-tweaks/panel-php";
+} from "../addons/system-tweaks/panel-php";
 
 const ARGS = "-R -F -y /home/clp/services/php-fpm/fpm/php-fpm.conf -c /home/clp/services/php-fpm/fpm/php.ini";
 const dirs: string[] = [];
@@ -69,7 +68,7 @@ function box(): Box {
     rejected: new Set(),
     dead: new Set(),
     reloadFails: false,
-    configFile: join(root, "panel-tweaks.conf"),
+    configFile: join(root, "system-tweaks.conf"),
     releases: { "8.1": ["8.1.34-1+clp-bookworm", "8.1.34-1+clp-bookworm"], "8.3": ["8.3.36-1", "8.3.36-1"], "8.4": ["8.4.25-1+clp-bookworm", "8.4.27-1+clp-bookworm"] },
     fragment,
     setStock,
@@ -302,7 +301,7 @@ test("a change queued behind disabling cannot put the override back, and enablin
   const env = box();
   await setPanelPhp("8.4", env.options);
   withdrawPanelPhp(env.options);
-  await expect(setPanelPhp("8.3", env.options)).rejects.toThrow("Panel Tweaks is disabled");
+  await expect(setPanelPhp("8.3", env.options)).rejects.toThrow("System Tweaks is disabled");
   expect(await reconcilePanelPhp(env.options)).toBeNull();
   expect(existsSync(env.dropIn)).toBe(false);
 
@@ -327,7 +326,7 @@ test("a change admitted before an uninstall purged its state still finds the add
   withdrawPanelPhp(env.options);
   rmSync(env.configFile);
   rmSync(env.stateFile);
-  await expect(setPanelPhp("8.3", env.options)).rejects.toThrow("Panel Tweaks is disabled");
+  await expect(setPanelPhp("8.3", env.options)).rejects.toThrow("System Tweaks is disabled");
   expect(existsSync(env.dropIn)).toBe(false);
 });
 
@@ -388,19 +387,18 @@ test("the page offers the installed versions and says what the panel runs on", (
     wanted: "8.4", stock: "8.1", running: "8.4",
     choices: [{ version: "8.1", installed: "8.1.34" }, { version: "8.4", installed: "8.4.25", available: "8.4.27" }],
   };
-  const page = dashboardView({ tweaks: DEFAULT_TWEAKS, sites: [], diskMeasuredAt: "" }, status);
+  const page = panelPhpCard(status);
   expect(page).toContain(`<option value="">CloudPanel&#x27;s own: PHP 8.1 (8.1.34)</option>`);
   expect(page).toContain(`<option value="8.4" selected>PHP 8.4 (8.4.25)</option>`);
   expect(page).toContain("which no longer gets security fixes");
   expect(panelPhpLine(status)).toBe("Running on PHP 8.4. 8.4.27 is available; run apt upgrade to install it.");
 
-  const gone = dashboardView({ tweaks: DEFAULT_TWEAKS, sites: [], diskMeasuredAt: "" }, { ...status, wanted: "8.3" });
+  const gone = panelPhpCard({ ...status, wanted: "8.3" });
   expect(gone).toContain(`<option value="8.3" selected disabled>PHP 8.3 (unavailable)</option>`);
   expect(gone).not.toContain(`<option value="8.4" selected>`);
   expect(page).not.toContain("(unavailable)");
 
-  const blocked = dashboardView({ tweaks: DEFAULT_TWEAKS, sites: [], diskMeasuredAt: "" },
-    { ...status, wanted: "", running: "8.2", overriddenBy: "/etc/systemd/system/clp-php-fpm.service.d/override.conf" });
+  const blocked = panelPhpCard({ ...status, wanted: "", running: "8.2", overriddenBy: "/etc/systemd/system/clp-php-fpm.service.d/override.conf" });
   expect(blocked).toContain(`onchange="setPanelPhp(this)" disabled>`);
   expect(blocked).toContain("override.conf sets this already. Remove it to choose here. Running on PHP 8.2.");
 });

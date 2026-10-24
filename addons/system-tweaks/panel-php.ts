@@ -15,7 +15,7 @@ import { fastCgiRequest, type FastCgiResponse } from "../../lib/fastcgi";
 
 const STATE_VERSION = 1;
 const VERSION_RE = /^[0-9]+\.[0-9]+$/;
-const MARKER = "# Managed by clp-addons Panel Tweaks: the PHP version CloudPanel runs on.";
+const MARKER = "# Managed by clp-addons System Tweaks: the PHP version CloudPanel runs on.";
 
 export interface PanelPhpPaths {
   unit: string;
@@ -23,7 +23,7 @@ export interface PanelPhpPaths {
   fpmBinDir: string;
   stateFile: string;
   lockFile: string;
-  /** Panel Tweaks' own config, which exists only while the addon is installed. */
+  /** System Tweaks' own config, which exists only while the addon is installed. */
   configFile: string;
   panelRoot: string;
   panelSocket: string;
@@ -36,9 +36,9 @@ export const DEFAULT_PANEL_PHP_PATHS: PanelPhpPaths = {
   unit: PANEL_FPM_UNIT,
   dropInFile: `${SYSTEMD_DIR}/${PANEL_FPM_UNIT}.d/clp-addons-php.conf`,
   fpmBinDir: PHP_FPM_BIN_DIR,
-  stateFile: `${STATE_DIR}/panel-tweaks/panel-php.json`,
+  stateFile: `${STATE_DIR}/system-tweaks/panel-php.json`,
   lockFile: "/run/lock/clp-addons/panel-php.lock",
-  configFile: `${CONFIG_DIR}/panel-tweaks.conf`,
+  configFile: `${CONFIG_DIR}/system-tweaks.conf`,
   panelRoot: "/home/clp/htdocs/app/files/public",
   panelSocket: "/run/clp-php-fpm.sock",
   fileManagerSocket: "/run/clp-fm-php-fpm.sock",
@@ -381,7 +381,7 @@ export async function setPanelPhp(php: string, options: PanelPhpOptions = {}): P
   await withFileLock(ctx.paths.lockFile, 30, "another panel PHP change is still running", async () => {
     // Purging removes the withdrawn mark with the state, but not before the config.
     if (readChoice(ctx.paths).withdrawn || !existsSync(ctx.paths.configFile)) {
-      failAction("Panel Tweaks is disabled; enable it to choose the panel's PHP");
+      failAction("System Tweaks is disabled; enable it to choose the panel's PHP");
     }
     await apply(ctx, php);
     writeChoice(ctx.paths, { php });
