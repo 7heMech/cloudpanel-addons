@@ -1,6 +1,6 @@
 {
   "name": "cloudpanel-addons",
-  "version": "1.5.2",
+  "version": "2.0.0",
   "packageManager": "bun@1.4.3",
   "devDependencies": {
     "@types/bun": "latest"
