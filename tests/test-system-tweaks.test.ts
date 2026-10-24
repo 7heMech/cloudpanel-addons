@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
 import {
-  executeSystemTweaksAction, restoreSystemTweaks, systemTweaksUpkeep, withdrawSystemTweaks,
+  executeSystemTweaksAction, restoreSystemTweaks, systemTweaksMaintenance, systemTweaksUpkeep, withdrawSystemTweaks,
   type SystemTweaksOptions, type SystemTweaksState,
 } from "../addons/system-tweaks/action";
 import {
@@ -287,6 +287,14 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
       },
       uploadProgress: { run, paths: { phpRoot, fpmBinDir: sbin, panelUnit: "clp-php-fpm.service" } },
       phpGuard,
+      panelPhp: {
+        run: () => ({ ok: false, stdout: "", stderr: "no panel unit in this fixture" }),
+        paths: {
+          stateFile: join(dir, "panel-php.json"), lockFile: join(dir, "panel-php.lock"),
+          dropInFile: join(dir, "panel-php.conf"), configFile: guardConfig,
+          fpmBinDir: sbin, procRoot: join(dir, "proc"), rootUid: uid,
+        },
+      },
       realIp: { run: nginxRun, paths: { nginxConf, panelConf, cloudflareIps, panelUid: uid, rootUid: uid } },
     },
   };
@@ -724,7 +732,7 @@ test("failed downloads retain the package URL in expandable details and escape t
   const updates = updatesStatus(b.options.updates);
   expect(updates.lastRun?.outcome).toBe("failed");
   expect(updates.lastRun?.message).toContain("php8.2-bcmath.deb");
-  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" } });
+  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, panelPhp: { error: "" } });
   expect(html).toContain("A package download failed (HTTP 404).");
   expect(html).toContain('<details class="st-run-details"><summary>Failure details</summary>');
   expect(html).toContain("php8.2-bcmath.deb failed to download, aborting &lt;script&gt;");
@@ -814,4 +822,32 @@ test("the reboot-time API validates input and returns replacement HTML from the 
     }
     expect(calls).toEqual([{ rebootTime: "03:30" }, { rebootTime: "now" }, { rebootTime: null }]);
   } finally { systemTweaksService.setUpdates = original; }
+});
+
+test("System Tweaks exposes panel PHP state and validates its change action", async () => {
+  const b = box();
+  const state = await act(b, ["state"]);
+  expect(state.panelPhp).toMatchObject({ wanted: "", stock: null, choices: [] });
+  await expect(act(b, ["set-panel-php"], { php: 8.4 })).rejects.toThrow("php must be a version");
+  await expect(act(b, ["set-panel-php"], { php: "8.4" })).rejects.toThrow("is not the CloudPanel PHP-FPM unit");
+  expect(dashboardView(state)).toContain("<h2>Panel PHP</h2>");
+});
+
+test("systemTweaksMaintenance still reconciles panel PHP when upkeep fails", async () => {
+  const b = box();
+  writeFileSync(b.nginxConf, CLOUDPANEL_NGINX_CONF);
+  b.nginx.fail = true;
+  writeFileSync(b.options.panelPhp!.paths!.stateFile!, JSON.stringify({ version: 1, php: "8.4" }), { mode: 0o600 });
+  let phpCalled = false;
+  b.options.panelPhp = {
+    ...b.options.panelPhp,
+    run: () => {
+      phpCalled = true;
+      return { ok: false, stdout: "", stderr: "no panel unit in this fixture" };
+    },
+  };
+  await expect(systemTweaksMaintenance(b.options)).rejects.toThrow(
+    "Nginx validation failed: emerg; panel PHP: clp-php-fpm.service is not the CloudPanel PHP-FPM unit this addon knows",
+  );
+  expect(phpCalled).toBe(true);
 });

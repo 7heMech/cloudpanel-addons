@@ -25,3 +25,6 @@
 .st-reboot-controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; align-items: center; }
 .st-reboot-controls select { flex: 1 1 210px; min-width: 0; }
 .st-reboot-controls input { flex: 0 1 180px; min-width: 0; }
+.panel-php-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; }
+.panel-php-choice select { width: auto; max-width: 100%; }
+#panel-php-status:empty { display: none; }

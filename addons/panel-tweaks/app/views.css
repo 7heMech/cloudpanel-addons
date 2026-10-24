@@ -6,9 +6,6 @@
 @media (max-width: 760px) {
   .tweak-scan { flex-direction: column; align-items: flex-start; gap: 8px; }
 }
-.panel-php-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; }
-.panel-php-choice select { width: auto; max-width: 100%; }
-#panel-php-status:empty { display: none; }
 .preview-widths { display: flex; gap: 8px; }
 .preview-widths .btn { min-height: 36px; padding: 4px 14px; font-size: 13px; }
 .preview-widths .btn.is-active { border-color: var(--primary); color: var(--primary); }

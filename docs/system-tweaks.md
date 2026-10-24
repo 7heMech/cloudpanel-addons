@@ -54,6 +54,17 @@ CloudPanel's own included, with `99-clp-addons-upload-progress.ini`. The table
 shows each FPM's effective value and which file set it. Switching the mitigation
 off removes only that file. It comes back if System Tweaks is disabled.
 
+## Panel PHP
+
+Under **Addons → System Tweaks → Panel PHP**, choose a newer installed version
+in **Panel runs on**. This changes the PHP used by CloudPanel's pages,
+phpMyAdmin and File Manager. Site PHP versions keep their own settings.
+
+The change restarts the panel's PHP service and checks its login page and File
+Manager. If either check fails, the previous configuration is restored.
+Choose **CloudPanel's own** to undo the override. Disabling System Tweaks also
+removes the override; enabling it again reapplies the saved choice through repair.
+
 ## Forged visitor IPs
 
 **Block forged visitor IPs** is on by default. Without it, any client can claim

@@ -34,8 +34,8 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | PHP Resources | Categories of PHP-FPM worker limits, assigned in bulk and to new sites. |
 | [SMTP Relay](docs/smtp-relay.md) | Send each site's mail through SMTP relay profiles, WordPress and PHP included. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
-| Panel Tweaks | Site search and columns, automatic SSL for native sites, mobile layouts, themes, and a newer PHP for the panel itself. |
-| [System Tweaks](docs/system-tweaks.md) | Automatic security updates, the PHP upload-progress mitigation and forged visitor-IP blocking. |
+| Panel Tweaks | Site search and columns, automatic SSL for native sites, mobile layouts and themes. |
+| [System Tweaks](docs/system-tweaks.md) | Automatic security updates, the panel’s PHP version, the PHP upload-progress mitigation and forged visitor-IP blocking. |
 | [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in, optional CLP Varnish Cache installation and MainWP Child enrollment. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
 | Security Keys | Sign in with a passkey or a hardware key such as a YubiKey instead of a password, for the roles an administrator allows. Needs the panel on a hostname with a valid certificate. |

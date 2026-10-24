@@ -34,6 +34,26 @@ function setRealIp(input) {
   return change(input, '/api/real-ip', { enabled: input.checked }, 'Saved.');
 }
 
+// A change restarts the panel and waits for it to answer, so its notice stays up.
+async function setPanelPhp(select) {
+  select.disabled = true;
+  const label = select.options[select.selectedIndex].textContent;
+  notify('Switching the panel to ' + label + '…', 'warn');
+  clearTimeout(clpFlashTimer);
+  busy(true);
+  try {
+    const reply = await post('/api/panel-php', { php: select.value });
+    busy(false);
+    repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+    notify('The panel answers on ' + label + '.', 'ok');
+  } catch (error) {
+    select.value = select.dataset.current || '';
+    select.disabled = false;
+    busy(false);
+    notify(error.message, 'error');
+  }
+}
+
 function installUpdates() {
   notify('Installing unattended-upgrades…', 'warn');
   clearTimeout(clpFlashTimer);
