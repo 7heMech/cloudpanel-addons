@@ -51,10 +51,10 @@ function zoneSummary(profile: Profile): string {
   return `${esc(parts.join(" · ") || "Zone settings unchanged")}${rules.length || extras.length ? `<span class="hint">${esc([rules.length ? `Rules: ${rules.join(", ")}` : "", ...extras].filter(Boolean).join(" · "))}</span>` : ""}`;
 }
 
-function profileRow(profile: DnsState["profiles"][number], isDefault: boolean): string {
+function profileRow(profile: DnsState["profiles"][number]): string {
   const enforcing = profile.mode === "enforce";
   return `<tr data-profile="${esc(profile.id)}">
-    <td class="site-cell"><strong>${esc(profile.name)}</strong><span class="dns-card-sites"> · ${plural(profile.sites, "site")}</span>${isDefault ? '<span class="badge state-default">Default for new sites</span>' : ""}</td>
+    <td class="site-cell"><strong>${esc(profile.name)}</strong><span class="dns-card-sites"> · ${plural(profile.sites, "site")}</span></td>
     <td data-label="Records">${recordSummary(profile)}</td>
     <td data-label="Zone" class="wide-cell">${zoneSummary(profile)}</td>
     <td data-label="Enforce" class="dns-enforce-cell">
@@ -99,10 +99,8 @@ function connectionRow(connection: DnsState["connections"][number]): string {
   const accounts = connection.accounts.map((account) => account.name || account.id).join(", ");
   const status = connection.active ? '<span class="tone-ok">Active</span>' : `<span class="tone-bad">${esc(connection.status === "unchecked" ? "Not checked" : "Not working")}</span>`;
   return `<tr data-connection="${esc(connection.id)}">
-    <td class="site-cell"><strong>${esc(connection.label)}</strong></td>
-    <td data-label="Accounts" class="wide-cell">${esc(accounts || "—")}</td>
-    <td data-label="Zones" class="numeric">${connection.zones}</td>
-    <td data-label="Status">${status}${connection.error ? `<span class="hint">${esc(connection.error)}</span>` : ""}</td>
+    <td class="site-cell"><strong>${esc(connection.label)}</strong><span class="hint">Cloudflare</span></td>
+    <td class="wide-cell">${esc(accounts || "—")}<span class="hint">${esc(plural(connection.zones, "zone"))} · ${status}${connection.error ? ` · ${esc(connection.error)}` : ""}</span></td>
     <td data-label="Actions" class="action-cell"><div class="actions">
       <button class="btn" type="button" onclick="dnsEditConnection('${esc(connection.id)}')">Edit</button>
       <button class="btn btn-danger" type="button" onclick="dnsRemoveConnection('${esc(connection.id)}')">Remove</button>
@@ -117,15 +115,21 @@ function address(value: string, detected: string | null, placeholder: string): s
   return `${name} <span class="tone-warn">${detected === null ? "not detected" : "none"}</span>`;
 }
 
+/** What DNS connects to and what the placeholders stand for: set once, rarely touched. */
 function settingsCard(state: DnsState): string {
   const { mailcow, server } = state;
   const dkim = mailcow.dkimSource ? `shares the DKIM key of ${mailcow.dkimSource}` : `${mailcow.dkimBits}-bit DKIM, selector ${mailcow.dkimSelector}`;
   const mailcowValue = mailcow.url
     ? `<span class="mono">{mailcow.host}</span> ${esc(mailcow.host)}<span class="hint">${esc([dkim, mailcow.sharedMailbox && `${mailcow.sharedMailbox} may send as each domain`].filter(Boolean).join(" · "))}</span>`
     : '<span class="hint">Not set up. Profiles that use Mailcow need it.</span>';
-  return `<div class="card card-table"><div class="card-header"><div><h2>Server and Mailcow</h2>
-      <p class="hint">What the placeholders in record rows stand for.</p></div></div>
+  const connections = state.connections.length ? state.connections.map(connectionRow).join("") : `<tr>
+      <td class="site-cell"><strong>Cloudflare</strong></td><td class="wide-cell"><span class="hint">Not connected</span></td>
+      <td data-label="Actions" class="action-cell"><button class="btn" type="button" onclick="dnsEditConnection('')">Connect</button></td></tr>`;
+  return `<div class="card card-table"><div class="card-header"><div><h2>Settings</h2>
+      <p class="hint">Each Cloudflare connection is one API token. A site is managed in the longest zone any connection reaches.</p></div>
+      ${state.connections.length ? '<button class="btn" type="button" onclick="dnsEditConnection(\'\')">Add Cloudflare connection</button>' : ""}</div>
     <table class="fleet-table dns-settings-table"><tbody>
+      ${connections}
       <tr><td class="site-cell"><strong>Server addresses</strong></td>
         <td class="wide-cell">${address(server.ipv4, server.detected.ipv4, "{ipv4}")}<br>${address(server.ipv6, server.detected.ipv6, "{ipv6}")}</td>
         <td data-label="Actions" class="action-cell"><button class="btn" type="button" onclick="dnsEditServer()">Edit</button></td></tr>
@@ -135,6 +139,22 @@ function settingsCard(state: DnsState): string {
     </tbody></table></div>`;
 }
 
+/** Until Cloudflare is connected: the three steps that make a new site publish itself. */
+function setupCard(state: DnsState): string {
+  if (state.connections.length) return "";
+  const fallback = state.profiles.find((profile) => profile.id === state.defaultProfileId);
+  const step = (done: boolean, title: string, hint: string, control: string): string =>
+    `<li class="${done ? "done" : ""}"><div><strong>${title}</strong><span class="hint">${hint}</span></div><div class="dns-step-control">${control}</div></li>`;
+  return `<div class="card dns-setup"><h2>Set up DNS</h2><ol class="dns-checklist">
+    ${step(false, "Connect Cloudflare", "Cloudflare's own form opens with the permissions filled in; paste the token back.",
+      '<button class="btn btn-primary" type="button" onclick="dnsEditConnection(\'\')">Connect Cloudflare</button>')}
+    ${step(Boolean(fallback), "Choose the profile for new sites", "A new site joins it seconds after CloudPanel creates it. Existing sites are never moved.",
+      `<select id="dns-setup-default" aria-label="Profile for new sites" onchange="dnsSetDefault(this)">${profileOptions(state.profiles, state.defaultProfileId, "No profile")}</select>`)}
+    ${step(fallback?.mode === "enforce", `Turn on Enforce${fallback ? ` for ${esc(fallback.name)}` : ""}`, "Report only shows what differs and writes nothing, so new sites would get no records.",
+      fallback?.mode === "enforce" ? '<span class="tone-ok">On</span>' : '<span class="hint">After connecting</span>')}
+  </ol></div>`;
+}
+
 export function dashboardView(state: DnsState): string {
   return `<div id="dns-root">${dashboardContent(state)}</div>${DIALOGS}`;
 }
@@ -142,14 +162,10 @@ export function dashboardView(state: DnsState): string {
 /** Everything a change can alter, repainted in place from the action's reply. */
 export function dashboardContent(state: DnsState, now = Date.now()): string {
   const data = JSON.stringify(state).replaceAll("<", "\\u003c");
-  const profiles = state.profiles.map((profile) => profileRow(profile, profile.id === state.defaultProfileId)).join("");
+  const profiles = state.profiles.map(profileRow).join("");
   const sites = state.sites.map((site) => siteRow(site, state)).join("");
-  const connections = state.connections.map(connectionRow).join("");
   const waiting = state.waitUntil > now
     ? `<div class="notice">Cloudflare or Mailcow asked this server to wait until ${esc(new Date(state.waitUntil).toISOString().slice(11, 16))} UTC. Checks resume after that.</div>` : "";
-  const connect = state.connections.length ? "" : `<div class="card dns-setup">
-      <div><h2>Connect Cloudflare</h2><p>DNS needs a Cloudflare API token. Cloudflare's own form opens with the permissions the profiles need; you choose the accounts and zones there and paste the token back.</p></div>
-      <button class="btn btn-primary" type="button" onclick="dnsEditConnection('')">Connect Cloudflare</button></div>`;
   const orphans = state.orphans.length ? `<div class="card card-table"><div class="card-header"><div><h2>Records of deleted sites</h2>
       <p class="hint">These sites are gone from CloudPanel. Their records are still in Cloudflare until you remove them.</p></div></div>
       <table class="fleet-table dns-orphan-table"><tbody>${state.orphans.map((orphan) => `<tr>
@@ -159,22 +175,15 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
           <button class="btn btn-danger" type="button" onclick="dnsRemoveRecords('${esc(orphan.domain)}')">Remove records</button>
         </div></td></tr>`).join("")}</tbody></table></div>` : "";
 
+  const fallback = state.profiles.find((profile) => profile.id === state.defaultProfileId);
+  const reportOnly = state.connections.length && fallback && fallback.mode !== "enforce"
+    ? `<div class="notice dns-report-warning"><span>New sites join <strong>${esc(fallback.name)}</strong>, which is Report only: DNS writes none of their records, so their certificate cannot be issued.</span>
+        <button class="btn" type="button" onclick="dnsEnforce('${esc(fallback.id)}')">Turn on Enforce</button></div>` : "";
+
   return `<script type="application/json" id="dns-state">${data}</script>
     <div class="page-heading"><div><h1>DNS</h1>
-      <p>Keep each site's Cloudflare DNS to its profile's records. Report only shows what differs; Enforce makes it so and keeps it so.</p></div>
-      <button class="btn btn-primary" type="button" onclick="dnsEditProfile('')">New profile</button></div>
-    ${waiting}${connect}
-    <div class="card default-card">
-      <div><h2>New sites</h2><p>A site created from now on joins this profile, before its certificate is requested.</p>
-        <p class="hint">Existing sites are never moved by this. Its records are written seconds after CloudPanel creates the site.</p></div>
-      <div class="default-choice"><label class="hint" for="dns-default">Profile for new sites</label>
-        <select id="dns-default" onchange="dnsSetDefault(this)">${profileOptions(state.profiles, state.defaultProfileId, "None")}</select></div>
-    </div>
-    <div class="card card-table"><div class="card-header"><div><h2>Profiles</h2>
-      <p class="hint">A profile is the records each of its sites should have. Enforce deletes records that conflict with them, at the names the profile writes and nowhere else.</p></div></div>
-      ${profiles ? `<table class="fleet-table dns-profile-table"><thead><tr><th>Profile</th><th>Records</th><th>Zone</th><th>Enforce</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table>`
-        : '<div class="empty">No profiles yet. Create one from the Web and Mailcow presets.</div>'}
-    </div>
+      <p>Keep each site's Cloudflare DNS to its profile's records. Report only shows what differs; Enforce makes it so and keeps it so.</p></div></div>
+    ${waiting}${setupCard(state)}${reportOnly}
     <div class="card card-table">
     ${state.sites.length ? `<div class="card-header toolbar">
         <h2>Sites</h2>
@@ -193,11 +202,14 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
       : '<div class="empty">CloudPanel has no sites yet.</div>'}
     </div>
     ${orphans}
-    <div class="card card-table"><div class="card-header"><div><h2>Cloudflare</h2>
-      <p class="hint">Each connection is one API token. A site is managed in the longest zone any connection reaches.</p></div>
-      <button class="btn" type="button" onclick="dnsEditConnection('')">Add connection</button></div>
-      ${connections ? `<table class="fleet-table dns-connection-table"><thead><tr><th>Connection</th><th>Accounts</th><th class="numeric">Zones</th><th>Status</th><th class="action-cell">Actions</th></tr></thead><tbody>${connections}</tbody></table>`
-        : '<div class="empty">No connections yet.</div>'}
+    <div class="card card-table"><div class="card-header"><div><h2>Profiles</h2>
+      <p class="hint">A profile is the records each of its sites should have. Enforce deletes records that conflict with them, at the names the profile writes and nowhere else.</p></div>
+      <div class="dns-profile-tools">
+        <div class="dns-default-field"><label class="hint" for="dns-default">New sites join</label>
+          <select id="dns-default" onchange="dnsSetDefault(this)">${profileOptions(state.profiles, state.defaultProfileId, "No profile")}</select></div>
+        <button class="btn btn-primary" type="button" onclick="dnsEditProfile('')">New profile</button></div></div>
+      ${profiles ? `<table class="fleet-table dns-profile-table"><thead><tr><th>Profile</th><th>Records</th><th>Zone</th><th>Enforce</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table>`
+        : '<div class="empty">No profiles yet. Create one from the Web and Mailcow presets.</div>'}
     </div>
     ${settingsCard(state)}`;
 }
@@ -224,16 +236,18 @@ const DIALOGS = `
     <input type="hidden" name="id">
     <div class="form-grid">${field("dns-profile-name", "Name", '<input id="dns-profile-name" name="name" required maxlength="40" autocomplete="off" placeholder="Web and Mailcow">')}</div>
     <div class="dns-section-head"><h3>Records</h3>
-      <div class="actions"><select id="dns-preset" aria-label="Add rows from a preset" onchange="dnsAddPreset(this)"></select>
+      <div class="actions"><label class="dns-check"><input type="checkbox" id="dns-advanced" onchange="dnsRenderRows()"> TTL and apex only</label>
+        <select id="dns-preset" aria-label="Add rows from a preset" onchange="dnsAddPreset(this)"></select>
         <button class="btn" type="button" onclick="dnsAddRow()">Add record</button></div></div>
-    <div class="dns-rows-wrap"><table class="dns-rows"><thead><tr><th>Type</th><th>Name</th><th>Content</th><th>Priority</th><th>TTL</th><th>Proxy</th><th>Apex only</th><th><span class="visually-hidden">Remove</span></th></tr></thead>
+    <div class="dns-rows-wrap"><table class="dns-rows" id="dns-rows-table"><thead><tr><th>Type</th><th>Name</th><th>Content</th><th class="dns-adv">TTL</th><th class="dns-adv">Apex only</th><th>Proxy</th><th><span class="visually-hidden">Remove</span></th></tr></thead>
       <tbody id="dns-rows"></tbody></table></div>
     <p class="hint dns-empty-rows" id="dns-empty-rows" hidden>No records yet. Add one, or start from a preset.</p>
     <div class="dns-placeholders"><span class="hint">Placeholders, inserted where the cursor is:</span>
       ${PLACEHOLDERS.map(([token, meaning]) => `<button class="dns-chip" type="button" title="${esc(meaning)}" onmousedown="event.preventDefault()" onclick="dnsInsert('${token}')">${token}</button>`).join("")}</div>
-    <h3 class="dns-section">Mailcow</h3>
-    ${switchField("mailcow", "Set up each site's domain in Mailcow", "Adds the domain if it is missing, gives it a DKIM key, and lets the shared mailbox send as it. A Mailcow domain is never deleted.")}
-    <h3 class="dns-section">Cloudflare zone <span class="hint inline">applies to the whole zone</span></h3>
+    <div id="dns-mailcow-section"><h3 class="dns-section">Mailcow</h3>
+    ${switchField("mailcow", "Set up each site's domain in Mailcow", "Adds the domain if it is missing, gives it a DKIM key, and lets the shared mailbox send as it. A Mailcow domain is never deleted.")}</div>
+    <details class="dns-zone-details" id="dns-zone-details"><summary><h3>Cloudflare zone</h3><span class="hint" id="dns-zone-summary"></span></summary>
+    <p class="hint">These apply to the whole zone, not only to this profile's sites.</p>
     <div class="form-grid">
       ${field("dns-ssl", "SSL/TLS mode", `<select id="dns-ssl" name="ssl"><option value="">Leave as it is</option>${Object.entries(SSL_LABELS).map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>`)}
       ${field("dns-https", "Always Use HTTPS", '<select id="dns-https" name="alwaysHttps"><option value="">Leave as it is</option><option value="on">On</option><option value="off">Off</option></select>')}
@@ -243,7 +257,7 @@ const DIALOGS = `
     <div class="form-grid dns-zone-grid">
       ${field("dns-skip", "Skip the firewall for", '<textarea id="dns-skip" name="skipFirewallIps" rows="2" placeholder="203.0.113.7"></textarea>', "Optional. One IP per line, such as a MainWP Dashboard's. Skips Super Bot Fight Mode and managed rules; Cloudflare cannot skip the free Bot Fight Mode.")}
       ${field("dns-create-in", "Missing zones", '<select id="dns-create-in" name="createIn"></select>', "Creating a zone shows its nameservers; changing them at the registrar is up to you.")}
-    </div>
+    </div></details>
     ${actions("Save profile")}
   </form></dialog>
   <dialog id="dns-review-dialog" class="dns-wide-dialog" aria-labelledby="dns-review-heading">

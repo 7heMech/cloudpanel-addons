@@ -109,7 +109,7 @@ function dnsPreviewState(url: URL): DnsState {
   const profiles = [web, mailcow].map((profile) => ({ ...profile, sites: sites.filter((site) => site.profileId === profile.id).length }));
   return {
     profiles,
-    defaultProfileId: setup ? null : "web",
+    defaultProfileId: setup ? null : url.searchParams.has("report") ? "web-mailcow" : "web",
     sites,
     connections: setup ? [] : [
       { id: "cf-1", label: "Agency", active: true, status: "active", accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }], zones: 42, error: null, hasToken: true },
@@ -1423,7 +1423,8 @@ const server = Bun.serve({
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       html = phpResourcesLayout("PHP Resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice);
     } else if (path === "/addons/dns/" || path === "/addons/dns") {
-      // ?dialog=profile|new|review|site|choose|connection|mailcow|server opens that dialog on load;
+      // ?dialog=profile|advanced|new|review|site|choose|connection|mailcow|server opens that dialog on load; ?report makes the
+      // Report only profile the default for new sites;
       // ?at=<selector> hides the cards above that one, for a phone screenshot of something below the fold; ?dark
       // draws the dark theme.
       const state = dnsPreviewState(url);
@@ -1431,6 +1432,7 @@ const server = Bun.serve({
       const at = url.searchParams.get("at");
       const openers: Record<string, string> = {
         profile: "dnsEditProfile('web-mailcow')",
+        advanced: "dnsEditProfile('web-mailcow');document.getElementById('dns-advanced').click();document.getElementById('dns-zone-details').open=true",
         new: "dnsEditProfile('')",
         review: `dnsShowReview(${JSON.stringify(dnsPreviewReview(state))})`,
         site: "dnsShowSite('shop.example.com')",

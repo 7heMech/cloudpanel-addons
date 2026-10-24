@@ -63,32 +63,45 @@ async function dnsPost(path, body, from) {
 
 // --- profiles ---------------------------------------------------------------
 
-function dnsRowCells(row, index) {
+function dnsTtlLabel(ttl) {
+  const known = DNS_TTLS.find(function (option) { return option[0] === ttl; });
+  return known ? known[1] : ttl + ' s';
+}
+
+/** Type, name, content and proxy; priority sits in the content cell for MX and SRV, TTL and apex only behind the toggle. */
+function dnsRowCells(row, index, advanced) {
   const proxiable = ['A', 'AAAA', 'CNAME'].indexOf(row.type) >= 0;
   const prioritised = row.type === 'MX' || row.type === 'SRV';
-  return '<td data-label="Type" class="dns-type"><select data-field="type" aria-label="Type of record ' + (index + 1) + '">' +
+  const n = index + 1;
+  const tags = advanced ? [] : [row.apexOnly ? 'apex only' : '', !row.proxied && row.ttl !== 1 ? 'TTL ' + dnsTtlLabel(row.ttl) : ''].filter(Boolean);
+  return '<td data-label="Type" class="dns-type"><select data-field="type" aria-label="Type of record ' + n + '">' +
       DNS_TYPES.map(function (type) { return '<option' + (type === row.type ? ' selected' : '') + '>' + type + '</option>'; }).join('') + '</select></td>' +
-    '<td data-label="Name" class="dns-name"><input data-field="name" aria-label="Name of record ' + (index + 1) + '" spellcheck="false" autocomplete="off" placeholder="{domain}"></td>' +
-    '<td data-label="Content" class="dns-content"><input data-field="content" aria-label="Content of record ' + (index + 1) + '" spellcheck="false" autocomplete="off" placeholder="' + dnsEsc(DNS_EXAMPLES[row.type]) + '"></td>' +
-    '<td data-label="Priority" class="dns-priority"><input data-field="priority" type="number" min="0" max="65535" inputmode="numeric" aria-label="Priority of record ' + (index + 1) + '"' + (prioritised ? '' : ' disabled') + '></td>' +
-    '<td data-label="TTL" class="dns-ttl"><select data-field="ttl" aria-label="TTL of record ' + (index + 1) + '"' + (row.proxied ? ' disabled' : '') + '>' +
+    '<td data-label="Name" class="dns-name' + (tags.length ? ' dns-tagged' : '') + '"><input data-field="name" aria-label="Name of record ' + n + '" spellcheck="false" autocomplete="off" placeholder="{domain}">' +
+      (tags.length ? '<span class="dns-row-tags">' + tags.map(function (tag) { return '<span class="badge">' + dnsEsc(tag) + '</span>'; }).join('') + '</span>' : '') + '</td>' +
+    '<td data-label="Content" class="dns-content"><div class="dns-content-fields">' +
+      (prioritised ? '<input data-field="priority" class="dns-priority" type="number" min="0" max="65535" inputmode="numeric" title="Priority" aria-label="Priority of record ' + n + '">' : '') +
+      '<input data-field="content" aria-label="Content of record ' + n + '" spellcheck="false" autocomplete="off" placeholder="' + dnsEsc(DNS_EXAMPLES[row.type]) + '"></div></td>' +
+    '<td data-label="TTL" class="dns-ttl dns-adv"><select data-field="ttl" aria-label="TTL of record ' + n + '"' + (row.proxied ? ' disabled' : '') + '>' +
       DNS_TTLS.map(function (ttl) { return '<option value="' + ttl[0] + '"' + (ttl[0] === row.ttl ? ' selected' : '') + '>' + ttl[1] + '</option>'; }).join('') + '</select></td>' +
-    '<td data-label="Proxy" class="dns-flag"><label class="switch"><input data-field="proxied" type="checkbox" aria-label="Proxy record ' + (index + 1) + '"' +
-      (row.proxied ? ' checked' : '') + (proxiable ? '' : ' disabled') + '><span></span></label></td>' +
-    '<td data-label="Apex only" class="dns-flag"><label class="switch"><input data-field="apexOnly" type="checkbox" aria-label="Record ' + (index + 1) + ' only at the zone apex"' +
+    '<td data-label="Apex only" class="dns-flag dns-adv"><label class="switch"><input data-field="apexOnly" type="checkbox" aria-label="Record ' + n + ' only at the zone apex"' +
       (row.apexOnly ? ' checked' : '') + '><span></span></label></td>' +
-    '<td class="dns-remove"><button class="btn dns-remove-btn" type="button" aria-label="Remove record ' + (index + 1) + '" onclick="dnsRemoveRow(' + index + ')">×</button></td>';
+    '<td data-label="Proxy" class="dns-flag' + (proxiable ? '' : ' dns-unproxiable') + '"><label class="switch"><input data-field="proxied" type="checkbox" aria-label="Proxy record ' + n + '"' +
+      (row.proxied ? ' checked' : '') + (proxiable ? '' : ' disabled') + '><span></span></label></td>' +
+    '<td class="dns-remove"><button class="btn dns-remove-btn" type="button" aria-label="Remove record ' + n + '" onclick="dnsRemoveRow(' + index + ')">×</button></td>';
 }
 
 function dnsRenderRows() {
   const body = CLP_ROOT.getElementById('dns-rows');
+  const advanced = CLP_ROOT.getElementById('dns-advanced').checked;
+  CLP_ROOT.getElementById('dns-rows-table').classList.toggle('dns-show-advanced', advanced);
   body.textContent = '';
   dnsRowsState.forEach(function (row, index) {
     const tr = document.createElement('tr');
-    tr.innerHTML = dnsRowCells(row, index);
+    tr.innerHTML = dnsRowCells(row, index, advanced);
     tr.querySelector('[data-field="name"]').value = row.name;
     tr.querySelector('[data-field="content"]').value = row.content;
-    tr.querySelector('[data-field="priority"]').value = row.priority === null || row.priority === undefined ? '' : row.priority;
+    const priority = tr.querySelector('[data-field="priority"]');
+    if (priority) priority.value = row.priority === null || row.priority === undefined ? '' : row.priority;
     tr.addEventListener('input', function (event) { dnsRowChanged(index, event.target, false); });
     tr.addEventListener('change', function (event) { dnsRowChanged(index, event.target, true); });
     tr.addEventListener('focusin', function (event) { if (event.target.matches('input[type="text"], input:not([type])')) dnsLastField = event.target; });
@@ -139,6 +152,7 @@ function dnsAddPreset(select) {
   if (zone.alwaysHttps !== undefined && !form.elements.namedItem('alwaysHttps').value) form.elements.namedItem('alwaysHttps').value = zone.alwaysHttps ? 'on' : 'off';
   if (zone.acmeFullSsl) form.elements.namedItem('acmeFullSsl').checked = true;
   if (zone.webmailFullSsl) form.elements.namedItem('webmailFullSsl').checked = true;
+  dnsSyncProfileSections();
   dnsRenderRows();
   notify('Added the ' + preset.label + ' rows. Edit them as you need.', 'ok');
 }
@@ -177,9 +191,28 @@ function dnsEditProfile(id) {
   }).join('');
   dnsRowsState = profile ? profile.records.map(function (record) { return Object.assign({}, record); }) : [];
   dnsLastField = null;
+  CLP_ROOT.getElementById('dns-advanced').checked = false;
+  CLP_ROOT.getElementById('dns-zone-details').open = false;
+  dnsSyncProfileSections();
   dnsRenderRows();
   CLP_ROOT.getElementById('dns-profile-heading').textContent = profile ? 'Edit ' + profile.name : 'New profile';
   dnsOpen('dns-profile-dialog');
+}
+
+/** Mailcow shows once Mailcow is set up or the profile uses it; the zone's summary follows its fields. */
+function dnsSyncProfileSections() {
+  const form = CLP_ROOT.getElementById('dns-profile-form');
+  const value = function (name) { return form.elements.namedItem(name).value; };
+  CLP_ROOT.getElementById('dns-mailcow-section').hidden = !dnsState.mailcow.url && !form.elements.namedItem('mailcow').checked;
+  const ssl = form.elements.namedItem('ssl');
+  const parts = [];
+  if (value('ssl')) parts.push(ssl.options[ssl.selectedIndex].text);
+  if (value('alwaysHttps')) parts.push('Always HTTPS ' + value('alwaysHttps'));
+  const rules = [form.elements.namedItem('acmeFullSsl').checked && "Let's Encrypt", form.elements.namedItem('webmailFullSsl').checked && 'webmail',
+    value('skipFirewallIps').trim() && 'firewall skip'].filter(Boolean);
+  if (rules.length) parts.push('Rules: ' + rules.join(', '));
+  if (value('createIn')) parts.push('creates missing zones');
+  CLP_ROOT.getElementById('dns-zone-summary').textContent = parts.join(' · ') || 'Left as it is';
 }
 
 function dnsSaveProfile(event) {
@@ -212,6 +245,10 @@ async function dnsDeleteProfile(id) {
     confirmLabel: 'Delete', danger: true,
   });
   if (accepted) dnsPost('/api/profiles/delete', { id: id });
+}
+
+function dnsEnforce(id) {
+  dnsPost('/api/mode', { id: id, mode: 'enforce' });
 }
 
 function dnsSetMode(input, id) {
@@ -465,6 +502,9 @@ function dnsSaveServer(event) {
     ipv6: form.elements.namedItem('ipv6').value.trim(),
   }, CLP_ROOT.getElementById('dns-server-dialog'));
 }
+
+CLP_ROOT.getElementById('dns-zone-details').addEventListener('change', dnsSyncProfileSections);
+CLP_ROOT.getElementById('dns-zone-details').addEventListener('input', dnsSyncProfileSections);
 
 /** A press on the backdrop closes a dialog; a drag that started in a field and ended outside does not. */
 CLP_ROOT.querySelectorAll('dialog').forEach(function (dialog) {
