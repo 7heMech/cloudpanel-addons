@@ -52,8 +52,11 @@ ok "dependencies available"
 
 # The binary asks which addons once it is installed, on the terminal this
 # script was started from: under `curl | bash` its own stdin is the script.
+# It needs one it can open, which /dev/tty's permissions do not show, output
+# to a terminal and one that can redraw, so that is settled before downloading.
+can_ask() { [[ -t 1 && ${TERM:-dumb} != dumb ]] && ( : < /dev/tty ) 2>/dev/null; }
 IFS=',' read -r -a ADDON_LIST <<< "$SELECTED"
-if (( ${#ADDON_LIST[@]} == 0 )) && { (( ASSUME_YES )) || [[ ! -r /dev/tty || ! -w /dev/tty ]]; }; then
+if (( ${#ADDON_LIST[@]} == 0 )) && { (( ASSUME_YES )) || ! can_ask; }; then
   die "no addons selected and no terminal to ask on. Pass --addons=panel-tweaks,maintenance"
 fi
 

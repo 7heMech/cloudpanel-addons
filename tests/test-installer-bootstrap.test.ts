@@ -99,3 +99,30 @@ test("a binary that does not match SHA256SUMS is never run", () => {
   expect(result.events.some((event) => event.startsWith("clp:"))).toBe(false);
   expect(result.output).toContain("checksum mismatch");
 });
+
+// The binary asks on /dev/tty, so the script must know before downloading
+// whether it can. Each case runs under a real pseudo-terminal from `script`.
+test.each([
+  { name: "a terminal", command: "bash $HARNESS", asks: true },
+  { name: "no terminal to open, though output is one", command: "setsid -w bash $HARNESS", asks: false },
+  { name: "output piped elsewhere", command: "bash $HARNESS | cat", asks: false },
+  { name: "a terminal that cannot redraw", command: "TERM=dumb bash $HARNESS", asks: false },
+])("the installer asks only with $name", ({ command, asks }) => {
+  const root = mkdtempSync(`${tmpdir()}/installer-tty-test-`);
+  try {
+    const source = readFileSync(join(import.meta.dir, "..", "install.sh"), "utf8");
+    const canAsk = source.match(/^can_ask\(\) \{.*\}$/m)?.[0];
+    if (!canAsk) throw new Error("can_ask was not found in install.sh");
+    const harness = join(root, "harness.sh");
+    const result = join(root, "result");
+    writeFileSync(harness, `${canAsk}\nif can_ask; then echo yes > "${result}"; else echo no > "${result}"; fi\n`);
+    spawnSync("script", ["-qec", command, "/dev/null"], {
+      env: { ...process.env, TERM: "xterm", HARNESS: harness },
+      stdio: "ignore",
+      timeout: 10_000,
+    });
+    expect(readFileSync(result, "utf8").trim()).toBe(asks ? "yes" : "no");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
