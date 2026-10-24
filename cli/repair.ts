@@ -1,14 +1,15 @@
 // `clp-addons repair`.
 
-import { installedAddons, resolveAddon, migrateAbsorbedAddons } from "./addons";
+import { installedAddons, resolveAddon, migrateOldAddonNames } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
 import { reconcilePhpGuard } from "./php-guard";
 import { runAddonMaintenance, runManagerMaintenance } from "./maintenance";
 import { withOperationLock } from "./operation-lock";
-import { CLOUDFLARE_RECONCILE_TIMER, MANAGER_UNIT, SMTP_RECONCILE_PATH, SYSTEMD_DIR } from "./paths";
+import { conffilesReleased } from "./conffiles";
+import { CLOUDFLARE_RECONCILE_TIMER, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "./paths";
 import {
   ensureAuthHelperReady, ensureDirs, ensurePathWatching, ensureServiceUser, ensureTimerArmed, hardenBackups, installUnits,
-  reconcilePanelIdentity, removeLegacyInstall, removeLegacyUnits, removeLegacyUsers, startUnits,
+  managerSocketProblem, reconcilePanelIdentity, removeLegacyUnits, startUnits,
   unitActive, warnIfPanelSessionUnreadable, writeConfig,
 } from "./provision";
 import { fatal, log, parseFlags, requireRoot } from "./util";
@@ -26,6 +27,12 @@ export async function cmdRepair(argv: string[]): Promise<void> {
 
 async function applyRepair(positional: string[], flags: Record<string, string | true>): Promise<void> {
   const quiet = flags.quiet === true;
+  if (conffilesReleased()) {
+    // An unattended upgrade has the package's own text in Nginx's conffiles;
+    // `apt-hook post` runs repair once it is done.
+    if (!quiet) log.warn("an unattended upgrade is running; repair waits for it to finish");
+    return;
+  }
   if (flags["anchors-only"] === true) {
     // The watcher's fast path: reconcile only what this project injected into
     // panel-owned files. The Nginx proxy belongs here as much as the Twig
@@ -35,11 +42,11 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     // unreachable in between. Both reconcilers no-op when nothing drifted, so
     // this stays cheap enough to run on every template write during an upgrade.
     reconcileAnchors(quiet);
-    if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; run repair after checking site vhosts and global_settings");
+    if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");
     if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
     return;
   }
-  migrateAbsorbedAddons(quiet);
+  migrateOldAddonNames(quiet);
   const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
   const all = installedAddons();
   // An installation with every addon disabled still needs its timer, its Nginx
@@ -51,7 +58,6 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
   }
 
   ensureServiceUser(quiet);
-  removeLegacyInstall(quiet);
   ensureDirs(all);
   // Unattended (timer-driven) reconciliation must not abort just because nobody is
   // currently logged into the panel; unlike install, warn and keep repairing.
@@ -66,20 +72,19 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     hardenBackups(spec, quiet);
   }
   removeLegacyUnits(quiet);
-  removeLegacyUsers(quiet);
   reconcilePanelIdentity(quiet);
   const unitChanges = installUnits(all);
   ensureDirs(all);
-  if (unitChanges.systemd || unitActive(MANAGER_UNIT) !== "active") startUnits();
+  if (unitChanges.systemd || unitActive(MANAGER_UNIT) !== "active" || managerSocketProblem() !== null) startUnits();
   else {
     ensureTimerArmed("clp-addons-reconcile.timer", quiet);
     if (all.some((spec) => spec.name === "cloudflare-ips")) {
       ensureTimerArmed(CLOUDFLARE_RECONCILE_TIMER, quiet);
     }
-    if (all.some((spec) => spec.name === "smtp")) ensurePathWatching(SMTP_RECONCILE_PATH, quiet);
+    if (all.some((spec) => spec.newSites)) ensurePathWatching(NEW_SITES_PATH, quiet);
   }
   reconcileAnchors(quiet);
-  if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; run repair after checking site vhosts and global_settings");
+  if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");
   if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
   reconcilePhpGuard(true, quiet);
   // Runs after the master-vhost reconciliation above, not before: recovering

@@ -4,12 +4,20 @@
 
 The compiled `clp-addons` binary contains the CLI, manager, and all addon code.
 `clp-addons serve` runs as the locked `clp-addons` account and serves enabled
-addons from `/run/clp-addons/manager.sock`. A config file under
+addons from `/run/clp-addons/manager.sock`. It refuses to start outside the unit's cgroup or as
+another account: run by hand, it replaced the live daemon's socket
+with one the auth gateway rejects. `status` reports a socket the account does
+not own, and `repair` restarts the manager when it finds one. A config file under
 `/etc/clp-addons/` enables an addon; disabling it keeps the addon's state.
 
 CloudPanel's master Nginx vhost proxies `/addons/` to the manager socket. The
 manager uses the existing `cloudpanel` session and does not create a separate
 site, hostname, or login.
+
+The manager turns off Bun's idle timeout. Its 10-second default closes a
+connection whose handler is still waiting on the gateway, which a Check now or
+an enforced DNS plan routinely outlasts. Nginx's hour-long read timeout and each
+gateway call's own deadline bound every request instead.
 
 `manager/` holds that process: `server.ts` owns the socket, the request gate
 and the mount dispatch, and `index.ts`, `service.ts` and `views.ts` are the
@@ -25,6 +33,11 @@ systemd units, its manager handler, its privileged action and any repair upkeep
 -- and the catalog derives its config file and state directory from its name, so
 a definition cannot name a file provisioning will not look for.
 
+Repair upkeep runs inside repair's operation lock, so it stays short. Work that
+waits on the network or on a site's own code is queued with `queueAddonPass`
+instead: a transient unit that runs `clp-addons action <addon> <verb>` under a
+runtime bound and is skipped while the previous pass is still running.
+
 The catalog is an explicit list, not filesystem discovery. This ships as one
 binary; a registry that depended on what happened to be on disk could be wrong.
 
@@ -37,12 +50,21 @@ owning the project's path constants imported every addon's target list in order
 to describe them; the injection-target shape now lives in `lib/addon-target.ts`,
 which both sides import.
 
+## The CLI
+
+`clp-addons` with no arguments in a root terminal is an interactive menu:
+addons toggle through the same enable and disable the Addons page runs, and
+status, repair and update run the commands of those names. Without a terminal or
+root it prints the plain overview. Help lists operator commands only. `action`
+is how the gateway runs an addon's root verbs, and `serve`, `smtp-submit` and
+`terminal-pty` are started by systemd, Postfix and the terminal action.
+
 ## Enable and disable apply a delta
 
 A toggle is not an install. Enabling an addon writes that addon's config file,
 creates its state directory, rewrites the managed unit definitions and starts
 whatever those definitions newly introduce -- and nothing else. It does not
-create the service user, probe the auth helper or sweep legacy installs: those
+create the service user or probe the auth helper: those
 answer "has this box ever been set up", which `install`, `update` and `repair`
 ask and a toggle does not. An `enable` hands itself to the full install path
 rather than applying a delta to nothing whenever the unit files, the service
@@ -53,9 +75,9 @@ would otherwise read as a finished install and then start nothing.
 
 A managed definition is rewritten when its text differs, and also when what
 stands at its path is not the plain `0644` file this binary writes -- a
-group-writable unit, or a symlink to a file holding the right text. Rewriting
-unconditionally used to converge that as a side effect, and several managed
-units name no `User=`, so systemd runs what they name as root.
+group-writable unit, or a symlink to a file holding the right text. Comparing
+text alone would leave either in place, and several managed units name no
+`User=`, so systemd runs what they name as root.
 
 `systemctl daemon-reload` runs only when a managed definition was created,
 changed or removed, and a toggle starts only units it created -- never the auth
@@ -135,6 +157,49 @@ Dashboard chart that fits -- is the addon's alone, and a switch, because that is
 the panel's own shape being changed rather than room being made for something an
 addon added.
 
+### Package conffiles
+
+`/etc/nginx/global_settings` (Maintenance Mode) and `/etc/nginx/nginx.conf`
+(System Tweaks) are dpkg conffiles of `nginx-common`. unattended-upgrades holds
+back a package whose modified conffile the upgrade would replace, because nobody
+is there to answer dpkg's prompt, so these edits could keep an Nginx security
+update out. A drop-in on `apt-daily-upgrade.service`, installed with the binary,
+runs `clp-addons apt-hook pre` before each run and `apt-hook post` after it,
+both allowed to fail without stopping the run (`cli/conffiles.ts`).
+
+`pre` acts only on an edited file whose package `apt-cache policy` shows a
+different candidate. It raises `/run/clp-addons/conffiles-released` first, then
+writes the package text back without a reload. Maintenance Mode's block comes
+out only while the rest of the file still matches its recorded baseline, which is
+then forgotten. `post` clears the flag and runs repair, which records what the
+upgrade installed as the new baseline and edits it again. Repair does nothing
+while the flag is up and the service still runs, however long it takes; a flag
+left by a run that stopped without `post` holds nothing off. Only when systemd
+cannot answer does the flag lapse after six hours. Between the two, a reload by
+the Nginx package itself runs the package text: maintenance pages and narrowed
+IP trust are off for the rest of that run. An interactive `apt upgrade` still
+gets dpkg's prompt. `bun tests/integration/integration-conffile-upgrade.ts`
+shows on Debian's real unattended-upgrades that an edited conffile holds the
+package back and a released one is upgraded with its new conffile.
+
+## New sites
+
+An addon that has work for a site the moment it exists declares `newSites` in
+its catalog definition. `clp-addons-new-sites.path` watches
+`/etc/nginx/sites-enabled`, where CloudPanel writes every new site's vhost, and
+its service runs `clp-addons sync-sites`: each installed addon's `newSites`, in
+catalog order, so DNS normally writes a site's records before SMTP Relay binds
+its user. Each gets a 15-second head start rather than waiting for the one
+before it to finish: DNS can wait minutes for its lock behind a fleet check, and
+until SMTP Relay binds the site its mail login is refused. One addon failing
+does not skip the next. CloudPanel commits the site row
+about 200 ms after writing the vhost, so the service runs again 10 seconds
+later, even if the first run failed. The units exist while any installed addon
+declares `newSites`; repair restarts the watcher if it has stopped. It takes no
+operation lock: each addon's work takes its own. Vhost rewrites also wake the
+watcher; when the site set is unchanged, the hooks make no network calls or
+configuration writes.
+
 ## One way to watch a job
 
 `lib/job-stream.ts` owns both job-observation routes: `/api/jobs/:id` polls and
@@ -161,7 +226,7 @@ Panel information is read through `readPanelSnapshot`, which returns the
 snapshot and its age at receipt. A timestamp that cannot be parsed reads as
 infinitely old rather than as `NaN`: every caller compares the age against a
 staleness threshold, and `NaN` fails every comparison, so an unreadable snapshot
-used to look current. What a given age means stays with each addon.
+would look current. What a given age means stays with each addon.
 
 ## Shared interface
 
@@ -194,7 +259,11 @@ bounded by the visual viewport so a phone's collapsing address bar cannot cover
 them. 940px rather than a phone width because a fleet table is five or six
 columns wide: below that the columns are narrower than the hostnames in them and
 a domain wrapped a character at a time. Cell padding comes down from 1200px for
-the same reason. Two-column card and field grids hold until 760px, where the
+the same reason. Instatic's instance and inventory lists and Stager's clone,
+source and promotion lists use the same fleet rows, with labels on secondary
+cells so their meaning survives the hidden table heading. Empty cells disappear
+and the site and type lead each card. Page and form actions wrap within the
+available width. Two-column card and field grids hold until 760px, where the
 tables have already given way. Live enable, disable and update jobs
 put their state, current step and output in the manager card that owns the job,
 with the log auto-expanding as output arrives so the operator can see the live
@@ -203,8 +272,16 @@ card the page does not carry -- an update watched from the index -- takes a card
 of its own under the heading and above the rest, whether the page was drawn
 during the job or a duplicate request told the browser about it, so a job is
 never reported under the action the operator happened to click. The shared
-watcher scopes its updates to that card; a completed job still reloads the page
-so the server remains the source of the result view.
+watcher scopes its updates to that card. A finished job asks the server for the
+page again and swaps in the view it draws, so the server remains the source of
+the result view. A successful update reloads instead: the page's script and
+styles belong to the release it replaced.
+
+Mutations that replace a view return `html` from the renderer used on first
+load. `repaintView` swaps it into `#clp-content`, closes finished dialogs, and
+preserves scroll, focus and disclosure state for elements with stable IDs.
+Addon clients retain their fleet selections and report outcomes with `notify`.
+Failed mutations leave the view intact.
 
 A page reached from a site's tab strip is drawn in site mode instead: the shell
 shows CloudPanel's site information and the applicable site tabs with the addon's
@@ -284,13 +361,10 @@ string built from a shared class name, a script fragment that is a function
 body rather than a program, and a `<script>` element indented to sit inside a
 Twig template.
 
-Three scripts are shared. Every addon page gets the base helpers; the two fleet
-tables also get the site-selection ones, and the two addons whose change is too
-wide to patch into the page get the pair that carries a message across a reload.
-That pair is not in the base: a page that reloads is the exception here, and a
-page whose switches are modes rather than actions must not be handed the means
-to reload itself. Each shared function takes the page's own repaint, because
-what a change redraws is the one thing the addons do not agree on.
+Every addon page gets the shared base helpers, including `repaintView` and
+inline notices. Fleet tables also get site-selection helpers, whose entry
+points take the page's own selection repaint. Pages with background jobs get
+the shared job watcher. Theme initialization runs before styles are painted.
 
 ## Live panel data
 

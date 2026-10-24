@@ -3,13 +3,14 @@
 // the catalog is consulted, because neither is an addon.
 import { dashboardUrl, installedAddons } from "./addons";
 import { reconcileAnchors } from "./reconcile";
+import { cmdMenu } from "./menu";
 import { cmdStatus } from "./status";
 import { cmdInstall } from "./install";
+import { cmdAptHook } from "./apt-hook";
 import { cmdRepair } from "./repair";
 import { applyDisable, applyEnable } from "./toggle";
 import { cmdUninstall } from "./uninstall";
 import { cmdUpdate } from "./update";
-import { mountPath } from "./paths";
 import { ADDONS, ADDON_NAMES } from "./addon-catalog";
 import { CLI_VERSION } from "./release";
 import { installedConfig } from "./provision";
@@ -23,6 +24,7 @@ import { runAuthActionStdin } from "./auth-action";
 import { runManagerAction, type ManagerOps } from "./manager-action";
 import { runSmtpSubmit } from "../addons/smtp/submit";
 import { runTerminalPty } from "../addons/terminal/pty";
+import { runNewSiteWork } from "./maintenance";
 
 /**
  * The privileged half of the three manager verbs.
@@ -46,36 +48,17 @@ export const MANAGER_OPS: ManagerOps = {
 function usage(): void {
   log.plain(`clp-addons ${CLI_VERSION} — CloudPanel Addons
 
-  clp-addons install <addon> [--version=vX.Y.Z] [--skip-attestation] [--local=DIR]
-  clp-addons update [--version=vX.Y.Z] [--skip-attestation]   (alias: upgrade)
+  clp-addons
+  clp-addons install [<addon>...] [--local=DIR]
+  clp-addons update [--version=vX.Y.Z] [--skip-attestation]
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons maintenance <domain> [on|off|status]
-  clp-addons action cloudflare-ips <list|set|policy|reconcile> [options]
-  clp-addons action smtp <list|save-profile|delete-profile|assign|set-default|save-grants|test|reconcile|sync-sites|deactivate>
-  clp-addons action instatic <verb> [options]
-  clp-addons action stager <verb> [options]
-  clp-addons action maintenance <verb> --domain=<domain>
-  clp-addons action git <verb> [--domain=<domain>] [--job=<job>]
-  clp-addons action php-resources <list|site|save-category|delete-category|assign|set-default|reconcile> [--domain=<domain>]
-  clp-addons action panel-tweaks <state|set-tweaks|scan|scan-stream>
-  clp-addons action wp-login <sites|sign-in|remove> [--domain=<domain>]
-  clp-addons action manager <enable|disable|update|reconcile|job|watch-job> [--addon=<addon>] [--id=<job>]
-  clp-addons action terminal session --domain=<domain> --cols=<n> --rows=<n>   (through the gateway only)
-  clp-addons action auth (session id on bounded stdin)
-  clp-addons serve
-  clp-addons smtp-submit -t -i
-  clp-addons terminal-pty   (as a site user, started by the terminal action)
+  clp-addons action system-tweaks state|set-updates|install-updates|set-upload-guard|set-real-ip|set-panel-php
   clp-addons --version
 
-Addons: ${ADDON_NAMES.join(", ")}
-
-Install enables bundled addon code without downloading a release. Use update
-to upgrade the binary, or install --version to explicitly select a release.
-
-The manager is served at ${mountPath("instatic").replace("/instatic", "")} through
-the CloudPanel master vhost and authenticates with the CloudPanel cloudpanel session.`);
+Addons: ${ADDON_NAMES.join(", ")}`);
 }
 
 async function cmdAction(argv: string[]): Promise<number> {
@@ -130,7 +113,8 @@ async function cmdOverview(): Promise<void> {
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
   if (args.length === 0) {
-    await cmdOverview();
+    if (process.stdin.isTTY && process.stdout.isTTY && process.getuid?.() === 0) await cmdMenu();
+    else await cmdOverview();
     return 0;
   }
   const [verb = "help", ...rest] = args;
@@ -139,11 +123,15 @@ async function main(): Promise<number> {
     case "--version":
     case "-v": log.plain(CLI_VERSION); return 0;
     case "install": await cmdInstall(rest); return 0;
-    case "update":
-    case "upgrade": await cmdUpdate(rest); return 0;
-    case "self-update": fatal("self-update is deprecated; use clp-addons update");
+    case "update": await cmdUpdate(rest); return 0;
     case "recon": await runRecon(); return 0;
     case "repair": await cmdRepair(rest); return 0;
+    case "apt-hook": await cmdAptHook(rest); return 0;
+    case "sync-sites":
+      requireRoot("sync-sites");
+      if (rest.length) fatal("sync-sites takes no arguments");
+      await runNewSiteWork(installedAddons());
+      return 0;
     case "status": await cmdStatus(); return 0;
     case "maintenance": await cmdMaintenance(rest); return 0;
     case "uninstall": cmdUninstall(rest); return 0;

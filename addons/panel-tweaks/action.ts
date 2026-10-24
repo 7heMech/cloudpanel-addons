@@ -776,7 +776,12 @@ export async function runPanelTweaksAction(
   }
 }
 
-/** The repair hook checks every fifteen minutes but performs a sweep only when due. */
+/** The repair hook: sweep the disk when due. */
+export async function panelTweaksUpkeep(options: PanelTweaksActionOptions = {}): Promise<string | null> {
+  return scanDiskUsage(options);
+}
+
+/** Checked every fifteen minutes, but a sweep runs only when due. */
 export async function scanDiskUsage(options: PanelTweaksActionOptions = {}): Promise<string | null> {
   const paths = pathsFor(options);
   if (!readTweaks(paths).diskUsage) return null;

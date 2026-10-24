@@ -1,6 +1,6 @@
 // The upkeep `repair` and the reconcile timer run, per addon and for the manager's own job records.
 
-import { type AddonSpec, addonMaintenance } from "./addon-catalog";
+import { type AddonSpec, addonMaintenance, addonNewSites } from "./addon-catalog";
 import { pruneManagerJobs } from "./manager-action";
 import { log } from "./util";
 /**
@@ -24,6 +24,35 @@ export async function runAddonMaintenance(
       log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+}
+
+/** How long one addon's new-site work runs before the next starts beside it. */
+export const NEW_SITE_HEAD_START_MS = 15_000;
+
+/**
+ * What the new-site watcher runs: each installed addon's work for sites
+ * CloudPanel has just created, in catalog order. Each gets a head start rather
+ * than the whole of the one before it, so DNS normally writes first, but DNS
+ * waiting on its lock behind a long fleet check does not keep SMTP Relay from
+ * binding the site's mail login for minutes. One addon failing does not keep
+ * the next from its turn.
+ */
+export async function runNewSiteWork(installed: AddonSpec[], headStartMs = NEW_SITE_HEAD_START_MS): Promise<void> {
+  const running: Promise<void>[] = [];
+  for (const spec of addonNewSites(installed)) {
+    const task = spec.newSites!;
+    const done = (async () => {
+      try {
+        const line = await task.run();
+        if (line) log.ok(`${task.label}: ${line}`);
+      } catch (error) {
+        log.warn(`${task.label} failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    })();
+    running.push(done);
+    await Promise.race([done, Bun.sleep(headStartMs)]);
+  }
+  await Promise.all(running);
 }
 
 /**

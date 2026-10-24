@@ -1,22 +1,23 @@
 // Platform PHP hardening, applied regardless of which addons are enabled.
+// System Tweaks shows it and is the only place to opt out; the opt-out counts
+// only while System Tweaks is enabled.
 //
 // Session upload progress is one of the confirmed consumers of CVE-2026-109619
 // ("php2shell"), is on by default, and needs no session_start(); PHP's advisory
 // names disabling it as the administrative mitigation and recommends keeping it
 // off even after patching, as a hardly-used, hardly-tested feature. This writes
-// that setting on every installed PHP-FPM, the panel's end-of-life 8.1 included,
-// which upstream will not patch. It does not address CVE-2026-109618, whose only
+// that setting on every installed PHP-FPM, including the end-of-life 8.1 the
+// panel runs on unless Panel Tweaks moved it. It does not address CVE-2026-109618, whose only
 // real fix is patched PHP; see docs/decisions/security.md.
 
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "../lib/atomic-write";
-import { PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_ROOT } from "./paths";
+import { CONFIG_DIR, PANEL_FPM_UNIT, PHP_FPM_BIN_DIR, PHP_GUARD_INI_NAME, PHP_ROOT, ROOT_UID, STATE_DIR } from "./paths";
 import { errorMessage, withRecoveryFailures } from "./nginx-transaction";
 import { unitActive } from "./provision";
 import { log, tryRun } from "./util";
 
-const INI_NAME = "99-clp-addons-upload-progress.ini";
 const INI_BODY = "; Managed by clp-addons: CVE-2026-109619 session upload-progress mitigation\nsession.upload_progress.enabled = Off\n";
 const VERSION_RE = /^[0-9]+\.[0-9]+$/;
 
@@ -26,13 +27,19 @@ export interface PhpGuardPaths {
   panelFpmUnit: string;
   /** The uid a drop-in must belong to for its contents to be trusted. */
   rootUid: number;
+  /** System Tweaks' config file: the opt-out below counts only while it exists. */
+  optOutConfig: string;
+  /** System Tweaks' settings, where `uploadProgressGuard: false` is the opt-out. */
+  optOutSettings: string;
 }
 
 export const DEFAULT_PHP_GUARD_PATHS: PhpGuardPaths = {
   phpRoot: PHP_ROOT,
   fpmBinDir: PHP_FPM_BIN_DIR,
   panelFpmUnit: PANEL_FPM_UNIT,
-  rootUid: 0,
+  rootUid: ROOT_UID,
+  optOutConfig: `${CONFIG_DIR}/system-tweaks.conf`,
+  optOutSettings: `${STATE_DIR}/system-tweaks/settings.json`,
 };
 
 export interface PhpGuardOptions {
@@ -56,7 +63,7 @@ function fpmTargets(paths: PhpGuardPaths): FpmTarget[] {
     .sort()
     .map((version) => ({
       version,
-      path: join(paths.phpRoot, version, "fpm", "conf.d", INI_NAME),
+      path: join(paths.phpRoot, version, "fpm", "conf.d", PHP_GUARD_INI_NAME),
       present: existsSync(join(paths.fpmBinDir, `php-fpm${version}`)),
     }));
 }
@@ -75,11 +82,26 @@ function current(path: string, rootUid: number): string | null {
   return readFileSync(path, "utf8");
 }
 
+/** Whether an operator turned the guard off in System Tweaks, which must still be enabled. */
+export function phpGuardOptedOut(options: PhpGuardOptions = {}): boolean {
+  const paths = { ...DEFAULT_PHP_GUARD_PATHS, ...options.paths };
+  if (!existsSync(paths.optOutConfig)) return false;
+  const text = current(paths.optOutSettings, paths.rootUid);
+  if (text === null) return false;
+  try {
+    return (JSON.parse(text) as { uploadProgressGuard?: unknown }).uploadProgressGuard === false;
+  } catch {
+    return false;
+  }
+}
+
 export interface PhpGuardStatus {
   /** Versions whose FPM binary is installed and whose drop-in is in place. */
   guarded: string[];
   /** Installed-FPM versions still missing the drop-in. */
   unguarded: string[];
+  /** Turned off in System Tweaks, so a missing drop-in is wanted. */
+  optedOut: boolean;
 }
 
 export function inspectPhpGuard(options: PhpGuardOptions = {}): PhpGuardStatus {
@@ -90,13 +112,13 @@ export function inspectPhpGuard(options: PhpGuardOptions = {}): PhpGuardStatus {
     if (!target.present) continue;
     (current(target.path, paths.rootUid) === INI_BODY ? guarded : unguarded).push(target.version);
   }
-  return { guarded, unguarded };
+  return { guarded, unguarded, optedOut: phpGuardOptedOut(options) };
 }
 
 /**
  * Installs or removes the drop-in on every PHP-FPM, testing and reloading each
  * one it changed. Returns how many files changed. Reloads the panel's own FPM
- * too, since it scans the installed 8.1 `conf.d`. Failures restore written files
+ * too, since it scans the `conf.d` of whichever version runs it. Failures restore written files
  * and reload services that may have picked up the change.
  */
 export function reconcilePhpSessionGuard(install: boolean, options: PhpGuardOptions = {}): number {
@@ -152,9 +174,28 @@ export function reconcilePhpSessionGuard(install: boolean, options: PhpGuardOpti
   return changes.length;
 }
 
-export function reconcilePhpGuard(install: boolean, quiet = false): void {
-  const changed = reconcilePhpSessionGuard(install);
+/**
+ * After a disable, or an uninstall that leaves the binary: System Tweaks'
+ * opt-out may just have stopped counting. The addon is already gone, so a
+ * failure warns and leaves the guard to the repair timer.
+ */
+export function settlePhpGuard(): void {
+  try {
+    reconcilePhpGuard(true);
+  } catch (error) {
+    log.warn(`PHP upload-progress guard not reconciled, repair will retry: ${errorMessage(error)}`);
+  }
+}
+
+/** `install` is whether any addon is installed; System Tweaks' opt-out can still keep it off. */
+export function reconcilePhpGuard(install: boolean, quiet = false, options: PhpGuardOptions = {}): void {
+  const wanted = install && !phpGuardOptedOut(options);
+  const changed = reconcilePhpSessionGuard(wanted, options);
   if (changed > 0 && !quiet) {
-    log.ok(install ? `PHP upload-progress disabled (${changed} updated)` : `PHP upload-progress guard removed (${changed} updated)`);
+    log.ok(wanted
+      ? `PHP upload-progress disabled (${changed} updated)`
+      : install
+        ? `PHP upload-progress guard off in System Tweaks (${changed} updated)`
+        : `PHP upload-progress guard removed (${changed} updated)`);
   }
 }

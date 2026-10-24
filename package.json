@@ -1,6 +1,6 @@
 {
   "name": "cloudpanel-addons",
-  "version": "1.5.2",
+  "version": "2.0.0",
   "packageManager": "bun@1.4.3",
   "devDependencies": {
     "@types/bun": "latest"
@@ -17,11 +17,14 @@
     "test": "bun test --isolate --max-concurrency=1",
     "test:app": "bun test ./tests/test-app.test.ts",
     "test:delete": "bun test ./tests/test-delete.test.ts",
-    "test:inject": "bun test ./tests/test-inject.test.ts",
-    "test:installer": "bun tests/integration/integration-installer-picker.ts"
+    "test:inject": "bun test ./tests/test-inject.test.ts"
   },
   "type": "module",
   "dependencies": {
+    "@sigstore/bundle": "^5.0.0",
+    "@sigstore/protobuf-specs": "^0.5.2",
+    "@sigstore/tuf": "^5.0.0",
+    "@sigstore/verify": "^4.1.2",
     "tldts": "^7.4.18"
   }
 }

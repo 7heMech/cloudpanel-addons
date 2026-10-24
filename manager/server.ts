@@ -1,17 +1,19 @@
 // The long-lived process behind `clp-addons serve`: one Unix socket, one
 // request gate, and every addon mounted behind it.
 import type { Server } from "bun";
-import { chmodSync, chownSync, existsSync, unlinkSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, readFileSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { userInfo } from "node:os";
 import { ADDONS, ADDON_NAMES, addonHandler } from "../cli/addon-catalog";
-import { PANEL_GROUP, SOCKET_PATH } from "../cli/paths";
+import { MANAGER_UNIT, PANEL_GROUP, SERVICE_USER, SOCKET_PATH } from "../cli/paths";
 import { CLI_VERSION } from "../cli/release";
-import { log } from "../cli/util";
+import { fatal, log } from "../cli/util";
 import { jsonResponse, newCsrfToken } from "../lib/app-http";
 import { splitMount } from "../lib/mount";
 import { adminGate, authenticateRequest } from "../lib/sso-auth";
 import { checkCliUpdate } from "../lib/update-check";
 import { GIT_HOOK_PREFIX, handleGitHook } from "../addons/git/app/hook";
+import { SIGN_IN_PREFIX, handleSignIn } from "../addons/security-keys/app/sign-in";
 import { handleManagerRoute } from "./index";
 import { latestManagerJobView } from "./service";
 import { indexPage, updatePage } from "./views";
@@ -57,12 +59,22 @@ function mountedAddons(): string[] {
  * get from an addon page, and reads nothing. Panel Tweaks' state route is one
  * because the page it enhances is CloudPanel's own Sites page, which every
  * panel user sees; the action narrows the reply to the rows that page would
- * already have drawn for the caller.
+ * already have drawn for the caller. DNS's provision route is called from the
+ * page a new site lands on, by whoever created it; the action refuses a site
+ * that is not the caller's and answers with readiness only. Security Keys'
+ * routes are the caller's own keys, managed from CloudPanel's Security page;
+ * the gateway reads whose they are from the session itself.
  */
 const SELF_SCOPED_ROUTES = new Set([
-  "POST /wp-login/api/sign-in",
-  "GET /wp-login/api/session",
+  "POST /wp-tools/api/sign-in",
+  "GET /wp-tools/api/session",
   "GET /panel-tweaks/api/panel",
+  "GET /dns/api/session",
+  "POST /dns/api/provision",
+  "GET /security-keys/api/keys",
+  "POST /security-keys/api/register-options",
+  "POST /security-keys/api/register",
+  "POST /security-keys/api/remove",
 ]);
 
 /**
@@ -82,6 +94,13 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
   if (req.method === "POST" && path.startsWith(GIT_HOOK_PREFIX) && mountedAddons().includes("git")) {
     const delivery = await handleGitHook(req, path);
     if (delivery) return delivery;
+  }
+
+  // Passkey sign-in, from the login page: there is no session yet, and the
+  // key's signature, checked as root, is the credential.
+  if (path.startsWith(SIGN_IN_PREFIX) && mountedAddons().includes("security-keys")) {
+    const signIn = await handleSignIn(req, path);
+    if (signIn) return signIn;
   }
 
   // Nothing else is answered before this, not even the liveness probe: a route
@@ -147,6 +166,14 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
  * continues or an error escapes.
  */
 export async function cmdServe(): Promise<never> {
+  // Anything else replaces the live daemon's socket with one the auth gateway
+  // will not answer for, which takes every addon page down until a restart.
+  // The unit's cgroup is set by systemd, where an environment variable is not.
+  const cgroups = readFileSync("/proc/self/cgroup", "utf-8").split("\n");
+  const inUnit = cgroups.some((line) => line.endsWith(`/${MANAGER_UNIT}`));
+  if (!inUnit || userInfo().username !== SERVICE_USER) {
+    fatal(`'serve' runs only as the ${MANAGER_UNIT} unit; to restart the manager: systemctl restart ${MANAGER_UNIT}`);
+  }
   const socketDir = SOCKET_PATH.slice(0, SOCKET_PATH.lastIndexOf("/"));
   if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH);
   const prevUmask = process.umask(0o007);
@@ -157,6 +184,11 @@ export async function cmdServe(): Promise<never> {
       // Bun renders its own error page, stack trace included, unless NODE_ENV
       // is production, and the unit sets no NODE_ENV.
       development: false,
+      // Bun's 10-second default drops a request whose gateway call takes
+      // longer; Nginx and each call's own deadline bound the wait instead.
+      // Its types offer idleTimeout to TCP servers only, and per-request
+      // server.timeout() does not reach a Unix socket, but this does.
+      ...({ idleTimeout: 0 } as object),
       error(error) {
         console.error("[clp-addons] request failed:", error);
         return jsonResponse({ ok: false, error: "internal error" }, { status: 500 });

@@ -44,7 +44,7 @@ export function dashboardView(state: CloudflareState): string {
 
   return `
     <div class="page-heading">
-      <div><h1>Cloudflare IP access</h1><p>Control CloudPanel's “Allow traffic from Cloudflare only” setting for every site.</p></div>
+      <div><h1>Cloudflare IP Access</h1><p>Control CloudPanel's “Allow traffic from Cloudflare only” setting for every site.</p></div>
     </div>
     <div class="card fleet-card">
       <div>

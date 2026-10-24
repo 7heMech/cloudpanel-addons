@@ -67,7 +67,7 @@ Postfix would refuse, so the mail still goes out under its login.
 When it cannot apply a rule (no rule file, an untrusted one, unknown flags, or a
 message it cannot parse), it passes the message to `/usr/sbin/sendmail` with the
 original arguments, and Postfix still enforces the envelope. The panel's own
-PHP-FPM reads the 8.1 conf.d and passes through this way. Laravel and Symfony
+PHP-FPM reads its version's conf.d and passes through this way. Laravel and Symfony
 sendmail transports run `sendmail -bs` themselves and never reach the wrapper.
 
 Other apps run sendmail themselves, often by name, as Nodemailer does. The
@@ -93,14 +93,12 @@ keeps the policy; enabling applies it again.
 
 ## New sites
 
-`clp-addons-smtp-reconcile.path` watches `/etc/nginx/sites-enabled`, where
-CloudPanel writes every new site's vhost. Its service runs `sync-sites`, which
-does nothing unless CloudPanel's sites have changed since the last run; then it
-binds new site users, puts new sites in the default profile and drops deleted
-sites. CloudPanel commits the site row about 200 ms after writing the vhost, so
-the service runs it again 10 seconds later, even if the first run failed. Repair
-runs the full reconcile, which also undoes drift, every 15 minutes, and restarts
-the watcher if it has stopped.
+SMTP's `sync-sites` runs from the shared new-site watcher
+(see [Platform integration](platform.md#new-sites)), after DNS, or after
+fifteen seconds if DNS is still waiting. It does nothing
+unless CloudPanel's sites have changed since the last run; then it binds new
+site users, puts new sites in the default profile and drops deleted sites.
+Repair runs the full reconcile, which also undoes drift, every 15 minutes.
 
 ## Limits
 

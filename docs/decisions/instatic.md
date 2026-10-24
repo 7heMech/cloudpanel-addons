@@ -16,6 +16,11 @@ stream. Installation and addon settings remain on the administrator's manager
 pages. Image selection is limited to exact versions of the fixed Instatic
 registry image; callers cannot supply container commands or mount paths.
 
+Lifecycle actions, updates and deletion return dashboard HTML from the same
+renderer as the first load, and the page repaints in place and reports the
+outcome. A rolled-back update shows its container logs. A finished creation job
+repaints its result view.
+
 ## Instance model
 
 Each site is a CloudPanel reverse proxy backed by a Docker container bound to
@@ -49,11 +54,10 @@ when they do not start with a letter.
 Instatic declares `requiresUnits: ["docker"]` (`addons/instatic/addon.ts`).
 `clp-addons install instatic` / `enable instatic` -- whether run from the CLI
 or triggered from the Addons UI -- provision Docker themselves when it is
-missing, the same way `install.sh --install-docker` does for a fresh host:
-download `get.docker.com` and run it, then `systemctl enable --now docker`
-(`ensureRequiredUnits` in `cli/provision.ts`). Enabling instatic never fails
-just because Docker was never installed; it only fails if that provisioning
-itself does not bring the unit up.
+missing: download `get.docker.com` and run it, then `systemctl enable --now
+docker` (`ensureRequiredUnits` in `cli/provision.ts`). Enabling instatic
+never fails just because Docker was never installed; it only fails if that
+provisioning itself does not bring the unit up.
 
 ## Storage and replacement
 

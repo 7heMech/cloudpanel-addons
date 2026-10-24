@@ -5,12 +5,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   ANCHOR_SERVICE, CLI_BIN, CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, DISTRO_NGINX_SITES_DIR,
-  SMTP_RECONCILE_PATH, SMTP_RECONCILE_SERVICE,
-  CONFIG_DIR, LIBEXEC_DIR, LEGACY_UNITS, INSTATIC_BACKUP_CRON,
-  AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LEGACY_USERS, LOCK_DIR, MANAGER_UNIT,
+  NEW_SITES_PATH, NEW_SITES_SERVICE,
+  CONFIG_DIR, LIBEXEC_DIR, INSTATIC_BACKUP_CRON, LEGACY_UNITS,
+  AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LOCK_DIR, MANAGER_UNIT,
   PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
-  SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH,
+  SOCKET_PATH, SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH,
+  APT_UPGRADE_DROPIN,
 } from "./paths";
 import { MAINTENANCE_INCLUDE_PATH } from "./maintenance-vhosts";
 import { ADDONS, ADDON_NAMES, templateWatchPaths, type AddonSpec } from "./addon-catalog";
@@ -19,10 +20,6 @@ import { panelUserUid } from "../lib/sso-auth";
 import { fatal, log, run, tryRun, writeAtomic } from "./util";
 
 
-const LEGACY_MANAGER_AUTH = `${CONFIG_DIR}/manager-auth`;
-const LEGACY_PLATFORM_CONFIG = `${CONFIG_DIR}/platform.conf`;
-const LEGACY_SITE_MARKER = `${STATE_DIR}/.site-created-by-addons`;
-const LEGACY_LIBRARY_DIR = "/usr/local/lib/clp-addons";
 const BACKUP_DIR = "/var/backups/clp-addons";
 
 export function instaticBackupCron(): string {
@@ -357,53 +354,6 @@ export function ensureServiceUser(
   }
 }
 
-export function removeLegacyUsers(quiet = false): void {
-  for (const user of LEGACY_USERS) {
-    if (!tryRun("id", ["-u", user]).ok) continue;
-    tryRun("gpasswd", ["-d", user, "docker"]);
-    rmSync(`/etc/sudoers.d/clp-addon-${user}`, { force: true });
-    const result = tryRun("userdel", [user]);
-    if (!result.ok && !quiet) log.warn(`could not remove legacy user ${user}: ${result.out}`);
-  }
-}
-
-export function removeLegacyInstall(quiet = false): void {
-  if (existsSync(LEGACY_SITE_MARKER)) {
-    const domain = readFileSync(LEGACY_SITE_MARKER, "utf-8").trim();
-    const validDomain = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(domain);
-    if (validDomain) {
-      const result = tryRun("clpctl", ["site:delete", `--domainName=${domain}`, "--force"]);
-      if (result.ok) {
-        if (!quiet) log.ok(`removed the legacy manager site ${domain}`);
-        rmSync(LEGACY_SITE_MARKER, { force: true });
-      } else if (!quiet) {
-        log.warn(`could not remove the legacy manager site ${domain}: ${result.out}`);
-      }
-    } else {
-      rmSync(LEGACY_SITE_MARKER, { force: true });
-    }
-  }
-
-  for (const path of [LEGACY_MANAGER_AUTH, LEGACY_PLATFORM_CONFIG]) rmSync(path, { force: true });
-  for (const path of [
-    `${LEGACY_LIBRARY_DIR}/releases`,
-    `${LEGACY_LIBRARY_DIR}/current`,
-    `${LEGACY_LIBRARY_DIR}/gh`,
-  ]) rmSync(path, { recursive: true, force: true });
-  try {
-    for (const entry of readdirSync(LEGACY_LIBRARY_DIR)) {
-      if (entry.startsWith("clp-action-")) rmSync(`${LEGACY_LIBRARY_DIR}/${entry}`, { force: true });
-    }
-  } catch {
-    // The legacy directory is optional on a fresh installation.
-  }
-  tryRun("rmdir", [LEGACY_LIBRARY_DIR]);
-}
-
-function removeLegacySudoers(): void {
-  for (const name of ADDON_NAMES) rmSync(`/etc/sudoers.d/clp-addon-${name}`, { force: true });
-}
-
 export function ensurePanelSessionReadable(
   commands: ProvisionCommandRunner = { run, tryRun },
   sessionDir = SESSION_DIR,
@@ -562,30 +512,16 @@ export function hardenBackups(spec: AddonSpec, quiet = false): void {
 }
 
 /**
- * Record who the panel is, and scrub anything an older install left behind.
- *
- * This used to install a sudoers rule, and was called `installSudoers` long
- * after it had stopped doing that: the root gateway daemon replaced sudo
- * entirely, so the manager holds no sudo privileges at all and there is no rule
- * to write. What is left is the panel identity file the root action binary
- * reads to refuse operating on the panel's own hostname, plus the removal of
- * any `/etc/sudoers.d` drop-in a pre-gateway version of this project installed.
- * That removal has to keep happening for as long as an upgrade from one of
- * those versions is possible; the name it was hiding under did not.
+ * Record who the panel is: the root action binary reads this to refuse
+ * operating on the panel's own hostname.
  */
 export function reconcilePanelIdentity(quiet = false, specs: AddonSpec[] = installedAddonSpecs()): void {
-  removeSudoers();
   if (specs.length > 0) {
     ensurePanelIdentity(quiet);
   } else {
     rmSync(PANEL_IDENTITY_PATH, { force: true });
   }
   if (!quiet) log.ok("panel identity reconciled; the manager dispatches via the root gateway and holds no sudo rule");
-}
-
-export function removeSudoers(): void {
-  rmSync("/etc/sudoers.d/clp-addons", { force: true });
-  removeLegacySudoers();
 }
 
 function configBody(spec: AddonSpec): string {
@@ -770,30 +706,31 @@ WantedBy=timers.target
 }
 
 /**
- * New sites need SMTP Relay quickly: their login is refused any sender but its
+ * New sites need DNS and SMTP Relay quickly: DNS before automatic SSL asks for
+ * a certificate, and SMTP because a site's login is refused any sender but its
  * bare name until the sender map lists it. CloudPanel writes a vhost for every
  * new site, but commits the site row about 200 ms later, so the sync runs
  * again shortly after to catch a row that was not there yet. A vhost write
  * that adds or removes no site changes nothing.
  */
-export function smtpReconcileUnits(): { service: string; path: string } {
+export function newSiteUnits(): { service: string; path: string } {
   return {
     service: `[Unit]
-Description=Apply SMTP Relay to new CloudPanel sites
-ConditionPathExists=${ADDONS.smtp!.configFile}
+Description=Apply addons to new CloudPanel sites
 
 [Service]
 Type=oneshot
-ExecStart=-${CLI_BIN} action smtp sync-sites
+TimeoutStartSec=15min
+ExecStart=-${CLI_BIN} sync-sites
 ExecStart=/bin/sleep 10
-ExecStart=${CLI_BIN} action smtp sync-sites
+ExecStart=${CLI_BIN} sync-sites
 `,
     path: `[Unit]
-Description=Watch for new CloudPanel sites that SMTP Relay must bind
+Description=Watch for new CloudPanel sites
 
 [Path]
 PathChanged=${DISTRO_NGINX_SITES_DIR}
-Unit=${SMTP_RECONCILE_SERVICE}
+Unit=${NEW_SITES_SERVICE}
 
 [Install]
 WantedBy=paths.target
@@ -833,8 +770,8 @@ export interface UnitChanges {
   reconcile: boolean;
   /** The Cloudflare timer and service were added or removed by this pass. */
   cloudflare: "added" | "removed" | null;
-  /** The SMTP Relay new-site watcher was added or removed by this pass. */
-  smtp: "added" | "removed" | null;
+  /** The shared new-site watcher was added or removed by this pass. */
+  newSites: "added" | "removed" | null;
   /** The auth socket or service definition differs. */
   auth: boolean;
   /** The Instatic backup cron file was created or removed. */
@@ -895,6 +832,15 @@ function syncAddonUnits(enabled: boolean, trigger: string, units: [string, strin
   return units.map(([name]) => removeManaged(`${SYSTEMD_DIR}/${name}`)).some(Boolean) ? "removed" : null;
 }
 
+/** See conffiles.ts: unattended-upgrades must never hold Nginx back over an edit of ours. */
+export function aptUpgradeDropIn(): string {
+  return `# clp-addons: Nginx conffiles get their package text back while unattended-upgrades runs.
+[Service]
+ExecStartPre=-${CLI_BIN} apt-hook pre
+ExecStopPost=-${CLI_BIN} apt-hook post
+`;
+}
+
 export function installUnits(specs: AddonSpec[]): UnitChanges {
   const cron = reconcileInstaticBackupCron(specs.some((spec) => spec.name === "instatic"));
   const units = reconcileUnits();
@@ -906,6 +852,7 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
     writeManaged(`${SYSTEMD_DIR}/${RECONCILE_TIMER}`, units.timer),
     writeManaged(`${SYSTEMD_DIR}/${RECONCILE_PATH}`, units.path),
     writeManaged(`${SYSTEMD_DIR}/${ANCHOR_SERVICE}`, units.anchor),
+    writeManaged(`${SYSTEMD_DIR}/${APT_UPGRADE_DROPIN}`, aptUpgradeDropIn()),
   ];
   const reconcileChanged = reconcileWrites.some(Boolean);
 
@@ -913,9 +860,9 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
   const cloudflare = syncAddonUnits(specs.some((spec) => spec.name === "cloudflare-ips"), CLOUDFLARE_RECONCILE_TIMER, [
     [CLOUDFLARE_RECONCILE_SERVICE, cloudflareUnits.service], [CLOUDFLARE_RECONCILE_TIMER, cloudflareUnits.timer],
   ]);
-  const smtpUnits = smtpReconcileUnits();
-  const smtp = syncAddonUnits(specs.some((spec) => spec.name === "smtp"), SMTP_RECONCILE_PATH, [
-    [SMTP_RECONCILE_SERVICE, smtpUnits.service], [SMTP_RECONCILE_PATH, smtpUnits.path],
+  const siteUnits = newSiteUnits();
+  const newSites = syncAddonUnits(specs.some((spec) => spec.newSites), NEW_SITES_PATH, [
+    [NEW_SITES_SERVICE, siteUnits.service], [NEW_SITES_PATH, siteUnits.path],
   ]);
 
   const auth = authUnits();
@@ -923,16 +870,15 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
     writeManaged(`${SYSTEMD_DIR}/${AUTH_SOCKET_UNIT}`, auth.socket),
     writeManaged(`${SYSTEMD_DIR}/${AUTH_SERVICE_UNIT}`, auth.service),
   ];
-  const legacyTemplate = removeManaged(`${SYSTEMD_DIR}/clp-addons-auth@.service`);
 
   const changes: UnitChanges = {
     manager,
     reconcile: reconcileChanged,
     cloudflare,
-    smtp,
+    newSites,
     auth: authWrites.some(Boolean),
     cron,
-    systemd: manager || reconcileChanged || cloudflare !== null || smtp !== null || authWrites.some(Boolean) || legacyTemplate,
+    systemd: manager || reconcileChanged || cloudflare !== null || newSites !== null || authWrites.some(Boolean),
   };
   // systemd only needs telling when a definition it reads actually moved. The
   // cron file is not systemd's, so it does not count towards this.
@@ -960,9 +906,9 @@ export function applyToggleUnits(changes: UnitChanges): void {
     run("systemctl", ["enable", CLOUDFLARE_RECONCILE_TIMER]);
     run("systemctl", ["restart", CLOUDFLARE_RECONCILE_TIMER]);
   }
-  if (changes.smtp === "added") {
-    run("systemctl", ["enable", SMTP_RECONCILE_PATH]);
-    run("systemctl", ["restart", SMTP_RECONCILE_PATH]);
+  if (changes.newSites === "added") {
+    run("systemctl", ["enable", NEW_SITES_PATH]);
+    run("systemctl", ["restart", NEW_SITES_PATH]);
   }
 }
 
@@ -1017,9 +963,9 @@ export function startUnits(options: StartUnitsOptions = {}): void {
     run("systemctl", ["enable", CLOUDFLARE_RECONCILE_TIMER]);
     run("systemctl", ["restart", CLOUDFLARE_RECONCILE_TIMER]);
   }
-  if (existsSync(`${SYSTEMD_DIR}/${SMTP_RECONCILE_PATH}`)) {
-    run("systemctl", ["enable", SMTP_RECONCILE_PATH]);
-    run("systemctl", ["restart", SMTP_RECONCILE_PATH]);
+  if (existsSync(`${SYSTEMD_DIR}/${NEW_SITES_PATH}`)) {
+    run("systemctl", ["enable", NEW_SITES_PATH]);
+    run("systemctl", ["restart", NEW_SITES_PATH]);
   }
   ensureTimerArmed(RECONCILE_TIMER);
 }
@@ -1027,20 +973,46 @@ export function startUnits(options: StartUnitsOptions = {}): void {
 export function stopUnits(keepShared = false): void {
   if (keepShared) return;
   reconcileInstaticBackupCron(false);
-  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, CLOUDFLARE_RECONCILE_TIMER, SMTP_RECONCILE_PATH,
+  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, CLOUDFLARE_RECONCILE_TIMER, NEW_SITES_PATH,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     tryRun("systemctl", ["disable", "--now", unit]);
   }
   for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE,
-    CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, SMTP_RECONCILE_SERVICE, SMTP_RECONCILE_PATH,
-    AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, "clp-addons-auth@.service"]) {
+    CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, NEW_SITES_SERVICE, NEW_SITES_PATH,
+    AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     rmSync(`${SYSTEMD_DIR}/${unit}`, { force: true });
   }
+  rmSync(`${SYSTEMD_DIR}/${APT_UPGRADE_DROPIN}`, { force: true });
   tryRun("systemctl", ["daemon-reload"]);
 }
 
 export function unitActive(unit: string): string {
   return tryRun("systemctl", ["is-active", unit]).out || "unknown";
+}
+
+/**
+ * Why the manager socket is not the one the unit serves, or null when it is.
+ * A `serve` run by hand left a root-owned socket behind while the unit kept
+ * running on the one it had replaced, so ownership is part of the answer.
+ */
+export function managerSocketProblem(): string | null {
+  let socket: ReturnType<typeof lstatSync>;
+  try {
+    socket = lstatSync(SOCKET_PATH);
+  } catch {
+    return "missing";
+  }
+  const mode = socket.mode & 0o777;
+  const details = `mode ${mode.toString(8).padStart(4, "0")}, owner ${socket.uid}:${socket.gid}`;
+  if (!socket.isSocket()) return `not a socket (${details})`;
+  if (mode !== 0o660) return `not ready (${details}; expected mode 0660)`;
+  const serviceUid = tryRun("id", ["-u", SERVICE_USER]);
+  if (!serviceUid.ok) return `not ready (${details}; ${SERVICE_USER} has no uid)`;
+  if (String(socket.uid) !== serviceUid.out) return `not ready (${details}; expected owner ${SERVICE_USER})`;
+  // The panel's Nginx reaches the socket through its group.
+  const panelGid = tryRun("getent", ["group", PANEL_GROUP]).out.split(":")[2] ?? "";
+  if (String(socket.gid) !== panelGid) return `not ready (${details}; expected group ${PANEL_GROUP})`;
+  return null;
 }
 
 export function unitPid(unit: string): string | null {
@@ -1088,12 +1060,14 @@ export function purgeTwigCache(): void {
 }
 
 export function removeLegacyUnits(quiet = false): void {
+  let removed = false;
   for (const unit of LEGACY_UNITS) {
     const path = `${SYSTEMD_DIR}/${unit}`;
     if (!existsSync(path)) continue;
     if (!quiet) log.warn(`removing legacy unit ${unit}`);
     tryRun("systemctl", ["disable", "--now", unit]);
     rmSync(path, { force: true });
+    removed = true;
   }
-  removeLegacySudoers();
+  if (removed) run("systemctl", ["daemon-reload"]);
 }

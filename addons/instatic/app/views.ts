@@ -97,7 +97,7 @@ export function dashboardView(
     .map((i) => {
       const missing = isInstanceMissing(i, snapshotAge, panelSites, snapshotTakenAt);
       return `<tr>
-  <td>
+  <td class="site-cell wide-cell">
     ${
       missing
         ? `<span class="mono">${esc(i.domain)}</span>`
@@ -105,16 +105,16 @@ export function dashboardView(
     }
     ${missing ? '<div class="hint">CloudPanel site deleted. Delete here to archive and clean up the instance.</div>' : ''}
   </td>
-  <td class="mono">127.0.0.1:${esc(i.port)}</td>
-  <td>
+  <td class="mono" data-label="Local port">127.0.0.1:${esc(i.port)}</td>
+  <td data-label="Version">
     <span class="badge">${esc(i.tag)}</span>
     ${behind(i.tag) ? `<span class="badge behind" title="${esc(latest)} is available">${esc(latest)} available</span>` : ""}
   </td>
-  <td>
+  <td data-label="State">
     <span class="badge ${stateClass(i.state)}">${esc(i.state)}</span>
     ${missing ? '<span class="badge" style="color:var(--bad);border-color:var(--bad);margin-left:0.25rem;">deleted</span>' : ''}
   </td>
-  <td class="action-cell"><details class="row-actions"><summary>Manage</summary><div class="actions">
+  <td class="action-cell wide-cell" data-label="Actions"><details id="instance-actions-${esc(i.domain)}" class="row-actions"><summary>Manage</summary><div class="actions">
     ${
       i.state === "running"
         ? `<button class="btn" onclick="act('${escJs(i.domain)}','stop')">Stop</button>`
@@ -164,25 +164,25 @@ export function dashboardView(
   ${
     instances.length === 0
       ? `<div class="empty">No Instatic instances yet. <a href="${BASE}/new">Create one</a>.</div>`
-      : `<table>
+      : `<table class="fleet-table">
     <thead><tr><th scope="col">Site</th><th scope="col">Local port</th><th scope="col">Version</th><th scope="col">State</th><th scope="col" class="action-cell">Actions</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`
   }
 </div>
 
-<details class="card site-inventory">
+<details id="site-inventory" class="card site-inventory">
   <summary>
     All CloudPanel sites on this server (${panelSites.length})
   </summary>
   <p class="hint">Check whether a hostname is already in use before creating an instance.</p>
-  <div class="table-scroll"><table>
+  <div class="table-scroll"><table class="fleet-table">
     <thead><tr><th>Domain</th><th>Type</th><th>Site user</th></tr></thead>
     <tbody>${
       panelSites.length === 0
         ? `<tr><td colspan="3" class="empty">${snapshotAge > 3600 ? "Site inventory is unavailable." : "No CloudPanel sites found."}</td></tr>`
         : panelSites
-            .map((s) => `<tr><td>${esc(s.domain)}</td><td><span class="badge">${esc(s.type)}</span></td><td class="mono">${esc(s.user)}</td></tr>`)
+            .map((s) => `<tr><td class="site-cell">${esc(s.domain)}</td><td class="type-cell">${esc(s.type)}</td><td class="mono" data-label="Site user">${esc(s.user)}</td></tr>`)
             .join("")
     }</tbody>
   </table></div>

@@ -4,14 +4,16 @@
 
 import { installedAddons, resolveAddon } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
-import { reconcilePhpGuard } from "./php-guard";
-import { removeWpLogin } from "../addons/wp-login/action";
+import { requireMainwpSettled } from "../addons/wp-tools/mainwp";
+import { withFileLockSync } from "./action-common";
+import { reconcilePhpGuard, settlePhpGuard } from "./php-guard";
+import { removeWpLogin, DEFAULT_WP_TOOLS_PATHS } from "../addons/wp-tools/action";
 import { type AddonSpec } from "./addon-catalog";
 import { withOperationLock, withOperationLockSync } from "./operation-lock";
 import {
   applyToggleUnits, ensureAuthHelperReady, ensureDirs, ensureRequiredUnits, ensureServiceUser,
-  installUnits, platformProvisioned, reconcilePanelIdentity, removeLegacyInstall, removeLegacyUnits,
-  removeLegacyUsers, startUnits, writeConfig,
+  installUnits, platformProvisioned, reconcilePanelIdentity, removeLegacyUnits,
+  startUnits, writeConfig,
 } from "./provision";
 import { fatal, log, requireRoot } from "./util";
 import { rmSync } from "node:fs";
@@ -22,20 +24,18 @@ import { rmSync } from "node:fs";
  *
  * Shared by `install` and by an `enable` that finds nothing provisioned. It is
  * deliberately not what a toggle runs -- re-creating the service user, probing
- * the auth helper and sweeping legacy installs are answers to "has this box
+ * the auth helper are answers to "has this box
  * ever been set up", and asking that on every toggle is most of what made a
  * toggle slow.
  */
 export function bootstrapProvision(specs: AddonSpec[]): void {
   ensureServiceUser();
-  removeLegacyInstall();
   ensureDirs(specs, true);
   ensureAuthHelperReady();
   for (const item of specs) writeConfig(item, true);
   reconcilePanelIdentity();
   installUnits(specs);
   removeLegacyUnits(true);
-  removeLegacyUsers(true);
   ensureDirs(specs);
   if (!reconcileAnchors(false)) fatal("could not safely patch the required CloudPanel templates");
   if (!reconcileMaintenanceNginx(false)) fatal("could not safely inject the Nginx maintenance check");
@@ -97,7 +97,7 @@ async function enableAddon(spec: AddonSpec): Promise<void> {
  * A failure warns rather than stops: an addon that cannot be removed because
  * one site's files moved would be worse than a helper left behind and named.
  */
-export function withdrawWpLogin(): void {
+export function withdrawWpTools(): void {
   try {
     const { removed, failed } = removeWpLogin();
     if (removed > 0) log.ok(`sign-in helper removed from ${removed} site${removed === 1 ? "" : "s"}`);
@@ -122,13 +122,23 @@ export function applyDisable(name: string): void {
 }
 
 function disableAddon(spec: AddonSpec): void {
+  if (spec.name !== "wp-tools") return disableAddonContents(spec);
+  withFileLockSync(DEFAULT_WP_TOOLS_PATHS.mainwpLockFile, 15, "a MainWP change is still running", () => {
+    requireMainwpSettled(DEFAULT_WP_TOOLS_PATHS.mainwpState);
+    withFileLockSync(DEFAULT_WP_TOOLS_PATHS.varnishLockFile, 15, "a WordPress Varnish change is still running", () => disableAddonContents(spec));
+  });
+}
+
+function disableAddonContents(spec: AddonSpec): void {
   const remaining = installedAddons().filter((item) => item.name !== spec.name);
 
   spec.deactivate?.();
-  if (spec.name === "wp-login") withdrawWpLogin();
+  if (spec.name === "wp-tools") withdrawWpTools();
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
   spec.withdrawn?.();
+  // Even with no addon left the binary stays, and repair keeps the guard.
+  settlePhpGuard();
   // Reconciled after the config file is gone, so the injection set is read
   // from the state that now exists rather than described by an `exclude`
   // argument. The Twig cache is purged by the reconciler when the markup

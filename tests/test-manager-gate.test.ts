@@ -88,23 +88,32 @@ test("an authenticated non-administrator gets no further than the gate", () => {
 
 // The one carve-out in the blanket gate. The route is not answered here --
 // splitMount is mocked away -- but reaching the dispatch is what says the gate
-// let it past, and the neighbouring wp-login routes show it is that route only.
-test("a non-administrator reaches the WordPress sign-in and nothing else", () => {
+// let it past, and the neighbouring wp-tools routes show it is that route only.
+test("a non-administrator reaches only the named self-scoped routes", () => {
   const results = probe({ user: "someone", roles: ["ROLE_USER"] }, [
-    { path: "/addons/wp-login/api/sign-in", method: "POST" },
-    { path: "/addons/wp-login/api/session" },
-    { path: "/addons/wp-login/", method: "GET" },
-    { path: "/addons/wp-login/api/remove", method: "POST" },
-    { path: "/addons/wp-login/api/sign-in", method: "GET" },
+    { path: "/addons/wp-tools/api/sign-in", method: "POST" },
+    { path: "/addons/wp-tools/api/session" },
+    { path: "/addons/wp-tools/", method: "GET" },
+    { path: "/addons/wp-tools/api/remove", method: "POST" },
+    { path: "/addons/wp-tools/api/sign-in", method: "GET" },
     { path: "/addons/panel-tweaks/api/panel" },
+    { path: "/addons/dns/api/session" },
+    { path: "/addons/dns/api/provision", method: "POST" },
+    { path: "/addons/dns/" },
+    { path: "/addons/dns/api/check", method: "POST" },
+    { path: "/addons/dns/api/provision", method: "GET" },
+    { path: "/addons/dns/api/session", method: "POST" },
+    { path: "/addons/dns/api/provision-extra", method: "POST" },
     { path: "/addons/panel-tweaks/", method: "GET" },
     { path: "/addons/panel-tweaks/api/tweaks", method: "POST" },
   ]);
   const dispatched = results.filter((result) => (result.reached as string[]).includes("addon-dispatch"));
   expect(dispatched.map((result) => `${result.method} ${result.path}`)).toEqual([
-    "POST /addons/wp-login/api/sign-in",
-    "GET /addons/wp-login/api/session",
+    "POST /addons/wp-tools/api/sign-in",
+    "GET /addons/wp-tools/api/session",
     "GET /addons/panel-tweaks/api/panel",
+    "GET /addons/dns/api/session",
+    "POST /addons/dns/api/provision",
   ]);
   for (const result of results) {
     // Nothing else the manager does runs for this session, dispatched or not.
@@ -164,6 +173,14 @@ test("an ordinary user cannot create or manage Instatic sites", () => {
     expect(result.body).toEqual({ ok: false, error: "administrator role required" });
     expect(result.reached).toEqual([]);
   }
+});
+
+test("an addon that is not installed answers 404 to an administrator and 403 to anyone else", () => {
+  // Panel Tweaks' completion script reads exactly these as "DNS is not installed".
+  const session = [{ path: "/addons/dns/api/session" }];
+  expect(probe({ user: "admin", roles: ["ROLE_ADMIN"] }, session)[0]!.status).toBe(404);
+  expect(probe({ user: "someone", roles: ["ROLE_USER"] }, session)[0]!.status).toBe(403);
+  expect(probe({ user: "manager", roles: ["ROLE_SITE_MANAGER"] }, session)[0]!.status).toBe(403);
 });
 
 test("an administrator reaches the probe and the routes behind it", () => {
@@ -293,6 +310,80 @@ test("a wrong webhook token is answered exactly as a stranger is", async () => {
   });
 });
 
+/**
+ * Passkey sign-in is the other thing answered before the gate. It reaches root
+ * only from the panel's own origin, carries the challenge in a cookie another
+ * site cannot send, and is nothing at all while the addon is not installed.
+ */
+function signInProbe(installed: boolean): Array<Record<string, unknown>> {
+  const script = `
+import { mock } from "bun:test";
+const realSso = await import("./lib/sso-auth.ts");
+mock.module("./lib/sso-auth.ts", () => ({
+  ...realSso,
+  authenticateRequest: async () => ({ auth: null, response: realSso.redirectToLogin() }),
+}));
+mock.module("./lib/update-check.ts", () => ({ checkCliUpdate: async () => null }));
+const asked = [];
+mock.module("./lib/gateway-client.ts", () => ({
+  callGatewayAction: async (addon, verb, args, input) => {
+    asked.push(verb + " " + (input ?? ""));
+    if (verb === "login-options") return { ok: true, data: { challengeId: "c".repeat(32), challenge: "xyz" } };
+    return JSON.parse(input).challengeId === "c".repeat(32)
+      ? { ok: true, data: { token: "f".repeat(64), user: "alice" } }
+      : { ok: false, error: "the sign-in request has expired; try again" };
+  },
+  streamGatewayAction: () => ({ close() {} }),
+}));
+const realCatalog = await import("./cli/addon-catalog.ts");
+mock.module("./cli/addon-catalog.ts", () => ({
+  ...realCatalog,
+  ADDONS: { ...realCatalog.ADDONS, "security-keys": { ...realCatalog.ADDONS["security-keys"], configFile: ${installed ? '"./package.json"' : '"./absent.conf"'} } },
+}));
+const { handleRequest } = await import("./manager/server.ts");
+const url = "https://panel.example:8443/addons/security-keys/login/";
+const post = (route, headers) => new Request(url + route, {
+  method: "POST", body: JSON.stringify({ id: "k", response: {} }), headers: { host: "panel.example:8443", ...headers },
+});
+const out = [];
+for (const [label, req] of [
+  ["options", post("options", { origin: "https://panel.example:8443" })],
+  ["cross-site", post("options", { origin: "https://evil.example" })],
+  ["no-cookie", post("verify", { origin: "https://panel.example:8443" })],
+  ["verify", post("verify", { origin: "https://panel.example:8443", cookie: "clp_addons_passkey=" + "c".repeat(32) })],
+  ["get", new Request(url + "options")],
+]) {
+  const before = asked.length;
+  const res = await handleRequest(req, {});
+  out.push({ label, status: res.status, cookie: res.headers.get("set-cookie"), body: await res.text(), asked: asked.slice(before) });
+}
+console.log(JSON.stringify(out));
+`;
+  const run = spawnSync("bun", ["-e", script], { cwd: repo, encoding: "utf-8" });
+  if (run.status !== 0) throw new Error(run.stderr || "sign-in probe failed");
+  return JSON.parse(run.stdout.trim().split("\n").at(-1)!);
+}
+
+test("passkey sign-in is answered before the gate, from the panel's own origin only", () => {
+  const results = Object.fromEntries(signInProbe(true).map((result) => [result.label, result]));
+  expect(results.options).toMatchObject({ status: 200, asked: ["login-options "] });
+  expect(JSON.parse(String(results.options!.body))).toEqual({ ok: true, challenge: "xyz" });
+  expect(results.options!.cookie).toBe(
+    `clp_addons_passkey=${"c".repeat(32)}; Path=/addons/security-keys/login; Max-Age=300; HttpOnly; Secure; SameSite=Strict`,
+  );
+  expect(results["cross-site"]).toMatchObject({ status: 403, asked: [] });
+  expect(results["no-cookie"]).toMatchObject({ status: 400 });
+  expect(JSON.parse(String(results.verify!.body))).toEqual({ ok: true, redirect: `/autologin?token=${"f".repeat(64)}` });
+  expect(String(results.verify!.cookie)).toStartWith("clp_addons_passkey=; Path=/addons/security-keys/login; Max-Age=0");
+  expect(results.get).toMatchObject({ status: 302, asked: [] });
+});
+
+test("passkey sign-in does not exist while the addon is not installed", () => {
+  for (const result of signInProbe(false)) {
+    expect(result, String(result.label)).toMatchObject({ status: 302, asked: [] });
+  }
+});
+
 // The tests above drive real requests through the gate. This one is about an
 // argument to Bun.serve, which no request can reach: with `development` on,
 // Bun answers a handler fault with its own error page, which would put a stack
@@ -300,6 +391,21 @@ test("a wrong webhook token is answered exactly as a stranger is", async () => {
 test("a handler fault cannot answer with Bun's error page", () => {
   const source = readFileSync(join(repo, "manager/server.ts"), "utf8");
   expect(source.slice(source.indexOf("async function cmdServe"))).toInclude("development: false");
+});
+
+test("a slow gateway call is not cut off by Bun's idle timeout", () => {
+  const source = readFileSync(join(repo, "manager/server.ts"), "utf8");
+  expect(source.slice(source.indexOf("async function cmdServe"))).toInclude("idleTimeout: 0");
+});
+
+// Run by hand, serve would replace the live daemon's socket before anything
+// could notice it was the wrong account, so it refuses before touching it.
+test("serve refuses to start outside its systemd unit", () => {
+  // Claiming a systemd invocation in the environment is not enough.
+  const env = { ...process.env, INVOCATION_ID: "0123456789abcdef0123456789abcdef" };
+  const result = spawnSync("bun", ["cli/index.ts", "serve"], { cwd: repo, env, encoding: "utf8" });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toInclude("systemctl restart clp-addons.service");
 });
 
 // A shell as a site's user is an administrator's tool: no role list, no

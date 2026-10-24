@@ -48,13 +48,48 @@ failure returns a nonzero exit code to CI.
 ## Verified artifacts
 
 The tag workflow builds one Linux x86-64 binary and publishes it with the
-installer, SHA-256 sums, and GitHub build provenance. Installation and updates
-verify the checksum and repository-bound attestation before replacing the
-binary. `--skip-attestation` is an explicit operator override.
+installer, SHA-256 sums, and GitHub build provenance. Updates verify the
+checksum and repository-bound attestation before replacing the binary.
+`--skip-attestation` is an explicit operator override.
 
-If an attestation-capable GitHub CLI is unavailable, the installer or binary
-downloads GitHub CLI's official archive, checks its published checksum, tests
-the candidate, and installs it in `/usr/local/libexec/clp-addons/`.
+The binary checks provenance itself with Sigstore's `@sigstore/verify`, the
+checks `gh attestation verify --repo --signer-workflow` makes: a SLSA
+provenance statement naming the artifact's SHA-256, signed in Sigstore's public
+log by a GitHub Actions certificate for this repository's `release.yml` on a tag,
+with this repository as its source. Sigstore's trusted keys come through its TUF
+repository, `tuf-repo-cdn.sigstore.dev`, and are cached in
+`/usr/local/libexec/clp-addons/sigstore`, where only root can write. They are
+not frozen into the binary: a rotated key would then refuse the very update
+that carries the new one. An update removes the GitHub CLI earlier releases
+kept in `/usr/local/libexec/clp-addons/gh`.
+
+## Installer
+
+`install.sh` checks the host, downloads the binary from
+`/releases/latest/download` or the `--version` tag, checks it against
+`SHA256SUMS`, and installs it. It makes no GitHub API call. It then runs
+`clp-addons install --local=DIR` with the addons from `--addons`, or with none
+on the terminal the script was started from, so the binary asks. The question,
+the addon names and what each addon needs, such as Docker, live only in the
+binary, and the picker is the same list as the `clp-addons` menu.
+
+The installer does not check provenance. Under `curl | bash`, `install.sh`
+comes from the same release as the binary, so anyone able to substitute the
+binary could substitute the script and its check with it. The checksum catches
+a damaged download; provenance protects every update, which the installed
+binary verifies. An operator who verifies `install.sh` itself, which is
+attested with the binary, before running it gets the same assurance for the
+first install. `install` takes no `--version`; changing version is `update`.
+
+## Default selection
+
+The installer preselects Panel Tweaks, System Tweaks, Maintenance Mode, Terminal
+and Security Keys, each marked `preselected` in its addon definition. A default is useful on almost any box, needs no outside
+account, and changes nothing until used unless the change is itself protective.
+Addons that need a Cloudflare token or relay account, manage Postfix, or serve
+one task (Stager, Instatic, Git Deploy, PHP Resources) are chosen by hand, as are
+Cloudflare IP Access and WordPress Tools, which only some boxes want. The
+selection only applies when the installer runs; `update` never adds an addon.
 
 ## Update behavior
 

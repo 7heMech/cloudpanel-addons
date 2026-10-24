@@ -14,7 +14,8 @@ function errorMessage(error: unknown): string {
 
 /** Every change answers with the whole state, so they all reply the same way. */
 async function change(result: Awaited<ReturnType<typeof phpResourcesService.assign>>): Promise<Response> {
-  return json(result, result.ok ? 200 : 400);
+  if (!result.ok || !result.data) return json(result, 400);
+  return json({ ...result, html: dashboardView(result.data) });
 }
 
 export async function handle(
@@ -32,11 +33,11 @@ export async function handle(
     try {
       const result = await phpResourcesService.state();
       if (!result.ok || !result.data) throw new Error(result.error ?? "PHP pool settings are unavailable");
-      return htmlResponse(layout("PHP resources", dashboardView(result.data), updateNotice), { csrf });
+      return htmlResponse(layout("PHP Resources", dashboardView(result.data), updateNotice), { csrf });
     } catch (error) {
       const message = errorMessage(error);
       return htmlResponse(
-        layout("PHP resources", `<div class="alert" role="alert">${Bun.escapeHTML(message)}</div>`, updateNotice),
+        layout("PHP Resources", `<div class="alert" role="alert">${Bun.escapeHTML(message)}</div>`, updateNotice),
         { status: 500, csrf },
       );
     }

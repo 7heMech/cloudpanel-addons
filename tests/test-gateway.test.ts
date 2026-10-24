@@ -43,9 +43,8 @@ describe("Gateway Protocol & Server", () => {
     });
   });
 
-  test("parseGatewayRequest falls back to legacy raw session IDs", () => {
-    const legacy = parseGatewayRequest("6utuq9lrth7e3q1e7bftvr07kc\n");
-    expect(legacy).toEqual({ kind: "auth", sessionId: "6utuq9lrth7e3q1e7bftvr07kc" });
+  test("parseGatewayRequest refuses a bare session ID line", () => {
+    expect(parseGatewayRequest("6utuq9lrth7e3q1e7bftvr07kc\n")).toBeNull();
   });
 
   test("parseGatewayRequest rejects malformed input", () => {

@@ -1,12 +1,12 @@
 import { esc } from "../../../lib/app-http";
-import { renderLayout } from "../../../lib/app-ui";
+import { TWEAK_ROW_JS, TWEAK_ROW_STYLE, renderLayout, sinceText } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { PanelTweaks, PanelTweaksState } from "../action";
 
 const BASE = mountPath("panel-tweaks");
 
-// Cards, switches, badges, the fleet table and its narrow-screen layout are in
-// lib/app-ui; only the two rows this page alone draws are here.
+// Cards, switches, badges, the switch rows and the fleet table are in lib/app-ui;
+// only what this page alone draws is here.
 import STYLE from "./views.css" with { type: "text" };
 
 import SCRIPT from "./views.client.js" with { type: "text" };
@@ -20,8 +20,8 @@ export function layout(
     brand: "Panel Tweaks",
     base: BASE,
     nav: [],
-    css: STYLE,
-    script: SCRIPT,
+    css: TWEAK_ROW_STYLE + STYLE,
+    script: TWEAK_ROW_JS + SCRIPT,
     updateNotice,
   });
 }
@@ -128,18 +128,6 @@ function tweakList(state: PanelTweaksState): string {
         </section>`).join("");
 }
 
-/** How long ago something happened, in the words a status line would use. */
-export function sinceText(iso: string): string {
-  const at = Date.parse(iso);
-  if (!Number.isFinite(at)) return "never";
-  const minutes = Math.round((Date.now() - at) / 60000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
-  const days = Math.round(hours / 24);
-  return `${days} day${days === 1 ? "" : "s"} ago`;
-}
 
 function previewCard(state: PanelTweaksState): string {
   const sites = state.sites.length;

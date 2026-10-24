@@ -15,7 +15,7 @@ import { maintenanceService } from "../addons/maintenance/app/service";
 import { CLIENT_JS, fleetView, layout, siteView } from "../addons/maintenance/app/views";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import {
-  inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance,
+  inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance, releaseMaintenanceSettings,
 } from "../cli/inject";
 import { MAINTENANCE_ALLOWED_VERBS } from "../lib/gateway-protocol";
 
@@ -136,6 +136,38 @@ test("maximum-length domains use bounded bypass lock filenames", async () => {
     expect(lockFiles).toHaveLength(1);
     expect(lockFiles[0]).toMatch(/^maintenance-[0-9a-f]{64}\.lock$/);
     expect(Buffer.byteLength(lockFiles[0]!, "utf8")).toBeLessThanOrEqual(255);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an upgrade run gets global_settings back as packaged, and the next reconcile adopts what the upgrade installed", () => {
+  const root = mkdtempSync(join(tmpdir(), "clp-maintenance-release-"));
+  const settingsPath = join(root, "global_settings");
+  const geoPath = join(root, "sites-enabled", "00-clp-addons-maintenance-client-ip.conf");
+  const includePath = join(root, "maintenance.conf");
+  const paths = {
+    settingsPath, stateDir: join(root, "state"), geoPath, cloudflareIpsPath: join(root, "cloudflare", "ips"), panelDb: null,
+    includePath, vhostUid: process.getuid?.() ?? 0,
+  };
+  const original = "client_max_body_size 128m;";
+  writeFileSync(settingsPath, original, { mode: 0o644 });
+  mkdirSync(join(root, "cloudflare"));
+  writeFileSync(paths.cloudflareIpsPath, "allow 173.245.48.0/20;\ndeny all;\n");
+  try {
+    expect(reconcileNginxMaintenance({ ...paths, reload: false }).state).toBe("ok");
+    expect(releaseMaintenanceSettings(paths)).toBe(true);
+    expect(readFileSync(settingsPath, "utf8")).toBe(original);
+    expect(existsSync(geoPath) && existsSync(includePath)).toBe(true);
+    expect(releaseMaintenanceSettings(paths)).toBe(false);
+
+    const upgraded = "client_max_body_size 256m;";
+    writeFileSync(settingsPath, upgraded);
+    expect(reconcileNginxMaintenance({ ...paths, reload: false })).toMatchObject({ state: "ok", changed: true });
+    expect(readFileSync(settingsPath, "utf8")).toBe(`${upgraded}\n${NGINX_MAINTENANCE_BLOCK}\n`);
+
+    writeFileSync(settingsPath, readFileSync(settingsPath, "utf8").replace(upgraded, `${upgraded}\nserver_tokens off;`));
+    expect(releaseMaintenanceSettings(paths)).toBe(false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -820,7 +852,7 @@ test("the maintenance count under a global override covers unreadable sites too"
 // /api/tweaks saves the switch and then writes the panel's templates. When only
 // the second half fails it answers 500 with the saved state attached, so putting
 
-// WordPress Sign-In adds one address at a time; it must keep the rest, add an
+// WordPress Tools adds one address at a time; it must keep the rest, add an
 // address only once, and stop at the same limit a saved list does.
 test("adding one bypass keeps the list, deduplicates and respects the limit", async () => {
   const { root, paths } = fixture();

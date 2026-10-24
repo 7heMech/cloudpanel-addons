@@ -18,11 +18,12 @@ phone and the row menu are each their own switch. The row menu is on by
 default: several addons put a link in every row, and one button per row reads
 better than the list of links they add up to.
 
-WordPress sign-in is [its own addon](wp-login.md) because it writes a plugin into
-a customer's site. Panel Tweaks only changes CloudPanel's pages and, for
-automatic SSL, submits the panel's own certificate form. An operator who wants a
-filterable site list should not have to install the code that can do that, and
-a switch is a weaker withdrawal than not having it on the box.
+WordPress sign-in and plugin installation belong to
+[WordPress Tools](wp-tools.md) because they write into a customer's site. Panel
+Tweaks only changes CloudPanel's pages and, for automatic SSL, submits the
+panel's own certificate form. An operator who wants a filterable site list
+should not have to install the code that can do that, and a switch is a weaker
+withdrawal than not having it on the box.
 
 The page groups those switches by the panel surface they change, in the order
 Dashboard, Login, Sites. The Sites group is last because it is the longest and
@@ -38,13 +39,6 @@ draws.
 Its scan status and manual scan button live in that row rather than taking a
 card of their own. The compact button follows the timestamp on desktop; status
 and button stack on phones to fit within the indentation.
-
-`login-theme` used to be its own addon and is the device-theme switch here.
-`install`, `update` and `repair` carry a box over: the old config file is what
-recorded the addon as enabled, so writing `panel-tweaks.conf` and removing
-`login-theme.conf` is the whole migration. Its state directory held nothing, and
-its Twig block goes on the next reconciliation, because the injection set is
-read from the config files rather than from what is in the templates.
 
 ## Site-list anchors
 
@@ -129,8 +123,8 @@ WordPress, PHP, Static HTML, Node.js, Python and Reverse Proxy creation forms;
 unnamed because Symfony rejects a field its form does not declare. Everything
 else is CloudPanel's: the browser submits the panel's own Let's Encrypt form
 with its CSRF token and the operator's session, so issuance, permissions and
-renewal stay the panel's, and site managers get it too. There is no gateway verb
-or manager route.
+renewal stay the panel's, and site managers get it too. Panel Tweaks has no
+gateway verb or manager route for it.
 
 Submitting a creation form with the box checked adds its domain to the
 `__Host-clp_addons_ssl` cookie for 15 minutes. `__Host-` means no other host can
@@ -147,13 +141,21 @@ page with it:
 
 Twig draws a status line there, in the shape of CloudPanel's flash messages, and
 the script forgets the domain before any request, so a refresh or Back never
-issues twice. It then fetches the native form and posts it for the created
-domain alone; the form's default `www` name needs DNS the operator may not have.
-CloudPanel redirects to the site's certificate list only on success; anything
-else shows the panel's own error with a link to the site's SSL/TLS tab. The page
-must stay open until it finishes. On Sites, the enhanced table then refetches its
-data and repaints that row's SSL cell. There are no retries and no scans of
-existing sites.
+issues twice. When the DNS addon is installed, the script first asks it to
+write the new site's records (see [DNS](dns.md)). DNS answers with the names its
+records cover -- `www` only where it writes one -- or with why DNS is not ready
+yet, in which case no certificate is requested here and DNS retries as root
+later. Without DNS, or for a site DNS does not manage, the certificate is for
+the created domain alone; the form's default `www` name needs DNS the operator
+may not have. DNS counts as absent only when its session route answers 404 or
+403; when it does not answer, or cannot write the records, nothing is requested
+and the domain is remembered again, so a refresh starts over. The script then
+fetches the native form and posts it for those names. CloudPanel redirects to
+the site's certificate list only on success; anything else shows the panel's
+own error with a link to the site's SSL/TLS tab. The page must stay open until
+it finishes. On Sites, the enhanced table then refetches its data and repaints
+that row's SSL cell. Panel Tweaks itself never retries and never scans existing
+sites.
 
 ## Nothing moves once it is on the screen
 
@@ -181,6 +183,11 @@ of the cell it came from: the table sits in a horizontal scroller, which clips
 anything hanging out of it. The links themselves are moved into it rather than
 copied, so another addon's link keeps working with no arrangement between the
 two: the addon does not know what is in the action cell, only that it is a link.
+The table keeps 20px at its outer edges and 10px on each side between columns,
+leaving the action menu visible with the default columns at desktop width.
+With the narrow layout enabled, rows become cards at 1100px, before those
+columns squeeze hostnames into fragments. Additional columns can still use the
+scroller when the table layout is active.
 
 `lib/row-actions.ts` is the whole agreement between the two addons. An addon
 with an action worth a place in the menu but not a link in every row of a list
@@ -393,7 +400,8 @@ large enough to exceed it gets its sizes from the unattended sweep instead,
 which has no deadline. The pressed sweep streams compact progress events through
 the root gateway and SSE response: the site being measured, the completed and
 total counts, and the measured/skipped counts. It never streams `du` output or
-filesystem paths. The manager disables Bun's idle timeout for this request so a
-single large site may stay quiet for longer than ten seconds; the gateway's
-four-minute deadline remains the bound on the operation, and a disconnected
-browser closes the gateway stream and its action process.
+filesystem paths. A single large site may stay quiet for longer than ten
+seconds, because the manager runs without Bun's idle timeout (see
+[Platform integration](platform.md)); the gateway's four-minute deadline remains
+the bound on the operation, and a disconnected browser closes the gateway stream
+and its action process.

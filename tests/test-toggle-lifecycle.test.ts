@@ -27,6 +27,7 @@ interface Run {
   cron: boolean;
   /** What addon hooks ran through the CLI binary. */
   cli: string[];
+  warnings: string[];
   error?: string;
 }
 
@@ -40,6 +41,7 @@ const calls = [];
 const failing = JSON.parse(process.env.CLP_TEST_FAILING ?? "[]");
 const provision = [];
 const inject = [];
+const warnings = [];
 const record = (bucket, name) => (...args) => { bucket.push(name); return undefined; };
 
 // Only the paths are redirected. The catalog derives each addon's config file
@@ -59,6 +61,8 @@ mock.module("./cli/paths.ts", () => ({
   INSTATIC_BACKUP_CRON: root + "/cron.d/instatic-backup",
   // What an addon's hooks run; nothing here may reach the real binary.
   CLI_BIN: root + "/clp-addons",
+  // The fixture's files are the test's own, not root's.
+  ROOT_UID: process.getuid(),
 }));
 
 const realUtil = await import("./cli/util.ts");
@@ -67,7 +71,7 @@ mock.module("./cli/util.ts", () => ({
   ...realUtil,
   Fatal: TestFatal,
   fatal: (message) => { throw new TestFatal(message); },
-  log: { step: () => {}, ok: () => {}, warn: () => {}, err: () => {}, plain: () => {} },
+  log: { step: () => {}, ok: () => {}, warn: (message) => { warnings.push(message); }, err: () => {}, plain: () => {} },
   requireRoot: () => {},
   run: (cmd, args) => { calls.push([cmd, args]); return cmd === "id" ? "0" : ""; },
   tryRun: (cmd, args) => {
@@ -91,10 +95,7 @@ mock.module("./cli/provision.ts", () => ({
   ensureTimerArmed: record(provision, "ensureTimerArmed"),
   hardenBackups: record(provision, "hardenBackups"),
   reconcilePanelIdentity: record(provision, "reconcilePanelIdentity"),
-  removeLegacyInstall: record(provision, "removeLegacyInstall"),
   removeLegacyUnits: record(provision, "removeLegacyUnits"),
-  removeLegacyUsers: record(provision, "removeLegacyUsers"),
-  removeSudoers: record(provision, "removeSudoers"),
   startUnits: record(provision, "startUnits"),
   stopUnits: record(provision, "stopUnits"),
   purgeTwigCache: record(provision, "purgeTwigCache"),
@@ -137,6 +138,7 @@ try {
   for (const step of JSON.parse(process.env.CLP_TEST_STEPS)) {
     if (step.verb === "enable") await cli.applyEnable(step.addon);
     else if (step.verb === "disable") cli.applyDisable(step.addon);
+    else if (step.verb === "uninstall") (await import("./cli/uninstall.ts")).cmdUninstall([step.addon, "--yes"]);
     // A between-steps nudge, so a test can spoil a unit file the way something
     // outside this binary would and watch the next toggle put it back.
     else chmodSync(root + "/systemd/" + step.addon, step.mode);
@@ -153,6 +155,7 @@ console.log(JSON.stringify({
     .map(([, args]) => args.join(" ")),
   cron: existsSync(root + "/cron.d/instatic-backup"),
   cli: existsSync(root + "/cli-calls") ? readFileSync(root + "/cli-calls", "utf8").trim().split("\n") : [],
+  warnings,
   error,
 }));
 `;
@@ -173,7 +176,8 @@ function fixture(options: { provisioned: boolean; enabled: string[] }): string {
     // find them to stop and remove them.
     const units: Record<string, string[]> = {
       "cloudflare-ips": ["clp-addons-cloudflare-ips-reconcile.timer", "clp-addons-cloudflare-ips-reconcile.service"],
-      smtp: ["clp-addons-smtp-reconcile.path", "clp-addons-smtp-reconcile.service"],
+      smtp: ["clp-addons-new-sites.path", "clp-addons-new-sites.service"],
+      dns: ["clp-addons-new-sites.path", "clp-addons-new-sites.service"],
     };
     for (const unit of units[name] ?? []) writeFileSync(join(root, "systemd", unit), "# placeholder\n");
   }
@@ -181,7 +185,7 @@ function fixture(options: { provisioned: boolean; enabled: string[] }): string {
 }
 
 type Step =
-  | { verb: "enable" | "disable"; addon: string }
+  | { verb: "enable" | "disable" | "uninstall"; addon: string }
   | { verb: "chmod"; addon: string; mode: number };
 
 function toggle(
@@ -219,8 +223,7 @@ test("enabling an addon restarts nothing that was already running", () => {
 
 test("a toggle does not re-run first-install work", () => {
   const run = toggle([{ verb: "enable", addon: "stager" }]);
-  for (const step of ["ensureServiceUser", "ensureAuthHelperReady", "removeLegacyInstall",
-    "removeLegacyUnits", "removeLegacyUsers"]) {
+  for (const step of ["ensureServiceUser", "ensureAuthHelperReady", "removeLegacyUnits"]) {
     expect(run.provision).not.toContain(step);
   }
   // The addon's own dependencies are still checked: that is about this addon,
@@ -235,6 +238,7 @@ test("enabling on a box that was never installed runs the full bootstrap", () =>
   expect(run.provision).toContain("ensureAuthHelperReady");
   expect(run.provision).toContain("startUnits");
   expect(run.inject).toContain("proxy");
+  expect(readFileSync(join(run.root, "systemd", "apt-daily-upgrade.service.d", "50-clp-addons.conf"), "utf8")).toContain("apt-hook pre");
 });
 
 test("re-enabling an addon that is already on changes and reloads nothing", () => {
@@ -247,33 +251,49 @@ test("re-enabling an addon that is already on changes and reloads nothing", () =
 
 test("the Cloudflare timer is started when its units appear and stopped when they go", () => {
   const on = toggle([{ verb: "enable", addon: "cloudflare-ips" }]);
+  expect(on.error).toBeUndefined();
   expect(on.systemd).toContain("enable clp-addons-cloudflare-ips-reconcile.timer");
   expect(on.systemd).toContain("restart clp-addons-cloudflare-ips-reconcile.timer");
 
   const off = toggle([{ verb: "disable", addon: "cloudflare-ips" }], { enabled: ["cloudflare-ips"] });
+  expect(off.error).toBeUndefined();
   expect(off.systemd).toContain("disable --now clp-addons-cloudflare-ips-reconcile.timer");
   expect(existsSync(join(off.root, "systemd", "clp-addons-cloudflare-ips-reconcile.timer"))).toBe(false);
   expect(existsSync(join(off.root, "systemd", "clp-addons-cloudflare-ips-reconcile.service"))).toBe(false);
 });
 
-test("the SMTP new-site watcher is started when its units appear and stopped when they go", () => {
+test("the shared new-site watcher is started when its units appear and stopped when they go", () => {
   const on = toggle([{ verb: "enable", addon: "smtp" }]);
   expect(on.error).toBeUndefined();
-  expect(on.systemd).toContain("enable clp-addons-smtp-reconcile.path");
-  expect(on.systemd).toContain("restart clp-addons-smtp-reconcile.path");
+  expect(on.systemd).toContain("enable clp-addons-new-sites.path");
+  expect(on.systemd).toContain("restart clp-addons-new-sites.path");
   // Disable withdrew the saved policy, so enable puts it back.
   expect(on.cli).toEqual(["action smtp reconcile"]);
-  const service = readFileSync(join(on.root, "systemd", "clp-addons-smtp-reconcile.service"), "utf8");
+  const service = readFileSync(join(on.root, "systemd", "clp-addons-new-sites.service"), "utf8");
   // CloudPanel commits a new site's row after writing its vhost, so it runs twice, and a failed first run still waits for the second.
-  expect(service).toMatch(/ExecStart=-\S+ action smtp sync-sites\nExecStart=\/bin\/sleep 10\nExecStart=\/\S+ action smtp sync-sites\n/);
-  expect(readFileSync(join(on.root, "systemd", "clp-addons-smtp-reconcile.path"), "utf8")).toContain("PathChanged=/etc/nginx/sites-enabled");
+  expect(service).toMatch(/ExecStart=-\S+ sync-sites\nExecStart=\/bin\/sleep 10\nExecStart=\/\S+ sync-sites\n/);
+  expect(readFileSync(join(on.root, "systemd", "clp-addons-new-sites.path"), "utf8")).toContain("PathChanged=/etc/nginx/sites-enabled");
 
   const off = toggle([{ verb: "disable", addon: "smtp" }], { enabled: ["smtp"] });
   expect(off.error).toBeUndefined();
   expect(off.cli).toEqual(["action smtp deactivate"]);
-  expect(off.systemd).toContain("disable --now clp-addons-smtp-reconcile.path");
-  expect(existsSync(join(off.root, "systemd", "clp-addons-smtp-reconcile.path"))).toBe(false);
-  expect(existsSync(join(off.root, "systemd", "clp-addons-smtp-reconcile.service"))).toBe(false);
+  expect(off.systemd).toContain("disable --now clp-addons-new-sites.path");
+  expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.path"))).toBe(false);
+  expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.service"))).toBe(false);
+});
+
+test("the watcher stays while SMTP still uses it, and disabling DNS stops its transient pass", () => {
+  const on = toggle([{ verb: "enable", addon: "dns" }], { enabled: ["smtp"] });
+  expect(on.error).toBeUndefined();
+  expect(existsSync(join(on.root, "systemd", "clp-addons-dns.service"))).toBe(false);
+
+  const off = toggle([{ verb: "disable", addon: "dns" }], { enabled: ["smtp", "dns"] });
+  expect(off.error).toBeUndefined();
+  // Disabling stops a check that is running and changes nothing in Cloudflare.
+  expect(off.systemd).toContain("stop clp-addon-dns-reconcile");
+  expect(existsSync(join(off.root, "systemd", "clp-addons-dns.service"))).toBe(false);
+  expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.path"))).toBe(true);
+  expect(off.cli).toEqual([]);
 });
 
 test("an addon with no panel markup does not touch the panel templates", () => {
@@ -384,4 +404,69 @@ test("a box whose reconcile timer is not armed is bootstrapped too", () => {
   });
   expect(run.error).toBeUndefined();
   expect(run.provision).toContain("startUnits");
+});
+
+test("DNS can be disabled and re-enabled without SMTP, keeping its state", () => {
+  const on = toggle([{ verb: "enable", addon: "dns" }]);
+  expect(on.error).toBeUndefined();
+  expect(on.systemd).toContain("enable clp-addons-new-sites.path");
+  expect(on.calls.some(([cmd, args]) => cmd === "systemctl" && args.includes("postfix"))).toBe(false);
+  const state = join(on.root, "state", "dns");
+  mkdirSync(state, { recursive: true });
+  const policy = join(state, "policy.json");
+  writeFileSync(policy, "kept policy", { mode: 0o600 });
+  const off = toggle([{ verb: "disable", addon: "dns" }], { root: on.root });
+  expect(off.error).toBeUndefined();
+  expect(off.systemd).toContain("stop clp-addon-dns-reconcile");
+  expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.path"))).toBe(false);
+  const again = toggle([{ verb: "enable", addon: "dns" }], { root: on.root });
+  expect(again.error).toBeUndefined();
+  expect(again.systemd).toContain("enable clp-addons-new-sites.path");
+  expect(readFileSync(policy, "utf8")).toBe("kept policy");
+});
+
+// --- the PHP upload-progress guard ---------------------------------------------
+
+/** One PHP-FPM, with System Tweaks enabled and its guard opted out. */
+function optedOutFixture(alsoEnabled: string[] = []): { root: string; guard: string } {
+  const root = fixture({ provisioned: true, enabled: ["system-tweaks", ...alsoEnabled] });
+  mkdirSync(join(root, "php", "8.3", "fpm", "conf.d"), { recursive: true });
+  mkdirSync(join(root, "sbin"), { recursive: true });
+  writeFileSync(join(root, "sbin", "php-fpm8.3"), "");
+  mkdirSync(join(root, "state", "system-tweaks"), { recursive: true });
+  writeFileSync(join(root, "state", "system-tweaks", "settings.json"), JSON.stringify({ version: 1, uploadProgressGuard: false }), { mode: 0o600 });
+  return { root, guard: join(root, "php", "8.3", "fpm", "conf.d", "99-clp-addons-upload-progress.ini") };
+}
+
+const guardTests = (run: Run) => run.calls.filter(([cmd, args]) => cmd.endsWith("php-fpm8.3") && args[0] === "-t");
+
+test("disabling System Tweaks puts its opted-out guard back, even with no addon left", () => {
+  const { root, guard } = optedOutFixture();
+  const run = toggle([{ verb: "disable", addon: "system-tweaks" }], { root });
+  expect(run.error).toBeUndefined();
+  expect(existsSync(guard)).toBe(true);
+});
+
+test("a guard that fails its config test does not stop a disable", () => {
+  const { root, guard } = optedOutFixture(["maintenance"]);
+  const run = toggle([{ verb: "disable", addon: "system-tweaks" }], { root, failing: ["php-fpm8.3 -t"] });
+  expect(run.error).toBeUndefined();
+  expect(existsSync(join(root, "etc", "system-tweaks.conf"))).toBe(false);
+  expect(existsSync(guard)).toBe(false);
+  expect(run.warnings.some((line) => line.includes("repair will retry"))).toBe(true);
+});
+
+test("uninstalling the last addon never writes the guard it is about to remove", () => {
+  const { root, guard } = optedOutFixture();
+  const run = toggle([{ verb: "uninstall", addon: "system-tweaks" }], { root });
+  expect(run.error).toBeUndefined();
+  expect(guardTests(run)).toEqual([]);
+  expect(existsSync(guard)).toBe(false);
+});
+
+test("uninstalling System Tweaks while another addon remains puts the guard back", () => {
+  const { root, guard } = optedOutFixture(["maintenance"]);
+  const run = toggle([{ verb: "uninstall", addon: "system-tweaks" }], { root });
+  expect(run.error).toBeUndefined();
+  expect(existsSync(guard)).toBe(true);
 });

@@ -444,15 +444,8 @@ test("nothing in the tree grants the manager a sudo rule", () => {
   expect(granting.stdout.toString().trim()).toBe("");
 });
 
-test("every sudoers path the provisioner names is one it deletes", () => {
-  const provision = readFileSync(join(REPO, "cli/provision.ts"), "utf8");
-  const mentions = provision
-    .split("\n")
-    .filter((line) => line.includes("/etc/sudoers.d") && !line.trimStart().startsWith("*"));
-  expect(mentions.length).toBeGreaterThan(0);
-  // Removal has to keep happening for as long as an upgrade from a pre-gateway
-  // version is possible. Writing one must not come back with it.
-  for (const mention of mentions) expect(mention).toContain("rmSync");
+test("the provisioner never writes a sudoers rule", () => {
+  expect(readFileSync(join(REPO, "cli/provision.ts"), "utf8")).not.toContain("/etc/sudoers.d");
 });
 
 test("panel identity extraction normalizes exact, alias, and wildcard names", () => {
@@ -864,4 +857,43 @@ test("a failed ownership change is not swallowed", () => {
      catch (error) { console.log(error.message); }`,
   ], { cwd: REPO, encoding: "utf8" });
   expect(result.trim()).toBe("EPERM");
+});
+
+test("repair removes SMTP Relay's old watcher units and reloads systemd only when needed", () => {
+  const root = mkdtempSync(join(tmpdir(), "legacy-units-"));
+  const legacy = ["clp-addons-smtp-reconcile.path", "clp-addons-smtp-reconcile.service"];
+  for (const unit of legacy) writeFileSync(join(root, unit), "old unit");
+  try {
+    const output = execFileSync(process.execPath, ["-e", `
+      import { mock } from "bun:test";
+      const fs = await import("node:fs");
+      const remove = fs.rmSync;
+      mock.module("node:fs", () => ({ ...fs, rmSync: (path, options) => {
+        if (!String(path).startsWith("/etc/sudoers.d/")) remove(path, options);
+      } }));
+      const paths = await import("./cli/paths.ts");
+      mock.module("./cli/paths.ts", () => ({ ...paths, SYSTEMD_DIR: ${JSON.stringify(root)} }));
+      const util = await import("./cli/util.ts");
+      const calls = [];
+      mock.module("./cli/util.ts", () => ({ ...util,
+        run: (command, args) => calls.push([command, ...args]),
+        tryRun: (command, args) => { calls.push([command, ...args]); return { ok: true, out: "" }; },
+      }));
+      const { removeLegacyUnits } = await import("./cli/provision.ts");
+      removeLegacyUnits(true);
+      const first = [...calls];
+      calls.length = 0;
+      removeLegacyUnits(true);
+      console.log(JSON.stringify({ first, second: calls }));
+    `], { cwd: REPO, encoding: "utf8" });
+    const result = JSON.parse(output);
+    expect(result.first).toEqual([
+      ...legacy.map((unit) => ["systemctl", "disable", "--now", unit]),
+      ["systemctl", "daemon-reload"],
+    ]);
+    expect(result.second).toEqual([]);
+    for (const unit of legacy) expect(lstatSync(join(root, unit), { throwIfNoEntry: false })).toBeUndefined();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

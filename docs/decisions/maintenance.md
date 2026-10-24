@@ -53,8 +53,13 @@ marked include of `/etc/nginx/clp-addons-maintenance.conf`, containing the same
 check, in both their database `site.vhost_template` and rendered vhost. The
 include goes at the start of the canonical site's port-8080 backend when present,
 otherwise its main server, never the www redirect. A serving server that already
-includes `global_settings` gets no additional include. A vhost that mentions
-`global_settings` without including it has opted out on purpose and is left
+includes `global_settings` gets no additional include. `global_settings` is
+optional: when it does not exist the addon neither creates it nor records a
+baseline for it, still stages the includes and client-IP map, and reports a vhost
+that includes the missing file as uncovered. Nginx rejects such a rendered vhost,
+so with validation on the run fails with Nginx's error and rolls back. A
+`global_settings` that exists but cannot be read fails validation rather than
+counting as missing. A vhost that mentions `global_settings` without including it has opted out on purpose and is left
 alone. A site whose vhost is untrusted or has no single serving server is
 skipped, so it cannot block the others, and `clp-addons status` names it. Older
 templates retain their existing header settings. Nginx checks
@@ -76,7 +81,7 @@ client-supplied header. A site CloudPanel proxies to a local backend, such as
 WordPress, runs the check in that backend, whose peer is CloudPanel's own front
 server; there the map takes the client from the `X-Real-IP` that server sets
 from its `$remote_addr`, so on those sites a bypass is only as hard to forge as
-CloudPanel's own real-IP setting makes it. This map leaves CloudPanel's
+the global real-IP trust makes it (see [System Tweaks](system-tweaks.md#forged-visitor-ips)). This map leaves CloudPanel's
 `$remote_addr` and Cloudflare-only access rules untouched. Reconciliation updates the map when
 CloudPanel's Cloudflare range file changes, after validating and reloading
 Nginx. The path watcher monitors the range file and its directory so both
@@ -102,12 +107,16 @@ without assuming it was scheduled or promising a recovery time.
 
 ## State and privileges
 
+The shared HTTP request IP reader converts IPv4-mapped IPv6 hosts to dotted
+IPv4, so the page's current-IP shortcut and a bypass accepted during WordPress
+sign-in save the IPv4 address used by the site's connection.
+
 Only the root gateway changes maintenance state. It accepts a fixed verb set,
 normalizes domains and IP addresses, checks that site-scoped domains are current
 CloudPanel sites, and bounds a custom template at 256 KiB. Each bypass update
 replaces the complete list for its scope and allows at most 64 addresses.
-WordPress Sign-In adds one address to a site's list through the same locked
-writer, when an administrator agrees; see [WordPress Sign-In](wp-login.md).
+WordPress Tools adds one address to a site's list through the same locked
+writer, when an administrator agrees; see [WordPress Tools](wp-tools.md).
 
 The state root, global directory, and per-domain directories are mode `0711`,
 which lets Nginx traverse a known path without listing domains or bypasses.
@@ -126,7 +135,13 @@ transaction, edits to trusted regular vhosts with preserved ownership and
 permissions, then `nginx -t` and a distro Nginx reload before commit. Failure rolls back the
 site rows and changed Nginx files; a failed reload also attempts to reload the
 restored configuration. Missing or ambiguous serving blocks leave that site
-unchanged and are reported as uncovered by status.
+unchanged and are reported as uncovered by status. The transaction refuses a
+`global_settings` or vhost that is a symlink, not a regular file or group- or
+world-writable, and a vhost owned by the wrong user, without changing mode or
+owner (a writable Nginx config may already be tampered with). For
+`global_settings` the error names the file, the reason and the `chown` or `chmod`
+that fixes it, and repair and status print it. A refused site vhost is skipped
+and status lists only its domain.
 
 Install, enable, repair and the periodic repair timer reconcile these files.
 The existing path watcher also watches the site vhost directory and standalone
