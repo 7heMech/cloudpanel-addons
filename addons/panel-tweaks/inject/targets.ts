@@ -200,7 +200,8 @@ body .header .navbar-right > ul > li.user-avatar > a.dropdown-toggle::after { bo
  * halves that Bootstrap never stacks on its own. Below 760px the container
  * becomes the viewport and the cards become one centred column; below 576px --
  * Bootstrap's own point for stacking columns -- each half takes the whole row,
- * with the row's own spacing between the stacked halves. These rules carry a
+ * with the row's own spacing between the stacked halves, except the Back and
+ * submit row, whose two buttons stay side by side. These rules carry a
  * `body` in front for the same reason the header's do.
  */
 const NEW_SITE_STYLE = `
@@ -218,6 +219,10 @@ const NEW_SITE_STYLE = `
 @media (max-width: 576px) {
   body .new-site-container .card-form .row > .col-6 { width: 100%; }
   body .new-site-container .card-form .row > .col-6 + .col-6 { margin-top: 20px; }
+  /* Except the Back and submit row, as in the Admin area's forms. */
+  body .new-site-container .card-form .row:has(> .col-6.text-start + .col-6.text-end) > .col-6 { width: auto; margin-top: 0; }
+  body .new-site-container .card-form .row:has(> .col-6.text-start + .col-6.text-end) > .text-end { margin-left: auto; }
+  body .new-site-container .card-form .row:has(> .col-6.text-start + .col-6.text-end) .btn { white-space: nowrap; }
 }
 `;
 
