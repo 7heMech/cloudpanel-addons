@@ -249,7 +249,7 @@ function realIpCard(state: SystemTweaksState): string {
       <div class="tweak-list">${switchRow({
         key: "blockForgedRealIp",
         title: "Block forged visitor IPs",
-        description: "CloudPanel's Nginx believes a client IP header from any address: X-Real-IP on sites and X-Forwarded-For on the panel. A client can then pose as another IP to PHP, logs, basic auth, IP-based security plugins and Cloudflare-only access. This comments out set_real_ip_from 0.0.0.0/0 in both nginx.conf files; loopback and private-network proxies, including CloudPanel's own, stay trusted. Package updates still install: the line is put back for the update run and commented out again after it. Switching off puts the line back.",
+        description: "CloudPanel's Nginx believes a client IP header from any address: X-Real-IP on sites and X-Forwarded-For on the panel. A client can then pose as another IP to PHP, logs, basic auth, IP-based security plugins and Cloudflare-only access. This comments out set_real_ip_from 0.0.0.0/0 in both nginx.conf files; loopback and private-network proxies, including CloudPanel's own, stay trusted, and the panel also trusts Cloudflare. Package updates still install: the line is put back for the update run and commented out again after it. Switching off puts the line back.",
         checked: state.realIp.blockForged,
         onchange: "setRealIp(this)",
         extra: `<p class="st-status">${realIpLine(state.realIp)}</p>`,

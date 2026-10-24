@@ -1,12 +1,16 @@
 /**
  * CloudPanel's two nginx.conf files, the sites' and the panel's, trust the
  * client IP header from every address. Commenting out that one line in each
- * leaves loopback and private-network proxies trusted.
+ * leaves loopback and private-network proxies trusted. The panel also trusts
+ * Cloudflare: its X-Forwarded-For ends with the address Cloudflare received, so
+ * a panel behind Cloudflare keeps its visitors. The sites' X-Real-IP is passed
+ * through Cloudflare unchanged, so trusting Cloudflare there would reopen it.
  */
 import { existsSync, readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { runCommand, type CommandResult } from "../../cli/action-common";
-import { nginxFileChange, trustedVhost, withNginxTransaction } from "../../cli/nginx-transaction";
-import { ROOT_UID, nginxLayout } from "../../cli/paths";
+import { cloudflareRanges, nginxFileChange, trustedVhost, withNginxTransaction } from "../../cli/nginx-transaction";
+import { CLOUDFLARE_IPS_PATH, ROOT_UID, nginxLayout } from "../../cli/paths";
 import { panelUserUid } from "../../lib/sso-auth";
 import { COMMAND_MS } from "./limits";
 
@@ -14,12 +18,16 @@ export const REAL_IP_MARKER = "#clp-addons:untrusted ";
 const MARK = REAL_IP_MARKER;
 const ANY = /^([ \t]*)(set_real_ip_from[ \t]+(?:0\.0\.0\.0\/0|::\/0)[ \t]*;)[ \t]*$/gm;
 const MARKED = new RegExp(`^([ \\t]*)${MARK}(set_real_ip_from[ \\t]+(?:0\\.0\\.0\\.0\\/0|::\\/0)[ \\t]*;)[ \\t]*$`, "gm");
+const PROXIES_START = "# clp-addons:cloudflare-proxies:start";
+const PROXIES_END = "# clp-addons:cloudflare-proxies:end";
+const PROXIES = new RegExp(`^[ \\t]*${PROXIES_START}\\n(?:.*\\n)*?[ \\t]*${PROXIES_END}\\n`, "gm");
 
 export const DEFAULT_REAL_IP_PATHS = {
   nginxConf: "/etc/nginx/nginx.conf",
   /** CloudPanel 6's own Nginx; null on the older layout, where the panel shares the sites' instance. */
   panelConf: nginxLayout().configFile as string | null,
   panelUid: null as number | null,
+  cloudflareIps: CLOUDFLARE_IPS_PATH,
   nginx: "nginx",
   systemctl: "systemctl",
   rootUid: ROOT_UID,
@@ -43,23 +51,42 @@ interface Instance {
   groupWritable: boolean;
   config?: string;
   service?: string;
+  /** Proxies trusted in place of every address. */
+  proxies: string[];
 }
 
-export function withoutAnyAddress(content: string): string {
-  return content.replace(ANY, (_line, indent: string, directive: string) => `${indent}${MARK}${directive}`);
+/** Comments out the trust in every address and, after it, trusts `proxies`. */
+export function withoutAnyAddress(content: string, proxies: string[] = []): string {
+  const marked = content.replace(PROXIES, "")
+    .replace(ANY, (_line, indent: string, directive: string) => `${indent}${MARK}${directive}`);
+  if (proxies.length === 0) return marked;
+  return marked.replace(new RegExp(MARKED.source, "m"), (line, indent: string) =>
+    [line, `${indent}${PROXIES_START}`, ...proxies.map((proxy) => `${indent}set_real_ip_from ${proxy};`), `${indent}${PROXIES_END}`].join("\n"));
 }
 
 export function withAnyAddress(content: string): string {
-  return content.replace(MARKED, (_line, indent: string, directive: string) => `${indent}${directive}`);
+  return content.replace(PROXIES, "").replace(MARKED, (_line, indent: string, directive: string) => `${indent}${directive}`);
+}
+
+/** CloudPanel's own Cloudflare list, each entry checked as an address or a prefix. */
+function cloudflareProxies(path: string): string[] {
+  return cloudflareRanges(path).filter((range) => {
+    const [address = "", prefix] = range.split("/");
+    const family = isIP(address);
+    return family !== 0 && (prefix === undefined || (/^\d+$/.test(prefix) && Number(prefix) <= (family === 4 ? 32 : 128)));
+  });
 }
 
 function instances(options: RealIpOptions): { sites: Instance; panel: Instance | null } {
   const paths = { ...DEFAULT_REAL_IP_PATHS, ...options.paths };
-  const sites = { conf: paths.nginxConf, uid: paths.rootUid, groupWritable: false };
+  const sites = { conf: paths.nginxConf, uid: paths.rootUid, groupWritable: false, proxies: [] };
   if (!paths.panelConf || !existsSync(paths.panelConf)) return { sites, panel: null };
   // The panel's files belong to its own account, mode 770.
   const uid = paths.panelUid ?? panelUserUid() ?? paths.rootUid;
-  return { sites, panel: { conf: paths.panelConf, uid, groupWritable: true, config: paths.panelConf, service: "clp-nginx" } };
+  return { sites, panel: {
+    conf: paths.panelConf, uid, groupWritable: true, config: paths.panelConf, service: "clp-nginx",
+    proxies: cloudflareProxies(paths.cloudflareIps),
+  } };
 }
 
 export function realIpStatus(options: RealIpOptions = {}): RealIpStatus {
@@ -69,7 +96,7 @@ export function realIpStatus(options: RealIpOptions = {}): RealIpStatus {
   for (const instance of panel ? [sites, panel] : [sites]) {
     try {
       const { content } = trustedVhost(instance.conf, instance.uid, instance.groupWritable);
-      if (withoutAnyAddress(content) !== content) trustsAnyAddress = true;
+      if (new RegExp(ANY.source, "m").test(content)) trustsAnyAddress = true;
     } catch (error) {
       problems.push(error instanceof Error ? error.message : String(error));
     }
@@ -100,11 +127,13 @@ function applyTo(instance: Instance, wanted: (content: string) => string, option
 /** Puts both files in the wanted state, validating and reloading each instance only on a change. */
 export function applyRealIp(blockForged: boolean, options: RealIpOptions = {}): boolean {
   const { sites, panel } = instances(options);
-  const wanted = blockForged ? withoutAnyAddress : withAnyAddress;
+  const wanted = (instance: Instance) => blockForged
+    ? (content: string) => withoutAnyAddress(content, instance.proxies)
+    : withAnyAddress;
   const before = existsSync(sites.conf) ? readFileSync(sites.conf, "utf8") : null;
-  const changed = applyTo(sites, wanted, options, true);
+  const changed = applyTo(sites, wanted(sites), options, true);
   try {
-    return (panel ? applyTo(panel, wanted, options, true) : false) || changed;
+    return (panel ? applyTo(panel, wanted(panel), options, true) : false) || changed;
   } catch (error) {
     // Both or neither: the panel's refusal puts the sites' file back as it was.
     if (changed && before !== null) applyTo(sites, () => before, options, true);

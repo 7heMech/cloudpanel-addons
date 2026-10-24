@@ -163,11 +163,21 @@ that line in both files, and a `::/0` one if present, by prefixing
 `#clp-addons:untrusted `. The other `set_real_ip_from` lines stay: `127.0.0.1`,
 which CloudPanel's front server uses when it proxies to a local backend such as
 WordPress or Varnish, and the private ranges, where a load balancer would sit.
-A peer in those ranges can still set the header. Cloudflare sends
-`CF-Connecting-IP`, not `X-Real-IP`, so site requests keep the edge address they
-have today, and CloudPanel's `cloudflare` log format already reads that header.
-A panel or site behind a proxy on a public address loses its visitor IPs; switch
-the setting off there.
+A peer in those ranges can still set the header.
+
+The panel also trusts Cloudflare, in a marked block after the commented line
+built from CloudPanel's `/etc/nginx/cloudflare/ips`, with each entry checked as
+an address or prefix. Cloudflare appends the address it received the request
+from to `X-Forwarded-For`, and the panel has `real_ip_recursive on`, so Nginx
+skips trusted proxies from the right and stops at that address. A panel behind
+Cloudflare keeps its visitors' addresses, and a forged entry sent through
+Cloudflare sits to the left of the real one and is never reached. The sites get
+no Cloudflare trust: Cloudflare passes a client's `X-Real-IP` through unchanged,
+so trusting it would reopen the forgery for every site behind Cloudflare. Their
+Cloudflare requests keep the edge address they have today, and CloudPanel's
+`cloudflare` log format already reads `CF-Connecting-IP`. Only a proxy on a
+public address other than Cloudflare loses its visitors' addresses; switch the
+setting off there.
 
 Switching off removes the prefix and leaves each file byte-for-byte as CloudPanel
 wrote it. Each instance uses the shared Nginx transaction with its own
@@ -176,8 +186,8 @@ validation (`nginx -t`, or `nginx -t -c` for the panel) and reload (`nginx` or
 sites' half. The panel's file belongs to the `clp` account with mode 770, so it
 is accepted when owned by that account and not world-writable. The gateway
 timeout is in `limits.ts`. Activation and the 15-minute repair reapply the
-edit when CloudPanel rewrites a file, so a rewrite leaves the trust open until
-then. Disabling the addon restores both lines.
+edit when CloudPanel rewrites a file, and rebuild the panel's Cloudflare block
+when CloudPanel's list changes, so a rewrite leaves the trust open until then. Disabling the addon restores both lines.
 
 The sites' `nginx.conf` is a dpkg conffile of `nginx-common`. unattended-upgrades
 holds back a package whose modified conffile the upgrade would replace, so an

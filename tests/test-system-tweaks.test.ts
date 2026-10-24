@@ -154,6 +154,7 @@ interface Box {
   installed: { value: boolean };
   nginxConf: string;
   panelConf: string;
+  cloudflareIps: string;
   nginx: { fail: boolean; failPanel: boolean; commands: string[] };
 }
 
@@ -255,6 +256,8 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
   const panelConf = join(dir, "clp-nginx.conf");
   writeFileSync(panelConf, PANEL_NGINX_CONF);
   chmodSync(panelConf, 0o770);
+  const cloudflareIps = join(dir, "cloudflare-ips");
+  writeFileSync(cloudflareIps, "allow 173.245.48.0/20;\nallow 2400:cb00::/32;\ndeny all;\n");
   const nginx = { fail: false, failPanel: false, commands: [] as string[] };
   const nginxRun = (command: string, args: string[]): CommandResult => {
     nginx.commands.push(`${command} ${args.join(" ")}`);
@@ -269,7 +272,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
     paths: { phpRoot, fpmBinDir: sbin, rootUid: uid, optOutConfig: guardConfig, optOutSettings: settingsFile },
   };
   return {
-    aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, nginx,
+    aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, cloudflareIps, nginx,
     dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
     options: {
       processUid: 0,
@@ -284,7 +287,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
       },
       uploadProgress: { run, paths: { phpRoot, fpmBinDir: sbin, panelUnit: "clp-php-fpm.service" } },
       phpGuard,
-      realIp: { run: nginxRun, paths: { nginxConf, panelConf, panelUid: uid, rootUid: uid } },
+      realIp: { run: nginxRun, paths: { nginxConf, panelConf, cloudflareIps, panelUid: uid, rootUid: uid } },
     },
   };
 }
@@ -551,7 +554,15 @@ test("forged visitor IPs are blocked by default and switching off restores Cloud
   const blocked = readFileSync(b.nginxConf, "utf8");
   expect(blocked).toContain("    #clp-addons:untrusted set_real_ip_from 0.0.0.0/0;\n");
   expect(blocked).toContain("    set_real_ip_from 10.0.0.0/8;\n");
-  expect(readFileSync(b.panelConf, "utf8")).toContain("    #clp-addons:untrusted set_real_ip_from 0.0.0.0/0;\n    real_ip_header X-Forwarded-For;\n");
+  expect(readFileSync(b.panelConf, "utf8")).toContain([
+    "    #clp-addons:untrusted set_real_ip_from 0.0.0.0/0;",
+    "    # clp-addons:cloudflare-proxies:start",
+    "    set_real_ip_from 173.245.48.0/20;",
+    "    set_real_ip_from 2400:cb00::/32;",
+    "    # clp-addons:cloudflare-proxies:end",
+    "    real_ip_header X-Forwarded-For;\n",
+  ].join("\n"));
+  expect(blocked).not.toContain("cloudflare-proxies");
   expect(b.nginx.commands).toEqual([
     "nginx -t", "systemctl reload nginx", `nginx -t -c ${b.panelConf}`, "systemctl reload clp-nginx",
   ]);
@@ -574,6 +585,20 @@ test("repair narrows the trust again after CloudPanel rewrites nginx.conf, and d
   expect(readFileSync(b.nginxConf, "utf8")).toContain("#clp-addons:untrusted set_real_ip_from 0.0.0.0/0;");
   withdrawSystemTweaks(b.options);
   expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF);
+});
+
+test("the panel follows CloudPanel's Cloudflare list, keeping only well-formed entries", async () => {
+  const b = box();
+  restoreSystemTweaks(b.options);
+  writeFileSync(b.cloudflareIps, "allow 104.16.0.0/13;\nallow 999.1.1.1;\nallow 10.0.0.0/99;\ndeny all;\n");
+  expect(systemTweaksUpkeep(b.options)).toBe("visitor-IP trust narrowed again");
+  const panel = readFileSync(b.panelConf, "utf8");
+  expect(panel).toContain("    set_real_ip_from 104.16.0.0/13;\n");
+  expect(panel).not.toContain("173.245.48.0/20");
+  expect(panel).not.toContain("999.1.1.1");
+  expect(panel).not.toContain("10.0.0.0/99");
+  expect(panel.match(/cloudflare-proxies:start/g)).toHaveLength(1);
+  expect((await act(b, ["state"])).realIp.trustsAnyAddress).toBe(false);
 });
 
 test("a change Nginx rejects leaves the file and the saved choice as they were", async () => {

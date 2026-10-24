@@ -26,6 +26,16 @@ export function openPanelDatabase(path: string, readOnly = false, busyTimeoutMs 
   }
 }
 
+/** The `allow` entries of CloudPanel's Cloudflare list, or none without one. */
+export function cloudflareRanges(path: string): string[] {
+  let content: string;
+  try { content = readFileSync(path, "utf8"); } catch { return []; }
+  return content.split(/\r?\n/).flatMap((line) => {
+    const match = line.match(/^\s*allow\s+([0-9a-fA-F.:/]+)\s*;/);
+    return match ? [match[1]!] : [];
+  });
+}
+
 /** `groupWritable` accepts a file its owning account's group may write, as CloudPanel's panel files are. */
 export function trustedVhost(path: string, expectedUid: number, groupWritable = false): NginxFileBackup & { content: string } {
   const stat = lstatSync(path);
