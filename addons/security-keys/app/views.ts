@@ -26,7 +26,8 @@ function added(iso: string): string {
 
 function lastUsed(iso: string | null, now: number): string {
   if (!iso) return "Never used";
-  const days = Math.floor((now - Date.parse(iso)) / DAY_MS);
+  // Calendar days in UTC, the zone the exact time on hover is given in.
+  const days = Math.floor(now / DAY_MS) - Math.floor(Date.parse(iso) / DAY_MS);
   const text = days < 1 ? "Today" : days === 1 ? "Yesterday" : days < 60 ? `${days} days ago` : `${Math.round(days / 30)} months ago`;
   return `<time datetime="${esc(iso)}" title="${esc(iso.slice(0, 16).replace("T", " "))} UTC">${text}</time>`;
 }

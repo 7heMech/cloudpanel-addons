@@ -413,3 +413,13 @@ test("the admin list groups keys by user and marks what needs review", () => {
   expect(page).not.toContain("<span class=\"badge");
   expect(dashboardView({ users: [], settings: { roles: [], syncedPasskeys: true } }, now)).toContain("No security keys yet.");
 });
+
+test("Today and Yesterday follow the UTC calendar, not 24-hour spans", () => {
+  const used = (lastUsedAt: string, at: string) => dashboardView({
+    users: [{ user: "admin", active: true, role: "ROLE_ADMIN", keys: [{ id: "a", name: "YubiKey", synced: false, lastUsedAt, origin: "https://panel.example.com:8443", createdAt: "2026-01-02T00:00:00Z" }] }],
+    settings: { roles: ["ROLE_ADMIN"], syncedPasskeys: true },
+  }, Date.parse(at)).match(/UTC">([^<]+)<\/time>/)?.[1];
+  expect(used("2026-10-23T23:00:00Z", "2026-10-24T01:00:00Z")).toBe("Yesterday");
+  expect(used("2026-10-24T00:30:00Z", "2026-10-24T23:30:00Z")).toBe("Today");
+  expect(used("2026-10-21T23:59:00Z", "2026-10-24T00:01:00Z")).toBe("3 days ago");
+});

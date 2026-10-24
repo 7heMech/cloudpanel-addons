@@ -31,7 +31,6 @@
   .sk-toolbar .hint { flex-basis: 100%; margin-left: 0; }
   .sk-table thead { display: none; }
   .sk-table, .sk-table tbody, .sk-table tr { display: block; }
-  .sk-table tbody[hidden], .sk-table tr[hidden] { display: none; }
   .sk-group-head th { display: block; padding: 16px 16px 4px; }
   /* A key's details stack, with Remove centred beside them. */
   .sk-table tr.sk-key { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding: 10px 16px 10px 28px; }
