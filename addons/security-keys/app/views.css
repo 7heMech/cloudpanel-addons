@@ -1,7 +1,6 @@
 .security-key-table time { white-space: nowrap; }
 .security-key-table td .badge { display: table; margin-bottom: 3px; padding: 1px 5px; font-size: 10px; line-height: 1.2; }
 .security-key-table td.action-cell { text-align: right; }
-.security-key-table td.action-cell .btn { padding: 5px 12px; font-size: 13px; }
 .settings-card { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
 .settings-card h2 { margin: 0 0 8px; }
 .settings-card > div > p { margin: 0 0 12px; }
@@ -13,5 +12,6 @@
 @media (max-width: 940px) {
   .fleet-table.security-key-table td.site-cell { flex: 1 1 calc(100% - 110px); align-self: center; }
   .fleet-table.security-key-table td.action-cell:has(.btn) { flex: 0 0 auto; order: -1; }
+  .security-key-table td.action-cell .btn { padding: 5px 12px; font-size: 13px; }
   .security-key-table td.mono { overflow-wrap: anywhere; }
 }
