@@ -6,10 +6,10 @@
 .clp-sk-keys li:first-child { border-top: 0; }
 .clp-sk-keys li > div { min-width: 0; }
 .clp-sk-keys strong { display: block; overflow-wrap: anywhere; }
-.clp-sk-keys .btn { flex: 0 0 auto; }
 .clp-sk-meta, .clp-sk-refused { display: block; margin-top: 2px; font-size: 14px; }
 .clp-sk-meta { color: #9bacb6; }
 .clp-sk-refused { color: #dc3545; }
+.clp-sk-keys .btn { flex: 0 0 auto; }
 html.dark .clp-sk-keys, html.dark .clp-sk-keys li { border-color: var(--clp-border-color); }
 html.dark .clp-sk-meta { color: var(--clp-text-secondary, #9b9b9b); }
 .clp-sk-none { margin: 0 0 16px; color: #9ca3af; }
@@ -20,10 +20,4 @@ html.dark .clp-sk-meta { color: var(--clp-text-secondary, #9b9b9b); }
 @media (max-width: 575px) {
   .clp-sk-add input { max-width: none; }
   .clp-sk-add .btn { flex: 1 1 100%; }
-  /* Remove moves up to the name's line so the dates keep one line under both. */
-  .clp-sk-keys li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; row-gap: 0; }
-  .clp-sk-keys li > div { display: contents; }
-  .clp-sk-keys .btn { grid-column: 2; grid-row: 1; padding-top: 4px; padding-bottom: 4px; }
-  .clp-sk-meta, .clp-sk-refused { grid-column: 1 / -1; font-size: 13px; }
-  .clp-sk-meta { white-space: nowrap; }
 }

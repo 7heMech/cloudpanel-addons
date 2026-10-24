@@ -15,7 +15,7 @@ if (card) {
     errorBox.textContent = message;
     errorBox.hidden = !message;
   };
-  // This year's dates leave the year out, so a key's dates fit one line on a phone.
+  // This year's dates leave the year out.
   var day = function (iso) {
     var date = new Date(iso);
     return date.getFullYear() === new Date().getFullYear()
@@ -53,7 +53,9 @@ if (card) {
       name.textContent = key.name;
       var meta = document.createElement("span");
       meta.className = "clp-sk-meta";
-      meta.textContent = "Added " + day(key.createdAt) + " \u00b7 " + (key.lastUsedAt ? "Last used " + day(key.lastUsedAt) : "Never used");
+      // A narrow row breaks only between the two dates, never inside one.
+      var whole = function (text) { return text.replace(/ /g, "\u00a0"); };
+      meta.textContent = whole("Added " + day(key.createdAt)) + " \u00b7 " + whole(key.lastUsedAt ? "Last used " + day(key.lastUsedAt) : "Never used");
       meta.title = "Added " + new Date(key.createdAt).toLocaleString() +
         (key.lastUsedAt ? "\nLast used " + new Date(key.lastUsedAt).toLocaleString() : "");
       about.appendChild(name);
