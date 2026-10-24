@@ -84,16 +84,8 @@ function sha256(s: string): string {
 const startMarker = (addon: string, slug: string) => `{# clp-addons:${addon}:${slug}:start #}`;
 const endMarker = (addon: string, slug: string) => `{# clp-addons:${addon}:${slug}:end #}`;
 
-/**
- * Every addon's markers, not just one addon's.
- *
- * The slug segment is optional because releases up to v0.2.0 wrote
- * `{# clp-addons:instatic:start #}` with no slug. Those blocks still have to be
- * recognised, or the first reconciliation after an upgrade would snapshot a
- * file with the old block still in it and bake that nav entry into the pristine
- * copy permanently.
- */
-const ANY_BLOCK = /\n?[ \t]*\{# clp-addons:[a-z0-9_-]+(?::[a-z0-9_-]+)?:start #\}[\s\S]*?\{# clp-addons:[a-z0-9_-]+(?::[a-z0-9_-]+)?:end #\}/g;
+/** Every addon's markers, not just one addon's. */
+const ANY_BLOCK = /\n?[ \t]*\{# clp-addons:[a-z0-9_-]+:[a-z0-9_-]+:start #\}[\s\S]*?\{# clp-addons:[a-z0-9_-]+:[a-z0-9_-]+:end #\}/g;
 
 /** What the file looked like before any addon touched it. */
 function stripAllMarkers(content: string): string {
@@ -183,7 +175,6 @@ export function reconcile(
   paths?: Partial<InjectPaths>
 ): { statuses: TargetStatus[]; changed: boolean } {
   const p = resolvePaths(paths);
-  dropLegacySnapshots(p);
 
   const byFile = new Map<string, Injection[]>();
   for (const inj of injections) {
@@ -205,23 +196,6 @@ export function reconcile(
     changed ||= r.changed;
   }
   return { statuses, changed };
-}
-
-/**
- * Snapshots from the per-addon scheme releases up to v0.2.0 used. They are
- * keyed by target slug and have no `.path` sidecar, and their recorded hash
- * belongs to a different keying, so leaving them would strand state that
- * nothing reads and that an operator would reasonably mistake for current.
- */
-function dropLegacySnapshots(p: InjectPaths): void {
-  if (!existsSync(p.stateDir)) return;
-  const names = readdirSync(p.stateDir);
-  for (const f of names) {
-    if (!f.endsWith(".pristine") && !f.endsWith(".sha256")) continue;
-    const base = f.slice(0, f.lastIndexOf("."));
-    if (names.includes(`${base}.path`)) continue;
-    rmSync(`${p.stateDir}/${f}`, { force: true });
-  }
 }
 
 /** Templates we have a pristine snapshot for, i.e. ones some addon has patched. */

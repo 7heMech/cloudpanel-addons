@@ -20,23 +20,10 @@ function readCookie(req: Request, name: string): string | null {
   return new Bun.CookieMap(req.headers.get("cookie") ?? "").get(name);
 }
 
-/**
- * Expiry for the `/addons`-scoped cookie an older release set.
- *
- * A cookie's identity is its name, domain and path, so the panel-wide cookie
- * does not replace it: after an upgrade a browser holds both, and sends both
- * under `/addons`, longest path first. The server reads the first, which is the
- * stale one, while a page mounted in a panel route can only see the new one --
- * every action would be refused as a mismatch until the browser closed.
- * Expiring a cookie that is not there does nothing, so this is sent always.
- */
-const LEGACY_CSRF_EXPIRY = `${CSRF_COOKIE}=; Path=/addons; Max-Age=0; SameSite=Strict; Secure`;
-
-/** Response headers with the CSRF cookie set and the superseded one expired. */
+/** Response headers with the CSRF cookie set. */
 export function withCsrfCookie(headers: Record<string, string>, token: string): Headers {
   const out = new Headers(headers);
   out.append("Set-Cookie", csrfCookieHeader(token));
-  out.append("Set-Cookie", LEGACY_CSRF_EXPIRY);
   return out;
 }
 
@@ -57,8 +44,7 @@ export function csrfCookieHeader(token: string): string {
 /**
  * What every response from an addon gets unless it deliberately says otherwise.
  *
- * `csrf` attaches the cookie pair `withCsrfCookie` sets: the panel-wide cookie
- * and the expiry for the `/addons`-scoped one an older release wrote.
+ * `csrf` attaches the CSRF cookie `withCsrfCookie` sets.
  */
 export interface ResponsePolicy {
   status?: number;
@@ -97,7 +83,6 @@ function buildHeaders(contentType: string | null, policy: ResponsePolicy): Heade
   for (const cookie of extra.getSetCookie()) headers.append("Set-Cookie", cookie);
   if (policy.csrf !== undefined) {
     headers.append("Set-Cookie", csrfCookieHeader(policy.csrf));
-    headers.append("Set-Cookie", LEGACY_CSRF_EXPIRY);
   }
   return headers;
 }

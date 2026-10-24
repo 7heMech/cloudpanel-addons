@@ -48,18 +48,14 @@ describe("response policy", () => {
     expect(fromPairs.headers.get("X-Test")).toBe("two");
   });
 
-  test("the CSRF cookie is sent as a pair: the panel-wide one and the legacy expiry", () => {
+  test("the CSRF cookie is panel-wide, strict and secure", () => {
     const token = newCsrfToken();
     const cookies = htmlResponse("", { csrf: token }).headers.getSetCookie();
-    expect(cookies.length).toBe(2);
+    expect(cookies.length).toBe(1);
     expect(cookies[0]).toContain(`clp_addons_csrf=${token}`);
     expect(cookies[0]).toContain("Path=/");
     expect(cookies[0]).toContain("SameSite=Strict");
     expect(cookies[0]).toContain("Secure");
-    // A browser upgraded from the /addons-scoped cookie holds both and sends
-    // the stale one first, so the old one has to be expired explicitly.
-    expect(cookies[1]).toContain("Path=/addons");
-    expect(cookies[1]).toContain("Max-Age=0");
     expect(htmlResponse("").headers.getSetCookie().length).toBe(0);
   });
 
@@ -175,7 +171,7 @@ describe("bounded JSON reads", () => {
 });
 
 describe("repeated Set-Cookie", () => {
-  test("a caller's cookies survive the merge and join the CSRF pair", () => {
+  test("a caller's cookies survive the merge beside the CSRF cookie", () => {
     const headers = new Headers();
     headers.append("Set-Cookie", "a=1; Path=/");
     headers.append("Set-Cookie", "b=2; Path=/");
@@ -184,8 +180,8 @@ describe("repeated Set-Cookie", () => {
     const cookies = res.headers.getSetCookie();
     expect(cookies).toContain("a=1; Path=/");
     expect(cookies).toContain("b=2; Path=/");
-    // Both the caller's pair and the CSRF pair, not one collapsed value.
-    expect(cookies.length).toBe(4);
+    // The caller's two and the CSRF cookie, not one collapsed value.
+    expect(cookies.length).toBe(3);
     expect(res.headers.get("X-Thing")).toBe("kept");
   });
 

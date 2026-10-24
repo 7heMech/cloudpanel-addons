@@ -106,7 +106,7 @@ test("the action's daemon answers the same contract over a unix socket", async (
     Bun.connect({
       unix: sockPath,
       socket: {
-        open: (conn) => { conn.write("live\n"); },
+        open: (conn) => { conn.write(`${JSON.stringify({ kind: "auth", sessionId: "live" })}\n`); },
         data: (_conn, chunk) => { reply += Buffer.from(chunk).toString("utf8"); },
         close: () => resolve(),
       },

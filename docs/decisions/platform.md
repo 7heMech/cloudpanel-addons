@@ -64,7 +64,7 @@ is how the gateway runs an addon's root verbs, and `serve`, `smtp-submit` and
 A toggle is not an install. Enabling an addon writes that addon's config file,
 creates its state directory, rewrites the managed unit definitions and starts
 whatever those definitions newly introduce -- and nothing else. It does not
-create the service user, probe the auth helper or sweep legacy installs: those
+create the service user or probe the auth helper: those
 answer "has this box ever been set up", which `install`, `update` and `repair`
 ask and a toggle does not. An `enable` hands itself to the full install path
 rather than applying a delta to nothing whenever the unit files, the service

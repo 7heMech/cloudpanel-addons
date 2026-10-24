@@ -266,7 +266,7 @@ export type GatewayResponse<T = unknown> = ActionResult<T>;
 
 /**
  * Parses an incoming line from the gateway socket.
- * Supports both JSON request frames and legacy raw `<sessionId>\n` lines.
+ * Requests are JSON frames.
  * Only the first line is the request; what follows it is never parsed here.
  */
 export function parseGatewayRequest(raw: string): GatewayRequest | null {
@@ -315,11 +315,6 @@ export function parseGatewayRequest(raw: string): GatewayRequest | null {
     } catch {
       return null;
     }
-  }
-
-  // Fallback: legacy raw sessionId line
-  if (/^[a-zA-Z0-9,-]{1,128}$/.test(trimmed)) {
-    return { kind: "auth", sessionId: trimmed };
   }
 
   return null;

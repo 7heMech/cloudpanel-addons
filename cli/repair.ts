@@ -9,7 +9,7 @@ import { conffilesReleased } from "./conffiles";
 import { CLOUDFLARE_RECONCILE_TIMER, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "./paths";
 import {
   ensureAuthHelperReady, ensureDirs, ensurePathWatching, ensureServiceUser, ensureTimerArmed, hardenBackups, installUnits,
-  managerSocketProblem, reconcilePanelIdentity, removeLegacyInstall, removeLegacyUnits, removeLegacyUsers, startUnits,
+  managerSocketProblem, reconcilePanelIdentity, removeLegacyUnits, startUnits,
   unitActive, warnIfPanelSessionUnreadable, writeConfig,
 } from "./provision";
 import { fatal, log, parseFlags, requireRoot } from "./util";
@@ -58,7 +58,6 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
   }
 
   ensureServiceUser(quiet);
-  removeLegacyInstall(quiet);
   ensureDirs(all);
   // Unattended (timer-driven) reconciliation must not abort just because nobody is
   // currently logged into the panel; unlike install, warn and keep repairing.
@@ -73,7 +72,6 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     hardenBackups(spec, quiet);
   }
   removeLegacyUnits(quiet);
-  removeLegacyUsers(quiet);
   reconcilePanelIdentity(quiet);
   const unitChanges = installUnits(all);
   ensureDirs(all);

@@ -57,9 +57,7 @@ function probeFor(state: "anchor-not-found-in-markup" | "template-absent"): stri
     reconcilePanelIdentity: () => {},
     installUnits: () => false,
     purgeTwigCache: () => {},
-    removeLegacyInstall: () => {},
     removeLegacyUnits: () => {},
-    removeLegacyUsers: () => {},
     startUnits: () => { throw new Error("startUnits must not run once a required anchor is blocked"); },
     writeConfig: () => {},
   }));

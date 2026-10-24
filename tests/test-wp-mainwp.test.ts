@@ -545,12 +545,6 @@ test("an unconfirmed registration ties the addon to its Dashboard until cleanup"
   await expect(configureMainwp(run, options, false, undefined, true)).rejects.toThrow("clean up the MainWP connections");
 });
 
-test("state written before the remote mode reads as a Dashboard on this server", () => {
-  const { remote: _remote, ...old } = emptyMainwpState();
-  saveMainwpState(run.statePath, old as never);
-  expect(readMainwpState(run.statePath).remote).toBe(false);
-});
-
 test("the page offers a Dashboard on another server and Install or Activate per site", () => {
   const state = { ...emptyMainwpState(), remote: true, enabled: true };
   state.sites["new.test"] = { status: "inactive", seen: true, checkedAt: "", error: "", ownedPlugin: true, ownedConnection: false };

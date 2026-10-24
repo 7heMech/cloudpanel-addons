@@ -5,7 +5,7 @@ import { artifactNames, installArtifacts } from "./artifacts";
 import { bootstrapProvision, applyEnable } from "./toggle";
 import { type AddonSpec } from "./addon-catalog";
 import { withOperationLock } from "./operation-lock";
-import { ensureDirs, ensureRequiredUnits, ensureServiceUser, removeLegacyInstall } from "./provision";
+import { ensureDirs, ensureRequiredUnits, ensureServiceUser } from "./provision";
 import {
   CLI_VERSION, type FetchedArtifact, fetchVerified, loadLocal, resolveRelease, verifyAttestation,
 } from "./release";
@@ -47,7 +47,6 @@ async function applyInstall(spec: AddonSpec, flags: Record<string, string | true
   }
 
   ensureServiceUser();
-  removeLegacyInstall();
   ensureDirs(specs, true);
   installArtifacts(artifacts, artifactTag ?? CLI_VERSION.replace(/^v/, ""));
   bootstrapProvision(specs);

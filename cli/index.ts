@@ -50,7 +50,7 @@ function usage(): void {
 
   clp-addons
   clp-addons install <addon> [--version=vX.Y.Z] [--skip-attestation] [--local=DIR]
-  clp-addons update [--version=vX.Y.Z] [--skip-attestation]   (alias: upgrade)
+  clp-addons update [--version=vX.Y.Z] [--skip-attestation]
   clp-addons repair [<addon>] [--quiet] [--anchors-only]
   clp-addons status
   clp-addons uninstall <addon> --yes [--purge]
@@ -122,9 +122,7 @@ async function main(): Promise<number> {
     case "--version":
     case "-v": log.plain(CLI_VERSION); return 0;
     case "install": await cmdInstall(rest); return 0;
-    case "update":
-    case "upgrade": await cmdUpdate(rest); return 0;
-    case "self-update": fatal("self-update is deprecated; use clp-addons update");
+    case "update": await cmdUpdate(rest); return 0;
     case "recon": await runRecon(); return 0;
     case "repair": await cmdRepair(rest); return 0;
     case "apt-hook": await cmdAptHook(rest); return 0;

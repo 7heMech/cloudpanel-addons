@@ -95,10 +95,7 @@ mock.module("./cli/provision.ts", () => ({
   ensureTimerArmed: record(provision, "ensureTimerArmed"),
   hardenBackups: record(provision, "hardenBackups"),
   reconcilePanelIdentity: record(provision, "reconcilePanelIdentity"),
-  removeLegacyInstall: record(provision, "removeLegacyInstall"),
   removeLegacyUnits: record(provision, "removeLegacyUnits"),
-  removeLegacyUsers: record(provision, "removeLegacyUsers"),
-  removeSudoers: record(provision, "removeSudoers"),
   startUnits: record(provision, "startUnits"),
   stopUnits: record(provision, "stopUnits"),
   purgeTwigCache: record(provision, "purgeTwigCache"),
@@ -226,8 +223,7 @@ test("enabling an addon restarts nothing that was already running", () => {
 
 test("a toggle does not re-run first-install work", () => {
   const run = toggle([{ verb: "enable", addon: "stager" }]);
-  for (const step of ["ensureServiceUser", "ensureAuthHelperReady", "removeLegacyInstall",
-    "removeLegacyUnits", "removeLegacyUsers"]) {
+  for (const step of ["ensureServiceUser", "ensureAuthHelperReady", "removeLegacyUnits"]) {
     expect(run.provision).not.toContain(step);
   }
   // The addon's own dependencies are still checked: that is about this addon,

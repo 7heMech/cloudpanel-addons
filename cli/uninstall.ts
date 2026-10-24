@@ -12,7 +12,7 @@ import { purgeTwigCache } from "./inject";
 import { withOperationLockSync } from "./operation-lock";
 import { CLI_BIN, LIBEXEC_DIR } from "./paths";
 import {
-  ensureDirs, installUnits, installedConfig, reconcilePanelIdentity, removeLegacyInstall, removeSudoers,
+  ensureDirs, installUnits, installedConfig, reconcilePanelIdentity,
   startUnits, stopUnits,
 } from "./provision";
 import { fatal, log, parseFlags, requireRoot, tryRun } from "./util";
@@ -92,6 +92,7 @@ function uninstallContents(spec: AddonSpec, flags: Record<string, string | true>
     return;
   }
 
+  reconcilePanelIdentity(true, []);
   reconcileNginx(true, false);
   reconcilePhpGuard(false, true);
   stopUnits();
@@ -107,7 +108,6 @@ function removeAddonFiles(spec: AddonSpec, purge: boolean, instances: string[], 
   }
 
   stopUnits(remaining.length > 0);
-  removeLegacyInstall();
   reconcileAnchors(true, spec.name, remaining.length > 0);
   purgeTwigCache();
   if (purge) {
@@ -125,7 +125,6 @@ function removeAddonFiles(spec: AddonSpec, purge: boolean, instances: string[], 
       fatal(`could not remove ${spec.name} instances; state preserved for retry: ${failed.join(", ")}`);
     }
   }
-  removeSudoers();
   if (spec.name === "wp-tools") withdrawWpTools();
   // The config last: once it is gone the addon is no longer installed.
   rmSync(`${spec.configFile}.new`, { force: true });

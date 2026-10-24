@@ -12,8 +12,8 @@ import { type AddonSpec } from "./addon-catalog";
 import { withOperationLock, withOperationLockSync } from "./operation-lock";
 import {
   applyToggleUnits, ensureAuthHelperReady, ensureDirs, ensureRequiredUnits, ensureServiceUser,
-  installUnits, platformProvisioned, reconcilePanelIdentity, removeLegacyInstall, removeLegacyUnits,
-  removeLegacyUsers, startUnits, writeConfig,
+  installUnits, platformProvisioned, reconcilePanelIdentity, removeLegacyUnits,
+  startUnits, writeConfig,
 } from "./provision";
 import { fatal, log, requireRoot } from "./util";
 import { rmSync } from "node:fs";
@@ -24,20 +24,18 @@ import { rmSync } from "node:fs";
  *
  * Shared by `install` and by an `enable` that finds nothing provisioned. It is
  * deliberately not what a toggle runs -- re-creating the service user, probing
- * the auth helper and sweeping legacy installs are answers to "has this box
+ * the auth helper are answers to "has this box
  * ever been set up", and asking that on every toggle is most of what made a
  * toggle slow.
  */
 export function bootstrapProvision(specs: AddonSpec[]): void {
   ensureServiceUser();
-  removeLegacyInstall();
   ensureDirs(specs, true);
   ensureAuthHelperReady();
   for (const item of specs) writeConfig(item, true);
   reconcilePanelIdentity();
   installUnits(specs);
   removeLegacyUnits(true);
-  removeLegacyUsers(true);
   ensureDirs(specs);
   if (!reconcileAnchors(false)) fatal("could not safely patch the required CloudPanel templates");
   if (!reconcileMaintenanceNginx(false)) fatal("could not safely inject the Nginx maintenance check");
