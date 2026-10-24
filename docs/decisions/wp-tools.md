@@ -10,9 +10,16 @@ site list does not thereby authorize those actions, and the gateway's fixed
 addon-and-verb table refuses
 `panel-tweaks sign-in` rather than allowing it and checking a stored switch.
 
-The stable identifier, command-line name, config file and mount remain
-`wp-login`, preserving installed sign-in behavior and injected links. Sign-in
-is available whenever the addon is enabled. Automatic Varnish installation and
+Its identifier was `wp-login` before 2.0.0. `update` and `repair` move
+`wp-login.conf` and `/var/lib/clp-addons/wp-login/` to the new name, the state
+also when the addon is disabled, since it holds the MainWP connections and any
+login setting an enrollment changed. When both directories hold state, nothing
+is renamed and update and repair say which to keep. If the update fails after
+the move, it puts both back under `wp-login` first, because the binary the
+rollback restores knows only that name. The old name is not accepted anywhere
+else.
+
+Sign-in is available whenever the addon is enabled. Automatic Varnish installation and
 MainWP enrollment are separate opt-in policies, off when no settings exist.
 
 Disabling or uninstalling removes the sign-in helper from every site it is in.
@@ -27,14 +34,14 @@ updates, settings, deactivation and deletion belong to WordPress.
 ## Varnish installation
 
 The policy, per-domain exclusions and last-check records live in root-owned
-`/var/lib/clp-addons/wp-login/varnish.json`, written atomically with mode `0600`.
+`/var/lib/clp-addons/wp-tools/varnish.json`, written atomically with mode `0600`.
 Disabling keeps this state. Entries for a domain the panel no longer has are
 dropped, so a recreated site starts fresh. Missing state means automation off;
 invalid state is an error rather than a reason to reinstall plugins. The page
 then shows that error in place of the Varnish controls and still offers
 sign-in.
 
-Every 15 minutes repair queues `clp-addons action wp-login sync` through
+Every 15 minutes repair queues `clp-addons action wp-tools sync` through
 `queueAddonPass`. That pass runs outside repair's operation lock. The transient
 unit has a 180-second runtime limit and skips an already running pass. Each policy checks
 the enabled config under its own lock before reading state or discovering sites;
@@ -317,7 +324,7 @@ certificate verification, no redirects, a five-second timeout and a 1 KiB limit.
 Anything but 200–399 is Waiting for HTTPS: no `seen`, no claim, retried on every
 pass. A maintenance page or a Cloudflare-only rule is not ready either.
 
-Root-only `/var/lib/clp-addons/wp-login/mainwp.json`, written atomically with
+Root-only `/var/lib/clp-addons/wp-tools/mainwp.json`, written atomically with
 mode `0600`, holds the policy, exclusions and each site's status, `seen`, and
 separate plugin and connection ownership. While it owns anything it also keeps
 a snapshot of the settings it may change, the Security ID until the connection

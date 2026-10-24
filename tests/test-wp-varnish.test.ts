@@ -3,14 +3,14 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeWpLoginAction, reconcileWpVarnish, type WpLoginActionOptions, type WpSiteView } from "../addons/wp-login/action";
-import { commandOutput, readVarnishState, type WpCommand, type VarnishSyncResult } from "../addons/wp-login/varnish";
-import { handle } from "../addons/wp-login/app/index";
-import { dashboardView, layout } from "../addons/wp-login/app/views";
-import { emptyMainwpState, mainwpView, saveMainwpState } from "../addons/wp-login/mainwp";
-import { WP_LOGIN_ADDON } from "../addons/wp-login/addon";
-import type { WpDashboard } from "../addons/wp-login/app/service";
-import { WP_LOGIN_ALLOWED_VERBS } from "../lib/gateway-protocol";
+import { executeWpToolsAction, reconcileWpVarnish, type WpToolsActionOptions, type WpSiteView } from "../addons/wp-tools/action";
+import { commandOutput, readVarnishState, type WpCommand, type VarnishSyncResult } from "../addons/wp-tools/varnish";
+import { handle } from "../addons/wp-tools/app/index";
+import { dashboardView, layout } from "../addons/wp-tools/app/views";
+import { emptyMainwpState, mainwpView, saveMainwpState } from "../addons/wp-tools/mainwp";
+import { WP_TOOLS_ADDON } from "../addons/wp-tools/addon";
+import type { WpDashboard } from "../addons/wp-tools/app/service";
+import { WP_TOOLS_ALLOWED_VERBS } from "../lib/gateway-protocol";
 import { withFileLock } from "../cli/action-common";
 
 let root = "";
@@ -19,11 +19,11 @@ let statuses: Record<string, "active" | "inactive" | "missing">;
 let multisite: Set<string>;
 let failures: Set<string>;
 
-function options(): WpLoginActionOptions {
+function options(): WpToolsActionOptions {
   return {
     processUid: 0,
     paths: {
-      configFile: join(root, "wp-login.conf"), panelDb: join(root, "panel.sq3"), passwd: join(root, "passwd"),
+      configFile: join(root, "wp-tools.conf"), panelDb: join(root, "panel.sq3"), passwd: join(root, "passwd"),
       lockFile: join(root, "wp.lock"), varnishState: join(root, "varnish.json"), varnishLockFile: join(root, "wp-varnish.lock"),
       mainwpState: join(root, "mainwp.json"), mainwpLockFile: join(root, "wp-mainwp.lock"),
     },
@@ -41,7 +41,7 @@ function options(): WpLoginActionOptions {
 }
 
 async function act<T = unknown>(...argv: string[]): Promise<T> {
-  return await executeWpLoginAction(argv, options()) as T;
+  return await executeWpToolsAction(argv, options()) as T;
 }
 
 function dbRun(sql: string): void {
@@ -51,7 +51,7 @@ function dbRun(sql: string): void {
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "clp-wp-varnish-"));
-  writeFileSync(join(root, "wp-login.conf"), "");
+  writeFileSync(join(root, "wp-tools.conf"), "");
   commands = [];
   statuses = {};
   multisite = new Set();
@@ -124,7 +124,7 @@ test("repair queues nothing while both policies are off", async () => {
       calls.push(args);
       return { success: true, stdout: "", stderr: "", exitCode: 0 };
     };
-    expect(await WP_LOGIN_ADDON.maintenance!.run(options() as Record<string, unknown>)).toBeNull();
+    expect(await WP_TOOLS_ADDON.maintenance!.run(options() as Record<string, unknown>)).toBeNull();
     expect(calls).toEqual([]);
   } finally {
     Bun.spawnSync = spawn;
@@ -141,12 +141,12 @@ test("repair queues a bounded policy pass without running site code", async () =
       calls.push(args);
       return { success: args[0] === "systemd-run", stdout: "", stderr: "", exitCode: 0 };
     };
-    expect(await WP_LOGIN_ADDON.maintenance!.run(options() as Record<string, unknown>)).toBe("plugin policy pass queued");
+    expect(await WP_TOOLS_ADDON.maintenance!.run(options() as Record<string, unknown>)).toBe("plugin policy pass queued");
     expect(calls).toHaveLength(2);
     const queued = calls[1]!;
     expect(queued).toContain("--no-block");
     expect(queued).toContain("--property=RuntimeMaxSec=180");
-    expect(queued.slice(queued.indexOf("--") + 1)).toEqual(["/usr/local/bin/clp-addons", "action", "wp-login", "sync"]);
+    expect(queued.slice(queued.indexOf("--") + 1)).toEqual(["/usr/local/bin/clp-addons", "action", "wp-tools", "sync"]);
     expect(commands).toEqual([]);
   } finally {
     Bun.spawnSync = spawn;
@@ -166,7 +166,7 @@ test("a queued pass skips disabled or uninstalled addons before reading state or
   const state = { ...emptyMainwpState(), enabled: true, dashboard: "blog.example.com", cleanup: true };
   saveMainwpState(join(root, "mainwp.json"), state);
   const varnish = readFileSync(join(root, "varnish.json"), "utf8");
-  rmSync(join(root, "wp-login.conf"));
+  rmSync(join(root, "wp-tools.conf"));
   rmSync(join(root, "panel.sq3"));
   await act("sync");
   expect(commands).toEqual([]);
@@ -192,12 +192,12 @@ test("a Varnish failure does not prevent the queued MainWP pass", async () => {
     };
     return `CLP-ADDONS-MAINWP:${JSON.stringify(reply)}`;
   };
-  await expect(executeWpLoginAction(["sync"], config)).rejects.toThrow();
+  await expect(executeWpToolsAction(["sync"], config)).rejects.toThrow();
   expect(checked).toEqual(["dashboard-status", "status"]);
 });
 
 test("the periodic verb refuses arguments and stays outside the gateway", async () => {
-  expect(WP_LOGIN_ALLOWED_VERBS.has("sync")).toBe(false);
+  expect(WP_TOOLS_ALLOWED_VERBS.has("sync")).toBe(false);
   for (const arg of ["--domain=shop.example.com", "--enabled=true", "--as-user=admin"]) {
     await expect(act("sync", arg)).rejects.toThrow();
   }
@@ -289,7 +289,7 @@ test("intent is saved before installing, and a failed download is retried on the
     throw new Error("download failed");
   };
   await act("varnish-settings", "--enabled=true");
-  const result = await executeWpLoginAction(["varnish-sync"], config) as VarnishSyncResult;
+  const result = await executeWpToolsAction(["varnish-sync"], config) as VarnishSyncResult;
   expect(result.failed).toEqual(["shop.example.com: download failed"]);
   expect(seenDuringInstall).toBe(true);
   expect(readVarnishState(join(root, "varnish.json")).sites["shop.example.com"]).toMatchObject({ status: "error", seen: false });
@@ -357,19 +357,19 @@ test("Varnish verbs reject missing, duplicate and unrelated arguments", async ()
     ["varnish-site", "--domain=shop.example.com"], ["varnish-sync", "--enabled=true"],
     ["varnish-install", "--domain=shop.example.com", "--as-user=boss"],
   ]) await expect(act(...args)).rejects.toThrow();
-  for (const verb of ["varnish-settings", "varnish-site", "varnish-install", "varnish-sync"]) expect(WP_LOGIN_ALLOWED_VERBS.has(verb)).toBe(true);
+  for (const verb of ["varnish-settings", "varnish-site", "varnish-install", "varnish-sync"]) expect(WP_TOOLS_ALLOWED_VERBS.has(verb)).toBe(true);
 });
 
 test("Varnish routes remain administrator-only", async () => {
   const token = "a".repeat(64);
   for (const path of ["settings", "site", "install", "sync"]) {
-    const request = new Request(`https://panel.example.com/addons/wp-login/api/varnish-${path}`, {
+    const request = new Request(`https://panel.example.com/addons/wp-tools/api/varnish-${path}`, {
       method: "POST", headers: { Host: "panel.example.com", Origin: "https://panel.example.com", Cookie: `clp_addons_csrf=${token}`, "X-CLP-Addons-CSRF": token },
     });
     const response = await handle(request, `/api/varnish-${path}`, undefined, undefined, { user: "site-manager", roles: ["ROLE_SITE_MANAGER"] });
     expect(response.status).toBe(404);
   }
-  const dashboard = new Request("https://panel.example.com/addons/wp-login/api/dashboard", { headers: { Host: "panel.example.com" } });
+  const dashboard = new Request("https://panel.example.com/addons/wp-tools/api/dashboard", { headers: { Host: "panel.example.com" } });
   expect((await handle(dashboard, "/api/dashboard", undefined, undefined, { user: "site-manager", roles: ["ROLE_SITE_MANAGER"] })).status).toBe(404);
 });
 
@@ -380,5 +380,5 @@ test("the WordPress Tools page emits a valid script with sign-in and Varnish act
   expect(html).toContain("/api/varnish-settings");
   expect(html).toContain("/api/dashboard");
   expect(html).not.toContain("location.reload");
-  expect(readFileSync(join(import.meta.dir, "../addons/wp-login/app/views.client.js"), "utf8")).toContain("target.close()");
+  expect(readFileSync(join(import.meta.dir, "../addons/wp-tools/app/views.client.js"), "utf8")).toContain("target.close()");
 });

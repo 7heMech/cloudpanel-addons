@@ -1,5 +1,5 @@
 /**
- * The privileged half of WordPress Tools (stable identifier: wp-login).
+ * The privileged half of WordPress Tools (stable identifier: wp-tools).
  *
  * This is the only addon that puts its own code inside a site, which is why it is
  * an addon rather than a switch on Panel Tweaks: an operator who wants a
@@ -41,7 +41,7 @@ import {
 
 import { basicAuthBlocks, withBasicAuthBypass, type reloadNginx } from "./basic-auth";
 
-export type WpLoginVerb = "sites" | "sign-in" | "remove" | "sync" | "varnish-settings" | "varnish-site" | "varnish-install" | "varnish-sync";
+export type WpToolsVerb = "sites" | "sign-in" | "remove" | "sync" | "varnish-settings" | "varnish-site" | "varnish-install" | "varnish-sync";
 
 /** Where the loader and its one-time secret live inside a WordPress site. */
 const MU_PLUGINS = "wp-content/mu-plugins";
@@ -124,7 +124,7 @@ export interface WpRemoveResult {
   failed: string[];
 }
 
-export interface WpLoginActionPaths {
+export interface WpToolsActionPaths {
   configFile: string;
   panelDb: string;
   passwd: string;
@@ -143,8 +143,8 @@ export interface WpLoginActionPaths {
   mainwpLockFile: string;
 }
 
-export interface WpLoginActionOptions extends VarnishOptions {
-  paths?: Partial<WpLoginActionPaths>;
+export interface WpToolsActionOptions extends VarnishOptions {
+  paths?: Partial<WpToolsActionPaths>;
   emitReply?: boolean;
   processUid?: number;
   now?: () => Date;
@@ -154,11 +154,11 @@ export interface WpLoginActionOptions extends VarnishOptions {
   domainValidator?: (value: string) => string;
 }
 
-export const DEFAULT_WP_LOGIN_PATHS: WpLoginActionPaths = {
-  configFile: `${CONFIG_DIR}/wp-login.conf`,
+export const DEFAULT_WP_TOOLS_PATHS: WpToolsActionPaths = {
+  configFile: `${CONFIG_DIR}/wp-tools.conf`,
   panelDb: PANEL_DB,
   passwd: "/etc/passwd",
-  lockFile: "/run/lock/clp-addons/wp-login.lock",
+  lockFile: "/run/lock/clp-addons/wp-tools.lock",
   runuser: "/usr/sbin/runuser",
   maintenanceConfig: `${CONFIG_DIR}/maintenance.conf`,
   maintenance: DEFAULT_MAINTENANCE_ACTION_PATHS,
@@ -166,14 +166,14 @@ export const DEFAULT_WP_LOGIN_PATHS: WpLoginActionPaths = {
   nginx: "nginx",
   systemctl: "systemctl",
   vhostUid: 0,
-  varnishState: `${STATE_DIR}/wp-login/varnish.json`,
+  varnishState: `${STATE_DIR}/wp-tools/varnish.json`,
   varnishLockFile: "/run/lock/clp-addons/wp-varnish.lock",
-  mainwpState: `${STATE_DIR}/wp-login/mainwp.json`,
+  mainwpState: `${STATE_DIR}/wp-tools/mainwp.json`,
   mainwpLockFile: "/run/lock/clp-addons/wp-mainwp.lock",
 };
 
-function pathsFor(options: WpLoginActionOptions): WpLoginActionPaths {
-  return { ...DEFAULT_WP_LOGIN_PATHS, ...options.paths };
+function pathsFor(options: WpToolsActionOptions): WpToolsActionPaths {
+  return { ...DEFAULT_WP_TOOLS_PATHS, ...options.paths };
 }
 
 function reason(error: unknown): string {
@@ -209,7 +209,7 @@ function openPanelDatabase(path: string): Database {
  * CloudPanel's database, and the answer has to be the same one the panel's own
  * Sites page is built from.
  */
-function mayManageSite(paths: WpLoginActionPaths, userName: string, domain: string): boolean {
+function mayManageSite(paths: WpToolsActionPaths, userName: string, domain: string): boolean {
   const db = openPanelDatabase(paths.panelDb);
   try {
     return panelUserOwnsSite(db, userName, domain);
@@ -220,7 +220,7 @@ function mayManageSite(paths: WpLoginActionPaths, userName: string, domain: stri
   }
 }
 
-function panelSites(paths: WpLoginActionPaths): PanelSiteRow[] {
+function panelSites(paths: WpToolsActionPaths): PanelSiteRow[] {
   const db = openPanelDatabase(paths.panelDb);
   try {
     // Older panels have no Varnish column. Their sign-in behavior is unchanged,
@@ -280,7 +280,7 @@ function isWordPress(root: string): boolean {
  * an account that is missing, belongs to the box, or shares its uid with
  * another site, the same refusals SMTP and Terminal make.
  */
-function resolvedSites(paths: WpLoginActionPaths): { row: PanelSiteRow; account: SiteAccount; root: string }[] {
+function resolvedSites(paths: WpToolsActionPaths): { row: PanelSiteRow; account: SiteAccount; root: string }[] {
   const accounts = readAccounts(paths.passwd);
   const rows = panelSites(paths).flatMap((row) => {
     const account = accounts.get(row.user);
@@ -300,7 +300,7 @@ function resolvedSites(paths: WpLoginActionPaths): { row: PanelSiteRow; account:
 }
 
 /** Shared discovery and eligibility for the page and plugin installation. */
-function resolvedWordPressSites(paths: WpLoginActionPaths) {
+function resolvedWordPressSites(paths: WpToolsActionPaths) {
   return resolvedSites(paths)
     .filter((site) => isWordPress(site.root))
     .map((site) => ({
@@ -309,7 +309,7 @@ function resolvedWordPressSites(paths: WpLoginActionPaths) {
     }));
 }
 
-function wordpressSites(paths: WpLoginActionPaths, state: WpVarnishState): WpSiteView[] {
+function wordpressSites(paths: WpToolsActionPaths, state: WpVarnishState): WpSiteView[] {
   return resolvedWordPressSites(paths)
     .map((site) => ({
       domain: site.row.domain_name,
@@ -323,7 +323,7 @@ function wordpressSites(paths: WpLoginActionPaths, state: WpVarnishState): WpSit
 }
 
 /** The sites and the panel's domains a Varnish pass works from. */
-function varnishRun(paths: WpLoginActionPaths, request: { domain?: string; dueOnly?: boolean } = {}): VarnishRun {
+function varnishRun(paths: WpToolsActionPaths, request: { domain?: string; dueOnly?: boolean } = {}): VarnishRun {
   return {
     statePath: paths.varnishState,
     runuser: paths.runuser,
@@ -342,7 +342,7 @@ function varnishRun(paths: WpLoginActionPaths, request: { domain?: string; dueOn
  * sites automation can still act on and does not wait for a page's pass.
  */
 export async function reconcileWpVarnish(
-  options: WpLoginActionOptions = {},
+  options: WpToolsActionOptions = {},
   request: { dueOnly?: boolean } = {},
 ): Promise<VarnishSyncResult> {
   const paths = pathsFor(options);
@@ -356,18 +356,18 @@ export async function reconcileWpVarnish(
 }
 
 /** MainWP works from the same sites; Varnish eligibility does not apply. */
-function mainwpRun(paths: WpLoginActionPaths, request: { dueOnly?: boolean } = {}): MainwpRun {
+function mainwpRun(paths: WpToolsActionPaths, request: { dueOnly?: boolean } = {}): MainwpRun {
   return { ...varnishRun(paths, request), statePath: paths.mainwpState };
 }
 
 /** Whether the timer has anything to queue: automation is on, or MainWP still owes a site work. */
-export function wpPoliciesActive(options: WpLoginActionOptions = {}): boolean {
+export function wpPoliciesActive(options: WpToolsActionOptions = {}): boolean {
   const paths = pathsFor(options);
   return readVarnishState(paths.varnishState).enabled || mainwpNeedsRepair(readMainwpState(paths.mainwpState));
 }
 
 /** The queued timer's MainWP pass does not wait for a page's pass. */
-export async function reconcileWpMainwp(options: WpLoginActionOptions = {}): Promise<MainwpResult> {
+export async function reconcileWpMainwp(options: WpToolsActionOptions = {}): Promise<MainwpResult> {
   const paths = pathsFor(options);
   return withFileLock(paths.mainwpLockFile, 1, "a MainWP change is still running", async () => {
     if (!existsSync(paths.configFile) || !mainwpNeedsRepair(readMainwpState(paths.mainwpState))) {
@@ -378,7 +378,7 @@ export async function reconcileWpMainwp(options: WpLoginActionOptions = {}): Pro
 }
 
 /** Run both policies even when one fails; systemd bounds the whole pass. */
-async function syncPolicies(options: WpLoginActionOptions): Promise<unknown> {
+async function syncPolicies(options: WpToolsActionOptions): Promise<unknown> {
   const failed: string[] = [];
   let varnish: VarnishSyncResult | undefined;
   let mainwp: MainwpResult | undefined;
@@ -482,7 +482,7 @@ mv -f "$t" "$3"`;
 /** Only `PATH`: whatever else root's environment holds is not the site's to read. */
 const SITE_ENV = { PATH: "/usr/sbin:/usr/bin:/sbin:/bin" };
 
-function runAsSite(paths: WpLoginActionPaths, account: SiteAccount, command: string[], input?: string, timeoutMs = 30_000): void {
+function runAsSite(paths: WpToolsActionPaths, account: SiteAccount, command: string[], input?: string, timeoutMs = 30_000): void {
   const result = Bun.spawnSync([paths.runuser, "-u", account.name, "--", ...command], {
     cwd: "/",
     stdin: input === undefined ? "ignore" : new TextEncoder().encode(input),
@@ -500,7 +500,7 @@ function runAsSite(paths: WpLoginActionPaths, account: SiteAccount, command: str
 
 type ResolvedSite = ReturnType<typeof resolvedSites>[number];
 
-function wordpressSite(paths: WpLoginActionPaths, domain: string): ResolvedSite {
+function wordpressSite(paths: WpToolsActionPaths, domain: string): ResolvedSite {
   const site = resolvedSites(paths).find((candidate) => candidate.row.domain_name === domain);
   if (!site) failAction(`CloudPanel has no site called ${domain} with an account this addon can act as`);
   if (!isWordPress(site.root)) failAction(`${domain} does not look like a WordPress installation`);
@@ -508,9 +508,9 @@ function wordpressSite(paths: WpLoginActionPaths, domain: string): ResolvedSite 
 }
 
 function mintWpLogin(
-  paths: WpLoginActionPaths,
+  paths: WpToolsActionPaths,
   site: ResolvedSite,
-  options: WpLoginActionOptions,
+  options: WpToolsActionOptions,
 ): WpLoginResult {
   const domain = site.row.domain_name;
 
@@ -548,7 +548,7 @@ function mintWpLogin(
  * somebody else's site because the addon went away would make it something an
  * operator cannot fully withdraw.
  */
-export function removeWpLogin(paths: WpLoginActionPaths = DEFAULT_WP_LOGIN_PATHS): WpRemoveResult {
+export function removeWpLogin(paths: WpToolsActionPaths = DEFAULT_WP_TOOLS_PATHS): WpRemoveResult {
   let removed = 0;
   const failed: string[] = [];
   for (const site of resolvedSites(paths)) {
@@ -568,7 +568,7 @@ export function removeWpLogin(paths: WpLoginActionPaths = DEFAULT_WP_LOGIN_PATHS
 // --- request parsing ------------------------------------------------------
 
 interface ParsedAction {
-  verb: WpLoginVerb;
+  verb: WpToolsVerb;
   domain: string;
   /** The panel user the request is on behalf of, when it is not an admin's. */
   asUser: string;
@@ -581,9 +581,9 @@ interface ParsedAction {
   excluded?: boolean;
 }
 
-function parseAction(argv: string[], options: WpLoginActionOptions): ParsedAction {
+function parseAction(argv: string[], options: WpToolsActionOptions): ParsedAction {
   const [rawVerb, ...rest] = argv;
-  const verbs: WpLoginVerb[] = ["sites", "sign-in", "remove", "sync", "varnish-settings", "varnish-site", "varnish-install", "varnish-sync"];
+  const verbs: WpToolsVerb[] = ["sites", "sign-in", "remove", "sync", "varnish-settings", "varnish-site", "varnish-install", "varnish-sync"];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown WordPress sign-in verb '${rawVerb ?? ""}'`);
 
@@ -641,9 +641,9 @@ function parseAction(argv: string[], options: WpLoginActionOptions): ParsedActio
   return { verb, domain, asUser, clientIp, addBypass, allowBasicAuth, enabled, excluded };
 }
 
-export async function executeWpLoginAction(
+export async function executeWpToolsAction(
   argv: string[],
-  options: WpLoginActionOptions = {},
+  options: WpToolsActionOptions = {},
 ): Promise<unknown> {
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress sign-in actions must run as root");
   const paths = pathsFor(options);
@@ -721,19 +721,19 @@ export async function executeWpLoginAction(
   });
 }
 
-export async function runWpLoginAction(
+export async function runWpToolsAction(
   argv: string[],
-  options: WpLoginActionOptions = {},
+  options: WpToolsActionOptions = {},
 ): Promise<number> {
   const emit = options.emitReply !== false;
   try {
-    const data = await executeWpLoginAction(argv, options);
+    const data = await executeWpToolsAction(argv, options);
     if (emit) emitActionOk(data);
     return 0;
   } catch (error) {
     const message = reason(error);
-    if (emit) emitActionError(message, error instanceof ActionFailure ? error.data : undefined, "wp-login");
-    else process.stderr.write(`[wp-login] ERROR: ${message}\n`);
+    if (emit) emitActionError(message, error instanceof ActionFailure ? error.data : undefined, "wp-tools");
+    else process.stderr.write(`[wp-tools] ERROR: ${message}\n`);
     return 1;
   }
 }

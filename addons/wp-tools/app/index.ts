@@ -2,7 +2,7 @@ import { signInWindow } from "./sign-in-window";
 import {
   bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readJsonObject, newCsrfToken, safeDecodePathSegment,
 } from "../../../lib/app-http";
-import { validateDomain, wpLoginService } from "./service";
+import { validateDomain, wpToolsService } from "./service";
 import { dashboardBody, dashboardView, layout } from "./views";
 
 function json(body: unknown, status = 200): Response {
@@ -22,7 +22,7 @@ export async function handle(
 ): Promise<Response> {
   const method = req.method;
 
-  if (method === "GET" && path === "/health") return json({ ok: true, service: "wp-login-manager" });
+  if (method === "GET" && path === "/health") return json({ ok: true, service: "wp-tools-manager" });
 
   // The link injected into CloudPanel's Sites page is on a page this addon did
   // not render, so the browser may have no CSRF cookie yet and a non-adminis-
@@ -44,7 +44,7 @@ export async function handle(
   if (method === "GET" && path === "/") {
     const csrf = newCsrfToken();
     try {
-      const result = await wpLoginService.sites();
+      const result = await wpToolsService.sites();
       if (!result.ok || !result.data) throw new Error(result.error ?? "the WordPress site list is unavailable");
       return htmlResponse(layout("WordPress Tools", dashboardView(result.data), updateNotice), { csrf });
     } catch (error) {
@@ -57,7 +57,7 @@ export async function handle(
 
   if (method === "GET" && path === "/api/dashboard") {
     if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
-    const result = await wpLoginService.sites();
+    const result = await wpToolsService.sites();
     if (!result.ok || !result.data) return json(result, 400);
     return json({ ok: true, data: { html: dashboardBody(result.data) } });
   }
@@ -82,7 +82,7 @@ export async function handle(
     if (!admin && !auth?.user) return json({ ok: false, error: "not found" }, 404);
     // The address comes from the request, never the body: the page can only
     // agree to add the one it is being answered from.
-    const result = await wpLoginService.signIn(domain, {
+    const result = await wpToolsService.signIn(domain, {
       asUser: admin ? undefined : auth!.user,
       clientIp: clientIp(req),
       addBypass: body.addBypass === true,
@@ -92,7 +92,7 @@ export async function handle(
   }
 
   if (path === "/api/remove") {
-    const result = await wpLoginService.remove();
+    const result = await wpToolsService.remove();
     return json(result, result.ok ? 200 : 400);
   }
 
@@ -107,20 +107,20 @@ export async function handle(
       if (body.remote !== undefined && body.remote !== true) return json({ ok: false, error: "remote must be true" }, 400);
       const dashboard = body.dashboard === undefined ? undefined : validateDomain(body.dashboard);
       if (dashboard === null) return json({ ok: false, error: "choose a valid Dashboard hostname" }, 400);
-      result = await wpLoginService.mainwpSettings(body.enabled, dashboard, body.remote === true);
-    } else if (path === "/api/mainwp-sync") result = await wpLoginService.mainwpSync();
+      result = await wpToolsService.mainwpSettings(body.enabled, dashboard, body.remote === true);
+    } else if (path === "/api/mainwp-sync") result = await wpToolsService.mainwpSync();
     else if (path === "/api/mainwp-cleanup") {
       if (body.confirm !== true) return json({ ok: false, error: "confirm MainWP cleanup" }, 400);
-      result = await wpLoginService.mainwpCleanup();
+      result = await wpToolsService.mainwpCleanup();
     } else {
       const domain = validateDomain(body.domain);
       if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
       if (path === "/api/mainwp-site") {
         if (typeof body.excluded !== "boolean") return json({ ok: false, error: "excluded must be true or false" }, 400);
-        result = await wpLoginService.mainwpSite(domain, body.excluded);
+        result = await wpToolsService.mainwpSite(domain, body.excluded);
       } else if (path === "/api/mainwp-connect") {
         if (body.confirm !== true) return json({ ok: false, error: "confirm the MainWP connection" }, 400);
-        result = await wpLoginService.mainwpConnect(domain);
+        result = await wpToolsService.mainwpConnect(domain);
       }
     }
     return result ? json(result, result.ok ? 200 : 400) : json({ ok: false, error: "not found" }, 404);
@@ -131,7 +131,7 @@ export async function handle(
     // administrator gate. Keep that boundary explicit here as well.
     if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
     if (path === "/api/varnish-sync") {
-      const result = await wpLoginService.varnishSync();
+      const result = await wpToolsService.varnishSync();
       return json(result, result.ok ? 200 : 400);
     }
     let body: Record<string, unknown>;
@@ -139,18 +139,18 @@ export async function handle(
     catch (error) { return bodyErrorResponse(error); }
     if (path === "/api/varnish-settings") {
       if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
-      const result = await wpLoginService.varnishSettings(body.enabled);
+      const result = await wpToolsService.varnishSettings(body.enabled);
       return json(result, result.ok ? 200 : 400);
     }
     const domain = validateDomain(body.domain);
     if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
     if (path === "/api/varnish-site") {
       if (typeof body.excluded !== "boolean") return json({ ok: false, error: "excluded must be true or false" }, 400);
-      const result = await wpLoginService.varnishSite(domain, body.excluded);
+      const result = await wpToolsService.varnishSite(domain, body.excluded);
       return json(result, result.ok ? 200 : 400);
     }
     if (path === "/api/varnish-install") {
-      const result = await wpLoginService.varnishInstall(domain);
+      const result = await wpToolsService.varnishInstall(domain);
       return json(result, result.ok ? 200 : 400);
     }
   }

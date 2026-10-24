@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { reloadNginx } from "../addons/wp-login/basic-auth";
+import { reloadNginx } from "../addons/wp-tools/basic-auth";
 
 let root: string;
 beforeEach(() => {

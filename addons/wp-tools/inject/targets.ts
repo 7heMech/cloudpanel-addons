@@ -28,7 +28,7 @@ import STYLE from "./sites.css" with { type: "text" };
 // of the document but the domain the template wrote into the link.
 import SCRIPT from "./sites.client.js" with { type: "text" };
 
-export const WP_LOGIN_TARGETS: AddonTarget[] = [
+export const WP_TOOLS_TARGETS: AddonTarget[] = [
   {
     slug: "sites-script",
     template: "Frontend/Site/index.html.twig",
@@ -45,7 +45,7 @@ export const WP_LOGIN_TARGETS: AddonTarget[] = [
     required: false,
     snippet: () => `
         ${WORDPRESS}
-          <a href="#" class="clp-wp-login ${ROW_ACTION_CLASS}" data-clp-domain="{{ site.domainName }}" title="Sign in to WordPress as its first administrator">WP Login</a>
+          <a href="#" class="clp-wp-tools ${ROW_ACTION_CLASS}" data-clp-domain="{{ site.domainName }}" title="Sign in to WordPress as its first administrator">WP Login</a>
         {% endif %}`,
   },
 ];

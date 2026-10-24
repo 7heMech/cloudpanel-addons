@@ -16,7 +16,7 @@ export interface WpDashboard {
 }
 
 function call<T>(verb: string, args: string[] = [], timeout?: number): Promise<ActionResult<T>> {
-  return callGatewayAction<T>("wp-login", verb, args, undefined, timeout ? { timeout } : undefined);
+  return callGatewayAction<T>("wp-tools", verb, args, undefined, timeout ? { timeout } : undefined);
 }
 
 /** Finding the WordPress sites means a stat of every site root on the box. */
@@ -26,7 +26,7 @@ const PASS_TIMEOUT_MS = 120_000;
 /** A MainWP pass can end in an enrollment's own minute and the restore after it. */
 const MAINWP_TIMEOUT_MS = 210_000;
 
-export const wpLoginService = {
+export const wpToolsService = {
   sites(): Promise<ActionResult<WpDashboard>> {
     return call<WpDashboard>("sites", [], LIST_TIMEOUT_MS);
   },

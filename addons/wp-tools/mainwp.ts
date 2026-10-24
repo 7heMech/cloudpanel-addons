@@ -695,7 +695,7 @@ export function requireMainwpSettled(path: string): void {
   }
   const sites = Object.values(state.sites);
   if (sites.some(needsAuthRecovery)) {
-    throw new Error("a MainWP enrollment was interrupted; run clp-addons repair wp-login to restore its temporary setting, then retry");
+    throw new Error("a MainWP enrollment was interrupted; run clp-addons repair wp-tools to restore its temporary setting, then retry");
   }
 }
 

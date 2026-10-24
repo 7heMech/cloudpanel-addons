@@ -104,11 +104,11 @@ export const SYSTEM_TWEAKS_ALLOWED_VERBS = new Set([
 ]);
 
 /**
- * WordPress Tools keeps its stable wp-login identifier. Sign-in credentials,
- * helper removal, optional Varnish installation and MainWP enrollment each have
- * fixed verbs; none accepts paths, plugin names or arbitrary commands.
+ * Sign-in credentials, helper removal, optional Varnish installation and MainWP
+ * enrollment each have fixed verbs; none accepts paths, plugin names or
+ * arbitrary commands.
  */
-export const WP_LOGIN_ALLOWED_VERBS = new Set([
+export const WP_TOOLS_ALLOWED_VERBS = new Set([
   "sites",
   "sign-in",
   "remove",

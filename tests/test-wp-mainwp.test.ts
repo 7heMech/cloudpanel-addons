@@ -2,11 +2,11 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { configureMainwp, emptyMainwpState, mainwpAction, mainwpView, readMainwpState, requireMainwpSettled, saveMainwpState, syncMainwp, type MainwpRun } from "../addons/wp-login/mainwp";
-import type { WpCommand } from "../addons/wp-login/wp-cli";
-import { commandOutput } from "../addons/wp-login/wp-cli";
-import { handle } from "../addons/wp-login/app/index";
-import { dashboardView } from "../addons/wp-login/app/views";
+import { configureMainwp, emptyMainwpState, mainwpAction, mainwpView, readMainwpState, requireMainwpSettled, saveMainwpState, syncMainwp, type MainwpRun } from "../addons/wp-tools/mainwp";
+import type { WpCommand } from "../addons/wp-tools/wp-cli";
+import { commandOutput } from "../addons/wp-tools/wp-cli";
+import { handle } from "../addons/wp-tools/app/index";
+import { dashboardView } from "../addons/wp-tools/app/views";
 
 let root: string;
 let run: MainwpRun;
@@ -249,10 +249,10 @@ test("invalid state and unconfirmed or malformed verbs fail closed", async () =>
 
 test("MainWP routes require administrator, CSRF, and confirmation before reaching the gateway", async () => {
   for (const path of ["settings", "site", "sync", "connect", "cleanup"]) {
-    const response = await handle(new Request(`https://panel.test/addons/wp-login/api/mainwp-${path}`, { method: "POST", headers: { Host: "panel.test", origin: "https://panel.test", cookie: `clp_addons_csrf=${"a".repeat(64)}`, "X-CLP-Addons-CSRF": "a".repeat(64), "Content-Type": "application/json" }, body: "{}" }), `/api/mainwp-${path}`, undefined, undefined, { user: "manager", roles: ["ROLE_SITE_MANAGER"] });
+    const response = await handle(new Request(`https://panel.test/addons/wp-tools/api/mainwp-${path}`, { method: "POST", headers: { Host: "panel.test", origin: "https://panel.test", cookie: `clp_addons_csrf=${"a".repeat(64)}`, "X-CLP-Addons-CSRF": "a".repeat(64), "Content-Type": "application/json" }, body: "{}" }), `/api/mainwp-${path}`, undefined, undefined, { user: "manager", roles: ["ROLE_SITE_MANAGER"] });
     expect(response.status).toBe(404);
   }
-  const denied = await handle(new Request("https://panel.test/addons/wp-login/api/mainwp-cleanup", { method: "POST", body: "{}" }), "/api/mainwp-cleanup", undefined, undefined, { user: "admin", roles: ["ROLE_ADMIN"] });
+  const denied = await handle(new Request("https://panel.test/addons/wp-tools/api/mainwp-cleanup", { method: "POST", body: "{}" }), "/api/mainwp-cleanup", undefined, undefined, { user: "admin", roles: ["ROLE_ADMIN"] });
   expect(denied.status).toBe(403);
 });
 

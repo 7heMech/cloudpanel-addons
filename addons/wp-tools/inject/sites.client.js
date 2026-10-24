@@ -26,10 +26,10 @@
       else if (confirm(text)) onAccept();
       return;
     }
-    var el = document.getElementById("clp-wp-login-dialog");
+    var el = document.getElementById("clp-wp-tools-dialog");
     if (!el) {
       el = document.createElement("div");
-      el.id = "clp-wp-login-dialog";
+      el.id = "clp-wp-tools-dialog";
       el.className = "modal fade";
       el.tabIndex = -1;
       el.innerHTML = '<div class="modal-dialog modal-dialog-centered"><div class="modal-content">'
@@ -116,7 +116,7 @@
   }
 
   function start(event) {
-    var link = event.target.closest ? event.target.closest("a.clp-wp-login") : null;
+    var link = event.target.closest ? event.target.closest("a.clp-wp-tools") : null;
     if (!link) return;
     event.preventDefault();
     if (link.dataset.busy === "1") return;

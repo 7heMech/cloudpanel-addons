@@ -1,6 +1,6 @@
 // `clp-addons update`, and the rollback a failed one runs.
 
-import { installedAddons, migrateAbsorbedAddons } from "./addons";
+import { installedAddons, migrateOldAddonNames, revertAddonRenames } from "./addons";
 import {
   artifactNames, currentArtifactsMatch, installArtifacts, keepPreviousArtifacts, replaceArtifacts,
   rollbackUpdate,
@@ -23,24 +23,33 @@ import { fatal, log, parseFlags, requireRoot, run } from "./util";
  * Services restart last, after every generated file reflects this process.
  */
 function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
-  migrateAbsorbedAddons();
-  const specs = installedAddons();
-  ensureServiceUser();
-  removeLegacyInstall();
-  ensureDirs(specs);
-  ensureAuthHelperReady();
-  for (const spec of specs) writeConfig(spec, true);
-  reconcilePanelIdentity();
-  removeLegacyUnits(true);
-  removeLegacyUsers(true);
-  installUnits(specs);
-  ensureDirs(specs);
-  reconcileAnchors(false);
-  if (!reconcileMaintenanceNginx(false)) log.warn("Nginx maintenance check needs manual repair");
-  if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
-  reconcilePhpGuard(true);
-  startUnits({ beforeManagerRestart });
-  return specs;
+  // A failure from here on makes the binary that started this update restore
+  // itself, and an earlier binary knows the renamed addons only by their old
+  // names, so they go back first.
+  const renames = migrateOldAddonNames();
+  try {
+    const specs = installedAddons();
+    ensureServiceUser();
+    removeLegacyInstall();
+    ensureDirs(specs);
+    ensureAuthHelperReady();
+    for (const spec of specs) writeConfig(spec, true);
+    reconcilePanelIdentity();
+    removeLegacyUnits(true);
+    removeLegacyUsers(true);
+    installUnits(specs);
+    ensureDirs(specs);
+    reconcileAnchors(false);
+    if (!reconcileMaintenanceNginx(false)) log.warn("Nginx maintenance check needs manual repair");
+    if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
+    reconcilePhpGuard(true);
+    startUnits({ beforeManagerRestart });
+    if (renames.length > 0 && unitActive(MANAGER_UNIT) !== "active") revertAddonRenames(renames);
+    return specs;
+  } catch (error) {
+    revertAddonRenames(renames);
+    throw error;
+  }
 }
 
 /**

@@ -116,7 +116,7 @@ normalizes domains and IP addresses, checks that site-scoped domains are current
 CloudPanel sites, and bounds a custom template at 256 KiB. Each bypass update
 replaces the complete list for its scope and allows at most 64 addresses.
 WordPress Tools adds one address to a site's list through the same locked
-writer, when an administrator agrees; see [WordPress Tools](wp-login.md).
+writer, when an administrator agrees; see [WordPress Tools](wp-tools.md).
 
 The state root, global directory, and per-domain directories are mode `0711`,
 which lets Nginx traverse a known path without listing domains or bypasses.

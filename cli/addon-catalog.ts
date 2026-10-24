@@ -20,7 +20,7 @@ import { INSTATIC_ADDON } from "../addons/instatic/addon";
 import { MAINTENANCE_ADDON } from "../addons/maintenance/addon";
 import { PANEL_TWEAKS_ADDON } from "../addons/panel-tweaks/addon";
 import { SYSTEM_TWEAKS_ADDON } from "../addons/system-tweaks/addon";
-import { WP_LOGIN_ADDON } from "../addons/wp-login/addon";
+import { WP_TOOLS_ADDON } from "../addons/wp-tools/addon";
 import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
 import { SMTP_ADDON } from "../addons/smtp/addon";
@@ -102,7 +102,7 @@ const DEFINITIONS: AddonDefinition[] = [
   GIT_ADDON,
   PANEL_TWEAKS_ADDON,
   SYSTEM_TWEAKS_ADDON,
-  WP_LOGIN_ADDON,
+  WP_TOOLS_ADDON,
   SMTP_ADDON,
   TERMINAL_ADDON,
   SECURITY_KEYS_ADDON,
