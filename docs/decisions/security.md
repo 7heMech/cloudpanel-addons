@@ -86,15 +86,15 @@ that policy or install the official CLP plugin; sign-in's non-administrator
 exception does not apply. The normal WordPress plugin remains installed when
 automation stops. See [WordPress Tools](wp-login.md).
 
-CloudPanel's native basic-auth allowance inherits its global real-IP trust:
-`set_real_ip_from 0.0.0.0/0` accepts a forged `X-Real-IP` from any IPv4 peer.
-Anyone who knows an allowed IP can replay it to bypass authentication. Ordinary
+CloudPanel's native basic-auth allowance inherits its global real-IP trust.
+Stock CloudPanel's `set_real_ip_from 0.0.0.0/0` accepts a forged `X-Real-IP` from
+any IPv4 peer, so anyone who knows an allowed IP can replay it to bypass
+authentication. [System Tweaks](system-tweaks.md#forged-visitor-ips) removes that
+line by default; a box without it keeps the native trust. Ordinary
 Cloudflare proxy requests carry the visitor in `CF-Connecting-IP`, which that
 configuration does not use; Nginx sees the edge, so the panel IP may never
-match. Both limits appear in the confirmation. The addon retains native
-behavior and changes neither global `nginx.conf` nor per-site real-IP trust.
-A local override would also alter CloudPanel's Cloudflare-only checks and need
-removal and regeneration handling beyond the native allowlist's lifecycle.
+match. Both limits appear in the confirmation. WordPress sign-in itself changes
+no real-IP trust.
 
 ## CloudPanel authentication
 

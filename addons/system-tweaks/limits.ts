@@ -8,3 +8,5 @@ export const COMMAND_MS = 30_000;
 export const INSTALL_DEADLINE_MS = 600_000;
 /** The gateway kills the action at this, so it waits past the deadline for start-up and the reply. */
 export const INSTALL_GATEWAY_TIMEOUT_MS = INSTALL_DEADLINE_MS + 30_000;
+/** Nginx validation and reload, a rollback of both, lock waiting and the reply. */
+export const REAL_IP_GATEWAY_TIMEOUT_MS = 4 * COMMAND_MS + 60_000;

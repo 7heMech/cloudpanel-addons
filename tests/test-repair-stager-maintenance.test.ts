@@ -311,33 +311,3 @@ test.serial("repair runs addon maintenance after the anchors and Nginx, and --an
   expect(output.full.filter((step) => step === "prune")).toHaveLength(1);
   expect(output.anchorsOnly).toEqual(["anchors", "maintenance", "nginx"]);
 });
-
-test.serial("the path watcher's fast repair restores the opted-in Cloudflare check only with Cloudflare IP Access enabled", () => {
-  const script = `${mockPrelude}
-    let enabled = false;
-    let calls = 0;
-    let fail = false;
-    mock.module("./cli/operation-lock.ts", () => ({ withOperationLock: async (_name, body) => body() }));
-    const realAddons = await import("./cli/addons.ts");
-    mock.module("./cli/addons.ts", () => ({ ...realAddons, installedAddons: () => enabled ? [{ name: "cloudflare-ips" }] : [] }));
-    const realTweaks = await import("./addons/cloudflare-ips/action.ts");
-    mock.module("./addons/cloudflare-ips/action.ts", () => ({ ...realTweaks, cloudflareProtectionUpkeep: () => {
-      calls++;
-      if (fail) throw new Error("peer lookup rejected");
-    } }));
-    const { cmdRepair } = await import("./cli/repair.ts");
-    await cmdRepair(["--anchors-only"]);
-    const disabledCalls = calls;
-    enabled = true;
-    await cmdRepair(["--anchors-only"]);
-    fail = true;
-    await cmdRepair(["--anchors-only"]);
-    process.stdout.write(JSON.stringify({ disabledCalls, calls, log: globalThis.__repairLog }));
-  `;
-  const result = spawnSync(process.execPath, ["-e", script], { cwd: repo, encoding: "utf8" });
-  expect(result.status, result.stderr).toBe(0);
-  const output = JSON.parse(result.stdout.trim().split("\n").pop() ?? "");
-  expect(output.disabledCalls).toBe(0);
-  expect(output.calls).toBe(2);
-  expect(output.log).toContainEqual(["err", "Cloudflare bypass protection: peer lookup rejected"]);
-});

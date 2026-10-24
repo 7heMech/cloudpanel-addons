@@ -53,3 +53,15 @@ Every installation turns off `session.upload_progress.enabled` on each PHP-FPM,
 CloudPanel's own included, with `99-clp-addons-upload-progress.ini`. The table
 shows each FPM's effective value and which file set it. Switching the mitigation
 off removes only that file. It comes back if System Tweaks is disabled.
+
+## Forged visitor IPs
+
+**Block forged visitor IPs** is on by default. Without it, any client can claim
+another IP address with an `X-Real-IP` header, and sites, logs, basic auth and
+**Allow traffic from Cloudflare only** believe it. It comments out
+`set_real_ip_from 0.0.0.0/0` in `/etc/nginx/nginx.conf`. Cloudflare traffic and
+CloudPanel's own proxying are unaffected.
+
+Switch it off if a load balancer on a public address sits in front of this
+server. If unattended-upgrades reports a conffile prompt for `nginx-common`,
+switch it off, run `apt upgrade`, and switch it on again.

@@ -8,8 +8,6 @@ import { ARTIFACT_MANIFEST_PATH, CLI_ARTIFACT, CLI_BIN, LIBEXEC_DIR, LOCK_DIR } 
 import * as realProvision from "../cli/provision";
 
 const calls: string[] = [];
-const realCloudflare = await import("../addons/cloudflare-ips/action");
-mock.module("../addons/cloudflare-ips/action", () => ({ ...realCloudflare, cloudflareProtectionUpkeep: () => { calls.push("cloudflareProtectionUpkeep"); return null; } }));
 mock.module("../cli/php-guard", () => ({ reconcilePhpGuard: () => calls.push("reconcilePhpGuard") }));
 let hasInstalledAddon = true;
 let artifactsAvailable = false;
@@ -683,7 +681,6 @@ test("an up-to-date update with no addons keeps the no-service branch", async ()
   expect(calls).toContain("startUnits");
   expect(calls.filter((c) => c.startsWith("writeConfig:"))).toHaveLength(0);
   expect(calls).toContain("log.ok:clp-addons 1.2.3 is up to date");
-  expect(calls).not.toContain("cloudflareProtectionUpkeep");
   expect(provisioning).toEqual({
     serviceUser: true,
     legacyInstall: false,
@@ -742,7 +739,6 @@ test("a same-version update reuses verified installed artifacts", async () => {
   expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
   expect(calls).toContain("reconcile");
   expect(calls).toContain("startUnits");
-  expect(calls).toContain("cloudflareProtectionUpkeep");
   artifactsAvailable = false;
 });
 

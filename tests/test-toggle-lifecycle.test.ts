@@ -121,12 +121,6 @@ mock.module("./cli/inject.ts", () => ({
   panelVhostWatchPath: () => null,
 }));
 const realMaintenance = await import("./addons/maintenance/action.ts");
-const realCloudflare = await import("./addons/cloudflare-ips/action.ts");
-mock.module("./addons/cloudflare-ips/action.ts", () => ({
-  ...realCloudflare,
-  cloudflareProtectionUpkeep: record(provision, "cloudflareProtectionUpkeep"),
-  withdrawCloudflareProtection: record(provision, "withdrawCloudflareProtection"),
-}));
 mock.module("./addons/maintenance/action.ts", () => ({
   ...realMaintenance,
   ensureMaintenanceData: () => {},
@@ -261,13 +255,11 @@ test("re-enabling an addon that is already on changes and reloads nothing", () =
 test("the Cloudflare timer is started when its units appear and stopped when they go", () => {
   const on = toggle([{ verb: "enable", addon: "cloudflare-ips" }]);
   expect(on.error).toBeUndefined();
-  expect(on.provision).toContain("cloudflareProtectionUpkeep");
   expect(on.systemd).toContain("enable clp-addons-cloudflare-ips-reconcile.timer");
   expect(on.systemd).toContain("restart clp-addons-cloudflare-ips-reconcile.timer");
 
   const off = toggle([{ verb: "disable", addon: "cloudflare-ips" }], { enabled: ["cloudflare-ips"] });
   expect(off.error).toBeUndefined();
-  expect(off.provision).toContain("withdrawCloudflareProtection");
   expect(off.systemd).toContain("disable --now clp-addons-cloudflare-ips-reconcile.timer");
   expect(existsSync(join(off.root, "systemd", "clp-addons-cloudflare-ips-reconcile.timer"))).toBe(false);
   expect(existsSync(join(off.root, "systemd", "clp-addons-cloudflare-ips-reconcile.service"))).toBe(false);

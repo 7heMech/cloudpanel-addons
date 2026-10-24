@@ -30,6 +30,10 @@ function setUploadGuard(input) {
   return change(input, '/api/upload-guard', { enabled: input.checked }, 'Saved.');
 }
 
+function setRealIp(input) {
+  return change(input, '/api/real-ip', { enabled: input.checked }, 'Saved.');
+}
+
 function installUpdates() {
   notify('Installing unattended-upgrades…', 'warn');
   clearTimeout(clpFlashTimer);

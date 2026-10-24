@@ -184,11 +184,17 @@ function coverageBadge(row: CoverageRow): string {
   return badge("Not covered", "plain");
 }
 
+/** A name with its detail beneath, and its state at the end of the row. */
+function stateRow(name: string, detail: string, state: string): string {
+  const shown = detail && detail.toLowerCase() !== name.toLowerCase();
+  return `
+          <tr><td><span class="st-name">${esc(name)}</span>${shown ? `<span class="hint st-detail">${esc(detail)}</span>` : ""}</td>
+            <td class="st-state">${state}</td></tr>`;
+}
+
 function coverageCard(status: UpdatesStatus): string {
   if (!status.installed) return "";
-  const rows = status.coverage.map((row) => `
-          <tr><td><span class="st-name">${esc(row.name)}</span>${row.detail ? `<span class="hint st-detail">${esc(row.detail)}</span>` : ""}</td>
-            <td class="st-state">${coverageBadge(row)}</td></tr>`).join("");
+  const rows = status.coverage.map((row) => stateRow(row.name, row.detail, coverageBadge(row))).join("");
   const hint = status.enabled
     ? "Where unattended-upgrades installs from, as apt reads its configuration now."
     : "Updates are off, so nothing is installed automatically. This is what they would cover.";
@@ -201,19 +207,18 @@ function coverageCard(status: UpdatesStatus): string {
     </div>`;
 }
 
-function uploadProgressState(row: FpmUploadProgress): string {
+/** Who decided the value, and any pool that turns it back on. */
+function uploadProgressSource(row: FpmUploadProgress): string {
   const file = row.source.includes("/conf.d/") ? row.source.slice(row.source.lastIndexOf("/") + 1) : row.source;
   const pools = row.poolsOn.length ? ` On in pool${row.poolsOn.length === 1 ? "" : "s"} ${row.poolsOn.join(", ")}.` : "";
-  if (!row.enabled && row.setBy === "clp-addons") {
-    return `${badge("Off", "ok")} <span class="hint">by clp-addons${row.offWithoutGuard ? ", and by your own config" : ""}.${esc(pools)}</span>`;
-  }
-  if (!row.enabled) return `${badge("Off", "ok")} <span class="hint">by your config in ${esc(file)}.${esc(pools)}</span>`;
-  return `${badge("On", "bad")} <span class="hint">${row.setBy === "default" ? "PHP's default" : `set in ${esc(file)}`}.${esc(pools)}</span>`;
+  if (!row.enabled && row.setBy === "clp-addons") return `Set by clp-addons${row.offWithoutGuard ? " and your own config" : ""}.${pools}`;
+  if (!row.enabled) return `Set by your config in ${file}.${pools}`;
+  return `${row.setBy === "default" ? "PHP's default" : `Set in ${file}`}.${pools}`;
 }
 
 function uploadProgressCard(state: SystemTweaksState): string {
-  const rows = state.uploadProgress.fpms.map((row) => `
-          <tr><td class="st-name">${esc(row.label)}</td><td>${uploadProgressState(row)}</td></tr>`).join("");
+  const rows = state.uploadProgress.fpms.map((row) =>
+    stateRow(row.label, uploadProgressSource(row), row.enabled ? badge("On", "bad") : badge("Off", "ok"))).join("");
   return `
     <div class="card">
       <div class="card-header"><h2>PHP</h2></div>
@@ -225,8 +230,31 @@ function uploadProgressCard(state: SystemTweaksState): string {
         onchange: "setUploadGuard(this)",
       })}
       </div>
-      ${rows ? `<div class="table-scroll"><table class="st-table"><thead><tr><th>PHP-FPM</th><th>Upload progress</th></tr></thead>
+      ${rows ? `<div class="table-scroll"><table class="st-table"><thead><tr><th>PHP-FPM</th><th class="st-state">Upload progress</th></tr></thead>
         <tbody>${rows}</tbody></table></div>` : `<p class="hint">No PHP-FPM is installed.</p>`}
+    </div>`;
+}
+
+function realIpLine(state: SystemTweaksState["realIp"]): string {
+  if (state.problem) return `${badge("Unknown", "warn")} <span>${esc(state.problem)}</span>`;
+  if (!state.trustsAnyAddress) return `${badge("Blocked", "ok")} <span>Only local and private-network proxies can set the visitor IP.</span>`;
+  return `${badge("Trusted", state.blockForged ? "warn" : "plain")} <span>Any client can set its own IP with an X-Real-IP header.${
+    state.blockForged ? " Run clp-addons repair." : ""}</span>`;
+}
+
+function realIpCard(state: SystemTweaksState): string {
+  return `
+    <div class="card">
+      <div class="card-header"><h2>Nginx</h2></div>
+      <div class="tweak-list">${switchRow({
+        key: "blockForgedRealIp",
+        title: "Block forged visitor IPs",
+        description: "CloudPanel's nginx.conf believes an X-Real-IP header from any address, so a client can pose as another IP to PHP, logs, IP-based security plugins and Cloudflare-only access. This comments out its set_real_ip_from 0.0.0.0/0 line; loopback and private-network proxies, including CloudPanel's own, stay trusted. Cloudflare does not send the header. Switching off puts the line back.",
+        checked: state.realIp.blockForged,
+        onchange: "setRealIp(this)",
+        extra: `<p class="st-status">${realIpLine(state.realIp)}</p>`,
+      })}
+      </div>
     </div>`;
 }
 
@@ -242,5 +270,5 @@ export function dashboardView(state: SystemTweaksState): string {
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates)}
-    </div>${coverageCard(state.updates)}${uploadProgressCard(state)}`;
+    </div>${coverageCard(state.updates)}${uploadProgressCard(state)}${realIpCard(state)}`;
 }

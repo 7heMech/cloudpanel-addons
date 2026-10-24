@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
 import {
-  executeSystemTweaksAction, restoreSystemTweaks, withdrawSystemTweaks,
+  executeSystemTweaksAction, restoreSystemTweaks, systemTweaksUpkeep, withdrawSystemTweaks,
   type SystemTweaksOptions, type SystemTweaksState,
 } from "../addons/system-tweaks/action";
 import {
@@ -81,6 +81,18 @@ test("Debian's own patterns leave every CloudPanel repository uncovered", () => 
   expect(rows.find((row) => row.name === "CloudPanel PHP")!.detail).toBe("8.1, 8.3");
 });
 
+test("CloudPanel's other repositories get product names and Debian's components keep their own order", () => {
+  const source = (component: string, origin = "packages-v1.cloudpanel.io", n = "bookworm") =>
+    ({ origin, label: "", archive: "", codename: n, component, site: "" });
+  const rows = coverageOf([
+    source("varnish-7"), source("proftpd"),
+    ...["non-free", "contrib", "main", "non-free-firmware"].map((c) => source(c, "Debian", "bookworm-security")),
+  ], [], debian);
+  expect(rows.map((row) => [row.name, row.detail])).toEqual([
+    ["Varnish", "varnish-7"], ["ProFTPD", "proftpd"], ["Debian bookworm-security", "main, contrib, non-free, non-free-firmware"],
+  ]);
+});
+
 test("the drop-in adds PHP and Nginx by default, and the database and panel only when asked", () => {
   const patterns = (settings: typeof DEFAULT_UPDATE_SETTINGS) => [
     ...allowedPatterns(parseAptConfig(DEBIAN_STOCK_DUMP)),
@@ -139,7 +151,21 @@ interface Box {
   guardConfig: string;
   settingsFile: string;
   installed: { value: boolean };
+  nginxConf: string;
+  nginx: { fail: boolean; commands: string[] };
 }
+
+const CLOUDPANEL_NGINX_CONF = `http {
+    real_ip_recursive on;
+
+    set_real_ip_from 127.0.0.1;
+    set_real_ip_from 10.0.0.0/8;
+    set_real_ip_from 172.16.0.0/12;
+    set_real_ip_from 192.168.0.0/16;
+    set_real_ip_from 0.0.0.0/0;
+    #real_ip_header X-Forwarded-For;
+}
+`;
 
 /** apt-config dump over the box's files, enough of apt's syntax for these drop-ins. */
 function dumpOf(aptDir: string): string {
@@ -212,13 +238,20 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
   writeFileSync(guardConfig, "");
   const settingsFile = join(dir, "state", "settings.json");
   const uid = process.getuid!();
+  const nginxConf = join(dir, "nginx.conf");
+  writeFileSync(nginxConf, CLOUDPANEL_NGINX_CONF, { mode: 0o644 });
+  const nginx = { fail: false, commands: [] as string[] };
+  const nginxRun = (command: string, args: string[]): CommandResult => {
+    nginx.commands.push(`${command} ${args.join(" ")}`);
+    return nginx.fail && command === "nginx" && args[0] === "-t" && readFileSync(nginxConf, "utf8").includes("#clp-addons:untrusted") ? { ok: false, stdout: "", stderr: "emerg" } : ok();
+  };
   const phpGuard: PhpGuardOptions = {
     run: () => ({ ok: true, out: "" }),
     isActive: () => false,
     paths: { phpRoot, fpmBinDir: sbin, rootUid: uid, optOutConfig: guardConfig, optOutSettings: settingsFile },
   };
   return {
-    aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed,
+    aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, nginx,
     dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
     options: {
       processUid: 0,
@@ -233,6 +266,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
       },
       uploadProgress: { run, paths: { phpRoot, fpmBinDir: sbin, panelUnit: "clp-php-fpm.service" } },
       phpGuard,
+      realIp: { run: nginxRun, paths: { nginxConf, rootUid: uid } },
     },
   };
 }
@@ -461,6 +495,52 @@ test("disabling the addon withdraws the drop-in and enabling it again restores i
   expect(readFileSync(b.dropIn, "utf8")).toContain("component=percona-*");
 });
 
+// --- X-Real-IP ---------------------------------------------------------------
+
+test("forged visitor IPs are blocked by default and switching off restores CloudPanel's exact file", async () => {
+  const b = box();
+  expect((await act(b, ["state"])).realIp).toEqual({ blockForged: true, trustsAnyAddress: true, problem: "" });
+  restoreSystemTweaks(b.options);
+  const blocked = readFileSync(b.nginxConf, "utf8");
+  expect(blocked).toContain("    #clp-addons:untrusted set_real_ip_from 0.0.0.0/0;\n");
+  expect(blocked).toContain("    set_real_ip_from 10.0.0.0/8;\n");
+  expect(b.nginx.commands).toEqual(["nginx -t", "systemctl reload nginx"]);
+  expect((await act(b, ["state"])).realIp.trustsAnyAddress).toBe(false);
+
+  const off = await act(b, ["set-real-ip"], { enabled: false });
+  expect(off.realIp).toEqual({ blockForged: false, trustsAnyAddress: true, problem: "" });
+  expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF);
+  b.nginx.commands.length = 0;
+  expect(systemTweaksUpkeep(b.options)).toBeNull();
+  expect(b.nginx.commands).toEqual([]);
+});
+
+test("repair narrows the trust again after CloudPanel rewrites nginx.conf, and disabling the addon puts it back", async () => {
+  const b = box();
+  await act(b, ["set-real-ip"], { enabled: true });
+  writeFileSync(b.nginxConf, CLOUDPANEL_NGINX_CONF);
+  expect(systemTweaksUpkeep(b.options)).toBe("X-Real-IP trust narrowed again");
+  expect(readFileSync(b.nginxConf, "utf8")).toContain("#clp-addons:untrusted set_real_ip_from 0.0.0.0/0;");
+  withdrawSystemTweaks(b.options);
+  expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF);
+});
+
+test("a change Nginx rejects leaves the file and the saved choice as they were", async () => {
+  const b = box();
+  b.nginx.fail = true;
+  await expect(act(b, ["set-real-ip"], { enabled: true })).rejects.toThrow("Nginx validation failed");
+  expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF);
+  expect(existsSync(b.settingsFile)).toBe(false);
+});
+
+test("the page shows forged IPs as blocked, or as trusted and needing repair", async () => {
+  const b = box();
+  const state = await act(b, ["state"]);
+  expect(dashboardView(state)).toContain("Any client can set its own IP with an X-Real-IP header. Run clp-addons repair.");
+  restoreSystemTweaks(b.options);
+  expect(dashboardView(await act(b, ["state"]))).toContain("Only local and private-network proxies can set the visitor IP.");
+});
+
 // --- upload progress ----------------------------------------------------------
 
 test("ini values are read the way PHP reads them", () => {
@@ -568,7 +648,7 @@ test("failed downloads retain the package URL in expandable details and escape t
   const updates = updatesStatus(b.options.updates);
   expect(updates.lastRun?.outcome).toBe("failed");
   expect(updates.lastRun?.message).toContain("php8.2-bcmath.deb");
-  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] } });
+  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" } });
   expect(html).toContain("A package download failed (HTTP 404).");
   expect(html).toContain('<details class="st-run-details"><summary>Failure details</summary>');
   expect(html).toContain("php8.2-bcmath.deb failed to download, aborting &lt;script&gt;");

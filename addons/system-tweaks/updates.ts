@@ -267,6 +267,8 @@ function sourceName(source: AptSource): { key: string; name: string; detail: str
     if (component === "main") return { key: "cp:main", name: "CloudPanel", detail: "main" };
     if (component === "nginx") return { key: "cp:nginx", name: "Nginx", detail: "nginx" };
     if (/^(percona|mysql|mariadb)/.test(component)) return { key: `cp:${component}`, name: "MySQL", detail: component };
+    if (component.startsWith("varnish")) return { key: `cp:${component}`, name: "Varnish", detail: component };
+    if (component === "proftpd") return { key: "cp:proftpd", name: "ProFTPD", detail: component };
     return { key: `cp:${component}`, name: component, detail: component };
   }
   // Ubuntu gives every pocket the release's codename and names the pocket in
@@ -295,9 +297,17 @@ export function coverageOf(sources: AptSource[], patterns: string[], distro: { i
     name: group.name,
     detail: key === "cp:php"
       ? [...group.components].map((component) => component.slice(4)).sort(compareVersions).join(", ")
-      : group.detail || [...group.components].filter(Boolean).join(", "),
+      : group.detail || [...group.components].filter(Boolean).sort(byComponent).join(", "),
     covered: group.covered === 0 ? "none" : group.covered === group.total ? "all" : "some",
   }));
+}
+
+// Debian's and Ubuntu's own order, so main always comes first.
+const COMPONENT_ORDER = ["main", "restricted", "universe", "multiverse", "contrib", "non-free", "non-free-firmware"];
+
+function byComponent(a: string, b: string): number {
+  const rank = (component: string) => (COMPONENT_ORDER.indexOf(component) + 1) || COMPONENT_ORDER.length + 1;
+  return rank(a) - rank(b) || a.localeCompare(b);
 }
 
 function compareVersions(a: string, b: string): number {

@@ -146,7 +146,6 @@ test("a fleet table gives the domain its own line on a phone", () => {
     }]),
     cloudflareDashboardView({
       autoEnableNewSites: false,
-      protection: { wanted: true, configured: true, available: true, problem: "" },
       sites: [{ domain: "a-rather-long-hostname.example.test", type: "php", enabled: false, excludedFromAutomatic: false }],
     }),
   ]) {

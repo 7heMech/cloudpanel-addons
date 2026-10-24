@@ -131,9 +131,7 @@ That block is reconciled from a hashed pristine copy and validated with the
 customer-site Nginx configuration before reload. Runtime site toggles only
 create or remove flag files, so they do not reload Nginx.
 
-A path unit repairs managed blocks after CloudPanel rewrites watched files.
-The Cloudflare IP Access bypass-protection policy is also applied by this fast
-repair after a Cloudflare range replacement. A
+A path unit repairs managed blocks after CloudPanel rewrites watched files. A
 15-minute timer repairs service, socket, permissions, and integration drift.
 CloudPanel's legacy distro Nginx layout and its separate panel Nginx layout are
 detected from their files and services rather than a version string.

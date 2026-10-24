@@ -81,7 +81,7 @@ client-supplied header. A site CloudPanel proxies to a local backend, such as
 WordPress, runs the check in that backend, whose peer is CloudPanel's own front
 server; there the map takes the client from the `X-Real-IP` that server sets
 from its `$remote_addr`, so on those sites a bypass is only as hard to forge as
-CloudPanel's own real-IP setting makes it. This map leaves CloudPanel's
+the global real-IP trust makes it (see [System Tweaks](system-tweaks.md#forged-visitor-ips)). This map leaves CloudPanel's
 `$remote_addr` and Cloudflare-only access rules untouched. Reconciliation updates the map when
 CloudPanel's Cloudflare range file changes, after validating and reloading
 Nginx. The path watcher monitors the range file and its directory so both

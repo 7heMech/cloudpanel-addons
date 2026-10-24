@@ -146,3 +146,40 @@ config". It also needs no process per version on every page load. Like
 `php -i`, it shows the config on disk, which a running FPM picks up on its next
 reload. A site's own `.user.ini` or an Nginx `PHP_VALUE` can still change this
 per-directory setting for that site; neither is read.
+
+## Forged visitor IPs
+
+CloudPanel's `/etc/nginx/nginx.conf` has `set_real_ip_from 0.0.0.0/0` with the
+default `real_ip_header X-Real-IP`, so any IPv4 client can name its own address.
+Nginx then uses it as `$remote_addr`: in access logs, PHP's `REMOTE_ADDR`,
+CloudPanel's basic-auth and Cloudflare-only `allow` rules, and IP-based plugins.
+A direct request with `X-Real-IP` set to a Cloudflare address passes a
+Cloudflare-only site.
+
+**Block forged visitor IPs**, on by default (`blockForgedRealIp`), comments out
+that line, and a `::/0` one if present, by prefixing
+`#clp-addons:untrusted `. The other `set_real_ip_from` lines stay: `127.0.0.1`,
+which CloudPanel's front server uses when it proxies to a local backend such as
+WordPress or Varnish, and the private ranges, where a load balancer would sit.
+A peer in those ranges can still set the header. Cloudflare sends
+`CF-Connecting-IP`, not `X-Real-IP`, so its requests keep the edge address they
+have today, and CloudPanel's `cloudflare` log format already reads that header.
+A public-address proxy in front of the server would lose its visitor IPs; switch
+the setting off there.
+
+Switching off removes the prefix and leaves the file byte-for-byte as CloudPanel
+wrote it. Each change uses the shared Nginx transaction (`nginx -t`, one
+reload, restore on failure); the gateway timeout is in `limits.ts`. Activation
+and the repair timer reapply it when CloudPanel rewrites the file, so a rewrite
+leaves the trust open until the next repair run. Disabling the addon restores
+the line. Only the sites' Nginx is changed; the panel's own Nginx on port 8443
+has its own configuration.
+
+`nginx.conf` is a dpkg conffile of CloudPanel's `nginx-common`. If a later
+package changes that file, unattended-upgrades sees a conffile prompt and holds
+the Nginx upgrade back until it is installed by hand. Switching the setting off,
+upgrading and switching it on again avoids the prompt.
+
+`bun tests/integration/integration-real-ip.ts` runs real Nginx in Docker: it
+reproduces the bypass on the stock directives, then shows the edited ones reject
+it while Cloudflare peers and loopback proxies keep working.

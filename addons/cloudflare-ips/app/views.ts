@@ -1,6 +1,6 @@
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
-import { FLEET_ROW_SELECTION_JS, TWEAK_ROW_JS, TWEAK_ROW_STYLE, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
+import { FLEET_ROW_SELECTION_JS, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import { siteTypeLabel } from "../../../lib/site-context";
 import type { CloudflareState } from "./service";
@@ -16,7 +16,6 @@ const STYLE = VIEWS_CSS
 
 export const CLIENT_JS = `
 ${FLEET_ROW_SELECTION_JS}
-${TWEAK_ROW_JS}
 ${CLIENT_JS_BODY}`;
 
 export function layout(title: string, content: string, updateNotice?: { current: string; latest: string } | null): string {
@@ -24,7 +23,7 @@ export function layout(title: string, content: string, updateNotice?: { current:
     brand: "Cloudflare IP Access",
     base: BASE,
     nav: [],
-    css: TWEAK_ROW_STYLE + STYLE,
+    css: STYLE,
     script: CLIENT_JS,
     updateNotice,
   });
@@ -46,20 +45,6 @@ export function dashboardView(state: CloudflareState): string {
   return `
     <div class="page-heading">
       <div><h1>Cloudflare IP Access</h1><p>Control CloudPanel's “Allow traffic from Cloudflare only” setting for every site.</p></div>
-    </div>
-    <div class="card">
-      <div class="tweak-row cf-protection-row"><div class="tweak-body">
-        <div class="tweak-heading">
-          <h3>Mitigate Cloudflare-only bypass<button class="tweak-more" type="button" aria-expanded="false"
-            aria-controls="cf-protection-note" aria-label="About Cloudflare-only bypass protection" onclick="toggleNote(this)"></button></h3>
-          <label class="switch"><input id="bypass-protection" type="checkbox" aria-label="Mitigate Cloudflare-only bypass"
-            ${state.protection.wanted ? "checked" : ""} onchange="setProtection(this)"><span></span></label>
-        </div>
-        <p class="cf-protection-scope">Applies only to sites with “Cloudflare only” enabled. Sites with it off are not restricted by this protection.</p>
-        <div class="tweak-note" id="cf-protection-note"><p>On by default. Checks the actual connection address so forged IP headers cannot bypass Cloudflare-only access. Cloudflare must connect directly to this server; an intermediate proxy or tunnel will be blocked. Direct certificate validation requests are also blocked; use validation through Cloudflare or DNS.</p></div>
-        <p class="cf-protection-status" id="cf-protection-status">${state.protection.configured ? "Protection configured." : state.protection.wanted ? "Protection needs repair." : "Bypass protection is off."}</p>
-        <p class="cf-protection-problem" id="cf-protection-problem"${state.protection.problem ? "" : " hidden"}>${esc(state.protection.problem)}</p>
-      </div></div>
     </div>
     <div class="card fleet-card">
       <div>

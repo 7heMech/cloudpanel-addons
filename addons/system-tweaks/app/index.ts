@@ -74,5 +74,10 @@ export async function handle(
     return repaint(await systemTweaksService.setUploadGuard(body.enabled));
   }
 
+  if (path === "/api/real-ip") {
+    if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+    return repaint(await systemTweaksService.setRealIp(body.enabled));
+  }
+
   return json({ ok: false, error: "not found" }, 404);
 }

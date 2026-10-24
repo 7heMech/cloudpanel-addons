@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  cloudflareProtectionUpkeep, withdrawCloudflareProtection, reconcileNewSites, runCloudflareAction, transformVhost, type CloudflareActionPaths,
+  reconcileNewSites, runCloudflareAction, transformVhost, type CloudflareActionPaths,
 } from "../addons/cloudflare-ips/action";
 import { CLIENT_JS, dashboardView, layout } from "../addons/cloudflare-ips/app/views";
 import type { CommandResult } from "../cli/action-common";
@@ -52,8 +52,6 @@ function fixture(): { root: string; paths: CloudflareActionPaths; db: Database }
     paths: {
       panelDb,
       nginxVhostDir,
-      cloudflareIps: join(root, "ips"),
-      peerGeo: join(nginxVhostDir, "00-peer.conf"),
       policyFile: join(root, "state", "policy.json"),
       lockFile: join(root, "locks", "cloudflare.lock"),
       nginx: "nginx-test",
@@ -92,7 +90,7 @@ async function captureActionFailure(action: () => Promise<number>): Promise<{ co
 
 test("dashboard renders bulk, per-site, and automatic controls with escaped site data", () => {
   const html = dashboardView({
-    autoEnableNewSites: true, protection: { wanted: true, configured: true, available: true, problem: "" },
+    autoEnableNewSites: true,
     sites: [{ domain: '"><script>alert(1)</script>.example.test', type: "php", enabled: false, excludedFromAutomatic: true }],
   });
   expect(html).toContain("Enable all sites");
@@ -113,10 +111,10 @@ test("dashboard summarises how many sites allow Cloudflare only", () => {
     { domain: "b.example.test", type: "php", enabled: false, excludedFromAutomatic: true },
     { domain: "c.example.test", type: "static", enabled: true, excludedFromAutomatic: false },
   ];
-  expect(dashboardView({ autoEnableNewSites: true, protection: { wanted: true, configured: true, available: true, problem: "" }, sites })).toContain("2 of 3 sites allow Cloudflare only.");
-  expect(dashboardView({ autoEnableNewSites: true, protection: { wanted: true, configured: true, available: true, problem: "" }, sites: [] })).toContain("No sites found in CloudPanel.");
+  expect(dashboardView({ autoEnableNewSites: true, sites })).toContain("2 of 3 sites allow Cloudflare only.");
+  expect(dashboardView({ autoEnableNewSites: true, sites: [] })).toContain("No sites found in CloudPanel.");
   // Selected-scope actions start unavailable because nothing is selected yet.
-  const rendered = dashboardView({ autoEnableNewSites: true, protection: { wanted: true, configured: true, available: true, problem: "" }, sites });
+  const rendered = dashboardView({ autoEnableNewSites: true, sites });
   expect(rendered).toContain('id="enable-selected" type="button" disabled');
   expect(rendered).toContain('id="disable-selected" type="button" disabled');
   expect(rendered).toContain('<div class="actions toolbar-actions">');
@@ -124,7 +122,7 @@ test("dashboard summarises how many sites allow Cloudflare only", () => {
 
 test("the switch column ends where the table ends, as the Maintenance table does", () => {
   const html = dashboardView({
-    autoEnableNewSites: true, protection: { wanted: true, configured: true, available: true, problem: "" },
+    autoEnableNewSites: true,
     sites: [{ domain: "a.example.test", type: "php", enabled: true, excludedFromAutomatic: false }],
   });
   // .action-cell is the shared right-aligned column; without it the switches
@@ -139,7 +137,7 @@ test("the switch column ends where the table ends, as the Maintenance table does
 
 test("site type tags sit above the hostname on phones, centred with it in the row", () => {
   const html = dashboardView({
-    autoEnableNewSites: true, protection: { wanted: true, configured: true, available: true, problem: "" },
+    autoEnableNewSites: true,
     sites: [{ domain: "a.example.test", type: "reverse-proxy", enabled: true, excludedFromAutomatic: false }],
   });
   const page = layout("Cloudflare IP access", html);
@@ -225,7 +223,6 @@ function fakeDashboard(
 }
 
 interface DashboardClient {
-  setProtection(input: unknown): Promise<void>;
   setOne(input: unknown): Promise<void>;
   setAllSites(enabled: boolean): void;
   runBulk(rows: unknown[], enabled: boolean, scope: string): Promise<void>;
@@ -250,7 +247,7 @@ function loadDashboard(
 ): DashboardClient {
   const factory = new Function(
     "CLP_ROOT", "document", "plural", "call", "busy", "notify", "clearNotice", "confirmAction", "location", "repaintView",
-    `${CLIENT_JS}\nreturn { setProtection, setOne, setAllSites, runBulk, siteRows, rowState, paintSummary, selectAllSites, toggleAllSites, toggleSiteSelection };`,
+    `${CLIENT_JS}\nreturn { setOne, setAllSites, runBulk, siteRows, rowState, paintSummary, selectAllSites, toggleAllSites, toggleSiteSelection };`,
   ) as (...args: unknown[]) => DashboardClient;
   return factory(
     // BASE_CLIENT_JS supplies these; on this page, which never mounts in a
@@ -275,7 +272,7 @@ test("a failed per-site update reports inline and repaints from the server", asy
     // The write fails; the follow-up read still reports the real server state.
     call: async (path, options) => {
       if (options) throw new Error("request failed");
-      return { ok: true, data: { autoEnableNewSites: true, protection: { wanted: true, configured: true, available: true, problem: "" }, sites: [{ domain: "retry.example.test", type: "php", enabled: false, excludedFromAutomatic: true }] } };
+      return { ok: true, data: { autoEnableNewSites: true, sites: [{ domain: "retry.example.test", type: "php", enabled: false, excludedFromAutomatic: true }] } };
     },
     notify: (message, kind) => messages.push({ message, kind }),
   });
@@ -331,7 +328,7 @@ test("an all-sites confirmation names the sites it turns on and the exceptions i
   const client = loadDashboard(dom, {
     call: async (path, options) => {
       if (options) { requests.push(JSON.parse((options as { body: string }).body)); return { ok: true }; }
-      return { ok: true, data: { autoEnableNewSites: true, protection: { wanted: true, configured: true, available: true, problem: "" }, sites: [
+      return { ok: true, data: { autoEnableNewSites: true, sites: [
         { domain: "on.example.test", type: "php", enabled: true, excludedFromAutomatic: false },
         { domain: "off.example.test", type: "php", enabled: true, excludedFromAutomatic: false },
         { domain: "also-off.example.test", type: "php", enabled: true, excludedFromAutomatic: false },
@@ -390,7 +387,7 @@ test("a site turned off after an enable-all stays off when the page repaints", a
     call: async (path, options) => {
       if (options) return { ok: true };
       // What the action records: the flag off and the automatic exception set.
-      return { ok: true, data: { autoEnableNewSites: true, protection: { wanted: true, configured: true, available: true, problem: "" }, sites: [
+      return { ok: true, data: { autoEnableNewSites: true, sites: [
         { domain: "keep.example.test", type: "php", enabled: true, excludedFromAutomatic: false },
         { domain: "exception.example.test", type: "php", enabled: false, excludedFromAutomatic: true },
       ] } };
@@ -420,7 +417,7 @@ test("a changed site inventory repaints and retains only surviving selections", 
   const client = loadDashboard(dom, {
     call: async (path, options) => {
       if (options) return { ok: true };
-      return { ok: true, html: "fresh inventory", data: { autoEnableNewSites: true, protection: { wanted: true, configured: true, available: true, problem: "" }, sites: [
+      return { ok: true, html: "fresh inventory", data: { autoEnableNewSites: true, sites: [
         { domain: "kept.example.test", type: "php", enabled: true, excludedFromAutomatic: false },
         { domain: "new.example.test", type: "php", enabled: true, excludedFromAutomatic: false },
       ] } };
@@ -760,102 +757,4 @@ test("automatic policy enables new site IDs and keeps hostname exceptions off", 
     try { f.db.close(); } catch {}
     rmSync(f.root, { recursive: true, force: true });
   }
-});
-
-for (const existingPolicy of [false, true]) {
-  test(`bypass protection defaults on for ${existingPolicy ? "existing" : "new"} Cloudflare installations and preserves site choices`, async () => {
-    const { root, paths, db } = fixture();
-    try {
-      const stock = "allow 173.245.48.0/20;\nallow 2400:cb00::/32;\ndeny all;\n";
-      writeFileSync(paths.cloudflareIps, stock, { mode: 0o644 });
-      addSite(db, paths, "protected.test", "protected", true);
-      addSite(db, paths, "open.test", "open", false);
-      const openVhost = readFileSync(join(paths.nginxVhostDir, "open.test.conf"), "utf8");
-      if (existingPolicy) {
-        mkdirSync(join(root, "state"));
-        writeFileSync(paths.policyFile, JSON.stringify({ version: 1, autoEnableNewSites: false, knownSiteIds: [1, 2], excludedDomains: ["open.test"] }), { mode: 0o600 });
-      }
-      const options = { paths, run: successCommand, emitReply: false };
-      expect(cloudflareProtectionUpkeep(options)).toBe("Cloudflare-only bypass protection restored");
-      expect(readFileSync(paths.cloudflareIps, "utf8")).toContain("if ($clp_system_cf_peer = 0)");
-      expect(readFileSync(join(paths.nginxVhostDir, "open.test.conf"), "utf8")).toBe(openVhost);
-      expect(db.query("SELECT allow_traffic_from_cloudflare_only AS enabled FROM site ORDER BY id").all()).toEqual([{ enabled: 1 }, { enabled: 0 }]);
-      withdrawCloudflareProtection(options);
-      expect(readFileSync(paths.cloudflareIps, "utf8")).toBe(stock);
-      expect(existsSync(paths.peerGeo)).toBe(false);
-      cloudflareProtectionUpkeep(options);
-      expect(existsSync(paths.peerGeo)).toBe(true);
-      expect(await runCloudflareAction(["protection", "--enabled", "no"], options)).toBe(0);
-      expect(JSON.parse(readFileSync(paths.policyFile, "utf8")).blockBypass).toBe(false);
-      expect(cloudflareProtectionUpkeep(options)).toBe(null);
-      expect(readFileSync(paths.cloudflareIps, "utf8")).toBe(stock);
-      expect(await runCloudflareAction(["protection", "--enabled", "yes"], options)).toBe(0);
-      expect(JSON.parse(readFileSync(paths.policyFile, "utf8")).blockBypass).toBe(true);
-      writeFileSync(paths.cloudflareIps, stock);
-      expect(cloudflareProtectionUpkeep(options)).toBe("Cloudflare-only bypass protection restored");
-      expect(readFileSync(join(paths.nginxVhostDir, "open.test.conf"), "utf8")).toBe(openVhost);
-    } finally { db.close(); rmSync(root, { recursive: true, force: true }); }
-  });
-}
-
-test("failed bypass-protection changes restore both the policy and Nginx files", async () => {
-  const { root, paths, db } = fixture();
-  try {
-    const stock = "allow 173.245.48.0/20;\ndeny all;\n";
-    writeFileSync(paths.cloudflareIps, stock, { mode: 0o644 });
-    const options = { paths, run: successCommand, emitReply: false };
-    cloudflareProtectionUpkeep(options);
-    const protectedIps = readFileSync(paths.cloudflareIps, "utf8");
-    let checks = 0;
-    const failure = await captureActionFailure(() => runCloudflareAction(["protection", "--enabled", "no"], {
-      ...options, run: () => checks++ === 0 ? { ok: false, stdout: "", stderr: "invalid configuration" } : successCommand(),
-    }));
-    expect(failure.code).toBe(1);
-    expect(failure.stderr).toContain("invalid configuration");
-    expect(existsSync(paths.policyFile)).toBe(false);
-    expect(readFileSync(paths.cloudflareIps, "utf8")).toBe(protectedIps);
-    expect(cloudflareProtectionUpkeep(options)).toBe(null);
-    expect(existsSync(paths.peerGeo)).toBe(true);
-  } finally { db.close(); rmSync(root, { recursive: true, force: true }); }
-});
-
-test("a completed protection change succeeds even if the panel database becomes unreadable", async () => {
-  const { root, paths, db } = fixture();
-  db.close();
-  try {
-    writeFileSync(paths.cloudflareIps, "allow 173.245.48.0/20;\ndeny all;\n", { mode: 0o644 });
-    const run = (command: string, args: string[]) => {
-      if (args[0] === "reload") writeFileSync(paths.panelDb, "not a SQLite database");
-      return successCommand();
-    };
-    const result = await captureActionFailure(() => runCloudflareAction(["protection", "--enabled", "yes"], { paths, run, emitReply: false }));
-    expect(result.code).toBe(0);
-    expect(result.stderr).toBe("");
-    expect(JSON.parse(readFileSync(paths.policyFile, "utf8")).blockBypass).toBe(true);
-    expect(readFileSync(paths.cloudflareIps, "utf8")).toContain("if ($clp_system_cf_peer = 0)");
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
-
-
-test("a protection acknowledgement repaints without reading an unavailable site inventory", async () => {
-  const dom = fakeDashboard([{ domain: "unchanged.test", enabled: false, excluded: true }]);
-  dom.byId["bypass-protection"] = { ...dom.byId["automatic-policy"]!, checked: true };
-  dom.byId["cf-protection-status"] = { ...dom.byId["cf-summary"]! };
-  dom.byId["cf-protection-problem"] = { ...dom.byId["cf-summary"]! };
-  const requests: string[] = [];
-  const messages: string[] = [];
-  const client = loadDashboard(dom, {
-    call: async (path) => {
-      requests.push(path);
-      if (path !== "/api/protection") throw new Error("site database unavailable");
-      return { ok: true, data: { protection: { wanted: true, configured: true, available: true, problem: "" } } };
-    },
-    notify: message => messages.push(message),
-  });
-  await client.setProtection(dom.byId["bypass-protection"]);
-  expect(requests).toEqual(["/api/protection"]);
-  expect(dom.byId["bypass-protection"]!.checked).toBe(true);
-  expect(dom.byId["cf-protection-status"]!.textContent).toBe("Protection configured.");
-  expect(dom.rows[0]!.dataset.enabled).toBe("false");
-  expect(messages).toEqual(["Bypass protection saved. It only applies to Cloudflare-only sites."]);
 });

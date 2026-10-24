@@ -221,11 +221,9 @@ address, so adding the administrator's panel IP may leave the password prompt.
 A panel reached over IPv4 and a site reached over IPv6 can also disagree.
 
 This feature retains native behavior and states both real-IP limits in its
-confirmation. It does not change global `nginx.conf` or install local trust
-rules: those would also change CloudPanel's Cloudflare-only access checks and
-need lifecycle handling to survive vhost regeneration and disappear when the
-native allowance is removed. A native allowlist change persists through
-CloudPanel's regeneration without separate addon state.
+confirmation. It installs no trust rules of its own; [System Tweaks](system-tweaks.md#forged-visitor-ips)
+narrows the global trust, by default, for every site. A native allowlist change
+persists through CloudPanel's regeneration without separate addon state.
 
 ## Two answers to "which sites are WordPress"
 

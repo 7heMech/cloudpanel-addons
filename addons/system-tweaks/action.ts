@@ -12,11 +12,12 @@ import {
 } from "./updates";
 import { INSTALL_DEADLINE_MS } from "./limits";
 import { uploadProgressStatus, type FpmUploadProgress, type UploadProgressOptions } from "./upload-progress";
+import { applyRealIp, realIpStatus, type RealIpOptions, type RealIpStatus } from "./real-ip";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
 
-export type SystemTweaksVerb = "state" | "set-updates" | "install-updates" | "set-upload-guard";
+export type SystemTweaksVerb = "state" | "set-updates" | "install-updates" | "set-upload-guard" | "set-real-ip";
 
 export interface SystemTweaksSettings {
   updates: UpdateSettings;
@@ -24,12 +25,15 @@ export interface SystemTweaksSettings {
   enabledTimers: string[];
   /** The platform's PHP upload-progress guard; false is the only opt-out there is. */
   uploadProgressGuard: boolean;
+  /** Stop nginx.conf trusting X-Real-IP from every address. */
+  blockForgedRealIp: boolean;
 }
 
 export interface SystemTweaksState {
   updates: UpdatesStatus;
   settings: UpdateSettings;
   uploadProgress: { guard: boolean; fpms: FpmUploadProgress[] };
+  realIp: RealIpStatus & { blockForged: boolean };
 }
 
 export interface SystemTweaksPaths {
@@ -52,6 +56,7 @@ export interface SystemTweaksOptions {
   updates?: UpdatesOptions;
   uploadProgress?: UploadProgressOptions;
   phpGuard?: PhpGuardOptions;
+  realIp?: RealIpOptions;
   now?: () => number;
 }
 
@@ -68,6 +73,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
     updates: { ...DEFAULT_UPDATE_SETTINGS },
     enabledTimers: [],
     uploadProgressGuard: true,
+    blockForgedRealIp: true,
   };
   if (!existsSync(paths.settingsFile)) return settings;
   const info = lstatSync(paths.settingsFile);
@@ -89,6 +95,7 @@ export function readSettings(paths: SystemTweaksPaths): SystemTweaksSettings {
       timer === "apt-daily.timer" || timer === "apt-daily-upgrade.timer");
   }
   if (stored.uploadProgressGuard === false) settings.uploadProgressGuard = false;
+  if (stored.blockForgedRealIp === false) settings.blockForgedRealIp = false;
   return settings;
 }
 
@@ -114,6 +121,7 @@ function stateOf(options: SystemTweaksOptions): SystemTweaksState {
       guard: settings.uploadProgressGuard,
       fpms: uploadProgressStatus(options.uploadProgress),
     },
+    realIp: { ...realIpStatus(options.realIp), blockForged: settings.blockForgedRealIp },
   };
 }
 
@@ -174,9 +182,21 @@ async function setUploadGuard(options: SystemTweaksOptions): Promise<SystemTweak
   return stateOf(options);
 }
 
+async function setRealIp(options: SystemTweaksOptions): Promise<SystemTweaksState> {
+  const paths = pathsFor(options);
+  const body = await requestBody(options);
+  if (typeof body.enabled !== "boolean") failAction("enabled must be true or false");
+  await withFileLock(paths.lockFile, 15, "another system tweaks change is still running", async () => {
+    const settings = readSettings(paths);
+    applyRealIp(body.enabled as boolean, options.realIp);
+    writeSettings(paths, { ...settings, blockForgedRealIp: body.enabled as boolean });
+  });
+  return stateOf(options);
+}
+
 function parseVerb(argv: string[]): SystemTweaksVerb {
   const [rawVerb, ...rest] = argv;
-  const verbs: SystemTweaksVerb[] = ["state", "set-updates", "install-updates", "set-upload-guard"];
+  const verbs: SystemTweaksVerb[] = ["state", "set-updates", "install-updates", "set-upload-guard", "set-real-ip"];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown system tweaks verb '${rawVerb ?? ""}'`);
   if (rest.length > 0) failAction(`unexpected argument '${rest[0]}'`);
@@ -189,6 +209,7 @@ export async function executeSystemTweaksAction(argv: string[], options: SystemT
   if (verb === "state") return stateOf(options);
   if (verb === "set-updates") return setUpdates(options);
   if (verb === "set-upload-guard") return setUploadGuard(options);
+  if (verb === "set-real-ip") return setRealIp(options);
   // One deadline for the install and the state read that answers it, which the
   // gateway's timeout is sized from.
   const now = options.now ?? Date.now;
@@ -226,6 +247,7 @@ export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | 
       if (applied.enabledTimers.length !== settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: applied.enabledTimers });
       if (applied.changed) notices.push("automatic updates config restored");
     }
+    if (settings.blockForgedRealIp && applyRealIp(true, options.realIp)) notices.push("X-Real-IP trust narrowed again");
     return notices.join("; ") || null;
   });
 }
@@ -234,6 +256,7 @@ export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
   withSettingsLock(options, (paths, settings) => {
     applyUpdates({ ...settings.updates, enabled: false }, settings.enabledTimers, options.updates);
     if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
+    applyRealIp(false, options.realIp);
   });
 }
 
@@ -244,5 +267,6 @@ export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
       writeSettings(paths, { ...settings, enabledTimers: applied.enabledTimers });
     }
     if (!settings.uploadProgressGuard) reconcilePhpGuard(true, false, guardOptions(options));
+    if (settings.blockForgedRealIp) applyRealIp(true, options.realIp);
   });
 }
