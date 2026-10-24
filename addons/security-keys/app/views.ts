@@ -50,8 +50,8 @@ function settingsCard(settings: Settings): string {
 export function dashboardView({ users, settings }: { users: UserKeysView[]; settings: Settings }): string {
   const rows = users.flatMap((entry) => entry.keys.map((key) => `
     <tr>
-      <td class="site-cell">${esc(entry.user)}${entry.active ? "" : ' <span class="badge state-failed">No longer signs in</span>'}</td>
-      <td data-label="Key">${esc(key.name)}${key.synced ? ` <span class="badge${settings.syncedPasskeys ? "" : " state-failed"}">Synced passkey</span>` : ""}</td>
+      <td class="site-cell">${entry.active ? "" : '<span class="badge state-failed">No longer signs in</span> '}${esc(entry.user)}</td>
+      <td data-label="Key">${key.synced ? `<span class="badge${settings.syncedPasskeys ? "" : " state-failed"}">Synced passkey</span> ` : ""}${esc(key.name)}</td>
       <td data-label="Panel address" class="mono">${esc(new URL(key.origin).host)}</td>
       <td data-label="Added">${when(key.createdAt, 10)}</td>
       <td data-label="Last used (UTC)">${when(key.lastUsedAt, 16)}</td>
