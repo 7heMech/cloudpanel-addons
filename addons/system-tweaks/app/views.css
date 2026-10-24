@@ -14,7 +14,11 @@
 .st-detail { display: block; margin-top: 2px; }
 .st-name { font-weight: 600; }
 .st-state { text-align: right; white-space: nowrap; }
+.st-run-details { margin-top: 8px; }
+.st-run-details summary { cursor: pointer; color: var(--muted); }
+.st-run-details pre { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 @media (max-width: 760px) {
-  .st-kv { grid-template-columns: minmax(80px, 110px) minmax(0, 1fr); gap: 10px 12px; }
+  .st-kv { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .st-kv dt:not(:first-child) { margin-top: 12px; }
   .st-table th, .st-table td { padding: 10px 8px; }
 }

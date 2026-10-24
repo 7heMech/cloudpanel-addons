@@ -30,10 +30,6 @@ function setUploadGuard(input) {
   return change(input, '/api/upload-guard', { enabled: input.checked }, 'Saved.');
 }
 
-function setCloudflarePeer(input) {
-  return change(input, '/api/cloudflare-peer', { enabled: input.checked }, 'Saved.');
-}
-
 function installUpdates() {
   notify('Installing unattended-upgrades…', 'warn');
   clearTimeout(clpFlashTimer);

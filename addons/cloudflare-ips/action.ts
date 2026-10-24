@@ -4,13 +4,14 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, runCommand, validateFlag, withFileLock,
+  ActionFailure, emitActionError, emitActionOk, failAction, runCommand, validateFlag, withFileLock, withFileLockSync,
   type CommandResult,
 } from "../../cli/action-common";
 import { PANEL_DB, STATE_DIR } from "../../cli/paths";
 import {
   errorMessage, openPanelDatabase, trustedVhost, withNginxTransaction, withRecoveryFailures, writeAtomicOwned,
 } from "../../cli/nginx-transaction";
+import { applyCloudflarePeer, cloudflarePeerStatus, DEFAULT_CLOUDFLARE_PEER_PATHS, type CloudflarePeerOptions } from "./cloudflare-peer";
 
 const POLICY_VERSION = 1;
 const MAX_SITES_PER_REQUEST = 10_000;
@@ -18,7 +19,7 @@ const HOST_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
 const HOST_RE = new RegExp(`^(?:${HOST_LABEL})(?:\\.${HOST_LABEL})+$`);
 const CLOUDFLARE_INCLUDE = "include /etc/nginx/cloudflare/ips;";
 
-export type CloudflareVerb = "list" | "set" | "policy" | "reconcile";
+export type CloudflareVerb = "list" | "set" | "policy" | "protection" | "reconcile";
 
 export interface CloudflareActionPaths {
   panelDb: string;
@@ -29,6 +30,8 @@ export interface CloudflareActionPaths {
   systemctl: string;
   vhostUid: number;
   stateUid: number;
+  cloudflareIps: string;
+  peerGeo: string;
 }
 
 export interface CloudflareActionOptions {
@@ -56,6 +59,7 @@ interface SiteRow {
 interface Policy {
   version: 1;
   autoEnableNewSites: boolean;
+  blockBypass: boolean;
   knownSiteIds: number[];
   excludedDomains: string[];
 }
@@ -74,6 +78,8 @@ export const DEFAULT_CLOUDFLARE_ACTION_PATHS: CloudflareActionPaths = {
   systemctl: "systemctl",
   vhostUid: 0,
   stateUid: 0,
+  cloudflareIps: DEFAULT_CLOUDFLARE_PEER_PATHS.ips,
+  peerGeo: DEFAULT_CLOUDFLARE_PEER_PATHS.geo,
 };
 
 function pathsFor(options: CloudflareActionOptions): CloudflareActionPaths {
@@ -81,7 +87,7 @@ function pathsFor(options: CloudflareActionOptions): CloudflareActionPaths {
 }
 
 function emptyPolicy(): Policy {
-  return { version: POLICY_VERSION, autoEnableNewSites: false, knownSiteIds: [], excludedDomains: [] };
+  return { version: POLICY_VERSION, autoEnableNewSites: false, blockBypass: true, knownSiteIds: [], excludedDomains: [] };
 }
 
 function normalizeDomain(value: unknown): string | null {
@@ -96,6 +102,7 @@ function stablePolicy(value: Policy): Policy {
   return {
     version: POLICY_VERSION,
     autoEnableNewSites: value.autoEnableNewSites,
+    blockBypass: value.blockBypass !== false,
     knownSiteIds: [...new Set(value.knownSiteIds.filter((id) => Number.isInteger(id) && id > 0))].sort((a, b) => a - b),
     excludedDomains: [...new Set(value.excludedDomains.map(normalizeDomain).filter((v): v is string => v !== null))].sort(),
   };
@@ -117,6 +124,7 @@ function readPolicy(path: string, expectedUid: number): Policy {
   const policy = raw as Partial<Policy>;
   if (
     policy.version !== POLICY_VERSION || typeof policy.autoEnableNewSites !== "boolean" ||
+    (policy.blockBypass !== undefined && typeof policy.blockBypass !== "boolean") ||
     !Array.isArray(policy.knownSiteIds) || !policy.knownSiteIds.every(Number.isInteger) ||
     !Array.isArray(policy.excludedDomains) || !policy.excludedDomains.every((item) => typeof item === "string")
   ) failAction("Cloudflare IP policy is malformed");
@@ -149,11 +157,11 @@ function siteRows(db: Database): SiteRow[] {
 
 function parseAction(argv: string[]): ParsedAction {
   const verb = argv[0] as CloudflareVerb | undefined;
-  if (!verb || !["list", "set", "policy", "reconcile"].includes(verb)) {
+  if (!verb || !["list", "set", "policy", "protection", "reconcile"].includes(verb)) {
     failAction(`unknown Cloudflare IP action '${verb ?? ""}'`);
   }
   let enabled: boolean | null = null;
-  if (verb === "set" || verb === "policy") {
+  if (verb === "set" || verb === "policy" || verb === "protection") {
     if (argv.length !== 3 || argv[1] !== "--enabled") failAction(`${verb} takes only --enabled yes|no`);
     enabled = validateFlag(argv[2]!, "enabled") === "yes";
   } else if (argv.length !== 1) {
@@ -241,7 +249,7 @@ async function updateSites(
   }
 }
 
-function listState(paths: CloudflareActionPaths): { sites: CloudflareSiteView[]; autoEnableNewSites: boolean } {
+function listState(paths: CloudflareActionPaths) {
   const db = openPanelDatabase(paths.panelDb);
   try {
     const policy = readPolicy(paths.policyFile, paths.stateUid);
@@ -254,15 +262,62 @@ function listState(paths: CloudflareActionPaths): { sites: CloudflareSiteView[];
         excludedFromAutomatic: excluded.has(site.domain_name),
       })),
       autoEnableNewSites: policy.autoEnableNewSites,
+      protection: cloudflarePeerStatus(policy.blockBypass, peerOptions(paths)),
     };
   } finally {
     db.close();
   }
 }
 
-async function withPolicyLock<T>(paths: CloudflareActionPaths, body: () => Promise<T>): Promise<T> {
+function peerOptions(paths: CloudflareActionPaths, run?: CloudflareActionOptions["run"]): CloudflarePeerOptions {
+  return { paths: { ips: paths.cloudflareIps, geo: paths.peerGeo, rootUid: paths.stateUid, nginx: paths.nginx, systemctl: paths.systemctl }, run };
+}
+
+export function cloudflareProtectionUpkeep(options: CloudflareActionOptions = {}): string | null {
+  const paths = pathsFor(options);
+  preparePolicyLock(paths);
+  return withFileLockSync(paths.lockFile, 30, "another Cloudflare IP operation is running", () => {
+    const policy = readPolicy(paths.policyFile, paths.stateUid);
+    return applyCloudflarePeer(policy.blockBypass, peerOptions(paths, options.run)) ? "Cloudflare-only bypass protection restored" : null;
+  });
+}
+
+export function withdrawCloudflareProtection(options: CloudflareActionOptions = {}): void {
+  const paths = pathsFor(options);
+  preparePolicyLock(paths);
+  withFileLockSync(paths.lockFile, 30, "another Cloudflare IP operation is running", () =>
+    applyCloudflarePeer(false, peerOptions(paths, options.run)));
+}
+
+async function setProtection(paths: CloudflareActionPaths, enabled: boolean, run?: CloudflareActionOptions["run"]) {
+  return withPolicyLock(paths, async () => {
+    const policy = readPolicy(paths.policyFile, paths.stateUid);
+    const before = existsSync(paths.policyFile) ? readFileSync(paths.policyFile, "utf8") : null;
+    writePolicy(paths.policyFile, { ...policy, blockBypass: enabled }, paths.stateUid);
+    try {
+      applyCloudflarePeer(enabled, peerOptions(paths, run));
+    } catch (error) {
+      const failures: string[] = [];
+      try {
+        if (before === null) rmSync(paths.policyFile, { force: true });
+        else {
+          const stat = lstatSync(paths.policyFile);
+          writeAtomicOwned(paths.policyFile, before, 0o600, stat.uid, stat.gid);
+        }
+      } catch (rollbackError) { failures.push(errorMessage(rollbackError)); }
+      throw withRecoveryFailures(error, "policy rollback failed", failures);
+    }
+    return listState(paths);
+  });
+}
+
+function preparePolicyLock(paths: CloudflareActionPaths): void {
   mkdirSync(dirname(paths.lockFile), { recursive: true });
   chmodSync(dirname(paths.lockFile), 0o700);
+}
+
+async function withPolicyLock<T>(paths: CloudflareActionPaths, body: () => Promise<T>): Promise<T> {
+  preparePolicyLock(paths);
   return withFileLock(paths.lockFile, 30, "another Cloudflare IP operation is running", body);
 }
 
@@ -359,6 +414,7 @@ export async function runCloudflareAction(argv: string[], options: CloudflareAct
     const command = options.run ?? runCommand;
     let data: unknown;
     if (action.verb === "list") data = listState(paths);
+    else if (action.verb === "protection") data = await setProtection(paths, action.enabled!, options.run);
     else if (action.verb === "policy") {
       const policy = await setPolicy(paths, action.enabled!);
       data = { autoEnableNewSites: policy.autoEnableNewSites };

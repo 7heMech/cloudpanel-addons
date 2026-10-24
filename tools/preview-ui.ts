@@ -45,6 +45,7 @@ import { dashboardView as securityKeysDashboardView, layout as securityKeysLayou
 import { SECURITY_KEYS_TARGETS } from "../addons/security-keys/inject/targets";
 import type { UserKeysView } from "../addons/security-keys/action";
 import { dashboardView as systemTweaksDashboardView, layout as systemTweaksLayout } from "../addons/system-tweaks/app/views";
+import type { CloudflareState } from "../addons/cloudflare-ips/app/service";
 import type { SystemTweaksState } from "../addons/system-tweaks/action";
 
 const versions: AvailableTags = { tags: ["0.0.19", "0.0.18"], latest: "0.0.19", source: "registry" };
@@ -310,15 +311,34 @@ const cloudflareSites = [
 ];
 
 /** ?sites=all|none|mixed and ?auto=off cover the states the controls describe. */
-function cloudflarePreviewState(url: URL) {
+let cloudflarePreview: CloudflareState | null = null;
+
+function cloudflarePreviewState(url: URL): CloudflareState {
+  if (cloudflarePreview) return cloudflarePreview;
   const all = url.searchParams.get("sites");
   const sites = cloudflareSites.map((site) => all === "all"
     ? { ...site, enabled: true }
     : all === "none" ? { ...site, enabled: false } : site);
   return {
     autoEnableNewSites: url.searchParams.get("auto") !== "off",
+    protection: { wanted: true, configured: true, available: true, problem: "" },
     sites: url.searchParams.has("empty") ? [] : sites,
   };
+}
+
+function cloudflarePreviewMutation(path: string, source: URL, body: Record<string, any>): Response | null {
+  if (!["/addons/cloudflare-ips/api/protection", "/addons/cloudflare-ips/api/sites", "/addons/cloudflare-ips/api/policy"].includes(path)) return null;
+  const state = structuredClone(cloudflarePreviewState(source));
+  if (path.endsWith("/protection")) {
+    state.protection.wanted = body.enabled === true;
+    state.protection.configured = body.enabled === true;
+  } else if (path.endsWith("/policy")) state.autoEnableNewSites = body.enabled === true;
+  else for (const site of state.sites) if (body.domains?.includes(site.domain)) {
+    site.enabled = body.enabled === true;
+    site.excludedFromAutomatic = !site.enabled;
+  }
+  cloudflarePreview = state;
+  return Response.json({ ok: true, data: state, html: cloudflareDashboardView(state) });
 }
 
 /**
@@ -406,10 +426,9 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
         { name: "Debian bookworm", detail: "main, contrib, non-free, non-free-firmware", covered: "all" },
         { name: "Debian bookworm-updates", detail: "main", covered: "none" },
       ],
-      lastRun: enabled ? { at: "2026-10-23 06:41:09", outcome: "upgraded", packages: ["php8.3-fpm", "php8.3-cli"], message: "" } : null,
+      lastRun: url.searchParams.has("failed") ? { at: "2026-10-23 16:11:29", outcome: "failed", packages: [], message: "An error occurred: 404 Not Found [IP: 2001:db8::1 443]\nThe URI https://packages.example.test/php8.2-bcmath.deb failed to download, aborting" } : enabled ? { at: "2026-10-23 06:41:09", outcome: "upgraded", packages: ["php8.3-fpm", "php8.3-cli"], message: "" } : null,
       rebootRequired: { since: "2026-10-20T06:41:09Z", packages: ["linux-image-6.1.0-53-amd64"] },
     },
-    cloudflarePeer: { wanted: true, configured: true, available: true, problem: "" },
     uploadProgress: {
       guard,
       fpms: [...php.map((version) => ({
@@ -437,9 +456,6 @@ function systemTweaksPreviewMutation(path: string, source: URL, body: Record<str
       row.enabled = !state.uploadProgress.guard && !row.offWithoutGuard;
       row.setBy = state.uploadProgress.guard ? "clp-addons" : row.offWithoutGuard ? "config" : "default";
     }
-  } else if (path.endsWith("/cloudflare-peer")) {
-    state.cloudflarePeer.wanted = body.enabled === true;
-    state.cloudflarePeer.configured = body.enabled === true;
   } else {
     Object.assign(state.settings, body);
     state.updates.managed = state.settings.enabled;
@@ -1018,6 +1034,7 @@ async function repaintPreviewMutation(req: Request, url: URL): Promise<Response 
     ?? instaticPreviewMutation(path, body)
     ?? phpPreviewMutation(path, source, body)
     ?? systemTweaksPreviewMutation(path, source, body)
+    ?? cloudflarePreviewMutation(path, source, body)
     ?? managerPreviewMutation(path, source);
 }
 
@@ -1253,6 +1270,10 @@ const server = Bun.serve({
         previewEnabled = previewEnabled!.filter((addon) => addon !== job.addon);
         if (job.kind === "enable") previewEnabled.push(job.addon);
       }, job.kind === "update" ? "failed" : "done");
+    }
+    if (path === "/addons/cloudflare-ips/api/sites") {
+      const state = cloudflarePreviewState(new URL(req.headers.get("referer") || req.url));
+      return Response.json({ ok: true, data: state, html: cloudflareDashboardView(state) });
     }
     if (path === "/addons/git/api/view") {
       const selected = url.searchParams.get("domain");

@@ -13,7 +13,10 @@
    An uncovered source still needs `apt upgrade`.
 
 **Last run** shows the last result from
-`/var/log/unattended-upgrades/unattended-upgrades.log`. **Reboot** shows when
+`/var/log/unattended-upgrades/unattended-upgrades.log`. Expand **Failure details**
+for the complete error, including the package URL if recorded. HTTP 404 means
+the repository did not provide the requested package; it is not a successful
+update. **Reboot** shows when
 an update such as a kernel needs a restart. Switch on **Reboot when required**
 to restart right after that run.
 
@@ -33,27 +36,6 @@ To try a run without installing anything:
 ```bash
 unattended-upgrade --dry-run -d
 ```
-
-## Cloudflare connection check
-
-Use **Check Cloudflare connections** when Cloudflare connects directly to this
-server. It adds a connection-address check to sites using **Allow traffic from
-Cloudflare only**, including sites enabled through CloudPanel itself. Choose
-those sites in Cloudflare IP Access or each site's Security page.
-
-The switch starts off. Leave it off when a load balancer or tunnel sits between
-Cloudflare and the server: those connections would be blocked. Direct requests
-for certificate validation are blocked too, so use validation through Cloudflare
-or DNS. Sites without Cloudflare-only access keep working normally.
-
-**Configured** means the extra check is present in the Nginx files. If the page
-says **Needs repair**, run `clp-addons repair` and check any reported error.
-CloudPanel replacing its range list triggers repair automatically, but until
-repair finishes only CloudPanel's original rules may be active.
-
-Switching off removes the added check and leaves CloudPanel's rules in place.
-Disabling System Tweaks removes the check too; enabling it again restores your
-choice. The setting does not change how visitor IPs are passed to applications.
 
 ## PHP upload-progress mitigation
 

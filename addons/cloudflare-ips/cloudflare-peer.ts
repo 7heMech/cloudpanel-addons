@@ -40,7 +40,7 @@ function withoutBlock(content: string): string {
   if (!content.startsWith(CLOUDFLARE_PEER_BLOCK) ||
       content.slice(CLOUDFLARE_PEER_BLOCK.length).includes(START) ||
       content.slice(CLOUDFLARE_PEER_BLOCK.length).includes(END)) {
-    failAction("the System Tweaks Cloudflare block has changed; restore it before changing this setting");
+    failAction("the clp-addons Cloudflare block has changed; restore it before changing this setting");
   }
   return content.slice(CLOUDFLARE_PEER_BLOCK.length);
 }

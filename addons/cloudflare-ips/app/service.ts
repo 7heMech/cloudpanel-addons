@@ -1,4 +1,6 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
+import type { CloudflarePeerStatus } from "../cloudflare-peer";
+import { PROTECTION_GATEWAY_TIMEOUT_MS } from "../limits";
 
 export interface CloudflareSiteView {
   domain: string;
@@ -10,6 +12,7 @@ export interface CloudflareSiteView {
 export interface CloudflareState {
   sites: CloudflareSiteView[];
   autoEnableNewSites: boolean;
+  protection: CloudflarePeerStatus;
 }
 
 async function call<T>(verb: string, args: string[] = [], input?: string): Promise<ActionResult<T>> {
@@ -31,5 +34,9 @@ export const cloudflareService = {
 
   async setAutomatic(enabled: boolean): Promise<ActionResult<{ autoEnableNewSites: boolean }>> {
     return call<{ autoEnableNewSites: boolean }>("policy", ["--enabled", enabled ? "yes" : "no"]);
+  },
+  async setProtection(enabled: boolean): Promise<ActionResult<CloudflareState>> {
+    return callGatewayAction<CloudflareState>("cloudflare-ips", "protection", ["--enabled", enabled ? "yes" : "no"], undefined,
+      { timeout: PROTECTION_GATEWAY_TIMEOUT_MS });
   },
 };

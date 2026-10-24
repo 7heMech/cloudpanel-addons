@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
 import { inspectPhpGuard, reconcilePhpGuard, type PhpGuardOptions } from "../cli/php-guard";
 import {
-  executeSystemTweaksAction, restoreSystemTweaks, withdrawSystemTweaks, systemTweaksNginxUpkeep,
+  executeSystemTweaksAction, restoreSystemTweaks, withdrawSystemTweaks,
   type SystemTweaksOptions, type SystemTweaksState,
 } from "../addons/system-tweaks/action";
 import {
@@ -13,7 +13,6 @@ import {
 } from "../addons/system-tweaks/updates";
 import { iniBoolean, iniSetting, uploadProgressStatus } from "../addons/system-tweaks/upload-progress";
 import { dashboardView } from "../addons/system-tweaks/app/views";
-import { appRequest } from "./app-request";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -234,7 +233,6 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
       },
       uploadProgress: { run, paths: { phpRoot, fpmBinDir: sbin, panelUnit: "clp-php-fpm.service" } },
       phpGuard,
-      cloudflarePeer: { run, paths: { ips: join(dir, "cloudflare-ips"), geo: join(dir, "cloudflare-geo"), rootUid: uid } },
     },
   };
 }
@@ -289,33 +287,6 @@ for (const codename of ["jammy", "noble", "resolute"]) {
     }
   });
 }
-
-test("Cloudflare connection checks are opt-in, survive repair, withdraw and restore with the addon", async () => {
-  const b = box();
-  const ips = b.options.cloudflarePeer!.paths!.ips!;
-  const stock = "allow 173.245.48.0/20;\nallow 2400:cb00::/32;\ndeny all;\n";
-  writeFileSync(ips, stock, { mode: 0o644 });
-  expect((await act(b, ["state"])).cloudflarePeer.wanted).toBe(false);
-  expect((await act(b, ["set-cloudflare-peer"], { enabled: true })).cloudflarePeer.configured).toBe(true);
-  expect(dashboardView(await act(b, ["state"]))).toContain("Check Cloudflare connections");
-  writeFileSync(ips, stock);
-  expect((await act(b, ["state"])).cloudflarePeer.configured).toBe(false);
-  expect(systemTweaksNginxUpkeep(b.options)).toBe("Cloudflare connection check restored");
-  withdrawSystemTweaks(b.options);
-  expect(readFileSync(ips, "utf8")).toBe(stock);
-  restoreSystemTweaks(b.options);
-  expect((await act(b, ["state"])).cloudflarePeer.configured).toBe(true);
-  expect((await act(b, ["set-cloudflare-peer"], { enabled: false })).cloudflarePeer.wanted).toBe(false);
-  expect(systemTweaksNginxUpkeep(b.options)).toBe(null);
-  expect(readFileSync(ips, "utf8")).toBe(stock);
-});
-
-test("a failed Cloudflare change restores its setting and rejects non-boolean input", async () => {
-  const b = box();
-  await expect(act(b, ["set-cloudflare-peer"], { enabled: "true" })).rejects.toThrow("true or false");
-  await expect(act(b, ["set-cloudflare-peer"], { enabled: true })).rejects.toThrow("IP list is missing");
-  expect((await act(b, ["state"])).cloudflarePeer.wanted).toBe(false);
-});
 
 test("a box whose operator already turned updates on reads as configured outside System Tweaks", async () => {
   const b = box();
@@ -588,20 +559,18 @@ test("actions refuse to run as anyone but root", async () => {
   await expect(act(b, ["state", "--extra"])).rejects.toThrow("unexpected argument");
 });
 
-test("the Cloudflare page action requires CSRF and a boolean, and repaints from the gateway reply", async () => {
-  const state = await act(box(), ["state"]);
-  state.cloudflarePeer = { wanted: true, configured: true, available: true, problem: "" };
-  const calls: boolean[] = [];
-  mock.module("../addons/system-tweaks/app/service", () => ({ systemTweaksService: {
-    setCloudflarePeer: async (enabled: boolean) => { calls.push(enabled); return { ok: true, data: state }; },
-  } }));
-  const { handle } = await import("../addons/system-tweaks/app/index");
-  const path = "/api/cloudflare-peer";
-  expect((await handle(appRequest(path, "POST", { enabled: true }, false), path)).status).toBe(403);
-  expect((await handle(appRequest(path, "POST", { enabled: "true" }), path)).status).toBe(400);
-  expect(calls).toEqual([]);
-  const response = await handle(appRequest(path, "POST", { enabled: true }), path);
-  expect(response.status).toBe(200);
-  expect(calls).toEqual([true]);
-  expect(await response.json()).toEqual({ ok: true, html: dashboardView(state) });
+
+test("failed downloads retain the package URL in expandable details and escape the log", () => {
+  const b = box({ log: `2026-10-23 16:11:29,000 INFO Starting unattended upgrades script
+2026-10-23 16:12:44,000 ERROR An error occurred: 404 Not Found [IP: 2001:db8::1 443]
+2026-10-23 16:12:44,001 ERROR The URI https://packages.example.test/php8.2-bcmath.deb failed to download, aborting <script>
+` });
+  const updates = updatesStatus(b.options.updates);
+  expect(updates.lastRun?.outcome).toBe("failed");
+  expect(updates.lastRun?.message).toContain("php8.2-bcmath.deb");
+  const html = dashboardView({ updates, settings: { ...DEFAULT_UPDATE_SETTINGS }, uploadProgress: { guard: true, fpms: [] } });
+  expect(html).toContain("A package download failed (HTTP 404).");
+  expect(html).toContain('<details class="st-run-details"><summary>Failure details</summary>');
+  expect(html).toContain("php8.2-bcmath.deb failed to download, aborting &lt;script&gt;");
+  expect(html).not.toContain("<script>");
 });

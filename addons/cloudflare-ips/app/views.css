@@ -1,5 +1,8 @@
 
 .fleet-card, .policy-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
+.cf-protection-row { padding: 0; border: 0; }
+.cf-protection-scope, .cf-protection-status, .cf-protection-problem { margin-top: 10px !important; }
+.cf-protection-problem { overflow-wrap: anywhere; color: var(--warn) !important; }
 .fleet-card h2, .policy-card h2 { margin: 0 0 8px; }
 .fleet-card p, .policy-card p { margin: 0; }
 .fleet-card .actions { flex-shrink: 0; }

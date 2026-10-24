@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
   applyCloudflarePeer, cloudflarePeerStatus, CLOUDFLARE_PEER_BLOCK, cloudflarePeerRanges,
   type CloudflarePeerOptions,
-} from "../addons/system-tweaks/cloudflare-peer";
+} from "../addons/cloudflare-ips/cloudflare-peer";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });

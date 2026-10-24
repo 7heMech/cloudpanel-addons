@@ -7,6 +7,7 @@ import {
 } from "./artifacts";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
 import { reconcilePhpGuard } from "./php-guard";
+import { cloudflareProtectionUpkeep } from "../addons/cloudflare-ips/action";
 import { type AddonSpec } from "./addon-catalog";
 import { operationLockEnv, withOperationLock } from "./operation-lock";
 import { CLI_BIN, MANAGER_UNIT } from "./paths";
@@ -39,6 +40,10 @@ function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
   if (!reconcileMaintenanceNginx(false)) log.warn("Nginx maintenance check needs manual repair");
   if (!reconcileNginx(false)) log.warn("Nginx proxy needs manual repair");
   reconcilePhpGuard(true);
+  if (specs.some((spec) => spec.name === "cloudflare-ips")) {
+    try { cloudflareProtectionUpkeep(); }
+    catch (error) { log.warn(`Cloudflare bypass protection needs repair: ${error instanceof Error ? error.message : String(error)}`); }
+  }
   startUnits({ beforeManagerRestart });
   return specs;
 }

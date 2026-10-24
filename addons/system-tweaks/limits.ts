@@ -8,5 +8,3 @@ export const COMMAND_MS = 30_000;
 export const INSTALL_DEADLINE_MS = 600_000;
 /** The gateway kills the action at this, so it waits past the deadline for start-up and the reply. */
 export const INSTALL_GATEWAY_TIMEOUT_MS = INSTALL_DEADLINE_MS + 30_000;
-/** Nginx test/reload and rollback (4 commands), state queries (9), lock and reply. */
-export const CLOUDFLARE_PEER_GATEWAY_TIMEOUT_MS = 13 * COMMAND_MS + 60_000;

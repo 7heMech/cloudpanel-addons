@@ -312,16 +312,16 @@ test.serial("repair runs addon maintenance after the anchors and Nginx, and --an
   expect(output.anchorsOnly).toEqual(["anchors", "maintenance", "nginx"]);
 });
 
-test.serial("the path watcher's fast repair restores the opted-in Cloudflare check only with System Tweaks enabled", () => {
+test.serial("the path watcher's fast repair restores the opted-in Cloudflare check only with Cloudflare IP Access enabled", () => {
   const script = `${mockPrelude}
     let enabled = false;
     let calls = 0;
     let fail = false;
     mock.module("./cli/operation-lock.ts", () => ({ withOperationLock: async (_name, body) => body() }));
     const realAddons = await import("./cli/addons.ts");
-    mock.module("./cli/addons.ts", () => ({ ...realAddons, installedAddons: () => enabled ? [{ name: "system-tweaks" }] : [] }));
-    const realTweaks = await import("./addons/system-tweaks/action.ts");
-    mock.module("./addons/system-tweaks/action.ts", () => ({ ...realTweaks, systemTweaksNginxUpkeep: () => {
+    mock.module("./cli/addons.ts", () => ({ ...realAddons, installedAddons: () => enabled ? [{ name: "cloudflare-ips" }] : [] }));
+    const realTweaks = await import("./addons/cloudflare-ips/action.ts");
+    mock.module("./addons/cloudflare-ips/action.ts", () => ({ ...realTweaks, cloudflareProtectionUpkeep: () => {
       calls++;
       if (fail) throw new Error("peer lookup rejected");
     } }));
@@ -339,5 +339,5 @@ test.serial("the path watcher's fast repair restores the opted-in Cloudflare che
   const output = JSON.parse(result.stdout.trim().split("\n").pop() ?? "");
   expect(output.disabledCalls).toBe(0);
   expect(output.calls).toBe(2);
-  expect(output.log).toContainEqual(["err", "Cloudflare connection check: peer lookup rejected"]);
+  expect(output.log).toContainEqual(["err", "Cloudflare bypass protection: peer lookup rejected"]);
 });

@@ -3,7 +3,7 @@ import { strict as assert } from "node:assert";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CLOUDFLARE_PEER_BLOCK, cloudflarePeerGeo } from "../../addons/system-tweaks/cloudflare-peer";
+import { CLOUDFLARE_PEER_BLOCK, cloudflarePeerGeo } from "../../addons/cloudflare-ips/cloudflare-peer";
 
 const dir = mkdtempSync(join(tmpdir(), "clp-peer-nginx-"));
 try {

@@ -26,7 +26,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 
 | Addon | Description |
 | --- | --- |
-| Cloudflare IP Access | Allow traffic from Cloudflare only, across all sites and for new ones. |
+| [Cloudflare IP Access](docs/cloudflare-ips.md) | Manage Cloudflare-only access and mitigate bypasses using forged IP headers. |
 | [DNS](docs/dns.md) | Each site's Cloudflare records kept to a profile, with Mailcow set up for its mail. |
 | [Instatic CMS](https://github.com/CoreBunch/Instatic) | Instatic CMS sites on CloudPanel. |
 | Stager | Staging copies of WordPress, PHP, static and Instatic sites, and promotion back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
@@ -35,7 +35,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | [SMTP Relay](docs/smtp-relay.md) | Send each site's mail through SMTP relay profiles, WordPress and PHP included. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
 | Panel Tweaks | Site search and columns, automatic SSL for native sites, mobile layouts, themes, and a newer PHP for the panel itself. |
-| [System Tweaks](docs/system-tweaks.md) | Automatic security updates, Cloudflare connection checks, and the PHP upload-progress mitigation. |
+| [System Tweaks](docs/system-tweaks.md) | Automatic security updates and the PHP upload-progress mitigation. |
 | [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in, optional CLP Varnish Cache installation and MainWP Child enrollment. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
 | Security Keys | Sign in with a passkey or a hardware key such as a YubiKey instead of a password, for the roles an administrator allows. Needs the panel on a hostname with a valid certificate. |

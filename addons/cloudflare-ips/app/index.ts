@@ -67,5 +67,15 @@ export async function handle(
     return json(result, result.ok ? 200 : 400);
   }
 
+  if (req.method === "POST" && path === "/api/protection") {
+    const denied = guardMutation(req);
+    if (denied) return denied;
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req); } catch (error) { return bodyErrorResponse(error); }
+    if (!validMutationBody(body)) return json({ ok: false, error: "enabled must be boolean" }, 400);
+    const result = await cloudflareService.setProtection(body.enabled);
+    return json(result.ok && result.data ? { ...result, html: dashboardView(result.data) } : result, result.ok ? 200 : 400);
+  }
+
   return json({ ok: false, error: "not found" }, 404);
 }

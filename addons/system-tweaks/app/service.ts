@@ -1,6 +1,6 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
 import type { SystemTweaksState } from "../action";
-import { CLOUDFLARE_PEER_GATEWAY_TIMEOUT_MS, INSTALL_GATEWAY_TIMEOUT_MS } from "../limits";
+import { INSTALL_GATEWAY_TIMEOUT_MS } from "../limits";
 
 function call(verb: string, input?: string, timeout?: number): Promise<ActionResult<SystemTweaksState>> {
   return callGatewayAction<SystemTweaksState>("system-tweaks", verb, [], input, timeout ? { timeout } : undefined);
@@ -23,7 +23,4 @@ export const systemTweaksService = {
     return call("set-upload-guard", JSON.stringify({ enabled }));
   },
 
-  setCloudflarePeer(enabled: boolean): Promise<ActionResult<SystemTweaksState>> {
-    return call("set-cloudflare-peer", JSON.stringify({ enabled }), CLOUDFLARE_PEER_GATEWAY_TIMEOUT_MS);
-  },
 };

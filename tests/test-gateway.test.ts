@@ -360,7 +360,7 @@ describe("Gateway Protocol & Server", () => {
   });
 
   test("the Cloudflare dashboard cannot invoke the timer-only reconcile verb", () => {
-    expect(CLOUDFLARE_IPS_ALLOWED_VERBS).toEqual(new Set(["list", "set", "policy"]));
+    expect(CLOUDFLARE_IPS_ALLOWED_VERBS).toEqual(new Set(["list", "set", "policy", "protection"]));
     expect(CLOUDFLARE_IPS_ALLOWED_VERBS.has("reconcile")).toBe(false);
   });
 });

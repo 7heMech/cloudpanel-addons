@@ -13,7 +13,7 @@ import {
 } from "./provision";
 import { fatal, log, parseFlags, requireRoot } from "./util";
 import { existsSync } from "node:fs";
-import { systemTweaksNginxUpkeep } from "../addons/system-tweaks/action";
+import { cloudflareProtectionUpkeep } from "../addons/cloudflare-ips/action";
 /**
  * Reconciles manager provisioning and enabled addon state, or only injected
  * CloudPanel anchors and the Nginx proxy when `--anchors-only` is supplied.
@@ -36,9 +36,9 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     // unreachable in between. Both reconcilers no-op when nothing drifted, so
     // this stays cheap enough to run on every template write during an upgrade.
     reconcileAnchors(quiet);
-    if (installedAddons().some((spec) => spec.name === "system-tweaks")) {
-      try { systemTweaksNginxUpkeep(); }
-      catch (error) { log.err(`Cloudflare connection check: ${error instanceof Error ? error.message : String(error)}`); }
+    if (installedAddons().some((spec) => spec.name === "cloudflare-ips")) {
+      try { cloudflareProtectionUpkeep(); }
+      catch (error) { log.err(`Cloudflare bypass protection: ${error instanceof Error ? error.message : String(error)}`); }
     }
     if (!reconcileMaintenanceNginx(quiet)) log.err("Nginx maintenance check is not ready; fix the problem above, then run repair again");
     if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");

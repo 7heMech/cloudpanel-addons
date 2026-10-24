@@ -386,8 +386,8 @@ function lastRunIn(text: string): LastRun | null {
   const at = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/.exec(run[0] ?? "")?.[1] ?? "";
   const packages = run.map((line) => /Packages that will be upgraded: (.*)$/.exec(line)?.[1])
     .filter((list): list is string => Boolean(list)).flatMap((list) => list.trim().split(/\s+/));
-  const error = run.find((line) => / ERROR /.test(line));
-  if (error) return { at, outcome: "failed", packages, message: error.replace(/^.*? ERROR /, "") };
+  const errors = run.filter((line) => / ERROR /.test(line)).map((line) => line.replace(/^.*? ERROR /, ""));
+  if (errors.length) return { at, outcome: "failed", packages, message: [...new Set(errors)].join("\n") };
   if (run.some((line) => line.includes("All upgrades installed"))) return { at, outcome: "upgraded", packages, message: "" };
   if (run.some((line) => line.includes("No packages found that can be upgraded unattended"))) {
     return { at, outcome: "nothing", packages: [], message: "" };

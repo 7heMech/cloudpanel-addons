@@ -100,7 +100,6 @@ export const SYSTEM_TWEAKS_ALLOWED_VERBS = new Set([
   "set-updates",
   "install-updates",
   "set-upload-guard",
-  "set-cloudflare-peer",
 ]);
 
 /**
@@ -127,6 +126,7 @@ export const CLOUDFLARE_IPS_ALLOWED_VERBS = new Set([
   "list",
   "set",
   "policy",
+  "protection",
 ]);
 
 export const SMTP_ALLOWED_VERBS = new Set([

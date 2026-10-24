@@ -74,7 +74,35 @@ function applyState(state, html) {
   });
   const policy = document.getElementById('automatic-policy');
   if (policy) policy.checked = Boolean(state.autoEnableNewSites);
+  if (state.protection) {
+    const protection = document.getElementById('bypass-protection');
+    if (protection) protection.checked = state.protection.wanted;
+    const status = document.getElementById('cf-protection-status');
+    if (status) status.textContent = state.protection.configured ? 'Protection configured.'
+      : state.protection.wanted ? 'Protection needs repair.' : 'Bypass protection is off.';
+    const problem = document.getElementById('cf-protection-problem');
+    if (problem) { problem.textContent = state.protection.problem; problem.hidden = !state.protection.problem; }
+  }
   paintSummary();
+}
+
+async function setProtection(input) {
+  clearNotice();
+  busy(true);
+  try {
+    const reply = await call('/api/protection', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: input.checked }),
+    });
+    busy(false);
+    applyState(reply.data, reply.html);
+    notify('Bypass protection saved. It only applies to Cloudflare-only sites.', 'ok');
+  } catch (error) {
+    const state = await readState();
+    busy(false);
+    if (state.ok) applyState(state.data, state.html);
+    else input.checked = !input.checked;
+    notify('Could not update bypass protection: ' + error.message, 'error');
+  }
 }
 
 /** The state the server holds now, or why it could not be read. */

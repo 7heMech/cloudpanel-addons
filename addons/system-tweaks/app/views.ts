@@ -35,7 +35,6 @@ interface Row {
   description: string;
   checked: boolean;
   disabled?: boolean;
-  nested?: boolean;
   onchange: string;
   extra?: string;
 }
@@ -43,7 +42,7 @@ interface Row {
 function switchRow(row: Row): string {
   const note = `tweak-note-${row.key}`;
   return `
-      <div class="tweak-row${row.nested ? " is-nested" : ""}">
+      <div class="tweak-row">
         <div class="tweak-body">
           <div class="tweak-heading">
             <h3>${esc(row.title)}<button class="tweak-more" type="button" aria-expanded="false"
@@ -102,25 +101,25 @@ function updateRows(status: UpdatesStatus, settings: UpdateSettings): string {
       key: "nginx",
       title: "Nginx",
       description: "CloudPanel's Nginx build. An update reloads Nginx without dropping connections.",
-      checked: settings.nginx, disabled: locked, nested: true, onchange: "setUpdates(this)",
+      checked: settings.nginx, disabled: locked, onchange: "setUpdates(this)",
     }),
     switchRow({
       key: "database",
       title: "MySQL",
       description: "CloudPanel's database server. An update restarts MySQL, so every site loses its database for a moment.",
-      checked: settings.database, disabled: locked, nested: true, onchange: "setUpdates(this)",
+      checked: settings.database, disabled: locked, onchange: "setUpdates(this)",
     }),
     switchRow({
       key: "panel",
       title: "CloudPanel",
       description: "The panel itself, which clp-update normally updates.",
-      checked: settings.panel, disabled: locked, nested: true, onchange: "setUpdates(this)",
+      checked: settings.panel, disabled: locked, onchange: "setUpdates(this)",
     }),
     switchRow({
       key: "reboot",
       title: "Reboot when required",
       description: "Restarts the server right after a run that installed something needing it, such as a new kernel.",
-      checked: settings.reboot, disabled: locked, nested: true, onchange: "setUpdates(this)",
+      checked: settings.reboot, disabled: locked, onchange: "setUpdates(this)",
     }),
   ].join("");
 }
@@ -133,7 +132,8 @@ function lastRunText(run: LastRun | null): string {
     return `${at}: installed ${count} update${count === 1 ? "" : "s"}${count ? ` (${run.packages.join(", ")})` : ""}.`;
   }
   if (run.outcome === "nothing") return `${at}: nothing to install.`;
-  if (run.outcome === "failed") return `${at}: failed. ${run.message}`;
+  if (run.outcome === "failed") return `${at}: ${/\b404\s+Not Found\b/i.test(run.message)
+    ? "A package download failed (HTTP 404)." : "Failed. See the details below."}`;
   return `${at}: no result logged yet.`;
 }
 
@@ -146,9 +146,11 @@ function statusList(status: UpdatesStatus): string {
   const automatic = status.reboot
     ? `On${status.rebootTime && status.rebootTime !== "now" ? `, at ${esc(status.rebootTime)}` : ", right after the run"}.`
     : "Off.";
+  const failure = status.lastRun?.outcome === "failed"
+    ? `<details class="st-run-details"><summary>Failure details</summary><pre>${esc(status.lastRun.message)}</pre></details>` : "";
   return `
       <dl class="kv st-kv">
-        <dt>Last run</dt><dd>${esc(lastRunText(status.lastRun))}</dd>
+        <dt>Last run</dt><dd>${esc(lastRunText(status.lastRun))}${failure}</dd>
         <dt>Reboot</dt><dd>${reboot}</dd>
         <dt>Automatic reboot</dt><dd>${automatic}</dd>
       </dl>`;
@@ -207,7 +209,6 @@ function uploadProgressCard(state: SystemTweaksState): string {
 }
 
 export function dashboardView(state: SystemTweaksState): string {
-  const peer = state.cloudflarePeer;
   return `
     <div class="page-heading">
       <div>
@@ -219,17 +220,5 @@ export function dashboardView(state: SystemTweaksState): string {
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
       </div>${statusList(state.updates)}
-    </div>${coverageCard(state.updates)}
-    <div class="card">
-      <div class="card-header"><h2>Cloudflare</h2></div>
-      <div class="tweak-list">${switchRow({
-        key: "cloudflarePeer",
-        title: "Check Cloudflare connections",
-        description: "On sites using Cloudflare only, require the connection itself to come from CloudPanel's Cloudflare IP list. Forwarded IP headers cannot pass this check. Use this when Cloudflare connects directly to this server; another load balancer or tunnel in between will be blocked. Direct certificate validation requests are also blocked. Manage which sites use Cloudflare only in Cloudflare IP Access or the site's Security page.",
-        checked: peer.wanted,
-        disabled: !peer.available && !peer.wanted,
-        onchange: "setCloudflarePeer(this)",
-        extra: `<p class="st-status">${badge(peer.configured ? "Configured" : peer.wanted ? "Needs repair" : "Off", peer.configured ? "ok" : peer.wanted ? "warn" : "plain")} <span>${esc(peer.problem || (peer.configured ? "Checks the connecting address on Cloudflare-only sites." : "Existing CloudPanel and operator access rules still apply."))}</span></p>`,
-      })}</div>
-    </div>${uploadProgressCard(state)}`;
+    </div>${coverageCard(state.updates)}${uploadProgressCard(state)}`;
 }

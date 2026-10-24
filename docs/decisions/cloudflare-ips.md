@@ -9,10 +9,6 @@ from `main` to `cloudflare`, and adds
 reverses those rendered-vhost changes. CloudPanel remains the source of the IP
 ranges in `/etc/nginx/cloudflare/ips`.
 
-The optional connection-address check is owned by
-[System Tweaks](system-tweaks.md#cloudflare-connection-check). It hardens the
-shared include without changing which sites this addon selects.
-
 Bulk changes take one exclusive addon lock and one immediate SQLite transaction.
 Every affected vhost must be a trusted regular file. The trust checks, owned
 atomic replacement, restoration and recovery error collection are shared with
@@ -60,3 +56,59 @@ Turning a site off in the addon records its hostname as an exception. The timer
 does not re-enable an exception. Turning the site on removes the exception.
 Enabling or disabling the policy does not change existing sites; operators use
 the dashboard's bulk controls for that.
+
+## Cloudflare-only bypass protection
+
+Cloudflare IP Access owns **Mitigate Cloudflare-only bypass**, enabled by default.
+It applies only to sites whose public server includes CloudPanel's Cloudflare-only
+rules. Turning that setting off for a site removes the include, so this protection
+adds no restriction to that site. It does not enable Cloudflare-only access on
+any site by itself.
+
+The existing root-owned policy file stores `blockBypass`; a missing field means
+true, including existing installations. An explicit false persists through
+repair, update and addon reactivation. System Tweaks does not control this policy.
+
+CloudPanel's broad real-IP trust can replace `$remote_addr` from a request
+header before its access rules run. The extra check uses
+[`$realip_remote_addr`](https://nginx.org/en/docs/http/ngx_http_realip_module.html#embedded_variables),
+which retains the original connection address. Its lookup lives in the owned
+HTTP-context file `/etc/nginx/sites-enabled/00-clp-addons-cloudflare-peer.conf`.
+A marked block at the start of `/etc/nginx/cloudflare/ips` rejects peers outside
+that lookup with 403. The rest of CloudPanel's include stays byte-for-byte
+intact, so its existing address checks still apply too. The addon does not
+change global real-IP trust, visitor-IP headers, logs or PHP's `REMOTE_ADDR`.
+
+Ranges come from the trusted, root-owned CloudPanel include. Only numeric IPv4
+and IPv6 `allow` rules followed by `deny all` are accepted; custom directives,
+untrusted files, modified markers and an unrelated lookup file are refused.
+An operator's access rule elsewhere remains in place; the page reports whether
+this addon's check is configured, not whether every possible outside protection
+exists. No local-network or loopback exemption is added. CloudPanel's normal
+WordPress/Varnish backend has no Cloudflare include and is unaffected. A server
+that puts that include in a backend must remove it there or leave this switch
+off. Direct ACME requests are rejected too; validation must reach the site via
+Cloudflare or use DNS. Unrestricted sites do not use the check.
+
+The shared Nginx transaction writes both files, tests the complete configuration
+and reloads once. Validation or reload failure restores both files and the
+stored choice. Each Nginx command has a 30-second timeout; the gateway allows
+180 seconds for validation/reload, possible rollback, the state reply and lock
+waiting. Both limits are in `addons/cloudflare-ips/limits.ts`.
+
+Activation, update, repair and `repair --anchors-only` apply the saved policy. The
+existing path watcher watches the include and its directory, so a CloudPanel
+range replacement refreshes the lookup and puts the block back. This is eventual
+repair: a replacement loaded before the watcher finishes temporarily has only
+CloudPanel's rules. The page reports missing or stale configuration as needing
+repair, and watcher failures are logged. It reports configuration on disk,
+not a probe of live Nginx workers. Disabling the switch or addon removes only
+the exact marked block and owned lookup, preserving the current ranges rather
+than restoring an old copy. Re-enabling the addon restores its saved choice.
+The policy lock serializes protection changes with site and new-site policy
+changes.
+
+`bun tests/integration/integration-cloudflare-peer.ts` tests the generated
+configuration with real Nginx in an isolated Docker network: rejection of
+requests from untrusted peers, IPv4/IPv6 trusted peers, local backend proxying,
+direct ACME requests and unrestricted sites.
