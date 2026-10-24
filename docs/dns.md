@@ -9,7 +9,8 @@ domain up in Mailcow. Enable **DNS** under Addons, or run
 1. **Connect Cloudflare.** Open DNS and choose **Connect Cloudflare**. **Create
    token in Cloudflare** opens Cloudflare's token form. Check the permissions
    listed beside the link are there. Pick the accounts and zones there (All zones
-   also covers zones you add later), create the token, and paste it back. DNS
+   also covers zones you add later), limit it to the server addresses shown
+   under Client IP Address Filtering, create the token, and paste it back. DNS
    finds the accounts and zones it reaches by itself. Add more connections for
    other Cloudflare logins.
 2. **Mailcow, if you use it.** Under **Server and Mailcow**, set Mailcow's

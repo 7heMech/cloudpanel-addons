@@ -385,6 +385,9 @@ function dnsEditConnection(id) {
   token.placeholder = connection ? 'Leave empty to keep the saved token' : 'Paste the token';
   CLP_ROOT.getElementById('dns-token-permissions').textContent = dnsState.token.permissions.join(', ');
   CLP_ROOT.getElementById('dns-token-link').href = dnsState.token.url;
+  const ips = [dnsState.server.detected.ipv4, dnsState.server.detected.ipv6].filter(Boolean);
+  CLP_ROOT.getElementById('dns-token-ips').textContent = ips.join(', ');
+  CLP_ROOT.getElementById('dns-token-ips-hint').hidden = !ips.length;
   CLP_ROOT.getElementById('dns-connection-heading').textContent = connection ? 'Edit ' + connection.label : 'Connect Cloudflare';
   form.querySelector('[type="submit"]').textContent = connection ? 'Save' : 'Connect';
   dnsOpen('dns-connection-dialog');
