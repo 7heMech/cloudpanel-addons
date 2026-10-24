@@ -37,7 +37,7 @@ import {
 import type { AddonTarget } from "../lib/addon-target";
 import { writeAtomic } from "./util";
 import { runCommand, type CommandResult } from "./action-common";
-import { errorMessage, nginxFileChange, openPanelDatabase, trustedVhost, withNginxTransaction } from "./nginx-transaction";
+import { errorMessage, nginxFileChange, openPanelDatabase, trustedVhost, withNginxTransaction, writeAtomicOwned } from "./nginx-transaction";
 import { MAINTENANCE_INCLUDE_PATH, sitesWithoutMaintenance, stageMaintenanceVhosts } from "./maintenance-vhosts";
 
 // CloudPanel versions this patch's markup assumptions were verified against.
@@ -1001,6 +1001,26 @@ function inspectMaintenance(options: MaintenanceNginxPaths): MaintenanceNginxSta
 function uncoveredDetail(sites: string[], settingsMissing: boolean, settingsPath: string): string {
   const listed = `${sites.length} sites without the check: ${sites.join(", ")}`;
   return settingsMissing ? `${settingsPath} does not exist, ${listed}` : `Injected, ${listed}`;
+}
+
+/**
+ * Gives global_settings, a dpkg conffile, back the package text it was recorded
+ * from, without a reload, and forgets that record so the next reconcile takes
+ * whatever an upgrade installed as the new baseline. A file that differs from
+ * the record in other ways is left alone: the operator changed it too.
+ */
+export function releaseMaintenanceSettings(options: MaintenanceNginxPaths = {}): boolean {
+  const { settingsPath, stateDir } = maintenancePath(options);
+  const read = readIfPresent(settingsPath);
+  if (read === null || !read.includes("# clp-addons:maintenance:start")) return false;
+  const files = maintenanceNginxFiles(stateDir);
+  const baseline = maintenanceBaseline(files);
+  const upstream = stripMaintenanceNginx(read);
+  if (!baseline || baseline.hash !== sha256(upstream)) return false;
+  const current = trustedVhost(settingsPath, statSync(settingsPath).uid);
+  writeAtomicOwned(settingsPath, upstream, current.mode, current.uid, current.gid);
+  removeNginxState(files);
+  return true;
 }
 
 type ReconcileOptions = MaintenanceNginxPaths & { enabled?: boolean; reload?: boolean; run?: (command: string, args: string[]) => CommandResult };

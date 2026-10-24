@@ -6,6 +6,7 @@ import { reconcileAnchors } from "./reconcile";
 import { cmdMenu } from "./menu";
 import { cmdStatus } from "./status";
 import { cmdInstall } from "./install";
+import { cmdAptHook } from "./apt-hook";
 import { cmdRepair } from "./repair";
 import { applyDisable, applyEnable } from "./toggle";
 import { cmdUninstall } from "./uninstall";
@@ -126,6 +127,7 @@ async function main(): Promise<number> {
     case "self-update": fatal("self-update is deprecated; use clp-addons update");
     case "recon": await runRecon(); return 0;
     case "repair": await cmdRepair(rest); return 0;
+    case "apt-hook": await cmdAptHook(rest); return 0;
     case "sync-sites":
       requireRoot("sync-sites");
       if (rest.length) fatal("sync-sites takes no arguments");

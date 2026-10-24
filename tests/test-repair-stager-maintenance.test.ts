@@ -311,3 +311,29 @@ test.serial("repair runs addon maintenance after the anchors and Nginx, and --an
   expect(output.full.filter((step) => step === "prune")).toHaveLength(1);
   expect(output.anchorsOnly).toEqual(["anchors", "maintenance", "nginx"]);
 });
+
+test.serial("repair leaves Nginx's conffiles alone while an unattended upgrade has them", () => {
+  const script = `${mockPrelude}
+    globalThis.__order = [];
+    mock.module("./cli/conffiles.ts", () => ({ conffilesReleased: () => true }));
+    mock.module("./cli/inject.ts", () => ({
+      KNOWN_GOOD_PANEL_VERSIONS: [],
+      inspect: () => ({ state: "ok" }),
+      inspectNginxMaintenance: () => ({ state: "ok" }),
+      inspectNginxProxy: () => ({ state: "ok" }),
+      masterVhostHost: () => null,
+      panelVersion: () => "test",
+      purgeTwigCache: () => {},
+      reconcile: () => { globalThis.__order.push("anchors"); return { statuses: [], changed: false }; },
+      reconcileNginxMaintenance: () => { globalThis.__order.push("maintenance"); return { state: "missing", changed: false }; },
+      reconcileNginxProxy: () => { globalThis.__order.push("nginx"); return { state: "ok", changed: false }; },
+    }));
+    const { cmdRepair } = await import("./cli/repair.ts");
+    await cmdRepair([]);
+    await cmdRepair(["--anchors-only"]);
+    process.stdout.write(JSON.stringify(globalThis.__order));
+  `;
+  const result = spawnSync(process.execPath, ["-e", script], { cwd: repo, encoding: "utf8" });
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout.trim().split("\n").pop() ?? "")).toEqual([]);
+});

@@ -11,6 +11,7 @@ import {
   PANEL_GROUP, PANEL_USER, RECONCILE_PATH, RECONCILE_SERVICE,
   RECONCILE_TIMER, SERVICE_GROUP, SERVICE_USER, SESSION_DIR, SHARED_GROUP, SOCKET_DIR, STATE_DIR,
   SOCKET_PATH, SYSTEMD_DIR, TWIG_CACHE_DIR, PANEL_IDENTITY_PATH, NGINX_GLOBAL_SETTINGS, CLOUDFLARE_IPS_PATH,
+  APT_UPGRADE_DROPIN,
 } from "./paths";
 import { MAINTENANCE_INCLUDE_PATH } from "./maintenance-vhosts";
 import { ADDONS, ADDON_NAMES, templateWatchPaths, type AddonSpec } from "./addon-catalog";
@@ -896,6 +897,15 @@ function syncAddonUnits(enabled: boolean, trigger: string, units: [string, strin
   return units.map(([name]) => removeManaged(`${SYSTEMD_DIR}/${name}`)).some(Boolean) ? "removed" : null;
 }
 
+/** See conffiles.ts: unattended-upgrades must never hold Nginx back over an edit of ours. */
+export function aptUpgradeDropIn(): string {
+  return `# clp-addons: Nginx conffiles get their package text back while unattended-upgrades runs.
+[Service]
+ExecStartPre=-${CLI_BIN} apt-hook pre
+ExecStopPost=-${CLI_BIN} apt-hook post
+`;
+}
+
 export function installUnits(specs: AddonSpec[]): UnitChanges {
   const cron = reconcileInstaticBackupCron(specs.some((spec) => spec.name === "instatic"));
   const units = reconcileUnits();
@@ -907,6 +917,7 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
     writeManaged(`${SYSTEMD_DIR}/${RECONCILE_TIMER}`, units.timer),
     writeManaged(`${SYSTEMD_DIR}/${RECONCILE_PATH}`, units.path),
     writeManaged(`${SYSTEMD_DIR}/${ANCHOR_SERVICE}`, units.anchor),
+    writeManaged(`${SYSTEMD_DIR}/${APT_UPGRADE_DROPIN}`, aptUpgradeDropIn()),
   ];
   const reconcileChanged = reconcileWrites.some(Boolean);
 
@@ -1037,6 +1048,7 @@ export function stopUnits(keepShared = false): void {
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT, "clp-addons-auth@.service"]) {
     rmSync(`${SYSTEMD_DIR}/${unit}`, { force: true });
   }
+  rmSync(`${SYSTEMD_DIR}/${APT_UPGRADE_DROPIN}`, { force: true });
   tryRun("systemctl", ["daemon-reload"]);
 }
 

@@ -1,5 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandResult } from "../cli/action-common";
@@ -13,6 +13,7 @@ import {
 } from "../addons/system-tweaks/updates";
 import { iniBoolean, iniSetting, uploadProgressStatus } from "../addons/system-tweaks/upload-progress";
 import { dashboardView } from "../addons/system-tweaks/app/views";
+import { releaseRealIp } from "../addons/system-tweaks/real-ip";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -152,8 +153,19 @@ interface Box {
   settingsFile: string;
   installed: { value: boolean };
   nginxConf: string;
-  nginx: { fail: boolean; commands: string[] };
+  panelConf: string;
+  nginx: { fail: boolean; failPanel: boolean; commands: string[] };
 }
+
+const PANEL_NGINX_CONF = `http {
+    real_ip_recursive on;
+
+    set_real_ip_from 127.0.0.1;
+    set_real_ip_from 10.0.0.0/8;
+    set_real_ip_from 0.0.0.0/0;
+    real_ip_header X-Forwarded-For;
+}
+`;
 
 const CLOUDPANEL_NGINX_CONF = `http {
     real_ip_recursive on;
@@ -240,10 +252,16 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
   const uid = process.getuid!();
   const nginxConf = join(dir, "nginx.conf");
   writeFileSync(nginxConf, CLOUDPANEL_NGINX_CONF, { mode: 0o644 });
-  const nginx = { fail: false, commands: [] as string[] };
+  const panelConf = join(dir, "clp-nginx.conf");
+  writeFileSync(panelConf, PANEL_NGINX_CONF);
+  chmodSync(panelConf, 0o770);
+  const nginx = { fail: false, failPanel: false, commands: [] as string[] };
   const nginxRun = (command: string, args: string[]): CommandResult => {
     nginx.commands.push(`${command} ${args.join(" ")}`);
-    return nginx.fail && command === "nginx" && args[0] === "-t" && readFileSync(nginxConf, "utf8").includes("#clp-addons:untrusted") ? { ok: false, stdout: "", stderr: "emerg" } : ok();
+    if (command !== "nginx" || args[0] !== "-t") return ok();
+    const panel = args[1] === "-c";
+    const failing = panel ? nginx.failPanel : nginx.fail;
+    return failing && readFileSync(panel ? panelConf : nginxConf, "utf8").includes("#clp-addons:untrusted") ? { ok: false, stdout: "", stderr: "emerg" } : ok();
   };
   const phpGuard: PhpGuardOptions = {
     run: () => ({ ok: true, out: "" }),
@@ -251,7 +269,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
     paths: { phpRoot, fpmBinDir: sbin, rootUid: uid, optOutConfig: guardConfig, optOutSettings: settingsFile },
   };
   return {
-    aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, nginx,
+    aptDir, commands, timers, phpRoot, guardConfig, settingsFile, installed, nginxConf, panelConf, nginx,
     dropIn: join(aptDir, "52clp-addons-unattended-upgrades"),
     options: {
       processUid: 0,
@@ -266,7 +284,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
       },
       uploadProgress: { run, paths: { phpRoot, fpmBinDir: sbin, panelUnit: "clp-php-fpm.service" } },
       phpGuard,
-      realIp: { run: nginxRun, paths: { nginxConf, rootUid: uid } },
+      realIp: { run: nginxRun, paths: { nginxConf, panelConf, panelUid: uid, rootUid: uid } },
     },
   };
 }
@@ -396,6 +414,35 @@ test("a timer that cannot be enabled undoes the drop-in and the timers enabled b
   expect(existsSync(b.settingsFile)).toBe(false);
 });
 
+test("a panel refusal puts a half-edited sites file back exactly, without reopening what was closed", async () => {
+  const b = box();
+  const half = CLOUDPANEL_NGINX_CONF.replace("    set_real_ip_from 0.0.0.0/0;\n", "    #clp-addons:untrusted set_real_ip_from 0.0.0.0/0;\n    set_real_ip_from ::/0;\n");
+  writeFileSync(b.nginxConf, half);
+  b.nginx.failPanel = true;
+  await expect(act(b, ["set-real-ip"], { enabled: true })).rejects.toThrow("Nginx validation failed");
+  expect(readFileSync(b.nginxConf, "utf8")).toBe(half);
+});
+
+test("a panel Nginx that rejects the change takes the sites' half back too", async () => {
+  const b = box();
+  b.nginx.failPanel = true;
+  await expect(act(b, ["set-real-ip"], { enabled: true })).rejects.toThrow("Nginx validation failed");
+  expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF);
+  expect(readFileSync(b.panelConf, "utf8")).toBe(PANEL_NGINX_CONF);
+});
+
+test("an upgrade run gets the sites' conffile back unreloaded, and the panel's file keeps its edit", async () => {
+  const b = box();
+  restoreSystemTweaks(b.options);
+  b.nginx.commands.length = 0;
+  expect(releaseRealIp(b.options.realIp)).toBe(true);
+  expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF);
+  expect(readFileSync(b.panelConf, "utf8")).toContain("#clp-addons:untrusted");
+  expect(b.nginx.commands).toEqual([]);
+  expect(systemTweaksUpkeep(b.options)).toBe("visitor-IP trust narrowed again");
+  expect(readFileSync(b.nginxConf, "utf8")).toContain("#clp-addons:untrusted");
+});
+
 test("the gateway waits for the longest an install can take", async () => {
   const gatewayTimeouts: number[] = [];
   mock.module("../lib/gateway-client", () => ({
@@ -504,12 +551,16 @@ test("forged visitor IPs are blocked by default and switching off restores Cloud
   const blocked = readFileSync(b.nginxConf, "utf8");
   expect(blocked).toContain("    #clp-addons:untrusted set_real_ip_from 0.0.0.0/0;\n");
   expect(blocked).toContain("    set_real_ip_from 10.0.0.0/8;\n");
-  expect(b.nginx.commands).toEqual(["nginx -t", "systemctl reload nginx"]);
+  expect(readFileSync(b.panelConf, "utf8")).toContain("    #clp-addons:untrusted set_real_ip_from 0.0.0.0/0;\n    real_ip_header X-Forwarded-For;\n");
+  expect(b.nginx.commands).toEqual([
+    "nginx -t", "systemctl reload nginx", `nginx -t -c ${b.panelConf}`, "systemctl reload clp-nginx",
+  ]);
   expect((await act(b, ["state"])).realIp.trustsAnyAddress).toBe(false);
 
   const off = await act(b, ["set-real-ip"], { enabled: false });
   expect(off.realIp).toEqual({ blockForged: false, trustsAnyAddress: true, problem: "" });
   expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF);
+  expect(readFileSync(b.panelConf, "utf8")).toBe(PANEL_NGINX_CONF);
   b.nginx.commands.length = 0;
   expect(systemTweaksUpkeep(b.options)).toBeNull();
   expect(b.nginx.commands).toEqual([]);
@@ -519,7 +570,7 @@ test("repair narrows the trust again after CloudPanel rewrites nginx.conf, and d
   const b = box();
   await act(b, ["set-real-ip"], { enabled: true });
   writeFileSync(b.nginxConf, CLOUDPANEL_NGINX_CONF);
-  expect(systemTweaksUpkeep(b.options)).toBe("X-Real-IP trust narrowed again");
+  expect(systemTweaksUpkeep(b.options)).toBe("visitor-IP trust narrowed again");
   expect(readFileSync(b.nginxConf, "utf8")).toContain("#clp-addons:untrusted set_real_ip_from 0.0.0.0/0;");
   withdrawSystemTweaks(b.options);
   expect(readFileSync(b.nginxConf, "utf8")).toBe(CLOUDPANEL_NGINX_CONF);
@@ -536,7 +587,7 @@ test("a change Nginx rejects leaves the file and the saved choice as they were",
 test("the page shows forged IPs as blocked, or as trusted and needing repair", async () => {
   const b = box();
   const state = await act(b, ["state"]);
-  expect(dashboardView(state)).toContain("Any client can set its own IP with an X-Real-IP header. Run clp-addons repair.");
+  expect(dashboardView(state)).toContain("Any client can set its own IP with a header. Run clp-addons repair.");
   restoreSystemTweaks(b.options);
   expect(dashboardView(await act(b, ["state"]))).toContain("Only local and private-network proxies can set the visitor IP.");
 });

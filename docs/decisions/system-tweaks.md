@@ -149,36 +149,43 @@ per-directory setting for that site; neither is read.
 
 ## Forged visitor IPs
 
-CloudPanel's `/etc/nginx/nginx.conf` has `set_real_ip_from 0.0.0.0/0` with the
-default `real_ip_header X-Real-IP`, so any IPv4 client can name its own address.
-Nginx then uses it as `$remote_addr`: in access logs, PHP's `REMOTE_ADDR`,
-CloudPanel's basic-auth and Cloudflare-only `allow` rules, and IP-based plugins.
-A direct request with `X-Real-IP` set to a Cloudflare address passes a
-Cloudflare-only site.
+CloudPanel's two Nginx instances trust a client IP header from every address
+through `set_real_ip_from 0.0.0.0/0`: the sites' `/etc/nginx/nginx.conf` with the
+default `real_ip_header X-Real-IP`, and the panel's
+`/home/clp/services/nginx/nginx.conf` (CloudPanel 6, `clp-nginx.service`) with
+`X-Forwarded-For`. Any IPv4 client can therefore name its own address. Nginx
+uses it as `$remote_addr`: in access logs, PHP's `REMOTE_ADDR`, basic-auth and
+Cloudflare-only `allow` rules, IP-based plugins and the panel. A direct request
+with `X-Real-IP` set to a Cloudflare address passes a Cloudflare-only site.
 
 **Block forged visitor IPs**, on by default (`blockForgedRealIp`), comments out
-that line, and a `::/0` one if present, by prefixing
+that line in both files, and a `::/0` one if present, by prefixing
 `#clp-addons:untrusted `. The other `set_real_ip_from` lines stay: `127.0.0.1`,
 which CloudPanel's front server uses when it proxies to a local backend such as
 WordPress or Varnish, and the private ranges, where a load balancer would sit.
 A peer in those ranges can still set the header. Cloudflare sends
-`CF-Connecting-IP`, not `X-Real-IP`, so its requests keep the edge address they
+`CF-Connecting-IP`, not `X-Real-IP`, so site requests keep the edge address they
 have today, and CloudPanel's `cloudflare` log format already reads that header.
-A public-address proxy in front of the server would lose its visitor IPs; switch
+A panel or site behind a proxy on a public address loses its visitor IPs; switch
 the setting off there.
 
-Switching off removes the prefix and leaves the file byte-for-byte as CloudPanel
-wrote it. Each change uses the shared Nginx transaction (`nginx -t`, one
-reload, restore on failure); the gateway timeout is in `limits.ts`. Activation
-and the repair timer reapply it when CloudPanel rewrites the file, so a rewrite
-leaves the trust open until the next repair run. Disabling the addon restores
-the line. Only the sites' Nginx is changed; the panel's own Nginx on port 8443
-has its own configuration.
+Switching off removes the prefix and leaves each file byte-for-byte as CloudPanel
+wrote it. Each instance uses the shared Nginx transaction with its own
+validation (`nginx -t`, or `nginx -t -c` for the panel) and reload (`nginx` or
+`clp-nginx`), restoring the file on failure; a panel failure also undoes the
+sites' half. The panel's file belongs to the `clp` account with mode 770, so it
+is accepted when owned by that account and not world-writable. The gateway
+timeout is in `limits.ts`. Activation and the 15-minute repair reapply the
+edit when CloudPanel rewrites a file, so a rewrite leaves the trust open until
+then. Disabling the addon restores both lines.
 
-`nginx.conf` is a dpkg conffile of CloudPanel's `nginx-common`. If a later
-package changes that file, unattended-upgrades sees a conffile prompt and holds
-the Nginx upgrade back until it is installed by hand. Switching the setting off,
-upgrading and switching it on again avoids the prompt.
+The sites' `nginx.conf` is a dpkg conffile of `nginx-common`. unattended-upgrades
+holds back a package whose modified conffile the upgrade would replace, so an
+edit left in place could keep a security update out. The shared hook described
+in [Platform](platform.md#package-conffiles) gives the file its package text
+back for the run when `nginx-common` has an upgrade waiting, and repair edits
+whatever the upgrade installed. The panel's file is not a conffile: a
+`cloudpanel` upgrade overwrites it and repair edits it again.
 
 `bun tests/integration/integration-real-ip.ts` runs real Nginx in Docker: it
 reproduces the bypass on the stock directives, then shows the edited ones reject

@@ -92,6 +92,10 @@ export const ARTIFACT_MANIFEST_PATH = `${STATE_DIR}/artifacts.json`;
 export const TEMPLATE_STATE_DIR = `${STATE_DIR}/templates`;
 export const LOCK_DIR = "/run/lock/clp-addons";
 export const SYSTEMD_DIR = "/etc/systemd/system";
+/** Runs `clp-addons apt-hook` around unattended-upgrades' daily run. */
+export const APT_UPGRADE_DROPIN = "apt-daily-upgrade.service.d/50-clp-addons.conf";
+/** Present while edits to package conffiles are given back for an upgrade run. */
+export const CONFFILES_RELEASED_FLAG = "/run/clp-addons/conffiles-released";
 /** Operator-editable schedule for Instatic's recovery snapshots. */
 export const INSTATIC_BACKUP_CRON = "/etc/cron.d/clp-addons-instatic-backup";
 

@@ -5,6 +5,7 @@ import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./r
 import { reconcilePhpGuard } from "./php-guard";
 import { runAddonMaintenance, runManagerMaintenance } from "./maintenance";
 import { withOperationLock } from "./operation-lock";
+import { conffilesReleased } from "./conffiles";
 import { CLOUDFLARE_RECONCILE_TIMER, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "./paths";
 import {
   ensureAuthHelperReady, ensureDirs, ensurePathWatching, ensureServiceUser, ensureTimerArmed, hardenBackups, installUnits,
@@ -26,6 +27,12 @@ export async function cmdRepair(argv: string[]): Promise<void> {
 
 async function applyRepair(positional: string[], flags: Record<string, string | true>): Promise<void> {
   const quiet = flags.quiet === true;
+  if (conffilesReleased()) {
+    // An unattended upgrade has the package's own text in Nginx's conffiles;
+    // `apt-hook post` runs repair once it is done.
+    if (!quiet) log.warn("an unattended upgrade is running; repair waits for it to finish");
+    return;
+  }
   if (flags["anchors-only"] === true) {
     // The watcher's fast path: reconcile only what this project injected into
     // panel-owned files. The Nginx proxy belongs here as much as the Twig
