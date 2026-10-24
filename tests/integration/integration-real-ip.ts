@@ -32,12 +32,16 @@ const cloudpanel = `    real_ip_recursive on;
     #real_ip_header X-Forwarded-For;
 `;
 
+const panel = cloudpanel.replace("#real_ip_header X-Forwarded-For;", "real_ip_header X-Forwarded-For;");
+
 const dir = mkdtempSync(join(tmpdir(), "clp-real-ip-nginx-"));
 try {
   chmodSync(dir, 0o755);
   writeFileSync(join(dir, "index.html"), "served\n", { mode: 0o644 });
   writeFileSync(join(dir, "stock.conf"), conf(cloudpanel, 8080, "stock"));
   writeFileSync(join(dir, "blocked.conf"), conf(withoutAnyAddress(cloudpanel), 8090, "blocked"));
+  // The panel's own Nginx reads X-Forwarded-For instead.
+  writeFileSync(join(dir, "panel.conf"), conf(withoutAnyAddress(panel), 8100, "panel"));
   const result = Bun.spawnSync(["docker", "run", "--rm", "--network", "none", "--mount", `type=bind,source=${dir},target=/probe,readonly`,
     "--entrypoint", "sh", "nginx:stable", "-c", `set -eu
 check() {
@@ -55,6 +59,10 @@ check 403 -o /dev/null -w '%{http_code}' --interface 127.0.0.3 -H 'X-Real-IP: 12
 check served --interface 127.0.0.2 -H 'CF-Connecting-IP: 192.0.2.1' http://127.0.0.1:8090/
 check 127.0.0.3 --interface 127.0.0.3 -H 'X-Real-IP: 192.0.2.1' http://127.0.0.1:8091/
 check 192.0.2.1 --interface 127.0.0.1 -H 'X-Real-IP: 192.0.2.1' http://127.0.0.1:8091/
+nginx -t -c /probe/panel.conf
+nginx -c /probe/panel.conf
+check 127.0.0.3 --interface 127.0.0.3 -H 'X-Forwarded-For: 192.0.2.1' http://127.0.0.1:8101/
+check 192.0.2.1 --interface 127.0.0.1 -H 'X-Forwarded-For: 192.0.2.1' http://127.0.0.1:8101/
 echo 'Real-IP integration passed: forged header reproduced on the stock config; blocked after the edit; Cloudflare peers and loopback proxies unaffected.'
 `], { stdout: "pipe", stderr: "pipe", timeout: 60_000 });
   assert.equal(result.exitCode, 0, result.stdout.toString() + result.stderr.toString());
