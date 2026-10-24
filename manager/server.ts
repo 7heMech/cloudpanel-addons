@@ -66,8 +66,8 @@ function mountedAddons(): string[] {
  * the gateway reads whose they are from the session itself.
  */
 const SELF_SCOPED_ROUTES = new Set([
-  "POST /wp-login/api/sign-in",
-  "GET /wp-login/api/session",
+  "POST /wp-tools/api/sign-in",
+  "GET /wp-tools/api/session",
   "GET /panel-tweaks/api/panel",
   "GET /dns/api/session",
   "POST /dns/api/provision",

@@ -1,6 +1,6 @@
 // `clp-addons repair`.
 
-import { installedAddons, resolveAddon, migrateAbsorbedAddons } from "./addons";
+import { installedAddons, resolveAddon, migrateOldAddonNames } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
 import { reconcilePhpGuard } from "./php-guard";
 import { runAddonMaintenance, runManagerMaintenance } from "./maintenance";
@@ -46,7 +46,7 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
     if (!reconcileNginx(quiet)) log.err("Nginx proxy is not ready; run repair after checking the master vhost");
     return;
   }
-  migrateAbsorbedAddons(quiet);
+  migrateOldAddonNames(quiet);
   const specs = positional[0] ? [resolveAddon(positional[0])] : installedAddons();
   const all = installedAddons();
   // An installation with every addon disabled still needs its timer, its Nginx

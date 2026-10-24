@@ -4,15 +4,15 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  executeWpLoginAction, WP_LOGIN_FIELD, WORDPRESS_APPLICATIONS,
-  type WpBasicAuthReply, type WpLoginActionOptions, type WpLoginResult, type WpMaintenanceReply, type WpRemoveResult, type WpSiteView,
-} from "../addons/wp-login/action";
+  executeWpToolsAction, WP_LOGIN_FIELD, WORDPRESS_APPLICATIONS,
+  type WpBasicAuthReply, type WpToolsActionOptions, type WpLoginResult, type WpMaintenanceReply, type WpRemoveResult, type WpSiteView,
+} from "../addons/wp-tools/action";
 import { DEFAULT_MAINTENANCE_ACTION_PATHS } from "../addons/maintenance/action";
-import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
+import { WP_TOOLS_TARGETS } from "../addons/wp-tools/inject/targets";
 import { ROW_ACTION_CLASS } from "../lib/row-actions";
 
-const scriptTarget = WP_LOGIN_TARGETS.find((target) => target.slug === "sites-script")!;
-const linkTarget = WP_LOGIN_TARGETS.find((target) => target.slug === "sites-action")!;
+const scriptTarget = WP_TOOLS_TARGETS.find((target) => target.slug === "sites-script")!;
+const linkTarget = WP_TOOLS_TARGETS.find((target) => target.slug === "sites-action")!;
 
 // --- what goes into CloudPanel's own page ---------------------------------
 
@@ -24,7 +24,7 @@ test("the link is per-site Twig for every role, and the script is emitted once",
   expect(scriptTarget.anchorBefore).toBe('<div class="card card-table">');
   expect(linkTarget.template).toBe(scriptTarget.template);
 
-  const link = linkTarget.snippet("/addons/wp-login");
+  const link = linkTarget.snippet("/addons/wp-tools");
   // Not administrator-only: CloudPanel lists a ROLE_USER only their own sites,
   // and the sign-in action checks the mapping again as root.
   expect(link).not.toContain("is_granted");
@@ -33,12 +33,12 @@ test("the link is per-site Twig for every role, and the script is emitted once",
   expect(link).toContain(ROW_ACTION_CLASS);
   for (const application of WORDPRESS_APPLICATIONS) expect(link).toContain(`'${application}'`);
 
-  const script = scriptTarget.snippet("/addons/wp-login");
+  const script = scriptTarget.snippet("/addons/wp-tools");
   expect(script).not.toContain("is_granted");
-  expect(script).toContain("/addons/wp-login/api/sign-in");
+  expect(script).toContain("/addons/wp-tools/api/sign-in");
   // The page belongs to CloudPanel, so the token has to be fetched rather than
   // assumed: a non-administrator has no addon page to have been given one by.
-  expect(script).toContain("/addons/wp-login/api/session");
+  expect(script).toContain("/addons/wp-tools/api/session");
   // One listener on the document: the rows belong to the panel, and a filtered
   // or re-sorted table moves them out from under a per-row listener.
   expect(script).toContain('document.addEventListener("click"');
@@ -47,13 +47,13 @@ test("the link is per-site Twig for every role, and the script is emitted once",
 // Neither block may stop an install: the addon's own page signs in to the same
 // sites whether or not CloudPanel's markup still matches.
 test("neither block is required", () => {
-  for (const target of WP_LOGIN_TARGETS) expect(target.required).toBe(false);
+  for (const target of WP_TOOLS_TARGETS) expect(target.required).toBe(false);
 });
 
 // The blocks are rendered by Twig before a browser sees them, and Twig reads
 // `{{`, `{%` and `{#` wherever they appear -- including inside a <script>.
 test("nothing in the script is markup Twig would take for its own", () => {
-  const body = scriptTarget.snippet("/addons/wp-login");
+  const body = scriptTarget.snippet("/addons/wp-tools");
   for (const sequence of ["{{", "{%", "{#"]) expect(body).not.toContain(sequence);
 });
 
@@ -61,7 +61,7 @@ test("nothing in the script is markup Twig would take for its own", () => {
 
 let root = "";
 
-function options(extra: Partial<WpLoginActionOptions> = {}): WpLoginActionOptions {
+function options(extra: Partial<WpToolsActionOptions> = {}): WpToolsActionOptions {
   return {
     processUid: 0,
     emitReply: false,
@@ -70,7 +70,7 @@ function options(extra: Partial<WpLoginActionOptions> = {}): WpLoginActionOption
     paths: {
       panelDb: join(root, "panel.sq3"),
       passwd: join(root, "passwd"),
-      lockFile: join(root, "wp-login.lock"),
+      lockFile: join(root, "wp-tools.lock"),
       runuser: join(root, "runuser"),
       nginxVhostDir: join(root, "vhosts"),
       vhostUid: process.getuid!(),
@@ -151,7 +151,7 @@ function runuserLog(): string[] {
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "clp-wp-login-"));
+  root = mkdtempSync(join(tmpdir(), "clp-wp-tools-"));
   seedPanel();
   seedAccounts();
   fakeRunuser();
@@ -161,8 +161,8 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-async function act<T>(argv: string[], extra: Partial<WpLoginActionOptions> = {}): Promise<T> {
-  return await executeWpLoginAction(argv, options(extra)) as T;
+async function act<T>(argv: string[], extra: Partial<WpToolsActionOptions> = {}): Promise<T> {
+  return await executeWpToolsAction(argv, options(extra)) as T;
 }
 
 function siteDir(user: string, domain: string): string {
@@ -290,7 +290,7 @@ test("an unknown verb, a stray argument and a non-root caller are all refused", 
   await expect(act(["login"])).rejects.toThrow("unknown WordPress sign-in verb");
   await expect(act(["sites", "--domain=shop.example.com"])).rejects.toThrow("takes no --domain");
   await expect(act(["sign-in", "--domain=shop.example.com", "--force"])).rejects.toThrow("unexpected argument");
-  await expect(executeWpLoginAction(["sites"], { ...options(), processUid: 1000 }))
+  await expect(executeWpToolsAction(["sites"], { ...options(), processUid: 1000 }))
     .rejects.toThrow("must run as root");
 });
 

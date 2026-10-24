@@ -19,7 +19,7 @@ default: several addons put a link in every row, and one button per row reads
 better than the list of links they add up to.
 
 WordPress sign-in and plugin installation belong to
-[WordPress Tools](wp-login.md) because they write into a customer's site. Panel
+[WordPress Tools](wp-tools.md) because they write into a customer's site. Panel
 Tweaks only changes CloudPanel's pages and, for automatic SSL, submits the
 panel's own certificate form. An operator who wants a filterable site list
 should not have to install the code that can do that, and a switch is a weaker

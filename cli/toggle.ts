@@ -4,10 +4,10 @@
 
 import { installedAddons, resolveAddon } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
-import { requireMainwpSettled } from "../addons/wp-login/mainwp";
+import { requireMainwpSettled } from "../addons/wp-tools/mainwp";
 import { withFileLockSync } from "./action-common";
 import { reconcilePhpGuard, settlePhpGuard } from "./php-guard";
-import { removeWpLogin, DEFAULT_WP_LOGIN_PATHS } from "../addons/wp-login/action";
+import { removeWpLogin, DEFAULT_WP_TOOLS_PATHS } from "../addons/wp-tools/action";
 import { type AddonSpec } from "./addon-catalog";
 import { withOperationLock, withOperationLockSync } from "./operation-lock";
 import {
@@ -99,7 +99,7 @@ async function enableAddon(spec: AddonSpec): Promise<void> {
  * A failure warns rather than stops: an addon that cannot be removed because
  * one site's files moved would be worse than a helper left behind and named.
  */
-export function withdrawWpLogin(): void {
+export function withdrawWpTools(): void {
   try {
     const { removed, failed } = removeWpLogin();
     if (removed > 0) log.ok(`sign-in helper removed from ${removed} site${removed === 1 ? "" : "s"}`);
@@ -124,10 +124,10 @@ export function applyDisable(name: string): void {
 }
 
 function disableAddon(spec: AddonSpec): void {
-  if (spec.name !== "wp-login") return disableAddonContents(spec);
-  withFileLockSync(DEFAULT_WP_LOGIN_PATHS.mainwpLockFile, 15, "a MainWP change is still running", () => {
-    requireMainwpSettled(DEFAULT_WP_LOGIN_PATHS.mainwpState);
-    withFileLockSync(DEFAULT_WP_LOGIN_PATHS.varnishLockFile, 15, "a WordPress Varnish change is still running", () => disableAddonContents(spec));
+  if (spec.name !== "wp-tools") return disableAddonContents(spec);
+  withFileLockSync(DEFAULT_WP_TOOLS_PATHS.mainwpLockFile, 15, "a MainWP change is still running", () => {
+    requireMainwpSettled(DEFAULT_WP_TOOLS_PATHS.mainwpState);
+    withFileLockSync(DEFAULT_WP_TOOLS_PATHS.varnishLockFile, 15, "a WordPress Varnish change is still running", () => disableAddonContents(spec));
   });
 }
 
@@ -135,7 +135,7 @@ function disableAddonContents(spec: AddonSpec): void {
   const remaining = installedAddons().filter((item) => item.name !== spec.name);
 
   spec.deactivate?.();
-  if (spec.name === "wp-login") withdrawWpLogin();
+  if (spec.name === "wp-tools") withdrawWpTools();
   rmSync(spec.configFile, { force: true });
   rmSync(`${spec.configFile}.new`, { force: true });
   spec.withdrawn?.();

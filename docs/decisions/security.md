@@ -47,7 +47,7 @@ without directory listing; flag files remain root-only and HTML files are
 readable by Nginx. Custom pages are size-bounded, stripped of active markup,
 and served with a restrictive content security policy.
 
-WordPress Tools (addon identifier `wp-login`) is the only addon that puts its
+WordPress Tools (addon identifier `wp-tools`) is the only addon that puts its
 own code inside a site, and it is a separate addon for that reason: an operator
 who does not install it does not have that code on the box, and the gateway's
 addon-and-verb table refuses its verbs to anything else. It installs a
@@ -84,7 +84,7 @@ Unix user, using its configured PHP version, for the same accounts sign-in
 accepts and under a deadline root enforces itself. Only administrators can manage
 that policy or install the official CLP plugin; sign-in's non-administrator
 exception does not apply. The normal WordPress plugin remains installed when
-automation stops. See [WordPress Tools](wp-login.md).
+automation stops. See [WordPress Tools](wp-tools.md).
 
 CloudPanel's native basic-auth allowance inherits its global real-IP trust.
 Stock CloudPanel's `set_real_ip_from 0.0.0.0/0` accepts a forged `X-Real-IP` from
@@ -129,7 +129,7 @@ exceptions are below: nine named routes, and two routes settled ahead of the
 gate by a credential of their own.
 
 Nine routes are named as exceptions. Two are WordPress Tools':
-`POST /wp-login/api/sign-in` and the `GET /wp-login/api/session` that hands out
+`POST /wp-tools/api/sign-in` and the `GET /wp-tools/api/session` that hands out
 the CSRF pair, because the link that uses them is injected into CloudPanel's own
 Sites page, which a non-administrator sees too. The third is Panel Tweaks'
 read-only `GET /panel-tweaks/api/panel`, which answers the script injected into

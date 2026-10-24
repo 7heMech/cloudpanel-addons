@@ -6,7 +6,7 @@ import type { VarnishPluginStatus } from "../varnish";
 import type { MainwpSiteView, MainwpStatus, MainwpView } from "../mainwp";
 import type { WpDashboard } from "./service";
 
-const BASE = mountPath("wp-login");
+const BASE = mountPath("wp-tools");
 
 // The cards, the buttons and the narrow-screen table layout are in lib/app-ui.
 import STYLE from "./views.css" with { type: "text" };

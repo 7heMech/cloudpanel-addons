@@ -1,12 +1,12 @@
 // `clp-addons uninstall`.
 
-import { requireMainwpSettled } from "../addons/wp-login/mainwp";
-import { DEFAULT_WP_LOGIN_PATHS } from "../addons/wp-login/action";
+import { requireMainwpSettled } from "../addons/wp-tools/mainwp";
+import { DEFAULT_WP_TOOLS_PATHS } from "../addons/wp-tools/action";
 import { withFileLockSync } from "./action-common";
 import { resolveAddon } from "./addons";
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
 import { reconcilePhpGuard, settlePhpGuard } from "./php-guard";
-import { withdrawWpLogin } from "./toggle";
+import { withdrawWpTools } from "./toggle";
 import { ADDONS, ADDON_NAMES, type AddonSpec } from "./addon-catalog";
 import { purgeTwigCache } from "./inject";
 import { withOperationLockSync } from "./operation-lock";
@@ -34,10 +34,10 @@ export function cmdUninstall(argv: string[]): void {
 }
 
 function applyUninstall(spec: AddonSpec, flags: Record<string, string | true>): void {
-  if (spec.name !== "wp-login" || flags.yes !== true) return uninstallContents(spec, flags);
-  withFileLockSync(DEFAULT_WP_LOGIN_PATHS.mainwpLockFile, 15, "a MainWP change is still running", () => {
-    requireMainwpSettled(DEFAULT_WP_LOGIN_PATHS.mainwpState);
-    withFileLockSync(DEFAULT_WP_LOGIN_PATHS.varnishLockFile, 15, "a WordPress Varnish change is still running", () => uninstallContents(spec, flags));
+  if (spec.name !== "wp-tools" || flags.yes !== true) return uninstallContents(spec, flags);
+  withFileLockSync(DEFAULT_WP_TOOLS_PATHS.mainwpLockFile, 15, "a MainWP change is still running", () => {
+    requireMainwpSettled(DEFAULT_WP_TOOLS_PATHS.mainwpState);
+    withFileLockSync(DEFAULT_WP_TOOLS_PATHS.varnishLockFile, 15, "a WordPress Varnish change is still running", () => uninstallContents(spec, flags));
   });
 }
 
@@ -126,7 +126,7 @@ function removeAddonFiles(spec: AddonSpec, purge: boolean, instances: string[], 
     }
   }
   removeSudoers();
-  if (spec.name === "wp-login") withdrawWpLogin();
+  if (spec.name === "wp-tools") withdrawWpTools();
   // The config last: once it is gone the addon is no longer installed.
   rmSync(`${spec.configFile}.new`, { force: true });
   rmSync(spec.configFile, { force: true });

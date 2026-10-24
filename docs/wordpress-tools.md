@@ -1,6 +1,6 @@
 # WordPress Tools
 
-Enable **WordPress Tools** in Addons. Its command-line name remains `wp-login`.
+Enable **WordPress Tools** in Addons. Its command-line name is `wp-tools`.
 
 ## Sign in
 
@@ -43,7 +43,7 @@ the CLP plugin remains available in WordPress, where you can deactivate or
 delete it. Kept addon data retains automation settings and exclusions for the
 next enable.
 
-If the page reports that `/var/lib/clp-addons/wp-login/varnish.json` cannot be
+If the page reports that `/var/lib/clp-addons/wp-tools/varnish.json` cannot be
 read, sign-in still works. Deleting that file turns automation off and forgets
 exclusions and which plugins were removed on purpose.
 
@@ -96,8 +96,8 @@ connected since.
 
 Disabling or uninstalling WordPress Tools leaves MainWP connections in place;
 clean up first to remove them. Both refuse while an interrupted connection's
-temporary authentication setting needs recovery. Run `clp-addons repair wp-login`
+temporary authentication setting needs recovery. Run `clp-addons repair wp-tools`
 and let its background pass finish before retrying. If the page reports that
-`/var/lib/clp-addons/wp-login/mainwp.json` cannot be read, sign-in and Varnish
+`/var/lib/clp-addons/wp-tools/mainwp.json` cannot be read, sign-in and Varnish
 still work. Deleting that file turns automation off and forgets which connections
 WordPress Tools made, so cleanup can no longer remove them.

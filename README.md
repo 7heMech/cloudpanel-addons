@@ -59,7 +59,7 @@ Security, in the roles an administrator allows.
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
 Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,
-`php-resources`, `git`, `panel-tweaks`, `system-tweaks`, `wp-login`, `smtp`, `terminal`, and
+`php-resources`, `git`, `panel-tweaks`, `system-tweaks`, `wp-tools`, `smtp`, `terminal`, and
 `security-keys`. Run
 `clp-addons --help` for version selection and data removal options.
 

@@ -88,14 +88,14 @@ test("an authenticated non-administrator gets no further than the gate", () => {
 
 // The one carve-out in the blanket gate. The route is not answered here --
 // splitMount is mocked away -- but reaching the dispatch is what says the gate
-// let it past, and the neighbouring wp-login routes show it is that route only.
+// let it past, and the neighbouring wp-tools routes show it is that route only.
 test("a non-administrator reaches only the named self-scoped routes", () => {
   const results = probe({ user: "someone", roles: ["ROLE_USER"] }, [
-    { path: "/addons/wp-login/api/sign-in", method: "POST" },
-    { path: "/addons/wp-login/api/session" },
-    { path: "/addons/wp-login/", method: "GET" },
-    { path: "/addons/wp-login/api/remove", method: "POST" },
-    { path: "/addons/wp-login/api/sign-in", method: "GET" },
+    { path: "/addons/wp-tools/api/sign-in", method: "POST" },
+    { path: "/addons/wp-tools/api/session" },
+    { path: "/addons/wp-tools/", method: "GET" },
+    { path: "/addons/wp-tools/api/remove", method: "POST" },
+    { path: "/addons/wp-tools/api/sign-in", method: "GET" },
     { path: "/addons/panel-tweaks/api/panel" },
     { path: "/addons/dns/api/session" },
     { path: "/addons/dns/api/provision", method: "POST" },
@@ -109,8 +109,8 @@ test("a non-administrator reaches only the named self-scoped routes", () => {
   ]);
   const dispatched = results.filter((result) => (result.reached as string[]).includes("addon-dispatch"));
   expect(dispatched.map((result) => `${result.method} ${result.path}`)).toEqual([
-    "POST /addons/wp-login/api/sign-in",
-    "GET /addons/wp-login/api/session",
+    "POST /addons/wp-tools/api/sign-in",
+    "GET /addons/wp-tools/api/session",
     "GET /addons/panel-tweaks/api/panel",
     "GET /addons/dns/api/session",
     "POST /addons/dns/api/provision",

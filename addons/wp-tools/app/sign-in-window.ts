@@ -10,7 +10,7 @@ import { mountPath } from "../../../lib/mount";
 export function signInWindow(domain: string): Response {
   const policy = SECURITY_HEADERS["Content-Security-Policy"]!.replace("form-action 'none'", `form-action https://${domain}`);
   const page = renderToolWindow(`Signing in to ${domain}`, `<p class="empty">Signing in to ${esc(domain)}…</p>`, {
-    base: mountPath("wp-login"),
+    base: mountPath("wp-tools"),
     script: "",
   });
   return htmlResponse(page, { headers: { "Content-Security-Policy": policy } });

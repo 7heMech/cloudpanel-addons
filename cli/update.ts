@@ -1,6 +1,6 @@
 // `clp-addons update`, and the rollback a failed one runs.
 
-import { installedAddons, migrateAbsorbedAddons } from "./addons";
+import { installedAddons, migrateOldAddonNames } from "./addons";
 import {
   artifactNames, currentArtifactsMatch, installArtifacts, keepPreviousArtifacts, replaceArtifacts,
   rollbackUpdate,
@@ -23,7 +23,7 @@ import { fatal, log, parseFlags, requireRoot, run } from "./util";
  * Services restart last, after every generated file reflects this process.
  */
 function finalizeUpdate(beforeManagerRestart?: () => void): AddonSpec[] {
-  migrateAbsorbedAddons();
+  migrateOldAddonNames();
   const specs = installedAddons();
   ensureServiceUser();
   removeLegacyInstall();

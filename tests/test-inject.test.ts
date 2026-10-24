@@ -16,7 +16,7 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync,
 import { tmpdir } from "node:os";
 import { findMasterVhost, inspect, masterVhostHost, NGINX_PROXY_BLOCK, inspectNginxProxy, reconcile, reconcileNginxProxy, type Injection } from "../cli/inject";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
-import { WP_LOGIN_TARGETS } from "../addons/wp-login/inject/targets";
+import { WP_TOOLS_TARGETS } from "../addons/wp-tools/inject/targets";
 import { headerTarget, siteLayoutTarget } from "../lib/panel-nav";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
 import type { AddonTarget } from "../lib/addon-target";
@@ -164,13 +164,13 @@ check("single addon install: addon target injected", readStager().includes("Stag
 reconcile(simulateInstalledInjections(["stager"], "stager"), PATHS);
 check("single addon uninstall: manager nav removed and header restored", body() === navOriginal);
 check("single addon uninstall: addon target removed and restored", readStager() === stagerOriginal);
-// WP_LOGIN_TARGETS puts its link before the Manage link in the sites table's
+// WP_TOOLS_TARGETS puts its link before the Manage link in the sites table's
 // action cell, which is the project's one anchor inside a Twig loop.
 const siteDir = `${dir}/Frontend/Site`;
 mkdirSync(siteDir, { recursive: true });
 // By slug, not by index: this addon has more than one target and their order
 // in the list is the injector's business, not this fixture's.
-const siteActionTarget = WP_LOGIN_TARGETS.find((target) => target.slug === "sites-action")!;
+const siteActionTarget = WP_TOOLS_TARGETS.find((target) => target.slug === "sites-action")!;
 const siteFile = `${dir}/${siteActionTarget.template}`;
 const siteOriginal = `
                     <td class="text-end">
@@ -180,9 +180,9 @@ const siteOriginal = `
 writeFileSync(siteFile, siteOriginal);
 
 const siteActionInj: Injection = {
-  addon: "wp-login",
+  addon: "wp-tools",
   target: siteActionTarget,
-  url: "/addons/wp-login",
+  url: "/addons/wp-tools",
 };
 
 check("a site-action target reports missing-anchor before injection",
