@@ -9,6 +9,11 @@ site using a lossless encoding of its lowercase domain, so a second click
 focuses the shell already open without confusing dots with hyphens; Shift-click
 opens another. On a phone it is a tab.
 
+Addons → Terminal lists each site with its user under the domain. From six
+sites a search appears, focused on a desktop, and Enter opens the only match.
+A worker refusal (see below) shows as "Couldn't open a terminal" with Try
+again, not as a session that ended.
+
 The text-size buttons stay together on every screen, with a gap before reset
 beside the theme switch to reduce accidental resets.
 

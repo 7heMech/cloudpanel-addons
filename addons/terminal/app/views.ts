@@ -1,7 +1,6 @@
 import { esc } from "../../../lib/app-http";
-import { renderLayout, renderToolWindow, THEME_SWITCH_ICONS } from "../../../lib/app-ui";
+import { FLEET_NONE_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout, renderToolWindow, THEME_SWITCH_ICONS } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
-import { siteTypeLabel } from "../../../lib/site-context";
 import type { SanitizedSite } from "../../../lib/gateway-protocol";
 
 import OPEN_JS from "./open.client.js" with { type: "text" };
@@ -31,17 +30,15 @@ export function layout(
     base: BASE,
     nav: [],
     css: FLEET_STYLE,
-    script: `${OPEN_JS}${FLEET_JS}`,
+    script: `${OPEN_JS}${FLEET_ROW_SELECTION_JS}\n${FLEET_JS}`,
     updateNotice,
   });
 }
 
 function siteRow(site: SanitizedSite): string {
   return `
-              <tr data-domain="${esc(site.domain)}" data-search="${esc(`${site.domain} ${site.user}`.toLowerCase())}">
-                <td class="site-cell">${esc(site.domain)}</td>
-                <td class="type-cell">${esc(siteTypeLabel(site.type))}</td>
-                <td class="user-cell" data-label="Site user">${esc(site.user)}</td>
+              <tr data-domain="${esc(site.domain)}" data-find="${esc(`${site.domain} ${site.user}`)}">
+                <td class="site-cell">${esc(site.domain)}<div class="hint mono">${esc(site.user)}</div></td>
                 <td class="action-cell">
                   <button class="btn" type="button" data-domain="${esc(site.domain)}" onclick="openFromRow(this, event)">Open terminal</button>
                 </td>
@@ -49,24 +46,22 @@ function siteRow(site: SanitizedSite): string {
 }
 
 export function dashboardView(sites: SanitizedSite[]): string {
-  const count = `${sites.length} site${sites.length === 1 ? "" : "s"}`;
   const table = sites.length === 0
     ? '<div class="empty">CloudPanel has no sites yet.</div>'
-    : `<div class="table-scroll">
+    : `${fleetFilterHtml({ count: sites.length, placeholder: "Find a site or user", summary: `${sites.length} sites` })}
+      <div class="table-scroll">
         <table class="fleet-table terminal-site-table">
           <thead>
             <tr>
-              <th>Domain</th>
-              <th>Type</th>
-              <th>Site user</th>
-              <th class="text-end">Action</th>
+              <th>Site</th>
+              <th class="action-cell"></th>
             </tr>
           </thead>
           <tbody>${sites.map(siteRow).join("")}
           </tbody>
         </table>
       </div>
-      <div class="terminal-none" id="terminal-none" hidden>No site matches.</div>`;
+      ${FLEET_NONE_HTML}`;
   return `
     <div class="page-heading">
       <div>
@@ -75,11 +70,7 @@ export function dashboardView(sites: SanitizedSite[]): string {
       </div>
     </div>
     <div class="card card-table">
-      <div class="card-header terminal-toolbar">
-        <h2>Sites</h2>
-        <span class="toolbar-note" id="terminal-count">${count}</span>
-        ${sites.length === 0 ? "" : '<input type="search" id="terminal-search" placeholder="Search sites" aria-label="Search sites" autocomplete="off">'}
-      </div>
+      <div class="card-header"><h2>Sites</h2></div>
       ${table}
     </div>`;
 }
