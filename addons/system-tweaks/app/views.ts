@@ -200,9 +200,10 @@ function stateRow(name: string, detail: string, state: string): string {
 function coverageDetails(status: UpdatesStatus): string {
   if (!status.installed) return "";
   if (!status.coverage.length) return `<p class="hint st-fold">apt lists no repositories.</p>`;
-  const covered = status.coverage.filter((row) => row.covered !== "none").length;
+  const covered = status.coverage.filter((row) => row.covered === "all").length;
+  const partly = status.coverage.filter((row) => row.covered === "some").length;
   const summary = status.enabled
-    ? `Repositories: ${covered} of ${status.coverage.length} covered`
+    ? `Repositories: ${covered} of ${status.coverage.length} covered${partly ? `, ${partly} partly` : ""}`
     : `Repositories: none covered while updates are off`;
   return `
       <details class="st-fold">
@@ -227,13 +228,15 @@ function uploadProgressDetails(fpms: FpmUploadProgress[]): string {
   if (!fpms.length) return `<p class="st-status hint">No PHP-FPM is installed.</p>`;
   const on = fpms.filter((row) => row.enabled).length;
   const pools = fpms.reduce((total, row) => total + row.poolsOn.length, 0);
-  const summary = on === 0 ? `Off on all ${fpms.length} PHP-FPMs` : `On in ${on} of ${fpms.length} PHP-FPMs`;
+  const count = `${fpms.length} PHP-FPM${fpms.length === 1 ? "" : "s"}`;
+  const summary = on === 0 ? `Off on ${fpms.length === 1 ? "its one PHP-FPM" : `all ${count}`}` : `On in ${on} of ${count}`;
   const poolText = pools ? `, on again in ${pools} pool${pools === 1 ? "" : "s"}` : "";
   return `
           <details class="st-fold">
             <summary>${badge(on || pools ? "Check" : "Off", on || pools ? "warn" : "ok")} ${summary}${poolText}</summary>
             <div class="table-scroll"><table class="st-table"><thead><tr><th>PHP-FPM</th><th class="st-state">Upload progress</th></tr></thead>
-              <tbody>${fpms.map((row) => stateRow(row.label, uploadProgressSource(row), row.enabled ? badge("On", "bad") : badge("Off", "ok"))).join("")}</tbody></table></div>
+              <tbody>${fpms.map((row) => stateRow(row.label, uploadProgressSource(row),
+                row.enabled ? badge("On", "bad") : row.poolsOn.length ? badge("Partly", "warn") : badge("Off", "ok"))).join("")}</tbody></table></div>
           </details>`;
 }
 

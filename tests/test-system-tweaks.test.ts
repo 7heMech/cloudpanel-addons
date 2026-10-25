@@ -849,18 +849,27 @@ test("the page shows update options only once updates are on, and says what sile
     installed: true, version: "2.9.1", distro: { id: "Debian", codename: "bookworm" }, managed: false, enabled: true,
     outsideSource: "20auto-upgrades", overriddenBy: "", listsUpdated: true, reboot: false, rebootTime: "", timezone: "UTC",
     timer: { state: "enabled", next: "" },
-    coverage: [{ name: "CloudPanel PHP", detail: "8.3", covered: "none" }, { name: "Debian bookworm-security", detail: "main", covered: "all" }],
+    coverage: [
+      { name: "CloudPanel PHP", detail: "8.3", covered: "none" }, { name: "Debian bookworm-security", detail: "main", covered: "all" },
+      { name: "Debian bookworm", detail: "main, contrib", covered: "some" },
+    ],
     lastRun: null, rebootRequired: { since: "2026-10-01T00:00:00Z", packages: ["linux-image-6.1.0-53-amd64"] },
   };
   const state = {
     updates, settings: { ...DEFAULT_UPDATE_SETTINGS },
-    uploadProgress: { guard: true, fpms: [] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, panelPhp: { error: "" },
+    uploadProgress: { guard: true, fpms: [{
+      label: "PHP 8.2", version: "8.2", enabled: false, setBy: "clp-addons" as const,
+      source: "/etc/php/8.2/fpm/conf.d/99-clp-addons-upload-progress.ini", offWithoutGuard: false, poolsOn: ["legacy.example.com"],
+    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, panelPhp: { error: "" },
   };
   const now = Date.parse("2026-10-25T00:00:00Z");
   const outside = dashboardView(state, now);
   expect(outside).not.toContain('data-setting="nginx"');
   expect(outside).toContain("Automatic updates skip CloudPanel's PHP");
-  expect(outside).toContain("Repositories: 1 of 2 covered");
+  // Partly covered is not covered, and a pool that turns upload progress back on is not Off.
+  expect(outside).toContain("Repositories: 1 of 3 covered, 1 partly");
+  expect(outside).toContain('<span class="badge state-exited">Partly</span>');
+  expect(outside).toContain("Off on its one PHP-FPM, on again in 1 pool");
   expect(outside).toContain("A reboot has been needed since 2026-10-01 and automatic reboot is off, so the server still runs the old kernel.");
   expect(dashboardView(state, Date.parse("2026-10-03T00:00:00Z"))).not.toContain("A reboot has been needed");
 
