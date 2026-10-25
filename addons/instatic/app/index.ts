@@ -5,11 +5,10 @@
 import { instaticService, validateDomain, validateTag, validateJobId } from "./service";
 import { layout, dashboardView, newInstanceView, jobView } from "./views";
 import {
-  bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
+  bodyErrorResponse, errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
   safeDecodePathSegment,
 } from "../../../lib/app-http";
 import { listAvailableTags } from "./tags";
-import type { SanitizedSite } from "../../../lib/snapshot-reader";
 import { jobApiRoute } from "../../../lib/job-stream";
 
 function html(body: string, csrf: string, status = 200): Response {
@@ -21,17 +20,12 @@ function json(body: unknown, status = 200): Response {
 }
 
 async function dashboard(): Promise<string> {
-  const instances = await instaticService.listInstances();
-  let panelSites: SanitizedSite[] = [];
-  let snapshotAge = Infinity;
-  let snapshotTakenAt = "";
-  try {
-    const { snap, ageSeconds } = await instaticService.snapshot();
-    panelSites = snap.sites;
-    snapshotAge = ageSeconds;
-    snapshotTakenAt = snap.updatedAt;
-  } catch {}
-  return dashboardView(instances, snapshotAge, panelSites, await listAvailableTags(), snapshotTakenAt);
+  const [instances, jobs, available] = await Promise.all([
+    instaticService.listInstances(),
+    instaticService.listJobs(),
+    listAvailableTags(),
+  ]);
+  return dashboardView(instances, available, jobs);
 }
 
 async function change(result: { ok: boolean }): Promise<Response> {
@@ -72,11 +66,9 @@ export async function handle(
       if (path === "/") {
         return html(page("Instatic instances", await dashboard()), csrf);
       }
-      const available = await listAvailableTags();
-      return html(page("New Instatic site", newInstanceView(await instaticService.nextPort(), available)), csrf);
+      return html(page("New Instatic site", newInstanceView(await listAvailableTags())), csrf);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return html(page("Error", `<div class="alert">${Bun.escapeHTML(msg)}</div>`), csrf, 500);
+      return html(page("Error", errorBlock(err)), csrf, 500);
     }
   }
 
@@ -134,11 +126,6 @@ export async function handle(
 
     if (verb === "logs" && method === "GET") {
       const res = await instaticService.getLogs(domain);
-      return json(res, res.ok ? 200 : 400);
-    }
-
-    if (verb === "creation-log" && method === "GET") {
-      const res = await instaticService.getInstanceCreationLog(domain);
       return json(res, res.ok ? 200 : 400);
     }
 

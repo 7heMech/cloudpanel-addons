@@ -1031,8 +1031,18 @@ const previewDeployments = new Map<string, GitSiteStatus>();
 let previewManagerJob: import("../cli/manager-action").ManagerJobView | null = null;
 let previewJobNumber = 0;
 
-function instaticDashboard(): string {
-  return dashboardView(instances, 30, sites.map((site) => ({ domain: site.domain, type: site.siteType, user: site.siteUser })), versions);
+/**
+ * ?offline is a box that cannot reach ghcr.io; the fleet shows a creation in
+ * progress, a failed one, and an instance whose CloudPanel site was deleted.
+ */
+function instaticDashboard(url?: URL): string {
+  const offline = url?.searchParams.has("offline");
+  const available: AvailableTags = offline ? { tags: ["0.0.18"], latest: null, source: "fallback" } : versions;
+  const jobs: InstaticJobView[] = [
+    { ...instaticCreationJob, id: "preview-instatic-job", domain: "blog.example.com", state: "running", step: "pulling ghcr.io/corebunch/instatic:0.0.19" },
+    { ...instaticCreationJob, id: "preview-instatic-failed", domain: "news.example.com", state: "failed", step: "", error: "health check failed for news.example.com" },
+  ];
+  return dashboardView([...instances, { ...instances[0]!, domain: "old.example.com", tag: "0.0.18", panelSite: false }], available, jobs);
 }
 
 async function repaintPreviewMutation(req: Request, url: URL): Promise<Response | null> {
@@ -1494,14 +1504,21 @@ const server = Bun.serve({
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
       html = cloudflareLayout("Cloudflare IP Access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {
-      html = instaticLayout("Instatic sites", dashboardView(empty ? [] : instances, age,
-        sites.map((s) => ({ domain: s.domain, type: s.siteType, user: s.siteUser })), versions), notice);
+      html = instaticLayout("Instatic sites", empty ? dashboardView([], versions) : instaticDashboard(url), notice);
+      // ?dialog=update|delete|stop opens that dialog once the page is up.
+      const openers: Record<string, string> = {
+        update: "askUpdate('docs.example.com','0.0.18')",
+        delete: "askDelete('old.example.com')",
+        stop: "askStop('pages.example.com')",
+      };
+      const opener = openers[url.searchParams.get("dialog") ?? ""];
+      if (opener) html = html.replace("</body>", `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>`);
     } else if (path === "/addons/instatic/new") {
-      html = instaticLayout("New Instatic site", newInstanceView(39003, versions), notice);
+      html = instaticLayout("New Instatic site", newInstanceView(url.searchParams.has("offline") ? { tags: ["0.0.18"], latest: null, source: "fallback" } : versions), notice);
     } else if (path === "/addons/instatic/jobs/preview-instatic-job") {
-      html = instaticLayout("Creating blog.example.com", instaticJobView(url.searchParams.has("finish") && !finishedPreviewJobs.has(instaticCreationJob.id) ? { ...instaticCreationJob, state: "running" } : instaticCreationJob, instaticLogs), notice);
-    } else if (path.startsWith("/addons/instatic/api/") && path.endsWith("/creation-log")) {
-      return Response.json({ ok: true, data: { domain: "pages.example.com", log: instaticLogs } });
+      // ?cert=failed shows a creation whose certificate request failed.
+      const certificate = url.searchParams.get("cert") === "failed" ? "failed" as const : "issued" as const;
+      html = instaticLayout("Creating blog.example.com", instaticJobView(url.searchParams.has("finish") && !finishedPreviewJobs.has(instaticCreationJob.id) ? { ...instaticCreationJob, state: "running" } : { ...instaticCreationJob, certificate }, instaticLogs), notice);
     } else if (path.startsWith("/addons/instatic/api/") && path.endsWith("/logs")) {
       return Response.json({ ok: true, data: { logs: "Instatic listening on 127.0.0.1:39000\nReady to accept requests" } });
     } else if (path === "/addons/instatic/api/jobs/preview-instatic-job/events" || (path === "/addons/instatic/api/jobs/preview-instatic-job" && req.headers.get("accept")?.includes("text/event-stream"))) {

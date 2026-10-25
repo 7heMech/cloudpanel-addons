@@ -10,6 +10,9 @@ const REPOSITORY = "corebunch/instatic";
 const TOKEN_URL = `${REGISTRY}/token?scope=repository:${REPOSITORY}:pull&service=ghcr.io`;
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 const CACHE_TTL_MS = 15 * 60 * 1000;
+// An unreachable registry costs every page an 8 s timeout, so a failure is
+// believed for a minute before it is tried again.
+const FAILURE_TTL_MS = 60 * 1000;
 
 // Stop following pages long before a runaway Link chain can hold the dashboard
 // open. Far more than Instatic will have for years.
@@ -31,6 +34,20 @@ export interface AvailableTags {
 }
 
 let cache: { at: number; tags: string[] } | null = null;
+let failedAt = 0;
+
+function unreachable(): AvailableTags {
+  // A stale cache is still a real answer from the registry; FALLBACK is not,
+  // so it never gets to claim a newest version.
+  if (cache) return { tags: cache.tags, source: "cache", latest: cache.tags[0] ?? null };
+  return { tags: FALLBACK, source: "fallback", latest: null };
+}
+
+/** Forgets every lookup, for tests. */
+export function resetTagCache(): void {
+  cache = null;
+  failedAt = 0;
+}
 
 function byVersionDesc(a: string, b: string): number {
   return Bun.semver.order(b, a);
@@ -85,6 +102,7 @@ async function fetchAllTags(token: string): Promise<string[]> {
 export async function listAvailableTags(): Promise<AvailableTags> {
   const fresh = cache && Date.now() - cache.at < CACHE_TTL_MS;
   if (fresh && cache) return { tags: cache.tags, source: "registry", latest: cache.tags[0] ?? null };
+  if (Date.now() - failedAt < FAILURE_TTL_MS) return unreachable();
 
   try {
     const tokenRes = await fetch(TOKEN_URL, { signal: AbortSignal.timeout(8000) });
@@ -96,12 +114,11 @@ export async function listAvailableTags(): Promise<AvailableTags> {
     if (versions.length === 0) throw new Error("registry listed no version-shaped tags");
 
     cache = { at: Date.now(), tags: versions };
+    failedAt = 0;
     return { tags: versions, source: "registry", latest: versions[0]! };
   } catch (err) {
     console.error("[tags] could not list registry tags:", err instanceof Error ? err.message : err);
-    // A stale cache is still a real answer from the registry; FALLBACK is not,
-    // so it never gets to claim a newest version.
-    if (cache) return { tags: cache.tags, source: "cache", latest: cache.tags[0] ?? null };
-    return { tags: FALLBACK, source: "fallback", latest: null };
+    failedAt = Date.now();
+    return unreachable();
   }
 }

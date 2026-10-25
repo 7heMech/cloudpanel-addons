@@ -1,4 +1,3 @@
-import { existsSync, readFileSync } from "node:fs";
 import { getNextAvailablePort, readPanelSnapshot, type PanelSnapshot } from "../../../lib/snapshot-reader";
 import { callGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
 import { watchGatewayJob, type JobWatcher } from "../../../lib/job-stream";
@@ -69,6 +68,8 @@ export interface InstaticJobView {
   port: number;
   tag: string;
   tls: boolean;
+  /** What came of the certificate; absent on records written before it was kept. */
+  certificate?: "issued" | "failed" | "none";
   state: "queued" | "running" | "done" | "failed" | "unknown";
   step: string;
   createdAt: string;
@@ -83,21 +84,6 @@ export const instaticService = {
   /** Fetches current panel information and reports its age at receipt. */
   async snapshot(): Promise<{ snap: PanelSnapshot; ageSeconds: number }> {
     return readPanelSnapshot();
-  },
-
-  /**
-   * Returns the lowest reserved port absent from both panel data and the
-   * current Instatic instance list.
-   *
-   * @throws If either allocation source is unavailable or the range is full.
-   */
-  async nextPort(): Promise<number> {
-    // Panel data is queried in real time through the root gateway.
-    const [instances, { snap }] = await Promise.all([
-      this.listInstancesOrThrow(),
-      this.snapshot(),
-    ]);
-    return getNextAvailablePort(snap, instances.map((i) => i.port));
   },
 
   async listInstances(): Promise<InstanceView[]> {
@@ -174,27 +160,6 @@ export const instaticService = {
       return [];
     }
     return res.data?.jobs ?? [];
-  },
-
-  async getInstanceCreationLog(domain: string): Promise<ActionResult<{ domain: string; log: string }>> {
-    const valid = validateDomain(domain);
-    if (!valid) return { ok: false, error: "domain is not a valid hostname" };
-    try {
-      const path = `/var/lib/clp-addons/instatic/${valid}/create.log`;
-      if (existsSync(path)) {
-        return { ok: true, data: { domain: valid, log: readFileSync(path, "utf8") } };
-      }
-    } catch {}
-    // Fallback to searching jobs
-    const jobs = await this.listJobs();
-    const match = jobs.find((j) => j.domain === valid);
-    if (match) {
-      const jobRes = await this.getJob(match.id);
-      if (jobRes.ok && jobRes.data) {
-        return { ok: true, data: { domain: valid, log: jobRes.data.log } };
-      }
-    }
-    return { ok: true, data: { domain: valid, log: "" } };
   },
 
   async updateInstance(domain: string, tag: string): Promise<ActionResult> {

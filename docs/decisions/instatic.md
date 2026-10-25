@@ -8,7 +8,7 @@ whole mount, including lifecycle actions and job pages. CloudPanel gives site
 managers access to every site, so the instance list is not scoped per account.
 Ordinary users cannot enter the addon, and its New Site tile names only the two
 allowed roles in Twig. The addon header omits Addons and Admin Area links for a
-site manager, keeping Instances and New site available.
+site manager; the dashboard and its New site button stay available.
 
 Job streams recheck the same roles against the active CloudPanel account every
 15 seconds. Expiry, deactivation, or demotion to an ordinary user closes the
@@ -20,6 +20,21 @@ Lifecycle actions, updates and deletion return dashboard HTML from the same
 renderer as the first load, and the page repaints in place and reports the
 outcome. A rolled-back update shows its container logs. A finished creation job
 repaints its result view.
+
+The dashboard reads instances, creation jobs and registry tags in parallel. A
+creation that is queued, running, or failed with no instance to show for it is a
+row at the top, linking to its job page. An instance is deleted from the panel
+when the action's `list` says `panelSite: false`; such a row offers only Logs and
+Delete. Update appears only when the registry has a newer version and offers only
+newer versions. When ghcr.io cannot be reached, Update is disabled and no tag is
+called the latest; the failure is remembered for a minute, so repaints do not each
+wait out the 8 s timeout. Delete asks for the domain to be typed, and removes the
+CloudPanel site only when the addon created it. The New site form reads only the
+tag list: the port is chosen when the site is created.
+
+A creation job records `certificate` (`issued`, `failed` or `none`), and a failed
+request is a warning on the job page; records from 1.5.x, without it, keep the
+old wording. The creation log lives with the job record and expires with it.
 
 ## Instance model
 

@@ -1,8 +1,4 @@
 
-let currentLogDomain = '';
-let currentLogPort = '';
-let currentLogMode = 'container';
-
 async function act(domain, verb) {
   busy(true);
   try {
@@ -29,60 +25,42 @@ async function takeSnapshot(domain) {
     document.getElementById('snapshot-dialog').showModal();
   } catch (e) {
     busy(false);
-    alert('Snapshot failed: ' + e.message);
+    notify('Snapshot failed: ' + e.message, 'error');
   }
 }
 
-async function fetchLogContent() {
+async function showLogs(domain, port) {
+  document.getElementById('logs-title').textContent = 'Logs \u2014 ' + domain;
+  document.getElementById('logs-port-info').textContent = port
+    ? 'Container listens on internal port 3001, mapped from host 127.0.0.1:' + port + ' for CloudPanel reverse proxy.'
+    : '';
   const pre = document.getElementById('logs-body');
   pre.textContent = 'Loading\u2026';
+  document.getElementById('logs-dialog').showModal();
   try {
-    if (currentLogMode === 'creation') {
-      const body = await call('/api/instances/' + encodeURIComponent(currentLogDomain) + '/creation-log');
-      pre.textContent = (body && body.data && body.data.log) || '(no creation log recorded)';
-    } else {
-      const body = await call('/api/instances/' + encodeURIComponent(currentLogDomain) + '/logs');
-      pre.textContent = (body && body.data && body.data.logs) || '(no output)';
-    }
+    const body = await call('/api/instances/' + encodeURIComponent(domain) + '/logs');
+    pre.textContent = (body && body.data && body.data.logs) || '(no output)';
   } catch (e) {
     pre.textContent = 'Could not fetch logs: ' + e.message;
   }
 }
 
-function switchLogs(mode) {
-  currentLogMode = mode;
-  const btnC = document.getElementById('btn-container-logs');
-  const btnCr = document.getElementById('btn-creation-logs');
-  if (btnC && btnCr) {
-    if (mode === 'creation') {
-      btnCr.classList.add('btn-primary');
-      btnC.classList.remove('btn-primary');
-    } else {
-      btnC.classList.add('btn-primary');
-      btnCr.classList.remove('btn-primary');
-    }
-  }
-  fetchLogContent();
+async function askStop(domain) {
+  const agreed = await confirmAction({
+    title: 'Stop ' + domain + '?',
+    text: domain + ' is offline until it is started again.',
+    confirmLabel: 'Stop',
+    danger: true,
+  });
+  if (agreed) act(domain, 'stop');
 }
 
-async function showLogs(domain, port) {
-  currentLogDomain = domain;
-  currentLogPort = port;
-  currentLogMode = 'container';
-  const dlg = document.getElementById('logs-dialog');
-  const portInfo = document.getElementById('logs-port-info');
-  document.getElementById('logs-title').textContent = 'Logs \u2014 ' + domain;
-  if (portInfo) {
-    portInfo.textContent = port ? 'Container listens on internal port 3001, mapped from host 127.0.0.1:' + port + ' for CloudPanel reverse proxy.' : '';
-  }
-  const btnC = document.getElementById('btn-container-logs');
-  const btnCr = document.getElementById('btn-creation-logs');
-  if (btnC && btnCr) {
-    btnC.classList.add('btn-primary');
-    btnCr.classList.remove('btn-primary');
-  }
-  dlg.showModal();
-  fetchLogContent();
+/** True when version a is newer than b; both are x.y.z. */
+function versionNewer(a, b) {
+  const x = a.split('.').map(Number);
+  const y = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+  return false;
 }
 
 let pendingUpdate = null;
@@ -91,26 +69,25 @@ function askUpdate(domain, current) {
   document.getElementById('update-domain').textContent = domain;
   document.getElementById('update-current').textContent = current;
 
-  // The version to update to is picked from the list the registry actually
-  // reports, not typed from memory. Typing it meant knowing a release had
-  // happened, and nothing on this page ever said so.
+  // Only versions newer than the one running: an update never goes back.
   const sel = document.getElementById('update-tag');
   let chosen = '';
   for (let i = 0; i < sel.options.length; i++) {
     const opt = sel.options[i];
-    const isCurrent = opt.value === current;
-    opt.disabled = isCurrent;
-    opt.textContent = opt.dataset.label + (isCurrent ? ' (running now)' : '');
-    if (!isCurrent && !chosen) chosen = opt.value;
+    const newer = versionNewer(opt.value, current);
+    opt.hidden = !newer;
+    opt.disabled = !newer;
+    if (newer && !chosen) chosen = opt.value;
   }
-  // Options are newest first, so the first enabled one is the newest on offer.
-  sel.value = chosen || current;
+  // Options are newest first, so the first one left is the newest on offer.
+  if (!chosen) { notify(domain + ' already runs the newest version.', 'ok'); return; }
+  sel.value = chosen;
   document.getElementById('update-dialog').showModal();
 }
 
 async function confirmUpdate() {
   const tag = document.getElementById('update-tag').value.trim();
-  if (!/^\d+\.\d+\.\d+$/.test(tag)) { alert('Enter an exact version, for example 0.0.18'); return; }
+  if (!/^\d+\.\d+\.\d+$/.test(tag)) { notify('Choose a version to update to.', 'error'); return; }
   document.getElementById('update-dialog').close();
   busy(true);
   try {
@@ -128,6 +105,7 @@ async function confirmUpdate() {
       document.getElementById('logs-title').textContent =
         'Update failed — rolled back to ' + (data.restoredTag || 'the previous version');
       document.getElementById('logs-body').textContent = error.message + '\n\n' + data.logs;
+      document.getElementById('logs-port-info').textContent = '';
       document.getElementById('logs-dialog').showModal();
     }
   } finally {
@@ -135,23 +113,21 @@ async function confirmUpdate() {
   }
 }
 
-let pendingDelete = null;
-function askDelete(domain) {
-  pendingDelete = domain;
-  document.getElementById('delete-domain').textContent = domain;
-  document.getElementById('delete-confirm').value = '';
-  document.getElementById('delete-dialog').showModal();
-}
-
-async function confirmDelete() {
-  const typed = document.getElementById('delete-confirm').value.trim();
-  if (typed !== pendingDelete) { alert('Type the domain exactly to confirm.'); return; }
-  document.getElementById('delete-dialog').close();
+async function askDelete(domain) {
+  const agreed = await confirmAction({
+    title: 'Delete ' + domain + '?',
+    text: 'This removes the container and the instance data, and the CloudPanel site if this addon created it. '
+      + 'A final archive is written to /var/backups/clp-addons/instatic first.',
+    typed: domain,
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!agreed) return;
   busy(true);
   try {
-    const reply = await call('/api/instances/' + encodeURIComponent(pendingDelete) + '/delete', { method: 'POST' });
+    const reply = await call('/api/instances/' + encodeURIComponent(domain) + '/delete', { method: 'POST' });
     repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
-    notify(pendingDelete + ' deleted.', 'ok');
+    notify(domain + ' deleted.', 'ok');
   } catch (e) {
     notify('Delete failed: ' + e.message, 'error');
   } finally {
@@ -178,7 +154,7 @@ async function submitCreate(ev) {
     }
   } catch (e) {
     busy(false);
-    alert('Create failed: ' + e.message);
+    notify('Create failed: ' + e.message, 'error');
   }
   return false;
 }

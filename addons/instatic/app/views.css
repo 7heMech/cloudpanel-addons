@@ -1,3 +1,12 @@
 
 .behind { color: var(--warn); border-color: var(--warn); margin-left: 0.35rem; }
 .btn-update { border-color: var(--warn); color: var(--warn); }
+.logs-port { margin: 0 0 12px; }
+.snapshot-box { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 12px 16px; margin-bottom: 16px; }
+.snapshot-file { font-weight: 600; margin-bottom: 4px; }
+.snapshot-path { font-size: 13px; word-break: break-all; }
+.job-step { margin-top: 0; margin-bottom: 8px; }
+.job-step:empty { display: none; }
+.job-alert { margin: 0 0 12px; }
+.job-timing { margin-top: 12px; }
+.job-links { margin-top: 20px; }
