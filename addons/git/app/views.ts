@@ -368,14 +368,14 @@ export function fleetView(sites: GitSiteStatus[]): string {
         filters: [{ value: "attention", label: "Needs attention" }, { value: "deploying", label: "Deploying" }],
         summary: `${sites.length} sites`,
       })}
-      <table class="fleet-table git-fleet-table">
+      <div class="table-scroll"><table class="fleet-table git-fleet-table">
         <thead><tr>
           <th scope="col" class="site-select"><input type="checkbox" id="select-all" aria-label="Select all sites" onchange="selectAllSites(this.checked)"></th>
           <th scope="col">Site</th><th scope="col">Branch</th>
           <th scope="col">Current checkout</th><th scope="col">Last deployment</th><th scope="col" aria-label="Actions"></th>
         </tr></thead>
         <tbody>${sites.map(row).join("")}</tbody>
-      </table>
+      </table></div>
       ${FLEET_NONE_HTML}`
       }
     </div>`;

@@ -58,7 +58,7 @@ function siteSwitch(id: string, label: string, domain: string, included: boolean
 
 function varnishCell(site: WpSiteView, varnish: WpVarnishState, available: boolean): string {
   if (!available) return '<span class="toolbar-note">Unavailable</span>';
-  if (!site.varnishCache) return "";
+  if (!site.varnishCache) return '<span class="hint" title="Varnish Cache is off for this site in CloudPanel, so the plugin has nothing to purge">Varnish off</span>';
   const domain = esc(site.domain);
   const record = site.varnishPlugin;
   const [label, tone] = !record ? ["Not checked", ""]
@@ -99,8 +99,8 @@ function siteRow(site: WpSiteView, data: WpDashboard, mainwp: boolean): string {
   return `
               <tr data-domain="${domain}" data-find="${esc(`${site.domain} ${site.user}`)}">
                 <td class="site-cell">${domain}<div class="hint">${esc(site.user)}</div></td>
-                <td data-label="Varnish">${varnishCell(site, data.varnish, !data.varnishError)}</td>${
-  mainwp ? `\n                <td data-label="MainWP">${mainwpCell(site, data.mainwp)}</td>` : ""}
+                <td data-label="Varnish plugin">${varnishCell(site, data.varnish, !data.varnishError)}</td>${
+  mainwp ? `\n                <td data-label="MainWP Child">${mainwpCell(site, data.mainwp)}</td>` : ""}
                 <td class="action-cell"><button class="btn btn-primary" type="button" data-domain="${domain}" onclick="signIn(this)">Sign in</button></td>
               </tr>`;
 }
@@ -130,7 +130,7 @@ function sitesCard(data: WpDashboard): string {
           <thead>
             <tr>
               <th scope="col">Site</th>
-              <th scope="col">Varnish</th>${mainwp ? '\n              <th scope="col">MainWP</th>' : ""}
+              <th scope="col" title="CLP Varnish Cache, the WordPress plugin that clears CloudPanel's Varnish cache when content changes">Varnish plugin</th>${mainwp ? '\n              <th scope="col">MainWP Child</th>' : ""}
               <th scope="col" class="action-cell"></th>
             </tr>
           </thead>

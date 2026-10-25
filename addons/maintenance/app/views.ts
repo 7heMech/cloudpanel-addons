@@ -142,10 +142,10 @@ export function fleetView(fleet: MaintenanceFleet, currentIp = ""): string {
   ];
   const table = sites.length
     ? `${fleetFilterHtml({ count: sites.length, filters, summary: plural(sites.length, "site") })}
-      <table class="fleet-table maintenance-fleet-table"><thead><tr>
+      <div class="table-scroll"><table class="fleet-table maintenance-fleet-table"><thead><tr>
         <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
         <th scope="col">Site</th><th scope="col">Type</th><th scope="col">Effective status</th><th scope="col" class="action-cell">Site setting</th>
-      </tr></thead><tbody>${sites.map((site) => siteRow(site, globalEnabled)).join("")}</tbody></table>
+      </tr></thead><tbody>${sites.map((site) => siteRow(site, globalEnabled)).join("")}</tbody></table></div>
       ${FLEET_NONE_HTML}`
     : '<div class="empty">No CloudPanel sites were found.</div>';
   return `<div class="page-heading" id="maintenance-fleet"><div><h1>Maintenance Mode</h1><p>Switch sites to a 503 maintenance page without reloading Nginx.</p></div></div>

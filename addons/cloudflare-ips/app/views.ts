@@ -61,13 +61,13 @@ export function dashboardView(state: CloudflareState): string {
             </div>
           </div>
           ${fleetFilterHtml({ count: total, filters: [{ value: "off", label: "Off" }], summary: plural(total, "site") })}
-          <table class="fleet-table cloudflare-site-table">
+          <div class="table-scroll"><table class="fleet-table cloudflare-site-table">
             <thead><tr>
               <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
               <th scope="col">Site</th><th scope="col" class="action-cell">Cloudflare only</th>
             </tr></thead>
             <tbody>${rows}</tbody>
-          </table>
+          </table></div>
           ${FLEET_NONE_HTML}`}
     </div>
     <div class="card split-card cf-policy">

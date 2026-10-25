@@ -159,10 +159,10 @@ export function dashboardView(
   ${
     instances.length === 0 && creations.length === 0
       ? `<div class="empty">No Instatic instances yet. <a href="${BASE}/new">Create one</a>.</div>`
-      : `<table class="fleet-table">
+      : `<div class="table-scroll"><table class="fleet-table">
     <thead><tr><th scope="col">Site</th><th scope="col">Version</th><th scope="col">State</th><th scope="col" class="action-cell">Actions</th></tr></thead>
     <tbody>${jobRows}${rows}</tbody>
-  </table>`
+  </table></div>`
   }
 </div>
 

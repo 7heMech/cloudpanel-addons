@@ -130,7 +130,7 @@ function settingsCard(state: DnsState): string {
   return `<div class="card card-table"><div class="card-header"><div><h2>Settings</h2>
       <p class="hint">Each Cloudflare connection is one API token. A site is managed in the longest zone any connection reaches.</p></div>
       ${state.connections.length ? '<button class="btn" type="button" onclick="dnsEditConnection(\'\')">Add Cloudflare connection</button>' : ""}</div>
-    <table class="fleet-table dns-settings-table"><tbody>
+    <div class="table-scroll"><table class="fleet-table dns-settings-table"><tbody>
       ${connections}
       <tr><td class="site-cell"><strong>Server addresses</strong></td>
         <td class="wide-cell">${address(server.ipv4, server.detected.ipv4, "{ipv4}")}<br>${address(server.ipv6, server.detected.ipv6, "{ipv6}")}</td>
@@ -138,7 +138,7 @@ function settingsCard(state: DnsState): string {
       <tr><td class="site-cell"><strong>Mailcow</strong>${mailcow.url ? `<span class="hint">${esc(new URL(mailcow.url).host)}</span>` : ""}</td>
         <td class="wide-cell">${mailcowValue}</td>
         <td data-label="Actions" class="action-cell"><button class="btn" type="button" onclick="dnsEditMailcow()">${mailcow.url ? "Edit" : "Set up"}</button></td></tr>
-    </tbody></table></div>`;
+    </tbody></table></div></div>`;
 }
 
 /** Until Cloudflare is connected: the three steps that make a new site publish itself. */
@@ -170,12 +170,12 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
     ? `<div class="notice">Cloudflare or Mailcow asked this server to wait until ${esc(new Date(state.waitUntil).toISOString().slice(11, 16))} UTC. Checks resume after that.</div>` : "";
   const orphans = state.orphans.length ? `<div class="card card-table"><div class="card-header"><div><h2>Records of deleted sites</h2>
       <p class="hint">These sites are gone from CloudPanel. Their records are still in Cloudflare until you remove them.</p></div></div>
-      <table class="fleet-table dns-orphan-table"><tbody>${state.orphans.map((orphan) => `<tr>
+      <div class="table-scroll"><table class="fleet-table dns-orphan-table"><tbody>${state.orphans.map((orphan) => `<tr>
         <td class="site-cell"><strong>${esc(orphan.domain)}</strong><span class="hint">${esc(plural(orphan.records, "record"))} in ${esc(orphan.zone)}</span></td>
         <td data-label="Actions" class="action-cell"><div class="actions">
           <button class="btn" type="button" onclick="dnsForget('${esc(orphan.domain)}')">Keep</button>
           <button class="btn btn-danger" type="button" onclick="dnsRemoveRecords('${esc(orphan.domain)}')">Remove records</button>
-        </div></td></tr>`).join("")}</tbody></table></div>` : "";
+        </div></td></tr>`).join("")}</tbody></table></div></div>` : "";
 
   const fallback = state.profiles.find((profile) => profile.id === state.defaultProfileId);
   const reportOnly = state.connections.length && fallback && fallback.mode !== "enforce"
@@ -195,10 +195,10 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
           .map((profile) => `<option value="${esc(profile.id)}">${esc(profile.name)}</option>`).join("")}<option value="-">${NO_PROFILE}</option></select>
         <button class="btn" id="assign-selected" type="button" disabled onclick="dnsAssignSelected()">Assign selected</button>
       </div>
-      <table class="fleet-table dns-site-table"><thead><tr>
+      <div class="table-scroll"><table class="fleet-table dns-site-table"><thead><tr>
         <th class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked, dnsPaintSelection)" aria-label="Select all sites"></th>
         <th>Site</th><th>Runs</th><th>Profile</th><th>DNS</th><th class="action-cell"></th>
-      </tr></thead><tbody>${sites}</tbody></table>
+      </tr></thead><tbody>${sites}</tbody></table></div>
       <div class="card-footer"><span class="hint">${esc(ago(state.checkedAt, now))}. Drift is checked every 15 minutes.</span>
         <button class="btn" type="button" onclick="dnsCheck(this)"${state.connections.length ? "" : " disabled"}>Check now</button></div>`
       : '<div class="empty">CloudPanel has no sites yet.</div>'}
@@ -210,7 +210,7 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
         <div class="dns-default-field"><label class="hint" for="dns-default">New sites join</label>
           <select id="dns-default" onchange="dnsSetDefault(this)">${profileOptions(state.profiles, state.defaultProfileId, "No profile")}</select></div>
         <button class="btn btn-primary" type="button" onclick="dnsEditProfile('')">New profile</button></div></div>
-      ${profiles ? `<table class="fleet-table dns-profile-table"><thead><tr><th>Profile</th><th>Records</th><th>Zone</th><th>Enforce</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table>`
+      ${profiles ? `<div class="table-scroll"><table class="fleet-table dns-profile-table"><thead><tr><th>Profile</th><th>Records</th><th>Zone</th><th>Enforce</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table></div>`
         : '<div class="empty">No profiles yet. Create one from the Web and Mailcow presets.</div>'}
     </div>
     ${settingsCard(state)}`;

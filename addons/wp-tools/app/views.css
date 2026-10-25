@@ -1,5 +1,7 @@
 .card-header + .fleet-filter { padding-top: 18px; }
+.wp-site-table th:first-child { width: 30%; }
 .wp-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+@media (min-width: 941px) { .wp-status { flex-wrap: nowrap; } .wp-status .btn { white-space: nowrap; } }
 .wp-status .btn { min-height: 32px; padding: 4px 12px; font-size: 13px; }
 .wp-error { max-width: 260px; margin-top: 6px; color: var(--bad); font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
 .wp-auto { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 13px; }

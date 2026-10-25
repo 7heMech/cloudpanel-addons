@@ -126,10 +126,10 @@ export function dashboardContent(state: SmtpState): string {
       ${fleetFilterHtml({ count: total, filters: [
         { value: "unrelayed", label: "Not relayed" }, { value: "discarded", label: "Discarded" }, { value: "blocked", label: "Blocked" },
       ], summary: `${total} site${total === 1 ? "" : "s"}` })}
-      <table class="fleet-table smtp-site-table"><thead><tr>
+      <div class="table-scroll"><table class="fleet-table smtp-site-table"><thead><tr>
         <th class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
         <th>Site</th><th>Mail</th><th>From</th><th class="action-cell">Actions</th>
-      </tr></thead><tbody>${sites}</tbody></table>
+      </tr></thead><tbody>${sites}</tbody></table></div>
       ${FLEET_NONE_HTML}`
       : '<div class="empty">CloudPanel has no sites yet.</div>'}
     ${state.skipped.length ? `<p class="hint skipped-note">Can't be relayed: ${state.skipped
@@ -141,7 +141,7 @@ export function dashboardContent(state: SmtpState): string {
         <div class="smtp-default-field"><label class="hint" for="smtp-default">New sites</label>
           <select id="smtp-default" onchange="smtpSetDefault(this)">${profileOptions(state.profiles, state.defaultProfileId)}</select></div>
         <button class="btn btn-primary" type="button" onclick="smtpEditProfile('')">New profile</button></div></div>
-      ${profiles ? `<table class="fleet-table smtp-profile-table"><thead><tr><th>Profile</th><th>Sends through</th><th>From</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table>`
+      ${profiles ? `<div class="table-scroll"><table class="fleet-table smtp-profile-table"><thead><tr><th>Profile</th><th>Sends through</th><th>From</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table></div>`
         : '<div class="empty">No profiles yet. Create one for each SMTP account.</div>'}
     </div>
     <dialog id="smtp-profile-dialog" aria-labelledby="smtp-profile-heading"><form id="smtp-profile-form" onsubmit="smtpSaveProfile(event)">
