@@ -285,8 +285,9 @@ styles belong to the release it replaced.
 
 Mutations that replace a view return `html` from the renderer used on first
 load. `repaintView` swaps it into `#clp-content`, closes finished dialogs, and
-preserves scroll, focus and disclosure state for elements with stable IDs.
-Addon clients retain their fleet selections and report outcomes with `notify`.
+preserves scroll, focus and disclosure state for elements with stable IDs, the
+ticked site rows, and the value of every control marked `data-keep` (search and
+filter boxes). Addon clients report outcomes with `notify`, never `alert()`.
 Failed mutations leave the view intact.
 
 A page reached from a site's tab strip is drawn in site mode instead: the shell
@@ -367,10 +368,16 @@ string built from a shared class name, a script fragment that is a function
 body rather than a program, and a `<script>` element indented to sit inside a
 Twig template.
 
-Every addon page gets the shared base helpers, including `repaintView` and
-inline notices. Fleet tables also get site-selection helpers, whose entry
-points take the page's own selection repaint. Pages with background jobs get
-the shared job watcher. Theme initialization runs before styles are painted.
+Every addon page gets the shared base helpers, including `repaintView`, inline
+notices and `confirmAction`. The one confirmation dialog can ask the operator to
+type a word, such as the domain, before something that cannot be undone, and a
+press on any dialog's backdrop closes it. Fleet tables also get site-selection
+helpers: `paintFleetSelection` paints the count, select-all and every control
+marked `data-needs-selection` by shared ids, and `fleetFilterHtml` adds a search
+and an optional filter once a table has six sites. A row the search hides is
+deselected, so a bulk action only reaches sites on screen. Pages with background
+jobs get the shared job watcher. Theme initialization runs before styles are
+painted.
 
 ## Live panel data
 
