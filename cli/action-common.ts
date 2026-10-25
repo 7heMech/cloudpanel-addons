@@ -1,10 +1,12 @@
 import { dlopen, FFIType } from "bun:ffi";
 import { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { parse as parseDomain } from "tldts";
 import {
-  accessSync, closeSync, ftruncateSync, lstatSync, openSync, readFileSync, writeSync, constants as fsConstants,
+  accessSync, closeSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, writeSync, constants as fsConstants,
+  type Stats,
 } from "node:fs";
+import { dirname } from "node:path";
 import { PANEL_IDENTITY_PATH } from "./paths";
 
 const HOSTNAME_LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
@@ -399,12 +401,40 @@ export interface FileLockOptions {
   note?: string;
 }
 
+function lstatOrNull(path: string): Stats | null {
+  try { return lstatSync(path); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+/**
+ * Makes `dir` a directory only this process's user can change. The lock
+ * directory sits in /run/lock, which every user can write, so after a reboot
+ * anyone could create it first and fill it with links for root to follow. One
+ * this user does not own, or others can write, is moved aside and made again.
+ */
+export function ensureLockDir(dir: string): void {
+  const uid = process.geteuid?.() ?? 0;
+  const trusted = (stat: Stats | null) => stat && stat.isDirectory() && stat.uid === uid && !(stat.mode & 0o022);
+  let stat = lstatOrNull(dir);
+  if (trusted(stat)) return;
+  if (stat) renameSync(dir, `${dir}.untrusted-${randomBytes(6).toString("hex")}`);
+  try { mkdirSync(dir, { mode: 0o700 }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") mkdirSync(dir, { recursive: true, mode: 0o700 });
+    else if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  stat = lstatOrNull(dir);
+  if (!trusted(stat)) failAction(`refusing to use ${dir}: it is not a directory only this user can write`);
+}
+
 // O_RDWR|O_CREAT rather than "w": truncating on open would erase the note the
-// holder wrote. The file is created with mode 0666 under the service umask,
-// the same mode the original wrapper's `exec 200>...` used; the lock directory
-// itself, not the file mode, is the access boundary.
+// holder wrote. O_NOFOLLOW, since root truncates and writes the file.
 function openLockFile(path: string): number {
-  return openSync(path, fsConstants.O_RDWR | fsConstants.O_CREAT, 0o666);
+  ensureLockDir(dirname(path));
+  return openSync(path, fsConstants.O_RDWR | fsConstants.O_CREAT | fsConstants.O_NOFOLLOW, 0o600);
 }
 
 function lockHolder(path: string): string | null {
