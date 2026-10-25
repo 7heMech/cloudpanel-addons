@@ -12,10 +12,8 @@ async function smtpPost(path, body, done) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    for (const dialog of CLP_ROOT.querySelectorAll('dialog[open]')) dialog.close();
-    CLP_ROOT.getElementById('smtp-root').innerHTML = reply.html;
+    repaintView(CLP_ROOT.getElementById('smtp-root'), reply.html);
     smtpState = reply.data;
-    smtpPaintSelection();
     notify(done, 'ok');
     return true;
   } catch (error) {
@@ -27,23 +25,21 @@ async function smtpPost(path, body, done) {
 }
 
 function smtpProfileName(id) {
+  if (id === 'dont-send') return "Don't send";
   const profile = smtpState.profiles.find(function (item) { return item.id === id; });
   return profile ? profile.name : id;
 }
 
 // --- profiles ---------------------------------------------------------------
 
-function smtpSyncDelivery() {
+/** A saved password is kept only for the server and account it was saved for. */
+function smtpSyncPassword() {
   const form = CLP_ROOT.getElementById('smtp-profile-form');
-  const send = form.elements.namedItem('delivery').value === 'send';
-  CLP_ROOT.getElementById('smtp-relay-fields').hidden = !send;
-  for (const name of ['host', 'port', 'username', 'sender']) form.elements.namedItem(name).required = send;
-  // A saved password is kept only for the server and account it was saved for.
   const keeps = form.dataset.savedRelay !== '' && form.dataset.savedRelay ===
     JSON.stringify([form.elements.namedItem('host').value.trim().toLowerCase(), form.elements.namedItem('username').value]);
   const password = form.elements.namedItem('password');
-  password.required = send && !keeps;
-  password.placeholder = keeps ? 'Leave blank to keep the saved password' : 'SMTP password';
+  password.required = !keeps;
+  password.placeholder = keeps ? 'Blank keeps the saved one' : '';
 }
 
 function smtpEditProfile(id) {
@@ -52,13 +48,13 @@ function smtpEditProfile(id) {
   form.reset();
   form.elements.namedItem('id').value = profile ? profile.id : '';
   form.elements.namedItem('name').value = profile ? profile.name : '';
-  form.elements.namedItem('delivery').value = profile && !profile.relay ? 'discard' : 'send';
-  form.elements.namedItem('host').value = profile && profile.relay ? profile.relay.host : '';
-  form.elements.namedItem('port').value = profile && profile.relay ? profile.relay.port : 587;
-  form.elements.namedItem('username').value = profile && profile.relay ? profile.relay.username : '';
+  form.elements.namedItem('host').value = profile ? profile.relay.host : '';
+  form.elements.namedItem('port').value = profile ? profile.relay.port : 587;
+  form.elements.namedItem('username').value = profile ? profile.relay.username : '';
   form.elements.namedItem('sender').value = profile ? profile.sender : 'noreply@{site}';
-  form.dataset.savedRelay = profile && profile.relay ? JSON.stringify([profile.relay.host, profile.relay.username]) : '';
-  smtpSyncDelivery();
+  form.dataset.savedRelay = profile ? JSON.stringify([profile.relay.host, profile.relay.username]) : '';
+  form.querySelector('.smtp-from-help').open = false;
+  smtpSyncPassword();
   CLP_ROOT.getElementById('smtp-profile-heading').textContent = profile ? 'Edit ' + profile.name : 'New profile';
   CLP_ROOT.getElementById('smtp-profile-dialog').showModal();
 }
@@ -66,18 +62,17 @@ function smtpEditProfile(id) {
 function smtpSaveProfile(event) {
   event.preventDefault();
   const fields = smtpFields(event.currentTarget);
-  const send = fields.delivery === 'send';
   smtpPost('/api/profiles', {
     id: fields.id || null,
     name: fields.name,
-    relay: send ? { host: fields.host, port: Number(fields.port), username: fields.username, password: fields.password } : null,
-    sender: send ? fields.sender : undefined,
-  }, fields.id ? 'Saved ' + fields.name + '. Its sites use it now.' : 'Created ' + fields.name + '. Assign sites to it below.');
+    relay: { host: fields.host, port: Number(fields.port), username: fields.username, password: fields.password },
+    sender: fields.sender,
+  }, fields.id ? 'Saved ' + fields.name + '. Its sites use it now.' : 'Created ' + fields.name + '. Assign sites to it above.');
 }
 
 async function smtpDeleteProfile(id) {
   const profile = smtpState.profiles.find(function (item) { return item.id === id; });
-  const details = profile && profile.sites ? [plural(profile.sites, 'site') + ' in it ' + (profile.sites === 1 ? 'stops' : 'stop') + ' being relayed.'] : [];
+  const details = profile && profile.sites ? [plural(profile.sites, 'site') + ' in it ' + (profile.sites === 1 ? 'is' : 'are') + ' then sent from this server.'] : [];
   const accepted = await confirmAction({
     title: 'Delete ' + smtpProfileName(id) + '?',
     text: 'Its SMTP account and From are removed.',
@@ -90,84 +85,63 @@ async function smtpDeleteProfile(id) {
 
 async function smtpSetDefault(select) {
   const id = select.value || null;
-  const saved = await smtpPost('/api/default', { profileId: id }, id
-    ? 'New sites will join ' + smtpProfileName(id) + '. Existing sites are unchanged.'
-    : 'New sites will not be relayed. Existing sites are unchanged.');
+  const saved = await smtpPost('/api/default', { profileId: id }, id === 'dont-send'
+    ? "New sites will join Don't send, so their mail is discarded. Existing sites are unchanged."
+    : id ? 'New sites will join ' + smtpProfileName(id) + '. Existing sites are unchanged.'
+    : 'New sites will send from this server. Existing sites are unchanged.');
   if (!saved) select.value = smtpState.defaultProfileId || '';
 }
 
 // --- sites ------------------------------------------------------------------
 
-function smtpPaintSelection() {
-  const rows = siteRows();
-  rows.forEach(function (row) {
-    const box = row.querySelector('.site-checkbox');
-    row.setAttribute('aria-selected', String(Boolean(box && box.checked)));
-  });
-  const chosen = selectedRows();
-  const note = CLP_ROOT.getElementById('site-selection');
-  if (note) note.textContent = chosen.length === 0 ? 'No sites selected' : chosen.length + ' of ' + rows.length + ' selected';
-  const apply = CLP_ROOT.getElementById('assign-selected');
-  if (apply) apply.disabled = chosen.length === 0;
-  const all = CLP_ROOT.getElementById('select-all');
-  if (all) {
-    all.checked = rows.length > 0 && chosen.length === rows.length;
-    all.indeterminate = chosen.length > 0 && chosen.length < rows.length;
-  }
-  const allBtn = CLP_ROOT.getElementById('select-all-btn');
-  if (allBtn) allBtn.textContent = rows.length > 0 && chosen.length === rows.length ? 'Deselect all' : 'Select all';
+function smtpWhere(id) {
+  return id === 'dont-send' ? 'is discarded' : id ? 'goes through ' + smtpProfileName(id) : 'is sent from this server';
 }
 
 async function smtpAssignRow(select) {
   const row = select.closest('tr[data-domain]');
   const id = select.value || null;
-  const saved = await smtpPost('/api/assign', { domains: [row.dataset.domain], profileId: id }, id
-    ? row.dataset.domain + ' now sends through ' + smtpProfileName(id) + '.'
-    : row.dataset.domain + ' is no longer relayed.');
+  const saved = await smtpPost('/api/assign', { domains: [row.dataset.domain], profileId: id },
+    'Mail from ' + row.dataset.domain + ' now ' + smtpWhere(id) + '.');
   if (!saved) select.value = row.dataset.profileId || '';
 }
 
 async function smtpAssignSelected() {
   const rows = selectedRows();
   const picker = CLP_ROOT.getElementById('bulk-profile');
-  if (!rows.length) return notify('Select at least one site first.', 'warn');
-  if (!picker.value) return notify('Choose a profile to put them in first.', 'warn');
+  if (!rows.length) return;
+  if (!picker.value) return notify('Choose where their mail goes first.', 'warn');
   const id = picker.value === '-' ? null : picker.value;
   const moving = rows.filter(function (row) { return (row.dataset.profileId || '') !== (id || ''); });
   if (!moving.length) return notify('Those sites are already there; nothing to change.', 'ok');
   const accepted = await confirmAction({
-    title: id ? 'Send ' + plural(rows.length, 'site') + ' through ' + smtpProfileName(id) + '?' : 'Stop relaying ' + plural(rows.length, 'site') + '?',
-    text: id ? 'Their mail goes through this profile\'s SMTP account from now on.' : 'Their mail is no longer relayed.',
-    details: [moving.length + ' of the ' + plural(rows.length, 'selected site') + (moving.length === 1 ? ' changes' : ' change') + '; the rest are already there.'],
-    confirmLabel: id ? 'Assign' : 'Stop relaying',
-    danger: !id,
+    title: id === 'dont-send' ? 'Discard mail from ' + plural(moving.length, 'site') + '?'
+      : id ? 'Send ' + plural(moving.length, 'site') + ' through ' + smtpProfileName(id) + '?'
+      : 'Send ' + plural(moving.length, 'site') + ' from this server?',
+    text: id === 'dont-send' ? 'Their mail is logged and never delivered.'
+      : id ? 'Their mail goes through this profile\'s SMTP account from now on.' : 'Their mail is no longer relayed.',
+    confirmLabel: id === 'dont-send' ? 'Discard' : 'Assign',
+    danger: !id || id === 'dont-send',
   });
   if (!accepted) return;
-  smtpPost('/api/assign', { domains: rows.map(function (row) { return row.dataset.domain; }), profileId: id }, id
-    ? plural(rows.length, 'site') + (rows.length === 1 ? ' now sends' : ' now send') + ' through ' + smtpProfileName(id) + '.'
-    : plural(rows.length, 'site') + (rows.length === 1 ? ' is' : ' are') + ' no longer relayed.');
+  smtpPost('/api/assign', { domains: moving.map(function (row) { return row.dataset.domain; }), profileId: id },
+    'Mail from ' + plural(moving.length, 'site') + ' now ' + smtpWhere(id) + '.');
 }
 
 function smtpList(value) {
   return String(value || '').split(/[\s,]+/).map(function (part) { return part.trim(); }).filter(Boolean);
 }
 
-function smtpSiteGrants(domain) {
-  const site = smtpState.sites.find(function (item) { return item.domain === domain; });
-  return site ? site.grants : [];
+function smtpSite(domain) {
+  return smtpState.sites.find(function (item) { return item.domain === domain; });
 }
 
-/** With no domain, opens on no site, and choosing one shows the domains it already has. */
 function smtpEditGrants(domain) {
   const form = CLP_ROOT.getElementById('smtp-grants-form');
   form.elements.namedItem('domain').value = domain;
-  smtpLoadGrants();
+  form.elements.namedItem('domains').value = (smtpSite(domain) || { grants: [] }).grants.join('\n');
+  CLP_ROOT.getElementById('smtp-grants-heading').textContent = 'Extra sending domains for ' + domain;
   CLP_ROOT.getElementById('smtp-grants-dialog').showModal();
-}
-
-function smtpLoadGrants() {
-  const form = CLP_ROOT.getElementById('smtp-grants-form');
-  form.elements.namedItem('domains').value = smtpSiteGrants(form.elements.namedItem('domain').value).join('\n');
 }
 
 function smtpSaveGrants(event) {
@@ -179,34 +153,61 @@ function smtpSaveGrants(event) {
     : fields.domain + ' now sends only as its own domain.');
 }
 
-async function smtpRemoveGrants(domain) {
-  const accepted = await confirmAction({
-    title: 'Stop ' + domain + ' sending as ' + smtpSiteGrants(domain).join(', ') + '?',
-    text: 'It then sends only as its own domain.',
-    confirmLabel: 'Remove',
-    danger: true,
-  });
-  if (accepted) smtpPost('/api/grants', { domain: domain, domains: [] }, domain + ' now sends only as its own domain.');
+// --- test -------------------------------------------------------------------
+
+function smtpOpenTest(domain) {
+  const form = CLP_ROOT.getElementById('smtp-test-form');
+  form.elements.namedItem('domain').value = domain;
+  CLP_ROOT.getElementById('smtp-test-heading').textContent = 'Send a test from ' + domain;
+  CLP_ROOT.getElementById('smtp-test-result').hidden = true;
+  CLP_ROOT.getElementById('smtp-test-dialog').showModal();
+}
+
+/** What Postfix did with the test, and what the profile's From made of the one the app asked for. */
+function smtpTestOutcome(data) {
+  const delivery = data.delivery || { state: 'queued', detail: '' };
+  const verdict = {
+    sent: ['tone-ok', 'Delivered', 'The SMTP server accepted it.'],
+    deferred: ['tone-warn', 'Deferred', delivery.detail],
+    bounced: ['tone-bad', 'Refused', delivery.detail],
+    queued: ['', 'Still queued', 'Postfix has not tried it yet.'],
+  }[delivery.state];
+  const from = data.sender === data.requested ? 'Sent as ' + data.sender + '.'
+    : 'The app asked for ' + data.requested + ' and it was sent as ' + data.sender + (data.replyTo ? ', with Reply-To ' + data.replyTo : '') + '.';
+  return { tone: verdict[0], verdict: verdict[1], reason: verdict[2], from: from };
 }
 
 async function smtpSendTest(event) {
   event.preventDefault();
   const fields = smtpFields(event.currentTarget);
+  const result = CLP_ROOT.getElementById('smtp-test-result');
+  result.hidden = true;
   busy(true);
   try {
-    const result = await call('/api/test', {
+    const reply = await call('/api/test', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ domain: fields.domain, recipient: fields.recipient, from: fields.from }),
     });
-    const data = result.data;
-    notify((data.discarded ? 'Postfix accepted the test and its profile discards it, so it will not arrive. ' : 'Postfix queued the test to ' + data.recipient + '. ') +
-      (data.sender === data.requested ? 'Its From stays ' + data.sender
-        : 'The app asked for ' + data.requested + ' and it was sent as ' + data.sender + (data.replyTo ? ', with Reply-To ' + data.replyTo : '')) + '.', 'ok');
+    const outcome = smtpTestOutcome(reply.data);
+    result.textContent = '';
+    const verdict = document.createElement('strong');
+    verdict.className = outcome.tone;
+    verdict.textContent = outcome.verdict;
+    const reason = document.createElement('span');
+    reason.className = 'smtp-test-reason';
+    reason.textContent = outcome.reason;
+    const from = document.createElement('span');
+    from.className = 'hint';
+    from.textContent = outcome.from;
+    result.append(verdict, reason, from);
+    result.className = 'smtp-test-result';
   } catch (error) {
-    notify(error.message, 'error');
+    result.textContent = error.message;
+    result.className = 'smtp-test-result tone-bad';
   } finally {
+    result.hidden = false;
     busy(false);
   }
 }
 
-smtpPaintSelection();
+paintFleetSelection();
