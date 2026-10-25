@@ -85,20 +85,52 @@ export function stageMaintenanceVhosts(db: Database, changes: NginxChange[], pat
   }
 }
 
-/** With `settingsMissing`, a vhost that includes the absent global_settings is not covered by it. */
-export function sitesWithoutMaintenance(db: Database, paths: {
-  nginxVhostDir: string; vhostUid: number; includePath: string; settingsMissing?: boolean;
-}): string[] {
-  return maintenanceSites(db).flatMap((site) => {
-    try {
-      const domain = siteDomain(site);
-      const rendered = readFileSync(join(paths.nginxVhostDir, `${domain}.conf`), "utf8");
-      if (optedOut(rendered) && !rendered.includes("include /etc/nginx/global_settings")) return [];
-      return [rendered, site.vhost_template].every((content) => {
-        const block = servingBlock(content, domain);
-        const viaSettings = includes(block, "/etc/nginx/global_settings");
-        return paths.settingsMissing ? !viaSettings && includes(block, paths.includePath) : viaSettings !== includes(block, paths.includePath);
-      }) ? [] : [domain];
-    } catch { return [site.domain_name]; }
-  });
+interface CoveragePaths { nginxVhostDir: string; includePath: string; settingsMissing?: boolean }
+
+/**
+ * Why Nginx does not run the maintenance check for a site, or null when it
+ * does. With `settingsMissing`, a vhost that includes the absent
+ * global_settings is not covered by it.
+ */
+function siteGap(site: SiteRow, paths: CoveragePaths): { reason: string; optedOut?: true } | null {
+  let domain: string;
+  let rendered: string;
+  try {
+    domain = siteDomain(site);
+    rendered = readFileSync(join(paths.nginxVhostDir, `${domain}.conf`), "utf8");
+  } catch { return { reason: "Nginx has no vhost for it yet" }; }
+  if (optedOut(rendered) && !rendered.includes("include /etc/nginx/global_settings")) {
+    return { reason: "its vhost opts out of Nginx's global settings", optedOut: true };
+  }
+  try {
+    return [rendered, site.vhost_template].every((content) => {
+      const block = servingBlock(content, domain);
+      const viaSettings = includes(block, "/etc/nginx/global_settings");
+      return paths.settingsMissing ? !viaSettings && includes(block, paths.includePath) : viaSettings !== includes(block, paths.includePath);
+    }) ? null : { reason: "its vhost does not include the check" };
+  } catch { return { reason: "its vhost has no single server block for it" }; }
+}
+
+/** Why Nginx runs no maintenance check for one site, or null when it does or the site is unknown. */
+export function maintenanceGap(db: Database, domain: string, paths: CoveragePaths): string | null {
+  const site = db.query<SiteRow, [string]>("SELECT domain_name, vhost_template FROM site WHERE lower(domain_name) = ? LIMIT 1;").get(domain);
+  return site ? siteGap(site, paths)?.reason ?? null : null;
+}
+
+/** Every site Nginx runs no maintenance check for, opted-out ones included, with why. */
+export function maintenanceGaps(db: Database, paths: CoveragePaths): Map<string, string> {
+  const gaps = new Map<string, string>();
+  for (const site of maintenanceSites(db)) {
+    const gap = siteGap(site, paths);
+    if (gap) gaps.set(site.domain_name, gap.reason);
+  }
+  return gaps;
+}
+
+/** The sites status reports as uncovered: a vhost that opted out made its own choice. */
+export function sitesWithoutMaintenance(db: Database, paths: CoveragePaths): string[] {
+  return maintenanceSites(db).filter((site) => {
+    const gap = siteGap(site, paths);
+    return gap !== null && !gap.optedOut;
+  }).map((site) => site.domain_name);
 }

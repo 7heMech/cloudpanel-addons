@@ -56,6 +56,7 @@ export const GIT_ALLOWED_VERBS = new Set([
 ]);
 
 export const MAINTENANCE_ALLOWED_VERBS = new Set([
+  "sites",
   "status",
   "enable",
   "disable",

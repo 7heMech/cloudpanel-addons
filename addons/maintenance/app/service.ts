@@ -1,15 +1,17 @@
 import { callGatewayAction, type ActionResult } from "../../../lib/gateway-client";
-import { fetchPanelInfo, type SanitizedSite } from "../../../lib/snapshot-reader";
+import { fetchPanelInfo } from "../../../lib/snapshot-reader";
 import type { SiteContext } from "../../../lib/site-context";
-import type { GlobalMaintenanceStatus, MaintenanceStatus } from "../action";
+import type { GlobalMaintenanceStatus, MaintenanceSiteStatus, MaintenanceStatus } from "../action";
 import { validateDomain } from "../../../lib/app-http";
 
 export { validateDomain };
 
-export interface MaintenanceSiteView extends MaintenanceStatus {
-  type: string;
-  user: string;
-  error?: string;
+export type MaintenanceSiteView = MaintenanceSiteStatus;
+
+/** What the fleet page draws: every site and the global override. */
+export interface MaintenanceFleet {
+  global: GlobalMaintenanceStatus;
+  sites: MaintenanceSiteView[];
 }
 
 /** A site's status together with the panel context its page is drawn in. */
@@ -22,15 +24,14 @@ export interface MaintenanceTemplateView {
   domain: string;
   custom: boolean;
   html: string;
+  /** Set by a save whose HTML the sanitizer had to change. */
+  removed?: boolean;
 }
 
 export interface BulkToggleResult {
-  ok: boolean;
-  data: {
-    enabled: boolean;
-    updated: string[];
-    failed: { domain: string; error: string }[];
-  };
+  enabled: boolean;
+  updated: string[];
+  failed: { domain: string; error: string }[];
 }
 
 function action<T>(verb: string, domain: string, input?: string): Promise<ActionResult<T>> {
@@ -53,28 +54,8 @@ async function requireResult<T>(result: ActionResult<T>, fallback: string): Prom
 }
 
 export const maintenanceService = {
-  async panelSites(): Promise<SanitizedSite[]> {
-    return (await fetchPanelInfo()).sites;
-  },
-
-  async listSites(): Promise<MaintenanceSiteView[]> {
-    const sites = await this.panelSites();
-    const statuses: MaintenanceSiteView[] = [];
-    // Bound root action fan-out on panels with a large fleet.
-    for (let offset = 0; offset < sites.length; offset += 8) {
-      statuses.push(...await Promise.all(sites.slice(offset, offset + 8).map(async (site): Promise<MaintenanceSiteView> => {
-        const result = await action<MaintenanceStatus>("status", site.domain);
-        if (!result.ok || !result.data) {
-          return {
-            domain: site.domain, type: site.type, user: site.user,
-            enabled: false, customTemplate: false, bypasses: [],
-            error: result.error ?? "status unavailable",
-          };
-        }
-        return { ...result.data, type: site.type, user: site.user };
-      })));
-    }
-    return statuses.sort((a, b) => a.domain.localeCompare(b.domain));
+  async fleet(): Promise<MaintenanceFleet> {
+    return requireResult(await globalAction<MaintenanceFleet>("sites"), "the sites could not be read");
   },
 
   /**
@@ -98,10 +79,6 @@ export const maintenanceService = {
     };
   },
 
-  status(domain: string): Promise<ActionResult<MaintenanceStatus>> {
-    return action("status", domain);
-  },
-
   setEnabled(domain: string, enabled: boolean): Promise<ActionResult<MaintenanceStatus>> {
     return action(enabled ? "enable" : "disable", domain);
   },
@@ -120,15 +97,12 @@ export const maintenanceService = {
     return globalAction<{ global: boolean }>(enabled ? "global-enable" : "global-disable");
   },
 
-  async setAllEnabled(enabled: boolean, domains?: string[]): Promise<BulkToggleResult> {
-    const targetDomains = domains !== undefined
-      ? domains
-      : (await this.panelSites()).map((s) => s.domain);
+  async setManyEnabled(domains: string[], enabled: boolean): Promise<BulkToggleResult> {
     const updated: string[] = [];
     const failed: { domain: string; error: string }[] = [];
 
-    for (let offset = 0; offset < targetDomains.length; offset += 8) {
-      const batch = targetDomains.slice(offset, offset + 8);
+    for (let offset = 0; offset < domains.length; offset += 8) {
+      const batch = domains.slice(offset, offset + 8);
       await Promise.all(batch.map(async (domain) => {
         try {
           const res = await this.setEnabled(domain, enabled);
@@ -144,12 +118,9 @@ export const maintenanceService = {
     }
 
     return {
-      ok: true,
-      data: {
-        enabled,
-        updated: updated.sort((a, b) => a.localeCompare(b)),
-        failed: failed.sort((a, b) => a.domain.localeCompare(b.domain)),
-      },
+      enabled,
+      updated: updated.sort((a, b) => a.localeCompare(b)),
+      failed: failed.sort((a, b) => a.domain.localeCompare(b.domain)),
     };
   },
 

@@ -7,6 +7,7 @@ import { jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, 
 import { fleetView as gitFleetView, fragment as gitFragment, layout as gitLayout, siteView as gitSiteView } from "../addons/git/app/views";
 import type { GitSiteStatus } from "../addons/git/app/service";
 import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
+import type { MaintenanceFleet, MaintenanceSiteView } from "../addons/maintenance/app/service";
 import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayout } from "../addons/php-resources/app/views";
 import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../addons/smtp/app/views";
 import type { SmtpState } from "../addons/smtp/action";
@@ -252,6 +253,48 @@ function gitPreviewSites(url: URL): GitSiteStatus[] {
 }
 
 /**
+ * Maintenance across the fleet. ?global turns the override on, ?many adds sites
+ * until the search shows, and ?uncovered leaves www without the Nginx check.
+ * Switches made on the page are kept until the preview restarts.
+ */
+const maintenanceChanges = { enabled: new Map<string, boolean>(), global: null as boolean | null };
+
+function maintenancePreviewFleet(url: URL): MaintenanceFleet {
+  const extra = url.searchParams.has("many") ? [
+    { domain: "shop.example.com", siteType: "php", siteUser: "shop" },
+    { domain: "blog.example.com", siteType: "php", siteUser: "blog" },
+    { domain: "new.example.com", siteType: "php", siteUser: "new" },
+    { domain: "a-rather-long-customer-hostname.staging.example.com", siteType: "nodejs", siteUser: "long" },
+  ] : [];
+  const fleetSites = [...sites, ...extra].map((site, index): MaintenanceSiteView => ({
+    domain: site.domain, type: site.siteType, user: site.siteUser,
+    enabled: maintenanceChanges.enabled.get(site.domain) ?? (index === 0 || site.domain === "new.example.com"),
+    customTemplate: index === 1, bypasses: index === 0 ? ["203.0.113.8"] : index === 3 ? ["198.51.100.4", "198.51.100.5"] : [],
+    uncovered: site.domain === "new.example.com" || (index === 0 && url.searchParams.has("uncovered")) ? "Nginx has no vhost for it yet" : null,
+    ...(index === 2 ? { error: "status unavailable" } : {}),
+  }));
+  return {
+    global: { global: maintenanceChanges.global ?? url.searchParams.has("global"), bypasses: url.searchParams.has("empty") ? [] : ["203.0.113.8"] },
+    sites: url.searchParams.has("empty") ? [] : fleetSites,
+  };
+}
+
+function maintenancePreviewMutation(path: string, source: URL, body: Record<string, any>): Response | null {
+  const toggle = path.match(/^\/addons\/maintenance\/api\/sites\/([^/]+)\/toggle$/);
+  if (toggle) maintenanceChanges.enabled.set(decodeURIComponent(toggle[1]!), body.enabled === true);
+  else if (path === "/addons/maintenance/api/bulk-toggle") {
+    for (const domain of body.domains ?? []) maintenanceChanges.enabled.set(domain, body.enabled === true);
+  } else if (path === "/addons/maintenance/api/global-toggle") maintenanceChanges.global = body.enabled === true;
+  else return null;
+  const domain = toggle ? decodeURIComponent(toggle[1]!) : "";
+  return Response.json({
+    ok: true,
+    data: toggle ? { domain, enabled: body.enabled === true } : { enabled: body.enabled, updated: body.domains ?? [], failed: [], global: body.enabled },
+    html: maintenanceFleetView(maintenancePreviewFleet(source), "203.0.113.8"),
+  });
+}
+
+/**
  * The Staging tab's content for one site.
  *
  * Both ends of a clone, because the page answers two questions and a fixture
@@ -386,6 +429,11 @@ let systemTweaksPreview: SystemTweaksState | null = null;
 
 /** ?dark draws a page in the panel's dark theme, from the cookie the panel's own switch sets. */
 function previewTheme(html: string, url: URL): string {
+  // ?open=id,id opens those disclosures, so a section that starts closed can be reviewed.
+  const open = url.searchParams.get("open");
+  if (open) {
+    html = html.replace("</body>", () => `<script>addEventListener("DOMContentLoaded",function(){${JSON.stringify(open.split(",")).replaceAll("<", "\\u003c")}.forEach(function(id){const d=document.getElementById(id);if(d)d.open=true})})</script></body>`);
+  }
   if (!url.searchParams.has("dark")) return html;
   return html.replace("<head>", "<head><script>document.cookie='theme=dark; Path=/'</script>");
 }
@@ -1045,6 +1093,7 @@ async function repaintPreviewMutation(req: Request, url: URL): Promise<Response 
     return Response.json({ ok: true, html: systemTweaksDashboardView(state) });
   }
   return gitPreviewMutation(req, path, source, body)
+    ?? maintenancePreviewMutation(path, source, body)
     ?? instaticPreviewMutation(path, body)
     ?? phpPreviewMutation(path, source, body)
     ?? systemTweaksPreviewMutation(path, source, body)
@@ -1266,7 +1315,7 @@ const server = Bun.serve({
       if (!site) return Response.json({ ok: false, error: "no such site" }, { status: 404 });
       const view = {
         domain: site.domain, type: site.siteType, user: site.siteUser,
-        enabled: site.domain === sites[0]!.domain, customTemplate: false, bypasses: ["203.0.113.8"],
+        enabled: site.domain === sites[0]!.domain, customTemplate: false, bypasses: ["203.0.113.8"], uncovered: null,
       };
       // The real route sets the CSRF cookie here, and where that cookie is
       // readable from decides whether a mounted page can act at all.
@@ -1392,21 +1441,15 @@ const server = Bun.serve({
       );
     }
     if (path === "/addons/maintenance/" || path === "/addons/maintenance") {
-      const maintenanceSites = sites.map((site, index) => ({
-        domain: site.domain, type: site.siteType, user: site.siteUser,
-        enabled: index === 0, customTemplate: index === 1, bypasses: index === 0 ? ["203.0.113.8"] : [],
-        ...(index === 2 ? { error: "status unavailable" } : {}),
-      }));
-      // ?global=1 shows the override active, which is the state whose wording
-      // has to distinguish effective status from each site's saved setting.
-      const globalEnabled = url.searchParams.has("global");
+      const fleet = maintenancePreviewFleet(url);
+      const globalEnabled = fleet.global.global;
       const selected = url.searchParams.get("domain");
-      const site = maintenanceSites.find((candidate) => candidate.domain === selected);
+      const site = fleet.sites.find((candidate) => candidate.domain === selected);
       html = maintenanceLayout(
         site ? `Maintenance — ${site.domain}` : "Maintenance Mode",
         site
           ? maintenanceSiteView(site, { domain: site.domain, custom: site.customTemplate, html: DEFAULT_MAINTENANCE_TEMPLATE }, "203.0.113.8", globalEnabled)
-          : maintenanceFleetView(empty ? [] : maintenanceSites, { global: globalEnabled, bypasses: empty ? [] : ["203.0.113.8"] }, "203.0.113.8"),
+          : maintenanceFleetView(fleet, "203.0.113.8"),
         notice,
         site
           ? {

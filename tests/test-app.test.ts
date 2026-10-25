@@ -140,10 +140,10 @@ test("a fleet table gives the domain its own line on a phone", () => {
   expect(narrow).toContain(".fleet-table td[data-label]::before { content: attr(data-label);");
 
   for (const html of [
-    maintenanceFleetView([{
+    maintenanceFleetView({ global: { global: false, bypasses: [] }, sites: [{
       domain: "a-rather-long-hostname.example.test", user: "site-user", type: "php", enabled: false,
-      customTemplate: false, bypasses: [], error: "",
-    }]),
+      customTemplate: false, bypasses: [], uncovered: null,
+    }] }),
     cloudflareDashboardView({
       autoEnableNewSites: false,
       sites: [{ domain: "a-rather-long-hostname.example.test", enabled: false }],
