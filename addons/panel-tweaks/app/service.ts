@@ -1,5 +1,5 @@
 import { callGatewayAction, streamGatewayAction, type ActionResult, type GatewayStream } from "../../../lib/gateway-client";
-import type { PanelTweaks, PanelTweaksState, ScanResult, ScanStreamEvent, SetTweaksResult } from "../action";
+import type { PanelTweaks, PanelTweaksState, ScanStreamEvent, SetTweaksResult } from "../action";
 
 function call<T>(verb: string, args: string[] = [], input?: string, timeout?: number): Promise<ActionResult<T>> {
   return callGatewayAction<T>("panel-tweaks", verb, args, input, timeout ? { timeout } : undefined);
@@ -22,10 +22,6 @@ export const panelTweaksService = {
 
   setTweaks(wanted: Partial<PanelTweaks>): Promise<ActionResult<SetTweaksResult>> {
     return call<SetTweaksResult>("set-tweaks", [], JSON.stringify(wanted));
-  },
-
-  scan(): Promise<ActionResult<ScanResult>> {
-    return call<ScanResult>("scan", [], undefined, SCAN_TIMEOUT_MS);
   },
 
   scanStream(handlers: {

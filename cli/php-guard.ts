@@ -7,7 +7,7 @@
 // names disabling it as the administrative mitigation and recommends keeping it
 // off even after patching, as a hardly-used, hardly-tested feature. This writes
 // that setting on every installed PHP-FPM, including the end-of-life 8.1 the
-// panel runs on unless Panel Tweaks moved it. It does not address CVE-2026-109618, whose only
+// panel runs on unless System Tweaks moved it. It does not address CVE-2026-109618, whose only
 // real fix is patched PHP; see docs/decisions/security.md.
 
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync } from "node:fs";

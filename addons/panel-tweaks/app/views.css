@@ -1,3 +1,5 @@
+.tweak-list > .tweak-row:first-child { padding-top: 0; border-top: 0; }
+.tweak-list > .tweak-row:last-child { padding-bottom: 0; }
 
 .tweak-scan { display: none; flex-wrap: wrap; align-items: center; gap: 8px 12px;
   margin-top: 12px; color: var(--muted); font-size: 13px; }

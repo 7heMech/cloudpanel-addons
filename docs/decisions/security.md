@@ -260,7 +260,7 @@ Any installation disables `session.upload_progress.enabled` through a managed
 `99-clp-addons-upload-progress.ini` in every `/etc/php/<ver>/fpm/conf.d`, the
 panel's own PHP included -- its FPM scans that version's directory, so one
 drop-in reaches the panel and the root File Manager pool, whether it runs on
-CloudPanel's 8.1 or a version [Panel Tweaks](panel-tweaks.md#the-panels-own-php)
+CloudPanel's 8.1 or a version [System Tweaks](system-tweaks.md#the-panels-own-php)
 moved it to. Session upload progress is a
 confirmed consumer of CVE-2026-109619, is on by default, and PHP's advisory
 recommends leaving it off even after patching. This is not a fix: it addresses

@@ -28,7 +28,7 @@ export function layout(
 
 interface TweakCopy {
   key: keyof PanelTweaks;
-  category: "Sites" | "Dashboard" | "Login";
+  category: "Sites" | "Panel";
   title: string;
   description: string;
   /** The switch this one depends on: off with it, and unusable until it is on. */
@@ -64,7 +64,7 @@ const COPY: TweakCopy[] = [
     key: "sitesMobile",
     category: "Sites",
     title: "Sites list as cards on a phone",
-    description: "Turns the Sites table into readable cards below 860px. Switch it off to keep CloudPanel's sideways-scrolling table.",
+    description: "Turns the Sites table into readable cards on narrow screens. Switch it off to keep CloudPanel's sideways-scrolling table.",
   },
   {
     key: "actionMenu",
@@ -74,13 +74,13 @@ const COPY: TweakCopy[] = [
   },
   {
     key: "panelMobile",
-    category: "Dashboard",
+    category: "Panel",
     title: "CloudPanel mobile layout",
     description: "Fits CloudPanel's header, Dashboard charts, new-site pages and Admin Area to phone screens.",
   },
   {
     key: "deviceTheme",
-    category: "Login",
+    category: "Panel",
     title: "Device theme on first visit",
     description: "Uses the device's theme on the first visit. Afterward, CloudPanel's theme switch takes over.",
   },
@@ -118,16 +118,12 @@ function scanControls(state: PanelTweaksState): string {
     <button class="btn" type="button" onclick="measureNow(this)">Measure now</button></div>`;
 }
 
-function tweakList(state: PanelTweaksState): string {
-  return (["Dashboard", "Login", "Sites"] as const).map((category) => `
-        <section class="tweak-category" aria-labelledby="tweak-category-${category.toLowerCase()}">
-          <h3 class="tweak-category-title" id="tweak-category-${category.toLowerCase()}">${category}</h3>${COPY
-            .filter((copy) => copy.category === category)
-            .map((copy) => switchRow(copy, state.tweaks, copy.key === "diskUsage" ? scanControls(state) : ""))
-            .join("")}
-        </section>`).join("");
+function tweakList(state: PanelTweaksState, category: TweakCopy["category"]): string {
+  return COPY
+    .filter((copy) => copy.category === category)
+    .map((copy) => switchRow(copy, state.tweaks, copy.key === "diskUsage" ? scanControls(state) : ""))
+    .join("");
 }
-
 
 function previewCard(state: PanelTweaksState): string {
   const sites = state.sites.length;
@@ -159,8 +155,13 @@ export function dashboardView(state: PanelTweaksState): string {
       </div>
     </div>
     <div class="card">
-      <div class="card-header"><h2>What it adds</h2></div>
-      <div class="tweak-list">${tweakList(state)}
+      <div class="card-header"><h2>Sites</h2></div>
+      <div class="tweak-list">${tweakList(state, "Sites")}
       </div>
-    </div>${previewCard(state)}`;
+    </div>${previewCard(state)}
+    <div class="card">
+      <div class="card-header"><h2>Whole panel</h2></div>
+      <div class="tweak-list">${tweakList(state, "Panel")}
+      </div>
+    </div>`;
 }
