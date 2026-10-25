@@ -4,7 +4,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  ANCHOR_SERVICE, CLI_BIN, CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, DISTRO_NGINX_SITES_DIR,
+  ANCHOR_SERVICE, CLI_BIN, DISTRO_NGINX_SITES_DIR,
   NEW_SITES_PATH, NEW_SITES_SERVICE,
   CONFIG_DIR, LIBEXEC_DIR, INSTATIC_BACKUP_CRON, LEGACY_UNITS,
   AUTH_SERVICE_UNIT, AUTH_SOCKET_PATH, AUTH_SOCKET_UNIT, LOCK_DIR, MANAGER_UNIT,
@@ -680,31 +680,6 @@ ExecStart=/usr/local/bin/clp-addons repair --anchors-only --quiet
   };
 }
 
-export function cloudflareReconcileUnits(): { service: string; timer: string } {
-  return {
-    service: `[Unit]
-Description=Apply Cloudflare-only access to new CloudPanel sites
-After=nginx.service
-ConditionPathExists=${ADDONS["cloudflare-ips"]!.configFile}
-
-[Service]
-Type=oneshot
-ExecStart=${CLI_BIN} action cloudflare-ips reconcile
-`,
-    timer: `[Unit]
-Description=Check for new CloudPanel sites that require Cloudflare-only access
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=1min
-AccuracySec=10s
-
-[Install]
-WantedBy=timers.target
-`,
-  };
-}
-
 /**
  * New sites need DNS and SMTP Relay quickly: DNS before automatic SSL asks for
  * a certificate, and SMTP because a site's login is refused any sender but its
@@ -756,20 +731,16 @@ function reconcileWatchPaths(): string[] {
 /**
  * What one `installUnits` pass actually altered.
  *
- * `installUnits` used to answer a single boolean that meant "the manager or the
- * Cloudflare units changed", while writing seven other files and a cron entry
- * it said nothing about. A caller deciding what to restart needs the difference
- * between them: a toggle that changed no definition should reload nothing and
- * restart nothing, and one that only added the Cloudflare timer should start
- * that timer and leave the armed reconcile timer and the auth socket alone.
+ * A caller deciding what to restart needs the difference between them: a
+ * toggle that changed no definition should reload nothing and restart nothing,
+ * and one that only added the new-site watcher should start that watcher and
+ * leave the armed reconcile timer and the auth socket alone.
  */
 export interface UnitChanges {
   /** The manager unit's own text differs, so its next start will differ. */
   manager: boolean;
   /** Any shared reconcile/anchor definition was written differently. */
   reconcile: boolean;
-  /** The Cloudflare timer and service were added or removed by this pass. */
-  cloudflare: "added" | "removed" | null;
   /** The shared new-site watcher was added or removed by this pass. */
   newSites: "added" | "removed" | null;
   /** The auth socket or service definition differs. */
@@ -856,10 +827,6 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
   ];
   const reconcileChanged = reconcileWrites.some(Boolean);
 
-  const cloudflareUnits = cloudflareReconcileUnits();
-  const cloudflare = syncAddonUnits(specs.some((spec) => spec.name === "cloudflare-ips"), CLOUDFLARE_RECONCILE_TIMER, [
-    [CLOUDFLARE_RECONCILE_SERVICE, cloudflareUnits.service], [CLOUDFLARE_RECONCILE_TIMER, cloudflareUnits.timer],
-  ]);
   const siteUnits = newSiteUnits();
   const newSites = syncAddonUnits(specs.some((spec) => spec.newSites), NEW_SITES_PATH, [
     [NEW_SITES_SERVICE, siteUnits.service], [NEW_SITES_PATH, siteUnits.path],
@@ -874,11 +841,10 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
   const changes: UnitChanges = {
     manager,
     reconcile: reconcileChanged,
-    cloudflare,
     newSites,
     auth: authWrites.some(Boolean),
     cron,
-    systemd: manager || reconcileChanged || cloudflare !== null || newSites !== null || authWrites.some(Boolean),
+    systemd: manager || reconcileChanged || newSites !== null || authWrites.some(Boolean),
   };
   // systemd only needs telling when a definition it reads actually moved. The
   // cron file is not systemd's, so it does not count towards this.
@@ -902,10 +868,6 @@ export function installUnits(specs: AddonSpec[]): UnitChanges {
  * has already made the new text the one systemd will use.
  */
 export function applyToggleUnits(changes: UnitChanges): void {
-  if (changes.cloudflare === "added") {
-    run("systemctl", ["enable", CLOUDFLARE_RECONCILE_TIMER]);
-    run("systemctl", ["restart", CLOUDFLARE_RECONCILE_TIMER]);
-  }
   if (changes.newSites === "added") {
     run("systemctl", ["enable", NEW_SITES_PATH]);
     run("systemctl", ["restart", NEW_SITES_PATH]);
@@ -959,10 +921,6 @@ export function startUnits(options: StartUnitsOptions = {}): void {
   run("systemctl", ["restart", RECONCILE_TIMER]);
   run("systemctl", ["enable", RECONCILE_PATH]);
   run("systemctl", ["restart", RECONCILE_PATH]);
-  if (existsSync(`${SYSTEMD_DIR}/${CLOUDFLARE_RECONCILE_TIMER}`)) {
-    run("systemctl", ["enable", CLOUDFLARE_RECONCILE_TIMER]);
-    run("systemctl", ["restart", CLOUDFLARE_RECONCILE_TIMER]);
-  }
   if (existsSync(`${SYSTEMD_DIR}/${NEW_SITES_PATH}`)) {
     run("systemctl", ["enable", NEW_SITES_PATH]);
     run("systemctl", ["restart", NEW_SITES_PATH]);
@@ -973,12 +931,12 @@ export function startUnits(options: StartUnitsOptions = {}): void {
 export function stopUnits(keepShared = false): void {
   if (keepShared) return;
   reconcileInstaticBackupCron(false);
-  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, CLOUDFLARE_RECONCILE_TIMER, NEW_SITES_PATH,
+  for (const unit of [MANAGER_UNIT, RECONCILE_TIMER, RECONCILE_PATH, NEW_SITES_PATH,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     tryRun("systemctl", ["disable", "--now", unit]);
   }
   for (const unit of [MANAGER_UNIT, RECONCILE_SERVICE, RECONCILE_TIMER, RECONCILE_PATH, ANCHOR_SERVICE,
-    CLOUDFLARE_RECONCILE_SERVICE, CLOUDFLARE_RECONCILE_TIMER, NEW_SITES_SERVICE, NEW_SITES_PATH,
+    NEW_SITES_SERVICE, NEW_SITES_PATH,
     AUTH_SOCKET_UNIT, AUTH_SERVICE_UNIT]) {
     rmSync(`${SYSTEMD_DIR}/${unit}`, { force: true });
   }

@@ -146,12 +146,11 @@ test("a fleet table gives the domain its own line on a phone", () => {
     }]),
     cloudflareDashboardView({
       autoEnableNewSites: false,
-      sites: [{ domain: "a-rather-long-hostname.example.test", type: "php", enabled: false, excludedFromAutomatic: false }],
+      sites: [{ domain: "a-rather-long-hostname.example.test", enabled: false }],
     }),
   ]) {
     expect(html).toContain('<table class="fleet-table');
     expect(html).toContain('<td class="site-cell"');
-    expect(html).toContain('<td class="type-cell">');
   }
 });
 

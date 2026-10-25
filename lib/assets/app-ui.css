@@ -271,6 +271,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .fleet-filter input { flex: 1 1 220px; max-width: 320px; }
 .fleet-filter select { width: auto; }
 .fleet-filter .hint { margin-left: auto; }
+.card-header + .fleet-filter { padding-top: 18px; }
 .fleet-table tr[hidden] { display: none !important; }
 @media (max-width: 1100px) {
   .clp-addon-header-inner > #clp-addons-update-notice { order: 3; flex: 1 0 100%; margin: 0;
@@ -338,6 +339,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .fleet-table, .fleet-table tbody, .fleet-table tr, .fleet-table td { display: block; }
   .fleet-table thead { display: none; }
   .fleet-filter { padding: 0 20px 16px; }
+  .card-header + .fleet-filter { padding-top: 16px; }
   .fleet-filter input { max-width: none; }
   .fleet-filter .hint { flex-basis: 100%; margin-left: 0; }
   .split-card { flex-wrap: wrap; }

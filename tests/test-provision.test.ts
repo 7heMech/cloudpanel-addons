@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { nginxLayout, PANEL_GROUP, SERVICE_GROUP, SERVICE_USER } from "../cli/paths";
 import { ADDON_NAMES, ADDONS } from "../cli/addon-catalog";
 import {
-  authUnits, cloudflareReconcileUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit,
+  authUnits, ensurePanelSessionReadable, reconcileUnits, serviceUnit,
   vhostOwnerAccepted, warnIfPanelSessionUnreadable,
 } from "../cli/provision";
 import { panelUserUid } from "../lib/sso-auth";
@@ -14,13 +14,6 @@ import { panelUserUid } from "../lib/sso-auth";
 // these assertions bound to the real implementation regardless of file order.
 const realProvision = async (): Promise<typeof import("../cli/provision")> =>
   await import("../cli/provision?provision-test-real" as "../cli/provision");
-
-test("Cloudflare new-site reconciliation runs once a minute through the root action", () => {
-  const units = cloudflareReconcileUnits();
-  expect(units.service).toContain("ConditionPathExists=/etc/clp-addons/cloudflare-ips.conf");
-  expect(units.service).toContain("ExecStart=/usr/local/bin/clp-addons action cloudflare-ips reconcile");
-  expect(units.timer).toContain("OnUnitActiveSec=1min");
-});
 
 test("hyphenated addon names produce valid systemd environment variables", () => {
   const unit = serviceUnit([ADDONS["cloudflare-ips"]!, ADDONS["panel-tweaks"]!]);
@@ -859,9 +852,13 @@ test("a failed ownership change is not swallowed", () => {
   expect(result.trim()).toBe("EPERM");
 });
 
-test("repair removes SMTP Relay's old watcher units and reloads systemd only when needed", () => {
+test("repair removes the per-addon new-site units 1.5.x left and reloads systemd only when needed", () => {
   const root = mkdtempSync(join(tmpdir(), "legacy-units-"));
-  const legacy = ["clp-addons-smtp-reconcile.path", "clp-addons-smtp-reconcile.service"];
+  // SMTP Relay's old watcher, and Cloudflare IP Access's one-minute timer as 1.5.2 installed it.
+  const legacy = [
+    "clp-addons-smtp-reconcile.path", "clp-addons-smtp-reconcile.service",
+    "clp-addons-cloudflare-ips-reconcile.timer", "clp-addons-cloudflare-ips-reconcile.service",
+  ];
   for (const unit of legacy) writeFileSync(join(root, unit), "old unit");
   try {
     const output = execFileSync(process.execPath, ["-e", `

@@ -214,7 +214,7 @@ test("repair completes reconciliation even when no panel session exists", () => 
 
 test("repair checks persistent enablement for every installed timer", () => {
   expect(result.repairWithoutSession.calls).toContain("ensureTimerArmed:clp-addons-reconcile.timer");
-  expect(result.repairWithoutSession.calls).toContain("ensureTimerArmed:clp-addons-cloudflare-ips-reconcile.timer");
+  expect(result.repairWithoutSession.calls).not.toContain("ensureTimerArmed:clp-addons-cloudflare-ips-reconcile.timer");
 });
 
 test("install proceeds when the fixed directory has no live panel session", () => {

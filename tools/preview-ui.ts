@@ -303,16 +303,18 @@ const instaticCreationJob: InstaticJobView = {
 };
 const instaticLogs = "[instatic] creating CloudPanel reverse-proxy site for blog.example.com\n[instatic] preparing instance storage\n[instatic] pulling ghcr.io/corebunch/instatic:0.0.19\n[instatic] starting instatic-blog.example.com on 127.0.0.1:39003\n[instatic] waiting for health check\n[instatic] requesting a Let's Encrypt certificate for blog.example.com\n[instatic] instance created successfully";
 const cloudflareSites = [
-  { domain: "www.example.com", type: "php", enabled: true, excludedFromAutomatic: false },
-  { domain: "static.example.com", type: "static", enabled: false, excludedFromAutomatic: true },
-  { domain: "pages.example.com", type: "reverse-proxy", enabled: true, excludedFromAutomatic: false },
-  { domain: "a-rather-long-customer-hostname.staging.example.com", type: "nodejs", enabled: false, excludedFromAutomatic: false },
+  { domain: "www.example.com", enabled: true },
+  { domain: "static.example.com", enabled: false },
+  { domain: "pages.example.com", enabled: true },
+  { domain: "a-rather-long-customer-hostname.staging.example.com", enabled: false },
 ];
+const cloudflareMoreSites = ["shop.example.net", "docs.example.org", "status.example.io", "api.example.dev"]
+  .map((domain, index) => ({ domain, enabled: index % 2 === 0 }));
 
-/** ?sites=all|none|mixed and ?auto=off cover the states the controls describe. */
+/** ?sites=all|none|mixed, ?auto=off and ?many (search and filter) cover the states the controls describe. */
 function cloudflarePreviewState(url: URL) {
   const all = url.searchParams.get("sites");
-  const sites = cloudflareSites.map((site) => all === "all"
+  const sites = [...cloudflareSites, ...(url.searchParams.has("many") ? cloudflareMoreSites : [])].map((site) => all === "all"
     ? { ...site, enabled: true }
     : all === "none" ? { ...site, enabled: false } : site);
   return {
