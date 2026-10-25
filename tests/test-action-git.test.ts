@@ -16,7 +16,7 @@ import { Database } from "bun:sqlite";
 import {
   runGitAction, validateBranch, validateDirectory, validatePostDeploy, validateRemote, WEBHOOK_TOKEN_RE,
 } from "../addons/git/action";
-import { ActionFailure } from "../cli/action-common";
+import { ActionFailure, acquireFileLock } from "../cli/action-common";
 import { isTerminalJobState } from "../lib/job-id";
 
 const DOMAIN = "app.example.test";
@@ -524,6 +524,26 @@ test("a delivery is authenticated by its token and nothing else", async () => {
     expect(replay.data.deployed).toBe(false);
     expect(replay.data.outcome).toContain("already queued");
     expect((await action(fx, ["jobs"])).data.jobs.length).toBe(1);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test("a delivery without the token is refused at once, not after waiting for the site's lock", async () => {
+  const fx = fixture();
+  try {
+    await withWebhook(fx);
+    mkdirSync(join(fx.root, "locks"), { recursive: true });
+    const held = await acquireFileLock(join(fx.root, "locks", `git-${DOMAIN}.lock`), 1, "held");
+    try {
+      const started = Date.now();
+      const refused = await action(fx, ["hook", `--domain=${DOMAIN}`], JSON.stringify({ token: "A".repeat(43) }));
+      expect(refused.ok).toBe(false);
+      expect(refused.error).toContain("no delivery");
+      expect(Date.now() - started).toBeLessThan(1000);
+    } finally {
+      held.release();
+    }
   } finally {
     rmSync(fx.root, { recursive: true, force: true });
   }

@@ -201,4 +201,6 @@ A delivery with a well-formed token that is wrong still costs one gateway round
 trip and one action process, and a gateway that is down is answered exactly as a
 wrong token is. Both are the price of having no oracle: the manager cannot tell
 a wrong token from an unknown one, or from an unanswered question, without being
-able to read the record itself.
+able to read the record itself. The action checks the token before it takes the
+site's lock, and again once it holds it, so a delivery without the token never
+keeps a real deployment waiting.
