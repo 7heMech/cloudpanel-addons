@@ -300,6 +300,18 @@ test("the page puts sites first and draws only the controls that do something", 
   expect(on).toContain('id="varnish-auto-new.test"');
   expect(on).not.toContain('id="varnish-auto-manual.test"');
 
+  // A deleted Dashboard leaves the Child plugins the addon installed for cleanup to remove,
+  // and automation without a Dashboard reads as off.
+  const orphaned = emptyMainwpState(); orphaned.enabled = true;
+  orphaned.sites["new.test"] = { status: "inactive", seen: true, checkedAt: "", error: "", ownedPlugin: true, ownedConnection: false,
+    snapshot: { options: {}, meta: {}, admin: 1, active: false, tables: [], cron: {}, uploads: false } };
+  saveMainwpState(run.statePath, orphaned);
+  const reread = readMainwpState(run.statePath);
+  expect(reread.enabled).toBe(false);
+  const leftover = page(sites, reread);
+  expect(leftover).toContain("cleanupMainwp()");
+  expect(leftover).not.toContain("mainwp-automatic");
+
   // The shared search appears from six sites.
   expect(fresh).not.toContain('id="fleet-find"');
   const many = ["a", "b", "c", "d", "e", "f"].map((name) => site(`${name}.test`));

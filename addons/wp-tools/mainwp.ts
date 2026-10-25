@@ -194,6 +194,8 @@ export function readMainwpState(path: string): MainwpState {
   if (!state.retired.every((entry) => typeof entry?.domain === "string" && isConnection(entry.connection))) {
     throw new Error("the MainWP cleanup record is invalid");
   }
+  // Automation connects sites to a Dashboard, so without one it is off.
+  if (!state.dashboard) state.enabled = false;
   return state;
 }
 

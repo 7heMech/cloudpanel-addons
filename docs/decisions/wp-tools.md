@@ -99,7 +99,9 @@ sign-in is the most-used action and the one the addon started with; each
 status has its Install, Activate, Connect or Retry beside it. The two
 automation policies are set once, so they share one card below the table. The
 page draws only controls that do something: the MainWP column and switch
-appear once a Dashboard is chosen, until then the card holds only the picker; a
+appear once a Dashboard is chosen, until then the card holds only the picker,
+plus cleanup while Child plugins the addon installed remain from a deleted
+Dashboard, and automation reads as off; a
 site's Automatic switch appears only while its policy is on; a site without
 Varnish has an empty cell. A muted line under the table offers to remove the
 sign-in helper while any site has it, and the shared search appears from six

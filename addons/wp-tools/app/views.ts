@@ -172,14 +172,6 @@ function dashboardPicker(sites: WpSiteView[], state: MainwpView): string {
 function mainwpSection(sites: WpSiteView[], state: MainwpView, error: string): string {
   const title = "Install and connect MainWP Child automatically";
   if (error) return `<div class="wp-section"><h3>${title}</h3><div class="alert" role="alert">${esc(error)}</div></div>`;
-  if (!state.dashboard) {
-    return `
-      <div class="wp-section">
-        <h3>MainWP</h3>
-        <p class="hint">Choose the site that runs MainWP Dashboard to connect the other WordPress sites to it.</p>
-        ${dashboardPicker(sites, state)}
-      </div>`;
-  }
   const cleanable = state.owned > 0 || state.cleanup;
   const cleanup = cleanable
     ? `<button class="btn" type="button" onclick="cleanupMainwp()">${state.cleanup ? "Retry cleanup…" : "Turn off and clean up…"}</button>`
@@ -187,6 +179,19 @@ function mainwpSection(sites: WpSiteView[], state: MainwpView, error: string): s
   const note = state.cleanup
     ? '<p class="mainwp-note" role="status">Cleanup pending. Automation stays off until what WordPress Tools added is removed.</p>'
     : "";
+  if (!state.dashboard) {
+    // A deleted Dashboard can leave Child plugins the addon installed, which cleanup still removes.
+    return `
+      <div class="wp-section">
+        <h3>MainWP</h3>
+        <p class="hint">Choose the site that runs MainWP Dashboard to connect the other WordPress sites to it.</p>
+        <div class="mainwp-controls">
+          ${dashboardPicker(sites, state)}
+          ${cleanup}
+        </div>
+        ${note}
+      </div>`;
+  }
   return `
       <div class="wp-section">
         <div class="split-card">
