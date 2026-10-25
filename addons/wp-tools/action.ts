@@ -71,8 +71,6 @@ export const WORDPRESS_APPLICATIONS = ["WordPress", "WooCommerce"];
 export interface WpSiteView {
   domain: string;
   user: string;
-  /** The application CloudPanel recorded, such as WordPress. May be empty. */
-  application: string;
   /** Whether the sign-in helper is in the site right now. */
   helper: boolean;
   varnishCache: boolean;
@@ -314,7 +312,6 @@ function wordpressSites(paths: WpToolsActionPaths, state: WpVarnishState): WpSit
     .map((site) => ({
       domain: site.row.domain_name,
       user: site.row.user,
-      application: site.row.application ?? "",
       helper: existsSync(join(site.root, LOADER_FILE)),
       varnishCache: site.varnishCache,
       varnishExcluded: state.excluded.includes(site.row.domain_name),
@@ -363,7 +360,12 @@ function mainwpRun(paths: WpToolsActionPaths, request: { dueOnly?: boolean } = {
 /** Whether the timer has anything to queue: automation is on, or MainWP still owes a site work. */
 export function wpPoliciesActive(options: WpToolsActionOptions = {}): boolean {
   const paths = pathsFor(options);
-  return readVarnishState(paths.varnishState).enabled || mainwpNeedsRepair(readMainwpState(paths.mainwpState));
+  // Each on its own: a damaged Varnish record must not keep MainWP's repair from being queued.
+  const safely = (read: () => boolean): boolean => {
+    try { return read(); } catch { return false; }
+  };
+  return safely(() => readVarnishState(paths.varnishState).enabled)
+    || safely(() => mainwpNeedsRepair(readMainwpState(paths.mainwpState)));
 }
 
 /** The queued timer's MainWP pass does not wait for a page's pass. */
@@ -585,7 +587,7 @@ function parseAction(argv: string[], options: WpToolsActionOptions): ParsedActio
   const [rawVerb, ...rest] = argv;
   const verbs: WpToolsVerb[] = ["sites", "sign-in", "remove", "sync", "varnish-settings", "varnish-site", "varnish-install", "varnish-sync"];
   const verb = verbs.find((known) => known === rawVerb);
-  if (!verb) failAction(`unknown WordPress sign-in verb '${rawVerb ?? ""}'`);
+  if (!verb) failAction(`unknown WordPress Tools verb '${rawVerb ?? ""}'`);
 
   let domain = "";
   let asUser = "";
@@ -645,7 +647,7 @@ export async function executeWpToolsAction(
   argv: string[],
   options: WpToolsActionOptions = {},
 ): Promise<unknown> {
-  if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress sign-in actions must run as root");
+  if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress Tools actions must run as root");
   const paths = pathsFor(options);
   if (argv[0]?.startsWith("mainwp-")) {
     return withFileLock(paths.mainwpLockFile, 15, "a MainWP change is still running", () => {
@@ -706,6 +708,7 @@ export async function executeWpToolsAction(
     failAction("that site is not yours to sign in to");
   }
   return withFileLock(paths.lockFile, 5, "a WordPress sign-in change is still running", async () => {
+    if (!existsSync(paths.configFile)) failAction("WordPress Tools is not enabled");
     // Maintenance answers in Nginx, before WordPress could read the secret, so
     // a secret minted for a browser it turns away is one nobody can use.
     const site = wordpressSite(paths, domain);

@@ -94,10 +94,18 @@ time and bounded error text. Pending sites are handled on subsequent passes.
 Every Varnish route remains administrator-only; the sign-in route's role
 exception does not grant plugin-management access.
 
-The page follows the Cloudflare IPs layout: a policy card and a fleet table for
-Varnish, the same for MainWP, then a helper card when any site has the helper.
-Per-site inclusion is a switch and does not imply that the global policy is on.
-Sign-in is the primary row action. After any change the page fetches
+The page opens with one sites table -- Site, Varnish, MainWP, Sign in -- since
+sign-in is the most-used action and the one the addon started with; each
+status has its Install, Activate, Connect or Retry beside it. The two
+automation policies are set once, so they share one card below the table. The
+page draws only controls that do something: the MainWP column and switch
+appear once a Dashboard is chosen, until then the card holds only the picker,
+plus cleanup while Child plugins the addon installed remain from a deleted
+Dashboard, and automation reads as off; a
+site's Automatic switch appears only while its policy is on; a site without
+Varnish has an empty cell. A muted line under the table offers to remove the
+sign-in helper while any site has it, and the shared search appears from six
+sites. After any change the page fetches
 `/api/dashboard`, a server-rendered fragment of everything below the heading,
 and repaints from it, so row status always comes from the same renderer as the
 first load and the page never reloads.
@@ -138,7 +146,9 @@ Its sign-in window opens on the addon's page for that one site, whose policy
 lets a form go only to the site's HTTPS origin, and the token's form is written
 into it once it has loaded. This keeps the response header size independent
 of the site count and within the panel's proxy buffer. CloudPanel's Sites page
-sets no policy, so its link opens a blank window.
+sets no policy, so its link opens a blank window. Either way the window's
+`opener` is cut before the form is submitted, so a page on the site cannot send
+the panel's tab elsewhere.
 
 The site user creates `mu-plugins/clp-addons` itself, so every directory it adds
 is that user's. A missing `wp-includes` or `wp-content` is a refusal rather than
@@ -199,7 +209,10 @@ with maintenance in `cli/nginx-config.ts`. Only a regular,
 root-owned vhost that is not writable by other users can be replaced. Its mode
 and ownership survive atomic replacement; credentials and other content remain.
 
-The sign-in lock waits up to five seconds. Minting as the site user has ten
+Disable and uninstall remove the helper from every site and then the addon's
+config under the sign-in lock, and a sign-in refuses once the config is gone,
+so one that was waiting cannot put a helper back. The sign-in lock waits up to
+five seconds. Minting as the site user has ten
 seconds and runs before the SQLite write transaction; panel reads and writes
 wait at most one second for database contention. The transaction, shared with
 Cloudflare IP Access and maintenance in `cli/nginx-transaction.ts`, validates
@@ -294,9 +307,8 @@ enabled. The addon's own page signs in to the same sites either way.
 ## MainWP enrollment
 
 The Dashboard is one WordPress site on this server, chosen from the same
-discovery as everything else, or "on another server". Connecting to an external
-Dashboard would need its credentials and network policy, which the addon does
-not manage, so for one it only installs the Child; see below. Child steps run as the child's site
+discovery as everything else; a Dashboard elsewhere would need credentials and
+network policy the addon does not manage. Child steps run as the child's site
 user and Dashboard steps as the Dashboard's, through the shared WP-CLI runner.
 A fixed adapter, `mainwp.php`, is passed to `wp eval` with JSON on stdin and
 answers on a marked line. Its failures are fixed codes the addon turns into its
@@ -363,24 +375,6 @@ plugin the addon installed, so automation may install it again after a completed
 cleanup, even if cleanup needed retries. One already removed by the operator
 stays seen.
 
-For a Dashboard on another server the addon never registers anything.
-Automation installs MainWP Child on an unseen site and leaves it inactive:
-MainWP Child deactivates itself on an admin page load once it has been
-unconnected for `mainwp_child_ttl_active_unconnected_site` minutes (20 by
-default), so a Child activated in advance would be off by the time the operator
-connects it. The row action activates it, after clearing
-`mainwp_child_lasttime_not_connected` so that timeout starts afresh, and the
-operator adds the site from their Dashboard with the administrator's own login.
-Neither path sets a Security ID or changes the password requirement, so the
-Child is no easier to claim than the site's admin account. A Child with a public
-key is reported connected, to whichever Dashboard holds it. The install is
-journaled as phase `child`, which needs no authentication recovery; an interrupt
-needs Retry, like an enrollment's. Cleanup uses the same snapshot rules, so it
-deletes a Child it installed and restores the activation of one it found,
-unless a Dashboard has connected it since. Moving to a Dashboard elsewhere
-requires cleaning up the connections the addon made; moving back does not,
-since an installed Child belongs to no Dashboard.
-
 MainWP has its own lock, separate from Varnish and sign-in. The queued pass
 looks only at unseen sites, unfinished phases, pending cleanup and retired
 records, and starts sites for 25 seconds; Check now and Connect get 90. An
@@ -394,3 +388,9 @@ The switch only pauses automation. Disabling or uninstalling leaves the
 connections, as it leaves the Varnish plugin, and refuses only while an
 enrollment stopped before its temporary setting was restored. `--purge`
 forgets which connections the addon made.
+
+## Direction
+
+A later change may let the operator pick any plugins from the WordPress.org
+registry to install automatically, with setup options for predefined ones such
+as CLP Varnish Cache and MainWP Child, or per-plugin setup.

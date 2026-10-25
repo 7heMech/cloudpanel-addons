@@ -71,6 +71,7 @@ function options(extra: Partial<WpToolsActionOptions> = {}): WpToolsActionOption
       panelDb: join(root, "panel.sq3"),
       passwd: join(root, "passwd"),
       lockFile: join(root, "wp-tools.lock"),
+      configFile: join(root, "wp-tools.conf"),
       runuser: join(root, "runuser"),
       nginxVhostDir: join(root, "vhosts"),
       vhostUid: process.getuid!(),
@@ -152,6 +153,7 @@ function runuserLog(): string[] {
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "clp-wp-tools-"));
+  writeFileSync(join(root, "wp-tools.conf"), "");
   seedPanel();
   seedAccounts();
   fakeRunuser();
@@ -233,6 +235,11 @@ test("a WordPress site missing wp-content is refused rather than rebuilt", async
   await expect(act(["sign-in", "--domain=shop.example.com"])).rejects.toThrow("does not look like a WordPress");
 });
 
+test("no sign-in is minted once the addon's config is gone", async () => {
+  rmSync(join(root, "wp-tools.conf"));
+  await expect(act(["sign-in", "--domain=shop.example.com"])).rejects.toThrow("WordPress Tools is not enabled");
+});
+
 test("a site that is not WordPress, or not a site at all, gets no sign-in", async () => {
   await expect(act(["sign-in", "--domain=docs.example.com"])).rejects.toThrow("does not look like a WordPress");
   await expect(act(["sign-in", "--domain=absent.example.com"])).rejects.toThrow("no site called");
@@ -287,7 +294,7 @@ test("a site whose writes fail is named rather than half signed in", async () =>
 });
 
 test("an unknown verb, a stray argument and a non-root caller are all refused", async () => {
-  await expect(act(["login"])).rejects.toThrow("unknown WordPress sign-in verb");
+  await expect(act(["login"])).rejects.toThrow("unknown WordPress Tools verb");
   await expect(act(["sites", "--domain=shop.example.com"])).rejects.toThrow("takes no --domain");
   await expect(act(["sign-in", "--domain=shop.example.com", "--force"])).rejects.toThrow("unexpected argument");
   await expect(executeWpToolsAction(["sites"], { ...options(), processUid: 1000 }))

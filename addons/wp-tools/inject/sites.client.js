@@ -81,6 +81,9 @@
     field.value = data.token;
     form.appendChild(field);
     target.document.body.appendChild(form);
+    // Cut before WordPress loads: a page in that window could otherwise send
+    // this panel tab somewhere else through window.opener.
+    target.opener = null;
     form.submit();
   }
 
