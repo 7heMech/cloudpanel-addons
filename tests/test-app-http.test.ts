@@ -216,7 +216,8 @@ describe("HTML and JavaScript escaping", () => {
   });
 
   test("the addon error paths escape through Bun rather than by hand", () => {
-    expect(repoSource("addons/instatic/app/index.ts")).toInclude("Bun.escapeHTML(msg)");
+    // errorBlock escapes through esc(), which is Bun.escapeHTML.
+    expect(repoSource("addons/instatic/app/index.ts")).toInclude("errorBlock(err)");
     const stager = repoSource("addons/stager/app/index.ts");
     expect(stager).toInclude("Bun.escapeHTML(");
     expect(stager).not.toInclude("escapeMinimal");

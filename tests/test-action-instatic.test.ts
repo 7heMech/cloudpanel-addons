@@ -8,8 +8,8 @@ import {
   DEFAULT_INSTATIC_ACTION_PATHS, makeSnapshot, parseInstaticAction, panelIdentityForInstatic, pruneSnapshots,
   siteUserTaken, validateInstaticDomain,
 } from "../addons/instatic/action";
-import { dashboardView, newInstanceView } from "../addons/instatic/app/views";
-import type { InstanceView } from "../addons/instatic/app/service";
+import { dashboardView, jobView, newInstanceView, pendingCreations } from "../addons/instatic/app/views";
+import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
 import { isNewerThan } from "../addons/instatic/app/tags";
 import { ActionFailure, normalizeIdentityHostname, validateFlag, validatePort, validateTag } from "../cli/action-common";
 
@@ -167,25 +167,56 @@ describe("version awareness", () => {
   });
   const live = (latest: string) => ({ tags: [latest], source: "registry" as const, latest });
 
-  test("an out-of-date instance is badged and counted", () => {
-    const html = dashboardView([instance("0.0.17")], 0, [], live("0.0.18"));
+  test("an out-of-date instance is badged, counted and offered Update", () => {
+    const html = dashboardView([instance("0.0.17")], live("0.0.18"));
     expect(html).toInclude("0.0.18 available");
-    expect(html).toMatch(/Updates available<\/div>\s*<div class="value"[^>]*>1</);
+    expect(html).toInclude("1 update available (latest 0.0.18)");
+    expect(html).toInclude("askUpdate(");
   });
 
-  test("a current instance is not", () => {
-    const html = dashboardView([instance("0.0.18")], 0, [], live("0.0.18"));
-    expect(html).not.toInclude("available</span>");
-    expect(html).toMatch(/Updates available<\/div>\s*<div class="value"[^>]*>0</);
+  test("a current instance is not, and has no Update to offer", () => {
+    const html = dashboardView([instance("0.0.18")], live("0.0.18"));
+    expect(html).not.toInclude("available");
+    expect(html).not.toInclude("askUpdate(");
   });
 
   // The offline list is one hardcoded version. Badging against it would invent
   // updates that do not exist, and claim an instance is behind a version that
   // may long since have been superseded.
   test("the offline fallback never claims an update", () => {
-    const html = dashboardView([instance("0.0.17")], 0, [], { tags: ["0.0.18"], source: "fallback", latest: null });
+    const html = dashboardView([instance("0.0.17")], { tags: ["0.0.18"], source: "fallback", latest: null });
     expect(html).not.toInclude("0.0.18 available");
-    expect(html).toInclude("Could not reach ghcr.io");
+    expect(html).toInclude("Can't reach ghcr.io");
+    expect(html).toInclude('<button class="btn" disabled title="Can\'t reach ghcr.io">Update</button>');
+    expect(html).not.toInclude("(latest)");
+    expect(newInstanceView({ tags: ["0.0.18"], source: "fallback", latest: null })).not.toInclude("(latest)");
+  });
+
+  test("an instance whose CloudPanel site is gone offers only Logs and Delete, and says deleted once", () => {
+    const html = dashboardView([{ ...instance("0.0.17"), panelSite: false }], live("0.0.18"));
+    expect(html.match(/>deleted</g)?.length).toBe(1);
+    expect(html).toInclude("showLogs(");
+    expect(html).toInclude("askDelete(");
+    for (const verb of ["askStop(", "'restart'", "takeSnapshot(", "'recreate'", "askUpdate("]) expect(html).not.toInclude(verb);
+  });
+
+  test("creations still under way, or failed with nothing to show, sit at the top", () => {
+    const job = (domain: string, state: InstaticJobView["state"], createdAt = "2026-09-10T09:30:00Z"): InstaticJobView => ({
+      id: `20260910T093000Z-${domain.length}${state}`.slice(0, 22), domain, port: 39001, tag: "0.0.18", tls: false, state, step: "pulling", createdAt,
+    });
+    const pending = pendingCreations([
+      job("new.example.com", "running"),
+      job("broken.example.com", "failed"),
+      job("demo.example.com", "failed"),
+      job("done.example.com", "done"),
+      job("retry.example.com", "failed", "2026-09-09T09:30:00Z"),
+      job("retry.example.com", "running", "2026-09-10T10:30:00Z"),
+    ], [instance("0.0.18")]);
+    expect(pending.map((j) => `${j.domain} ${j.state}`)).toEqual([
+      "retry.example.com running", "new.example.com running", "broken.example.com failed",
+    ]);
+    const html = dashboardView([instance("0.0.18")], live("0.0.18"), [job("new.example.com", "running")]);
+    expect(html.indexOf("new.example.com")).toBeLessThan(html.indexOf("demo.example.com"));
   });
 });
 
@@ -233,9 +264,30 @@ test("archiving an instance is not a rolling window", () => {
 
 describe("the TLS certificate option", () => {
   test("the New Site page offers it", () => {
-    const html = newInstanceView(39001, { tags: ["0.0.18"], source: "registry", latest: "0.0.18" });
+    const html = newInstanceView({ tags: ["0.0.18"], source: "registry", latest: "0.0.18" });
     expect(html).toInclude('<input type="checkbox" id="tls"');
-    expect(html).toInclude("Request a Let's Encrypt certificate immediately");
+    expect(html).toInclude("Request a Let's Encrypt certificate");
+    // An uppercase hostname is lowercased, not refused by a pattern before that.
+    expect(html).not.toInclude("pattern=");
+    expect(html).toInclude("toLowerCase()");
+  });
+
+  const created = (extra: Partial<InstaticJobView>): InstaticJobView => ({
+    id: "20260910T093000Z-abcdef", domain: "pages.example.com", port: 39001, tag: "0.0.18", tls: true,
+    state: "done", step: "", createdAt: "2026-09-10T09:30:00Z", ...extra,
+  });
+
+  test("a failed certificate request is a warning, not a requested certificate", () => {
+    const html = jobView(created({ certificate: "failed" }), "");
+    expect(html).toInclude("No certificate yet. Point DNS at this server and issue one under Site → SSL/TLS.");
+    expect(html).not.toInclude("certificate requested");
+    expect(jobView(created({ certificate: "issued" }), "")).toInclude("Encrypt certificate issued");
+  });
+
+  test("a record from before the outcome was kept keeps the old wording", () => {
+    const html = jobView(created({}), "");
+    expect(html).toInclude("Encrypt certificate requested");
+    expect(html).not.toInclude("No certificate yet");
   });
 
   test("the flag validator takes yes and no and nothing else", () => {

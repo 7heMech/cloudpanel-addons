@@ -17,7 +17,7 @@ describe("Instatic dashboard replies", () => {
   for (const verb of ["start", "stop", "restart", "recreate", "update", "delete"]) {
     test(`${verb} returns the same dashboard as GET`, async () => {
       spyOn(instaticService, "listInstances").mockResolvedValue(instances);
-      spyOn(instaticService, "snapshot").mockResolvedValue({ snap: { updatedAt: "now", sites: [], allocatedPorts: [], portRange: { min: 39000, max: 39999 } }, ageSeconds: 2 });
+      spyOn(instaticService, "listJobs").mockResolvedValue([]);
       spyOn(tags, "listAvailableTags").mockResolvedValue(available);
       const method = verb === "update" ? "updateInstance" : verb === "delete" ? "deleteInstance" : "lifecycle";
       spyOn(instaticService, method).mockResolvedValue({ ok: true, data: { domain: instances[0]!.domain } } as never);
@@ -25,7 +25,7 @@ describe("Instatic dashboard replies", () => {
       const response = await instaticHandle(request(path, "POST", verb === "update" ? { tag: "0.0.19" } : undefined), path);
       const body = await response.json() as { html: string; data: { domain: string } };
       expect(response.status).toBe(200);
-      expect(body.html).toBe(instaticView(instances, 2, [], available, "now"));
+      expect(body.html).toBe(instaticView(instances, available, []));
       expect(body.data.domain).toBe("pages.example.com");
       const page = await (await instaticHandle(request("/"), "/")).text();
       expect(page).toContain(body.html);
@@ -43,5 +43,38 @@ describe("Instatic dashboard replies", () => {
     expect((await instaticHandle(request(path, "POST", { tag: "0.0.19" }, false), path)).status).toBe(403);
     expect(read).not.toHaveBeenCalled();
     expect(change).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the New site page", () => {
+  test("reads only the version list, so it cannot fail on a port lookup", async () => {
+    const list = spyOn(instaticService, "listInstances");
+    const strict = spyOn(instaticService, "listInstancesOrThrow");
+    const snapshot = spyOn(instaticService, "snapshot");
+    spyOn(tags, "listAvailableTags").mockResolvedValue({ tags: ["0.0.19"], latest: "0.0.19", source: "registry" });
+    const response = await instaticHandle(request("/new"), "/new");
+    expect(response.status).toBe(200);
+    expect(await response.text()).not.toContain('id="port"');
+    for (const spy of [list, strict, snapshot]) expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("an unreachable registry", () => {
+  test("is asked once a minute, not once a page", async () => {
+    tags.resetTagCache();
+    let calls = 0;
+    const fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async () => {
+      calls++;
+      throw new Error("offline");
+    }) as unknown as typeof fetch);
+    spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect((await tags.listAvailableTags()).source).toBe("fallback");
+      expect((await tags.listAvailableTags()).latest).toBeNull();
+      expect(calls).toBe(1);
+    } finally {
+      fetchSpy.mockRestore();
+      tags.resetTagCache();
+    }
   });
 });

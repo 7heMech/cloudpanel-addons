@@ -32,6 +32,8 @@ export interface InstaticJobView {
   port: number;
   tag: string;
   tls: boolean;
+  /** What came of the certificate; absent on records written before it was kept. */
+  certificate?: "issued" | "failed" | "none";
   state: "queued" | "running" | "done" | "failed" | "unknown";
   step: string;
   createdAt: string;
@@ -155,6 +157,11 @@ function jobDir(paths: InstaticActionPaths, id: string): string {
   return storeJobDir(paths.jobsDir, id);
 }
 
+function certificateOf(dir: string): Pick<InstaticJobView, "certificate"> {
+  const value = jobGet(dir, "certificate");
+  return value === "issued" || value === "failed" || value === "none" ? { certificate: value } : {};
+}
+
 function jobJson(paths: InstaticActionPaths, dir: string, id: string): InstaticJobView {
   const common = jobCommonFields(dir);
   const state = (["queued", "running", "done", "failed"].includes(common.state)
@@ -166,6 +173,7 @@ function jobJson(paths: InstaticActionPaths, dir: string, id: string): InstaticJ
     port: Number(jobGet(dir, "port")) || 0,
     tag: jobGet(dir, "tag"),
     tls: jobGet(dir, "tls") === "yes",
+    ...certificateOf(dir),
     state,
     step: common.step,
     createdAt: common.createdAt,
@@ -1593,13 +1601,13 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
       if (!certificate.ok) {
         diagnostic(`[instatic] WARN: the certificate request failed; point ${domain} at this server and retry from Site -> SSL/TLS\n`);
       }
+      jobSet(jDir, "certificate", certificate.ok ? "issued" : "failed");
+    } else {
+      jobSet(jDir, "certificate", "none");
     }
 
     setStep(jDir, "instance created successfully");
     jobSet(jDir, "finishedAt", dateStamp(true));
-    try {
-      cpSync(logPath, join(dir, "create.log"));
-    } catch {}
     jobSet(jDir, "state", "done");
 
     emitActionOk({ domain, port, tag, container: name, siteUser: siteUserFinal, siteCreatedByAddon: siteCreated, status: "running" });

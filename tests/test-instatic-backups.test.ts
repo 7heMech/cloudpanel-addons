@@ -367,6 +367,29 @@ for (const verb of ["create", "run"]) test(`${verb} provisions the site-home lay
     expect(existsSync(join(f.state, "data"))).toBe(false);
     expect(existsSync(nativeBackupPath(domain, f.paths))).toBe(true);
     expect(statSync(f.storage.envFile).mode & 0o777).toBe(0o600);
+    if (verb === "run") {
+      // The outcome of the certificate is on the record, and the log stays with the job.
+      expect(action(f, ["job", "--job", job]).reply.data.job.certificate).toBe("none");
+      expect(existsSync(join(f.state, "create.log"))).toBe(false);
+    }
+  } finally { f.cleanup(); }
+});
+
+test("a creation record written by 1.5.x reads without a certificate outcome", () => {
+  const f = fixture();
+  try {
+    f.db.close();
+    const job = "20260901T000000Z-abcdef";
+    const dir = join(f.paths.jobsDir, job);
+    mkdirSync(dir, { recursive: true });
+    for (const [field, value] of Object.entries({
+      domain, port: "39000", tag: "0.0.18", tls: "yes", createdAt: "2026-09-01T00:00:00Z", startedAt: "2026-09-01T00:00:01Z",
+      finishedAt: "2026-09-01T00:01:00Z", step: "instance created successfully", state: "done",
+    })) writeFileSync(join(dir, field), `${value}\n`);
+    writeFileSync(join(dir, "log"), "");
+    const reply = action(f, ["job", "--job", job]).reply;
+    expect(reply.data.job).toMatchObject({ domain, tls: true, state: "done" });
+    expect("certificate" in reply.data.job).toBe(false);
   } finally { f.cleanup(); }
 });
 
