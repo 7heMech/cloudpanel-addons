@@ -89,9 +89,9 @@ private files out of the web root.
 Update and recreate take a clean local snapshot before replacing the container.
 The recorded data and encryption key are retained, and a failed health check
 restores the previous version. The check needs a 2xx or 3xx from the container
-itself, then any answer through Nginx but a missing one, 404, 502 or 504: a
-site behind Cloudflare IP Access refuses the server's own address with 403, and
-maintenance mode answers 503, before the request is proxied. User-created snapshots are a five-file rolling
+itself, then a 2xx, 3xx, 401, 403 or 503 through Nginx: a site behind
+Cloudflare IP Access refuses the server's own address with 403, and maintenance
+mode answers 503, before the request is proxied. User-created snapshots are a five-file rolling
 window. Deletion writes a separate final archive and does not prune earlier
 deletion archives.
 
