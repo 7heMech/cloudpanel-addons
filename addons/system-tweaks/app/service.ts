@@ -11,7 +11,7 @@ export const systemTweaksService = {
     return call("state");
   },
 
-  setUpdates(wanted: Record<string, boolean | string | null>): Promise<ActionResult<SystemTweaksState>> {
+  setUpdates(wanted: Record<string, boolean | string>): Promise<ActionResult<SystemTweaksState>> {
     return call("set-updates", JSON.stringify(wanted));
   },
 

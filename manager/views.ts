@@ -13,23 +13,30 @@ import MANAGER_INDEX_CSS from "./views.css" with { type: "text" };
 
 import MANAGER_INDEX_JS from "./views.client.js" with { type: "text" };
 
-/** Renders the manager card for a known addon, or nothing for an unknown name. */
-function addonCard(name: string, enabled: boolean, job: ManagerJobView | null = null): string {
+/** The release line an addon first shipped in, as `2.0`, when that is the installed one. */
+function isNew(added: string | undefined, version: string): boolean {
+  return added !== undefined && version.split(".").slice(0, 2).join(".") === added;
+}
+
+/** One row of the Enabled or Available list, for a known addon, or nothing for an unknown name. */
+function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, version: string): string {
   const spec = ADDONS[name];
   if (!spec) return "";
   const title = spec.title ?? spec.name;
-  const description = spec.description ? `<p>${esc(spec.description)}</p>` : "";
-  const mounted = addonHandler(spec.name) !== undefined;
+  const href = addonHandler(spec.name) !== undefined ? `${mountPath(spec.name)}/` : null;
   const live = liveManagerJob(job);
   const addonJob = live && live.addon === spec.name ? live : null;
+  const heading = enabled && href ? `<a href="${esc(href)}">${esc(title)}</a>` : esc(title);
   const actions = enabled
-    ? `${mounted ? `<a class="btn btn-primary btn-lg" href="${esc(`${mountPath(spec.name)}/`)}" aria-label="Open ${esc(title)}">Open</a>` : '<span class="badge state-running addon-status">Enabled</span>'}
-    <button class="btn btn-danger btn-lg" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)">Disable</button>`
-    : `<button class="btn btn-primary btn-lg" type="button" onclick="enableAddon('${escJs(spec.name)}', this)">Enable ${esc(title)}</button>`;
-  return `<article class="card addon-card" data-manager-job-card="${esc(spec.name)}">
-  <div class="card-header"><h2>${esc(title)}</h2></div>
-  ${description}
-  <div class="actions">${actions}</div>
+    ? `${href ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>` : ""}
+      <button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`
+    : `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`;
+  return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}">
+  <div class="addon-about">
+    <h3>${heading}${isNew(spec.added, version) ? ' <span class="badge state-queued">New</span>' : ""}</h3>
+    ${spec.description ? `<p>${esc(spec.description)}</p>` : ""}
+  </div>
+  <div class="addon-actions">${actions}</div>
   ${addonJob ? managerJobStatus(addonJob) : ""}
 </article>`;
 }
@@ -96,25 +103,25 @@ type ManagerPageOptions = { job?: ManagerJobView | null; csrf?: string };
 export function indexPage(
   enabled: string[],
   update?: { current: string; latest: string } | null,
-  options: ManagerPageOptions & { available?: string[] } = {},
+  options: ManagerPageOptions & { available?: string[]; version?: string } = {},
 ): Response {
   const available = options.available ?? [];
-  const cards = enabled.map((name) => addonCard(name, true, options.job ?? null)).join("");
-  const availableCards = available.map((name) => addonCard(name, false, options.job ?? null)).join("");
+  const version = options.version ?? CLI_VERSION;
+  const rows = (names: string[], on: boolean) => names.map((name) => addonRow(name, on, options.job ?? null, version)).join("");
+  const list = (title: string, names: string[], on: boolean) =>
+    `<section class="card addon-list"><h2>${title} <span class="hint">${names.length}</span></h2>${rows(names, on)}</section>`;
 
   const live = liveManagerJob(options.job ?? null);
   const claimed = live && [...enabled, ...available].includes(managerJobKey(live)) ? managerJobKey(live) : null;
   const content = `<div class="page-heading"><h1>Addons</h1><a class="btn" href="${UPDATE_PATH}">Updates</a></div>` +
     managerJobFailure(options.job ?? null) +
     managerJobBlock(options.job ?? null, claimed) +
-    (cards
-      ? `<div class="addon-grid">${cards}</div>`
+    (enabled.length
+      ? list("Enabled", enabled, true)
       : `<div class="card empty">${esc(available.length
         ? "No addons are enabled. Enable one below to add it to CloudPanel."
         : "No addons are currently available.")}</div>`) +
-    (availableCards
-      ? `<section class="addon-section"><h2>Available</h2><div class="addon-grid">${availableCards}</div></section>`
-      : "");
+    (available.length ? list("Available", available, false) : "");
 
   return managerPage("CloudPanel Addons", content, update, options);
 }

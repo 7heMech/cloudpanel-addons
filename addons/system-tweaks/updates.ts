@@ -25,7 +25,8 @@ export interface UpdateSettings {
   database: boolean;
   panel: boolean;
   reboot: boolean;
-  rebootTime: string | null;
+  /** `now`, right after the run, or a 24-hour `HH:MM`. */
+  rebootTime: string;
 }
 
 export const DEFAULT_UPDATE_SETTINGS: UpdateSettings = {
@@ -34,13 +35,15 @@ export const DEFAULT_UPDATE_SETTINGS: UpdateSettings = {
   database: false,
   panel: false,
   reboot: false,
-  rebootTime: null,
+  rebootTime: "now",
 };
 
 export const UPDATE_SETTING_KEYS = ["enabled", "nginx", "database", "panel", "reboot"] as const;
 
-export function validRebootTime(value: unknown): value is string | null {
-  return value === null || value === "now" || (typeof value === "string" && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value));
+export const REBOOT_TIME_ERROR = "rebootTime must be now or HH:MM (00:00–23:59)";
+
+export function validRebootTime(value: unknown): value is string {
+  return value === "now" || (typeof value === "string" && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value));
 }
 
 export interface UpdatesPaths {
@@ -335,7 +338,7 @@ export function securityPattern(distroId: string): string | null {
 }
 
 export function dropInFor(settings: UpdateSettings, distroId: string): string {
-  if (!validRebootTime(settings.rebootTime)) failAction("rebootTime must be null, now or HH:MM (00:00–23:59)");
+  if (!validRebootTime(settings.rebootTime)) failAction(REBOOT_TIME_ERROR);
   const cloudpanel = (component: string) => `origin=${CLOUDPANEL_ORIGIN},codename=\${distro_codename},component=${component}`;
   const patterns = [
     securityPattern(distroId),
@@ -352,7 +355,7 @@ export function dropInFor(settings: UpdateSettings, distroId: string): string {
     ...patterns.map((pattern) => `\t"${pattern}";`),
     "};",
     `Unattended-Upgrade::Automatic-Reboot "${settings.reboot ? "true" : "false"}";`,
-    ...(settings.rebootTime === null ? [] : [`Unattended-Upgrade::Automatic-Reboot-Time "${settings.rebootTime}";`]),
+    `Unattended-Upgrade::Automatic-Reboot-Time "${settings.rebootTime}";`,
     "",
   ].join("\n");
 }
@@ -498,11 +501,16 @@ export function updatesStatus(options: UpdatesOptions = {}): UpdatesStatus {
   };
 }
 
-/** The effective `Automatic-Reboot`, so a first switch-on keeps what the operator had. */
-export function effectiveReboot(options: UpdatesOptions = {}): boolean {
+/**
+ * The effective reboot policy, so a first switch-on keeps what the operator
+ * had. A time this cannot express, such as `+15`, becomes right after the run.
+ */
+export function effectiveReboot(options: UpdatesOptions = {}): Pick<UpdateSettings, "reboot" | "rebootTime"> {
   const ctx = contextOf(options);
   const dump = ctx.run("apt-config", ["dump"]);
-  return truthy(scalar(parseAptConfig(dump.ok ? dump.stdout : ""), "Unattended-Upgrade::Automatic-Reboot"));
+  const config = parseAptConfig(dump.ok ? dump.stdout : "");
+  const time = scalar(config, "Unattended-Upgrade::Automatic-Reboot-Time");
+  return { reboot: truthy(scalar(config, "Unattended-Upgrade::Automatic-Reboot")), rebootTime: validRebootTime(time) ? time : "now" };
 }
 
 // --- changing it -------------------------------------------------------------

@@ -399,12 +399,11 @@ function registerOptions(paths: SecurityKeysPaths, user: string, now: number) {
   const settings = readSettings(paths);
   if (!allowedRole(settings, account)) failAction("security keys are turned off for your account");
   const store = readStore(paths);
-  const entry = store.users[user];
-  const current = entry && entry.userId === account.id ? entry : null;
-  const handle = current?.handle ?? handleFor(paths, account.id);
-  const issued = issueChallenge(paths, now, "register", user, account.id, handle);
+  const handle = currentHandle(paths, store, user, account);
   return {
-    ...issued, user: { id: handle, name: user }, exclude: current?.keys.map((key) => key.id) ?? [],
+    ...issueChallenge(paths, now, "register", user, account.id, handle),
+    user: { id: handle, name: user },
+    exclude: ownKeys(store, user, account).map((key) => key.id),
     syncedPasskeys: settings.syncedPasskeys,
   };
 }
@@ -415,7 +414,7 @@ function currentHandle(paths: SecurityKeysPaths, store: Store, user: string, acc
   return entry && entry.userId === account.id ? entry.handle : handleFor(paths, account.id);
 }
 
-function register(paths: SecurityKeysPaths, user: string, input: Record<string, unknown>, now: number): { keys: KeyView[] } {
+function register(paths: SecurityKeysPaths, user: string, input: Record<string, unknown>, now: number): void {
   const name = oneLine(input.name ?? "", "key name", 64, false) || "Security key";
   const origin = normalizeOrigin(input.origin);
   // Bound to the account and handle it was issued for, so a challenge from
@@ -456,7 +455,6 @@ function register(paths: SecurityKeysPaths, user: string, input: Record<string, 
       lastUsedAt: null,
     });
     writeStore(paths, store);
-    return { keys: entry.keys.map(keyView) };
   });
 }
 
@@ -509,8 +507,10 @@ export async function runSecurityKeysAction(argv: string[], options: SecurityKey
     else if (verb === "sign-in") data = signIn(paths, readInput(options), now);
     else if (verb === "keys") data = ownView(paths, panelUser!, activeAccount(paths, panelUser!));
     else if (verb === "register-options") data = registerOptions(paths, panelUser!, now);
-    else if (verb === "register") data = register(paths, panelUser!, readInput(options), now);
-    else if (verb === "remove") {
+    else if (verb === "register") {
+      register(paths, panelUser!, readInput(options), now);
+      data = ownView(paths, panelUser!, activeAccount(paths, panelUser!));
+    } else if (verb === "remove") {
       const account = activeAccount(paths, panelUser!);
       removeKey(paths, panelUser!, readInput(options).id);
       data = ownView(paths, panelUser!, account);

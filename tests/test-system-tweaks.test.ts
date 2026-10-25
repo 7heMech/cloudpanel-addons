@@ -9,7 +9,7 @@ import {
   type SystemTweaksOptions, type SystemTweaksState,
 } from "../addons/system-tweaks/action";
 import {
-  allowedPatterns, coverageOf, dropInFor, fnmatch, parseAptConfig, parsePolicy, updatesStatus, DEFAULT_UPDATE_SETTINGS,
+  allowedPatterns, coverageOf, dropInFor, fnmatch, parseAptConfig, parsePolicy, updatesStatus, DEFAULT_UPDATE_SETTINGS, type UpdatesStatus,
 } from "../addons/system-tweaks/updates";
 import { iniBoolean, iniSetting, uploadProgressStatus } from "../addons/system-tweaks/upload-progress";
 import { dashboardView } from "../addons/system-tweaks/app/views";
@@ -739,14 +739,13 @@ test("failed downloads retain the package URL in expandable details and escape t
   expect(html).not.toContain("<script>");
 });
 
-test("reboot timing preserves outside policy until explicitly set, and restores it on removal", async () => {
+test("the first switch-on copies the box's reboot time, and switching off gives the outside policy back", async () => {
   const b = box();
   const outside = 'Unattended-Upgrade::Automatic-Reboot "true";\nUnattended-Upgrade::Automatic-Reboot-Time "04:15";\n';
   writeFileSync(join(b.aptDir, "50unattended-upgrades"), outside);
   let state = await act(b, ["set-updates"], { enabled: true });
-  expect(state.settings.rebootTime).toBe(null);
-  expect(state.updates.rebootTime).toBe("04:15");
-  expect(readFileSync(b.dropIn, "utf8")).not.toContain("Automatic-Reboot-Time");
+  expect(state.settings).toMatchObject({ reboot: true, rebootTime: "04:15" });
+  expect(readFileSync(b.dropIn, "utf8")).toContain('Unattended-Upgrade::Automatic-Reboot-Time "04:15";');
   for (const time of ["00:00", "03:30", "23:59", "now"]) {
     state = await act(b, ["set-updates"], { rebootTime: time });
     expect(state.settings.rebootTime).toBe(time);
@@ -754,8 +753,6 @@ test("reboot timing preserves outside policy until explicitly set, and restores 
     expect(JSON.parse(readFileSync(b.settingsFile, "utf8")).updates.rebootTime).toBe(time);
     expect(readFileSync(join(b.aptDir, "50unattended-upgrades"), "utf8")).toBe(outside);
   }
-  state = await act(b, ["set-updates"], { rebootTime: null });
-  expect(state.updates.rebootTime).toBe("04:15");
   await act(b, ["set-updates"], { rebootTime: "03:30" });
   withdrawSystemTweaks(b.options);
   expect(updatesStatus(b.options.updates).rebootTime).toBe("04:15");
@@ -763,8 +760,20 @@ test("reboot timing preserves outside policy until explicitly set, and restores 
   expect(updatesStatus(b.options.updates).rebootTime).toBe("03:30");
   state = await act(b, ["set-updates"], { enabled: false });
   expect(state.updates.rebootTime).toBe("04:15");
-  expect(dashboardView(state)).not.toContain("overrides your saved reboot time");
   expect(b.commands.some(command => /shutdown|reboot/.test(command))).toBe(false);
+});
+
+test("a reboot time this cannot express starts as right after the run, and a later apt file still wins", async () => {
+  const b = box();
+  writeFileSync(join(b.aptDir, "40operator"), 'Unattended-Upgrade::Automatic-Reboot-Time "+15";\n');
+  let state = await act(b, ["set-updates"], { enabled: true, reboot: true });
+  expect(state.settings.rebootTime).toBe("now");
+  writeFileSync(join(b.aptDir, "90operator"), 'Unattended-Upgrade::Automatic-Reboot-Time "+15";\n');
+  state = await act(b, ["set-updates"], { rebootTime: "02:00" });
+  expect(state.updates.rebootTime).toBe("+15");
+  const html = dashboardView(state);
+  expect(html).toContain("Another apt file sets it to 15 minutes after the run, and wins.");
+  expect(html).toContain(`<span class="hint">${state.updates.timezone}</span>`);
 });
 
 test("invalid reboot times cannot change settings or inject apt directives", async () => {
@@ -772,29 +781,11 @@ test("invalid reboot times cannot change settings or inject apt directives", asy
   await act(b, ["set-updates"], { enabled: true });
   const before = readFileSync(b.dropIn, "utf8");
   const settings = readFileSync(b.settingsFile, "utf8");
-  for (const rebootTime of ["", "3:30", "24:00", "12:60", "+5", false, 330, '03:30";\nAPT::Periodic::Enable "0']) {
+  for (const rebootTime of ["", null, "3:30", "24:00", "12:60", "+5", false, 330, '03:30";\nAPT::Periodic::Enable "0']) {
     await expect(act(b, ["set-updates"], { rebootTime })).rejects.toThrow("rebootTime must be");
     expect(readFileSync(b.dropIn, "utf8")).toBe(before);
     expect(readFileSync(b.settingsFile, "utf8")).toBe(settings);
   }
-});
-
-test("old saved settings preserve outside timing and later apt files remain authoritative", async () => {
-  const b = box();
-  await act(b, ["set-updates"], { enabled: true, reboot: true });
-  const saved = JSON.parse(readFileSync(b.settingsFile, "utf8"));
-  delete saved.updates.rebootTime;
-  writeFileSync(b.settingsFile, JSON.stringify(saved));
-  writeFileSync(join(b.aptDir, "90operator"), 'Unattended-Upgrade::Automatic-Reboot-Time "+15";\n');
-  let state = await act(b, ["state"]);
-  expect(state.settings.rebootTime).toBe(null);
-  expect(state.updates.rebootTime).toBe("+15");
-  state = await act(b, ["set-updates"], { rebootTime: "02:00" });
-  expect(state.updates.rebootTime).toBe("+15");
-  const html = dashboardView(state);
-  expect(html).toContain("overrides your saved reboot time");
-  expect(html).toContain("15 minutes after the run");
-  expect(html).toContain(`Server timezone: ${state.updates.timezone}`);
 });
 
 test("the reboot-time API validates input and returns replacement HTML from the action reply", async () => {
@@ -814,13 +805,14 @@ test("the reboot-time API validates input and returns replacement HTML from the 
   try {
     expect((await handle(request("03:30", false), "/api/updates")).status).toBe(403);
     expect((await handle(request("24:30"), "/api/updates")).status).toBe(400);
+    expect((await handle(request(null), "/api/updates")).status).toBe(400);
     expect(calls).toEqual([]);
-    for (const rebootTime of ["03:30", "now", null]) {
+    for (const rebootTime of ["03:30", "now"]) {
       const response = await handle(request(rebootTime), "/api/updates");
       expect(response.status).toBe(200);
       expect((await response.json() as { html: string }).html).toBe(dashboardView(state));
     }
-    expect(calls).toEqual([{ rebootTime: "03:30" }, { rebootTime: "now" }, { rebootTime: null }]);
+    expect(calls).toEqual([{ rebootTime: "03:30" }, { rebootTime: "now" }]);
   } finally { systemTweaksService.setUpdates = original; }
 });
 
@@ -830,7 +822,7 @@ test("System Tweaks exposes panel PHP state and validates its change action", as
   expect(state.panelPhp).toMatchObject({ wanted: "", stock: null, choices: [] });
   await expect(act(b, ["set-panel-php"], { php: 8.4 })).rejects.toThrow("php must be a version");
   await expect(act(b, ["set-panel-php"], { php: "8.4" })).rejects.toThrow("is not the CloudPanel PHP-FPM unit");
-  expect(dashboardView(state)).toContain("<h2>Panel PHP</h2>");
+  expect(dashboardView(state)).toContain("<h3>Panel PHP<button");
 });
 
 test("systemTweaksMaintenance still reconciles panel PHP when upkeep fails", async () => {
@@ -850,4 +842,44 @@ test("systemTweaksMaintenance still reconciles panel PHP when upkeep fails", asy
     "Nginx validation failed: emerg; panel PHP: clp-php-fpm.service is not the CloudPanel PHP-FPM unit this addon knows",
   );
   expect(phpCalled).toBe(true);
+});
+
+test("the page shows update options only once updates are on, and says what silently goes uncovered", () => {
+  const updates: UpdatesStatus = {
+    installed: true, version: "2.9.1", distro: { id: "Debian", codename: "bookworm" }, managed: false, enabled: true,
+    outsideSource: "20auto-upgrades", overriddenBy: "", listsUpdated: true, reboot: false, rebootTime: "", timezone: "UTC",
+    timer: { state: "enabled", next: "" },
+    coverage: [
+      { name: "CloudPanel PHP", detail: "8.3", covered: "none" }, { name: "Debian bookworm-security", detail: "main", covered: "all" },
+      { name: "Debian bookworm", detail: "main, contrib", covered: "some" },
+    ],
+    lastRun: null, rebootRequired: { since: "2026-10-01T00:00:00Z", packages: ["linux-image-6.1.0-53-amd64"] },
+  };
+  const state = {
+    updates, settings: { ...DEFAULT_UPDATE_SETTINGS },
+    uploadProgress: { guard: true, fpms: [{
+      label: "PHP 8.2", version: "8.2", enabled: false, setBy: "clp-addons" as const,
+      source: "/etc/php/8.2/fpm/conf.d/99-clp-addons-upload-progress.ini", offWithoutGuard: false, poolsOn: ["legacy.example.com"],
+    }] }, realIp: { blockForged: true, trustsAnyAddress: false, problem: "" }, panelPhp: { error: "" },
+  };
+  const now = Date.parse("2026-10-25T00:00:00Z");
+  const outside = dashboardView(state, now);
+  expect(outside).not.toContain('data-setting="nginx"');
+  expect(outside).toContain("Automatic updates skip CloudPanel's PHP");
+  // Partly covered is not covered, and a pool that turns upload progress back on is not Off.
+  expect(outside).toContain("Repositories: 1 of 3 covered, 1 partly");
+  expect(outside).toContain('<span class="badge state-exited">Partly</span>');
+  expect(outside).toContain("Off on its one PHP-FPM, on again in 1 pool");
+  expect(outside).toContain("A reboot has been needed since 2026-10-01 and automatic reboot is off, so the server still runs the old kernel.");
+  expect(dashboardView(state, Date.parse("2026-10-03T00:00:00Z"))).not.toContain("A reboot has been needed");
+
+  const managed = dashboardView({
+    ...state,
+    settings: { ...DEFAULT_UPDATE_SETTINGS, enabled: true, reboot: true },
+    updates: { ...updates, managed: true, reboot: true, coverage: updates.coverage.map((row) => ({ ...row, covered: "all" as const })) },
+  }, now);
+  expect(managed).toContain('data-setting="nginx"');
+  expect(managed).toContain('<option value="now" selected>Right after the update run</option>');
+  expect(managed).not.toContain("skip CloudPanel's PHP");
+  expect(managed).not.toContain("A reboot has been needed");
 });

@@ -30,34 +30,46 @@ function badge(text: string, tone: "ok" | "warn" | "bad" | "plain"): string {
   return `<span class="badge${state}">${esc(text)}</span>`;
 }
 
+const DAY_MS = 86_400_000;
+/** How long a required reboot may wait, with automatic reboot off, before the page says so. */
+const REBOOT_OVERDUE_DAYS = 7;
+
 interface Row {
   key: string;
   title: string;
   description: string;
-  checked: boolean;
+  /** The switch's state; a row with `control` instead has none. */
+  checked?: boolean;
   disabled?: boolean;
-  onchange: string;
+  onchange?: string;
+  /** What sits where the switch would, such as a select. */
+  control?: string;
   extra?: string;
 }
 
-function switchRow(row: Row): string {
+function settingRow(row: Row): string {
   const note = `tweak-note-${row.key}`;
+  const control = row.control ?? `
+            <label class="switch" title="${esc(row.title)}">
+              <input type="checkbox" data-setting="${esc(row.key)}" onchange="${row.onchange}"${row.checked ? " checked" : ""}
+                ${row.disabled ? "disabled " : ""}aria-label="${esc(row.title)}">
+              <span></span>
+            </label>`;
   return `
       <div class="tweak-row">
         <div class="tweak-body">
           <div class="tweak-heading">
             <h3>${esc(row.title)}<button class="tweak-more" type="button" aria-expanded="false"
               aria-controls="${note}" aria-label="What ${esc(row.title.toLowerCase())} does"
-              onclick="toggleNote(this)"></button></h3>
-            <label class="switch" title="${esc(row.title)}">
-              <input type="checkbox" data-setting="${esc(row.key)}" onchange="${row.onchange}"${row.checked ? " checked" : ""}
-                ${row.disabled ? "disabled " : ""}aria-label="${esc(row.title)}">
-              <span></span>
-            </label>
+              onclick="toggleNote(this)"></button></h3>${control}
           </div>
           <div class="tweak-note" id="${note}"><p>${esc(row.description)}</p></div>${row.extra ?? ""}
         </div>
       </div>`;
+}
+
+function warning(text: string): string {
+  return `<p class="notice st-inline-notice">${text}</p>`;
 }
 
 /** What the switch leaves on the box, said once, under it. */
@@ -69,8 +81,7 @@ function updatesLine(status: UpdatesStatus): string {
     const next = status.timer.next ? ` Next run ${esc(status.timer.next)}.` : "";
     if (status.managed) return `${badge("On", "ok")} <span>Runs once a day.${next}</span>`;
     const where = status.outsideSource ? ` in ${esc(status.outsideSource)}` : "";
-    return `${badge("On", "ok")} <span>Configured outside System Tweaks${where}.${next} Switching on here adds
-      CloudPanel's PHP to what it covers; switching off again leaves your setup as it was.</span>`;
+    return `${badge("On", "ok")} <span>Configured outside System Tweaks${where}.${next}</span>`;
   }
   if (!status.managed) return `${badge("Off", "plain")}`;
   const why = status.overriddenBy
@@ -81,70 +92,64 @@ function updatesLine(status: UpdatesStatus): string {
   return `${badge("Off", "warn")} <span>${why}</span>`;
 }
 
-function rebootTiming(status: UpdatesStatus, settings: UpdateSettings, locked: boolean): string {
-  if (!settings.reboot && !status.reboot) return "";
-  const mode = settings.rebootTime === null ? "existing" : settings.rebootTime === "now" ? "now" : "time";
-  const value = /^\d{2}:\d{2}$/.test(settings.rebootTime ?? status.rebootTime) ? (settings.rebootTime ?? status.rebootTime) : "";
-  const overridden = !locked && settings.rebootTime !== null && (status.rebootTime || "now") !== settings.rebootTime;
-  return `<form class="st-reboot-time" onsubmit="saveRebootTime(event, this)">
-    <label for="reboot-mode">Reboot timing</label>
-    <div class="st-reboot-controls">
-      <select id="reboot-mode" name="mode" onchange="rebootModeChanged(this)"${locked ? " disabled" : ""}>
-        <option value="existing"${mode === "existing" ? " selected" : ""}>Use existing configuration</option>
-        <option value="now"${mode === "now" ? " selected" : ""}>After the update run</option>
-        <option value="time"${mode === "time" ? " selected" : ""}>At a specific time</option>
-      </select>
-      <input type="time" name="time" aria-label="Reboot time" value="${esc(value)}"${mode !== "time" ? " hidden disabled" : locked ? " disabled" : " required"}>
-      <button class="btn" type="submit"${locked ? " disabled" : ""}>Save time</button>
-    </div>
-    <p class="hint">Server timezone: ${esc(status.timezone)}. Only reboots when an update requires it. Changes apply to future update runs.</p>
-    ${overridden ? '<p class="notice st-inline-notice">Another apt configuration overrides your saved reboot time. The effective timing is shown below.</p>' : ""}
-  </form>`;
+/** Updates that run but leave CloudPanel's PHP to a manual apt upgrade. */
+function phpGapWarning(status: UpdatesStatus): string {
+  const php = status.coverage.find((row) => row.name === "CloudPanel PHP");
+  if (!status.enabled || !php || php.covered === "all") return "";
+  return warning(status.managed
+    ? "apt's configuration leaves CloudPanel's PHP out of automatic updates, so its security fixes wait for apt upgrade."
+    : "Automatic updates skip CloudPanel's PHP, so its security fixes wait for apt upgrade. Switch on Install updates automatically to add it.");
+}
+
+function rebootTiming(status: UpdatesStatus, settings: UpdateSettings): string {
+  const at = settings.rebootTime !== "now";
+  const effective = status.rebootTime || "now";
+  const overridden = effective !== settings.rebootTime
+    ? `<p class="hint">Another apt file sets it to ${/^\+\d+$/.test(effective) ? `${esc(effective.slice(1))} minutes after the run`
+      : effective === "now" ? "right after the run" : esc(effective)}, and wins.</p>`
+    : "";
+  return `
+          <div class="st-reboot-time">
+            <select id="reboot-mode" aria-label="When to reboot" onchange="setRebootTime(this)">
+              <option value="now"${at ? "" : " selected"}>Right after the update run</option>
+              <option value="time"${at ? " selected" : ""}>At a set time</option>
+            </select>
+            <input type="time" id="reboot-time" aria-label="Reboot time" value="${esc(at ? settings.rebootTime : "03:00")}"${at ? "" : " hidden"} onchange="setRebootTime(this)">
+            <span class="hint">${esc(status.timezone)}</span>
+          </div>${overridden}`;
 }
 
 function updateRows(status: UpdatesStatus, settings: UpdateSettings): string {
-  const locked = !status.installed || !status.managed;
   const install = status.installed ? "" : `
           <div class="st-install"><button class="btn" type="button" onclick="installUpdates(this)">Install unattended-upgrades</button></div>`;
   const lists = status.enabled && !status.listsUpdated
-    ? `<p class="notice st-inline-notice">Package lists are not refreshed automatically, so it only installs updates something else downloaded.</p>`
+    ? warning("Package lists are not refreshed automatically, so it only installs updates something else downloaded.")
     : "";
-  return [
-    switchRow({
-      key: "enabled",
-      title: "Install updates automatically",
-      description: "Uses the distro's unattended-upgrades once a day. It always covers the distro's security updates and every PHP version CloudPanel ships. Switching off removes only System Tweaks' own file.",
-      checked: status.managed,
-      disabled: !status.installed,
-      onchange: "setUpdates(this)",
-      extra: `<p class="st-status" id="updates-status">${updatesLine(status)}</p>${lists}${install}`,
-    }),
-    switchRow({
-      key: "nginx",
-      title: "Nginx",
-      description: "CloudPanel's Nginx build. An update reloads Nginx without dropping connections.",
-      checked: settings.nginx, disabled: locked, onchange: "setUpdates(this)",
-    }),
-    switchRow({
-      key: "database",
-      title: "MySQL",
-      description: "CloudPanel's database server. An update restarts MySQL, so every site loses its database for a moment.",
-      checked: settings.database, disabled: locked, onchange: "setUpdates(this)",
-    }),
-    switchRow({
-      key: "panel",
-      title: "CloudPanel",
-      description: "The panel itself, which clp-update normally updates.",
-      checked: settings.panel, disabled: locked, onchange: "setUpdates(this)",
-    }),
-    switchRow({
-      key: "reboot",
-      title: "Reboot when required",
-      description: "Allows unattended-upgrades to restart the server when required, using the reboot timing below.",
-      checked: settings.reboot, disabled: locked, onchange: "setUpdates(this)",
-      extra: rebootTiming(status, settings, locked),
-    }),
-  ].join("");
+  const option = (key: "nginx" | "database" | "panel" | "reboot", title: string, description: string, extra = "") => `
+            <div class="st-option">
+              <div class="st-option-row">
+                <div><label for="update-${key}">${title}</label><p class="hint">${description}</p></div>
+                <label class="switch"><input id="update-${key}" type="checkbox" data-setting="${key}" onchange="setUpdates(this)"${settings[key] ? " checked" : ""}><span></span></label>
+              </div>${extra}
+            </div>`;
+  const options = status.installed && status.managed ? `
+          <div class="st-options">${[
+    option("nginx", "Nginx", "CloudPanel's Nginx build. An update reloads it without dropping connections."),
+    option("database", "MySQL", "CloudPanel's database server. An update restarts it, so sites lose their database for a moment."),
+    option("panel", "CloudPanel", "The panel itself, which clp-update normally updates."),
+    option("reboot", "Reboot when required", "Restarts the server when an update such as a kernel needs it.",
+      settings.reboot ? rebootTiming(status, settings) : ""),
+  ].join("")}
+          </div>` : "";
+  return settingRow({
+    key: "enabled",
+    title: "Install updates automatically",
+    description: "Once a day, with the distro's unattended-upgrades: its security updates and every PHP version CloudPanel ships.",
+    checked: status.managed,
+    disabled: !status.installed,
+    onchange: "setUpdates(this)",
+    extra: `<p class="st-status" id="updates-status">${updatesLine(status)}</p>${phpGapWarning(status)}${lists}${install}${options}`,
+  });
 }
 
 function lastRunText(run: LastRun | null): string {
@@ -160,23 +165,21 @@ function lastRunText(run: LastRun | null): string {
   return `${at}: no result logged yet.`;
 }
 
-function statusList(status: UpdatesStatus): string {
+function statusList(status: UpdatesStatus, now: number): string {
   if (!status.installed) return "";
-  const reboot = status.rebootRequired
-    ? `${badge("Required", "warn")} since ${esc(status.rebootRequired.since.slice(0, 10))}${status.rebootRequired.packages.length
-      ? ` for ${esc(status.rebootRequired.packages.join(", "))}` : ""}.`
-    : "Not required.";
-  const automatic = status.reboot
-    ? `On${status.rebootTime && status.rebootTime !== "now" ? `, ${/^\+\d+$/.test(status.rebootTime) ? `${esc(status.rebootTime.slice(1))} minutes after the run` : `at ${esc(status.rebootTime)} (${esc(status.timezone)})`}` : ", right after the run"}.`
-    : "Off.";
+  const required = status.rebootRequired;
   const failure = status.lastRun?.outcome === "failed"
     ? `<details class="st-run-details"><summary>Failure details</summary><pre>${esc(status.lastRun.message)}</pre></details>` : "";
+  const overdue = required && !status.reboot && now - Date.parse(required.since) > REBOOT_OVERDUE_DAYS * DAY_MS
+    ? warning(`A reboot has been needed since ${esc(required.since.slice(0, 10))} and automatic reboot is off, so the server still runs the old ${
+      required.packages.some((name) => name.startsWith("linux-")) ? "kernel" : "code"}. Restart it, or switch on Reboot when required.`)
+    : "";
   return `
       <dl class="kv st-kv">
-        <dt>Last run</dt><dd>${esc(lastRunText(status.lastRun))}${failure}</dd>
-        <dt>Reboot</dt><dd>${reboot}</dd>
-        <dt>Automatic reboot</dt><dd>${automatic}</dd>
-      </dl>`;
+        <dt>Last run</dt><dd>${esc(lastRunText(status.lastRun))}${failure}</dd>${required ? `
+        <dt>Reboot</dt><dd>${badge("Required", "warn")} since ${esc(required.since.slice(0, 10))}${required.packages.length
+          ? ` for ${esc(required.packages.join(", "))}` : ""}.</dd>` : ""}
+      </dl>${overdue}`;
 }
 
 function coverageBadge(row: CoverageRow): string {
@@ -193,19 +196,22 @@ function stateRow(name: string, detail: string, state: string): string {
             <td class="st-state">${state}</td></tr>`;
 }
 
-function coverageCard(status: UpdatesStatus): string {
+/** Where updates come from, folded to a count. */
+function coverageDetails(status: UpdatesStatus): string {
   if (!status.installed) return "";
-  const rows = status.coverage.map((row) => stateRow(row.name, row.detail, coverageBadge(row))).join("");
-  const hint = status.enabled
-    ? "Where unattended-upgrades installs from, as apt reads its configuration now."
-    : "Updates are off, so nothing is installed automatically. This is what they would cover.";
+  if (!status.coverage.length) return `<p class="hint st-fold">apt lists no repositories.</p>`;
+  const covered = status.coverage.filter((row) => row.covered === "all").length;
+  const partly = status.coverage.filter((row) => row.covered === "some").length;
+  const summary = status.enabled
+    ? `Repositories: ${covered} of ${status.coverage.length} covered${partly ? `, ${partly} partly` : ""}`
+    : `Repositories: none covered while updates are off`;
   return `
-    <div class="card">
-      <div class="card-header"><h2>Repositories</h2></div>
-      <p class="hint">${hint}</p>
-      ${rows ? `<div class="table-scroll"><table class="st-table"><thead><tr><th>Repository</th><th class="st-state">Updates</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>` : `<p class="hint">apt lists no repositories.</p>`}
-    </div>`;
+      <details class="st-fold">
+        <summary>${summary}</summary>
+        <p class="hint">As apt reads its configuration now${status.enabled ? "" : ", once updates are on"}. A repository that is not covered still needs apt upgrade.</p>
+        <div class="table-scroll"><table class="st-table"><thead><tr><th>Repository</th><th class="st-state">Updates</th></tr></thead>
+          <tbody>${status.coverage.map((row) => stateRow(row.name, row.detail, coverageBadge(row))).join("")}</tbody></table></div>
+      </details>`;
 }
 
 /** Who decided the value, and any pool that turns it back on. */
@@ -217,28 +223,25 @@ function uploadProgressSource(row: FpmUploadProgress): string {
   return `${row.setBy === "default" ? "PHP's default" : `Set in ${file}`}.${pools}`;
 }
 
-function uploadProgressCard(state: SystemTweaksState): string {
-  const rows = state.uploadProgress.fpms.map((row) =>
-    stateRow(row.label, uploadProgressSource(row), row.enabled ? badge("On", "bad") : badge("Off", "ok"))).join("");
+/** Each PHP-FPM's upload progress, folded to what needs a look. */
+function uploadProgressDetails(fpms: FpmUploadProgress[]): string {
+  if (!fpms.length) return `<p class="st-status hint">No PHP-FPM is installed.</p>`;
+  const on = fpms.filter((row) => row.enabled).length;
+  const pools = fpms.reduce((total, row) => total + row.poolsOn.length, 0);
+  const count = `${fpms.length} PHP-FPM${fpms.length === 1 ? "" : "s"}`;
+  const summary = on === 0 ? `Off on ${fpms.length === 1 ? "its one PHP-FPM" : `all ${count}`}` : `On in ${on} of ${count}`;
+  const poolText = pools ? `, on again in ${pools} pool${pools === 1 ? "" : "s"}` : "";
   return `
-    <div class="card">
-      <div class="card-header"><h2>PHP</h2></div>
-      <div class="tweak-list">${switchRow({
-        key: "uploadProgressGuard",
-        title: "PHP upload-progress mitigation",
-        description: `Turns PHP's session upload progress off on every PHP-FPM, CloudPanel's own included, with ${PHP_GUARD_INI_NAME}. It is a route into CVE-2026-109619, and PHP's advisory GHSA-6wmf-4rv5-p3rp recommends keeping it off even on patched PHP. Switching off removes only that file; a setting of your own still applies.`,
-        checked: state.uploadProgress.guard,
-        onchange: "setUploadGuard(this)",
-      })}
-      </div>
-      ${rows ? `<div class="table-scroll"><table class="st-table"><thead><tr><th>PHP-FPM</th><th class="st-state">Upload progress</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>` : `<p class="hint">No PHP-FPM is installed.</p>`}
-    </div>`;
+          <details class="st-fold">
+            <summary>${badge(on || pools ? "Check" : "Off", on || pools ? "warn" : "ok")} ${summary}${poolText}</summary>
+            <div class="table-scroll"><table class="st-table"><thead><tr><th>PHP-FPM</th><th class="st-state">Upload progress</th></tr></thead>
+              <tbody>${fpms.map((row) => stateRow(row.label, uploadProgressSource(row),
+                row.enabled ? badge("On", "bad") : row.poolsOn.length ? badge("Partly", "warn") : badge("Off", "ok"))).join("")}</tbody></table></div>
+          </details>`;
 }
 
 function phpOption(choice: PanelPhpChoice, stock: string | null, selected: boolean): string {
-  const release = choice.installed ? ` (${choice.installed})` : "";
-  const label = choice.version === stock ? `CloudPanel's own: PHP ${choice.version}${release}` : `PHP ${choice.version}${release}`;
+  const label = `PHP ${choice.version}${choice.version === stock ? ", CloudPanel's own" : ""}`;
   return `<option value="${choice.version === stock ? "" : esc(choice.version)}"${selected ? " selected" : ""}>${esc(label)}</option>`;
 }
 
@@ -255,31 +258,31 @@ export function panelPhpLine(status: PanelPhpStatus): string {
   return lines.join(" ");
 }
 
-export function panelPhpCard(status: PanelPhpStatus | { error: string }): string {
+export function panelPhpRow(status: PanelPhpStatus | { error: string }): string {
+  const description = "Runs CloudPanel's pages, phpMyAdmin and the File Manager. CloudPanel has not tested newer versions, so a change is undone if the login page or File Manager stops answering.";
   if ("error" in status) {
-    return `
-    <div class="card"><div class="card-header"><h2>Panel PHP</h2></div>
-      <div class="alert" role="alert">${esc(status.error)}</div></div>`;
+    return settingRow({ key: "panelPhp", title: "Panel PHP", description, control: "",
+      extra: `<div class="alert st-alert" role="alert">${esc(status.error)}</div>` });
   }
-  const eol = status.stock === "8.1" ? ", which no longer gets security fixes" : "";
-  const body = status.stock === null
-    ? `<p class="hint">CloudPanel's PHP-FPM unit is not one this addon recognises, so the panel keeps the PHP CloudPanel chose.</p>`
-    : `<p class="hint">CloudPanel runs its pages, phpMyAdmin and the File Manager on PHP ${esc(status.stock)}${eol}.
-      A newer installed PHP can run them instead. CloudPanel has not tested this, so after a change the panel is
-      asked for its login page and File Manager, and the change is undone if either fails.</p>
-      <div class="panel-php-choice">
-        <label class="hint" for="panel-php">Panel runs on</label>
-        <select id="panel-php" data-current="${esc(status.wanted)}" onchange="setPanelPhp(this)"${status.overriddenBy ? " disabled" : ""}>${status.choices
+  if (status.stock === null) {
+    return settingRow({ key: "panelPhp", title: "Panel PHP", description, control: "",
+      extra: `<p class="st-status hint">CloudPanel's PHP-FPM unit is not one this addon recognises, so the panel keeps the PHP CloudPanel chose.</p>` });
+  }
+  const select = `
+            <select id="panel-php" aria-label="Panel PHP" data-current="${esc(status.wanted)}" onchange="setPanelPhp(this)"${status.overriddenBy ? " disabled" : ""}>${status.choices
     .map((choice) => phpOption(choice, status.stock, (status.wanted || status.stock) === choice.version)).join("")}${
     status.wanted && !status.choices.some((choice) => choice.version === status.wanted)
-      ? `<option value="${esc(status.wanted)}" selected disabled>PHP ${esc(status.wanted)} (unavailable)</option>` : ""}</select>
-      </div>`;
-  return `
-    <div class="card">
-      <div class="card-header"><h2>Panel PHP</h2></div>
-      ${body}
-      <p class="hint" id="panel-php-status">${esc(panelPhpLine(status))}</p>
-    </div>`;
+      ? `<option value="${esc(status.wanted)}" selected disabled>PHP ${esc(status.wanted)} (unavailable)</option>` : ""}</select>`;
+  const newer = status.choices.some((choice) => choice.version !== status.stock);
+  const eol = status.stock === "8.1" && !status.wanted && !status.overriddenBy
+    ? warning(newer
+      ? "The panel runs on PHP 8.1, which no longer gets security fixes. Choose a newer PHP above."
+      : "The panel runs on PHP 8.1, which no longer gets security fixes. Install a newer PHP-FPM to choose it here.")
+    : "";
+  return settingRow({
+    key: "panelPhp", title: "Panel PHP", description, control: select,
+    extra: `<p class="st-status hint" id="panel-php-status">${esc(panelPhpLine(status))}</p>${eol}`,
+  });
 }
 
 function realIpLine(state: SystemTweaksState["realIp"]): string {
@@ -289,14 +292,21 @@ function realIpLine(state: SystemTweaksState["realIp"]): string {
     state.blockForged ? " Run clp-addons repair." : ""}</span>`;
 }
 
-function realIpCard(state: SystemTweaksState): string {
+function settingsCard(state: SystemTweaksState): string {
   return `
     <div class="card">
-      <div class="card-header"><h2>Nginx</h2></div>
-      <div class="tweak-list">${switchRow({
+      <div class="card-header"><h2>Settings</h2></div>
+      <div class="tweak-list">${panelPhpRow(state.panelPhp)}${settingRow({
+        key: "uploadProgressGuard",
+        title: "PHP upload-progress mitigation",
+        description: `Turns PHP's session upload progress, a route into CVE-2026-109619, off on every PHP-FPM with ${PHP_GUARD_INI_NAME}. Off removes only that file.`,
+        checked: state.uploadProgress.guard,
+        onchange: "setUploadGuard(this)",
+        extra: uploadProgressDetails(state.uploadProgress.fpms),
+      })}${settingRow({
         key: "blockForgedRealIp",
         title: "Block forged visitor IPs",
-        description: "CloudPanel's Nginx believes a client IP header from any address: X-Real-IP on sites and X-Forwarded-For on the panel. A client can then pose as another IP to PHP, logs, basic auth, IP-based security plugins and Cloudflare-only access. This comments out set_real_ip_from 0.0.0.0/0 in both nginx.conf files; loopback and private-network proxies, including CloudPanel's own, stay trusted, and the panel also trusts Cloudflare. Package updates still install: the line is put back for the update run and commented out again after it. Switching off puts the line back.",
+        description: "Stops any client from naming its own IP with a header to PHP, logs, basic auth and Cloudflare-only access. Local proxies stay trusted, and the panel also trusts Cloudflare. Switch it off only behind another public proxy.",
         checked: state.realIp.blockForged,
         onchange: "setRealIp(this)",
         extra: `<p class="st-status">${realIpLine(state.realIp)}</p>`,
@@ -305,7 +315,7 @@ function realIpCard(state: SystemTweaksState): string {
     </div>`;
 }
 
-export function dashboardView(state: SystemTweaksState): string {
+export function dashboardView(state: SystemTweaksState, now = Date.now()): string {
   return `
     <div class="page-heading">
       <div>
@@ -316,6 +326,6 @@ export function dashboardView(state: SystemTweaksState): string {
     <div class="card">
       <div class="card-header"><h2>Automatic updates</h2></div>
       <div class="tweak-list">${updateRows(state.updates, state.settings)}
-      </div>${statusList(state.updates)}
-    </div>${coverageCard(state.updates)}${uploadProgressCard(state)}${panelPhpCard(state.panelPhp)}${realIpCard(state)}`;
+      </div>${statusList(state.updates, now)}${coverageDetails(state.updates)}
+    </div>${settingsCard(state)}`;
 }

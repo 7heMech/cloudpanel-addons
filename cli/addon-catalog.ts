@@ -53,6 +53,8 @@ export interface AddonDefinition {
   description: string;
   /** systemd units this addon cannot work without, such as `docker`. */
   requiresUnits?: string[];
+  /** The release line it first shipped in, such as `2.0`; the Addons page marks it New there. */
+  added?: string;
   /** Ticked when the installer asks which addons to install. */
   preselected?: boolean;
   targets: AddonTarget[];
