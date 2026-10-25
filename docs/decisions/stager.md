@@ -36,7 +36,8 @@ table selection that is only safe if the operator already knows the answer.
 on each finished clone whose staging and live sites both still exist. The job
 reply carries `panelSite` and `sourcePanelSite` from the panel database, and the
 list, the job page, the Staging tab and the promote page all refuse up front
-rather than after the confirmation. `/promote` without `?job=` returns to the
+rather than after the confirmation. An unknown answer, when the panel database
+cannot be read, refuses too, since the action would. `/promote` without `?job=` returns to the
 list. The promote page is one card; the operator types the live hostname in
 the shared confirmation.
 

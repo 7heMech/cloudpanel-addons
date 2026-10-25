@@ -160,6 +160,8 @@ export function promoteBlocked(job: JobView): string {
   if (!job.source || !job.target) return "That clone record is incomplete.";
   if (job.panelSite === false) return `${job.target} has been deleted from CloudPanel, so there is nothing to promote.`;
   if (job.sourcePanelSite === false) return `${job.source} has been deleted from CloudPanel, so there is no live site to promote onto.`;
+  // Unknown is not present: the action would refuse it after the confirmation.
+  if (job.panelSite !== true || job.sourcePanelSite !== true) return "CloudPanel's site list could not be read, so neither site can be confirmed. Try again in a moment.";
   return "";
 }
 

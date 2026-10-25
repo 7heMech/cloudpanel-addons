@@ -264,6 +264,7 @@ function mockClone(overrides: Partial<JobView> = {}): JobView {
     step: "",
     error: "",
     panelSite: true,
+    sourcePanelSite: true,
     createdAt: "2026-09-16T09:00:00Z",
     startedAt: "2026-09-16T09:00:01Z",
     finishedAt: "2026-09-16T09:05:00Z",
@@ -319,6 +320,8 @@ describe("the promote route", () => {
         [mockClone({ result: null }), "recorded no result"],
         [mockClone({ panelSite: false }), "stg.example.test has been deleted"],
         [mockClone({ sourcePanelSite: false }), "no live site to promote onto"],
+        [mockClone({ panelSite: null }), "could not be read"],
+        [mockClone({ sourcePanelSite: undefined }), "could not be read"],
       ] as Array<[JobView, string]>) {
         stagerService.getJob = async () => ({ ok: true, data: { job, log: "" } });
         const res = await handle(promoteRequest({ job: job.id }), "/api/promotions");

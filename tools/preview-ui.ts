@@ -261,7 +261,7 @@ function gitPreviewSites(url: URL): GitSiteStatus[] {
 function previewSiteStaging(domain: string, siteType: string, url: URL): string {
   const base: JobView = {
     id: "preview-clone", kind: "clone", source: "", target: "", port: 0, state: "done",
-    step: "", error: "", panelSite: true, createdAt: "2026-09-10T09:30:00Z",
+    step: "", error: "", panelSite: true, sourcePanelSite: true, createdAt: "2026-09-10T09:30:00Z",
     startedAt: "2026-09-10T09:30:02Z", finishedAt: "2026-09-10T09:32:10Z", result: null,
   };
   if (url.searchParams.has("empty") && !url.searchParams.has("staged-from")) {
@@ -281,7 +281,7 @@ function previewSiteStaging(domain: string, siteType: string, url: URL): string 
 }
 const job: JobView = {
   id: "preview-job", kind: "clone", source: "www.example.com", target: "stg.example.com", port: 0,
-  state: "done", step: "", error: "", panelSite: true,
+  state: "done", step: "", error: "", panelSite: true, sourcePanelSite: true,
   createdAt: "2026-09-10T09:30:00Z", startedAt: "2026-09-10T09:30:02Z", finishedAt: "2026-09-10T09:32:10Z",
   result: {
     siteType: "php", siteUser: "staging", phpVersion: "8.2", vhostTemplate: "WordPress",
