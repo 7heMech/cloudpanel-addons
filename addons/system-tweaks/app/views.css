@@ -23,7 +23,7 @@
 }
 
 .st-reboot-time { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; }
-.st-reboot-time select { flex: 0 1 240px; min-width: 0; }
+.st-reboot-time select { flex: 0 1 280px; min-width: 0; }
 .st-reboot-time input { flex: 0 1 170px; min-width: 0; }
 .st-reboot-time + .hint { margin-top: 6px; font-size: 13px; }
 .st-fold { margin-top: 14px; }
@@ -32,7 +32,7 @@
 .st-fold[open] > summary { margin-bottom: 10px; }
 .st-fold > .hint { margin: 0 0 10px; font-size: 13px; }
 .card > .st-fold { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--row-border); }
-.tweak-heading select { flex: 0 1 300px; width: auto; min-width: 0; }
+.tweak-heading select { flex: 0 1 260px; width: auto; min-width: 0; }
 #panel-php-status:empty { display: none; }
 @media (max-width: 760px) {
   /* The version list takes its own line under the title. */

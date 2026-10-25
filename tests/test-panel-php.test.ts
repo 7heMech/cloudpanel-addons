@@ -388,8 +388,8 @@ test("the page offers the installed versions and says what the panel runs on", (
     choices: [{ version: "8.1", installed: "8.1.34" }, { version: "8.4", installed: "8.4.25", available: "8.4.27" }],
   };
   const page = panelPhpRow(status);
-  expect(page).toContain(`<option value="">PHP 8.1 (8.1.34), CloudPanel&#x27;s own</option>`);
-  expect(page).toContain(`<option value="8.4" selected>PHP 8.4 (8.4.25)</option>`);
+  expect(page).toContain(`<option value="">PHP 8.1, CloudPanel&#x27;s own</option>`);
+  expect(page).toContain(`<option value="8.4" selected>PHP 8.4</option>`);
   // Only the panel left on 8.1 is warned about.
   expect(page).not.toContain("no longer gets security fixes");
   expect(panelPhpRow({ ...status, wanted: "", running: "8.1" })).toContain("The panel runs on PHP 8.1, which no longer gets security fixes. Choose a newer PHP above.");

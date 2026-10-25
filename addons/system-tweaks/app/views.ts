@@ -233,8 +233,7 @@ function uploadProgressDetails(fpms: FpmUploadProgress[]): string {
 }
 
 function phpOption(choice: PanelPhpChoice, stock: string | null, selected: boolean): string {
-  const release = choice.installed ? ` (${choice.installed})` : "";
-  const label = `PHP ${choice.version}${release}${choice.version === stock ? ", CloudPanel's own" : ""}`;
+  const label = `PHP ${choice.version}${choice.version === stock ? ", CloudPanel's own" : ""}`;
   return `<option value="${choice.version === stock ? "" : esc(choice.version)}"${selected ? " selected" : ""}>${esc(label)}</option>`;
 }
 
