@@ -17,7 +17,7 @@ import {
 } from "../addons/stager/action";
 import { handle } from "../addons/stager/app/index";
 import { stagerService, type JobView } from "../addons/stager/app/service";
-import { promoteListView, promoteView } from "../addons/stager/app/views";
+import { jobsView, promoteView, siteStagingView } from "../addons/stager/app/views";
 
 const repo = join(import.meta.dir, "..");
 
@@ -264,6 +264,7 @@ function mockClone(overrides: Partial<JobView> = {}): JobView {
     step: "",
     error: "",
     panelSite: true,
+    sourcePanelSite: true,
     createdAt: "2026-09-16T09:00:00Z",
     startedAt: "2026-09-16T09:00:01Z",
     finishedAt: "2026-09-16T09:05:00Z",
@@ -317,6 +318,10 @@ describe("the promote route", () => {
         [mockClone({ state: "running" }), "Only a finished clone"],
         [mockClone({ kind: "promote" }), "itself a promote"],
         [mockClone({ result: null }), "recorded no result"],
+        [mockClone({ panelSite: false }), "stg.example.test has been deleted"],
+        [mockClone({ sourcePanelSite: false }), "no live site to promote onto"],
+        [mockClone({ panelSite: null }), "could not be read"],
+        [mockClone({ sourcePanelSite: undefined }), "could not be read"],
       ] as Array<[JobView, string]>) {
         stagerService.getJob = async () => ({ ok: true, data: { job, log: "" } });
         const res = await handle(promoteRequest({ job: job.id }), "/api/promotions");
@@ -386,6 +391,12 @@ describe("the promote route", () => {
     }
   });
 
+  it("sends /promote without a clone to the list", async () => {
+    const res = await handle(new Request("https://panel.example.test:8443/addons/stager/promote"), "/promote");
+    expect(res.status).toBe(302);
+    expect(res.headers.get("Location")).toBe("/addons/stager/");
+  });
+
   it("refuses a mutation with no CSRF token", async () => {
     const req = new Request("https://panel.example.test:8443/addons/stager/api/promotions", {
       method: "POST",
@@ -398,10 +409,10 @@ describe("the promote route", () => {
 });
 
 describe("the promote pages", () => {
-  it("says the live database is not overwritten, and asks for the live hostname", () => {
+  it("says the live database is not overwritten once, and has the live hostname typed", () => {
     const html = promoteView(mockClone());
-    expect(html).toContain("The live database is not overwritten");
-    expect(html).toContain("Type live.example.test to confirm");
+    expect(html.split("live database is not overwritten").length).toBe(2);
+    expect(html).toContain('data-live="live.example.test"');
     expect(html).toContain("wp-content/uploads");
     // No credential fields for a site with no second application to sign in to.
     expect(html).not.toContain("promote-src-password");
@@ -420,14 +431,33 @@ describe("the promote pages", () => {
     expect(html).toContain("Publish it once afterwards");
   });
 
-  it("lists only finished clones", () => {
-    const html = promoteListView([
+  it("offers Promote only on finished clones whose two sites are still there", () => {
+    const html = jobsView([
       mockClone(),
       mockClone({ id: "20260916T090000Z-b2c3d4", target: "wip.example.test", state: "running" }),
       mockClone({ id: "20260916T090000Z-c3d4e5", target: "old.example.test", kind: "promote" }),
+      mockClone({ id: "20260916T090000Z-d4e5f6", target: "gone.example.test", panelSite: false }),
+      mockClone({ id: "20260916T090000Z-e5f6a7", target: "orphan.example.test", sourcePanelSite: false }),
     ]);
-    expect(html).toContain("stg.example.test");
-    expect(html).not.toContain("wip.example.test");
-    expect(html).not.toContain("old.example.test");
+    expect(html).toContain("promote?job=20260916T090000Z-a1b2c3");
+    for (const id of ["b2c3d4", "c3d4e5", "d4e5f6", "e5f6a7"]) expect(html).not.toContain(`promote?job=20260916T090000Z-${id}`);
+    expect(html.match(/>deleted</g)?.length).toBe(1);
+  });
+
+  it("shows a staging site's last promote, which runs from the staging site", () => {
+    const html = siteStagingView("stg.example.test", [
+      mockClone(),
+      mockClone({ id: "20260917T090000Z-a1b2c3", kind: "promote", source: "stg.example.test", target: "live.example.test",
+        createdAt: "2026-09-17T09:00:00Z" }),
+    ], true);
+    expect(html).toContain("Last promoted</a> 2026-09-17 09:00 UTC");
+    expect(html).toContain("Promote to live.example.test");
+    expect(html).not.toContain("No staging copies");
+  });
+
+  it("does not offer Promote on the tab of a staging site whose live site is gone", () => {
+    const html = siteStagingView("stg.example.test", [mockClone({ sourcePanelSite: false })], true);
+    expect(html).toContain("no live site to promote onto");
+    expect(html).not.toContain("promote?job=");
   });
 });

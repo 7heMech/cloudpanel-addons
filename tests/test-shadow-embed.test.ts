@@ -319,7 +319,7 @@ test("the Staging fragment shows this site's clones and its way back to live", a
     const job = (over: Partial<JobView>): JobView => ({
       id: "20260916T000000Z-aaaaaa", kind: "clone", source: "", target: "", port: 0,
       state: "done", step: "", error: "", createdAt: "2026-09-16T00:00:00Z",
-      startedAt: "", finishedAt: "", result: null, ...over,
+      startedAt: "", finishedAt: "", result: null, panelSite: true, sourcePanelSite: true, ...over,
     });
     stagerService.sitePage = async (domain: string) => ({
       context: { domain, user: "shop", type: "php" },

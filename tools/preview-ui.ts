@@ -3,7 +3,7 @@
 import { indexPage, updatePage } from "../manager/views";
 import { dashboardView as cloudflareDashboardView, layout as cloudflareLayout } from "../addons/cloudflare-ips/app/views";
 import { dashboardView, layout as instaticLayout, newInstanceView, jobView as instaticJobView } from "../addons/instatic/app/views";
-import { jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, newCloneView, promoteListView, promoteView, siteStagingView } from "../addons/stager/app/views";
+import { jobsView, jobView, layout as stagerLayout, fragment as stagerFragment, newCloneView, promoteView, siteStagingView } from "../addons/stager/app/views";
 import { fleetView as gitFleetView, fragment as gitFragment, layout as gitLayout, siteView as gitSiteView } from "../addons/git/app/views";
 import type { GitSiteStatus } from "../addons/git/app/service";
 import { fleetView as maintenanceFleetView, fragment as maintenanceFragment, layout as maintenanceLayout, siteView as maintenanceSiteView } from "../addons/maintenance/app/views";
@@ -35,7 +35,7 @@ import type { PanelTweaksState } from "../addons/panel-tweaks/action";
 import type { PanelPhpStatus } from "../addons/system-tweaks/panel-php";
 import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { type: "text" };
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
-import type { JobView, SiteDetail, SiteSummary } from "../addons/stager/app/service";
+import type { JobView, SiteSummary } from "../addons/stager/app/service";
 import type { AvailableTags } from "../addons/instatic/app/tags";
 import { withCsrfCookie, SECURITY_HEADERS } from "../lib/app-http";
 import { handle as terminalHandle } from "../addons/terminal/app/index";
@@ -261,24 +261,27 @@ function gitPreviewSites(url: URL): GitSiteStatus[] {
 function previewSiteStaging(domain: string, siteType: string, url: URL): string {
   const base: JobView = {
     id: "preview-clone", kind: "clone", source: "", target: "", port: 0, state: "done",
-    step: "", error: "", panelSite: true, createdAt: "2026-09-10T09:30:00Z",
+    step: "", error: "", panelSite: true, sourcePanelSite: true, createdAt: "2026-09-10T09:30:00Z",
     startedAt: "2026-09-10T09:30:02Z", finishedAt: "2026-09-10T09:32:10Z", result: null,
   };
-  if (url.searchParams.has("empty")) {
+  if (url.searchParams.has("empty") && !url.searchParams.has("staged-from")) {
     return siteStagingView(domain, [], siteType !== "nodejs" && siteType !== "python");
   }
   const jobs: JobView[] = [
     { ...base, id: "preview-clone-1", source: domain, target: `stg.${domain}` },
     { ...base, id: "preview-clone-2", source: domain, target: `qa.${domain}`, state: "running", step: "copying files" },
   ];
+  // ?staged-from draws the site as a staging copy of live.example.com, promoted once.
   if (url.searchParams.has("staged-from")) {
-    jobs.push({ ...base, id: "preview-clone-3", source: "live.example.com", target: domain, result: {} as never });
+    jobs.push({ ...base, id: "preview-clone-3", source: "live.example.com", target: domain, result: job.result });
+    jobs.push({ ...base, id: "preview-promote-1", kind: "promote", source: domain, target: "live.example.com", createdAt: "2026-09-12T14:05:00Z" });
+    if (url.searchParams.has("empty")) jobs.splice(0, 2);
   }
   return siteStagingView(domain, jobs, siteType !== "nodejs" && siteType !== "python");
 }
 const job: JobView = {
   id: "preview-job", kind: "clone", source: "www.example.com", target: "stg.example.com", port: 0,
-  state: "done", step: "", error: "", panelSite: true,
+  state: "done", step: "", error: "", panelSite: true, sourcePanelSite: true,
   createdAt: "2026-09-10T09:30:00Z", startedAt: "2026-09-10T09:30:02Z", finishedAt: "2026-09-10T09:32:10Z",
   result: {
     siteType: "php", siteUser: "staging", phpVersion: "8.2", vhostTemplate: "WordPress",
@@ -1536,21 +1539,26 @@ const server = Bun.serve({
               ...(url.searchParams.has("no-ip") ? {} : { publicIp: PREVIEW_PUBLIC_IP }),
             },
           )
-        : stagerLayout("Staging sites", jobsView(empty ? [] : [currentJob], age), notice);
+        : stagerLayout("Staging sites", jobsView(empty ? [] : [
+          currentJob,
+          { ...job, id: "preview-job-2", source: "shop.example.com", target: "qa.shop.example.com", createdAt: "2026-09-08T11:00:00Z" },
+          { ...job, id: "preview-job-3", source: "blog.example.com", target: "stg.blog.example.com", panelSite: false, createdAt: "2026-09-01T08:15:00Z" },
+          { ...job, id: "preview-job-4", kind: "promote", source: "stg.example.com", target: "www.example.com", createdAt: "2026-09-11T16:40:00Z" },
+        ], age), notice);
     } else if (path === "/addons/stager/new") {
-      const source = sites.find((s) => s.domain === url.searchParams.get("source"));
-      const detail: SiteDetail | null = source ? {
-        ...source, instatic: source.siteType === "reverse-proxy", rootDirectory: source.domain,
-        database: source.databases ? "example" : "", sizeMb: 148,
-      } : null;
-      html = stagerLayout("New staging site", newCloneView(detail, empty ? [] : sites), notice);
+      const source = sites.find((s) => s.domain === url.searchParams.get("source")) ?? null;
+      // ?many lists enough sites for the picker's search to appear.
+      const picker = url.searchParams.has("many")
+        ? [...sites, ...["shop", "docs", "agency", "careers"].map((name): SiteSummary => ({
+          domain: `${name}.example.org`, siteType: "php", siteUser: name, phpVersion: "8.3", application: "WordPress", databases: 1,
+        }))]
+        : sites;
+      html = stagerLayout("New staging site", newCloneView(source, empty ? [] : picker), notice);
     } else if (path === "/addons/stager/promote") {
-      // ?job= is what the list's Promote link carries, so following it here
-      // reaches the same view it reaches in the panel. The preview had its own
-      // /promote/confirm instead, which nothing linked to.
-      html = url.searchParams.has("job")
-        ? stagerLayout("Promote to live", promoteView(currentJob), notice)
-        : stagerLayout("Promote to live", promoteListView(empty ? [] : [currentJob]), notice);
+      // ?job= is what the list's Promote link carries; without it the route
+      // sends the operator to the list, as the panel's does.
+      if (!url.searchParams.has("job")) return Response.redirect(new URL("/addons/stager/", url).href, 302);
+      html = stagerLayout("Promote to live", promoteView(currentJob), notice);
     } else if (path === "/addons/stager/jobs/preview-job") {
       html = stagerLayout("Staging site details", jobView(currentJob, logs), notice);
     } else if (path === "/addons/stager/api/jobs/preview-job/events" || (path === "/addons/stager/api/jobs/preview-job" && req.headers.get("accept")?.includes("text/event-stream"))) {

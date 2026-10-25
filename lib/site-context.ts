@@ -70,10 +70,11 @@ const NATIVE_TABS: TabSpec[] = [
  * injector settles on when several addons share one anchor. Keeping the label
  * here keeps the injected Twig and the reproduced strip from drifting apart.
  */
-export const ADDON_SITE_TABS: { slug: string; label: string; url: string }[] = [
+export const ADDON_SITE_TABS: { slug: string; label: string; url: string; applies?: (site: SiteContext) => boolean }[] = [
   { slug: "git", label: "Git", url: mountPath("git") },
   { slug: "maintenance", label: "Maintenance", url: mountPath("maintenance") },
-  { slug: "stager", label: "Staging", url: mountPath("stager") },
+  // The types Stager clones, as its injected tab's Twig condition has them.
+  { slug: "stager", label: "Staging", url: mountPath("stager"), applies: (site) => ["php", "static", "reverse-proxy"].includes(site.type) },
 ];
 
 /** How CloudPanel's stored site `type` reads to an operator. */
@@ -102,7 +103,7 @@ export function siteTabs(site: SiteContext, activeSlug = ""): SiteTab[] {
     active: tab.slug === activeSlug,
   }));
   const addons = ADDON_SITE_TABS.filter(
-    (tab) => site.addonSlugs === undefined || site.addonSlugs.includes(tab.slug),
+    (tab) => (site.addonSlugs === undefined || site.addonSlugs.includes(tab.slug)) && (!tab.applies || tab.applies(site)),
   ).map((tab) => ({
     slug: tab.slug,
     label: tab.label,

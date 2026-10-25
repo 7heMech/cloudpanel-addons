@@ -87,20 +87,19 @@ describe("a stager job's staging site", () => {
 });
 
 describe("the stager's pages", () => {
-  test("badge a missing site and explain it", () => {
+  test("badge a missing site once", () => {
     const html = jobsView([JOB], 120, PROD_ONLY, SNAP_TIME);
-    expect(html).toInclude("CloudPanel site deleted");
-    expect(html).toInclude("deleted</span>");
+    expect(html.match(/>deleted</g)?.length).toBe(1);
   });
 
   test("say nothing when the site is present", () => {
-    expect(jobsView([JOB], 120, WITH_STAGING, SNAP_TIME)).not.toInclude("CloudPanel site deleted");
+    expect(jobsView([JOB], 120, WITH_STAGING, SNAP_TIME)).not.toInclude("deleted</span>");
   });
 
-  test("drop the link to a site that is gone", () => {
+  test("drop the link to a site that is gone and say so once", () => {
     const html = jobView(JOB, "all good", 120, PROD_ONLY, SNAP_TIME);
     expect(html).toInclude("This staging site has been deleted from CloudPanel.");
-    expect(html).toInclude("(deleted from CloudPanel)");
+    expect(html.match(/deleted/g)?.length).toBe(1);
     expect(html).not.toInclude('href="https://stg.example.com"');
   });
 
