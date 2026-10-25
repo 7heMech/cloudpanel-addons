@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { applicationOk, holdCloneMail } from "../addons/stager/action";
+import { applicationOk, holdCloneMail, rewriteWpConfig } from "../addons/stager/action";
 import { expandTarget } from "../addons/stager/app/service";
 import { CLIENT_JS } from "../addons/stager/app/views";
 
@@ -324,5 +324,39 @@ describe("a site the job adopted is not a site the job created", () => {
   // the work to systemd is closed where the work actually starts.
   test("the run verb re-checks that the target does not already exist", () => {
     expect(stager()).toMatch(/if \(siteExists\(paths, ctx\.target\)\) \{\n\s*failJob/);
+  });
+});
+
+describe("the clone's wp-config.php", () => {
+  const db = { name: "stg_db", user: "stg_user", pass: "s3cret" };
+
+  test("is pointed at the clone's database whatever quotes and spacing it uses", () => {
+    const rewritten = rewriteWpConfig([
+      `define( 'DB_NAME', 'live_db' );`,
+      `define("DB_USER","live_user");`,
+      `define(\t'DB_PASSWORD' ,\t"p'a\\"ss" ) ;`,
+    ].join("\n"), "stg.example.test", db);
+    expect(rewritten).not.toContain("live_");
+    expect(rewritten).toContain(`define( 'DB_NAME', 'stg_db' );`);
+    expect(rewritten).toContain(`define( 'DB_USER', 'stg_user' );`);
+    expect(rewritten).toContain(`define( 'DB_PASSWORD', 's3cret' );`);
+    expect(rewritten).toContain(`define( 'WP_HOME', 'https://stg.example.test' );`);
+  });
+
+  test("fails rather than keep a credential it cannot rewrite", () => {
+    expect(() => rewriteWpConfig([
+      `define( 'DB_NAME', getenv('DB_NAME') );`,
+      `define( 'DB_USER', 'live_user' );`,
+      `define( 'DB_PASSWORD', 'x' );`,
+    ].join("\n"), "stg.example.test", db)).toThrow("DB_NAME");
+    expect(() => rewriteWpConfig(`define( 'DB_NAME', 'a' );`, "stg.example.test", db)).toThrow("DB_USER");
+  });
+
+  test("writes a password with replacement patterns in it literally", () => {
+    const rewritten = rewriteWpConfig(
+      `define('DB_NAME','a');define('DB_USER','b');define('DB_PASSWORD','c');`,
+      "stg.example.test", { ...db, pass: "x$&y$1" },
+    );
+    expect(rewritten).toContain(`'x$&y$1'`);
   });
 });

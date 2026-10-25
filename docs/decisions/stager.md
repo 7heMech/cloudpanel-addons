@@ -9,7 +9,10 @@ Node.js, Python, and other reverse proxy backends are excluded.
 For PHP sites, Stager copies the document root, exports and imports the first
 CloudPanel database, carries the source Nginx configuration when it can be
 validated, and writes the new database credentials into supported application
-configuration. WordPress URLs are rewritten when WP-CLI is available. Other
+configuration. A `wp-config.php` whose `DB_NAME`, `DB_USER` or `DB_PASSWORD` is
+not one quoted value fails the clone, which is then removed: until it is
+rewritten the copy names the live database, and the WP-CLI step that follows
+would rewrite the live site's URLs. WordPress URLs are rewritten when WP-CLI is available. Other
 applications may retain absolute source URLs in their database.
 
 For Instatic sites, Stager creates a separate container, key, owner, and port,
@@ -74,8 +77,7 @@ The live site keeps its own `wp-config.php`, `.env` and `wp-content/uploads`:
 the staging copy's are dropped before the switch, because the staging
 `wp-config.php` names the staging database and pointing the live site at it
 would be worse than any missed edit. The two configuration files are then
-copied from the live root into the staged one, and the staged root is chowned,
-before the rename. A root that went live without a `wp-config.php` and gained
+copied from the live root into the staged one before the rename. A root that went live without a `wp-config.php` and gained
 one a moment later would be a WordPress offering its installer to whoever asked
 in between, however short that moment was. `wp-content/uploads` can be
 gigabytes, so it is moved onto the new root after the switch instead: the cost
@@ -90,6 +92,12 @@ through Instatic's export and import APIs. The live instance's own content is
 exported first and kept with the job. It keeps its container, port, key, users
 and integration secrets; the operator must publish it once afterwards.
 
+Root reads the staging copy, but every write, removal and move inside a site's
+document root runs as that site's user: both trees belong to site users, and
+root acting by path there would follow a link such as a `wp-content` pointing at
+another site. The copy is therefore owned by the site's user as it is written,
+for a clone as for a promote.
+
 The replaced document root, the database dump and the content export are kept
 with the job record and expire with it. A promote that dies between the two
 renames is put back by the maintenance pass, which is also what removes the
@@ -97,9 +105,10 @@ retained roots once their records expire.
 
 ## Mail
 
-While SMTP Relay is enabled, a finished clone is assigned to its seeded
+While SMTP Relay is enabled, a clone is assigned to its seeded
 `dont-send` profile through SMTP's own `assign` verb, so a copy of a shop does
-not mail the shop's customers. `assign` records the site as decided, so SMTP's
+not mail the shop's customers. That happens as soon as its site exists, before
+any of the live site's code is copied in. `assign` records the site as decided, so SMTP's
 new-site pass does not move it into the default profile. A failed assignment is
 a job note, not a failed clone. A promote leaves the live site's assignment
 alone.
