@@ -52,7 +52,8 @@ async function setDomains(domains, enabled) {
   if (!domains.length) return;
   const state = await change('/api/sites', { domains: domains, enabled: enabled }, 'Could not update the Cloudflare setting: ');
   if (!state) return;
-  const done = plural(domains.length, 'site') + (enabled ? ' now allow' : ' no longer allow') + ' Cloudflare traffic only.';
+  const one = domains.length === 1;
+  const done = plural(domains.length, 'site') + (enabled ? ' now allow' : ' no longer allow') + (one ? 's' : '') + ' Cloudflare traffic only.';
   // The change landed; what is on screen is what could not be refreshed, and
   // saying only that it worked would hide rows that are no longer true.
   notify(state.ok ? done : done + ' The page may be out of date: ' + state.error, state.ok ? 'ok' : 'warn');

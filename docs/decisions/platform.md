@@ -200,8 +200,8 @@ later, even if the first run failed. The units exist while any installed addon
 declares `newSites`; repair restarts the watcher if it has stopped. It takes no
 operation lock: each addon's work takes its own. Vhost rewrites also wake the
 watcher; when the site set is unchanged, the hooks make no network calls or
-configuration writes. Update and repair remove the units of the per-addon
-watchers this replaced (`LEGACY_UNITS` in `cli/paths.ts`).
+configuration writes. Update and repair disable and remove the units listed in
+`LEGACY_UNITS` in `cli/paths.ts`.
 
 ## One way to watch a job
 
