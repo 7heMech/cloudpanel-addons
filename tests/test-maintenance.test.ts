@@ -88,6 +88,27 @@ test("global maintenance actions enable, report status, and disable fleet-wide m
   }
 });
 
+test("many sites are switched in one action, and a site the panel does not have is reported, not fatal", async () => {
+  const { root, paths } = fixture("a.example.com", ["b.example.com"]);
+  try {
+    const on = await executeMaintenanceAction(["enable-many"], actionOptions(paths, {
+      input: JSON.stringify({ domains: ["b.example.com", "A.example.com", "gone.example.com"] }),
+    })) as { updated: string[]; failed: { domain: string; error: string }[] };
+    expect(on.updated).toEqual(["a.example.com", "b.example.com"]);
+    expect(on.failed).toEqual([{ domain: "gone.example.com", error: "CloudPanel site not found: 'gone.example.com'" }]);
+    expect(lstatSync(join(paths.dataDir, "a.example.com", "on")).isFile()).toBe(true);
+    const off = await executeMaintenanceAction(["disable-many"], actionOptions(paths, {
+      input: JSON.stringify({ domains: ["a.example.com"] }),
+    })) as { updated: string[] };
+    expect(off.updated).toEqual(["a.example.com"]);
+    expect(existsSync(join(paths.dataDir, "a.example.com", "on"))).toBe(false);
+    expect(existsSync(join(paths.dataDir, "b.example.com", "on"))).toBe(true);
+    await expect(executeMaintenanceAction(["enable-many"], actionOptions(paths, { input: "{}" }))).rejects.toThrow("at least one site");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("maintenance actions toggle atomically, manage a passive template, and replace IP bypasses", async () => {
   const { root, paths } = fixture();
   try {
@@ -573,13 +594,12 @@ test("the bulk route switches the listed sites and answers with the repainted fl
     expect((await handleMaintenance(request(alias, { enabled: true, domains: ["a.example.com"] }), alias)).status).toBe(404);
   }
 
-  const original = { setEnabled: maintenanceService.setEnabled, fleet: maintenanceService.fleet };
+  const original = { setManyEnabled: maintenanceService.setManyEnabled, fleet: maintenanceService.fleet };
   try {
     const switched: string[] = [];
-    maintenanceService.setEnabled = async (domain, enabled) => {
-      if (domain === "bad.example.com") return { ok: false, error: "root action failed" };
-      switched.push(domain);
-      return { ok: true, data: { domain, enabled, customTemplate: false, bypasses: [], uncovered: null } };
+    maintenanceService.setManyEnabled = async (domains, enabled) => {
+      switched.push(...domains.filter((domain) => domain !== "bad.example.com"));
+      return { enabled, updated: switched, failed: [{ domain: "bad.example.com", error: "root action failed" }] };
     };
     maintenanceService.fleet = async () => ({ global: { global: false, bypasses: [] }, sites: [] });
     const res = await handleMaintenance(request("/api/bulk-toggle", { enabled: true, domains: ["good.example.com", "bad.example.com"] }), "/api/bulk-toggle");
@@ -615,7 +635,10 @@ test("maintenance integration preserves ACME and normalizes non-GET errors throu
   });
   expect(MAINTENANCE_TARGETS[0]!.snippet("/addons/maintenance")).toContain("site.domainName|url_encode");
   expect(MAINTENANCE_ALLOWED_VERBS).toEqual(new Set([
-    "sites", "status", "enable", "disable", "get-template", "set-template", "reset-template", "set-bypass",
+    "sites",
+    "enable-many",
+    "disable-many",
+    "status", "enable", "disable", "get-template", "set-template", "reset-template", "set-bypass",
     "global-status", "global-enable", "global-disable",
     "global-set-bypass",
   ]));

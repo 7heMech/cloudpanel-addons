@@ -9,7 +9,8 @@ state, in one `sites` action call, which reads the panel database and the state
 directory once. The sites table comes first, with "N of M in maintenance" in its
 header counting what visitors get. A site's custom page and bypass count are a
 note under its name. Rows are selected by click or checkbox and "Turn on
-selected" or "Turn off selected" switch them through one bulk route, so most of
+selected" or "Turn off selected" switch them through one bulk route and one
+`enable-many` or `disable-many` action, which reads the panel database once, so most of
 the fleet can go into maintenance without the global switch; turning sites on
 asks first, with their names. From six sites a search and a filter (in
 maintenance, live, not covered) sit above the table. Every fleet change answers

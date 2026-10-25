@@ -98,30 +98,10 @@ export const maintenanceService = {
   },
 
   async setManyEnabled(domains: string[], enabled: boolean): Promise<BulkToggleResult> {
-    const updated: string[] = [];
-    const failed: { domain: string; error: string }[] = [];
-
-    for (let offset = 0; offset < domains.length; offset += 8) {
-      const batch = domains.slice(offset, offset + 8);
-      await Promise.all(batch.map(async (domain) => {
-        try {
-          const res = await this.setEnabled(domain, enabled);
-          if (res.ok) {
-            updated.push(domain);
-          } else {
-            failed.push({ domain, error: res.error ?? "failed to toggle" });
-          }
-        } catch (err) {
-          failed.push({ domain, error: err instanceof Error ? err.message : String(err) });
-        }
-      }));
-    }
-
-    return {
-      enabled,
-      updated: updated.sort((a, b) => a.localeCompare(b)),
-      failed: failed.sort((a, b) => a.domain.localeCompare(b.domain)),
-    };
+    const res = await globalAction<BulkToggleResult>(enabled ? "enable-many" : "disable-many", JSON.stringify({ domains }));
+    if (res.ok && res.data) return res.data;
+    const error = res.error ?? "failed to toggle";
+    return { enabled, updated: [], failed: domains.map((domain) => ({ domain, error })) };
   },
 
   template(domain: string): Promise<ActionResult<MaintenanceTemplateView>> {

@@ -75,6 +75,8 @@ export const DEFAULT_MAINTENANCE_ACTION_PATHS: MaintenanceActionPaths = {
 
 type MaintenanceVerb =
   | "sites"
+  | "enable-many"
+  | "disable-many"
   | "status"
   | "enable"
   | "disable"
@@ -109,14 +111,14 @@ function parseAction(argv: string[], paths: MaintenanceActionPaths, options: Mai
     "status", "enable", "disable", "get-template", "set-template", "reset-template", "set-bypass",
   ];
   const globalAllowed: MaintenanceVerb[] = [
-    "sites", "global-status", "global-enable", "global-disable", "global-set-bypass",
+    "sites", "enable-many", "disable-many", "global-status", "global-enable", "global-disable", "global-set-bypass",
   ];
   if (verb && globalAllowed.includes(verb)) {
     if (argv.length > 1) failAction(`action ${verb} takes no arguments`);
     return { verb, domain: "" };
   }
   if (!verb || !siteAllowed.includes(verb)) {
-    failAction("usage: clp-addons action maintenance {status|enable|disable|get-template|set-template|reset-template|set-bypass} --domain <domain> | {sites|global-status|global-enable|global-disable|global-set-bypass}");
+    failAction("usage: clp-addons action maintenance {status|enable|disable|get-template|set-template|reset-template|set-bypass} --domain <domain> | {sites|enable-many|disable-many|global-status|global-enable|global-disable|global-set-bypass}");
   }
   let domain = "";
   for (let i = 1; i < argv.length; i++) {
@@ -481,6 +483,66 @@ export function sanitizeTemplate(input: string): string {
   return html.trim() + "\n";
 }
 
+/** Purges the Varnish cache of each domain, eight at a time, within eight seconds. */
+async function purgeVarnishMany(domains: string[], options: MaintenanceActionOptions): Promise<void> {
+  const started = Date.now();
+  let next = 0;
+  const worker = async () => {
+    while (next < domains.length && Date.now() - started < 8_000) {
+      const domain = domains[next++];
+      if (domain) await purgeVarnish(domain, options.varnishPort, options.fetchFn);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, domains.length) }, () => worker()));
+}
+
+/** Turns maintenance on or off for many sites in one pass: one database read, one process. */
+async function toggleMany(
+  paths: MaintenanceActionPaths, enabled: boolean, input: string, options: MaintenanceActionOptions,
+): Promise<{ enabled: boolean; updated: string[]; failed: { domain: string; error: string }[] }> {
+  let requested: unknown;
+  try { requested = (JSON.parse(input) as { domains?: unknown }).domains; } catch { failAction("expected JSON with a domains list"); }
+  if (!Array.isArray(requested) || requested.length === 0) failAction("domains must list at least one site");
+  let present: Set<string>;
+  let db: Database;
+  try {
+    db = new Database(paths.panelDb, { readonly: true });
+  } catch {
+    failAction("CloudPanel's site database is unavailable");
+  }
+  try {
+    db.exec("PRAGMA busy_timeout = 5000;");
+    present = new Set(db.query<{ domain_name: string }, []>("SELECT lower(domain_name) AS domain_name FROM site").all()
+      .map((row) => row.domain_name));
+  } catch {
+    failAction("CloudPanel's site database could not be read");
+  } finally {
+    db.close();
+  }
+  const updated: string[] = [];
+  const failed: { domain: string; error: string }[] = [];
+  for (const raw of requested) {
+    const shown = typeof raw === "string" ? raw : String(raw);
+    try {
+      if (typeof raw !== "string") failAction("not a domain");
+      const domain = options.domainValidator ? options.domainValidator(raw) : validateDomain(raw, paths.panelIdentityFile);
+      if (!present.has(domain)) failAction(`CloudPanel site not found: '${domain}'`);
+      const flag = join(siteDir(paths, domain, enabled), "on");
+      if (enabled) writeAtomic(flag, "", 0o600);
+      else rmSync(flag, { force: true });
+      updated.push(domain);
+    } catch (error) {
+      failed.push({ domain: shown, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  await purgeVarnishMany(updated, options);
+  return {
+    enabled,
+    updated: updated.sort((a, b) => a.localeCompare(b)),
+    failed: failed.sort((a, b) => a.domain.localeCompare(b.domain)),
+  };
+}
+
 function readInput(options: MaintenanceActionOptions): Promise<string> {
   if (options.input !== undefined) return Promise.resolve(options.input);
   return Bun.stdin.text();
@@ -495,6 +557,9 @@ export async function executeMaintenanceAction(
   const { verb, domain } = parseAction(argv, paths, options);
 
   if (verb === "sites") return allStatuses(paths);
+  if (verb === "enable-many" || verb === "disable-many") {
+    return toggleMany(paths, verb === "enable-many", await readInput(options), options);
+  }
 
   if (verb === "global-status") {
     const dir = siteDir(paths, "_global");
@@ -541,23 +606,7 @@ export async function executeMaintenanceAction(
         db.close();
       }
 
-      const CONCURRENCY = 8;
-      const PURGE_BUDGET_MS = 8_000;
-      const start = Date.now();
-      let idx = 0;
-
-      const worker = async () => {
-        while (idx < domainNames.length && Date.now() - start < PURGE_BUDGET_MS) {
-          const domain = domainNames[idx++];
-          if (domain) {
-            await purgeVarnish(domain, options.varnishPort, options.fetchFn);
-          }
-        }
-      };
-
-      await Promise.all(
-        Array.from({ length: Math.min(CONCURRENCY, domainNames.length) }, () => worker()),
-      );
+      await purgeVarnishMany(domainNames, options);
     } catch {
       // panelDb may not exist in some unit tests or mock environments
     }
