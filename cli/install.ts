@@ -1,6 +1,6 @@
 // `clp-addons install`.
 
-import { dashboardUrl, installedAddons, resolveAddon } from "./addons";
+import { dashboardUrl, installedAddons, migrateOldAddonNames, resolveAddon } from "./addons";
 import { artifactNames, installArtifacts } from "./artifacts";
 import { bootstrapProvision, applyEnable } from "./toggle";
 import { ADDONS, ADDON_NAMES, type AddonSpec } from "./addon-catalog";
@@ -24,6 +24,8 @@ export async function cmdInstall(argv: string[]): Promise<void> {
   const names = positional.length > 0 ? positional : await askAddons();
   const [first, ...rest] = [...new Set(names)].map(resolveAddon);
   return withOperationLock(`install ${names.join(", ")}`, async () => {
+    // Re-running the installer on an older box must not leave a renamed addon behind until repair.
+    migrateOldAddonNames();
     if (typeof flags.local === "string") applyLocal(first!, flags.local);
     else await applyEnable(first!.name);
     for (const spec of rest) await applyEnable(spec.name);

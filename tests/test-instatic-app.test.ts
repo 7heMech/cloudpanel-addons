@@ -16,7 +16,7 @@ describe("Instatic dashboard replies", () => {
 
   for (const verb of ["start", "stop", "restart", "recreate", "update", "delete"]) {
     test(`${verb} returns the same dashboard as GET`, async () => {
-      spyOn(instaticService, "listInstances").mockResolvedValue(instances);
+      spyOn(instaticService, "listInstancesOrThrow").mockResolvedValue(instances);
       spyOn(instaticService, "listJobs").mockResolvedValue([]);
       spyOn(tags, "listAvailableTags").mockResolvedValue(available);
       const method = verb === "update" ? "updateInstance" : verb === "delete" ? "deleteInstance" : "lifecycle";
@@ -32,8 +32,19 @@ describe("Instatic dashboard replies", () => {
     });
   }
 
+  test("a list that fails after a change leaves the page as it is rather than empty", async () => {
+    spyOn(instaticService, "listInstancesOrThrow").mockRejectedValue(new Error("action unavailable"));
+    spyOn(instaticService, "listJobs").mockResolvedValue([]);
+    spyOn(tags, "listAvailableTags").mockResolvedValue(available);
+    spyOn(instaticService, "lifecycle").mockResolvedValue({ ok: true, data: { domain: instances[0]!.domain } } as never);
+    const path = "/api/instances/pages.example.com/stop";
+    const body = await (await instaticHandle(request(path, "POST"), path)).json() as { ok: boolean; html?: string };
+    expect(body.ok).toBe(true);
+    expect(body.html).toBeUndefined();
+  });
+
   test("failure retains rollback details and skips rendering; CSRF still guards actions", async () => {
-    const read = spyOn(instaticService, "listInstances");
+    const read = spyOn(instaticService, "listInstancesOrThrow");
     const result = { ok: false, error: "rolled back", data: { restoredTag: "0.0.18", logs: "container failed" } };
     const change = spyOn(instaticService, "updateInstance").mockResolvedValue(result as never);
     const path = "/api/instances/pages.example.com/update";

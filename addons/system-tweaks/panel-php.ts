@@ -233,6 +233,23 @@ function runningVersion(ctx: Context): string | null {
   }
 }
 
+/**
+ * Automatic updates include the PHP packages the panel runs on, and no package
+ * script restarts CloudPanel's own unit, so after one the panel keeps running
+ * the replaced binary. Its reload re-executes the new one.
+ */
+function reloadReplaced(ctx: Context): string | null {
+  const pid = ctx.run("systemctl", ["show", "-p", "MainPID", "--value", ctx.paths.unit]).stdout.trim();
+  if (!/^[1-9][0-9]*$/.test(pid)) return null;
+  try {
+    if (!readlinkSync(join(ctx.paths.procRoot, pid, "exe")).endsWith(" (deleted)")) return null;
+  } catch {
+    return null;
+  }
+  check(ctx.run("systemctl", ["reload", ctx.paths.unit]), "reloading the panel's PHP onto its updated binary");
+  return "panel PHP reloaded onto its updated binary";
+}
+
 function dropInFor(ctx: Context, php: string, unit: BaseUnit): string {
   return [
     MARKER,
@@ -402,6 +419,26 @@ export async function setPanelPhp(php: string, options: PanelPhpOptions = {}): P
  */
 export async function reconcilePanelPhp(options: PanelPhpOptions = {}): Promise<string | null> {
   const ctx = contextOf(options);
+  // The choice first, so a failed reload cannot keep it from being restored;
+  // a restart it makes also leaves nothing to reload.
+  let reconciled: string | null = null;
+  let failure: unknown = null;
+  try {
+    reconciled = await reconcileChoice(ctx);
+  } catch (error) {
+    failure = error;
+  }
+  let reloaded: string | null = null;
+  try {
+    if (existsSync(ctx.paths.configFile)) reloaded = reloadReplaced(ctx);
+  } catch (error) {
+    failure ??= error;
+  }
+  if (failure) throw failure;
+  return [reloaded, reconciled].filter(Boolean).join("; ") || null;
+}
+
+async function reconcileChoice(ctx: Context): Promise<string | null> {
   if (!readChoice(ctx.paths).php && !present(ctx.paths.dropInFile)) return null;
   return withFileLock(ctx.paths.lockFile, 30, "another panel PHP change is still running", async () => {
     const choice = readChoice(ctx.paths);

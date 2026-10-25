@@ -123,8 +123,9 @@ unless CloudPanel's sites have changed since the last run; then it binds new
 site users, puts new sites in the default profile and drops deleted sites.
 Repair runs the full reconcile, which also undoes drift, every 15 minutes.
 
-Stager assigns each finished staging clone to `dont-send` through `assign`,
-which marks the site known, so the new-site pass leaves it there.
+Stager assigns each staging clone to `dont-send` through `assign` as soon as
+its site exists, which marks the site known, so the new-site pass leaves it
+there.
 
 ## Limits
 

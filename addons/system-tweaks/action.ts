@@ -301,21 +301,30 @@ export function systemTweaksUpkeep(options: SystemTweaksOptions = {}): string | 
 export function withdrawSystemTweaks(options: SystemTweaksOptions = {}): void {
   // First, because it refuses when CloudPanel's own PHP would not come back.
   withdrawPanelPhp(options.panelPhp);
-  withSettingsLock(options, (paths, settings) => {
-    applyUpdates({ ...settings.updates, enabled: false }, settings.enabledTimers, options.updates);
-    if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
-    applyRealIp(false, options.realIp);
-  });
+  try {
+    withSettingsLock(options, (paths, settings) => {
+      applyUpdates({ ...settings.updates, enabled: false }, settings.enabledTimers, options.updates);
+      if (settings.enabledTimers.length) writeSettings(paths, { ...settings, enabledTimers: [] });
+      applyRealIp(false, options.realIp);
+    });
+  } catch (error) {
+    // The addon stays enabled, so its panel PHP choice comes back with it.
+    restorePanelPhp(options.panelPhp);
+    throw error;
+  }
 }
 
 export function restoreSystemTweaks(options: SystemTweaksOptions = {}): void {
-  withSettingsLock(options, (paths, settings) => {
-    if (settings.updates.enabled && unattendedUpgradesInstalled(options.updates)) {
-      const applied = applyUpdates(settings.updates, settings.enabledTimers, options.updates);
-      writeSettings(paths, { ...settings, enabledTimers: applied.enabledTimers });
-    }
-    if (!settings.uploadProgressGuard) reconcilePhpGuard(true, false, guardOptions(options));
-    if (settings.blockForgedRealIp) applyRealIp(true, options.realIp);
-  });
-  restorePanelPhp(options.panelPhp);
+  try {
+    withSettingsLock(options, (paths, settings) => {
+      if (settings.updates.enabled && unattendedUpgradesInstalled(options.updates)) {
+        const applied = applyUpdates(settings.updates, settings.enabledTimers, options.updates);
+        writeSettings(paths, { ...settings, enabledTimers: applied.enabledTimers });
+      }
+      if (!settings.uploadProgressGuard) reconcilePhpGuard(true, false, guardOptions(options));
+      if (settings.blockForgedRealIp) applyRealIp(true, options.realIp);
+    });
+  } finally {
+    restorePanelPhp(options.panelPhp);
+  }
 }

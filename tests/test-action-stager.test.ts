@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { applicationOk, holdCloneMail, rewriteWpConfig } from "../addons/stager/action";
+import { applicationOk, dotenvProblem, holdCloneMail, rewriteDotenvContent, rewriteWpConfig } from "../addons/stager/action";
 import { expandTarget } from "../addons/stager/app/service";
 import { CLIENT_JS } from "../addons/stager/app/views";
 
@@ -325,6 +325,18 @@ describe("a site the job adopted is not a site the job created", () => {
   test("the run verb re-checks that the target does not already exist", () => {
     expect(stager()).toMatch(/if \(siteExists\(paths, ctx\.target\)\) \{\n\s*failJob/);
   });
+});
+
+test("a .env the clone cannot repoint fails it", () => {
+  expect(dotenvProblem("DB_DATABASE=a\nDB_USERNAME=b\nDB_PASSWORD=c\n")).toBeNull();
+  expect(dotenvProblem("DB_DATABASE=a\nDB_USERNAME=b\nDB_PASSWORD=c\nDATABASE_URL=mysql://live\n")).toContain("database URL");
+  expect(dotenvProblem("DB_DATABASE=a\n")).toContain("DB_USERNAME, DB_PASSWORD");
+  const exported = "export DB_DATABASE=live\nexport DB_USERNAME=live\n  DB_PASSWORD = secret\nAPP_KEY=x\n";
+  expect(dotenvProblem(exported)).toBeNull();
+  expect(rewriteDotenvContent(exported, { name: "stg", user: "stg_u", pass: "p$&1" }))
+    .toBe("export DB_DATABASE=stg\nexport DB_USERNAME=stg_u\n  DB_PASSWORD=p$&1\nAPP_KEY=x\n");
+  // A source with a database and neither file is not cloned at all.
+  expect(readFileSync(join(import.meta.dir, "../addons/stager/action.ts"), "utf-8")).toMatch(/\} else \{\n\s*failJob\(ctx, `found no wp-config\.php or \.env/);
 });
 
 describe("the clone's wp-config.php", () => {

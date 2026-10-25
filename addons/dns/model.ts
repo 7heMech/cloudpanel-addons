@@ -20,7 +20,7 @@ export const PRIORITISED: readonly RecordType[] = ["MX", "SRV"];
 
 const MAX_PROFILES = 24;
 const MAX_RECORDS = 60;
-const MAX_CONNECTIONS = 12;
+export const MAX_CONNECTIONS = 12;
 const MAX_SKIP_IPS = 20;
 const NAME_MAX = 40;
 
@@ -95,6 +95,8 @@ export interface Policy {
   /** Domain to profile id. A site that is absent is left alone. */
   assignments: Record<string, string>;
   knownSiteIds: number[];
+  /** New sites whose changes beyond their own address records wait for an administrator's review. */
+  held: string[];
   connections: Connection[];
   /** Zone name to the connection and zone that manage it, where more than one could. */
   zoneChoices: Record<string, ZoneChoice>;
@@ -328,13 +330,15 @@ export function parsePolicy(value: unknown): Policy {
     for (const [zone, choice] of Object.entries(raw.zoneChoices ?? {})) {
       choices[hostname(zone, "a zone")] = { connectionId: connectionId(choice.connectionId), zoneId: cloudflareId(choice.zoneId, "a zone") };
     }
+    const assignments: Record<string, string> = Object.fromEntries(Object.entries(raw.assignments)
+      .filter(([, id]) => ids.has(id))
+      .map(([domain, id]) => [hostname(domain, "an assigned site"), id]));
     return {
       version: 1,
       profiles,
       defaultProfileId: raw.defaultProfileId && ids.has(raw.defaultProfileId) ? raw.defaultProfileId : null,
-      assignments: Object.fromEntries(Object.entries(raw.assignments)
-        .filter(([, id]) => ids.has(id))
-        .map(([domain, id]) => [hostname(domain, "an assigned site"), id])),
+      assignments,
+      held: [...new Set((raw.held ?? []).filter((domain) => typeof domain === "string" && assignments[domain]))],
       knownSiteIds: [...new Set((raw.knownSiteIds ?? []).filter((id) => Number.isSafeInteger(id) && id > 0))],
       connections: parseConnections(raw.connections ?? []),
       zoneChoices: choices,

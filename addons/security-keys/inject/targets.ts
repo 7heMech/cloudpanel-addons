@@ -42,12 +42,12 @@ export const SECURITY_KEYS_TARGETS: AddonTarget[] = [
       <div class="card clp-security-keys" id="clp-security-keys">
         <div class="card-header">Security Keys</div>
         <div class="card-body">
-          <p>Sign in without your password using a passkey or a hardware key such as a YubiKey. The key asks for its PIN, your fingerprint or your device's unlock every time.</p>
+          <p>Sign in without your password or two-factor code using a passkey or a hardware key such as a YubiKey. The key asks for its PIN, your fingerprint or your device's unlock every time.</p>
           <div class="alert alert-danger clp-sk-error" role="alert" hidden></div>
           <div class="clp-sk-list"></div>
           <p class="clp-sk-unsupported" hidden>Security keys work only when the panel is open on its hostname with a valid certificate, not on an IP address.</p>
           <p class="clp-sk-off" hidden>An administrator has turned security keys off for your account. You can still remove the keys above.</p>
-          <p class="clp-sk-hardware" hidden>This panel accepts hardware keys only, not passkeys synced by a password manager or your devices.</p>
+          <p class="clp-sk-hardware" hidden>This panel refuses passkeys synced by a password manager or across your devices. Use a hardware key, or a passkey kept on one device.</p>
           <form class="clp-sk-add" hidden>
             <input type="text" class="form-control form-control-lg" maxlength="64" placeholder="Key name, e.g. YubiKey" aria-label="Key name">
             <button type="submit" class="btn btn-blue btn-lg">Add Security Key</button>

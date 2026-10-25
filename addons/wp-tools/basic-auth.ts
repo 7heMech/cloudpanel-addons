@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { BlockList, isIP } from "node:net";
 import { join } from "node:path";
 import { normalizeMappedIpv4 } from "../../lib/ip-address";
-import { failAction, runCommand, type CommandResult } from "../../cli/action-common";
+import { ActionFailure, failAction, runCommand, type CommandResult } from "../../cli/action-common";
 import { openPanelDatabase, trustedVhost, withNginxTransactionAsync } from "../../cli/nginx-transaction";
 
 export interface BasicAuthPaths {
@@ -76,6 +76,23 @@ export function basicAuthBlocks(paths: BasicAuthPaths, domain: string, ip: strin
   }
 }
 
+/** Whether `basicAuthVhost` could add an IP to this site's block, so the offer is never one that is then refused. */
+export function basicAuthRewritable(paths: BasicAuthPaths, domain: string): boolean {
+  const db = openPanelDatabase(paths.panelDb, true, 1000);
+  try {
+    const row = settings(db, domain);
+    if (!row) return false;
+    const { content } = trustedVhost(join(paths.nginxVhostDir, `${domain}.conf`), paths.vhostUid);
+    basicAuthVhost(content, domain, row.whitelisted_ips, [...normalizedEntries(row.whitelisted_ips), "192.0.2.1"]);
+    return true;
+  } catch (error) {
+    if (error instanceof ActionFailure) return false;
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
 function escaped(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -112,18 +129,33 @@ export function basicAuthVhost(content: string, domain: string, previous: string
     "fastcgi_params", "/etc/nginx/fastcgi_params",
   ]);
   const affected = [server];
+  // Where `satisfy all;` goes in, so a closed location stays closed to a visitor with the password.
+  const closing: number[] = [];
   for (const scope of affected) {
     affected.push(...scope.children);
     const authOff = scope.directives.some(({ words }) => words[0] === "auth_basic" && words[1] === "off");
     if (scope !== server && authOff) continue;
+    // CloudPanel's templates close `.git` and `xmlrpc.php` with a lone `deny all`.
+    // That location's own rules replace the server's, but it inherits `satisfy any`,
+    // which would let the password through; `satisfy all` keeps it denied.
+    const rules = scope.directives.filter(({ words }) => accessRules.has(words[0]!)).map(({ words }) => words.join(" "));
+    const deny = scope.directives.find(({ words }) => words.join(" ") === "deny all");
+    const closed = scope !== server && deny !== undefined
+      && (rules.length === 1 || (rules.length === 2 && rules.includes("satisfy all")));
+    if (closed && !rules.includes("satisfy all")) closing.push(deny.start);
     for (const { words, start, end } of scope.directives) {
-      if (accessRules.has(words[0]!) && (start < blockStart || end > blockEnd)) refuse();
+      if (accessRules.has(words[0]!) && !closed && (start < blockStart || end > blockEnd)) refuse();
       if (words[0] === "include" && !safeIncludes.has(words[1]!)) refuse();
     }
   }
+  let closedContent = content;
+  for (const at of closing.sort((a, b) => b - a)) {
+    const indent = /[ \t]*$/.exec(closedContent.slice(0, at))![0];
+    closedContent = `${closedContent.slice(0, at)}satisfy all;\n${indent}${closedContent.slice(at)}`;
+  }
   const replacement = ["satisfy any;", ...next.map((ip) => `allow ${ip};`), "deny all;", ...block.slice(-2)]
     .map((line) => `  ${line}`).join("\n");
-  return content.replace(pattern, () => replacement);
+  return closedContent.replace(pattern, () => replacement);
 }
 
 export async function reloadNginx(

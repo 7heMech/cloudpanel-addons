@@ -92,3 +92,13 @@ test("a failed update hands the addon back under its old name to the binary it r
   expect(readFileSync(join(root, "state", "wp-login", "mainwp.json"), "utf8")).toBe("{}");
   expect(existsSync(join(root, "state", "wp-tools"))).toBe(false);
 });
+
+test("an empty old state directory is cleared away rather than reported every repair", () => {
+  const root = fixture();
+  mkdirSync(join(root, "state", "wp-login"));
+  mkdirSync(join(root, "state", "wp-tools"));
+  writeFileSync(join(root, "state", "wp-tools", "mainwp.json"), "new");
+  expect(migrate(root).warnings).toEqual([]);
+  expect(existsSync(join(root, "state", "wp-login"))).toBe(false);
+  expect(readFileSync(join(root, "state", "wp-tools", "mainwp.json"), "utf8")).toBe("new");
+});

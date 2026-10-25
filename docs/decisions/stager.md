@@ -9,10 +9,13 @@ Node.js, Python, and other reverse proxy backends are excluded.
 For PHP sites, Stager copies the document root, exports and imports the first
 CloudPanel database, carries the source Nginx configuration when it can be
 validated, and writes the new database credentials into supported application
-configuration. A `wp-config.php` whose `DB_NAME`, `DB_USER` or `DB_PASSWORD` is
-not one quoted value fails the clone, which is then removed: until it is
-rewritten the copy names the live database, and the WP-CLI step that follows
-would rewrite the live site's URLs. WordPress URLs are rewritten when WP-CLI is available. Other
+configuration: a `wp-config.php` or `.env` in the copy or in its root directory,
+such as `public`; `export` in front of a `.env` key is kept. Until that is rewritten the copy names the live database, and
+the WP-CLI step that follows would rewrite the live site's URLs. So a source
+with a database fails the clone, which is then removed, when neither file is
+found, when a `wp-config.php` sets `DB_NAME`, `DB_USER` or `DB_PASSWORD` as
+anything but one quoted value, or when a `.env` sets `DATABASE_URL` or `DB_URL`
+or lacks `DB_DATABASE`, `DB_USERNAME` or `DB_PASSWORD`. WordPress URLs are rewritten when WP-CLI is available. Other
 applications may retain absolute source URLs in their database.
 
 For Instatic sites, Stager creates a separate container, key, owner, and port,
@@ -73,7 +76,8 @@ addon's.
 
 For PHP and static sites the new document root is assembled beside the live one
 and put in place with a rename, so the site is never serving a half-copied tree.
-The live site keeps its own `wp-config.php`, `.env` and `wp-content/uploads`:
+The live site keeps its own `wp-config.php`, `.env` and `wp-content/uploads`,
+and the `wp-config.php` and `.env` in its root directory, such as `public`:
 the staging copy's are dropped before the switch, because the staging
 `wp-config.php` names the staging database and pointing the live site at it
 would be worse than any missed edit. The two configuration files are then
@@ -106,8 +110,10 @@ retained roots once their records expire.
 ## Mail
 
 While SMTP Relay is enabled, a clone is assigned to its seeded
-`dont-send` profile through SMTP's own `assign` verb, so a copy of a shop does
-not mail the shop's customers. That happens as soon as its site exists, before
+`dont-send` profile through SMTP's own `assign` verb, so mail a copy of a shop
+sends through PHP's `mail()` does not reach the shop's customers; an SMTP or
+API mail plugin in the copy still sends. Once assigned, SMTP Relay's routing is
+on for the whole server, as for any routed site. That happens as soon as its site exists, before
 any of the live site's code is copied in. `assign` records the site as decided, so SMTP's
 new-site pass does not move it into the default profile. A failed assignment is
 a job note, not a failed clone. A promote leaves the live site's assignment

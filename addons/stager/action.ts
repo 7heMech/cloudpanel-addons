@@ -1486,9 +1486,9 @@ function instaticSetup(
   return { ok: true, reason: "" };
 }
 
-function runWpSearchReplace(user: string, path: string, from: string, to: string): boolean {
+function runWpSearchReplace(user: string, path: string, from: string, to: string, network: boolean): boolean {
   const args = ["-u", user, "--", "env", `HOME=/home/${user}`, "wp", `--path=${path}`, "--skip-plugins", "--skip-themes", "search-replace"];
-  if (readFileSyncSafe(join(path, "wp-config.php")).includes("DOMAIN_CURRENT_SITE")) {
+  if (network) {
     args.push(from, to, "--network");
   } else {
     args.push(`https://${from}`, `https://${to}`);
@@ -1547,12 +1547,32 @@ export function rewriteWpConfig(content: string, target: string, db: { name: str
   return content;
 }
 
+const DOTENV_KEYS = ["DB_DATABASE", "DB_USERNAME", "DB_PASSWORD"] as const;
+
+/** A `.env` line setting `key`, with or without `export` in front. */
+function dotenvLine(key: string): RegExp {
+  return new RegExp(`^([ \\t]*(?:export[ \\t]+)?)${key}[ \\t]*=.*$`, "gm");
+}
+
+/** Why a `.env` cannot be pointed at the clone's database by its three DB_ keys, if it cannot. */
+export function dotenvProblem(content: string): string | null {
+  if (/^\s*(?:export\s+)?(?:DATABASE_URL|DB_URL)\s*=/m.test(content)) return "the .env sets a database URL, which this clone cannot rewrite";
+  const missing = DOTENV_KEYS.filter((key) => !dotenvLine(key).test(content));
+  return missing.length ? `the .env does not set ${missing.join(", ")}` : null;
+}
+
+/** Sets the three DB_ keys, keeping any `export` in front of each. */
+export function rewriteDotenvContent(content: string, db: { name: string; user: string; pass: string }): string {
+  const values: Record<(typeof DOTENV_KEYS)[number], string> = { DB_DATABASE: db.name, DB_USERNAME: db.user, DB_PASSWORD: db.pass };
+  return DOTENV_KEYS.reduce((text, key) => text.replace(dotenvLine(key), (_line, prefix: string) => `${prefix}${key}=${values[key]}`), content);
+}
+
 function rewriteDotenv(file: string, ctx: RunContext): void {
   const original = readAsSiteUser(ctx.stgUser, file);
   if (original === null) failJob(ctx, `could not read the clone's .env`);
-  const content = original.replace(/^DB_DATABASE=.*/gm, `DB_DATABASE=${ctx.stgDbName}`)
-    .replace(/^DB_USERNAME=.*/gm, `DB_USERNAME=${ctx.stgDbUser}`)
-    .replace(/^DB_PASSWORD=.*/gm, `DB_PASSWORD=${ctx.stgDbPass}`);
+  const problem = dotenvProblem(original);
+  if (problem) failJob(ctx, `${problem}, so the clone was removed before it could reach ${ctx.source}'s database`);
+  const content = rewriteDotenvContent(original, { name: ctx.stgDbName, user: ctx.stgDbUser, pass: ctx.stgDbPass });
   if (!writeAsSiteUser(ctx.stgUser, file, content)) failJob(ctx, `could not write the clone's .env`);
 }
 
@@ -2305,9 +2325,13 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
 
     if (ctx.srcDb) {
       setStep(ctx, "rewriting the application's database credentials");
-      const wpConfig = join(destination, "wp-config.php");
-      const dotenv = join(destination, ".env");
-      if (isRegularFile(wpConfig)) {
+      // WordPress also reads wp-config.php from one level above a `public` root.
+      const sub = removePathPrefix(ctx.srcRoot, ctx.source);
+      const webRoot = sub && !sub.split("/").includes("..") ? join(destination, sub) : destination;
+      const found = (name: string) => [...new Set([webRoot, destination])].map((dir) => join(dir, name)).find(isRegularFile);
+      const wpConfig = found("wp-config.php");
+      const dotenv = found(".env");
+      if (wpConfig) {
         let rewritten: string;
         try {
           const original = readAsSiteUser(ctx.stgUser, wpConfig);
@@ -2319,16 +2343,16 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
         if (!writeAsSiteUser(ctx.stgUser, wpConfig, rewritten)) failJob(ctx, "could not write the clone's wp-config.php, so the clone was removed");
         if (Bun.which("wp")) {
           setStep(ctx, "rewriting URLs with wp-cli");
-          if (!runWpSearchReplace(ctx.stgUser, destination, ctx.source, ctx.target)) {
+          if (!runWpSearchReplace(ctx.stgUser, webRoot, ctx.source, ctx.target, rewritten.includes("DOMAIN_CURRENT_SITE"))) {
             ctx.notes.push("wp-cli search-replace reported problems; check the log");
           }
         } else {
           ctx.notes.push(`wp-cli is not installed, so URLs inside the database still name ${ctx.source}`);
         }
-      } else if (isRegularFile(dotenv)) {
+      } else if (dotenv) {
         rewriteDotenv(dotenv, ctx);
       } else {
-        ctx.notes.push("no wp-config.php or .env found, so the database credentials were not written into the application; they are in this job's result");
+        failJob(ctx, `found no wp-config.php or .env to point at the clone's database, so the clone was removed before it could reach ${ctx.source}'s database`);
       }
     }
 
@@ -2556,10 +2580,16 @@ async function promoteFiles(ctx: PromoteContext): Promise<void> {
   if (!asSiteUser(ctx.dstUser, "mkdir", ["-m", "755", "--", ctx.stageRoot]).ok) failJob(ctx, `could not create ${ctx.stageRoot}; nothing was changed`);
   const copyCode = await runTarCopy(ctx.srcRoot, ctx.stageRoot, ctx.dstUser);
   if (copyCode >= 2) failJob(ctx, `copying the staging files failed (tar exit ${copyCode})`);
+  // A clone rewrites the configuration in its site directory or in its root
+  // directory, such as `public`, so both are the live site's own.
+  const sub = removePathPrefix(siteRow(ctx.paths, ctx.target)?.root ?? "", ctx.target).replace(/^\/+/, "");
+  const nested = sub && !sub.split("/").includes("..") ? PRESERVED_COPIED.map((name) => join(sub, name)) : [];
+  const copied = [...PRESERVED_COPIED, ...nested];
+
   // Whatever the staging copy holds at these paths is dropped here rather than
   // after the switch, so the release that goes live never contains the staging
   // site's database credentials even for an instant.
-  for (const relative of PRESERVED_PATHS) {
+  for (const relative of [...PRESERVED_PATHS, ...nested]) {
     if (!asSiteUser(ctx.dstUser, "rm", ["-rf", "--", join(ctx.stageRoot, relative)]).ok) {
       failJob(ctx, `could not clear ${relative} from the new release; nothing was changed`);
     }
@@ -2569,7 +2599,7 @@ async function promoteFiles(ctx: PromoteContext): Promise<void> {
   // them from its first served request. lstat rather than stat: a symlink at
   // this name in the live root would otherwise be resolved and its target
   // copied into the new release under a configuration file's name.
-  for (const relative of PRESERVED_COPIED) {
+  for (const relative of copied) {
     const origin = join(ctx.dstRoot, relative);
     let info;
     try { info = lstatSync(origin); } catch { continue; }

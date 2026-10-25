@@ -22,7 +22,7 @@ import { type ApiFetch, redact } from "./http";
 import { MailcowApi } from "./mailcow";
 import {
   connectionId, hostname, parseMailcow, parsePolicy, parseProfile, parseSecrets, profileEffect, profileId, secretText,
-  ipAddress, cloudflareId, type MailcowSettings, type Policy, type Profile, type Secrets,
+  ipAddress, cloudflareId, MAX_CONNECTIONS, type MailcowSettings, type Policy, type Profile, type Secrets,
 } from "./model";
 import { PRESETS, seededPolicy, type Preset } from "./presets";
 import { describeRecord, renderProfile, sameRecord } from "./records";
@@ -425,11 +425,18 @@ class Action {
 
   /** Every site: read, enforce what enforces, and record the result. */
   async check(retrySsl: boolean): Promise<void> {
-    const policy = this.adoptNewSites(this.files.policy());
+    const before = this.files.policy();
+    const policy = this.adoptNewSites(before);
     const run = this.run(policy);
     await run.discover();
     const assigned = this.sites().filter((site) => policy.assignments[site.domain]);
     await run.load(assigned.map((site) => site.domain));
+    this.hold(run, policy, this.joined(before, policy).map((site) => site.domain));
+    const released = run.releaseHeld();
+    if (released.length) {
+      policy.held = policy.held.filter((domain) => !released.includes(domain));
+      this.savePolicy(policy);
+    }
     await run.enforce(assigned);
     const plans = run.planAll(this.sites());
     this.record(run, plans, "all");
@@ -439,6 +446,8 @@ class Action {
   /** Puts sites CloudPanel created since the last look into the default profile. */
   adoptNewSites(policy: Policy): Policy {
     const sites = this.sites();
+    // An empty read is a panel database being restored, not every site deleted.
+    if (!sites.length) return policy;
     const known = new Set(policy.knownSiteIds);
     const next = structuredClone(policy);
     for (const site of sites) {
@@ -448,8 +457,27 @@ class Action {
       if (!sites.some((site) => site.domain === domain)) delete next.assignments[domain];
     }
     next.knownSiteIds = sites.map((site) => site.id);
+    next.held = next.held.filter((domain) => next.assignments[domain]);
     if (JSON.stringify(next) !== JSON.stringify(policy)) this.savePolicy(next);
     return next;
+  }
+
+  /** The sites `adoptNewSites` put in a profile. */
+  private joined(before: Policy, after: Policy): PanelSite[] {
+    const known = new Set(before.knownSiteIds);
+    return this.sites().filter((site) => !known.has(site.id) && after.assignments[site.domain] && !before.assignments[site.domain]);
+  }
+
+  /**
+   * Creating a site points its names here, so a new site's own address records
+   * are written straight away. Anything more its profile would change in the
+   * zone waits until an administrator reviews the site.
+   */
+  private hold(run: DnsRun, policy: Policy, domains: string[]): void {
+    const held = run.holdForReview(domains);
+    if (!held.length) return;
+    policy.held = [...policy.held, ...held];
+    this.savePolicy(policy);
   }
 
   async syncSites(): Promise<string[]> {
@@ -459,11 +487,12 @@ class Action {
     const removed = Object.keys(before.assignments).some((domain) => !this.sites().some((site) => site.domain === domain));
     if (!added.length && !removed) return [];
     const policy = this.adoptNewSites(before);
-    const joined = added.filter((site) => policy.assignments[site.domain]);
+    const joined = this.joined(before, policy);
     if (!joined.length) return [];
     const run = this.run(policy);
     await run.discover();
     await run.load(joined.map((site) => site.domain));
+    this.hold(run, policy, joined.map((site) => site.domain));
     await run.enforce(joined);
     this.record(run, run.planAll(this.sites()), joined.map((site) => site.domain));
     return joined.map((site) => site.domain);
@@ -525,6 +554,7 @@ class Action {
     return this.sites().map((site) => site.domain).filter((domain) => {
       const next = after.profiles.find((profile) => profile.id === after.assignments[domain]);
       if (!next || next.mode !== "enforce") return false;
+      if (before.held.includes(domain) && !after.held.includes(domain)) return true;
       const previous = before.profiles.find((profile) => profile.id === before.assignments[domain]);
       if (!previous || previous.mode !== "enforce" || previous.id !== next.id) return true;
       if (profileEffect(previous) !== profileEffect(next)) return true;
@@ -694,6 +724,8 @@ class Action {
     const secrets = this.files.secrets();
     const existing = body.id ? policy.connections.find((connection) => connection.id === connectionId(body.id)) : undefined;
     if (body.id && !existing) failAction("That connection no longer exists");
+    // Before the token is saved, so a refused one is not left behind in the secrets.
+    if (!existing && policy.connections.length >= MAX_CONNECTIONS) failAction(`At most ${MAX_CONNECTIONS} Cloudflare connections can be added`);
     const token = body.token ? secretText(body.token, "The API token") : existing ? secrets.cloudflare[existing.id] : undefined;
     if (!token) failAction("Paste the API token Cloudflare showed you");
     if (Object.entries(secrets.cloudflare).some(([id, saved]) => saved === token && id !== existing?.id)) failAction("That token is already saved as another connection");
@@ -807,6 +839,8 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
       if (id) next.assignments[domain] = id;
       else delete next.assignments[domain];
     }
+    // Placing a site by hand is its review.
+    next.held = next.held.filter((domain) => !domains.includes(domain));
     // A site placed by hand is not a new site for the default to claim.
     next.knownSiteIds = [...new Set([...next.knownSiteIds, ...domains.map((domain) => action.site(domain).id)])];
     const name = id ? next.profiles.find((profile) => profile.id === id)!.name : "no profile";

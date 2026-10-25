@@ -113,6 +113,12 @@ exclusive lock in `/run/lock/clp-addons/operation.lock` for the whole operation,
 so a root shell, a panel job, the anchor path unit and the reconcile timer queue
 instead of overwriting each other's work.
 
+Every user can write `/run/lock`, and it is empty after a reboot, so anyone
+could create `clp-addons` there before root does. Before opening a lock file, a
+directory root does not own, or that others can write, is renamed aside and made
+again as `0700`. Lock files are opened with `O_NOFOLLOW`, and a conffiles flag
+root did not raise does not count.
+
 The lock is taken at the entry point and nowhere below it. A nested call, and a
 re-exec marked with `CLP_ADDONS_IN_OPERATION` such as the update handoff, run
 inside the lock their caller already holds. The holder records its operation and

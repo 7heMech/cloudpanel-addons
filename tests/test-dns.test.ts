@@ -483,6 +483,13 @@ describe("several connections", () => {
     await env.enforce("web");
     expect(env.cf.records.get(ours.id)!.length).toBeGreaterThan(0);
     expect(env.cf.records.get(theirs.id)).toEqual([]);
+
+    // With the chosen connection gone, the zone left over is not the one chosen.
+    env.cf.tokens.delete(SECOND_TOKEN);
+    await env.act("reconcile");
+    expect(env.cf.records.get(theirs.id)).toEqual([]);
+    const lost = (await env.act("list")).sites.find((entry) => entry.domain === "example.net")!.plan!;
+    expect(lost.problems.join()).toContain("cannot be reached");
   });
 });
 
@@ -523,6 +530,77 @@ describe("zones and new sites", () => {
     for (let pass = 0; pass < 3; pass++) await env.act("sync-sites");
     expect([env.cf.calls.length, env.mc.calls.length]).toEqual(calls);
     expect(statSync(policyFile).ino).toBe(inode);
+  });
+
+  test("a new site points its own names here at once; the rest of its profile waits for an administrator", async () => {
+    const env = setup();
+    const zone = env.cf.zone("client.org", env.agency);
+    env.cf.record("client.org", { type: "CNAME", name: "mail.client.org", content: "mx.mailhost.example" });
+    await env.connect();
+    await env.act("set-default", { profileId: "web" });
+    await env.enforce("web");
+    env.sites.push(site(8, "mail.client.org", { createdAt: START }));
+    await env.act("sync-sites");
+    expect(env.records("client.org")).toContain("A mail.client.org 203.0.113.10 proxied");
+    expect(env.records("client.org").some((record) => record.startsWith("CNAME mail.client.org"))).toBe(false);
+    // Strict SSL and Always Use HTTPS would change every name in the zone.
+    expect(env.cf.settings.get(`${zone.id}:ssl`)).toBeUndefined();
+    let plan = (await env.act("list")).sites.find((entry) => entry.domain === "mail.client.org")!.plan!;
+    expect(plan.held).toBe(true);
+    expect(plan.changes.filter((change) => change.waits).map((change) => change.subject)).toEqual(["Zone setting, whole zone", "Zone setting, whole zone"]);
+    expect((await env.act<ProvisionReply>("provision", undefined, ["--domain=mail.client.org"])).ready).toBe(true);
+    // The repair pass keeps holding it.
+    await env.act("reconcile");
+    expect(env.cf.settings.get(`${zone.id}:ssl`)).toBeUndefined();
+
+    const review = await env.act("assign", { domains: ["mail.client.org"], profileId: "web" });
+    expect(review.review!.blocked).toBe(false);
+    await env.act("confirm", { token: review.review!.token });
+    expect(env.cf.settings.get(`${zone.id}:ssl`)).toBe("strict");
+    plan = (await env.act("list")).sites.find((entry) => entry.domain === "mail.client.org")!.plan!;
+    expect(plan.held).toBeUndefined();
+  });
+
+  test("a new site whose zone cannot be read yet stays held until a check can plan it", async () => {
+    const env = setup();
+    const zone = env.cf.zone("client.org", env.agency);
+    await env.connect();
+    await env.act("set-default", { profileId: "web" });
+    await env.enforce("web");
+    const token = env.cf.tokens.get(TOKEN)!;
+    env.cf.tokens.delete(TOKEN);
+    env.sites.push(site(8, "mail.client.org", { createdAt: START }));
+    await env.act("sync-sites");
+    env.cf.tokens.set(TOKEN, token);
+    await env.act("reconcile");
+    expect(env.records("client.org")).toContain("A mail.client.org 203.0.113.10 proxied");
+    expect(env.cf.settings.get(`${zone.id}:ssl`)).toBeUndefined();
+    expect((await env.act("list")).sites.find((entry) => entry.domain === "mail.client.org")!.plan!.held).toBe(true);
+  });
+
+  test("a new site that only adds records and points its own names is not held", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    await env.enforce("web");
+    await env.act("set-default", { profileId: "web" });
+    env.sites.push(site(7, "fresh.example.com", { createdAt: START }));
+    await env.act("sync-sites");
+    expect((await env.act("list")).sites.find((entry) => entry.domain === "fresh.example.com")!.plan!.held).toBeUndefined();
+  });
+
+  test("one empty read of the panel's sites leaves every assignment alone", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("assign", { domains: ["example.com"], profileId: "web" });
+    await env.enforce("web");
+    await env.act("set-default", { profileId: "web" });
+    const sites = env.sites.splice(0);
+    await env.act("sync-sites");
+    env.sites.push(...sites);
+    await env.act("sync-sites");
+    const state = await env.act("list");
+    expect(state.sites.map((entry) => [entry.domain, entry.profileId])).toEqual([["example.com", "web"], ["shop.example.com", null]]);
   });
 
   test("provisioning names www for a certificate only at the apex", async () => {

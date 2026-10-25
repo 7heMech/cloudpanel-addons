@@ -55,7 +55,6 @@ function usage(): void {
   clp-addons status
   clp-addons uninstall <addon> --yes [--purge]
   clp-addons maintenance <domain> [on|off|status]
-  clp-addons action system-tweaks state|set-updates|install-updates|set-upload-guard|set-real-ip|set-panel-php
   clp-addons --version
 
 Addons: ${ADDON_NAMES.join(", ")}`);

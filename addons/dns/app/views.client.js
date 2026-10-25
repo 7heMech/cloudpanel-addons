@@ -292,7 +292,8 @@ async function dnsAssignSelected() {
   const picker = CLP_ROOT.getElementById('bulk-profile');
   if (!picker.value) return notify('Choose a profile to put them in first.', 'warn');
   const id = picker.value === '-' ? null : picker.value;
-  const moving = rows.filter(function (row) { return (row.dataset.profileId || '') !== (id || ''); });
+  // A held site placed in its own profile again is reviewed.
+  const moving = rows.filter(function (row) { return (row.dataset.profileId || '') !== (id || '') || (id && row.dataset.held); });
   if (!moving.length) return notify('Those sites are already there; nothing to change.', 'ok');
   const profile = id ? dnsProfile(id) : null;
   if (!profile || profile.mode !== 'enforce') {
@@ -326,7 +327,8 @@ function dnsChanges(changes) {
   return '<ul class="dns-changes">' + changes.map(function (change) {
     return '<li><span class="badge dns-' + change.action + '">' + DNS_ACTION_LABELS[change.action] + '</span><div>' +
       '<strong>' + dnsEsc(change.subject) + '</strong><span class="dns-change-detail">' + dnsEsc(change.detail) + '</span>' +
-      (change.before ? '<span class="hint">Now: ' + dnsEsc(change.before) + '</span>' : '') + '</div></li>';
+      (change.before ? '<span class="hint">Now: ' + dnsEsc(change.before) + '</span>' : '') +
+      (change.waits ? '<span class="hint tone-warn">Waits for your review</span>' : '') + '</div></li>';
   }).join('') + '</ul>';
 }
 
@@ -377,18 +379,25 @@ function dnsShowSite(domain) {
           return '<option value="' + dnsEsc(choice.connectionId + '/' + choice.zoneId) + '">' + dnsEsc(choice.label) + '</option>';
         }).join('') + '</select><button class="btn" type="button" onclick="dnsChooseZone()">Use this</button></div></div>';
     }
+    if (plan.held && !plan.problems.length) {
+      html += '<div class="notice">CloudPanel created this site, so its own address records went in straight away. The changes marked below reach further and wait until you review them.</div>';
+    }
     if (!plan.problems.length) {
       html += '<h3 class="dns-section">' + (profile && profile.mode === 'enforce' ? 'To change' : 'Differences, not changed in Report only') + '</h3>' + dnsChanges(plan.changes);
     }
   }
   CLP_ROOT.getElementById('dns-site-body').innerHTML = html;
   const pending = plan && !plan.problems.length && plan.changes.some(function (change) { return change.action !== 'note'; });
-  CLP_ROOT.getElementById('dns-site-apply').hidden = !(profile && profile.mode === 'enforce' && pending);
+  const apply = CLP_ROOT.getElementById('dns-site-apply');
+  apply.hidden = !(profile && profile.mode === 'enforce' && pending);
+  apply.textContent = plan && plan.held ? 'Review changes' : 'Apply now';
   dnsOpen('dns-site-dialog');
 }
 
 async function dnsApplySite() {
   const dialog = CLP_ROOT.getElementById('dns-site-dialog');
+  const site = dnsState.sites.find(function (candidate) { return candidate.domain === dnsSiteShown; });
+  if (site.plan && site.plan.held) return dnsPost('/api/assign', { domains: [site.domain], profileId: site.profileId }, dialog);
   const reply = await dnsPost('/api/provision', { domain: dnsSiteShown });
   if (!reply) return;
   if (reply.provision) notify(reply.provision.ready ? dnsSiteShown + ': DNS is in place.' : dnsSiteShown + ': ' + reply.provision.reason, reply.provision.ready ? 'ok' : 'warn');

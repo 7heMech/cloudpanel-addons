@@ -57,6 +57,8 @@ export interface Change {
   subject: string;
   detail: string;
   before?: string;
+  /** Waits for an administrator: a new site's change beyond pointing its own names here. */
+  waits?: true;
 }
 
 export interface SitePlan {
@@ -71,6 +73,8 @@ export interface SitePlan {
   zoneChoices: { zone: string; connectionId: string; zoneId: string; label: string }[];
   /** The names a certificate can be requested for once DNS is in place. */
   certificateNames: string[];
+  /** A new site whose other changes wait for an administrator's review. */
+  held?: true;
 }
 
 export interface ManagedRecords {
@@ -106,7 +110,7 @@ interface MailState {
 type Resolution =
   | { kind: "zone"; ref: ZoneRef }
   | { kind: "missing"; name: string; createIn: AccountRef | null }
-  | { kind: "choose"; candidates: ZoneRef[]; name: string }
+  | { kind: "choose"; candidates: ZoneRef[]; name: string; lost?: boolean }
   | { kind: "unreachable"; reason: string };
 
 const INACTIVE_ZONES = new Set(["moved", "deleted", "deactivated"]);
@@ -130,10 +134,12 @@ export class DnsRun {
   private readonly mailcow: MailcowApi | null;
   private readonly cloudflareBackoff: { until: number };
   private readonly mailcowBackoff: { until: number };
+  private readonly held: Set<string>;
 
   constructor(private readonly context: RunContext) {
     this.cloudflareBackoff = { until: context.backoff.cloudflare };
     this.mailcowBackoff = { until: context.backoff.mailcow };
+    this.held = new Set(context.policy.held);
     for (const connection of context.policy.connections) {
       const token = context.secrets.cloudflare[connection.id];
       if (token) this.cloudflare.set(connection.id, new CloudflareApi(token, context.fetch, this.cloudflareBackoff));
@@ -198,6 +204,10 @@ export class DnsRun {
     const choice = this.context.policy.zoneChoices[name];
     const chosen = choice && candidates.find((ref) => ref.connectionId === choice.connectionId && ref.zone.id === choice.zoneId);
     if (chosen) return { kind: "zone", ref: chosen };
+    const same = choice && candidates.find((ref) => ref.zone.id === choice.zoneId);
+    if (same) return { kind: "zone", ref: same };
+    // The chosen zone is out of reach, and what is left is a zone the operator did not pick.
+    if (choice) return { kind: "choose", candidates, name, lost: true };
     const ids = new Set(candidates.map(({ zone }) => zone.id));
     // Two tokens reaching the same zone can both write it; the first connection is used until another is chosen.
     if (ids.size === 1) return { kind: "zone", ref: candidates[0]! };
@@ -210,19 +220,19 @@ export class DnsRun {
   }
 
   /** Every assigned site's profile in each zone, so a zone's settings and rules are decided once. */
-  private zoneProfiles(): Map<string, Profile[]> {
-    if (this.profilesByZone) return this.profilesByZone;
+  private zoneProfiles(withHeld = true): Map<string, Profile[]> {
+    if (withHeld && this.profilesByZone) return this.profilesByZone;
     const byZone = new Map<string, Profile[]>();
     for (const site of this.context.sites) {
       const profile = this.profileOf(site.domain);
-      if (!profile) continue;
+      if (!profile || (!withHeld && this.held.has(site.domain))) continue;
       const resolved = this.resolve(site.domain, profile);
       if (resolved.kind !== "zone") continue;
       const list = byZone.get(resolved.ref.zone.id) ?? [];
       list.push(profile);
       byZone.set(resolved.ref.zone.id, list);
     }
-    this.profilesByZone = byZone;
+    if (withHeld) this.profilesByZone = byZone;
     return byZone;
   }
 
@@ -373,7 +383,7 @@ export class DnsRun {
       const current = state.settings.get(wanted.setting);
       if (current === undefined || current === wanted.value) continue;
       const before = wanted.setting === "ssl" ? SSL_LABELS[current as keyof typeof SSL_LABELS] ?? current : current;
-      plan.changes.push({ action: "update", subject: "Zone setting, whole zone", detail: wanted.label, before });
+      plan.changes.push({ action: "update", subject: "Zone setting, whole zone", detail: wanted.label, before, ...plan.held && { waits: true } });
     }
     for (const spec of wantedRules(wants)) {
       if (!state.rulesets.has(spec.phase)) continue;
@@ -392,6 +402,7 @@ export class DnsRun {
     };
     this.diffs.delete(site.domain);
     if (!profile) return plan;
+    if (this.held.has(site.domain)) plan.held = true;
 
     const resolved = this.resolve(site.domain, profile);
     if (resolved.kind === "unreachable") {
@@ -399,7 +410,9 @@ export class DnsRun {
       return plan;
     }
     if (resolved.kind === "choose") {
-      plan.problems.push(`${resolved.name} is reachable through more than one connection; choose which one manages it`);
+      plan.problems.push(resolved.lost
+        ? `The zone chosen for ${resolved.name} cannot be reached; check its connection, or choose again`
+        : `${resolved.name} is reachable through more than one connection; choose which one manages it`);
       plan.zoneChoices = resolved.candidates.map((ref) => ({
         zone: resolved.name, connectionId: ref.connectionId, zoneId: ref.zone.id,
         label: `${this.connectionLabel(ref.connectionId)} · ${ref.zone.account.name || ref.zone.account.id} (${ref.zone.status})`,
@@ -450,7 +463,10 @@ export class DnsRun {
     for (const name of rendered.waitingDkim) {
       plan.changes.push({ action: "create", subject: `TXT ${name}`, detail: "Mailcow's DKIM key, once Mailcow holds it" });
     }
-    for (const op of diff.ops) plan.changes.push(this.recordChange(op));
+    for (const op of diff.ops) {
+      const change = this.recordChange(op);
+      plan.changes.push(plan.held && !pointsOwnName(site.domain, op) ? { ...change, waits: true } : change);
+    }
     const addresses = diff.wanted.filter((record) => ["A", "AAAA", "CNAME"].includes(record.type));
     plan.certificateNames = [site.domain, `www.${site.domain}`].filter((name) => addresses.some((record) => record.name === name));
     return plan;
@@ -501,6 +517,36 @@ export class DnsRun {
     this.failures.set(domain, [...this.failures.get(domain) ?? [], reason(error)]);
   }
 
+  /**
+   * Holds those of `domains` whose plans do more than point their own names
+   * here and add records, or could not be planned yet, and answers which. Call
+   * after `load`.
+   */
+  holdForReview(domains: string[]): string[] {
+    return domains.filter((domain) => {
+      const site = this.context.sites.find((candidate) => candidate.domain === domain);
+      if (!site || this.held.has(domain)) return false;
+      this.held.add(domain);
+      const plan = this.planSite(site);
+      // A site whose zone could not be read is held until a check can say what it would change.
+      if (plan.problems.length || plan.changes.some((change) => change.waits)) return true;
+      this.held.delete(domain);
+      return false;
+    });
+  }
+
+  /** Releases the held sites a clean plan shows have nothing beyond their own names to change, and answers which. */
+  releaseHeld(): string[] {
+    return [...this.held].filter((domain) => {
+      const site = this.context.sites.find((candidate) => candidate.domain === domain);
+      if (!site) return false;
+      const plan = this.planSite(site);
+      if (plan.problems.length || plan.changes.some((change) => change.waits)) return false;
+      this.held.delete(domain);
+      return true;
+    });
+  }
+
   /** Makes the given sites match their enforcing profiles. Sites with problems are left alone. */
   async enforce(sites: PanelSite[]): Promise<void> {
     const ready = () => this.planAll(this.context.sites)
@@ -510,10 +556,11 @@ export class DnsRun {
     const targets = ready();
     if (!targets.length) return;
     const byZone = this.zoneProfiles();
+    const reviewed = this.zoneProfiles(false);
 
     await Promise.all([...new Set(targets.map((plan) => plan.zone!.id))].map((zoneId) => {
       const domains = targets.filter((plan) => plan.zone!.id === zoneId).map((plan) => plan.domain);
-      return this.enforceZone(this.zones.get(zoneId)!, byZone.get(zoneId) ?? [], domains);
+      return this.enforceZone(this.zones.get(zoneId)!, byZone.get(zoneId) ?? [], reviewed.get(zoneId) ?? [], domains);
     }));
     await this.enforceMail(targets.filter((plan) => this.profileOf(plan.domain)?.mailcow).map((plan) => plan.domain));
 
@@ -526,7 +573,8 @@ export class DnsRun {
           // Planned again, since an earlier site in the zone may have written a record this one wants too.
           const fresh = this.planSite(this.context.sites.find((site) => site.domain === plan.domain)!);
           if (fresh.problems.length) continue;
-          await this.applyRecords(state, this.diffs.get(plan.domain)!.ops);
+          const ops = this.diffs.get(plan.domain)!.ops;
+          await this.applyRecords(state, fresh.held ? ops.filter((op) => pointsOwnName(plan.domain, op)) : ops);
         } catch (error) {
           this.fail(plan.domain, error);
         }
@@ -558,14 +606,16 @@ export class DnsRun {
     }));
   }
 
-  private async enforceZone(state: ZoneState, profiles: Profile[], domains: string[]): Promise<void> {
+  /** `reviewed` leaves out held sites' profiles: their rules are written, their zone settings wait. */
+  private async enforceZone(state: ZoneState, profiles: Profile[], reviewed: Profile[], domains: string[]): Promise<void> {
     const api = this.cloudflare.get(state.ref.connectionId)!;
     const zoneId = state.ref.zone.id;
     // A Report only profile in the same zone is never a reason to write.
-    const { wants, problems } = zoneWants(profiles.filter((profile) => profile.mode === "enforce"));
+    const enforcing = (list: Profile[]) => list.filter((profile) => profile.mode === "enforce");
+    const { wants, problems } = zoneWants(enforcing(profiles));
     if (problems.length) return;
     try {
-      for (const wanted of wantedSettings(wants)) {
+      for (const wanted of wantedSettings(zoneWants(enforcing(reviewed)).wants)) {
         if (state.settings.get(wanted.setting) === wanted.value) continue;
         await api.setSetting(zoneId, wanted.setting, wanted.value);
         state.settings.set(wanted.setting, wanted.value);
@@ -692,6 +742,14 @@ export class DnsRun {
 }
 
 /** Whether a new site's certificate can be requested now, and if not, why. */
+/** A record a site CloudPanel just created may write before review: an address at its own name or `www`. */
+function pointsOwnName(domain: string, op: RecordOp): boolean {
+  if (op.action === "create") return true;
+  const own = op.record.name === domain || op.record.name === `www.${domain}`;
+  const address = (type: string | undefined) => type === "A" || type === "AAAA" || type === "CNAME";
+  return own && address(op.record.type) && (!op.current || address(op.current.type));
+}
+
 export function readiness(plan: SitePlan | undefined): { ready: boolean; reason: string } {
   if (!plan?.profileId) return { ready: false, reason: "No DNS profile is assigned to this site" };
   if (plan.mode !== "enforce") return { ready: false, reason: "Its DNS profile is Report only" };
@@ -701,7 +759,7 @@ export function readiness(plan: SitePlan | undefined): { ready: boolean; reason:
     const servers = plan.zone.nameServers.length ? `: ${plan.zone.nameServers.join(", ")}` : "";
     return { ready: false, reason: `Zone ${plan.zone.name} is ${plan.zone.status}; set its nameservers at the registrar${servers}` };
   }
-  if (plan.changes.some((change) => change.action !== "note")) return { ready: false, reason: "Some DNS changes have not been made yet" };
+  if (plan.changes.some((change) => change.action !== "note" && !change.waits)) return { ready: false, reason: "Some DNS changes have not been made yet" };
   if (!plan.certificateNames.includes(plan.domain)) return { ready: false, reason: "The profile manages no address for this site" };
   return { ready: true, reason: "DNS is in place" };
 }
