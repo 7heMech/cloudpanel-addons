@@ -382,6 +382,11 @@ function mintPanelToken(paths: SecurityKeysPaths, user: string, now: number): st
   return token;
 }
 
+/** One line in the gateway's journal, where CloudPanel's own log has nothing for a key sign-in. */
+function audit(line: string): void {
+  process.stderr.write(`[security-keys] ${line.replace(/\s+/g, " ")}\n`);
+}
+
 function signIn(paths: SecurityKeysPaths, input: Record<string, unknown>, now: number): { token: string; user: string } {
   const challenge = expectedChallenge(paths, input.challengeId, now, "login");
   const credentialId = typeof input.id === "string" && input.id.length <= 1400 ? input.id : refuse("the key sent no credential id");
@@ -400,11 +405,7 @@ function signIn(paths: SecurityKeysPaths, input: Record<string, unknown>, now: n
     const account = activeAccount(paths, user);
     if (account.id !== entry.userId) refuse("this key belongs to a CloudPanel account that no longer exists");
     const key = entry.keys.find((candidate) => candidate.id === credentialId)!;
-    const settings = readSettings(paths);
-    if (!allowedRole(settings, account)) refuse("security keys are turned off for your account; sign in with your password");
-    if (key.synced && !settings.syncedPasskeys) {
-      refuse("this panel no longer accepts synced passkeys; use a hardware key or your password");
-    }
+    // The signature first, so only the key's holder learns the settings that refuse it.
     const { signCount } = spendChallenge(paths, input.challengeId as string, now, () => verifyAssertion({
       clientDataJSON: fromB64url(input.clientDataJSON, "clientDataJSON"),
       authenticatorData: fromB64url(input.authenticatorData, "authenticatorData"),
@@ -414,10 +415,17 @@ function signIn(paths: SecurityKeysPaths, input: Record<string, unknown>, now: n
       publicKey: key.publicKey,
       signCount: key.signCount,
     }));
+    const settings = readSettings(paths);
+    if (!allowedRole(settings, account)) refuse("security keys are turned off for your account; sign in with your password");
+    if (key.synced && !settings.syncedPasskeys) {
+      refuse("this panel no longer accepts synced passkeys; use a hardware key or your password");
+    }
     key.signCount = signCount;
     key.lastUsedAt = new Date(now).toISOString();
     writeStore(paths, store);
-    return { token: mintPanelToken(paths, user, now), user };
+    const token = mintPanelToken(paths, user, now);
+    audit(`${user} signed in with the key "${key.name}"`);
+    return { token, user };
   });
 }
 
@@ -482,18 +490,20 @@ function register(paths: SecurityKeysPaths, user: string, input: Record<string, 
       lastUsedAt: null,
     });
     writeStore(paths, store);
+    audit(`${user} added the key "${name}"`);
   });
 }
 
-function removeKey(paths: SecurityKeysPaths, user: string, id: unknown): boolean {
+function removeKey(paths: SecurityKeysPaths, user: string, id: unknown, by = user): boolean {
   if (typeof id !== "string") failAction("choose a key to remove");
   return withStoreLock(paths, () => {
     const store = readStore(paths);
     const entry = store.users[user];
-    const before = entry?.keys.length ?? 0;
-    if (entry) entry.keys = entry.keys.filter((key) => key.id !== id);
-    if ((entry?.keys.length ?? 0) === before) failAction("that key is not registered");
+    const removed = entry?.keys.find((key) => key.id === id);
+    if (!entry || !removed) failAction("that key is not registered");
+    entry.keys = entry.keys.filter((key) => key.id !== id);
     writeStore(paths, store);
+    audit(by === user ? `${user} removed the key "${removed.name}"` : `${by} removed ${user}'s key "${removed.name}"`);
     return true;
   });
 }
@@ -548,7 +558,7 @@ export async function runSecurityKeysAction(argv: string[], options: SecurityKey
     } else {
       const input = readInput(options);
       if (typeof input.user !== "string" || !PANEL_USER_NAME_RE.test(input.user)) failAction("choose a user");
-      removeKey(paths, input.user, input.id);
+      removeKey(paths, input.user, input.id, "an administrator");
       data = allUsers(paths);
     }
     if (emit) emitActionOk(data);
@@ -558,9 +568,9 @@ export async function runSecurityKeysAction(argv: string[], options: SecurityKey
     const data = error instanceof ActionFailure ? error.data : undefined;
     // The two verbs anyone who reaches the login page can call.
     const refused = error instanceof SignInRefusal || error instanceof WebAuthnError;
-    if ((argv[0] === "login-options" || argv[0] === "sign-in") && !refused) {
-      process.stderr.write(`[security-keys] sign-in failed: ${message.replace(/\s+/g, " ")}\n`);
-      message = SIGN_IN_UNAVAILABLE;
+    if (argv[0] === "login-options" || argv[0] === "sign-in") {
+      audit(`sign-in ${refused ? "refused" : "failed"}: ${message}`);
+      if (!refused) message = SIGN_IN_UNAVAILABLE;
     }
     if (emit) emitActionError(message, data, "security-keys");
     else process.stderr.write(`[security-keys] ERROR: ${message}\n`);

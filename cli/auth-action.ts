@@ -591,6 +591,9 @@ export function createAuthActionServer(options: AuthActionOptions = {}): net.Ser
               proc.exited,
             ]);
             cleanup();
+            // An action's own account of what went wrong, kept even when it answered in JSON.
+            const said = stderr.trim();
+            if (said) process.stderr.write(said.slice(-8192).split("\n").map((line) => line.startsWith("[") ? `${line}\n` : `[${request.addon} ${request.verb}] ${line}\n`).join(""));
 
             const trimmed = stdout.trim();
             if (trimmed.startsWith("{")) {
