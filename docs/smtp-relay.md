@@ -60,8 +60,8 @@ one of its extra sending domains, or the profile's From.
   Mailcow mailbox permitted to send as all of them, then lets any of its sites
   send signed mail as every one of those domains. Give sites that do not trust
   each other separate profiles.
-- While any site is relayed, Postfix stops relaying unauthenticated SMTP from
-  `localhost:25`. Point apps that used it at sendmail or PHP `mail()`.
+- While any site is in a profile, Don't send included (as every Stager clone
+  is), Postfix stops relaying unauthenticated SMTP from `localhost:25`. Point apps that used it at sendmail or PHP `mail()`.
 - Apps with their own SMTP settings keep connecting to their provider directly.
 - New sites are picked up seconds after CloudPanel creates them. Disabling the
   addon restores Postfix's previous settings and removes its PHP setting; the
