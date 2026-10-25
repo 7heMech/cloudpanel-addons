@@ -416,3 +416,15 @@ test("the page offers the installed versions and says what the panel runs on", (
   expect(blocked).toContain(`onchange="setPanelPhp(this)" disabled>`);
   expect(blocked).toContain("override.conf sets this already. Remove it to choose here. Running on PHP 8.2.");
 });
+
+test("after an update replaces the binary the panel runs, repair reloads it, and only then", async () => {
+  const b = box();
+  expect(await reconcilePanelPhp(b.options)).toBeNull();
+  expect(b.commands.some((command) => command.startsWith("systemctl reload"))).toBe(false);
+  const exe = join(b.options.paths!.procRoot!, "4242", "exe");
+  const binary = readFileSync(b.fragment, "utf8").match(/ExecStart=(\S+)/)![1]!;
+  rmSync(exe);
+  symlinkSync(`${binary} (deleted)`, exe);
+  expect(await reconcilePanelPhp(b.options)).toBe("panel PHP reloaded onto its updated binary");
+  expect(b.commands.filter((command) => command.startsWith("systemctl reload"))).toHaveLength(1);
+});

@@ -233,6 +233,23 @@ function runningVersion(ctx: Context): string | null {
   }
 }
 
+/**
+ * Automatic updates include the PHP packages the panel runs on, and no package
+ * script restarts CloudPanel's own unit, so after one the panel keeps running
+ * the replaced binary. Its reload re-executes the new one.
+ */
+function reloadReplaced(ctx: Context): string | null {
+  const pid = ctx.run("systemctl", ["show", "-p", "MainPID", "--value", ctx.paths.unit]).stdout.trim();
+  if (!/^[1-9][0-9]*$/.test(pid)) return null;
+  try {
+    if (!readlinkSync(join(ctx.paths.procRoot, pid, "exe")).endsWith(" (deleted)")) return null;
+  } catch {
+    return null;
+  }
+  check(ctx.run("systemctl", ["reload", ctx.paths.unit]), "reloading the panel's PHP onto its updated binary");
+  return "panel PHP reloaded onto its updated binary";
+}
+
 function dropInFor(ctx: Context, php: string, unit: BaseUnit): string {
   return [
     MARKER,
@@ -402,8 +419,9 @@ export async function setPanelPhp(php: string, options: PanelPhpOptions = {}): P
  */
 export async function reconcilePanelPhp(options: PanelPhpOptions = {}): Promise<string | null> {
   const ctx = contextOf(options);
-  if (!readChoice(ctx.paths).php && !present(ctx.paths.dropInFile)) return null;
-  return withFileLock(ctx.paths.lockFile, 30, "another panel PHP change is still running", async () => {
+  const reloaded = existsSync(ctx.paths.configFile) ? reloadReplaced(ctx) : null;
+  if (!readChoice(ctx.paths).php && !present(ctx.paths.dropInFile)) return reloaded;
+  const reconciled = await withFileLock(ctx.paths.lockFile, 30, "another panel PHP change is still running", async () => {
     const choice = readChoice(ctx.paths);
     if (choice.withdrawn || !existsSync(ctx.paths.configFile)) return null;
     const current = choice.php ? releases(ctx, [choice.php]).get(choice.php)?.installed ?? "" : "";
@@ -417,6 +435,7 @@ export async function reconcilePanelPhp(options: PanelPhpOptions = {}): Promise<
       throw error;
     }
   });
+  return [reloaded, reconciled].filter(Boolean).join("; ") || null;
 }
 
 /**

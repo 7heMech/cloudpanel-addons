@@ -150,6 +150,9 @@ only after that package is upgraded or the operator chooses again. Once
 CloudPanel's own unit starts a version at least as new as the choice, the
 drop-in is removed. A drop-in someone else wrote that sets `ExecStart`, such
 as a hand-made `override.conf`, wins: the row says so and refuses a choice.
+Automatic updates include the panel's PHP packages, and no package script
+restarts CloudPanel's unit, so when its main process runs a binary that has been
+replaced, repair reloads the unit, whose `USR2` re-executes the new one.
 Disabling System Tweaks removes the drop-in and keeps the choice, which enabling
 reapplies through the reconcile service. Disabling is synchronous, so it cannot
 ask the pools for a page: under the same lock, it config-tests the PHP the unit
@@ -159,7 +162,9 @@ requires the unit to come back running it. Otherwise, including a failed
 that aborts later reactivates the addon. While the addon is disabled the stored
 choice is marked withdrawn, and a change that was waiting for the lock refuses,
 as it does once the addon's config is gone, so neither can write the drop-in
-again; enabling clears the mark. The page check is the one thing withdrawal
+again; enabling clears the mark. A disable whose other half fails after
+withdrawal, or an enable whose settings half fails, still leaves the choice
+applied, since the addon stays enabled. The page check is the one thing withdrawal
 does not repeat: a PHP that starts but answers 500 is not caught. The row also shows a newer package
 version when apt has one, revision included, because a newer minor is no fix
 until it is patched, and a failure is retried once that version changes. A
