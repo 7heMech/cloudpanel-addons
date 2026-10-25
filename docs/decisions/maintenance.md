@@ -3,37 +3,49 @@
 ## Panel surfaces
 
 Maintenance Mode is available from the Addons overview and from an
-administrator-only tab in every CloudPanel site view. The overview reads the
-live CloudPanel site inventory and shows each site's effective status, saved
-setting, template choice, and bypass count. At phone widths it omits the
-template-choice and bypass-count fields; both remain available on the site's
-detail page and in the desktop overview. Effective status and the saved
-per-site setting share one row in each mobile site card.
+administrator-only tab in every CloudPanel site view. The overview reads every
+site's saved setting, template, bypasses and Nginx coverage, and the global
+state, in one `sites` action call, which reads the panel database and the state
+directory once. The sites table comes first, with "N of M in maintenance" in its
+header counting what visitors get. A site's custom page and bypass count are a
+note under its name. Rows are selected by click or checkbox and "Turn on
+selected" or "Turn off selected" switch them through one bulk route and one
+`enable-many` or `disable-many` action, which reads the panel database once, so most of
+the fleet can go into maintenance without the global switch; turning sites on
+asks first, with their names. From six sites a search and a filter (in
+maintenance, live, not covered) sit above the table. Every fleet change answers
+with the redrawn fleet, which the page repaints.
 
-The global override is a card of its own labelled "Global maintenance", not a
-switch in the table header: it decides what visitors get for every site at once
-and changes nothing a site has saved. Its confirmation names the site count and
-how many have maintenance saved off. While it is on, sites covered by the Nginx
-check serve 503 and a
-site whose own setting is off, or could not be read, shows a "Maintenance
-(Global)" badge and is counted as in maintenance; turning it off returns each
-site to its saved setting. Turning it on or off purges Varnish
-cache across the fleet. A card below it saves up to 64 global IP bypasses. Each
-one applies to every site, including sites with their own maintenance setting
-on, and remains saved when the global override is off. Site bypasses continue
-to apply to their own site. Both bypass lists keep Save off until the list
+Below the table one card holds the global override: a switch that decides what
+visitors get for every site at once and changes nothing a site has saved, and
+the global IP bypasses behind a summary that counts them. Its confirmation names
+the site count and how many have maintenance saved off. While it is on, a banner
+above the table says every site serves the maintenance page, and a site whose own
+setting is off, or could not be read, shows a "Maintenance (Global)" badge;
+turning it off returns each site to its saved setting. Turning it on or off
+purges Varnish cache across the fleet. Global bypasses (up to 64) apply to every
+site, including sites with their own maintenance setting on, and remain saved
+when the override is off. Both bypass lists keep Save off until the list
 differs from the saved one.
 
-A domain query opens the focused editor for that site. That page is drawn in the
-shell's site mode, so CloudPanel's site information and site tabs stay above it
-and Settings remains one click away; it says explicitly when the global override
-is what is serving the maintenance page, because changing the saved setting
-there does not lift it.
+A site Nginx runs no check for (see Request handling) is called out rather than
+drawn as in maintenance: its badge reads "Not covered" whenever its setting or
+the override would put it in maintenance, the note under its name says why, the
+site page carries a warning, and `clp-addons maintenance <domain> on` warns.
 
-The template opens read-only. An Edit switch above the editor turns editing on
-and nothing else: turning it off restores what is saved, asking first only when
-there is an unsaved change, and never removes a saved template. Removing one is
-the reset button alone.
+A domain query opens the focused page for that site, drawn in the shell's site
+mode, so CloudPanel's site information and site tabs stay above it. The status
+badge and the site's switch sit in the heading. It says when the global override
+is what is serving the maintenance page, because changing the saved setting
+there does not lift it. IP bypasses and the maintenance page fold into summaries
+("1 bypass", "Default" or "Custom").
+
+The maintenance page section opens on a preview. An Edit switch turns editing
+on and nothing else, showing the HTML with a Preview tab beside it: turning it
+off restores what is saved, asking first only when there is an unsaved change,
+and never removes a saved template. Reset to default exists only while a custom
+template is saved, and is the only way to remove one. A save whose HTML the
+sanitizer changed says "Saved; some tags were removed".
 
 The custom template is edited with CloudPanel's own Ace build, the editor the
 panel uses for a vhost, loaded from the panel at `/assets/js/ace.min.js`. That
@@ -61,7 +73,9 @@ so with validation on the run fails with Nginx's error and rolls back. A
 `global_settings` that exists but cannot be read fails validation rather than
 counting as missing. A vhost that mentions `global_settings` without including it has opted out on purpose and is left
 alone. A site whose vhost is untrusted or has no single serving server is
-skipped, so it cannot block the others, and `clp-addons status` names it. Older
+skipped, so it cannot block the others, and `clp-addons status` names it. The
+same check gives the pages and the CLI their coverage: no vhost yet, a vhost that
+opted out, one without the check, or one with no single serving server. Older
 templates retain their existing header settings. Nginx checks
 `/var/lib/clp-addons/maintenance/_global/on` and
 `/var/lib/clp-addons/maintenance/$server_name/on` on requests reaching that server
@@ -125,6 +139,11 @@ public HTML files are mode `0644`. Disabling or
 uninstalling the addon removes the marked includes from templates and rendered
 vhosts, the standalone check, the global Nginx block and the client-IP map. Site
 state remains unless purge was requested.
+
+Repair's upkeep removes the state directory of a domain CloudPanel no longer
+has, so a site created again under that name starts live, with no bypasses or
+template. It leaves `_global` and anything that is not a hostname's directory,
+and removes nothing when the panel database cannot be read or lists no site.
 
 ## Reconciliation
 

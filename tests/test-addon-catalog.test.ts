@@ -61,10 +61,10 @@ test("required systemd dependencies survive into the catalog", () => {
 
 test("repair upkeep is the addons that ask for it, in catalog order", () => {
   const all = ADDON_NAMES.map((name) => ADDONS[name]!);
-  expect(addonMaintenance(all).map((spec) => spec.name)).toEqual(["cloudflare-ips", "dns", "instatic", "stager", "php-resources", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp"]);
+  expect(addonMaintenance(all).map((spec) => spec.name)).toEqual(["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp"]);
   // Gated on being installed: repair passes the installed set, not every addon.
   expect(addonMaintenance([ADDONS.stager!]).map((spec) => spec.name)).toEqual(["stager"]);
-  expect(addonMaintenance([ADDONS.maintenance!])).toEqual([]);
+  expect(addonMaintenance([ADDONS.terminal!])).toEqual([]);
 });
 
 test("new-site work runs DNS before SMTP Relay, and only for installed addons", () => {

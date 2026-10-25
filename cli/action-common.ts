@@ -1,4 +1,5 @@
 import { dlopen, FFIType } from "bun:ffi";
+import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { parse as parseDomain } from "tldts";
 import {
@@ -535,4 +536,28 @@ export function readable(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Which of `domains` CloudPanel no longer has, for upkeep that removes what a
+ * deleted site left behind. None when the panel database cannot be read or
+ * lists no site at all: an outage or a half-restored panel must never read as
+ * every site having been deleted.
+ */
+export function deletedSites(panelDb: string, domains: string[]): string[] {
+  let present: Set<string>;
+  try {
+    const db = new Database(panelDb, { readonly: true });
+    try {
+      db.exec("PRAGMA busy_timeout = 5000;");
+      present = new Set(db.query<{ domain_name: unknown }, []>("SELECT domain_name FROM site").all()
+        .flatMap((row) => typeof row.domain_name === "string" ? [row.domain_name.toLowerCase()] : []));
+    } finally {
+      db.close();
+    }
+  } catch {
+    return [];
+  }
+  if (present.size === 0) return [];
+  return domains.filter((domain) => !present.has(domain.toLowerCase()));
 }

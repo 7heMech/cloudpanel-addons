@@ -19,7 +19,7 @@ import { fatal, Fatal, log, requireRoot } from "./util";
 import { withOperationLockSync } from "./operation-lock";
 import { runRecon } from "./recon";
 import { cmdServe } from "../manager/server";
-import { executeMaintenanceAction } from "../addons/maintenance/action";
+import { executeMaintenanceAction, type MaintenanceStatus } from "../addons/maintenance/action";
 import { runAuthActionStdin } from "./auth-action";
 import { runManagerAction, type ManagerOps } from "./manager-action";
 import { runSmtpSubmit } from "../addons/smtp/submit";
@@ -83,20 +83,19 @@ async function cmdMaintenance(argv: string[]): Promise<void> {
   }
   const verb = operation === "on" ? "enable" : operation === "off" ? "disable" : "status";
   try {
-    const result = await executeMaintenanceAction([verb, `--domain=${rawDomain}`]) as {
-      domain: string; enabled: boolean; customTemplate: boolean; bypasses: string[];
-    };
+    const result = await executeMaintenanceAction([verb, `--domain=${rawDomain}`]) as MaintenanceStatus;
     const global = await executeMaintenanceAction(["global-status"]) as { global: boolean; bypasses: string[] };
     if (operation === "status") {
-      const state = result.enabled ? "maintenance (503)" : global.global ? "maintenance (503, global)" : "live";
+      const state = result.uncovered ? "live, not covered" : result.enabled ? "maintenance (503)" : global.global ? "maintenance (503, global)" : "live";
       log.plain(`${result.domain}: ${state}`);
       log.plain(`Template: ${result.customTemplate ? "custom" : "default"}`);
       log.plain(`IP bypasses: ${result.bypasses.length ? result.bypasses.join(", ") : "none"}`);
       if (global.bypasses.length) log.plain(`Global IP bypasses: ${global.bypasses.join(", ")}`);
     } else {
       log.ok(`${result.domain}: maintenance mode ${result.enabled ? "enabled" : "disabled"}`);
-      if (!result.enabled && global.global) log.warn("global maintenance is on, so the site still serves 503");
+      if (!result.enabled && global.global && !result.uncovered) log.warn("global maintenance is on, so the site still serves 503");
     }
+    if (result.uncovered) log.warn(`Nginx does not run the maintenance check for ${result.domain} (${result.uncovered}), so visitors get the site whatever is set`);
   } catch (error) {
     fatal(error instanceof Error ? error.message : String(error));
   }

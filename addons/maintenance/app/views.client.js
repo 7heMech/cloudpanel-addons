@@ -85,125 +85,100 @@ async function setupTemplateEditor() {
     });
   }
   const editing = templateToggle();
-  setTemplateHidden(false);
-  setTemplateEditable(Boolean(editing && editing.checked));
+  setTemplateMode(Boolean(editing && editing.checked));
 }
 
 function siteEndpoint(domain, suffix) {
   return '/api/sites/' + encodeURIComponent(domain) + suffix;
 }
 
-function updateStats(inMaintenance, live) {
-  CLP_ROOT.querySelectorAll('.card.stats .stat').forEach(function (stat) {
-    const label = stat.querySelector('.label');
-    const value = stat.querySelector('.value');
-    if (!label || !value) return;
-    const text = label.textContent.trim();
-    if (text === 'In maintenance') value.textContent = String(inMaintenance);
-    if (text === 'Live') value.textContent = String(live);
-  });
-}
-
-function isGlobalActive() {
-  const el = CLP_ROOT.querySelector('[data-global-maintenance]');
-  if (el) return el.dataset.globalMaintenance === 'true';
-  const global = CLP_ROOT.getElementById('global-toggle');
-  return global ? global.checked : false;
-}
-
-function paintGlobalState(globalActive) {
-  CLP_ROOT.querySelectorAll('[data-global-maintenance]').forEach(function (el) {
-    el.dataset.globalMaintenance = String(globalActive);
-  });
-  const global = CLP_ROOT.getElementById('global-toggle');
-  if (global) global.checked = globalActive;
-  const state = CLP_ROOT.getElementById('global-state');
-  if (state) state.textContent = globalActive ? 'On' : 'Off';
-}
-
-function syncGlobalUI(globalActive) {
-  paintGlobalState(globalActive);
-
-  // Every row, not only the readable ones: the override covers a site whose
-  // saved setting could not be read just as it covers the rest.
-  const rows = Array.from(CLP_ROOT.querySelectorAll('input[data-toggle-domain]'));
-  let readableCount = 0;
-  let siteEnabledCount = 0;
-
-  rows.forEach(function (input) {
-    const domain = input.dataset.toggleDomain;
-    const readable = input.dataset.available === 'true';
-    if (readable) readableCount++;
-    const isSiteEnabled = readable && input.checked;
-    if (isSiteEnabled) siteEnabledCount++;
-
-    const badge = CLP_ROOT.querySelector('[data-status-domain="' + CSS.escape(domain) + '"]');
-    if (!badge) return;
-
-    if (isSiteEnabled) {
-      badge.className = 'badge state-maintenance';
-      badge.textContent = 'Maintenance Mode (503)';
-    } else if (globalActive) {
-      badge.className = 'badge state-maintenance';
-      badge.textContent = 'Maintenance (Global)';
-    } else if (!readable) {
-      badge.className = 'badge state-unavailable';
-      badge.textContent = 'Unavailable';
-    } else {
-      badge.className = 'badge state-live';
-      badge.textContent = 'Live';
-    }
-  });
-
-  const maintenanceCount = globalActive ? rows.length : siteEnabledCount;
-  const liveCount = globalActive ? 0 : readableCount - siteEnabledCount;
-  updateStats(maintenanceCount, liveCount);
-}
-
-function paintStatus(domain, siteEnabled) {
-  const globalActive = isGlobalActive();
-  CLP_ROOT.querySelectorAll('[data-status-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
-    if (siteEnabled) {
-      node.textContent = 'Maintenance Mode (503)';
-      node.className = 'badge state-maintenance';
-    } else if (globalActive) {
-      node.textContent = 'Maintenance (Global)';
-      node.className = 'badge state-maintenance';
-    } else {
-      node.textContent = 'Live';
-      node.className = 'badge state-live';
-    }
-  });
-  CLP_ROOT.querySelectorAll('[data-toggle-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
-    node.checked = siteEnabled;
-  });
-
-  const notice = CLP_ROOT.getElementById('global-notice');
-  if (notice) notice.hidden = !(globalActive && !siteEnabled);
-
-  const rows = Array.from(CLP_ROOT.querySelectorAll('input[data-toggle-domain]'));
-  const available = rows.filter(function (i) { return i.dataset.available === 'true'; });
-  if (available.length > 0) {
-    const siteEnabledCount = available.filter(function (i) { return i.checked; }).length;
-    // Every row, as syncGlobalUI counts them: the override covers a site whose
-    // saved setting could not be read just as it covers the rest.
-    const maintenanceCount = globalActive ? rows.length : siteEnabledCount;
-    const liveCount = globalActive ? 0 : available.length - siteEnabledCount;
-    updateStats(maintenanceCount, liveCount);
+function repaintFleet(reply, done) {
+  if (reply.html) {
+    repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+    if (done) notify(done, 'ok');
+  } else {
+    notify((done ? done + ' ' : '') + 'The page could not be refreshed; reload it to see the change.', 'warn');
   }
 }
 
+function onFleetPage() {
+  return Boolean(CLP_ROOT.getElementById('maintenance-fleet'));
+}
+
+// The site page has one site and an editor whose state a repaint would lose,
+// so it paints its badge and notices in place.
+function paintSiteStatus(domain, enabled) {
+  const heading = CLP_ROOT.querySelector('[data-global-maintenance]');
+  const globalActive = Boolean(heading && heading.dataset.globalMaintenance === 'true');
+  const uncovered = Boolean(heading && heading.dataset.uncovered === 'true');
+  CLP_ROOT.querySelectorAll('[data-status-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
+    const label = uncovered && (enabled || globalActive) ? ['Not covered', 'uncovered']
+      : enabled ? ['Maintenance Mode (503)', 'maintenance']
+      : globalActive ? ['Maintenance (Global)', 'maintenance'] : ['Live', 'live'];
+    node.textContent = label[0];
+    node.className = 'badge state-' + label[1];
+  });
+  CLP_ROOT.querySelectorAll('[data-toggle-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
+    node.checked = enabled;
+  });
+  const notice = CLP_ROOT.getElementById('global-notice');
+  if (notice) notice.hidden = !(globalActive && !enabled && !uncovered);
+}
+
 async function toggleMaintenance(domain, enabled) {
+  const fleet = onFleetPage();
   clearNotice();
   busy(true);
   try {
     const reply = await call(siteEndpoint(domain, '/toggle'), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enabled })
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(fleet ? { enabled: enabled, view: 'fleet' } : { enabled: enabled })
     });
-    paintStatus(domain, reply.data.enabled);
+    if (fleet) repaintFleet(reply);
+    else paintSiteStatus(domain, reply.data.enabled);
   } catch (error) {
-    paintStatus(domain, !enabled);
+    CLP_ROOT.querySelectorAll('[data-toggle-domain="' + CSS.escape(domain) + '"]').forEach(function (node) {
+      node.checked = !enabled;
+    });
     notify('Could not change maintenance mode for ' + domain + ': ' + error.message, 'error');
+  } finally {
+    busy(false);
+  }
+}
+
+function selectedDomains() {
+  return selectedRows().map(function (row) { return row.dataset.domain; });
+}
+
+// Taking sites offline is confirmed with their names; bringing them back is not.
+async function toggleSelected(enabled) {
+  const domains = selectedDomains();
+  if (!domains.length) return;
+  if (enabled) {
+    const accepted = await confirmAction({
+      title: 'Turn on maintenance for ' + plural(domains.length, 'site') + '?',
+      text: 'Visitors to these sites get the 503 maintenance page until it is turned off.',
+      details: domains,
+      confirmLabel: 'Turn on',
+      danger: true,
+    });
+    if (!accepted) return;
+  }
+  clearNotice();
+  busy(true);
+  try {
+    const reply = await call('/api/bulk-toggle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: enabled, domains: domains })
+    });
+    const failed = reply.data.failed;
+    const done = 'Maintenance turned ' + (enabled ? 'on' : 'off') + ' for ' + plural(reply.data.updated.length, 'site') + '.';
+    repaintFleet(reply, failed.length ? '' : done);
+    if (failed.length) {
+      notify(done + ' Not changed: ' + failed.map(function (f) { return f.domain + ' (' + f.error + ')'; }).join(', '), 'error');
+    }
+  } catch (error) {
+    notify('Could not change maintenance mode: ' + error.message, 'error');
   } finally {
     busy(false);
   }
@@ -216,7 +191,7 @@ async function toggleGlobalMaintenance(targetEnabled) {
   // One Nginx flag covers every CloudPanel site, including any whose own
   // status could not be read, so the scope is the whole inventory.
   const all = Array.from(CLP_ROOT.querySelectorAll('input[data-toggle-domain]'));
-  const known = all.filter(function (input) { return input.dataset.available === 'true'; });
+  const known = all.filter(function (input) { return !input.disabled; });
   const count = all.length;
   const savedOff = known.filter(function (input) { return !input.checked; }).length;
   const unknown = all.length - known.length;
@@ -233,8 +208,8 @@ async function toggleGlobalMaintenance(targetEnabled) {
   const accepted = await confirmAction({
     title: targetEnabled ? 'Turn on global maintenance?' : 'Turn off global maintenance?',
     text: targetEnabled
-      ? 'Global maintenance covers all ' + count + (count === 1 ? ' site' : ' sites') + ' on this panel.'
-      : 'Global maintenance stops covering all ' + count + (count === 1 ? ' site' : ' sites') + ' on this panel.',
+      ? 'Global maintenance covers all ' + plural(count, 'site') + ' on this panel.'
+      : 'Global maintenance stops covering all ' + plural(count, 'site') + ' on this panel.',
     details: details,
     confirmLabel: targetEnabled ? 'Turn on' : 'Turn off',
     danger: targetEnabled,
@@ -246,13 +221,12 @@ async function toggleGlobalMaintenance(targetEnabled) {
   clearNotice();
   busy(true);
   try {
-    await call('/api/global-toggle', {
+    const reply = await call('/api/global-toggle', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: targetEnabled })
     });
-    syncGlobalUI(targetEnabled);
-    notify(targetEnabled ? 'Global maintenance is on.' : 'Global maintenance is off.', 'ok');
+    repaintFleet(reply, targetEnabled ? 'Global maintenance is on.' : 'Global maintenance is off.');
   } catch (error) {
     if (toggle) toggle.checked = !targetEnabled;
     notify('Could not change global maintenance mode: ' + error.message, 'error');
@@ -262,9 +236,8 @@ async function toggleGlobalMaintenance(targetEnabled) {
 }
 
 function showEditorTab(tab) {
-  const editor = CLP_ROOT.getElementById('template-editor');
   const preview = CLP_ROOT.getElementById('template-preview');
-  if (!editor || !preview) return;
+  if (!preview) return;
   const showingPreview = tab === 'preview';
   setTemplateHidden(showingPreview);
   preview.hidden = !showingPreview;
@@ -275,18 +248,28 @@ function showEditorTab(tab) {
 }
 
 function updateTemplatePreview() {
-  const editor = CLP_ROOT.getElementById('template-editor');
   const preview = CLP_ROOT.getElementById('template-preview');
-  if (!editor || !preview) return;
+  if (!preview) return;
   if (maintenancePreviewUrl) URL.revokeObjectURL(maintenancePreviewUrl);
   maintenancePreviewUrl = URL.createObjectURL(new Blob([templateValue()], { type: 'text/html' }));
   preview.src = maintenancePreviewUrl;
 }
 
+// The page opens on its preview; the Edit switch is the way into the HTML.
 function setTemplateMode(editing) {
   const save = CLP_ROOT.getElementById('save-template');
+  const tabs = CLP_ROOT.querySelector('.editor-tabs');
   setTemplateEditable(editing);
   if (save) save.disabled = !editing;
+  if (tabs) tabs.hidden = !editing;
+  showEditorTab(editing ? 'editor' : 'preview');
+}
+
+function paintTemplateKind(custom) {
+  const kind = CLP_ROOT.getElementById('template-kind');
+  if (kind) kind.textContent = custom ? 'Custom' : 'Default';
+  const reset = CLP_ROOT.getElementById('reset-template');
+  if (reset) reset.hidden = !custom;
 }
 
 // Editing is a local mode and nothing else: leaving it never touches what is
@@ -305,13 +288,11 @@ async function changeTemplateMode(domain, editing) {
     return;
   }
   setTemplateValue(templateSaved);
-  updateTemplatePreview();
   setTemplateMode(false);
 }
 
 async function saveTemplate(domain) {
-  const editor = CLP_ROOT.getElementById('template-editor');
-  if (!editor) return;
+  if (!templateArea()) return;
   clearNotice();
   busy(true);
   try {
@@ -320,22 +301,21 @@ async function saveTemplate(domain) {
     });
     setTemplateValue(reply.data.html);
     templateSaved = reply.data.html;
+    paintTemplateKind(true);
     updateTemplatePreview();
-    notify('Custom maintenance page saved.', 'ok');
+    notify(reply.data.removed ? 'Saved; some tags were removed.' : 'Custom maintenance page saved.', reply.data.removed ? 'warn' : 'ok');
   } catch (error) { notify('Could not save the template: ' + error.message, 'error'); }
-  finally { busy(false); setTemplateMode(true); }
+  finally { busy(false); setTemplateEditable(true); }
 }
 
-async function resetTemplate(domain, confirmed) {
-  if (!confirmed) {
-    const accepted = await confirmAction({
-      title: 'Reset to the default maintenance page?',
-      text: 'The custom template saved for ' + domain + ' is removed and cannot be recovered from here.',
-      confirmLabel: 'Reset',
-      danger: true,
-    });
-    if (!accepted) return;
-  }
+async function resetTemplate(domain) {
+  const accepted = await confirmAction({
+    title: 'Reset to the default maintenance page?',
+    text: 'The custom template saved for ' + domain + ' is removed and cannot be recovered from here.',
+    confirmLabel: 'Reset',
+    danger: true,
+  });
+  if (!accepted) return;
   clearNotice();
   busy(true);
   try {
@@ -344,7 +324,7 @@ async function resetTemplate(domain, confirmed) {
     setTemplateValue(reply.data.html);
     templateSaved = reply.data.html;
     if (toggle) toggle.checked = false;
-    updateTemplatePreview();
+    paintTemplateKind(false);
     notify('Reset to the default maintenance page.', 'ok');
   } catch (error) {
     notify('Could not reset the template: ' + error.message, 'error');
@@ -375,6 +355,10 @@ async function saveBypassList(id, endpoint, saved, failed) {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ips: bypassList(field.value) })
     });
     field.value = field.defaultValue = reply.data.bypasses.join('\n');
+    const count = CLP_ROOT.getElementById(id + '-count');
+    const n = reply.data.bypasses.length;
+    const word = id === 'bypass-ips' ? ['bypass', 'bypasses'] : ['address', 'addresses'];
+    if (count) count.textContent = n ? n + ' ' + word[n === 1 ? 0 : 1] : 'None';
     notify(saved, 'ok');
   } catch (error) { notify(failed + error.message, 'error'); }
   finally {
