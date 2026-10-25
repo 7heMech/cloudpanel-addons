@@ -15,12 +15,8 @@
 /* Push to deploy while off: a row like the summaries above it, with nothing to open. */
 .git-push-row { display: flex; align-items: center; gap: 12px; }
 .disclosure + .git-push-row { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
-.git-advanced { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 20px; }
-.git-advanced > summary { font-size: 14px; }
-.git-repo-form .form-grid { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr); }
-.git-advanced .form-field { max-width: 480px; }
-.git-repo-form .form-actions { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 20px; }
-.git-danger { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
+.git-repo-form .form-grid { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+.git-repo-form .form-actions { margin-top: 24px; }
 .git-setup-intro { margin-bottom: 24px; }
 .git-setup-intro h2 { margin: 0 0 8px; }
 .git-output { margin-top: 20px; }
