@@ -75,6 +75,8 @@ export function siteStatus(site: SiteView, mode: "report" | "enforce" | null): {
   if (!plan) return { label: "Not checked yet", tone: "muted", hint: "" };
   const zone = plan.zone ? `${plan.zone.name} · ${plan.zone.connection}` : "";
   if (plan.problems.length) return { label: "Needs attention", tone: "bad", hint: plan.problems[0]! };
+  const waiting = plan.changes.filter((change) => change.waits).length;
+  if (waiting) return { label: "Waits for review", tone: "warn", hint: `Its address is in place; ${plural(waiting, "change")} reach${waiting === 1 ? "es" : ""} further` };
   const pending = plan.changes.filter((change) => change.action !== "note").length;
   if (plan.zone && plan.zone.status !== "active") return { label: `Zone ${plan.zone.status}`, tone: "warn", hint: "Set its nameservers at the registrar" };
   if (!plan.zone && pending) return { label: "Zone to create", tone: "warn", hint: "" };
@@ -85,7 +87,7 @@ export function siteStatus(site: SiteView, mode: "report" | "enforce" | null): {
 function siteRow(site: SiteView, state: DnsState): string {
   const profile = state.profiles.find((candidate) => candidate.id === site.profileId);
   const status = siteStatus(site, profile?.mode ?? null);
-  return `<tr data-domain="${esc(site.domain)}" data-profile-id="${esc(site.profileId ?? "")}" tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this, dnsPaintSelection)" onkeydown="toggleSiteSelection(event, this, dnsPaintSelection)">
+  return `<tr data-domain="${esc(site.domain)}" data-profile-id="${esc(site.profileId ?? "")}"${site.plan?.held ? " data-held" : ""} tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this, dnsPaintSelection)" onkeydown="toggleSiteSelection(event, this, dnsPaintSelection)">
     <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="dnsPaintSelection()" aria-label="Select ${esc(site.domain)}"></td>
     <td class="site-cell"><strong>${esc(site.domain)}</strong></td>
     <td class="type-cell">${esc(TYPE_LABELS[site.type] ?? site.type)}</td>

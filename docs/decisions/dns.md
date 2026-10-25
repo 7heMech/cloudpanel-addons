@@ -140,7 +140,8 @@ site belongs to the longest zone any connection reaches; moved, deleted and
 deactivated zones are ignored. One zone reached by two tokens is used through
 the first connection until the operator chooses another; two zones with the
 same name, in different accounts, must be chosen between before either is
-written. A profile can create a missing zone, for the registrable domain, in an
+written. When the chosen zone cannot be reached, the choice is asked again
+rather than falling back to the zone left over. A profile can create a missing zone, for the registrable domain, in an
 account chosen from the ones its connections reach. While any connection cannot
 be read, a site with no zone found is unreachable rather than missing, so a zone
 only that connection reaches is never created again elsewhere. A new zone's
@@ -164,6 +165,16 @@ DNS declares `newSites`, so the shared watcher (see
 [Platform integration](platform.md#new-sites)) gives a new site the default
 profile and enforces it, normally within seconds and before SMTP Relay, which
 waits at most fifteen seconds for it.
+
+Creating a site points its names at this server, so a new site's records are
+created and its own address records -- A, AAAA or CNAME at the site and `www`
+-- are replaced at once, with no review. If its profile would do more, such as
+update or delete other records or change a zone setting, the site is held: its
+rules are still written, but the rest waits, through every later check, until
+an administrator reviews it. Placing the site in a profile by hand, or the
+page's Review changes, runs the usual review and clears the hold. Readiness
+ignores the held changes. One read of the panel that finds no sites changes no
+assignment.
 
 Panel Tweaks' completion page calls `POST /addons/dns/api/provision` before it
 asks for a certificate. The route, and its CSRF session route, are reachable by

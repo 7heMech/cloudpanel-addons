@@ -87,6 +87,7 @@ export function seededPolicy(): Policy {
     defaultProfileId: null,
     assignments: {},
     knownSiteIds: [],
+    held: [],
     connections: [],
     zoneChoices: {},
     server: { ipv4: "", ipv6: "" },
