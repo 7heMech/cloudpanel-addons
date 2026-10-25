@@ -362,12 +362,20 @@ const phpPoolSites: PoolSiteState[] = [
   },
 ];
 
-/** ?default=off leaves new sites uncategorised; ?empty= drops the fleet. */
+const phpMorePoolSites: PoolSiteState[] = ["news", "docs", "store", "events"].map((name, index) => ({
+  domain: `${name}.example.org`, siteUser: name, phpVersion: index % 2 ? "8.2" : "8.3",
+  poolFile: `/etc/php/8.3/fpm/pool.d/${name}.example.org.conf`,
+  current: { ...PRESET_CATEGORIES[index % 2]!.profile },
+  categoryId: PRESET_CATEGORIES[index % 2]!.id, categoryName: PRESET_CATEGORIES[index % 2]!.name,
+  drifted: false,
+}));
+
+/** ?default=off leaves new sites uncategorised; ?empty= drops the fleet; ?many shows search and filter. */
 function phpResourcesPreviewState(url: URL): PhpResourcesState {
   return {
     categories: url.searchParams.has("no-categories") ? [] : PRESET_CATEGORIES,
     defaultCategoryId: url.searchParams.get("default") === "off" ? null : "standard",
-    sites: url.searchParams.has("empty") ? [] : phpPoolSites,
+    sites: url.searchParams.has("empty") ? [] : url.searchParams.has("many") ? [...phpPoolSites, ...phpMorePoolSites] : phpPoolSites,
   };
 }
 
@@ -1439,7 +1447,12 @@ const server = Bun.serve({
       }
       html = wpToolsLayout("WordPress Tools", wpToolsDashboardView(wpToolsPreviewData()), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
-      html = phpResourcesLayout("PHP Resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice);
+      // ?dialog=new|edit opens the category dialog on load (edit: the first category), ?more with More limits open.
+      const dialog = url.searchParams.get("dialog");
+      const opener = dialog === null ? "" : `openCategoryDialog(${dialog === "edit" ? "CLP_ROOT.querySelector('tr[data-category] button')" : "document.body"});`
+        + (url.searchParams.has("more") ? "CLP_ROOT.getElementById('category-more').open=true;" : "");
+      html = phpResourcesLayout("PHP Resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice)
+        .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/dns/" || path === "/addons/dns") {
       // ?dialog=profile|advanced|new|review|site|choose|connection|mailcow|server opens that dialog on load; ?report makes the
       // Report only profile the default for new sites;

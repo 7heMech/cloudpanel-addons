@@ -18,6 +18,7 @@ import type { AddonTarget } from "../../../lib/addon-target";
 const STYLE = [
   "#clp-php-resources .col-form-label { padding-bottom: 0; opacity: .7; }",
   "#clp-php-resources .clp-addon-readonly { padding: 2px 0 14px; overflow-wrap: anywhere; }",
+  "#clp-php-resources .clp-addon-limits > summary { cursor: pointer; padding: 0 0 14px; opacity: .7; }",
 ].join(" ");
 
 export const PHP_RESOURCES_TARGETS: AddonTarget[] = [
