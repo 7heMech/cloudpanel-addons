@@ -7,7 +7,8 @@
 }
 /* Only a domain and a button per site, so a wide screen shows two sites a row. */
 @media (min-width: 941px) {
-  .terminal-site-table thead { display: none; }
+  /* Out of sight, not out of the accessibility tree: screen readers still name the column. */
+  .terminal-site-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .terminal-site-table tbody { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-left: -1px; }
   .terminal-site-table tr { display: flex; align-items: center; justify-content: space-between; gap: 16px;
     border-top: 1px solid var(--row-border); border-left: 1px solid var(--row-border); }
