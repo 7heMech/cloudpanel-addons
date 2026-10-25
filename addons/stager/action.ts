@@ -1,11 +1,12 @@
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
-  chmodSync, closeSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, openSync,
+  chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync,
   readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import { CLI_BIN, PANEL_IDENTITY_PATH } from "../../cli/paths";
+import { CLI_BIN, CONFIG_DIR, PANEL_IDENTITY_PATH } from "../../cli/paths";
+import { executeSmtpAction } from "../smtp/action";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import {
   createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet,
@@ -63,6 +64,8 @@ export interface StagerActionPaths {
   actionBinary: string;
   tempDir: string;
   sqlite3: string;
+  /** Present while SMTP Relay is enabled. */
+  smtpConfigFile?: string;
   emitReply?: boolean;
 }
 
@@ -78,6 +81,7 @@ export const DEFAULT_STAGER_ACTION_PATHS: StagerActionPaths = {
   actionBinary: CLI_BIN,
   tempDir: "/tmp",
   sqlite3: "sqlite3",
+  smtpConfigFile: `${CONFIG_DIR}/smtp.conf`,
 };
 
 export interface ParsedStagerAction {
@@ -138,6 +142,7 @@ interface JobView {
   finishedAt: string;
   result: unknown;
   panelSite: boolean | null;
+  sourcePanelSite: boolean | null;
 }
 
 function pathsFor(options?: StagerActionOptions): StagerActionPaths {
@@ -489,6 +494,33 @@ let activeTranscript: JobTranscript | null = null;
 function diagnostic(value: string): void {
   if (activeTranscript) activeTranscript.write(value);
   else process.stderr.write(value);
+}
+
+/** SMTP Relay's seeded profile that discards mail (DONT_SEND in addons/smtp/action.ts). */
+const SMTP_DONT_SEND = "dont-send";
+
+/**
+ * A staging copy runs the live site's code against a copy of its customers, so
+ * while SMTP Relay is enabled it starts in the Don't send profile. `assign`
+ * marks the site as decided, so SMTP's new-site pass leaves it there. A failure
+ * here never fails the clone; it becomes a note.
+ */
+export async function holdCloneMail(
+  paths: Pick<StagerActionPaths, "smtpConfigFile">,
+  domain: string,
+  notes: string[],
+  assign: (input: string) => Promise<unknown> = (input) => executeSmtpAction(["assign"], { input }),
+): Promise<void> {
+  if (!existsSync(paths.smtpConfigFile ?? DEFAULT_STAGER_ACTION_PATHS.smtpConfigFile!)) return;
+  try {
+    await assign(JSON.stringify({ domains: [domain], profileId: SMTP_DONT_SEND }));
+    logLine(`SMTP Relay: ${domain} is in the Don't send profile`);
+    notes.push(`SMTP Relay discards ${domain}'s mail (Don't send profile); move it to another profile there to let it send`);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    warnLine(`SMTP Relay could not hold ${domain}'s mail: ${reason}`);
+    notes.push(`${domain} could not be put in SMTP Relay's Don't send profile, so it may send mail to real customers: ${reason}. Assign it there in SMTP Relay`);
+  }
 }
 
 function logLine(value: string): void {
@@ -1680,13 +1712,6 @@ function cmdDescribe(paths: StagerActionPaths, domain: string): void {
     failAction("cannot read the panel database");
   }
 
-  let sizeMb = 0;
-  const root = `/home/${row.user}/htdocs/${domain}`;
-  if (isDirectory(root)) {
-    const size = runCommand("du", ["-sm", root]);
-    const match = size.stdout.trim().match(/^([0-9]+)/);
-    sizeMb = match ? Number(match[1]) || 0 : 0;
-  }
   emitStagerOk(paths, {
     domain,
     siteType: type,
@@ -1696,7 +1721,6 @@ function cmdDescribe(paths: StagerActionPaths, domain: string): void {
     application: row.application || "Generic",
     rootDirectory: row.root,
     database,
-    sizeMb,
   });
 }
 
@@ -2273,9 +2297,8 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
       const certificate = runCommand(paths.clpctl, ["lets-encrypt:install:certificate", `--domainName=${ctx.target}`]);
       forwardCommandOutput(certificate);
       if (!certificate.ok) ctx.notes.push(`the certificate request failed; point ${ctx.target} at this server and retry from Site -> SSL/TLS`);
-    } else {
-      ctx.notes.push(`no certificate was requested; ${ctx.target} is served with CloudPanel's self-signed one until you issue one`);
     }
+    await holdCloneMail(paths, ctx.target, ctx.notes);
 
     setStep(ctx, "recording the result");
     const result: JobResult = {
@@ -2808,18 +2831,21 @@ function readJobResult(dir: string): unknown {
 
 function jobJson(paths: StagerActionPaths, dir: string, id: string, hasPanelDb: boolean, panelSites: Set<string>): JobView {
   const target = jobGet(dir, "target");
-  let panelSite: boolean | null = null;
-  if (hasPanelDb && jobGet(dir, "state") === "done" && target) panelSite = panelSites.has(target);
+  const source = jobGet(dir, "source");
+  const done = hasPanelDb && jobGet(dir, "state") === "done";
+  const panelSite = done && target ? panelSites.has(target) : null;
+  const sourcePanelSite = done && source ? panelSites.has(source) : null;
   const portText = jobGet(dir, "port");
   return {
     id,
     kind: jobGet(dir, "kind") || "clone",
-    source: jobGet(dir, "source"),
+    source,
     target,
     port: /^\d+$/.test(portText) ? Number(portText) || 0 : 0,
     ...jobCommonFields(dir),
     result: readJobResult(dir),
     panelSite,
+    sourcePanelSite,
   };
 }
 

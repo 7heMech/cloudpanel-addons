@@ -6,10 +6,8 @@ export { type ActionResult };
 
 // clone only writes a job record and hands the work to systemd, so it
 // answers immediately -- the long operation is the job itself, which nothing
-// here waits on. describe runs du over a whole site, which is the one read
-// that can genuinely take a while.
+// here waits on.
 const TIMEOUTS: Record<string, number> = {
-  describe: 120_000,
   clone: 60_000,
   promote: 60_000,
 };
@@ -49,17 +47,19 @@ export { validateJobId } from "../../../lib/job-id";
 
 /**
  * Expand the shorthand the original wrapper script accepted: a bare label
- * becomes a subdomain of the site being cloned.
+ * becomes a subdomain of the site being cloned, of `example.com` rather than
+ * `www.example.com`.
  *
  * Here rather than in the action binary because it is a convenience, and the
  * action binary must not rewrite its input -- a boundary that silently
  * corrects a value is one that eventually corrects it wrong. What crosses the
- * boundary is always a complete hostname.
+ * boundary is always a complete hostname. The page's script carries this same
+ * function, so it is written in the JavaScript a browser runs.
  */
 export function expandTarget(input: string, source: string): string {
-  const t = input.trim().toLowerCase().replace(/\.$/, "");
+  const t = String(input || "").trim().toLowerCase().replace(/\.$/, "");
   if (!t) return "";
-  return t.includes(".") ? t : `${t}.${source}`;
+  return t.indexOf(".") === -1 ? t + "." + source.replace(/^www\./, "") : t;
 }
 
 /** The `site.type` values the action binary will clone (CLONABLE_TYPES in
@@ -81,7 +81,6 @@ export interface SiteDetail extends Omit<SiteSummary, "databases"> {
   instatic: boolean;
   rootDirectory: string;
   database: string;
-  sizeMb: number;
 }
 
 export interface JobResult {
@@ -147,60 +146,21 @@ export interface JobView {
   /** Optional one-shot event emitted by the job runner. */
   event?: string;
   result: JobResult | PromoteResult | null;
+  /** Whether the panel still has the job's target, or null when that is unknown. */
   panelSite?: boolean | null;
+  /** The same for its source. */
+  sourcePanelSite?: boolean | null;
 }
 
-/**
- * `describe` is the one read that costs real work: the action
- * binary runs `du -sm` over the source's whole document root as root, with a
- * 120-second timeout.
- * Measured on this box, one pass over ~18 GB took 22 seconds of wall time and 9
- * of system time. Nothing bounded how many could run at once, so a handful of
- * requests could keep root walking the disk indefinitely.
- *
- * Requests are authenticated now, which takes the anonymous version of that
- * away. It does not take away the browser version: a page on another origin can
- * point an `<img>` at this route, and the browser attaches the operator's Basic
- * Auth credentials on its own. So the work itself is bounded rather than the
- * caller.
- *
- * One at a time, and a short queue -- past that the answer is an error, because
- * a caller waiting behind fifty disk walks would rather be told than timed out.
- * Repeating the same domain joins the in-flight call instead of starting a
- * second identical walk, which is the shape a refreshed page actually makes.
- */
-const DESCRIBE_QUEUE_MAX = 4;
-let describeRunning = 0;
-let describeQueued = 0;
-let describeChain: Promise<unknown> = Promise.resolve();
-const describeInFlight = new Map<string, Promise<ActionResult<SiteDetail>>>();
-
-async function withDescribeSlot(
-  domain: string,
-  work: () => Promise<ActionResult<SiteDetail>>,
-): Promise<ActionResult<SiteDetail>> {
-  const shared = describeInFlight.get(domain);
-  if (shared) return shared;
-
-  if (describeRunning > 0 && describeQueued >= DESCRIBE_QUEUE_MAX) {
-    return { ok: false, error: "too many size scans are already running; try again in a moment" };
-  }
-
-  describeQueued++;
-  const run = describeChain.then(async () => {
-    describeQueued--;
-    describeRunning++;
-    try {
-      return await work();
-    } finally {
-      describeRunning--;
-      describeInFlight.delete(domain);
-    }
-  });
-  // The chain must not break on a rejection, or every later caller inherits it.
-  describeChain = run.catch(() => undefined);
-  describeInFlight.set(domain, run);
-  return run;
+/** Why this clone record cannot be the basis of a promote, or "" if it can. */
+export function promoteBlocked(job: JobView): string {
+  if (job.kind === "promote") return "That job is itself a promote; promote from the clone that created the staging site.";
+  if (job.state !== "done") return `That clone is ${job.state}. Only a finished clone can be promoted.`;
+  if (!job.result) return "That clone recorded no result, so there is nothing to say what it produced.";
+  if (!job.source || !job.target) return "That clone record is incomplete.";
+  if (job.panelSite === false) return `${job.target} has been deleted from CloudPanel, so there is nothing to promote.`;
+  if (job.sourcePanelSite === false) return `${job.source} has been deleted from CloudPanel, so there is no live site to promote onto.`;
+  return "";
 }
 
 export const stagerService = {
@@ -213,8 +173,9 @@ export const stagerService = {
     return res.data?.sites ?? [];
   },
 
+  /** Why a site cannot be cloned, from the action that decides it. */
   async describe(domain: string): Promise<ActionResult<SiteDetail>> {
-    return withDescribeSlot(domain, () => callAction<SiteDetail>("describe", ["--domain", domain]));
+    return callAction<SiteDetail>("describe", ["--domain", domain]);
   },
 
   /**

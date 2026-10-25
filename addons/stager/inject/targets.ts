@@ -49,11 +49,11 @@ export const STAGER_TARGETS: AddonTarget[] = [
     </li>`,
     required: true,
     snippet: (url) => `
-        {% if is_granted('ROLE_ADMIN') %}
+        {% if is_granted('ROLE_ADMIN') %}${CLONABLE}
           <li>
             <a href="${url}?domain={{ site.domainName|url_encode }}">${TAB_LABEL}</a>
           </li>
-        {% endif %}`,
+        {% endif %}{% endif %}`,
   },
   // Cloning is not an action anyone does daily, so it is menu-only: it appears
   // in a Sites row's action menu and nowhere else, rather than as a link in

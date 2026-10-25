@@ -4,8 +4,11 @@ import type { SanitizedSite } from "../../../lib/snapshot-reader";
 // process, and
 // the page is served to an operator whose session can create CloudPanel sites.
 
-import { esc, escJs } from "../../../lib/app-http";
-import { JOB_STYLE, JOB_WATCH_JS, renderFragment, renderLayout } from "../../../lib/app-ui";
+import { esc } from "../../../lib/app-http";
+import {
+  FLEET_NONE_HTML, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, jobStateClass, jobStateLabel, renderFragment, renderLayout,
+  whenText,
+} from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
 import type { SiteContext } from "../../../lib/site-context";
 import { mountPath } from "../../../lib/mount";
@@ -17,7 +20,7 @@ import { mountPath } from "../../../lib/mount";
  * name, so a link that forgets it is a bug at build time, not a routing choice.
  */
 const BASE = mountPath("stager");
-import type { JobResult, JobView, PromoteResult, SiteDetail, SiteSummary } from "./service";
+import { expandTarget, promoteBlocked, type JobResult, type JobView, type PromoteResult, type SiteSummary } from "./service";
 
 // Only what the shared shell does not carry.
 import STYLE from "./views.css" with { type: "text" };
@@ -27,7 +30,9 @@ import STYLE from "./views.css" with { type: "text" };
  *
  * Exported so tests/test-app.test.ts can parse it.
  */
-import CLIENT_JS from "./views.client.js" with { type: "text" };
+import VIEWS_JS from "./views.client.js" with { type: "text" };
+// One expandTarget for the route and the hostname preview.
+const CLIENT_JS = `const expandTarget = ${expandTarget.toString()};\n${VIEWS_JS}`;
 export { CLIENT_JS };
 
 export function layout(
@@ -39,13 +44,7 @@ export function layout(
   return renderLayout(title, content, {
     brand: "Stager",
     base: BASE,
-    // A site-scoped page draws CloudPanel's own site tabs instead of this
-    // addon's, so its own nav would be a second strip saying something else.
-    nav: site ? [] : [
-      { href: `${BASE}/`, label: "Clones" },
-      { href: `${BASE}/new`, label: "New staging site" },
-      { href: `${BASE}/promote`, label: "Promote to live" },
-    ],
+    nav: [],
     css: STYLE + JOB_STYLE,
     script: JOB_WATCH_JS + CLIENT_JS,
     updateNotice,
@@ -67,13 +66,8 @@ export function fragment(title: string, content: string): EmbedFragment {
   });
 }
 
-function stateClass(state: string): string {
-  const known = ["queued", "running", "done", "failed"];
-  return known.includes(state) ? `state-${state}` : "state-failed";
-}
-
-function when(iso: string): string {
-  return iso ? iso.replace("T", " ").replace("Z", " UTC") : "—";
+function stateBadge(job: JobView, id = ""): string {
+  return `<span class="badge ${jobStateClass(job.state)}"${id ? ` id="${id}"` : ""}>${esc(jobStateLabel(job.state))}</span>`;
 }
 
 export function isSiteMissing(
@@ -96,51 +90,51 @@ export function isSiteMissing(
   return !panelSites.some((s) => s.domain === job.target);
 }
 
+/** A finished clone whose two sites are both still there. */
+function canPromote(job: JobView, missing: boolean): boolean {
+  return !missing && !promoteBlocked(job);
+}
+
+function promoteHref(job: JobView): string {
+  return `${BASE}/promote?job=${encodeURIComponent(job.id)}`;
+}
+
 export function jobsView(
   jobs: JobView[],
   snapshotAge = Infinity,
   panelSites: SanitizedSite[] = [],
   snapshotTakenAt = ""
 ): string {
-  const active = jobs.filter((j) => j.state === "queued" || j.state === "running").length;
   const rows = jobs
-    .map(
-      (j) => {
-        const missing = isSiteMissing(j, snapshotAge, panelSites, snapshotTakenAt);
-        return `
+    .map((j) => {
+      const missing = isSiteMissing(j, snapshotAge, panelSites, snapshotTakenAt);
+      const active = j.state === "queued" || j.state === "running";
+      return `
         <tr>
           <td class="site-cell">
             <a href="${BASE}/jobs/${esc(j.id)}">${esc(j.target)}</a>
             ${j.kind === "promote" ? '<div class="hint">promoted to live</div>' : ""}
-            ${missing ? '<div class="hint">CloudPanel site deleted</div>' : ""}
           </td>
           <td class="wide-cell" data-label="From">${esc(j.source)}</td>
           <td class="type-cell">${esc(j.result ? typeLabel(j.result.siteType) : "—")}</td>
           <td data-label="State">
-            <span class="badge ${stateClass(j.state)}">${esc(j.state)}</span>
-            ${missing ? '<span class="badge" style="color:var(--bad);border-color:var(--bad);margin-left:0.25rem;">deleted</span>' : ""}
+            ${stateBadge(j)}${missing ? ' <span class="badge state-deleted">deleted</span>' : ""}
+            ${active && j.step ? `<div class="hint">${esc(j.step)}</div>` : ""}
           </td>
-          <td class="step wide-cell" data-label="Step">${esc(j.state === "done" ? "" : j.step)}</td>
-          <td class="step wide-cell" data-label="Started">${esc(when(j.createdAt))}</td>
+          <td class="step wide-cell" data-label="Started">${esc(whenText(j.createdAt))}</td>
+          <td class="action-cell">${canPromote(j, missing) ? `<a href="${promoteHref(j)}">Promote</a>` : ""}</td>
         </tr>`;
-      }
-    )
+    })
     .join("");
 
   return `
-    <div class="page-heading"><div><h1>Staging sites</h1><p>Clone a site to test changes before going live.</p></div><a class="btn btn-primary" href="${BASE}/new">+ New staging site</a></div>
-    <div class="card">
-      <div class="stats">
-        <div class="stat"><div class="label">Clones on record</div><div class="value">${jobs.length}</div></div>
-        <div class="stat"><div class="label">In flight</div><div class="value">${active}</div></div>
-      </div>
-    </div>
+    <div class="page-heading"><div><h1>Staging sites</h1><p>Clone a site to test changes, then promote them to the live site.</p></div><a class="btn btn-primary" href="${BASE}/new">+ New staging site</a></div>
     <div class="card card-table">
       ${
         jobs.length === 0
-          ? `<div class="empty">No clones yet. Start one from the Sites list in CloudPanel, or with the button above.</div>`
+          ? `<div class="empty">No clones yet. Start one with the button above, or from a site's Staging tab.</div>`
           : `<table class="fleet-table">
-        <thead><tr><th scope="col">Site</th><th scope="col">From</th><th scope="col">Type</th><th scope="col">State</th><th scope="col">Step</th><th scope="col">Started</th></tr></thead>
+        <thead><tr><th scope="col">Site</th><th scope="col">From</th><th scope="col">Type</th><th scope="col">State</th><th scope="col">Started</th><th scope="col" class="action-cell" aria-label="Actions"></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>`
       }
@@ -151,8 +145,8 @@ export function jobsView(
  * Staging as it looks from one site's own page in CloudPanel.
  *
  * Two questions, because a site can be either end of a clone and occasionally
- * both: what has been staged *from* this site, and whether this site *is* a
- * staging copy that can go back to the site it came from. The fleet view at
+ * both: whether this site *is* a staging copy that can go back to the site it
+ * came from, and what has been staged *from* it. The fleet view at
  * `/addons/stager/` answers neither -- it lists every clone on the box, which
  * is the wrong altitude for a page reached from one site's tab strip.
  */
@@ -164,75 +158,80 @@ export function siteStagingView(
   panelSites: SanitizedSite[] = [],
   snapshotTakenAt = "",
 ): string {
+  const newest = (a: JobView, b: JobView) => b.createdAt.localeCompare(a.createdAt);
   const clonesFrom = jobs.filter((j) => j.kind !== "promote" && j.source === domain);
   // The clone that produced this site, if it is one. Newest first, because a
   // site cloned twice is the second clone.
   const cloneOf = jobs
     .filter((j) => j.kind !== "promote" && j.target === domain && j.state === "done" && j.result)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-  const promotes = jobs.filter((j) => j.kind === "promote" && j.target === domain);
+    .sort(newest)[0];
+  // A promote runs from the staging site, so this site is its source.
+  const lastPromote = jobs.filter((j) => j.kind === "promote" && j.source === domain).sort(newest)[0];
 
   const row = (j: JobView): string => {
     const missing = isSiteMissing(j, snapshotAge, panelSites, snapshotTakenAt);
     return `
         <tr>
-          <td class="site-cell wide-cell">
-            <a href="${BASE}/jobs/${esc(j.id)}">${esc(j.target)}</a>
-            ${missing ? '<div class="hint">CloudPanel site deleted</div>' : ""}
+          <td class="site-cell wide-cell"><a href="${BASE}/jobs/${esc(j.id)}">${esc(j.target)}</a></td>
+          <td data-label="State">
+            ${stateBadge(j)}${missing ? ' <span class="badge state-deleted">deleted</span>' : ""}
+            ${j.state === "queued" || j.state === "running" ? `<div class="hint">${esc(j.step)}</div>` : ""}
           </td>
-          <td data-label="State"><span class="badge ${stateClass(j.state)}">${esc(j.state)}</span></td>
-          <td class="step wide-cell" data-label="Step">${esc(j.state === "done" ? "" : j.step)}</td>
-          <td class="step wide-cell" data-label="Started">${esc(when(j.createdAt))}</td>
+          <td class="step wide-cell" data-label="Started">${esc(whenText(j.createdAt))}</td>
+          <td class="action-cell">${canPromote(j, missing) ? `<a href="${promoteHref(j)}">Promote</a>` : ""}</td>
         </tr>`;
   };
 
   const cloneAction = clonable
-    ? `<a class="btn btn-primary" href="${BASE}/new?source=${encodeURIComponent(domain)}">+ New staging site</a>`
+    ? `<a class="btn${cloneOf ? "" : " btn-primary"}" href="${BASE}/new?source=${encodeURIComponent(domain)}">+ New staging site</a>`
     : "";
-  const staged = `
+  const heading = `
     <div class="page-heading">
       <div>
         <h1>Staging</h1>
-        <p>Copies of ${esc(domain)} you can change without touching what visitors see.</p>
+        <p>${cloneOf
+          ? `${esc(domain)} is a staging copy of ${esc(cloneOf.source)}.`
+          : `Copies of ${esc(domain)} you can change without touching what visitors see.`}</p>
       </div>
       ${cloneAction}
-    </div>
-    <div class="card card-table">
-      ${
-        clonesFrom.length === 0
-          ? `<div class="empty">${
-              clonable
-                ? `No staging copies of ${esc(domain)} yet.`
-                : `A ${esc(domain)} site cannot be cloned, so it has no staging copies.`
-            }</div>`
-          : `<table class="fleet-table">
-        <thead><tr><th scope="col">Staging site</th><th scope="col">State</th><th scope="col">Step</th><th scope="col">Started</th></tr></thead>
-        <tbody>${clonesFrom.map(row).join("")}</tbody>
-      </table>`
-      }
     </div>`;
 
-  // Only when this site is itself a finished clone: promoting is the return leg
-  // of a clone, so without that record there is no live site to return to.
-  const promoteSection = cloneOf
-    ? `
-    <div class="addon-section">
-      <h2>Promote to live</h2>
-      <div class="card">
-        <p>${esc(domain)} was cloned from <strong>${esc(cloneOf.source)}</strong>. Promoting moves its files onto that site.</p>
-        ${
-          promotes.length > 0
-            ? `<p class="hint">Last promoted ${esc(when(promotes.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]!.createdAt))}.</p>`
-            : ""
-        }
-        <div class="actions">
-          <a class="btn btn-primary" href="${BASE}/promote?job=${encodeURIComponent(cloneOf.id)}">Promote to ${esc(cloneOf.source)}</a>
-        </div>
+  // Promoting is the return leg of a clone, so without that record there is no
+  // live site to return to.
+  let promote = "";
+  if (cloneOf) {
+    const blocked = promoteBlocked(cloneOf);
+    const last = !lastPromote
+      ? ""
+      : lastPromote.state === "done"
+        ? ` <a href="${BASE}/jobs/${esc(lastPromote.id)}">Last promoted</a> ${esc(whenText(lastPromote.createdAt))}.`
+        : ` <a href="${BASE}/jobs/${esc(lastPromote.id)}">Last promote</a>: ${esc(jobStateLabel(lastPromote.state).toLowerCase())}, ${esc(whenText(lastPromote.createdAt))}.`;
+    promote = `
+    <div class="card split-card">
+      <div>
+        <h2>Promote to ${esc(cloneOf.source)}</h2>
+        <p class="hint">${blocked ? esc(blocked) : `Moves ${esc(domain)}'s files onto ${esc(cloneOf.source)}.${last}`}</p>
       </div>
-    </div>`
-    : "";
+      ${blocked ? "" : `<a class="btn btn-primary" href="${promoteHref(cloneOf)}">Promote</a>`}
+    </div>`;
+  }
 
-  return staged + promoteSection;
+  const clones = clonesFrom.length > 0
+    ? `<div class="card card-table">
+      <table class="fleet-table">
+        <thead><tr><th scope="col">Staging site</th><th scope="col">State</th><th scope="col">Started</th><th scope="col" class="action-cell" aria-label="Actions"></th></tr></thead>
+        <tbody>${clonesFrom.map(row).join("")}</tbody>
+      </table>
+    </div>`
+    : cloneOf
+      ? ""
+      : `<div class="card card-table"><div class="empty">${
+          clonable
+            ? `No staging copies of ${esc(domain)} yet.`
+            : `A ${esc(domain)} site cannot be cloned, so it has no staging copies.`
+        }</div></div>`;
+
+  return heading + promote + clones;
 }
 
 /** How a site's `type` column reads to an operator. */
@@ -243,36 +242,44 @@ function typeLabel(t: string): string {
   return t;
 }
 
+/** One line on what is being cloned: `WordPress, PHP 8.2, 1 database`. */
+function sourceSummary(site: SiteSummary): string {
+  if (site.siteType === "reverse-proxy") return "Instatic site. Its pages and media go to a new instance of its own.";
+  const parts = [site.application || "Generic", site.phpVersion ? `PHP ${site.phpVersion}` : typeLabel(site.siteType)];
+  if (site.siteType !== "static") parts.push(site.databases ? `${site.databases} database${site.databases === 1 ? "" : "s"}` : "no database");
+  return parts.join(", ");
+}
+
 /** Renders either the source picker or the configuration form for a new clone. */
-export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], error?: string): string {
+export function newCloneView(source: SiteSummary | null, sites: SiteSummary[], error?: string): string {
   if (!source) {
     const options = sites
-      .map((s) => `<tr><td class="site-cell"><a href="${BASE}/new?source=${encodeURIComponent(s.domain)}">${esc(s.domain)}</a></td>
+      .map((s) => `<tr data-domain="${esc(s.domain)}" data-find="${esc(`${s.domain} ${s.application}`)}">
+        <td class="site-cell"><a href="${BASE}/new?source=${encodeURIComponent(s.domain)}">${esc(s.domain)}</a></td>
         <td class="type-cell">${esc(typeLabel(s.siteType))}${s.phpVersion ? ` ${esc(s.phpVersion)}` : ""}</td>
         <td data-label="Application">${esc(s.application || "Generic")}</td>
-        <td class="action-cell" data-label="Action"><a href="${BASE}/new?source=${encodeURIComponent(s.domain)}">Clone</a></td></tr>`)
+        <td class="action-cell"><a href="${BASE}/new?source=${encodeURIComponent(s.domain)}">Clone</a></td></tr>`)
       .join("");
     return `
-      <div class="page-heading"><div><h1>New staging site</h1><p>Choose the site you want to clone.</p></div></div>
+      <div class="page-heading"><div><h1>New staging site</h1><p>Choose the site you want to clone.</p></div>
+        <a class="btn" href="${BASE}/">Back</a></div>
       ${error ? `<div class="alert" role="alert">${esc(error)}</div>` : ""}
       <div class="card card-table">
         ${
           sites.length === 0
             ? `<div class="empty">No clonable sites found in CloudPanel.</div>`
-            : `<table class="fleet-table"><thead><tr><th scope="col">Domain</th><th scope="col">Type</th><th scope="col">Application</th><th scope="col" class="action-cell">Action</th></tr></thead><tbody>${options}</tbody></table>`
+            : `${fleetFilterHtml({ count: sites.length, summary: `${sites.length} sites` })}
+              <table class="fleet-table"><thead><tr><th scope="col">Domain</th><th scope="col">Type</th><th scope="col">Application</th><th scope="col" class="action-cell" aria-label="Actions"></th></tr></thead><tbody>${options}</tbody></table>
+              ${FLEET_NONE_HTML}`
         }
       </div>`;
   }
-
-  const sizeNote = source.sizeMb > 0 ? `${source.sizeMb} MB of files` : "size unknown";
-  const dbNote = source.database ? `database ${esc(source.database)}` : "no database";
-  const isInstatic = source.siteType === "reverse-proxy";
 
   // Only for an Instatic source, because only there is there a second
   // application to sign into. The password is the source instance's own
   // administrator credential: it is posted once, reaches the action binary on
   // stdin, and is deleted the moment the export it exists for has finished.
-  const instaticFields = isInstatic
+  const instaticFields = source.siteType === "reverse-proxy"
     ? `
       <div class="credential-fields">
         <h2>Source Instatic account</h2>
@@ -296,34 +303,17 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
       </div>`
     : "";
 
-  const carriedNote = isInstatic
-    ? `The clone gets its own Instatic container, port and secret key, and the source's pages and media
-       are copied across through Instatic's own site bundle. The source's nginx config is carried too.`
-    : `The clone is created ${source.phpVersion ? "with the same PHP version and " : ""}with the source's
-       own nginx config where that can be done safely; when it cannot, the job says why.`;
-
   return `
     <div class="form-page">
     <div class="page-heading"><h1>New staging site</h1></div>
     ${error ? `<div class="alert" role="alert">${esc(error)}</div>` : ""}
     <div class="card">
-      <div class="card-header"><h2>Source site</h2></div>
-      <dl class="kv">
-        <dt>Source</dt><dd>${esc(source.domain)}</dd>
-        <dt>Type</dt><dd>${esc(typeLabel(source.siteType))}</dd>
-        ${source.phpVersion ? `<dt>PHP</dt><dd>${esc(source.phpVersion)}</dd>` : ""}
-        <dt>Template</dt><dd>${esc(source.application)}</dd>
-        <dt>Contents</dt><dd>${esc(sizeNote)}, ${dbNote}</dd>
-      </dl>
-      <p class="hint">${carriedNote}</p>
-    </div>
-    <div class="card">
-      <div class="card-header"><h2>Staging site settings</h2></div>
+      <div class="card-header"><div><h2>Clone ${esc(source.domain)}</h2><p class="hint">${esc(sourceSummary(source))}</p></div></div>
       <form onsubmit="event.preventDefault(); startClone();">
       <input type="hidden" id="source-domain" value="${esc(source.domain)}">
       <label for="target" class="required">Staging hostname</label>
-      <input id="target" required autocomplete="off" placeholder="stg" oninput="previewTarget()" aria-describedby="target-preview">
-      <div class="hint" id="target-preview" aria-live="polite">A label such as stg becomes stg.${esc(source.domain)}</div>
+      <input id="target" required autocomplete="off" value="stg" oninput="previewTarget()" aria-describedby="target-preview">
+      <div class="hint" id="target-preview" aria-live="polite">Will create ${esc(expandTarget("stg", source.domain))}</div>
       ${instaticFields}
 
       <div class="check-field">
@@ -343,47 +333,20 @@ export function newCloneView(source: SiteDetail | null, sites: SiteSummary[], er
     </div></div>`;
 }
 
-/**
- * The clones that can be promoted.
- *
- * Driven from this addon's own clone records rather than from a free choice of
- * two sites: a promote is the return leg of a clone, and a record of the clone
- * is what says which live site a staging copy belongs to. Anything else would
- * be a general site-to-site copy, which is not what this is.
- */
-export function promoteListView(jobs: JobView[]): string {
-  const promotable = jobs.filter((j) => j.kind !== "promote" && j.state === "done");
-  const rows = promotable
-    .map((j) => `<tr>
-      <td class="site-cell"><a href="${BASE}/jobs/${esc(j.id)}">${esc(j.target)}</a></td>
-      <td class="wide-cell" data-label="Live site">${esc(j.source)}</td>
-      <td class="type-cell">${esc(j.result ? typeLabel(j.result.siteType) : "—")}</td>
-      <td class="wide-cell" data-label="Cloned">${esc(when(j.finishedAt || j.createdAt))}</td>
-      <td class="action-cell" data-label="Action"><a href="${BASE}/promote?job=${encodeURIComponent(j.id)}">Promote</a></td>
-    </tr>`)
-    .join("");
-
-  return `
-    <div class="page-heading"><div><h1>Promote to live</h1>
-      <p>Put a staging site's files back onto the live site it was cloned from.</p></div></div>
-    <div class="card">
-      <p class="hint danger-note">A promote moves files and, for an Instatic site, content. The live database is
-        never overwritten: it holds the orders, form entries, comments and accounts created on the live site since
-        the staging copy was taken, and nothing in a promote can tell those apart from stale rows.</p>
-    </div>
-    <div class="card card-table">
-      ${promotable.length === 0
-        ? `<div class="empty">No finished clones to promote. Clone a site first; a promote is the return leg of a clone.</div>`
-        : `<table class="fleet-table"><thead><tr><th scope="col">Staging site</th><th scope="col">Live site</th><th scope="col">Type</th><th scope="col">Cloned</th><th scope="col" class="action-cell">Action</th></tr></thead><tbody>${rows}</tbody></table>`}
-    </div>`;
-}
-
-/** The confirmation for one promote: what moves, what does not, and type-to-confirm. */
+/** The confirmation for one promote: what moves, what does not, and the credentials it needs. */
 export function promoteView(job: JobView, error?: string): string {
   const result = job.result as JobResult | null;
   const isInstatic = result?.siteType === "reverse-proxy";
   const staging = job.target;
   const live = job.source;
+
+  if (error) {
+    return `
+    <div class="form-page">
+    <div class="page-heading"><h1>Promote to live</h1><a class="btn" href="${BASE}/">Back</a></div>
+    <div class="alert" role="alert">${esc(error)}</div>
+    </div>`;
+  }
 
   const credentialFields = isInstatic
     ? `
@@ -438,28 +401,16 @@ export function promoteView(job: JobView, error?: string): string {
   return `
     <div class="form-page">
     <div class="page-heading"><h1>Promote to live</h1></div>
-    ${error ? `<div class="alert" role="alert">${esc(error)}</div>` : ""}
     <div class="card">
-      <div class="card-header"><h2>What this does</h2></div>
-      <dl class="kv">
-        <dt>Promote</dt><dd>${esc(staging)}</dd>
-        <dt>Onto</dt><dd>${esc(live)}</dd>
-        <dt>Type</dt><dd>${esc(typeLabel(result?.siteType ?? ""))}</dd>
-      </dl>
+      <div class="card-header"><h2>${esc(staging)} → ${esc(live)}</h2></div>
       <ul class="notes">${whatMoves}</ul>
       <p class="hint danger-note">The live database is not overwritten. Everything created on ${esc(live)} since
         this clone was taken — orders, form submissions, comments, accounts — stays exactly as it is, and any
         content edited on ${esc(staging)} that lives in the database does not move.</p>
-    </div>
-    <div class="card">
-      <div class="card-header"><h2>Confirm</h2></div>
-      <form onsubmit="event.preventDefault(); startPromote('${escJs(job.id)}');">
+      <form onsubmit="event.preventDefault(); startPromote(this);" data-job="${esc(job.id)}" data-staging="${esc(staging)}" data-live="${esc(live)}">
       ${credentialFields}
-      <label for="promote-confirm" class="required">Type ${esc(live)} to confirm</label>
-      <input id="promote-confirm" required autocomplete="off" data-domain="${esc(live)}" placeholder="${esc(live)}">
-      <div class="hint">${esc(live)} serves the replaced files from the moment the switch completes.</div>
       <div class="form-actions">
-        <a class="btn btn-lg" href="${BASE}/promote">Back</a>
+        <a class="btn btn-lg" href="${BASE}/">Back</a>
         <button class="btn btn-primary btn-lg" type="submit">Promote to live</button>
       </div>
       </form>
@@ -482,6 +433,7 @@ export function jobView(
   const promoted = promote ? (job.result as PromoteResult | null) : null;
   const missing = promote ? false : isSiteMissing(job, snapshotAge, panelSites, snapshotTakenAt);
 
+  // What the operator still has to do, so it sits right under the status.
   const notes = job.result?.notes?.length
     ? `<div class="card">
         <div class="card-header"><h2>${promote ? "Promote notes" : "Clone notes"}</h2></div>
@@ -521,7 +473,7 @@ export function jobView(
         <dl class="kv">
           <dt>Staging site</dt><dd>${
             missing
-              ? `<span class="mono">${esc(job.target)}</span> <span class="hint" style="display:inline">(deleted from CloudPanel)</span>`
+              ? `<span class="mono">${esc(job.target)}</span>`
               : `<a href="https://${esc(job.target)}" target="_blank" rel="noopener">${esc(job.target)}</a>`
           }</dd>
           <dt>Type</dt><dd>${esc(typeLabel(result.siteType))}</dd>
@@ -530,11 +482,7 @@ export function jobView(
           <dt>Template</dt><dd>${esc(result.vhostTemplate)}</dd>
           <dt>Vhost</dt><dd>${vhostNote}</dd>
         </dl>
-        <p class="hint">${
-          missing
-            ? "This staging site has been deleted from CloudPanel."
-            : "The site user's password was generated and not kept. Set one in Site → SSH/FTP if you need SFTP access."
-        }</p>
+        ${missing ? "" : `<p class="hint">The site user's password was generated and not kept. Set one in Site → SSH/FTP if you need SFTP access.</p>`}
       </div>`
     : "";
 
@@ -571,8 +519,6 @@ export function jobView(
             ? `<dt>Kept from the live site</dt><dd>${promoted.preserved.map((path) => `<span class="mono">${esc(path)}</span>`).join(", ")}</dd>`
             : ""}
         </dl>
-        <p class="hint">The live database was not touched. It holds what this site's own visitors created
-          since the staging copy was taken, and nothing in a promote can tell that apart from a stale row.</p>
       </div>`
     : "";
 
@@ -589,8 +535,8 @@ export function jobView(
       </div>`
     : "";
 
-  const promoteAction = !promote && job.state === "done"
-    ? `<a class="btn" href="${BASE}/promote?job=${encodeURIComponent(job.id)}">Promote to live</a>`
+  const promoteAction = !promote && canPromote(job, missing)
+    ? `<a class="btn" href="${promoteHref(job)}">Promote to live</a>`
     : "";
 
   return `
@@ -600,25 +546,24 @@ export function jobView(
       <div class="card-header"><h2>${promote ? "Promote status" : "Clone status"}</h2></div>
       <div class="job-summary">
         <span class="job-domain">${esc(job.source)}</span>
-        <span class="hint" style="margin:0;">→</span>
+        <span class="hint job-arrow">→</span>
         <span class="job-domain">${esc(job.target)}</span>
-        <span class="badge ${stateClass(job.state)}" id="job-state">${esc(job.state)}</span>
-        ${missing ? '<span class="badge" style="color:var(--bad);border-color:var(--bad);">site deleted</span>' : ""}
+        ${stateBadge(job, "job-state")}
       </div>
-      <div class="step" id="job-step" style="margin-top:0.5rem;">${esc(finished ? "" : job.step)}</div>
-      ${missing ? '<div class="alert" style="margin-top:0.75rem;">This staging site has been deleted from CloudPanel.</div>' : ""}
-      ${job.error ? `<div class="alert" style="margin-top:0.75rem;">${esc(job.error)}</div>` : ""}
+      <div class="step job-step" id="job-step">${esc(finished ? "" : job.step)}</div>
+      ${missing ? '<div class="alert job-alert">This staging site has been deleted from CloudPanel.</div>' : ""}
+      ${job.error ? `<div class="alert job-alert">${esc(job.error)}</div>` : ""}
       <dl class="kv job-timing">
-        <dt>Started</dt><dd>${esc(when(job.startedAt || job.createdAt))}</dd>
-        <dt>Finished</dt><dd>${esc(when(job.finishedAt))}</dd>
+        <dt>Started</dt><dd>${esc(whenText(job.startedAt || job.createdAt))}</dd>
+        <dt>Finished</dt><dd>${esc(whenText(job.finishedAt))}</dd>
       </dl>
     </div>
+    ${notes}
     ${site}
     ${promotedSite}
     ${rollback}
     ${instatic}
     ${credentials}
-    ${notes}
     <div class="card">
       <div class="card-header"><h2>Log</h2></div>
       <pre id="job-log">${esc(logText || "(no output yet)")}</pre>

@@ -10,7 +10,8 @@ plugin: their `mail()` goes through the relay as it is.
    client support; the installer adds the SASL modules if they are missing.
 2. Create a **profile** for each SMTP account: hostname, a STARTTLS port (587 or
    2525), username, password, and the From its sites send with. The built-in
-   **Don't send** profile discards mail instead, for staging copies.
+   **Don't send** profile discards mail instead; Stager puts new staging copies
+   in it.
 3. Assign sites to profiles, one at a time or in bulk, and choose the profile new
    sites join. A site in no profile is not relayed. A site marked **Blocked**
    could send as a domain another site sends through a different profile; put

@@ -32,16 +32,32 @@ overwrite, whole tables at a time at best. So Stager moves files and, for an
 Instatic site, content, and refuses the database outright rather than offering a
 table selection that is only safe if the operator already knows the answer.
 
-A clone starts from the fleet page at `/addons/stager/`, from the site's own
-Staging tab, or from a Sites row's action menu. Not from a link in the row
+`/addons/stager/` is one page: every clone and promote on the box, with Promote
+on each finished clone whose staging and live sites both still exist. The job
+reply carries `panelSite` and `sourcePanelSite` from the panel database, and the
+list, the job page, the Staging tab and the promote page all refuse up front
+rather than after the confirmation. `/promote` without `?job=` returns to the
+list. The promote page is one card; the operator types the live hostname in
+the shared confirmation.
+
+A clone starts from that page, from the site's own Staging tab, or from a Sites
+row's action menu. Not from a link in the row
 itself: cloning is not an everyday action, and a link in every row of the list
 an operator reads every day is priced as though it were. `Clone` is marked
 `clp-addons-menu-only` from `lib/row-actions.ts`, and Stager emits the rule that
 hides it, so on a box with no action menu it appears in neither place.
 
-Staging is a tab on CloudPanel's own site page, beside Maintenance. It shows
-the one site's two ends of a clone -- what has been staged from it, and whether
-it is itself a staging copy with a live site to go back to -- rather than the
+The clone form names the source in one line from the `sites` listing and
+prefills the hostname `stg`. It no longer measures the source: `du -sm` over a
+large site took tens of seconds as root only to print a size. A bare label goes
+under the source's domain, without a leading `www.`; `expandTarget` in
+`app/service.ts` is the one copy, and the page's script carries its source.
+
+Staging is a tab on CloudPanel's own site page, beside Maintenance, on the site
+types Clone works on (PHP, static and reverse proxy); the injected Twig and
+`lib/site-context` apply the same condition. It shows the one site's two ends of
+a clone -- whether it is itself a staging copy with a live site to go back to,
+which comes first, and what has been staged from it -- rather than the
 fleet list at `/addons/stager/`, which is the wrong altitude for a page reached
 from one site's tab strip. Both addon tabs patch the same anchor in the panel's
 strip; the injector applies them in a fixed order, so the panel's copy and the
@@ -77,6 +93,15 @@ The replaced document root, the database dump and the content export are kept
 with the job record and expire with it. A promote that dies between the two
 renames is put back by the maintenance pass, which is also what removes the
 retained roots once their records expire.
+
+## Mail
+
+While SMTP Relay is enabled, a finished clone is assigned to its seeded
+`dont-send` profile through SMTP's own `assign` verb, so a copy of a shop does
+not mail the shop's customers. `assign` records the site as decided, so SMTP's
+new-site pass does not move it into the default profile. A failed assignment is
+a job note, not a failed clone. A promote leaves the live site's assignment
+alone.
 
 ## Jobs and cleanup
 

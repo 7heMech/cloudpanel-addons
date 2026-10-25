@@ -1,23 +1,19 @@
-
-function expandTarget(value, source) {
-  const t = String(value || '').trim().toLowerCase().replace(/\.$/, '');
-  if (!t) return '';
-  return t.indexOf('.') === -1 ? t + '.' + source : t;
-}
+// expandTarget is prepended by views.ts from service.ts, so the preview and
+// the route expand a bare label the same way.
 
 function previewTarget() {
   const input = document.getElementById('target');
   const source = document.getElementById('source-domain').value;
   const out = document.getElementById('target-preview');
   const full = expandTarget(input.value, source);
-  out.textContent = full ? 'Will create ' + full : 'A label such as stg becomes stg.' + source;
+  out.textContent = full ? 'Will create ' + full : 'A label such as stg becomes ' + expandTarget('stg', source);
 }
 
 async function startClone() {
   const source = document.getElementById('source-domain').value;
   const target = expandTarget(document.getElementById('target').value, source);
   const tls = document.getElementById('tls').checked;
-  if (!target) { alert('Enter a hostname for the staging site.'); return false; }
+  if (!target) { notify('Enter a hostname for the staging site.', 'error'); return false; }
   const payload = { source: source, target: target, tls: tls };
   // Present only when the source is an Instatic site. Read straight into the
   // request. The root job keeps it only until the source login succeeds.
@@ -26,7 +22,7 @@ async function startClone() {
     const password = document.getElementById('instatic-password');
     const code = document.getElementById('instatic-mfa');
     if (!email.value || !password.value) {
-      alert('Enter the source instance admin email and password.');
+      notify('Enter the source instance admin email and password.', 'error');
       return false;
     }
     payload.instaticEmail = email.value;
@@ -43,12 +39,13 @@ async function startClone() {
     location.href = CLP_BASE + '/jobs/' + encodeURIComponent(body.data.job);
   } catch (e) {
     busy(false);
-    alert('Could not start the clone: ' + e.message);
+    notify('Could not start the clone: ' + e.message, 'error');
   }
   return false;
 }
 
-async function startPromote(job) {
+async function startPromote(form) {
+  const live = form.dataset.live;
   const fields = {};
   const ids = {
     instaticEmail: 'promote-src-email', instaticPassword: 'promote-src-password', mfaCode: 'promote-src-mfa',
@@ -60,18 +57,20 @@ async function startPromote(job) {
   }
   const needsCredentials = document.getElementById('promote-src-email');
   if (needsCredentials && (!fields.instaticEmail || !fields.instaticPassword || !fields.liveEmail || !fields.livePassword)) {
-    alert('Enter the admin email and password for both instances.');
+    notify('Enter the admin email and password for both instances.', 'error');
     return false;
   }
-  const confirmField = document.getElementById('promote-confirm');
-  const expected = confirmField.getAttribute('data-domain');
-  if (confirmField.value.trim() !== expected) {
-    alert('Type ' + expected + ' to confirm.');
-    return false;
-  }
+  const agreed = await confirmAction({
+    title: 'Promote ' + form.dataset.staging + ' to ' + live + '?',
+    text: live + ' serves the replaced files from the moment the switch completes.',
+    typed: live,
+    confirmLabel: 'Promote',
+    danger: true,
+  });
+  if (!agreed) return false;
   busy(true);
   try {
-    const payload = { job: job };
+    const payload = { job: form.dataset.job };
     for (const key in fields) { if (fields[key]) payload[key] = fields[key]; }
     const body = await call('/api/promotions', {
       method: 'POST',
@@ -81,7 +80,7 @@ async function startPromote(job) {
     location.href = CLP_BASE + '/jobs/' + encodeURIComponent(body.data.job);
   } catch (e) {
     busy(false);
-    alert('Could not start the promote: ' + e.message);
+    notify('Could not start the promote: ' + e.message, 'error');
   }
   return false;
 }
