@@ -7,6 +7,7 @@ export const TERMINAL_ADDON: AddonDefinition = {
   name: "terminal",
   title: "Terminal",
   description: "A shell as any site's own user, in a window opened from the panel's Sites page, the site page, or Addons.",
+  changed: { in: "2.0", note: "Slimmer site rows with search." },
   preselected: true,
   targets: TERMINAL_TARGETS,
   handler: handle,

@@ -55,6 +55,8 @@ export interface AddonDefinition {
   requiresUnits?: string[];
   /** The release line it first shipped in, such as `2.0`; the Addons page marks it New there. */
   added?: string;
+  /** What changed in a release line, shown as Changed on the Addons page while that line is installed. */
+  changed?: { in: string; note: string };
   /** Ticked when the installer asks which addons to install. */
   preselected?: boolean;
   targets: AddonTarget[];

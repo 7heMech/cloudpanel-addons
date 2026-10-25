@@ -7,6 +7,7 @@ export const GIT_ADDON: AddonDefinition = {
   name: "git",
   title: "Git Deploy",
   description: "Deploy a site from a Git remote and run a command afterwards.",
+  changed: { in: "2.0", note: "One page for status and settings; deleted sites are forgotten." },
   targets: GIT_TARGETS,
   handler: handle,
   action: runGitAction,

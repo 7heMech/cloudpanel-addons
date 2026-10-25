@@ -28,8 +28,9 @@ knows nothing about it.
 The Addons page is two lists, Enabled and Available, one row per addon with its
 one-line description and its buttons, so the whole catalog fits on a screen. An
 addon's `added` release line (`2.0`) marks it New for as long as that line is
-the one installed. That is the only change the page reports; what changed in
-existing addons is the changelog's, which the update page links.
+the one installed. An existing addon's `changed` line marks it Changed for the
+same time, with one line saying what changed; the rest is the changelog's, which
+the update page links.
 
 ## One catalog, compiled in
 

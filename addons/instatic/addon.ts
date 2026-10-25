@@ -7,6 +7,7 @@ export const INSTATIC_ADDON: AddonDefinition = {
   name: "instatic",
   title: "Instatic CMS",
   description: "Instant static site hosting and staging on CloudPanel.",
+  changed: { in: "2.0", note: "A slimmer dashboard that shows sites being created, and updates that roll back on failure." },
   requiresUnits: ["docker"],
   targets: INSTATIC_TARGETS,
   handler: handle,
