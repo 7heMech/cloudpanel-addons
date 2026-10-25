@@ -9,7 +9,7 @@ import type { SmtpProfileView, SmtpSiteView, SmtpState } from "../action";
 
 const BASE = mountPath("smtp");
 const STYLE = CSS.split("/* fleet-row-selection */").join(fleetRowSelectionStyle("smtp-site-table"));
-const CLIENT = `${FLEET_ROW_SELECTION_JS}\n${CLIENT_BODY}`;
+export const CLIENT = `${FLEET_ROW_SELECTION_JS}\n${CLIENT_BODY}`;
 const NO_PROFILE = "Not relayed (sent from this server)";
 const DONT_SEND = "dont-send";
 const DONT_SEND_LABEL = "Don't send (discard)";

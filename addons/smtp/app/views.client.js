@@ -167,14 +167,14 @@ function smtpOpenTest(domain) {
 function smtpTestOutcome(data) {
   const delivery = data.delivery || { state: 'queued', detail: '' };
   const verdict = {
-    sent: ['tone-ok', 'Delivered to the SMTP server.'],
-    deferred: ['tone-warn', 'Deferred: ' + delivery.detail],
-    bounced: ['tone-bad', 'Refused: ' + delivery.detail],
-    queued: ['', 'Still queued: Postfix has not tried it yet.'],
+    sent: ['tone-ok', 'Delivered', 'The SMTP server accepted it.'],
+    deferred: ['tone-warn', 'Deferred', delivery.detail],
+    bounced: ['tone-bad', 'Refused', delivery.detail],
+    queued: ['', 'Still queued', 'Postfix has not tried it yet.'],
   }[delivery.state];
   const from = data.sender === data.requested ? 'Sent as ' + data.sender + '.'
     : 'The app asked for ' + data.requested + ' and it was sent as ' + data.sender + (data.replyTo ? ', with Reply-To ' + data.replyTo : '') + '.';
-  return { tone: verdict[0], verdict: verdict[1], from: from };
+  return { tone: verdict[0], verdict: verdict[1], reason: verdict[2], from: from };
 }
 
 async function smtpSendTest(event) {
@@ -193,10 +193,13 @@ async function smtpSendTest(event) {
     const verdict = document.createElement('strong');
     verdict.className = outcome.tone;
     verdict.textContent = outcome.verdict;
+    const reason = document.createElement('span');
+    reason.className = 'smtp-test-reason';
+    reason.textContent = outcome.reason;
     const from = document.createElement('span');
     from.className = 'hint';
     from.textContent = outcome.from;
-    result.append(verdict, from);
+    result.append(verdict, reason, from);
     result.className = 'smtp-test-result';
   } catch (error) {
     result.textContent = error.message;

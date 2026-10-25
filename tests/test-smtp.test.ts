@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { closedRelay, executeSmtpAction, type SmtpActionOptions, type SmtpSiteRow, type SmtpState, type SmtpTestResult } from "../addons/smtp/action";
 import { envelopeGrants, siteName, submissionRule, type SmtpRewriteRule } from "../addons/smtp/config";
 import { MAX_MESSAGE_BYTES, prepareSubmission, readBoundedSubmission, runSmtpSubmit } from "../addons/smtp/submit";
-import { dashboardContent } from "../addons/smtp/app/views";
+import { CLIENT as SMTP_CLIENT, dashboardContent } from "../addons/smtp/app/views";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -610,4 +610,17 @@ test("a 1.5.x Don't send given an SMTP server keeps relaying its sites under its
   expect(state.sites.find((site) => site.domain === "shop.test")!.profileId).toBe("mailgun");
   await act(b, "reconcile");
   expect(file(b, "transports")).toContain("/@shop\\.test$/ smtp:[smtp.mailgun.org]:587\n");
+});
+
+test("the test dialog leads with what the SMTP server did, then its reason", () => {
+  const root = { getElementById: () => null, querySelectorAll: () => [] };
+  const client = new Function("CLP_ROOT", `${SMTP_CLIENT}\nreturn { smtpTestOutcome };`)(root) as {
+    smtpTestOutcome: (data: unknown) => { tone: string; verdict: string; reason: string; from: string };
+  };
+  const base = { requested: "wordpress@example.com", sender: "wordpress@example.com", replyTo: null };
+  expect(client.smtpTestOutcome({ ...base, delivery: { state: "deferred", detail: "SASL authentication failed" } }))
+    .toEqual({ tone: "tone-warn", verdict: "Deferred", reason: "SASL authentication failed", from: "Sent as wordpress@example.com." });
+  expect(client.smtpTestOutcome({ ...base, sender: "noreply@example.com", replyTo: "wordpress@example.com", delivery: { state: "sent", detail: "250 OK" } }))
+    .toMatchObject({ verdict: "Delivered", from: "The app asked for wordpress@example.com and it was sent as noreply@example.com, with Reply-To wordpress@example.com." });
+  expect(client.smtpTestOutcome({ ...base, delivery: { state: "queued", detail: "" } }).verdict).toBe("Still queued");
 });
