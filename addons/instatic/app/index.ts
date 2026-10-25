@@ -28,9 +28,14 @@ async function dashboard(): Promise<string> {
   return dashboardView(instances, available, jobs);
 }
 
+/** A change that landed is reported as landed, even when redrawing the list afterwards fails. */
 async function change(result: { ok: boolean }): Promise<Response> {
   if (!result.ok) return json(result, 400);
-  return json({ ...result, html: await dashboard() });
+  try {
+    return json({ ...result, html: await dashboard() });
+  } catch {
+    return json(result);
+  }
 }
 
 const MUTATING_VERBS = new Set(["start", "stop", "restart", "recreate", "delete", "snapshot", "update"]);

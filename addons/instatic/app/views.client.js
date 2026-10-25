@@ -3,7 +3,7 @@ async function act(domain, verb) {
   busy(true);
   try {
     const reply = await call('/api/instances/' + encodeURIComponent(domain) + '/' + verb, { method: 'POST' });
-    repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+    if (reply.html) repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
     notify(domain + ': ' + verb + ' completed.', 'ok');
   } catch (e) {
     notify(verb + ' failed: ' + e.message, 'error');
@@ -96,7 +96,7 @@ async function confirmUpdate() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tag: tag }),
     });
-    repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+    if (reply.html) repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
     notify(pendingUpdate + ' updated to ' + tag + '.', 'ok');
   } catch (error) {
     notify('Update failed: ' + error.message, 'error');
@@ -126,7 +126,7 @@ async function askDelete(domain) {
   busy(true);
   try {
     const reply = await call('/api/instances/' + encodeURIComponent(domain) + '/delete', { method: 'POST' });
-    repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+    if (reply.html) repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
     notify(domain + ' deleted.', 'ok');
   } catch (e) {
     notify('Delete failed: ' + e.message, 'error');
