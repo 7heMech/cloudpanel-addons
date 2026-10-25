@@ -93,10 +93,13 @@ deactivated account cannot sign in with one. The administrator page marks
 both.
 
 Challenges are root's too, and cost nothing to issue: a challenge is an HMAC,
-under a root-only `secret`, of an id carrying its own five-minute expiry, bound
+under a root-only `secret`, written in full and linked into place on first use
+so it is never seen empty, of an id carrying its own five-minute expiry, bound
 for registration to the account, its `user.id` and its handle. Asking for one
 writes nothing, so the pre-session route's cost does not grow with how often it
-is asked. A challenge is spent under the store lock only after a key has
+is asked. A sign-in naming no registered key is refused before the store lock,
+so made-up requests never queue with real ones. A challenge is spent under the
+store lock only after a key has
 answered it, in `spent.json`, which therefore grows with real sign-ins. User
 handles for new accounts are derived from the same secret and `user.id`. The
 manager never decides what was signed.
@@ -106,7 +109,9 @@ by opening each candidate without following a link or blocking, and reading it
 only when it is a small regular file of that user's.
 
 `login-options` and `sign-in` are answered ahead of the session gate, because
-there is no session yet. They are matched before the gate only while the addon
+there is no session yet. They tell the page only why a key was refused; any
+other failure, such as a file or database error or a deactivated account, is
+logged and answered as sign-in being unavailable. They are matched before the gate only while the addon
 is installed, require the panel's own Origin, and carry the challenge id in an
 `HttpOnly` `SameSite=Strict` cookie scoped to `/addons/security-keys/login`, so
 another site can neither start nor finish a sign-in in the visitor's browser.

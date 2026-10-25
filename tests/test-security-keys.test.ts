@@ -279,7 +279,8 @@ describe("the root action", () => {
     const key = new SoftKey();
     await register("alice", key);
     account("alice", 7, 0);
-    expect(await signIn(key)).toMatchObject({ ok: false, error: expect.stringMatching(/not active/) });
+    // Who exists and who is deactivated is not the login page's to say.
+    expect(await signIn(key)).toMatchObject({ ok: false, error: expect.stringMatching(/unavailable right now/) });
     account("alice", 8);
     expect(await signIn(key)).toMatchObject({ ok: false, error: expect.stringMatching(/no longer exists/) });
     expect((await run(["keys", "--panel-user=alice"])).data.keys).toEqual([]);

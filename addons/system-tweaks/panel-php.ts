@@ -324,7 +324,12 @@ async function apply(ctx: Context, php: string): Promise<string | null> {
     }
     return null;
   }
-  const target = php && newer(php, unit.stock) ? php : unit.stock;
+  const wanted = php && newer(php, unit.stock) ? php : unit.stock;
+  // A chosen PHP removed since it was set leaves the unit unable to start at
+  // its next restart, so the panel goes back to CloudPanel's own before that.
+  const missing = wanted !== unit.stock && !existsSync(join(ctx.paths.fpmBinDir, `php-fpm${wanted}`));
+  if (missing && !before?.includes(`php-fpm${wanted}`)) failAction(`PHP ${wanted} is not installed`);
+  const target = missing ? unit.stock : wanted;
   const desired = target === unit.stock ? null : dropInFor(ctx, target, unit);
   if (desired === before && (desired !== null || !present(ctx.paths.dropInFile))) return null;
 
@@ -339,7 +344,7 @@ async function apply(ctx: Context, php: string): Promise<string | null> {
     check(ctx.run("systemctl", ["restart", ctx.paths.unit]), `restarting ${ctx.paths.unit} failed`);
     const problem = await waitHealthy(ctx, target);
     if (problem) failAction(`the panel did not come back on PHP ${target}: ${problem}`);
-    return target;
+    if (!missing) return target;
   } catch (error) {
     let restored: string;
     try {
@@ -352,6 +357,7 @@ async function apply(ctx: Context, php: string): Promise<string | null> {
     }
     failAction(`${reason(error)}; ${restored}`);
   }
+  failAction(`PHP ${wanted} is no longer installed, so the panel is back on PHP ${unit.stock}`);
 }
 
 export function panelPhpStatus(options: PanelPhpOptions = {}): PanelPhpStatus {

@@ -1,6 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 import {
-  chmodSync, closeSync, constants as fs, existsSync, fchmodSync, fchownSync, fstatSync, lstatSync, mkdirSync, openSync,
+  chmodSync, closeSync, constants as fs, existsSync, fchmodSync, fchownSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync,
   readdirSync, readFileSync, readSync, rmSync, writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -12,6 +12,7 @@ import { LOCK_DIR, PANEL_DB, PANEL_VAR_DIR, STATE_DIR } from "../../cli/paths";
 import { PANEL_USER_NAME_RE } from "../../lib/panel-users";
 import {
   ALGORITHMS, fromB64url, normalizeOrigin, verifyAssertion, verifyRegistration, type StoredPublicKey,
+  WebAuthnError,
 } from "./webauthn";
 
 /**
@@ -246,6 +247,19 @@ function activeAccount(paths: SecurityKeysPaths, user: string): PanelAccount {
 }
 
 /**
+ * What the login page may show the person in front of it. Anything else a
+ * sign-in fails with -- a path, a database error -- is the journal's, and the
+ * page is told only that sign-in is unavailable.
+ */
+class SignInRefusal extends ActionFailure {}
+
+function refuse(message: string): never {
+  throw new SignInRefusal(message);
+}
+
+const SIGN_IN_UNAVAILABLE = "Security key sign-in is unavailable right now; sign in with your password";
+
+/**
  * Root's own key for challenges and user handles, made on first use. A
  * challenge is an HMAC of its id, so issuing one writes nothing: the sign-in
  * route answers anyone who can reach the panel, and what it costs must not
@@ -254,11 +268,19 @@ function activeAccount(paths: SecurityKeysPaths, user: string): PanelAccount {
 function secret(paths: SecurityKeysPaths): Buffer {
   const path = join(paths.stateDir, "secret");
   mkdirSync(paths.stateDir, { recursive: true, mode: 0o700 });
-  try {
-    const fd = openSync(path, fs.O_WRONLY | fs.O_CREAT | fs.O_EXCL | fs.O_NOFOLLOW, 0o600);
-    try { writeSync(fd, randomBytes(32)); } finally { closeSync(fd); }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  // Written in full beside it and linked into place, so no reader ever finds
+  // it empty and a crash cannot leave it so; a link refuses an existing name.
+  if (!existsSync(path)) {
+    const temp = `${path}.${randomBytes(8).toString("hex")}`;
+    const fd = openSync(temp, fs.O_WRONLY | fs.O_CREAT | fs.O_EXCL | fs.O_NOFOLLOW, 0o600);
+    try {
+      try { writeSync(fd, randomBytes(32)); } finally { closeSync(fd); }
+      linkSync(temp, path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    } finally {
+      rmSync(temp, { force: true });
+    }
   }
   trustedFile(path, paths.stateUid);
   const key = readFileSync(path);
@@ -283,7 +305,7 @@ function issueChallenge(paths: SecurityKeysPaths, now: number, ...binding: (stri
 /** The challenge a key must have signed for this id and purpose, if the id is still current. */
 function expectedChallenge(paths: SecurityKeysPaths, id: unknown, now: number, ...binding: (string | number)[]): string {
   const match = typeof id === "string" ? CHALLENGE_ID_RE.exec(id) : null;
-  if (!match || !(Number(match[1]) > now)) failAction("the sign-in request has expired; try again");
+  if (!match || !(Number(match[1]) > now)) refuse("the sign-in request has expired; try again");
   return mac(paths, ...binding, id as string).toString("base64url");
 }
 
@@ -300,7 +322,7 @@ function spendChallenge<T>(paths: SecurityKeysPaths, id: string, now: number, an
     try { spent = JSON.parse(readFileSync(path, "utf8")); } catch { spent = {}; }
   }
   const live = Object.fromEntries(Object.entries(spent).filter(([, expiresAt]) => typeof expiresAt === "number" && expiresAt > now));
-  if (id in live) failAction("the sign-in request has expired; try again");
+  if (id in live) refuse("the sign-in request has expired; try again");
   const result = answered();
   live[id] = Number(id.split(".")[0]);
   writeAtomicOwned(path, JSON.stringify(live), 0o600, paths.stateUid, process.getgid?.() ?? 0);
@@ -362,21 +384,26 @@ function mintPanelToken(paths: SecurityKeysPaths, user: string, now: number): st
 
 function signIn(paths: SecurityKeysPaths, input: Record<string, unknown>, now: number): { token: string; user: string } {
   const challenge = expectedChallenge(paths, input.challengeId, now, "login");
-  const credentialId = typeof input.id === "string" && input.id.length <= 1400 ? input.id : failAction("the key sent no credential id");
+  const credentialId = typeof input.id === "string" && input.id.length <= 1400 ? input.id : refuse("the key sent no credential id");
+  const registered = (store: ReturnType<typeof readStore>) =>
+    Object.entries(store.users).find(([, user]) => user.keys.some((key) => key.id === credentialId));
+  // Looked up before the lock as well as under it, so a request naming no
+  // registered key never waits in line with real sign-ins and registrations.
+  if (!registered(readStore(paths))) refuse("this key is not registered on this panel");
   return withStoreLock(paths, () => {
     const store = readStore(paths);
-    const owner = Object.entries(store.users).find(([, user]) => user.keys.some((key) => key.id === credentialId));
-    if (!owner) failAction("this key is not registered on this panel");
+    const owner = registered(store);
+    if (!owner) refuse("this key is not registered on this panel");
     const [user, entry] = owner;
     // A discoverable key always says whose it is; it must say the same.
-    if (input.userHandle !== entry.handle) failAction("this key is not registered on this panel");
+    if (input.userHandle !== entry.handle) refuse("this key is not registered on this panel");
     const account = activeAccount(paths, user);
-    if (account.id !== entry.userId) failAction("this key belongs to a CloudPanel account that no longer exists");
+    if (account.id !== entry.userId) refuse("this key belongs to a CloudPanel account that no longer exists");
     const key = entry.keys.find((candidate) => candidate.id === credentialId)!;
     const settings = readSettings(paths);
-    if (!allowedRole(settings, account)) failAction("security keys are turned off for your account; sign in with your password");
+    if (!allowedRole(settings, account)) refuse("security keys are turned off for your account; sign in with your password");
     if (key.synced && !settings.syncedPasskeys) {
-      failAction("this panel no longer accepts synced passkeys; use a hardware key or your password");
+      refuse("this panel no longer accepts synced passkeys; use a hardware key or your password");
     }
     const { signCount } = spendChallenge(paths, input.challengeId as string, now, () => verifyAssertion({
       clientDataJSON: fromB64url(input.clientDataJSON, "clientDataJSON"),
@@ -527,8 +554,14 @@ export async function runSecurityKeysAction(argv: string[], options: SecurityKey
     if (emit) emitActionOk(data);
     return 0;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    let message = error instanceof Error ? error.message : String(error);
     const data = error instanceof ActionFailure ? error.data : undefined;
+    // The two verbs anyone who reaches the login page can call.
+    const refused = error instanceof SignInRefusal || error instanceof WebAuthnError;
+    if ((argv[0] === "login-options" || argv[0] === "sign-in") && !refused) {
+      process.stderr.write(`[security-keys] sign-in failed: ${message.replace(/\s+/g, " ")}\n`);
+      message = SIGN_IN_UNAVAILABLE;
+    }
     if (emit) emitActionError(message, data, "security-keys");
     else process.stderr.write(`[security-keys] ERROR: ${message}\n`);
     return 1;
