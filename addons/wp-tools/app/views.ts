@@ -1,9 +1,9 @@
 import { esc } from "../../../lib/app-http";
-import { renderLayout } from "../../../lib/app-ui";
+import { FLEET_NONE_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { WpSiteView } from "../action";
-import type { VarnishPluginStatus } from "../varnish";
-import type { MainwpSiteView, MainwpStatus, MainwpView } from "../mainwp";
+import type { VarnishPluginStatus, WpVarnishState } from "../varnish";
+import type { MainwpStatus, MainwpView } from "../mainwp";
 import type { WpDashboard } from "./service";
 
 const BASE = mountPath("wp-tools");
@@ -23,7 +23,7 @@ export function layout(
     base: BASE,
     nav: [],
     css: STYLE,
-    script: SCRIPT,
+    script: `${FLEET_ROW_SELECTION_JS}\n${SCRIPT}`,
     updateNotice,
   });
 }
@@ -36,106 +36,6 @@ const PLUGIN_STATUS: Record<VarnishPluginStatus, [label: string, tone: string]> 
   error: ["Check failed", "state-failed"],
 };
 
-function pluginStatus(site: WpSiteView, available: boolean): string {
-  if (!available) return '<span class="toolbar-note">Unavailable</span>';
-  if (!site.varnishCache) return '<span class="toolbar-note">Varnish off</span>';
-  const record = site.varnishPlugin;
-  if (!record) return '<span class="badge">Not checked</span>';
-  const [label, tone] = record.status === "missing" && record.seen ? ["Removed", ""] : PLUGIN_STATUS[record.status];
-  const checked = record.checkedAt.replace("T", " ").slice(0, 16);
-  return `<span class="badge ${tone}" title="Checked ${esc(checked)} UTC">${label}</span>${
-    record.error ? `<div class="varnish-error">${esc(record.error)}</div>` : ""}`;
-}
-
-/** The explicit install for an included site; the backend installs if missing and activates. */
-function pluginButton(site: WpSiteView): string {
-  const status = site.varnishPlugin?.status;
-  if (!site.varnishCache || site.varnishExcluded || status === "active" || status === "unsupported") return "";
-  const label = status === "inactive" ? "Activate" : status === "error" ? "Retry" : "Install";
-  return `<button class="btn" type="button" data-domain="${esc(site.domain)}" onclick="installPlugin(this)">${label}</button>`;
-}
-
-function siteRow(site: WpSiteView, available: boolean): string {
-  const domain = esc(site.domain);
-  const automatic = available && site.varnishCache
-    ? `<label class="switch"><input id="auto-${domain}" type="checkbox" data-domain="${domain}" aria-label="Install CLP Varnish Cache automatically on ${domain}" ${site.varnishExcluded ? "" : "checked"} onchange="setSiteAutomatic(this)"><span></span></label>`
-    : "";
-  return `
-              <tr>
-                <td class="site-cell">${domain}<div class="hint">${esc(site.user)}</div></td>
-                <td class="type-cell">${esc(site.application || "WordPress")}</td>
-                <td data-label="Varnish plugin">${pluginStatus(site, available)}</td>
-                <td data-label="Automatic">${automatic}</td>
-                <td class="action-cell"><span class="row-actions">${available ? pluginButton(site) : ""}<button class="btn btn-primary" type="button" data-domain="${domain}" onclick="signIn(this)">Sign in</button></span></td>
-              </tr>`;
-}
-
-function sitesCard(sites: WpSiteView[], available: boolean): string {
-  if (sites.length === 0) {
-    return `
-    <div class="card card-table">
-      <div class="card-header"><h2>WordPress sites</h2></div>
-      <div class="empty">No site on this server has a WordPress in it.</div>
-    </div>`;
-  }
-  return `
-    <div class="card card-table">
-      <div class="card-header">
-        <h2>WordPress sites</h2>
-        <span class="toolbar-note">${sites.length} site${sites.length === 1 ? "" : "s"}</span>
-      </div>
-      <div class="table-scroll">
-        <table class="fleet-table wp-site-table">
-          <thead>
-            <tr>
-              <th scope="col">Site</th>
-              <th scope="col">Application</th>
-              <th scope="col">Varnish plugin</th>
-              <th scope="col">Automatic</th>
-              <th scope="col" class="action-cell">Actions</th>
-            </tr>
-          </thead>
-          <tbody>${sites.map((site) => siteRow(site, available)).join("")}
-          </tbody>
-        </table>
-      </div>
-    </div>`;
-}
-
-function policyCard(automatic: boolean, error: string): string {
-  if (error) {
-    return `
-    <div class="card wp-card">
-      <h2>Install CLP Varnish Cache automatically</h2>
-      <div class="alert" role="alert">${esc(error)}</div>
-    </div>`;
-  }
-  return `
-    <div class="card switch-row wp-card">
-      <div>
-        <h2>Install CLP Varnish Cache automatically</h2>
-        <p>On WordPress sites with Varnish enabled in CloudPanel, checked every 15 minutes. A plugin deactivated or removed in WordPress is left alone.</p>
-      </div>
-      <div class="wp-card-controls">
-        ${automatic ? '<button class="btn" id="varnish-check" type="button" onclick="checkSites()">Check now</button>' : ""}
-        <label class="switch"><input id="varnish-automatic" type="checkbox" aria-label="Install CLP Varnish Cache automatically" ${automatic ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
-      </div>
-    </div>`;
-}
-
-function helperCard(sites: WpSiteView[]): string {
-  const installed = sites.filter((site) => site.helper).length;
-  if (installed === 0) return "";
-  return `
-    <div class="card switch-row wp-card">
-      <div>
-        <h2>Sign-in helper</h2>
-        <p>A must-use plugin in ${installed} site${installed === 1 ? "" : "s"} that accepts a one-time sign-in and does nothing on any other request. The next sign-in puts it back.</p>
-      </div>
-      <button class="btn" type="button" onclick="removeHelpers()">Remove from every site</button>
-    </div>`;
-}
-
 const MAINWP_STATUS: Record<MainwpStatus, [label: string, tone: string]> = {
   missing: ["Not installed", ""],
   inactive: ["Installed, inactive", ""],
@@ -146,61 +46,141 @@ const MAINWP_STATUS: Record<MainwpStatus, [label: string, tone: string]> = {
   error: ["Check failed", "state-failed"],
 };
 
-function mainwpStatus(record: MainwpSiteView | undefined, isDashboard: boolean, remote: boolean): string {
-  if (isDashboard) return '<span class="badge state-done">Dashboard</span>';
-  if (!record) return '<span class="badge">Not checked</span>';
-  const [label, tone] = record.status === "missing" && record.seen ? ["Removed", ""]
-    : remote && record.status === "not-connected" ? ["Active, not connected", "state-paused"] : MAINWP_STATUS[record.status];
-  const owner = record.status !== "connected" ? "" : record.ownedConnection ? "Connected by WordPress Tools" : "Connected in MainWP";
-  const checked = record.checkedAt.replace("T", " ").slice(0, 16);
-  return `<span class="badge ${tone}"${checked ? ` title="Checked ${esc(checked)} UTC"` : ""}>${label}</span>${
-    owner ? `<div class="hint">${owner}</div>` : ""}${record.error ? `<div class="varnish-error">${esc(record.error)}</div>` : ""}`;
+function checkedTitle(checkedAt: string): string {
+  const checked = checkedAt.replace("T", " ").slice(0, 16);
+  return checked ? ` title="Checked ${esc(checked)} UTC"` : "";
 }
 
-function mainwpRow(site: WpSiteView, state: MainwpView): string {
+/** A per-site Automatic switch, drawn only while that automation is on. */
+function siteSwitch(id: string, label: string, domain: string, included: boolean, handler: string): string {
+  return `<div class="wp-auto"><label class="switch"><input id="${id}" type="checkbox" data-domain="${domain}" aria-label="${label} ${domain}" ${included ? "checked" : ""} onchange="${handler}(this)"><span></span></label><label for="${id}">Automatic</label></div>`;
+}
+
+function varnishCell(site: WpSiteView, varnish: WpVarnishState, available: boolean): string {
+  if (!available) return '<span class="toolbar-note">Unavailable</span>';
+  if (!site.varnishCache) return "";
+  const domain = esc(site.domain);
+  const record = site.varnishPlugin;
+  const [label, tone] = !record ? ["Not checked", ""]
+    : record.status === "missing" && record.seen ? ["Removed", ""] : PLUGIN_STATUS[record.status];
+  const status = record?.status;
+  // The backend installs if missing and activates.
+  const action = site.varnishExcluded || status === "active" || status === "unsupported" ? ""
+    : `<button class="btn" type="button" data-domain="${domain}" onclick="installPlugin(this)">${
+      status === "inactive" ? "Activate" : status === "error" ? "Retry" : "Install"}</button>`;
+  const automatic = varnish.enabled
+    ? siteSwitch(`varnish-auto-${domain}`, "Install CLP Varnish Cache automatically on", domain, !site.varnishExcluded, "setSiteAutomatic")
+    : "";
+  return `<div class="wp-status"><span class="badge ${tone}"${record ? checkedTitle(record.checkedAt) : ""}>${label}</span>${action}</div>${
+    record?.error ? `<div class="wp-error">${esc(record.error)}</div>` : ""}${automatic}`;
+}
+
+function mainwpCell(site: WpSiteView, state: MainwpView): string {
+  if (site.domain === state.dashboard) return '<div class="wp-status"><span class="badge state-done">Dashboard</span></div>';
   const domain = esc(site.domain);
   const record = state.sites[site.domain];
-  const isDashboard = site.domain === state.dashboard;
   const excluded = state.excluded.includes(site.domain);
-  const eligible = !isDashboard && record?.status !== "unsupported";
-  const automatic = eligible
-    ? `<label class="switch"><input type="checkbox" data-domain="${domain}" aria-label="Install MainWP Child automatically on ${domain}" ${excluded ? "" : "checked"} onchange="setMainwpSite(this)"><span></span></label>`
+  const [label, tone] = !record ? ["Not checked", ""]
+    : record.status === "missing" && record.seen ? ["Removed", ""] : MAINWP_STATUS[record.status];
+  const eligible = record?.status !== "unsupported";
+  const action = eligible && !excluded && !state.cleanup && record?.status !== "connected"
+    ? `<button class="btn" type="button" data-domain="${domain}" onclick="connectMainwp(this)">${record?.status === "error" ? "Retry" : "Connect"}</button>`
     : "";
-  const usable = eligible && !excluded && !state.cleanup && record?.status !== "connected";
-  // A Dashboard elsewhere connects the site itself; here the Child is only installed and activated.
-  const label = record?.status === "error" ? "Retry"
-    : !state.remote ? "Connect"
-    : !record || record.status === "missing" ? "Install"
-    : record.status === "inactive" ? "Activate" : "";
-  const action = usable && (state.dashboard || state.remote) && label
-    ? `<button class="btn" type="button" data-domain="${domain}"${state.remote ? " data-remote" : ""} onclick="connectMainwp(this)">${label}</button>`
+  const owner = record?.status !== "connected" ? "" : record.ownedConnection ? "Connected by WordPress Tools" : "Connected in MainWP";
+  const automatic = state.enabled && eligible
+    ? siteSwitch(`mainwp-auto-${domain}`, "Install MainWP Child automatically on", domain, !excluded, "setMainwpSite")
     : "";
+  return `<div class="wp-status"><span class="badge ${tone}"${record ? checkedTitle(record.checkedAt) : ""}>${label}</span>${action}</div>${
+    owner ? `<div class="hint">${owner}</div>` : ""}${record?.error ? `<div class="wp-error">${esc(record.error)}</div>` : ""}${automatic}`;
+}
+
+function siteRow(site: WpSiteView, data: WpDashboard, mainwp: boolean): string {
+  const domain = esc(site.domain);
   return `
-              <tr>
+              <tr data-domain="${domain}" data-find="${esc(`${site.domain} ${site.user}`)}">
                 <td class="site-cell">${domain}<div class="hint">${esc(site.user)}</div></td>
-                <td data-label="MainWP">${mainwpStatus(record, isDashboard, state.remote)}</td>
-                <td data-label="Automatic">${automatic}</td>
-                <td class="action-cell"><span class="row-actions">${action}</span></td>
+                <td data-label="Varnish">${varnishCell(site, data.varnish, !data.varnishError)}</td>${
+  mainwp ? `\n                <td data-label="MainWP">${mainwpCell(site, data.mainwp)}</td>` : ""}
+                <td class="action-cell"><button class="btn btn-primary" type="button" data-domain="${domain}" onclick="signIn(this)">Sign in</button></td>
               </tr>`;
 }
 
-function mainwpCard(sites: WpSiteView[], state: MainwpView, error: string): string {
-  if (error) {
+function helperLine(sites: WpSiteView[]): string {
+  const installed = sites.filter((site) => site.helper).length;
+  if (installed === 0) return "";
+  return `<p class="wp-helper hint">Sign-in helper on ${installed} site${installed === 1 ? "" : "s"} · <button class="wp-link" type="button" onclick="removeHelpers()">Remove</button></p>`;
+}
+
+function sitesCard(data: WpDashboard): string {
+  const sites = data.sites;
+  if (sites.length === 0) {
     return `
-    <div class="card wp-card">
-      <h2>Install and connect MainWP Child automatically</h2>
-      <div class="alert" role="alert">${esc(error)}</div>
+    <div class="card card-table">
+      <div class="card-header"><h2>WordPress sites</h2></div>
+      <div class="empty">No site on this server has a WordPress in it.</div>
     </div>`;
   }
+  const mainwp = !data.mainwpError && Boolean(data.mainwp.dashboard);
+  return `
+    <div class="card card-table">
+      <div class="card-header"><h2>WordPress sites</h2></div>
+      ${fleetFilterHtml({ count: sites.length, summary: `${sites.length} sites` })}
+      <div class="table-scroll">
+        <table class="fleet-table wp-site-table">
+          <thead>
+            <tr>
+              <th scope="col">Site</th>
+              <th scope="col">Varnish</th>${mainwp ? '\n              <th scope="col">MainWP</th>' : ""}
+              <th scope="col" class="action-cell"></th>
+            </tr>
+          </thead>
+          <tbody>${sites.map((site) => siteRow(site, data, mainwp)).join("")}
+          </tbody>
+        </table>
+      </div>
+      ${FLEET_NONE_HTML}
+    </div>${helperLine(sites)}`;
+}
+
+function varnishSection(automatic: boolean, error: string): string {
+  const title = "Install CLP Varnish Cache automatically";
+  if (error) return `<div class="wp-section"><h3>${title}</h3><div class="alert" role="alert">${esc(error)}</div></div>`;
+  return `
+      <div class="wp-section split-card">
+        <div>
+          <h3>${title}</h3>
+          <p class="hint">On WordPress sites with Varnish enabled in CloudPanel, checked every 15 minutes. A plugin deactivated or removed in WordPress is left alone.</p>
+        </div>
+        <div class="wp-controls">
+          ${automatic ? '<button class="btn" id="varnish-check" type="button" onclick="checkSites()">Check now</button>' : ""}
+          <label class="switch"><input id="varnish-automatic" type="checkbox" aria-label="${title}" ${automatic ? "checked" : ""} onchange="setAutomatic(this)"><span></span></label>
+        </div>
+      </div>`;
+}
+
+function dashboardPicker(sites: WpSiteView[], state: MainwpView): string {
   const locked = state.connections > 0 || state.cleanup;
-  const cleanable = state.owned > 0 || state.cleanup;
-  const options = `<option value="@remote"${state.remote ? " selected" : ""}>On another server</option>` + sites.map((site) =>
+  const options = sites.map((site) =>
     `<option value="${esc(site.domain)}"${site.domain === state.dashboard ? " selected" : ""}>${esc(site.domain)}</option>`).join("");
-  const chosen = Boolean(state.dashboard) || state.remote;
-  const title = state.remote ? "Install MainWP Child automatically" : "Install and connect MainWP Child automatically";
-  const summary = state.remote
-    ? "On every WordPress site that has never had MainWP Child, checked every 15 minutes. It is left inactive, because MainWP Child turns itself off when no Dashboard connects soon after activation: activate a site below just before adding it in your Dashboard with the site's administrator login. A Child removed in WordPress is left alone."
-    : "On every WordPress site that has never had MainWP Child, once it answers over HTTPS, checked every 15 minutes. A Child removed in WordPress is left alone.";
+  return `<div class="mainwp-picker">
+          <label for="mainwp-dashboard">MainWP Dashboard</label>
+          <select id="mainwp-dashboard" onchange="setMainwpDashboard(this)" ${locked ? "disabled" : ""}>${
+  state.dashboard ? "" : '<option value="">Choose a site</option>'}${options}</select>
+        </div>`;
+}
+
+function mainwpSection(sites: WpSiteView[], state: MainwpView, error: string): string {
+  const title = "Install and connect MainWP Child automatically";
+  if (error) return `<div class="wp-section"><h3>${title}</h3><div class="alert" role="alert">${esc(error)}</div></div>`;
+  if (!state.dashboard) {
+    return `
+      <div class="wp-section">
+        <h3>MainWP</h3>
+        <p class="hint">Choose the site that runs MainWP Dashboard to connect the other WordPress sites to it.</p>
+        ${dashboardPicker(sites, state)}
+      </div>`;
+  }
+  const cleanable = state.owned > 0 || state.cleanup;
   const cleanup = cleanable
     ? `<button class="btn" type="button" onclick="cleanupMainwp()">${state.cleanup ? "Retry cleanup…" : "Turn off and clean up…"}</button>`
     : "";
@@ -208,54 +188,35 @@ function mainwpCard(sites: WpSiteView[], state: MainwpView, error: string): stri
     ? '<p class="mainwp-note" role="status">Cleanup pending. Automation stays off until what WordPress Tools added is removed.</p>'
     : "";
   return `
-    <div class="card wp-card">
-      <div class="switch-row">
-        <div>
-          <h2>${title}</h2>
-          <p>${summary}</p>
+      <div class="wp-section">
+        <div class="split-card">
+          <div>
+            <h3>${title}</h3>
+            <p class="hint">On every WordPress site that has never had MainWP Child, once it answers over HTTPS, checked every 15 minutes. A Child removed in WordPress is left alone.</p>
+          </div>
+          <label class="switch"><input id="mainwp-automatic" type="checkbox" aria-label="${title}" ${state.enabled ? "checked" : ""} ${state.cleanup ? "disabled" : ""} onchange="setMainwpAutomatic(this)"><span></span></label>
         </div>
-        <label class="switch"><input id="mainwp-automatic" type="checkbox" aria-label="${title}" ${state.enabled ? "checked" : ""} ${!chosen || state.cleanup ? "disabled" : ""} onchange="setMainwpAutomatic(this)"><span></span></label>
-      </div>
-      <div class="mainwp-controls">
-        <label class="hint" for="mainwp-dashboard">MainWP Dashboard</label>
-        <select id="mainwp-dashboard" onchange="setMainwpDashboard(this)" ${locked ? "disabled" : ""}><option value="">Choose a site</option>${options}</select>
-        <button class="btn" id="mainwp-check" type="button" onclick="checkMainwp()" ${chosen ? "" : "disabled"}>Check now</button>
-        ${cleanup}
-      </div>
-      ${note}
-    </div>`;
+        <div class="mainwp-controls">
+          ${dashboardPicker(sites, state)}
+          <button class="btn" id="mainwp-check" type="button" onclick="checkMainwp()">Check now</button>
+          ${cleanup}
+        </div>
+        ${note}
+      </div>`;
 }
 
-function mainwpSitesCard(sites: WpSiteView[], state: MainwpView, available: boolean): string {
-  if (!available || sites.length === 0) return "";
+function automationCard(data: WpDashboard): string {
   return `
-    <div class="card card-table">
-      <div class="card-header">
-        <h2>MainWP sites</h2>
-        <span class="toolbar-note">${sites.length} site${sites.length === 1 ? "" : "s"}</span>
-      </div>
-      <div class="table-scroll">
-        <table class="fleet-table wp-site-table mainwp-site-table">
-          <thead>
-            <tr>
-              <th scope="col">Site</th>
-              <th scope="col">MainWP</th>
-              <th scope="col">Automatic</th>
-              <th scope="col" class="action-cell">Actions</th>
-            </tr>
-          </thead>
-          <tbody>${sites.map((site) => mainwpRow(site, state)).join("")}
-          </tbody>
-        </table>
-      </div>
+    <div class="card">
+      <div class="card-header"><h2>Automation</h2></div>
+      ${varnishSection(data.varnish.enabled, data.varnishError)}
+      ${mainwpSection(data.sites, data.mainwp, data.mainwpError)}
     </div>`;
 }
 
 /** Everything below the heading; the page repaints it from `/api/dashboard` after a change. */
 export function dashboardBody(data: WpDashboard): string {
-  const available = !data.varnishError;
-  return `${policyCard(data.varnish.enabled, data.varnishError)}${sitesCard(data.sites, available)}${
-    mainwpCard(data.sites, data.mainwp, data.mainwpError)}${mainwpSitesCard(data.sites, data.mainwp, !data.mainwpError)}${helperCard(data.sites)}`;
+  return `${sitesCard(data)}${automationCard(data)}`;
 }
 
 export function dashboardView(data: WpDashboard): string {
@@ -263,7 +224,7 @@ export function dashboardView(data: WpDashboard): string {
     <div class="page-heading">
       <div>
         <h1>WordPress Tools</h1>
-        <p>Sign in to any WordPress on this server as its first administrator, and automate CLP Varnish Cache and MainWP Child installation.</p>
+        <p>Sign in to any WordPress on this server as its first administrator, and install CLP Varnish Cache and MainWP Child automatically.</p>
       </div>
     </div>
     <div id="wp-dashboard">${dashboardBody(data)}</div>`;

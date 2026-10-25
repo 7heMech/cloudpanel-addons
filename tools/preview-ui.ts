@@ -777,10 +777,10 @@ function wpToolsPreviewSites(url: URL): WpSiteView[] {
     ? { status: status as "inactive" | "missing" | "unsupported" | "error", seen: true, checkedAt: "2026-10-09T08:45:00Z", error: status === "error" ? "WP-CLI timed out while checking the site. Retry to check again." : "" }
     : null;
   return [
-    { domain: "www.example.com", user: "example", application: "WordPress", helper: true, varnishCache: false, varnishExcluded: false, varnishPlugin: null },
-    { domain: "shop.example.com", user: "shop", application: "WooCommerce", helper: true, varnishCache: true, varnishExcluded: false, varnishPlugin: { status: "active", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
-    { domain: "blog.example.com", user: "blog", application: "Generic", helper: false, varnishCache: true, varnishExcluded: false, varnishPlugin: plugin },
-    { domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", application: "WordPress", helper: false, varnishCache: true, varnishExcluded: true, varnishPlugin: { status: "inactive", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
+    { domain: "www.example.com", user: "example", helper: true, varnishCache: false, varnishExcluded: false, varnishPlugin: null },
+    { domain: "shop.example.com", user: "shop", helper: true, varnishCache: true, varnishExcluded: false, varnishPlugin: { status: "active", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
+    { domain: "blog.example.com", user: "blog", helper: false, varnishCache: true, varnishExcluded: false, varnishPlugin: plugin },
+    { domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", helper: false, varnishCache: true, varnishExcluded: true, varnishPlugin: { status: "inactive", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
   ];
 }
 
@@ -918,31 +918,19 @@ function terminalPreview(req: Request, url: URL): Response | null {
 
 // The WordPress Tools API, acting on the sites the page was last drawn with.
 // ?mainwp=states turns automation on, ?mainwp=cleanup shows a pending cleanup,
-// ?mainwp=remote a Dashboard on another server.
+// ?mainwp=none has no Dashboard chosen yet.
 function mainwpPreview(url: URL): MainwpView {
   const checkedAt = "2026-10-16T09:00:00Z";
   const entry = (status: MainwpSiteView["status"], ownedConnection = false, seen = true): MainwpSiteView => ({
     status, seen, checkedAt, ownedConnection,
     error: status === "error" ? "the Dashboard could not connect; check the site's HTTPS, firewall and security plugins" : "",
   });
-  const remote = url.searchParams.get("mainwp") === "remote";
-  if (remote) {
-    return {
-      enabled: true, dashboard: "", remote: true, excluded: [], cleanup: false, owned: 2, connections: 0,
-      sites: {
-        "shop.example.com": entry("connected"),
-        "www.example.com": entry("not-connected"),
-        "blog.example.com": entry("inactive"),
-        "new.example.com": entry("missing", false, false),
-        "removed.example.com": entry("missing"),
-        "network.example.com": entry("unsupported"),
-      },
-    };
+  if (url.searchParams.get("mainwp") === "none") {
+    return { enabled: false, dashboard: "", excluded: [], cleanup: false, owned: 0, connections: 0, sites: {} };
   }
   return {
     enabled: url.searchParams.get("mainwp") === "states",
     dashboard: "mainwp.example.com",
-    remote: false,
     excluded: ["staging.newsletter.example-church-of-the-hills.com"],
     cleanup: url.searchParams.get("mainwp") === "cleanup",
     owned: 1, connections: 1,
@@ -1452,7 +1440,7 @@ const server = Bun.serve({
       const mainwpOnly = ["mainwp.example.com", "new.example.com", "waiting.example.com", "removed.example.com", "network.example.com", "retry.example.com"];
       if (!empty) {
         for (const domain of mainwpOnly) wpToolsPreview.sites.push({
-          domain, user: domain.split(".")[0]!, application: "WordPress", helper: false, varnishCache: false, varnishExcluded: false, varnishPlugin: null,
+          domain, user: domain.split(".")[0]!, helper: false, varnishCache: false, varnishExcluded: false, varnishPlugin: null,
         });
       }
       html = wpToolsLayout("WordPress Tools", wpToolsDashboardView(wpToolsPreviewData()), notice);

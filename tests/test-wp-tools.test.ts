@@ -287,7 +287,7 @@ test("a site whose writes fail is named rather than half signed in", async () =>
 });
 
 test("an unknown verb, a stray argument and a non-root caller are all refused", async () => {
-  await expect(act(["login"])).rejects.toThrow("unknown WordPress sign-in verb");
+  await expect(act(["login"])).rejects.toThrow("unknown WordPress Tools verb");
   await expect(act(["sites", "--domain=shop.example.com"])).rejects.toThrow("takes no --domain");
   await expect(act(["sign-in", "--domain=shop.example.com", "--force"])).rejects.toThrow("unexpected argument");
   await expect(executeWpToolsAction(["sites"], { ...options(), processUid: 1000 }))

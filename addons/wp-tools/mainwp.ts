@@ -1,6 +1,5 @@
 // MainWP Child enrollment: install, activate and connect each WordPress site to
-// one MainWP Dashboard on this server, or, for a Dashboard on another server,
-// only install the Child; and withdraw only what that added.
+// one MainWP Dashboard on this server, and withdraw only what that added.
 
 import { existsSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -42,18 +41,13 @@ export interface MainwpRecord {
   /** The Security ID of an enrollment that is not verified yet. */
   token?: string;
   connection?: Connection;
-  /**
-   * `restored` keeps connection recovery pending after authentication is safe;
-   * `child` is a Child-only install, which changes no authentication.
-   */
-  phase?: "install" | "connect" | "restored" | "cleanup" | "child";
+  /** `restored` keeps connection recovery pending after authentication is safe. */
+  phase?: "install" | "connect" | "restored" | "cleanup";
 }
 
 export interface MainwpState {
   enabled: boolean;
   dashboard: string;
-  /** The Dashboard is on another server: install the Child only, and connect from there. */
-  remote: boolean;
   excluded: string[];
   cleanup: boolean;
   sites: Record<string, MainwpRecord>;
@@ -67,7 +61,6 @@ export type MainwpSiteView = Pick<MainwpRecord, "status" | "seen" | "checkedAt" 
 export interface MainwpView {
   enabled: boolean;
   dashboard: string;
-  remote: boolean;
   excluded: string[];
   cleanup: boolean;
   sites: Record<string, MainwpSiteView>;
@@ -90,8 +83,6 @@ export interface MainwpRun {
 
 export interface MainwpResult {
   checked: number;
-  /** Child plugins installed or activated for a Dashboard on another server. */
-  installed: number;
   connected: number;
   removed: number;
   pending: number;
@@ -153,9 +144,9 @@ const FAILURES: Record<string, string> = {
 };
 
 export const emptyMainwpState = (): MainwpState => ({
-  enabled: false, dashboard: "", remote: false, excluded: [], cleanup: false, sites: {}, retired: [],
+  enabled: false, dashboard: "", excluded: [], cleanup: false, sites: {}, retired: [],
 });
-const emptyResult = (): MainwpResult => ({ checked: 0, installed: 0, connected: 0, removed: 0, pending: 0, failed: [] });
+const emptyResult = (): MainwpResult => ({ checked: 0, connected: 0, removed: 0, pending: 0, failed: [] });
 
 function isConnection(value: unknown): value is Connection {
   const connection = value as Connection | null;
@@ -186,7 +177,7 @@ function isRecord(value: unknown): value is MainwpRecord {
     || typeof record.ownedPlugin !== "boolean" || typeof record.ownedConnection !== "boolean") return false;
   if (record.token !== undefined && !HEX64.test(record.token)) return false;
   if (record.connection !== undefined && !isConnection(record.connection)) return false;
-  if (record.phase !== undefined && !["install", "connect", "restored", "cleanup", "child"].includes(record.phase)) return false;
+  if (record.phase !== undefined && !["install", "connect", "restored", "cleanup"].includes(record.phase)) return false;
   const owns = record.ownedPlugin || record.ownedConnection || record.phase !== undefined;
   return record.snapshot === undefined ? !owns : isSnapshot(record.snapshot);
 }
@@ -194,7 +185,7 @@ function isRecord(value: unknown): value is MainwpRecord {
 export function readMainwpState(path: string): MainwpState {
   if (!existsSync(path)) return emptyMainwpState();
   const state = JSON.parse(readFileSync(path, "utf8")) as MainwpState;
-  if (!state || typeof state.enabled !== "boolean" || typeof state.remote !== "boolean" || typeof state.dashboard !== "string" || typeof state.cleanup !== "boolean"
+  if (!state || typeof state.enabled !== "boolean" || typeof state.dashboard !== "string" || typeof state.cleanup !== "boolean"
     || !Array.isArray(state.excluded) || !state.excluded.every((domain) => typeof domain === "string")
     || !state.sites || typeof state.sites !== "object" || Array.isArray(state.sites) || !Array.isArray(state.retired)) {
     throw new Error("the MainWP settings are invalid");
@@ -216,8 +207,7 @@ function ownedCount(state: MainwpState): number {
 
 /**
  * Dashboard records the addon made, or may have made: an enrollment it never
- * confirmed keeps its Security ID until the Dashboard says either way. A Child
- * it only installed belongs to no Dashboard.
+ * confirmed keeps its Security ID until the Dashboard says either way.
  */
 function ownedConnections(state: MainwpState): number {
   return Object.values(state.sites).filter((record) => record.ownedConnection || record.token).length + state.retired.length;
@@ -233,7 +223,7 @@ export function mainwpView(state: MainwpState): MainwpView {
     status: record.status, seen: record.seen, checkedAt: record.checkedAt, error: record.error, ownedConnection: record.ownedConnection,
   }]));
   return {
-    enabled: state.enabled, dashboard: state.dashboard, remote: state.remote, excluded: state.excluded, cleanup: state.cleanup, sites,
+    enabled: state.enabled, dashboard: state.dashboard, excluded: state.excluded, cleanup: state.cleanup, sites,
     owned: ownedCount(state), connections: ownedConnections(state),
   };
 }
@@ -344,7 +334,6 @@ async function startPass(run: MainwpRun, options: WpOptions, state: MainwpState,
   const deadline = Date.now() + (run.dueOnly ? 25_000 : 90_000);
   const pass: Pass = { run, options, deadline, state, result: emptyResult(), connections: {}, dashboardError: "", recoveryFailed: new Set() };
   await recoverAuthentication(pass, selected);
-  if (state.remote) return pass;
   if (!state.dashboard) {
     // A deleted Dashboard leaves nothing there to remove, so cleanup carries on.
     if (!state.cleanup) pass.dashboardError = "choose a MainWP Dashboard first";
@@ -418,7 +407,6 @@ async function visit(pass: Pass, site: WpSite): Promise<void> {
     const status = await childStatus(pass, site);
     if (pass.state.cleanup) await cleanupSite(pass, site, record, status);
     else if (status.multisite) record.status = "unsupported";
-    else if (pass.state.remote) await checkChildOnly(pass, site, record, status);
     else await checkSite(pass, site, record, status);
   } catch (error) {
     record.status = "error";
@@ -427,71 +415,6 @@ async function visit(pass: Pass, site: WpSite): Promise<void> {
   } finally {
     pass.result.checked++;
     saveMainwpState(pass.run.statePath, pass.state);
-  }
-}
-
-/**
- * For a Dashboard on another server. Automation installs the Child but leaves
- * it inactive: MainWP Child deactivates itself when no Dashboard connects soon
- * after activation, so an operator activates it just before adding the site,
- * with the site's own administrator login, from that Dashboard.
- */
-async function checkChildOnly(pass: Pass, site: WpSite, record: MainwpRecord, status: ChildStatus): Promise<void> {
-  const explicit = Boolean(pass.run.domain);
-  if (status.key) {
-    record.status = "connected";
-    record.seen = true;
-    delete record.phase;
-    return;
-  }
-  record.status = !status.installed ? "missing" : status.active ? "not-connected" : "inactive";
-  if (record.phase && !explicit) {
-    delete record.phase;
-    throw new Error("Installation was interrupted. Retry to continue.");
-  }
-  const unseen = !record.seen;
-  if (status.installed) record.seen = true;
-  if (explicit ? !status.active : pass.state.enabled && unseen && !status.installed) {
-    await installChild(pass, site, record, status, explicit);
-  }
-}
-
-async function installChild(pass: Pass, site: WpSite, record: MainwpRecord, status: ChildStatus, activate: boolean): Promise<void> {
-  const before = structuredClone(record);
-  if (!record.snapshot) {
-    const reply = await bridge<{ snapshot?: unknown }>(pass, site, { op: "snapshot", whole: !status.installed });
-    if (!isSnapshot(reply.snapshot)) throw new Error("MainWP returned invalid settings");
-    record.snapshot = reply.snapshot;
-    record.ownedPlugin = !status.installed;
-  }
-  record.seen = true;
-  record.phase = "child";
-  saveMainwpState(pass.run.statePath, pass.state);
-  try {
-    if (!status.installed) {
-      const force = status.files ? ["--force"] : [];
-      await runWp(pass.run, site, ["plugin", "install", "mainwp-child", ...force], pass.options, pass.deadline);
-    }
-    if (activate) await bridge(pass, site, { op: "activate" });
-    record.status = activate ? "not-connected" : "inactive";
-    pass.result.installed++;
-  } catch (error) {
-    if (await childUntouched(pass, site, status)) {
-      forget(record);
-      Object.assign(record, before);
-    }
-    throw error;
-  } finally {
-    delete record.phase;
-  }
-}
-
-async function childUntouched(pass: Pass, site: WpSite, before: ChildStatus): Promise<boolean> {
-  try {
-    const after = await childStatus(pass, site);
-    return (["installed", "files", "active", "key", "securityId", "fingerprint"] as const).every((field) => after[field] === before[field]);
-  } catch {
-    return false;
   }
 }
 
@@ -629,7 +552,7 @@ async function cleanupSite(pass: Pass, site: WpSite, record: MainwpRecord, statu
   if (!ours) record.status = paired(status, connection) ? "connected" : "not-connected";
   else if (record.ownedPlugin) {
     record.status = "missing";
-  } else record.status = pass.state.remote && !record.snapshot?.active ? "inactive" : "not-connected";
+  } else record.status = "not-connected";
   forget(record);
   pass.result.removed++;
 }
@@ -651,28 +574,24 @@ async function retire(pass: Pass): Promise<void> {
 }
 
 export async function configureMainwp(
-  run: MainwpRun, options: WpOptions, enabled: boolean, dashboard?: string, remote?: boolean,
+  run: MainwpRun, options: WpOptions, enabled: boolean, dashboard?: string,
 ): Promise<MainwpView> {
   const state = readMainwpState(run.statePath);
   prune(state, run.domains);
   if (state.cleanup && enabled) throw new Error("finish MainWP cleanup before turning automation on");
-  const moving = remote === true ? !state.remote : dashboard !== undefined && (state.remote || dashboard !== state.dashboard);
+  const moving = dashboard !== undefined && dashboard !== state.dashboard;
   if (moving && ownedConnections(state) > 0) {
     throw new Error("clean up the MainWP connections WordPress Tools made before changing Dashboard");
   }
-  if (remote === true && !state.remote) {
-    state.remote = true;
-    state.dashboard = "";
-  } else if (dashboard !== undefined && moving) {
+  if (moving) {
     const site = run.sites.find((entry) => entry.domain === dashboard);
     if (!site) throw new Error("choose a WordPress site on this server as the Dashboard");
     await bridge({ run, options, deadline: Date.now() + 30_000 }, site, { op: "dashboard-status", domains: [] });
-    state.remote = false;
-    state.dashboard = dashboard;
+    state.dashboard = dashboard!;
     // Those connections were to the previous Dashboard; the next check finds this one's.
     for (const record of Object.values(state.sites)) if (record.status === "connected") record.status = "not-connected";
   }
-  if (enabled && !state.remote && !run.sites.some((site) => site.domain === state.dashboard)) throw new Error("choose a MainWP Dashboard first");
+  if (enabled && !run.sites.some((site) => site.domain === state.dashboard)) throw new Error("choose a MainWP Dashboard first");
   state.enabled = enabled;
   saveMainwpState(run.statePath, state);
   return mainwpView(state);
@@ -698,7 +617,7 @@ export function requireMainwpSettled(path: string): void {
 }
 
 const ARGUMENTS: Record<string, string[]> = {
-  "mainwp-settings": ["enabled", "dashboard", "remote"],
+  "mainwp-settings": ["enabled", "dashboard"],
   "mainwp-site": ["domain", "excluded"],
   "mainwp-sync": [],
   "mainwp-connect": ["domain", "confirm"],
@@ -727,9 +646,7 @@ export async function mainwpAction(run: MainwpRun, argv: string[], options: WpOp
   const fields = parseArguments(verb, rest);
   if (verb === "mainwp-settings") {
     const dashboard = fields.dashboard === undefined ? undefined : validate(fields.dashboard);
-    const remote = fields.remote === undefined ? undefined : parseBoolean(fields.remote, "remote");
-    if (remote === false || (remote && dashboard !== undefined)) throw new Error("choose either a Dashboard on this server or --remote=true");
-    return { mainwp: await configureMainwp(run, options, parseBoolean(fields.enabled, "enabled"), dashboard, remote) };
+    return { mainwp: await configureMainwp(run, options, parseBoolean(fields.enabled, "enabled"), dashboard) };
   }
   if (verb === "mainwp-sync") return syncMainwp(run, options);
   if (verb === "mainwp-cleanup") {

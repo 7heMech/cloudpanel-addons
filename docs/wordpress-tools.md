@@ -7,13 +7,13 @@ Enable **WordPress Tools** in Addons. Its command-line name is `wp-tools`.
 Click **Sign in** beside a WordPress site to open its first administrator's
 account in a new tab. Allow pop-ups for CloudPanel. The **WP Login** shortcut
 on CloudPanel's Sites page is also available to panel users for their own sites.
-To clean up helpers, choose **Remove from every site** under **Sign-in
-helper**. The next sign-in installs the helper again.
+To clean up helpers, choose **Remove** in the **Sign-in helper on N sites** line
+under the table. The next sign-in installs the helper again.
 
 ## CLP Varnish Cache
 
-Enable Varnish for a site in CloudPanel, then open WordPress Tools. Turn on
-**Install CLP Varnish Cache automatically** to install and activate the
+Enable Varnish for a site in CloudPanel, then open WordPress Tools. Under
+**Automation**, turn on **Install CLP Varnish Cache automatically** to install and activate the
 [official CLP Varnish Cache plugin](https://www.cloudpanel.io/docs/v2/frontend-area/varnish-cache/wordpress/plugin/)
 on applicable WordPress sites. Automation starts off. Only actual WordPress
 installations with Varnish enabled qualify; multisite networks are left alone.
@@ -24,9 +24,10 @@ applies the policy immediately and refreshes the status shown. Large fleets or
 slow downloads may leave sites pending; check again to continue. The status badge
 shows when it was checked.
 
-Turn off a site's **Automatic** switch to manage it yourself. That keeps its
-existing plugin unchanged and hides installation actions for that site.
-**Install** also works for an included site while automation is off.
+While automation is on, each site's Varnish cell has an **Automatic** switch;
+turn it off to manage that site yourself. That keeps its existing plugin
+unchanged and hides installation actions for that site. **Install** also works
+while automation is off.
 
 An existing inactive plugin is never activated automatically. A plugin removed
 after a check is never installed again automatically. Use **Activate**,
@@ -49,9 +50,9 @@ exclusions and which plugins were removed on purpose.
 
 ## MainWP Child
 
-Choose a **MainWP Dashboard**, a WordPress site on this server with MainWP
-active, then turn on **Install and connect MainWP Child automatically**. For a
-Dashboard on another server, see below.
+Under **Automation**, choose a **MainWP Dashboard**, a WordPress site on this
+server with MainWP active. The table then gets a MainWP column. Turn on
+**Install and connect MainWP Child automatically** to connect new sites.
 
 Every 15 minutes the repair timer queues a background pass to install,
 activate and connect MainWP Child on new WordPress sites as each site's first
@@ -65,8 +66,8 @@ A site that already has MainWP Child shows **Connect** instead; nothing connects
 it automatically. A Child connected to another Dashboard must be disconnected in
 MainWP first. A Child removed after a check is never installed again
 automatically; **Connect** puts it back. **Retry** repeats a failed connection.
-The Dashboard's own site, multisite networks and sites with **Automatic** off
-are left alone.
+The Dashboard's own site, multisite networks and sites whose MainWP
+**Automatic** switch is off are left alone.
 
 Turning automation off leaves every connection in place. **Turn off and clean
 up…** removes what WordPress Tools added: the Dashboard records it created, with
@@ -77,22 +78,6 @@ plugin and its other settings stay. Connections you made, or anyone made since,
 are left alone. **Cleanup pending** means a site or the Dashboard needs
 attention; fix it and retry. Cleanup does not undo work done through MainWP or
 end WordPress sessions it opened.
-
-### A Dashboard on another server
-
-Choose **On another server** as the Dashboard, then turn on **Install MainWP
-Child automatically**. Every 15 minutes, sites that have never had MainWP Child
-get it installed but left inactive: MainWP Child turns itself off when no
-Dashboard connects within its connection timeout, 20 minutes unless changed in
-its settings. To connect a site, click **Activate** (or **Install**) beside it,
-then add it in your MainWP Dashboard with the site's administrator username and
-password. It shows **Connected** after the next check. WordPress Tools does not
-contact that Dashboard; your Dashboard must reach the site over HTTPS, so allow
-it through any firewall or Cloudflare-only rule.
-
-**Turn off and clean up…** deletes the MainWP Child plugins WordPress Tools
-installed and deactivates any it activated, except on sites a Dashboard has
-connected since.
 
 Disabling or uninstalling WordPress Tools leaves MainWP connections in place;
 clean up first to remove them. Both refuse while an interrupted connection's

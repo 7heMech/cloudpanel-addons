@@ -71,8 +71,6 @@ export const WORDPRESS_APPLICATIONS = ["WordPress", "WooCommerce"];
 export interface WpSiteView {
   domain: string;
   user: string;
-  /** The application CloudPanel recorded, such as WordPress. May be empty. */
-  application: string;
   /** Whether the sign-in helper is in the site right now. */
   helper: boolean;
   varnishCache: boolean;
@@ -314,7 +312,6 @@ function wordpressSites(paths: WpToolsActionPaths, state: WpVarnishState): WpSit
     .map((site) => ({
       domain: site.row.domain_name,
       user: site.row.user,
-      application: site.row.application ?? "",
       helper: existsSync(join(site.root, LOADER_FILE)),
       varnishCache: site.varnishCache,
       varnishExcluded: state.excluded.includes(site.row.domain_name),
@@ -585,7 +582,7 @@ function parseAction(argv: string[], options: WpToolsActionOptions): ParsedActio
   const [rawVerb, ...rest] = argv;
   const verbs: WpToolsVerb[] = ["sites", "sign-in", "remove", "sync", "varnish-settings", "varnish-site", "varnish-install", "varnish-sync"];
   const verb = verbs.find((known) => known === rawVerb);
-  if (!verb) failAction(`unknown WordPress sign-in verb '${rawVerb ?? ""}'`);
+  if (!verb) failAction(`unknown WordPress Tools verb '${rawVerb ?? ""}'`);
 
   let domain = "";
   let asUser = "";
@@ -645,7 +642,7 @@ export async function executeWpToolsAction(
   argv: string[],
   options: WpToolsActionOptions = {},
 ): Promise<unknown> {
-  if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress sign-in actions must run as root");
+  if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress Tools actions must run as root");
   const paths = pathsFor(options);
   if (argv[0]?.startsWith("mainwp-")) {
     return withFileLock(paths.mainwpLockFile, 15, "a MainWP change is still running", () => {
