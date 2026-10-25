@@ -16,7 +16,7 @@ import { Database } from "bun:sqlite";
 import {
   runGitAction, validateBranch, validateDirectory, validatePostDeploy, validateRemote, WEBHOOK_TOKEN_RE,
 } from "../addons/git/action";
-import { ActionFailure } from "../cli/action-common";
+import { ActionFailure, acquireFileLock } from "../cli/action-common";
 import { isTerminalJobState } from "../lib/job-id";
 
 const DOMAIN = "app.example.test";
@@ -397,6 +397,43 @@ test("the action refuses a site CloudPanel does not have and an unknown argument
   }
 });
 
+test("prune forgets the records of sites CloudPanel no longer has, and nothing when the panel cannot answer", async () => {
+  const fx = fixture();
+  try {
+    await action(fx, ["configure", `--domain=${DOMAIN}`],
+      JSON.stringify({ remote: fx.bare, branch: "main", directory: "", postDeploy: "" }));
+    // A record as 1.5.2 wrote it, for a site since deleted from CloudPanel.
+    const gone = "gone.example.test";
+    writeFileSync(join(fx.root, "state", "sites", `${gone}.json`), `${JSON.stringify({
+      domain: gone, remote: "git@github.com:example/gone.git", branch: "main", directory: "", postDeploy: "make",
+      updatedAt: "2026-01-01T00:00:00Z",
+      webhook: { token: "A".repeat(43), lastDeliveryAt: "", lastDelivery: "", lastDeliveryJob: "" },
+    }, null, 2)}\n`, { mode: 0o600 });
+
+    const fleet = (await action(fx, ["sites"])).data.sites as { domain: string; siteType: string; publicKey: string; keyMissing?: boolean }[];
+    expect(fleet.map((site) => [site.domain, site.siteType])).toEqual([[DOMAIN, "php"], [gone, ""]]);
+    // The fleet draws no key; it is told only whether an SSH remote has one.
+    expect(fleet[0]).toMatchObject({ publicKey: "", keyMissing: false });
+    rmSync(join(fx.root, "home", USER, ".ssh"), { recursive: true, force: true });
+    expect((await action(fx, ["sites"])).data.sites[0]).toMatchObject({ publicKey: "", keyMissing: true });
+
+    // An unreadable panel database, and one that lists no site, remove nothing.
+    const withPanel = (panelDb: string) => ({ ...fx, options: { ...fx.options, paths: { ...fx.options!.paths, panelDb } } });
+    expect((await action(withPanel(join(fx.root, "missing.db")), ["prune"])).data.forgotten).toEqual([]);
+    const empty = join(fx.root, "empty.db");
+    const db = new Database(empty, { create: true });
+    db.run("CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT, type TEXT, user TEXT)");
+    db.close();
+    expect((await action(withPanel(empty), ["prune"])).data.forgotten).toEqual([]);
+    expect(existsSync(join(fx.root, "state", "sites", `${gone}.json`))).toBe(true);
+
+    expect((await action(fx, ["prune"])).data.forgotten).toEqual([gone]);
+    expect((await action(fx, ["domains"])).data.domains).toEqual([DOMAIN]);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
 /* --------------------------------------------------------- push to deploy */
 
 /** What a repository POSTs: the ref is read out of the body, never beside it. */
@@ -487,6 +524,26 @@ test("a delivery is authenticated by its token and nothing else", async () => {
     expect(replay.data.deployed).toBe(false);
     expect(replay.data.outcome).toContain("already queued");
     expect((await action(fx, ["jobs"])).data.jobs.length).toBe(1);
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test("a delivery without the token is refused at once, not after waiting for the site's lock", async () => {
+  const fx = fixture();
+  try {
+    await withWebhook(fx);
+    mkdirSync(join(fx.root, "locks"), { recursive: true });
+    const held = await acquireFileLock(join(fx.root, "locks", `git-${DOMAIN}.lock`), 1, "held");
+    try {
+      const started = Date.now();
+      const refused = await action(fx, ["hook", `--domain=${DOMAIN}`], JSON.stringify({ token: "A".repeat(43) }));
+      expect(refused.ok).toBe(false);
+      expect(refused.error).toContain("no delivery");
+      expect(Date.now() - started).toBeLessThan(1000);
+    } finally {
+      held.release();
+    }
   } finally {
     rmSync(fx.root, { recursive: true, force: true });
   }

@@ -150,42 +150,10 @@ async function deployGitSite(domain) {
   }
 }
 
-function gitSelected() {
-  return Array.from(CLP_ROOT.querySelectorAll('.git-select:checked:not(:disabled)')).map(function (box) {
-    return box.getAttribute('data-domain');
-  });
-}
-
-function gitSelectionChanged() {
-  const count = gitSelected().length;
-  const total = CLP_ROOT.querySelectorAll('.git-select:not(:disabled)').length;
-  const button = CLP_ROOT.getElementById('git-deploy-selected');
-  if (button) {
-    button.disabled = count === 0;
-    button.textContent = count ? 'Deploy selected (' + count + ')' : 'Deploy selected';
-  }
-  const all = CLP_ROOT.getElementById('git-select-all');
-  if (all) {
-    all.checked = total > 0 && count === total;
-    all.indeterminate = count > 0 && count < total;
-  }
-  const mobile = CLP_ROOT.getElementById('git-select-mobile');
-  if (mobile) mobile.textContent = total > 0 && count === total ? 'Deselect all' : 'Select all';
-}
-
-function toggleGitAll(checked) {
-  CLP_ROOT.querySelectorAll('.git-select:not(:disabled)').forEach(function (box) { box.checked = checked; });
-  gitSelectionChanged();
-}
-
-function selectGitAll() {
-  toggleGitAll(gitSelected().length < CLP_ROOT.querySelectorAll('.git-select:not(:disabled)').length);
-}
-
 // The fleet answer to "deploy these": one request per site, reported together,
 // so a failure names the site it belongs to instead of stopping the rest.
 async function deployGitSelected() {
-  const domains = gitSelected();
+  const domains = selectedRows().map(function (row) { return row.dataset.domain; });
   if (domains.length === 0) return;
   const accepted = await confirmAction({
     title: 'Deploy ' + domains.length + ' site' + (domains.length === 1 ? '' : 's') + '?',
@@ -233,14 +201,8 @@ function initGitWebhookUrl() {
 }
 
 function paintGit(html) {
-  const selected = Array.from(CLP_ROOT.querySelectorAll('.git-select:checked')).map(function (box) {
-    return box.getAttribute('data-domain');
-  });
   repaintView(CLP_ROOT.getElementById('clp-content'), html);
   busy(false);
-  CLP_ROOT.querySelectorAll('.git-select').forEach(function (box) {
-    box.checked = selected.includes(box.getAttribute('data-domain'));
-  });
   initGit();
 }
 
@@ -277,10 +239,6 @@ async function gitJobFinished(job) {
 
 function initGit() {
   initGitWebhookUrl();
-  CLP_ROOT.querySelectorAll('.git-select').forEach(function (box) {
-    box.addEventListener('change', gitSelectionChanged);
-  });
-  gitSelectionChanged();
   const watch = CLP_ROOT.getElementById('job-watch');
   if (watch) watchJob(watch.getAttribute('data-job'), null, gitJobFinished);
   CLP_ROOT.querySelectorAll('tr[data-job]').forEach(function (row) {

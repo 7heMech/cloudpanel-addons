@@ -186,7 +186,8 @@ function gitPreviewLog(site: GitSiteStatus): string {
 
 /**
  * Connected sites and first-time setup. ?first-deploy, ?no-delivery,
- * ?other-provider, ?unavailable, and ?state= cover the expandable controls.
+ * ?other-provider, ?unavailable, ?no-key, ?no-hook and ?state= cover the
+ * expandable controls, and ?many adds sites until the fleet search shows.
  */
 const gitChanges = new Map<string, GitSiteStatus>();
 
@@ -249,6 +250,12 @@ function gitPreviewSites(url: URL): GitSiteStatus[] {
         error: "The build command failed. Check the deployment output before trying again." },
     },
   ];
+  if (url.searchParams.has("many")) {
+    const base = result[2]!;
+    for (const name of ["blog", "docs", "shop", "api"]) {
+      result.push({ ...base, domain: `${name}.example.com`, config: { ...base.config!, domain: `${name}.example.com`, remote: `https://github.com/example/${name}.git`, directory: "" } });
+    }
+  }
   return result.map((site) => gitChanges.get(site.domain) ?? site);
 }
 
@@ -1584,7 +1591,8 @@ const server = Bun.serve({
             varnishCache: siteVarnish[site.domain] === true,
             ...(url.searchParams.has("no-ip") ? {} : { publicIp: PREVIEW_PUBLIC_IP }),
           })
-        : gitLayout("Git Deploy", gitFleetView(empty ? [] : gitSites.filter((site) => site.configured)), notice);
+        : gitLayout("Git Deploy", gitFleetView(empty ? [] : gitSites.filter((site) => site.configured)
+          .map((site) => ({ ...site, publicKey: "", keyMissing: site.domain === "www.example.com" && url.searchParams.has("no-key") }))), notice);
     } else if (path === "/addons/stager/" || path === "/addons/stager") {
       // ?domain= is the site-scoped page the Staging tab reaches, drawn here
       // with the panel's chrome around it the way the standalone ?embed=0 page
