@@ -8,6 +8,11 @@ import { dnsName } from "./model";
 
 const API = "https://api.cloudflare.com/client/v4";
 const MAX_INVENTORY = 100_000;
+/** Cloudflare's list can disagree with its own count for a moment after a write. */
+const REREAD_DELAYS_MS = [500, 1500];
+
+/** A listing that was not consistent from first page to last. */
+class InconsistentRead extends ProviderError {}
 
 export interface CfAccount {
   id: string;
@@ -183,6 +188,24 @@ function recordBody(record: RecordWrite): Record<string, unknown> {
   return body;
 }
 
+/** The token permission each ruleset phase this addon writes needs. */
+const PHASE_PERMISSIONS: Record<string, string> = {
+  http_config_settings: "Config Rules: Edit",
+  http_request_firewall_custom: "Zone WAF: Edit",
+};
+const rulesPermission = (phase: string) => PHASE_PERMISSIONS[phase] ?? "rules permissions";
+
+/** Cloudflare refuses a permission the token lacks with a bare "Authentication error"; name the permission instead. */
+async function needs<T>(permission: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (!(error instanceof ProviderError) || error.status !== 403) throw error;
+    const reason = error.message.replace(/^Cloudflare: /, "");
+    throw new ProviderError("Cloudflare", `the token lacks ${permission} for this zone; add it to the token in Cloudflare (${reason})`, 403);
+  }
+}
+
 export class CloudflareApi {
   readonly http: ProviderHttp;
 
@@ -202,7 +225,20 @@ export class CloudflareApi {
     throw new ProviderError("Cloudflare", reasons || `HTTP ${status}`, status);
   }
 
+  /** Every page of a listing, read again from the start when it was not consistent. */
   private async pages<T>(path: string, perPage: number, parse: (value: unknown) => T & { id: string }): Promise<T[]> {
+    for (const delay of REREAD_DELAYS_MS) {
+      try {
+        return await this.readPages(path, perPage, parse);
+      } catch (error) {
+        if (!(error instanceof InconsistentRead)) throw error;
+        await Bun.sleep(delay);
+      }
+    }
+    return this.readPages(path, perPage, parse);
+  }
+
+  private async readPages<T>(path: string, perPage: number, parse: (value: unknown) => T & { id: string }): Promise<T[]> {
     const items: T[] = [];
     const seen = new Set<string>();
     let total: number | null = null;
@@ -215,18 +251,18 @@ export class CloudflareApi {
       }
       const count = meta.total_count as number;
       if (count > MAX_INVENTORY) throw new ProviderError("Cloudflare", "returned more entries than this addon reads");
-      if (total !== null && count !== total) throw new ProviderError("Cloudflare", "changed while it was being read; check again");
+      if (total !== null && count !== total) throw new InconsistentRead("Cloudflare", "changed while it was being read; check again");
       total = count;
       for (const entry of result) {
         const item = parse(entry);
-        if (seen.has(item.id)) throw new ProviderError("Cloudflare", "returned the same entry twice while paging; check again");
+        if (seen.has(item.id)) throw new InconsistentRead("Cloudflare", "returned the same entry twice while paging; check again");
         seen.add(item.id);
         items.push(item);
       }
       if (page >= (meta.total_pages as number)) break;
-      if (result.length === 0) throw new ProviderError("Cloudflare", "stopped returning entries part way through");
+      if (result.length === 0) throw new InconsistentRead("Cloudflare", "stopped returning entries part way through");
     }
-    if (items.length !== total) throw new ProviderError("Cloudflare", "returned fewer entries than it counted; check again");
+    if (items.length !== total) throw new InconsistentRead("Cloudflare", "returned fewer entries than it counted; check again");
     return items;
   }
 
@@ -290,18 +326,18 @@ export class CloudflareApi {
   }
 
   async setting(zoneId: string, setting: string): Promise<string> {
-    const { result } = await this.call(`/zones/${id(zoneId)}/settings/${setting}`);
+    const { result } = await needs("Zone Settings: Edit", () => this.call(`/zones/${id(zoneId)}/settings/${setting}`));
     return text(object(result).value, 40);
   }
 
   async setSetting(zoneId: string, setting: string, value: string): Promise<void> {
-    await this.call(`/zones/${id(zoneId)}/settings/${setting}`, "PATCH", { value });
+    await needs("Zone Settings: Edit", () => this.call(`/zones/${id(zoneId)}/settings/${setting}`, "PATCH", { value }));
   }
 
   /** The zone's ruleset for one phase, or null when it has none yet. */
   async entrypoint(zoneId: string, phase: string): Promise<CfRuleset | null> {
     try {
-      const { result } = await this.call(`/zones/${id(zoneId)}/rulesets/phases/${phase}/entrypoint`);
+      const { result } = await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/phases/${phase}/entrypoint`));
       return parseRuleset(result);
     } catch (error) {
       if (error instanceof ProviderError && error.status === 404) return null;
@@ -310,18 +346,18 @@ export class CloudflareApi {
   }
 
   async createEntrypoint(zoneId: string, phase: string, rules: RuleWrite[]): Promise<CfRuleset> {
-    const { result } = await this.call(`/zones/${id(zoneId)}/rulesets`, "POST", { name: "CloudPanel DNS", kind: "zone", phase, rules });
+    const { result } = await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets`, "POST", { name: "CloudPanel DNS", kind: "zone", phase, rules }));
     return parseRuleset(result);
   }
 
   /** Adds one rule, leaving the phase's other rules alone. */
-  async addRule(zoneId: string, rulesetId: string, rule: RuleWrite): Promise<CfRuleset> {
-    const { result } = await this.call(`/zones/${id(zoneId)}/rulesets/${rulesetId}/rules`, "POST", rule);
+  async addRule(zoneId: string, phase: string, rulesetId: string, rule: RuleWrite): Promise<CfRuleset> {
+    const { result } = await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/${rulesetId}/rules`, "POST", rule));
     return parseRuleset(result);
   }
 
-  async updateRule(zoneId: string, rulesetId: string, ruleId: string, rule: RuleWrite): Promise<CfRuleset> {
-    const { result } = await this.call(`/zones/${id(zoneId)}/rulesets/${rulesetId}/rules/${ruleId}`, "PATCH", rule);
+  async updateRule(zoneId: string, phase: string, rulesetId: string, ruleId: string, rule: RuleWrite): Promise<CfRuleset> {
+    const { result } = await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/${rulesetId}/rules/${ruleId}`, "PATCH", rule));
     return parseRuleset(result);
   }
 

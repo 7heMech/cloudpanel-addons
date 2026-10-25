@@ -98,13 +98,18 @@ describe("Cloudflare", () => {
     expect(records.find((record) => record.type === "SRV")).toMatchObject({ content: "0 443 mail.example.net", priority: 0 });
   });
 
-  test("a page that changes while it is read is refused rather than used", async () => {
+  test("a listing that changes while it is read is read again, and refused if it keeps changing", async () => {
     const { fake, agency } = cloudflare();
     for (let n = 0; n < 60; n++) fake.zone(`z${n}.example`, agency);
     const inner = fake.fetch;
     let pages = 0;
     fake.fetch = async (url, init) => {
       if (new URL(url).pathname.endsWith("/zones") && ++pages === 2) fake.zone("late.example", agency);
+      return inner(url, init);
+    };
+    expect(await new CloudflareApi(USER_TOKEN, fake.fetch).zones()).toHaveLength(61);
+    fake.fetch = async (url, init) => {
+      if (new URL(url).pathname.endsWith("/zones") && ++pages % 2 === 0) fake.zone(`late${pages}.example`, agency);
       return inner(url, init);
     };
     await expect(new CloudflareApi(USER_TOKEN, fake.fetch).zones()).rejects.toThrow("changed while it was being read");
@@ -139,6 +144,17 @@ describe("Cloudflare", () => {
     expect(message).not.toContain(USER_TOKEN.slice(0, 12));
   });
 
+  test("a refused rules or settings call names the permission the token lacks", async () => {
+    const rule = { ref: "clp_dns_acme", action: "set_config", expression: "true", description: "x", enabled: true, action_parameters: { ssl: "full" } };
+    const api = new CloudflareApi(USER_TOKEN, async () => Response.json({
+      success: false, errors: [{ code: 10000, message: "Authentication error" }],
+    }, { status: 403 }));
+    await expect(api.entrypoint("a".repeat(32), "http_config_settings")).rejects.toThrow("lacks Config Rules: Edit");
+    await expect(api.entrypoint("a".repeat(32), "http_request_firewall_custom")).rejects.toThrow("lacks Zone WAF: Edit");
+    await expect(api.setting("a".repeat(32), "ssl")).rejects.toThrow("lacks Zone Settings: Edit");
+    await expect(api.addRule("a".repeat(32), "http_config_settings", "b".repeat(32), rule)).rejects.toThrow("lacks Config Rules: Edit");
+  });
+
   test("TXT values are written as quoted strings of at most 255 characters", () => {
     const long = "v=DKIM1;k=rsa;p=" + "A".repeat(400);
     const quoted = quoteTxt(long);
@@ -154,7 +170,7 @@ describe("Cloudflare", () => {
     const rule = { ref: "clp_dns_acme", action: "set_config", expression: "true", description: "x", enabled: true, action_parameters: { ssl: "full" } };
     expect(await api.entrypoint(zone.id, "http_config_settings")).toBeNull();
     const created = await api.createEntrypoint(zone.id, "http_config_settings", [{ ...rule, ref: "theirs" }]);
-    const added = await api.addRule(zone.id, created.id, rule);
+    const added = await api.addRule(zone.id, "http_config_settings", created.id, rule);
     expect(added.rules.map((entry) => entry.ref)).toEqual(["theirs", "clp_dns_acme"]);
   });
 });

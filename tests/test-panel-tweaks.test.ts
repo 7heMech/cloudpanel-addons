@@ -333,6 +333,7 @@ test("the mobile layout fits the new-site chooser and its forms to a phone", () 
   expect(snippet).toContain("@media (max-width: 576px)");
   expect(snippet).toContain("body .new-site-container .card-form .row > .col-6 { width: 100%; }");
   expect(snippet).toContain("body .new-site-container .card-form .row > .col-6 + .col-6 { margin-top: 20px; }");
+  expect(snippet).toContain("body .new-site-container .card-form .row:has(> .col-6.text-start + .col-6.text-end) > .col-6 { width: auto; margin-top: 0; }");
   for (const sequence of ["{{", "{%", "{#"]) expect(snippet).not.toContain(sequence);
 });
 

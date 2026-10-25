@@ -97,7 +97,8 @@ whose information boxes at a fixed 240px -- both wider than the phone they are
 on -- and the new-site pages, whose chooser and forms live in a fixed 800px
 container of two-column cards and unstacking halves. Below 760px the container
 becomes the viewport and the cards become one centred column; below 576px,
-Bootstrap's own stacking point, each form half takes the whole row.
+Bootstrap's own stacking point, each form half takes the whole row, except
+the Back and submit row, whose two buttons stay side by side.
 
 The Admin header additionally carries rules for the Admin Area, under the same
 mobile-layout switch and without another template anchor. Below 760px the fixed
@@ -107,7 +108,7 @@ navigation and tabs hide their native scrollbar tracks while keeping scrolling,
 as the frontend navigation does. The content loses its desktop
 side margins, card headings wrap, and tables scroll inside their existing body
 wrapper. Below 576px the form columns take the whole row, including the narrow
-columns used for firewall rules. Long site labels wrap beside their checkboxes,
+columns used for firewall rules, except a form's Back and submit row. Long site labels wrap beside their checkboxes,
 and the logo can shrink beside the header tools on the smallest phones. Events
 gives its date-range input a full row and stacks the two calendars in a popup
 bounded by that row and 65% of the viewport height, with an inner scroller and

@@ -577,8 +577,8 @@ export class DnsRun {
         if (found.state === "present") continue;
         let updated: CfRuleset;
         if (!ruleset) updated = await api.createEntrypoint(zoneId, spec.phase, [spec.rule]);
-        else if (found.state === "update") updated = await api.updateRule(zoneId, ruleset.id, found.ruleId, spec.rule);
-        else updated = await api.addRule(zoneId, ruleset.id, spec.rule);
+        else if (found.state === "update") updated = await api.updateRule(zoneId, spec.phase, ruleset.id, found.ruleId, spec.rule);
+        else updated = await api.addRule(zoneId, spec.phase, ruleset.id, spec.rule);
         state.rulesets.set(spec.phase, updated);
       }
     } catch (error) {

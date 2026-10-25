@@ -6,25 +6,31 @@ domain up in Mailcow. Enable **DNS** under Addons, or run
 
 ## Set up
 
+Until Cloudflare is connected, the DNS page opens with these steps as a
+checklist.
+
 1. **Connect Cloudflare.** Open DNS and choose **Connect Cloudflare**. **Create
    token in Cloudflare** opens Cloudflare's token form. Check the permissions
-   listed beside the link, adding **Config Rules: Edit** and **Zone WAF: Edit**
-   manually when listed. Pick the accounts and zones there (All zones
-   also covers zones you add later), create the token, and paste it back. DNS
+   listed beside the link are there. Pick the accounts and zones there (All zones
+   also covers zones you add later), limit it to the server addresses shown
+   under Client IP Address Filtering, create the token, and paste it back. DNS
    finds the accounts and zones it reaches by itself. Add more connections for
    other Cloudflare logins.
-2. **Mailcow, if you use it.** Under **Server and Mailcow**, set Mailcow's
+2. **Mailcow, if you use it.** Under **Settings**, set Mailcow's
    address, a read-write API key (limit it to this server's IP in Mailcow), the
    mail hostname, how new domains get a DKIM key, and optionally a shared
    mailbox, such as the one SMTP Relay sends through.
 3. **Profiles.** Edit **Web** or **Web and Mailcow**, or create your own from the
-   presets. Each row is a record every site in the profile gets.
+   presets. Each row is a record every site in the profile gets; **TTL and apex
+   only** shows the less common columns, and **Cloudflare zone** opens the
+   zone-wide settings.
 4. **Assign sites** in the table, in bulk if you like. Profiles start in
    **Report only**: **Check now** shows what differs and changes nothing.
 5. **Enforce.** Turn on Enforce for a profile, read the plan, and confirm it.
    From then on its records are kept as they are, and conflicting records at the
    names it writes are deleted. Other names are never touched.
-6. **New sites.** Choose the profile new sites join.
+6. **New sites.** Choose the profile under **New sites join**. If it is Report
+   only, the page warns that new sites get no records.
 
 If you later turn on a feature that needs another permission, such as creating
 zones or skipping the firewall, edit the token in Cloudflare to add it.

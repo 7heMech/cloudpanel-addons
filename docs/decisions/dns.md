@@ -67,6 +67,12 @@ every sender is left exactly as written.
 
 ## Report only and Enforce
 
+The page puts the sites first, then the profiles with the choice of default,
+then the connections and settings that are set once. Until a connection
+exists it opens with the three steps that make a new site publish itself:
+connect, choose the default, enforce it. A default profile in Report only is
+called out, since its new sites get no records and so no certificate.
+
 Report only reads Cloudflare and Mailcow and writes nothing. Enforce makes the
 plan and keeps making it: every check corrects drift at the names the profile
 owns, and deletes conflicting records there.
@@ -115,11 +121,16 @@ template (`/profile/api-tokens` with `permissionGroupKeys`, `accountId=*` and
 screen and never types an account ID. The permissions are the union of what the
 saved profiles use: Account Settings Read, DNS Edit, Zone Read (Zone Edit if a
 profile creates zones), Zone Settings Edit, Config Rules Edit and Zone WAF Edit
-for the features that need them. The URL uses only keys in Cloudflare's
-[template reference](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/).
-Config Rules and Zone WAF have no documented template key, so the page asks
-operators to add them manually when listed. Their API permissions are
+for the features that need them. The URL uses the keys in Cloudflare's
+[template reference](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/),
+plus `config_settings` and `zone_waf`, which the reference leaves out but the
+form accepts. The dashboard drops an unknown key without saying so, which is
+why the page also lists the permissions. The template has no parameter for
+Client IP Address Filtering, so the page shows the server's detected addresses
+to paste there. Their API permissions are
 [Config Settings Write and Zone WAF Write](https://developers.cloudflare.com/ruleset-engine/rulesets-api/update/).
+Cloudflare refuses a missing permission with a bare "Authentication error", so
+a refused settings or rules read or write is reported with the permission it needs.
 
 A token is verified before it is saved (`/user/tokens/verify`, or the account
 route for an account-owned one, using a zone's account when account listing is
@@ -184,8 +195,10 @@ addon's own: each request has a 15-second deadline and an 8 MiB reply limit, no
 redirects, and the shared bounded HTTP body reader. A 429 stores Cloudflare's or Mailcow's `Retry-After` (five
 minutes if absent), after which no request is made to that provider until it
 passes, across runs, including failed connection checks and unconfirmed plans.
-A page whose paging changes mid-read, or repeats an entry,
-is refused rather than used.
+A listing whose count changes mid-read, or that repeats or
+misses an entry, is read again after half a second and then a second and a
+half, since Cloudflare's list can lag its count just after a write, and is
+refused if it still disagrees.
 
 ## State, secrets and removal
 
