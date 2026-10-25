@@ -209,6 +209,17 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .row-actions[open] summary { margin-bottom: 12px; }
 .row-actions .actions { max-width: 280px; justify-content: flex-end; margin-left: auto; }
 .row-actions .btn { padding: 5px 10px; }
+/* On a wide screen Manage opens a menu over the page rather than growing the
+   row; the shared script places it, since the table's scroll box would clip it. */
+@media (min-width: 941px) {
+  .row-actions[open] summary { margin-bottom: 0; }
+  .row-actions .actions { position: fixed; z-index: 1040; flex-direction: column; flex-wrap: nowrap; align-items: stretch;
+    gap: 2px; min-width: 190px; max-width: none; padding: 6px; background: var(--panel); border: 1px solid var(--card-border);
+    border-radius: 4px; box-shadow: 0 8px 28px rgb(0 0 0 / 16%); }
+  .row-actions .actions .btn { justify-content: flex-start; width: 100%; border-color: transparent; text-align: left; padding: 7px 12px; }
+  .row-actions .actions .btn:hover { background: var(--surface); }
+  .row-actions .actions .btn-danger:hover { background: var(--bad); }
+}
 .site-inventory > summary { cursor: pointer; font-size: 18px; font-weight: 600; }
 .site-inventory[open] > summary { margin-bottom: 16px; }
 .addon-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 30px; }

@@ -86,7 +86,8 @@ export async function handle(
     const res = await instaticService.getJob(id);
     if (!res.ok || !res.data) return new Response("Job not found", { status: 404 });
     const csrf = newCsrfToken();
-    return html(page(`Creating ${res.data.job.domain}`, jobView(res.data.job, res.data.log)), csrf);
+    const job = res.data.job;
+    return html(page(`${job.kind === "update" ? "Updating" : "Creating"} ${job.domain}`, jobView(job, res.data.log)), csrf);
   }
 
   if (path === "/api/instances" && method === "GET") {
@@ -107,6 +108,41 @@ export async function handle(
 
     const res = await instaticService.createInstance(domain, tag, tls === true, true);
     return json(res, res.ok ? 202 : 400);
+  }
+
+  // The dashboard again, for a page waiting on jobs it started to finish.
+  if (path === "/api/dashboard" && method === "GET") {
+    try {
+      return json({ ok: true, html: await dashboard() });
+    } catch (error) {
+      return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+    }
+  }
+
+  // Several sites at once: each update starts a job of its own; a restart is done
+  // in turn. A site that fails is named rather than stopping the rest.
+  if (path === "/api/bulk" && method === "POST") {
+    const blocked = guardMutation(req);
+    if (blocked) return blocked;
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req); } catch (error) { return bodyErrorResponse(error); }
+    const verb = body.verb;
+    if (verb !== "update" && verb !== "restart") return json({ ok: false, error: "verb must be update or restart" }, 400);
+    const tag = verb === "update" ? validateTag(body.tag) : null;
+    if (verb === "update" && !tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
+    if (!Array.isArray(body.domains) || body.domains.length === 0 || body.domains.length > 500) {
+      return json({ ok: false, error: "choose between 1 and 500 sites" }, 400);
+    }
+    const domains = body.domains.map((domain) => validateDomain(domain));
+    if (domains.some((domain) => !domain)) return json({ ok: false, error: "a domain is not a valid hostname" }, 400);
+    const done: string[] = [];
+    const failed: { domain: string; error: string }[] = [];
+    for (const domain of domains as string[]) {
+      const res = verb === "update" ? await instaticService.updateInstance(domain, tag!) : await instaticService.lifecycle(domain, "restart");
+      if (res.ok) done.push(domain);
+      else failed.push({ domain, error: res.error ?? "failed" });
+    }
+    return change({ ok: true, data: { done, failed } } as { ok: boolean });
   }
 
   if (path === "/api/jobs" && method === "GET") {

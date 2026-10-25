@@ -1091,6 +1091,11 @@ function instaticDashboard(url?: URL): string {
   const jobs: InstaticJobView[] = [
     { ...instaticCreationJob, id: "preview-instatic-job", domain: "blog.example.com", state: "running", step: "pulling ghcr.io/corebunch/instatic:0.0.19" },
     { ...instaticCreationJob, id: "preview-instatic-failed", domain: "news.example.com", state: "failed", step: "", error: "health check failed for news.example.com" },
+    // ?updates: one site updating now and one whose update was rolled back.
+    ...url?.searchParams.has("updates") ? [
+      { ...instaticCreationJob, kind: "update" as const, id: "preview-update-docs", domain: "docs.example.com", tag: "0.0.19", fromTag: "0.0.18", state: "running" as const, step: "waiting for health check" },
+      { ...instaticCreationJob, kind: "update" as const, id: "preview-update-failed", domain: "preview.example.com", tag: "0.0.19", fromTag: "0.0.18", state: "failed" as const, step: "", error: "health check failed for preview.example.com at 0.0.19; previous instance preserved" },
+    ] : [],
   ];
   return dashboardView([...instances, { ...instances[0]!, domain: "old.example.com", tag: "0.0.18", panelSite: false }], available, jobs);
 }

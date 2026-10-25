@@ -70,6 +70,9 @@ export interface InstaticJobView {
   tls: boolean;
   /** What came of the certificate; absent on records written before it was kept. */
   certificate?: "issued" | "failed" | "none";
+  /** Absent on records written before updates were jobs, which are creations. */
+  kind?: "create" | "update";
+  fromTag?: string;
   state: "queued" | "running" | "done" | "failed" | "unknown";
   step: string;
   createdAt: string;
@@ -162,8 +165,9 @@ export const instaticService = {
     return res.data?.jobs ?? [];
   },
 
-  async updateInstance(domain: string, tag: string): Promise<ActionResult> {
-    return callAction("update", ["--domain", domain, "--tag", tag]);
+  /** Starts the update as a job, whose log the job page streams; answers its id. */
+  async updateInstance(domain: string, tag: string): Promise<ActionResult<{ job?: string }>> {
+    return callAction<{ job?: string }>("update", ["--domain", domain, "--tag", tag, "--async"]);
   },
 
   /**

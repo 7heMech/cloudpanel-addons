@@ -4,7 +4,9 @@
 // delete sites.
 
 import { esc, escJs } from "../../../lib/app-http";
-import { JOB_STYLE, JOB_WATCH_JS, jobStateClass, jobStateLabel, renderLayout, whenText } from "../../../lib/app-ui";
+import {
+  FLEET_NONE_HTML, FLEET_ROW_SELECTION_JS, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, jobStateClass, jobStateLabel, renderLayout, whenText,
+} from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 
 /**
@@ -42,7 +44,7 @@ export function layout(
     base: BASE,
     nav: [],
     css: STYLE + JOB_STYLE,
-    script: JOB_WATCH_JS + CLIENT_JS,
+    script: JOB_WATCH_JS + FLEET_ROW_SELECTION_JS + CLIENT_JS,
     updateNotice,
     admin,
   });
@@ -53,21 +55,31 @@ function stateClass(state: string): string {
   return known.includes(state) ? `state-${state}` : "state-unknown";
 }
 
-/**
- * Creations still worth a row of their own: the newest job for each domain
- * while it is queued or running, or failed with no instance to show for it.
- */
-export function pendingCreations(jobs: InstaticJobView[], instances: InstanceView[]): InstaticJobView[] {
+/** The newest job for each domain. */
+function newestJobs(jobs: InstaticJobView[]): Map<string, InstaticJobView> {
   const newest = new Map<string, InstaticJobView>();
   for (const job of jobs) {
     const seen = newest.get(job.domain);
     if (!seen || job.createdAt > seen.createdAt) newest.set(job.domain, job);
   }
-  return [...newest.values()]
-    .filter((job) => job.state === "queued" || job.state === "running"
-      || (job.state === "failed" && !instances.some((i) => i.domain === job.domain)))
+  return newest;
+}
+
+const active = (job: InstaticJobView | undefined) => job?.state === "queued" || job?.state === "running";
+
+/**
+ * Creations still worth a row of their own: the newest job for each domain
+ * while it is queued or running, or failed with no instance to show for it.
+ * An update shows on its instance's row instead.
+ */
+export function pendingCreations(jobs: InstaticJobView[], instances: InstanceView[]): InstaticJobView[] {
+  return [...newestJobs(jobs).values()]
+    .filter((job) => job.kind !== "update")
+    .filter((job) => active(job) || (job.state === "failed" && !instances.some((i) => i.domain === job.domain)))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
+
+const STATE_LABELS: Record<string, string> = { running: "Running", exited: "Stopped", created: "Created", paused: "Paused" };
 
 /** Renders the Instatic dashboard: creations in progress, then every instance. */
 export function dashboardView(
@@ -83,8 +95,11 @@ export function dashboardView(
   const behindOf = (i: InstanceView) => i.panelSite !== false && latest !== null && isNewerThan(latest, i.tag);
   const outdated = instances.filter(behindOf).length;
   const creations = pendingCreations(jobs, instances);
+  const newest = newestJobs(jobs);
+  const working = jobs.some(active);
 
   const jobRows = creations.map((job) => `<tr>
+  <td class="site-select"></td>
   <td class="site-cell wide-cell"><a href="${BASE}/jobs/${esc(job.id)}">${esc(job.domain)}</a></td>
   <td data-label="Version"><span class="badge">${esc(job.tag)}</span></td>
   <td data-label="State">
@@ -99,8 +114,12 @@ export function dashboardView(
       const missing = i.panelSite === false;
       const behind = behindOf(i);
       const d = escJs(i.domain);
-      const update = latest === null
-        ? `<button class="btn" disabled title="Can't reach ghcr.io">Update</button>`
+      const job = newest.get(i.domain);
+      const updating = job?.kind === "update" && active(job) ? job : null;
+      // A failed update left the instance on its old version; say so until another update replaces the record.
+      const failedUpdate = job?.kind === "update" && job.state === "failed" && job.tag !== i.tag ? job : null;
+      const update = updating ? ""
+        : latest === null ? `<button class="btn" disabled title="Can't reach ghcr.io">Update</button>`
         : behind ? `<button class="btn btn-update" onclick="askUpdate('${d}','${escJs(i.tag)}')">Update</button>` : "";
       const actions = missing
         ? `<button class="btn" onclick="showLogs('${d}', '${escJs(String(i.port ?? ""))}')">Logs</button>
@@ -111,13 +130,19 @@ export function dashboardView(
         : `<button class="btn" onclick="act('${d}','start')">Start</button>`
     }
     <button class="btn" onclick="act('${d}','restart')">Restart</button>
-    ${update}
     <button class="btn" onclick="takeSnapshot('${d}')" title="Create a backup snapshot of the SQLite database and instance data">Snapshot</button>
     <button class="btn" onclick="act('${d}','recreate')" title="Rebuild the recorded version, preserving data and enabling native backups for older instances">Recreate</button>
     <button class="btn" onclick="showLogs('${d}', '${escJs(String(i.port ?? ""))}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${d}')">Delete</button>`;
-      return `<tr>
-  <td class="site-cell wide-cell">
+      const state = missing
+        ? '<span class="badge state-absent" title="The CloudPanel site was deleted; Delete archives and removes the instance">Deleted</span>'
+        : updating
+          ? `<span class="badge state-running">Updating</span><div class="hint">${esc(updating.step)} · <a href="${BASE}/jobs/${esc(updating.id)}">Log</a></div>`
+          : `<span class="badge ${stateClass(i.state)}">${esc(STATE_LABELS[i.state] ?? i.state)}</span>${failedUpdate
+            ? `<div class="hint tone-bad">Update to ${esc(failedUpdate.tag)} failed · <a href="${BASE}/jobs/${esc(failedUpdate.id)}">Log</a></div>` : ""}`;
+      return `<tr data-domain="${esc(i.domain)}" data-find="${esc(i.domain)}" data-tag="${esc(i.tag)}"${behind ? " data-behind" : ""} tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
+  <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(i.domain)}"${missing || updating ? " disabled" : ""}></td>
+  <td class="site-cell">
     ${
       missing
         ? `<span class="mono">${esc(i.domain)}</span>`
@@ -128,14 +153,10 @@ export function dashboardView(
     <span class="badge">${esc(i.tag)}</span>
     ${behind ? `<span class="badge behind" title="${esc(latest)} is available">${esc(latest)} available</span>` : ""}
   </td>
-  <td data-label="State">
-    ${missing
-      ? '<span class="badge state-absent" title="The CloudPanel site was deleted; Delete archives and removes the instance">deleted</span>'
-      : `<span class="badge ${stateClass(i.state)}">${esc(i.state)}</span>`}
-  </td>
-  <td class="action-cell wide-cell" data-label="Actions"><details id="instance-actions-${esc(i.domain)}" class="row-actions"><summary>Manage</summary><div class="actions">
+  <td data-label="State">${state}</td>
+  <td class="action-cell wide-cell" data-label="Actions"><div class="instatic-row-actions">${update}<details id="instance-actions-${esc(i.domain)}" class="row-actions"><summary>Manage</summary><div class="actions">
     ${actions}
-  </div></details></td>
+  </div></details></div></td>
 </tr>`;
     })
     .join("\n");
@@ -155,14 +176,25 @@ export function dashboardView(
 
   return `<div class="page-heading"><div><h1>Instatic sites</h1><p>Host and manage static sites on CloudPanel.</p></div><a class="btn btn-primary" href="${BASE}/new">+ New site</a></div>${versionNotice}${updatesLine}
 
-<div class="card card-table">
+<div class="card card-table" id="instatic-sites"${working ? " data-working" : ""}>
   ${
     instances.length === 0 && creations.length === 0
       ? `<div class="empty">No Instatic instances yet. <a href="${BASE}/new">Create one</a>.</div>`
-      : `<div class="table-scroll"><table class="fleet-table">
-    <thead><tr><th scope="col">Site</th><th scope="col">Version</th><th scope="col">State</th><th scope="col" class="action-cell">Actions</th></tr></thead>
+      : `<div class="card-header toolbar">
+    <h2>Sites</h2>
+    <span class="toolbar-note" id="site-selection">No sites selected</span>
+    <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
+    <div class="toolbar-end actions bulk-actions">
+      ${latest === null ? "" : `<button class="btn" type="button" data-needs-selection disabled onclick="bulkInstatic('update', '${escJs(latest)}')" title="Update the selected sites to ${esc(latest)}">Update to ${esc(latest)}</button>`}
+      <button class="btn" type="button" data-needs-selection disabled onclick="bulkInstatic('restart')">Restart</button>
+    </div>
+  </div>
+  ${fleetFilterHtml({ count: instances.length, summary: `${instances.length} sites` })}
+  <div class="table-scroll"><table class="fleet-table instatic-table">
+    <thead><tr><th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th><th scope="col">Site</th><th scope="col">Version</th><th scope="col">State</th><th scope="col" class="action-cell">Actions</th></tr></thead>
     <tbody>${jobRows}${rows}</tbody>
-  </table></div>`
+  </table></div>
+  ${FLEET_NONE_HTML}`
   }
 </div>
 
@@ -215,14 +247,18 @@ function certificateText(job: InstaticJobView): string {
   return job.tls ? "Let's Encrypt certificate requested" : "Self-signed or custom SSL";
 }
 
-/** Renders the progress and result of an Instatic site creation job: one status card and the log. */
+/** Renders the progress and result of an Instatic creation or update job: one status card and the log. */
 export function jobView(job: InstaticJobView, logText: string): string {
   const finished = job.state === "done" || job.state === "failed";
   const done = job.state === "done";
+  const update = job.kind === "update";
   const certificateWarning = done && job.certificate === "failed"
     ? `<div class="notice job-alert">No certificate yet. Point DNS at this server and issue one under Site → SSL/TLS.</div>`
     : "";
-  const links = done
+  const links = done && update
+    ? `<div class="actions job-links"><a class="btn btn-primary" href="${BASE}/">Back to sites</a>
+          <a class="btn" href="https://${esc(job.domain)}" target="_blank" rel="noreferrer noopener">Visit site</a></div>`
+    : done
     ? `<div class="actions job-links">
           <a class="btn btn-primary" href="https://${esc(job.domain)}/admin" target="_blank" rel="noreferrer noopener">Open admin</a>
           <a class="btn" href="https://${esc(job.domain)}" target="_blank" rel="noreferrer noopener">Visit site</a>
@@ -232,10 +268,12 @@ export function jobView(job: InstaticJobView, logText: string): string {
   return `
     <div class="page-heading">
       <div>
-        <h1>New Instatic site</h1>
-        <p>Creating an Instatic site at ${esc(job.domain)}.</p>
+        <h1>${update ? "Update" : "New Instatic site"}</h1>
+        <p>${update
+    ? `${esc(job.domain)} from ${esc(job.fromTag ?? "its version")} to ${esc(job.tag)}. A failed update puts the previous version back.`
+    : `Creating an Instatic site at ${esc(job.domain)}.`}</p>
       </div>
-      <a class="btn" href="${BASE}/">Back to instances</a>
+      <a class="btn" href="${BASE}/">Back to sites</a>
     </div>
     <div class="card">
       <div class="card-header"><h2>${esc(job.domain)}</h2><span class="badge ${jobStateClass(job.state)}" id="job-state">${esc(jobStateLabel(job.state))}</span></div>
@@ -246,7 +284,7 @@ export function jobView(job: InstaticJobView, logText: string): string {
         <dt>Domain</dt><dd>${done ? `<a href="https://${esc(job.domain)}" target="_blank" rel="noreferrer noopener">${esc(job.domain)}</a>` : esc(job.domain)}</dd>
         <dt>Version</dt><dd>${esc(job.tag)}</dd>
         <dt>Port</dt><dd class="mono">127.0.0.1:${esc(String(job.port))}</dd>
-        ${done ? `<dt>Certificate</dt><dd>${esc(certificateText(job))}</dd>` : ""}
+        ${done && !update ? `<dt>Certificate</dt><dd>${esc(certificateText(job))}</dd>` : ""}
         <dt>Started</dt><dd>${esc(whenText(job.startedAt || job.createdAt))}</dd>
         ${job.finishedAt ? `<dt>Finished</dt><dd>${esc(whenText(job.finishedAt))}</dd>` : ""}
       </dl>

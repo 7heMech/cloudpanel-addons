@@ -16,12 +16,17 @@ stream. Installation and addon settings remain on the administrator's manager
 pages. Image selection is limited to exact versions of the fixed Instatic
 registry image; callers cannot supply container commands or mount paths.
 
-Lifecycle actions, updates and deletion return dashboard HTML from the same
-renderer as the first load, and the page repaints in place and reports the
-outcome. A rolled-back update shows its container logs. A finished creation job
-repaints its result view.
+Lifecycle actions and deletion return dashboard HTML from the same renderer as
+the first load, and the page repaints in place and reports the outcome. An
+update is a job, like a creation: one update opens its job page, which streams
+the log, including a rolled-back update's container output. Sites can be
+selected and updated to the latest version or restarted together; each update
+is its own job. While any job runs, the dashboard fetches itself again every
+four seconds, and an updating row shows its step and cannot be selected. A
+failed update is named on its row until another replaces it. A finished job
+repaints its result view. On a wide screen Manage opens a menu.
 
-The dashboard reads instances, creation jobs and registry tags in parallel. A
+The dashboard reads instances, jobs and registry tags in parallel. A
 creation that is queued, running, or failed with no instance to show for it is a
 row at the top, linking to its job page. An instance is deleted from the panel
 when the action's `list` says `panelSite: false`; such a row offers only Logs and
@@ -83,7 +88,10 @@ private files out of the web root.
 
 Update and recreate take a clean local snapshot before replacing the container.
 The recorded data and encryption key are retained, and a failed health check
-restores the previous version. User-created snapshots are a five-file rolling
+restores the previous version. The check needs a 2xx or 3xx from the container
+itself, then any answer through Nginx but a missing one, 404, 502 or 504: a
+site behind Cloudflare IP Access refuses the server's own address with 403, and
+maintenance mode answers 503, before the request is proxied. User-created snapshots are a five-file rolling
 window. Deletion writes a separate final archive and does not prune earlier
 deletion archives.
 
