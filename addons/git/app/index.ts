@@ -4,7 +4,7 @@
 // a request for /addons/git/api/... arrives as /api/... .
 
 import {
-  bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
+  bodyErrorResponse, errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
   redirectResponse, safeDecodePathSegment,
 } from "../../../lib/app-http";
 import { jobApiRoute } from "../../../lib/job-stream";
@@ -24,10 +24,6 @@ function json(body: unknown, status = 200): Response {
 // loads from this addon, so it carries the CSRF cookie its own actions echo.
 function fragmentJson(body: unknown, csrf: string, status = 200): Response {
   return jsonResponse(body, { status, csrf });
-}
-
-function errorBlock(error: unknown): string {
-  return `<div class="alert">${Bun.escapeHTML(error instanceof Error ? error.message : String(error))}</div>`;
 }
 
 /** The site page's content, and the log of whatever it last deployed. */

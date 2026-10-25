@@ -22,7 +22,7 @@ import {
   listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord,
 } from "../../cli/job-store";
 import {
-  ActionCommandFailure, ActionFailure, acquireFileLock, emitActionError, emitActionOk, failAction,
+  ActionCommandFailure, ActionFailure, acquireFileLock, deletedSites, emitActionError, emitActionOk, failAction,
   readable, runCommand, validateDomain, validateJob,
   type FileLockHandle,
 } from "../../cli/action-common";
@@ -189,7 +189,10 @@ export interface GitSiteStatus {
   path: string;
   configured: boolean;
   config: GitSiteConfig | null;
+  /** "" on the fleet, which draws no key; `keyMissing` says what it needs. */
   publicKey: string;
+  /** Set on the fleet: the remote needs the deploy key and the site user has none. */
+  keyMissing?: boolean;
   commit: GitCommit | null;
   lastJob: GitJobView | null;
 }
@@ -746,10 +749,12 @@ function latestJobs(paths: GitActionPaths): Map<string, GitJobView> {
  * because every path here has just looked the site up to decide what to do.
  */
 function siteStatus(
-  paths: GitActionPaths, domain: string, site: SiteRow, jobs: Map<string, GitJobView>,
+  paths: GitActionPaths, domain: string, site: SiteRow, jobs: Map<string, GitJobView>, fleet = false,
 ): GitSiteStatus {
   const config = readConfig(paths, domain);
   const path = deployPath(paths, site.user, domain, config?.directory ?? "");
+  // The fleet draws no key, so it reads one only for a remote that needs it.
+  const needsKey = config !== null && usesDeployKey(config.remote);
   return {
     domain,
     siteUser: site.user,
@@ -757,7 +762,8 @@ function siteStatus(
     path,
     configured: config !== null,
     config,
-    publicKey: readPublicKey(paths, site.user),
+    publicKey: fleet ? "" : readPublicKey(paths, site.user),
+    ...(fleet ? { keyMissing: needsKey && !readPublicKey(paths, site.user) } : {}),
     commit: readCommit(paths, site.user, path),
     lastJob: jobs.get(domain) ?? null,
   };
@@ -779,7 +785,7 @@ function cmdSites(paths: GitActionPaths): void {
   for (const domain of configuredDomains(paths)) {
     const row = siteRow(paths, domain);
     const status = row?.user
-      ? siteStatus(paths, domain, row, jobs)
+      ? siteStatus(paths, domain, row, jobs, true)
       // A site deleted from CloudPanel: listed as configured-but-unreadable
       // rather than left out of the page.
       : {
@@ -801,8 +807,8 @@ function withoutToken(config: GitSiteConfig | null): GitSiteConfig | null {
 /**
  * Which sites this addon deploys, and nothing else about them.
  *
- * `sites` answers the fleet page and costs a panel-database read and two
- * subprocesses per site. CloudPanel's own site list asks a much smaller
+ * `sites` answers the fleet page and costs a panel-database read and a
+ * subprocess or two per site. CloudPanel's own site list asks a much smaller
  * question -- which of these rows should offer the link -- and asks it on a
  * page the panel serves constantly, so it gets the directory listing behind
  * the fleet view rather than the fleet view.
@@ -1195,7 +1201,13 @@ function cmdJobs(paths: GitActionPaths): void {
   emitOk(paths, { jobs: jobViews(paths) });
 }
 
+/**
+ * Job upkeep, and the records of sites CloudPanel no longer has: a domain
+ * created again must not inherit the old repository, command and webhook URL.
+ */
 function cmdPrune(paths: GitActionPaths): void {
+  const forgotten = deletedSites(paths.panelDb, configuredDomains(paths));
+  for (const domain of forgotten) rmSync(configPath(paths, domain), { force: true });
   const { removed, stuck } = pruneJobs({
     addon: "git",
     jobsDir: paths.jobsDir,
@@ -1204,7 +1216,7 @@ function cmdPrune(paths: GitActionPaths): void {
     onStuck: (id, state) =>
       diagnostic(`[git] WARN: job ${id} is recorded as ${state} but nothing is running it; marking it failed\n`),
   });
-  emitOk(paths, { removed, stuck });
+  emitOk(paths, { removed, stuck, forgotten });
 }
 
 /* ---------------------------------------------------------------- dispatch */

@@ -83,3 +83,62 @@ describe("Git view replies", () => {
     expect(change).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("Git pages", () => {
+  const job = {
+    id: "20260917T110500Z-ab12cd", kind: "deploy", domain: site.domain, startedBy: "push", state: "failed",
+    step: "", error: "the post-deploy command failed", createdAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+    startedAt: "", finishedAt: "", result: null,
+  };
+
+  test("one status card holds the checkout, the last deployment and Deploy now", () => {
+    const html = siteView({ ...site, lastJob: job }, "log");
+    const card = html.slice(html.indexOf('id="git-job-card"'), html.indexOf("git-settings"));
+    expect(card).toContain('<span class="badge state-failed" id="job-state">Failed</span>');
+    expect(card).toMatch(/4 minutes ago<\/time> · push/);
+    expect(card).toContain('id="git-deploy"');
+    expect(card).toContain('<pre id="job-log">log</pre>');
+    expect(html).not.toContain("Deployment mode");
+    expect(html).not.toContain("Latest deployment");
+  });
+
+  test("settings are one card of rows, the missing key first and open, the push switch on its row", () => {
+    const missing = siteView({ ...site, publicKey: "" }, "");
+    const settings = missing.slice(missing.indexOf("git-settings"));
+    expect(settings.indexOf('id="git-deploy-key" open')).toBeGreaterThan(-1);
+    expect(settings.indexOf('id="git-deploy-key"')).toBeLessThan(settings.indexOf('id="git-repository-settings"'));
+    expect(settings).toContain('<div class="git-push-row">');
+    expect(missing).not.toContain("git-dashboard");
+    expect(missing).not.toContain("git-disclosure");
+
+    const keyed = siteView({ ...site, commit: { hash: "a", shortHash: "a", author: "", committedAt: "", subject: "x" } }, "");
+    expect(keyed.indexOf('id="git-repository-settings"')).toBeLessThan(keyed.indexOf('id="git-deploy-key"'));
+    expect(keyed).not.toContain('id="git-deploy-key" open');
+
+    const hooked = siteView({ ...site, config: { ...site.config!, webhook: { token: "A".repeat(43), lastDeliveryAt: "", lastDelivery: "", lastDeliveryJob: "" } } }, "");
+    expect(hooked).toMatch(/<details class="disclosure git-push" id="git-webhook-setup">\s*<summary>.*Push to deploy.*id="git-webhook-toggle" type="checkbox" checked/s);
+  });
+
+  test("the post-deploy command sits beside URL and branch; Advanced keeps the subdirectory and Stop deploying", () => {
+    const html = siteView(site, "");
+    const advanced = html.indexOf('id="git-advanced"');
+    expect(html.indexOf('id="git-post-deploy"')).toBeLessThan(advanced);
+    expect(html.indexOf('id="git-directory"')).toBeGreaterThan(advanced);
+    expect(html.indexOf("Stop deploying")).toBeGreaterThan(advanced);
+  });
+
+  test("the fleet names the sites that need attention, and says nothing when none do", () => {
+    expect(fleetView([site])).not.toContain("Needs attention");
+    const html = fleetView([
+      { ...site, lastJob: job },
+      { ...site, domain: "key.example.com", keyMissing: true },
+      { ...site, domain: "push.example.com", config: { ...site.config!, webhook: { token: "", lastDeliveryAt: "x", lastDelivery: "ignored: a deployment of push.example.com is already running", lastDeliveryJob: "" } } },
+      { ...site, domain: "branch.example.com", config: { ...site.config!, webhook: { token: "", lastDeliveryAt: "x", lastDelivery: "ignored: the push was for refs/heads/dev, not main", lastDeliveryJob: "" } } },
+    ]);
+    expect(html).toContain("Needs attention: www.example.com (the last deployment failed), key.example.com (its deploy key is missing), push.example.com (the last push was not deployed).");
+    expect(html).not.toContain("git-metric");
+    // The shared selection drives the bulk button.
+    expect(html).toContain('data-needs-selection disabled onclick="deployGitSelected()"');
+    expect(html).toContain('onclick="toggleSiteSelection(event, this)"');
+  });
+});
