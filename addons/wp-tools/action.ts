@@ -360,7 +360,12 @@ function mainwpRun(paths: WpToolsActionPaths, request: { dueOnly?: boolean } = {
 /** Whether the timer has anything to queue: automation is on, or MainWP still owes a site work. */
 export function wpPoliciesActive(options: WpToolsActionOptions = {}): boolean {
   const paths = pathsFor(options);
-  return readVarnishState(paths.varnishState).enabled || mainwpNeedsRepair(readMainwpState(paths.mainwpState));
+  // Each on its own: a damaged Varnish record must not keep MainWP's repair from being queued.
+  const safely = (read: () => boolean): boolean => {
+    try { return read(); } catch { return false; }
+  };
+  return safely(() => readVarnishState(paths.varnishState).enabled)
+    || safely(() => mainwpNeedsRepair(readMainwpState(paths.mainwpState)));
 }
 
 /** The queued timer's MainWP pass does not wait for a page's pass. */
@@ -703,6 +708,7 @@ export async function executeWpToolsAction(
     failAction("that site is not yours to sign in to");
   }
   return withFileLock(paths.lockFile, 5, "a WordPress sign-in change is still running", async () => {
+    if (!existsSync(paths.configFile)) failAction("WordPress Tools is not enabled");
     // Maintenance answers in Nginx, before WordPress could read the secret, so
     // a secret minted for a browser it turns away is one nobody can use.
     const site = wordpressSite(paths, domain);

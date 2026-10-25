@@ -71,6 +71,7 @@ function options(extra: Partial<WpToolsActionOptions> = {}): WpToolsActionOption
       panelDb: join(root, "panel.sq3"),
       passwd: join(root, "passwd"),
       lockFile: join(root, "wp-tools.lock"),
+      configFile: join(root, "wp-tools.conf"),
       runuser: join(root, "runuser"),
       nginxVhostDir: join(root, "vhosts"),
       vhostUid: process.getuid!(),
@@ -152,6 +153,7 @@ function runuserLog(): string[] {
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "clp-wp-tools-"));
+  writeFileSync(join(root, "wp-tools.conf"), "");
   seedPanel();
   seedAccounts();
   fakeRunuser();
@@ -231,6 +233,11 @@ test("a sign-in installs the loader, leaves a single-use secret, and names the s
 test("a WordPress site missing wp-content is refused rather than rebuilt", async () => {
   rmSync(join(siteDir("shop", "shop.example.com"), "wp-content"), { recursive: true, force: true });
   await expect(act(["sign-in", "--domain=shop.example.com"])).rejects.toThrow("does not look like a WordPress");
+});
+
+test("no sign-in is minted once the addon's config is gone", async () => {
+  rmSync(join(root, "wp-tools.conf"));
+  await expect(act(["sign-in", "--domain=shop.example.com"])).rejects.toThrow("WordPress Tools is not enabled");
 });
 
 test("a site that is not WordPress, or not a site at all, gets no sign-in", async () => {

@@ -146,7 +146,9 @@ Its sign-in window opens on the addon's page for that one site, whose policy
 lets a form go only to the site's HTTPS origin, and the token's form is written
 into it once it has loaded. This keeps the response header size independent
 of the site count and within the panel's proxy buffer. CloudPanel's Sites page
-sets no policy, so its link opens a blank window.
+sets no policy, so its link opens a blank window. Either way the window's
+`opener` is cut before the form is submitted, so a page on the site cannot send
+the panel's tab elsewhere.
 
 The site user creates `mu-plugins/clp-addons` itself, so every directory it adds
 is that user's. A missing `wp-includes` or `wp-content` is a refusal rather than
@@ -207,7 +209,10 @@ with maintenance in `cli/nginx-config.ts`. Only a regular,
 root-owned vhost that is not writable by other users can be replaced. Its mode
 and ownership survive atomic replacement; credentials and other content remain.
 
-The sign-in lock waits up to five seconds. Minting as the site user has ten
+Disable and uninstall remove the helper from every site and then the addon's
+config under the sign-in lock, and a sign-in refuses once the config is gone,
+so one that was waiting cannot put a helper back. The sign-in lock waits up to
+five seconds. Minting as the site user has ten
 seconds and runs before the SQLite write transaction; panel reads and writes
 wait at most one second for database contention. The transaction, shared with
 Cloudflare IP Access and maintenance in `cli/nginx-transaction.ts`, validates

@@ -8,6 +8,9 @@ export interface FleetState<T> {
 /** Forgets domains the panel no longer has, so a recreated site starts fresh. Returns what it dropped. */
 export function pruneFleet<T>(state: FleetState<T>, domains: Set<string>): Record<string, T> {
   const dropped: Record<string, T> = {};
+  // A panel that lists no site at all is far likelier a bad read than every
+  // site deleted at once, so nothing is forgotten on it.
+  if (domains.size === 0) return dropped;
   state.excluded = state.excluded.filter((domain) => domains.has(domain));
   for (const [domain, record] of Object.entries(state.sites)) {
     if (domains.has(domain)) continue;

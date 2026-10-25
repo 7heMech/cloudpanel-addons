@@ -125,8 +125,11 @@ function removeAddonFiles(spec: AddonSpec, purge: boolean, instances: string[], 
       fatal(`could not remove ${spec.name} instances; state preserved for retry: ${failed.join(", ")}`);
     }
   }
-  if (spec.name === "wp-tools") withdrawWpTools();
   // The config last: once it is gone the addon is no longer installed.
-  rmSync(`${spec.configFile}.new`, { force: true });
-  rmSync(spec.configFile, { force: true });
+  const removeConfig = () => {
+    rmSync(`${spec.configFile}.new`, { force: true });
+    rmSync(spec.configFile, { force: true });
+  };
+  if (spec.name === "wp-tools") withdrawWpTools(removeConfig);
+  else removeConfig();
 }

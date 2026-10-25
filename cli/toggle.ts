@@ -97,14 +97,22 @@ async function enableAddon(spec: AddonSpec): Promise<void> {
  * A failure warns rather than stops: an addon that cannot be removed because
  * one site's files moved would be worse than a helper left behind and named.
  */
-export function withdrawWpTools(): void {
-  try {
-    const { removed, failed } = removeWpLogin();
-    if (removed > 0) log.ok(`sign-in helper removed from ${removed} site${removed === 1 ? "" : "s"}`);
-    if (failed.length > 0) log.warn(`the sign-in helper is still in ${failed.join("; ")}`);
-  } catch (error) {
-    log.warn(`the sign-in helper could not be removed from every site: ${error instanceof Error ? error.message : String(error)}`);
-  }
+/**
+ * Takes the sign-in helper out of every site, then removes the addon's config
+ * under the same lock. A sign-in waiting on that lock then finds the addon gone
+ * rather than putting a helper back into a site it has just left.
+ */
+export function withdrawWpTools(removeConfig: () => void): void {
+  withFileLockSync(DEFAULT_WP_TOOLS_PATHS.lockFile, 30, "a WordPress sign-in is still running", () => {
+    try {
+      const { removed, failed } = removeWpLogin();
+      if (removed > 0) log.ok(`sign-in helper removed from ${removed} site${removed === 1 ? "" : "s"}`);
+      if (failed.length > 0) log.warn(`the sign-in helper is still in ${failed.join("; ")}`);
+    } catch (error) {
+      log.warn(`the sign-in helper could not be removed from every site: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    removeConfig();
+  });
 }
 
 /**
@@ -133,9 +141,12 @@ function disableAddonContents(spec: AddonSpec): void {
   const remaining = installedAddons().filter((item) => item.name !== spec.name);
 
   spec.deactivate?.();
-  if (spec.name === "wp-tools") withdrawWpTools();
-  rmSync(spec.configFile, { force: true });
-  rmSync(`${spec.configFile}.new`, { force: true });
+  const removeConfig = () => {
+    rmSync(spec.configFile, { force: true });
+    rmSync(`${spec.configFile}.new`, { force: true });
+  };
+  if (spec.name === "wp-tools") withdrawWpTools(removeConfig);
+  else removeConfig();
   spec.withdrawn?.();
   // Even with no addon left the binary stays, and repair keeps the guard.
   settlePhpGuard();
