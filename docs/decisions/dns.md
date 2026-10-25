@@ -172,6 +172,9 @@ non-administrators: the action is told the panel user and refuses a site
 fixed one when a non-administrator's site has a problem, since a plan's problems
 can name other sites and quote provider errors) and the certificate names only -- the site and `www` where the profile writes an
 address there. A site in no profile or a Report only one is not DNS's to hold up.
+A non-administrator's call checks Cloudflare only for a site created in the last
+fifteen minutes; for an older one it answers from the last check, so repeating
+it cannot keep the DNS lock and the provider's rate limit busy.
 For an enforced site created in the last fifteen minutes that still has its
 self-signed certificate, the call also records that automatic SSL was asked
 for. When DNS was not ready -- a new zone waiting for its nameservers, say --
@@ -211,8 +214,10 @@ and error text is redacted of them. A saved Mailcow key is kept only for the
 Mailcow address it was saved with.
 
 The records an enforcing site has as wanted are tracked by id and their full
-record values, including priority, proxy, TTL and comment. When CloudPanel no
-longer has the site, the page lists them; Remove plans the deletion of those
+record values, including priority, proxy, TTL and comment. A site taken out of
+its profile, or into a Report only one, is forgotten there and then: its records
+are its own again. When CloudPanel no longer has an enforced site, the page
+lists them; Remove plans the deletion of those
 still unchanged and at no name a current site's profile writes, and deletes
 them after the same kind of review. It refuses while a site in that zone could
 not be read or planned safely. Keep forgets them. Neither touches the zone or Mailcow.

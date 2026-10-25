@@ -26,7 +26,7 @@ import {
 } from "./model";
 import { PRESETS, seededPolicy, type Preset } from "./presets";
 import { describeRecord, renderProfile, sameRecord } from "./records";
-import { clpctlIssue, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
+import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "./store";
 import { tokenTemplate, type TokenTemplate } from "./token";
 
@@ -314,6 +314,24 @@ class Action {
     if (JSON.stringify(backoff) !== JSON.stringify(status.backoff)) this.files.saveStatus({ ...status, backoff });
   }
 
+  /**
+   * Saves `next`, and forgets what was written for a current site it no longer
+   * enforces: those records are the site's own again, as taking it out of a
+   * profile promises, so they are never offered for removal once it is deleted.
+   */
+  private savePolicy(next: Policy): void {
+    this.files.savePolicy(next);
+    const managed = this.files.managed();
+    let forgot = false;
+    for (const site of this.sites()) {
+      const profile = next.profiles.find((candidate) => candidate.id === next.assignments[site.domain]);
+      if (!managed[site.domain] || profile?.mode === "enforce") continue;
+      delete managed[site.domain];
+      forgot = true;
+    }
+    if (forgot) this.files.saveManaged(managed);
+  }
+
   /** Writes what a run found for `domains`, keeping what it did not look at. */
   record(run: DnsRun, plans: SitePlan[], domains: string[] | "all"): void {
     const status = this.files.status();
@@ -430,7 +448,7 @@ class Action {
       if (!sites.some((site) => site.domain === domain)) delete next.assignments[domain];
     }
     next.knownSiteIds = sites.map((site) => site.id);
-    if (JSON.stringify(next) !== JSON.stringify(policy)) this.files.savePolicy(next);
+    if (JSON.stringify(next) !== JSON.stringify(policy)) this.savePolicy(next);
     return next;
   }
 
@@ -460,17 +478,24 @@ class Action {
     if (!profile || profile.mode !== "enforce") {
       return { managed: false, ready: false, reason: profile ? "Its DNS profile is Report only" : "No DNS profile is assigned to this site", certificateNames: [] };
     }
-    if (ssl) {
-      const requests = this.files.ssl();
-      if (requestSsl(requests, site, this.now)) this.files.saveSsl(requests);
+    // A site owner's call reaches Cloudflare only for a site made in the last
+    // few minutes, the moment it is for; for any other the last check answers.
+    let plan: SitePlan | undefined;
+    if (asUser && this.now - site.createdAt > NEW_SITE_WINDOW) {
+      plan = this.files.status().plans[domain];
+    } else {
+      if (ssl) {
+        const requests = this.files.ssl();
+        if (requestSsl(requests, site, this.now)) this.files.saveSsl(requests);
+      }
+      const run = this.run(policy);
+      await run.discover();
+      await run.load([domain]);
+      await run.enforce([site]);
+      const plans = run.planAll(this.sites());
+      this.record(run, plans, [domain]);
+      plan = plans.find((candidate) => candidate.domain === domain);
     }
-    const run = this.run(policy);
-    await run.discover();
-    await run.load([domain]);
-    await run.enforce([site]);
-    const plans = run.planAll(this.sites());
-    this.record(run, plans, [domain]);
-    const plan = plans.find((candidate) => candidate.domain === domain);
     const ready = readiness(plan);
     // A plan's problems can name other customers' sites and quote Cloudflare
     // or Mailcow errors, which are an administrator's to read. The rest, such
@@ -519,7 +544,7 @@ class Action {
     const before = this.files.policy();
     const domains = this.affected(before, next);
     if (!domains.length) {
-      this.files.savePolicy(next);
+      this.savePolicy(next);
       if (mailcowKey !== undefined) this.files.saveSecrets(this.secretsWith(mailcowKey));
       this.files.savePending(null);
       await this.tryRefresh(refresh);
@@ -579,7 +604,7 @@ class Action {
     if (this.digest(plans) !== pending.digest) {
       return this.review(current, next, pending.domains, "Cloudflare or Mailcow changed after the plan was shown. This is the plan now.", pending.mailcowKey);
     }
-    this.files.savePolicy(next);
+    this.savePolicy(next);
     if (pending.mailcowKey !== undefined) this.files.saveSecrets(this.secretsWith(pending.mailcowKey));
     this.files.savePending(null);
     await run.enforce(this.sites().filter((site) => pending.domains.includes(site.domain)));
@@ -686,7 +711,7 @@ class Action {
     if (existing) next.connections = next.connections.map((connection) => connection.id === id ? { id, label } : connection);
     else next.connections.push({ id, label });
     this.files.saveSecrets({ ...secrets, cloudflare: { ...secrets.cloudflare, [id]: token } });
-    this.files.savePolicy(next);
+    this.savePolicy(next);
     await this.tryRefresh("all");
     const zones = `${report.zones} zone${report.zones === 1 ? "" : "s"}`;
     return this.reply({ notice: `${label} reaches ${report.accounts.length} account${report.accounts.length === 1 ? "" : "s"} and ${zones}.` });
@@ -702,7 +727,7 @@ class Action {
     const secrets = this.files.secrets();
     delete secrets.cloudflare[id];
     this.files.saveSecrets(secrets);
-    this.files.savePolicy(next);
+    this.savePolicy(next);
     const status = this.files.status();
     this.files.saveStatus({ ...status, connections: status.connections.filter((connection) => connection.id !== id) });
     await this.tryRefresh("all");

@@ -220,6 +220,17 @@ test("repair reapplies the choice, records a failure once, and retries after an 
   expect(panelPhpStatus(env.options).failure).toBeUndefined();
 });
 
+test("a chosen PHP removed since puts the panel back on CloudPanel's own before its next restart", async () => {
+  const env = box();
+  await setPanelPhp("8.4", env.options);
+  rmSync(join(env.options.paths!.fpmBinDir!, "php-fpm8.4"));
+  env.releases["8.4"] = ["(none)", "8.4.27-1+clp-bookworm"];
+  await expect(reconcilePanelPhp(env.options)).rejects.toThrow("PHP 8.4 is no longer installed, so the panel is back on PHP 8.1");
+  expect(existsSync(env.dropIn)).toBe(false);
+  expect(panelPhpStatus(env.options)).toMatchObject({ running: "8.1", failure: { php: "8.4" } });
+  expect(await reconcilePanelPhp(env.options)).toBeNull();
+});
+
 test("a repair run picks up a choice saved while it waited for the lock", async () => {
   const env = box();
   await setPanelPhp("8.4", env.options);

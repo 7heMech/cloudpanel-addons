@@ -554,6 +554,7 @@ describe("zones and new sites", () => {
       INSERT INTO site VALUES (1, 'example.com'), (2, 'shop.example.com');
       INSERT INTO user_sites VALUES (1, 2);`);
     db.close();
+    env.sites[1]!.createdAt = env.clock.now - 60_000;
     await env.connect();
     await expect(env.act("provision", undefined, ["--domain=example.com", "--as-user=bob"])).rejects.toThrow("not one of yours");
     expect(await env.act<ProvisionReply>("provision", undefined, ["--domain=shop.example.com", "--as-user=bob"])).toMatchObject({ managed: false });
@@ -690,6 +691,34 @@ describe("sites CloudPanel no longer has", () => {
     expect(done.orphans).toEqual([]);
     expect(env.records().filter((record) => record.includes("shop.example.com"))).toEqual(["AAAA shop.example.com 2001:db8::99 proxied"]);
     expect(env.records()).toContain("A example.com 203.0.113.10 proxied");
+  });
+
+  test("a site owner's provision reaches Cloudflare only for a new site", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
+    await env.enforce("web");
+    const db = new Database(join(env.dir, "db.sq3"), { create: true });
+    db.exec("CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER)");
+    db.exec("INSERT INTO user VALUES (1, 'bob', 'ROLE_ADMIN', 1)");
+    db.close();
+    const calls = env.cf.calls.length;
+    const old = await env.act<{ managed: boolean; ready: boolean }>("provision", undefined, ["--domain=shop.example.com", "--as-user=bob"]);
+    expect(old.managed).toBe(true);
+    expect(env.cf.calls.length).toBe(calls);
+    env.sites.find((entry) => entry.domain === "shop.example.com")!.createdAt = env.clock.now - 60_000;
+    await env.act("provision", undefined, ["--domain=shop.example.com", "--as-user=bob"]);
+    expect(env.cf.calls.length).toBeGreaterThan(calls);
+  });
+
+  test("a site taken out of enforcing leaves no records to remove once it is deleted", async () => {
+    const env = setup();
+    await env.connect();
+    await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
+    await env.enforce("web");
+    await env.act("assign", { domains: ["shop.example.com"], profileId: null });
+    env.sites.splice(env.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
+    expect((await env.act("list")).orphans).toEqual([]);
   });
 
   test("Keep forgets them and changes nothing in Cloudflare", async () => {

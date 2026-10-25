@@ -162,7 +162,10 @@ as it does once the addon's config is gone, so neither can write the drop-in
 again; enabling clears the mark. The page check is the one thing withdrawal
 does not repeat: a PHP that starts but answers 500 is not caught. The row also shows a newer package
 version when apt has one, revision included, because a newer minor is no fix
-until it is patched, and a failure is retried once that version changes.
+until it is patched, and a failure is retried once that version changes. A
+chosen PHP that is removed afterwards is noticed by the next repair, which puts
+the panel back on CloudPanel's own PHP and records the failure, rather than
+leaving a unit that cannot start at its next restart.
 
 A choice and its drop-in change under one lock, and a repair run reads the
 choice only after it holds the lock. A file at the drop-in path that is not

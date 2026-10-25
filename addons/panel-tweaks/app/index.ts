@@ -153,7 +153,10 @@ export async function handle(
     const admin = auth?.roles.includes("ROLE_ADMIN") ?? false;
     if (!admin && !auth?.user) return json({ ok: false, error: "not found" }, 404);
     const result = await panelTweaksService.state(admin ? undefined : auth!.user);
-    return json(result, result.ok ? 200 : 500);
+    if (result.ok || admin) return json(result, result.ok ? 200 : 500);
+    // Why it failed can name files and databases, which are an administrator's to read.
+    console.error(`[panel-tweaks] panel data failed: ${result.error ?? "unknown error"}`);
+    return json({ ok: false, error: "Panel Tweaks is unavailable right now" }, 500);
   }
 
   if (method !== "POST") return json({ ok: false, error: "not found" }, 404);
