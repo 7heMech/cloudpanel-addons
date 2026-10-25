@@ -20,7 +20,7 @@ export const PRIORITISED: readonly RecordType[] = ["MX", "SRV"];
 
 const MAX_PROFILES = 24;
 const MAX_RECORDS = 60;
-const MAX_CONNECTIONS = 12;
+export const MAX_CONNECTIONS = 12;
 const MAX_SKIP_IPS = 20;
 const NAME_MAX = 40;
 

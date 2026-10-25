@@ -140,8 +140,8 @@ export async function handle(
     return json(result, result.ok ? 200 : 400);
   }
 
-  // The selected sites, each switched by its own action call; a site that fails is
-  // named in the reply rather than stopping the rest.
+  // The selected sites, switched by one action call; a site that fails is named
+  // in the reply rather than stopping the rest.
   if (method === "POST" && path === "/api/bulk-toggle") {
     const denied = guardMutation(req);
     if (denied) return denied;

@@ -22,7 +22,7 @@ import { type ApiFetch, redact } from "./http";
 import { MailcowApi } from "./mailcow";
 import {
   connectionId, hostname, parseMailcow, parsePolicy, parseProfile, parseSecrets, profileEffect, profileId, secretText,
-  ipAddress, cloudflareId, type MailcowSettings, type Policy, type Profile, type Secrets,
+  ipAddress, cloudflareId, MAX_CONNECTIONS, type MailcowSettings, type Policy, type Profile, type Secrets,
 } from "./model";
 import { PRESETS, seededPolicy, type Preset } from "./presets";
 import { describeRecord, renderProfile, sameRecord } from "./records";
@@ -719,6 +719,8 @@ class Action {
     const secrets = this.files.secrets();
     const existing = body.id ? policy.connections.find((connection) => connection.id === connectionId(body.id)) : undefined;
     if (body.id && !existing) failAction("That connection no longer exists");
+    // Before the token is saved, so a refused one is not left behind in the secrets.
+    if (!existing && policy.connections.length >= MAX_CONNECTIONS) failAction(`At most ${MAX_CONNECTIONS} Cloudflare connections can be added`);
     const token = body.token ? secretText(body.token, "The API token") : existing ? secrets.cloudflare[existing.id] : undefined;
     if (!token) failAction("Paste the API token Cloudflare showed you");
     if (Object.entries(secrets.cloudflare).some(([id, saved]) => saved === token && id !== existing?.id)) failAction("That token is already saved as another connection");

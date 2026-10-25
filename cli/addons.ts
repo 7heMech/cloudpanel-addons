@@ -41,6 +41,8 @@ export function migrateOldAddonNames(quiet = false): AddonRename[] {
   for (const [from, to] of Object.entries(RENAMED_ADDONS)) {
     const legacyConfig = `${CONFIG_DIR}/${from}.conf`;
     const legacyState = `${STATE_DIR}/${from}`;
+    // An empty old state directory holds nothing to keep or to conflict with.
+    if (existsSync(legacyState) && readdirSync(legacyState).length === 0) rmSync(legacyState, { recursive: true, force: true });
     // A disabled addon has no config but keeps its state for re-enabling.
     if (!existsSync(legacyConfig) && !existsSync(legacyState)) continue;
     const spec = ADDONS[to]!;

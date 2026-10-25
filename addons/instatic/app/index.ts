@@ -21,7 +21,7 @@ function json(body: unknown, status = 200): Response {
 
 async function dashboard(): Promise<string> {
   const [instances, jobs, available] = await Promise.all([
-    instaticService.listInstances(),
+    instaticService.listInstancesOrThrow(),
     instaticService.listJobs(),
     listAvailableTags(),
   ]);

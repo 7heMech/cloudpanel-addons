@@ -189,9 +189,10 @@ it cannot keep the DNS lock and the provider's rate limit busy.
 For an enforced site created in the last fifteen minutes that still has its
 self-signed certificate, the call also records that automatic SSL was asked
 for. When DNS was not ready -- a new zone waiting for its nameservers, say --
-the check retries it as root with `clpctl lets-encrypt:install:certificate`
-once the site is ready: two minutes after the request, then after 5, 15, 60
-and 360 minutes, five attempts in all. The attempt is counted before the CLI
+the 15-minute check retries it as root with `clpctl
+lets-encrypt:install:certificate` once the site is ready: at the first check two
+minutes or more after the request, then at the first check 5, 15, 60 and 360
+minutes after each attempt, five attempts in all. The attempt is counted before the CLI
 runs. A site whose certificate is no longer the placeholder ends its request,
 so a real certificate is never replaced; a site DNS stops enforcing drops it.
 
