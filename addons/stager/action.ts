@@ -1547,11 +1547,24 @@ export function rewriteWpConfig(content: string, target: string, db: { name: str
   return content;
 }
 
+const DOTENV_KEYS = ["DB_DATABASE", "DB_USERNAME", "DB_PASSWORD"] as const;
+
+/** A `.env` line setting `key`, with or without `export` in front. */
+function dotenvLine(key: string): RegExp {
+  return new RegExp(`^([ \\t]*(?:export[ \\t]+)?)${key}[ \\t]*=.*$`, "gm");
+}
+
 /** Why a `.env` cannot be pointed at the clone's database by its three DB_ keys, if it cannot. */
 export function dotenvProblem(content: string): string | null {
   if (/^\s*(?:export\s+)?(?:DATABASE_URL|DB_URL)\s*=/m.test(content)) return "the .env sets a database URL, which this clone cannot rewrite";
-  const missing = ["DB_DATABASE", "DB_USERNAME", "DB_PASSWORD"].filter((key) => !new RegExp(`^${key}=`, "m").test(content));
+  const missing = DOTENV_KEYS.filter((key) => !dotenvLine(key).test(content));
   return missing.length ? `the .env does not set ${missing.join(", ")}` : null;
+}
+
+/** Sets the three DB_ keys, keeping any `export` in front of each. */
+export function rewriteDotenvContent(content: string, db: { name: string; user: string; pass: string }): string {
+  const values: Record<(typeof DOTENV_KEYS)[number], string> = { DB_DATABASE: db.name, DB_USERNAME: db.user, DB_PASSWORD: db.pass };
+  return DOTENV_KEYS.reduce((text, key) => text.replace(dotenvLine(key), (_line, prefix: string) => `${prefix}${key}=${values[key]}`), content);
 }
 
 function rewriteDotenv(file: string, ctx: RunContext): void {
@@ -1559,9 +1572,7 @@ function rewriteDotenv(file: string, ctx: RunContext): void {
   if (original === null) failJob(ctx, `could not read the clone's .env`);
   const problem = dotenvProblem(original);
   if (problem) failJob(ctx, `${problem}, so the clone was removed before it could reach ${ctx.source}'s database`);
-  const content = original.replace(/^DB_DATABASE=.*/gm, `DB_DATABASE=${ctx.stgDbName}`)
-    .replace(/^DB_USERNAME=.*/gm, `DB_USERNAME=${ctx.stgDbUser}`)
-    .replace(/^DB_PASSWORD=.*/gm, `DB_PASSWORD=${ctx.stgDbPass}`);
+  const content = rewriteDotenvContent(original, { name: ctx.stgDbName, user: ctx.stgDbUser, pass: ctx.stgDbPass });
   if (!writeAsSiteUser(ctx.stgUser, file, content)) failJob(ctx, `could not write the clone's .env`);
 }
 
@@ -2569,10 +2580,16 @@ async function promoteFiles(ctx: PromoteContext): Promise<void> {
   if (!asSiteUser(ctx.dstUser, "mkdir", ["-m", "755", "--", ctx.stageRoot]).ok) failJob(ctx, `could not create ${ctx.stageRoot}; nothing was changed`);
   const copyCode = await runTarCopy(ctx.srcRoot, ctx.stageRoot, ctx.dstUser);
   if (copyCode >= 2) failJob(ctx, `copying the staging files failed (tar exit ${copyCode})`);
+  // A clone rewrites the configuration in its site directory or in its root
+  // directory, such as `public`, so both are the live site's own.
+  const sub = removePathPrefix(siteRow(ctx.paths, ctx.target)?.root ?? "", ctx.target).replace(/^\/+/, "");
+  const nested = sub && !sub.split("/").includes("..") ? PRESERVED_COPIED.map((name) => join(sub, name)) : [];
+  const copied = [...PRESERVED_COPIED, ...nested];
+
   // Whatever the staging copy holds at these paths is dropped here rather than
   // after the switch, so the release that goes live never contains the staging
   // site's database credentials even for an instant.
-  for (const relative of PRESERVED_PATHS) {
+  for (const relative of [...PRESERVED_PATHS, ...nested]) {
     if (!asSiteUser(ctx.dstUser, "rm", ["-rf", "--", join(ctx.stageRoot, relative)]).ok) {
       failJob(ctx, `could not clear ${relative} from the new release; nothing was changed`);
     }
@@ -2582,7 +2599,7 @@ async function promoteFiles(ctx: PromoteContext): Promise<void> {
   // them from its first served request. lstat rather than stat: a symlink at
   // this name in the live root would otherwise be resolved and its target
   // copied into the new release under a configuration file's name.
-  for (const relative of PRESERVED_COPIED) {
+  for (const relative of copied) {
     const origin = join(ctx.dstRoot, relative);
     let info;
     try { info = lstatSync(origin); } catch { continue; }

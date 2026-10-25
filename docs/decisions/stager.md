@@ -10,7 +10,7 @@ For PHP sites, Stager copies the document root, exports and imports the first
 CloudPanel database, carries the source Nginx configuration when it can be
 validated, and writes the new database credentials into supported application
 configuration: a `wp-config.php` or `.env` in the copy or in its root directory,
-such as `public`. Until that is rewritten the copy names the live database, and
+such as `public`; `export` in front of a `.env` key is kept. Until that is rewritten the copy names the live database, and
 the WP-CLI step that follows would rewrite the live site's URLs. So a source
 with a database fails the clone, which is then removed, when neither file is
 found, when a `wp-config.php` sets `DB_NAME`, `DB_USER` or `DB_PASSWORD` as
@@ -76,7 +76,8 @@ addon's.
 
 For PHP and static sites the new document root is assembled beside the live one
 and put in place with a rename, so the site is never serving a half-copied tree.
-The live site keeps its own `wp-config.php`, `.env` and `wp-content/uploads`:
+The live site keeps its own `wp-config.php`, `.env` and `wp-content/uploads`,
+and the `wp-config.php` and `.env` in its root directory, such as `public`:
 the staging copy's are dropped before the switch, because the staging
 `wp-config.php` names the staging database and pointing the live site at it
 would be worse than any missed edit. The two configuration files are then
