@@ -258,10 +258,10 @@ export function dashboardView(state: PhpResourcesState): string {
         <button class="btn" id="assign-selected" type="button" disabled data-needs-selection onclick="assignSelected()">Assign selected</button>
       </div>
       ${fleetFilterHtml({ count: total, filters: [{ value: "drifted", label: "Drifted" }], summary: `${total} PHP site${total === 1 ? "" : "s"}` })}
-      <table class="fleet-table php-sites-table"><thead><tr>
+      <div class="table-scroll"><table class="fleet-table php-sites-table"><thead><tr>
         <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
         <th scope="col">Site</th><th scope="col">Category</th><th scope="col">Now running</th>
-      </tr></thead><tbody>${siteRows}</tbody></table>
+      </tr></thead><tbody>${siteRows}</tbody></table></div>
       ${FLEET_NONE_HTML}`
     : '<div class="empty">No CloudPanel site runs PHP, so there is no PHP-FPM pool to tune.</div>'}
   </div>
@@ -272,9 +272,9 @@ export function dashboardView(state: PhpResourcesState): string {
         <select id="default-category" onchange="setDefaultCategory(this)">${categoryOptions(state.categories, state.defaultCategoryId)}</select></div>
       <button class="btn btn-primary" type="button" onclick="openCategoryDialog(this)">New category</button></div></div>
   ${state.categories.length
-    ? `<table class="fleet-table"><thead><tr><th scope="col">Category</th><th scope="col">Limits</th>
+    ? `<div class="table-scroll"><table class="fleet-table"><thead><tr><th scope="col">Category</th><th scope="col">Limits</th>
         <th scope="col" class="numeric">Sites</th><th scope="col" class="action-cell">Actions</th></tr></thead>
-      <tbody>${categoryRows}</tbody></table>`
+      <tbody>${categoryRows}</tbody></table></div>`
     : '<div class="empty">No categories yet. Create one to give a group of sites the same PHP-FPM limits.</div>'}
   </div>
   <dialog id="category-dialog" aria-labelledby="category-dialog-title" data-default-profile="${esc(JSON.stringify(DEFAULT_CATEGORY_PROFILE))}">

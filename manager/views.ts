@@ -33,8 +33,10 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ve
     : `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`;
   return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}">
   <div class="addon-about">
-    <h3>${heading}${isNew(spec.added, version) ? ' <span class="badge state-queued">New</span>' : ""}</h3>
-    ${spec.description ? `<p>${esc(spec.description)}</p>` : ""}
+    <h3>${heading}${isNew(spec.added, version) ? ' <span class="badge state-queued">New</span>'
+      : spec.changed && isNew(spec.changed.in, version) ? ' <span class="badge">Changed</span>' : ""}</h3>
+    ${spec.description ? `<p>${esc(spec.description)}</p>` : ""}${
+  spec.changed && !isNew(spec.added, version) && isNew(spec.changed.in, version) ? `<p class="addon-changed">${esc(spec.changed.note)}</p>` : ""}
   </div>
   <div class="addon-actions">${actions}</div>
   ${addonJob ? managerJobStatus(addonJob) : ""}

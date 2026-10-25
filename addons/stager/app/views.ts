@@ -133,10 +133,10 @@ export function jobsView(
       ${
         jobs.length === 0
           ? `<div class="empty">No clones yet. Start one with the button above, or from a site's Staging tab.</div>`
-          : `<table class="fleet-table">
+          : `<div class="table-scroll"><table class="fleet-table">
         <thead><tr><th scope="col">Site</th><th scope="col">From</th><th scope="col">Type</th><th scope="col">State</th><th scope="col">Started</th><th scope="col" class="action-cell" aria-label="Actions"></th></tr></thead>
         <tbody>${rows}</tbody>
-      </table>`
+      </table></div>`
       }
     </div>`;
 }
@@ -218,10 +218,10 @@ export function siteStagingView(
 
   const clones = clonesFrom.length > 0
     ? `<div class="card card-table">
-      <table class="fleet-table">
+      <div class="table-scroll"><table class="fleet-table">
         <thead><tr><th scope="col">Staging site</th><th scope="col">State</th><th scope="col">Started</th><th scope="col" class="action-cell" aria-label="Actions"></th></tr></thead>
         <tbody>${clonesFrom.map(row).join("")}</tbody>
-      </table>
+      </table></div>
     </div>`
     : cloneOf
       ? ""
@@ -269,7 +269,7 @@ export function newCloneView(source: SiteSummary | null, sites: SiteSummary[], e
           sites.length === 0
             ? `<div class="empty">No clonable sites found in CloudPanel.</div>`
             : `${fleetFilterHtml({ count: sites.length, summary: `${sites.length} sites` })}
-              <table class="fleet-table"><thead><tr><th scope="col">Domain</th><th scope="col">Type</th><th scope="col">Application</th><th scope="col" class="action-cell" aria-label="Actions"></th></tr></thead><tbody>${options}</tbody></table>
+              <div class="table-scroll"><table class="fleet-table"><thead><tr><th scope="col">Domain</th><th scope="col">Type</th><th scope="col">Application</th><th scope="col" class="action-cell" aria-label="Actions"></th></tr></thead><tbody>${options}</tbody></table></div>
               ${FLEET_NONE_HTML}`
         }
       </div>`;

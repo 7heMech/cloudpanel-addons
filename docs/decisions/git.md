@@ -92,8 +92,8 @@ Below it one Settings card holds three rows that open, each set once:
 Repository settings (summarised as repository, branch and command), Deploy key
 and Push to deploy. The deploy key row is open until a checkout exists, and
 while an SSH remote has no key it moves to the top. HTTPS remotes have no key
-row. The repository form puts the URL, branch and post-deploy command in one
-row; Advanced holds the subdirectory and Stop deploying. Saving an SSH remote
+row. The repository form shows the URL and branch, then the post-deploy command
+and deploy directory, with Stop deploying beside Save changes. Saving an SSH remote
 generates the deploy key as part of the save, so the sequence is save, add the
 key to the repository, deploy. Key replacement and webhook URL rotation sit
 beside their Copy buttons and keep their confirmations.

@@ -96,21 +96,75 @@ async function confirmUpdate() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tag: tag }),
     });
-    if (reply.html) repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
-    notify(pendingUpdate + ' updated to ' + tag + '.', 'ok');
-  } catch (error) {
-    notify('Update failed: ' + error.message, 'error');
-    const data = error.data;
-    if (data && data.logs) {
-      document.getElementById('logs-title').textContent =
-        'Update failed — rolled back to ' + (data.restoredTag || 'the previous version');
-      document.getElementById('logs-body').textContent = error.message + '\n\n' + data.logs;
-      document.getElementById('logs-port-info').textContent = '';
-      document.getElementById('logs-dialog').showModal();
+    // The update runs as a job; its page streams the log as it goes.
+    if (reply.data && reply.data.job) {
+      location.href = CLP_BASE + '/jobs/' + encodeURIComponent(reply.data.job);
+      return;
     }
+    if (reply.html) repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+    busy(false);
+  } catch (error) {
+    busy(false);
+    notify('Update failed: ' + error.message, 'error');
+  }
+}
+
+/** Updates or restarts the selected sites; each update is a job of its own, shown on its row. */
+async function bulkInstatic(verb, tag) {
+  let rows = selectedRows();
+  if (verb === 'update') rows = rows.filter(function (row) { return versionNewer(tag, row.dataset.tag); });
+  if (!rows.length) return notify('The selected sites already run ' + tag + '.', 'ok');
+  const domains = rows.map(function (row) { return row.dataset.domain; });
+  const accepted = await confirmAction({
+    title: (verb === 'update' ? 'Update ' : 'Restart ') + plural(domains.length, 'site') + '?',
+    text: verb === 'update'
+      ? 'Each site is snapshotted, moved to ' + tag + ' and checked; one that fails its check goes back to its previous version.'
+      : 'Each site is unavailable for a few seconds while its container restarts.',
+    details: domains,
+    confirmLabel: verb === 'update' ? 'Update' : 'Restart',
+  });
+  if (!accepted) return;
+  busy(true);
+  try {
+    const reply = await call('/api/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verb: verb, domains: domains, tag: tag }),
+    });
+    if (reply.html) repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+    const failed = (reply.data && reply.data.failed) || [];
+    const done = (reply.data && reply.data.done) || [];
+    if (failed.length) {
+      notify(failed.map(function (entry) { return entry.domain + ': ' + entry.error; }).join('; '), 'error');
+    } else {
+      notify(verb === 'update' ? 'Updating ' + plural(done.length, 'site') + '; each row shows its progress.' : plural(done.length, 'site') + ' restarted.', 'ok');
+    }
+    watchDashboard();
+  } catch (error) {
+    notify(error.message, 'error');
   } finally {
     busy(false);
   }
+}
+
+/** While a job runs, the list is fetched again every few seconds so each row shows where it is. */
+let dashboardTimer = null;
+function watchDashboard() {
+  clearTimeout(dashboardTimer);
+  const card = CLP_ROOT.getElementById('instatic-sites');
+  if (!card || !card.hasAttribute('data-working')) return;
+  dashboardTimer = setTimeout(async function () {
+    try {
+      const reply = await call('/api/dashboard');
+      if (reply.html && !CLP_ROOT.querySelector('dialog[open]')) {
+        repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+        paintFleetSelection();
+      }
+    } catch (error) {
+      // The next look tries again.
+    }
+    watchDashboard();
+  }, 4000);
 }
 
 async function askDelete(domain) {
@@ -163,6 +217,10 @@ function initInstatic() {
   const watch = document.getElementById('job-watch');
   if (watch && watch.dataset.job) {
     watchJob(watch.dataset.job);
+  }
+  if (CLP_ROOT.getElementById('instatic-sites')) {
+    paintFleetSelection();
+    watchDashboard();
   }
 }
 

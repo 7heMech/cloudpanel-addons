@@ -117,6 +117,12 @@ html.dark .card-header { background: var(--surface); }
 .card-table { padding: 0; overflow-x: auto; }
 .card-table > .card-header { margin: 0; padding: 25px 32px; }
 .table-scroll { overflow-x: auto; }
+/* A long site list keeps its own height, so what follows it stays a scroll away
+   and the header with the bulk actions stays in view above the rows. */
+@media (min-width: 941px) {
+  .table-scroll:has(> .fleet-table > tbody > tr:nth-child(13)) { max-height: min(68vh, 720px); overflow-y: auto; }
+  .table-scroll:has(> .fleet-table > tbody > tr:nth-child(13)) thead th { position: sticky; top: 0; z-index: 2; }
+}
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 30px; }
 .stat .label { font-size: 18px; font-weight: 500; margin-bottom: 5px; }
 .stat .value { font-size: 16px; }
@@ -203,6 +209,17 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .row-actions[open] summary { margin-bottom: 12px; }
 .row-actions .actions { max-width: 280px; justify-content: flex-end; margin-left: auto; }
 .row-actions .btn { padding: 5px 10px; }
+/* On a wide screen Manage opens a menu over the page rather than growing the
+   row; the shared script places it, since the table's scroll box would clip it. */
+@media (min-width: 941px) {
+  .row-actions[open] summary { margin-bottom: 0; }
+  .row-actions .actions { position: fixed; z-index: 1040; flex-direction: column; flex-wrap: nowrap; align-items: stretch;
+    gap: 2px; min-width: 190px; max-width: none; padding: 6px; background: var(--panel); border: 1px solid var(--card-border);
+    border-radius: 4px; box-shadow: 0 8px 28px rgb(0 0 0 / 16%); }
+  .row-actions .actions .btn { justify-content: flex-start; width: 100%; border-color: transparent; text-align: left; padding: 7px 12px; }
+  .row-actions .actions .btn:hover { background: var(--surface); }
+  .row-actions .actions .btn-danger:hover { background: var(--bad); }
+}
 .site-inventory > summary { cursor: pointer; font-size: 18px; font-weight: 600; }
 .site-inventory[open] > summary { margin-bottom: 16px; }
 .addon-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 30px; }
@@ -244,7 +261,20 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .toolbar-note { color: var(--muted); font-size: 14px; font-weight: 400; }
 .mobile-select-all { display: none; }
 .alert-ok { color: var(--ok); background: rgb(35 119 75 / 8%); }
-#clp-flash { margin-bottom: 20px; }
+/* A message stays in view however far the page is scrolled: top right under the
+   panel's header, at the bottom on a phone. */
+#clp-flash { position: fixed; z-index: 1050; top: 92px; right: 24px; width: min(440px, calc(100vw - 48px)); margin: 0;
+  display: flex; align-items: flex-start; gap: 12px; box-shadow: 0 8px 28px rgb(0 0 0 / 18%); overflow-wrap: anywhere; }
+#clp-flash[hidden] { display: none; }
+#clp-flash.alert { background: linear-gradient(rgb(248 113 113 / 12%), rgb(248 113 113 / 12%)), var(--panel); }
+#clp-flash.notice { background: linear-gradient(rgb(251 191 36 / 12%), rgb(251 191 36 / 12%)), var(--panel); }
+#clp-flash.alert-ok { background: linear-gradient(rgb(35 119 75 / 10%), rgb(35 119 75 / 10%)), var(--panel); }
+#clp-flash .clp-flash-text { flex: 1 1 auto; min-width: 0; }
+#clp-flash .clp-flash-close { flex: 0 0 auto; margin: -4px -8px 0 0; padding: 2px 8px; border: 0; background: none;
+  color: inherit; font-size: 20px; line-height: 1; cursor: pointer; }
+@media (max-width: 940px) {
+  #clp-flash { top: auto; bottom: 12px; left: 12px; right: 12px; width: auto; }
+}
 #clp-confirm-details { margin: 12px 0 0; padding-left: 20px; color: var(--muted); font-size: 14px; }
 #clp-confirm-text { margin: 0; overflow-wrap: anywhere; }
 #clp-confirm-typed-field { margin: 16px 0 0; }
@@ -338,6 +368,12 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
      the domain on a line of its own, and every other cell names its column. */
   .fleet-table, .fleet-table tbody, .fleet-table tr, .fleet-table td { display: block; }
   .fleet-table thead { display: none; }
+  /* On a phone the list is the page: once a row is ticked, its header with the
+     bulk actions sticks to the top while the rows scroll under it. */
+  .card-table:has(.fleet-table) { overflow: visible; }
+  .card-table:has(.fleet-table tr[aria-selected="true"]) > .card-header { position: sticky; top: 0; z-index: 5;
+    background: var(--panel); box-shadow: 0 1px 0 var(--border); }
+  html.dark .card-table:has(.fleet-table tr[aria-selected="true"]) > .card-header { background: var(--surface); }
   .fleet-filter { padding: 0 20px 16px; }
   .card-header + .fleet-filter { padding-top: 16px; }
   .fleet-filter input { max-width: none; }

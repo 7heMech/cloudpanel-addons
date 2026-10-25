@@ -18,6 +18,7 @@ export const PHP_RESOURCES_ADDON: AddonDefinition = {
   name: "php-resources",
   title: "PHP Resources",
   description: "Give groups of PHP sites the same PHP-FPM limits, and clear abandoned PHP and ImageMagick temp files from /tmp.",
+  changed: { in: "2.0", note: "Sites first, and new sites get their limits within seconds." },
   targets: PHP_RESOURCES_TARGETS,
   handler: handle,
   action: runPhpResourcesAction,

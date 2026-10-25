@@ -89,3 +89,43 @@ describe("an unreachable registry", () => {
     }
   });
 });
+
+describe("updates as jobs", () => {
+  const instance: InstanceView = { domain: "pages.example.com", port: 39000, tag: "0.0.18", container: "c", siteUser: "pages", createdAt: "", state: "running" };
+  const available = { tags: ["0.0.19", "0.0.18"], latest: "0.0.19", source: "registry" as const };
+  const job = {
+    id: "20261025T120000Z-ab12cd", kind: "update" as const, domain: "pages.example.com", port: 39000, tag: "0.0.19", fromTag: "0.0.18",
+    tls: false, state: "running" as const, step: "waiting for health check", createdAt: "2026-10-25T12:00:00Z",
+  };
+
+  test("a running update shows on its row, which cannot be selected meanwhile", () => {
+    const html = instaticView([instance], available, [job]);
+    expect(html).toContain("Updating");
+    expect(html).toContain("waiting for health check");
+    expect(html).toMatch(/aria-label="Select pages\.example\.com" disabled/);
+    expect(html).toContain('data-working');
+    expect(html).not.toContain("askUpdate('pages.example.com'");
+  });
+
+  test("a rolled-back update is named on the row until another replaces it", () => {
+    const html = instaticView([instance], available, [{ ...job, state: "failed", step: "" }]);
+    expect(html).toContain("Update to 0.0.19 failed");
+    expect(html).not.toContain("data-working");
+  });
+
+  test("a bulk update starts one job a site and names any it could not start", async () => {
+    spyOn(instaticService, "listInstancesOrThrow").mockResolvedValue([instance]);
+    spyOn(instaticService, "listJobs").mockResolvedValue([]);
+    spyOn(tags, "listAvailableTags").mockResolvedValue(available);
+    const update = spyOn(instaticService, "updateInstance").mockImplementation(async (domain) =>
+      domain === "pages.example.com" ? { ok: true, data: { job: job.id } } : { ok: false, error: "no such instance" });
+    const path = "/api/bulk";
+    const response = await instaticHandle(request(path, "POST", { verb: "update", tag: "0.0.19", domains: ["pages.example.com", "gone.example.com"] }), path);
+    const body = await response.json() as { data: { done: string[]; failed: { domain: string; error: string }[] }; html: string };
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(body.data.done).toEqual(["pages.example.com"]);
+    expect(body.data.failed).toEqual([{ domain: "gone.example.com", error: "no such instance" }]);
+    expect(body.html).toContain("instatic-sites");
+    expect((await instaticHandle(request(path, "POST", { verb: "delete", domains: ["pages.example.com"] }), path)).status).toBe(400);
+  });
+});

@@ -115,7 +115,7 @@ describe("the instatic dashboard", () => {
   // only one: an unknown answer (null) is not a deleted site.
   test("badges an instance the panel no longer has and offers the cleanup", () => {
     const html = dashboardView([{ ...INSTANCE, panelSite: false }], TAGS);
-    expect(html).toInclude("deleted</span>");
+    expect(html).toInclude("Deleted</span>");
     expect(html).toInclude("askDelete(");
     expect(html).not.toInclude('href="https://inst.example.com"');
   });

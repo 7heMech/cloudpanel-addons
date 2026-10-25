@@ -10,6 +10,7 @@
 .addon-about h3 a:hover { color: var(--link); }
 .addon-about h3 .badge { margin-left: 6px; vertical-align: 1px; }
 .addon-about p { margin: 3px 0 0; color: var(--muted); font-size: 14px; }
+.addon-about .addon-changed { color: var(--text); font-size: 13px; }
 .addon-actions { display: flex; gap: 8px; }
 .addon-row .manager-job-status { grid-column: 1 / -1; margin-top: 8px; }
 @media (max-width: 575px) {

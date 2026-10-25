@@ -1,6 +1,9 @@
 
 .behind { color: var(--warn); border-color: var(--warn); margin-left: 0.35rem; }
 .btn-update { border-color: var(--warn); color: var(--warn); }
+.instatic-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 14px; }
+.instatic-row-actions .btn-update { padding: 5px 12px; }
+@media (max-width: 940px) { .instatic-row-actions { justify-content: flex-start; flex-wrap: wrap; } }
 .logs-port { margin: 0 0 12px; }
 .snapshot-box { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 12px 16px; margin-bottom: 16px; }
 .snapshot-file { font-weight: 600; margin-bottom: 4px; }

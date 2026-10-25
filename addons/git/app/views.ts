@@ -201,21 +201,17 @@ function repositoryForm(site: GitSiteStatus): string {
               placeholder="composer install --no-dev" value="${esc(config?.postDeploy ?? "")}">
             <div class="hint">Optional. Runs as ${esc(site.siteUser)} in the deployed directory after every deployment.</div>
           </div>
-        </div>
-        <details id="git-advanced" class="disclosure git-advanced">
-          ${summary("Advanced", config?.directory ? `Deploys into ${esc(config.directory)}` : "Deploy directory")}
           <div class="form-field">
-            <label for="git-directory">Subdirectory</label>
+            <label for="git-directory">Deploy into</label>
             <input id="git-directory" type="text" maxlength="${MAX_DIRECTORY_LENGTH}" spellcheck="false" autocapitalize="off"
-              placeholder="Leave empty for the site directory" value="${esc(config?.directory ?? "")}">
-            <div class="hint">Relative to <span class="mono">~/htdocs/${esc(site.domain)}</span></div>
+              placeholder="The site directory" value="${esc(config?.directory ?? "")}">
+            <div class="hint">Optional. A subdirectory of <span class="mono">~/htdocs/${esc(site.domain)}</span></div>
           </div>
-          ${site.configured ? `<div class="git-danger">
-            <p class="hint">Disconnect the repository and keep the deployed files.</p>
-            <button class="btn btn-danger" type="button" onclick="forgetGitSite('${esc(site.domain)}')">Stop deploying</button>
-          </div>` : ""}
-        </details>
-        <div class="form-actions"><button class="btn btn-primary" type="submit">${site.configured ? "Save changes" : "Connect repository"}</button></div>
+        </div>
+        <div class="form-actions">
+          ${site.configured ? `<button class="btn btn-danger" type="button" title="Disconnect the repository and keep the deployed files" onclick="forgetGitSite('${esc(site.domain)}')">Stop deploying</button>` : ""}
+          <button class="btn btn-primary" type="submit">${site.configured ? "Save changes" : "Connect repository"}</button>
+        </div>
       </form>`;
 
   return site.configured ? fields : `
@@ -372,14 +368,14 @@ export function fleetView(sites: GitSiteStatus[]): string {
         filters: [{ value: "attention", label: "Needs attention" }, { value: "deploying", label: "Deploying" }],
         summary: `${sites.length} sites`,
       })}
-      <table class="fleet-table git-fleet-table">
+      <div class="table-scroll"><table class="fleet-table git-fleet-table">
         <thead><tr>
           <th scope="col" class="site-select"><input type="checkbox" id="select-all" aria-label="Select all sites" onchange="selectAllSites(this.checked)"></th>
           <th scope="col">Site</th><th scope="col">Branch</th>
           <th scope="col">Current checkout</th><th scope="col">Last deployment</th><th scope="col" aria-label="Actions"></th>
         </tr></thead>
         <tbody>${sites.map(row).join("")}</tbody>
-      </table>
+      </table></div>
       ${FLEET_NONE_HTML}`
       }
     </div>`;

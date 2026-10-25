@@ -119,12 +119,11 @@ describe("Git pages", () => {
     expect(hooked).toMatch(/<details class="disclosure git-push" id="git-webhook-setup">\s*<summary>.*Push to deploy.*id="git-webhook-toggle" type="checkbox" checked/s);
   });
 
-  test("the post-deploy command sits beside URL and branch; Advanced keeps the subdirectory and Stop deploying", () => {
+  test("every repository field shows at once, and Stop deploying sits beside Save changes", () => {
     const html = siteView(site, "");
-    const advanced = html.indexOf('id="git-advanced"');
-    expect(html.indexOf('id="git-post-deploy"')).toBeLessThan(advanced);
-    expect(html.indexOf('id="git-directory"')).toBeGreaterThan(advanced);
-    expect(html.indexOf("Stop deploying")).toBeGreaterThan(advanced);
+    expect(html).not.toContain("git-advanced");
+    for (const id of ["git-remote", "git-branch", "git-post-deploy", "git-directory"]) expect(html).toContain(`id="${id}"`);
+    expect(html).toMatch(/<div class="form-actions">\s*<button class="btn btn-danger"[^>]*>Stop deploying<\/button>\s*<button class="btn btn-primary" type="submit">Save changes/);
   });
 
   test("the fleet names the sites that need attention, and says nothing when none do", () => {
