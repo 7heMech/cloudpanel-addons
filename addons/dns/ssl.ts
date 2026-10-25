@@ -24,7 +24,7 @@ export const MAX_ATTEMPTS = 5;
 /** Waits after attempt 1, 2, 3 and 4; the first waits for the browser's own try. */
 const DELAYS = [5 * 60_000, 15 * 60_000, 60 * 60_000, 6 * 60 * 60_000];
 const FIRST_DELAY = 2 * 60_000;
-const NEW_SITE_WINDOW = 15 * 60_000;
+export const NEW_SITE_WINDOW = 15 * 60_000;
 const KEEP_FINISHED = 7 * 24 * 60 * 60_000;
 
 /** Records a request for a site created moments ago that still has its placeholder certificate. */

@@ -170,7 +170,7 @@ runs `clp-addons apt-hook pre` before each run and `apt-hook post` after it,
 both allowed to fail without stopping the run (`cli/conffiles.ts`).
 
 `pre` acts only on an edited file whose package `apt-cache policy` shows a
-different candidate. It raises `/run/clp-addons/conffiles-released` first, then
+different candidate. It raises `/run/lock/clp-addons/conffiles-released` first, then
 writes the package text back without a reload. Maintenance Mode's block comes
 out only while the rest of the file still matches its recorded baseline, which is
 then forgotten. `post` clears the flag and runs repair, which records what the

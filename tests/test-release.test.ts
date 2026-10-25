@@ -39,6 +39,12 @@ test("a released artifact verifies against the provenance published with it", as
   await verifyAttestation(release, [{ name: "install.sh", bytes: installSh }], false, trustedRoot);
 });
 
+test("an attestation signed for another tag does not vouch for this release", async () => {
+  serve(bundles);
+  await expect(verifyAttestation({ ...release, tag: "v9.9.9" }, [{ name: "install.sh", bytes: installSh }], false, trustedRoot))
+    .rejects.toThrow("provenance verification failed for install.sh");
+});
+
 test("bytes no attestation names are refused", async () => {
   serve(bundles);
   const changed = Buffer.concat([installSh, Buffer.from("\n")]);

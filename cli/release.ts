@@ -102,18 +102,23 @@ export async function fetchVerified(rel: ResolvedRelease, names: string[]): Prom
   return artifacts;
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * What `gh attestation verify --repo --signer-workflow` checks: a SLSA
  * provenance statement for these bytes, signed in Sigstore's public log by a
  * certificate GitHub Actions issued to this repository's release workflow for
- * a tag. The source repository is checked apart from the workflow because a
+ * this release's own tag, so an attestation of another tag does not vouch for
+ * it. The source repository is checked apart from the workflow because a
  * reusable workflow signs for whichever repository calls it.
  */
-const PROVENANCE_POLICY = {
-  subjectAlternativeName: new RegExp(`^https://github\\.com/${REPO.replace(/\./g, "\\.")}/\\.github/workflows/release\\.yml@refs/tags/`),
+export const provenancePolicy = (tag: string) => ({
+  subjectAlternativeName: new RegExp(`^https://github\\.com/${escapeRegExp(REPO)}/\\.github/workflows/release\\.yml@refs/tags/${escapeRegExp(tag)}$`),
   extensions: { issuer: "https://token.actions.githubusercontent.com" },
   oids: [{ oid: { id: [1, 3, 6, 1, 4, 1, 57264, 1, 12] }, value: derUtf8(`https://github.com/${REPO}`) }],
-};
+});
 
 function derUtf8(text: string): Buffer {
   const bytes = Buffer.from(text, "utf-8");
@@ -173,7 +178,7 @@ export async function verifyAttestation(
     });
     if (!bundle) fatal(`provenance verification failed for ${artifact.name}: no attestation names these bytes`);
     try {
-      verifier.verify(toSignedEntity(bundleFromJSON(bundle)), PROVENANCE_POLICY);
+      verifier.verify(toSignedEntity(bundleFromJSON(bundle)), provenancePolicy(rel.tag));
     } catch (error) {
       fatal(`provenance verification failed for ${artifact.name}: ${error instanceof Error ? error.message : String(error)}`);
     }

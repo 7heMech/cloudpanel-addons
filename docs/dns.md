@@ -44,8 +44,8 @@ registrar; the certificate is requested automatically once the zone is active.
 
 **Details** on a site shows its zone and every pending change. Drift is
 corrected every 15 minutes, or at once with **Check now**. When a site is
-deleted from CloudPanel, its records stay in Cloudflare until you choose
-**Remove records** or **Keep**. A Mailcow domain is never deleted.
+deleted from CloudPanel while a profile enforces it, its records stay in
+Cloudflare until you choose **Remove records** or **Keep**. A Mailcow domain is never deleted.
 
 ## Leaving Terraform
 

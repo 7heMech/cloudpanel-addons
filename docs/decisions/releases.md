@@ -55,8 +55,9 @@ checksum and repository-bound attestation before replacing the binary.
 The binary checks provenance itself with Sigstore's `@sigstore/verify`, the
 checks `gh attestation verify --repo --signer-workflow` makes: a SLSA
 provenance statement naming the artifact's SHA-256, signed in Sigstore's public
-log by a GitHub Actions certificate for this repository's `release.yml` on a tag,
-with this repository as its source. Sigstore's trusted keys come through its TUF
+log by a GitHub Actions certificate for this repository's `release.yml` on the
+release's own tag, with this repository as its source. An attestation of an
+older tag does not vouch for the same bytes republished under a newer one. Sigstore's trusted keys come through its TUF
 repository, `tuf-repo-cdn.sigstore.dev`, and are cached in
 `/usr/local/libexec/clp-addons/sigstore`, where only root can write. They are
 not frozen into the binary: a rotated key would then refuse the very update
