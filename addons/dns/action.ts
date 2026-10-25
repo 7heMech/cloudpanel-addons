@@ -432,6 +432,11 @@ class Action {
     const assigned = this.sites().filter((site) => policy.assignments[site.domain]);
     await run.load(assigned.map((site) => site.domain));
     this.hold(run, policy, this.joined(before, policy).map((site) => site.domain));
+    const released = run.releaseHeld();
+    if (released.length) {
+      policy.held = policy.held.filter((domain) => !released.includes(domain));
+      this.savePolicy(policy);
+    }
     await run.enforce(assigned);
     const plans = run.planAll(this.sites());
     this.record(run, plans, "all");

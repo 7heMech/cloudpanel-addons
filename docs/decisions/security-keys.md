@@ -112,8 +112,8 @@ only when it is a small regular file of that user's.
 there is no session yet. They tell the page only why a key was refused; any
 other failure, such as a file or database error or a deactivated account, is
 logged and answered as sign-in being unavailable. CloudPanel records no login
-event for a key sign-in, so the action logs every sign-in, refusal, added key
-and removed key, with the user and key name. The gateway passes an action's
+event for a key sign-in, so the action logs every sign-in, added key and
+removed key with the user and key name, and every refusal with its reason. The gateway passes an action's
 stderr on to its own journal (`journalctl -u clp-addons-auth`), even when the
 action answered in JSON. They are matched before the gate only while the addon
 is installed, require the panel's own Origin, and carry the challenge id in an

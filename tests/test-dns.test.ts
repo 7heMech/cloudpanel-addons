@@ -561,6 +561,23 @@ describe("zones and new sites", () => {
     expect(plan.held).toBeUndefined();
   });
 
+  test("a new site whose zone cannot be read yet stays held until a check can plan it", async () => {
+    const env = setup();
+    const zone = env.cf.zone("client.org", env.agency);
+    await env.connect();
+    await env.act("set-default", { profileId: "web" });
+    await env.enforce("web");
+    const token = env.cf.tokens.get(TOKEN)!;
+    env.cf.tokens.delete(TOKEN);
+    env.sites.push(site(8, "mail.client.org", { createdAt: START }));
+    await env.act("sync-sites");
+    env.cf.tokens.set(TOKEN, token);
+    await env.act("reconcile");
+    expect(env.records("client.org")).toContain("A mail.client.org 203.0.113.10 proxied");
+    expect(env.cf.settings.get(`${zone.id}:ssl`)).toBeUndefined();
+    expect((await env.act("list")).sites.find((entry) => entry.domain === "mail.client.org")!.plan!.held).toBe(true);
+  });
+
   test("a new site that only adds records and points its own names is not held", async () => {
     const env = setup();
     await env.connect();

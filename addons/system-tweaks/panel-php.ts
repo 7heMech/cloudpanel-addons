@@ -419,9 +419,28 @@ export async function setPanelPhp(php: string, options: PanelPhpOptions = {}): P
  */
 export async function reconcilePanelPhp(options: PanelPhpOptions = {}): Promise<string | null> {
   const ctx = contextOf(options);
-  const reloaded = existsSync(ctx.paths.configFile) ? reloadReplaced(ctx) : null;
-  if (!readChoice(ctx.paths).php && !present(ctx.paths.dropInFile)) return reloaded;
-  const reconciled = await withFileLock(ctx.paths.lockFile, 30, "another panel PHP change is still running", async () => {
+  // The choice first, so a failed reload cannot keep it from being restored;
+  // a restart it makes also leaves nothing to reload.
+  let reconciled: string | null = null;
+  let failure: unknown = null;
+  try {
+    reconciled = await reconcileChoice(ctx);
+  } catch (error) {
+    failure = error;
+  }
+  let reloaded: string | null = null;
+  try {
+    if (existsSync(ctx.paths.configFile)) reloaded = reloadReplaced(ctx);
+  } catch (error) {
+    failure ??= error;
+  }
+  if (failure) throw failure;
+  return [reloaded, reconciled].filter(Boolean).join("; ") || null;
+}
+
+async function reconcileChoice(ctx: Context): Promise<string | null> {
+  if (!readChoice(ctx.paths).php && !present(ctx.paths.dropInFile)) return null;
+  return withFileLock(ctx.paths.lockFile, 30, "another panel PHP change is still running", async () => {
     const choice = readChoice(ctx.paths);
     if (choice.withdrawn || !existsSync(ctx.paths.configFile)) return null;
     const current = choice.php ? releases(ctx, [choice.php]).get(choice.php)?.installed ?? "" : "";
@@ -435,7 +454,6 @@ export async function reconcilePanelPhp(options: PanelPhpOptions = {}): Promise<
       throw error;
     }
   });
-  return [reloaded, reconciled].filter(Boolean).join("; ") || null;
 }
 
 /**

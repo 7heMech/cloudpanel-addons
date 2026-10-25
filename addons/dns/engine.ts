@@ -519,16 +519,31 @@ export class DnsRun {
 
   /**
    * Holds those of `domains` whose plans do more than point their own names
-   * here and add records, and answers which. Call after `load`.
+   * here and add records, or could not be planned yet, and answers which. Call
+   * after `load`.
    */
   holdForReview(domains: string[]): string[] {
     return domains.filter((domain) => {
       const site = this.context.sites.find((candidate) => candidate.domain === domain);
       if (!site || this.held.has(domain)) return false;
       this.held.add(domain);
-      if (this.planSite(site).changes.some((change) => change.waits)) return true;
+      const plan = this.planSite(site);
+      // A site whose zone could not be read is held until a check can say what it would change.
+      if (plan.problems.length || plan.changes.some((change) => change.waits)) return true;
       this.held.delete(domain);
       return false;
+    });
+  }
+
+  /** Releases the held sites a clean plan shows have nothing beyond their own names to change, and answers which. */
+  releaseHeld(): string[] {
+    return [...this.held].filter((domain) => {
+      const site = this.context.sites.find((candidate) => candidate.domain === domain);
+      if (!site) return false;
+      const plan = this.planSite(site);
+      if (plan.problems.length || plan.changes.some((change) => change.waits)) return false;
+      this.held.delete(domain);
+      return true;
     });
   }
 

@@ -441,13 +441,17 @@ test("a confirmed basic-auth bypass preserves the native allowlist, checks Nginx
   const conf = readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8");
   expect(conf).toContain("satisfy any;\n  allow 198.51.100.1;\n  allow 2001:db8::/32;\n  allow 203.0.113.9;\n  deny all;");
   expect(conf).toContain("auth_basic off;\n    allow all;");
-  // CloudPanel's own closed locations stay closed, as its own allowed IPs leave them.
-  expect(conf).toContain("location ~/\\.git {\n    deny all;\n  }");
+  // A closed location would inherit satisfy any and let the password through; it stays closed.
+  expect(conf).toContain("location ~/\\.git {\n    satisfy all;\n    deny all;\n  }");
+  expect(conf).toContain("location = /xmlrpc.php {\n    satisfy all;\n    deny all;\n  }");
   expect(calls).toEqual(["nginx -t", "systemctl reload nginx"]);
   expect(runuserLog()).toEqual(["shop PATH"]);
   // Subsequent sign-ins do not edit or reload, including a repeated confirmation.
   await act(["sign-in", SHOP, FROM, ALLOW_BASIC], { run: () => { throw new Error("unexpected command"); } });
   expect(basicAuthIps()).toBe("198.51.100.1,2001:db8::/32,203.0.113.9");
+  // A later bypass accepts what the first wrote, without adding it again.
+  await act(["sign-in", SHOP, "--client-ip=198.51.100.7", ALLOW_BASIC], { run: okCommand });
+  expect(readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8").match(/satisfy all;/g)).toHaveLength(2);
 });
 
 test("existing native IP and CIDR bypasses include canonical IPv6 and mapped IPv4", async () => {
