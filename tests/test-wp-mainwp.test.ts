@@ -279,9 +279,8 @@ test("the page puts sites first and draws only the controls that do something", 
   expect(fresh).toContain('id="mainwp-dashboard"');
   expect(fresh).not.toContain("Application");
   expect(fresh).not.toContain("On another server");
-  // A site without Varnish has an empty cell, and Automatic switches wait for their automation.
-  expect(fresh).toContain('<td data-label="Varnish"></td>');
-  expect(fresh).not.toContain("Varnish off");
+  // A site without Varnish says so, and Automatic switches wait for their automation.
+  expect(fresh).toContain('<td data-label="Varnish plugin"><span class="hint" title="Varnish Cache is off');
   expect(fresh).not.toContain("setSiteAutomatic(this)");
   expect(fresh).toContain("Sign-in helper on 1 site · ");
   expect(page([site("a.test")], emptyMainwpState())).not.toContain("Sign-in helper");
@@ -289,7 +288,7 @@ test("the page puts sites first and draws only the controls that do something", 
   const chosen = emptyMainwpState(); chosen.dashboard = "dashboard.test";
   const off = page(sites, chosen);
   const heads = [...off.matchAll(/<th scope="col"[^>]*>([^<]*)<\/th>/g)].map((match) => match[1]);
-  expect(heads).toEqual(["Site", "Varnish", "MainWP", ""]);
+  expect(heads).toEqual(["Site", "Varnish plugin", "MainWP Child", ""]);
   expect(off).toContain("mainwp-automatic");
   expect(off).not.toContain("setMainwpSite(this)");
   expect(off).toMatch(/data-domain="new.test" onclick="connectMainwp\(this\)">Connect</);

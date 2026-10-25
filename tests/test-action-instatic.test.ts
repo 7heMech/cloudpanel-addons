@@ -194,10 +194,10 @@ describe("version awareness", () => {
 
   test("an instance whose CloudPanel site is gone offers only Logs and Delete, and says deleted once", () => {
     const html = dashboardView([{ ...instance("0.0.17"), panelSite: false }], live("0.0.18"));
-    expect(html.match(/>deleted</g)?.length).toBe(1);
+    expect(html.match(/>Deleted</g)?.length).toBe(1);
     expect(html).toInclude("showLogs(");
     expect(html).toInclude("askDelete(");
-    for (const verb of ["askStop(", "'restart'", "takeSnapshot(", "'recreate'", "askUpdate("]) expect(html).not.toInclude(verb);
+    for (const verb of ["askStop(", "','restart')", "takeSnapshot(", "','recreate')", "askUpdate("]) expect(html).not.toInclude(verb);
   });
 
   test("creations still under way, or failed with nothing to show, sit at the top", () => {
