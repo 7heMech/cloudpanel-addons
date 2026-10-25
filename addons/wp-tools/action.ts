@@ -39,7 +39,7 @@ import {
   emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpView, readMainwpState, syncMainwp, type MainwpResult, type MainwpRun,
 } from "./mainwp";
 
-import { basicAuthBlocks, withBasicAuthBypass, type reloadNginx } from "./basic-auth";
+import { basicAuthBlocks, basicAuthRewritable, withBasicAuthBypass, type reloadNginx } from "./basic-auth";
 
 export type WpToolsVerb = "sites" | "sign-in" | "remove" | "sync" | "varnish-settings" | "varnish-site" | "varnish-install" | "varnish-sync";
 
@@ -109,10 +109,11 @@ export interface WpBasicAuthReply {
   basicAuth: { ip: string; canBypass: boolean; message: string };
 }
 
-function basicAuthReply(domain: string, ip: string, admin: boolean): WpBasicAuthReply {
+function basicAuthReply(domain: string, ip: string, admin: boolean, rewritable: () => boolean): WpBasicAuthReply {
   const blocked = `${domain} is protected by CloudPanel basic authentication.`;
   if (!admin) return { basicAuth: { ip, canBypass: false, message: `${blocked} An administrator can allow your IP in Security → Basic Authentication.` } };
   if (!ip) return { basicAuth: { ip, canBypass: false, message: `${blocked} The panel could not tell your IP, so manage its allowlist in Security → Basic Authentication.` } };
+  if (!rewritable()) return { basicAuth: { ip, canBypass: false, message: `${blocked} Its Nginx configuration has been customized, so allow your IP ${ip} in Security → Basic Authentication.` } };
   return { basicAuth: { ip, canBypass: true, message: `${blocked} Allow your IP ${ip} for the whole site and everyone sharing that IP, until removed in Security → Basic Authentication? CloudPanel accepts forged X-Real-IP, so anyone who knows an allowed IP can bypass it. Behind Cloudflare, your IP may not match.` } };
 }
 
@@ -715,7 +716,7 @@ export async function executeWpToolsAction(
     const maintenance = existsSync(paths.maintenanceConfig) && maintenanceBlocks(paths.maintenance, domain, clientIp);
     if (maintenance && !bypass) return maintenanceReply(domain, clientIp, !asUser);
     const basicAuth = basicAuthBlocks(paths, domain, clientIp);
-    if (basicAuth && !allowBasicAuth) return basicAuthReply(domain, clientIp, !asUser);
+    if (basicAuth && !allowBasicAuth) return basicAuthReply(domain, clientIp, !asUser, () => basicAuthRewritable(paths, domain));
     // Mint before taking CloudPanel's write lock; an unused token expires on its own.
     const login = mintWpLogin(paths, site, options);
     if (basicAuth) await withBasicAuthBypass(paths, domain, clientIp, options.run, options.reloadNginx);

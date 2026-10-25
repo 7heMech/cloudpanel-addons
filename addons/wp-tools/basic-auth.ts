@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { BlockList, isIP } from "node:net";
 import { join } from "node:path";
 import { normalizeMappedIpv4 } from "../../lib/ip-address";
-import { failAction, runCommand, type CommandResult } from "../../cli/action-common";
+import { ActionFailure, failAction, runCommand, type CommandResult } from "../../cli/action-common";
 import { openPanelDatabase, trustedVhost, withNginxTransactionAsync } from "../../cli/nginx-transaction";
 
 export interface BasicAuthPaths {
@@ -76,6 +76,23 @@ export function basicAuthBlocks(paths: BasicAuthPaths, domain: string, ip: strin
   }
 }
 
+/** Whether `basicAuthVhost` could add an IP to this site's block, so the offer is never one that is then refused. */
+export function basicAuthRewritable(paths: BasicAuthPaths, domain: string): boolean {
+  const db = openPanelDatabase(paths.panelDb, true, 1000);
+  try {
+    const row = settings(db, domain);
+    if (!row) return false;
+    const { content } = trustedVhost(join(paths.nginxVhostDir, `${domain}.conf`), paths.vhostUid);
+    basicAuthVhost(content, domain, row.whitelisted_ips, [...normalizedEntries(row.whitelisted_ips), "192.0.2.1"]);
+    return true;
+  } catch (error) {
+    if (error instanceof ActionFailure) return false;
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
 function escaped(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -116,8 +133,12 @@ export function basicAuthVhost(content: string, domain: string, previous: string
     affected.push(...scope.children);
     const authOff = scope.directives.some(({ words }) => words[0] === "auth_basic" && words[1] === "off");
     if (scope !== server && authOff) continue;
+    // CloudPanel's templates close `.git` and `xmlrpc.php` with a lone `deny all`;
+    // its own allowed IPs leave those as they are, and so does this.
+    const rules = scope.directives.filter(({ words }) => accessRules.has(words[0]!));
+    const closed = scope !== server && rules.length === 1 && rules[0]!.words.join(" ") === "deny all";
     for (const { words, start, end } of scope.directives) {
-      if (accessRules.has(words[0]!) && (start < blockStart || end > blockEnd)) refuse();
+      if (accessRules.has(words[0]!) && !closed && (start < blockStart || end > blockEnd)) refuse();
       if (words[0] === "include" && !safeIncludes.has(words[1]!)) refuse();
     }
   }

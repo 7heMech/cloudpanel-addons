@@ -203,6 +203,10 @@ Acceptance updates the native allowlist and exactly one complete generated
 blocks are refused with a pointer to the native Security page. Extra access
 rules in that server or its protected locations, and unknown includes, are
 refused because adding `satisfy any` could make them bypass authentication.
+A location whose only access rule is `deny all`, as CloudPanel's templates
+close `.git` and `xmlrpc.php`, is accepted: CloudPanel's own allowed IPs leave
+it the same. The check runs before the bypass is offered, so a vhost it would
+refuse gets a pointer to the Security page instead of the offer.
 This also refuses CloudPanel's Cloudflare IP range include in the same server:
 otherwise every allowed edge could bypass basic auth. The parser is shared
 with maintenance in `cli/nginx-config.ts`. Only a regular,

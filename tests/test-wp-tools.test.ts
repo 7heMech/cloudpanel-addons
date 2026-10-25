@@ -402,7 +402,7 @@ function seedBasicAuth(ips: string | null = null, active = true): string {
   db.close();
   mkdirSync(join(root, "vhosts"));
   const access = ips ? `  satisfy any;\n${ips.split(",").map((ip) => `  allow ${ip.trim()};\n`).join("")}  deny all;\n` : "";
-  const content = `server {\n  listen 443 ssl;\n  server_name shop.example.com;\n  location ~ /.well-known {\n    auth_basic off;\n    allow all;\n  }\n${access}  auth_basic "Restricted Area";\n  auth_basic_user_file /etc/nginx/basic-auth/shop.example.com;\n  location / { proxy_pass http://127.0.0.1:8080; }\n}\n`;
+  const content = `server {\n  listen 443 ssl;\n  server_name shop.example.com;\n  location ~ /.well-known {\n    auth_basic off;\n    allow all;\n  }\n${access}  auth_basic "Restricted Area";\n  auth_basic_user_file /etc/nginx/basic-auth/shop.example.com;\n  location / { proxy_pass http://127.0.0.1:8080; }\n  location ~/\\.git {\n    deny all;\n  }\n  location = /xmlrpc.php {\n    deny all;\n  }\n}\n`;
   writeFileSync(join(root, "vhosts", "shop.example.com.conf"), content, { mode: 0o640 });
   return content;
 }
@@ -441,6 +441,8 @@ test("a confirmed basic-auth bypass preserves the native allowlist, checks Nginx
   const conf = readFileSync(join(root, "vhosts", "shop.example.com.conf"), "utf8");
   expect(conf).toContain("satisfy any;\n  allow 198.51.100.1;\n  allow 2001:db8::/32;\n  allow 203.0.113.9;\n  deny all;");
   expect(conf).toContain("auth_basic off;\n    allow all;");
+  // CloudPanel's own closed locations stay closed, as its own allowed IPs leave them.
+  expect(conf).toContain("location ~/\\.git {\n    deny all;\n  }");
   expect(calls).toEqual(["nginx -t", "systemctl reload nginx"]);
   expect(runuserLog()).toEqual(["shop PATH"]);
   // Subsequent sign-ins do not edit or reload, including a repeated confirmation.
@@ -603,6 +605,14 @@ test("only complete generated basic-auth lines can be rewritten", async () => {
   }
 });
 
+test("a vhost the bypass would refuse is not offered", async () => {
+  const original = seedBasicAuth();
+  writeFileSync(join(root, "vhosts", "shop.example.com.conf"), original.replace("  location / {", "  location /custom { allow all; }\n  location / {"));
+  const reply = await act<WpBasicAuthReply>(["sign-in", SHOP, FROM]);
+  expect(reply.basicAuth).toMatchObject({ canBypass: false });
+  expect(reply.basicAuth.message).toContain("customized");
+});
+
 test("custom access rules cannot become public access when satisfy any is added", async () => {
   const original = seedBasicAuth();
   const path = join(root, "vhosts", "shop.example.com.conf");
@@ -610,6 +620,7 @@ test("custom access rules cannot become public access when satisfy any is added"
     "allow all;", "deny all;", "satisfy all;",
     "include /etc/nginx/cloudflare/ips;", "include /etc/nginx/custom-access.conf;",
     "location /custom { allow all; }", "location /custom { include /etc/nginx/custom-access.conf; }",
+    "location /custom { deny all; allow 10.0.0.1; }", "location /custom { satisfy any; deny all; }",
     'location /custom { auth_basic "Custom"; }',
   ]) {
     const customized = original.replace('  auth_basic "Restricted Area";', `${extra}\n  auth_basic "Restricted Area";`);
