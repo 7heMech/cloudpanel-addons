@@ -44,7 +44,6 @@ interface Row {
   onchange?: string;
   /** What sits where the switch would, such as a select. */
   control?: string;
-  nested?: boolean;
   extra?: string;
 }
 
@@ -57,7 +56,7 @@ function settingRow(row: Row): string {
               <span></span>
             </label>`;
   return `
-      <div class="tweak-row${row.nested ? " is-nested" : ""}">
+      <div class="tweak-row">
         <div class="tweak-body">
           <div class="tweak-heading">
             <h3>${esc(row.title)}<button class="tweak-more" type="button" aria-expanded="false"
@@ -126,25 +125,31 @@ function updateRows(status: UpdatesStatus, settings: UpdateSettings): string {
   const lists = status.enabled && !status.listsUpdated
     ? warning("Package lists are not refreshed automatically, so it only installs updates something else downloaded.")
     : "";
-  const main = settingRow({
+  const option = (key: "nginx" | "database" | "panel" | "reboot", title: string, description: string, extra = "") => `
+            <div class="st-option">
+              <div class="st-option-row">
+                <div><label for="update-${key}">${title}</label><p class="hint">${description}</p></div>
+                <label class="switch"><input id="update-${key}" type="checkbox" data-setting="${key}" onchange="setUpdates(this)"${settings[key] ? " checked" : ""}><span></span></label>
+              </div>${extra}
+            </div>`;
+  const options = status.installed && status.managed ? `
+          <div class="st-options">${[
+    option("nginx", "Nginx", "CloudPanel's Nginx build. An update reloads it without dropping connections."),
+    option("database", "MySQL", "CloudPanel's database server. An update restarts it, so sites lose their database for a moment."),
+    option("panel", "CloudPanel", "The panel itself, which clp-update normally updates."),
+    option("reboot", "Reboot when required", "Restarts the server when an update such as a kernel needs it.",
+      settings.reboot ? rebootTiming(status, settings) : ""),
+  ].join("")}
+          </div>` : "";
+  return settingRow({
     key: "enabled",
     title: "Install updates automatically",
     description: "Once a day, with the distro's unattended-upgrades: its security updates and every PHP version CloudPanel ships.",
     checked: status.managed,
     disabled: !status.installed,
     onchange: "setUpdates(this)",
-    extra: `<p class="st-status" id="updates-status">${updatesLine(status)}</p>${phpGapWarning(status)}${lists}${install}`,
+    extra: `<p class="st-status" id="updates-status">${updatesLine(status)}</p>${phpGapWarning(status)}${lists}${install}${options}`,
   });
-  if (!status.installed || !status.managed) return main;
-  const nested = (key: "nginx" | "database" | "panel" | "reboot", title: string, description: string, extra = "") =>
-    settingRow({ key, title, description, checked: settings[key], onchange: "setUpdates(this)", nested: true, extra });
-  return main + [
-    nested("nginx", "Nginx", "CloudPanel's Nginx build. An update reloads it without dropping connections."),
-    nested("database", "MySQL", "CloudPanel's database server. An update restarts it, so sites lose their database for a moment."),
-    nested("panel", "CloudPanel", "The panel itself, which clp-update normally updates."),
-    nested("reboot", "Reboot when required", "Restarts the server when an update such as a kernel needs it.",
-      settings.reboot ? rebootTiming(status, settings) : ""),
-  ].join("");
 }
 
 function lastRunText(run: LastRun | null): string {

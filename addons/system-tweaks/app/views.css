@@ -22,6 +22,14 @@
   .st-table th, .st-table td { padding: 10px 12px; }
 }
 
+/* What the updates switch covers, as one list under it once it is on. */
+.st-options { margin-top: 14px; }
+.st-option { padding: 10px 0; border-top: 1px solid var(--row-border); }
+.st-option-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.st-option-row > div { min-width: 0; }
+.st-option-row label:not(.switch) { color: var(--text); font-weight: 500; }
+.st-option-row .hint { margin: 2px 0 0; font-size: 13px; }
+.st-option-row .switch { flex: 0 0 auto; margin: 0; }
 .st-reboot-time { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; }
 .st-reboot-time select { flex: 0 1 280px; min-width: 0; }
 .st-reboot-time input { flex: 0 1 170px; min-width: 0; }
