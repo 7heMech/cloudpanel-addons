@@ -25,7 +25,6 @@ if (card) {
 
   // What root says this account may do, painted with every reply.
   var applyPolicy = function (data) {
-    if (data.canAdd === undefined) return;
     syncedPasskeys = data.syncedPasskeys;
     card.querySelector(".clp-sk-unsupported").hidden = usable || !data.canAdd;
     card.querySelector(".clp-sk-off").hidden = data.canAdd;

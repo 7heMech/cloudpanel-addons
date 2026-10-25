@@ -21,7 +21,7 @@ function fnBody(name: string): string {
 
 describe("the card list", () => {
   test("renders a card naming the addon and its mount", () => {
-    expect(page).toInclude("addon-card");
+    expect(page).toInclude("addon-row");
     expect(page).toInclude("Instatic");
     expect(page).toInclude("/addons/instatic");
     expect(page).toInclude('aria-label="Open Instatic CMS">Open</a>');

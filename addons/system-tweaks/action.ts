@@ -7,7 +7,7 @@ import { ROOT_UID, STATE_DIR } from "../../cli/paths";
 import { reconcilePhpGuard, type PhpGuardOptions } from "../../cli/php-guard";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import {
-  DEFAULT_UPDATE_SETTINGS, UPDATE_SETTING_KEYS, applyUpdates, validRebootTime, effectiveReboot, installUnattendedUpgrades, systemRun, unattendedUpgradesInstalled, updatesStatus, withDeadline,
+  DEFAULT_UPDATE_SETTINGS, REBOOT_TIME_ERROR, UPDATE_SETTING_KEYS, applyUpdates, validRebootTime, effectiveReboot, installUnattendedUpgrades, systemRun, unattendedUpgradesInstalled, updatesStatus, withDeadline,
   type UpdateSettings, type UpdatesOptions, type UpdatesStatus,
 } from "./updates";
 import { INSTALL_DEADLINE_MS } from "./limits";
@@ -163,13 +163,17 @@ async function setUpdates(options: SystemTweaksOptions): Promise<SystemTweaksSta
       named++;
     }
     if (body.rebootTime !== undefined) {
-      if (!validRebootTime(body.rebootTime)) failAction("rebootTime must be null, now or HH:MM (00:00–23:59)");
+      if (!validRebootTime(body.rebootTime)) failAction(REBOOT_TIME_ERROR);
       wanted.rebootTime = body.rebootTime;
       named++;
     }
     if (named === 0) failAction("no setting was named");
     // The first switch-on keeps the reboot policy the box already had.
-    if (wanted.enabled && !settings.updates.enabled && body.reboot === undefined) wanted.reboot = effectiveReboot(options.updates);
+    if (wanted.enabled && !settings.updates.enabled) {
+      const had = effectiveReboot(options.updates);
+      if (body.reboot === undefined) wanted.reboot = had.reboot;
+      if (body.rebootTime === undefined) wanted.rebootTime = had.rebootTime;
+    }
     const applied = applyUpdates(wanted, settings.enabledTimers, options.updates);
     writeSettings(paths, { ...settings, updates: wanted, enabledTimers: applied.enabledTimers });
   });

@@ -7,32 +7,29 @@
    busy.
 2. Switch on **Install updates automatically**. It runs once a day, from
    `apt-daily-upgrade.timer`, and installs the distro's security updates and
-   every PHP version CloudPanel ships. Nginx is included by default; MySQL and
-   CloudPanel itself only if you switch them on.
-3. Check **Repositories**: it lists every apt source and whether it is covered.
-   An uncovered source still needs `apt upgrade`.
+   every PHP version CloudPanel ships. Its options appear under it: Nginx is
+   included by default; MySQL and CloudPanel itself only if you switch them on.
+3. Open **Repositories** to see every apt source and whether it is covered. An
+   uncovered source still needs `apt upgrade`.
 
 **Last run** shows the last result from
 `/var/log/unattended-upgrades/unattended-upgrades.log`. Expand **Failure details**
 for the complete error, including the package URL if recorded. HTTP 404 means
 the repository did not provide the requested package; it is not a successful
-update. **Reboot** shows when
-an update such as a kernel needs a restart. Switch on **Reboot when required**
-to allow automatic restarts. Under **Reboot timing**, choose **After the update
-run** or **At a specific time**, enter a 24-hour time, and select **Save time**.
-The time uses the server timezone shown next to the control, not your phone or
-browser timezone. A required reboot is scheduled for the next occurrence of
-that time after the update run.
+update. **Reboot** appears when an update such as a kernel needs a restart; after
+a week without one, the page warns.
 
-**Use existing configuration** leaves the reboot time to your other apt files
-(or immediately after the run if no time is configured). This is the default
-for existing and new installations. **Automatic reboot** shows the effective
-timing; a later operator file may override your choice. Changes affect future
-update runs and do not reschedule or cancel an already queued shutdown.
+Switch on **Reboot when required** to allow automatic restarts, then choose
+**Right after the update run** or **At a set time**. Each change is saved at
+once. The time uses the server timezone shown next to it, not your browser's.
+Switching updates on the first time keeps the reboot policy your apt files
+already had. If a later apt file sets another time, the page says so under the
+control. Changes affect future update runs and do not reschedule or cancel an
+already queued shutdown.
 
 If updates were already on before System Tweaks, the page says **Configured
-outside System Tweaks** and names your file. Switching on adds CloudPanel's PHP
-to that setup. Switching off removes only
+outside System Tweaks** and names your file, and warns when that setup skips
+CloudPanel's PHP. Switching on adds it. Switching off removes only
 `/etc/apt/apt.conf.d/52clp-addons-unattended-upgrades`, so your own setup is
 left as it was. Disabling System Tweaks removes it too.
 
@@ -50,14 +47,15 @@ unattended-upgrade --dry-run -d
 ## PHP upload-progress mitigation
 
 Every installation turns off `session.upload_progress.enabled` on each PHP-FPM,
-CloudPanel's own included, with `99-clp-addons-upload-progress.ini`. The table
-shows each FPM's effective value and which file set it. Switching the mitigation
+CloudPanel's own included, with `99-clp-addons-upload-progress.ini`. Open the
+summary under the switch to see each FPM's effective value and which file set
+it. Switching the mitigation
 off removes only that file. It comes back if System Tweaks is disabled.
 
 ## Panel PHP
 
-Under **Addons → System Tweaks → Panel PHP**, choose a newer installed version
-in **Panel runs on**. This changes the PHP used by CloudPanel's pages,
+Under **Addons → System Tweaks → Settings**, choose a newer installed version
+in **Panel PHP**. The page warns while the panel is left on PHP 8.1. This changes the PHP used by CloudPanel's pages,
 phpMyAdmin and File Manager. Site PHP versions keep their own settings.
 
 The change restarts the panel's PHP service and checks its login page and File

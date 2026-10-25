@@ -5,12 +5,26 @@ which stay with [Panel Tweaks](panel-tweaks.md). PHP worker limits stay with
 [PHP Resources](php-resources.md). System Tweaks also owns the PHP version
 that runs the panel itself.
 
-## Automatic updates
+## The page
 
-The page uses separate switch rows with dividers, matching Panel Tweaks. On
-phones, last-run and reboot labels sit above their values. Failed runs show a
-short summary with expandable log details, including the failed package URL
-when unattended-upgrades logs one.
+Two cards: Automatic updates, which an operator comes back to, then one
+Settings card for the panel's PHP, the upload-progress mitigation and forged
+visitor IPs, which are set once. Each row says what it does in a sentence; the
+reasons are here. The Nginx, MySQL, CloudPanel and reboot rows appear only once
+System Tweaks' own switch is on, since they change nothing before. The
+repositories and each PHP-FPM's upload-progress value fold into a summary that
+opens, and the summary says when something needs a look.
+
+Three states would otherwise do nothing visible, so the page calls them out:
+updates that run but leave CloudPanel's PHP uncovered, usually an outside
+setup with only the distro's security pocket; a reboot required for over a
+week with automatic reboot off; and a panel still on PHP 8.1 when a newer
+PHP-FPM is installed.
+
+Failed runs show a short summary with expandable log details, including the
+failed package URL when unattended-upgrades logs one.
+
+## Automatic updates
 
 Updates use the distro's own `unattended-upgrades`. Everything System Tweaks
 sets is one drop-in, `/etc/apt/apt.conf.d/52clp-addons-unattended-upgrades`. It
@@ -26,11 +40,10 @@ the operator's previous setup comes back. The file sets:
 - CloudPanel's origin `packages-v1.cloudpanel.io` for `component=php-*`, always;
 - `nginx`, on by default; `percona-*`/`mysql-*`/`mariadb-*` and `main`, off by
   default;
-- `Automatic-Reboot`, off by default. The first switch-on copies the box's
-  effective value, so a policy the operator already had stays in place;
-- `Automatic-Reboot-Time` only when explicitly chosen: `now` or a validated
-  24-hour `HH:MM`. Missing or null `rebootTime` leaves this directive out,
-  preserving outside policy on existing installations and on first activation.
+- `Automatic-Reboot` and `Automatic-Reboot-Time`, `now` or a validated 24-hour
+  `HH:MM`. The first switch-on copies the box's effective values, so a policy
+  the operator already had stays in place; a time the page cannot offer, such
+  as `+15`, becomes `now`.
 
 PHP is always in because CloudPanel's PHP builds come only from its own
 repository. Debian's security pocket alone would not have patched the php2shell
@@ -74,16 +87,15 @@ notice up until the reply repaints it. Ubuntu's postinst may turn
 updates on by itself, and the page then reports that as configured outside
 System Tweaks.
 
-Reboot timing uses unattended-upgrades’ existing scheduling behavior on both
-Debian and Ubuntu; no separate timer or direct shutdown command is added. The
-HTTP boundary, root action and drop-in generator validate explicit times before
-writing them. The control offers existing configuration, immediate-after-run,
-and a clock time, saved independently of the reboot switch. Server timezone
-comes from the root process’s system timezone (`Intl.DateTimeFormat`); effective
-timing comes from `apt-config dump`. Outside relative values such as `+15` are
-displayed without changing them. Later apt files remain authoritative and a
-different effective time is reported next to the control. Settings changes do
-not change an already queued shutdown. See [Ubuntu’s reboot documentation](https://ubuntu.com/server/docs/how-to/software/automatic-updates/#reboots).
+Reboot timing uses unattended-upgrades’ own scheduling on both Debian and
+Ubuntu; no separate timer or direct shutdown command is added. The HTTP
+boundary, root action and drop-in generator validate the time before writing
+it. The control, shown while the reboot switch is on, offers right after the
+run or a clock time, and saves on every change. Server timezone comes from the
+root process’s system timezone (`Intl.DateTimeFormat`); effective timing comes
+from `apt-config dump`. Later apt files remain authoritative, and a different
+effective time, `+15` included, is reported under the control. Settings changes
+do not change an already queued shutdown. See [Ubuntu’s reboot documentation](https://ubuntu.com/server/docs/how-to/software/automatic-updates/#reboots).
 
 ### Reading the effective state
 
@@ -113,7 +125,7 @@ The page never reports what the drop-in meant to do. It reads the result:
 
 CloudPanel runs its pages, phpMyAdmin and the root File Manager pool in
 `clp-php-fpm`, started on PHP 8.1, which upstream no longer patches. The Panel
-PHP card lets an administrator run that unit on any newer installed PHP-FPM.
+PHP row lets an administrator run that unit on any newer installed PHP-FPM.
 It is a choice rather than a switch because the panel is CloudPanel's
 code and was not tested on 8.2+: two pinned dependencies declare `php <8.2`.
 Symfony then logs deprecation notices to `/home/clp/logs/php/error.log`.
@@ -137,7 +149,7 @@ is recorded with its package release and is not retried every fifteen minutes,
 only after that package is upgraded or the operator chooses again. Once
 CloudPanel's own unit starts a version at least as new as the choice, the
 drop-in is removed. A drop-in someone else wrote that sets `ExecStart`, such
-as a hand-made `override.conf`, wins: the card says so and refuses a choice.
+as a hand-made `override.conf`, wins: the row says so and refuses a choice.
 Disabling System Tweaks removes the drop-in and keeps the choice, which enabling
 reapplies through the reconcile service. Disabling is synchronous, so it cannot
 ask the pools for a page: under the same lock, it config-tests the PHP the unit
@@ -148,7 +160,7 @@ that aborts later reactivates the addon. While the addon is disabled the stored
 choice is marked withdrawn, and a change that was waiting for the lock refuses,
 as it does once the addon's config is gone, so neither can write the drop-in
 again; enabling clears the mark. The page check is the one thing withdrawal
-does not repeat: a PHP that starts but answers 500 is not caught. The card also shows a newer package
+does not repeat: a PHP that starts but answers 500 is not caught. The row also shows a newer package
 version when apt has one, revision included, because a newer minor is no fix
 until it is patched, and a failure is retried once that version changes.
 

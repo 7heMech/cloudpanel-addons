@@ -1,13 +1,12 @@
-// Browsers refuse WebAuthn on an IP address, so say so where it would fail. A
-// key works only at the address it was added on, so mark the ones from another.
-function paintAddressWarning() {
-  const warning = CLP_ROOT.getElementById('sk-address');
-  if (warning) warning.hidden = !/^[\d.]+$|^\[/.test(location.hostname);
-  for (const cell of CLP_ROOT.querySelectorAll('.sk-host')) {
-    cell.classList.toggle('is-elsewhere', cell.dataset.host !== location.host);
-  }
+// Browsers refuse WebAuthn on an IP address, so the first setup step is done
+// only on a hostname. A key works only at the address it was added on, so the
+// ones from another address say which.
+function paintAddresses() {
+  const step = CLP_ROOT.getElementById('sk-step-address');
+  if (step) step.classList.toggle('done', !/^[\d.]+$|^\[/.test(location.hostname) && window.isSecureContext);
+  for (const host of CLP_ROOT.querySelectorAll('.sk-host')) host.hidden = host.dataset.host === location.host;
 }
-paintAddressWarning();
+paintAddresses();
 
 // Search and the review filter only hide rows; every key is already on the page.
 function filterKeys() {
@@ -22,7 +21,7 @@ function filterKeys() {
         && (show === 'all'
           || (show === 'stale' && row.classList.contains('is-stale'))
           || (show === 'synced' && row.hasAttribute('data-synced'))
-          || (show === 'inactive' && group.hasAttribute('data-inactive')));
+          || (show === 'blocked' && row.hasAttribute('data-blocked')));
       row.hidden = !visible;
       if (visible) shown++;
     }
@@ -51,7 +50,7 @@ async function saveSettings(input) {
       body: JSON.stringify({ roles: roles, syncedPasskeys: CLP_ROOT.getElementById('synced-passkeys').checked }),
     });
     repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
-    paintAddressWarning();
+    paintAddresses();
     notify('Settings saved.', 'ok');
   } catch (error) {
     input.checked = !input.checked;
@@ -78,7 +77,7 @@ async function revokeKey(button) {
       body: JSON.stringify({ user: user, id: button.dataset.id }),
     });
     repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
-    paintAddressWarning();
+    paintAddresses();
     notify('Key removed.', 'ok');
   } catch (error) {
     notify(error.message, 'error');

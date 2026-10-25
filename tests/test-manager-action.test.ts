@@ -304,7 +304,7 @@ describe("the manager index", () => {
 
   test("offers an addon that is compiled in but not enabled", async () => {
     const html = await render(["instatic"], null, { available: ["stager"] });
-    expect(html).toContain("<h2>Available</h2>");
+    expect(html).toContain('<h2>Available <span class="hint">1</span></h2>');
     expect(html).toContain("enableAddon('stager', this)");
     expect(html).toContain('aria-label="Open Instatic CMS">Open</a>');
     // The slug the route takes, then the name the card shows, which is what
@@ -312,9 +312,16 @@ describe("the manager index", () => {
     expect(html).toContain(`disableAddon('instatic', 'Instatic CMS', this)`);
   });
 
+  test("marks addons first shipped in the installed release line as new", async () => {
+    const html = await render([], null, { available: ["dns", "stager"], version: "2.0.3" });
+    expect(html.match(/>New</g)).toHaveLength(1);
+    expect(html).toMatch(/DNS <span class="badge state-queued">New<\/span>/);
+    expect(await render([], null, { available: ["dns"], version: "2.1.0" })).not.toContain(">New<");
+  });
+
   test("shows no Available section when every addon is on", async () => {
     const html = await render(["instatic", "stager"], null, { available: [] });
-    expect(html).not.toContain("<h2>Available</h2>");
+    expect(html).not.toContain("<h2>Available");
     // The handlers are always defined; what must be absent is anything calling them.
     expect(html).not.toContain("enableAddon('");
   });

@@ -2,6 +2,7 @@
 .st-status { margin-top: 10px !important; }
 .st-status .badge { margin-right: 6px; }
 .st-install { margin-top: 12px; }
+.st-alert { margin: 12px 0 0; }
 .st-inline-notice { margin: 12px 0 0 !important; padding: 10px 14px; color: var(--warn) !important; }
 .st-kv { display: grid; grid-template-columns: minmax(110px, 180px) minmax(0, 1fr); gap: 10px 25px; align-items: baseline;
   margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--row-border); font-size: 14px; }
@@ -21,10 +22,20 @@
   .st-table th, .st-table td { padding: 10px 12px; }
 }
 
-.st-reboot-time { margin-top: 14px; }
-.st-reboot-controls { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0; align-items: center; }
-.st-reboot-controls select { flex: 1 1 210px; min-width: 0; }
-.st-reboot-controls input { flex: 0 1 180px; min-width: 0; }
-.panel-php-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; }
-.panel-php-choice select { width: auto; max-width: 100%; }
+.st-reboot-time { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; }
+.st-reboot-time select { flex: 0 1 240px; min-width: 0; }
+.st-reboot-time input { flex: 0 1 170px; min-width: 0; }
+.st-reboot-time + .hint { margin-top: 6px; font-size: 13px; }
+.st-fold { margin-top: 14px; }
+.st-fold > summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+.st-fold > summary .badge { margin-right: 6px; }
+.st-fold[open] > summary { margin-bottom: 10px; }
+.st-fold > .hint { margin: 0 0 10px; font-size: 13px; }
+.card > .st-fold { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--row-border); }
+.tweak-heading select { flex: 0 1 300px; width: auto; min-width: 0; }
 #panel-php-status:empty { display: none; }
+@media (max-width: 760px) {
+  /* The version list takes its own line under the title. */
+  .tweak-heading:has(select) { flex-wrap: wrap; }
+  .tweak-heading select { flex: 1 1 100%; }
+}

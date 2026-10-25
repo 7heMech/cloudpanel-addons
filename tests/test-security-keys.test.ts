@@ -322,7 +322,8 @@ describe("the root action", () => {
   test("every role may use keys until an administrator turns one off", async () => {
     account("root-admin", 1, 1, "ROLE_ADMIN");
     const key = new SoftKey();
-    expect((await register("alice", key)).ok).toBe(true);
+    // Registering answers with the same view of the account as listing does.
+    expect(await register("alice", key)).toMatchObject({ ok: true, data: { keys: [{ name: "YubiKey" }], canAdd: true, syncedPasskeys: true } });
     expect(await run(["keys", "--panel-user=alice"])).toMatchObject({ data: { canAdd: true, syncedPasskeys: true } });
     expect((await run(["users"])).data.settings).toEqual({ roles: ["ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"], syncedPasskeys: true });
 
@@ -400,18 +401,27 @@ test("the admin list groups keys by user and marks what needs review", () => {
     { user: "admin", active: true, role: "ROLE_ADMIN", keys: [key("a", "YubiKey", false, "2026-10-23T08:00:00Z"), key("b", "Bitwarden", true, null)] },
     { user: "gone", active: false, role: null, keys: [key("c", "Old key", false, "2026-03-01T00:00:00Z")] },
     { user: "nobody", active: true, role: "ROLE_USER", keys: [] },
+    { user: "jane", active: true, role: "ROLE_SITE_MANAGER", keys: [key("d", "Laptop", false, "2026-10-20T00:00:00Z")] },
   ];
   const page = dashboardView({ users, settings: { roles: ["ROLE_ADMIN"], syncedPasskeys: false } }, now);
-  expect(page.match(/class="sk-group"/g)).toHaveLength(2);
-  expect(page).toContain("<strong>admin</strong> <span class=\"hint\">Administrator · 2 keys</span>");
+  expect(page.match(/class="sk-group"/g)).toHaveLength(3);
+  expect(page).toContain("<strong>admin</strong> <span class=\"hint\">Administrator · 2 keys</span></th>");
   expect(page).toContain("<strong>gone</strong> <span class=\"hint\">1 key</span> <span class=\"sk-refused\">No longer signs in</span>");
+  expect(page).toContain("<strong>jane</strong> <span class=\"hint\">Site manager · 1 key</span> <span class=\"sk-refused\">Role is off</span>");
   expect(page).not.toContain("nobody");
-  expect(page).toContain("3 keys for 2 users");
+  expect(page).toContain("4 keys for 3 users");
   expect(page).toContain("Synced passkey, not accepted");
+  expect(page).toContain("1 synced passkey is on file and refused while this is off.");
+  // The refused passkey, the deactivated account and the role that is off.
+  expect(page.match(/data-blocked/g)).toHaveLength(3);
+  expect(page).not.toContain("Device-bound");
   expect(page).toContain(">Yesterday</time>");
   expect(page.match(/sk-key is-stale/g)).toHaveLength(2);
   expect(page).not.toContain("<span class=\"badge");
-  expect(dashboardView({ users: [], settings: { roles: [], syncedPasskeys: true } }, now)).toContain("No security keys yet.");
+  const empty = dashboardView({ users: [], settings: { roles: [], syncedPasskeys: true } }, now);
+  expect(empty).toContain("Set up security keys");
+  expect(empty).not.toContain("sk-table");
+  expect(empty).toContain("Every role is off, so nobody can add a key or sign in with one.");
 });
 
 test("Today and Yesterday follow the UTC calendar, not 24-hour spans", () => {

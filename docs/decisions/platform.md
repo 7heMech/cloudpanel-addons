@@ -25,6 +25,12 @@ Addons page itself, laid out the way an addon's `app/` is. It is not in `cli/`
 because none of it is a command; `cli/index.ts` calls `cmdServe` and otherwise
 knows nothing about it.
 
+The Addons page is two lists, Enabled and Available, one row per addon with its
+one-line description and its buttons, so the whole catalog fits on a screen. An
+addon's `added` release line (`2.0`) marks it New for as long as that line is
+the one installed. That is the only change the page reports; what changed in
+existing addons is the changelog's, which the update page links.
+
 ## One catalog, compiled in
 
 `cli/addon-catalog.ts` is the only registration seam. An addon declares itself

@@ -60,17 +60,11 @@ function installUpdates() {
   return change(null, '/api/install-updates', {}, 'unattended-upgrades is installed.', true);
 }
 
-function rebootModeChanged(select) {
-  const time = select.form.elements.time;
-  time.hidden = select.value !== 'time';
-  time.disabled = time.hidden;
-  time.required = !time.hidden;
-}
-
-function saveRebootTime(event, form) {
-  event.preventDefault();
-  if (!form.reportValidity()) return;
-  const mode = form.elements.mode.value;
-  const rebootTime = mode === 'existing' ? null : mode === 'now' ? 'now' : form.elements.time.value;
-  return change(null, '/api/updates', { rebootTime }, 'Reboot timing saved.');
+// Saved on every change: the select, or the time once one is shown.
+function setRebootTime(control) {
+  const time = CLP_ROOT.getElementById('reboot-time');
+  const at = CLP_ROOT.getElementById('reboot-mode').value === 'time';
+  time.hidden = !at;
+  if (at && !time.value) return;
+  return change(null, '/api/updates', { rebootTime: at ? time.value : 'now' }, 'Reboot timing saved.');
 }
