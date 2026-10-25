@@ -10,7 +10,7 @@ import {
   type PhpResourcesState, type PoolProfile, type PoolSiteState, type ReconcileResult,
 } from "../addons/php-resources/action";
 import type { CommandResult } from "../cli/action-common";
-import { CLIENT_JS, dashboardView, layout } from "../addons/php-resources/app/views";
+import { CLIENT_JS, dashboardView, layout, siteCardHtml } from "../addons/php-resources/app/views";
 
 /** CloudPanel's PoolBuilder output, byte for byte, with no trailing newline. */
 const STOCK_POOL = `[shop.example.com]
@@ -509,21 +509,33 @@ test("the PHP Resources category dialog fits a phone", () => {
   );
   expect(html).toContain("#category-dialog { width:720px; }");
   expect(html).toContain("@media (max-width:760px) {\n  #category-dialog { width:calc(100% - 20px); }");
-  expect(html).toContain('onmousedown="closeCategoryDialogOnBackdrop(event)"');
-  expect(html).toContain("if (!inside) dialog.close();");
+});
+
+test("the category dialog shows name, process manager and max children, and the rest under More limits", () => {
+  const html = dashboardView({ categories: [], defaultCategoryId: null, sites: [] });
+  const dialog = html.slice(html.indexOf('<dialog id="category-dialog"'));
+  const more = dialog.indexOf('<details class="disclosure" id="category-more">');
+  expect(more).toBeGreaterThan(0);
+  for (const id of ["category-name", "category-pm", "category-maxChildren"]) {
+    expect(dialog.indexOf(`id="${id}"`)).toBeLessThan(more);
+  }
+  for (const id of ["category-processIdleTimeout", "category-startServers", "category-maxRequests",
+    "category-requestTerminateTimeout", "category-rlimitFiles", "category-description"]) {
+    expect(dialog.indexOf(`id="${id}"`)).toBeGreaterThan(more);
+  }
 });
 
 test("php-resources site cards and select-all keep selection in sync", () => {
   const el = (over: any = {}) => ({ textContent: "", className: "", disabled: false, checked: false, indeterminate: false, ...over });
   const byId: Record<string, any> = {
     "site-selection": el(), "select-all": el(), "select-all-btn": el(), "assign-selected": el({ disabled: true }),
-    "bulk-category": el({ querySelector: () => null }),
   };
   const checkboxes = [el(), el()];
   const rows = checkboxes.map((checkbox, index) => {
     const attributes: Record<string, string> = { "aria-selected": "false" };
     return {
       dataset: { domain: index === 0 ? "a.test" : "b.test" },
+      hidden: false,
       attributes,
       setAttribute: (name: string, value: string) => { attributes[name] = value; },
       querySelector: (sel: string) => sel === ".site-checkbox" ? checkbox : null,
@@ -533,22 +545,24 @@ test("php-resources site cards and select-all keep selection in sync", () => {
     getElementById: (id: string) => byId[id] ?? null,
     querySelectorAll: (sel: string) => {
       if (sel === "tr[data-domain]") return rows;
-      if (sel === ".site-checkbox") return checkboxes;
+      if (sel === "[data-needs-selection]") return [byId["assign-selected"]];
       return [];
     },
   };
   const fakeDoc = { readyState: "complete", addEventListener: () => {} };
-  const factory = new Function("CLP_ROOT", "document", `${CLIENT_JS}\nreturn { toggleAllSites, selectAllSites, paintSelection, selectedRows, siteRows, toggleSiteSelection };`);
+  const factory = new Function("CLP_ROOT", "document", `${CLIENT_JS}\nreturn { toggleAllSites, paintFleetSelection, toggleSiteSelection };`);
   const client = factory(CLP_ROOT, fakeDoc);
-  client.paintSelection();
+  client.paintFleetSelection();
   expect(byId["select-all-btn"].textContent).toBe("Select all");
+  expect(byId["assign-selected"].disabled).toBe(true);
 
   const cardTarget = { closest: () => null };
-  client.toggleSiteSelection({ type: "click", target: cardTarget }, rows[0], client.paintSelection);
+  client.toggleSiteSelection({ type: "click", target: cardTarget }, rows[0]);
   expect(checkboxes[0]!.checked).toBe(true);
   expect(rows[0]!.attributes["aria-selected"]).toBe("true");
   expect(byId["site-selection"].textContent).toBe("1 of 2 selected");
-  client.toggleSiteSelection({ type: "click", target: { closest: () => ({}) } }, rows[0], client.paintSelection);
+  expect(byId["assign-selected"].disabled).toBe(false);
+  client.toggleSiteSelection({ type: "click", target: { closest: () => ({}) } }, rows[0]);
   expect(checkboxes[0]!.checked).toBe(true);
 
   let prevented = false;
@@ -557,15 +571,15 @@ test("php-resources site cards and select-all keep selection in sync", () => {
     key: " ",
     target: cardTarget,
     preventDefault: () => { prevented = true; },
-  }, rows[0], client.paintSelection);
+  }, rows[0]);
   expect(prevented).toBe(true);
   expect(checkboxes[0]!.checked).toBe(false);
   expect(rows[0]!.attributes["aria-selected"]).toBe("false");
 
-  client.toggleAllSites(client.paintSelection);
+  client.toggleAllSites();
   expect(checkboxes.every((c: any) => c.checked)).toBe(true);
   expect(byId["select-all-btn"].textContent).toBe("Deselect all");
-  client.toggleAllSites(client.paintSelection);
+  client.toggleAllSites();
   expect(checkboxes.every((c: any) => !c.checked)).toBe(true);
   expect(byId["select-all-btn"].textContent).toBe("Select all");
 });
@@ -585,8 +599,88 @@ test("the site table carries the mobile select-all control and selectable rows",
       categoryId: null, categoryName: null, drifted: false,
     }],
   });
-  expect(html).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites(paintSelection)">Select all</button>');
+  expect(html).toContain('<button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>');
   expect(html).toContain('<table class="fleet-table php-sites-table">');
-  expect(html).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this, paintSelection)"');
+  expect(html).toContain('tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)"');
+  expect(html).toContain('<span class="hint">PHP 8.2</span>');
+  expect(html).not.toContain('class="type-cell"');
   expect(layout("PHP resources", html)).toContain(".fleet-table.php-sites-table td.site-select { display:none; }");
+});
+
+test("the page puts the sites first and the default for new sites in the Categories header", () => {
+  const sites: PoolSiteState[] = ["a", "b", "c", "d", "e", "f"].map((name, index) => ({
+    domain: `${name}.example.com`, siteUser: name, phpVersion: "8.3",
+    poolFile: `/etc/php/8.3/fpm/pool.d/${name}.example.com.conf`,
+    current: { ...STOCK_PROFILE }, categoryId: "lite", categoryName: "Lite", drifted: index === 0,
+  }));
+  const html = dashboardView({ categories: PRESET_CATEGORIES, defaultCategoryId: "standard", sites });
+  expect(html).not.toContain('class="card stats"');
+  expect(html).not.toContain("default-card");
+  expect(html.indexOf("<h2>PHP sites</h2>")).toBeLessThan(html.indexOf("<h2>Categories</h2>"));
+  expect(html.indexOf("<h2>Categories</h2>")).toBeLessThan(html.indexOf('id="default-category"'));
+  expect(html).toContain("None (CloudPanel&#x27;s limits)");
+  expect(html).toContain('<option value="drifted">Drifted</option>');
+  expect(html).toContain('data-domain="a.example.com" data-show="drifted"');
+  expect(html).toContain('id="assign-selected" type="button" disabled data-needs-selection');
+  expect(html).toContain('id="bulk-category" data-keep');
+  expect(html).not.toContain("closeCategoryDialogOnBackdrop");
+  expect(html).not.toContain("fifteen minutes of being created");
+});
+
+test("a category's unused spare-server numbers do not read as drift", async () => {
+  const box = makeBox();
+  try {
+    box.addSite("shop.example.com", "8.2");
+    // On demand, with dynamic numbers kept from an earlier edit: none of them reach the pool file.
+    const saved = await executePhpResourcesAction(["save-category"], options(box, JSON.stringify({
+      id: null, name: "Quiet", description: "",
+      profile: { ...STOCK_PROFILE, maxChildren: 6, startServers: 4, minSpareServers: 3, maxSpareServers: 5 },
+    }))) as PhpResourcesResult;
+    const quiet = saved.categories.find((category) => category.name === "Quiet")!;
+    await assign(box, ["shop.example.com"], quiet.id);
+
+    const state = await executePhpResourcesAction(["list"], options(box)) as PhpResourcesState;
+    expect(siteIn(state, "shop.example.com").drifted).toBe(false);
+    const result = await executePhpResourcesAction(["reconcile"], options(box)) as ReconcileResult;
+    expect(result.repaired).toBe(0);
+  } finally {
+    rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+test("a new site whose pool could not be written joins the default on a later pass", async () => {
+  const box = makeBox();
+  try {
+    box.addSite("shop.example.com", "8.2");
+    await executePhpResourcesAction(["set-default"], options(box, JSON.stringify({ categoryId: "standard" })));
+    box.addSite("new.example.com", "8.2");
+    // The vhost is there before the pool file is.
+    const pool = box.poolOf("new.example.com", "8.2");
+    const stock = readFileSync(pool, "utf8");
+    rmSync(pool);
+
+    await expect(executePhpResourcesAction(["reconcile"], options(box))).rejects.toThrow(/new\.example\.com/);
+    expect(JSON.parse(readFileSync(box.paths.policyFile, "utf8")).assignments["new.example.com"]).toBeUndefined();
+
+    writeFileSync(pool, stock);
+    chmodSync(pool, 0o644);
+    const result = await executePhpResourcesAction(["reconcile"], options(box)) as ReconcileResult;
+    expect(result.applied).toBe(1);
+    expect(readProfileFromPool(readFileSync(pool, "utf8"))).toEqual(BUSY.profile);
+  } finally {
+    rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+test("the card on a site's Settings tab sums the pool up in a line and keeps the rest behind a toggle", () => {
+  const html = siteCardHtml({
+    domain: "shop.example.com", siteUser: "shop", phpVersion: "8.3",
+    poolFile: "/etc/php/8.3/fpm/pool.d/shop.example.com.conf",
+    current: { ...BUSY.profile }, categoryId: "standard", categoryName: "Standard", drifted: false,
+  });
+  const toggle = html.indexOf('<details class="clp-addon-limits"><summary>All limits</summary>');
+  expect(toggle).toBeGreaterThan(0);
+  expect(html.indexOf("Standard")).toBeLessThan(toggle);
+  expect(html.indexOf("On demand, up to 8")).toBeLessThan(toggle);
+  expect(html.indexOf("Max Requests per Worker")).toBeGreaterThan(toggle);
 });

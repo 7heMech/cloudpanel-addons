@@ -15,19 +15,22 @@ function readProfile() {
   const root = CLP_ROOT.getElementById('category-profile');
   if (!root) return null;
   const profile = {};
-  let bad = '';
+  let bad = null;
   root.querySelectorAll('[data-field]').forEach(function (input) {
     const key = input.dataset.field;
     if (key === 'pm') { profile.pm = input.value; return; }
     const raw = input.value.trim();
     if (!/^[0-9]+$/.test(raw)) {
-      if (!bad) bad = (CLP_ROOT.querySelector('label[for="' + input.id + '"]') || {}).textContent || key;
+      if (!bad) bad = input;
       return;
     }
     profile[key] = Number(raw);
   });
   if (bad) {
-    notify(bad + ' must be a whole number.', 'error');
+    const more = CLP_ROOT.getElementById('category-more');
+    if (more && more.contains(bad)) more.open = true;
+    if (bad.focus) bad.focus();
+    notify(((CLP_ROOT.querySelector('label[for="' + bad.id + '"]') || {}).textContent || bad.dataset.field) + ' must be a whole number.', 'error');
     return null;
   }
   return profile;
@@ -43,18 +46,8 @@ function writeProfile(profile) {
 }
 
 function paintResources(html) {
-  const selected = selectedRows().map(function (row) { return row.dataset.domain; });
-  const category = CLP_ROOT.getElementById('bulk-category')?.value || '';
   repaintView(CLP_ROOT.getElementById('clp-content'), html);
   busy(false);
-  siteRows().forEach(function (row) {
-    row.querySelector('.site-checkbox').checked = selected.includes(row.dataset.domain);
-  });
-  const picker = CLP_ROOT.getElementById('bulk-category');
-  if (picker && Array.from(picker.options).some(function (option) { return option.value === category; })) {
-    picker.value = category;
-  }
-  paintSelection();
 }
 
 /** What to say when a change landed on some sites and not on others. */
@@ -98,17 +91,8 @@ function openCategoryDialog(button) {
   CLP_ROOT.getElementById('category-name').value = category ? category.name : '';
   CLP_ROOT.getElementById('category-description').value = category ? category.description : '';
   writeProfile(category ? category.profile : JSON.parse(dialog.dataset.defaultProfile));
+  CLP_ROOT.getElementById('category-more').open = false;
   dialog.showModal();
-}
-
-/** Dismiss the modal only when the press landed on the native dialog backdrop. */
-function closeCategoryDialogOnBackdrop(event) {
-  const dialog = event.currentTarget;
-  if (event.target !== dialog) return;
-  const rect = dialog.getBoundingClientRect();
-  const inside = event.clientX >= rect.left && event.clientX <= rect.right &&
-    event.clientY >= rect.top && event.clientY <= rect.bottom;
-  if (!inside) dialog.close();
 }
 
 async function saveCategory() {
@@ -163,29 +147,6 @@ async function setDefaultCategory(select) {
 }
 
 // --- sites ----------------------------------------------------------------
-
-function paintSelection() {
-  const rows = siteRows();
-  rows.forEach(function (row) {
-    const box = row.querySelector('.site-checkbox');
-    row.setAttribute('aria-selected', String(Boolean(box && box.checked)));
-  });
-  const chosen = selectedRows();
-  const note = CLP_ROOT.getElementById('site-selection');
-  if (note) note.textContent = chosen.length === 0 ? 'No sites selected' : chosen.length + ' of ' + rows.length + ' selected';
-  const apply = CLP_ROOT.getElementById('assign-selected');
-  if (apply) apply.disabled = chosen.length === 0;
-  const all = CLP_ROOT.getElementById('select-all');
-  if (all) {
-    all.checked = rows.length > 0 && chosen.length === rows.length;
-    all.indeterminate = chosen.length > 0 && chosen.length < rows.length;
-  }
-  const allBtn = CLP_ROOT.getElementById('select-all-btn');
-  if (allBtn) {
-    allBtn.disabled = rows.length === 0;
-    allBtn.textContent = rows.length > 0 && chosen.length === rows.length ? 'Deselect all' : 'Select all';
-  }
-}
 
 function categoryLabel(id) {
   const picker = CLP_ROOT.getElementById('bulk-category');
@@ -284,7 +245,7 @@ async function repairDrifted() {
 }
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', paintSelection);
+  document.addEventListener('DOMContentLoaded', paintFleetSelection);
 } else {
-  paintSelection();
+  paintFleetSelection();
 }

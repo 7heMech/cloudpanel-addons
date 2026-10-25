@@ -69,7 +69,7 @@ test("repair upkeep is the addons that ask for it, in catalog order", () => {
 
 test("new-site work runs DNS before SMTP Relay, and only for installed addons", () => {
   const all = ADDON_NAMES.map((name) => ADDONS[name]!);
-  expect(addonNewSites(all).map((spec) => spec.name)).toEqual(["cloudflare-ips", "dns", "smtp"]);
+  expect(addonNewSites(all).map((spec) => spec.name)).toEqual(["cloudflare-ips", "dns", "php-resources", "smtp"]);
   expect(addonNewSites([ADDONS.smtp!]).map((spec) => spec.name)).toEqual(["smtp"]);
 });
 
