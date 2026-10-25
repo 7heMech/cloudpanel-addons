@@ -21,9 +21,12 @@
 .sk-toolbar select { width: auto; }
 .sk-toolbar .hint { margin-left: auto; }
 .sk-table td { padding: 10px 32px; }
-.sk-group-head th { padding: 16px 32px 6px; border-top: 1px solid var(--row-border); background: none; color: var(--text);
+/* Whitespace, not lines, between one user's keys and the next. */
+.sk-group-head th { padding: 26px 32px 4px; border-top: 0; background: none; color: var(--text);
   font-size: 15px; font-weight: 400; letter-spacing: 0; text-transform: none; white-space: normal; }
 .sk-group-head .hint { margin-left: 6px; }
+.sk-group:first-of-type .sk-group-head th { padding-top: 18px; }
+.sk-group .sk-key:last-child td { padding-bottom: 14px; }
 .sk-refused { color: var(--bad); font-size: 13px; }
 .sk-group-head .sk-refused { margin-left: 6px; }
 .sk-key td { border-top: 0; }

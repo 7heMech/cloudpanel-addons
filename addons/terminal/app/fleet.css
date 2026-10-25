@@ -5,3 +5,15 @@
   .terminal-site-table td.action-cell:has(.btn) { flex: 0 0 auto; }
   .terminal-site-table .btn { padding: 6px 12px; font-size: 14px; }
 }
+/* Only a domain and a button per site, so a wide screen shows two sites a row. */
+@media (min-width: 941px) {
+  .terminal-site-table thead { display: none; }
+  .terminal-site-table tbody { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-left: -1px; }
+  .terminal-site-table tr { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    border-top: 1px solid var(--row-border); border-left: 1px solid var(--row-border); }
+  .terminal-site-table tr[hidden] { display: none; }
+  .terminal-site-table tr:has(td[colspan]) { grid-column: 1 / -1; }
+  .terminal-site-table td { border-top: 0; min-width: 0; }
+  .terminal-site-table td.site-cell { flex: 1 1 auto; padding-right: 0; }
+  .terminal-site-table td.action-cell { flex: 0 0 auto; }
+}
