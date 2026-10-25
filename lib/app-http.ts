@@ -337,3 +337,12 @@ export const SECURITY_HEADERS: Record<string, string> = {
   "Referrer-Policy": "no-referrer",
   "X-Frame-Options": "DENY",
 };
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** What a page draws in place of its content when loading it failed. */
+export function errorBlock(error: unknown): string {
+  return `<div class="alert" role="alert">${esc(errorMessage(error))}</div>`;
+}

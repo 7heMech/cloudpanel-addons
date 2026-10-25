@@ -44,6 +44,50 @@ export function sinceText(iso: string): string {
   return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
+/** The badge class for a job's state. */
+export function jobStateClass(state: string): string {
+  return ["queued", "running", "done", "failed"].includes(state) ? `state-${state}` : "state-failed";
+}
+
+/** A job's state as a sentence would put it. */
+export function jobStateLabel(state: string): string {
+  return ({ queued: "Queued", running: "Running", done: "Done", failed: "Failed" } as Record<string, string>)[state] ?? state;
+}
+
+/** A recorded time as the job pages print it, `2026-09-10 09:30 UTC`. */
+export function whenText(iso: string): string {
+  const at = Date.parse(iso);
+  return Number.isFinite(at) ? `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC` : "—";
+}
+
+/** Below this many sites the whole table fits on a screen, so it needs no search. */
+export const FLEET_FILTER_MIN = 6;
+
+/**
+ * Search, and an optional filter, above a site table whose rows carry
+ * `data-domain`, `data-find` and `data-show`; the client half is `filterFleet`.
+ */
+export function fleetFilterHtml(options: {
+  count: number;
+  placeholder?: string;
+  filters?: { value: string; label: string }[];
+  summary: string;
+}): string {
+  if (options.count < FLEET_FILTER_MIN) return "";
+  const filters = options.filters?.length
+    ? `<select id="fleet-show" data-keep aria-label="Show" onchange="filterFleet()"><option value="">All sites</option>${options.filters
+      .map((filter) => `<option value="${esc(filter.value)}">${esc(filter.label)}</option>`).join("")}</select>`
+    : "";
+  const placeholder = options.placeholder ?? "Find a site";
+  return `<div class="fleet-filter">
+      <input type="search" id="fleet-find" data-keep placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" oninput="filterFleet()">
+      ${filters}<span class="hint" id="fleet-summary" data-all="${esc(options.summary)}">${esc(options.summary)}</span>
+    </div>`;
+}
+
+/** Shown under the table when the search or filter leaves no row. */
+export const FLEET_NONE_HTML = '<div class="empty" id="fleet-none" hidden>No site matches.</div>';
+
 /** Shared interaction and focus treatment for selectable site-table rows. */
 export function fleetRowSelectionStyle(tableClass: string): string {
   return `
@@ -162,6 +206,10 @@ const CONFIRM_HTML = `<dialog id="clp-confirm" aria-labelledby="clp-confirm-titl
   <div class="dialog-header"><h2 id="clp-confirm-title">Are you sure?</h2></div>
   <p id="clp-confirm-text"></p>
   <ul id="clp-confirm-details" hidden></ul>
+  <div class="form-field" id="clp-confirm-typed-field" hidden>
+    <label for="clp-confirm-typed">Type <strong id="clp-confirm-typed-word"></strong> to confirm</label>
+    <input id="clp-confirm-typed" autocomplete="off" autocapitalize="off" spellcheck="false">
+  </div>
   <form method="dialog" class="actions dialog-actions">
     <button class="btn" value="cancel" type="submit">Cancel</button>
     <button class="btn btn-primary" id="clp-confirm-accept" type="button">Continue</button>

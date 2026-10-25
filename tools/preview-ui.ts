@@ -371,10 +371,10 @@ let panelPhpChoice: string | null = null;
 
 let systemTweaksPreview: SystemTweaksState | null = null;
 
-/** ?dark draws an addon page in the dark theme, as the panel's cookie would. */
+/** ?dark draws a page in the panel's dark theme, from the cookie the panel's own switch sets. */
 function previewTheme(html: string, url: URL): string {
   if (!url.searchParams.has("dark")) return html;
-  return html.replace("</body>", () => `<script>addEventListener("DOMContentLoaded",function(){document.cookie='theme=dark; Path=/';syncTheme()})</script></body>`);
+  return html.replace("<head>", "<head><script>document.cookie='theme=dark; Path=/'</script>");
 }
 
 /**
@@ -1410,7 +1410,7 @@ const server = Bun.serve({
       html = panelTweaksLayout("Panel Tweaks", panelTweaksDashboardView(panelTweaksPreviewState(url)), notice);
     } else if (path === "/addons/system-tweaks/" || path === "/addons/system-tweaks") {
       systemTweaksPreview = null;
-      html = previewTheme(systemTweaksLayout("System Tweaks", systemTweaksDashboardView(systemTweaksPreviewState(url)), notice), url);
+      html = systemTweaksLayout("System Tweaks", systemTweaksDashboardView(systemTweaksPreviewState(url)), notice);
     } else if (path === "/addons/terminal/" || path === "/addons/terminal") {
       html = terminalLayout("Terminal", terminalDashboardView(empty ? [] : terminalPreviewSites), notice);
     } else if (path === "/addons/wp-tools/" || path === "/addons/wp-tools") {
@@ -1449,8 +1449,7 @@ const server = Bun.serve({
         mailcow: "dnsEditMailcow()",
         server: "dnsEditServer()",
       };
-      const dark = url.searchParams.has("dark") ? "document.cookie='theme=dark; Path=/';syncTheme();" : "";
-      const opener = dark + (dialog ? openers[dialog] ?? "" : at ? `const card=document.querySelector(${JSON.stringify(at)})?.closest("#dns-root > *");for(let el=document.getElementById("dns-root").firstElementChild;el&&el!==card;el=el.nextElementSibling)el.style.display="none"` : "");
+      const opener = (dialog ? openers[dialog] ?? "" : at ? `const card=document.querySelector(${JSON.stringify(at)})?.closest("#dns-root > *");for(let el=document.getElementById("dns-root").firstElementChild;el&&el!==card;el=el.nextElementSibling)el.style.display="none"` : "");
       html = dnsLayout("DNS", dnsDashboardView(state), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener.replaceAll("<", "\\u003c")}})</script></body>` : "</body>");
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {
@@ -1462,13 +1461,13 @@ const server = Bun.serve({
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/security-keys/" || path === "/addons/security-keys") {
       // ?hardware-only turns synced passkeys off; ?admins-only leaves one role on and ?no-roles none.
-      html = previewTheme(securityKeysLayout("Security Keys", securityKeysDashboardView({
+      html = securityKeysLayout("Security Keys", securityKeysDashboardView({
         users: securityKeysPreviewUsers(url),
         settings: {
           roles: url.searchParams.has("no-roles") ? [] : url.searchParams.has("admins-only") ? ["ROLE_ADMIN"] : ["ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"],
           syncedPasskeys: !url.searchParams.has("hardware-only"),
         },
-      }), notice), url);
+      }), notice);
     } else if (path === "/addons/cloudflare-ips/" || path === "/addons/cloudflare-ips") {
       html = cloudflareLayout("Cloudflare IP Access", cloudflareDashboardView(cloudflarePreviewState(url)), notice);
     } else if (path === "/addons/instatic/") {
@@ -1572,7 +1571,7 @@ const server = Bun.serve({
     } else if (path === "/addons/stager/api/jobs/preview-job") {
       return Response.json({ ok: true, data: { job: { ...currentJob, state: "running", result: null }, log: logs } });
     } else return new Response("Not found", { status: 404 });
-    return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+    return new Response(previewTheme(html, url), { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
   },
 });
 console.log(`UI preview (fictional data): ${server.url}addons/`);

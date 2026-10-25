@@ -247,6 +247,31 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 #clp-flash { margin-bottom: 20px; }
 #clp-confirm-details { margin: 12px 0 0; padding-left: 20px; color: var(--muted); font-size: 14px; }
 #clp-confirm-text { margin: 0; overflow-wrap: anywhere; }
+#clp-confirm-typed-field { margin: 16px 0 0; }
+#clp-confirm-typed-field label { font-size: 14px; overflow-wrap: anywhere; }
+/* A section that opens: its summary reads as a title with a hint, and a chevron. */
+.disclosure > summary { display: flex; align-items: center; gap: 12px; cursor: pointer; list-style: none; }
+.disclosure > summary::-webkit-details-marker { display: none; }
+.disclosure > summary::after { content: ''; width: 7px; height: 7px; flex: 0 0 7px; margin-left: auto;
+  border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(-45deg); }
+.disclosure[open] > summary::after { transform: rotate(45deg); }
+.disclosure > summary .summary-title { display: block; color: var(--heading); font-weight: 600; }
+.disclosure > summary .hint { display: block; margin-top: 5px; }
+.disclosure[open] > summary { margin-bottom: 20px; }
+.disclosure + .disclosure { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
+/* Text on the left and the control that sets it on the right, as one card. */
+.split-card { display: flex; align-items: center; justify-content: space-between; gap: 16px 24px; }
+.split-card > :first-child { min-width: 0; }
+.split-card h2 { margin: 0 0 6px; }
+.split-card p { margin: 0; }
+.split-card .hint { margin-top: 4px; }
+.split-card > :last-child { flex-shrink: 0; }
+/* Search and filter above a site table. */
+.fleet-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 0 32px 18px; }
+.fleet-filter input { flex: 1 1 220px; max-width: 320px; }
+.fleet-filter select { width: auto; }
+.fleet-filter .hint { margin-left: auto; }
+.fleet-table tr[hidden] { display: none !important; }
 @media (max-width: 1100px) {
   .clp-addon-header-inner > #clp-addons-update-notice { order: 3; flex: 1 0 100%; margin: 0;
     padding: 10px 20px; justify-content: flex-end; border-top: 1px solid var(--border); }
@@ -312,6 +337,11 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
      the domain on a line of its own, and every other cell names its column. */
   .fleet-table, .fleet-table tbody, .fleet-table tr, .fleet-table td { display: block; }
   .fleet-table thead { display: none; }
+  .fleet-filter { padding: 0 20px 16px; }
+  .fleet-filter input { max-width: none; }
+  .fleet-filter .hint { flex-basis: 100%; margin-left: 0; }
+  .split-card { flex-wrap: wrap; }
+  .split-card > :last-child { flex-basis: 100%; }
   .mobile-select-all { display: inline-flex; margin-left: auto; padding: 6px 14px; font-size: 13px; white-space: nowrap; }
   .fleet-table tr { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px 12px;
     padding: 16px 20px; border-top: 1px solid var(--row-border); }
