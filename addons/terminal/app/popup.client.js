@@ -127,7 +127,7 @@ const END_REASONS = {
   gone: 'This session is no longer running.',
 };
 
-function showEnded(text, title) {
+function showEnded(text, title, again) {
   ended = true;
   if (events) events.close();
   events = null;
@@ -139,9 +139,11 @@ function showEnded(text, title) {
   setStatus('Ended', '');
   document.getElementById('term-ended-title').textContent = title || 'Session ended';
   document.getElementById('term-ended-text').textContent = text;
+  const newButton = document.getElementById('term-new');
+  newButton.textContent = again || 'New session';
   termMain.classList.add('is-ended');
   endedCard.hidden = false;
-  document.getElementById('term-new').focus();
+  newButton.focus();
 }
 
 function finish(info) {
@@ -164,7 +166,7 @@ async function createSession() {
     sessionStorage.setItem(STORE_KEY, sessionId);
     attach(false);
   } catch (error) {
-    showEnded(error.message);
+    showEnded(error.message, "Couldn't open a terminal", 'Try again');
   }
 }
 

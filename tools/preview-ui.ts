@@ -843,6 +843,7 @@ const terminalPreviewSites = [
   { domain: "static.example.com", user: "static", type: "static" },
   { domain: "pages.example.com", user: "pages", type: "reverse-proxy" },
   { domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", type: "php" },
+  { domain: "blog.example.org", user: "blog", type: "php" },
 ];
 
 const ESC = "\x1b";
@@ -864,7 +865,7 @@ const TERMINAL_TRANSCRIPT = [
   PROMPT,
 ].join("\r\n");
 
-/** What the next popup shows: `?state=ended|moved|reconnecting` on the popup page sets it. */
+/** What the next popup shows: `?state=ended|moved|reconnecting|refused` on the popup page sets it. */
 let terminalPreviewState = "";
 
 /**
@@ -881,6 +882,9 @@ function terminalPreview(req: Request, url: URL): Response | null {
   }
   if (path.startsWith("/addons/terminal/assets/")) return null;
   if (path === "/addons/terminal/api/sessions" && req.method === "POST") {
+    if (terminalPreviewState === "refused") {
+      return Response.json({ ok: false, error: "www.example.com cannot be opened: its Unix user has no login shell" }, { status: 400 });
+    }
     return Response.json({ ok: true, data: { id: "preview-session-0000000", user: "example" } });
   }
   if (/\/api\/sessions\/[^/]+\/events$/.test(path)) {
