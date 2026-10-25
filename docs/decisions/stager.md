@@ -48,8 +48,8 @@ an operator reads every day is priced as though it were. `Clone` is marked
 hides it, so on a box with no action menu it appears in neither place.
 
 The clone form names the source in one line from the `sites` listing and
-prefills the hostname `stg`. It no longer measures the source: `du -sm` over a
-large site took tens of seconds as root only to print a size. A bare label goes
+prefills the hostname `stg`. It does not measure the source, because measuring
+a large site as root takes tens of seconds. A bare label goes
 under the source's domain, without a leading `www.`; `expandTarget` in
 `app/service.ts` is the one copy, and the page's script carries its source.
 
