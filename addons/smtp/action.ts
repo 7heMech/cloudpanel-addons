@@ -42,7 +42,10 @@ const POSTFIX_KEYS = [
 type PostfixKey = (typeof POSTFIX_KEYS)[number];
 const PHP_INI_NAME = "99-clp-addons-smtp.ini";
 const PHP_INI = `; Managed by clp-addons SMTP Relay\nsendmail_path = ${CLI_BIN} smtp-submit -t -i\n`;
+/** Discard is this one built-in profile, which Stager also assigns its staging copies to. */
 const DONT_SEND: SmtpProfile = { id: "dont-send", name: "Don't send", relay: null, sender: DEFAULT_SENDER };
+/** How long a test waits for Postfix's first delivery attempt. */
+const DELIVERY_WAIT_MS = 8_000;
 const MAX_PROFILES = 24;
 const NAME_MAX = 40;
 const MAX_GRANTS = 30;
@@ -87,6 +90,8 @@ export interface SmtpSiteView {
   sender: string | null;
   /** Which site and profile keep this one from being relayed, or from using its own domains when it is in no profile. */
   blocked: string | null;
+  /** Its PHP-FPM pool sets its own sendmail_path, so its web requests go around the relay. */
+  bypass: boolean;
   grants: string[];
 }
 export interface SmtpState {
@@ -95,6 +100,11 @@ export interface SmtpState {
   sites: SmtpSiteView[];
   skipped: { domain: string; reason: string }[];
 }
+export interface SmtpDelivery {
+  /** What Postfix's first attempt did, or `queued` when it had not tried within the wait. */
+  state: "sent" | "deferred" | "bounced" | "queued";
+  detail: string;
+}
 export interface SmtpTestResult {
   queued: true;
   discarded: boolean;
@@ -102,6 +112,8 @@ export interface SmtpTestResult {
   sender: string;
   replyTo: string | null;
   recipient: string;
+  /** Null for a discarded test, which is never delivered. */
+  delivery: SmtpDelivery | null;
 }
 
 export interface SmtpPaths {
@@ -127,6 +139,7 @@ export interface SmtpActionOptions {
   processUid?: number;
   /** Test fixtures may provide sites without a CloudPanel database. */
   sites?: SmtpSiteRow[];
+  deliveryWaitMs?: number;
 }
 export const DEFAULT_SMTP_PATHS: SmtpPaths = {
   panelDb: PANEL_DB,
@@ -167,7 +180,7 @@ function trustedRead(path: string, uid: number): string | null {
 // Policy
 // ---------------------------------------------------------------------------
 
-/** Produced on read, like PHP Resources' presets, so a read never writes and a deleted one stays deleted. */
+/** Produced on read, like PHP Resources' presets, so a read never writes. */
 function seededPolicy(): SmtpPolicy {
   return { version: 2, profiles: [{ ...DONT_SEND }], defaultProfileId: null, assignments: {}, grants: {}, knownSiteIds: [] };
 }
@@ -221,7 +234,7 @@ function readPolicy(paths: SmtpPaths): SmtpPolicy {
     failAction("SMTP configuration is malformed");
   }
   try {
-    return stablePolicy({
+    return withDontSend({
       version: 2,
       profiles: source.profiles.map((profile) => {
         const raw = profile as unknown as Record<string, unknown>;
@@ -243,9 +256,48 @@ function readPolicy(paths: SmtpPaths): SmtpPolicy {
   }
 }
 
+/**
+ * Discard is `dont-send` and nothing else. 1.5 let any profile discard and let
+ * `dont-send` be given a relay: a discard profile's sites move to `dont-send`,
+ * a relay profile holding that id keeps its sites under an id of its own, and
+ * a deleted `dont-send` comes back.
+ */
+function withDontSend(policy: SmtpPolicy): SmtpPolicy {
+  const next = structuredClone(policy);
+  const moved = new Map<string, string>();
+  const ids = new Set(next.profiles.map((profile) => profile.id));
+  for (const profile of next.profiles) {
+    if (profile.id === DONT_SEND.id && profile.relay) {
+      let base = "relay";
+      try { base = nameSlug(profile.name, "a profile name"); } catch { /* keeps "relay" */ }
+      let id = base;
+      for (let n = 2; ids.has(id) || id === DONT_SEND.id; n++) id = `${base.slice(0, 36)}-${n}`;
+      ids.add(id);
+      moved.set(profile.id, id);
+      profile.id = id;
+    } else if (profile.id !== DONT_SEND.id && !profile.relay) {
+      moved.set(profile.id, DONT_SEND.id);
+    }
+  }
+  next.profiles = next.profiles.filter((profile) => profile.relay || profile.id === DONT_SEND.id);
+  if (!next.profiles.some((profile) => profile.id === DONT_SEND.id)) next.profiles.push({ ...DONT_SEND });
+  const to = (id: string): string => moved.get(id) ?? id;
+  next.assignments = Object.fromEntries(Object.entries(next.assignments).map(([domain, id]) => [domain, to(id)]));
+  if (next.defaultProfileId) next.defaultProfileId = to(next.defaultProfileId);
+  return stablePolicy(next);
+}
+
+const policyText = (policy: SmtpPolicy): string => JSON.stringify(stablePolicy(policy), null, 2) + "\n";
+
 function writePolicy(paths: SmtpPaths, policy: SmtpPolicy): void {
   if (existsSync(paths.stateFile)) trustedStat(paths.stateFile, paths.rootUid);
-  writeFileAtomic(paths.stateFile, JSON.stringify(stablePolicy(policy), null, 2) + "\n", { mode: 0o600, createParent: true });
+  writeFileAtomic(paths.stateFile, policyText(policy), { mode: 0o600, createParent: true });
+}
+
+/** Whether the saved file is older than what reading it makes of it, as a 1.5 file with discard profiles is. */
+function policyFileStale(paths: SmtpPaths, policy: SmtpPolicy): boolean {
+  const raw = trustedRead(paths.stateFile, paths.rootUid);
+  return raw !== null && raw !== policyText(policy);
 }
 
 function findProfile(policy: SmtpPolicy, id: string): SmtpProfile {
@@ -716,7 +768,18 @@ function commit(paths: SmtpPaths, before: SmtpPolicy, next: SmtpPolicy, sites: S
 // Verbs
 // ---------------------------------------------------------------------------
 
-function stateOf(policy: SmtpPolicy, { sites, skipped }: SiteSet): SmtpState {
+/** A pool's own sendmail_path wins over the conf.d one, so the site's web requests go around the relay. */
+function poolSetsSendmail(paths: SmtpPaths, site: SmtpSiteRow): string | null {
+  if (site.phpVersion === null) return null;
+  const pool = join(paths.phpRoot, site.phpVersion, "fpm/pool.d", `${site.domain}.conf`);
+  try {
+    return /^\s*php_(?:admin_)?value\[sendmail_path\]/m.test(readFileSync(pool, "utf8")) ? pool : null;
+  } catch {
+    return null;
+  }
+}
+
+function stateOf(paths: SmtpPaths, policy: SmtpPolicy, { sites, skipped }: SiteSet): SmtpState {
   const routes = new Map(routesFor(policy, sites).map((route) => [route.site, route]));
   const profiles = new Map(policy.profiles.map((profile) => [profile.id, profile]));
   const count = (id: string) => sites.filter((site) => policy.assignments[site.domain] === id).length;
@@ -736,6 +799,7 @@ function stateOf(policy: SmtpPolicy, { sites, skipped }: SiteSet): SmtpState {
         profileId: profiles.get(policy.assignments[site.domain] ?? "")?.id ?? null,
         sender: route.profile ? route.profile.sender.replaceAll("{site}", route.rule.site) : null,
         blocked: route.blocked && `${route.blocked.owner} sends as ${route.blocked.as} through ${route.blocked.profile}`,
+        bypass: route.profile !== null && poolSetsSendmail(paths, site) !== null,
         grants: policy.grants[site.domain] ?? [],
       };
     }),
@@ -770,6 +834,8 @@ function profileRequest(body: Record<string, unknown>): ProfileRequest {
 }
 
 function saveProfile(policy: SmtpPolicy, request: ProfileRequest): SmtpPolicy {
+  if (request.id === DONT_SEND.id) failAction("Don't send is built in and cannot be changed");
+  if (!request.relay) failAction("a profile needs an SMTP server");
   const next = structuredClone(policy);
   const clash = next.profiles.find((profile) => profile.id !== request.id && profile.name.toLowerCase() === request.name.toLowerCase());
   if (clash) failAction(`a profile called '${clash.name}' already exists`);
@@ -804,7 +870,30 @@ function assignRequest(body: Record<string, unknown>): { domains: string[]; prof
   };
 }
 
-function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], body: Record<string, unknown>): SmtpTestResult {
+/**
+ * Postfix's verdict on one message, found by its Message-ID in the mail log:
+ * the first delivery attempt's status, or `queued` if none came within `waitMs`.
+ */
+function awaitDelivery(run: Run, messageId: string, since: number, waitMs: number): SmtpDelivery {
+  const deadline = Date.now() + waitMs;
+  const tagged = new RegExp(`: ([0-9A-Za-z]+): message-id=<${messageId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}>`);
+  let queueId: string | null = null;
+  for (;;) {
+    const log = run("journalctl", ["--since", `@${Math.floor(since / 1000) - 1}`, "--no-pager", "-q", "-o", "short", "SYSLOG_FACILITY=2"]);
+    const lines = log.ok ? log.stdout.split("\n") : [];
+    queueId ??= lines.map((line) => line.match(tagged)?.[1]).find(Boolean) ?? null;
+    if (queueId) {
+      const status = new RegExp(`: ${queueId}: to=<[^>]*>.*, status=(sent|deferred|bounced|expired) \\((.*)\\)\\s*$`);
+      const found = lines.map((line) => line.match(status)).filter(Boolean).at(0);
+      if (found) return { state: found[1] === "expired" ? "bounced" : found[1] as SmtpDelivery["state"], detail: found[2]! };
+    }
+    if (Date.now() >= deadline) return { state: "queued", detail: "" };
+    Bun.sleepSync(500);
+  }
+}
+
+function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], body: Record<string, unknown>, run: Run,
+  waitMs: number): SmtpTestResult {
   const site = requireSite(sites, smtpDomain(body.domain));
   const route = routesFor(policy, sites).find((candidate) => candidate.site === site)!;
   if (route.blocked) failAction(`${site.domain} is not relayed: ${blockReason(route)}`);
@@ -815,13 +904,12 @@ function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], bo
     : php ? `wordpress@${route.rule.site}` : senderFor(route.rule.sender, route.rule.site);
   const path = php ? "PHP's mail()" : "sendmail";
   // A pool's own sendmail_path would send the site's web requests around the relay.
-  const pool = php ? join(paths.phpRoot, site.phpVersion!, "fpm/pool.d", `${site.domain}.conf`) : "";
-  if (php && existsSync(pool) && /^\s*php_(?:admin_)?value\[sendmail_path\]/m.test(readFileSync(pool, "utf8"))) {
-    failAction(`${site.domain}'s PHP-FPM pool sets its own sendmail_path, so its web requests bypass the relay; remove it from ${pool}`);
-  }
+  const pool = poolSetsSendmail(paths, site);
+  if (pool) failAction(`${site.domain}'s PHP-FPM pool sets its own sendmail_path, so its web requests bypass the relay; remove it from ${pool}`);
   const subject = `CloudPanel SMTP relay test for ${site.domain}`;
   const text = `This message was sent as ${site.user} through ${path} and the ${route.profile.name} profile.\n`;
-  const message = Buffer.from(`To: ${recipient}\nFrom: ${requested}\nSubject: ${subject}\n\n${text}`);
+  const messageId = `clp-addons-test.${crypto.randomUUID()}@${route.rule.site}`;
+  const message = Buffer.from(`To: ${recipient}\nFrom: ${requested}\nSubject: ${subject}\nMessage-ID: <${messageId}>\n\n${text}`);
   // Plain sendmail keeps the From the app wrote; Postfix maps only the envelope.
   let sender = requested;
   let replyTo: string | null = null;
@@ -832,9 +920,11 @@ function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], bo
   }
   // PHP itself, so the test also shows its sendmail_path reaches the wrapper.
   const command = php
-    ? [join(paths.phpBinDir, `php${site.phpVersion}`), "-r", 'exit(mail($argv[1], $argv[2], $argv[3], "From: " . $argv[4]) ? 0 : 1);', "--",
-      recipient, subject, text, requested]
+    ? [join(paths.phpBinDir, `php${site.phpVersion}`), "-r",
+      'exit(mail($argv[1], $argv[2], $argv[3], "From: " . $argv[4] . "\\r\\nMessage-ID: <" . $argv[5] . ">") ? 0 : 1);', "--",
+      recipient, subject, text, requested, messageId]
     : [SENDMAIL, "-t", "-i"];
+  const since = Date.now();
   const submit = Bun.spawnSync([paths.runuser, "-u", site.user, "--", ...command], {
     stdin: php ? "ignore" : message, stdout: "pipe", stderr: "pipe", maxBuffer: 64 * 1024, timeout: 30_000,
   });
@@ -842,7 +932,11 @@ function sendTest(paths: SmtpPaths, policy: SmtpPolicy, sites: SmtpSiteRow[], bo
     const detail = Buffer.from(submit.stderr).toString("utf8").trim().replace(/^\[smtp\] /, "");
     failAction(`${site.domain}'s ${path} did not queue the test: ${detail || "submission failed"}`);
   }
-  return { queued: true, discarded: route.profile.relay === null, requested, sender, replyTo, recipient };
+  const discarded = route.profile.relay === null;
+  return {
+    queued: true, discarded, requested, sender, replyTo, recipient,
+    delivery: discarded ? null : awaitDelivery(run, messageId, since, waitMs),
+  };
 }
 
 /**
@@ -874,7 +968,7 @@ function reconcile(paths: SmtpPaths, policy: SmtpPolicy, { sites, skipped }: Sit
   }
   next.knownSiteIds = sites.map((site) => site.id);
   // Only drift on an unchanged policy counts as repaired; a new site joining is reported as such.
-  if (JSON.stringify(stablePolicy(next)) !== JSON.stringify(stablePolicy(policy))) {
+  if (JSON.stringify(stablePolicy(next)) !== JSON.stringify(stablePolicy(policy)) || policyFileStale(paths, policy)) {
     commit(paths, policy, next, sites, run);
     return { repaired: 0, joined };
   }
@@ -914,13 +1008,14 @@ export async function executeSmtpAction(argv: string[], options: SmtpActionOptio
     const policy = readPolicy(paths);
     const siteSet = panelSites(paths, options.sites);
     const { sites } = siteSet;
-    if (verb === "list") return stateOf(policy, siteSet);
-    if (verb === "test") return sendTest(paths, policy, sites, body);
+    if (verb === "list") return stateOf(paths, policy, siteSet);
+    if (verb === "test") return sendTest(paths, policy, sites, body, run, options.deliveryWaitMs ?? DELIVERY_WAIT_MS);
     if (verb === "reconcile" || verb === "sync-sites") return reconcile(paths, policy, siteSet, run, verb === "reconcile");
     let next = structuredClone(policy);
     if (profile) next = saveProfile(policy, profile);
     if (verb === "delete-profile") {
       findProfile(next, target!);
+      if (target === DONT_SEND.id) failAction("Don't send is built in and cannot be deleted");
       next.profiles = next.profiles.filter((candidate) => candidate.id !== target);
       for (const [domain, id] of Object.entries(next.assignments)) if (id === target) delete next.assignments[domain];
       if (next.defaultProfileId === target) next.defaultProfileId = null;
@@ -946,7 +1041,7 @@ export async function executeSmtpAction(argv: string[], options: SmtpActionOptio
       next.grants[grants.domain] = grants.domains;
     }
     commit(paths, policy, next, sites, run);
-    return stateOf(stablePolicy(next), siteSet);
+    return stateOf(paths, stablePolicy(next), siteSet);
   });
 }
 

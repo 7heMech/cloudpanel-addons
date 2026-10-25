@@ -143,6 +143,7 @@ function dnsPreviewReview(state: DnsState): DnsReview {
 }
 
 /** Profiles and a mixed fleet. ?setup shows a first visit, ?empty a box with no sites. */
+/** ?setup shows a fresh box, ?discard-default a Don't send default, ?many enough sites for search and filter. */
 function smtpPreviewState(url: URL): SmtpState {
   const setup = url.searchParams.has("setup");
   const dontSend = { id: "dont-send", name: "Don't send", relay: null, sender: "noreply@{site}", sites: setup ? 0 : 1 };
@@ -152,11 +153,16 @@ function smtpPreviewState(url: URL): SmtpState {
     dontSend,
   ];
   const site = (domain: string, user: string, type: string, phpVersion: string | null, profileId: string | null, sender: string | null,
-    grants: string[] = [], blocked: string | null = null) =>
-    ({ domain, user, type, phpVersion, profileId: setup ? null : profileId, sender: setup ? null : sender, grants: setup ? [] : grants, blocked: setup ? null : blocked });
+    grants: string[] = [], blocked: string | null = null, bypass = false) =>
+    ({ domain, user, type, phpVersion, profileId: setup ? null : profileId, sender: setup ? null : sender, grants: setup ? [] : grants,
+      blocked: setup ? null : blocked, bypass: setup ? false : bypass });
+  const more = url.searchParams.has("many") ? [
+    site("events.example.com", "events", "php", "8.3", "postmark", "{from.local}@events.example.com", [], null, true),
+    site("api.example.com", "api", "python", null, "agency-gmail", "alerts@agency.example"),
+  ] : [];
   return {
     profiles,
-    defaultProfileId: setup ? null : "postmark",
+    defaultProfileId: setup ? null : url.searchParams.has("discard-default") ? "dont-send" : "postmark",
     sites: url.searchParams.has("empty") ? [] : [
       site("www.example.com", "example", "php", "8.3", "postmark", "{from.local}@example.com"),
       site("shop.example.com", "shop", "php", "8.3", "postmark", "{from.local}@shop.example.com", ["news.shop.example.com"]),
@@ -166,6 +172,7 @@ function smtpPreviewState(url: URL): SmtpState {
         "shop.example.com sends as news.shop.example.com through Postmark"),
       site("app.example.com", "app", "nodejs", null, null, null),
       site("docs.example.com", "docs", "static", null, null, null),
+      ...more,
     ],
     skipped: setup || url.searchParams.has("empty") ? [] : [{ domain: "old.example.com", reason: "it has no Unix account" }],
   };
@@ -1524,10 +1531,11 @@ const server = Bun.serve({
       html = dnsLayout("DNS", dnsDashboardView(state), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener.replaceAll("<", "\\u003c")}})</script></body>` : "</body>");
     } else if (path === "/addons/smtp/" || path === "/addons/smtp") {
-      // ?profile=<id> (or ?profile= for a new one) and ?domains=<site> open a dialog on load, like ?confirm= does.
+      // ?profile=<id> (or ?profile= for a new one), ?domains=<site> and ?test=<site> open a dialog on load, like ?confirm= does.
       const arg = (name: string) => JSON.stringify(url.searchParams.get(name)).replaceAll("<", "\\u003c");
       const opener = url.searchParams.has("profile") ? `smtpEditProfile(${arg("profile")})`
-        : url.searchParams.has("domains") ? `smtpEditGrants(${arg("domains")})` : "";
+        : url.searchParams.has("domains") ? `smtpEditGrants(${arg("domains")})`
+        : url.searchParams.has("test") ? `smtpOpenTest(${arg("test")})` : "";
       html = smtpLayout("SMTP Relay", smtpDashboardView(smtpPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/security-keys/" || path === "/addons/security-keys") {
