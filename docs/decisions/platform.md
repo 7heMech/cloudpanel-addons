@@ -142,10 +142,6 @@ A path unit repairs managed blocks after CloudPanel rewrites watched files. A
 CloudPanel's legacy distro Nginx layout and its separate panel Nginx layout are
 detected from their files and services rather than a version string.
 
-When Cloudflare IP Access is enabled, a separate one-minute timer applies its
-new-site policy. Disabling the addon removes that timer while keeping the policy
-state for a later re-enable.
-
 The manager's block in CloudPanel's own header also makes room for its update
 notice there. The panel lays the header out as one non-wrapping flex row of a
 fixed height, sized for exactly the three things in it, so a fourth has nowhere
@@ -204,7 +200,8 @@ later, even if the first run failed. The units exist while any installed addon
 declares `newSites`; repair restarts the watcher if it has stopped. It takes no
 operation lock: each addon's work takes its own. Vhost rewrites also wake the
 watcher; when the site set is unchanged, the hooks make no network calls or
-configuration writes.
+configuration writes. Update and repair disable and remove the units listed in
+`LEGACY_UNITS` in `cli/paths.ts`.
 
 ## One way to watch a job
 

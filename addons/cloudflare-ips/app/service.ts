@@ -2,9 +2,7 @@ import { callGatewayAction, type ActionResult } from "../../../lib/gateway-clien
 
 export interface CloudflareSiteView {
   domain: string;
-  type: string;
   enabled: boolean;
-  excludedFromAutomatic: boolean;
 }
 
 export interface CloudflareState {

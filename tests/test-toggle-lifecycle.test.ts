@@ -175,7 +175,7 @@ function fixture(options: { provisioned: boolean; enabled: string[] }): string {
     // An addon's own units are part of "already enabled": a disable has to
     // find them to stop and remove them.
     const units: Record<string, string[]> = {
-      "cloudflare-ips": ["clp-addons-cloudflare-ips-reconcile.timer", "clp-addons-cloudflare-ips-reconcile.service"],
+      "cloudflare-ips": ["clp-addons-new-sites.path", "clp-addons-new-sites.service"],
       smtp: ["clp-addons-new-sites.path", "clp-addons-new-sites.service"],
       dns: ["clp-addons-new-sites.path", "clp-addons-new-sites.service"],
     };
@@ -249,17 +249,17 @@ test("re-enabling an addon that is already on changes and reloads nothing", () =
   expect(run.systemd).toEqual(["daemon-reload"]);
 });
 
-test("the Cloudflare timer is started when its units appear and stopped when they go", () => {
+test("Cloudflare IP Access uses the shared new-site watcher, not a timer of its own", () => {
   const on = toggle([{ verb: "enable", addon: "cloudflare-ips" }]);
   expect(on.error).toBeUndefined();
-  expect(on.systemd).toContain("enable clp-addons-cloudflare-ips-reconcile.timer");
-  expect(on.systemd).toContain("restart clp-addons-cloudflare-ips-reconcile.timer");
+  expect(on.systemd).toContain("enable clp-addons-new-sites.path");
+  expect(on.systemd.join(" ")).not.toContain("cloudflare-ips-reconcile");
+  expect(existsSync(join(on.root, "systemd", "clp-addons-cloudflare-ips-reconcile.timer"))).toBe(false);
 
   const off = toggle([{ verb: "disable", addon: "cloudflare-ips" }], { enabled: ["cloudflare-ips"] });
   expect(off.error).toBeUndefined();
-  expect(off.systemd).toContain("disable --now clp-addons-cloudflare-ips-reconcile.timer");
-  expect(existsSync(join(off.root, "systemd", "clp-addons-cloudflare-ips-reconcile.timer"))).toBe(false);
-  expect(existsSync(join(off.root, "systemd", "clp-addons-cloudflare-ips-reconcile.service"))).toBe(false);
+  expect(off.systemd).toContain("disable --now clp-addons-new-sites.path");
+  expect(existsSync(join(off.root, "systemd", "clp-addons-new-sites.path"))).toBe(false);
 });
 
 test("the shared new-site watcher is started when its units appear and stopped when they go", () => {

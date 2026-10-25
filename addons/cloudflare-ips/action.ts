@@ -40,16 +40,19 @@ export interface CloudflareActionOptions {
 
 export interface CloudflareSiteView {
   domain: string;
-  type: string;
   enabled: boolean;
-  excludedFromAutomatic: boolean;
+}
+
+export interface ReconcileResult {
+  discovered: number;
+  enabled: number;
+  failed: { domain: string; error: string }[];
 }
 
 interface SiteRow {
   id: number;
   domain_name: string;
   user: string;
-  type: string;
   allow_traffic_from_cloudflare_only: number | boolean;
 }
 
@@ -140,8 +143,8 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
 function siteRows(db: Database): SiteRow[] {
   try {
     return db.query<SiteRow, []>(
-      "SELECT id, domain_name, user, type, allow_traffic_from_cloudflare_only FROM site ORDER BY domain_name;",
-    ).all().map((row) => ({ ...row, id: Number(row.id), domain_name: String(row.domain_name), user: String(row.user), type: String(row.type) }));
+      "SELECT id, domain_name, user, allow_traffic_from_cloudflare_only FROM site ORDER BY domain_name;",
+    ).all().map((row) => ({ ...row, id: Number(row.id), domain_name: String(row.domain_name), user: String(row.user) }));
   } catch (error) {
     failAction(`CloudPanel does not expose the required Cloudflare site setting: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -221,8 +224,12 @@ async function updateSites(
       const staged = selected.map((site) => {
         const domain = normalizeDomain(site.domain_name);
         if (!domain || domain !== site.domain_name) failAction(`CloudPanel returned an invalid site domain '${site.domain_name}'`);
-        const backup = trustedVhost(join(paths.nginxVhostDir, `${domain}.conf`), paths.vhostUid);
-        return { backup, content: transformVhost(backup.content, site.user, enabled) };
+        try {
+          const backup = trustedVhost(join(paths.nginxVhostDir, `${domain}.conf`), paths.vhostUid);
+          return { backup, content: transformVhost(backup.content, site.user, enabled) };
+        } catch (error) {
+          failAction(`${domain}: ${errorMessage(error)}`);
+        }
       });
 
       const update = db.query("UPDATE site SET allow_traffic_from_cloudflare_only = ?, updated_at = CURRENT_TIMESTAMP WHERE domain_name = ?;");
@@ -245,13 +252,10 @@ function listState(paths: CloudflareActionPaths): { sites: CloudflareSiteView[];
   const db = openPanelDatabase(paths.panelDb);
   try {
     const policy = readPolicy(paths.policyFile, paths.stateUid);
-    const excluded = new Set(policy.excludedDomains);
     return {
       sites: siteRows(db).map((site) => ({
         domain: site.domain_name,
-        type: site.type,
         enabled: Boolean(site.allow_traffic_from_cloudflare_only),
-        excludedFromAutomatic: excluded.has(site.domain_name),
       })),
       autoEnableNewSites: policy.autoEnableNewSites,
     };
@@ -325,10 +329,10 @@ async function setSelected(
 export async function reconcileNewSites(
   paths: CloudflareActionPaths = DEFAULT_CLOUDFLARE_ACTION_PATHS,
   command: (command: string, args: string[]) => CommandResult = runCommand,
-): Promise<{ discovered: number; enabled: number }> {
+): Promise<ReconcileResult> {
   return withPolicyLock(paths, async () => {
     const policy = readPolicy(paths.policyFile, paths.stateUid);
-    if (!policy.autoEnableNewSites) return { discovered: 0, enabled: 0 };
+    if (!policy.autoEnableNewSites) return { discovered: 0, enabled: 0, failed: [] };
 
     const db = openPanelDatabase(paths.panelDb);
     let sites: SiteRow[];
@@ -339,10 +343,24 @@ export async function reconcileNewSites(
     const excluded = new Set(policy.excludedDomains);
     const enable = discovered.filter((site) => !excluded.has(site.domain_name) && !Boolean(site.allow_traffic_from_cloudflare_only));
 
-    if (enable.length) await updateSites(paths, enable.map((site) => site.domain_name), true, command);
-    policy.knownSiteIds = sites.map((site) => site.id);
-    writePolicy(paths.policyFile, policy, paths.stateUid);
-    return { discovered: discovered.length, enabled: enable.length };
+    // One site at a time, so a vhost edited by hand fails alone. It stays
+    // unknown and is tried again on the next pass; the rest are recorded.
+    const failed: ReconcileResult["failed"] = [];
+    const failedIds = new Set<number>();
+    for (const site of enable) {
+      try {
+        await updateSites(paths, [site.domain_name], true, command);
+      } catch (error) {
+        const message = errorMessage(error);
+        failed.push({ domain: site.domain_name, error: message.includes(site.domain_name) ? message : `${site.domain_name}: ${message}` });
+        failedIds.add(site.id);
+      }
+    }
+    const knownSiteIds = sites.filter((site) => !failedIds.has(site.id)).map((site) => site.id);
+    if (JSON.stringify(stablePolicy({ ...policy, knownSiteIds })) !== JSON.stringify(stablePolicy(policy))) {
+      writePolicy(paths.policyFile, { ...policy, knownSiteIds }, paths.stateUid);
+    }
+    return { discovered: discovered.length, enabled: enable.length - failed.length, failed };
   });
 }
 

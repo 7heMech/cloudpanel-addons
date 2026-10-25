@@ -6,7 +6,7 @@ import { reconcilePhpGuard } from "./php-guard";
 import { runAddonMaintenance, runManagerMaintenance } from "./maintenance";
 import { withOperationLock } from "./operation-lock";
 import { conffilesReleased } from "./conffiles";
-import { CLOUDFLARE_RECONCILE_TIMER, MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "./paths";
+import { MANAGER_UNIT, NEW_SITES_PATH, SYSTEMD_DIR } from "./paths";
 import {
   ensureAuthHelperReady, ensureDirs, ensurePathWatching, ensureServiceUser, ensureTimerArmed, hardenBackups, installUnits,
   managerSocketProblem, reconcilePanelIdentity, removeLegacyUnits, startUnits,
@@ -78,9 +78,6 @@ async function applyRepair(positional: string[], flags: Record<string, string | 
   if (unitChanges.systemd || unitActive(MANAGER_UNIT) !== "active" || managerSocketProblem() !== null) startUnits();
   else {
     ensureTimerArmed("clp-addons-reconcile.timer", quiet);
-    if (all.some((spec) => spec.name === "cloudflare-ips")) {
-      ensureTimerArmed(CLOUDFLARE_RECONCILE_TIMER, quiet);
-    }
     if (all.some((spec) => spec.newSites)) ensurePathWatching(NEW_SITES_PATH, quiet);
   }
   reconcileAnchors(quiet);
