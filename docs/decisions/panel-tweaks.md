@@ -25,10 +25,11 @@ panel's own certificate form. An operator who wants a filterable site list
 should not have to install the code that can do that, and a switch is a weaker
 withdrawal than not having it on the box.
 
-The page groups those switches by the panel surface they change, in the order
-Dashboard, Login, Sites. The Sites group is last because it is the longest and
-the only one with a nested switch, so the two short groups are readable without
-scrolling past it. Measured sizes is nested under the Sites table enhancement
+The page puts the Sites switches first, since they are the ones an operator
+returns to, with the preview of the Sites page directly under them. The two
+switches that change the whole panel -- its mobile layout and the device theme
+on first visit -- follow as a short group of their own.
+Measured sizes is nested under the Sites table enhancement
 because the size column is its only visible result. A short branch and smaller
 heading show that relationship, with no divider between the child and parent.
 That nesting is enforced rather than only drawn: measured sizes cannot be
@@ -188,7 +189,9 @@ The table keeps 20px at its outer edges and 10px on each side between columns,
 leaving the action menu visible with the default columns at desktop width.
 With the narrow layout enabled, rows become cards at 1100px, before those
 columns squeeze hostnames into fragments. Additional columns can still use the
-scroller when the table layout is active.
+scroller when the table layout is active. With it off, a narrow screen keeps the
+desktop table and its column choice: the narrow column set belongs to the cards,
+so the script is told the switch and treats no width as narrow.
 
 `lib/row-actions.ts` is the whole agreement between the two addons. An addon
 with an action worth a place in the menu but not a link in every row of a list
@@ -395,6 +398,9 @@ does not make a later sweep incremental: every refresh traverses each site and
 database again. The kernel may retain filesystem metadata, but the schedule
 does not rely on it. A site whose account has gone, or whose home directory is
 not owned by it, is skipped rather than guessed at.
+
+A measurement holds a lock file of its own rather than the switches' lock, so
+moving a switch during a long sweep is not refused.
 
 The operator-pressed sweep is the same work with a four-minute budget. A box
 large enough to exceed it gets its sizes from the unattended sweep instead,

@@ -282,7 +282,8 @@ export function sitesBlock(url: string, tweaks: PanelTweaks = storedTweaks()): s
   .replace("CERTIFICATE_SHORT_LABELS_JSON", JSON.stringify(CERTIFICATE_SHORT_LABELS))
   .replace("APPLICATION_LABELS_JSON", JSON.stringify(APPLICATION_LABELS))
   .replace("SELF_SIGNED_JSON", JSON.stringify(SELF_SIGNED_CERTIFICATE))
-  .replace("SITES_TABLE_JSON", JSON.stringify(tweaks.sitesTable))}</script>`;
+  .replace("SITES_TABLE_JSON", JSON.stringify(tweaks.sitesTable))
+  .replace("SITES_MOBILE_JSON", JSON.stringify(tweaks.sitesMobile))}</script>`;
 }
 
 /**

@@ -18,6 +18,7 @@ import { panelTweaksService } from "../addons/panel-tweaks/app/service";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MENU_ONLY_CLASS, MENU_ONLY_STYLE, ROW_ACTION_CLASS, ROW_MENU_CLASS } from "../lib/row-actions";
+import { withFileLock } from "../cli/action-common";
 import { CLOUDFLARE_ORIGIN } from "./fixtures/certificates";
 
 const loginTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "login-device-theme")!;
@@ -214,6 +215,9 @@ test("the column picker is in the block, and a switched-off column is never pain
   expect(snippet).toContain('{ key: "runtime", label: "Runtime", wide: true, narrow: false }');
   // Off, the whole thing is inert: no choice is read and no rule is written.
   expect(sites({ sitesTable: false })).toContain("var COLUMNS_ON = false;");
+  // Without the cards a narrow screen keeps the desktop table and its columns.
+  expect(sites({ sitesMobile: true })).toContain('var NARROW_QUERY = true ? "(max-width: 1100px)" : "not all";');
+  expect(sites({ sitesMobile: false })).toContain('var NARROW_QUERY = false ? "(max-width: 1100px)" : "not all";');
 });
 
 // The addon's own page shows the panel's Sites page in a frame, so an operator
@@ -253,9 +257,8 @@ test("the preview frame is the panel's own page, with the injected block over it
 test("the addon page keeps switches beside wrapping labels on a phone", () => {
   const page = panelTweaksDashboardView({ tweaks: { ...DEFAULT_TWEAKS }, diskMeasuredAt: "", sites: [] });
   expect(page).toContain("CloudPanel mobile layout");
-  expect(page).toContain('id="tweak-category-sites"');
-  expect(page).toContain('id="tweak-category-dashboard"');
-  expect(page).toContain('id="tweak-category-login"');
+  expect(page).not.toContain("What it adds");
+  expect(page).not.toContain("tweak-category");
   expect(page).toContain('class="tweak-row is-nested"');
   expect(page).toContain('class="tweak-scan"');
   expect(page).toContain("Measure now");
@@ -264,9 +267,12 @@ test("the addon page keeps switches beside wrapping labels on a phone", () => {
     tweaks: { ...DEFAULT_TWEAKS, diskUsage: true }, diskMeasuredAt: "", sites: [],
   });
   expect(measuredOn).toContain('class="tweak-row is-nested is-enabled"');
-  // Sites is the longest group, so it sits below the two short ones.
-  expect(page.indexOf('id="tweak-category-sites"')).toBeGreaterThan(page.indexOf('id="tweak-category-login"'));
-  expect(page.indexOf('id="tweak-category-login"')).toBeGreaterThan(page.indexOf('id="tweak-category-dashboard"'));
+  // The Sites switches come first with their preview under them; the whole-panel
+  // switches follow.
+  expect(page.indexOf("<h2>Sites</h2>")).toBeLessThan(page.indexOf('id="preview-frame"'));
+  expect(page.indexOf('id="preview-frame"')).toBeLessThan(page.indexOf("<h2>Whole panel</h2>"));
+  expect(page.indexOf("<h2>Whole panel</h2>")).toBeLessThan(page.indexOf("CloudPanel mobile layout"));
+  expect(page).toContain("cards on narrow screens");
   // Measured sizes is unreachable while the table enhancement it belongs to is off.
   expect(page).toContain('data-tweak-parent="sitesTable" aria-label');
   const tableOff = panelTweaksDashboardView({
@@ -465,6 +471,7 @@ function options(extra: Partial<PanelTweaksActionOptions> = {}): PanelTweaksActi
       tweaksFile: join(panelRoot(), "state", "tweaks.json"),
       diskFile: join(panelRoot(), "state", "disk-usage.json"),
       lockFile: join(panelRoot(), "panel-tweaks.lock"),
+      scanLockFile: join(panelRoot(), "panel-tweaks-scan.lock"),
       mysqlDir: join(panelRoot(), "mysql"),
       passwd: join(panelRoot(), "passwd"),
       rootUid: process.getuid?.() ?? 0,
@@ -631,6 +638,13 @@ test("data switches take effect at request time and template switches reconcile"
   expect(theme.reinject).toBe(true);
   // The one that moved is saved beside the one that moved before it.
   expect(theme.tweaks).toEqual({ ...DEFAULT_TWEAKS, diskUsage: true, deviceTheme: false });
+});
+
+test("a switch still moves while a disk measurement runs", async () => {
+  const paths = options().paths!;
+  const result = await withFileLock(paths.scanLockFile!, 1, "scan locked", () =>
+    act<SetTweaksResult>(["set-tweaks"], { input: JSON.stringify({ actionMenu: false }) }));
+  expect(result.tweaks.actionMenu).toBe(false);
 });
 
 test("automatic SSL is opt-in, persisted independently of the site table, and reconciled", async () => {

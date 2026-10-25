@@ -13,7 +13,7 @@
  * browser; here it is only a switch.
  */
 import { Database } from "bun:sqlite";
-import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ActionFailure, emitActionError, emitActionOk, failAction, runCommand, withFileLock,
@@ -220,6 +220,8 @@ export interface PanelTweaksActionPaths {
   tweaksFile: string;
   diskFile: string;
   lockFile: string;
+  /** Held for a whole disk measurement, so switches still change meanwhile. */
+  scanLockFile: string;
   /** Where MySQL keeps one directory per database, when the box has MySQL. */
   mysqlDir: string;
   passwd: string;
@@ -241,6 +243,7 @@ export const DEFAULT_PANEL_TWEAKS_PATHS: PanelTweaksActionPaths = {
   tweaksFile: `${STATE_DIR}/panel-tweaks/tweaks.json`,
   diskFile: `${STATE_DIR}/panel-tweaks/disk-usage.json`,
   lockFile: "/run/lock/clp-addons/panel-tweaks.lock",
+  scanLockFile: "/run/lock/clp-addons/panel-tweaks-scan.lock",
   mysqlDir: "/var/lib/mysql",
   passwd: "/etc/passwd",
   rootUid: 0,
@@ -748,7 +751,7 @@ export async function executePanelTweaksAction(
 
   if (verb === "state") return stateOf(paths, asUser);
   if (verb === "set-tweaks") return setTweaks(paths, options);
-  return withFileLock(paths.lockFile, 15, "a disk measurement is already running", async () =>
+  return withFileLock(paths.scanLockFile, 15, "a disk measurement is already running", async () =>
     scanDisk(paths, options));
 }
 
@@ -792,13 +795,4 @@ export async function scanDiskUsage(options: PanelTweaksActionOptions = {}): Pro
   const result = await executePanelTweaksAction(["scan"], { ...options, emitReply: false }) as ScanResult;
   const measured = `${result.measured} site${result.measured === 1 ? "" : "s"} measured`;
   return result.skipped ? `${measured}, ${result.skipped} skipped` : measured;
-}
-
-/** Whether the file a site's `du` reads still exists; used by the tests. */
-export function siteHomeExists(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
 }

@@ -490,7 +490,8 @@ function panelPhpPreviewStatus(url: URL): PanelPhpStatus {
 /**
  * Panel Tweaks with every switch on and most sites measured, because that is
  * the widest the page gets: `?off` is the state an operator lands on after
- * enabling the addon, and `?unmeasured` is the gap before the first sweep.
+ * enabling the addon, `?unmeasured` is the gap before the first sweep, and
+ * `?nocards` keeps the table on a narrow screen.
  */
 function panelTweaksPreviewState(url: URL): PanelTweaksState {
   const on = !url.searchParams.has("off");
@@ -500,7 +501,7 @@ function panelTweaksPreviewState(url: URL): PanelTweaksState {
     tweaks: {
       deviceTheme: on,
       sitesTable: on,
-      sitesMobile: on,
+      sitesMobile: on && !url.searchParams.has("nocards"),
       actionMenu: on,
       panelMobile: on,
       diskUsage: on,
