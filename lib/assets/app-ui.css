@@ -9,7 +9,7 @@
   --header-bg: #fff; --header-link: #aaa; --header-icon: #aaa; --tab-link: #666;
   --input-bg: #fff; --input-border: #ced4da; --readonly-bg: #e9ecef;
   --button-bg: #fff; --button-text: #777; --button-border: #d3d3d3; --button-hover: #e4e5e6;
-  --ok: #23774b; --warn: #936319; --bad: #bc3636;
+  --ok: #23774b; --warn: #936319; --bad: #bc3636; --selected-row: rgb(0 120 212 / 7%);
   --shadow: 0 2px 4px rgb(157 161 164 / 19%);
   --header-shadow: 0 2px 2px rgb(237 237 237 / 50%);
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -22,7 +22,7 @@ html.dark {
   --link: #fff; --header-bg: #25282f; --header-link: #fff; --header-icon: #aaa; --tab-link: #9b9b9b;
   --input-bg: #20242c; --input-border: #a8b3cf33; --readonly-bg: #0e1217;
   --button-bg: #21262d; --button-text: #c9d1d9; --button-border: #a8b3cf33; --button-hover: #1c1f26;
-  --ok: #81c9a0; --warn: #e5bc76; --bad: #ef9999;
+  --ok: #81c9a0; --warn: #e5bc76; --bad: #ef9999; --selected-row: rgb(38 125 221 / 16%);
   --shadow: none; --header-shadow: none;
 }
 * { box-sizing: border-box; }
@@ -117,11 +117,16 @@ html.dark .card-header { background: var(--surface); }
 .card-table { padding: 0; overflow-x: auto; }
 .card-table > .card-header { margin: 0; padding: 25px 32px; }
 .table-scroll { overflow-x: auto; }
-/* A long site list keeps its own height, so what follows it stays a scroll away
-   and the header with the bulk actions stays in view above the rows. */
+/* A long site list with something below it keeps its own height, so what
+   follows stays a scroll away and the bulk actions stay in view above the rows.
+   A list that ends the page grows with it instead. */
 @media (min-width: 941px) {
-  .table-scroll:has(> .fleet-table > tbody > tr:nth-child(13)) { max-height: min(68vh, 720px); overflow-y: auto; }
-  .table-scroll:has(> .fleet-table > tbody > tr:nth-child(13)) thead th { position: sticky; top: 0; z-index: 2; }
+  .card:has(~ :not(dialog, script, style, template)) .table-scroll:has(> .fleet-table > tbody > tr:nth-child(13)) {
+    max-height: min(68vh, 720px); overflow-y: auto; }
+  /* The heading sticks and paints as one band: cells stuck one by one left
+     seams at fractional zoom that the rows showed through. */
+  .card:has(~ :not(dialog, script, style, template)) .table-scroll:has(> .fleet-table > tbody > tr:nth-child(13)) thead {
+    position: sticky; top: 0; z-index: 2; background: var(--surface); box-shadow: 0 1px 0 var(--row-border); }
 }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 30px; }
 .stat .label { font-size: 18px; font-weight: 500; margin-bottom: 5px; }
@@ -303,6 +308,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .fleet-filter .hint { margin-left: auto; }
 .card-header + .fleet-filter { padding-top: 18px; }
 .fleet-table tr[hidden] { display: none !important; }
+.fleet-table tr[aria-selected="true"] { background: var(--selected-row); }
 @media (max-width: 1100px) {
   .clp-addon-header-inner > #clp-addons-update-notice { order: 3; flex: 1 0 100%; margin: 0;
     padding: 10px 20px; justify-content: flex-end; border-top: 1px solid var(--border); }

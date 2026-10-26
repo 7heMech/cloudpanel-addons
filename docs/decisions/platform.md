@@ -272,7 +272,10 @@ a domain wrapped a character at a time. Cell padding comes down from 1200px for
 the same reason. Instatic's instance and inventory lists and Stager's clone,
 source and promotion lists use the same fleet rows, with labels on secondary
 cells so their meaning survives the hidden table heading. Empty cells disappear
-and the site and type lead each card. Page and form actions wrap within the
+and the site and type lead each card. A ticked row is tinted, and clicking
+anywhere on a row but a control or its Manage menu ticks it. On a wide screen a
+list of more than twelve rows with something below its card scrolls in a box of
+its own under a sticky heading; a list that ends the page grows with it. Page and form actions wrap within the
 available width. Two-column card and field grids hold until 760px, where the
 tables have already given way. Live enable, disable and update jobs
 put their state, current step and output in the manager card that owns the job,
