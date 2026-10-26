@@ -666,33 +666,25 @@ test("the update handoff refuses to provision from the outgoing process", async 
   expect(calls).not.toContain("startUnits");
 });
 
-test("an up-to-date update with no addons keeps the no-service branch", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  hasInstalledAddon = false;
-  artifactsAvailable = true;
-  artifactTampered = false;
-  resolvedReleaseTag = "v1.2.3";
+test("an up-to-date update says so and changes nothing, with or without addons", async () => {
+  for (const installed of [false, true]) {
+    calls.length = 0;
+    resetProvisioning();
+    hasInstalledAddon = installed;
+    artifactsAvailable = true;
+    artifactTampered = false;
+    resolvedReleaseTag = "v1.2.3";
 
-  await cmdUpdate(["--version=v1.2.3"]);
+    await cmdUpdate(["--version=v1.2.3"]);
 
-  expect(calls).not.toContain("fetchVerified");
-  expect(calls).not.toContain("verifyAttestation");
-  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
-  expect(calls).toContain("reconcile");
-  expect(calls).toContain("startUnits");
-  expect(calls.filter((c) => c.startsWith("writeConfig:"))).toHaveLength(0);
-  expect(calls).toContain("log.ok:clp-addons 1.2.3 is up to date");
-  expect(provisioning).toEqual({
-    serviceUser: true,
-    dirs: true,
-    sudoers: true,
-    legacyUnits: false,
-    units: true,
-    running: true,
-    anchors: true,
-    nginx: true,
-  });
+    expect(calls).not.toContain("fetchVerified");
+    expect(calls).not.toContain("verifyAttestation");
+    expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
+    expect(calls).not.toContain("reconcile");
+    expect(calls).not.toContain("startUnits");
+    expect(calls.filter((c) => c.startsWith("writeConfig:"))).toHaveLength(0);
+    expect(calls).toContain("log.ok:clp-addons 1.2.3 is up to date");
+  }
   artifactsAvailable = false;
 });
 
@@ -723,23 +715,6 @@ test("updating from a fully disabled state still hands off to the target binary"
   });
 });
 
-test("a same-version update reuses verified installed artifacts", async () => {
-  calls.length = 0;
-  resetProvisioning();
-  hasInstalledAddon = true;
-  artifactsAvailable = true;
-  artifactTampered = false;
-
-  await cmdUpdate(["--version=v1.2.3"]);
-
-  expect(calls).not.toContain("fetchVerified");
-  expect(calls).not.toContain("verifyAttestation");
-  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
-  expect(calls).toContain("reconcile");
-  expect(calls).toContain("startUnits");
-  artifactsAvailable = false;
-});
-
 test("a same-version update repairs a changed installed artifact", async () => {
   calls.length = 0;
   resetProvisioning();
@@ -754,4 +729,21 @@ test("a same-version update repairs a changed installed artifact", async () => {
   expect(calls).toContain(handoffCall("v1.2.3", "--version=v1.2.3"));
   artifactsAvailable = false;
   artifactTampered = false;
+});
+
+test("without --version an update never moves to an older version than the one installed", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  hasInstalledAddon = true;
+  artifactsAvailable = true;
+  artifactTampered = false;
+  resolvedReleaseTag = "v1.2.2";
+
+  await cmdUpdate([]);
+
+  expect(calls).not.toContain("fetchVerified");
+  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
+  expect(calls).toContain("log.ok:clp-addons 1.2.3 is up to date; the newest published release is 1.2.2");
+  resolvedReleaseTag = "v1.2.3";
+  artifactsAvailable = false;
 });

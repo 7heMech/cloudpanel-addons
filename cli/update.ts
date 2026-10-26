@@ -19,6 +19,7 @@ import {
   CLI_VERSION, type FetchedArtifact, fetchVerified, resolveRelease, verifyAttestation,
 } from "./release";
 import { fatal, log, parseFlags, requireRoot, run } from "./util";
+import { compareSemver, isPrerelease } from "../lib/semver";
 /**
  * Reconcile all provisioning from the binary that owns the definitions.
  * Services restart last, after every generated file reflects this process.
@@ -63,15 +64,26 @@ export async function cmdUpdate(argv: string[], options: { beforeManagerRestart?
 
 async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () => void }): Promise<void> {
   const { flags } = parseFlags(argv);
+  // A box running a pre-release keeps following them; a release takes it back to releases.
   const release = await resolveRelease(
     typeof flags.version === "string" ? flags.version : "latest",
-    flags["allow-prerelease"] === true,
+    flags["allow-prerelease"] === true || isPrerelease(CLI_VERSION),
   );
   const current = CLI_VERSION.replace(/^v/, "");
   const target = release.tag.replace(/^v/, "");
 
+  // Without --version an update only moves forward, whatever GitHub lists.
+  if (typeof flags.version !== "string" && compareSemver(target, current) < 0) {
+    log.ok(`clp-addons ${current} is up to date; the newest published release is ${target}`);
+    return;
+  }
   const upToDate = current === target;
   const artifactsCurrent = upToDate && currentArtifactsMatch(target);
+  // Nothing to install, and repair is the command that re-applies the panel side.
+  if (artifactsCurrent && flags["no-self-update"] !== true) {
+    log.ok(`clp-addons ${current} is up to date`);
+    return;
+  }
   let artifacts: FetchedArtifact[] | undefined;
   if (!artifactsCurrent) {
     artifacts = await fetchVerified(release, artifactNames());
@@ -130,10 +142,8 @@ async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () 
   if (specs.length === 0) {
     log.ok(versionChanged
       ? `clp-addons updated from ${updatedFrom} to ${target}; no addon service is configured`
-      : `clp-addons ${current} is up to date`);
+      : `clp-addons ${current} reinstalled; no addon service is configured`);
     return;
   }
-  log.ok(versionChanged
-    ? `clp-addons updated from ${updatedFrom} to ${target}`
-    : `clp-addons ${current} is up to date; provisioning reconciled`);
+  log.ok(versionChanged ? `clp-addons updated from ${updatedFrom} to ${target}` : `clp-addons ${current} reinstalled`);
 }

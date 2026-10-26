@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { TrustedRoot } from "@sigstore/protobuf-specs";
 import { verifyAttestation } from "../cli/release";
+import { newestRelease } from "../lib/semver";
 
 // v1.5.2's install.sh and the bundles published with it, checked against a
 // copy of Sigstore's trusted root, so nothing here needs the network.
@@ -86,4 +87,11 @@ test("skipped verification neither downloads bundles nor loads keys", async () =
   });
   expect(requests).toEqual([]);
   expect(loaded).toBe(false);
+});
+
+test("--allow-prerelease without a version takes the newest published release, pre-releases included", () => {
+  const release = (tag_name: string, draft = false) => ({ tag_name, draft });
+  expect(newestRelease([release("v1.5.2"), release("v2.0.0-rc.2"), release("v2.0.0-rc.1"), release("v2.1.0-rc.1", true)])?.tag_name).toBe("v2.0.0-rc.2");
+  expect(newestRelease([release("v2.0.0-rc.2"), release("v2.0.0"), release("not-a-tag")])?.tag_name).toBe("v2.0.0");
+  expect(newestRelease([release("v2.1.0", true)])).toBeUndefined();
 });
