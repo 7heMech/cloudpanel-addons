@@ -7,8 +7,10 @@
  * CloudPanel box empties /tmp short of a reboot. A WordPress image job that keeps
  * timing out leaves close to a gigabyte behind on every try.
  */
+import { Database } from "bun:sqlite";
 import { lstatSync, readdirSync, readFileSync, readlinkSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { PANEL_DB } from "../../cli/paths";
 import { readUnixAccounts, siteAccountProblem } from "../../lib/site-accounts";
 
 export interface TmpCleanupPaths {
@@ -27,6 +29,12 @@ export interface TmpCleanupResult {
   removed: number;
   /** Disk space the removed files held. */
   bytes: number;
+}
+
+export interface TmpCleanupOptions {
+  paths?: Partial<TmpCleanupPaths>;
+  panelDb?: string;
+  now?: number;
 }
 
 const HOUR_MS = 3_600_000;
@@ -124,4 +132,29 @@ export function removeAbandonedTmpFiles(
     }
   }
   return result;
+}
+
+/** The Unix users CloudPanel runs PHP sites as: every site it recorded PHP settings for. */
+export function phpSiteUsers(panelDb = PANEL_DB): string[] {
+  const db = new Database(panelDb, { readonly: true });
+  try {
+    db.exec("PRAGMA busy_timeout = 5000;");
+    return db.query<{ user: string }, []>(
+      "SELECT DISTINCT site.user AS user FROM site JOIN php_settings ON php_settings.site_id = site.id;",
+    ).all().map((row) => String(row.user));
+  } finally {
+    db.close();
+  }
+}
+
+function sizeText(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  return bytes >= 1024 ** 2 ? `${Math.round(bytes / 1024 ** 2)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/** One upkeep pass over every PHP site's leftovers; null when there was nothing to remove. */
+export function clearAbandonedTmpFiles(options: TmpCleanupOptions = {}): string | null {
+  const paths = { ...DEFAULT_TMP_CLEANUP_PATHS, ...options.paths };
+  const { removed, bytes } = removeAbandonedTmpFiles(phpSiteUsers(options.panelDb), paths, options.now);
+  return removed ? `${removed} abandoned temp file${removed === 1 ? "" : "s"} removed from /tmp (${sizeText(bytes)})` : null;
 }

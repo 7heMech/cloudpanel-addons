@@ -241,8 +241,7 @@ export function dashboardView(state: PhpResourcesState): string {
 
   return `<div class="page-heading">
     <div><h1>PHP Resources</h1>
-      <p>Put PHP sites into categories, and give each category its PHP-FPM worker limits.</p>
-      <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp.</p></div>
+      <p>Put PHP sites into categories, and give each category its PHP-FPM worker limits.</p></div>
   </div>
   ${drifted
     ? `<div class="notice">${drifted} ${drifted === 1 ? "site no longer matches the category it is" : "sites no longer match the category they are"} in, which is what changing a PHP version leaves behind. Repair puts ${drifted === 1 ? "it" : "them"} back within fifteen minutes.

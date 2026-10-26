@@ -5,7 +5,7 @@ import type { AddonDefinition } from "../../cli/addon-catalog";
 export const SYSTEM_TWEAKS_ADDON: AddonDefinition = {
   name: "system-tweaks",
   title: "System Tweaks",
-  description: "Automatic security updates, the PHP upload-progress mitigation, a newer PHP for CloudPanel itself and forged visitor-IP blocking.",
+  description: "Automatic security updates, the PHP upload-progress mitigation, a newer PHP for CloudPanel itself, forged visitor-IP blocking and /tmp cleanup.",
   added: "2.0",
   preselected: true,
   targets: [],

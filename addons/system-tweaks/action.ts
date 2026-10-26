@@ -16,6 +16,7 @@ import { applyRealIp, realIpStatus, type RealIpOptions, type RealIpStatus } from
 import {
   panelPhpStatus, reconcilePanelPhp, restorePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions, type PanelPhpStatus,
 } from "./panel-php";
+import { clearAbandonedTmpFiles, type TmpCleanupOptions } from "./tmp-cleanup";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;
@@ -62,6 +63,7 @@ export interface SystemTweaksOptions {
   phpGuard?: PhpGuardOptions;
   realIp?: RealIpOptions;
   panelPhp?: PanelPhpOptions;
+  tmpCleanup?: TmpCleanupOptions;
   now?: () => number;
 }
 
@@ -269,6 +271,12 @@ function withSettingsLock<T>(options: SystemTweaksOptions, body: (paths: SystemT
 export async function systemTweaksMaintenance(options: SystemTweaksOptions = {}): Promise<string | null> {
   const lines: string[] = [];
   const failures: string[] = [];
+  try {
+    const tmp = clearAbandonedTmpFiles(options.tmpCleanup);
+    if (tmp) lines.push(tmp);
+  } catch (error) {
+    failures.push(`/tmp cleanup: ${reason(error)}`);
+  }
   try {
     const upkeep = systemTweaksUpkeep(options);
     if (upkeep) lines.push(upkeep);

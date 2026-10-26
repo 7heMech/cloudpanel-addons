@@ -321,6 +321,7 @@ export function dashboardView(state: SystemTweaksState, now = Date.now()): strin
       <div>
         <h1>System Tweaks</h1>
         <p>Server-wide settings for this machine.</p>
+        <p class="hint">Every 15 minutes it also clears PHP and ImageMagick temp files that timed-out requests left in /tmp.</p>
       </div>
     </div>
     <div class="card">
