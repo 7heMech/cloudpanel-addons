@@ -94,16 +94,19 @@ time and bounded error text. Pending sites are handled on subsequent passes.
 Every Varnish route remains administrator-only; the sign-in route's role
 exception does not grant plugin-management access.
 
-The page opens with one sites table -- Site, Varnish, MainWP, Sign in -- since
-sign-in is the most-used action and the one the addon started with; each
-status has its Install, Activate, Connect or Retry beside it. The two
+The page opens with one sites table -- Site, CLP Varnish Cache, MainWP Child,
+Sign in -- since sign-in is the most-used action and the one the addon started
+with; each status has its Install, Activate, Connect or Retry beside it. On a
+wide screen a status keeps to one line and its site's Automatic switch sits at
+the right of the cell, under an Auto heading rather than a label on every row,
+so the table spreads across the page instead of stacking each cell. The two
 automation policies are set once, so they share one card below the table. The
 page draws only controls that do something: the MainWP column and switch
 appear once a Dashboard is chosen, here or on another server; until then the
 card holds only the picker, plus cleanup while Child plugins the addon
 installed remain from a deleted Dashboard, and automation reads as off; a
 site's Automatic switch appears only while its policy is on; a site without
-Varnish has an empty cell. A muted line under the table offers to remove the
+Varnish in CloudPanel says Varnish off. A muted line under the table offers to remove the
 sign-in helper while any site has it, and the shared search appears from six
 sites. After any change the page fetches
 `/api/dashboard`, a server-rendered fragment of everything below the heading,

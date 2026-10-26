@@ -71,8 +71,8 @@ function varnishCell(site: WpSiteView, varnish: WpVarnishState, available: boole
   const automatic = varnish.enabled
     ? siteSwitch(`varnish-auto-${domain}`, "Install CLP Varnish Cache automatically on", domain, !site.varnishExcluded, "setSiteAutomatic")
     : "";
-  return `<div class="wp-status"><span class="badge ${tone}"${record ? checkedTitle(record.checkedAt) : ""}>${label}</span>${action}</div>${
-    record?.error ? `<div class="wp-error">${esc(record.error)}</div>` : ""}${automatic}`;
+  return `<div class="wp-cell"><div class="wp-status"><span class="badge ${tone}"${record ? checkedTitle(record.checkedAt) : ""}>${label}</span>${action}</div>${
+    record?.error ? `<div class="wp-error">${esc(record.error)}</div>` : ""}${automatic}</div>`;
 }
 
 function mainwpCell(site: WpSiteView, state: MainwpView): string {
@@ -89,12 +89,12 @@ function mainwpCell(site: WpSiteView, state: MainwpView): string {
   const action = verb && eligible && !excluded && !state.cleanup && record?.status !== "connected"
     ? `<button class="btn" type="button" data-domain="${domain}"${state.remote ? " data-remote" : ""} onclick="connectMainwp(this)">${verb}</button>`
     : "";
-  const owner = record?.status !== "connected" ? "" : record.ownedConnection ? "Connected by WordPress Tools" : "Connected in MainWP";
+  const owner = record?.status !== "connected" ? "" : record.ownedConnection ? "by WordPress Tools" : "in MainWP";
   const automatic = state.enabled && eligible
     ? siteSwitch(`mainwp-auto-${domain}`, "Install MainWP Child automatically on", domain, !excluded, "setMainwpSite")
     : "";
-  return `<div class="wp-status"><span class="badge ${tone}"${record ? checkedTitle(record.checkedAt) : ""}>${label}</span>${action}</div>${
-    owner ? `<div class="hint">${owner}</div>` : ""}${record?.error ? `<div class="wp-error">${esc(record.error)}</div>` : ""}${automatic}`;
+  return `<div class="wp-cell"><div class="wp-status"><span class="badge ${tone}"${record ? checkedTitle(record.checkedAt) : ""}>${label}</span>${
+    owner ? `<span class="wp-note">${owner}</span>` : ""}${action}</div>${record?.error ? `<div class="wp-error">${esc(record.error)}</div>` : ""}${automatic}</div>`;
 }
 
 function siteRow(site: WpSiteView, data: WpDashboard, mainwp: boolean): string {
@@ -102,7 +102,7 @@ function siteRow(site: WpSiteView, data: WpDashboard, mainwp: boolean): string {
   return `
               <tr data-domain="${domain}" data-find="${esc(`${site.domain} ${site.user}`)}">
                 <td class="site-cell">${domain}<div class="hint">${esc(site.user)}</div></td>
-                <td data-label="Varnish plugin">${varnishCell(site, data.varnish, !data.varnishError)}</td>${
+                <td data-label="CLP Varnish Cache">${varnishCell(site, data.varnish, !data.varnishError)}</td>${
   mainwp ? `\n                <td data-label="MainWP Child">${mainwpCell(site, data.mainwp)}</td>` : ""}
                 <td class="action-cell"><button class="btn btn-primary" type="button" data-domain="${domain}" onclick="signIn(this)">Sign in</button></td>
               </tr>`;
@@ -124,6 +124,8 @@ function sitesCard(data: WpDashboard): string {
     </div>`;
   }
   const mainwp = !data.mainwpError && (Boolean(data.mainwp.dashboard) || data.mainwp.remote);
+  // On a wide screen the per-site switches sit under one Auto heading rather than each saying Automatic.
+  const heading = (title: string, automatic: boolean) => automatic ? `<span class="wp-th">${title}<span>Auto</span></span>` : title;
   return `
     <div class="card card-table">
       <div class="card-header"><h2>WordPress sites</h2></div>
@@ -133,7 +135,8 @@ function sitesCard(data: WpDashboard): string {
           <thead>
             <tr>
               <th scope="col">Site</th>
-              <th scope="col" title="CLP Varnish Cache, the WordPress plugin that clears CloudPanel's Varnish cache when content changes">Varnish plugin</th>${mainwp ? '\n              <th scope="col">MainWP Child</th>' : ""}
+              <th scope="col" title="The WordPress plugin that clears CloudPanel's Varnish cache when content changes">${heading("CLP Varnish Cache", data.varnish.enabled && !data.varnishError)}</th>${
+  mainwp ? `\n              <th scope="col">${heading("MainWP Child", data.mainwp.enabled)}</th>` : ""}
               <th scope="col" class="action-cell"></th>
             </tr>
           </thead>

@@ -282,7 +282,7 @@ test("the page puts sites first and draws only the controls that do something", 
   expect(fresh).not.toContain("Application");
   expect(fresh).toContain('<option value="">Choose a site</option><option value="@remote">On another server</option>');
   // A site without Varnish says so, and Automatic switches wait for their automation.
-  expect(fresh).toContain('<td data-label="Varnish plugin"><span class="hint" title="Varnish Cache is off');
+  expect(fresh).toContain('<td data-label="CLP Varnish Cache"><span class="hint" title="Varnish Cache is off');
   expect(fresh).not.toContain("setSiteAutomatic(this)");
   expect(fresh).toContain("Sign-in helper on 1 site · ");
   expect(page([site("a.test")], emptyMainwpState())).not.toContain("Sign-in helper");
@@ -290,12 +290,13 @@ test("the page puts sites first and draws only the controls that do something", 
   const chosen = emptyMainwpState(); chosen.dashboard = "dashboard.test";
   const off = page(sites, chosen);
   const heads = [...off.matchAll(/<th scope="col"[^>]*>([^<]*)<\/th>/g)].map((match) => match[1]);
-  expect(heads).toEqual(["Site", "Varnish plugin", "MainWP Child", ""]);
+  expect(heads).toEqual(["Site", "CLP Varnish Cache", "MainWP Child", ""]);
   expect(off).toContain("mainwp-automatic");
   expect(off).not.toContain("setMainwpSite(this)");
   expect(off).toMatch(/data-domain="new.test" onclick="connectMainwp\(this\)">Connect</);
   chosen.enabled = true;
   const on = page(sites, chosen, true);
+  expect(on).toContain('<th scope="col"><span class="wp-th">MainWP Child<span>Auto</span></span></th>');
   expect(on).toContain('id="mainwp-auto-new.test"');
   expect(on).not.toContain('id="mainwp-auto-dashboard.test"');
   expect(on).toContain('id="varnish-auto-new.test"');
@@ -640,7 +641,7 @@ test("the page offers a Dashboard on another server and Install or Activate per 
     varnish: { enabled: false, excluded: [], sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "" });
   expect(page).toContain('<option value="@remote" selected>On another server</option>');
   expect(page).not.toContain("Choose a site");
-  expect(page).toContain('<th scope="col">MainWP Child</th>');
+  expect(page).toContain('<th scope="col"><span class="wp-th">MainWP Child<span>Auto</span></span></th>');
   expect(page).toContain("Install MainWP Child automatically");
   expect(page).not.toContain("Install and connect");
   expect(page).toMatch(/data-domain="new.test" data-remote onclick="connectMainwp\(this\)">Activate</);
