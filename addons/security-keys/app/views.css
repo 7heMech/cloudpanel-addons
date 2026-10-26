@@ -16,10 +16,10 @@
    stays for the keyboard and screen readers; only the tile shows the state. */
 .sk-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
 .sk-tile { position: relative; display: block; margin: 0; padding: 14px 16px; border: 1px solid var(--button-border);
-  border-radius: 6px; background: var(--panel); cursor: pointer; transition: border-color .15s, background-color .15s, box-shadow .15s; }
+  border-radius: 6px; background: var(--panel); cursor: pointer; transition: border-color .15s, background-color .15s; }
 .sk-tile:hover { border-color: var(--muted); }
-.sk-tile:has(input:checked) { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); background: rgb(38 125 221 / 6%); }
-html.dark .sk-tile:has(input:checked) { background: rgb(38 125 221 / 14%); }
+.sk-tile:has(input:checked) { border-color: var(--primary); background: rgb(38 125 221 / 4%); }
+html.dark .sk-tile:has(input:checked) { background: rgb(38 125 221 / 10%); }
 .sk-tile:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .sk-tile input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
 .sk-tile strong { display: block; font-weight: 600; }
