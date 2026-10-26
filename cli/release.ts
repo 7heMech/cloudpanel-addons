@@ -4,6 +4,7 @@ import type { TrustedRoot } from "@sigstore/protobuf-specs";
 import { getTrustedRoot } from "@sigstore/tuf";
 import { Verifier, toSignedEntity, toTrustMaterial } from "@sigstore/verify";
 import { REPO, SIGSTORE_DIR } from "./paths";
+import { compareSemver } from "../lib/semver";
 import { fatal, log } from "./util";
 
 const API = "https://api.github.com";
@@ -45,11 +46,22 @@ interface GithubRelease {
   assets: { name: string; browser_download_url: string }[];
 }
 
+/** The newest published release by version, pre-releases included; GitHub's "latest" never is one. */
+export function newestRelease<T extends Pick<GithubRelease, "tag_name" | "draft">>(releases: T[]): T | undefined {
+  return releases
+    .filter((release) => !release.draft && VERSION_TAG_RE.test(release.tag_name))
+    .sort((a, b) => compareSemver(b.tag_name, a.tag_name))[0];
+}
+
 export async function resolveRelease(requested?: string, allowPrerelease = false): Promise<ResolvedRelease> {
   let release: GithubRelease;
   if (requested && requested !== "latest") {
     if (!VERSION_TAG_RE.test(requested)) fatal(`'${requested}' is not a release tag; expected something like v1.0.0`);
     release = (await github(`/repos/${REPO}/releases/tags/${requested}`)) as GithubRelease;
+  } else if (allowPrerelease) {
+    const newest = newestRelease((await github(`/repos/${REPO}/releases?per_page=30`)) as GithubRelease[]);
+    if (!newest) fatal("GitHub lists no published release");
+    release = newest;
   } else {
     release = (await github(`/repos/${REPO}/releases/latest`)) as GithubRelease;
   }

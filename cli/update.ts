@@ -72,6 +72,11 @@ async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () 
 
   const upToDate = current === target;
   const artifactsCurrent = upToDate && currentArtifactsMatch(target);
+  // Nothing to install, and repair is the command that re-applies the panel side.
+  if (artifactsCurrent && flags["no-self-update"] !== true) {
+    log.ok(`clp-addons ${current} is up to date`);
+    return;
+  }
   let artifacts: FetchedArtifact[] | undefined;
   if (!artifactsCurrent) {
     artifacts = await fetchVerified(release, artifactNames());
@@ -130,10 +135,8 @@ async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () 
   if (specs.length === 0) {
     log.ok(versionChanged
       ? `clp-addons updated from ${updatedFrom} to ${target}; no addon service is configured`
-      : `clp-addons ${current} is up to date`);
+      : `clp-addons ${current} reinstalled; no addon service is configured`);
     return;
   }
-  log.ok(versionChanged
-    ? `clp-addons updated from ${updatedFrom} to ${target}`
-    : `clp-addons ${current} is up to date; provisioning reconciled`);
+  log.ok(versionChanged ? `clp-addons updated from ${updatedFrom} to ${target}` : `clp-addons ${current} reinstalled`);
 }
