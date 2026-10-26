@@ -50,12 +50,9 @@ export const wpToolsService = {
     return call<WpRemoveResult>("remove", [], LIST_TIMEOUT_MS);
   },
 
-  mainwpSettings(enabled: boolean, dashboard?: string): Promise<ActionResult<{ mainwp: MainwpView }>> {
-    const choice = dashboard === undefined ? [] : [`--dashboard=${dashboard}`];
+  mainwpSettings(enabled: boolean, dashboard?: string, remote?: boolean): Promise<ActionResult<{ mainwp: MainwpView }>> {
+    const choice = [...(dashboard === undefined ? [] : [`--dashboard=${dashboard}`]), ...(remote ? ["--remote=true"] : [])];
     return call("mainwp-settings", [`--enabled=${enabled}`, ...choice], PASS_TIMEOUT_MS);
-  },
-  mainwpSite(domain: string, excluded: boolean): Promise<ActionResult<{ mainwp: MainwpView }>> {
-    return call("mainwp-site", [`--domain=${domain}`, `--excluded=${excluded}`]);
   },
   mainwpConnect(domain: string): Promise<ActionResult<MainwpResult>> {
     return call("mainwp-connect", [`--domain=${domain}`, `--confirm=${domain}`], MAINWP_TIMEOUT_MS);
@@ -68,9 +65,6 @@ export const wpToolsService = {
   },
   varnishSettings(enabled: boolean): Promise<ActionResult<{ varnish: WpVarnishState }>> {
     return call("varnish-settings", [`--enabled=${enabled}`]);
-  },
-  varnishSite(domain: string, excluded: boolean): Promise<ActionResult<{ varnish: WpVarnishState }>> {
-    return call("varnish-site", [`--domain=${domain}`, `--excluded=${excluded}`]);
   },
   varnishInstall(domain: string): Promise<ActionResult<VarnishSyncResult>> {
     return call("varnish-install", [`--domain=${domain}`], PASS_TIMEOUT_MS);

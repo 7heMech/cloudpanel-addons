@@ -413,6 +413,11 @@ test("the admin list groups keys by user and marks what needs review", () => {
   expect(page).toContain("4 keys for 3 users");
   expect(page).toContain("Synced passkey, not accepted");
   expect(page).toContain("1 synced passkey is on file and refused while this is off.");
+  // A tile per role, counting what it holds or refuses; a deactivated account counts for none.
+  expect(page).toMatch(/id="role-ROLE_ADMIN" type="checkbox" checked /);
+  expect(page).toContain('<strong>Administrators</strong><span class="hint">2 keys</span>');
+  expect(page).toContain('<strong>Site managers</strong><span class="sk-refused">1 key refused</span>');
+  expect(page).toContain('<strong>Users</strong><span class="hint">No keys</span>');
   // The refused passkey, the deactivated account and the role that is off.
   expect(page.match(/data-blocked/g)).toHaveLength(3);
   expect(page).not.toContain("Device-bound");

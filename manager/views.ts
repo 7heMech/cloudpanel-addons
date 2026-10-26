@@ -31,7 +31,7 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ve
     ? `${href ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>` : ""}
       <button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`
     : `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`;
-  return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}">
+  return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}" data-find="${esc(`${title} ${spec.name} ${spec.description ?? ""}`)}">
   <div class="addon-about">
     <h3>${heading}${isNew(spec.added, version) ? ' <span class="badge state-queued">New</span>'
       : spec.changed && isNew(spec.changed.in, version) ? ' <span class="badge">Changed</span>' : ""}</h3>
@@ -115,15 +115,20 @@ export function indexPage(
 
   const live = liveManagerJob(options.job ?? null);
   const claimed = live && [...enabled, ...available].includes(managerJobKey(live)) ? managerJobKey(live) : null;
+  const search = enabled.length + available.length > 0
+    ? `<div class="addon-find"><input type="search" id="addon-find" data-keep placeholder="Find an addon" aria-label="Find an addon" oninput="findAddons()"></div>`
+    : "";
   const content = `<div class="page-heading"><h1>Addons</h1><a class="btn" href="${UPDATE_PATH}">Updates</a></div>` +
     managerJobFailure(options.job ?? null) +
     managerJobBlock(options.job ?? null, claimed) +
+    search +
     (enabled.length
       ? list("Enabled", enabled, true)
       : `<div class="card empty">${esc(available.length
         ? "No addons are enabled. Enable one below to add it to CloudPanel."
         : "No addons are currently available.")}</div>`) +
-    (available.length ? list("Available", available, false) : "");
+    (available.length ? list("Available", available, false) : "") +
+    (search ? '<div class="card empty" id="addon-none" hidden>No addon matches.</div>' : "");
 
   return managerPage("CloudPanel Addons", content, update, options);
 }

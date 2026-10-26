@@ -15,9 +15,9 @@ test("the WordPress page refuses every form, so its header does not grow with th
   wpToolsService.sites = async () => ({ ok: true, data: {
     sites: Array.from({ length: 500 }, (_, i) => ({
       domain: `site${i}.example.com`, user: `site${i}`, application: "WordPress", helper: false,
-      varnishCache: false, varnishExcluded: false, varnishPlugin: null,
+      varnishCache: false, varnishPlugin: null,
     })),
-    varnish: { enabled: false, excluded: [], sites: {} },
+    varnish: { enabled: false, sites: {} },
     varnishError: "",
     mainwp: mainwpView(emptyMainwpState()),
     mainwpError: "",

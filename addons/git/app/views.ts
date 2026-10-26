@@ -5,7 +5,7 @@
 
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_NONE_HTML, FLEET_ROW_SELECTION_JS, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, fleetRowSelectionStyle, jobStateClass,
+  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, fleetRowSelectionStyle, jobStateClass,
   renderFragment, renderLayout, sinceText, whenText,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
@@ -324,8 +324,7 @@ export function fleetView(sites: GitSiteStatus[]): string {
         <td class="site-select">
           <input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${domain}"${available(site) ? "" : " disabled"}>
         </td>
-        <td class="site-cell">
-          <a href="${BASE}/?domain=${encodeURIComponent(site.domain)}">${domain}</a>
+        <td class="site-cell">${domain}
           <div class="hint" title="${esc(site.config?.remote ?? "")}">${esc(site.config ? repositoryName(site.config.remote) : "Settings unavailable")}</div>
           <div class="hint">${esc(site.siteType ? siteTypeLabel(site.siteType) : "Site no longer in CloudPanel")}</div>
         </td>
@@ -338,9 +337,10 @@ export function fleetView(sites: GitSiteStatus[]): string {
             : job ? `<span class="badge ${jobStateClass(job.state)}">${esc(stateLabel(job.state))}</span><div class="hint">${relativeTime(job.startedAt || job.createdAt)}</div>`
             : '<span class="badge state-queued">Not deployed</span>'}
         </td>
-        <td class="action-cell">
+        <td class="action-cell"><div class="actions">
           <button class="btn" type="button" onclick="deployGitSite('${esc(site.domain)}')"${available(site) ? "" : " disabled"}>${running(site) ? "Deploying…" : "Deploy"}</button>
-        </td>
+          <a class="btn" href="${BASE}/?domain=${encodeURIComponent(site.domain)}">Manage</a>
+        </div></td>
       </tr>`;
   };
 
@@ -376,7 +376,7 @@ export function fleetView(sites: GitSiteStatus[]): string {
         </tr></thead>
         <tbody>${sites.map(row).join("")}</tbody>
       </table></div>
-      ${FLEET_NONE_HTML}`
+      ${FLEET_FOOTER_HTML}`
       }
     </div>`;
 }

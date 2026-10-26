@@ -33,7 +33,7 @@ updates, settings, deactivation and deletion belong to WordPress.
 
 ## Varnish installation
 
-The policy, per-domain exclusions and last-check records live in root-owned
+The policy and last-check records live in root-owned
 `/var/lib/clp-addons/wp-tools/varnish.json`, written atomically with mode `0600`.
 Disabling keeps this state. Entries for a domain the panel no longer has are
 dropped, so a recreated site starts fresh. Missing state means automation off;
@@ -51,7 +51,7 @@ plugin not yet seen. It has a 30-second budget. **Check now** checks every
 eligible site within 90 seconds and refreshes what the page shows. An administrator can also request an
 installation for one site. Automatic checks do nothing while the policy is off. A single-site
 explicit installation can run while automation is off, but still honors
-exclusions and eligibility. Only PHP sites with CloudPanel's `varnish_cache`
+eligibility. Only PHP sites with CloudPanel's `varnish_cache`
 flag and `wp-includes` plus `wp-content` on disk are eligible. The page and
 installer share this discovery and eligibility calculation. A panel without
 the Varnish column contributes no eligible sites. Varnish itself is never
@@ -94,16 +94,20 @@ time and bounded error text. Pending sites are handled on subsequent passes.
 Every Varnish route remains administrator-only; the sign-in route's role
 exception does not grant plugin-management access.
 
-The page opens with one sites table -- Site, Varnish, MainWP, Sign in -- since
-sign-in is the most-used action and the one the addon started with; each
-status has its Install, Activate, Connect or Retry beside it. The two
-automation policies are set once, so they share one card below the table. The
+The page opens with one sites table -- Site, CLP Varnish Cache, MainWP Child,
+Sign in -- since sign-in is the most-used action and the one the addon started
+with; each status has its Install, Activate, Connect or Retry beside it, on one
+line on a wide screen, so the table spreads across the page instead of stacking
+each cell. The two automation policies are set once, so they share one card
+below the table. A row has no automation switch of its own: automation acts
+only on a site it has never seen, so a listed site has normally been handled by
+a pass already, and removing the plugin in WordPress keeps a site out, since a
+removed plugin is never put back. The
 page draws only controls that do something: the MainWP column and switch
-appear once a Dashboard is chosen, until then the card holds only the picker,
-plus cleanup while Child plugins the addon installed remain from a deleted
-Dashboard, and automation reads as off; a
-site's Automatic switch appears only while its policy is on; a site without
-Varnish has an empty cell. A muted line under the table offers to remove the
+appear once a Dashboard is chosen, here or on another server; until then the
+card holds only the picker, plus cleanup while Child plugins the addon
+installed remain from a deleted Dashboard, and automation reads as off; a site
+without Varnish in CloudPanel says Varnish off. A muted line under the table offers to remove the
 sign-in helper while any site has it, and the shared search appears from six
 sites. After any change the page fetches
 `/api/dashboard`, a server-rendered fragment of everything below the heading,
@@ -312,9 +316,11 @@ enabled. The addon's own page signs in to the same sites either way.
 ## MainWP enrollment
 
 The Dashboard is one WordPress site on this server, chosen from the same
-discovery as everything else; a Dashboard elsewhere would need credentials and
-network policy the addon does not manage. Child steps run as the child's site
-user and Dashboard steps as the Dashboard's, through the shared WP-CLI runner.
+discovery as everything else, or "on another server". Connecting to a Dashboard
+elsewhere would need its credentials and network policy, which the addon does
+not manage, so for one it only installs the Child; see below. Child steps run
+as the child's site user and Dashboard steps as the Dashboard's, through the
+shared WP-CLI runner.
 A fixed adapter, `mainwp.php`, is passed to `wp eval` with JSON on stdin and
 answers on a marked line. Its failures are fixed codes the addon turns into its
 own messages, so text a site prints in reply is never shown or logged; a failed
@@ -326,7 +332,7 @@ Connecting uses the child's first administrator, as sign-in does. The adapter
 sets a random Security ID and turns off that administrator's password
 requirement for connecting, which lets MainWP register with the ID alone. The
 previous setting is journaled first. It is restored in `finally`, or by the next
-queued pass after a crash, even when automation is off or the site is excluded.
+queued pass after a crash, even when automation is off.
 Interrupted children are recovered first, within the pass budget and before
 querying the Dashboard. A successful recovery is journaled as `restored`, so an
 unavailable Dashboard cannot prevent disable or uninstall once authentication
@@ -342,7 +348,7 @@ Anything but 200–399 is Waiting for HTTPS: no `seen`, no claim, retried on eve
 pass. A maintenance page or a Cloudflare-only rule is not ready either.
 
 Root-only `/var/lib/clp-addons/wp-tools/mainwp.json`, written atomically with
-mode `0600`, holds the policy, exclusions and each site's status, `seen`, and
+mode `0600`, holds the policy and each site's status, `seen`, and
 separate plugin and connection ownership. While it owns anything it also keeps
 a snapshot of the settings it may change, the Security ID until the connection
 is verified or cleaned up, the Dashboard record's id and key fingerprint, and a phase written
@@ -380,9 +386,29 @@ plugin the addon installed, so automation may install it again after a completed
 cleanup, even if cleanup needed retries. One already removed by the operator
 stays seen.
 
+For a Dashboard on another server the addon never contacts a Dashboard or
+registers anything. Automation installs MainWP Child on an unseen site and
+leaves it inactive: MainWP Child deactivates itself on an admin page load once
+it has been unconnected for `mainwp_child_ttl_active_unconnected_site` minutes
+(20 by default), so a Child activated in advance would be off by the time the
+operator connects it. The row action installs a missing Child and activates it,
+after clearing `mainwp_child_lasttime_not_connected` so that timeout starts
+afresh, and the operator adds the site from their Dashboard with the
+administrator's own login. Neither path sets a Security ID or changes the
+password requirement, so the Child is no easier to claim than the site's admin
+account. A Child with a public key is reported connected, to whichever
+Dashboard holds it. The install is journaled as phase `child`, which needs no
+authentication recovery: a failed attempt that changed nothing is retried on
+the next pass, and an interrupted one needs Retry, as an enrollment's do.
+Cleanup uses the same snapshot rules, so it deletes a Child it installed and
+restores the activation of one it found, unless a Dashboard has connected it
+since. Moving to a Dashboard elsewhere requires cleaning up the connections the
+addon made; moving back does not, since an installed Child belongs to no
+Dashboard.
+
 MainWP has its own lock, separate from Varnish and sign-in. The queued pass
 looks only at unseen sites, unfinished phases, pending cleanup and retired
-records, and starts sites for 25 seconds; Check now and Connect get 90. An
+records, and starts sites for 25 seconds; Check now and row actions get 90. An
 enrollment that has started gets up to a minute, so the budget never stops
 registration part-way. A pass asks the Dashboard about at most 64 sites, least
 recently checked first. A deleted site's owned Dashboard record is retired and

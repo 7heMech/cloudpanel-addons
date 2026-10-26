@@ -839,10 +839,10 @@ function wpToolsPreviewSites(url: URL): WpSiteView[] {
     ? { status: status as "inactive" | "missing" | "unsupported" | "error", seen: true, checkedAt: "2026-10-09T08:45:00Z", error: status === "error" ? "WP-CLI timed out while checking the site. Retry to check again." : "" }
     : null;
   return [
-    { domain: "www.example.com", user: "example", helper: true, varnishCache: false, varnishExcluded: false, varnishPlugin: null },
-    { domain: "shop.example.com", user: "shop", helper: true, varnishCache: true, varnishExcluded: false, varnishPlugin: { status: "active", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
-    { domain: "blog.example.com", user: "blog", helper: false, varnishCache: true, varnishExcluded: false, varnishPlugin: plugin },
-    { domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", helper: false, varnishCache: true, varnishExcluded: true, varnishPlugin: { status: "inactive", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
+    { domain: "www.example.com", user: "example", helper: true, varnishCache: false, varnishPlugin: null },
+    { domain: "shop.example.com", user: "shop", helper: true, varnishCache: true, varnishPlugin: { status: "active", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
+    { domain: "blog.example.com", user: "blog", helper: false, varnishCache: true, varnishPlugin: plugin },
+    { domain: "staging.newsletter.example-church-of-the-hills.com", user: "news", helper: false, varnishCache: true, varnishPlugin: { status: "inactive", seen: true, error: "", checkedAt: "2026-10-09T08:45:00Z" } },
   ];
 }
 
@@ -980,7 +980,7 @@ function terminalPreview(req: Request, url: URL): Response | null {
 
 // The WordPress Tools API, acting on the sites the page was last drawn with.
 // ?mainwp=states turns automation on, ?mainwp=cleanup shows a pending cleanup,
-// ?mainwp=none has no Dashboard chosen yet.
+// ?mainwp=none has no Dashboard chosen yet, ?mainwp=remote a Dashboard on another server.
 function mainwpPreview(url: URL): MainwpView {
   const checkedAt = "2026-10-16T09:00:00Z";
   const entry = (status: MainwpSiteView["status"], ownedConnection = false, seen = true): MainwpSiteView => ({
@@ -988,12 +988,28 @@ function mainwpPreview(url: URL): MainwpView {
     error: status === "error" ? "the Dashboard could not connect; check the site's HTTPS, firewall and security plugins" : "",
   });
   if (url.searchParams.get("mainwp") === "none") {
-    return { enabled: false, dashboard: "", excluded: [], cleanup: false, owned: 0, connections: 0, sites: {} };
+    return { enabled: false, dashboard: "", remote: false, cleanup: false, owned: 0, connections: 0, sites: {} };
+  }
+  if (url.searchParams.get("mainwp") === "remote") {
+    return {
+      enabled: true, dashboard: "", remote: true, cleanup: false, owned: 3, connections: 0,
+      sites: {
+        "shop.example.com": entry("connected"),
+        "www.example.com": entry("not-connected"),
+        "blog.example.com": entry("inactive"),
+        "staging.newsletter.example-church-of-the-hills.com": entry("inactive"),
+        "mainwp.example.com": entry("connected"),
+        "new.example.com": entry("missing", false, false),
+        "removed.example.com": entry("missing"),
+        "network.example.com": entry("unsupported"),
+        "retry.example.com": { ...entry("error"), error: "MainWP Child could not be activated; check the site in WordPress" },
+      },
+    };
   }
   return {
     enabled: url.searchParams.get("mainwp") === "states",
     dashboard: "mainwp.example.com",
-    excluded: ["staging.newsletter.example-church-of-the-hills.com"],
+    remote: false,
     cleanup: url.searchParams.get("mainwp") === "cleanup",
     owned: 1, connections: 1,
     sites: {
@@ -1012,7 +1028,7 @@ function mainwpPreview(url: URL): MainwpView {
 let wpToolsPreview = { sites: [] as WpSiteView[], automatic: false, error: "", mainwp: mainwpPreview(new URL("http://localhost")), mainwpError: "" };
 const wpToolsPreviewData = () => ({
   sites: wpToolsPreview.sites,
-  varnish: { enabled: wpToolsPreview.automatic, excluded: [], sites: {} },
+  varnish: { enabled: wpToolsPreview.automatic, sites: {} },
   varnishError: wpToolsPreview.error,
   mainwp: wpToolsPreview.mainwp, mainwpError: wpToolsPreview.mainwpError,
 });
@@ -1027,16 +1043,15 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
       return ok({ html: wpToolsDashboardBody(wpToolsPreviewData()) });
     case "mainwp-settings":
       wpToolsPreview.mainwp.enabled = body.enabled === true;
-      if (typeof body.dashboard === "string") wpToolsPreview.mainwp.dashboard = body.dashboard;
+      if (body.remote === true) Object.assign(wpToolsPreview.mainwp, { remote: true, dashboard: "" });
+      if (typeof body.dashboard === "string") Object.assign(wpToolsPreview.mainwp, { remote: false, dashboard: body.dashboard });
       return ok({});
-    case "mainwp-site":
-      wpToolsPreview.mainwp.excluded = wpToolsPreview.mainwp.excluded.filter((domain) => domain !== body.domain);
-      if (body.excluded === true && typeof body.domain === "string") wpToolsPreview.mainwp.excluded.push(body.domain);
-      return ok({});
-    case "mainwp-connect":
-      if (site) wpToolsPreview.mainwp.sites[site.domain] = { status: "connected", seen: true, ownedConnection: true, checkedAt: new Date().toISOString(), error: "" };
-      return ok({ checked: 1, connected: 1, removed: 0, pending: 0, failed: [] });
-    case "mainwp-sync": return ok({ checked: wpToolsPreview.sites.length, connected: 0, removed: 0, pending: 0, failed: [] });
+    case "mainwp-connect": {
+      const remote = wpToolsPreview.mainwp.remote;
+      if (site) wpToolsPreview.mainwp.sites[site.domain] = { status: remote ? "not-connected" : "connected", seen: true, ownedConnection: !remote, checkedAt: new Date().toISOString(), error: "" };
+      return ok({ checked: 1, installed: remote ? 1 : 0, connected: remote ? 0 : 1, removed: 0, pending: 0, failed: [] });
+    }
+    case "mainwp-sync": return ok({ checked: wpToolsPreview.sites.length, installed: 0, connected: 0, removed: 0, pending: 0, failed: [] });
     case "mainwp-cleanup":
       wpToolsPreview.mainwp.enabled = false;
       wpToolsPreview.mainwp.cleanup = false;
@@ -1050,17 +1065,14 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
     case "varnish-settings":
       wpToolsPreview.automatic = body.enabled === true;
       return ok({});
-    case "varnish-site":
-      if (site) site.varnishExcluded = body.excluded === true;
-      return ok({});
     case "varnish-install":
       if (site) site.varnishPlugin = active();
       return ok({ installed: 1, checked: 1, pending: 0, failed: [] });
     case "varnish-sync": {
-      const due = wpToolsPreview.sites.filter((entry) => entry.varnishCache && !entry.varnishExcluded
+      const due = wpToolsPreview.sites.filter((entry) => entry.varnishCache
         && (!entry.varnishPlugin || (entry.varnishPlugin.status === "missing" && !entry.varnishPlugin.seen)));
       due.forEach((entry) => { entry.varnishPlugin = active(); });
-      return ok({ installed: due.length, checked: wpToolsPreview.sites.filter((entry) => entry.varnishCache && !entry.varnishExcluded).length, pending: 0, failed: [] });
+      return ok({ installed: due.length, checked: wpToolsPreview.sites.filter((entry) => entry.varnishCache).length, pending: 0, failed: [] });
     }
     case "remove": {
       const removed = wpToolsPreview.sites.filter((entry) => entry.helper);
@@ -1110,6 +1122,10 @@ async function repaintPreviewMutation(req: Request, url: URL): Promise<Response 
     const state = { ...systemTweaksPreviewState(source), panelPhp: panelPhpPreviewStatus(source) };
     systemTweaksPreview = state;
     return Response.json({ ok: true, html: systemTweaksDashboardView(state) });
+  }
+  if (path === "/addons/security-keys/api/settings") {
+    const settings = { roles: Array.isArray(body.roles) ? body.roles : [], syncedPasskeys: body.syncedPasskeys === true };
+    return Response.json({ ok: true, html: securityKeysDashboardView({ users: securityKeysPreviewUsers(source), settings }) });
   }
   return gitPreviewMutation(req, path, source, body)
     ?? maintenancePreviewMutation(path, source, body)
@@ -1502,7 +1518,7 @@ const server = Bun.serve({
       const mainwpOnly = ["mainwp.example.com", "new.example.com", "waiting.example.com", "removed.example.com", "network.example.com", "retry.example.com"];
       if (!empty) {
         for (const domain of mainwpOnly) wpToolsPreview.sites.push({
-          domain, user: domain.split(".")[0]!, helper: false, varnishCache: false, varnishExcluded: false, varnishPlugin: null,
+          domain, user: domain.split(".")[0]!, helper: false, varnishCache: false, varnishPlugin: null,
         });
       }
       html = wpToolsLayout("WordPress Tools", wpToolsDashboardView(wpToolsPreviewData()), notice);

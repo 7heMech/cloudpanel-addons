@@ -10,9 +10,10 @@ plugin: their `mail()` goes through the relay as it is.
    client support; the installer adds the SASL modules if they are missing.
 2. Create a **profile** for each SMTP account: hostname, a STARTTLS port (587 or
    2525), username, password, and the From its sites send with.
-3. In each site's **Mail** column, one at a time or in bulk, choose a profile,
-   **Not relayed (sent from this server)**, or **Don't send (discard)**, which
-   logs mail and never delivers it; Stager puts new staging copies in it. Under **Profiles**,
+3. In each site's **Mail** column, one at a time or in bulk, choose **Relay
+   through** a profile; **Don't handle**, which leaves the site's mail to this
+   server's own Postfix; or **Discard (never delivered)**, which logs mail and
+   never delivers it, and which Stager puts new staging copies in. Under **Profiles**,
    choose where new sites' mail goes. A site marked **Blocked** could send as a
    domain another site sends through a different profile; put both in one
    profile or remove the domain with **Domains** on its row. A site marked
@@ -60,7 +61,7 @@ one of its extra sending domains, or the profile's From.
   Mailcow mailbox permitted to send as all of them, then lets any of its sites
   send signed mail as every one of those domains. Give sites that do not trust
   each other separate profiles.
-- While any site is in a profile, Don't send included (as every Stager clone
+- While any site is in a profile, Discard included (as every Stager clone
   is), Postfix stops relaying unauthenticated SMTP from `localhost:25`. Point apps that used it at sendmail or PHP `mail()`.
 - Apps with their own SMTP settings keep connecting to their provider directly.
 - New sites are picked up seconds after CloudPanel creates them. Disabling the

@@ -46,7 +46,7 @@
   .skipped-note { padding:16px 20px 20px; }
   .smtp-profiles-header { flex-wrap:wrap; }
   .smtp-profile-tools { width:100%; flex-wrap:wrap; }
-  .smtp-default-field { flex:1 1 200px; }
+  .smtp-default-field { flex:1 1 100%; }
   .smtp-default-field select { width:100%; min-width:0; }
   .smtp-checklist > li { display:grid; grid-template-columns:28px minmax(0,1fr); gap:10px 14px; align-items:start; }
   .smtp-step-control { grid-column:2; text-align:left; }

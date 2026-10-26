@@ -3,7 +3,14 @@
 .btn-update { border-color: var(--warn); color: var(--warn); }
 .instatic-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 14px; }
 .instatic-row-actions .btn-update { padding: 5px 12px; }
-@media (max-width: 940px) { .instatic-row-actions { justify-content: flex-start; flex-wrap: wrap; } }
+/* On a phone Manage opens in place: Update floats beside it, and the buttons
+   clear it, so opening the menu neither moves Manage nor indents the buttons. */
+@media (max-width: 940px) {
+  .instatic-row-actions { display: flow-root; }
+  .instatic-row-actions > .btn { float: left; margin-right: 14px; }
+  .instatic-row-actions summary { display: inline-block; padding: 6px 0; }
+  .instatic-row-actions .row-actions .actions { clear: left; }
+}
 .logs-port { margin: 0 0 12px; }
 .snapshot-box { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 12px 16px; margin-bottom: 16px; }
 .snapshot-file { font-weight: 600; margin-bottom: 4px; }

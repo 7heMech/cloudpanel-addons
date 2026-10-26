@@ -41,7 +41,7 @@ import {
 
 import { basicAuthBlocks, basicAuthRewritable, withBasicAuthBypass, type reloadNginx } from "./basic-auth";
 
-export type WpToolsVerb = "sites" | "sign-in" | "remove" | "sync" | "varnish-settings" | "varnish-site" | "varnish-install" | "varnish-sync";
+export type WpToolsVerb = "sites" | "sign-in" | "remove" | "sync" | "varnish-settings" | "varnish-install" | "varnish-sync";
 
 /** Where the loader and its one-time secret live inside a WordPress site. */
 const MU_PLUGINS = "wp-content/mu-plugins";
@@ -74,7 +74,6 @@ export interface WpSiteView {
   /** Whether the sign-in helper is in the site right now. */
   helper: boolean;
   varnishCache: boolean;
-  varnishExcluded: boolean;
   varnishPlugin: VarnishSiteRecord | null;
 }
 
@@ -315,7 +314,6 @@ function wordpressSites(paths: WpToolsActionPaths, state: WpVarnishState): WpSit
       user: site.row.user,
       helper: existsSync(join(site.root, LOADER_FILE)),
       varnishCache: site.varnishCache,
-      varnishExcluded: state.excluded.includes(site.row.domain_name),
       varnishPlugin: state.sites[site.row.domain_name] ?? null,
     }));
 }
@@ -581,12 +579,11 @@ interface ParsedAction {
   addBypass: boolean;
   allowBasicAuth: boolean;
   enabled?: boolean;
-  excluded?: boolean;
 }
 
 function parseAction(argv: string[], options: WpToolsActionOptions): ParsedAction {
   const [rawVerb, ...rest] = argv;
-  const verbs: WpToolsVerb[] = ["sites", "sign-in", "remove", "sync", "varnish-settings", "varnish-site", "varnish-install", "varnish-sync"];
+  const verbs: WpToolsVerb[] = ["sites", "sign-in", "remove", "sync", "varnish-settings", "varnish-install", "varnish-sync"];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown WordPress Tools verb '${rawVerb ?? ""}'`);
 
@@ -596,7 +593,6 @@ function parseAction(argv: string[], options: WpToolsActionOptions): ParsedActio
   let addBypass = false;
   let allowBasicAuth = false;
   let enabled: boolean | undefined;
-  let excluded: boolean | undefined;
   const seen = new Set<string>();
   for (const argument of rest) {
     const key = argument.split("=")[0]!;
@@ -625,7 +621,6 @@ function parseAction(argv: string[], options: WpToolsActionOptions): ParsedActio
       continue;
     }
     if (/^--enabled=(true|false)$/.test(argument)) { enabled = argument.endsWith("=true"); continue; }
-    if (/^--excluded=(true|false)$/.test(argument)) { excluded = argument.endsWith("=true"); continue; }
     failAction(`unexpected argument '${argument}'`);
   }
   if (verb !== "sign-in" && (asUser || clientIp || addBypass || allowBasicAuth)) failAction(`'${verb}' takes no --as-user, --client-ip, --add-bypass or --allow-basic-auth`);
@@ -633,15 +628,14 @@ function parseAction(argv: string[], options: WpToolsActionOptions): ParsedActio
   if ((addBypass || allowBasicAuth) && (asUser || !clientIp)) failAction("only an administrator's sign-in can add its address as a bypass");
   if (asUser && !PANEL_USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
   if (verb === "varnish-settings" ? enabled === undefined : enabled !== undefined) failAction(`'${verb}' has invalid --enabled`);
-  if (verb === "varnish-site" ? excluded === undefined : excluded !== undefined) failAction(`'${verb}' has invalid --excluded`);
-  if (verb === "sign-in" || verb === "varnish-site" || verb === "varnish-install") {
+  if (verb === "sign-in" || verb === "varnish-install") {
     // The panel's own hostname is refused here as it is everywhere else: the
     // panel is not a site, and nothing of ours writes into it.
     domain = (options.domainValidator ?? ((value: string) => validateDomain(value)))(domain);
   } else if (domain) {
     failAction(`'${verb}' takes no --domain`);
   }
-  return { verb, domain, asUser, clientIp, addBypass, allowBasicAuth, enabled, excluded };
+  return { verb, domain, asUser, clientIp, addBypass, allowBasicAuth, enabled };
 }
 
 export async function executeWpToolsAction(
@@ -656,12 +650,12 @@ export async function executeWpToolsAction(
       return mainwpAction(mainwpRun(paths), argv, options, options.domainValidator ?? ((value) => validateDomain(value)));
     });
   }
-  const { verb, domain, asUser, clientIp, addBypass: bypass, allowBasicAuth, enabled, excluded } = parseAction(argv, options);
+  const { verb, domain, asUser, clientIp, addBypass: bypass, allowBasicAuth, enabled } = parseAction(argv, options);
   if (verb === "sync") return syncPolicies(options);
 
   if (verb === "sites") {
     // The optional feature's state must not take sign-in down with it.
-    let varnish: WpVarnishState = { enabled: false, excluded: [], sites: {} };
+    let varnish: WpVarnishState = { enabled: false, sites: {} };
     let varnishError = "";
     try {
       varnish = readVarnishState(paths.varnishState);
@@ -678,19 +672,13 @@ export async function executeWpToolsAction(
     return { sites: wordpressSites(paths, varnish), varnish, varnishError, mainwp, mainwpError };
   }
   if (verb === "varnish-sync") return reconcileWpVarnish(options);
-  if (verb === "varnish-settings" || verb === "varnish-site" || verb === "varnish-install") {
+  if (verb === "varnish-settings" || verb === "varnish-install") {
     return withFileLock(paths.varnishLockFile, 15, "a WordPress Varnish change is still running", async () => {
       if (!existsSync(paths.configFile)) failAction("WordPress Tools must be enabled before a Varnish action");
       if (verb === "varnish-install") return syncVarnish(varnishRun(paths, { domain }), options);
       const state = readVarnishState(paths.varnishState);
-      const run = varnishRun(paths);
-      pruneVarnishState(state, run.domains);
-      if (verb === "varnish-settings") state.enabled = enabled!;
-      else {
-        if (!run.sites.some((site) => site.domain === domain)) failAction("that is not a WordPress site on this server");
-        state.excluded = state.excluded.filter((entry) => entry !== domain);
-        if (excluded) state.excluded.push(domain);
-      }
+      pruneVarnishState(state, varnishRun(paths).domains);
+      state.enabled = enabled!;
       saveVarnishState(paths.varnishState, state);
       return { varnish: state };
     });

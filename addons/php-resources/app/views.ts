@@ -1,7 +1,7 @@
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_NONE_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout,
+  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import {
@@ -262,7 +262,7 @@ export function dashboardView(state: PhpResourcesState): string {
         <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
         <th scope="col">Site</th><th scope="col">Category</th><th scope="col">Now running</th>
       </tr></thead><tbody>${siteRows}</tbody></table></div>
-      ${FLEET_NONE_HTML}`
+      ${FLEET_FOOTER_HTML}`
     : '<div class="empty">No CloudPanel site runs PHP, so there is no PHP-FPM pool to tune.</div>'}
   </div>
   <div class="card card-table"><div class="card-header category-header"><div><h2>Categories</h2>

@@ -117,11 +117,16 @@ html.dark .card-header { background: var(--surface); }
 .card-table { padding: 0; overflow-x: auto; }
 .card-table > .card-header { margin: 0; padding: 25px 32px; }
 .table-scroll { overflow-x: auto; }
-/* A long site list keeps its own height, so what follows it stays a scroll away
-   and the header with the bulk actions stays in view above the rows. */
+/* A long site list with something below it keeps its own height, so what
+   follows stays a scroll away and the bulk actions stay in view above the rows.
+   A list that ends the page grows with it instead. */
 @media (min-width: 941px) {
-  .table-scroll:has(> .fleet-table > tbody > tr:nth-child(13)) { max-height: min(68vh, 720px); overflow-y: auto; }
-  .table-scroll:has(> .fleet-table > tbody > tr:nth-child(13)) thead th { position: sticky; top: 0; z-index: 2; }
+  .card:has(~ :not(dialog, script, style, template)) .table-scroll:has(> .fleet-table > tbody > tr:nth-child(13)) {
+    max-height: min(68vh, 720px); overflow-y: auto; }
+  /* The heading sticks and paints as one band: cells stuck one by one left
+     seams at fractional zoom that the rows showed through. */
+  .card:has(~ :not(dialog, script, style, template)) .table-scroll:has(> .fleet-table > tbody > tr:nth-child(13)) thead {
+    position: sticky; top: 0; z-index: 2; background: var(--surface); box-shadow: 0 1px 0 var(--row-border); }
 }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 30px; }
 .stat .label { font-size: 18px; font-weight: 500; margin-bottom: 5px; }
@@ -219,6 +224,9 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
   .row-actions .actions .btn { justify-content: flex-start; width: 100%; border-color: transparent; text-align: left; padding: 7px 12px; }
   .row-actions .actions .btn:hover { background: var(--surface); }
   .row-actions .actions .btn-danger:hover { background: var(--bad); }
+  /* The toggle event comes after the first frame, which would draw the menu
+     where it sits in the row before the script moves it. */
+  .row-actions:not([data-placed]) .actions { visibility: hidden; }
 }
 .site-inventory > summary { cursor: pointer; font-size: 18px; font-weight: 600; }
 .site-inventory[open] > summary { margin-bottom: 16px; }
@@ -303,6 +311,8 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 4px
 .fleet-filter .hint { margin-left: auto; }
 .card-header + .fleet-filter { padding-top: 18px; }
 .fleet-table tr[hidden] { display: none !important; }
+.fleet-more { padding: 16px 20px; border-top: 1px solid var(--row-border); }
+.fleet-more .btn { width: 100%; }
 @media (max-width: 1100px) {
   .clp-addon-header-inner > #clp-addons-update-notice { order: 3; flex: 1 0 100%; margin: 0;
     padding: 10px 20px; justify-content: flex-end; border-top: 1px solid var(--border); }

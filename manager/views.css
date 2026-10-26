@@ -4,7 +4,9 @@
 .addon-list > h2 .hint { margin-left: 4px; font-weight: 400; }
 .addon-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 24px;
   padding: 16px 24px; border-top: 1px solid var(--row-border); }
-.addon-list > h2 + .addon-row { border-top: 0; }
+.addon-list > .addon-row:nth-child(1 of .addon-row:not([hidden])) { border-top: 0; }
+.addon-find { margin: 0 0 20px; }
+.addon-find input { max-width: 320px; }
 .addon-about h3 { margin: 0; font-size: 15px; font-weight: 600; }
 .addon-about h3 a { color: inherit; text-decoration: none; }
 .addon-about h3 a:hover { color: var(--link); }
@@ -14,6 +16,7 @@
 .addon-actions { display: flex; gap: 8px; }
 .addon-row .manager-job-status { grid-column: 1 / -1; margin-top: 8px; }
 @media (max-width: 575px) {
+  .addon-find input { max-width: none; }
   .addon-list > h2, .addon-row { padding-left: 16px; padding-right: 16px; }
   .addon-row { grid-template-columns: minmax(0, 1fr); gap: 10px; }
 }

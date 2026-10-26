@@ -17,7 +17,6 @@ export interface VarnishSiteRecord {
 
 export interface WpVarnishState {
   enabled: boolean;
-  excluded: string[];
   sites: Record<string, VarnishSiteRecord>;
 }
 
@@ -56,10 +55,9 @@ export interface VarnishSyncResult {
 }
 
 export function readVarnishState(path: string): WpVarnishState {
-  if (!existsSync(path)) return { enabled: false, excluded: [], sites: {} };
-  const state = JSON.parse(readFileSync(path, "utf8")) as WpVarnishState;
-  if (typeof state.enabled !== "boolean" || !Array.isArray(state.excluded)
-    || !state.excluded.every((domain) => typeof domain === "string")
+  if (!existsSync(path)) return { enabled: false, sites: {} };
+  const state = JSON.parse(readFileSync(path, "utf8")) as WpVarnishState & { excluded?: unknown };
+  if (typeof state.enabled !== "boolean"
     || !state.sites || typeof state.sites !== "object" || Array.isArray(state.sites)) {
     throw new Error("the WordPress Varnish settings are invalid");
   }
@@ -69,13 +67,14 @@ export function readVarnishState(path: string): WpVarnishState {
       throw new Error("the WordPress Varnish site record is invalid");
     }
   }
+  // Sites can no longer be excluded; the next save drops an old list.
+  delete state.excluded;
   return state;
 }
 
 /** Forgets domains the panel no longer has, so a recreated site starts fresh. */
 export function pruneVarnishState(state: WpVarnishState, domains: Set<string>): boolean {
-  const excluded = state.excluded.length;
-  return Object.keys(pruneFleet(state, domains)).length > 0 || state.excluded.length !== excluded;
+  return Object.keys(pruneFleet(state, domains)).length > 0;
 }
 
 export function saveVarnishState(path: string, state: WpVarnishState): void {
@@ -112,9 +111,8 @@ export async function syncVarnish(run: VarnishRun, options: VarnishOptions = {})
   if (pruneVarnishState(state, run.domains)) saveVarnishState(run.statePath, state);
   const result: VarnishSyncResult = { installed: 0, checked: 0, pending: 0, failed: [] };
   if (!state.enabled && !run.domain) return result;
-  const candidates = run.sites.filter((site) => site.eligible && !state.excluded.includes(site.domain)
-    && (!run.domain || site.domain === run.domain));
-  if (run.domain && candidates.length !== 1) throw new Error("that site is not eligible for Varnish installation or is excluded");
+  const candidates = run.sites.filter((site) => site.eligible && (!run.domain || site.domain === run.domain));
+  if (run.domain && candidates.length !== 1) throw new Error("that site is not eligible for Varnish installation");
   // Once a plugin has been seen, automation never touches that site again, so
   // the timer leaves it alone; Check now still refreshes what the page shows.
   const due = run.dueOnly
