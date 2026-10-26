@@ -104,9 +104,10 @@ export async function handle(
     let result;
     if (path === "/api/mainwp-settings") {
       if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+      if (body.remote !== undefined && body.remote !== true) return json({ ok: false, error: "remote must be true" }, 400);
       const dashboard = body.dashboard === undefined ? undefined : validateDomain(body.dashboard);
       if (dashboard === null) return json({ ok: false, error: "choose a valid Dashboard hostname" }, 400);
-      result = await wpToolsService.mainwpSettings(body.enabled, dashboard);
+      result = await wpToolsService.mainwpSettings(body.enabled, dashboard, body.remote === true);
     } else if (path === "/api/mainwp-sync") result = await wpToolsService.mainwpSync();
     else if (path === "/api/mainwp-cleanup") {
       if (body.confirm !== true) return json({ ok: false, error: "confirm MainWP cleanup" }, 400);

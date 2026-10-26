@@ -144,6 +144,17 @@ function clp_mainwp_prepare($admin, $input) {
     return array('ok' => true);
 }
 
+// For a Dashboard on another server. Clearing the not-connected time starts
+// MainWP Child's own connection timeout afresh, from the next admin page load.
+function clp_mainwp_activate() {
+    if (is_multisite()) clp_mainwp_fail('activation-failed');
+    if (get_option('mainwp_child_pubkey')) clp_mainwp_fail('already-connected');
+    delete_option('mainwp_child_lasttime_not_connected');
+    activate_plugin(CLP_MAINWP_CHILD);
+    if (!is_plugin_active(CLP_MAINWP_CHILD)) clp_mainwp_fail('activation-failed');
+    return array('ok' => true);
+}
+
 function clp_mainwp_restore_auth($input) {
     $snapshot = $input['snapshot'];
     if (!clp_mainwp_restore_meta($snapshot, array(clp_mainwp_meta_keys()['auth']))) clp_mainwp_fail('auth-not-restored');
@@ -317,6 +328,7 @@ try {
         case 'status': $reply = clp_mainwp_status($admin); break;
         case 'snapshot': $reply = array('snapshot' => clp_mainwp_snapshot($admin, !empty($input['whole']))); break;
         case 'prepare': $reply = clp_mainwp_prepare($admin, $input); break;
+        case 'activate': $reply = clp_mainwp_activate(); break;
         case 'restore-auth': $reply = clp_mainwp_restore_auth($input); break;
         case 'cleanup': $reply = clp_mainwp_cleanup($admin, $input); break;
         case 'dashboard-status': $reply = clp_mainwp_dashboard_status($input); break;

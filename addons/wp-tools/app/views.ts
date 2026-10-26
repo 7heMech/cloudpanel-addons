@@ -83,8 +83,11 @@ function mainwpCell(site: WpSiteView, state: MainwpView): string {
   const [label, tone] = !record ? ["Not checked", ""]
     : record.status === "missing" && record.seen ? ["Removed", ""] : MAINWP_STATUS[record.status];
   const eligible = record?.status !== "unsupported";
-  const action = eligible && !excluded && !state.cleanup && record?.status !== "connected"
-    ? `<button class="btn" type="button" data-domain="${domain}" onclick="connectMainwp(this)">${record?.status === "error" ? "Retry" : "Connect"}</button>`
+  // A Dashboard elsewhere connects the site itself; here the Child is only installed and activated.
+  const verb = record?.status === "error" ? "Retry" : !state.remote ? "Connect"
+    : record?.status === "inactive" ? "Activate" : record?.status === "not-connected" ? "" : "Install";
+  const action = verb && eligible && !excluded && !state.cleanup && record?.status !== "connected"
+    ? `<button class="btn" type="button" data-domain="${domain}"${state.remote ? " data-remote" : ""} onclick="connectMainwp(this)">${verb}</button>`
     : "";
   const owner = record?.status !== "connected" ? "" : record.ownedConnection ? "Connected by WordPress Tools" : "Connected in MainWP";
   const automatic = state.enabled && eligible
@@ -120,7 +123,7 @@ function sitesCard(data: WpDashboard): string {
       <div class="empty">No site on this server has a WordPress in it.</div>
     </div>`;
   }
-  const mainwp = !data.mainwpError && Boolean(data.mainwp.dashboard);
+  const mainwp = !data.mainwpError && (Boolean(data.mainwp.dashboard) || data.mainwp.remote);
   return `
     <div class="card card-table">
       <div class="card-header"><h2>WordPress sites</h2></div>
@@ -165,12 +168,13 @@ function dashboardPicker(sites: WpSiteView[], state: MainwpView): string {
   return `<div class="mainwp-picker">
           <label for="mainwp-dashboard">MainWP Dashboard</label>
           <select id="mainwp-dashboard" onchange="setMainwpDashboard(this)" ${locked ? "disabled" : ""}>${
-  state.dashboard ? "" : '<option value="">Choose a site</option>'}${options}</select>
+  state.dashboard || state.remote ? "" : '<option value="">Choose a site</option>'}<option value="@remote"${
+  state.remote ? " selected" : ""}>On another server</option>${options}</select>
         </div>`;
 }
 
 function mainwpSection(sites: WpSiteView[], state: MainwpView, error: string): string {
-  const title = "Install and connect MainWP Child automatically";
+  const title = state.remote ? "Install MainWP Child automatically" : "Install and connect MainWP Child automatically";
   if (error) return `<div class="wp-section"><h3>${title}</h3><div class="alert" role="alert">${esc(error)}</div></div>`;
   const cleanable = state.owned > 0 || state.cleanup;
   const cleanup = cleanable
@@ -179,12 +183,12 @@ function mainwpSection(sites: WpSiteView[], state: MainwpView, error: string): s
   const note = state.cleanup
     ? '<p class="mainwp-note" role="status">Cleanup pending. Automation stays off until what WordPress Tools added is removed.</p>'
     : "";
-  if (!state.dashboard) {
+  if (!state.dashboard && !state.remote) {
     // A deleted Dashboard can leave Child plugins the addon installed, which cleanup still removes.
     return `
       <div class="wp-section">
         <h3>MainWP</h3>
-        <p class="hint">Choose the site that runs MainWP Dashboard to connect the other WordPress sites to it.</p>
+        <p class="hint">Choose the site that runs MainWP Dashboard to connect the other WordPress sites to it, or On another server to only install MainWP Child.</p>
         <div class="mainwp-controls">
           ${dashboardPicker(sites, state)}
           ${cleanup}
@@ -192,12 +196,15 @@ function mainwpSection(sites: WpSiteView[], state: MainwpView, error: string): s
         ${note}
       </div>`;
   }
+  const summary = state.remote
+    ? "On every WordPress site that has never had MainWP Child, checked every 15 minutes. It stays inactive, since it turns itself off when no Dashboard connects soon after activation: activate a site just before adding it in your Dashboard. A Child removed in WordPress is left alone."
+    : "On every WordPress site that has never had MainWP Child, once it answers over HTTPS, checked every 15 minutes. A Child removed in WordPress is left alone.";
   return `
       <div class="wp-section">
         <div class="split-card">
           <div>
             <h3>${title}</h3>
-            <p class="hint">On every WordPress site that has never had MainWP Child, once it answers over HTTPS, checked every 15 minutes. A Child removed in WordPress is left alone.</p>
+            <p class="hint">${summary}</p>
           </div>
           <label class="switch"><input id="mainwp-automatic" type="checkbox" aria-label="${title}" ${state.enabled ? "checked" : ""} ${state.cleanup ? "disabled" : ""} onchange="setMainwpAutomatic(this)"><span></span></label>
         </div>

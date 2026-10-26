@@ -50,8 +50,8 @@ export const wpToolsService = {
     return call<WpRemoveResult>("remove", [], LIST_TIMEOUT_MS);
   },
 
-  mainwpSettings(enabled: boolean, dashboard?: string): Promise<ActionResult<{ mainwp: MainwpView }>> {
-    const choice = dashboard === undefined ? [] : [`--dashboard=${dashboard}`];
+  mainwpSettings(enabled: boolean, dashboard?: string, remote?: boolean): Promise<ActionResult<{ mainwp: MainwpView }>> {
+    const choice = [...(dashboard === undefined ? [] : [`--dashboard=${dashboard}`]), ...(remote ? ["--remote=true"] : [])];
     return call("mainwp-settings", [`--enabled=${enabled}`, ...choice], PASS_TIMEOUT_MS);
   },
   mainwpSite(domain: string, excluded: boolean): Promise<ActionResult<{ mainwp: MainwpView }>> {

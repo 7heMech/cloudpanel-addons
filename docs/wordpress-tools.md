@@ -52,7 +52,8 @@ exclusions and which plugins were removed on purpose.
 
 Under **Automation**, choose a **MainWP Dashboard**, a WordPress site on this
 server with MainWP active. The table then gets a MainWP column. Turn on
-**Install and connect MainWP Child automatically** to connect new sites.
+**Install and connect MainWP Child automatically** to connect new sites. For a
+Dashboard on another server, see below.
 
 Every 15 minutes the repair timer queues a background pass to install,
 activate and connect MainWP Child on new WordPress sites as each site's first
@@ -86,3 +87,19 @@ and let its background pass finish before retrying. If the page reports that
 `/var/lib/clp-addons/wp-tools/mainwp.json` cannot be read, sign-in and Varnish
 still work. Deleting that file turns automation off and forgets which connections
 WordPress Tools made, so cleanup can no longer remove them.
+
+### A Dashboard on another server
+
+Choose **On another server** as the **MainWP Dashboard**, then turn on **Install
+MainWP Child automatically**. Every 15 minutes, sites that have never had MainWP
+Child get it installed but left inactive: MainWP Child turns itself off when no
+Dashboard connects within its connection timeout, 20 minutes unless changed in
+its settings. To connect a site, click **Activate** (or **Install**) beside it,
+then add it in your MainWP Dashboard with the site's administrator username and
+password. **Check now** then shows it **Connected**. WordPress Tools never
+contacts that Dashboard, so it must reach the site over HTTPS on its own; allow
+it through any firewall or Cloudflare-only rule.
+
+**Turn off and clean up…** deletes the MainWP Child plugins WordPress Tools
+installed and deactivates any it activated, except on sites a Dashboard has
+connected since.

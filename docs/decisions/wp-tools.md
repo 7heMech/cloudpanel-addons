@@ -99,9 +99,9 @@ sign-in is the most-used action and the one the addon started with; each
 status has its Install, Activate, Connect or Retry beside it. The two
 automation policies are set once, so they share one card below the table. The
 page draws only controls that do something: the MainWP column and switch
-appear once a Dashboard is chosen, until then the card holds only the picker,
-plus cleanup while Child plugins the addon installed remain from a deleted
-Dashboard, and automation reads as off; a
+appear once a Dashboard is chosen, here or on another server; until then the
+card holds only the picker, plus cleanup while Child plugins the addon
+installed remain from a deleted Dashboard, and automation reads as off; a
 site's Automatic switch appears only while its policy is on; a site without
 Varnish has an empty cell. A muted line under the table offers to remove the
 sign-in helper while any site has it, and the shared search appears from six
@@ -312,9 +312,11 @@ enabled. The addon's own page signs in to the same sites either way.
 ## MainWP enrollment
 
 The Dashboard is one WordPress site on this server, chosen from the same
-discovery as everything else; a Dashboard elsewhere would need credentials and
-network policy the addon does not manage. Child steps run as the child's site
-user and Dashboard steps as the Dashboard's, through the shared WP-CLI runner.
+discovery as everything else, or "on another server". Connecting to a Dashboard
+elsewhere would need its credentials and network policy, which the addon does
+not manage, so for one it only installs the Child; see below. Child steps run
+as the child's site user and Dashboard steps as the Dashboard's, through the
+shared WP-CLI runner.
 A fixed adapter, `mainwp.php`, is passed to `wp eval` with JSON on stdin and
 answers on a marked line. Its failures are fixed codes the addon turns into its
 own messages, so text a site prints in reply is never shown or logged; a failed
@@ -380,9 +382,29 @@ plugin the addon installed, so automation may install it again after a completed
 cleanup, even if cleanup needed retries. One already removed by the operator
 stays seen.
 
+For a Dashboard on another server the addon never contacts a Dashboard or
+registers anything. Automation installs MainWP Child on an unseen site and
+leaves it inactive: MainWP Child deactivates itself on an admin page load once
+it has been unconnected for `mainwp_child_ttl_active_unconnected_site` minutes
+(20 by default), so a Child activated in advance would be off by the time the
+operator connects it. The row action installs a missing Child and activates it,
+after clearing `mainwp_child_lasttime_not_connected` so that timeout starts
+afresh, and the operator adds the site from their Dashboard with the
+administrator's own login. Neither path sets a Security ID or changes the
+password requirement, so the Child is no easier to claim than the site's admin
+account. A Child with a public key is reported connected, to whichever
+Dashboard holds it. The install is journaled as phase `child`, which needs no
+authentication recovery: a failed attempt that changed nothing is retried on
+the next pass, and an interrupted one needs Retry, as an enrollment's do.
+Cleanup uses the same snapshot rules, so it deletes a Child it installed and
+restores the activation of one it found, unless a Dashboard has connected it
+since. Moving to a Dashboard elsewhere requires cleaning up the connections the
+addon made; moving back does not, since an installed Child belongs to no
+Dashboard.
+
 MainWP has its own lock, separate from Varnish and sign-in. The queued pass
 looks only at unseen sites, unfinished phases, pending cleanup and retired
-records, and starts sites for 25 seconds; Check now and Connect get 90. An
+records, and starts sites for 25 seconds; Check now and row actions get 90. An
 enrollment that has started gets up to a minute, so the budget never stops
 registration part-way. A pass asks the Dashboard about at most 64 sites, least
 recently checked first. A deleted site's owned Dashboard record is retired and
