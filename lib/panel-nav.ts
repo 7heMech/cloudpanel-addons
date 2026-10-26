@@ -1,7 +1,7 @@
 import type { AddonTarget } from "./addon-target";
 import { SITE_EMBED_SCRIPT, SITE_EMBED_STYLE } from "./shadow-embed";
 import { esc, escJs } from "./app-http";
-import { UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
+import { RELEASES_URL, UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
 
 export function headerUpdateScript(addonsUrl = "/addons/"): string {
   const baseUrl = addonsUrl.replace(/\/+$/, "");
@@ -36,6 +36,7 @@ export function headerUpdateScript(addonsUrl = "/addons/"): string {
     }
     notice.querySelector(".update-label").textContent = "Addons · v" + latest + " available";
     notice.querySelector(".clp-addon-update-badge").title = "clp-addons v" + latest + " available";
+    notice.querySelector(".clp-addon-changelog-link").href = "${escJs(RELEASES_URL)}/tag/v" + encodeURIComponent(latest);
     header.classList.add("clp-addons-has-update");
   }
 
