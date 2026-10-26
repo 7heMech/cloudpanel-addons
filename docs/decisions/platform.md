@@ -27,8 +27,8 @@ knows nothing about it.
 
 The Addons page is two lists, Enabled and Available, one row per addon with its
 one-line description and its buttons, so the whole catalog fits on a screen. A
-search above them hides the rows whose name and description lack any of its
-words, and a list it empties. An
+search above them keeps only the rows whose name and description contain every
+one of its words, and hides a list it empties. An
 addon's `added` release line (`2.0`) marks it New for as long as that line is
 the one installed. An existing addon's `changed` line marks it Changed for the
 same time, with one line saying what changed; the rest is the changelog's, which
