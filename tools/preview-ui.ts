@@ -1123,6 +1123,10 @@ async function repaintPreviewMutation(req: Request, url: URL): Promise<Response 
     systemTweaksPreview = state;
     return Response.json({ ok: true, html: systemTweaksDashboardView(state) });
   }
+  if (path === "/addons/security-keys/api/settings") {
+    const settings = { roles: Array.isArray(body.roles) ? body.roles : [], syncedPasskeys: body.syncedPasskeys === true };
+    return Response.json({ ok: true, html: securityKeysDashboardView({ users: securityKeysPreviewUsers(source), settings }) });
+  }
   return gitPreviewMutation(req, path, source, body)
     ?? maintenancePreviewMutation(path, source, body)
     ?? instaticPreviewMutation(path, body)

@@ -60,9 +60,16 @@ function setupCard(): string {
 }
 
 function settingsCard(settings: Settings, users: UserKeysView[]): string {
-  // Checkboxes rather than switches: the roles are a pick-any list.
-  const check = (id: string, label: string, checked: boolean) => `
-          <label class="check-label"><input id="${id}" type="checkbox" ${checked ? "checked" : ""} onchange="saveSettings(this)">${label}</label>`;
+  // An account that no longer signs in is refused whatever its role, so its keys count for none.
+  const tile = ([role, label]: (typeof ROLE_LABELS)[number]) => {
+    const on = settings.roles.includes(role);
+    const count = users.filter((entry) => entry.active && entry.role === role).reduce((total, entry) => total + entry.keys.length, 0);
+    const keys = `${count} key${count === 1 ? "" : "s"}`;
+    const note = count === 0 ? '<span class="hint">No keys</span>'
+      : on ? `<span class="hint">${keys}</span>` : `<span class="sk-refused">${keys} refused</span>`;
+    return `
+          <label class="sk-tile"><input id="role-${role}" type="checkbox" ${on ? "checked" : ""} onchange="saveSettings(this)"><span><strong>${label}</strong>${note}</span></label>`;
+  };
   const synced = users.reduce((total, entry) => total + entry.keys.filter((key) => key.synced).length, 0);
   const warning = settings.roles.length === 0
     ? "Every role is off, so nobody can add a key or sign in with one."
@@ -71,21 +78,18 @@ function settingsCard(settings: Settings, users: UserKeysView[]): string {
       : "";
   return `
     <div class="card settings-card">
-      <h2>Settings</h2>
+      <div class="card-header"><h2>Settings</h2></div>
       ${warning ? `<div class="notice">${warning}</div>` : ""}
-      <div class="settings-grid">
-        <div>
-          <h3>Who can use security keys</h3>
-          <p class="hint">Accounts in a role that is off keep their keys and their password, but cannot add or use a key.</p>
-          <div class="setting-checks">${ROLE_LABELS.map(([role, label]) => check(`role-${role}`, label, settings.roles.includes(role))).join("")}
-          </div>
+      <div class="sk-setting">
+        <h3>Who can use security keys</h3>
+        <p class="hint">Accounts in a role that is off keep their keys and their password, but cannot add or use a key.</p>
+        <div class="sk-tiles">${ROLE_LABELS.map(tile).join("")}
         </div>
-        <div>
-          <h3>Synced passkeys</h3>
-          <p class="hint">Passkeys a password manager or your devices copy between them, such as Bitwarden, iCloud Keychain or Google Password Manager. Off, only hardware keys and passkeys that stay on one device are accepted.</p>
-          <div class="setting-checks">${check("synced-passkeys", "Accept synced passkeys", settings.syncedPasskeys)}
-          </div>
-        </div>
+      </div>
+      <div class="sk-setting sk-switch-row">
+        <h3>Accept synced passkeys</h3>
+        <p class="hint">Passkeys a password manager or your devices copy between them, such as Bitwarden, iCloud Keychain or Google Password Manager. Off, only hardware keys and passkeys that stay on one device are accepted.</p>
+        <label class="switch"><input id="synced-passkeys" type="checkbox" aria-label="Accept synced passkeys" ${settings.syncedPasskeys ? "checked" : ""} onchange="saveSettings(this)"><span></span></label>
       </div>
     </div>`;
 }
