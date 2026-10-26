@@ -730,3 +730,20 @@ test("a same-version update repairs a changed installed artifact", async () => {
   artifactsAvailable = false;
   artifactTampered = false;
 });
+
+test("without --version an update never moves to an older version than the one installed", async () => {
+  calls.length = 0;
+  resetProvisioning();
+  hasInstalledAddon = true;
+  artifactsAvailable = true;
+  artifactTampered = false;
+  resolvedReleaseTag = "v1.2.2";
+
+  await cmdUpdate([]);
+
+  expect(calls).not.toContain("fetchVerified");
+  expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
+  expect(calls).toContain("log.ok:clp-addons 1.2.3 is up to date; the newest published release is 1.2.2");
+  resolvedReleaseTag = "v1.2.3";
+  artifactsAvailable = false;
+});

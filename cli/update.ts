@@ -19,7 +19,7 @@ import {
   CLI_VERSION, type FetchedArtifact, fetchVerified, resolveRelease, verifyAttestation,
 } from "./release";
 import { fatal, log, parseFlags, requireRoot, run } from "./util";
-import { isPrerelease } from "../lib/semver";
+import { compareSemver, isPrerelease } from "../lib/semver";
 /**
  * Reconcile all provisioning from the binary that owns the definitions.
  * Services restart last, after every generated file reflects this process.
@@ -72,6 +72,11 @@ async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () 
   const current = CLI_VERSION.replace(/^v/, "");
   const target = release.tag.replace(/^v/, "");
 
+  // Without --version an update only moves forward, whatever GitHub lists.
+  if (typeof flags.version !== "string" && compareSemver(target, current) < 0) {
+    log.ok(`clp-addons ${current} is up to date; the newest published release is ${target}`);
+    return;
+  }
   const upToDate = current === target;
   const artifactsCurrent = upToDate && currentArtifactsMatch(target);
   // Nothing to install, and repair is the command that re-applies the panel side.

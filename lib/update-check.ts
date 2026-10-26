@@ -39,7 +39,7 @@ async function fetchLatestRelease(
   try {
     // "latest" is never a pre-release, so a box running one reads the list.
     const prerelease = isPrerelease(currentVersion);
-    const res = await fetch(`https://api.github.com/repos/${repo}/releases${prerelease ? "?per_page=30" : "/latest"}`, {
+    const res = await fetch(`https://api.github.com/repos/${repo}/releases${prerelease ? "?per_page=100" : "/latest"}`, {
       headers: {
         Accept: "application/vnd.github+json",
         "User-Agent": "clp-addons",

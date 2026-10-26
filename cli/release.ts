@@ -51,7 +51,7 @@ export async function resolveRelease(requested?: string, allowPrerelease = false
     if (!VERSION_TAG_RE.test(requested)) fatal(`'${requested}' is not a release tag; expected something like v1.0.0`);
     release = (await github(`/repos/${REPO}/releases/tags/${requested}`)) as GithubRelease;
   } else if (allowPrerelease) {
-    const newest = newestRelease((await github(`/repos/${REPO}/releases?per_page=30`)) as GithubRelease[]);
+    const newest = newestRelease((await github(`/repos/${REPO}/releases?per_page=100`)) as GithubRelease[]);
     if (!newest) fatal("GitHub lists no published release");
     release = newest;
   } else {

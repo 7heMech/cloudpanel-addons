@@ -213,7 +213,7 @@ describe("which releases a box is told about", () => {
     const asked: string[] = [];
     globalThis.fetch = github(asked);
     expect(await checkCliUpdate("2.1.0-rc.1", "owner/repo")).toEqual({ current: "2.1.0-rc.1", latest: "2.1.0-rc.2", hasUpdate: true });
-    expect(asked).toEqual(["https://api.github.com/repos/owner/repo/releases?per_page=30"]);
+    expect(asked).toEqual(["https://api.github.com/repos/owner/repo/releases?per_page=100"]);
   });
 
   test("a box running a release is told about releases only", async () => {
