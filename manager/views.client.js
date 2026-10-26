@@ -75,13 +75,48 @@ async function startManagerJob(path, title, source, key) {
     const jobKey = running && running.kind === 'update' ? 'update' : (running && running.addon) || 'manager-job';
     const jobCard = existing ? managerJobCard(null, jobKey, true) : card;
     showJob(existing ? describeManagerJob(running) : title, jobCard);
-    watchJob(id, jobCard);
+    watchJob(id, jobCard, managerJobFinished);
   } catch (err) {
     busy(false);
     // In the page rather than in a modal the browser owns, which would cover
     // the card it is talking about and lose it on dismissal.
     notify(err.message, 'error');
   }
+}
+
+// A successful update replaces this page's script and styles.
+async function managerJobFinished(job) {
+  if (job && job.kind === 'update' && job.state === 'done') {
+    location.reload();
+    return;
+  }
+  const shown = await repaintPage();
+  findAddons();
+  if (shown && job && job.state === 'done') {
+    notify((job.kind === 'disable' ? 'Disabled ' : 'Enabled ') + (job.addon || 'the addon') + '.', 'ok');
+  } else if (shown && job) {
+    notify('Job failed: ' + (job.error || job.step), 'error');
+  }
+}
+
+// Every word has to appear in the name or description of the addon, in any order.
+function findAddons() {
+  const find = CLP_ROOT.getElementById('addon-find');
+  if (!find) return;
+  const words = find.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  let shown = 0;
+  CLP_ROOT.querySelectorAll('.addon-list').forEach(function (list) {
+    let matches = 0;
+    list.querySelectorAll('.addon-row').forEach(function (row) {
+      const text = (row.dataset.find || '').toLowerCase();
+      row.hidden = !words.every(function (word) { return text.indexOf(word) !== -1; });
+      if (!row.hidden) matches++;
+    });
+    list.hidden = matches === 0;
+    shown += matches;
+  });
+  const none = CLP_ROOT.getElementById('addon-none');
+  if (none) none.hidden = shown > 0;
 }
 
 function enableAddon(name, source) {

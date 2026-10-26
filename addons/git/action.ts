@@ -22,7 +22,7 @@ import {
   listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord,
 } from "../../cli/job-store";
 import {
-  ActionCommandFailure, ActionFailure, acquireFileLock, emitActionError, emitActionOk, failAction,
+  ActionCommandFailure, ActionFailure, acquireFileLock, deletedSites, emitActionError, emitActionOk, failAction,
   readable, runCommand, validateDomain, validateJob,
   type FileLockHandle,
 } from "../../cli/action-common";
@@ -189,7 +189,10 @@ export interface GitSiteStatus {
   path: string;
   configured: boolean;
   config: GitSiteConfig | null;
+  /** "" on the fleet, which draws no key; `keyMissing` says what it needs. */
   publicKey: string;
+  /** Set on the fleet: the remote needs the deploy key and the site user has none. */
+  keyMissing?: boolean;
   commit: GitCommit | null;
   lastJob: GitJobView | null;
 }
@@ -746,10 +749,12 @@ function latestJobs(paths: GitActionPaths): Map<string, GitJobView> {
  * because every path here has just looked the site up to decide what to do.
  */
 function siteStatus(
-  paths: GitActionPaths, domain: string, site: SiteRow, jobs: Map<string, GitJobView>,
+  paths: GitActionPaths, domain: string, site: SiteRow, jobs: Map<string, GitJobView>, fleet = false,
 ): GitSiteStatus {
   const config = readConfig(paths, domain);
   const path = deployPath(paths, site.user, domain, config?.directory ?? "");
+  // The fleet draws no key, so it reads one only for a remote that needs it.
+  const needsKey = config !== null && usesDeployKey(config.remote);
   return {
     domain,
     siteUser: site.user,
@@ -757,7 +762,8 @@ function siteStatus(
     path,
     configured: config !== null,
     config,
-    publicKey: readPublicKey(paths, site.user),
+    publicKey: fleet ? "" : readPublicKey(paths, site.user),
+    ...(fleet ? { keyMissing: needsKey && !readPublicKey(paths, site.user) } : {}),
     commit: readCommit(paths, site.user, path),
     lastJob: jobs.get(domain) ?? null,
   };
@@ -779,7 +785,7 @@ function cmdSites(paths: GitActionPaths): void {
   for (const domain of configuredDomains(paths)) {
     const row = siteRow(paths, domain);
     const status = row?.user
-      ? siteStatus(paths, domain, row, jobs)
+      ? siteStatus(paths, domain, row, jobs, true)
       // A site deleted from CloudPanel: listed as configured-but-unreadable
       // rather than left out of the page.
       : {
@@ -801,8 +807,8 @@ function withoutToken(config: GitSiteConfig | null): GitSiteConfig | null {
 /**
  * Which sites this addon deploys, and nothing else about them.
  *
- * `sites` answers the fleet page and costs a panel-database read and two
- * subprocesses per site. CloudPanel's own site list asks a much smaller
+ * `sites` answers the fleet page and costs a panel-database read and a
+ * subprocess or two per site. CloudPanel's own site list asks a much smaller
  * question -- which of these rows should offer the link -- and asks it on a
  * page the panel serves constantly, so it gets the directory listing behind
  * the fleet view rather than the fleet view.
@@ -979,13 +985,21 @@ function recordDelivery(paths: GitActionPaths, domain: string, outcome: string, 
  * a refusal an operator cannot see is a webhook they cannot fix.
  */
 async function cmdHook(
-  paths: GitActionPaths, domain: string, options: GitActionOptions, releaseLock: () => void,
+  paths: GitActionPaths, domain: string, options: GitActionOptions,
+  lockSite: (domain: string) => Promise<void>, releaseLock: () => void,
 ): Promise<void> {
-  const config = readConfig(paths, domain);
   const payload = await readSettings(options, MAX_HOOK_INPUT_BYTES) as GitHookPayload & Record<string, unknown>;
   const token = typeof payload.token === "string" ? payload.token : "";
-  const webhook = config?.webhook;
-  if (!config || !webhook || !secretEquals(token, webhook.token)) failAction("no delivery for this site");
+  const matches = (): GitSiteConfig => {
+    const found = readConfig(paths, domain);
+    if (!found?.webhook || !secretEquals(token, found.webhook.token)) failAction("no delivery for this site");
+    return found;
+  };
+  // Checked before the site's lock as well as after it: a request that does
+  // not hold the token must not be able to keep a real deployment waiting.
+  matches();
+  await lockSite(domain);
+  const config = matches();
 
   const text = (field: "event" | "body"): string =>
     typeof payload[field] === "string" ? payload[field] : "";
@@ -1195,7 +1209,13 @@ function cmdJobs(paths: GitActionPaths): void {
   emitOk(paths, { jobs: jobViews(paths) });
 }
 
+/**
+ * Job upkeep, and the records of sites CloudPanel no longer has: a domain
+ * created again must not inherit the old repository, command and webhook URL.
+ */
 function cmdPrune(paths: GitActionPaths): void {
+  const forgotten = deletedSites(paths.panelDb, configuredDomains(paths));
+  for (const domain of forgotten) rmSync(configPath(paths, domain), { force: true });
   const { removed, stuck } = pruneJobs({
     addon: "git",
     jobsDir: paths.jobsDir,
@@ -1204,13 +1224,14 @@ function cmdPrune(paths: GitActionPaths): void {
     onStuck: (id, state) =>
       diagnostic(`[git] WARN: job ${id} is recorded as ${state} but nothing is running it; marking it failed\n`),
   });
-  emitOk(paths, { removed, stuck });
+  emitOk(paths, { removed, stuck, forgotten });
 }
 
 /* ---------------------------------------------------------------- dispatch */
 
 async function dispatch(
-  action: ParsedGitAction, paths: GitActionPaths, options: GitActionOptions, releaseLock: () => void,
+  action: ParsedGitAction, paths: GitActionPaths, options: GitActionOptions,
+  lockSite: (domain: string) => Promise<void>, releaseLock: () => void,
 ): Promise<void> {
   switch (action.verb) {
     case "sites": cmdSites(paths); return;
@@ -1221,7 +1242,7 @@ async function dispatch(
     case "keygen": cmdKeygen(paths, action.domain, action.replace); return;
     case "webhook-enable": cmdWebhook(paths, action.domain, true, action.replace); return;
     case "webhook-disable": cmdWebhook(paths, action.domain, false, false); return;
-    case "hook": await cmdHook(paths, action.domain, options, releaseLock); return;
+    case "hook": await cmdHook(paths, action.domain, options, lockSite, releaseLock); return;
     case "deploy": cmdDeploy(paths, action.domain, releaseLock); return;
     case "run": await cmdRun(paths, action.job, options, releaseLock); return;
     case "job": cmdJob(paths, action.job); return;
@@ -1246,19 +1267,16 @@ export async function runGitAction(argv: string[], options?: GitActionOptions): 
       lock?.release();
       lock = null;
     };
+    // A deployment and the record it reads must not overlap for one site.
+    const lockSite = async (domain: string) => {
+      lock = await acquireFileLock(join(paths.lockDir, `git-${domain}.lock`), 30, `another deployment is already running for ${domain}`);
+    };
     try {
-      // A deployment and the record it reads must not overlap for one site.
-      const locked = action.verb === "deploy" || action.verb === "hook" ? action.domain
+      const locked = action.verb === "deploy" ? action.domain
         : action.verb === "run" ? jobGet(jobDir(paths, action.job), "domain")
         : "";
-      if (locked) {
-        lock = await acquireFileLock(
-          join(paths.lockDir, `git-${locked}.lock`),
-          30,
-          `another deployment is already running for ${locked}`,
-        );
-      }
-      await dispatch(action, paths, opts, releaseLock);
+      if (locked) await lockSite(locked);
+      await dispatch(action, paths, opts, lockSite, releaseLock);
       return 0;
     } finally {
       releaseLock();

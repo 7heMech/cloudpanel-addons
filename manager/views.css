@@ -1,14 +1,31 @@
 
-.addon-card .actions { margin-top: auto; }
-.addon-card .addon-status { align-self: center; }
+.addon-list { padding: 0; }
+.addon-list > h2 { margin: 0; padding: 18px 24px; border-bottom: 1px solid var(--border); font-size: 16px; }
+.addon-list > h2 .hint { margin-left: 4px; font-weight: 400; }
+.addon-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 24px;
+  padding: 16px 24px; border-top: 1px solid var(--row-border); }
+.addon-list > .addon-row:nth-child(1 of .addon-row:not([hidden])) { border-top: 0; }
+.addon-find { margin: 0 0 20px; }
+.addon-find input { max-width: 320px; }
+.addon-about h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.addon-about h3 a { color: inherit; text-decoration: none; }
+.addon-about h3 a:hover { color: var(--link); }
+.addon-about h3 .badge { margin-left: 6px; vertical-align: 1px; }
+.addon-about p { margin: 3px 0 0; color: var(--muted); font-size: 14px; }
+.addon-about .addon-changed { color: var(--text); font-size: 13px; }
+.addon-actions { display: flex; gap: 8px; }
+.addon-row .manager-job-status { grid-column: 1 / -1; margin-top: 8px; }
+@media (max-width: 575px) {
+  .addon-find input { max-width: none; }
+  .addon-list > h2, .addon-row { padding-left: 16px; padding-right: 16px; }
+  .addon-row { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+}
 .manager-job-status { width: 100%; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
 .manager-job-status .job-summary { justify-content: space-between; }
 .manager-job-status .step { margin: 6px 0 0; overflow-wrap: anywhere; }
 .job-log-details { margin-top: 10px; }
 .job-log-details summary { color: var(--muted); font-size: 14px; cursor: pointer; }
 .job-log-details pre { max-height: 240px; margin: 10px 0 0; }
-.addon-section { margin-top: 30px; }
-.addon-section h2 { margin: 0 0 20px; font-size: 20px; }
 .update-page { max-width: 800px; margin: 0 auto; }
 .update-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin: 0 0 25px; }
 .update-versions dt { color: var(--muted); font-size: 14px; margin-bottom: 8px; }

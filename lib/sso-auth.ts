@@ -512,7 +512,7 @@ function serviceUnavailableResponse(): Response {
   );
 }
 
-export function parsePanelSession(data: Uint8Array | string): PanelSession | null {
+export function parsePanelSession(data: Uint8Array | string, options: { unmarkedMfa?: boolean } = {}): PanelSession | null {
   const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_SESSION_BYTES) return null;
   try {
@@ -543,17 +543,18 @@ export function parsePanelSession(data: Uint8Array | string): PanelSession | nul
 
     // LoginListener writes `true` only after successful MFA, writes `false`
     // while an MFA challenge is pending, and removes the marker for users who
-    // do not have MFA enabled. AutoLoginAuthenticator can skip that listener,
-    // so an absent marker is accepted only when the serialized native user
-    // explicitly says MFA is disabled. Every present marker is required to be
-    // the exact boolean true. It may remain true when the trusted native MFA
-    // value is either boolean.
+    // do not have MFA enabled. A present marker must be the exact boolean
+    // true. An absent one for an MFA user is a session the listener never saw:
+    // CloudPanel's own /autologin, which Security Keys uses after a verified
+    // passkey and only root can mint a token for, or a login from before MFA
+    // was turned on. CloudPanel serves both; this does only while Security
+    // Keys is enabled, and otherwise refuses them as it always did.
     const mfaEntries = attributes.entries.filter((entry) => keyText(entry.key) === "mfaAuthenticated");
     if (mfaEntries.length > 1) return null;
     if (mfaEntries.length === 1) {
       const marker = mfaEntries[0]!.value;
       if (marker.type !== "boolean" || marker.value !== true) return null;
-    } else if (identity.mfa) {
+    } else if (identity.mfa && !options.unmarkedMfa) {
       return null;
     }
 

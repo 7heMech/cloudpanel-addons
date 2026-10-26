@@ -32,6 +32,12 @@ export interface InstaticJobView {
   port: number;
   tag: string;
   tls: boolean;
+  /** What came of the certificate; absent on records written before it was kept. */
+  certificate?: "issued" | "failed" | "none";
+  /** What the job does; records written before updates were jobs are creations. */
+  kind: "create" | "update";
+  /** The version an update started from. */
+  fromTag?: string;
   state: "queued" | "running" | "done" | "failed" | "unknown";
   step: string;
   createdAt: string;
@@ -155,6 +161,11 @@ function jobDir(paths: InstaticActionPaths, id: string): string {
   return storeJobDir(paths.jobsDir, id);
 }
 
+function certificateOf(dir: string): Pick<InstaticJobView, "certificate"> {
+  const value = jobGet(dir, "certificate");
+  return value === "issued" || value === "failed" || value === "none" ? { certificate: value } : {};
+}
+
 function jobJson(paths: InstaticActionPaths, dir: string, id: string): InstaticJobView {
   const common = jobCommonFields(dir);
   const state = (["queued", "running", "done", "failed"].includes(common.state)
@@ -166,6 +177,9 @@ function jobJson(paths: InstaticActionPaths, dir: string, id: string): InstaticJ
     port: Number(jobGet(dir, "port")) || 0,
     tag: jobGet(dir, "tag"),
     tls: jobGet(dir, "tls") === "yes",
+    ...certificateOf(dir),
+    kind: jobGet(dir, "kind") === "update" ? "update" : "create",
+    ...(jobGet(dir, "fromTag") ? { fromTag: jobGet(dir, "fromTag") } : {}),
     state,
     step: common.step,
     createdAt: common.createdAt,
@@ -681,11 +695,14 @@ async function healthCheck(port: number, domain: string): Promise<boolean> {
     return false;
   }
 
+  // Through Nginx, only an answer from the proxy failing to reach the container
+  // counts against it. A site behind Cloudflare IP Access refuses this server's
+  // own address with 403, and maintenance mode answers 503, both before proxying.
   for (let i = 0; i < 15; i++) {
     const result = runCommand("curl", ["-sk", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "--resolve", `${domain}:443:127.0.0.1`, `https://${domain}/`]);
     if (result.stderr) diagnostic(result.stderr);
     code = result.stdout.trim();
-    if (/^[23]/.test(code)) return true;
+    if (/^(?:[23]\d\d|401|403|503)$/.test(code)) return true;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   diagnostic(`[instatic] WARN: container is up but nginx did not serve ${domain} (last: ${code || "none"})\n`);
@@ -1069,7 +1086,11 @@ function restoreLocalSnapshot(snapshot: string, storage: SnapshotSources, dir: s
   }
 }
 
-async function replaceInstance(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
+async function replaceInstance(
+  action: ParsedInstaticAction,
+  paths: InstaticActionPaths,
+  step: (text: string) => void = (text) => diagnostic(`[instatic] ${text}\n`),
+): Promise<void> {
   const { domain } = action;
   const updating = action.verb === "update";
   const name = containerName(domain);
@@ -1094,7 +1115,7 @@ async function replaceInstance(action: ParsedInstaticAction, paths: InstaticActi
   if (containerExists(`${name}-prev`)) failAction(`previous container ${name}-prev still exists; resolve the earlier operation before retrying`);
 
   if (updating) {
-    diagnostic(`[instatic] pulling ${REGISTRY_IMAGE}:${tag}\n`);
+    step(`pulling ${REGISTRY_IMAGE}:${tag}`);
     const pull = runCommand("docker", ["pull", `${REGISTRY_IMAGE}:${tag}`]);
     forwardCommandOutput(pull);
     if (!pull.ok) failAction(`failed to pull ${REGISTRY_IMAGE}:${tag}`);
@@ -1110,7 +1131,7 @@ async function replaceInstance(action: ParsedInstaticAction, paths: InstaticActi
       if (!stopped.ok) throw commandFailure("docker stop", stopped);
     }
     if (updating || storage.legacy) {
-      diagnostic("[instatic] snapshotting stopped instance before replacement\n");
+      step("snapshotting the stopped instance");
       const snapshots = join(dir, "snapshots");
       mkdirSync(snapshots, { recursive: true, mode: 0o700 });
       chmodSync(snapshots, 0o700);
@@ -1128,7 +1149,9 @@ async function replaceInstance(action: ParsedInstaticAction, paths: InstaticActi
       copyStorage(storage, destination);
     }
     candidate = true;
+    step(`starting ${tag}`);
     runContainer(name, port, tag, domain, destination, paths);
+    step("waiting for health check");
     if (!(await healthCheck(port, domain))) failAction(`health check failed for ${domain} at ${tag}`);
     const recorded = JSON.parse(readFileSync(meta, "utf8"));
     writeMetaFile(meta, JSON.stringify({ ...recorded, tag, storage: "site-home", siteUser: siteUserOf(domain, paths) }, null, 2) + "\n");
@@ -1165,8 +1188,84 @@ async function replaceInstance(action: ParsedInstaticAction, paths: InstaticActi
 }
 
 async function cmdUpdate(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
-  await replaceInstance(action, paths);
+  if (!action.isAsync) return replaceInstance(action, paths);
+  const { domain, tag } = action;
+  const meta = join(instanceDir(domain, paths), "meta.json");
+  if (!isRegularFile(meta)) failAction(`no such instance: ${domain}`);
+  const fromTag = validateTag(readMeta("tag", meta));
+  if (tag === fromTag) failAction(`already running tag ${tag}`);
+  activeJobFor(domain, paths);
+  const id = newJobId();
+  const jDir = createJobDir(paths.jobsDir, id);
+  jobSet(jDir, "kind", "update");
+  jobSet(jDir, "domain", domain);
+  jobSet(jDir, "port", readMeta("port", meta));
+  jobSet(jDir, "tag", tag);
+  jobSet(jDir, "fromTag", fromTag);
+  jobSet(jDir, "createdAt", dateStamp(true));
+  jobSet(jDir, "step", "queued");
+  jobSet(jDir, "state", "queued");
+  createJobLog(jDir);
+  const started = startJobUnit({
+    addon: "instatic",
+    id,
+    description: `clp-addons: updating Instatic site ${domain} to ${tag}`,
+    actionBinary: paths.actionBinary,
+  });
+  forwardCommandOutput(started);
+  if (!started.ok) {
+    jobSet(jDir, "error", "could not start the update job");
+    jobSet(jDir, "state", "failed");
+    failAction("systemd-run refused to start the update job");
+  }
+  emitActionOk({ job: id, domain, tag, status: "queued" });
 }
+
+/** Refuses a second job for a site while one is queued or running. */
+function activeJobFor(domain: string, paths: InstaticActionPaths): void {
+  for (const entry of listJobIds(paths.jobsDir)) {
+    const existing = jobDir(paths, entry);
+    if (jobGet(existing, "domain") !== domain) continue;
+    const state = jobGet(existing, "state");
+    if (state === "queued" || state === "running") {
+      failAction(`${jobGet(existing, "kind") === "update" ? "an update" : "the creation"} of ${domain} is already ${state}`);
+    }
+  }
+}
+
+/** The job half of an update: the same replacement, with its steps and output in the job's log. */
+async function runUpdateJob(jDir: string, paths: InstaticActionPaths): Promise<void> {
+  const domain = jobGet(jDir, "domain");
+  const tag = validateTag(jobGet(jDir, "tag"));
+  activeTranscript = new JobTranscript(join(jDir, "log"));
+  jobSet(jDir, "state", "running");
+  jobSet(jDir, "startedAt", dateStamp(true));
+  try {
+    await replaceInstance(
+      { verb: "update", domain, port: "", tag, confirm: "", tls: "no", job: "", isAsync: false },
+      paths,
+      (text) => setStep(jDir, text),
+    );
+    setStep(jDir, `updated to ${tag}`);
+    jobSet(jDir, "finishedAt", dateStamp(true));
+    jobSet(jDir, "state", "done");
+  } catch (error) {
+    const data = error instanceof ActionFailure ? error.data as { logs?: string } | undefined : undefined;
+    if (data?.logs) diagnostic(`[instatic] the new container's output:\n${data.logs}\n`);
+    const msg = error instanceof Error ? error.message : String(error);
+    jobSet(jDir, "finishedAt", dateStamp(true));
+    jobSet(jDir, "error", msg);
+    diagnostic(`[instatic] ERROR: ${msg}\n`);
+    jobSet(jDir, "state", "failed");
+    throw error;
+  } finally {
+    if (activeTranscript) {
+      activeTranscript.close();
+      activeTranscript = null;
+    }
+  }
+}
+
 
 async function cmdLifecycle(action: ParsedInstaticAction, paths: InstaticActionPaths): Promise<void> {
   const { verb, domain } = action;
@@ -1497,6 +1596,7 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
   const id = action.job;
   const jDir = jobDir(paths, id);
   if (!isDirectory(jDir)) failAction(`no such job: ${id}`);
+  if (jobGet(jDir, "kind") === "update") return runUpdateJob(jDir, paths);
   const domain = jobGet(jDir, "domain");
   const port = Number(jobGet(jDir, "port"));
   const tag = jobGet(jDir, "tag");
@@ -1593,13 +1693,13 @@ async function cmdRun(action: ParsedInstaticAction, paths: InstaticActionPaths):
       if (!certificate.ok) {
         diagnostic(`[instatic] WARN: the certificate request failed; point ${domain} at this server and retry from Site -> SSL/TLS\n`);
       }
+      jobSet(jDir, "certificate", certificate.ok ? "issued" : "failed");
+    } else {
+      jobSet(jDir, "certificate", "none");
     }
 
     setStep(jDir, "instance created successfully");
     jobSet(jDir, "finishedAt", dateStamp(true));
-    try {
-      cpSync(logPath, join(dir, "create.log"));
-    } catch {}
     jobSet(jDir, "state", "done");
 
     emitActionOk({ domain, port, tag, container: name, siteUser: siteUserFinal, siteCreatedByAddon: siteCreated, status: "running" });
@@ -1649,7 +1749,7 @@ export function pruneInstaticJobs(options?: InstaticActionOptions): PruneJobsRes
     addon: "instatic",
     jobsDir: pathsFor(options).jobsDir,
     retentionDays: JOB_RETENTION_DAYS,
-    stuckMessage: "the creation job stopped without recording a result",
+    stuckMessage: "the job stopped without recording a result",
     onStuck: (id, state) =>
       diagnostic(`[instatic] WARN: job ${id} is recorded as ${state} but nothing is running it; marking it failed\n`),
   });

@@ -31,6 +31,67 @@ const PANEL_ADMIN_URL = "/admin/users";
 const PANEL_SETTINGS_URL = "/settings";
 const PANEL_LOGOUT_URL = "/logout";
 
+/** How long ago something happened, in the words a status line would use. */
+export function sinceText(iso: string): string {
+  const at = Date.parse(iso);
+  if (!Number.isFinite(at)) return "never";
+  const minutes = Math.round((Date.now() - at) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+/** The badge class for a job's state. */
+export function jobStateClass(state: string): string {
+  return ["queued", "running", "done", "failed"].includes(state) ? `state-${state}` : "state-failed";
+}
+
+/** A job's state as a sentence would put it. */
+export function jobStateLabel(state: string): string {
+  return ({ queued: "Queued", running: "Running", done: "Done", failed: "Failed" } as Record<string, string>)[state] ?? state;
+}
+
+/** A recorded time as the job pages print it, `2026-09-10 09:30 UTC`. */
+export function whenText(iso: string): string {
+  const at = Date.parse(iso);
+  return Number.isFinite(at) ? `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC` : "—";
+}
+
+/** Below this many sites the whole table fits on a screen, so it needs no search. */
+export const FLEET_FILTER_MIN = 6;
+
+/**
+ * Search, and an optional filter, above a site table whose rows carry
+ * `data-domain`, `data-find` and `data-show`; the client half is `filterFleet`.
+ */
+export function fleetFilterHtml(options: {
+  count: number;
+  placeholder?: string;
+  filters?: { value: string; label: string }[];
+  summary: string;
+}): string {
+  if (options.count < FLEET_FILTER_MIN) return "";
+  const filters = options.filters?.length
+    ? `<select id="fleet-show" data-keep aria-label="Show" onchange="filterFleet()"><option value="">All sites</option>${options.filters
+      .map((filter) => `<option value="${esc(filter.value)}">${esc(filter.label)}</option>`).join("")}</select>`
+    : "";
+  const placeholder = options.placeholder ?? "Find a site";
+  return `<div class="fleet-filter">
+      <input type="search" id="fleet-find" data-keep placeholder="${esc(placeholder)}" aria-label="${esc(placeholder)}" oninput="filterFleet()">
+      ${filters}<span class="hint" id="fleet-summary" data-all="${esc(options.summary)}">${esc(options.summary)}</span>
+    </div>`;
+}
+
+/**
+ * Under the table: the line shown when search or filter leaves no row, and the
+ * button that shows the rest of a long list on a phone.
+ */
+export const FLEET_FOOTER_HTML = `<div class="empty" id="fleet-none" hidden>No site matches.</div>
+<div class="fleet-more" id="fleet-more" hidden><button class="btn" type="button" onclick="showAllSites()">Show all sites</button></div>`;
+
 /** Shared interaction and focus treatment for selectable site-table rows. */
 export function fleetRowSelectionStyle(tableClass: string): string {
   return `
@@ -50,17 +111,6 @@ export function fleetRowSelectionStyle(tableClass: string): string {
  */
 import FLEET_ROW_SELECTION_JS from "./assets/fleet-row-selection.client.js" with { type: "text" };
 export { FLEET_ROW_SELECTION_JS };
-
-/**
- * Carrying a message across the reload a change needed, for the addons whose
- * change is too wide to patch into the page in nine places.
- *
- * Not in BASE_CLIENT_JS: a page that reloads is the exception here, and the
- * pages whose switches are modes rather than actions must not be handed the
- * means to reload themselves.
- */
-import CARRIED_FLASH_JS from "./assets/carried-flash.client.js" with { type: "text" };
-export { CARRIED_FLASH_JS };
 
 // Measured against CloudPanel 2.5.1's public demo: dashboard, sites, settings,
 // certificates, logs and new-site forms. Keep these rules independent of the
@@ -93,6 +143,11 @@ export { BASE_CLIENT_JS };
 import JOB_STYLE from "./assets/job.css" with { type: "text" };
 export { JOB_STYLE };
 
+/** A list of settings, one switch each; the client half opens a setting's wording on a phone. */
+import TWEAK_ROW_STYLE from "./assets/tweak-rows.css" with { type: "text" };
+import TWEAK_ROW_JS from "./assets/tweak-rows.client.js" with { type: "text" };
+export { TWEAK_ROW_STYLE, TWEAK_ROW_JS };
+
 /**
  * The client half of the job progress page: paint an update, and follow a job
  * until it reaches a state that will not change again.
@@ -100,7 +155,9 @@ export { JOB_STYLE };
  * Appended to an addon's own script, which calls `watchJob(id)` once the page
  * announces a job to follow. A caller can pass a containing element as the
  * second argument when a page has more than one job surface; the manager uses
- * that to keep updates in the card whose action started the job. The markup
+ * that to keep updates in the card whose action started the job. A third
+ * argument overrides the finished job's repaint, for embedded Git views and
+ * successful manager updates that replace this page's code. The markup
  * contract is four ids -- `job-state`, `job-step`, `job-log` and a hidden
  * `job-watch` carrying `data-job` -- and an addon that draws only some of them
  * still works: each element is optional.
@@ -143,11 +200,20 @@ export const THEME_SWITCH_ICONS = `<svg class="moon" viewBox="0 0 384 512" fill=
 /** The inline notice holder every page carries, above its content. */
 const FLASH_HTML = '<div id="clp-flash" hidden></div>';
 
+/** What the addon's view drew, in the holder a change repaints in place. */
+function viewRoot(content: string): string {
+  return `<div id="clp-content">${content}</div>`;
+}
+
 /** The one confirmation dialog every page carries. */
 const CONFIRM_HTML = `<dialog id="clp-confirm" aria-labelledby="clp-confirm-title">
   <div class="dialog-header"><h2 id="clp-confirm-title">Are you sure?</h2></div>
   <p id="clp-confirm-text"></p>
   <ul id="clp-confirm-details" hidden></ul>
+  <div class="form-field" id="clp-confirm-typed-field" hidden>
+    <label for="clp-confirm-typed">Type <strong id="clp-confirm-typed-word"></strong> to confirm</label>
+    <input id="clp-confirm-typed" autocomplete="off" autocapitalize="off" spellcheck="false">
+  </div>
   <form method="dialog" class="actions dialog-actions">
     <button class="btn" value="cancel" type="submit">Cancel</button>
     <button class="btn btn-primary" id="clp-confirm-accept" type="button">Continue</button>
@@ -167,7 +233,7 @@ export function renderFragment(title: string, content: string, chrome: Chrome): 
     ok: true,
     title,
     css: shadowStyle(`${BASE_STYLE}${chrome.css ?? ""}`),
-    html: `${FLASH_HTML}${content}${CONFIRM_HTML}`,
+    html: `${FLASH_HTML}${viewRoot(content)}${CONFIRM_HTML}`,
     script: `const CLP_BASE = "${escJs(chrome.base)}";\n${BASE_CLIENT_JS}${chrome.script}`,
   };
 }
@@ -245,7 +311,7 @@ ${primaryNav}
     </div>
   </div>
 </header>
-<main>${contextualHeader}${FLASH_HTML}${content}</main>
+<main>${contextualHeader}${FLASH_HTML}${viewRoot(content)}</main>
 ${CONFIRM_HTML}
 <footer class="clp-addon-footer">
   <a href="https://www.cloudpanel.io/blog/" target="_blank" rel="noopener noreferrer">Blog</a>

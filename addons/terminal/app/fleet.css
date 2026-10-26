@@ -1,4 +1,26 @@
-.terminal-toolbar { flex-wrap: wrap; }
-.terminal-toolbar input[type="search"] { flex: 1 1 240px; max-width: 360px; margin-left: auto; font-weight: 400; }
-.terminal-site-table .user-cell { font-family: var(--mono); font-size: 14px; }
-.terminal-none { padding: 25px 32px; color: var(--muted); border-top: 1px solid var(--row-border); }
+.card-header + .fleet-filter { padding-top: 18px; }
+/* A phone keeps each site to one row: the domain and its user, then the button. */
+@media (max-width: 940px) {
+  .terminal-site-table tr { flex-wrap: nowrap; align-items: center; }
+  .terminal-site-table td.action-cell:has(.btn) { flex: 0 0 auto; }
+  .terminal-site-table .btn { padding: 6px 12px; font-size: 14px; }
+}
+/* Only a domain and a button per site, so a wide screen shows two sites a row. */
+@media (min-width: 941px) {
+  /* Out of sight, not out of the accessibility tree: screen readers still name the column.
+     Important over the shared long-list rule, whose sticky heading would take a row of space. */
+  .terminal-site-table thead { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  /* Each site draws its right and bottom edges, so a lone last site is closed on
+     both and the one above the empty half closes it. They are shadows, which take
+     no room: the outer ones fall outside the list and are clipped instead of
+     making it scroll. */
+  .terminal-site-table tbody { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-top: 1px solid var(--row-border); }
+  .terminal-site-table tr { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    box-shadow: 1px 1px 0 var(--row-border); }
+  .terminal-site-table tr[hidden] { display: none; }
+  .terminal-site-table tr:has(td[colspan]) { grid-column: 1 / -1; }
+  .terminal-site-table td { border-top: 0; min-width: 0; }
+  .terminal-site-table td.site-cell { flex: 1 1 auto; padding-right: 0; }
+  .terminal-site-table td.action-cell { flex: 0 0 auto; }
+}

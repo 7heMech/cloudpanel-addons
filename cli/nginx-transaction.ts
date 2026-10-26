@@ -16,20 +16,41 @@ export function writeAtomicOwned(path: string, content: string, mode: number, ui
   writeFileAtomic(path, content, { mode, owner: { uid, gid }, createParent: true });
 }
 
-export function openPanelDatabase(path: string, readOnly = false): Database {
+export function openPanelDatabase(path: string, readOnly = false, busyTimeoutMs = 5000): Database {
   try {
     const db = new Database(path, { create: false, ...(readOnly ? { readonly: true } : { readwrite: true }) });
-    db.exec("PRAGMA busy_timeout = 5000;");
+    db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs};`);
     return db;
   } catch (error) {
     failAction(`CloudPanel database could not be opened: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
-export function trustedVhost(path: string, expectedUid: number): NginxFileBackup & { content: string } {
+/** The `allow` entries of CloudPanel's Cloudflare list, or none without one. */
+export function cloudflareRanges(path: string): string[] {
+  let content: string;
+  try { content = readFileSync(path, "utf8"); } catch { return []; }
+  return content.split(/\r?\n/).flatMap((line) => {
+    const match = line.match(/^\s*allow\s+([0-9a-fA-F.:/]+)\s*;/);
+    return match ? [match[1]!] : [];
+  });
+}
+
+/** `groupWritable` accepts a file its owning account's group may write, as CloudPanel's panel files are. */
+export function trustedVhost(path: string, expectedUid: number, groupWritable = false): NginxFileBackup & { content: string } {
   const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== expectedUid || (stat.mode & 0o022) !== 0) {
-    failAction(`refusing untrusted Nginx vhost ${path}`);
+  const refuse = (reason: string, fix: string) => failAction(`refusing ${path}: ${reason}; ${fix}`);
+  if (stat.isSymbolicLink()) refuse("it is a symlink", "replace it with a regular file");
+  if (!stat.isFile()) refuse("it is not a regular file", "replace it with a regular file");
+  if (stat.uid !== expectedUid) {
+    refuse(
+      `owned by uid ${stat.uid}, expected ${expectedUid === 0 ? "root (0)" : `uid ${expectedUid}`}`,
+      expectedUid === 0 ? `run chown root:root ${path}` : `run chown ${expectedUid} ${path}`,
+    );
+  }
+  if ((stat.mode & (groupWritable ? 0o002 : 0o022)) !== 0) {
+    const who = [(stat.mode & 0o020) !== 0 ? "group" : "", (stat.mode & 0o002) !== 0 ? "world" : ""].filter(Boolean).join("- and ");
+    refuse(`${who}-writable (mode ${(stat.mode & 0o777).toString(8)})`, `run chmod go-w ${path}`);
   }
   return {
     path,
@@ -74,10 +95,10 @@ export interface NginxChange {
   content: string | null;
 }
 
-export function nginxFileChange(path: string, content: string | null, expectedUid: number): NginxChange {
+export function nginxFileChange(path: string, content: string | null, expectedUid: number, groupWritable = false): NginxChange {
   let backup: NginxFileBackup;
   try {
-    backup = trustedVhost(path, expectedUid);
+    backup = trustedVhost(path, expectedUid, groupWritable);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     backup = { path, content: null, mode: 0o644, uid: expectedUid, gid: process.getgid?.() ?? 0 };
@@ -85,57 +106,133 @@ export function nginxFileChange(path: string, content: string | null, expectedUi
   return { backup, content };
 }
 
-/** Commits panel rows and Nginx files together, recovering both on failure. */
-export function withNginxTransaction<T>(
-  db: Database | null,
-  paths: { nginx: string; systemctl: string },
-  command: (command: string, args: string[]) => CommandResult,
-  stage: (changes: NginxChange[]) => T,
-  options: { reload?: boolean; alwaysValidate?: boolean } = {},
-): { value: T; changed: boolean } {
-  const changes: NginxChange[] = [];
-  const written: NginxFileBackup[] = [];
-  let attemptedReload = false;
-  let began = false;
-  try {
-    if (db) { db.exec("BEGIN IMMEDIATE;"); began = true; }
-    const before = db?.query<{ count: number }, []>("SELECT total_changes() AS count;").get()!.count;
+/** Which Nginx to validate and reload: the sites' by default, or one with its own config and unit. */
+export interface NginxInstance {
+  nginx: string;
+  systemctl: string;
+  config?: string;
+  service?: string;
+}
+
+function testArgs(paths: NginxInstance): string[] {
+  return paths.config ? ["-t", "-c", paths.config] : ["-t"];
+}
+
+interface NginxTransactionOptions {
+  reload?: boolean;
+  alwaysValidate?: boolean;
+}
+
+class NginxTransaction {
+  private written: NginxFileBackup[] = [];
+  private attemptedReload = false;
+  private began = false;
+  needsReload = false;
+
+  constructor(
+    private db: Database | null,
+    private paths: NginxInstance,
+    private command: (command: string, args: string[]) => CommandResult,
+    private options: NginxTransactionOptions,
+  ) {}
+
+  prepare<T>(stage: (changes: NginxChange[]) => T): { value: T; changed: boolean } {
+    const changes: NginxChange[] = [];
+    if (this.db) {
+      this.db.exec("BEGIN IMMEDIATE;");
+      this.began = true;
+    }
+    const count = () => this.db?.query<{ count: number }, []>("SELECT total_changes() AS count;").get()!.count;
+    const before = count();
     const value = stage(changes);
-    const rowsChanged = before !== db?.query<{ count: number }, []>("SELECT total_changes() AS count;").get()!.count;
+    const rowsChanged = before !== count();
     for (const { backup, content } of changes) {
       if (content === backup.content) continue;
-      written.push(backup);
+      this.written.push(backup);
       if (content === null) rmSync(backup.path, { force: true });
       else writeAtomicOwned(backup.path, content, backup.mode, backup.uid, backup.gid);
     }
-    const changed = rowsChanged || written.length > 0;
-    if (options.reload !== false && (changed || options.alwaysValidate)) {
-      const checked = command(paths.nginx, ["-t"]);
+    const changed = rowsChanged || this.written.length > 0;
+    this.needsReload = this.options.reload !== false && (changed || this.options.alwaysValidate === true);
+    if (this.needsReload) {
+      const checked = this.command(this.paths.nginx, testArgs(this.paths));
       if (!checked.ok) throw new Error(commandError("Nginx validation", checked));
-      attemptedReload = true;
-      const reloaded = command(paths.systemctl, ["reload", "nginx"]);
-      if (!reloaded.ok) throw new Error(commandError("Nginx reload", reloaded));
     }
-    if (db) db.exec("COMMIT;");
     return { value, changed };
+  }
+
+  reload(label = "Nginx reload"): void {
+    this.attemptedReload = true;
+    const reloaded = this.command(this.paths.systemctl, ["reload", this.paths.service ?? "nginx"]);
+    if (!reloaded.ok) throw new Error(commandError(label, reloaded));
+  }
+
+  commit(): void {
+    if (this.db) this.db.exec("COMMIT;");
+  }
+
+  restore(failures: string[]): boolean {
+    failures.push(...restoreVhosts(this.written));
+    if (this.db && this.began) {
+      try { this.db.exec("ROLLBACK;"); }
+      catch (error) { failures.push(`database transaction: ${errorMessage(error)}`); }
+    }
+    if (!this.written.length) return false;
+    if (this.options.reload === false) return false;
+    try {
+      const restored = this.command(this.paths.nginx, testArgs(this.paths));
+      if (!restored.ok) failures.push(commandError("Nginx rollback validation", restored));
+      else return this.attemptedReload;
+    } catch (error) {
+      failures.push(`Nginx rollback validation failed: ${errorMessage(error)}`);
+    }
+    return false;
+  }
+}
+
+/** Commits panel rows and Nginx files together, recovering both on failure. */
+export function withNginxTransaction<T>(
+  db: Database | null,
+  paths: NginxInstance,
+  command: (command: string, args: string[]) => CommandResult,
+  stage: (changes: NginxChange[]) => T,
+  options: NginxTransactionOptions = {},
+): { value: T; changed: boolean } {
+  const transaction = new NginxTransaction(db, paths, command, options);
+  try {
+    const result = transaction.prepare(stage);
+    if (transaction.needsReload) transaction.reload();
+    transaction.commit();
+    return result;
   } catch (error) {
     const failures: string[] = [];
-    if (db && began) {
-      try { db.exec("ROLLBACK;"); }
-      catch (rollbackError) { failures.push(`database transaction: ${errorMessage(rollbackError)}`); }
+    if (transaction.restore(failures)) {
+      try { transaction.reload("Nginx rollback reload"); }
+      catch (error) { failures.push(errorMessage(error)); }
     }
-    if (written.length) {
-      failures.push(...restoreVhosts(written));
-      if (options.reload !== false) {
-        try {
-          const restored = command(paths.nginx, ["-t"]);
-          if (!restored.ok) failures.push(commandError("Nginx rollback validation", restored));
-          else if (attemptedReload) {
-            const reloaded = command(paths.systemctl, ["reload", "nginx"]);
-            if (!reloaded.ok) failures.push(commandError("Nginx rollback reload", reloaded));
-          }
-        } catch (recoveryError) { failures.push(`Nginx rollback validation/reload failed: ${errorMessage(recoveryError)}`); }
-      }
+    throw withRecoveryFailures(error, "rollback failed", failures);
+  }
+}
+
+/** Waits for a caller's reload acknowledgement before committing or finishing recovery. */
+export async function withNginxTransactionAsync<T>(
+  db: Database | null,
+  paths: NginxInstance,
+  command: (command: string, args: string[]) => CommandResult,
+  stage: (changes: NginxChange[]) => T,
+  reload: (signal: () => void) => Promise<void>,
+): Promise<{ value: T; changed: boolean }> {
+  const transaction = new NginxTransaction(db, paths, command, {});
+  try {
+    const result = transaction.prepare(stage);
+    if (transaction.needsReload) await reload(() => transaction.reload());
+    transaction.commit();
+    return result;
+  } catch (error) {
+    const failures: string[] = [];
+    if (transaction.restore(failures)) {
+      try { await reload(() => transaction.reload()); }
+      catch (error) { failures.push(`Nginx rollback reload failed: ${errorMessage(error)}`); }
     }
     throw withRecoveryFailures(error, "rollback failed", failures);
   }

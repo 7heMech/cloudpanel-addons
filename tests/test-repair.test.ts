@@ -83,13 +83,11 @@ const PROBE = String.raw`
     installUnits: () => { calls.push("installUnits"); provisioning.units = true; return false; },
     installedConfig: () => hasInstalledAddon,
     purgeTwigCache: () => calls.push("purgeTwigCache"),
-    removeLegacyInstall: () => calls.push("removeLegacyInstall"),
     removeLegacyUnits: () => calls.push("removeLegacyUnits"),
-    removeLegacyUsers: () => calls.push("removeLegacyUsers"),
-    removeSudoers: () => calls.push("removeSudoers"),
     startUnits: () => calls.push("startUnits"),
     stopUnits: () => calls.push("stopUnits"),
     unitActive: () => "active",
+    managerSocketProblem: () => null,
     unitPid: () => 1234,
     writeConfig: (spec) => calls.push("writeConfig:" + spec.name),
   }));
@@ -216,7 +214,7 @@ test("repair completes reconciliation even when no panel session exists", () => 
 
 test("repair checks persistent enablement for every installed timer", () => {
   expect(result.repairWithoutSession.calls).toContain("ensureTimerArmed:clp-addons-reconcile.timer");
-  expect(result.repairWithoutSession.calls).toContain("ensureTimerArmed:clp-addons-cloudflare-ips-reconcile.timer");
+  expect(result.repairWithoutSession.calls).not.toContain("ensureTimerArmed:clp-addons-cloudflare-ips-reconcile.timer");
 });
 
 test("install proceeds when the fixed directory has no live panel session", () => {

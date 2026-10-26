@@ -21,7 +21,7 @@ function fnBody(name: string): string {
 
 describe("the card list", () => {
   test("renders a card naming the addon and its mount", () => {
-    expect(page).toInclude("addon-card");
+    expect(page).toInclude("addon-row");
     expect(page).toInclude("Instatic");
     expect(page).toInclude("/addons/instatic");
     expect(page).toInclude('aria-label="Open Instatic CMS">Open</a>');
@@ -80,4 +80,20 @@ describe("acting on a card", () => {
   test("a job whose card is not on the page gets one above the cards", () => {
     expect(fnBody("managerJobCard")).toInclude("insertBefore(card, heading.nextSibling)");
   });
+});
+
+test("only a successful manager update reloads its replaced script", async () => {
+  for (const [kind, state, reloads] of [["enable", "done", 0], ["disable", "done", 0], ["update", "failed", 0], ["update", "done", 1]] as const) {
+    let navigations = 0;
+    let repaints = 0;
+    const notices: string[] = [];
+    const run = new Function("location", "repaintPage", "notify", "findAddons",
+      `async ${fnBody("managerJobFinished")}\n}\nreturn managerJobFinished;`)(
+      { reload() { navigations++; } }, async () => { repaints++; return true; }, (message: string) => notices.push(message), () => {},
+    );
+    await run({ kind, state, addon: "git", error: "download failed" });
+    expect(navigations).toBe(reloads);
+    expect(repaints).toBe(reloads ? 0 : 1);
+    if (!reloads) expect(notices[0]).toContain(state === "failed" ? "download failed" : "git");
+  }
 });

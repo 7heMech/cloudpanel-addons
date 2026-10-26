@@ -28,6 +28,9 @@ test("the reproduced tab strip applies CloudPanel's own conditions", () => {
   expect(staticTabs).toContain("Git");
   expect(staticTabs).toContain("Maintenance");
   expect(staticTabs).toContain("Staging");
+  // Staging only where Clone works, as the injected tab's Twig has it.
+  expect(siteTabs({ ...php, type: "nodejs" }).map((tab) => tab.label)).not.toContain("Staging");
+  expect(siteTabs({ ...php, type: "reverse-proxy" }).map((tab) => tab.label)).toContain("Staging");
 });
 
 test("tab links point at the panel's own routes and mark the active one", () => {

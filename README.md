@@ -14,9 +14,9 @@ Log in to your server as **root** and run:
 curl -fsSL https://github.com/7heMech/cloudpanel-addons/releases/latest/download/install.sh | bash
 ```
 
-The installer asks which addons you want, checks that the download is genuine,
-and installs Docker or Postfix when a selected addon needs it. Requires an
-x86-64 CloudPanel host.
+The installer asks which addons you want, and installs Docker or Postfix when a
+selected addon needs it. Updates are checked against GitHub build provenance.
+Requires an x86-64 CloudPanel host.
 
 When it finishes, open the new **Addons** tab in CloudPanel.
 
@@ -27,25 +27,30 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | Addon | Description |
 | --- | --- |
 | Cloudflare IP Access | Allow traffic from Cloudflare only, across all sites and for new ones. |
+| [DNS](docs/dns.md) | Each site's Cloudflare records kept to a profile, with Mailcow set up for its mail. |
 | [Instatic CMS](https://github.com/CoreBunch/Instatic) | Instatic CMS sites on CloudPanel. |
 | Stager | Staging copies of WordPress, PHP, static and Instatic sites, and promotion back to live. Based on [clp-stager](https://github.com/7heMech/clp-stager). |
 | Maintenance Mode | A customizable 503 page per site, with instant toggles and IP bypasses. |
-| PHP Resources | Categories of PHP-FPM worker limits, assigned in bulk and to new sites. |
+| PHP Resources | Categories of PHP-FPM worker limits, assigned in bulk and to new sites; clears abandoned PHP temp files from /tmp. |
 | [SMTP Relay](docs/smtp-relay.md) | Send each site's mail through SMTP relay profiles, WordPress and PHP included. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
 | Panel Tweaks | Site search and columns, automatic SSL for native sites, mobile layouts and themes. |
-| WordPress Sign-In | One-click sign-in to any WordPress on the server, no password needed. |
+| [System Tweaks](docs/system-tweaks.md) | Automatic security updates, the panel’s PHP version, the PHP upload-progress mitigation and forged visitor-IP blocking. |
+| [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in, optional CLP Varnish Cache installation and MainWP Child enrollment. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
+| Security Keys | Sign in with a passkey or a hardware key such as a YubiKey instead of a password and two-factor code, for the roles an administrator allows. Needs the panel on a hostname with a valid certificate. |
 
 Only CloudPanel administrators see the Addons tab. Site managers can also use
 Git Deploy and create and manage Instatic sites. Other panel users get Panel
-Tweaks' site search and columns and the WordPress Sign-In link on the Sites
-page, for their own sites.
+Tweaks' site search and columns and the WP Login link on the Sites page, for
+their own sites. Panel users add their own security keys under Account →
+Security, in the roles an administrator allows.
 
 ## Manage
 
 | Command | Purpose |
 | --- | --- |
+| `clp-addons` | As root, toggle addons and run status, repair or update. |
 | `clp-addons status` | Check services and CloudPanel integration. |
 | `clp-addons install <addon>` | Enable an addon, installing Docker if it needs it. |
 | `clp-addons update` | Install the latest verified release. |
@@ -53,8 +58,9 @@ page, for their own sites.
 | `clp-addons maintenance <domain> [on\|off\|status]` | Control or inspect maintenance mode for a site. |
 | `clp-addons uninstall <addon> --yes` | Remove an addon and keep its data. |
 
-Addon names are `cloudflare-ips`, `instatic`, `stager`, `maintenance`,
-`php-resources`, `git`, `panel-tweaks`, `wp-login`, `smtp`, and `terminal`. Run
+Addon names are `cloudflare-ips`, `dns`, `instatic`, `stager`, `maintenance`,
+`php-resources`, `git`, `panel-tweaks`, `system-tweaks`, `wp-tools`, `smtp`, `terminal`, and
+`security-keys`. Run
 `clp-addons --help` for version selection and data removal options.
 
 See [Instatic backup and restore](docs/instatic-backups.md) for CloudPanel Remote

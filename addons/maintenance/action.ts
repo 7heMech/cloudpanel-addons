@@ -5,10 +5,11 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, withFileLock,
+  ActionFailure, deletedSites, emitActionError, emitActionOk, failAction, normalizeIdentityHostname, withFileLock,
   validateDomain,
 } from "../../cli/action-common";
-import { PANEL_IDENTITY_PATH } from "../../cli/paths";
+import { MAINTENANCE_INCLUDE_PATH, maintenanceGap, maintenanceGaps } from "../../cli/maintenance-vhosts";
+import { DISTRO_NGINX_SITES_DIR, NGINX_GLOBAL_SETTINGS, PANEL_IDENTITY_PATH } from "../../cli/paths";
 import { writeAtomic } from "../../cli/util";
 import DEFAULT_TEMPLATE from "./default.html" with { type: "text" };
 
@@ -22,6 +23,15 @@ export interface MaintenanceStatus {
   enabled: boolean;
   customTemplate: boolean;
   bypasses: string[];
+  /** Why Nginx runs no maintenance check for the site, so its setting does nothing; null when it does. */
+  uncovered: string | null;
+}
+
+/** One row of `sites`: a site's status with what the panel says the site is. */
+export interface MaintenanceSiteStatus extends MaintenanceStatus {
+  type: string;
+  user: string;
+  error?: string;
 }
 
 export interface GlobalMaintenanceStatus {
@@ -34,6 +44,9 @@ export interface MaintenanceActionPaths {
   lockDir: string;
   panelDb: string;
   panelIdentityFile: string;
+  nginxVhostDir: string;
+  nginxSettings: string;
+  includePath: string;
 }
 
 export interface MaintenanceActionOptions {
@@ -55,9 +68,15 @@ export const DEFAULT_MAINTENANCE_ACTION_PATHS: MaintenanceActionPaths = {
   lockDir: "/run/lock/clp-addons",
   panelDb: "/home/clp/htdocs/app/data/db.sq3",
   panelIdentityFile: PANEL_IDENTITY_PATH,
+  nginxVhostDir: DISTRO_NGINX_SITES_DIR,
+  nginxSettings: NGINX_GLOBAL_SETTINGS,
+  includePath: MAINTENANCE_INCLUDE_PATH,
 };
 
 type MaintenanceVerb =
+  | "sites"
+  | "enable-many"
+  | "disable-many"
   | "status"
   | "enable"
   | "disable"
@@ -92,14 +111,14 @@ function parseAction(argv: string[], paths: MaintenanceActionPaths, options: Mai
     "status", "enable", "disable", "get-template", "set-template", "reset-template", "set-bypass",
   ];
   const globalAllowed: MaintenanceVerb[] = [
-    "global-status", "global-enable", "global-disable", "global-set-bypass",
+    "sites", "enable-many", "disable-many", "global-status", "global-enable", "global-disable", "global-set-bypass",
   ];
   if (verb && globalAllowed.includes(verb)) {
     if (argv.length > 1) failAction(`action ${verb} takes no arguments`);
     return { verb, domain: "" };
   }
   if (!verb || !siteAllowed.includes(verb)) {
-    failAction("usage: clp-addons action maintenance {status|enable|disable|get-template|set-template|reset-template|set-bypass} --domain <domain> | {global-status|global-enable|global-disable|global-set-bypass}");
+    failAction("usage: clp-addons action maintenance {status|enable|disable|get-template|set-template|reset-template|set-bypass} --domain <domain> | {sites|enable-many|disable-many|global-status|global-enable|global-disable|global-set-bypass}");
   }
   let domain = "";
   for (let i = 1; i < argv.length; i++) {
@@ -285,15 +304,90 @@ function writeBypasses(
   );
 }
 
-export function maintenanceStatus(paths: MaintenanceActionPaths, domain: string): MaintenanceStatus {
-  assertPanelSite(paths, domain);
+function coveragePaths(paths: MaintenanceActionPaths) {
+  return { nginxVhostDir: paths.nginxVhostDir, includePath: paths.includePath, settingsMissing: !existsSync(paths.nginxSettings) };
+}
+
+/** What a site's state directory says, read the way Nginx reads it. */
+function savedStatus(paths: MaintenanceActionPaths, domain: string, uncovered: string | null): MaintenanceStatus {
   const dir = siteDir(paths, domain);
   return {
     domain,
     enabled: safeRegularFile(join(dir, "on"), 0),
     customTemplate: safeRegularFile(join(dir, "maintenance.html")),
     bypasses: bypasses(dir),
+    uncovered,
   };
+}
+
+export function maintenanceStatus(paths: MaintenanceActionPaths, domain: string): MaintenanceStatus {
+  assertPanelSite(paths, domain);
+  let uncovered: string | null = null;
+  try {
+    const db = new Database(paths.panelDb, { readonly: true });
+    try { uncovered = maintenanceGap(db, domain, coveragePaths(paths)); } finally { db.close(); }
+  } catch {
+    // Coverage that cannot be checked is not claimed either way.
+  }
+  return savedStatus(paths, domain, uncovered);
+}
+
+/** Every site's status and Nginx coverage, from one read of the panel and of the state directory. */
+function allStatuses(paths: MaintenanceActionPaths): { global: GlobalMaintenanceStatus; sites: MaintenanceSiteStatus[] } {
+  let rows: { domain_name: string; type: unknown; user: unknown }[];
+  let gaps: Map<string, string>;
+  let db: Database;
+  try {
+    db = new Database(paths.panelDb, { readonly: true });
+  } catch {
+    failAction("CloudPanel's site database is unavailable");
+  }
+  try {
+    db.exec("PRAGMA busy_timeout = 5000;");
+    rows = db.query<{ domain_name: string; type: unknown; user: unknown }, []>(
+      "SELECT domain_name, type, user FROM site ORDER BY domain_name",
+    ).all();
+    try { gaps = maintenanceGaps(db, coveragePaths(paths)); } catch { gaps = new Map(); }
+  } catch {
+    failAction("CloudPanel's site database could not be read");
+  } finally {
+    db.close();
+  }
+  const globalDir = siteDir(paths, "_global");
+  const sites = rows.map((row): MaintenanceSiteStatus => {
+    const type = typeof row.type === "string" ? row.type : "";
+    const user = typeof row.user === "string" ? row.user : "";
+    const domain = normalizeIdentityHostname(row.domain_name);
+    const uncovered = gaps.get(row.domain_name) ?? null;
+    try {
+      if (!domain) failAction("CloudPanel records an invalid domain for this site");
+      return { ...savedStatus(paths, domain, uncovered), type, user };
+    } catch (error) {
+      return {
+        domain: row.domain_name, enabled: false, customTemplate: false, bypasses: [], uncovered, type, user,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  });
+  return { global: { global: safeRegularFile(join(globalDir, "on"), 0), bypasses: bypasses(globalDir) }, sites };
+}
+
+/**
+ * Removes the state of sites CloudPanel no longer has, so a domain created
+ * again starts live with no bypasses or template. The global directory and
+ * anything that is not a hostname's directory are left alone.
+ */
+export function pruneMaintenanceState(options: MaintenanceActionOptions = {}): string[] {
+  const paths = pathsFor(options);
+  let names: string[];
+  try { names = readdirSync(paths.dataDir); } catch { return []; }
+  const dirs = names.filter((name) => {
+    if (normalizeIdentityHostname(name) !== name) return false;
+    try { return lstatSync(join(paths.dataDir, name)).isDirectory(); } catch { return false; }
+  });
+  const gone = deletedSites(paths.panelDb, dirs);
+  for (const name of gone) rmSync(join(paths.dataDir, name), { recursive: true, force: true });
+  return gone;
 }
 
 /**
@@ -389,6 +483,66 @@ export function sanitizeTemplate(input: string): string {
   return html.trim() + "\n";
 }
 
+/** Purges the Varnish cache of each domain, eight at a time, within eight seconds. */
+async function purgeVarnishMany(domains: string[], options: MaintenanceActionOptions): Promise<void> {
+  const started = Date.now();
+  let next = 0;
+  const worker = async () => {
+    while (next < domains.length && Date.now() - started < 8_000) {
+      const domain = domains[next++];
+      if (domain) await purgeVarnish(domain, options.varnishPort, options.fetchFn);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, domains.length) }, () => worker()));
+}
+
+/** Turns maintenance on or off for many sites in one pass: one database read, one process. */
+async function toggleMany(
+  paths: MaintenanceActionPaths, enabled: boolean, input: string, options: MaintenanceActionOptions,
+): Promise<{ enabled: boolean; updated: string[]; failed: { domain: string; error: string }[] }> {
+  let requested: unknown;
+  try { requested = (JSON.parse(input) as { domains?: unknown }).domains; } catch { failAction("expected JSON with a domains list"); }
+  if (!Array.isArray(requested) || requested.length === 0) failAction("domains must list at least one site");
+  let present: Set<string>;
+  let db: Database;
+  try {
+    db = new Database(paths.panelDb, { readonly: true });
+  } catch {
+    failAction("CloudPanel's site database is unavailable");
+  }
+  try {
+    db.exec("PRAGMA busy_timeout = 5000;");
+    present = new Set(db.query<{ domain_name: string }, []>("SELECT lower(domain_name) AS domain_name FROM site").all()
+      .map((row) => row.domain_name));
+  } catch {
+    failAction("CloudPanel's site database could not be read");
+  } finally {
+    db.close();
+  }
+  const updated: string[] = [];
+  const failed: { domain: string; error: string }[] = [];
+  for (const raw of requested) {
+    const shown = typeof raw === "string" ? raw : String(raw);
+    try {
+      if (typeof raw !== "string") failAction("not a domain");
+      const domain = options.domainValidator ? options.domainValidator(raw) : validateDomain(raw, paths.panelIdentityFile);
+      if (!present.has(domain)) failAction(`CloudPanel site not found: '${domain}'`);
+      const flag = join(siteDir(paths, domain, enabled), "on");
+      if (enabled) writeAtomic(flag, "", 0o600);
+      else rmSync(flag, { force: true });
+      updated.push(domain);
+    } catch (error) {
+      failed.push({ domain: shown, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  await purgeVarnishMany(updated, options);
+  return {
+    enabled,
+    updated: updated.sort((a, b) => a.localeCompare(b)),
+    failed: failed.sort((a, b) => a.domain.localeCompare(b.domain)),
+  };
+}
+
 function readInput(options: MaintenanceActionOptions): Promise<string> {
   if (options.input !== undefined) return Promise.resolve(options.input);
   return Bun.stdin.text();
@@ -401,6 +555,11 @@ export async function executeMaintenanceAction(
   requireRoot(options);
   const paths = pathsFor(options);
   const { verb, domain } = parseAction(argv, paths, options);
+
+  if (verb === "sites") return allStatuses(paths);
+  if (verb === "enable-many" || verb === "disable-many") {
+    return toggleMany(paths, verb === "enable-many", await readInput(options), options);
+  }
 
   if (verb === "global-status") {
     const dir = siteDir(paths, "_global");
@@ -447,23 +606,7 @@ export async function executeMaintenanceAction(
         db.close();
       }
 
-      const CONCURRENCY = 8;
-      const PURGE_BUDGET_MS = 8_000;
-      const start = Date.now();
-      let idx = 0;
-
-      const worker = async () => {
-        while (idx < domainNames.length && Date.now() - start < PURGE_BUDGET_MS) {
-          const domain = domainNames[idx++];
-          if (domain) {
-            await purgeVarnish(domain, options.varnishPort, options.fetchFn);
-          }
-        }
-      };
-
-      await Promise.all(
-        Array.from({ length: Math.min(CONCURRENCY, domainNames.length) }, () => worker()),
-      );
+      await purgeVarnishMany(domainNames, options);
     } catch {
       // panelDb may not exist in some unit tests or mock environments
     }
@@ -495,9 +638,10 @@ export async function executeMaintenanceAction(
   }
 
   if (verb === "set-template") {
-    const html = sanitizeTemplate(await readInput(options));
+    const input = await readInput(options);
+    const html = sanitizeTemplate(input);
     writeAtomic(join(siteDir(paths, domain, true), "maintenance.html"), html, 0o644);
-    return { domain, custom: true, html };
+    return { domain, custom: true, html, removed: html.trim() !== input.trim() };
   }
 
   if (verb === "reset-template") {

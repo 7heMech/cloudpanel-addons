@@ -30,7 +30,9 @@
     { key: "cloudflare", label: "Cloudflare", wide: false, narrow: false },
     { key: "varnish", label: "Varnish", wide: false, narrow: false }
   ];
-  var NARROW_QUERY = "(max-width: 860px)";
+  // The narrow column set belongs to the cards; without them a narrow screen
+  // keeps the desktop table, and its columns.
+  var NARROW_QUERY = SITES_MOBILE_JSON ? "(max-width: 1100px)" : "not all";
   var COLUMNS_ON = SITES_TABLE_JSON;
   var columnStyle = null;
   var tagged = false;

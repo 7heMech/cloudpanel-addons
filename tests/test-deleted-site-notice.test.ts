@@ -8,7 +8,7 @@
 // with deletion, and a snapshot old enough to be stale cannot be trusted to
 // report an absence at all.
 import { describe, expect, test } from "bun:test";
-import { dashboardView, isInstanceMissing } from "../addons/instatic/app/views";
+import { dashboardView } from "../addons/instatic/app/views";
 import type { InstanceView } from "../addons/instatic/app/service";
 import { isSiteMissing, jobsView, jobView } from "../addons/stager/app/views";
 import type { JobView } from "../addons/stager/app/service";
@@ -87,20 +87,19 @@ describe("a stager job's staging site", () => {
 });
 
 describe("the stager's pages", () => {
-  test("badge a missing site and explain it", () => {
+  test("badge a missing site once", () => {
     const html = jobsView([JOB], 120, PROD_ONLY, SNAP_TIME);
-    expect(html).toInclude("CloudPanel site deleted");
-    expect(html).toInclude("deleted</span>");
+    expect(html.match(/>deleted</g)?.length).toBe(1);
   });
 
   test("say nothing when the site is present", () => {
-    expect(jobsView([JOB], 120, WITH_STAGING, SNAP_TIME)).not.toInclude("CloudPanel site deleted");
+    expect(jobsView([JOB], 120, WITH_STAGING, SNAP_TIME)).not.toInclude("deleted</span>");
   });
 
-  test("drop the link to a site that is gone", () => {
+  test("drop the link to a site that is gone and say so once", () => {
     const html = jobView(JOB, "all good", 120, PROD_ONLY, SNAP_TIME);
     expect(html).toInclude("This staging site has been deleted from CloudPanel.");
-    expect(html).toInclude("(deleted from CloudPanel)");
+    expect(html.match(/deleted/g)?.length).toBe(1);
     expect(html).not.toInclude('href="https://stg.example.com"');
   });
 
@@ -111,40 +110,21 @@ describe("the stager's pages", () => {
   });
 });
 
-describe("an instatic instance's site", () => {
-  test("follows a live panelSite answer over the snapshot", () => {
-    expect(isInstanceMissing({ ...INSTANCE, panelSite: false }, 10, WITH_INSTANCE, SNAP_TIME)).toBe(true);
-    expect(isInstanceMissing({ ...INSTANCE, panelSite: true }, 10, OTHER_ONLY, SNAP_TIME)).toBe(false);
-  });
-
-  test("is missing when a newer snapshot does not list it", () => {
-    expect(isInstanceMissing(INSTANCE, 120, OTHER_ONLY, SNAP_TIME)).toBe(true);
-  });
-
-  test("is not missing when the snapshot lists it", () => {
-    expect(isInstanceMissing(INSTANCE, 120, WITH_INSTANCE, SNAP_TIME)).toBe(false);
-  });
-
-  test("is not missing when the instance was created after the snapshot", () => {
-    expect(isInstanceMissing(INSTANCE, 120, OTHER_ONLY, "2026-09-09T08:55:00Z")).toBe(false);
-  });
-
-  test("is not missing on the word of a snapshot older than an hour", () => {
-    expect(isInstanceMissing(INSTANCE, 3601, OTHER_ONLY, SNAP_TIME)).toBe(false);
-  });
-});
-
 describe("the instatic dashboard", () => {
-  test("badges a missing instance and offers the cleanup", () => {
-    const html = dashboardView([{ ...INSTANCE, panelSite: false }], 120, OTHER_ONLY, TAGS, SNAP_TIME);
-    expect(html).toInclude("CloudPanel site deleted. Delete here to archive and clean up the instance.");
-    expect(html).toInclude("deleted</span>");
+  // The action reads the panel database for every list, so its answer is the
+  // only one: an unknown answer (null) is not a deleted site.
+  test("badges an instance the panel no longer has and offers the cleanup", () => {
+    const html = dashboardView([{ ...INSTANCE, panelSite: false }], TAGS);
+    expect(html).toInclude("Deleted</span>");
+    expect(html).toInclude("askDelete(");
     expect(html).not.toInclude('href="https://inst.example.com"');
   });
 
-  test("links to an instance whose site is present", () => {
-    const html = dashboardView([{ ...INSTANCE, panelSite: true }], 120, OTHER_ONLY, TAGS, SNAP_TIME);
-    expect(html).not.toInclude("CloudPanel site deleted");
-    expect(html).toInclude('href="https://inst.example.com"');
+  test("links to an instance whose site is present or unknown", () => {
+    for (const panelSite of [true, null]) {
+      const html = dashboardView([{ ...INSTANCE, panelSite }], TAGS);
+      expect(html).not.toInclude("deleted</span>");
+      expect(html).toInclude('href="https://inst.example.com"');
+    }
   });
 });

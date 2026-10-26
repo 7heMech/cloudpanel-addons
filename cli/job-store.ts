@@ -21,6 +21,7 @@ import {
 import { writeFileAtomic } from "../lib/atomic-write";
 import { join } from "node:path";
 import { runCommand } from "./action-common";
+import { CLI_BIN } from "./paths";
 
 /** A job id is a UTC stamp plus six hex characters: 20260911T160031Z-35e759. */
 // Re-exported from its neutral home so the app services can check an id
@@ -275,6 +276,37 @@ export function startJobUnit(options: {
 
 export function jobUnitIsActive(addon: string, id: string): boolean {
   return runCommand("systemctl", ["is-active", "--quiet", jobUnitName(addon, id)]).ok;
+}
+
+/**
+ * Start an addon's periodic pass in a transient unit and return, so work that
+ * waits on the network or on a site's own code never holds repair's operation
+ * lock. A pass still running from last time is left to finish rather than
+ * started twice. `runtime` bounds it in seconds.
+ */
+export function queueAddonPass(options: {
+  addon: string;
+  verb: string;
+  description: string;
+  runtime: number;
+  actionBinary?: string;
+}): boolean {
+  const unit = `clp-addon-${options.addon}-${options.verb}`;
+  const running = () => runCommand("systemctl", ["is-active", "--quiet", unit]).ok;
+  if (running()) return false;
+  const started = runCommand("systemd-run", [
+    `--unit=${unit}`,
+    `--description=${options.description}`,
+    "--collect",
+    "--no-block",
+    ...BACKGROUND_JOB_PROPERTIES.map((property) => `--property=${property}`),
+    `--property=RuntimeMaxSec=${options.runtime}`,
+    "--",
+    options.actionBinary ?? CLI_BIN, "action", options.addon, options.verb,
+  ]);
+  if (started.ok) return true;
+  if (running()) return false;
+  throw new Error(`could not queue ${unit}: ${started.stderr.trim() || "systemd-run failed"}`);
 }
 
 /**

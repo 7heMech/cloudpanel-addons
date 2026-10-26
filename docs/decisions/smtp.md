@@ -5,9 +5,16 @@
 Postfix, which CloudPanel installs and enabling the addon installs if missing,
 is the relay client. A named profile holds one SMTP account and a From template.
 Sites are assigned to profiles in bulk, and one profile can be the default for
-new sites, as in PHP Resources. A site in no profile is not relayed. The seeded
-"Don't send" profile routes its sites' mail to Postfix's `discard` transport, so
-it is logged and never delivered.
+new sites, as in PHP Resources. A site in no profile is not relayed. Discard is
+the built-in `dont-send` profile, which routes its sites' mail to Postfix's
+`discard` transport, so it is logged and never delivered; Stager assigns
+staging copies to it. Every profile the operator creates has an SMTP server.
+
+1.5 let any profile discard and let `dont-send` be edited into a relay. Reading
+the policy folds the first kind into `dont-send`, moves a relay profile holding
+the `dont-send` id to an id of its own with its sites, and restores a deleted
+`dont-send`; reconcile writes the result back, so `update` and `repair` migrate
+the file.
 
 ## Postfix enforces
 
@@ -54,7 +61,8 @@ That covers web requests, cron and WP-CLI, and survives CloudPanel rewriting a
 pool when a site changes PHP version. A site cannot change it: `sendmail_path` is
 `PHP_INI_SYSTEM`, and CloudPanel's PHP settings reach PHP as nginx `PHP_VALUE`,
 which php-fpm applies in user mode. A pool's own
-`php_admin_value[sendmail_path]` still wins, and the test refuses such a site.
+`php_admin_value[sendmail_path]` still wins: the page marks such a site
+Bypassed, and the test refuses it.
 
 The wrapper reads `/etc/clp-addons/smtp/<uid>.json`, root-owned and readable
 only by that site's group. It keeps the requested From when the template uses it
@@ -67,7 +75,7 @@ Postfix would refuse, so the mail still goes out under its login.
 When it cannot apply a rule (no rule file, an untrusted one, unknown flags, or a
 message it cannot parse), it passes the message to `/usr/sbin/sendmail` with the
 original arguments, and Postfix still enforces the envelope. The panel's own
-PHP-FPM reads the 8.1 conf.d and passes through this way. Laravel and Symfony
+PHP-FPM reads its version's conf.d and passes through this way. Laravel and Symfony
 sendmail transports run `sendmail -bs` themselves and never reach the wrapper.
 
 Other apps run sendmail themselves, often by name, as Nodemailer does. The
@@ -91,16 +99,35 @@ and a reload of each changed PHP version) and only then writes it. If any step
 fails, the previous policy is applied again. Disabling withdraws everything and
 keeps the policy; enabling applies it again.
 
+## The page
+
+Sites come first; from six sites, a search and filters for Not handled,
+Discarded and Blocked sit above them. Each site's Mail choice reads as what
+happens to its mail: Relay through a profile, Don't handle, or Discard (never
+delivered). Then come the profiles that have an SMTP server, with where
+new sites' mail goes in their header. Until a profile has one, a checklist
+shows the three steps to a relayed site, and a `dont-send` default is called
+out, since new sites' mail would be discarded. A site's extra sending domains
+show under its name, and its row opens the domains dialog and the test. Test is
+offered only for a site whose mail reaches a relay.
+
+The test sends with a unique Message-ID, then reads the mail log
+(`journalctl SYSLOG_FACILITY=2`) for up to eight seconds: the queue ID that
+`cleanup` logged for that Message-ID, then the first `status=` for it. It
+reports sent, deferred or bounced with the server's reason, or still queued.
+
 ## New sites
 
-`clp-addons-smtp-reconcile.path` watches `/etc/nginx/sites-enabled`, where
-CloudPanel writes every new site's vhost. Its service runs `sync-sites`, which
-does nothing unless CloudPanel's sites have changed since the last run; then it
-binds new site users, puts new sites in the default profile and drops deleted
-sites. CloudPanel commits the site row about 200 ms after writing the vhost, so
-the service runs it again 10 seconds later, even if the first run failed. Repair
-runs the full reconcile, which also undoes drift, every 15 minutes, and restarts
-the watcher if it has stopped.
+SMTP's `sync-sites` runs from the shared new-site watcher
+(see [Platform integration](platform.md#new-sites)), after DNS, or after
+fifteen seconds if DNS is still waiting. It does nothing
+unless CloudPanel's sites have changed since the last run; then it binds new
+site users, puts new sites in the default profile and drops deleted sites.
+Repair runs the full reconcile, which also undoes drift, every 15 minutes.
+
+Stager assigns each staging clone to `dont-send` through `assign` as soon as
+its site exists, which marks the site known, so the new-site pass leaves it
+there.
 
 ## Limits
 
@@ -108,5 +135,5 @@ The From rewrite covers PHP `mail()` only; a site that calls sendmail directly
 can put another domain in its From, and Postfix holds only its envelope. The
 provider is the boundary for From, so sites that do not trust each other need
 separate profiles rather than one account allowed to send as all of them. The
-test runs the site's PHP CLI `mail()`, or sendmail for other sites, and reports
-that Postfix queued the message, not the relay's answer.
+test runs the site's PHP CLI `mail()`, or sendmail for other sites; a relay that
+answers slower than the wait is reported as still queued.

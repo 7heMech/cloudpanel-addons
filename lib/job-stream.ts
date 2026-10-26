@@ -10,7 +10,6 @@
 // The addon supplies a reader and a watcher. Everything about the wire format
 // -- what counts as a change, when the stream closes, and the keepalive -- lives
 // here.
-import type { Server } from "bun";
 import { jsonResponse, policyHeaders, safeDecodePathSegment } from "./app-http";
 import { streamGatewayAction, type GatewayStream } from "./gateway-client";
 import { isTerminalJobState, validateJobId } from "./job-id";
@@ -98,7 +97,6 @@ export interface JobApiRoute<J extends JobProgress> {
   /** Path with the addon's mount prefix already stripped. */
   path: string;
   method: string;
-  server?: Server<unknown> | null;
   /** Also admit site managers when rechecking this addon's stream. */
   siteManager?: boolean;
   getJob: JobReader<J>;
@@ -133,7 +131,6 @@ export async function jobApiRoute<J extends JobProgress>(route: JobApiRoute<J>):
     return jobEventStream({
       id,
       req: route.req,
-      server: route.server ?? null,
       siteManager: route.siteManager,
       getJob: route.getJob,
       watchJob: route.watchJob,
@@ -184,26 +181,17 @@ export async function jobEventStream<J extends JobProgress>(options: {
   id: string;
   req: Request;
   getJob: JobReader<J>;
-  server?: Server<unknown> | null;
   watchJob?: JobWatcher<J>;
   recheckMs?: number;
   /** Defaults to administrator-only, as do addons without this opt-in. */
   siteManager?: boolean;
 }): Promise<Response> {
-  const { id, req, getJob, server, watchJob } = options;
+  const { id, req, getJob, watchJob } = options;
   const recheckMs = options.recheckMs ?? AUTH_RECHECK_MS;
 
   const initial = await getJob(id);
   if (!initial.ok || !initial.data) {
     return json({ ok: false, error: initial.error ?? "job not found" }, 404);
-  }
-
-  // Bun closes idle connections on its own schedule, and a job that is pulling
-  // an image says nothing for minutes at a time. Opt this one response out.
-  if (server && typeof server.timeout === "function") {
-    try {
-      server.timeout(req, 0);
-    } catch {}
   }
 
   const first = initial.data;

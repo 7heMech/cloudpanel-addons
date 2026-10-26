@@ -5,6 +5,11 @@
 .secret .kv dd { font-family: var(--mono); font-size: 14px; }
 .credential-fields { border-top: 1px solid var(--border); padding-top: 25px; margin-top: 25px; }
 .credential-fields h2 { margin: 0 0 20px; }
-.page-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-.page-actions > .btn { min-height: 50px; padding: 8px 30px; flex-shrink: 0; }
 .danger-note { border-left: 3px solid var(--bad); padding-left: 14px; }
+.state-deleted { color: var(--bad); border-color: currentColor; }
+.job-arrow { margin: 0; }
+.job-step { margin-top: 8px; }
+.job-step:empty { display: none; }
+.job-alert { margin: 12px 0 0; }
+.card-header .hint { margin: 6px 0 0; }
+.card-table > .fleet-filter:first-child { padding-top: 20px; }

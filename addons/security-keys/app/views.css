@@ -1,0 +1,79 @@
+.sk-setup { border-color: var(--primary); }
+.sk-setup h2 { margin: 0 0 4px; }
+.sk-checklist { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+.sk-checklist > li { display: flex; align-items: center; gap: 16px; padding: 16px 0; border-top: 1px solid var(--row-border); counter-increment: step; }
+.sk-checklist > li:first-child { border-top: 0; }
+.sk-checklist > li::before { content: counter(step); flex: 0 0 28px; height: 28px; border: 1px solid var(--button-border); border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; }
+.sk-checklist > li.done::before { content: "✓"; color: var(--ok); border-color: currentColor; }
+.sk-checklist > li > div { min-width: 0; }
+.sk-checklist strong { display: block; font-weight: 600; }
+
+.settings-card h3 { margin: 0 0 6px; font-size: 16px; }
+.settings-card p.hint { margin: 0; }
+.sk-setting + .sk-setting { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--row-border); }
+/* The roles are a pick-any list: a tile each, outlined while on. Its checkbox
+   stays for the keyboard and screen readers; only the tile shows the state. */
+.sk-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+.sk-tile { position: relative; display: block; margin: 0; padding: 14px 16px; border: 1px solid var(--button-border);
+  border-radius: 6px; background: var(--panel); cursor: pointer; transition: border-color .15s, background-color .15s; }
+.sk-tile:hover { border-color: var(--muted); }
+.sk-tile:has(input:checked) { border-color: var(--primary); background: rgb(38 125 221 / 4%); }
+html.dark .sk-tile:has(input:checked) { background: rgb(38 125 221 / 10%); }
+.sk-tile:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sk-tile input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+.sk-tile strong { display: block; font-weight: 600; }
+.sk-tile .hint, .sk-tile .sk-refused { display: block; margin-top: 2px; font-size: 13px; }
+.sk-switch-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 24px; }
+.sk-switch-row > .switch { grid-column: 2; grid-row: 1 / span 2; }
+
+.sk-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 18px 32px; }
+.sk-toolbar input { flex: 1 1 220px; max-width: 320px; }
+.sk-toolbar select { width: auto; }
+.sk-toolbar .hint { margin-left: auto; }
+.sk-table td { padding: 10px 32px; }
+/* Whitespace, not lines, between one user's keys and the next. */
+.sk-group-head th { padding: 26px 32px 4px; border-top: 0; background: none; color: var(--text);
+  font-size: 15px; font-weight: 400; letter-spacing: 0; text-transform: none; white-space: normal; }
+.sk-group-head .hint { margin-left: 6px; }
+.sk-group:first-of-type .sk-group-head th { padding-top: 18px; }
+.sk-group .sk-key:last-child td { padding-bottom: 14px; }
+.sk-refused { color: var(--bad); font-size: 13px; }
+.sk-group-head .sk-refused { margin-left: 6px; }
+.sk-key td { border-top: 0; }
+.sk-table td.sk-name { padding-left: 46px; }
+.sk-name > span { display: block; overflow-wrap: anywhere; }
+.sk-name > span[hidden] { display: none; }
+.sk-name > span:first-child { font-weight: 500; }
+.sk-name .hint, .sk-name .sk-refused { font-size: 13px; }
+.sk-table time { white-space: nowrap; }
+.is-stale .sk-used { color: var(--warn); }
+.sk-table .action-cell { text-align: right; }
+.sk-table .action-cell .btn { padding: 5px 10px; }
+
+@media (max-width: 760px) {
+  /* A tile is a row, its keys at the end; the switch sits beside its title, with the wording below both. */
+  .sk-tiles { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .sk-tile { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; padding: 12px 14px; }
+  .sk-tile .hint, .sk-tile .sk-refused { margin: 0; }
+  .sk-switch-row { row-gap: 10px; }
+  .sk-switch-row > h3 { margin: 0; }
+  .sk-switch-row > .switch { grid-row: 1; }
+  .sk-switch-row > .hint { grid-column: 1 / -1; }
+  .sk-checklist > li { align-items: flex-start; gap: 14px; }
+  .sk-toolbar { padding: 16px; }
+  .sk-toolbar input { max-width: none; }
+  .sk-toolbar .hint { flex-basis: 100%; margin-left: 0; }
+  .sk-table thead { display: none; }
+  .sk-table, .sk-table tbody, .sk-table tr { display: block; }
+  .sk-group-head th { display: block; padding: 16px 16px 4px; }
+  /* A key's details stack, with Remove centred beside them. */
+  .sk-table tr.sk-key { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding: 10px 16px 10px 28px; }
+  .sk-table td { display: block; padding: 0; border: 0; }
+  .sk-table td.sk-name { display: contents; }
+  .sk-name > span, .sk-table td.sk-used { grid-column: 1; }
+  .sk-name > span + span, .sk-table td.sk-used { margin-top: 2px; }
+  .sk-table td.sk-added { display: none; }
+  .sk-table td.sk-used { font-size: 13px; }
+  .sk-table td.action-cell { grid-column: 2; grid-row: 1 / span 4; align-self: center; }
+}

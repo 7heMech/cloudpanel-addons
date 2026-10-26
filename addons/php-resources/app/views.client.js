@@ -15,19 +15,22 @@ function readProfile() {
   const root = CLP_ROOT.getElementById('category-profile');
   if (!root) return null;
   const profile = {};
-  let bad = '';
+  let bad = null;
   root.querySelectorAll('[data-field]').forEach(function (input) {
     const key = input.dataset.field;
     if (key === 'pm') { profile.pm = input.value; return; }
     const raw = input.value.trim();
     if (!/^[0-9]+$/.test(raw)) {
-      if (!bad) bad = (CLP_ROOT.querySelector('label[for="' + input.id + '"]') || {}).textContent || key;
+      if (!bad) bad = input;
       return;
     }
     profile[key] = Number(raw);
   });
   if (bad) {
-    notify(bad + ' must be a whole number.', 'error');
+    const more = CLP_ROOT.getElementById('category-more');
+    if (more && more.contains(bad)) more.open = true;
+    if (bad.focus) bad.focus();
+    notify(((CLP_ROOT.querySelector('label[for="' + bad.id + '"]') || {}).textContent || bad.dataset.field) + ' must be a whole number.', 'error');
     return null;
   }
   return profile;
@@ -42,10 +45,10 @@ function writeProfile(profile) {
   paintProfileModes();
 }
 
-// A change here rewrites pool files, renames rows and moves counts between
-// categories, so the page is drawn again by the server rather than patched in
-// nine places. The message survives the reload, so what happened is still said.
-const FLASH_KEY = 'clp-php-resources-flash';
+function paintResources(html) {
+  repaintView(CLP_ROOT.getElementById('clp-content'), html);
+  busy(false);
+}
 
 /** What to say when a change landed on some sites and not on others. */
 function withFailures(message, failures) {
@@ -66,10 +69,13 @@ async function send(path, body, done) {
       body: JSON.stringify(body),
     });
     const flash = withFailures(done, (reply.data || {}).failures);
-    reloadWithFlash(FLASH_KEY, flash.message, flash.kind);
+    paintResources(reply.html);
+    notify(flash.message, flash.kind);
+    return true;
   } catch (error) {
     notify(error.message, 'error');
     busy(false);
+    return false;
   }
 }
 
@@ -85,17 +91,8 @@ function openCategoryDialog(button) {
   CLP_ROOT.getElementById('category-name').value = category ? category.name : '';
   CLP_ROOT.getElementById('category-description').value = category ? category.description : '';
   writeProfile(category ? category.profile : JSON.parse(dialog.dataset.defaultProfile));
+  CLP_ROOT.getElementById('category-more').open = false;
   dialog.showModal();
-}
-
-/** Dismiss the modal only when the press landed on the native dialog backdrop. */
-function closeCategoryDialogOnBackdrop(event) {
-  const dialog = event.currentTarget;
-  if (event.target !== dialog) return;
-  const rect = dialog.getBoundingClientRect();
-  const inside = event.clientX >= rect.left && event.clientX <= rect.right &&
-    event.clientY >= rect.top && event.clientY <= rect.bottom;
-  if (!inside) dialog.close();
 }
 
 async function saveCategory() {
@@ -140,35 +137,16 @@ async function deleteCategory(button) {
 async function setDefaultCategory(select) {
   const id = select.value || null;
   const label = select.options[select.selectedIndex].textContent;
-  await send('/api/default', { categoryId: id }, id
+  const saved = await send('/api/default', { categoryId: id }, id
     ? 'New sites will join ' + label + '. Sites that already exist are unchanged.'
     : 'New sites will keep the CloudPanel limits. Sites that already exist are unchanged.');
+  if (!saved) {
+    const previous = Array.from(select.options).find(function (option) { return option.defaultSelected; });
+    select.value = previous ? previous.value : '';
+  }
 }
 
 // --- sites ----------------------------------------------------------------
-
-function paintSelection() {
-  const rows = siteRows();
-  rows.forEach(function (row) {
-    const box = row.querySelector('.site-checkbox');
-    row.setAttribute('aria-selected', String(Boolean(box && box.checked)));
-  });
-  const chosen = selectedRows();
-  const note = CLP_ROOT.getElementById('site-selection');
-  if (note) note.textContent = chosen.length === 0 ? 'No sites selected' : chosen.length + ' of ' + rows.length + ' selected';
-  const apply = CLP_ROOT.getElementById('assign-selected');
-  if (apply) apply.disabled = chosen.length === 0;
-  const all = CLP_ROOT.getElementById('select-all');
-  if (all) {
-    all.checked = rows.length > 0 && chosen.length === rows.length;
-    all.indeterminate = chosen.length > 0 && chosen.length < rows.length;
-  }
-  const allBtn = CLP_ROOT.getElementById('select-all-btn');
-  if (allBtn) {
-    allBtn.disabled = rows.length === 0;
-    allBtn.textContent = rows.length > 0 && chosen.length === rows.length ? 'Deselect all' : 'Select all';
-  }
-}
 
 function categoryLabel(id) {
   const picker = CLP_ROOT.getElementById('bulk-category');
@@ -182,9 +160,10 @@ function categoryLabel(id) {
 async function assignRow(select) {
   const row = select.closest('tr[data-domain]');
   const id = select.value || null;
-  await send('/api/assign', { domains: [row.dataset.domain], categoryId: id }, id
+  const saved = await send('/api/assign', { domains: [row.dataset.domain], categoryId: id }, id
     ? row.dataset.domain + ' is now in ' + categoryLabel(id) + '.'
     : row.dataset.domain + ' is back on the CloudPanel limits.');
+  if (!saved) select.value = row.dataset.categoryId || '';
 }
 
 async function assignSelected() {
@@ -243,6 +222,7 @@ async function repairDrifted() {
   busy(true);
   const failures = [];
   let repaired = 0;
+  let html = null;
   for (const entry of groups) {
     try {
       const reply = await call('/api/assign', {
@@ -250,6 +230,7 @@ async function repairDrifted() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ domains: entry[1], categoryId: entry[0] }),
       });
+      html = reply.html;
       const written = (reply.data || {}).failures || [];
       written.forEach(function (failure) { failures.push(failure); });
       repaired += entry[1].length - written.length;
@@ -258,12 +239,13 @@ async function repairDrifted() {
     }
   }
   const flash = withFailures(plural(repaired, 'site') + ' are back on the limits of their category.', failures);
-  reloadWithFlash(FLASH_KEY, flash.message, flash.kind);
+  if (html !== null) paintResources(html);
+  busy(false);
+  notify(flash.message, flash.kind);
 }
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', function () { showCarriedFlash(FLASH_KEY); paintSelection(); });
+  document.addEventListener('DOMContentLoaded', paintFleetSelection);
 } else {
-  showCarriedFlash(FLASH_KEY);
-  paintSelection();
+  paintFleetSelection();
 }

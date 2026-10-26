@@ -1,16 +1,14 @@
 
-let currentLogDomain = '';
-let currentLogPort = '';
-let currentLogMode = 'container';
-
 async function act(domain, verb) {
   busy(true);
   try {
-    await call('/api/instances/' + encodeURIComponent(domain) + '/' + verb, { method: 'POST' });
-    location.reload();
+    const reply = await call('/api/instances/' + encodeURIComponent(domain) + '/' + verb, { method: 'POST' });
+    if (reply.html) repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+    notify(domain + ': ' + verb + ' completed.', 'ok');
   } catch (e) {
+    notify(verb + ' failed: ' + e.message, 'error');
+  } finally {
     busy(false);
-    alert(verb + ' failed: ' + e.message);
   }
 }
 
@@ -27,60 +25,42 @@ async function takeSnapshot(domain) {
     document.getElementById('snapshot-dialog').showModal();
   } catch (e) {
     busy(false);
-    alert('Snapshot failed: ' + e.message);
+    notify('Snapshot failed: ' + e.message, 'error');
   }
 }
 
-async function fetchLogContent() {
+async function showLogs(domain, port) {
+  document.getElementById('logs-title').textContent = 'Logs \u2014 ' + domain;
+  document.getElementById('logs-port-info').textContent = port
+    ? 'Container listens on internal port 3001, mapped from host 127.0.0.1:' + port + ' for CloudPanel reverse proxy.'
+    : '';
   const pre = document.getElementById('logs-body');
   pre.textContent = 'Loading\u2026';
+  document.getElementById('logs-dialog').showModal();
   try {
-    if (currentLogMode === 'creation') {
-      const body = await call('/api/instances/' + encodeURIComponent(currentLogDomain) + '/creation-log');
-      pre.textContent = (body && body.data && body.data.log) || '(no creation log recorded)';
-    } else {
-      const body = await call('/api/instances/' + encodeURIComponent(currentLogDomain) + '/logs');
-      pre.textContent = (body && body.data && body.data.logs) || '(no output)';
-    }
+    const body = await call('/api/instances/' + encodeURIComponent(domain) + '/logs');
+    pre.textContent = (body && body.data && body.data.logs) || '(no output)';
   } catch (e) {
     pre.textContent = 'Could not fetch logs: ' + e.message;
   }
 }
 
-function switchLogs(mode) {
-  currentLogMode = mode;
-  const btnC = document.getElementById('btn-container-logs');
-  const btnCr = document.getElementById('btn-creation-logs');
-  if (btnC && btnCr) {
-    if (mode === 'creation') {
-      btnCr.classList.add('btn-primary');
-      btnC.classList.remove('btn-primary');
-    } else {
-      btnC.classList.add('btn-primary');
-      btnCr.classList.remove('btn-primary');
-    }
-  }
-  fetchLogContent();
+async function askStop(domain) {
+  const agreed = await confirmAction({
+    title: 'Stop ' + domain + '?',
+    text: domain + ' is offline until it is started again.',
+    confirmLabel: 'Stop',
+    danger: true,
+  });
+  if (agreed) act(domain, 'stop');
 }
 
-async function showLogs(domain, port) {
-  currentLogDomain = domain;
-  currentLogPort = port;
-  currentLogMode = 'container';
-  const dlg = document.getElementById('logs-dialog');
-  const portInfo = document.getElementById('logs-port-info');
-  document.getElementById('logs-title').textContent = 'Logs \u2014 ' + domain;
-  if (portInfo) {
-    portInfo.textContent = port ? 'Container listens on internal port 3001, mapped from host 127.0.0.1:' + port + ' for CloudPanel reverse proxy.' : '';
-  }
-  const btnC = document.getElementById('btn-container-logs');
-  const btnCr = document.getElementById('btn-creation-logs');
-  if (btnC && btnCr) {
-    btnC.classList.add('btn-primary');
-    btnCr.classList.remove('btn-primary');
-  }
-  dlg.showModal();
-  fetchLogContent();
+/** True when version a is newer than b; both are x.y.z. */
+function versionNewer(a, b) {
+  const x = a.split('.').map(Number);
+  const y = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+  return false;
 }
 
 let pendingUpdate = null;
@@ -89,76 +69,123 @@ function askUpdate(domain, current) {
   document.getElementById('update-domain').textContent = domain;
   document.getElementById('update-current').textContent = current;
 
-  // The version to update to is picked from the list the registry actually
-  // reports, not typed from memory. Typing it meant knowing a release had
-  // happened, and nothing on this page ever said so.
+  // Only versions newer than the one running: an update never goes back.
   const sel = document.getElementById('update-tag');
   let chosen = '';
   for (let i = 0; i < sel.options.length; i++) {
     const opt = sel.options[i];
-    const isCurrent = opt.value === current;
-    opt.disabled = isCurrent;
-    opt.textContent = opt.dataset.label + (isCurrent ? ' (running now)' : '');
-    if (!isCurrent && !chosen) chosen = opt.value;
+    const newer = versionNewer(opt.value, current);
+    opt.hidden = !newer;
+    opt.disabled = !newer;
+    if (newer && !chosen) chosen = opt.value;
   }
-  // Options are newest first, so the first enabled one is the newest on offer.
-  sel.value = chosen || current;
+  // Options are newest first, so the first one left is the newest on offer.
+  if (!chosen) { notify(domain + ' already runs the newest version.', 'ok'); return; }
+  sel.value = chosen;
   document.getElementById('update-dialog').showModal();
 }
 
 async function confirmUpdate() {
   const tag = document.getElementById('update-tag').value.trim();
-  if (!/^\d+\.\d+\.\d+$/.test(tag)) { alert('Enter an exact version, for example 0.0.18'); return; }
+  if (!/^\d+\.\d+\.\d+$/.test(tag)) { notify('Choose a version to update to.', 'error'); return; }
   document.getElementById('update-dialog').close();
   busy(true);
-  let res = null;
-  let body = null;
   try {
-    res = await fetch(CLP_BASE + '/api/instances/' + encodeURIComponent(pendingUpdate) + '/update', {
+    const reply = await call('/api/instances/' + encodeURIComponent(pendingUpdate) + '/update', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-CLP-Addons-CSRF': csrf() },
-      body: JSON.stringify({ tag: tag })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag: tag }),
     });
-  } catch (error) {
-    // The dialog is already closed, so a request that never reached the server
-    // would otherwise leave the page disabled with nothing said.
+    // The update runs as a job; its page streams the log as it goes.
+    if (reply.data && reply.data.job) {
+      location.href = CLP_BASE + '/jobs/' + encodeURIComponent(reply.data.job);
+      return;
+    }
+    if (reply.html) repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
     busy(false);
-    notify(error.message || 'the update request did not reach the server', 'error');
-    return;
+  } catch (error) {
+    busy(false);
+    notify('Update failed: ' + error.message, 'error');
   }
-  try { body = await res.json(); } catch (e) {}
-  if (res.ok && body && body.ok !== false) { location.reload(); return; }
-
-  busy(false);
-  // A rolled-back update is the case where the container logs are the whole
-  // story, so show them rather than just the failure line.
-  const logs = body && body.data && body.data.logs;
-  document.getElementById('logs-title').textContent =
-    'Update failed \u2014 rolled back to ' + ((body && body.data && body.data.restoredTag) || 'the previous version');
-  document.getElementById('logs-body').textContent =
-    ((body && body.error) || 'update failed') + (logs ? '\n\n--- container logs ---\n' + logs : '');
-  document.getElementById('logs-dialog').showModal();
 }
 
-let pendingDelete = null;
-function askDelete(domain) {
-  pendingDelete = domain;
-  document.getElementById('delete-domain').textContent = domain;
-  document.getElementById('delete-confirm').value = '';
-  document.getElementById('delete-dialog').showModal();
-}
-
-async function confirmDelete() {
-  const typed = document.getElementById('delete-confirm').value.trim();
-  if (typed !== pendingDelete) { alert('Type the domain exactly to confirm.'); return; }
-  document.getElementById('delete-dialog').close();
+/** Updates or restarts the selected sites; each update is a job of its own, shown on its row. */
+async function bulkInstatic(verb, tag) {
+  let rows = selectedRows();
+  if (verb === 'update') rows = rows.filter(function (row) { return versionNewer(tag, row.dataset.tag); });
+  if (!rows.length) return notify('The selected sites already run ' + tag + '.', 'ok');
+  const domains = rows.map(function (row) { return row.dataset.domain; });
+  const accepted = await confirmAction({
+    title: (verb === 'update' ? 'Update ' : 'Restart ') + plural(domains.length, 'site') + '?',
+    text: verb === 'update'
+      ? 'Each site is snapshotted, moved to ' + tag + ' and checked; one that fails its check goes back to its previous version.'
+      : 'Each site is unavailable for a few seconds while its container restarts.',
+    details: domains,
+    confirmLabel: verb === 'update' ? 'Update' : 'Restart',
+  });
+  if (!accepted) return;
   busy(true);
   try {
-    await call('/api/instances/' + encodeURIComponent(pendingDelete) + '/delete', { method: 'POST' });
-    location.href = CLP_BASE + '/';
-  } catch (e) {
+    const reply = await call('/api/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verb: verb, domains: domains, tag: tag }),
+    });
+    if (reply.html) repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+    const failed = (reply.data && reply.data.failed) || [];
+    const done = (reply.data && reply.data.done) || [];
+    if (failed.length) {
+      notify(failed.map(function (entry) { return entry.domain + ': ' + entry.error; }).join('; '), 'error');
+    } else {
+      notify(verb === 'update' ? 'Updating ' + plural(done.length, 'site') + '; each row shows its progress.' : plural(done.length, 'site') + ' restarted.', 'ok');
+    }
+    watchDashboard();
+  } catch (error) {
+    notify(error.message, 'error');
+  } finally {
     busy(false);
-    alert('Delete failed: ' + e.message);
+  }
+}
+
+/** While a job runs, the list is fetched again every few seconds so each row shows where it is. */
+let dashboardTimer = null;
+function watchDashboard() {
+  clearTimeout(dashboardTimer);
+  const card = CLP_ROOT.getElementById('instatic-sites');
+  if (!card || !card.hasAttribute('data-working')) return;
+  dashboardTimer = setTimeout(async function () {
+    try {
+      const reply = await call('/api/dashboard');
+      if (reply.html && !CLP_ROOT.querySelector('dialog[open]')) {
+        repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+        paintFleetSelection();
+      }
+    } catch (error) {
+      // The next look tries again.
+    }
+    watchDashboard();
+  }, 4000);
+}
+
+async function askDelete(domain) {
+  const agreed = await confirmAction({
+    title: 'Delete ' + domain + '?',
+    text: 'This removes the container and the instance data, and the CloudPanel site if this addon created it. '
+      + 'A final archive is written to /var/backups/clp-addons/instatic first.',
+    typed: domain,
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!agreed) return;
+  busy(true);
+  try {
+    const reply = await call('/api/instances/' + encodeURIComponent(domain) + '/delete', { method: 'POST' });
+    if (reply.html) repaintView(CLP_ROOT.getElementById('clp-content'), reply.html);
+    notify(domain + ' deleted.', 'ok');
+  } catch (e) {
+    notify('Delete failed: ' + e.message, 'error');
+  } finally {
+    busy(false);
   }
 }
 
@@ -181,7 +208,7 @@ async function submitCreate(ev) {
     }
   } catch (e) {
     busy(false);
-    alert('Create failed: ' + e.message);
+    notify('Create failed: ' + e.message, 'error');
   }
   return false;
 }
@@ -190,6 +217,10 @@ function initInstatic() {
   const watch = document.getElementById('job-watch');
   if (watch && watch.dataset.job) {
     watchJob(watch.dataset.job);
+  }
+  if (CLP_ROOT.getElementById('instatic-sites')) {
+    paintFleetSelection();
+    watchDashboard();
   }
 }
 

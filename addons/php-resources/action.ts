@@ -289,10 +289,6 @@ export function parseProfile(value: unknown): PoolProfile {
   return profile;
 }
 
-export function profilesEqual(a: PoolProfile, b: PoolProfile): boolean {
-  return (Object.keys(FIELD_LABELS) as (keyof PoolProfile)[]).every((key) => a[key] === b[key]);
-}
-
 // ---------------------------------------------------------------------------
 // Categories
 // ---------------------------------------------------------------------------
@@ -412,6 +408,16 @@ export function poolDirectives(profile: PoolProfile): Map<string, string> {
   out.set("request_terminate_timeout", `${profile.requestTerminateTimeout}s`);
   out.set("rlimit_files", String(profile.rlimitFiles));
   return out;
+}
+
+/**
+ * Whether two profiles write the same pool. A category keeps the spare-server
+ * numbers it has under `ondemand`, which never reach the file.
+ */
+export function sameDirectives(a: PoolProfile, b: PoolProfile): boolean {
+  const left = poolDirectives(a);
+  const right = poolDirectives(b);
+  return left.size === right.size && [...left].every(([key, value]) => right.get(key) === value);
 }
 
 /**
@@ -783,7 +789,7 @@ function stateFor(paths: PhpResourcesActionPaths, site: SiteRow, policy: Policy)
     current,
     categoryId: category?.id ?? null,
     categoryName: category?.name ?? null,
-    drifted: category !== null && !profilesEqual(category.profile, current),
+    drifted: category !== null && !sameDirectives(category.profile, current),
   };
 }
 
@@ -970,6 +976,7 @@ export async function reconcilePhpResources(
 ): Promise<ReconcileResult> {
   return withPolicyLock(paths, async () => {
     const policy = readPolicy(paths.policyFile, paths.rootUid);
+    const before = structuredClone(policy);
     if (policy.defaultCategoryId === null && Object.keys(policy.assignments).length === 0) {
       return { discovered: 0, applied: 0, repaired: 0 };
     }
@@ -995,8 +1002,10 @@ export async function reconcilePhpResources(
 
     const outcome = applyMany(paths, entries, command);
     let applied = 0;
+    const retry = new Set<number>();
     for (const site of joining) {
-      if (outcome.failed.has(site.domain)) continue;
+      // Left unknown, so the next pass tries the site again.
+      if (outcome.failed.has(site.domain)) { retry.add(site.id); continue; }
       policy.assignments[site.domain] = policy.defaultCategoryId!;
       applied++;
     }
@@ -1008,8 +1017,10 @@ export async function reconcilePhpResources(
     for (const domain of Object.keys(policy.assignments)) {
       if (!live.has(domain)) delete policy.assignments[domain];
     }
-    policy.knownSiteIds = sites.map((site) => site.id);
-    writePolicy(paths.policyFile, policy, paths.rootUid);
+    policy.knownSiteIds = sites.filter((site) => !retry.has(site.id)).map((site) => site.id);
+    if (JSON.stringify(stablePolicy(policy)) !== JSON.stringify(stablePolicy(before))) {
+      writePolicy(paths.policyFile, policy, paths.rootUid);
+    }
 
     if (outcome.failed.size) failAction(`some sites could not be updated: ${failureLines(outcome).join("; ")}`);
     return { discovered: discovered.length, applied, repaired };

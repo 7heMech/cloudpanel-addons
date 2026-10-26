@@ -14,15 +14,18 @@ import type { Server } from "bun";
 import { CONFIG_DIR, STATE_DIR, TEMPLATES_DIR } from "./paths";
 import type { AddonTarget } from "../lib/addon-target";
 import { CLOUDFLARE_IPS_ADDON } from "../addons/cloudflare-ips/addon";
+import { DNS_ADDON } from "../addons/dns/addon";
 import { GIT_ADDON } from "../addons/git/addon";
 import { INSTATIC_ADDON } from "../addons/instatic/addon";
 import { MAINTENANCE_ADDON } from "../addons/maintenance/addon";
 import { PANEL_TWEAKS_ADDON } from "../addons/panel-tweaks/addon";
-import { WP_LOGIN_ADDON } from "../addons/wp-login/addon";
+import { SYSTEM_TWEAKS_ADDON } from "../addons/system-tweaks/addon";
+import { WP_TOOLS_ADDON } from "../addons/wp-tools/addon";
 import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
 import { STAGER_ADDON } from "../addons/stager/addon";
 import { SMTP_ADDON } from "../addons/smtp/addon";
 import { TERMINAL_ADDON } from "../addons/terminal/addon";
+import { SECURITY_KEYS_ADDON } from "../addons/security-keys/addon";
 
 export type { AddonTarget };
 
@@ -50,6 +53,12 @@ export interface AddonDefinition {
   description: string;
   /** systemd units this addon cannot work without, such as `docker`. */
   requiresUnits?: string[];
+  /** The release line it first shipped in, such as `2.0`; the Addons page marks it New there. */
+  added?: string;
+  /** What changed in a release line, shown as Changed on the Addons page while that line is installed. */
+  changed?: { in: string; note: string };
+  /** Ticked when the installer asks which addons to install. */
+  preselected?: boolean;
   targets: AddonTarget[];
   /** The manager routes this addon mounts, if it has any. */
   handler?: AddonHandler;
@@ -71,6 +80,8 @@ export interface AddonDefinition {
    */
   siteManager?: boolean;
   maintenance?: AddonMaintenance;
+  /** Work for sites CloudPanel has just created, run seconds after it writes their vhost. */
+  newSites?: AddonMaintenance;
 }
 
 /**
@@ -83,18 +94,24 @@ export interface AddonSpec extends AddonDefinition {
   stateDir: string;
 }
 
-/** Order is the order addons are listed and installed; keep it deliberate. */
+/**
+ * Order is the order addons are listed and installed, and the order their
+ * new-site work runs in: DNS before SMTP Relay. Keep it deliberate.
+ */
 const DEFINITIONS: AddonDefinition[] = [
   CLOUDFLARE_IPS_ADDON,
+  DNS_ADDON,
   INSTATIC_ADDON,
   STAGER_ADDON,
   MAINTENANCE_ADDON,
   PHP_RESOURCES_ADDON,
   GIT_ADDON,
   PANEL_TWEAKS_ADDON,
-  WP_LOGIN_ADDON,
+  SYSTEM_TWEAKS_ADDON,
+  WP_TOOLS_ADDON,
   SMTP_ADDON,
   TERMINAL_ADDON,
+  SECURITY_KEYS_ADDON,
 ];
 
 function specOf(definition: AddonDefinition): AddonSpec {
@@ -123,6 +140,11 @@ export function templateWatchPaths(): string[] {
     for (const target of spec.targets) paths.add(`${TEMPLATES_DIR}/${target.template}`);
   }
   return [...paths].sort();
+}
+
+/** The installed addons with work for new sites, in catalog order. */
+export function addonNewSites(installed: AddonSpec[]): AddonSpec[] {
+  return installed.filter((spec) => spec.newSites !== undefined);
 }
 
 /** The installed addons that want upkeep during repair, in catalog order. */

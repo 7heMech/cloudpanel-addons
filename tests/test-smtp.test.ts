@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { closedRelay, executeSmtpAction, type SmtpActionOptions, type SmtpSiteRow, type SmtpState, type SmtpTestResult } from "../addons/smtp/action";
 import { envelopeGrants, siteName, submissionRule, type SmtpRewriteRule } from "../addons/smtp/config";
 import { MAX_MESSAGE_BYTES, prepareSubmission, readBoundedSubmission, runSmtpSubmit } from "../addons/smtp/submit";
-import { dashboardContent } from "../addons/smtp/app/views";
+import { CLIENT as SMTP_CLIENT, dashboardContent } from "../addons/smtp/app/views";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -206,6 +206,7 @@ function box(sites: SmtpSiteRow[]): Box {
     },
     sites,
     run,
+    deliveryWaitMs: 0,
   };
   return { options, settings, commands, dir, postfixDir, phpRoot, ruleDir, fpmBinDir, sendmailLink };
 }
@@ -268,7 +269,8 @@ test("routing a site binds every login, relays by sender, closes loopback, and i
   const html = dashboardContent(await act(b, "list") as SmtpState);
   expect(html).not.toContain("pa$1ss");
   expect(html).toContain("Node.js");
-  expect(html).toContain('<option value="-">Not relayed</option>');
+  expect(html).toContain('<option value="-">Don&#x27;t handle</option>');
+  expect(html).toContain('<option value="dont-send">Discard (never delivered)</option>');
 
   // A settled box reads Postfix once and writes nothing; the new-site watcher does not even read it.
   b.commands.length = 0;
@@ -355,7 +357,7 @@ test("a site created onto another profile's domain is blocked, and nothing else 
     .toMatchObject({ profileId: null, sender: null, blocked: "www.example.com sends as news.test through Postmark" });
   const html = dashboardContent(await act(b, "list") as SmtpState);
   expect(html).toContain("Blocked: www.example.com sends as news.test through Postmark");
-  expect(html).toContain('<td data-label="Also sends as" class="wide-cell">news.test</td>');
+  expect(html).toContain("example · PHP 8.2 · also sends as news.test");
   expect(file(b, "local-senders")).toContain("\nnews news\n");
   expect(JSON.parse(readFileSync(join(b.ruleDir, "2004.json"), "utf8"))).toEqual({ version: 1, site: "news.test", sender: null, allowed: [] });
 
@@ -442,7 +444,7 @@ test("the test mail goes through the site's own path and reports what the rewrit
   await expect(act(b, "test", { domain: "shop.test", recipient: "me@inbox.test" })).rejects.toThrow("in no profile");
   const result = await act(b, "test", { domain: "www.example.com", recipient: "me@inbox.test", from: "orders@example.com" }) as SmtpTestResult;
   expect(result).toEqual({ queued: true, discarded: true, requested: "orders@example.com", sender: "noreply@example.com",
-    replyTo: "orders@example.com", recipient: "me@inbox.test" });
+    replyTo: "orders@example.com", recipient: "me@inbox.test", delivery: null });
   expect(file(b, "transports")).toBe("/^noreply@example\\.com$/ discard:\n/@example\\.com$/ discard:\n/@www\\.example\\.com$/ discard:\n");
   const html = dashboardContent(await act(b, "list") as SmtpState);
   expect(html).toContain('<span class="hint">Discarded</span>');
@@ -466,7 +468,7 @@ test("the test mail runs PHP's own mail(), and is refused for a pool that bypass
   const args = readFileSync(join(b.dir, "runuser-args"), "utf8");
   expect(args.startsWith("-u\nexample\n--\n/usr/bin/php8.2\n-r\n")).toBe(true);
   expect(args).toContain("\n--\nme@inbox.test\nCloudPanel SMTP relay test for www.example.com\n");
-  expect(args.trim().endsWith("\nwordpress@example.com")).toBe(true);
+  expect(args).toContain("\nwordpress@example.com\nclp-addons-test.");
 
   mkdirSync(join(b.phpRoot, "8.2/fpm/pool.d"));
   writeFileSync(join(b.phpRoot, "8.2/fpm/pool.d/www.example.com.conf"), "[example]\nphp_admin_value[sendmail_path] = /usr/sbin/sendmail -t -i\n");
@@ -485,4 +487,140 @@ test("deactivate withdraws everything even when the saved policy is unreadable",
   expect(b.settings.get("smtp_tls_policy_maps")).toBe("hash:/etc/postfix/operator-tls");
   expect(existsSync(join(b.phpRoot, "8.2/cli/conf.d/99-clp-addons-smtp.ini"))).toBe(false);
   expect(readdirSync(join(b.dir, "bin"))).toEqual([]);
+});
+
+test("a test reports what Postfix's first delivery attempt did", async () => {
+  const b = box(SITES);
+  await act(b, "save-profile", POSTMARK);
+  await act(b, "assign", { domains: ["app.test"], profileId: "postmark" });
+  let journal = (_id: string) => "";
+  const run = b.options.run!;
+  b.options.run = (command, args) => {
+    if (command !== "journalctl") return run(command, args);
+    const sent = readFileSync(join(b.dir, "sendmail-stdin"), "utf8");
+    return { ok: true, stdout: journal(sent.match(/^Message-ID: <(.+)>$/m)![1]!), stderr: "" };
+  };
+  const sendmail = join(b.dir, "runuser");
+  writeFileSync(sendmail, `#!/bin/sh\ncat > "${b.dir}/sendmail-stdin"\n`);
+  chmodSync(sendmail, 0o755);
+  b.options.paths!.runuser = sendmail;
+  b.options.deliveryWaitMs = 600;
+
+  journal = (id) => [
+    `Oct 25 06:00:01 cp postfix/pickup[11]: 9C1F2A0412: uid=2003 from=<app>`,
+    `Oct 25 06:00:01 cp postfix/cleanup[12]: 9C1F2A0412: message-id=<${id}>`,
+    `Oct 25 06:00:01 cp postfix/cleanup[12]: 1111111111: message-id=<someone-else@app.test>`,
+    `Oct 25 06:00:02 cp postfix/smtp[13]: 1111111111: to=<x@y.test>, relay=none, delay=1, status=sent (250 OK)`,
+    `Oct 25 06:00:02 cp postfix/smtp[13]: 9C1F2A0412: to=<me@inbox.test>, relay=smtp.postmarkapp.com[1.2.3.4]:587, delay=1.2, dsn=4.7.0, status=deferred (SASL authentication failed; server said: 535 bad credentials)`,
+  ].join("\n");
+  expect((await act(b, "test", { domain: "app.test", recipient: "me@inbox.test" }) as SmtpTestResult).delivery)
+    .toEqual({ state: "deferred", detail: "SASL authentication failed; server said: 535 bad credentials" });
+
+  journal = (id) => `Oct 25 06:00:01 cp postfix/cleanup[12]: 9C1F2A0413: message-id=<${id}>\n` +
+    "Oct 25 06:00:02 cp postfix/smtp[13]: 9C1F2A0413: to=<me@inbox.test>, relay=smtp.postmarkapp.com[1.2.3.4]:587, status=sent (250 2.0.0 OK: queued)";
+  expect((await act(b, "test", { domain: "app.test", recipient: "me@inbox.test" }) as SmtpTestResult).delivery)
+    .toEqual({ state: "sent", detail: "250 2.0.0 OK: queued" });
+
+  journal = (id) => `Oct 25 06:00:01 cp postfix/cleanup[12]: 9C1F2A0414: message-id=<${id}>`;
+  expect((await act(b, "test", { domain: "app.test", recipient: "me@inbox.test" }) as SmtpTestResult).delivery)
+    .toEqual({ state: "queued", detail: "" });
+});
+
+test("a site whose pool sets its own sendmail_path is flagged, and only relayed sites offer a test", async () => {
+  const b = box(SITES);
+  await act(b, "save-profile", POSTMARK);
+  await act(b, "assign", { domains: ["www.example.com", "shop.test"], profileId: "postmark" });
+  await act(b, "assign", { domains: ["app.test"], profileId: "dont-send" });
+  mkdirSync(join(b.phpRoot, "8.2/fpm/pool.d"));
+  writeFileSync(join(b.phpRoot, "8.2/fpm/pool.d/www.example.com.conf"), "[example]\nphp_admin_value[sendmail_path] = /usr/sbin/sendmail -t -i\n");
+  const state = await act(b, "list") as SmtpState;
+  expect(state.sites.map((site) => [site.domain, site.bypass])).toEqual([["www.example.com", true], ["shop.test", false], ["app.test", false]]);
+  const html = dashboardContent(state);
+  expect(html).toContain("Bypassed: its PHP-FPM pool sets its own sendmail_path");
+  const tests = [...html.matchAll(/onclick="smtpOpenTest\('([^']+)'\)"( disabled)?/g)].map((match) => [match[1], Boolean(match[2])]);
+  expect(tests).toEqual([["www.example.com", true], ["shop.test", false], ["app.test", true]]);
+});
+
+test("Don't send is the one discard choice: built in, and not a profile to edit", async () => {
+  const b = box(SITES);
+  await expect(act(b, "save-profile", { name: "Staging", relay: null })).rejects.toThrow("needs an SMTP server");
+  await expect(act(b, "save-profile", { ...POSTMARK, id: "dont-send" })).rejects.toThrow("built in");
+  await expect(act(b, "delete-profile", { id: "dont-send" })).rejects.toThrow("built in");
+  await act(b, "save-profile", POSTMARK);
+  await act(b, "set-default", { profileId: "dont-send" });
+  const html = dashboardContent(await act(b, "list") as SmtpState);
+  expect(html).toContain("their mail is never delivered");
+  // The Profiles table lists only profiles with an SMTP server.
+  expect(html).not.toContain('<tr data-profile="dont-send">');
+  expect(html).toContain('<tr data-profile="postmark">');
+  expect(html).not.toContain("Set up SMTP Relay");
+});
+
+test("1.5.x discard profiles fold into Don't send, and its sites keep being discarded", async () => {
+  const b = box(SITES);
+  // As 1.5.2 wrote it: the seeded Don't send, a discard profile of the operator's own, and a relay.
+  const legacy = {
+    version: 2,
+    profiles: [
+      { id: "dont-send", name: "Don't send", relay: null, sender: "noreply@{site}" },
+      { id: "postmark", name: "Postmark", relay: { ...POSTMARK.relay }, sender: "{from.local}@{site}" },
+      { id: "staging", name: "Staging", relay: null, sender: "noreply@{site}" },
+    ],
+    defaultProfileId: "staging",
+    assignments: { "app.test": "dont-send", "shop.test": "staging", "www.example.com": "postmark" },
+    grants: {},
+    knownSiteIds: [1, 2, 3],
+  };
+  writeFileSync(join(b.dir, "state.json"), JSON.stringify(legacy, null, 2) + "\n", { mode: 0o600 });
+
+  const state = await act(b, "list") as SmtpState;
+  expect(state.profiles.map((profile) => profile.id)).toEqual(["dont-send", "postmark"]);
+  expect(state.defaultProfileId).toBe("dont-send");
+  expect(state.sites.map((site) => [site.domain, site.profileId])).toEqual([
+    ["www.example.com", "postmark"], ["shop.test", "dont-send"], ["app.test", "dont-send"],
+  ]);
+
+  // Repair writes the migrated policy and routes both discarded sites to discard.
+  await act(b, "reconcile");
+  const saved = JSON.parse(readFileSync(join(b.dir, "state.json"), "utf8"));
+  expect(saved.profiles.map((profile: { id: string }) => profile.id)).toEqual(["dont-send", "postmark"]);
+  expect(saved.assignments["shop.test"]).toBe("dont-send");
+  expect(file(b, "transports")).toContain("/@shop\\.test$/ discard:\n");
+  expect(file(b, "transports")).toContain("/@app\\.test$/ discard:\n");
+  expect(file(b, "transports")).toContain("/@example\\.com$/ smtp:[smtp.postmarkapp.com]:587\n");
+  // Stager's assignment to dont-send keeps working.
+  const after = await act(b, "assign", { domains: ["www.example.com"], profileId: "dont-send" }) as SmtpState;
+  expect(after.sites[0]!.profileId).toBe("dont-send");
+});
+
+test("a 1.5.x Don't send given an SMTP server keeps relaying its sites under its own id", async () => {
+  const b = box(SITES);
+  const legacy = {
+    version: 2,
+    profiles: [{ id: "dont-send", name: "Mailgun", relay: { ...POSTMARK.relay, host: "smtp.mailgun.org" }, sender: "noreply@{site}" }],
+    defaultProfileId: "dont-send",
+    assignments: { "shop.test": "dont-send" },
+    grants: {},
+    knownSiteIds: [1, 2, 3],
+  };
+  writeFileSync(join(b.dir, "state.json"), JSON.stringify(legacy), { mode: 0o600 });
+  const state = await act(b, "list") as SmtpState;
+  expect(state.profiles.map((profile) => [profile.id, profile.relay?.host ?? null])).toEqual([["mailgun", "smtp.mailgun.org"], ["dont-send", null]]);
+  expect(state.defaultProfileId).toBe("mailgun");
+  expect(state.sites.find((site) => site.domain === "shop.test")!.profileId).toBe("mailgun");
+  await act(b, "reconcile");
+  expect(file(b, "transports")).toContain("/@shop\\.test$/ smtp:[smtp.mailgun.org]:587\n");
+});
+
+test("the test dialog leads with what the SMTP server did, then its reason", () => {
+  const root = { getElementById: () => null, querySelectorAll: () => [] };
+  const client = new Function("CLP_ROOT", `${SMTP_CLIENT}\nreturn { smtpTestOutcome };`)(root) as {
+    smtpTestOutcome: (data: unknown) => { tone: string; verdict: string; reason: string; from: string };
+  };
+  const base = { requested: "wordpress@example.com", sender: "wordpress@example.com", replyTo: null };
+  expect(client.smtpTestOutcome({ ...base, delivery: { state: "deferred", detail: "SASL authentication failed" } }))
+    .toEqual({ tone: "tone-warn", verdict: "Deferred", reason: "SASL authentication failed", from: "Sent as wordpress@example.com." });
+  expect(client.smtpTestOutcome({ ...base, sender: "noreply@example.com", replyTo: "wordpress@example.com", delivery: { state: "sent", detail: "250 OK" } }))
+    .toMatchObject({ verdict: "Delivered", from: "The app asked for wordpress@example.com and it was sent as noreply@example.com, with Reply-To wordpress@example.com." });
+  expect(client.smtpTestOutcome({ ...base, delivery: { state: "queued", detail: "" } }).verdict).toBe("Still queued");
 });

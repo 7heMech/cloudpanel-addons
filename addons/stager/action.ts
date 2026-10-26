@@ -1,11 +1,12 @@
 import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import {
-  chmodSync, closeSync, copyFileSync, lstatSync, mkdirSync, mkdtempSync, openSync,
+  chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync,
   readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "node:fs";
-import { join } from "node:path";
-import { CLI_BIN, PANEL_IDENTITY_PATH } from "../../cli/paths";
+import { dirname, join } from "node:path";
+import { CLI_BIN, CONFIG_DIR, PANEL_IDENTITY_PATH } from "../../cli/paths";
+import { executeSmtpAction } from "../smtp/action";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import {
   createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet,
@@ -63,6 +64,8 @@ export interface StagerActionPaths {
   actionBinary: string;
   tempDir: string;
   sqlite3: string;
+  /** Present while SMTP Relay is enabled. */
+  smtpConfigFile?: string;
   emitReply?: boolean;
 }
 
@@ -78,6 +81,7 @@ export const DEFAULT_STAGER_ACTION_PATHS: StagerActionPaths = {
   actionBinary: CLI_BIN,
   tempDir: "/tmp",
   sqlite3: "sqlite3",
+  smtpConfigFile: `${CONFIG_DIR}/smtp.conf`,
 };
 
 export interface ParsedStagerAction {
@@ -138,6 +142,7 @@ interface JobView {
   finishedAt: string;
   result: unknown;
   panelSite: boolean | null;
+  sourcePanelSite: boolean | null;
 }
 
 function pathsFor(options?: StagerActionOptions): StagerActionPaths {
@@ -271,6 +276,31 @@ function isRegularFile(path: string): boolean {
 function isDirectory(path: string): boolean {
   try {
     return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Work inside a site's own tree runs as that site's user. Root acting by path
+ * there would follow whatever links the site has put in it, so a staging copy
+ * with `wp-content` pointing at another site could have root delete or write
+ * that site's files.
+ */
+function asSiteUser(user: string, command: string, args: string[]): CommandResult {
+  return runCommand("runuser", ["-u", user, "--", command, ...args]);
+}
+
+function readAsSiteUser(user: string, path: string): string | null {
+  const read = asSiteUser(user, "cat", ["--", path]);
+  return read.ok ? read.stdout : null;
+}
+
+function writeAsSiteUser(user: string, path: string, content: string): boolean {
+  try {
+    return Bun.spawnSync(["runuser", "-u", user, "--", "tee", "--", path], {
+      stdin: Buffer.from(content), stdout: "ignore", stderr: "pipe", env: process.env,
+    }).success;
   } catch {
     return false;
   }
@@ -489,6 +519,33 @@ let activeTranscript: JobTranscript | null = null;
 function diagnostic(value: string): void {
   if (activeTranscript) activeTranscript.write(value);
   else process.stderr.write(value);
+}
+
+/** SMTP Relay's seeded profile that discards mail (DONT_SEND in addons/smtp/action.ts). */
+const SMTP_DONT_SEND = "dont-send";
+
+/**
+ * A staging copy runs the live site's code against a copy of its customers, so
+ * while SMTP Relay is enabled it starts in the Don't send profile. `assign`
+ * marks the site as decided, so SMTP's new-site pass leaves it there. A failure
+ * here never fails the clone; it becomes a note.
+ */
+export async function holdCloneMail(
+  paths: Pick<StagerActionPaths, "smtpConfigFile">,
+  domain: string,
+  notes: string[],
+  assign: (input: string) => Promise<unknown> = (input) => executeSmtpAction(["assign"], { input }),
+): Promise<void> {
+  if (!existsSync(paths.smtpConfigFile ?? DEFAULT_STAGER_ACTION_PATHS.smtpConfigFile!)) return;
+  try {
+    await assign(JSON.stringify({ domains: [domain], profileId: SMTP_DONT_SEND }));
+    logLine(`SMTP Relay: ${domain} is in the Don't send profile`);
+    notes.push(`SMTP Relay discards ${domain}'s mail (Don't send profile); move it to another profile there to let it send`);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    warnLine(`SMTP Relay could not hold ${domain}'s mail: ${reason}`);
+    notes.push(`${domain} could not be put in SMTP Relay's Don't send profile, so it may send mail to real customers: ${reason}. Assign it there in SMTP Relay`);
+  }
 }
 
 function logLine(value: string): void {
@@ -1429,9 +1486,9 @@ function instaticSetup(
   return { ok: true, reason: "" };
 }
 
-function runWpSearchReplace(user: string, path: string, from: string, to: string): boolean {
+function runWpSearchReplace(user: string, path: string, from: string, to: string, network: boolean): boolean {
   const args = ["-u", user, "--", "env", `HOME=/home/${user}`, "wp", `--path=${path}`, "--skip-plugins", "--skip-themes", "search-replace"];
-  if (readFileSyncSafe(join(path, "wp-config.php")).includes("DOMAIN_CURRENT_SITE")) {
+  if (network) {
     args.push(from, to, "--network");
   } else {
     args.push(`https://${from}`, `https://${to}`);
@@ -1449,36 +1506,78 @@ function readFileSyncSafe(path: string): string {
   }
 }
 
-function rewriteWpConfig(file: string, target: string, ctx: RunContext): void {
-  let content = readFileSync(file, "utf8");
-  content = content
-    .replace(/define\( *'DB_NAME', *'[^']*' *\);/g, `define('DB_NAME', '${ctx.stgDbName}');`)
-    .replace(/define\( *'DB_USER', *'[^']*' *\);/g, `define('DB_USER', '${ctx.stgDbUser}');`)
-    .replace(/define\( *'DB_PASSWORD', *'[^']*' *\);/g, `define('DB_PASSWORD', '${ctx.stgDbPass}');`);
-  if (content.includes("WP_HOME")) {
+/** A `define()` of `name` with a quoted literal value, in either quote and any spacing. */
+function wpDefine(name: string, flags = "g"): RegExp {
+  return new RegExp(`define\\(\\s*(['"])${name}\\1\\s*,\\s*(['"])((?:(?!\\2)[^\\\\]|\\\\.)*)\\2\\s*\\)\\s*;`, flags);
+}
+
+/** Every mention of `name` in a `define()`, so one the rewrite cannot read is noticed. */
+function wpDefineMentions(content: string, name: string): number {
+  return (content.match(new RegExp(`define\\(\\s*['"]${name}['"]`, "g")) ?? []).length;
+}
+
+/**
+ * Points the clone's `wp-config.php` at its own database and hostname. The
+ * clone keeps the live site's credentials until this succeeds, and the next
+ * step runs `wp search-replace` against whatever database the file names, so a
+ * credential this cannot rewrite fails the clone rather than leave the copy
+ * writing to the live database.
+ */
+export function rewriteWpConfig(content: string, target: string, db: { name: string; user: string; pass: string }): string {
+  const values: Record<string, string> = { DB_NAME: db.name, DB_USER: db.user, DB_PASSWORD: db.pass };
+  for (const [name, value] of Object.entries(values)) {
+    const mentions = wpDefineMentions(content, name);
+    const literal = (content.match(wpDefine(name)) ?? []).length;
+    if (mentions === 0 || literal !== mentions) {
+      failAction(`wp-config.php does not set ${name} as one quoted value this clone can rewrite`);
+    }
+    content = content.replace(wpDefine(name), () => `define( '${name}', '${value}' );`);
+  }
+  const url = `https://${target}`;
+  if (wpDefineMentions(content, "WP_HOME") > 0) {
     content = content
-      .replace(/define\( *'WP_HOME', *'[^']*' *\);/g, `define('WP_HOME', 'https://${target}');`)
-      .replace(/define\( *'WP_SITEURL', *'[^']*' *\);/g, `define('WP_SITEURL', 'https://${target}');`);
+      .replace(wpDefine("WP_HOME"), () => `define( 'WP_HOME', '${url}' );`)
+      .replace(wpDefine("WP_SITEURL"), () => `define( 'WP_SITEURL', '${url}' );`);
   } else {
-    content = content.replace(
-      /define\( *'DB_PASSWORD', *'[^']*' *\);/,
-      (match) => `${match}\ndefine('WP_HOME', 'https://${target}');\ndefine('WP_SITEURL', 'https://${target}');`,
-    );
+    content = content.replace(wpDefine("DB_PASSWORD", ""), (match) => `${match}\ndefine( 'WP_HOME', '${url}' );\ndefine( 'WP_SITEURL', '${url}' );`);
   }
   if (content.includes("DOMAIN_CURRENT_SITE")) {
-    content = content.replace(/define\( *'DOMAIN_CURRENT_SITE', *'[^']*' *\);/g, `define('DOMAIN_CURRENT_SITE', '${target}');`);
+    content = content.replace(wpDefine("DOMAIN_CURRENT_SITE"), () => `define( 'DOMAIN_CURRENT_SITE', '${target}' );`);
   }
-  writeFileSync(file, content);
+  return content;
+}
+
+const DOTENV_KEYS = ["DB_DATABASE", "DB_USERNAME", "DB_PASSWORD"] as const;
+
+/** A `.env` line setting `key`, with or without `export` in front. */
+function dotenvLine(key: string): RegExp {
+  return new RegExp(`^([ \\t]*(?:export[ \\t]+)?)${key}[ \\t]*=.*$`, "gm");
+}
+
+/** Why a `.env` cannot be pointed at the clone's database by its three DB_ keys, if it cannot. */
+export function dotenvProblem(content: string): string | null {
+  if (/^\s*(?:export\s+)?(?:DATABASE_URL|DB_URL)\s*=/m.test(content)) return "the .env sets a database URL, which this clone cannot rewrite";
+  const missing = DOTENV_KEYS.filter((key) => !dotenvLine(key).test(content));
+  return missing.length ? `the .env does not set ${missing.join(", ")}` : null;
+}
+
+/** Sets the three DB_ keys, keeping any `export` in front of each. */
+export function rewriteDotenvContent(content: string, db: { name: string; user: string; pass: string }): string {
+  const values: Record<(typeof DOTENV_KEYS)[number], string> = { DB_DATABASE: db.name, DB_USERNAME: db.user, DB_PASSWORD: db.pass };
+  return DOTENV_KEYS.reduce((text, key) => text.replace(dotenvLine(key), (_line, prefix: string) => `${prefix}${key}=${values[key]}`), content);
 }
 
 function rewriteDotenv(file: string, ctx: RunContext): void {
-  const content = readFileSync(file, "utf8").replace(/^DB_DATABASE=.*/gm, `DB_DATABASE=${ctx.stgDbName}`)
-    .replace(/^DB_USERNAME=.*/gm, `DB_USERNAME=${ctx.stgDbUser}`)
-    .replace(/^DB_PASSWORD=.*/gm, `DB_PASSWORD=${ctx.stgDbPass}`);
-  writeFileSync(file, content);
+  const original = readAsSiteUser(ctx.stgUser, file);
+  if (original === null) failJob(ctx, `could not read the clone's .env`);
+  const problem = dotenvProblem(original);
+  if (problem) failJob(ctx, `${problem}, so the clone was removed before it could reach ${ctx.source}'s database`);
+  const content = rewriteDotenvContent(original, { name: ctx.stgDbName, user: ctx.stgDbUser, pass: ctx.stgDbPass });
+  if (!writeAsSiteUser(ctx.stgUser, file, content)) failJob(ctx, `could not write the clone's .env`);
 }
 
-async function runTarCopy(source: string, destination: string): Promise<number> {
+/** Read as root, so nothing the source's user cannot read is missed; written as `owner`, who then owns every file. */
+async function runTarCopy(source: string, destination: string, owner: string): Promise<number> {
   let sender: Bun.Subprocess<"ignore", "pipe", "pipe"> | null = null;
   let receiver: Bun.Subprocess<ReadableStream, "pipe", "pipe"> | null = null;
   try {
@@ -1490,7 +1589,7 @@ async function runTarCopy(source: string, destination: string): Promise<number> 
       env: process.env,
     });
     receiver = Bun.spawn({
-      cmd: ["tar", "-xf", "-", "-C", destination],
+      cmd: ["runuser", "-u", owner, "--", "tar", "-xf", "-", "-C", destination, "--no-same-owner"],
       stdin: sender.stdout,
       stdout: "pipe",
       stderr: "pipe",
@@ -1680,13 +1779,6 @@ function cmdDescribe(paths: StagerActionPaths, domain: string): void {
     failAction("cannot read the panel database");
   }
 
-  let sizeMb = 0;
-  const root = `/home/${row.user}/htdocs/${domain}`;
-  if (isDirectory(root)) {
-    const size = runCommand("du", ["-sm", root]);
-    const match = size.stdout.trim().match(/^([0-9]+)/);
-    sizeMb = match ? Number(match[1]) || 0 : 0;
-  }
   emitStagerOk(paths, {
     domain,
     siteType: type,
@@ -1696,7 +1788,6 @@ function cmdDescribe(paths: StagerActionPaths, domain: string): void {
     application: row.application || "Generic",
     rootDirectory: row.root,
     database,
-    sizeMb,
   });
 }
 
@@ -2108,6 +2199,11 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
       else ctx.notes.push(`the CloudPanel site for ${ctx.target} already existed and was adopted rather than created, so its vhost and panel record were left as they were`);
     }
 
+    // Before anything is copied in: from here on the clone is a site that serves
+    // the live site's code, and the new-site watcher would otherwise give it the
+    // default profile's relay.
+    await holdCloneMail(paths, ctx.target, ctx.notes);
+
     if (ctx.templateName) {
       const removed = runCommand(paths.clpctl, ["vhost-template:delete", `--name=${ctx.templateName}`]);
       if (removed.stdout) diagnostic(removed.stdout);
@@ -2190,12 +2286,8 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
     } else {
       setStep(ctx, "copying files");
       const sourceDir = `/home/${ctx.srcUser}/htdocs/${ctx.source}`;
-      const copyCode = await runTarCopy(sourceDir, destination);
+      const copyCode = await runTarCopy(sourceDir, destination, ctx.stgUser);
       if (copyCode >= 2) failJob(ctx, `copying files failed (tar exit ${copyCode})`);
-      const owner = runCommand("chown", ["-R", `${ctx.stgUser}:${ctx.stgUser}`, destination]);
-      if (owner.stdout) diagnostic(owner.stdout);
-      if (owner.stderr) diagnostic(owner.stderr);
-      if (!owner.ok) failJob(ctx, `could not chown ${destination}`);
     }
 
     let instaticEmail = "";
@@ -2233,22 +2325,34 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
 
     if (ctx.srcDb) {
       setStep(ctx, "rewriting the application's database credentials");
-      const wpConfig = join(destination, "wp-config.php");
-      const dotenv = join(destination, ".env");
-      if (isRegularFile(wpConfig)) {
-        rewriteWpConfig(wpConfig, ctx.target, ctx);
+      // WordPress also reads wp-config.php from one level above a `public` root.
+      const sub = removePathPrefix(ctx.srcRoot, ctx.source);
+      const webRoot = sub && !sub.split("/").includes("..") ? join(destination, sub) : destination;
+      const found = (name: string) => [...new Set([webRoot, destination])].map((dir) => join(dir, name)).find(isRegularFile);
+      const wpConfig = found("wp-config.php");
+      const dotenv = found(".env");
+      if (wpConfig) {
+        let rewritten: string;
+        try {
+          const original = readAsSiteUser(ctx.stgUser, wpConfig);
+          if (original === null) failAction("could not read the clone's wp-config.php");
+          rewritten = rewriteWpConfig(original, ctx.target, { name: ctx.stgDbName, user: ctx.stgDbUser, pass: ctx.stgDbPass });
+        } catch (error) {
+          failJob(ctx, `${error instanceof Error ? error.message : String(error)}, so the clone was removed before it could reach ${ctx.source}'s database`);
+        }
+        if (!writeAsSiteUser(ctx.stgUser, wpConfig, rewritten)) failJob(ctx, "could not write the clone's wp-config.php, so the clone was removed");
         if (Bun.which("wp")) {
           setStep(ctx, "rewriting URLs with wp-cli");
-          if (!runWpSearchReplace(ctx.stgUser, destination, ctx.source, ctx.target)) {
+          if (!runWpSearchReplace(ctx.stgUser, webRoot, ctx.source, ctx.target, rewritten.includes("DOMAIN_CURRENT_SITE"))) {
             ctx.notes.push("wp-cli search-replace reported problems; check the log");
           }
         } else {
           ctx.notes.push(`wp-cli is not installed, so URLs inside the database still name ${ctx.source}`);
         }
-      } else if (isRegularFile(dotenv)) {
+      } else if (dotenv) {
         rewriteDotenv(dotenv, ctx);
       } else {
-        ctx.notes.push("no wp-config.php or .env found, so the database credentials were not written into the application; they are in this job's result");
+        failJob(ctx, `found no wp-config.php or .env to point at the clone's database, so the clone was removed before it could reach ${ctx.source}'s database`);
       }
     }
 
@@ -2273,10 +2377,7 @@ async function cmdRun(id: string, paths: StagerActionPaths): Promise<void> {
       const certificate = runCommand(paths.clpctl, ["lets-encrypt:install:certificate", `--domainName=${ctx.target}`]);
       forwardCommandOutput(certificate);
       if (!certificate.ok) ctx.notes.push(`the certificate request failed; point ${ctx.target} at this server and retry from Site -> SSL/TLS`);
-    } else {
-      ctx.notes.push(`no certificate was requested; ${ctx.target} is served with CloudPanel's self-signed one until you issue one`);
     }
-
     setStep(ctx, "recording the result");
     const result: JobResult = {
       siteType: ctx.srcType,
@@ -2395,19 +2496,13 @@ function pathExists(path: string): boolean {
  * not a second copy of the live site's user data, which stays on the live site
  * throughout.
  */
-function movePreserved(from: string, to: string, relative: string): boolean {
+function movePreserved(from: string, to: string, relative: string, user: string): boolean {
   const origin = join(from, relative);
   if (!pathExists(origin)) return false;
   const destination = join(to, relative);
-  try {
-    const parent = destination.slice(0, destination.lastIndexOf("/"));
-    mkdirSync(parent, { recursive: true });
-    rmSync(destination, { recursive: true, force: true });
-    renameSync(origin, destination);
-    return true;
-  } catch {
-    return false;
-  }
+  return asSiteUser(user, "mkdir", ["-p", "--", dirname(destination)]).ok
+    && asSiteUser(user, "rm", ["-rf", "--", destination]).ok
+    && asSiteUser(user, "mv", ["-T", "--", origin, destination]).ok;
 }
 
 function rollbackPromote(ctx: PromoteContext): void {
@@ -2421,7 +2516,7 @@ function rollbackPromote(ctx: PromoteContext): void {
     warnLine(`putting ${ctx.target}'s own document root back`);
     // The preserved paths were moved onto the new root; they belong to the
     // live site either way, so they go back with it.
-    for (const relative of ctx.movedPreserved) movePreserved(ctx.dstRoot, ctx.prevRoot, relative);
+    for (const relative of ctx.movedPreserved) movePreserved(ctx.dstRoot, ctx.prevRoot, relative, ctx.dstUser);
     // Derived from prevRoot, not from stageRoot: the successful swap cleared
     // stageRoot, and a discard path of ".discard" would be relative to nothing.
     const discard = `${ctx.prevRoot}.discard`;
@@ -2442,7 +2537,7 @@ function rollbackPromote(ctx: PromoteContext): void {
       warnLine(`could not put ${ctx.dstRoot} back; ${ctx.prevRoot} still holds what was there before`);
     }
   }
-  if (ctx.stageRoot) rmSync(ctx.stageRoot, { recursive: true, force: true });
+  if (ctx.stageRoot) asSiteUser(ctx.dstUser, "rm", ["-rf", "--", ctx.stageRoot]);
 
   if (jobGet(ctx.dir, "state") !== "failed") {
     try {
@@ -2481,20 +2576,30 @@ async function promoteFiles(ctx: PromoteContext): Promise<void> {
 
   setStep(ctx, "assembling the new release");
   ctx.stageRoot = join(htdocsOf(ctx.dstUser), `.clp-stager-promote-${ctx.id}`);
-  rmSync(ctx.stageRoot, { recursive: true, force: true });
-  mkdirSync(ctx.stageRoot, { recursive: true, mode: 0o755 });
-  const copyCode = await runTarCopy(ctx.srcRoot, ctx.stageRoot);
+  asSiteUser(ctx.dstUser, "rm", ["-rf", "--", ctx.stageRoot]);
+  if (!asSiteUser(ctx.dstUser, "mkdir", ["-m", "755", "--", ctx.stageRoot]).ok) failJob(ctx, `could not create ${ctx.stageRoot}; nothing was changed`);
+  const copyCode = await runTarCopy(ctx.srcRoot, ctx.stageRoot, ctx.dstUser);
   if (copyCode >= 2) failJob(ctx, `copying the staging files failed (tar exit ${copyCode})`);
+  // A clone rewrites the configuration in its site directory or in its root
+  // directory, such as `public`, so both are the live site's own.
+  const sub = removePathPrefix(siteRow(ctx.paths, ctx.target)?.root ?? "", ctx.target).replace(/^\/+/, "");
+  const nested = sub && !sub.split("/").includes("..") ? PRESERVED_COPIED.map((name) => join(sub, name)) : [];
+  const copied = [...PRESERVED_COPIED, ...nested];
+
   // Whatever the staging copy holds at these paths is dropped here rather than
   // after the switch, so the release that goes live never contains the staging
   // site's database credentials even for an instant.
-  for (const relative of PRESERVED_PATHS) rmSync(join(ctx.stageRoot, relative), { recursive: true, force: true });
+  for (const relative of [...PRESERVED_PATHS, ...nested]) {
+    if (!asSiteUser(ctx.dstUser, "rm", ["-rf", "--", join(ctx.stageRoot, relative)]).ok) {
+      failJob(ctx, `could not clear ${relative} from the new release; nothing was changed`);
+    }
+  }
 
   // Then the live site's own copies go in, so the root that becomes live has
   // them from its first served request. lstat rather than stat: a symlink at
   // this name in the live root would otherwise be resolved and its target
   // copied into the new release under a configuration file's name.
-  for (const relative of PRESERVED_COPIED) {
+  for (const relative of copied) {
     const origin = join(ctx.dstRoot, relative);
     let info;
     try { info = lstatSync(origin); } catch { continue; }
@@ -2502,24 +2607,13 @@ async function promoteFiles(ctx: PromoteContext): Promise<void> {
       warnLine(`${ctx.target}'s ${relative} is not a plain file, so it was left where it is`);
       continue;
     }
-    try {
-      copyFileSync(origin, join(ctx.stageRoot, relative));
-      chmodSync(join(ctx.stageRoot, relative), info.mode & 0o7777);
-      ctx.copiedPreserved.push(relative);
-      logLine(`kept the live site's own ${relative}`);
-    } catch {
+    if (!asSiteUser(ctx.dstUser, "cp", ["-P", "--preserve=mode,timestamps", "--", origin, join(ctx.stageRoot, relative)]).ok) {
       failJob(ctx, `could not copy ${ctx.target}'s own ${relative}; nothing was changed`);
     }
+    ctx.copiedPreserved.push(relative);
+    logLine(`kept the live site's own ${relative}`);
   }
 
-  // Before the switch, not after: a recursive chown over the whole release is
-  // the slowest step here, and running it on the live root would leave the site
-  // being served out of a tree whose ownership is still moving. It also turns a
-  // chown failure into one that changed nothing.
-  const staged = runCommand("chown", ["-R", `${ctx.dstUser}:${ctx.dstUser}`, ctx.stageRoot]);
-  if (staged.stdout) diagnostic(staged.stdout);
-  if (staged.stderr) diagnostic(staged.stderr);
-  if (!staged.ok) failJob(ctx, `could not chown the new release; nothing was changed`);
 
   setStep(ctx, `switching ${ctx.target} over`);
   ctx.prevRoot = join(htdocsOf(ctx.dstUser), `.clp-stager-prev-${ctx.target}-${ctx.id}`);
@@ -2542,12 +2636,12 @@ async function promoteFiles(ctx: PromoteContext): Promise<void> {
 
   setStep(ctx, "restoring what the live site owns");
   for (const relative of PRESERVED_MOVED) {
-    if (movePreserved(ctx.prevRoot, ctx.dstRoot, relative)) {
+    if (movePreserved(ctx.prevRoot, ctx.dstRoot, relative, ctx.dstUser)) {
       ctx.movedPreserved.push(relative);
       logLine(`kept the live site's own ${relative}`);
     } else if (pathExists(join(ctx.dstRoot, relative))) {
       // Only reachable if the path appeared between the strip above and here.
-      rmSync(join(ctx.dstRoot, relative), { recursive: true, force: true });
+      asSiteUser(ctx.dstUser, "rm", ["-rf", "--", join(ctx.dstRoot, relative)]);
     }
   }
   if (ctx.copiedPreserved.length === 0) {
@@ -2808,18 +2902,21 @@ function readJobResult(dir: string): unknown {
 
 function jobJson(paths: StagerActionPaths, dir: string, id: string, hasPanelDb: boolean, panelSites: Set<string>): JobView {
   const target = jobGet(dir, "target");
-  let panelSite: boolean | null = null;
-  if (hasPanelDb && jobGet(dir, "state") === "done" && target) panelSite = panelSites.has(target);
+  const source = jobGet(dir, "source");
+  const done = hasPanelDb && jobGet(dir, "state") === "done";
+  const panelSite = done && target ? panelSites.has(target) : null;
+  const sourcePanelSite = done && source ? panelSites.has(source) : null;
   const portText = jobGet(dir, "port");
   return {
     id,
     kind: jobGet(dir, "kind") || "clone",
-    source: jobGet(dir, "source"),
+    source,
     target,
     port: /^\d+$/.test(portText) ? Number(portText) || 0 : 0,
     ...jobCommonFields(dir),
     result: readJobResult(dir),
     panelSite,
+    sourcePanelSite,
   };
 }
 

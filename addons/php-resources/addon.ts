@@ -8,6 +8,8 @@ import { removeAbandonedTmpFiles } from "./tmp-cleanup";
 import type { AddonDefinition } from "../../cli/addon-catalog";
 import { log } from "../../cli/util";
 
+const count = (value: number, word: string) => `${value} ${word}${value === 1 ? "" : "s"}`;
+
 function sizeText(bytes: number): string {
   return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
 }
@@ -15,13 +17,20 @@ function sizeText(bytes: number): string {
 export const PHP_RESOURCES_ADDON: AddonDefinition = {
   name: "php-resources",
   title: "PHP Resources",
-  description: "Group PHP sites into categories of PHP-FPM limits, and pick the one new sites join.",
+  description: "Give groups of PHP sites the same PHP-FPM limits, and clear abandoned PHP and ImageMagick temp files from /tmp.",
+  changed: { in: "2.0", note: "Sites first, and new sites get their limits within seconds." },
   targets: PHP_RESOURCES_TARGETS,
   handler: handle,
   action: runPhpResourcesAction,
-  // Nothing else reaches a site created after the default category was chosen,
-  // or a site whose pool file CloudPanel rewrote when its PHP version changed.
-  // Repair is where both are noticed, which is every fifteen minutes.
+  newSites: {
+    label: "php resources",
+    run: async (options) => {
+      const result = await executePhpResourcesAction(["reconcile"], (options ?? {}) as PhpResourcesActionOptions) as ReconcileResult;
+      return result.applied ? `${count(result.applied, "new site")} joined the default category` : null;
+    },
+  },
+  // A site whose pool file CloudPanel rewrote when its PHP version changed, and
+  // a new site whose pool file was not there yet, are noticed here.
   maintenance: {
     label: "php resources",
     run: async (options) => {

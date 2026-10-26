@@ -72,59 +72,49 @@ expired, and an operator was told the gateway had failed where the answer was
 that the site was already deploying. Records expire after 14 days and
 the repair pass marks a deployment whose runner died as failed.
 
+The same repair pass removes the record of a site CloudPanel no longer has, so a
+domain created again does not inherit the old repository, post-deploy command
+and live webhook URL. It removes nothing when the panel database cannot be read
+or lists no site.
+
 ## Surfaces
 
 The site-scoped page is a tab in CloudPanel's own site page, mounted through
-`lib/shadow-embed.ts` beside Maintenance and Staging. Connected sites lead with
-the current checkout, repository, branch, and deployment mode. The dashboard
-uses two equal columns: latest deployment, repository settings, and the deploy
-key stack in the first, and push to deploy fills the second. While the switch
-is off that card shares a row with the latest deployment; while it is on it
-spans the column beside it. Either way the cards in a row are the same height
-and the two columns end together, whichever side is the taller: a collapsed
-push-to-deploy card reaches the bottom of the stack beside it, and expanded
-webhook instructions grow the cards opposite them. Cards stack on mobile. A
-checkout is reported separately from job success because a failed post-deploy
-command can leave the new files in place. Deploy is disabled while a job is
-queued or running. A deployment started there is watched in the same card, with
-failed output expanded so it can be read immediately.
+`lib/shadow-embed.ts` beside Maintenance and Staging. A connected site leads
+with one status card: the checked-out commit, the last deployment's state badge
+with when and how it started ("4 minutes ago · push"), its error and output,
+and Deploy now. A checkout is reported separately from job success because a
+failed post-deploy command can leave the new files in place. Deploy is disabled
+while a job is queued or running; a deployment started there is watched in the
+same card, with failed output expanded.
 
-Repository settings and the deploy key use native expandable sections, which
-also work inside the panel's shadow root. The repository form puts branch
-beside the URL wherever it is drawn; Advanced holds the post-deploy command,
-subdirectory, and disconnect action, and the submit button sits below a rule as
-the card's footer. Configured advanced values are summarized while closed and
-remain in the form when saving. Key replacement and webhook URL rotation sit
-beside their Copy buttons below the key or URL and retain their confirmation
-dialogs.
+Below it one Settings card holds three rows that open, each set once:
+Repository settings (summarised as repository, branch and command), Deploy key
+and Push to deploy. The deploy key row is open until a checkout exists, and
+while an SSH remote has no key it moves to the top. HTTPS remotes have no key
+row. The repository form shows the URL and branch, then the post-deploy command
+and deploy directory, with Stop deploying beside Save changes. Saving an SSH remote
+generates the deploy key as part of the save, so the sequence is save, add the
+key to the repository, deploy. Key replacement and webhook URL rotation sit
+beside their Copy buttons and keep their confirmations.
 
-A site nobody has connected yet shows the connection form. That form has the
-page to itself, so it also pairs the Advanced fields, subdirectory beside the
-longer post-deploy command. Each pair gives two thirds to the field whose
-values run long, so every row in the form shares its column edges; every pair
-stacks on a phone. The settings card on a connected site is one column wide,
-which fits the URL and branch but not the Advanced pair, so those stay stacked
-there. Saving an SSH remote generates the deploy key as part of the save, so
-the sequence is save, add the key to the repository, deploy. The key section is
-expanded until a checkout exists, or when the public key is missing. HTTPS
-remotes have no key section. A missing SSH key offers a generate action.
+The Push to deploy switch sits on its row, beside the last delivery's outcome.
+While it is on the row opens to the webhook URL and GitHub's steps (behind a
+GitHub summary for other remotes) and an Other providers & CI summary with the
+generic POST. A site nobody has connected yet shows only the connection form.
 
-The push-to-deploy switch and last delivery outcome stay visible. Webhook setup
-and Other providers & CI are independently expandable sections in that card;
-both start collapsed regardless of provider or delivery history. Webhook setup
-holds the URL and GitHub instructions. Other providers & CI holds generic POST
-instructions. Non-GitHub remotes also collapse the GitHub steps inside webhook
-setup. This choice only changes the instructions; it does not configure a
-provider.
-
-`/addons/git/` is the fleet view: counts of configured sites, active deployments,
-and sites needing attention precede each site's branch, checkout, and latest
-deployment. Attention means a failed job, unreadable settings, or a site absent
-from CloudPanel. Per-row and multi-select deployment exclude active jobs and
-unavailable sites, with selection controls on desktop and mobile. Connect a
-site links to CloudPanel's site list, where each site's Git tab starts setup.
-The fleet reply carries no webhook tokens; only the site's own page asks for a
-record it is going to print.
+`/addons/git/` is the fleet view: each configured site's branch, checkout and
+latest deployment. A line above the table names the sites that need attention,
+and why, only when some do: a site absent from CloudPanel or with unreadable
+settings, a failed deployment, an SSH remote with no deploy key, or a last
+delivery the token let in that deployed nothing for a reason other than another
+branch. The fleet reply carries no webhook tokens and no keys; it reads a key
+only for an SSH remote, to say whether one exists. Rows are selected by click
+or checkbox for Deploy selected, which skips active jobs and unavailable sites,
+so a site's name is plain text and its Manage button opens the site's page;
+from six sites a search and a filter (needs attention, deploying) sit above the
+table. Connect a site links to CloudPanel's site list, where each site's Git tab
+starts setup.
 
 CloudPanel's own site list carries a "Deploy from Git" link, left of the
 panel's own "Manage" and marked with `ROW_ACTION_CLASS` so Panel Tweaks' row
@@ -142,6 +132,11 @@ There is deliberately no card on the panel's Add Site page: it would have to
 reproduce the panel's own site creation -- PHP version, vhost template, site
 user, TLS -- and drift with every CloudPanel release. The link in the site list
 is the panel-native answer to the same wish.
+
+Settings mutations return the site renderer's HTML alongside their data. The
+browser repaints in its document or shadow root and rebuilds webhook URLs from
+its own origin. Deployment starts and completions read the view API; fleet
+selections and named disclosures survive repainting.
 
 ## Who reaches it
 
@@ -207,4 +202,6 @@ A delivery with a well-formed token that is wrong still costs one gateway round
 trip and one action process, and a gateway that is down is answered exactly as a
 wrong token is. Both are the price of having no oracle: the manager cannot tell
 a wrong token from an unknown one, or from an unanswered question, without being
-able to read the record itself.
+able to read the record itself. The action checks the token before it takes the
+site's lock, and again once it holds it, so a delivery without the token never
+keeps a real deployment waiting.

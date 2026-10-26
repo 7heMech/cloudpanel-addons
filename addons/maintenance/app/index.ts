@@ -26,6 +26,15 @@ function fragmentJson(body: unknown, csrf: string, status = 200): Response {
   return jsonResponse(body, { status, csrf });
 }
 
+/** The fleet page as it now stands, for a fleet change to repaint from; undefined if it cannot be read. */
+async function fleetHtml(req: Request): Promise<string | undefined> {
+  try {
+    return fleetView(await maintenanceService.fleet(), clientIp(req));
+  } catch {
+    return undefined;
+  }
+}
+
 function decodedDomain(raw: string): string | null {
   const decoded = safeDecodePathSegment(raw);
   return decoded === null ? null : validateDomain(decoded);
@@ -65,8 +74,8 @@ export async function handle(
       }
     }
     try {
+      if (!selected) return html(layout("Maintenance Mode", fleetView(await maintenanceService.fleet(), clientIp(req)), updateNotice), csrf);
       const globalStatus = await maintenanceService.globalStatus();
-      if (!selected) return html(layout("Maintenance Mode", fleetView(await maintenanceService.listSites(), globalStatus, clientIp(req)), updateNotice), csrf);
       const domain = validateDomain(selected);
       if (!domain) return html(layout("Invalid site", '<div class="alert">That is not a valid hostname.</div>', updateNotice), csrf, 400);
       const [page, template] = await Promise.all([maintenanceService.site(domain), maintenanceService.template(domain)]);
@@ -115,7 +124,7 @@ export async function handle(
     if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
     const result = await maintenanceService.setGlobalEnabled(body.enabled);
     if (!result.ok) return json({ ok: false, error: result.error ?? "failed to toggle global maintenance" }, 500);
-    return json({ ok: true, data: { global: body.enabled } }, 200);
+    return json({ ok: true, data: { global: body.enabled }, html: await fleetHtml(req) }, 200);
   }
 
   if (method === "PUT" && path === "/api/global-bypasses") {
@@ -131,23 +140,25 @@ export async function handle(
     return json(result, result.ok ? 200 : 400);
   }
 
-  if (method === "POST" && (path === "/api/sites/toggle" || path === "/api/toggle-all" || path === "/api/bulk-toggle")) {
+  // The selected sites, switched by one action call; a site that fails is named
+  // in the reply rather than stopping the rest.
+  if (method === "POST" && path === "/api/bulk-toggle") {
     const denied = guardMutation(req);
     if (denied) return denied;
     let body: Record<string, unknown>;
     try { body = await readJsonObject(req, 16 * 1024); } catch (error) { return bodyErrorResponse(error); }
     if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
-    let domains: string[] | undefined;
-    if (body.domains !== undefined) {
-      if (!Array.isArray(body.domains)) return json({ ok: false, error: "domains must be an array" }, 400);
-      domains = [];
-      for (const raw of body.domains as unknown[]) {
-        const decoded = typeof raw === "string" ? decodedDomain(raw) : null;
-        if (decoded === null) return json({ ok: false, error: `invalid domain in domains list: ${raw}` }, 400);
-        domains.push(decoded);
-      }
+    if (!Array.isArray(body.domains) || body.domains.length === 0) {
+      return json({ ok: false, error: "domains must list at least one site" }, 400);
     }
-    return json(await maintenanceService.setAllEnabled(body.enabled, domains), 200);
+    const domains: string[] = [];
+    for (const raw of body.domains as unknown[]) {
+      const decoded = typeof raw === "string" ? decodedDomain(raw) : null;
+      if (decoded === null) return json({ ok: false, error: `invalid domain in domains list: ${raw}` }, 400);
+      domains.push(decoded);
+    }
+    const data = await maintenanceService.setManyEnabled(domains, body.enabled);
+    return json({ ok: true, data, html: await fleetHtml(req) }, 200);
   }
 
   const route = path.match(/^\/api\/sites\/([^/]+)\/(toggle|template|bypasses)$/);
@@ -162,6 +173,8 @@ export async function handle(
       try { body = await readJsonObject(req, 1024); } catch (error) { return bodyErrorResponse(error); }
       if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be a boolean" }, 400);
       result = await maintenanceService.setEnabled(domain, body.enabled);
+      // The fleet page repaints from the reply; the site page paints the one switch it has.
+      if (result.ok && body.view === "fleet") return json({ ...result, html: await fleetHtml(req) });
     } else if (route[2] === "template" && method === "PUT") {
       let body: Record<string, unknown>;
       try { body = await readJsonObject(req, MAX_TEMPLATE_BYTES * 6 + 1024); }

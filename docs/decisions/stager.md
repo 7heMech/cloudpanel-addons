@@ -9,7 +9,13 @@ Node.js, Python, and other reverse proxy backends are excluded.
 For PHP sites, Stager copies the document root, exports and imports the first
 CloudPanel database, carries the source Nginx configuration when it can be
 validated, and writes the new database credentials into supported application
-configuration. WordPress URLs are rewritten when WP-CLI is available. Other
+configuration: a `wp-config.php` or `.env` in the copy or in its root directory,
+such as `public`; `export` in front of a `.env` key is kept. Until that is rewritten the copy names the live database, and
+the WP-CLI step that follows would rewrite the live site's URLs. So a source
+with a database fails the clone, which is then removed, when neither file is
+found, when a `wp-config.php` sets `DB_NAME`, `DB_USER` or `DB_PASSWORD` as
+anything but one quoted value, or when a `.env` sets `DATABASE_URL` or `DB_URL`
+or lacks `DB_DATABASE`, `DB_USERNAME` or `DB_PASSWORD`. WordPress URLs are rewritten when WP-CLI is available. Other
 applications may retain absolute source URLs in their database.
 
 For Instatic sites, Stager creates a separate container, key, owner, and port,
@@ -32,16 +38,33 @@ overwrite, whole tables at a time at best. So Stager moves files and, for an
 Instatic site, content, and refuses the database outright rather than offering a
 table selection that is only safe if the operator already knows the answer.
 
-A clone starts from the fleet page at `/addons/stager/`, from the site's own
-Staging tab, or from a Sites row's action menu. Not from a link in the row
+`/addons/stager/` is one page: every clone and promote on the box, with Promote
+on each finished clone whose staging and live sites both still exist. The job
+reply carries `panelSite` and `sourcePanelSite` from the panel database, and the
+list, the job page, the Staging tab and the promote page all refuse up front
+rather than after the confirmation. An unknown answer, when the panel database
+cannot be read, refuses too, since the action would. `/promote` without `?job=` returns to the
+list. The promote page is one card; the operator types the live hostname in
+the shared confirmation.
+
+A clone starts from that page, from the site's own Staging tab, or from a Sites
+row's action menu. Not from a link in the row
 itself: cloning is not an everyday action, and a link in every row of the list
 an operator reads every day is priced as though it were. `Clone` is marked
 `clp-addons-menu-only` from `lib/row-actions.ts`, and Stager emits the rule that
 hides it, so on a box with no action menu it appears in neither place.
 
-Staging is a tab on CloudPanel's own site page, beside Maintenance. It shows
-the one site's two ends of a clone -- what has been staged from it, and whether
-it is itself a staging copy with a live site to go back to -- rather than the
+The clone form names the source in one line from the `sites` listing and
+prefills the hostname `stg`. It does not measure the source, because measuring
+a large site as root takes tens of seconds. A bare label goes
+under the source's domain, without a leading `www.`; `expandTarget` in
+`app/service.ts` is the one copy, and the page's script carries its source.
+
+Staging is a tab on CloudPanel's own site page, beside Maintenance, on the site
+types Clone works on (PHP, static and reverse proxy); the injected Twig and
+`lib/site-context` apply the same condition. It shows the one site's two ends of
+a clone -- whether it is itself a staging copy with a live site to go back to,
+which comes first, and what has been staged from it -- rather than the
 fleet list at `/addons/stager/`, which is the wrong altitude for a page reached
 from one site's tab strip. Both addon tabs patch the same anchor in the panel's
 strip; the injector applies them in a fixed order, so the panel's copy and the
@@ -53,12 +76,12 @@ addon's.
 
 For PHP and static sites the new document root is assembled beside the live one
 and put in place with a rename, so the site is never serving a half-copied tree.
-The live site keeps its own `wp-config.php`, `.env` and `wp-content/uploads`:
+The live site keeps its own `wp-config.php`, `.env` and `wp-content/uploads`,
+and the `wp-config.php` and `.env` in its root directory, such as `public`:
 the staging copy's are dropped before the switch, because the staging
 `wp-config.php` names the staging database and pointing the live site at it
 would be worse than any missed edit. The two configuration files are then
-copied from the live root into the staged one, and the staged root is chowned,
-before the rename. A root that went live without a `wp-config.php` and gained
+copied from the live root into the staged one before the rename. A root that went live without a `wp-config.php` and gained
 one a moment later would be a WordPress offering its installer to whoever asked
 in between, however short that moment was. `wp-content/uploads` can be
 gigabytes, so it is moved onto the new root after the switch instead: the cost
@@ -73,10 +96,28 @@ through Instatic's export and import APIs. The live instance's own content is
 exported first and kept with the job. It keeps its container, port, key, users
 and integration secrets; the operator must publish it once afterwards.
 
+Root reads the staging copy, but every write, removal and move inside a site's
+document root runs as that site's user: both trees belong to site users, and
+root acting by path there would follow a link such as a `wp-content` pointing at
+another site. The copy is therefore owned by the site's user as it is written,
+for a clone as for a promote.
+
 The replaced document root, the database dump and the content export are kept
 with the job record and expire with it. A promote that dies between the two
 renames is put back by the maintenance pass, which is also what removes the
 retained roots once their records expire.
+
+## Mail
+
+While SMTP Relay is enabled, a clone is assigned to its seeded
+`dont-send` profile through SMTP's own `assign` verb, so mail a copy of a shop
+sends through PHP's `mail()` does not reach the shop's customers; an SMTP or
+API mail plugin in the copy still sends. Once assigned, SMTP Relay's routing is
+on for the whole server, as for any routed site. That happens as soon as its site exists, before
+any of the live site's code is copied in. `assign` records the site as decided, so SMTP's
+new-site pass does not move it into the default profile. A failed assignment is
+a job note, not a failed clone. A promote leaves the live site's assignment
+alone.
 
 ## Jobs and cleanup
 

@@ -1,0 +1,149 @@
+import { signInWindow } from "./sign-in-window";
+import {
+  bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readJsonObject, newCsrfToken, safeDecodePathSegment,
+} from "../../../lib/app-http";
+import { validateDomain, wpToolsService } from "./service";
+import { dashboardBody, dashboardView, layout } from "./views";
+
+function json(body: unknown, status = 200): Response {
+  return jsonResponse(body, { status });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export async function handle(
+  req: Request,
+  path: string,
+  updateNotice?: { current: string; latest: string } | null,
+  _server?: unknown,
+  auth?: { user: string; roles: string[] } | null,
+): Promise<Response> {
+  const method = req.method;
+
+  if (method === "GET" && path === "/health") return json({ ok: true, service: "wp-tools-manager" });
+
+  // The link injected into CloudPanel's Sites page is on a page this addon did
+  // not render, so the browser may have no CSRF cookie yet and a non-adminis-
+  // trator can never get one from an addon page. This hands out that pair and
+  // nothing else: no state is read, and the token is only useful to a request
+  // that can also send the session cookie from this origin.
+  if (method === "GET" && path === "/api/session") {
+    const csrf = newCsrfToken();
+    return jsonResponse({ ok: true }, { csrf });
+  }
+
+  const windowPage = /^\/sign-in\/([^/]+)$/.exec(path);
+  if (method === "GET" && windowPage) {
+    const domain = validateDomain(safeDecodePathSegment(windowPage[1]!));
+    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    return signInWindow(domain);
+  }
+
+  if (method === "GET" && path === "/") {
+    const csrf = newCsrfToken();
+    try {
+      const result = await wpToolsService.sites();
+      if (!result.ok || !result.data) throw new Error(result.error ?? "the WordPress site list is unavailable");
+      return htmlResponse(layout("WordPress Tools", dashboardView(result.data), updateNotice), { csrf });
+    } catch (error) {
+      return htmlResponse(
+        layout("WordPress Tools", `<div class="alert" role="alert">${Bun.escapeHTML(errorMessage(error))}</div>`, updateNotice),
+        { status: 500, csrf },
+      );
+    }
+  }
+
+  if (method === "GET" && path === "/api/dashboard") {
+    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
+    const result = await wpToolsService.sites();
+    if (!result.ok || !result.data) return json(result, 400);
+    return json({ ok: true, data: { html: dashboardBody(result.data) } });
+  }
+
+  if (method !== "POST") return json({ ok: false, error: "not found" }, 404);
+  const denied = guardMutation(req);
+  if (denied) return denied;
+
+  // Reached both from this addon's own page and from the link injected into
+  // CloudPanel's Sites page. This is the one route a non-administrator reaches,
+  // and the only thing this side decides is whose request it is.
+  if (path === "/api/sign-in") {
+    let body: Record<string, unknown>;
+    try {
+      body = await readJsonObject(req, 4 * 1024);
+    } catch (error) {
+      return bodyErrorResponse(error);
+    }
+    const domain = validateDomain(body.domain);
+    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+    const admin = auth?.roles.includes("ROLE_ADMIN") ?? false;
+    if (!admin && !auth?.user) return json({ ok: false, error: "not found" }, 404);
+    // The address comes from the request, never the body: the page can only
+    // agree to add the one it is being answered from.
+    const result = await wpToolsService.signIn(domain, {
+      asUser: admin ? undefined : auth!.user,
+      clientIp: clientIp(req),
+      addBypass: body.addBypass === true,
+      allowBasicAuth: body.allowBasicAuth === true,
+    });
+    return json(result, result.ok ? 200 : 400);
+  }
+
+  if (path === "/api/remove") {
+    const result = await wpToolsService.remove();
+    return json(result, result.ok ? 200 : 400);
+  }
+
+  if (path.startsWith("/api/mainwp-")) {
+    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req, 4 * 1024); }
+    catch (error) { return bodyErrorResponse(error); }
+    let result;
+    if (path === "/api/mainwp-settings") {
+      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+      if (body.remote !== undefined && body.remote !== true) return json({ ok: false, error: "remote must be true" }, 400);
+      const dashboard = body.dashboard === undefined ? undefined : validateDomain(body.dashboard);
+      if (dashboard === null) return json({ ok: false, error: "choose a valid Dashboard hostname" }, 400);
+      result = await wpToolsService.mainwpSettings(body.enabled, dashboard, body.remote === true);
+    } else if (path === "/api/mainwp-sync") result = await wpToolsService.mainwpSync();
+    else if (path === "/api/mainwp-cleanup") {
+      if (body.confirm !== true) return json({ ok: false, error: "confirm MainWP cleanup" }, 400);
+      result = await wpToolsService.mainwpCleanup();
+    } else if (path === "/api/mainwp-connect") {
+      const domain = validateDomain(body.domain);
+      if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+      if (body.confirm !== true) return json({ ok: false, error: "confirm the MainWP connection" }, 400);
+      result = await wpToolsService.mainwpConnect(domain);
+    }
+    return result ? json(result, result.ok ? 200 : 400) : json({ ok: false, error: "not found" }, 404);
+  }
+
+  if (path.startsWith("/api/varnish-")) {
+    // Only sign-in and its CSRF bootstrap are exceptions to the manager's
+    // administrator gate. Keep that boundary explicit here as well.
+    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
+    if (path === "/api/varnish-sync") {
+      const result = await wpToolsService.varnishSync();
+      return json(result, result.ok ? 200 : 400);
+    }
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req, 4 * 1024); }
+    catch (error) { return bodyErrorResponse(error); }
+    if (path === "/api/varnish-settings") {
+      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+      const result = await wpToolsService.varnishSettings(body.enabled);
+      return json(result, result.ok ? 200 : 400);
+    }
+    if (path === "/api/varnish-install") {
+      const domain = validateDomain(body.domain);
+      if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+      const result = await wpToolsService.varnishInstall(domain);
+      return json(result, result.ok ? 200 : 400);
+    }
+  }
+
+  return json({ ok: false, error: "not found" }, 404);
+}

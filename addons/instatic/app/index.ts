@@ -2,15 +2,13 @@
 //
 // The manager router strips the /addons/ prefix before dispatching here.
 
-import type { Server } from "bun";
 import { instaticService, validateDomain, validateTag, validateJobId } from "./service";
 import { layout, dashboardView, newInstanceView, jobView } from "./views";
 import {
-  bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
+  bodyErrorResponse, errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
   safeDecodePathSegment,
 } from "../../../lib/app-http";
 import { listAvailableTags } from "./tags";
-import type { SanitizedSite } from "../../../lib/snapshot-reader";
 import { jobApiRoute } from "../../../lib/job-stream";
 
 function html(body: string, csrf: string, status = 200): Response {
@@ -19,6 +17,25 @@ function html(body: string, csrf: string, status = 200): Response {
 
 function json(body: unknown, status = 200): Response {
   return jsonResponse(body, { status });
+}
+
+async function dashboard(): Promise<string> {
+  const [instances, jobs, available] = await Promise.all([
+    instaticService.listInstancesOrThrow(),
+    instaticService.listJobs(),
+    listAvailableTags(),
+  ]);
+  return dashboardView(instances, available, jobs);
+}
+
+/** A change that landed is reported as landed, even when redrawing the list afterwards fails. */
+async function change(result: { ok: boolean }): Promise<Response> {
+  if (!result.ok) return json(result, 400);
+  try {
+    return json({ ...result, html: await dashboard() });
+  } catch {
+    return json(result);
+  }
 }
 
 const MUTATING_VERBS = new Set(["start", "stop", "restart", "recreate", "delete", "snapshot", "update"]);
@@ -35,7 +52,7 @@ export async function handle(
   req: Request,
   path: string,
   updateNotice?: { current: string; latest: string } | null,
-  server?: Server<unknown> | null,
+  _server?: unknown,
   auth?: { user: string; roles: string[] } | null,
 ): Promise<Response> {
   const method = req.method;
@@ -52,36 +69,11 @@ export async function handle(
     const csrf = newCsrfToken();
     try {
       if (path === "/") {
-        const instances = await instaticService.listInstances();
-        let panelSites: SanitizedSite[] = [];
-        let snapshotAge = Infinity;
-        let snapshotTakenAt = "";
-        try {
-          const { snap, ageSeconds } = await instaticService.snapshot();
-          panelSites = snap.sites;
-          snapshotAge = ageSeconds;
-          snapshotTakenAt = snap.updatedAt;
-        } catch {
-          // Panel inventory unavailable; the action binary already supplied
-          // live instance data above.
-        }
-        // The dashboard needs the registry listing too, not just /new. Without
-        // it the page showed each instance's pinned tag with nothing to compare
-        // it against, so a new Instatic release was invisible here and the
-        // update dialog asked the operator to type a version from memory.
-        const available = await listAvailableTags();
-        return html(
-          page("Instatic instances",
-            dashboardView(instances, snapshotAge, panelSites, available, snapshotTakenAt)
-          ),
-          csrf
-        );
+        return html(page("Instatic instances", await dashboard()), csrf);
       }
-      const available = await listAvailableTags();
-      return html(page("New Instatic site", newInstanceView(await instaticService.nextPort(), available)), csrf);
+      return html(page("New Instatic site", newInstanceView(await listAvailableTags())), csrf);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return html(page("Error", `<div class="alert">${Bun.escapeHTML(msg)}</div>`), csrf, 500);
+      return html(page("Error", errorBlock(err)), csrf, 500);
     }
   }
 
@@ -94,7 +86,8 @@ export async function handle(
     const res = await instaticService.getJob(id);
     if (!res.ok || !res.data) return new Response("Job not found", { status: 404 });
     const csrf = newCsrfToken();
-    return html(page(`Creating ${res.data.job.domain}`, jobView(res.data.job, res.data.log)), csrf);
+    const job = res.data.job;
+    return html(page(`${job.kind === "update" ? "Updating" : "Creating"} ${job.domain}`, jobView(job, res.data.log)), csrf);
   }
 
   if (path === "/api/instances" && method === "GET") {
@@ -117,6 +110,41 @@ export async function handle(
     return json(res, res.ok ? 202 : 400);
   }
 
+  // The dashboard again, for a page waiting on jobs it started to finish.
+  if (path === "/api/dashboard" && method === "GET") {
+    try {
+      return json({ ok: true, html: await dashboard() });
+    } catch (error) {
+      return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
+    }
+  }
+
+  // Several sites at once: each update starts a job of its own; a restart is done
+  // in turn. A site that fails is named rather than stopping the rest.
+  if (path === "/api/bulk" && method === "POST") {
+    const blocked = guardMutation(req);
+    if (blocked) return blocked;
+    let body: Record<string, unknown>;
+    try { body = await readJsonObject(req); } catch (error) { return bodyErrorResponse(error); }
+    const verb = body.verb;
+    if (verb !== "update" && verb !== "restart") return json({ ok: false, error: "verb must be update or restart" }, 400);
+    const tag = verb === "update" ? validateTag(body.tag) : null;
+    if (verb === "update" && !tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
+    if (!Array.isArray(body.domains) || body.domains.length === 0 || body.domains.length > 500) {
+      return json({ ok: false, error: "choose between 1 and 500 sites" }, 400);
+    }
+    const domains = body.domains.map((domain) => validateDomain(domain));
+    if (domains.some((domain) => !domain)) return json({ ok: false, error: "a domain is not a valid hostname" }, 400);
+    const done: string[] = [];
+    const failed: { domain: string; error: string }[] = [];
+    for (const domain of domains as string[]) {
+      const res = verb === "update" ? await instaticService.updateInstance(domain, tag!) : await instaticService.lifecycle(domain, "restart");
+      if (res.ok) done.push(domain);
+      else failed.push({ domain, error: res.error ?? "failed" });
+    }
+    return change({ ok: true, data: { done, failed } } as { ok: boolean });
+  }
+
   if (path === "/api/jobs" && method === "GET") {
     return json({ ok: true, jobs: await instaticService.listJobs() });
   }
@@ -125,7 +153,6 @@ export async function handle(
     req,
     path,
     method,
-    server,
     siteManager: true,
     getJob: (jobId) => instaticService.getJob(jobId),
     watchJob: (jobId, handlers) => instaticService.watchJob(jobId, handlers),
@@ -143,11 +170,6 @@ export async function handle(
       return json(res, res.ok ? 200 : 400);
     }
 
-    if (verb === "creation-log" && method === "GET") {
-      const res = await instaticService.getInstanceCreationLog(domain);
-      return json(res, res.ok ? 200 : 400);
-    }
-
     if (MUTATING_VERBS.has(verb) && method === "POST") {
       const blocked = guardMutation(req);
       if (blocked) return blocked;
@@ -158,7 +180,7 @@ export async function handle(
         case "restart":
         case "recreate": {
           const res = await instaticService.lifecycle(domain, verb);
-          return json(res, res.ok ? 200 : 400);
+          return change(res);
         }
         case "snapshot": {
           const res = await instaticService.snapshotInstance(domain);
@@ -166,7 +188,7 @@ export async function handle(
         }
         case "delete": {
           const res = await instaticService.deleteInstance(domain);
-          return json(res, res.ok ? 200 : 400);
+          return change(res);
         }
         case "update": {
           // Only the read is guarded: an oversized body is a 413 the reader
@@ -181,7 +203,7 @@ export async function handle(
           const tag = validateTag(body.tag);
           if (!tag) return json({ ok: false, error: "tag must be an exact version such as 0.0.18" }, 400);
           const res = await instaticService.updateInstance(domain, tag);
-          return json(res, res.ok ? 200 : 400);
+          return change(res);
         }
       }
     }

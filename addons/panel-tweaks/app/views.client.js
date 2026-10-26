@@ -165,9 +165,3 @@ function setPreviewWidth(button) {
   wrap.classList.toggle('is-phone', button.dataset.width !== '0');
   fitPreview();
 }
-
-function toggleNote(button) {
-  const row = button.closest('.tweak-row');
-  const open = row.classList.toggle('is-open');
-  button.setAttribute('aria-expanded', open ? 'true' : 'false');
-}

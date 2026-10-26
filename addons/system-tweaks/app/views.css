@@ -1,0 +1,50 @@
+.tweak-list > .tweak-row:first-child { padding-top: 0; border-top: 0; }
+.st-status { margin-top: 10px !important; }
+.st-status .badge { margin-right: 6px; }
+.st-install { margin-top: 12px; }
+.st-alert { margin: 12px 0 0; }
+.st-inline-notice { margin: 12px 0 0 !important; padding: 10px 14px; color: var(--warn) !important; }
+.st-kv { display: grid; grid-template-columns: minmax(110px, 180px) minmax(0, 1fr); gap: 10px 25px; align-items: baseline;
+  margin: 0; padding-top: 18px; border-top: 1px solid var(--row-border); font-size: 14px; }
+.st-kv dt { color: var(--muted); }
+.st-kv dd { margin: 0; overflow-wrap: anywhere; }
+.st-table th, .st-table td { padding: 12px 16px; vertical-align: top; }
+.st-table .hint { font-size: 13px; }
+.st-detail { display: block; margin-top: 2px; }
+.st-name { font-weight: 600; }
+.st-state { text-align: right; white-space: nowrap; }
+.st-run-details { margin-top: 8px; }
+.st-run-details summary { cursor: pointer; color: var(--muted); }
+.st-run-details pre { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+@media (max-width: 760px) {
+  .st-kv { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .st-kv dt:not(:first-child) { margin-top: 12px; }
+  .st-table th, .st-table td { padding: 10px 12px; }
+}
+
+/* What the updates switch covers, as one list under it once it is on. */
+.st-options { margin-top: 14px; }
+.st-option { padding: 10px 0; border-top: 1px solid var(--row-border); }
+.st-option:last-child { padding-bottom: 0; }
+.st-option-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.st-option-row > div { min-width: 0; }
+.st-option-row label:not(.switch) { color: var(--text); font-weight: 500; }
+.st-option-row .hint { margin: 2px 0 0; font-size: 13px; }
+.st-option-row .switch { flex: 0 0 auto; margin: 0; }
+.st-reboot-time { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; }
+.st-reboot-time select { flex: 0 1 280px; min-width: 0; }
+.st-reboot-time input { flex: 0 1 170px; min-width: 0; }
+.st-reboot-time + .hint { margin-top: 6px; font-size: 13px; }
+.st-fold { margin-top: 14px; }
+.st-fold > summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+.st-fold > summary .badge { margin-right: 6px; }
+.st-fold[open] > summary { margin-bottom: 10px; }
+.st-fold > .hint { margin: 0 0 10px; font-size: 13px; }
+.card > .st-fold { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--row-border); }
+.tweak-heading select { flex: 0 1 260px; width: auto; min-width: 0; }
+#panel-php-status:empty { display: none; }
+@media (max-width: 760px) {
+  /* The version list takes its own line under the title. */
+  .tweak-heading:has(select) { flex-wrap: wrap; }
+  .tweak-heading select { flex: 1 1 100%; }
+}

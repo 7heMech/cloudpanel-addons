@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  BodyError, MAX_BODY_BYTES, SECURITY_HEADERS, bodyErrorResponse, esc, escJs, guardMutation, htmlResponse,
+  BodyError, MAX_BODY_BYTES, SECURITY_HEADERS, bodyErrorResponse, clientIp, esc, escJs, guardMutation, htmlResponse,
   jsonResponse, newCsrfToken, policyHeaders, policyResponse, readJsonObject, redirectResponse,
   safeDecodePathSegment,
 } from "../lib/app-http";
@@ -48,18 +48,14 @@ describe("response policy", () => {
     expect(fromPairs.headers.get("X-Test")).toBe("two");
   });
 
-  test("the CSRF cookie is sent as a pair: the panel-wide one and the legacy expiry", () => {
+  test("the CSRF cookie is panel-wide, strict and secure", () => {
     const token = newCsrfToken();
     const cookies = htmlResponse("", { csrf: token }).headers.getSetCookie();
-    expect(cookies.length).toBe(2);
+    expect(cookies.length).toBe(1);
     expect(cookies[0]).toContain(`clp_addons_csrf=${token}`);
     expect(cookies[0]).toContain("Path=/");
     expect(cookies[0]).toContain("SameSite=Strict");
     expect(cookies[0]).toContain("Secure");
-    // A browser upgraded from the /addons-scoped cookie holds both and sends
-    // the stale one first, so the old one has to be expired explicitly.
-    expect(cookies[1]).toContain("Path=/addons");
-    expect(cookies[1]).toContain("Max-Age=0");
     expect(htmlResponse("").headers.getSetCookie().length).toBe(0);
   });
 
@@ -175,7 +171,7 @@ describe("bounded JSON reads", () => {
 });
 
 describe("repeated Set-Cookie", () => {
-  test("a caller's cookies survive the merge and join the CSRF pair", () => {
+  test("a caller's cookies survive the merge beside the CSRF cookie", () => {
     const headers = new Headers();
     headers.append("Set-Cookie", "a=1; Path=/");
     headers.append("Set-Cookie", "b=2; Path=/");
@@ -184,8 +180,8 @@ describe("repeated Set-Cookie", () => {
     const cookies = res.headers.getSetCookie();
     expect(cookies).toContain("a=1; Path=/");
     expect(cookies).toContain("b=2; Path=/");
-    // Both the caller's pair and the CSRF pair, not one collapsed value.
-    expect(cookies.length).toBe(4);
+    // The caller's two and the CSRF cookie, not one collapsed value.
+    expect(cookies.length).toBe(3);
     expect(res.headers.get("X-Thing")).toBe("kept");
   });
 
@@ -220,7 +216,8 @@ describe("HTML and JavaScript escaping", () => {
   });
 
   test("the addon error paths escape through Bun rather than by hand", () => {
-    expect(repoSource("addons/instatic/app/index.ts")).toInclude("Bun.escapeHTML(msg)");
+    // errorBlock escapes through esc(), which is Bun.escapeHTML.
+    expect(repoSource("addons/instatic/app/index.ts")).toInclude("errorBlock(err)");
     const stager = repoSource("addons/stager/app/index.ts");
     expect(stager).toInclude("Bun.escapeHTML(");
     expect(stager).not.toInclude("escapeMinimal");
@@ -297,5 +294,31 @@ describe("CSRF and origin guard", () => {
       Host: "panel.example:8443",
       "X-Forwarded-Host": "evil.example:8443",
     }))?.status).toBe(403);
+  });
+});
+
+
+describe("request IP addresses", () => {
+  test("all supported forwarding headers normalize IPv4-mapped hosts", () => {
+    for (const header of ["CF-Connecting-IP", "X-Real-IP", "X-Forwarded-For"]) {
+      for (const value of ["::ffff:203.0.113.9", "::FFFF:CB00:7109", "0:0:0:0:0:ffff:203.0.113.9"]) {
+        const forwarded = header === "X-Forwarded-For" ? `${value}, 198.51.100.1` : value;
+        const req = new Request("https://panel.example.com/", { headers: { [header]: forwarded } });
+        expect(clientIp(req)).toBe("203.0.113.9");
+      }
+    }
+  });
+
+  test("normalization preserves header precedence, ordinary addresses and invalid-IP refusals", () => {
+    expect(clientIp(new Request("https://panel.example.com/", { headers: {
+      "CF-Connecting-IP": "::ffff:203.0.113.9", "X-Real-IP": "198.51.100.1", "X-Forwarded-For": "198.51.100.2",
+    } }))).toBe("203.0.113.9");
+    for (const [value, expected] of [
+      ["203.0.113.9", "203.0.113.9"], ["2001:DB8::1", "2001:DB8::1"],
+      ["::203.0.113.9", "::203.0.113.9"], ["fe80::1%lo", "fe80::1%lo"],
+      ["::ffff:256.0.113.9", ""], ["::ffff:203.0.113.009", ""], ["not-an-ip", ""], ["", ""],
+    ]) {
+      expect(clientIp(new Request("https://panel.example.com/", { headers: { "X-Real-IP": value! } }))).toBe(expected!);
+    }
   });
 });

@@ -112,3 +112,26 @@ test("a re-exec marked as part of the operation does not wait for its parent", a
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a lock directory others could write is moved aside, and a linked lock file is refused", async () => {
+  const { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } = await import("node:fs");
+  const base = mkdtempSync(join(tmpdir(), "lock-dir-"));
+  try {
+    const dir = join(base, "clp-addons");
+    mkdirSync(dir);
+    chmodSync(dir, 0o777);
+    const victim = join(base, "victim");
+    writeFileSync(victim, "keep");
+    symlinkSync(victim, join(dir, "operation.lock"));
+    withOperationLockSync("test", () => {}, { lockDir: dir });
+    expect(readFileSync(victim, "utf8")).toBe("keep");
+    expect(readdirSync(base).some((name) => name.startsWith("clp-addons.untrusted-"))).toBe(true);
+    expect(existsSync(join(dir, "operation.lock"))).toBe(true);
+
+    symlinkSync(victim, join(dir, "other.lock"));
+    expect(() => withFileLockSync(join(dir, "other.lock"), 1, "busy", () => {})).toThrow();
+    expect(readFileSync(victim, "utf8")).toBe("keep");
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});

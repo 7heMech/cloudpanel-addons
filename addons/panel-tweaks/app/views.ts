@@ -1,12 +1,12 @@
 import { esc } from "../../../lib/app-http";
-import { renderLayout } from "../../../lib/app-ui";
+import { TWEAK_ROW_JS, TWEAK_ROW_STYLE, renderLayout, sinceText } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { PanelTweaks, PanelTweaksState } from "../action";
 
 const BASE = mountPath("panel-tweaks");
 
-// Cards, switches, badges, the fleet table and its narrow-screen layout are in
-// lib/app-ui; only the two rows this page alone draws are here.
+// Cards, switches, badges, the switch rows and the fleet table are in lib/app-ui;
+// only what this page alone draws is here.
 import STYLE from "./views.css" with { type: "text" };
 
 import SCRIPT from "./views.client.js" with { type: "text" };
@@ -20,15 +20,15 @@ export function layout(
     brand: "Panel Tweaks",
     base: BASE,
     nav: [],
-    css: STYLE,
-    script: SCRIPT,
+    css: TWEAK_ROW_STYLE + STYLE,
+    script: TWEAK_ROW_JS + SCRIPT,
     updateNotice,
   });
 }
 
 interface TweakCopy {
   key: keyof PanelTweaks;
-  category: "Sites" | "Dashboard" | "Login";
+  category: "Sites" | "Panel";
   title: string;
   description: string;
   /** The switch this one depends on: off with it, and unusable until it is on. */
@@ -64,7 +64,7 @@ const COPY: TweakCopy[] = [
     key: "sitesMobile",
     category: "Sites",
     title: "Sites list as cards on a phone",
-    description: "Turns the Sites table into readable cards below 860px. Switch it off to keep CloudPanel's sideways-scrolling table.",
+    description: "Turns the Sites table into readable cards on narrow screens. Switch it off to keep CloudPanel's sideways-scrolling table.",
   },
   {
     key: "actionMenu",
@@ -74,13 +74,13 @@ const COPY: TweakCopy[] = [
   },
   {
     key: "panelMobile",
-    category: "Dashboard",
+    category: "Panel",
     title: "CloudPanel mobile layout",
     description: "Fits CloudPanel's header, Dashboard charts, new-site pages and Admin Area to phone screens.",
   },
   {
     key: "deviceTheme",
-    category: "Login",
+    category: "Panel",
     title: "Device theme on first visit",
     description: "Uses the device's theme on the first visit. Afterward, CloudPanel's theme switch takes over.",
   },
@@ -118,27 +118,11 @@ function scanControls(state: PanelTweaksState): string {
     <button class="btn" type="button" onclick="measureNow(this)">Measure now</button></div>`;
 }
 
-function tweakList(state: PanelTweaksState): string {
-  return (["Dashboard", "Login", "Sites"] as const).map((category) => `
-        <section class="tweak-category" aria-labelledby="tweak-category-${category.toLowerCase()}">
-          <h3 class="tweak-category-title" id="tweak-category-${category.toLowerCase()}">${category}</h3>${COPY
-            .filter((copy) => copy.category === category)
-            .map((copy) => switchRow(copy, state.tweaks, copy.key === "diskUsage" ? scanControls(state) : ""))
-            .join("")}
-        </section>`).join("");
-}
-
-/** How long ago something happened, in the words a status line would use. */
-export function sinceText(iso: string): string {
-  const at = Date.parse(iso);
-  if (!Number.isFinite(at)) return "never";
-  const minutes = Math.round((Date.now() - at) / 60000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
-  const days = Math.round(hours / 24);
-  return `${days} day${days === 1 ? "" : "s"} ago`;
+function tweakList(state: PanelTweaksState, category: TweakCopy["category"]): string {
+  return COPY
+    .filter((copy) => copy.category === category)
+    .map((copy) => switchRow(copy, state.tweaks, copy.key === "diskUsage" ? scanControls(state) : ""))
+    .join("");
 }
 
 function previewCard(state: PanelTweaksState): string {
@@ -171,8 +155,13 @@ export function dashboardView(state: PanelTweaksState): string {
       </div>
     </div>
     <div class="card">
-      <div class="card-header"><h2>What it adds</h2></div>
-      <div class="tweak-list">${tweakList(state)}
+      <div class="card-header"><h2>Sites</h2></div>
+      <div class="tweak-list">${tweakList(state, "Sites")}
       </div>
-    </div>${previewCard(state)}`;
+    </div>${previewCard(state)}
+    <div class="card">
+      <div class="card-header"><h2>Whole panel</h2></div>
+      <div class="tweak-list">${tweakList(state, "Panel")}
+      </div>
+    </div>`;
 }

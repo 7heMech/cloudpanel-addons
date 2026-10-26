@@ -49,23 +49,36 @@ replace their limits silently.
 
 ## Panel surfaces
 
-Everything is decided at `/addons/php-resources/`: the categories and their
-limits, which sites are in each, and which category new sites join. The site
-table carries selection and a bulk assignment, because moving forty sites is the
-ordinary operation. A site row selects as a whole with a highlighted state and
-keyboard support. Desktop retains the conventional checkbox; at 940px or
-narrower, where rows become cards, it is omitted and the width goes to the site
-card. Category pickers remain independent controls and never alter selection.
-The category editor is a native modal dialog; Cancel, Escape, or a press on its
-backdrop dismisses it without saving. The press, not the click, so that a drag
-out of a field does not discard the edits.
+Everything is decided at `/addons/php-resources/`. The page opens with a drift
+notice when there is drift, then the PHP sites, then the categories with the
+choice of category for new sites in their header. The site table carries
+selection and a bulk assignment, because moving forty sites is the ordinary
+operation; from six sites it has a search and a Drifted filter. Each site shows
+its PHP version under its name. A site row selects as a whole with a
+highlighted state and keyboard support. Desktop retains the conventional
+checkbox; at 940px or narrower, where rows become cards, it is omitted and the
+width goes to the site card. Category pickers remain independent controls and
+never alter selection.
+
+The category editor is a native modal dialog showing the name, process manager
+and max children, which are what a category is chosen by; idle or spare
+workers, recycling, request timeout, open files and the description sit under
+More limits. Cancel, Escape, or a click on its backdrop dismisses it without
+saving.
 
 A site's Settings tab in CloudPanel shows a read-only card under the panel's own
-PHP Settings form, with the category and the limits that site is running. Twig
+PHP Settings form, with the category and a one-line summary of the workers the
+site is running; every limit is behind an All limits toggle. Twig
 cannot see either — they are in a pool file and in this addon's policy — so the
 card is empty markup that fills itself from `/addons/php-resources/site-card`
 and stays hidden if it cannot. No site-scoped addon page and no extra tab: a
 form there would promise that one site's limits can be changed on their own.
+
+Successful mutations return dashboard HTML rendered from their returned state,
+including partial write failures. The browser repaints in place, preserves site
+selection, search and the bulk picker, closes the completed dialog and reports
+the outcome with `notify`.
+A refused change restores its category picker without replacing the view.
 
 ## Writing the pool file
 
@@ -98,19 +111,23 @@ chosen are recorded, so it never reaches back over a fleet that did not ask for
 it; assigning a site explicitly, including to no category, records its id too,
 so a deliberate choice is not overwritten later.
 
-Reconciliation runs as the addon's `repair` upkeep, which the reconcile timer
-fires every fifteen minutes. It puts new sites in the default category and
-rewrites an assigned site whose pool file no longer matches it. The second half
-is not housekeeping: changing a site's PHP version in the panel deletes its pool
-file and writes a stock one under the new version, so a tuned site silently
+Reconciliation runs as the addon's `newSites` hook, seconds after CloudPanel
+writes a new site's vhost (see [Platform](platform.md#new-sites)), and as its
+`repair` upkeep every fifteen minutes. It puts new sites in the default category
+and rewrites an assigned site whose pool file no longer matches it. The second
+half is not housekeeping: changing a site's PHP version in the panel deletes its
+pool file and writes a stock one under the new version, so a tuned site silently
 returns to 250 max children the moment somebody moves it from 8.2 to 8.3. The
 addon page offers the same repair on demand, for an operator who does not want
 to wait. An assignment for a site CloudPanel no longer has is dropped in the
 same pass.
 
-No timer of its own: nothing here is urgent enough to justify one, and a new
-site runs on CloudPanel's values in the meantime, which is what it would have
-run on anyway.
+A pool matches its category when it holds the directives the category would
+write, so numbers the chosen process manager never reads, such as spare servers
+under `ondemand`, do not count as drift. A new site whose pool file could not be
+written, such as one CloudPanel has not written yet, is not recorded as known,
+so the next pass tries it again. A pass that changes nothing leaves the policy
+file alone.
 
 ## Abandoned temp files
 

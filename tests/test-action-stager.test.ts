@@ -3,8 +3,9 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { applicationOk } from "../addons/stager/action";
+import { applicationOk, dotenvProblem, holdCloneMail, rewriteDotenvContent, rewriteWpConfig } from "../addons/stager/action";
 import { expandTarget } from "../addons/stager/app/service";
+import { CLIENT_JS } from "../addons/stager/app/views";
 
 const repo = join(import.meta.dir, "..");
 
@@ -131,6 +132,49 @@ describe("the target shorthand", () => {
       expect(expandTarget(input, "example.com")).toBe(expected);
     });
   }
+
+  test("a bare label goes under the bare domain of a www site", () => {
+    expect(expandTarget("stg", "www.example.com")).toBe("stg.example.com");
+    expect(expandTarget("stg", "shop.example.com")).toBe("stg.shop.example.com");
+  });
+
+  test("the page's script expands it the same way", () => {
+    const page = { readyState: "loading", addEventListener() {} };
+    const expand = new Function("document", `${CLIENT_JS}\nreturn expandTarget;`)(page) as typeof expandTarget;
+    expect(expand("STG", "www.example.com")).toBe("stg.example.com");
+  });
+});
+
+describe("a clone's mail while SMTP Relay is enabled", () => {
+  test("goes to the Don't send profile", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "stager-smtp-"));
+    writeFileSync(join(dir, "smtp.conf"), "");
+    const sent: string[] = [];
+    const notes: string[] = [];
+    await holdCloneMail({ smtpConfigFile: join(dir, "smtp.conf") }, "stg.example.com", notes, async (input) => { sent.push(input); });
+    expect(sent.map((input) => JSON.parse(input))).toEqual([{ domains: ["stg.example.com"], profileId: "dont-send" }]);
+    expect(notes.join(" ")).toContain("discards stg.example.com's mail");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("is left alone when SMTP Relay is not enabled", async () => {
+    let calls = 0;
+    const notes: string[] = [];
+    await holdCloneMail({ smtpConfigFile: "/nonexistent/smtp.conf" }, "stg.example.com", notes, async () => { calls++; });
+    expect(calls).toBe(0);
+    expect(notes).toEqual([]);
+  });
+
+  test("becomes a note, not a failed clone, when the assignment fails", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "stager-smtp-"));
+    writeFileSync(join(dir, "smtp.conf"), "");
+    const notes: string[] = [];
+    await holdCloneMail({ smtpConfigFile: join(dir, "smtp.conf") }, "stg.example.com", notes, async () => {
+      throw new Error("no such profile: dont-send");
+    });
+    expect(notes.join(" ")).toContain("could not be put in SMTP Relay's Don't send profile");
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 // `site.application` is the one value in the panel write that does not come
@@ -280,5 +324,51 @@ describe("a site the job adopted is not a site the job created", () => {
   // the work to systemd is closed where the work actually starts.
   test("the run verb re-checks that the target does not already exist", () => {
     expect(stager()).toMatch(/if \(siteExists\(paths, ctx\.target\)\) \{\n\s*failJob/);
+  });
+});
+
+test("a .env the clone cannot repoint fails it", () => {
+  expect(dotenvProblem("DB_DATABASE=a\nDB_USERNAME=b\nDB_PASSWORD=c\n")).toBeNull();
+  expect(dotenvProblem("DB_DATABASE=a\nDB_USERNAME=b\nDB_PASSWORD=c\nDATABASE_URL=mysql://live\n")).toContain("database URL");
+  expect(dotenvProblem("DB_DATABASE=a\n")).toContain("DB_USERNAME, DB_PASSWORD");
+  const exported = "export DB_DATABASE=live\nexport DB_USERNAME=live\n  DB_PASSWORD = secret\nAPP_KEY=x\n";
+  expect(dotenvProblem(exported)).toBeNull();
+  expect(rewriteDotenvContent(exported, { name: "stg", user: "stg_u", pass: "p$&1" }))
+    .toBe("export DB_DATABASE=stg\nexport DB_USERNAME=stg_u\n  DB_PASSWORD=p$&1\nAPP_KEY=x\n");
+  // A source with a database and neither file is not cloned at all.
+  expect(readFileSync(join(import.meta.dir, "../addons/stager/action.ts"), "utf-8")).toMatch(/\} else \{\n\s*failJob\(ctx, `found no wp-config\.php or \.env/);
+});
+
+describe("the clone's wp-config.php", () => {
+  const db = { name: "stg_db", user: "stg_user", pass: "s3cret" };
+
+  test("is pointed at the clone's database whatever quotes and spacing it uses", () => {
+    const rewritten = rewriteWpConfig([
+      `define( 'DB_NAME', 'live_db' );`,
+      `define("DB_USER","live_user");`,
+      `define(\t'DB_PASSWORD' ,\t"p'a\\"ss" ) ;`,
+    ].join("\n"), "stg.example.test", db);
+    expect(rewritten).not.toContain("live_");
+    expect(rewritten).toContain(`define( 'DB_NAME', 'stg_db' );`);
+    expect(rewritten).toContain(`define( 'DB_USER', 'stg_user' );`);
+    expect(rewritten).toContain(`define( 'DB_PASSWORD', 's3cret' );`);
+    expect(rewritten).toContain(`define( 'WP_HOME', 'https://stg.example.test' );`);
+  });
+
+  test("fails rather than keep a credential it cannot rewrite", () => {
+    expect(() => rewriteWpConfig([
+      `define( 'DB_NAME', getenv('DB_NAME') );`,
+      `define( 'DB_USER', 'live_user' );`,
+      `define( 'DB_PASSWORD', 'x' );`,
+    ].join("\n"), "stg.example.test", db)).toThrow("DB_NAME");
+    expect(() => rewriteWpConfig(`define( 'DB_NAME', 'a' );`, "stg.example.test", db)).toThrow("DB_USER");
+  });
+
+  test("writes a password with replacement patterns in it literally", () => {
+    const rewritten = rewriteWpConfig(
+      `define('DB_NAME','a');define('DB_USER','b');define('DB_PASSWORD','c');`,
+      "stg.example.test", { ...db, pass: "x$&y$1" },
+    );
+    expect(rewritten).toContain(`'x$&y$1'`);
   });
 });

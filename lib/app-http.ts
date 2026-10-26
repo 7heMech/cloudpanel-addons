@@ -7,6 +7,7 @@
 import { randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import { secretEquals } from "./secret-equals";
+import { normalizeMappedIpv4 } from "./ip-address";
 
 const CSRF_COOKIE = "clp_addons_csrf";
 const CSRF_HEADER = "x-clp-addons-csrf";
@@ -19,23 +20,10 @@ function readCookie(req: Request, name: string): string | null {
   return new Bun.CookieMap(req.headers.get("cookie") ?? "").get(name);
 }
 
-/**
- * Expiry for the `/addons`-scoped cookie an older release set.
- *
- * A cookie's identity is its name, domain and path, so the panel-wide cookie
- * does not replace it: after an upgrade a browser holds both, and sends both
- * under `/addons`, longest path first. The server reads the first, which is the
- * stale one, while a page mounted in a panel route can only see the new one --
- * every action would be refused as a mismatch until the browser closed.
- * Expiring a cookie that is not there does nothing, so this is sent always.
- */
-const LEGACY_CSRF_EXPIRY = `${CSRF_COOKIE}=; Path=/addons; Max-Age=0; SameSite=Strict; Secure`;
-
-/** Response headers with the CSRF cookie set and the superseded one expired. */
+/** Response headers with the CSRF cookie set. */
 export function withCsrfCookie(headers: Record<string, string>, token: string): Headers {
   const out = new Headers(headers);
   out.append("Set-Cookie", csrfCookieHeader(token));
-  out.append("Set-Cookie", LEGACY_CSRF_EXPIRY);
   return out;
 }
 
@@ -56,8 +44,7 @@ export function csrfCookieHeader(token: string): string {
 /**
  * What every response from an addon gets unless it deliberately says otherwise.
  *
- * `csrf` attaches the cookie pair `withCsrfCookie` sets: the panel-wide cookie
- * and the expiry for the `/addons`-scoped one an older release wrote.
+ * `csrf` attaches the CSRF cookie `withCsrfCookie` sets.
  */
 export interface ResponsePolicy {
   status?: number;
@@ -96,7 +83,6 @@ function buildHeaders(contentType: string | null, policy: ResponsePolicy): Heade
   for (const cookie of extra.getSetCookie()) headers.append("Set-Cookie", cookie);
   if (policy.csrf !== undefined) {
     headers.append("Set-Cookie", csrfCookieHeader(policy.csrf));
-    headers.append("Set-Cookie", LEGACY_CSRF_EXPIRY);
   }
   return headers;
 }
@@ -142,7 +128,7 @@ export class BodyError extends Error {
 export const MAX_BODY_BYTES = 64 * 1024;
 
 /**
- * Read a request body as text, refusing anything larger than `maxBytes`.
+ * Read an HTTP body as text, refusing anything larger than `maxBytes`.
  *
  * The declared length is checked first so an oversized body can be refused
  * before a byte of it is read. That check alone is not enough: `Content-Length`
@@ -151,7 +137,7 @@ export const MAX_BODY_BYTES = 64 * 1024;
  * could measure it. So the stream is counted as it arrives and abandoned the
  * moment it passes the limit.
  */
-export async function readBoundedText(req: Request, maxBytes = MAX_BODY_BYTES): Promise<string> {
+export async function readBoundedText(req: Request | Response, maxBytes = MAX_BODY_BYTES): Promise<string> {
   const declared = req.headers.get("content-length");
   if (declared !== null) {
     // RFC 9110 gives Content-Length as 1*DIGIT. Number() would take "0x40",
@@ -224,6 +210,29 @@ export function safeDecodePathSegment(segment: string): string | null {
 
 /** Returns null when the request may proceed, or a Response to send instead. */
 export function guardMutation(req: Request): Response | null {
+  const denied = guardOrigin(req);
+  if (denied) return denied;
+
+  const sent = req.headers.get(CSRF_HEADER);
+  const cookie = readCookie(req, CSRF_COOKIE);
+  if (!sent || !cookie || !secretEquals(sent, cookie)) {
+    // The cookie is set Secure, so a browser on plain http never stores it.
+    return jsonResponse({
+      ok: false,
+      error: cookie
+        ? "CSRF token mismatched; reload the page and try again"
+        : "CSRF cookie missing. It is set Secure, so use the CloudPanel HTTPS URL.",
+    }, { status: 403 });
+  }
+
+  return null;
+}
+
+/**
+ * The same-origin half of `guardMutation`, for the sign-in routes that are
+ * answered before there is a session or a CSRF cookie to compare.
+ */
+export function guardOrigin(req: Request): Response | null {
   const origin = req.headers.get("origin");
   const host = req.headers.get("host");
 
@@ -271,18 +280,6 @@ export function guardMutation(req: Request): Response | null {
     return jsonResponse({ ok: false, error: "cross-origin request refused" }, { status: 403 });
   }
 
-  const sent = req.headers.get(CSRF_HEADER);
-  const cookie = readCookie(req, CSRF_COOKIE);
-  if (!sent || !cookie || !secretEquals(sent, cookie)) {
-    // The cookie is set Secure, so a browser on plain http never stores it.
-    return jsonResponse({
-      ok: false,
-      error: cookie
-        ? "CSRF token mismatched; reload the page and try again"
-        : "CSRF cookie missing. It is set Secure, so use the CloudPanel HTTPS URL.",
-    }, { status: 403 });
-  }
-
   return null;
 }
 
@@ -292,12 +289,12 @@ const DOMAIN_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-
  * The browser's address as the panel saw it, preferring the visitor address
  * Cloudflare sends. The panel's own Nginx takes forwarded addresses from any
  * peer, so this is what the browser claims rather than something proven: it
- * only decides what an operator is shown or offered, and the one thing it can
- * write -- a maintenance bypass -- is one an administrator could add by hand.
+ * only decides what an operator is shown or offered. Any maintenance or basic-
+ * auth bypass requires an administrator, who could add it by hand.
  */
 export function clientIp(req: Request): string {
   const candidate = (req.headers.get("cf-connecting-ip") ?? req.headers.get("x-real-ip") ?? req.headers.get("x-forwarded-for")?.split(",")[0] ?? "").trim();
-  return isIP(candidate) ? candidate : "";
+  return isIP(candidate) ? normalizeMappedIpv4(candidate) : "";
 }
 
 /** A hostname from a request, lowercased and without a trailing dot, or null. */
@@ -340,3 +337,12 @@ export const SECURITY_HEADERS: Record<string, string> = {
   "Referrer-Policy": "no-referrer",
   "X-Frame-Options": "DENY",
 };
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** What a page draws in place of its content when loading it failed. */
+export function errorBlock(error: unknown): string {
+  return `<div class="alert" role="alert">${esc(errorMessage(error))}</div>`;
+}

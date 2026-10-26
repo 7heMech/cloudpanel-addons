@@ -98,7 +98,7 @@ test("a dialog is usable on a phone", () => {
 // ignores anything else, so a dialog built with the wrong key opens explaining
 // nothing and no type, test or console message says so.
 test("every confirmAction call uses the keys the shared dialog reads", () => {
-  const known = ["title", "text", "details", "confirmLabel", "danger", "onAccept"];
+  const known = ["title", "text", "details", "confirmLabel", "danger", "typed", "onAccept"];
   const files = [...ADDON_NAMES.map((name) => `addons/${name}/app/views.client.js`), "manager/views.client.js"]
     .map((file) => join(repo, file)).filter((file) => existsSync(file));
   const unknown = new Set<string>();
@@ -140,18 +140,17 @@ test("a fleet table gives the domain its own line on a phone", () => {
   expect(narrow).toContain(".fleet-table td[data-label]::before { content: attr(data-label);");
 
   for (const html of [
-    maintenanceFleetView([{
+    maintenanceFleetView({ global: { global: false, bypasses: [] }, sites: [{
       domain: "a-rather-long-hostname.example.test", user: "site-user", type: "php", enabled: false,
-      customTemplate: false, bypasses: [], error: "",
-    }]),
+      customTemplate: false, bypasses: [], uncovered: null,
+    }] }),
     cloudflareDashboardView({
       autoEnableNewSites: false,
-      sites: [{ domain: "a-rather-long-hostname.example.test", type: "php", enabled: false, excludedFromAutomatic: false }],
+      sites: [{ domain: "a-rather-long-hostname.example.test", enabled: false }],
     }),
   ]) {
     expect(html).toContain('<table class="fleet-table');
     expect(html).toContain('<td class="site-cell"');
-    expect(html).toContain('<td class="type-cell">');
   }
 });
 
@@ -196,4 +195,12 @@ test("a rejected request carries the state the route says it reached", async () 
   const refused = load(reply(400, { ok: false, error: "that is not a tweak" }));
   const plain = await refused.call("/api/tweaks", { method: "POST" }).catch((e: Error & { data?: unknown }) => e);
   expect(plain.data).toBeUndefined();
+});
+
+test("converted addon actions repaint without carrying notices through a reload", () => {
+  for (const script of [GIT_CLIENT_JS, INSTATIC_CLIENT_JS, PHP_RESOURCES_CLIENT_JS]) {
+    expect(script).not.toContain("location.reload");
+    expect(script).not.toContain("reloadWithFlash");
+    expect(script).toContain("repaintView(");
+  }
 });

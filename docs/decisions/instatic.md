@@ -8,13 +8,41 @@ whole mount, including lifecycle actions and job pages. CloudPanel gives site
 managers access to every site, so the instance list is not scoped per account.
 Ordinary users cannot enter the addon, and its New Site tile names only the two
 allowed roles in Twig. The addon header omits Addons and Admin Area links for a
-site manager, keeping Instances and New site available.
+site manager; the dashboard and its New site button stay available.
 
 Job streams recheck the same roles against the active CloudPanel account every
 15 seconds. Expiry, deactivation, or demotion to an ordinary user closes the
 stream. Installation and addon settings remain on the administrator's manager
 pages. Image selection is limited to exact versions of the fixed Instatic
 registry image; callers cannot supply container commands or mount paths.
+
+Lifecycle actions and deletion return dashboard HTML from the same renderer as
+the first load, and the page repaints in place and reports the outcome. An
+update is a job, like a creation: one update opens its job page, which streams
+the log, including a rolled-back update's container output. Sites can be
+selected and updated to the latest version or restarted together; each update
+is its own job. While any job runs, the dashboard fetches itself again every
+four seconds, and an updating row shows its step and cannot be selected. A
+failed update is named on its row until another replaces it. A finished job
+repaints its result view. A site's name is plain text, so clicking it selects
+the row like the rest of it; Manage starts with Open admin and Visit site. On a
+wide screen Manage opens a menu; on a phone its buttons open below Update and
+Manage, which stay where they were.
+
+The dashboard reads instances, jobs and registry tags in parallel. A
+creation that is queued, running, or failed with no instance to show for it is a
+row at the top, linking to its job page. An instance is deleted from the panel
+when the action's `list` says `panelSite: false`; such a row offers only Logs and
+Delete. Update appears only when the registry has a newer version and offers only
+newer versions. When ghcr.io cannot be reached, Update is disabled and no tag is
+called the latest; the failure is remembered for a minute, so repaints do not each
+wait out the 8 s timeout. Delete asks for the domain to be typed, and removes the
+CloudPanel site only when the addon created it. The New site form reads only the
+tag list: the port is chosen when the site is created.
+
+A creation job records `certificate` (`issued`, `failed` or `none`), and a failed
+request is a warning on the job page; records from 1.5.x, without it, keep the
+old wording. The creation log lives with the job record and expires with it.
 
 ## Instance model
 
@@ -49,11 +77,10 @@ when they do not start with a letter.
 Instatic declares `requiresUnits: ["docker"]` (`addons/instatic/addon.ts`).
 `clp-addons install instatic` / `enable instatic` -- whether run from the CLI
 or triggered from the Addons UI -- provision Docker themselves when it is
-missing, the same way `install.sh --install-docker` does for a fresh host:
-download `get.docker.com` and run it, then `systemctl enable --now docker`
-(`ensureRequiredUnits` in `cli/provision.ts`). Enabling instatic never fails
-just because Docker was never installed; it only fails if that provisioning
-itself does not bring the unit up.
+missing: download `get.docker.com` and run it, then `systemctl enable --now
+docker` (`ensureRequiredUnits` in `cli/provision.ts`). Enabling instatic
+never fails just because Docker was never installed; it only fails if that
+provisioning itself does not bring the unit up.
 
 ## Storage and replacement
 
@@ -64,7 +91,10 @@ private files out of the web root.
 
 Update and recreate take a clean local snapshot before replacing the container.
 The recorded data and encryption key are retained, and a failed health check
-restores the previous version. User-created snapshots are a five-file rolling
+restores the previous version. The check needs a 2xx or 3xx from the container
+itself, then a 2xx, 3xx, 401, 403 or 503 through Nginx: a site behind
+Cloudflare IP Access refuses the server's own address with 403, and maintenance
+mode answers 503, before the request is proxied. User-created snapshots are a five-file rolling
 window. Deletion writes a separate final archive and does not prune earlier
 deletion archives.
 

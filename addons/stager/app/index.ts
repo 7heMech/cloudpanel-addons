@@ -2,14 +2,14 @@
 //
 // The manager router strips the /addons/ prefix before dispatching here.
 
-import type { Server } from "bun";
-import { stagerService, validateDomain, validateJobId, expandTarget } from "./service";
+import { stagerService, validateDomain, validateJobId, expandTarget, promoteBlocked } from "./service";
 import type { JobResult, JobView } from "./service";
-import { layout, fragment, jobsView, newCloneView, jobView, promoteListView, promoteView, siteStagingView } from "./views";
+import { layout, fragment, jobsView, newCloneView, jobView, promoteView, siteStagingView } from "./views";
 import {
-  bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
+  bodyErrorResponse, errorBlock, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
   redirectResponse, safeDecodePathSegment,
 } from "../../../lib/app-http";
+import { mountPath } from "../../../lib/mount";
 import { getNextAvailablePort, type SanitizedSite } from "../../../lib/snapshot-reader";
 // The Stager already depends on the Instatic addon: cloning a reverse-proxy
 // site means driving its action binary, and this addon refuses one whose backend is
@@ -88,7 +88,7 @@ export async function handle(
   req: Request,
   path: string,
   updateNotice?: { current: string; latest: string } | null,
-  server?: Server<unknown> | null,
+  _server?: unknown,
 ): Promise<Response> {
   const url = new URL(req.url);
   const method = req.method;
@@ -207,16 +207,18 @@ export async function handle(
           csrf, 400
         );
       }
-      const detail = await stagerService.describe(source);
-      if (!detail.ok || !detail.data) {
+      // The listing applies every gate the action does, so a source it leaves
+      // out is one a clone would refuse; describe says which gate.
+      const sites = await stagerService.listSites();
+      const summary = sites.find((site) => site.domain === source);
+      if (!summary) {
+        const detail = await stagerService.describe(source);
         return html(
-          layout("New staging site",
-            newCloneView(null, await stagerService.listSites(), detail.error ?? `Cannot clone ${source}.`),
-            updateNotice),
+          layout("New staging site", newCloneView(null, sites, detail.error ?? `Cannot clone ${source}.`), updateNotice),
           csrf, 400
         );
       }
-      return html(layout(`Clone ${source}`, newCloneView(detail.data, []), updateNotice), csrf);
+      return html(layout(`Clone ${source}`, newCloneView(summary, []), updateNotice), csrf);
     } catch (err) {
       return html(layout("Error", errorBlock(err), updateNotice), csrf, 500);
     }
@@ -260,14 +262,9 @@ export async function handle(
   if (method === "GET" && path === "/promote") {
     const csrf = newCsrfToken();
     try {
-      const rawJob = url.searchParams.get("job");
-      if (!rawJob) {
-        return html(layout("Promote to live", promoteListView(await stagerService.listJobs()), updateNotice), csrf);
-      }
-      const id = validateJobId(rawJob);
-      if (!id) {
-        return html(layout("Promote to live", promoteListView(await stagerService.listJobs()), updateNotice), csrf, 400);
-      }
+      // The list of clones is where a promote is chosen.
+      const id = validateJobId(url.searchParams.get("job") ?? "");
+      if (!id) return redirectResponse(`${mountPath("stager")}/`);
       const res = await stagerService.getJob(id);
       if (!res.ok || !res.data) {
         return html(layout("Not found", `<div class="alert">${Bun.escapeHTML(res.error ?? "No such job.")}</div>`, updateNotice), csrf, 404);
@@ -290,7 +287,6 @@ export async function handle(
     req,
     path,
     method,
-    server,
     getJob: (jobId) => stagerService.getJob(jobId),
     watchJob: (jobId, handlers) => stagerService.watchJob(jobId, handlers),
   });
@@ -352,14 +348,10 @@ async function postClone(req: Request): Promise<Response> {
   // Instatic site, and that is settled by asking the action binary rather
   // than by trusting the body. Nothing here is ever logged.
   //
-  // `sites` rather than `describe`, because the only question this route has is
-  // what type the source is and `describe` answers it by also running `du -sm`
-  // over the whole document root -- a read with a 120-second timeout that a PHP
-  // clone needing no credentials has no use for. The listing applies the same
-  // gates, including leaving out a reverse proxy whose backend is not an
-  // instance this box manages, so a source missing from it is one the action binary
-  // would refuse; `describe` is asked once after that, for the sentence saying
-  // which condition applied.
+  // The listing applies the same gates as a clone, including leaving out a
+  // reverse proxy whose backend is not an instance this box manages, so a
+  // source missing from it is one the action binary would refuse; `describe`
+  // is asked once after that, for the sentence saying which condition applied.
   const summary = (await stagerService.listSites()).find((site) => site.domain === source);
   if (!summary) {
     const detail = await stagerService.describe(source);
@@ -425,15 +417,6 @@ async function postClone(req: Request): Promise<Response> {
 
   const res = await stagerService.startClone(source, target, tls === true, instatic);
   return json(res, res.ok ? 200 : 400);
-}
-
-/** Why this clone record cannot be the basis of a promote, or "" if it can. */
-function promoteBlocked(job: JobView): string {
-  if (job.kind === "promote") return "That job is itself a promote; promote from the clone that created the staging site.";
-  if (job.state !== "done") return `That clone is ${job.state}. Only a finished clone can be promoted.`;
-  if (!job.result) return "That clone recorded no result, so there is nothing to say what it produced.";
-  if (!job.source || !job.target) return "That clone record is incomplete.";
-  return "";
 }
 
 /**
@@ -524,9 +507,4 @@ async function postPromote(req: Request): Promise<Response> {
 
   const res = await stagerService.startPromote(staging, live, instatic);
   return json(res, res.ok ? 200 : 400);
-}
-
-function errorBlock(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err);
-  return `<div class="alert">${Bun.escapeHTML(msg)}</div>`;
 }

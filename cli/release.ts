@@ -1,8 +1,10 @@
-import { chmodSync, chownSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname } from "node:path";
-import { GH_PRIVATE, REPO } from "./paths";
-import { fatal, log, requireRoot, run, tryRun } from "./util";
+import { existsSync, readFileSync } from "node:fs";
+import { bundleFromJSON } from "@sigstore/bundle";
+import type { TrustedRoot } from "@sigstore/protobuf-specs";
+import { getTrustedRoot } from "@sigstore/tuf";
+import { Verifier, toSignedEntity, toTrustMaterial } from "@sigstore/verify";
+import { REPO, SIGSTORE_DIR } from "./paths";
+import { fatal, log } from "./util";
 
 const API = "https://api.github.com";
 const VERSION_TAG_RE = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
@@ -100,68 +102,52 @@ export async function fetchVerified(rel: ResolvedRelease, names: string[]): Prom
   return artifacts;
 }
 
-/** Recover the verifier before any downloaded addon binary is trusted. */
-export async function ensureGh(privatePath = GH_PRIVATE): Promise<string> {
-  for (const candidate of [privatePath, Bun.which("gh", { PATH: process.env.PATH })]) {
-    if (!candidate) continue;
-    if (tryRun(candidate, ["attestation", "--help"]).ok) return candidate;
-  }
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
-  requireRoot("install GitHub CLI");
-  const arch = process.arch === "x64" ? "amd64" : process.arch === "arm64" ? "arm64" : null;
-  if (process.platform !== "linux" || !arch) fatal(`GitHub CLI bootstrap does not support ${process.platform}/${process.arch}`);
-  log.step("installing GitHub CLI for provenance verification");
-  const release = await github("/repos/cli/cli/releases/latest") as GithubRelease;
-  if (!/^v\d+\.\d+\.\d+$/.test(release.tag_name) || release.draft || release.prerelease) {
-    fatal("GitHub CLI did not return a stable release tag");
-  }
-  const version = release.tag_name.slice(1);
-  const folder = `gh_${version}_linux_${arch}`;
-  const tarball = `${folder}.tar.gz`;
-  const base = `https://github.com/cli/cli/releases/download/${release.tag_name}`;
-  const sums = parseSums((await download(`${base}/gh_${version}_checksums.txt`)).toString("utf-8"));
-  const expected = sums.get(tarball);
-  if (!expected) fatal(`GitHub CLI checksums do not list ${tarball}`);
-  const bytes = await download(`${base}/${tarball}`);
-  if (sha256(bytes) !== expected) fatal(`checksum mismatch for ${tarball}`);
-  log.ok(`${tarball} checksum verified`);
+/**
+ * What `gh attestation verify --repo --signer-workflow` checks: a SLSA
+ * provenance statement for these bytes, signed in Sigstore's public log by a
+ * certificate GitHub Actions issued to this repository's release workflow for
+ * this release's own tag, so an attestation of another tag does not vouch for
+ * it. The source repository is checked apart from the workflow because a
+ * reusable workflow signs for whichever repository calls it.
+ */
+export const provenancePolicy = (tag: string) => ({
+  subjectAlternativeName: new RegExp(`^https://github\\.com/${escapeRegExp(REPO)}/\\.github/workflows/release\\.yml@refs/tags/${escapeRegExp(tag)}$`),
+  extensions: { issuer: "https://token.actions.githubusercontent.com" },
+  oids: [{ oid: { id: [1, 3, 6, 1, 4, 1, 57264, 1, 12] }, value: derUtf8(`https://github.com/${REPO}`) }],
+});
 
-  const directory = mkdtempSync(`${tmpdir()}/clp-addons-gh-`);
-  let staging: string | undefined;
+function derUtf8(text: string): Buffer {
+  const bytes = Buffer.from(text, "utf-8");
+  return Buffer.concat([Buffer.from([0x0c, bytes.length]), bytes]);
+}
+
+interface Statement {
+  predicateType?: string;
+  subject?: { digest?: { sha256?: string } }[];
+}
+
+function statementOf(bundle: { dsseEnvelope?: { payload?: string } }): Statement | null {
   try {
-    const archive = `${directory}/${tarball}`;
-    writeFileSync(archive, bytes, { mode: 0o600 });
-    run("tar", ["-xzf", archive, "-C", directory, "--no-same-owner", "--no-same-permissions", "--", `${folder}/bin/gh`]);
-    const extracted = `${directory}/${folder}/bin/gh`;
-    if (!lstatSync(extracted).isFile()) fatal("GitHub CLI archive does not contain a regular gh executable");
-
-    const destination = dirname(privatePath);
-    mkdirSync(destination, { recursive: true, mode: 0o755 });
-    const parent = lstatSync(destination);
-    if (!parent.isDirectory() || parent.uid !== 0 || (parent.mode & 0o022) !== 0) {
-      fatal(`GitHub CLI installation directory must be root-owned and not writable by group or others: ${destination}`);
-    }
-    // Stage on the destination filesystem, also allowing /tmp to be noexec.
-    // A failed download or capability probe must leave the previous gh intact.
-    staging = mkdtempSync(`${destination}/.gh-`);
-    const staged = `${staging}/gh`;
-    writeFileSync(staged, readFileSync(extracted), { mode: 0o755 });
-    chownSync(staged, 0, 0);
-    chmodSync(staged, 0o755);
-    if (!tryRun(staged, ["attestation", "--help"]).ok) fatal("downloaded GitHub CLI does not support attestation");
-    renameSync(staged, privatePath);
-    log.ok(`gh ${release.tag_name} installed`);
-    return privatePath;
-  } finally {
-    if (staging) rmSync(staging, { recursive: true, force: true });
-    rmSync(directory, { recursive: true, force: true });
+    return JSON.parse(Buffer.from(bundle.dsseEnvelope?.payload ?? "", "base64").toString("utf-8")) as Statement;
+  } catch {
+    return null;
   }
+}
+
+/** Sigstore's current keys, refreshed through its TUF repository into a root-only cache. */
+function sigstoreTrustedRoot(): Promise<TrustedRoot> {
+  return getTrustedRoot({ cachePath: SIGSTORE_DIR });
 }
 
 export async function verifyAttestation(
   rel: ResolvedRelease,
   artifacts: FetchedArtifact[],
   skip: boolean,
+  trustedRoot: () => Promise<TrustedRoot> = sigstoreTrustedRoot,
 ): Promise<void> {
   if (skip) {
     log.warn("provenance verification skipped; checksums alone cannot detect substitution");
@@ -169,26 +155,34 @@ export async function verifyAttestation(
   }
   const bundlesUrl = rel.assets.get(BUNDLES_ASSET);
   if (!bundlesUrl) fatal(`release ${rel.tag} has no ${BUNDLES_ASSET} asset`);
-  const gh = await ensureGh();
-
-  const directory = mkdtempSync(`${tmpdir()}/clp-addons-attest-`);
+  const lines = (await download(bundlesUrl)).toString("utf-8").split("\n").filter((line) => line.trim());
+  let bundles: { dsseEnvelope?: { payload?: string } }[];
   try {
-    const bundlePath = `${directory}/${BUNDLES_ASSET}`;
-    writeFileSync(bundlePath, await download(bundlesUrl));
-    for (const artifact of artifacts) {
-      const artifactPath = `${directory}/${artifact.name}`;
-      writeFileSync(artifactPath, artifact.bytes);
-      const result = tryRun(gh, [
-        "attestation", "verify", artifactPath,
-        "--bundle", bundlePath,
-        "--repo", REPO,
-        "--signer-workflow", `${REPO}/.github/workflows/release.yml`,
-      ]);
-      if (!result.ok) fatal(`provenance verification failed for ${artifact.name}:\n${result.out}`);
-      log.ok(`${artifact.name} provenance verified`);
+    bundles = lines.map((line) => JSON.parse(line));
+  } catch {
+    fatal(`${BUNDLES_ASSET} in release ${rel.tag} is not valid JSON lines`);
+  }
+  let verifier: Verifier;
+  try {
+    verifier = new Verifier(toTrustMaterial(await trustedRoot()));
+  } catch (error) {
+    fatal(`could not load Sigstore's trusted keys: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  for (const artifact of artifacts) {
+    const digest = sha256(artifact.bytes);
+    const bundle = bundles.find((candidate) => {
+      const statement = statementOf(candidate);
+      return statement?.predicateType === "https://slsa.dev/provenance/v1" &&
+        statement.subject?.some((subject) => subject.digest?.sha256 === digest);
+    });
+    if (!bundle) fatal(`provenance verification failed for ${artifact.name}: no attestation names these bytes`);
+    try {
+      verifier.verify(toSignedEntity(bundleFromJSON(bundle)), provenancePolicy(rel.tag));
+    } catch (error) {
+      fatal(`provenance verification failed for ${artifact.name}: ${error instanceof Error ? error.message : String(error)}`);
     }
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
+    log.ok(`${artifact.name} provenance verified`);
   }
 }
 

@@ -6,31 +6,48 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
-  DEFAULT_MAINTENANCE_TEMPLATE, MAX_BYPASS_IPS, MAX_TEMPLATE_BYTES, addBypass, executeMaintenanceAction, purgeVarnish,
-  type MaintenanceActionPaths, type MaintenanceStatus,
+  DEFAULT_MAINTENANCE_TEMPLATE, MAX_BYPASS_IPS, MAX_TEMPLATE_BYTES, addBypass, executeMaintenanceAction,
+  pruneMaintenanceState, purgeVarnish,
+  type MaintenanceActionPaths, type MaintenanceSiteStatus, type MaintenanceStatus,
 } from "../addons/maintenance/action";
 import { handle as handleMaintenance } from "../addons/maintenance/app/index";
-import { CLIENT_JS as MAINTENANCE_CLIENT_JS } from "../addons/maintenance/app/views";
-import { maintenanceService } from "../addons/maintenance/app/service";
+import { maintenanceService, type MaintenanceSiteView } from "../addons/maintenance/app/service";
 import { CLIENT_JS, fleetView, layout, siteView } from "../addons/maintenance/app/views";
 import { MAINTENANCE_TARGETS } from "../addons/maintenance/inject/targets";
+import { MAINTENANCE_INCLUDE_PATH } from "../cli/maintenance-vhosts";
 import {
-  inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance,
+  inspectNginxMaintenance, NGINX_MAINTENANCE_BLOCK, reconcileNginxMaintenance, releaseMaintenanceSettings,
 } from "../cli/inject";
 import { MAINTENANCE_ALLOWED_VERBS } from "../lib/gateway-protocol";
 
-function fixture(domain = "example.com"): { root: string; paths: MaintenanceActionPaths } {
+/** A vhost whose one server runs the standalone maintenance check. */
+function coveredVhost(domain: string): string {
+  return `server {\n  listen 80;\n  server_name ${domain};\n  include ${MAINTENANCE_INCLUDE_PATH};\n}\n`;
+}
+
+/** Each domain is a CloudPanel site with a vhost that runs the check, unless it is listed in `bare`. */
+function fixture(domain = "example.com", others: string[] = [], bare: string[] = []): { root: string; paths: MaintenanceActionPaths } {
   const root = mkdtempSync(join(tmpdir(), "clp-maintenance-"));
   const panelDb = join(root, "panel.db");
+  const nginxVhostDir = join(root, "sites-enabled");
+  mkdirSync(nginxVhostDir);
   const db = new Database(panelDb);
-  db.run("CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT)");
-  db.query("INSERT INTO site (domain_name) VALUES (?)").run(domain);
+  db.run("CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT, type TEXT, user TEXT, vhost_template TEXT)");
+  for (const name of [domain, ...others]) {
+    const vhost = bare.includes(name) ? coveredVhost(name).replace(/  include .*\n/, "") : coveredVhost(name);
+    db.query("INSERT INTO site (domain_name, type, user, vhost_template) VALUES (?, 'php', 'site', ?)").run(name, vhost);
+    // A name at the hostname limit is longer than a file name may be.
+    if (name.length < 250) writeFileSync(join(nginxVhostDir, `${name}.conf`), vhost);
+  }
   db.close();
   const identity = join(root, "panel-identity.conf");
   writeFileSync(identity, "PRIMARY=panel.example.test\nALIASES=\n", { mode: 0o600 });
   return {
     root,
-    paths: { dataDir: join(root, "data"), lockDir: join(root, "locks"), panelDb, panelIdentityFile: identity },
+    paths: {
+      dataDir: join(root, "data"), lockDir: join(root, "locks"), panelDb, panelIdentityFile: identity,
+      nginxVhostDir, nginxSettings: join(root, "global_settings"), includePath: MAINTENANCE_INCLUDE_PATH,
+    },
   };
 }
 
@@ -71,11 +88,32 @@ test("global maintenance actions enable, report status, and disable fleet-wide m
   }
 });
 
+test("many sites are switched in one action, and a site the panel does not have is reported, not fatal", async () => {
+  const { root, paths } = fixture("a.example.com", ["b.example.com"]);
+  try {
+    const on = await executeMaintenanceAction(["enable-many"], actionOptions(paths, {
+      input: JSON.stringify({ domains: ["b.example.com", "A.example.com", "gone.example.com"] }),
+    })) as { updated: string[]; failed: { domain: string; error: string }[] };
+    expect(on.updated).toEqual(["a.example.com", "b.example.com"]);
+    expect(on.failed).toEqual([{ domain: "gone.example.com", error: "CloudPanel site not found: 'gone.example.com'" }]);
+    expect(lstatSync(join(paths.dataDir, "a.example.com", "on")).isFile()).toBe(true);
+    const off = await executeMaintenanceAction(["disable-many"], actionOptions(paths, {
+      input: JSON.stringify({ domains: ["a.example.com"] }),
+    })) as { updated: string[] };
+    expect(off.updated).toEqual(["a.example.com"]);
+    expect(existsSync(join(paths.dataDir, "a.example.com", "on"))).toBe(false);
+    expect(existsSync(join(paths.dataDir, "b.example.com", "on"))).toBe(true);
+    await expect(executeMaintenanceAction(["enable-many"], actionOptions(paths, { input: "{}" }))).rejects.toThrow("at least one site");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("maintenance actions toggle atomically, manage a passive template, and replace IP bypasses", async () => {
   const { root, paths } = fixture();
   try {
     const initial = await executeMaintenanceAction(["status", "--domain=example.com"], actionOptions(paths)) as MaintenanceStatus;
-    expect(initial).toEqual({ domain: "example.com", enabled: false, customTemplate: false, bypasses: [] });
+    expect(initial).toEqual({ domain: "example.com", enabled: false, customTemplate: false, bypasses: [], uncovered: null });
 
     const enabled = await executeMaintenanceAction(["enable", "--domain=EXAMPLE.COM."], actionOptions(paths)) as MaintenanceStatus;
     expect(enabled.enabled).toBe(true);
@@ -83,10 +121,14 @@ test("maintenance actions toggle atomically, manage a passive template, and repl
     expect(readFileSync(join(paths.dataDir, "default.html"), "utf8")).toBe(DEFAULT_MAINTENANCE_TEMPLATE);
 
     const unsafe = '<!doctype html><meta http-equiv="ref&#x72;esh" content="0;url=https://bad.test"><h1 onclick="steal()">Hello</h1><script>steal()</script><form><input></form><svg><a xlink:href="javascript:steal()">link</a></svg>';
-    const custom = await executeMaintenanceAction(["set-template", "--domain=example.com"], actionOptions(paths, { input: unsafe })) as { html: string };
+    const custom = await executeMaintenanceAction(["set-template", "--domain=example.com"], actionOptions(paths, { input: unsafe })) as { html: string; removed: boolean };
     expect(custom.html).toContain("<h1>Hello</h1>");
+    // The page says so when the sanitizer changed what was sent.
+    expect(custom.removed).toBe(true);
     expect(custom.html).not.toMatch(/script|onclick|form|input|http-equiv|javascript/i);
     expect(readFileSync(join(paths.dataDir, "example.com", "maintenance.html"), "utf8")).toBe(custom.html);
+    const clean = await executeMaintenanceAction(["set-template", "--domain=example.com"], actionOptions(paths, { input: "<h1>Hi</h1>" })) as { removed: boolean };
+    expect(clean.removed).toBe(false);
 
     const bypassed = await executeMaintenanceAction(["set-bypass", "--domain=example.com"], actionOptions(paths, {
       input: JSON.stringify({ ips: ["203.0.113.8", "2001:0db8:0:0:0:0:0:1", "203.0.113.8"] }),
@@ -136,6 +178,38 @@ test("maximum-length domains use bounded bypass lock filenames", async () => {
     expect(lockFiles).toHaveLength(1);
     expect(lockFiles[0]).toMatch(/^maintenance-[0-9a-f]{64}\.lock$/);
     expect(Buffer.byteLength(lockFiles[0]!, "utf8")).toBeLessThanOrEqual(255);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an upgrade run gets global_settings back as packaged, and the next reconcile adopts what the upgrade installed", () => {
+  const root = mkdtempSync(join(tmpdir(), "clp-maintenance-release-"));
+  const settingsPath = join(root, "global_settings");
+  const geoPath = join(root, "sites-enabled", "00-clp-addons-maintenance-client-ip.conf");
+  const includePath = join(root, "maintenance.conf");
+  const paths = {
+    settingsPath, stateDir: join(root, "state"), geoPath, cloudflareIpsPath: join(root, "cloudflare", "ips"), panelDb: null,
+    includePath, vhostUid: process.getuid?.() ?? 0,
+  };
+  const original = "client_max_body_size 128m;";
+  writeFileSync(settingsPath, original, { mode: 0o644 });
+  mkdirSync(join(root, "cloudflare"));
+  writeFileSync(paths.cloudflareIpsPath, "allow 173.245.48.0/20;\ndeny all;\n");
+  try {
+    expect(reconcileNginxMaintenance({ ...paths, reload: false }).state).toBe("ok");
+    expect(releaseMaintenanceSettings(paths)).toBe(true);
+    expect(readFileSync(settingsPath, "utf8")).toBe(original);
+    expect(existsSync(geoPath) && existsSync(includePath)).toBe(true);
+    expect(releaseMaintenanceSettings(paths)).toBe(false);
+
+    const upgraded = "client_max_body_size 256m;";
+    writeFileSync(settingsPath, upgraded);
+    expect(reconcileNginxMaintenance({ ...paths, reload: false })).toMatchObject({ state: "ok", changed: true });
+    expect(readFileSync(settingsPath, "utf8")).toBe(`${upgraded}\n${NGINX_MAINTENANCE_BLOCK}\n`);
+
+    writeFileSync(settingsPath, readFileSync(settingsPath, "utf8").replace(upgraded, `${upgraded}\nserver_tokens off;`));
+    expect(releaseMaintenanceSettings(paths)).toBe(false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -245,160 +319,142 @@ test("template API accepts JSON escaping overhead and enforces the decoded UTF-8
   }
 });
 
-test("fleet overview separates unavailable sites from the live count", () => {
-  const rendered = fleetView([
-    { domain: "maintenance.example.com", type: "php", user: "one", enabled: true, customTemplate: false, bypasses: [] },
-    { domain: "live.example.com", type: "static", user: "two", enabled: false, customTemplate: false, bypasses: [] },
-    { domain: "unknown.example.com", type: "nodejs", user: "three", enabled: false, customTemplate: false, bypasses: [], error: "status unavailable" },
-  ]);
+const site = (extra: Partial<MaintenanceSiteView> = {}): MaintenanceSiteView => ({
+  domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [], uncovered: null,
+  ...extra,
+});
+const fleetOf = (sites: MaintenanceSiteView[], global = false, bypasses: string[] = []) => ({ global: { global, bypasses }, sites });
+
+test("the fleet counts what visitors get, in the table's header", () => {
+  const rendered = fleetView(fleetOf([
+    site({ domain: "maintenance.example.com", enabled: true, customTemplate: true, bypasses: ["203.0.113.8"] }),
+    site({ domain: "live.example.com" }),
+    site({ domain: "unknown.example.com", error: "status unavailable" }),
+  ]));
+  expect(rendered).toContain("1 of 3 in maintenance");
   expect(rendered).toContain(">Unavailable</span>");
-  expect(rendered).toContain('<table class="fleet-table maintenance-fleet-table">');
-  expect(rendered).toContain('<td class="page-cell" data-label="Page">Default</td>');
-  expect(rendered).toContain('<td class="bypass-cell" data-label="Bypasses">0</td>');
-  expect(rendered).toContain('<td data-label="Effective status">');
-  expect(rendered).not.toContain('<td class="wide-cell" data-label="Effective status">');
-  const page = layout("Maintenance", rendered);
-  expect(page).toContain(".fleet-table.maintenance-fleet-table td.page-cell,");
-  expect(page).toContain(".fleet-table.maintenance-fleet-table td.bypass-cell { display: none; }");
-  expect(rendered).toContain('<div class="label">In maintenance</div><div class="value">1</div>');
-  expect(rendered).toContain('<div class="label">Live</div><div class="value">1</div>');
+  expect(rendered).not.toContain('class="card stats"');
+  // Page and bypasses are a note under the site, not columns.
+  expect(rendered).toContain('<div class="hint">Custom page · 1 bypass</div>');
+  expect(rendered).not.toContain('data-label="Page"');
+  // An unreadable site cannot be selected or switched.
+  expect(rendered).toMatch(/aria-label="Select unknown\.example\.com" disabled/);
+  // The table comes before the global card.
+  expect(rendered.indexOf("maintenance-fleet-table")).toBeLessThan(rendered.indexOf("Global maintenance"));
 });
 
 test("the global override covers a site whose own setting could not be read", () => {
-  const sites = [
-    { domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] },
-    { domain: "unknown.example.com", type: "nodejs", user: "two", enabled: false, customTemplate: false, bypasses: [], error: "status unavailable" },
-  ];
+  const sites = [site(), site({ domain: "unknown.example.com", error: "status unavailable" })];
   // Nginx serves the override from one file for every site, so an unreadable
   // saved setting changes what the page knows, not what visitors are getting.
-  const globalOn = fleetView(sites, true);
+  const globalOn = fleetView(fleetOf(sites, true));
   expect(globalOn).toContain('<span class="badge state-maintenance" data-status-domain="unknown.example.com">Maintenance (Global)</span>');
-  expect(globalOn).toContain('<div class="label">In maintenance</div><div class="value">2</div>');
-  expect(globalOn).toContain('<div class="label">Live</div><div class="value">0</div>');
-  // What could not be read is still said, beside the site it belongs to.
+  expect(globalOn).toContain("2 of 2 in maintenance");
   expect(globalOn).toContain('<div class="hint">status unavailable</div>');
+  expect(globalOn).toContain("Global maintenance is on: every site serves the maintenance page.");
 
-  const globalOff = fleetView(sites, false);
+  const globalOff = fleetView(fleetOf(sites, false));
   expect(globalOff).toContain('<span class="badge state-unavailable" data-status-domain="unknown.example.com">Unavailable</span>');
-  expect(globalOff).toContain('<div class="label">In maintenance</div><div class="value">0</div>');
-  expect(globalOff).toContain('<div class="label">Live</div><div class="value">1</div>');
+  expect(globalOff).toContain("0 of 2 in maintenance");
+  expect(globalOff).not.toContain("Global maintenance is on");
 });
 
-test("fleet overview renders the global override and badges according to global and individual state", () => {
-  // globalEnabled = true: the override reads On, In maintenance = 2, Live = 0.
-  const globalOn = fleetView([
-    { domain: "one.example.com", type: "php", user: "one", enabled: true, customTemplate: false, bypasses: [] },
-    { domain: "two.example.com", type: "static", user: "two", enabled: false, customTemplate: false, bypasses: [] },
-  ], true);
+test("a site Nginx does not cover is never drawn as in maintenance", () => {
+  const uncovered = site({ domain: "new.example.com", enabled: true, uncovered: "Nginx has no vhost for it yet" });
+  const rendered = fleetView(fleetOf([site({ enabled: true }), uncovered], true));
+  expect(rendered).toContain('<span class="badge state-uncovered" data-status-domain="new.example.com" title="Nginx has no vhost for it yet">Not covered</span>');
+  expect(rendered).toContain("Not covered: Nginx has no vhost for it yet.");
+  expect(rendered).toContain("1 of 2 in maintenance");
+  expect(rendered).toContain("except the 1 site Nginx does not cover");
+  // Off and outside the override, it is live, and the note still says why a switch would do nothing.
+  const off = fleetView(fleetOf([{ ...uncovered, enabled: false }]));
+  expect(off).toContain(">Live</span>");
+  expect(off).toContain("Not covered: Nginx has no vhost for it yet.");
+
+  const page = siteView(uncovered, { domain: uncovered.domain, custom: false, html: "" }, "", true);
+  expect(page).toContain(">Not covered</span>");
+  expect(page).toContain("Nginx does not run the maintenance check for this site because Nginx has no vhost for it yet");
+  expect(page).toContain('<div id="global-notice" class="notice" hidden>');
+});
+
+test("the fleet selects rows and switches the selected sites, with search from six sites", () => {
+  const few = fleetView(fleetOf([site()]));
+  expect(few).toContain('onclick="toggleSiteSelection(event, this)"');
+  expect(few).toContain('<button class="btn" type="button" data-needs-selection disabled onclick="toggleSelected(true)">Turn on selected</button>');
+  expect(few).toContain('<button class="btn" type="button" data-needs-selection disabled onclick="toggleSelected(false)">Turn off selected</button>');
+  expect(few).not.toContain('id="fleet-find"');
+  const many = fleetView(fleetOf(Array.from({ length: 6 }, (_, i) => site({ domain: `s${i}.example.com` }))));
+  expect(many).toContain('id="fleet-find"');
+  expect(many).toContain('<option value="maintenance">In maintenance</option>');
+  expect(CLIENT_JS).toContain("function paintFleetSelection()");
+  expect(CLIENT_JS).toContain("call('/api/bulk-toggle'");
+});
+
+test("fleet overview renders the global override in a card of its own", () => {
+  const globalOn = fleetView(fleetOf([site({ enabled: true }), site({ domain: "two.example.com" })], true, ["203.0.113.8"]));
   expect(globalOn).toContain("<h2>Global maintenance</h2>");
-  expect(globalOn).toContain('<span class="switch-state" id="global-state">On</span>');
   expect(globalOn).toContain('<input type="checkbox" id="global-toggle" checked');
-  expect(globalOn).toContain('<div class="label">In maintenance</div><div class="value">2</div>');
-  expect(globalOn).toContain('<div class="label">Live</div><div class="value">0</div>');
   expect(globalOn).toContain('<span class="badge state-maintenance" data-status-domain="one.example.com">Maintenance Mode (503)</span>');
   expect(globalOn).toContain('<span class="badge state-maintenance" data-status-domain="two.example.com">Maintenance (Global)</span>');
-  expect(globalOn).toContain('data-global-maintenance="true"');
-  // The saved per-site setting is named as such, separately from what visitors get.
-  expect(globalOn).toContain("<th scope=\"col\">Effective status</th>");
-  expect(globalOn).toContain("Site setting</th>");
+  // Global bypasses fold into a summary that counts them.
+  expect(globalOn).toContain('<details class="disclosure bypass-disclosure" id="global-bypasses">');
+  expect(globalOn).toContain('<span class="hint" id="global-bypass-ips-count">1 address</span>');
 
-  // globalEnabled = false: the override reads Off, In maintenance = 1, Live = 1.
-  const globalOff = fleetView([
-    { domain: "one.example.com", type: "php", user: "one", enabled: true, customTemplate: false, bypasses: [] },
-    { domain: "two.example.com", type: "static", user: "two", enabled: false, customTemplate: false, bypasses: [] },
-  ], false);
-  expect(globalOff).toContain('<span class="switch-state" id="global-state">Off</span>');
+  const globalOff = fleetView(fleetOf([site({ enabled: true }), site({ domain: "two.example.com" })]));
   expect(globalOff).not.toContain('id="global-toggle" checked');
-  expect(globalOff).toContain('<div class="label">In maintenance</div><div class="value">1</div>');
-  expect(globalOff).toContain('<div class="label">Live</div><div class="value">1</div>');
-  expect(globalOff).toContain('<span class="badge state-maintenance" data-status-domain="one.example.com">Maintenance Mode (503)</span>');
   expect(globalOff).toContain('<span class="badge state-live" data-status-domain="two.example.com">Live</span>');
-  expect(globalOff).toContain('data-global-maintenance="false"');
 
   // No site at all -> nothing for the override to cover.
-  expect(fleetView([])).toContain('id="global-toggle"  disabled');
-  // One Nginx flag covers a site whose own status could not be read, so an
-  // unreadable status must not take the override away.
-  expect(fleetView([
-    { domain: "err.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [], error: "unavailable" },
-  ])).not.toContain('id="global-toggle"  disabled');
+  expect(fleetView(fleetOf([]))).toContain('id="global-toggle"  disabled');
+  expect(fleetView(fleetOf([site({ error: "unavailable" })]))).not.toContain('id="global-toggle"  disabled');
 });
 
 test("both bypass lists offer the operator's IP and hold Save until the list changes", () => {
-  const fleet = fleetView([], { global: false, bypasses: ["203.0.113.8"] }, "198.51.100.4");
+  const fleet = fleetView(fleetOf([], false, ["203.0.113.8"]), "198.51.100.4");
   expect(fleet).toContain(`onclick="addCurrentIp('global-bypass-ips', '198.51.100.4')"`);
   expect(fleet).toContain('data-bypass-save="global-bypass-ips" disabled');
-  const site = siteView(
-    { domain: "example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] },
-    { domain: "example.com", custom: false, html: "" },
-    "198.51.100.4",
-  );
-  expect(site).toContain(`onclick="addCurrentIp('bypass-ips', '198.51.100.4')"`);
-  expect(site).toContain('data-bypass-save="bypass-ips" disabled');
+  const page = siteView(site(), { domain: "one.example.com", custom: false, html: "" }, "198.51.100.4");
+  expect(page).toContain(`onclick="addCurrentIp('bypass-ips', '198.51.100.4')"`);
+  expect(page).toContain('data-bypass-save="bypass-ips" disabled');
+  expect(page).toContain('<span class="hint" id="bypass-ips-count">None</span>');
 });
 
 test("siteView explains that the global override outranks this site's saved setting", () => {
-  const site = { domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] };
   const template = { domain: "one.example.com", custom: false, html: "<h1>Maintenance</h1>" };
 
-  // Global on, site saved off: the site is in maintenance and the page says why.
-  const globalOn = siteView(site, template, "1.2.3.4", true);
+  const globalOn = siteView(site(), template, "1.2.3.4", true);
   expect(globalOn).toContain('data-global-maintenance="true"');
   expect(globalOn).toContain("Maintenance (Global)");
   expect(globalOn).toContain('<div id="global-notice" class="notice">');
-  expect(globalOn).toContain("Turning the setting below off does not take this site out of global maintenance.");
 
-  // Global off, site saved off: the site is live and the explanation is hidden.
-  const globalOff = siteView(site, template, "1.2.3.4", false);
-  expect(globalOff).toContain('data-global-maintenance="false"');
+  const globalOff = siteView(site(), template, "1.2.3.4", false);
   expect(globalOff).toContain("Live");
   expect(globalOff).toContain('<div id="global-notice" class="notice" hidden>');
 
-  // Site saved on: its own setting already explains the status.
-  const siteEnabled = siteView({ ...site, enabled: true }, template, "1.2.3.4", true);
+  const siteEnabled = siteView(site({ enabled: true }), template, "1.2.3.4", true);
   expect(siteEnabled).toContain("Maintenance Mode (503)");
   expect(siteEnabled).toContain('<div id="global-notice" class="notice" hidden>');
 });
 
-test("siteView renders responsive heading layout with badge after domain title and button in actions", () => {
-  const site = { domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] };
-  const template = { domain: "one.example.com", custom: false, html: "<h1>Maintenance</h1>" };
-  const html = siteView(site, template, "1.2.3.4", false);
-
-  expect(html).toContain('class="page-heading site-heading"');
-  expect(html).toContain('<div class="site-header-main"><div class="site-title-row"><h1>one.example.com</h1><span class="badge state-live" data-status-domain="one.example.com">Live</span></div>');
-  expect(html).toContain('<p class="site-desc">Maintenance mode applies to HTTP and HTTPS traffic for this site.</p>');
-  expect(html).toContain('<div class="actions"><a class="btn" href="/addons/maintenance/">All maintenance sites</a></div>');
-
-  // Verify DOM order: title precedes badge, badge precedes description, description precedes actions
-  const titleIndex = html.indexOf('<h1>one.example.com</h1>');
-  const badgeIndex = html.indexOf('data-status-domain="one.example.com"');
-  const descIndex = html.indexOf('<p class="site-desc">');
-  const actionsIndex = html.indexOf('<div class="actions"><a class="btn" href="/addons/maintenance/">All maintenance sites</a></div>');
-
-  expect(titleIndex).toBeGreaterThan(-1);
-  expect(badgeIndex).toBeGreaterThan(titleIndex);
-  expect(descIndex).toBeGreaterThan(badgeIndex);
-  expect(actionsIndex).toBeGreaterThan(descIndex);
-
-  // Verify layout styling includes natural inline-flex title row and mobile contents order
-  const page = layout("Maintenance", html);
-  expect(page).toContain(".site-heading {");
-  expect(page).toContain(".site-heading .site-title-row {");
-  expect(page).toContain("@media (max-width:760px)");
-  expect(page).toContain("display: contents;");
-  expect(page).toContain("grid-template-areas:");
-  expect(page).toContain('"badge .     actions"');
-  expect(page).toContain("overflow-x: auto;");
-
-  // Verify toggleMaintenance does not show notify popup on success
-  expect(CLIENT_JS).not.toContain("is now in maintenance mode.");
-  expect(CLIENT_JS).not.toContain("is now live.");
+test("the site page puts the switch beside its status and folds bypasses and the page into summaries", () => {
+  const html = siteView(site({ bypasses: ["203.0.113.8", "198.51.100.1"] }), { domain: "one.example.com", custom: false, html: "<p>x</p>" }, "", false);
+  expect(html).toMatch(/<div class="heading-controls"><span class="badge state-live"[^>]*>Live<\/span>\s*<label class="switch switch-danger"><input type="checkbox" data-toggle-domain="one\.example\.com"/);
+  expect(html).toContain('<span class="hint" id="bypass-ips-count">2 bypasses</span>');
+  expect(html).toContain('<span class="hint" id="template-kind">Default</span>');
+  // Reset only exists to remove a saved template.
+  expect(html).toMatch(/id="reset-template"[^>]*hidden>/);
+  expect(siteView(site({ customTemplate: true }), { domain: "one.example.com", custom: true, html: "" }, "", false))
+    .not.toMatch(/id="reset-template"[^>]*hidden>/);
+  // The page opens on its preview; the editor is behind the Edit switch.
+  expect(html).toContain('<textarea id="template-editor" aria-label="Maintenance page HTML" spellcheck="false" hidden>');
+  expect(html).toContain('<iframe id="template-preview" title="Maintenance page preview" sandbox></iframe>');
+  expect(html).toContain('<div class="editor-tabs" role="tablist" hidden>');
+  expect(layout("Maintenance", html)).not.toContain("display: contents");
+  expect(CLIENT_JS).toContain("'Saved; some tags were removed.'");
 });
 
 test("a site-scoped page keeps CloudPanel's site navigation rather than a back link", () => {
-  const site = { domain: "one.example.com", type: "php", user: "one", enabled: false, customTemplate: false, bypasses: [] };
-  const content = siteView(site, { domain: site.domain, custom: false, html: "" }, "", false);
+  const content = siteView(site(), { domain: "one.example.com", custom: false, html: "" }, "", false);
 
   const withContext = layout("Maintenance", content, null, {
     domain: "one.example.com", user: "one", type: "php", varnishCache: true, publicIp: "203.0.113.10",
@@ -412,7 +468,7 @@ test("a site-scoped page keeps CloudPanel's site navigation rather than a back l
   // The addon has one page of its own, so it carries no tab strip anywhere:
   // the only tab it could hold is the page already being read.
   expect(withContext).not.toContain('aria-label="Maintenance Mode navigation"');
-  const fleet = layout("Maintenance", fleetView([]), null);
+  const fleet = layout("Maintenance", fleetView(fleetOf([])), null);
   expect(fleet).not.toContain('aria-label="Maintenance Mode navigation"');
   expect(fleet).not.toContain('aria-label="Site navigation"');
 });
@@ -451,7 +507,9 @@ test("global toggle API guards mutations and toggles fleet-wide maintenance mode
 
   // Mock setGlobalEnabled
   const origSetGlobal = maintenanceService.setGlobalEnabled;
+  const origFleet = maintenanceService.fleet;
   try {
+    maintenanceService.fleet = async () => ({ global: { global: true, bypasses: [] }, sites: [] });
     let lastEnabled: boolean | undefined;
     maintenanceService.setGlobalEnabled = async (enabled) => {
       lastEnabled = enabled;
@@ -460,12 +518,15 @@ test("global toggle API guards mutations and toggles fleet-wide maintenance mode
 
     const res = await handleMaintenance(request({ enabled: true }), "/api/global-toggle");
     expect(res.status).toBe(200);
-    const data = await res.json() as { ok: boolean; data: { global: boolean } };
+    const data = await res.json() as { ok: boolean; data: { global: boolean }; html: string };
     expect(lastEnabled).toBe(true);
     expect(data.ok).toBe(true);
     expect(data.data.global).toBe(true);
+    // The fleet repaints from the reply, banner and all.
+    expect(data.html).toContain("Global maintenance is on");
   } finally {
     maintenanceService.setGlobalEnabled = origSetGlobal;
+    maintenanceService.fleet = origFleet;
   }
 });
 
@@ -498,7 +559,7 @@ test("global bypass API validates and saves addresses", async () => {
   }
 });
 
-test("bulk toggle API guards mutations and toggles all available sites", async () => {
+test("the bulk route switches the listed sites and answers with the repainted fleet", async () => {
   const token = "bulk-test-csrf-token";
   const request = (path: string, body: unknown, headers?: Record<string, string>) => new Request(`https://panel.example.test:8443/addons/maintenance${path}`, {
     method: "POST",
@@ -513,116 +574,43 @@ test("bulk toggle API guards mutations and toggles all available sites", async (
     },
   });
 
-  // Rejects mutations without CSRF
-  const noCsrf = await handleMaintenance(new Request("https://panel.example.test:8443/addons/maintenance/api/sites/toggle", {
+  const noCsrf = await handleMaintenance(new Request("https://panel.example.test:8443/addons/maintenance/api/bulk-toggle", {
     method: "POST",
-    body: JSON.stringify({ enabled: true }),
+    body: JSON.stringify({ enabled: true, domains: ["a.example.com"] }),
     headers: { "content-type": "application/json" },
-  }), "/api/sites/toggle");
+  }), "/api/bulk-toggle");
   expect(noCsrf.status).toBe(403);
 
-  // Rejects non-boolean enabled
-  const badBody = await handleMaintenance(request("/api/sites/toggle", { enabled: "yes" }), "/api/sites/toggle");
-  expect(badBody.status).toBe(400);
+  const badBody = await handleMaintenance(request("/api/bulk-toggle", { enabled: "yes" }), "/api/bulk-toggle");
   expect(await badBody.json()).toMatchObject({ ok: false, error: "enabled must be a boolean" });
-
-  // Rejects invalid JSON
-  const badJson = await handleMaintenance(request("/api/sites/toggle", "{invalid"), "/api/sites/toggle");
-  expect(badJson.status).toBe(400);
-
-  // Rejects domains if not an array
-  const badDomains = await handleMaintenance(request("/api/sites/toggle", { enabled: true, domains: "not-an-array" }), "/api/sites/toggle");
-  expect(badDomains.status).toBe(400);
-  expect(await badDomains.json()).toMatchObject({ ok: false, error: "domains must be an array" });
-
-  // Rejects domains if any entry is invalid
-  const invalidDomain = await handleMaintenance(request("/api/sites/toggle", { enabled: true, domains: ["good.example.com", "bad..domain/"] }), "/api/sites/toggle");
-  expect(invalidDomain.status).toBe(400);
+  expect((await handleMaintenance(request("/api/bulk-toggle", "{invalid"), "/api/bulk-toggle")).status).toBe(400);
+  // Every site at once is what the global switch is for; this takes a list.
+  const noDomains = await handleMaintenance(request("/api/bulk-toggle", { enabled: true }), "/api/bulk-toggle");
+  expect(await noDomains.json()).toMatchObject({ ok: false, error: "domains must list at least one site" });
+  const invalidDomain = await handleMaintenance(request("/api/bulk-toggle", { enabled: true, domains: ["good.example.com", "bad..domain/"] }), "/api/bulk-toggle");
   expect(await invalidDomain.json()).toMatchObject({ ok: false, error: "invalid domain in domains list: bad..domain/" });
-
-  // Mock setAllEnabled to verify successful bulk toggle
-  const origSetAll = maintenanceService.setAllEnabled;
-  try {
-    let lastEnabled: boolean | undefined;
-    maintenanceService.setAllEnabled = async (enabled) => {
-      lastEnabled = enabled;
-      return {
-        ok: true,
-        data: {
-          enabled,
-          updated: ["site-a.example.com", "site-b.example.com"],
-          failed: [],
-        },
-      };
-    };
-
-    const res = await handleMaintenance(request("/api/sites/toggle", { enabled: true }), "/api/sites/toggle");
-    expect(res.status).toBe(200);
-    const data = await res.json() as { ok: boolean; data: { enabled: boolean; updated: string[]; failed: unknown[] } };
-    expect(lastEnabled).toBe(true);
-    expect(data.ok).toBe(true);
-    expect(data.data.enabled).toBe(true);
-    expect(data.data.updated).toEqual(["site-a.example.com", "site-b.example.com"]);
-    expect(data.data.failed).toEqual([]);
-
-    // Also supports /api/toggle-all
-    const resToggleAll = await handleMaintenance(request("/api/toggle-all", { enabled: false }), "/api/toggle-all");
-    expect(resToggleAll.status).toBe(200);
-    expect(lastEnabled).toBe(false);
-
-    // Partial failure returns 200 with failed domains listed
-    maintenanceService.setAllEnabled = async (enabled) => ({
-      ok: true,
-      data: {
-        enabled,
-        updated: ["site-a.example.com"],
-        failed: [{ domain: "site-b.example.com", error: "permission denied" }],
-      },
-    });
-    const partialRes = await handleMaintenance(request("/api/sites/toggle", { enabled: true }), "/api/sites/toggle");
-    expect(partialRes.status).toBe(200);
-    const partialData = await partialRes.json() as { ok: boolean; data: { updated: string[]; failed: { domain: string; error: string }[] } };
-    expect(partialData.data.updated).toEqual(["site-a.example.com"]);
-    expect(partialData.data.failed).toEqual([{ domain: "site-b.example.com", error: "permission denied" }]);
-  } finally {
-    maintenanceService.setAllEnabled = origSetAll;
+  // The aliases that used to answer are gone.
+  for (const alias of ["/api/sites/toggle", "/api/toggle-all"]) {
+    expect((await handleMaintenance(request(alias, { enabled: true, domains: ["a.example.com"] }), alias)).status).toBe(404);
   }
-});
 
-test("maintenanceService.setAllEnabled toggles domains and captures partial failures", async () => {
-  const origSetEnabled = maintenanceService.setEnabled;
-  const origPanelSites = maintenanceService.panelSites;
+  const original = { setManyEnabled: maintenanceService.setManyEnabled, fleet: maintenanceService.fleet };
   try {
-    maintenanceService.panelSites = async () => [
-      { domain: "good.example.com", type: "php", user: "user1" } as any,
-      { domain: "bad.example.com", type: "static", user: "user2" } as any,
-    ];
-    maintenanceService.setEnabled = async (domain, enabled) => {
-      if (domain === "bad.example.com") {
-        return { ok: false, error: "root action failed" };
-      }
-      return { ok: true, data: { domain, enabled, customTemplate: false, bypasses: [] } };
+    const switched: string[] = [];
+    maintenanceService.setManyEnabled = async (domains, enabled) => {
+      switched.push(...domains.filter((domain) => domain !== "bad.example.com"));
+      return { enabled, updated: switched, failed: [{ domain: "bad.example.com", error: "root action failed" }] };
     };
-
-    const result = await maintenanceService.setAllEnabled(true);
-    expect(result.ok).toBe(true);
-    expect(result.data.enabled).toBe(true);
-    expect(result.data.updated).toEqual(["good.example.com"]);
-    expect(result.data.failed).toEqual([{ domain: "bad.example.com", error: "root action failed" }]);
-
-    // Explicit empty array does not query panelSites
-    let panelSitesCalled = false;
-    maintenanceService.panelSites = async () => {
-      panelSitesCalled = true;
-      return [];
-    };
-    const emptyResult = await maintenanceService.setAllEnabled(true, []);
-    expect(emptyResult.ok).toBe(true);
-    expect(emptyResult.data.updated).toEqual([]);
-    expect(panelSitesCalled).toBe(false);
+    maintenanceService.fleet = async () => ({ global: { global: false, bypasses: [] }, sites: [] });
+    const res = await handleMaintenance(request("/api/bulk-toggle", { enabled: true, domains: ["good.example.com", "bad.example.com"] }), "/api/bulk-toggle");
+    expect(res.status).toBe(200);
+    const reply = await res.json() as { ok: boolean; html: string; data: { updated: string[]; failed: unknown[] } };
+    expect(switched).toEqual(["good.example.com"]);
+    expect(reply.data.updated).toEqual(["good.example.com"]);
+    expect(reply.data.failed).toEqual([{ domain: "bad.example.com", error: "root action failed" }]);
+    expect(reply.html).toContain("Maintenance Mode");
   } finally {
-    maintenanceService.setEnabled = origSetEnabled;
-    maintenanceService.panelSites = origPanelSites;
+    Object.assign(maintenanceService, original);
   }
 });
 
@@ -647,6 +635,9 @@ test("maintenance integration preserves ACME and normalizes non-GET errors throu
   });
   expect(MAINTENANCE_TARGETS[0]!.snippet("/addons/maintenance")).toContain("site.domainName|url_encode");
   expect(MAINTENANCE_ALLOWED_VERBS).toEqual(new Set([
+    "sites",
+    "enable-many",
+    "disable-many",
     "status", "enable", "disable", "get-template", "set-template", "reset-template", "set-bypass",
     "global-status", "global-enable", "global-disable",
     "global-set-bypass",
@@ -711,7 +702,7 @@ test("the template editor borrows CloudPanel's own Ace and works without it", ()
   // The bundled theme is the only one there is; dark mode recolours it here.
   expect(CLIENT_JS).not.toContain("ace/theme/");
   const dark = layout("t", siteView(
-    { domain: "a.test", type: "php", user: "a", enabled: false, customTemplate: true, bypasses: [] },
+    { domain: "a.test", type: "php", user: "a", enabled: false, customTemplate: true, bypasses: [], uncovered: null },
     { domain: "a.test", custom: true, html: "<p>x</p>" }, "203.0.113.8", false));
   expect(dark).toContain("html.dark #template-ace .ace_tag");
   expect(dark).toContain("html.dark #template-ace .ace_string");
@@ -731,7 +722,7 @@ test("the template editor borrows CloudPanel's own Ace and works without it", ()
 
 test("the editor markup keeps the textarea beside the editor that replaces it", () => {
   const html = siteView(
-    { domain: "shop.example.test", type: "php", user: "shop", enabled: false, customTemplate: true, bypasses: [] },
+    { domain: "shop.example.test", type: "php", user: "shop", enabled: false, customTemplate: true, bypasses: [], uncovered: null },
     { domain: "shop.example.test", custom: true, html: "<p>hi</p>" },
     "203.0.113.8",
     false,
@@ -743,7 +734,7 @@ test("the editor markup keeps the textarea beside the editor that replaces it", 
 
 test("editing the template is a local mode that never removes what is saved", () => {
   const html = siteView(
-    { domain: "shop.example.test", type: "php", user: "shop", enabled: false, customTemplate: true, bypasses: [] },
+    { domain: "shop.example.test", type: "php", user: "shop", enabled: false, customTemplate: true, bypasses: [], uncovered: null },
     { domain: "shop.example.test", custom: true, html: "<p>hi</p>" },
     "203.0.113.8",
     false,
@@ -783,44 +774,10 @@ test("the addon serves the Ace mode the panel does not ship", async () => {
   expect(body).toContain("Copyright (c) 2010, Ajax.org B.V.");
 });
 
-// Global maintenance covers every site, including one whose saved setting could
-// not be read. syncGlobalUI counts them all; paintStatus counted only the
-// readable ones, so toggling any site under the override shrank the total.
-test("the maintenance count under a global override covers unreadable sites too", () => {
-  const stat = (label: string) => {
-    const value = { textContent: "" };
-    return { value, querySelector: (sel: string) => sel === ".label" ? { textContent: label } : value };
-  };
-  const stats = [stat("In maintenance"), stat("Live")];
-  const toggle = (available: boolean, checked: boolean) => ({
-    dataset: { available: String(available) }, checked,
-  });
-  // Three sites, one of which the manager could not read.
-  const toggles = [toggle(true, false), toggle(true, false), toggle(false, false)];
-  const CLP_ROOT = {
-    querySelector: () => ({ dataset: { globalMaintenance: "true" } }),
-    getElementById: () => null,
-    querySelectorAll: (sel: string) => {
-      if (sel === "input[data-toggle-domain]") return toggles;
-      if (sel === ".card.stats .stat") return stats;
-      return [];
-    },
-  };
-  const factory = new Function("CLP_ROOT", "CSS", "document",
-    `${MAINTENANCE_CLIENT_JS}\nreturn { paintStatus };`);
-  const client = factory(CLP_ROOT, { escape: (v: string) => v },
-    { readyState: "complete", addEventListener: () => {} });
-
-  client.paintStatus("a.test", false);
-  // Three rows under the override, not the two that could be read.
-  expect(stats[0]!.value.textContent).toBe("3");
-  expect(stats[1]!.value.textContent).toBe("0");
-});
-
 // /api/tweaks saves the switch and then writes the panel's templates. When only
 // the second half fails it answers 500 with the saved state attached, so putting
 
-// WordPress Sign-In adds one address at a time; it must keep the rest, add an
+// WordPress Tools adds one address at a time; it must keep the rest, add an
 // address only once, and stop at the same limit a saved list does.
 test("adding one bypass keeps the list, deduplicates and respects the limit", async () => {
   const { root, paths } = fixture();
@@ -833,6 +790,61 @@ test("adding one bypass keeps the list, deduplicates and respects the limit", as
     await executeMaintenanceAction(["set-bypass", "--domain=example.com"], actionOptions(paths, { input: JSON.stringify({ ips: full }) }));
     await expect(addBypass(paths, "example.com", "203.0.113.200")).rejects.toThrow(`at most ${MAX_BYPASS_IPS}`);
     expect(await addBypass(paths, "example.com", "198.51.100.0")).toHaveLength(MAX_BYPASS_IPS);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("one sites call reads every site's status and coverage, including state 1.5.2 left", async () => {
+  const { root, paths } = fixture("example.com", ["bare.example.com", "fresh.example.com"], ["bare.example.com"]);
+  rmSync(join(paths.nginxVhostDir, "fresh.example.com.conf"));
+  // What 1.5.2 wrote: a 0711 directory per domain with an empty `on` flag,
+  // `bypass_<ip>` files and a maintenance.html, and the same under _global.
+  for (const [dir, files] of [
+    ["example.com", ["on", "bypass_203.0.113.8", "maintenance.html"]],
+    ["bare.example.com", ["on"]],
+    ["_global", ["bypass_198.51.100.1"]],
+  ] as const) {
+    mkdirSync(join(paths.dataDir, dir), { recursive: true, mode: 0o711 });
+    for (const file of files) writeFileSync(join(paths.dataDir, dir, file), file === "maintenance.html" ? "<h1>Back soon</h1>\n" : "", { mode: 0o600 });
+  }
+  try {
+    const result = await executeMaintenanceAction(["sites"], actionOptions(paths)) as {
+      global: { global: boolean; bypasses: string[] }; sites: MaintenanceSiteStatus[];
+    };
+    expect(result.global).toEqual({ global: false, bypasses: ["198.51.100.1"] });
+    expect(result.sites).toEqual([
+      { domain: "bare.example.com", enabled: true, customTemplate: false, bypasses: [], uncovered: "its vhost does not include the check", type: "php", user: "site" },
+      { domain: "example.com", enabled: true, customTemplate: true, bypasses: ["203.0.113.8"], uncovered: null, type: "php", user: "site" },
+      { domain: "fresh.example.com", enabled: false, customTemplate: false, bypasses: [], uncovered: "Nginx has no vhost for it yet", type: "php", user: "site" },
+    ]);
+    // A single site's status carries the same answer, which the CLI warns with.
+    const one = await executeMaintenanceAction(["enable", "--domain=fresh.example.com"], actionOptions(paths)) as MaintenanceStatus;
+    expect(one.uncovered).toBe("Nginx has no vhost for it yet");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("upkeep removes the state of sites CloudPanel no longer has, and nothing when the panel cannot answer", async () => {
+  const { root, paths } = fixture("example.com", ["kept.example.com"]);
+  for (const dir of ["example.com", "kept.example.com", "deleted.example.com", "_global"]) {
+    mkdirSync(join(paths.dataDir, dir), { recursive: true });
+    writeFileSync(join(paths.dataDir, dir, "on"), "");
+  }
+  writeFileSync(join(paths.dataDir, "default.html"), "x");
+  try {
+    // An unreadable panel database and one that lists no site both read as "do nothing".
+    expect(pruneMaintenanceState({ paths: { ...paths, panelDb: join(root, "missing.db") } })).toEqual([]);
+    const empty = join(root, "empty.db");
+    const db = new Database(empty);
+    db.run("CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT)");
+    db.close();
+    expect(pruneMaintenanceState({ paths: { ...paths, panelDb: empty } })).toEqual([]);
+    expect(existsSync(join(paths.dataDir, "deleted.example.com"))).toBe(true);
+
+    expect(pruneMaintenanceState({ paths })).toEqual(["deleted.example.com"]);
+    expect(readdirSync(paths.dataDir).sort()).toEqual(["_global", "default.html", "example.com", "kept.example.com"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

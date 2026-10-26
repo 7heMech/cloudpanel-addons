@@ -9,16 +9,21 @@ plugin: their `mail()` goes through the relay as it is.
 1. Enable **SMTP Relay** in Addons. Postfix must be 3.6 or newer with Cyrus SASL
    client support; the installer adds the SASL modules if they are missing.
 2. Create a **profile** for each SMTP account: hostname, a STARTTLS port (587 or
-   2525), username, password, and the From its sites send with. The built-in
-   **Don't send** profile discards mail instead, for staging copies.
-3. Assign sites to profiles, one at a time or in bulk, and choose the profile new
-   sites join. A site in no profile is not relayed. A site marked **Blocked**
-   could send as a domain another site sends through a different profile; put
-   both in one profile or remove the domain under **Extra sending domains**.
-4. Send a test to an inbox you control. It runs as the site's own user, through
-   PHP's `mail()` for a PHP site and sendmail for any other, and confirms that
-   Postfix queued it. Delivery results are in `journalctl -u postfix@-`, or in
-   `/var/log/mail.log` where rsyslog is installed.
+   2525), username, password, and the From its sites send with.
+3. In each site's **Mail** column, one at a time or in bulk, choose **Relay
+   through** a profile; **Don't handle**, which leaves the site's mail to this
+   server's own Postfix; or **Discard (never delivered)**, which logs mail and
+   never delivers it, and which Stager puts new staging copies in. Under **Profiles**,
+   choose where new sites' mail goes. A site marked **Blocked** could send as a
+   domain another site sends through a different profile; put both in one
+   profile or remove the domain with **Domains** on its row. A site marked
+   **Bypassed** has a PHP-FPM pool that sets its own `sendmail_path`; remove it.
+4. Press **Test** on a site's row and send to an inbox you control. It runs as
+   the site's own user, through PHP's `mail()` for a PHP site and sendmail for
+   any other, and shows what the SMTP server did with it within about eight
+   seconds: delivered, deferred or refused with the server's reason, or still
+   queued. Full logs are in `journalctl -u postfix@-`, or in `/var/log/mail.log`
+   where rsyslog is installed.
 
 The provider must accept the addresses a profile's sites send as. The addon does
 not create mailboxes, verify domains at the provider, or set DNS records.
@@ -36,7 +41,7 @@ domain contains a dot and is not another CloudPanel site. For example, `www.exam
 `example.com` unless `example.com` is a separate site, in which case it keeps
 `www.example.com`. `{from.local}` and
 `{from.domain}` keep the app's From only on the site's own domain or one of its
-**Extra sending domains**. Whenever the address changes, the original moves to
+extra sending domains (**Domains** on its row). Whenever the address changes, the original moves to
 `Reply-To` unless the message already has one, and the display name is kept.
 
 ## Other apps
@@ -56,8 +61,8 @@ one of its extra sending domains, or the profile's From.
   Mailcow mailbox permitted to send as all of them, then lets any of its sites
   send signed mail as every one of those domains. Give sites that do not trust
   each other separate profiles.
-- While any site is relayed, Postfix stops relaying unauthenticated SMTP from
-  `localhost:25`. Point apps that used it at sendmail or PHP `mail()`.
+- While any site is in a profile, Discard included (as every Stager clone
+  is), Postfix stops relaying unauthenticated SMTP from `localhost:25`. Point apps that used it at sendmail or PHP `mail()`.
 - Apps with their own SMTP settings keep connecting to their provider directly.
 - New sites are picked up seconds after CloudPanel creates them. Disabling the
   addon restores Postfix's previous settings and removes its PHP setting; the

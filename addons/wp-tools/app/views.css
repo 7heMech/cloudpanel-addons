@@ -1,0 +1,36 @@
+.card-header + .fleet-filter { padding-top: 18px; }
+.wp-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.wp-status .btn { min-height: 32px; padding: 4px 12px; font-size: 13px; white-space: nowrap; }
+.wp-note { color: var(--muted); font-size: 13px; }
+.wp-error { margin-top: 6px; color: var(--bad); font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
+/* A wide screen keeps a status to one line, so a row is as tall as its tallest status. */
+@media (min-width: 941px) {
+  .wp-site-table th:not(:first-child), .wp-site-table td:not(:first-child) { padding-left: 20px; }
+  .wp-site-table th:not(:last-child), .wp-site-table td:not(:last-child) { padding-right: 20px; }
+  .wp-site-table td.site-cell { min-width: 200px; }
+  .wp-status { flex-wrap: nowrap; }
+}
+.wp-helper { margin: -18px 0 30px; }
+.wp-link { padding: 0; border: 0; background: none; color: var(--link); font: inherit; text-decoration: underline; cursor: pointer; }
+.wp-link:hover { color: var(--accent); }
+.wp-section h3 { margin: 0 0 6px; font-size: 16px; }
+.wp-section p.hint { margin: 0; }
+.wp-section .alert { margin: 0; }
+.wp-section + .wp-section { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--row-border); }
+.wp-controls { display: flex; align-items: center; gap: 16px; }
+.mainwp-picker { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 14px; }
+.mainwp-picker label { color: var(--muted); font-size: 14px; }
+.mainwp-picker select { flex: 1 1 220px; min-width: 0; max-width: 360px; }
+.mainwp-picker select:disabled { opacity: .5; cursor: not-allowed; background-color: var(--readonly-bg); }
+.mainwp-controls { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; }
+.mainwp-controls .mainwp-picker { flex: 1 1 320px; }
+.wp-section .mainwp-note { margin-top: 14px; color: var(--muted); font-size: 14px; }
+@media (max-width: 940px) {
+  .wp-site-table td.site-cell { flex-basis: 100%; }
+  .wp-site-table td.action-cell .btn { width: 100%; }
+  .wp-section .split-card > .switch { flex-basis: auto; margin-left: auto; }
+  .wp-helper { margin: -10px 0 24px; }
+  .wp-controls { justify-content: space-between; }
+  .mainwp-picker select { max-width: none; flex-basis: 100%; }
+  .mainwp-controls .btn { flex: 1 1 auto; }
+}
