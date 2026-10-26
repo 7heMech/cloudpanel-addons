@@ -111,8 +111,9 @@ Twig after replacing the binary, so the version-independent header reads
 manager is the source of truth.
 
 The installed binary and helper checksums are recorded in a root-owned
-manifest. Reapplying the same version reuses files only when every checksum
-still matches; otherwise the release is downloaded and verified again.
+manifest. An update to the version already installed whose checksums all still
+match says so and changes nothing; re-applying the panel side is `repair`'s job.
+If a checksum differs, the release is downloaded, verified and installed again.
 
 The binary being replaced is hard-linked aside under `/usr/local/libexec` with
 its manifest. The outgoing process outlives the one it hands off to, so it is
@@ -160,9 +161,17 @@ treats the newest release that is not one as "latest", and that is the URL the
 documented `curl | bash` bootstrap fetches `install.sh` from, so a tag that says
 it is not finished must not become what a new install receives.
 
-Neither the update notice nor `clp-addons update` without `--version` looks past
-"latest", so a box gets a pre-release only from `clp-addons update
---version=vX.Y.Z-rc.N --allow-prerelease`. That is how a release candidate is
+On a box running a release, the update notice and a plain `clp-addons update`
+never look past "latest", so it gets a pre-release only when asked:
+`clp-addons update --allow-prerelease` installs the newest published release,
+pre-releases included, and adding `--version` names one. A box running a pre-release
+follows them without being asked: the notice, the panel's Update and a plain
+`clp-addons update` all take the newest published release. A nightly or rc build
+therefore moves to the next one, and to the release once that is the newest,
+which puts the box back on releases. No setting records the choice; the
+installed version is the channel. The newest is picked from the latest 100
+releases GitHub lists, and without `--version` an update never moves to an
+older version than the one installed. That is how a release candidate is
 tried on a real box before anyone else gets it. The release is then tagged on
 the candidate's commit, so what was tried is what ships, and versions compare
 with semver's pre-release order, so a box on `2.0.0-rc.1` is offered `2.0.0`.

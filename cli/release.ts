@@ -4,10 +4,10 @@ import type { TrustedRoot } from "@sigstore/protobuf-specs";
 import { getTrustedRoot } from "@sigstore/tuf";
 import { Verifier, toSignedEntity, toTrustMaterial } from "@sigstore/verify";
 import { REPO, SIGSTORE_DIR } from "./paths";
+import { VERSION_TAG_RE, newestRelease } from "../lib/semver";
 import { fatal, log } from "./util";
 
 const API = "https://api.github.com";
-const VERSION_TAG_RE = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const BUNDLES_ASSET = "attestations.jsonl";
 
 export interface ResolvedRelease {
@@ -50,6 +50,10 @@ export async function resolveRelease(requested?: string, allowPrerelease = false
   if (requested && requested !== "latest") {
     if (!VERSION_TAG_RE.test(requested)) fatal(`'${requested}' is not a release tag; expected something like v1.0.0`);
     release = (await github(`/repos/${REPO}/releases/tags/${requested}`)) as GithubRelease;
+  } else if (allowPrerelease) {
+    const newest = newestRelease((await github(`/repos/${REPO}/releases?per_page=100`)) as GithubRelease[]);
+    if (!newest) fatal("GitHub lists no published release");
+    release = newest;
   } else {
     release = (await github(`/repos/${REPO}/releases/latest`)) as GithubRelease;
   }
