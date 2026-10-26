@@ -112,16 +112,11 @@ export async function handle(
     else if (path === "/api/mainwp-cleanup") {
       if (body.confirm !== true) return json({ ok: false, error: "confirm MainWP cleanup" }, 400);
       result = await wpToolsService.mainwpCleanup();
-    } else {
+    } else if (path === "/api/mainwp-connect") {
       const domain = validateDomain(body.domain);
       if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
-      if (path === "/api/mainwp-site") {
-        if (typeof body.excluded !== "boolean") return json({ ok: false, error: "excluded must be true or false" }, 400);
-        result = await wpToolsService.mainwpSite(domain, body.excluded);
-      } else if (path === "/api/mainwp-connect") {
-        if (body.confirm !== true) return json({ ok: false, error: "confirm the MainWP connection" }, 400);
-        result = await wpToolsService.mainwpConnect(domain);
-      }
+      if (body.confirm !== true) return json({ ok: false, error: "confirm the MainWP connection" }, 400);
+      result = await wpToolsService.mainwpConnect(domain);
     }
     return result ? json(result, result.ok ? 200 : 400) : json({ ok: false, error: "not found" }, 404);
   }
@@ -142,14 +137,9 @@ export async function handle(
       const result = await wpToolsService.varnishSettings(body.enabled);
       return json(result, result.ok ? 200 : 400);
     }
-    const domain = validateDomain(body.domain);
-    if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
-    if (path === "/api/varnish-site") {
-      if (typeof body.excluded !== "boolean") return json({ ok: false, error: "excluded must be true or false" }, 400);
-      const result = await wpToolsService.varnishSite(domain, body.excluded);
-      return json(result, result.ok ? 200 : 400);
-    }
     if (path === "/api/varnish-install") {
+      const domain = validateDomain(body.domain);
+      if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
       const result = await wpToolsService.varnishInstall(domain);
       return json(result, result.ok ? 200 : 400);
     }

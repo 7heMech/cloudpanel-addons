@@ -212,15 +212,12 @@ test("a Generic WordPress becomes eligible when CloudPanel enables Varnish", asy
   expect(statuses["blog.example.com"]).toBe("active");
 });
 
-test("site exclusions survive setting changes and reject explicit installation", async () => {
-  await act("varnish-site", "--domain=shop.example.com", "--excluded=true");
-  await act("varnish-settings", "--enabled=true");
-  expect((await act<VarnishSyncResult>("varnish-sync")).checked).toBe(0);
-  await expect(act("varnish-install", "--domain=shop.example.com")).rejects.toThrow("not eligible");
-  await act("varnish-settings", "--enabled=false");
-  expect(readVarnishState(join(root, "varnish.json")).excluded).toEqual(["shop.example.com"]);
-  await act("varnish-site", "--domain=shop.example.com", "--excluded=false");
-  expect((await act<VarnishSyncResult>("varnish-install", "--domain=shop.example.com")).installed).toBe(1);
+test("an exclusion list left in the state is ignored and dropped on the next write", async () => {
+  writeFileSync(join(root, "varnish.json"), '{"enabled":true,"excluded":["shop.example.com"],"sites":{}}');
+  expect((await act<VarnishSyncResult>("varnish-sync")).installed).toBe(1);
+  expect(readFileSync(join(root, "varnish.json"), "utf8")).not.toContain("excluded");
+  await expect(act("varnish-site", "--domain=shop.example.com", "--excluded=true")).rejects.toThrow("unknown WordPress Tools verb");
+  for (const verb of ["varnish-site", "mainwp-site"]) expect(WP_TOOLS_ALLOWED_VERBS.has(verb)).toBe(false);
 });
 
 test("existing inactive plugins and subsequently removed plugins require explicit action", async () => {
@@ -308,13 +305,12 @@ test("the timer checks only sites automation can still act on", async () => {
 });
 
 test("state for a domain the panel no longer has is dropped", async () => {
-  await act("varnish-site", "--domain=shop.example.com", "--excluded=true");
   await act("varnish-settings", "--enabled=true");
+  await act("varnish-sync");
+  expect(readVarnishState(join(root, "varnish.json")).sites["shop.example.com"]).toBeDefined();
   dbRun("DELETE FROM site WHERE domain_name = 'shop.example.com';");
   await act("varnish-sync");
-  const state = readVarnishState(join(root, "varnish.json"));
-  expect(state.excluded).toEqual([]);
-  expect(state.sites["shop.example.com"]).toBeUndefined();
+  expect(readVarnishState(join(root, "varnish.json")).sites["shop.example.com"]).toBeUndefined();
 });
 
 test("unreadable Varnish settings leave sign-in on the page", async () => {
@@ -340,7 +336,7 @@ test("a process the site detaches cannot hold the root action past its deadline"
 });
 
 test("invalid persisted state and invalid PHP versions do not execute plugin commands", async () => {
-  writeFileSync(join(root, "varnish.json"), '{"enabled":true,"excluded":[],"sites":{"shop.example.com":{"status":"active"}}}');
+  writeFileSync(join(root, "varnish.json"), '{"enabled":true,"sites":{"shop.example.com":{"status":"active"}}}');
   await expect(act("varnish-sync")).rejects.toThrow("site record is invalid");
   expect(commands).toEqual([]);
   rmSync(join(root, "varnish.json"));
@@ -354,15 +350,14 @@ test("Varnish verbs reject missing, duplicate and unrelated arguments", async ()
   for (const args of [
     ["varnish-settings"], ["varnish-settings", "--enabled=yes"],
     ["varnish-settings", "--enabled=true", "--enabled=false"],
-    ["varnish-site", "--domain=shop.example.com"], ["varnish-sync", "--enabled=true"],
-    ["varnish-install", "--domain=shop.example.com", "--as-user=boss"],
+    ["varnish-sync", "--enabled=true"], ["varnish-install", "--domain=shop.example.com", "--as-user=boss"],
   ]) await expect(act(...args)).rejects.toThrow();
-  for (const verb of ["varnish-settings", "varnish-site", "varnish-install", "varnish-sync"]) expect(WP_TOOLS_ALLOWED_VERBS.has(verb)).toBe(true);
+  for (const verb of ["varnish-settings", "varnish-install", "varnish-sync"]) expect(WP_TOOLS_ALLOWED_VERBS.has(verb)).toBe(true);
 });
 
 test("Varnish routes remain administrator-only", async () => {
   const token = "a".repeat(64);
-  for (const path of ["settings", "site", "install", "sync"]) {
+  for (const path of ["settings", "install", "sync"]) {
     const request = new Request(`https://panel.example.com/addons/wp-tools/api/varnish-${path}`, {
       method: "POST", headers: { Host: "panel.example.com", Origin: "https://panel.example.com", Cookie: `clp_addons_csrf=${token}`, "X-CLP-Addons-CSRF": token },
     });
@@ -374,7 +369,7 @@ test("Varnish routes remain administrator-only", async () => {
 });
 
 test("the WordPress Tools page emits a valid script with sign-in and Varnish actions", () => {
-  const html = layout("WordPress Tools", dashboardView({ sites: [], varnish: { enabled: false, excluded: [], sites: {} }, varnishError: "", mainwp: mainwpView(emptyMainwpState()), mainwpError: "" }));
+  const html = layout("WordPress Tools", dashboardView({ sites: [], varnish: { enabled: false, sites: {} }, varnishError: "", mainwp: mainwpView(emptyMainwpState()), mainwpError: "" }));
   for (const source of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)) expect(() => new Function(source[1]!)).not.toThrow();
   expect(html).toContain("/api/sign-in");
   expect(html).toContain("/api/varnish-settings");

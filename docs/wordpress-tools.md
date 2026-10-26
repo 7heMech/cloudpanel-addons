@@ -24,15 +24,11 @@ applies the policy immediately and refreshes the status shown. Large fleets or
 slow downloads may leave sites pending; check again to continue. The status badge
 shows when it was checked.
 
-While automation is on, each site's Varnish cell has an **Automatic** switch;
-turn it off to manage that site yourself. That keeps its existing plugin
-unchanged and hides installation actions for that site. **Install** also works
-while automation is off.
-
 An existing inactive plugin is never activated automatically. A plugin removed
-after a check is never installed again automatically. Use **Activate**,
-**Install**, or **Retry** to make that choice explicitly. A failed download is
-tried again on the next pass.
+after a check is never installed again automatically, so removing it in
+WordPress keeps that site out. Use **Activate**, **Install**, or **Retry** to
+make that choice explicitly; they also work while automation is off. A failed
+download is tried again on the next pass.
 
 WP-CLI and the site's matching PHP command must already be installed on the
 server. Use WordPress to configure the plugin and manage its updates. The addon
@@ -41,12 +37,11 @@ does not change CloudPanel's Varnish setting or the plugin's cache settings.
 Turning off automatic installation stops future changes. Disabling or
 uninstalling WordPress Tools removes its sign-in helper and stops automation;
 the CLP plugin remains available in WordPress, where you can deactivate or
-delete it. Kept addon data retains automation settings and exclusions for the
-next enable.
+delete it. Kept addon data retains automation settings for the next enable.
 
 If the page reports that `/var/lib/clp-addons/wp-tools/varnish.json` cannot be
 read, sign-in still works. Deleting that file turns automation off and forgets
-exclusions and which plugins were removed on purpose.
+which plugins were removed on purpose.
 
 ## MainWP Child
 
@@ -61,14 +56,13 @@ administrator. No user is created and no password is changed. A site the
 Dashboard cannot reach over HTTPS with a valid certificate shows **Waiting for
 HTTPS** and is tried again on the next pass. A firewall, Cloudflare-only rule or
 maintenance page blocks it too; allow the server's own address. **Check now**
-refreshes every included site and, with automation on, connects new ones at once.
+refreshes every site and, with automation on, connects new ones at once.
 
 A site that already has MainWP Child shows **Connect** instead; nothing connects
 it automatically. A Child connected to another Dashboard must be disconnected in
 MainWP first. A Child removed after a check is never installed again
 automatically; **Connect** puts it back. **Retry** repeats a failed connection.
-The Dashboard's own site, multisite networks and sites whose MainWP
-**Automatic** switch is off are left alone.
+The Dashboard's own site and multisite networks are left alone.
 
 Turning automation off leaves every connection in place. **Turn off and clean
 up…** removes what WordPress Tools added: the Dashboard records it created, with

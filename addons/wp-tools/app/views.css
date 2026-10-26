@@ -3,19 +3,12 @@
 .wp-status .btn { min-height: 32px; padding: 4px 12px; font-size: 13px; white-space: nowrap; }
 .wp-note { color: var(--muted); font-size: 13px; }
 .wp-error { margin-top: 6px; color: var(--bad); font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
-.wp-auto { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: 13px; }
-.wp-auto > label:last-child { margin: 0; font-size: 13px; font-weight: 400; color: var(--muted); cursor: pointer; }
-/* A wide screen keeps a status to one line, its site's switch on the right
-   under the column's Auto heading, so a row is as tall as its tallest status. */
+/* A wide screen keeps a status to one line, so a row is as tall as its tallest status. */
 @media (min-width: 941px) {
   .wp-site-table th:not(:first-child), .wp-site-table td:not(:first-child) { padding-left: 20px; }
   .wp-site-table th:not(:last-child), .wp-site-table td:not(:last-child) { padding-right: 20px; }
   .wp-site-table td.site-cell { min-width: 200px; }
-  .wp-cell { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 16px; }
-  .wp-cell > :not(.wp-auto) { grid-column: 1; }
-  .wp-cell > .wp-auto { grid-column: 2; grid-row: 1 / span 2; margin: 0; }
-  .wp-auto > label:last-child { display: none; }
-  .wp-th { display: flex; justify-content: space-between; gap: 16px; }
+  .wp-status { flex-wrap: nowrap; }
 }
 .wp-helper { margin: -18px 0 30px; }
 .wp-link { padding: 0; border: 0; background: none; color: var(--link); font: inherit; text-decoration: underline; cursor: pointer; }

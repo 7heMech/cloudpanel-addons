@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configureMainwp, emptyMainwpState, mainwpAction, mainwpView, readMainwpState, requireMainwpSettled, saveMainwpState, syncMainwp, type MainwpRun } from "../addons/wp-tools/mainwp";
@@ -217,17 +217,22 @@ test("cleanup is resumable; a failed child never hides its pending state or remo
   expect(connections["connected.test"]).toEqual({ id: 1, key });
 });
 
-test("exclusions and foreign connections are honored; switching Dashboard requires cleanup", async () => {
+test("foreign connections are honored; switching Dashboard requires cleanup", async () => {
   await configured();
-  await mainwpAction(run, ["mainwp-site", "--domain=new.test", "--excluded=true"], options, (d) => d);
-  await syncMainwp(run, options);
-  expect(children["new.test"]!.installed).toBe(false);
   children["manual.test"]!.key = "b".repeat(64);
   expect((await syncMainwp({ ...run, domain: "manual.test" }, options)).failed).toHaveLength(1);
   expect(children["manual.test"]!.key).toBe("b".repeat(64));
-  await mainwpAction(run, ["mainwp-site", "--domain=new.test", "--excluded=false"], options, (d) => d);
   await syncMainwp({ ...run, domain: "new.test" }, options);
   await expect(configureMainwp(run, options, true, "manual.test")).rejects.toThrow("clean up");
+});
+
+test("an exclusion list left in the state is ignored and dropped on the next write", async () => {
+  await configured();
+  writeFileSync(run.statePath, JSON.stringify({ ...JSON.parse(readFileSync(run.statePath, "utf8")), excluded: ["new.test"] }));
+  await syncMainwp(run, options);
+  expect(children["new.test"]!.installed).toBe(true);
+  expect(readFileSync(run.statePath, "utf8")).not.toContain("excluded");
+  await expect(mainwpAction(run, ["mainwp-site", "--domain=new.test", "--excluded=true"], options, (d) => d)).rejects.toThrow("unknown MainWP action");
 });
 
 test("removed panel domains are pruned and their owned Dashboard records are retired safely", async () => {
@@ -240,7 +245,7 @@ test("removed panel domains are pruned and their owned Dashboard records are ret
 
 test("invalid state and unconfirmed or malformed verbs fail closed", async () => {
   await configured();
-  for (const argv of [["mainwp-cleanup"], ["mainwp-connect", "--domain=manual.test"], ["mainwp-settings", "--enabled=true", "--enabled=false"], ["mainwp-sync", "--domain=new.test"], ["mainwp-site", "--domain=new.test"]]) await expect(mainwpAction(run, argv, options, (d) => d)).rejects.toThrow();
+  for (const argv of [["mainwp-cleanup"], ["mainwp-connect", "--domain=manual.test"], ["mainwp-settings", "--enabled=true", "--enabled=false"], ["mainwp-sync", "--domain=new.test"]]) await expect(mainwpAction(run, argv, options, (d) => d)).rejects.toThrow();
   const state = emptyMainwpState();
   state.sites["new.test"] = { status: "missing", seen: true, checkedAt: "", error: "", ownedPlugin: true, ownedConnection: false };
   saveMainwpState(run.statePath, state);
@@ -248,7 +253,7 @@ test("invalid state and unconfirmed or malformed verbs fail closed", async () =>
 });
 
 test("MainWP routes require administrator, CSRF, and confirmation before reaching the gateway", async () => {
-  for (const path of ["settings", "site", "sync", "connect", "cleanup"]) {
+  for (const path of ["settings", "sync", "connect", "cleanup"]) {
     const response = await handle(new Request(`https://panel.test/addons/wp-tools/api/mainwp-${path}`, { method: "POST", headers: { Host: "panel.test", origin: "https://panel.test", cookie: `clp_addons_csrf=${"a".repeat(64)}`, "X-CLP-Addons-CSRF": "a".repeat(64), "Content-Type": "application/json" }, body: "{}" }), `/api/mainwp-${path}`, undefined, undefined, { user: "manager", roles: ["ROLE_SITE_MANAGER"] });
     expect(response.status).toBe(404);
   }
@@ -261,15 +266,15 @@ test("MainWP routes require administrator, CSRF, and confirmation before reachin
 test("the UI has row Connect, a pause switch and explicit cleanup, with no secrets or selection UI", () => {
   const state = emptyMainwpState(); state.dashboard = "dashboard.test"; state.cleanup = true;
   state.sites["new.test"] = { status: "waiting-https", seen: false, checkedAt: "", error: "", ownedPlugin: false, ownedConnection: false };
-  const html = dashboardView({ sites: run.sites.map((s) => ({ domain: s.domain, user: s.user, helper: false, varnishCache: false, varnishExcluded: false, varnishPlugin: null })), varnish: { enabled: false, excluded: [], sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "" });
+  const html = dashboardView({ sites: run.sites.map((s) => ({ domain: s.domain, user: s.user, helper: false, varnishCache: false, varnishPlugin: null })), varnish: { enabled: false, sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "" });
   expect(html).toContain("Waiting for HTTPS"); expect(html).toContain("Cleanup pending"); expect(html).toContain("mainwp-automatic"); expect(html).not.toContain("Select all");
 });
 
 test("the page puts sites first and draws only the controls that do something", () => {
   const site = (domain: string, varnishCache = false, helper = false) =>
-    ({ domain, user: domain.split(".")[0]!, helper, varnishCache, varnishExcluded: false, varnishPlugin: null });
+    ({ domain, user: domain.split(".")[0]!, helper, varnishCache, varnishPlugin: null });
   const page = (sites: ReturnType<typeof site>[], mainwp: ReturnType<typeof emptyMainwpState>, varnish = false) => dashboardView({
-    sites, varnish: { enabled: varnish, excluded: [], sites: {} }, varnishError: "", mainwp: mainwpView(mainwp), mainwpError: "",
+    sites, varnish: { enabled: varnish, sites: {} }, varnishError: "", mainwp: mainwpView(mainwp), mainwpError: "",
   });
   const sites = [site("dashboard.test"), site("new.test", true, true), site("manual.test")];
 
@@ -281,9 +286,8 @@ test("the page puts sites first and draws only the controls that do something", 
   expect(fresh).toContain('id="mainwp-dashboard"');
   expect(fresh).not.toContain("Application");
   expect(fresh).toContain('<option value="">Choose a site</option><option value="@remote">On another server</option>');
-  // A site without Varnish says so, and Automatic switches wait for their automation.
+  // A site without Varnish says so.
   expect(fresh).toContain('<td data-label="CLP Varnish Cache"><span class="hint" title="Varnish Cache is off');
-  expect(fresh).not.toContain("setSiteAutomatic(this)");
   expect(fresh).toContain("Sign-in helper on 1 site · ");
   expect(page([site("a.test")], emptyMainwpState())).not.toContain("Sign-in helper");
 
@@ -292,15 +296,14 @@ test("the page puts sites first and draws only the controls that do something", 
   const heads = [...off.matchAll(/<th scope="col"[^>]*>([^<]*)<\/th>/g)].map((match) => match[1]);
   expect(heads).toEqual(["Site", "CLP Varnish Cache", "MainWP Child", ""]);
   expect(off).toContain("mainwp-automatic");
-  expect(off).not.toContain("setMainwpSite(this)");
   expect(off).toMatch(/data-domain="new.test" onclick="connectMainwp\(this\)">Connect</);
+  // With both policies on, the only switches are theirs, and every row keeps its action.
   chosen.enabled = true;
   const on = page(sites, chosen, true);
-  expect(on).toContain('<th scope="col"><span class="wp-th">MainWP Child<span>Auto</span></span></th>');
-  expect(on).toContain('id="mainwp-auto-new.test"');
-  expect(on).not.toContain('id="mainwp-auto-dashboard.test"');
-  expect(on).toContain('id="varnish-auto-new.test"');
-  expect(on).not.toContain('id="varnish-auto-manual.test"');
+  expect([...on.matchAll(/<th scope="col"[^>]*>([^<]*)<\/th>/g)].map((match) => match[1])).toEqual(heads);
+  expect(on.match(/class="switch"/g)).toHaveLength(2);
+  expect(on).toMatch(/data-domain="new.test" onclick="connectMainwp\(this\)">Connect</);
+  expect(on).toMatch(/data-domain="new.test" onclick="installPlugin\(this\)">Install</);
 
   // A deleted Dashboard leaves the Child plugins the addon installed for cleanup to remove,
   // and automation without a Dashboard reads as off.
@@ -335,11 +338,10 @@ test("empty PHP arrays are valid baselines and registration interrupted before r
   expect(commands.some((c) => c.stdin?.includes('"op":"dashboard-add"'))).toBe(false);
 });
 
-test("pausing and excluding an interrupted site cannot prevent authentication recovery", async () => {
+test("pausing automation cannot prevent an interrupted site's authentication recovery", async () => {
   await configured(); fail = "restore";
   await syncMainwp({ ...run, domain: "new.test" }, options);
   await configureMainwp(run, options, false);
-  await mainwpAction(run, ["mainwp-site", "--domain=new.test", "--excluded=true"], options, (d) => d);
   fail = ""; commands = [];
   await syncMainwp({ ...run, dueOnly: true }, options);
   expect(children["new.test"]!.auth).toBe(true);
@@ -637,17 +639,18 @@ test("the page offers a Dashboard on another server and Install or Activate per 
   const state = { ...emptyMainwpState(), remote: true, enabled: true };
   state.sites["new.test"] = { status: "inactive", seen: true, checkedAt: "", error: "", ownedPlugin: true, ownedConnection: false };
   state.sites["connected.test"] = { status: "connected", seen: true, checkedAt: "", error: "", ownedPlugin: false, ownedConnection: false };
-  const page = dashboardView({ sites: run.sites.map((site) => ({ domain: site.domain, user: site.user, helper: false, varnishCache: false, varnishExcluded: false, varnishPlugin: null })),
-    varnish: { enabled: false, excluded: [], sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "" });
+  const page = dashboardView({ sites: run.sites.map((site) => ({ domain: site.domain, user: site.user, helper: false, varnishCache: false, varnishPlugin: null })),
+    varnish: { enabled: false, sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "" });
   expect(page).toContain('<option value="@remote" selected>On another server</option>');
   expect(page).not.toContain("Choose a site");
-  expect(page).toContain('<th scope="col"><span class="wp-th">MainWP Child<span>Auto</span></span></th>');
+  expect(page).toContain('<th scope="col">MainWP Child</th>');
   expect(page).toContain("Install MainWP Child automatically");
   expect(page).not.toContain("Install and connect");
   expect(page).toMatch(/data-domain="new.test" data-remote onclick="connectMainwp\(this\)">Activate</);
   expect(page).toMatch(/data-domain="manual.test" data-remote onclick="connectMainwp\(this\)">Install</);
   expect(page).not.toMatch(/data-domain="connected.test"[^>]*onclick="connectMainwp/);
   expect(page).not.toContain(">Connect<");
-  expect(page).toContain('id="mainwp-auto-dashboard.test"');
+  // With the Dashboard elsewhere, a site named dashboard.test is just another site.
+  expect(page).toMatch(/data-domain="dashboard.test" data-remote onclick="connectMainwp\(this\)">Install</);
 });
 

@@ -54,7 +54,6 @@ export interface MainwpState {
   dashboard: string;
   /** The Dashboard is on another server: install the Child only, and connect from there. */
   remote?: boolean;
-  excluded: string[];
   cleanup: boolean;
   sites: Record<string, MainwpRecord>;
   /** Owned Dashboard records of sites the panel no longer has. */
@@ -68,7 +67,6 @@ export interface MainwpView {
   enabled: boolean;
   dashboard: string;
   remote: boolean;
-  excluded: string[];
   cleanup: boolean;
   sites: Record<string, MainwpSiteView>;
   /** Sites and Dashboard records cleanup would withdraw. */
@@ -77,7 +75,7 @@ export interface MainwpView {
   connections: number;
 }
 
-/** One pass: every included site, only those automation can still act on, or one domain. */
+/** One pass: every site, only those automation can still act on, or one domain. */
 export interface MainwpRun {
   statePath: string;
   runuser: string;
@@ -153,7 +151,7 @@ const FAILURES: Record<string, string> = {
 };
 
 export const emptyMainwpState = (): MainwpState => ({
-  enabled: false, dashboard: "", excluded: [], cleanup: false, sites: {}, retired: [],
+  enabled: false, dashboard: "", cleanup: false, sites: {}, retired: [],
 });
 const emptyResult = (): MainwpResult => ({ checked: 0, installed: 0, connected: 0, removed: 0, pending: 0, failed: [] });
 
@@ -193,10 +191,9 @@ function isRecord(value: unknown): value is MainwpRecord {
 
 export function readMainwpState(path: string): MainwpState {
   if (!existsSync(path)) return emptyMainwpState();
-  const state = JSON.parse(readFileSync(path, "utf8")) as MainwpState;
+  const state = JSON.parse(readFileSync(path, "utf8")) as MainwpState & { excluded?: unknown };
   if (!state || typeof state.enabled !== "boolean" || typeof state.dashboard !== "string" || typeof state.cleanup !== "boolean"
     || (state.remote !== undefined && typeof state.remote !== "boolean")
-    || !Array.isArray(state.excluded) || !state.excluded.every((domain) => typeof domain === "string")
     || !state.sites || typeof state.sites !== "object" || Array.isArray(state.sites) || !Array.isArray(state.retired)) {
     throw new Error("the MainWP settings are invalid");
   }
@@ -206,6 +203,8 @@ export function readMainwpState(path: string): MainwpState {
   }
   // Automation works for a Dashboard, here or on another server, so without one it is off.
   if (!state.dashboard && !state.remote) state.enabled = false;
+  // Sites can no longer be excluded; the next save drops an old list.
+  delete state.excluded;
   return state;
 }
 
@@ -236,7 +235,7 @@ export function mainwpView(state: MainwpState): MainwpView {
     status: record.status, seen: record.seen, checkedAt: record.checkedAt, error: record.error, ownedConnection: record.ownedConnection,
   }]));
   return {
-    enabled: state.enabled, dashboard: state.dashboard, remote: state.remote === true, excluded: state.excluded, cleanup: state.cleanup, sites,
+    enabled: state.enabled, dashboard: state.dashboard, remote: state.remote === true, cleanup: state.cleanup, sites,
     owned: ownedCount(state), connections: ownedConnections(state),
   };
 }
@@ -365,15 +364,12 @@ async function startPass(run: MainwpRun, options: WpOptions, state: MainwpState,
 
 function dueSites(run: MainwpRun, state: MainwpState): WpSite[] {
   const sites = run.sites.filter((site) => site.domain !== state.dashboard && (!run.domain || site.domain === run.domain));
-  if (run.domain && (sites.length !== 1 || state.excluded.includes(run.domain))) {
-    throw new Error("that site is excluded or is not a WordPress site MainWP can manage");
-  }
+  if (run.domain && sites.length !== 1) throw new Error("that is not a WordPress site MainWP can manage");
   return sites.filter((site) => {
     const record = state.sites[site.domain];
     if (state.cleanup) return Boolean(record?.snapshot);
-    // Even an excluded site gets an interrupted change's setting restored.
+    // Even with automation off, an interrupted change's setting is restored.
     if (record?.phase) return true;
-    if (state.excluded.includes(site.domain)) return false;
     return !run.dueOnly || (state.enabled && !record?.seen && record?.status !== "unsupported");
   });
 }
@@ -694,7 +690,6 @@ export function requireMainwpSettled(path: string): void {
 
 const ARGUMENTS: Record<string, string[]> = {
   "mainwp-settings": ["enabled", "dashboard", "remote"],
-  "mainwp-site": ["domain", "excluded"],
   "mainwp-sync": [],
   "mainwp-connect": ["domain", "confirm"],
   "mainwp-cleanup": ["confirm"],
@@ -732,19 +727,7 @@ export async function mainwpAction(run: MainwpRun, argv: string[], options: WpOp
     return syncMainwp(run, options, true);
   }
   const domain = validate(fields.domain ?? "");
-  const state = readMainwpState(run.statePath);
-  if (verb === "mainwp-connect") {
-    if (fields.confirm !== domain) throw new Error("confirm the MainWP connection with --confirm=<domain>");
-    if (state.cleanup) throw new Error("finish MainWP cleanup before connecting a site");
-    return syncMainwp({ ...run, domain }, options);
-  }
-  const excluded = parseBoolean(fields.excluded, "excluded");
-  if (!run.sites.some((site) => site.domain === domain) || domain === state.dashboard) {
-    throw new Error("that is not a WordPress site MainWP can manage");
-  }
-  prune(state, run.domains);
-  state.excluded = state.excluded.filter((entry) => entry !== domain);
-  if (excluded) state.excluded.push(domain);
-  saveMainwpState(run.statePath, state);
-  return { mainwp: mainwpView(state) };
+  if (fields.confirm !== domain) throw new Error("confirm the MainWP connection with --confirm=<domain>");
+  if (readMainwpState(run.statePath).cleanup) throw new Error("finish MainWP cleanup before connecting a site");
+  return syncMainwp({ ...run, domain }, options);
 }

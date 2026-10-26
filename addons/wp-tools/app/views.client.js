@@ -120,16 +120,6 @@ async function setAutomatic(input) {
   })) input.checked = !enabled;
 }
 
-async function setSiteAutomatic(input) {
-  const domain = input.dataset.domain;
-  const included = input.checked;
-  if (!await change('/api/varnish-site', { domain: domain, excluded: !included }, function () {
-    return { text: included
-      ? domain + ' is included in automatic installation.'
-      : domain + ' is excluded from automatic installation. Its plugin is left as it is.' };
-  })) input.checked = !included;
-}
-
 function syncSummary(data) {
   let text = 'Checked ' + plural(data.checked, 'site') + '; ' + data.installed + ' installed or activated.';
   if (data.pending) text += ' ' + data.pending + ' still to check; check again to continue.';
@@ -189,16 +179,6 @@ function setMainwpDashboard(select) {
       ? 'MainWP Child will be installed for a Dashboard on another server. Use Check now to see each site\'s MainWP Child.'
       : select.value + ' is the MainWP Dashboard. Use Check now to see which sites are connected to it.' };
   });
-}
-
-async function setMainwpSite(input) {
-  const domain = input.dataset.domain;
-  const included = input.checked;
-  if (!await change('/api/mainwp-site', { domain: domain, excluded: !included }, function () {
-    return { text: included
-      ? domain + ' is included in MainWP automation.'
-      : domain + ' is excluded from MainWP automation. Its connection is left as it is.' };
-  })) input.checked = !included;
 }
 
 function mainwpSummary(data) {
