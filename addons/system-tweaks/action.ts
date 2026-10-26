@@ -16,7 +16,7 @@ import { applyRealIp, realIpStatus, type RealIpOptions, type RealIpStatus } from
 import {
   panelPhpStatus, reconcilePanelPhp, restorePanelPhp, setPanelPhp, withdrawPanelPhp, type PanelPhpOptions, type PanelPhpStatus,
 } from "./panel-php";
-import { clearAbandonedTmpFiles, type TmpCleanupOptions } from "./tmp-cleanup";
+import { clearAbandonedTmpFiles, type TmpCleanupOptions } from "../../cli/tmp-cleanup";
 
 const SETTINGS_VERSION = 1;
 const MAX_INPUT_BYTES = 4 * 1024;

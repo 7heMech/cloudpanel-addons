@@ -129,6 +129,13 @@ written, such as one CloudPanel has not written yet, is not recorded as known,
 so the next pass tries it again. A pass that changes nothing leaves the policy
 file alone.
 
+## Abandoned temp files
+
+While System Tweaks is off, the upkeep also clears the temp files timed-out
+PHP requests leave in `/tmp`, so a box with PHP Resources alone keeps that
+cleanup. System Tweaks owns it; see
+[System Tweaks](system-tweaks.md#abandoned-temp-files).
+
 ## State and privileges
 
 Only the root gateway changes a pool. It accepts a fixed verb set, normalizes

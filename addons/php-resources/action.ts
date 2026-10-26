@@ -25,7 +25,8 @@ import {
   ActionFailure, emitActionError, emitActionOk, failAction, nameSlug, oneLine, runCommand, validateDomain, withFileLock,
   type CommandResult,
 } from "../../cli/action-common";
-import { PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
+import type { TmpCleanupOptions } from "../../cli/tmp-cleanup";
 import { writeFileAtomic } from "../../lib/atomic-write";
 
 const POLICY_VERSION = 1;
@@ -171,6 +172,8 @@ export interface PhpResourcesActionPaths {
   systemctl: string;
   /** Owner every file this action trusts and writes must have. */
   rootUid: number;
+  /** Present while System Tweaks is enabled, which then clears /tmp itself. */
+  systemTweaksConfig: string;
 }
 
 export interface PhpResourcesActionOptions {
@@ -182,6 +185,8 @@ export interface PhpResourcesActionOptions {
   processUid?: number;
   /** Test-only validator override for fixtures with no panel identity file. */
   domainValidator?: (value: string) => string;
+  /** Test-only /tmp, /proc and passwd for the temp-file cleanup. */
+  tmpCleanup?: TmpCleanupOptions;
 }
 
 export const DEFAULT_PHP_RESOURCES_ACTION_PATHS: PhpResourcesActionPaths = {
@@ -192,6 +197,7 @@ export const DEFAULT_PHP_RESOURCES_ACTION_PATHS: PhpResourcesActionPaths = {
   lockFile: "/run/lock/clp-addons/php-resources.lock",
   systemctl: "systemctl",
   rootUid: 0,
+  systemTweaksConfig: `${CONFIG_DIR}/system-tweaks.conf`,
 };
 
 function pathsFor(options: PhpResourcesActionOptions): PhpResourcesActionPaths {

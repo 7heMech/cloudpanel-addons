@@ -282,9 +282,10 @@ skips the cleanup that would remove its scratch files, and a CloudPanel box
 empties `/tmp` only at boot. An image too large for ImageMagick's memory limit
 is cached on disk, so a WordPress image job that keeps timing out leaves close
 to a gigabyte in `/tmp` on every try, and has filled a production disk that way.
-Clearing them is upkeep for the server rather than a PHP-FPM limit, so it is
-here and not in PHP Resources, and an install with the installer's defaults has
-it.
+Clearing them is upkeep for the server rather than a PHP-FPM limit, so System
+Tweaks owns it, and an install with the installer's defaults has it. PHP
+Resources runs the same pass while System Tweaks is off, since an update never
+enables an addon and a box with PHP Resources alone would otherwise lose it.
 
 The repair timer removes them every 15 minutes, as the first step of System
 Tweaks' upkeep, so a failing update or panel PHP check cannot stop it. It takes

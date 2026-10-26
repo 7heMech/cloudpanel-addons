@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import { chownSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { clearAbandonedTmpFiles, phpSiteUsers, removeAbandonedTmpFiles, type TmpCleanupPaths } from "../addons/system-tweaks/tmp-cleanup";
+import { clearAbandonedTmpFiles, phpSiteUsers, removeAbandonedTmpFiles, type TmpCleanupPaths } from "../cli/tmp-cleanup";
 
 const HOUR = 3_600_000;
 const NOW = Date.now();

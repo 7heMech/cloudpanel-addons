@@ -10,8 +10,8 @@
 import { Database } from "bun:sqlite";
 import { lstatSync, readdirSync, readFileSync, readlinkSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { PANEL_DB } from "../../cli/paths";
-import { readUnixAccounts, siteAccountProblem } from "../../lib/site-accounts";
+import { PANEL_DB } from "./paths";
+import { readUnixAccounts, siteAccountProblem } from "../lib/site-accounts";
 
 export interface TmpCleanupPaths {
   tmpDir: string;
