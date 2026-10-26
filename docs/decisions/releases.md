@@ -161,10 +161,15 @@ treats the newest release that is not one as "latest", and that is the URL the
 documented `curl | bash` bootstrap fetches `install.sh` from, so a tag that says
 it is not finished must not become what a new install receives.
 
-The update notice and a plain `clp-addons update` never look past "latest", so
-a box gets a pre-release only when asked: `clp-addons update --allow-prerelease`
-installs the newest published release, pre-releases included, and `--version`
-names one. That is how a release candidate is
+On a box running a release, the update notice and a plain `clp-addons update`
+never look past "latest", so it gets a pre-release only when asked:
+`clp-addons update --allow-prerelease` installs the newest published release,
+pre-releases included, and `--version` names one. A box running a pre-release
+follows them without being asked: the notice, the panel's Update and a plain
+`clp-addons update` all take the newest published release. A nightly or rc build
+therefore moves to the next one, and to the release once that is the newest,
+which puts the box back on releases. No setting records the choice; the
+installed version is the channel. That is how a release candidate is
 tried on a real box before anyone else gets it. The release is then tagged on
 the candidate's commit, so what was tried is what ships, and versions compare
 with semver's pre-release order, so a box on `2.0.0-rc.1` is offered `2.0.0`.

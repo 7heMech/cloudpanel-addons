@@ -4,7 +4,7 @@
 // release is available. The manager asks on every request it serves, so the
 // answer is cached for 15 minutes and refreshed by one call at a time.
 
-import { compareSemver } from "./semver";
+import { compareSemver, isPrerelease, newestRelease } from "./semver";
 
 export interface CliUpdateInfo {
   current: string;
@@ -37,7 +37,9 @@ async function fetchLatestRelease(
   const started = generation;
   let info: CliUpdateInfo | null = null;
   try {
-    const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+    // "latest" is never a pre-release, so a box running one reads the list.
+    const prerelease = isPrerelease(currentVersion);
+    const res = await fetch(`https://api.github.com/repos/${repo}/releases${prerelease ? "?per_page=30" : "/latest"}`, {
       headers: {
         Accept: "application/vnd.github+json",
         "User-Agent": "clp-addons",
@@ -45,8 +47,11 @@ async function fetchLatestRelease(
       signal: AbortSignal.timeout(timeoutMs),
     });
 
-    const data = res.ok ? ((await res.json()) as { tag_name?: string }) : null;
-    const remoteTag = (data?.tag_name ?? "").replace(/^v/, "");
+    const data: unknown = res.ok ? await res.json() : null;
+    const tag = prerelease
+      ? newestRelease(Array.isArray(data) ? data as { tag_name: string; draft: boolean }[] : [])?.tag_name
+      : (data as { tag_name?: string } | null)?.tag_name;
+    const remoteTag = (tag ?? "").replace(/^v/, "");
     if (remoteTag) {
       info = {
         current: currentVersion.replace(/^v/, ""),

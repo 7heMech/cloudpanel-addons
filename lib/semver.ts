@@ -31,3 +31,17 @@ export function compareSemver(a: string, b: string): number {
   }
   return 0;
 }
+
+export const VERSION_TAG_RE = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/** A box running a pre-release follows pre-releases; one on a release sees releases only. */
+export function isPrerelease(version: string): boolean {
+  return (version.replace(/^v/, "").split("+")[0] ?? "").includes("-");
+}
+
+/** The newest published release by version, pre-releases included; GitHub's "latest" never is one. */
+export function newestRelease<T extends { tag_name: string; draft: boolean }>(releases: T[]): T | undefined {
+  return releases
+    .filter((release) => !release.draft && VERSION_TAG_RE.test(release.tag_name))
+    .sort((a, b) => compareSemver(b.tag_name, a.tag_name))[0];
+}

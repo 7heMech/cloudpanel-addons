@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { TrustedRoot } from "@sigstore/protobuf-specs";
-import { newestRelease, verifyAttestation } from "../cli/release";
+import { verifyAttestation } from "../cli/release";
+import { newestRelease } from "../lib/semver";
 
 // v1.5.2's install.sh and the bundles published with it, checked against a
 // copy of Sigstore's trusted root, so nothing here needs the network.

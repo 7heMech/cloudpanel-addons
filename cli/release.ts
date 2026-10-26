@@ -4,11 +4,10 @@ import type { TrustedRoot } from "@sigstore/protobuf-specs";
 import { getTrustedRoot } from "@sigstore/tuf";
 import { Verifier, toSignedEntity, toTrustMaterial } from "@sigstore/verify";
 import { REPO, SIGSTORE_DIR } from "./paths";
-import { compareSemver } from "../lib/semver";
+import { VERSION_TAG_RE, newestRelease } from "../lib/semver";
 import { fatal, log } from "./util";
 
 const API = "https://api.github.com";
-const VERSION_TAG_RE = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const BUNDLES_ASSET = "attestations.jsonl";
 
 export interface ResolvedRelease {
@@ -44,13 +43,6 @@ interface GithubRelease {
   draft: boolean;
   prerelease: boolean;
   assets: { name: string; browser_download_url: string }[];
-}
-
-/** The newest published release by version, pre-releases included; GitHub's "latest" never is one. */
-export function newestRelease<T extends Pick<GithubRelease, "tag_name" | "draft">>(releases: T[]): T | undefined {
-  return releases
-    .filter((release) => !release.draft && VERSION_TAG_RE.test(release.tag_name))
-    .sort((a, b) => compareSemver(b.tag_name, a.tag_name))[0];
 }
 
 export async function resolveRelease(requested?: string, allowPrerelease = false): Promise<ResolvedRelease> {

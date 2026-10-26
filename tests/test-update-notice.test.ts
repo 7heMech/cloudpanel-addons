@@ -1,10 +1,17 @@
 // The update notice the addon puts on CloudPanel's own header, and the one it
 // puts on its own pages. Both read the same manager route, so what is pinned
 // here is that a stale notice is cleared as readily as a fresh one is shown.
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { renderLayout } from "../lib/app-ui";
 import { headerTarget, headerUpdateScript } from "../lib/panel-nav";
-import { isNewerVersion } from "../lib/update-check";
+import { isPrerelease } from "../lib/semver";
+import { checkCliUpdate, isNewerVersion, resetUpdateCache } from "../lib/update-check";
+
+const realFetch = globalThis.fetch;
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  resetUpdateCache();
+});
 
 test("native header follows the manager's update state and clears a restored stale notice", async () => {
   const listeners: Record<string, (event?: { persisted?: boolean }) => void> = {};
@@ -188,5 +195,33 @@ describe("the snippet injected into CloudPanel's header", () => {
       const at = snip.indexOf(needle);
       expect(at > start && at < end, needle).toBe(true);
     }
+  });
+});
+
+describe("which releases a box is told about", () => {
+  // GitHub's "latest" is the newest release, and its list includes pre-releases.
+  const github = (asked: string[]) => (async (url: string) => {
+    asked.push(url);
+    const body = url.endsWith("/releases/latest")
+      ? { tag_name: "v2.0.0" }
+      : [{ tag_name: "v2.0.0", draft: false }, { tag_name: "v2.1.0-rc.2", draft: false }, { tag_name: "v2.1.0-rc.3", draft: true }];
+    return Response.json(body);
+  }) as unknown as typeof fetch;
+
+  test("a box running a pre-release is told about the newest one", async () => {
+    expect(isPrerelease("2.1.0-rc.1")).toBe(true);
+    const asked: string[] = [];
+    globalThis.fetch = github(asked);
+    expect(await checkCliUpdate("2.1.0-rc.1", "owner/repo")).toEqual({ current: "2.1.0-rc.1", latest: "2.1.0-rc.2", hasUpdate: true });
+    expect(asked).toEqual(["https://api.github.com/repos/owner/repo/releases?per_page=30"]);
+  });
+
+  test("a box running a release is told about releases only", async () => {
+    expect(isPrerelease("2.0.0")).toBe(false);
+    expect(isPrerelease("2.0.0+build.5")).toBe(false);
+    const asked: string[] = [];
+    globalThis.fetch = github(asked);
+    expect(await checkCliUpdate("1.5.2", "owner/repo")).toEqual({ current: "1.5.2", latest: "2.0.0", hasUpdate: true });
+    expect(asked).toEqual(["https://api.github.com/repos/owner/repo/releases/latest"]);
   });
 });
