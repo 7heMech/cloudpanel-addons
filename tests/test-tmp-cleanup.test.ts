@@ -1,9 +1,10 @@
 import { expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import { chownSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { removeAbandonedTmpFiles, type TmpCleanupPaths } from "../addons/php-resources/tmp-cleanup";
+import { clearAbandonedTmpFiles, phpSiteUsers, removeAbandonedTmpFiles, type TmpCleanupPaths } from "../cli/tmp-cleanup";
 
 const HOUR = 3_600_000;
 const NOW = Date.now();
@@ -201,3 +202,22 @@ for (const code of ["ENOENT", "EACCES", "EROFS"]) {
     }
   });
 }
+
+test("the upkeep pass covers every PHP site's user, from CloudPanel's own records, and says what it freed", () => {
+  const box = makeBox();
+  try {
+    const panelDb = join(box.root, "db.sq3");
+    const db = new Database(panelDb, { create: true });
+    db.exec(`CREATE TABLE site (id INTEGER PRIMARY KEY, user TEXT);
+      CREATE TABLE php_settings (site_id INTEGER);
+      INSERT INTO site VALUES (1, 'shop'), (2, 'shop'), (3, 'node-app');
+      INSERT INTO php_settings VALUES (1), (2);`);
+    db.close();
+    expect(phpSiteUsers(panelDb)).toEqual(["shop"]);
+    box.file("magick-Ab12Cd34Ef56Gh78", 3);
+    expect(clearAbandonedTmpFiles({ paths: box.paths, panelDb, now: NOW })).toMatch(/^1 abandoned temp file removed from \/tmp \(\d+ KB\)$/);
+    expect(clearAbandonedTmpFiles({ paths: box.paths, panelDb, now: NOW })).toBeNull();
+  } finally {
+    rmSync(box.root, { recursive: true, force: true });
+  }
+});

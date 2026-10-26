@@ -106,6 +106,15 @@ describe("version comparison", () => {
     ["0.10.0", "0.9.9", true],
     ["0.9.3", "0.9.3", false],
     ["0.9.2", "0.9.3", false],
+    // A box on a release candidate is offered the release, and never an older one.
+    ["2.0.0", "2.0.0-rc.1", true],
+    ["2.0.0-rc.2", "2.0.0-rc.1", true],
+    ["2.0.0-rc.10", "2.0.0-rc.9", true],
+    ["2.0.0-rc.1", "2.0.0-beta.2", true],
+    ["2.0.0-rc.1", "2.0.0", false],
+    ["2.0.0-rc.1", "2.0.0-rc.1", false],
+    ["1.5.2", "2.0.0-rc.1", false],
+    ["2.0.0+build.5", "2.0.0", false],
   ] as const) {
     test(`${newer} is ${expected ? "" : "not "}newer than ${older}`, () => {
       expect(isNewerVersion(newer, older)).toBe(expected);

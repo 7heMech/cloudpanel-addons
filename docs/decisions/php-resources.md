@@ -131,26 +131,10 @@ file alone.
 
 ## Abandoned temp files
 
-A PHP request stopped by `max_execution_time` or `request_terminate_timeout`
-skips the cleanup that would remove its scratch files, and a CloudPanel box
-empties `/tmp` only at boot. An image too large for ImageMagick's memory limit
-is cached on disk, so a WordPress image job that keeps timing out leaves close
-to a gigabyte in `/tmp` on every try, and has filled a production disk that way.
-
-The same upkeep removes them. It reads only the top level of `/tmp`, never
-follows a symlink, and removes a regular file only when a PHP site's own user
-owns it, no process has it open or mapped, and it matches one of three names:
-ImageMagick's `magick-*` after two idle hours, and PHP's `php??????` uploads and
-WordPress's `wp_tempnam()` `*-??????.tmp` files after a day, since those are
-closed between being written and being read. Running it before reconciliation
-means a site that keeps failing to reconcile cannot stop it.
-
-Cleanup inspects process file descriptors and memory maps before deleting any
-file. A closed descriptor or a process that has exited can be skipped; an
-inspection failure for a process whose directory still exists stops cleanup
-and logs a warning. Unlink errors also reach that warning logger, except when
-the file has already disappeared. Reconciliation still runs after a cleanup
-failure.
+While System Tweaks is off, the upkeep also clears the temp files timed-out
+PHP requests leave in `/tmp`, so a box with PHP Resources alone keeps that
+cleanup. System Tweaks owns it; see
+[System Tweaks](system-tweaks.md#abandoned-temp-files).
 
 ## State and privileges
 

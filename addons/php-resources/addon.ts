@@ -1,23 +1,20 @@
+import { existsSync } from "node:fs";
 import { handle } from "./app/index";
 import {
-  DEFAULT_PHP_RESOURCES_ACTION_PATHS, executePhpResourcesAction, phpSiteUsers, runPhpResourcesAction,
+  DEFAULT_PHP_RESOURCES_ACTION_PATHS, executePhpResourcesAction, runPhpResourcesAction,
   type PhpResourcesActionOptions, type ReconcileResult,
 } from "./action";
 import { PHP_RESOURCES_TARGETS } from "./inject/targets";
-import { removeAbandonedTmpFiles } from "./tmp-cleanup";
 import type { AddonDefinition } from "../../cli/addon-catalog";
+import { clearAbandonedTmpFiles } from "../../cli/tmp-cleanup";
 import { log } from "../../cli/util";
 
 const count = (value: number, word: string) => `${value} ${word}${value === 1 ? "" : "s"}`;
 
-function sizeText(bytes: number): string {
-  return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
-}
-
 export const PHP_RESOURCES_ADDON: AddonDefinition = {
   name: "php-resources",
   title: "PHP Resources",
-  description: "Give groups of PHP sites the same PHP-FPM limits, and clear abandoned PHP and ImageMagick temp files from /tmp.",
+  description: "Give groups of PHP sites the same PHP-FPM limits.",
   changed: { in: "2.0", note: "Sites first, and new sites get their limits within seconds." },
   targets: PHP_RESOURCES_TARGETS,
   handler: handle,
@@ -35,13 +32,15 @@ export const PHP_RESOURCES_ADDON: AddonDefinition = {
     label: "php resources",
     run: async (options) => {
       const actionOptions = (options ?? {}) as PhpResourcesActionOptions;
-      // Before reconciling, so a site that keeps failing does not stop it.
-      try {
-        const users = phpSiteUsers({ ...DEFAULT_PHP_RESOURCES_ACTION_PATHS, ...actionOptions.paths });
-        const { removed, bytes } = removeAbandonedTmpFiles(users);
-        if (removed) log.ok(`php resources: ${removed} abandoned temp file${removed === 1 ? "" : "s"} removed from /tmp (${sizeText(bytes)})`);
-      } catch (error) {
-        log.warn(`php resources /tmp cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+      const paths = { ...DEFAULT_PHP_RESOURCES_ACTION_PATHS, ...actionOptions.paths };
+      // System Tweaks clears /tmp; a box with this addon and not that one keeps the cleanup.
+      if (!existsSync(paths.systemTweaksConfig)) {
+        try {
+          const cleared = clearAbandonedTmpFiles({ panelDb: paths.panelDb, ...actionOptions.tmpCleanup });
+          if (cleared) log.ok(`php resources: ${cleared}`);
+        } catch (error) {
+          log.warn(`php resources /tmp cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
       const result = await executePhpResourcesAction(["reconcile"], actionOptions) as ReconcileResult;
       if (!result.applied && !result.repaired) return null;

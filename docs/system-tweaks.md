@@ -76,3 +76,11 @@ is switched on.
 A panel behind Cloudflare keeps its visitors' addresses. Switch the setting off
 only if a load balancer or proxy other than Cloudflare, on a public address,
 sits in front of this server or its panel.
+
+## Abandoned temp files
+
+Every 15 minutes System Tweaks removes the PHP and ImageMagick temp files that
+timed-out requests left in `/tmp`: ImageMagick's after two idle hours, PHP
+uploads and WordPress downloads after a day. It removes only files a PHP site's
+own user owns and no process has open. There is nothing to set. PHP Resources
+does the same while System Tweaks is off.
