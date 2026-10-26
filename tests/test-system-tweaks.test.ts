@@ -1,4 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -266,6 +267,14 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
     const failing = panel ? nginx.failPanel : nginx.fail;
     return failing && readFileSync(panel ? panelConf : nginxConf, "utf8").includes("#clp-addons:untrusted") ? { ok: false, stdout: "", stderr: "emerg" } : ok();
   };
+  const tmpRoot = join(dir, "tmp-cleanup");
+  mkdirSync(join(tmpRoot, "tmp"), { recursive: true });
+  mkdirSync(join(tmpRoot, "proc"));
+  writeFileSync(join(tmpRoot, "passwd"), "");
+  const panelDb = join(tmpRoot, "db.sq3");
+  const db = new Database(panelDb, { create: true });
+  db.exec("CREATE TABLE site (id INTEGER PRIMARY KEY, user TEXT); CREATE TABLE php_settings (site_id INTEGER);");
+  db.close();
   const phpGuard: PhpGuardOptions = {
     run: () => ({ ok: true, out: "" }),
     isActive: () => false,
@@ -296,6 +305,7 @@ function box(options: { installed?: boolean; timers?: Record<string, string>; fa
         },
       },
       realIp: { run: nginxRun, paths: { nginxConf, panelConf, cloudflareIps, panelUid: uid, rootUid: uid } },
+      tmpCleanup: { paths: { tmpDir: join(tmpRoot, "tmp"), procDir: join(tmpRoot, "proc"), passwd: join(tmpRoot, "passwd") }, panelDb },
     },
   };
 }
@@ -842,6 +852,14 @@ test("systemTweaksMaintenance still reconciles panel PHP when upkeep fails", asy
     "Nginx validation failed: emerg; panel PHP: clp-php-fpm.service is not the CloudPanel PHP-FPM unit this addon knows",
   );
   expect(phpCalled).toBe(true);
+});
+
+test("systemTweaksMaintenance reports a /tmp cleanup that cannot read CloudPanel's sites, and still runs the rest", async () => {
+  const b = box();
+  writeFileSync(b.nginxConf, CLOUDPANEL_NGINX_CONF);
+  b.nginx.fail = true;
+  b.options.tmpCleanup = { ...b.options.tmpCleanup, panelDb: join(b.aptDir, "missing", "db.sq3") };
+  await expect(systemTweaksMaintenance(b.options)).rejects.toThrow(/^\/tmp cleanup: .+; Nginx validation failed: emerg/);
 });
 
 test("the page shows update options only once updates are on, and says what silently goes uncovered", () => {

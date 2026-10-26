@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,6 +10,7 @@ import {
   type PhpResourcesState, type PoolProfile, type PoolSiteState, type ReconcileResult,
 } from "../addons/php-resources/action";
 import type { CommandResult } from "../cli/action-common";
+import { PHP_RESOURCES_ADDON } from "../addons/php-resources/addon";
 import { CLIENT_JS, dashboardView, layout, siteCardHtml } from "../addons/php-resources/app/views";
 
 /** CloudPanel's PoolBuilder output, byte for byte, with no trailing newline. */
@@ -145,6 +146,7 @@ function makeBox(): Box {
     lockFile: join(root, "lock/php-resources.lock"),
     systemctl: "systemctl",
     rootUid: process.getuid?.() ?? 0,
+    systemTweaksConfig: join(root, "system-tweaks.conf"),
   };
 
   let nextPort = 17001;
@@ -192,6 +194,35 @@ function options(box: Box, input?: string): PhpResourcesActionOptions {
     ...(input === undefined ? {} : { input }),
   };
 }
+
+test("the upkeep clears abandoned temp files from /tmp only while System Tweaks, which does it, is off", async () => {
+  const box = makeBox();
+  try {
+    box.addSite("shop.example.com", "8.3");
+    const uid = process.getuid?.() || 1000;
+    const tmpDir = join(box.root, "tmp");
+    mkdirSync(tmpDir);
+    mkdirSync(join(box.root, "proc"));
+    writeFileSync(join(box.root, "passwd"), `shop:x:${uid}:${uid}::/home/shop:/bin/bash\n`);
+    const file = join(tmpDir, "magick-abandoned");
+    writeFileSync(file, "x");
+    if (process.getuid?.() === 0) chownSync(file, uid, uid);
+    const threeHoursAgo = (Date.now() - 3 * 3_600_000) / 1000;
+    utimesSync(file, threeHoursAgo, threeHoursAgo);
+    const upkeep = () => PHP_RESOURCES_ADDON.maintenance!.run({
+      ...options(box), tmpCleanup: { paths: { tmpDir, procDir: join(box.root, "proc"), passwd: join(box.root, "passwd") } },
+    } as Record<string, unknown>);
+
+    writeFileSync(box.paths.systemTweaksConfig, "");
+    await upkeep();
+    expect(existsSync(file)).toBe(true);
+    rmSync(box.paths.systemTweaksConfig);
+    await upkeep();
+    expect(existsSync(file)).toBe(false);
+  } finally {
+    rmSync(box.root, { recursive: true, force: true });
+  }
+});
 
 function reloadsOf(box: Box, version: string): number {
   return box.commands.filter((command) => command.join(" ") === `systemctl reload php${version}-fpm`).length;

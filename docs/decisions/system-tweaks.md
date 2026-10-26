@@ -274,3 +274,30 @@ whatever the upgrade installed. The panel's file is not a conffile: a
 `bun tests/integration/integration-real-ip.ts` runs real Nginx in Docker: it
 reproduces the bypass on the stock directives, then shows the edited ones reject
 it while Cloudflare peers and loopback proxies keep working.
+
+## Abandoned temp files
+
+A PHP request stopped by `max_execution_time` or `request_terminate_timeout`
+skips the cleanup that would remove its scratch files, and a CloudPanel box
+empties `/tmp` only at boot. An image too large for ImageMagick's memory limit
+is cached on disk, so a WordPress image job that keeps timing out leaves close
+to a gigabyte in `/tmp` on every try, and has filled a production disk that way.
+Clearing them is upkeep for the server rather than a PHP-FPM limit, so System
+Tweaks owns it, and an install with the installer's defaults has it. PHP
+Resources runs the same pass while System Tweaks is off, since an update never
+enables an addon and a box with PHP Resources alone would otherwise lose it.
+
+The repair timer removes them every 15 minutes, as the first step of System
+Tweaks' upkeep, so a failing update or panel PHP check cannot stop it. It takes
+the PHP sites' users from CloudPanel's own records, reads only the top level of
+`/tmp`, never follows a symlink, and removes a regular file only when a PHP
+site's own user owns it, no process has it open or mapped, and it matches one of
+three names: ImageMagick's `magick-*` after two idle hours, and PHP's
+`php??????` uploads and WordPress's `wp_tempnam()` `*-??????.tmp` files after a
+day, since those are closed between being written and being read.
+
+Cleanup inspects process file descriptors and memory maps before deleting any
+file. A closed descriptor or a process that has exited can be skipped; an
+inspection failure for a process whose directory still exists stops the cleanup,
+and the pass reports it, as it does unlink errors other than a file that has
+already gone. The rest of the upkeep still runs.

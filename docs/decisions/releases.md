@@ -159,3 +159,10 @@ hyphen, such as `v1.2.0-rc.1` -- publishes as a GitHub pre-release. GitHub
 treats the newest release that is not one as "latest", and that is the URL the
 documented `curl | bash` bootstrap fetches `install.sh` from, so a tag that says
 it is not finished must not become what a new install receives.
+
+Neither the update notice nor `clp-addons update` without `--version` looks past
+"latest", so a box gets a pre-release only from `clp-addons update
+--version=vX.Y.Z-rc.N --allow-prerelease`. That is how a release candidate is
+tried on a real box before anyone else gets it. The release is then tagged on
+the candidate's commit, so what was tried is what ships, and versions compare
+with semver's pre-release order, so a box on `2.0.0-rc.1` is offered `2.0.0`.
