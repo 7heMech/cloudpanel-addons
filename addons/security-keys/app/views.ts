@@ -60,11 +60,9 @@ function setupCard(): string {
 }
 
 function settingsCard(settings: Settings, users: UserKeysView[]): string {
-  const switchRow = (id: string, label: string, checked: boolean) => `
-        <div class="setting-row">
-          <label for="${id}">${label}</label>
-          <label class="switch"><input id="${id}" type="checkbox" ${checked ? "checked" : ""} onchange="saveSettings(this)"><span></span></label>
-        </div>`;
+  // Checkboxes rather than switches: the roles are a pick-any list.
+  const check = (id: string, label: string, checked: boolean) => `
+          <label class="check-label"><input id="${id}" type="checkbox" ${checked ? "checked" : ""} onchange="saveSettings(this)">${label}</label>`;
   const synced = users.reduce((total, entry) => total + entry.keys.filter((key) => key.synced).length, 0);
   const warning = settings.roles.length === 0
     ? "Every role is off, so nobody can add a key or sign in with one."
@@ -79,12 +77,14 @@ function settingsCard(settings: Settings, users: UserKeysView[]): string {
         <div>
           <h3>Who can use security keys</h3>
           <p class="hint">Accounts in a role that is off keep their keys and their password, but cannot add or use a key.</p>
-          ${ROLE_LABELS.map(([role, label]) => switchRow(`role-${role}`, label, settings.roles.includes(role))).join("")}
+          <div class="setting-checks">${ROLE_LABELS.map(([role, label]) => check(`role-${role}`, label, settings.roles.includes(role))).join("")}
+          </div>
         </div>
         <div>
           <h3>Synced passkeys</h3>
           <p class="hint">Passkeys a password manager or your devices copy between them, such as Bitwarden, iCloud Keychain or Google Password Manager. Off, only hardware keys and passkeys that stay on one device are accepted.</p>
-          ${switchRow("synced-passkeys", "Accept synced passkeys", settings.syncedPasskeys)}
+          <div class="setting-checks">${check("synced-passkeys", "Accept synced passkeys", settings.syncedPasskeys)}
+          </div>
         </div>
       </div>
     </div>`;

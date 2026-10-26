@@ -1,7 +1,7 @@
 import CLIENT_JS_BODY from "./views.client.js" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_NONE_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout,
+  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { CloudflareState } from "./service";
@@ -68,7 +68,7 @@ export function dashboardView(state: CloudflareState): string {
             </tr></thead>
             <tbody>${rows}</tbody>
           </table></div>
-          ${FLEET_NONE_HTML}`}
+          ${FLEET_FOOTER_HTML}`}
     </div>
     <div class="card split-card cf-policy">
       <div><h2>Enable on new sites</h2>

@@ -2,7 +2,7 @@ import CLIENT_BODY from "./views.client.js" with { type: "text" };
 import CSS from "./views.css" with { type: "text" };
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_NONE_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout,
+  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { SmtpProfileView, SmtpSiteView, SmtpState } from "../action";
@@ -10,9 +10,9 @@ import type { SmtpProfileView, SmtpSiteView, SmtpState } from "../action";
 const BASE = mountPath("smtp");
 const STYLE = CSS.split("/* fleet-row-selection */").join(fleetRowSelectionStyle("smtp-site-table"));
 export const CLIENT = `${FLEET_ROW_SELECTION_JS}\n${CLIENT_BODY}`;
-const NO_PROFILE = "Not relayed (sent from this server)";
+const NO_PROFILE = "Don't relay (send from this server)";
 const DONT_SEND = "dont-send";
-const DONT_SEND_LABEL = "Don't send (discard)";
+const DONT_SEND_LABEL = "Discard (never delivered)";
 /** Not a valid profile id, so no profile can be mistaken for it. */
 const BULK_NONE = "-";
 
@@ -29,10 +29,10 @@ function typeLabel(site: SmtpSiteView): string {
 
 const relays = (profiles: SmtpProfileView[]) => profiles.filter((profile) => profile.relay);
 
-/** Not relayed, then each relay profile, then discard: the three things a site's mail can do. */
+/** Don't relay, relay through each profile, or discard: the three things a site's mail can do. */
 function profileOptions(profiles: SmtpProfileView[], selected: string | null, none = ""): string {
   return [`<option value="${none}"${selected === null ? " selected" : ""}>${esc(NO_PROFILE)}</option>`]
-    .concat(relays(profiles).map((profile) => `<option value="${esc(profile.id)}"${profile.id === selected ? " selected" : ""}>${esc(profile.name)}</option>`))
+    .concat(relays(profiles).map((profile) => `<option value="${esc(profile.id)}"${profile.id === selected ? " selected" : ""}>Relay through ${esc(profile.name)}</option>`))
     .concat([`<option value="${DONT_SEND}"${selected === DONT_SEND ? " selected" : ""}>${esc(DONT_SEND_LABEL)}</option>`])
     .join("");
 }
@@ -110,7 +110,7 @@ export function dashboardContent(state: SmtpState): string {
     `<div class="form-field${full ? " form-field-full" : ""}"><label for="${id}">${label}</label>${control}${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
   const dialogActions = (save: string, close = "Cancel") => `<div class="actions dialog-actions"><button class="btn" type="button" onclick="this.closest('dialog').close()">${close}</button><button class="btn btn-primary" type="submit">${save}</button></div>`;
   const discardDefault = state.defaultProfileId === DONT_SEND
-    ? `<div class="notice">New sites join <strong>Don't send</strong>: their mail is discarded until you move them to a profile.</div>` : "";
+    ? `<div class="notice">New sites start on <strong>Discard</strong>: their mail is never delivered until you choose where it goes.</div>` : "";
   return `<script type="application/json" id="smtp-state">${data}</script>
     <div class="page-heading"><div><h1>SMTP Relay</h1>
       <p>Send each site's mail through its profile's SMTP account. Postfix lets a site send only as its own domains, so never through another profile.</p></div></div>
@@ -130,7 +130,7 @@ export function dashboardContent(state: SmtpState): string {
         <th class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
         <th>Site</th><th>Mail</th><th>From</th><th class="action-cell">Actions</th>
       </tr></thead><tbody>${sites}</tbody></table></div>
-      ${FLEET_NONE_HTML}`
+      ${FLEET_FOOTER_HTML}`
       : '<div class="empty">CloudPanel has no sites yet.</div>'}
     ${state.skipped.length ? `<p class="hint skipped-note">Can't be relayed: ${state.skipped
       .map((site) => `${esc(site.domain)} (${esc(site.reason)})`).join("; ")}.</p>` : ""}

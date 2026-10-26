@@ -45,7 +45,6 @@ async function dnsPost(path, body, from) {
     if (reply.html) {
       repaintView(CLP_ROOT.getElementById('dns-root'), reply.html);
       dnsState = reply.data;
-      dnsPaintSelection();
     }
     if (from) from.close();
     if (reply.data && reply.data.review) dnsShowReview(reply.data.review, reply.data.notice);
@@ -259,26 +258,6 @@ function dnsSetMode(input, id) {
 }
 
 // --- sites ------------------------------------------------------------------
-
-function dnsPaintSelection() {
-  const rows = siteRows();
-  rows.forEach(function (row) {
-    const box = row.querySelector('.site-checkbox');
-    row.setAttribute('aria-selected', String(Boolean(box && box.checked)));
-  });
-  const chosen = selectedRows();
-  const note = CLP_ROOT.getElementById('site-selection');
-  if (note) note.textContent = chosen.length === 0 ? 'No sites selected' : chosen.length + ' of ' + rows.length + ' selected';
-  const apply = CLP_ROOT.getElementById('assign-selected');
-  if (apply) apply.disabled = chosen.length === 0;
-  const all = CLP_ROOT.getElementById('select-all');
-  if (all) {
-    all.checked = rows.length > 0 && chosen.length === rows.length;
-    all.indeterminate = chosen.length > 0 && chosen.length < rows.length;
-  }
-  const allBtn = CLP_ROOT.getElementById('select-all-btn');
-  if (allBtn) allBtn.textContent = rows.length > 0 && chosen.length === rows.length ? 'Deselect all' : 'Select all';
-}
 
 async function dnsAssignRow(select) {
   const row = select.closest('tr[data-domain]');
@@ -525,4 +504,4 @@ CLP_ROOT.querySelectorAll('dialog').forEach(function (dialog) {
   });
 });
 
-dnsPaintSelection();
+paintFleetSelection();

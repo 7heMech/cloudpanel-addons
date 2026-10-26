@@ -1,5 +1,5 @@
 import { esc } from "../../../lib/app-http";
-import { FLEET_NONE_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout, renderToolWindow, THEME_SWITCH_ICONS } from "../../../lib/app-ui";
+import { FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout, renderToolWindow, THEME_SWITCH_ICONS } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { SanitizedSite } from "../../../lib/gateway-protocol";
 
@@ -61,7 +61,7 @@ export function dashboardView(sites: SanitizedSite[]): string {
           </tbody>
         </table>
       </div>
-      ${FLEET_NONE_HTML}`;
+      ${FLEET_FOOTER_HTML}`;
   return `
     <div class="page-heading">
       <div>

@@ -6,7 +6,7 @@ import type { SanitizedSite } from "../../../lib/snapshot-reader";
 
 import { esc } from "../../../lib/app-http";
 import {
-  FLEET_NONE_HTML, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, jobStateClass, jobStateLabel, renderFragment, renderLayout,
+  FLEET_FOOTER_HTML, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, jobStateClass, jobStateLabel, renderFragment, renderLayout,
   whenText,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
@@ -270,7 +270,7 @@ export function newCloneView(source: SiteSummary | null, sites: SiteSummary[], e
             ? `<div class="empty">No clonable sites found in CloudPanel.</div>`
             : `${fleetFilterHtml({ count: sites.length, summary: `${sites.length} sites` })}
               <div class="table-scroll"><table class="fleet-table"><thead><tr><th scope="col">Domain</th><th scope="col">Type</th><th scope="col">Application</th><th scope="col" class="action-cell" aria-label="Actions"></th></tr></thead><tbody>${options}</tbody></table></div>
-              ${FLEET_NONE_HTML}`
+              ${FLEET_FOOTER_HTML}`
         }
       </div>`;
   }

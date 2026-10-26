@@ -68,7 +68,8 @@ every sender is left exactly as written.
 ## Report only and Enforce
 
 The page puts the sites first, then the profiles with the choice of default,
-then the connections and settings that are set once. Until a connection
+then the connections and settings that are set once. The site list has the
+shared search from six sites and selection, as the other site lists do. Until a connection
 exists it opens with the three steps that make a new site publish itself:
 connect, choose the default, enforce it. A default profile in Report only is
 called out, since its new sites get no records and so no certificate.

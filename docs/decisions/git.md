@@ -110,7 +110,8 @@ settings, a failed deployment, an SSH remote with no deploy key, or a last
 delivery the token let in that deployed nothing for a reason other than another
 branch. The fleet reply carries no webhook tokens and no keys; it reads a key
 only for an SSH remote, to say whether one exists. Rows are selected by click
-or checkbox for Deploy selected, which skips active jobs and unavailable sites;
+or checkbox for Deploy selected, which skips active jobs and unavailable sites,
+so a site's name is plain text and its Manage button opens the site's page;
 from six sites a search and a filter (needs attention, deploying) sit above the
 table. Connect a site links to CloudPanel's site list, where each site's Git tab
 starts setup.

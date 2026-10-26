@@ -39,6 +39,7 @@
 .git-fleet .git-branch { max-width: 170px; overflow-wrap: anywhere; }
 .git-fleet .hint { font-size: 13px; }
 .git-fleet .commit-cell .mono { font-size: 13px; }
+.git-fleet .action-cell .actions { flex-wrap: nowrap; justify-content: flex-end; }
 .git-empty { padding: 52px 24px; text-align: center; }
 .git-empty h2 { margin: 0 0 10px; }
 .git-empty p { margin: 0 0 22px; color: var(--muted); }
@@ -56,5 +57,5 @@
   .git-fleet td[data-label="Last deployment"] { order: 2; }
   .git-fleet td.commit-cell { max-width: none; order: 3; }
   .git-fleet td.action-cell { order: 4; }
-  .git-fleet td.action-cell .btn { width: 100%; }
+  .git-fleet td.action-cell .btn { flex: 1 1 0; }
 }

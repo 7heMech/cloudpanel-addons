@@ -102,7 +102,9 @@ keeps the policy; enabling applies it again.
 ## The page
 
 Sites come first, with a search and filters for Not relayed, Discarded and
-Blocked from six sites; then the profiles that have an SMTP server, with where
+Blocked from six sites. Each site's Mail choice reads as what happens to its
+mail: Relay through a profile, Don't relay (send from this server), or Discard
+(never delivered). Then come the profiles that have an SMTP server, with where
 new sites' mail goes in their header. Until a profile has one, a checklist
 shows the three steps to a relayed site, and a `dont-send` default is called
 out, since new sites' mail would be discarded. A site's extra sending domains

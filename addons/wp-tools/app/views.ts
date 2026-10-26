@@ -1,5 +1,5 @@
 import { esc } from "../../../lib/app-http";
-import { FLEET_NONE_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout } from "../../../lib/app-ui";
+import { FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { WpSiteView } from "../action";
 import type { VarnishPluginStatus, WpVarnishState } from "../varnish";
@@ -138,7 +138,7 @@ function sitesCard(data: WpDashboard): string {
           </tbody>
         </table>
       </div>
-      ${FLEET_NONE_HTML}
+      ${FLEET_FOOTER_HTML}
     </div>${helperLine(sites)}`;
 }
 

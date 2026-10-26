@@ -269,8 +269,8 @@ test("routing a site binds every login, relays by sender, closes loopback, and i
   const html = dashboardContent(await act(b, "list") as SmtpState);
   expect(html).not.toContain("pa$1ss");
   expect(html).toContain("Node.js");
-  expect(html).toContain('<option value="-">Not relayed (sent from this server)</option>');
-  expect(html).toContain('<option value="dont-send">Don&#x27;t send (discard)</option>');
+  expect(html).toContain('<option value="-">Don&#x27;t relay (send from this server)</option>');
+  expect(html).toContain('<option value="dont-send">Discard (never delivered)</option>');
 
   // A settled box reads Postfix once and writes nothing; the new-site watcher does not even read it.
   b.commands.length = 0;
@@ -549,7 +549,7 @@ test("Don't send is the one discard choice: built in, and not a profile to edit"
   await act(b, "save-profile", POSTMARK);
   await act(b, "set-default", { profileId: "dont-send" });
   const html = dashboardContent(await act(b, "list") as SmtpState);
-  expect(html).toContain("their mail is discarded");
+  expect(html).toContain("their mail is never delivered");
   // The Profiles table lists only profiles with an SMTP server.
   expect(html).not.toContain('<tr data-profile="dont-send">');
   expect(html).toContain('<tr data-profile="postmark">');

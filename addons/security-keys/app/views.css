@@ -13,8 +13,8 @@
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
 .settings-grid h3 { margin: 0 0 6px; font-size: 15px; }
 .settings-grid p { margin: 0 0 12px; }
-.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-top: 1px solid var(--row-border); }
-.setting-row label:not(.switch) { font-weight: 500; }
+.setting-checks { display: flex; flex-direction: column; gap: 12px; }
+.setting-checks .check-label { margin: 0; font-weight: 500; }
 
 .sk-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 18px 32px; }
 .sk-toolbar input { flex: 1 1 220px; max-width: 320px; }

@@ -11,11 +11,13 @@
      Important over the shared long-list rule, whose sticky heading would take a row of space. */
   .terminal-site-table thead { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   /* Each site draws its right and bottom edges, so a lone last site is closed on
-     both and the one above the empty half closes it; the outer edges tuck under the card's. */
+     both and the one above the empty half closes it. They are shadows, which take
+     no room: the outer ones fall outside the list and are clipped instead of
+     making it scroll. */
   .terminal-site-table tbody { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
-    margin: 0 -1px -1px 0; border-top: 1px solid var(--row-border); }
+    border-top: 1px solid var(--row-border); }
   .terminal-site-table tr { display: flex; align-items: center; justify-content: space-between; gap: 16px;
-    border-right: 1px solid var(--row-border); border-bottom: 1px solid var(--row-border); }
+    box-shadow: 1px 1px 0 var(--row-border); }
   .terminal-site-table tr[hidden] { display: none; }
   .terminal-site-table tr:has(td[colspan]) { grid-column: 1 / -1; }
   .terminal-site-table td { border-top: 0; min-width: 0; }

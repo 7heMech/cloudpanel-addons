@@ -9,7 +9,7 @@ everyone's keys on Addons → Security Keys, can remove any of them, and set the
 panel-wide settings below. Nobody else can change those.
 
 The page puts the keys first and the two settings, set once, in one card
-below. Until anyone has a key, a checklist takes the list's place: open the
+below, as checkboxes: the roles are a pick-any list, not three settings. Until anyone has a key, a checklist takes the list's place: open the
 panel on its hostname (ticked by the browser), add your own key under Account →
 Security, sign in with it. That is the only place the page explains setup.
 

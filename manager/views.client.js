@@ -91,11 +91,32 @@ async function managerJobFinished(job) {
     return;
   }
   const shown = await repaintPage();
+  findAddons();
   if (shown && job && job.state === 'done') {
     notify((job.kind === 'disable' ? 'Disabled ' : 'Enabled ') + (job.addon || 'the addon') + '.', 'ok');
   } else if (shown && job) {
     notify('Job failed: ' + (job.error || job.step), 'error');
   }
+}
+
+// Every word has to appear in the name or description of the addon, in any order.
+function findAddons() {
+  const find = CLP_ROOT.getElementById('addon-find');
+  if (!find) return;
+  const words = find.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  let shown = 0;
+  CLP_ROOT.querySelectorAll('.addon-list').forEach(function (list) {
+    let matches = 0;
+    list.querySelectorAll('.addon-row').forEach(function (row) {
+      const text = (row.dataset.find || '').toLowerCase();
+      row.hidden = !words.every(function (word) { return text.indexOf(word) !== -1; });
+      if (!row.hidden) matches++;
+    });
+    list.hidden = matches === 0;
+    shown += matches;
+  });
+  const none = CLP_ROOT.getElementById('addon-none');
+  if (none) none.hidden = shown > 0;
 }
 
 function enableAddon(name, source) {

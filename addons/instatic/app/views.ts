@@ -5,7 +5,8 @@
 
 import { esc, escJs } from "../../../lib/app-http";
 import {
-  FLEET_NONE_HTML, FLEET_ROW_SELECTION_JS, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, jobStateClass, jobStateLabel, renderLayout, whenText,
+  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_STYLE, JOB_WATCH_JS, fleetFilterHtml, fleetRowSelectionStyle, jobStateClass, jobStateLabel,
+  renderLayout, whenText,
 } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 
@@ -43,7 +44,7 @@ export function layout(
     brand: "Instatic CMS",
     base: BASE,
     nav: [],
-    css: STYLE + JOB_STYLE,
+    css: STYLE + JOB_STYLE + fleetRowSelectionStyle("instatic-table"),
     script: JOB_WATCH_JS + FLEET_ROW_SELECTION_JS + CLIENT_JS,
     updateNotice,
     admin,
@@ -124,7 +125,9 @@ export function dashboardView(
       const actions = missing
         ? `<button class="btn" onclick="showLogs('${d}', '${escJs(String(i.port ?? ""))}')">Logs</button>
     <button class="btn btn-danger" onclick="askDelete('${d}')">Delete</button>`
-        : `${
+        : `<a class="btn" href="https://${esc(i.domain)}/admin" target="_blank" rel="noreferrer noopener">Open admin</a>
+    <a class="btn" href="https://${esc(i.domain)}" target="_blank" rel="noreferrer noopener">Visit site</a>
+    ${
       i.state === "running"
         ? `<button class="btn" onclick="askStop('${d}')">Stop</button>`
         : `<button class="btn" onclick="act('${d}','start')">Start</button>`
@@ -142,13 +145,7 @@ export function dashboardView(
             ? `<div class="hint tone-bad">Update to ${esc(failedUpdate.tag)} failed · <a href="${BASE}/jobs/${esc(failedUpdate.id)}">Log</a></div>` : ""}`;
       return `<tr data-domain="${esc(i.domain)}" data-find="${esc(i.domain)}" data-tag="${esc(i.tag)}"${behind ? " data-behind" : ""} tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
   <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(i.domain)}"${missing || updating ? " disabled" : ""}></td>
-  <td class="site-cell">
-    ${
-      missing
-        ? `<span class="mono">${esc(i.domain)}</span>`
-        : `<a href="https://${esc(i.domain)}" target="_blank" rel="noreferrer noopener">${esc(i.domain)}</a>`
-    }
-  </td>
+  <td class="site-cell">${missing ? `<span class="mono">${esc(i.domain)}</span>` : esc(i.domain)}</td>
   <td data-label="Version">
     <span class="badge">${esc(i.tag)}</span>
     ${behind ? `<span class="badge behind" title="${esc(latest)} is available">${esc(latest)} available</span>` : ""}
@@ -194,7 +191,7 @@ export function dashboardView(
     <thead><tr><th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th><th scope="col">Site</th><th scope="col">Version</th><th scope="col">State</th><th scope="col" class="action-cell">Actions</th></tr></thead>
     <tbody>${jobRows}${rows}</tbody>
   </table></div>
-  ${FLEET_NONE_HTML}`
+  ${FLEET_FOOTER_HTML}`
   }
 </div>
 

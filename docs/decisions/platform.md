@@ -26,7 +26,9 @@ because none of it is a command; `cli/index.ts` calls `cmdServe` and otherwise
 knows nothing about it.
 
 The Addons page is two lists, Enabled and Available, one row per addon with its
-one-line description and its buttons, so the whole catalog fits on a screen. An
+one-line description and its buttons, so the whole catalog fits on a screen. A
+search above them hides the rows whose name and description lack any of its
+words, and a list it empties. An
 addon's `added` release line (`2.0`) marks it New for as long as that line is
 the one installed. An existing addon's `changed` line marks it Changed for the
 same time, with one line saying what changed; the rest is the changelog's, which
@@ -275,7 +277,10 @@ cells so their meaning survives the hidden table heading. Empty cells disappear
 and the site and type lead each card. A ticked row is tinted, and clicking
 anywhere on a row but a control or its Manage menu ticks it. On a wide screen a
 list of more than twelve rows with something below its card scrolls in a box of
-its own under a sticky heading; a list that ends the page grows with it. Page and form actions wrap within the
+its own under a sticky heading; a list that ends the page grows with it. On a
+phone a list longer than ten sites shows the first ten and a button for the rest,
+so the settings below it stay close; the hidden rows are deselected like rows
+search hides, and search covers every site. Page and form actions wrap within the
 available width. Two-column card and field grids hold until 760px, where the
 tables have already given way. Live enable, disable and update jobs
 put their state, current step and output in the manager card that owns the job,

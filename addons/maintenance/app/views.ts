@@ -1,6 +1,6 @@
 import { esc, escJs } from "../../../lib/app-http";
 import {
-  FLEET_NONE_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderFragment, renderLayout,
+  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderFragment, renderLayout,
 } from "../../../lib/app-ui";
 import type { EmbedFragment } from "../../../lib/shadow-embed";
 import { mountPath } from "../../../lib/mount";
@@ -146,7 +146,7 @@ export function fleetView(fleet: MaintenanceFleet, currentIp = ""): string {
         <th scope="col" class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
         <th scope="col">Site</th><th scope="col">Type</th><th scope="col">Effective status</th><th scope="col" class="action-cell">Site setting</th>
       </tr></thead><tbody>${sites.map((site) => siteRow(site, globalEnabled)).join("")}</tbody></table></div>
-      ${FLEET_NONE_HTML}`
+      ${FLEET_FOOTER_HTML}`
     : '<div class="empty">No CloudPanel sites were found.</div>';
   return `<div class="page-heading" id="maintenance-fleet"><div><h1>Maintenance Mode</h1><p>Switch sites to a 503 maintenance page without reloading Nginx.</p></div></div>
   ${banner}

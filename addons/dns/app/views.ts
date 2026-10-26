@@ -1,7 +1,7 @@
 import CLIENT_BODY from "./views.client.js" with { type: "text" };
 import CSS from "./views.css" with { type: "text" };
 import { esc } from "../../../lib/app-http";
-import { FLEET_ROW_SELECTION_JS, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
+import { FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { DnsState, SiteView } from "../action";
 import type { Profile } from "../model";
@@ -87,8 +87,8 @@ export function siteStatus(site: SiteView, mode: "report" | "enforce" | null): {
 function siteRow(site: SiteView, state: DnsState): string {
   const profile = state.profiles.find((candidate) => candidate.id === site.profileId);
   const status = siteStatus(site, profile?.mode ?? null);
-  return `<tr data-domain="${esc(site.domain)}" data-profile-id="${esc(site.profileId ?? "")}"${site.plan?.held ? " data-held" : ""} tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this, dnsPaintSelection)" onkeydown="toggleSiteSelection(event, this, dnsPaintSelection)">
-    <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="dnsPaintSelection()" aria-label="Select ${esc(site.domain)}"></td>
+  return `<tr data-domain="${esc(site.domain)}" data-profile-id="${esc(site.profileId ?? "")}"${site.plan?.held ? " data-held" : ""} tabindex="0" aria-selected="false" onclick="toggleSiteSelection(event, this)" onkeydown="toggleSiteSelection(event, this)">
+    <td class="site-select"><input class="site-checkbox" type="checkbox" onchange="paintFleetSelection()" aria-label="Select ${esc(site.domain)}"></td>
     <td class="site-cell"><strong>${esc(site.domain)}</strong></td>
     <td class="type-cell">${esc(TYPE_LABELS[site.type] ?? site.type)}</td>
     <td data-label="Profile" class="dns-profile-cell"><select aria-label="Profile for ${esc(site.domain)}" onchange="dnsAssignRow(this)">${profileOptions(state.profiles, site.profileId, NO_PROFILE)}</select></td>
@@ -190,15 +190,17 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
     ${state.sites.length ? `<div class="card-header toolbar">
         <h2>Sites</h2>
         <span class="toolbar-note" id="site-selection">No sites selected</span>
-        <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites(dnsPaintSelection)">Select all</button>
+        <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
         <select class="toolbar-end" id="bulk-profile" aria-label="Profile for the selected sites"><option value="" selected disabled>Choose a profile</option>${state.profiles
           .map((profile) => `<option value="${esc(profile.id)}">${esc(profile.name)}</option>`).join("")}<option value="-">${NO_PROFILE}</option></select>
-        <button class="btn" id="assign-selected" type="button" disabled onclick="dnsAssignSelected()">Assign selected</button>
+        <button class="btn" id="assign-selected" type="button" disabled data-needs-selection onclick="dnsAssignSelected()">Assign selected</button>
       </div>
+      ${fleetFilterHtml({ count: state.sites.length, summary: `${state.sites.length} site${state.sites.length === 1 ? "" : "s"}` })}
       <div class="table-scroll"><table class="fleet-table dns-site-table"><thead><tr>
-        <th class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked, dnsPaintSelection)" aria-label="Select all sites"></th>
+        <th class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>
         <th>Site</th><th>Runs</th><th>Profile</th><th>DNS</th><th class="action-cell"></th>
       </tr></thead><tbody>${sites}</tbody></table></div>
+      ${FLEET_FOOTER_HTML}
       <div class="card-footer"><span class="hint">${esc(ago(state.checkedAt, now))}. Drift is checked every 15 minutes.</span>
         <button class="btn" type="button" onclick="dnsCheck(this)"${state.connections.length ? "" : " disabled"}>Check now</button></div>`
       : '<div class="empty">CloudPanel has no sites yet.</div>'}

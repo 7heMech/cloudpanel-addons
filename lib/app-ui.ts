@@ -85,8 +85,12 @@ export function fleetFilterHtml(options: {
     </div>`;
 }
 
-/** Shown under the table when the search or filter leaves no row. */
-export const FLEET_NONE_HTML = '<div class="empty" id="fleet-none" hidden>No site matches.</div>';
+/**
+ * Under the table: the line shown when search or filter leaves no row, and the
+ * button that shows the rest of a long list on a phone.
+ */
+export const FLEET_FOOTER_HTML = `<div class="empty" id="fleet-none" hidden>No site matches.</div>
+<div class="fleet-more" id="fleet-more" hidden><button class="btn" type="button" onclick="showAllSites()">Show all sites</button></div>`;
 
 /** Shared interaction and focus treatment for selectable site-table rows. */
 export function fleetRowSelectionStyle(tableClass: string): string {

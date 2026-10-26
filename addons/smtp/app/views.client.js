@@ -25,7 +25,7 @@ async function smtpPost(path, body, done) {
 }
 
 function smtpProfileName(id) {
-  if (id === 'dont-send') return "Don't send";
+  if (id === 'dont-send') return 'Discard';
   const profile = smtpState.profiles.find(function (item) { return item.id === id; });
   return profile ? profile.name : id;
 }
@@ -86,8 +86,8 @@ async function smtpDeleteProfile(id) {
 async function smtpSetDefault(select) {
   const id = select.value || null;
   const saved = await smtpPost('/api/default', { profileId: id }, id === 'dont-send'
-    ? "New sites will join Don't send, so their mail is discarded. Existing sites are unchanged."
-    : id ? 'New sites will join ' + smtpProfileName(id) + '. Existing sites are unchanged.'
+    ? "New sites' mail will be discarded. Existing sites are unchanged."
+    : id ? 'New sites will relay through ' + smtpProfileName(id) + '. Existing sites are unchanged.'
     : 'New sites will send from this server. Existing sites are unchanged.');
   if (!saved) select.value = smtpState.defaultProfileId || '';
 }
