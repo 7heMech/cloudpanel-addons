@@ -11,9 +11,9 @@ plugin: their `mail()` goes through the relay as it is.
 2. Create a **profile** for each SMTP account: hostname, a STARTTLS port (587 or
    2525), username, password, and the From its sites send with.
 3. In each site's **Mail** column, one at a time or in bulk, choose **Relay
-   through** a profile, **Don't relay (send from this server)**, or **Discard
-   (never delivered)**, which logs mail and never delivers it; Stager puts new
-   staging copies in it. Under **Profiles**,
+   through** a profile; **Don't handle**, which leaves the site's mail to this
+   server's own Postfix; or **Discard (never delivered)**, which logs mail and
+   never delivers it, and which Stager puts new staging copies in. Under **Profiles**,
    choose where new sites' mail goes. A site marked **Blocked** could send as a
    domain another site sends through a different profile; put both in one
    profile or remove the domain with **Domains** on its row. A site marked

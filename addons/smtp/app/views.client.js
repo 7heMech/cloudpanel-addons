@@ -72,7 +72,7 @@ function smtpSaveProfile(event) {
 
 async function smtpDeleteProfile(id) {
   const profile = smtpState.profiles.find(function (item) { return item.id === id; });
-  const details = profile && profile.sites ? [plural(profile.sites, 'site') + ' in it ' + (profile.sites === 1 ? 'is' : 'are') + ' then sent from this server.'] : [];
+  const details = profile && profile.sites ? [plural(profile.sites, 'site') + ' in it ' + (profile.sites === 1 ? 'is' : 'are') + ' then no longer handled.'] : [];
   const accepted = await confirmAction({
     title: 'Delete ' + smtpProfileName(id) + '?',
     text: 'Its SMTP account and From are removed.',
@@ -88,21 +88,21 @@ async function smtpSetDefault(select) {
   const saved = await smtpPost('/api/default', { profileId: id }, id === 'dont-send'
     ? "New sites' mail will be discarded. Existing sites are unchanged."
     : id ? 'New sites will relay through ' + smtpProfileName(id) + '. Existing sites are unchanged.'
-    : 'New sites will send from this server. Existing sites are unchanged.');
+    : "SMTP Relay will not handle new sites' mail. Existing sites are unchanged.");
   if (!saved) select.value = smtpState.defaultProfileId || '';
 }
 
 // --- sites ------------------------------------------------------------------
 
 function smtpWhere(id) {
-  return id === 'dont-send' ? 'is discarded' : id ? 'goes through ' + smtpProfileName(id) : 'is sent from this server';
+  return id === 'dont-send' ? 'is now discarded' : id ? 'now goes through ' + smtpProfileName(id) : 'is no longer handled';
 }
 
 async function smtpAssignRow(select) {
   const row = select.closest('tr[data-domain]');
   const id = select.value || null;
   const saved = await smtpPost('/api/assign', { domains: [row.dataset.domain], profileId: id },
-    'Mail from ' + row.dataset.domain + ' now ' + smtpWhere(id) + '.');
+    'Mail from ' + row.dataset.domain + ' ' + smtpWhere(id) + '.');
   if (!saved) select.value = row.dataset.profileId || '';
 }
 
@@ -117,15 +117,15 @@ async function smtpAssignSelected() {
   const accepted = await confirmAction({
     title: id === 'dont-send' ? 'Discard mail from ' + plural(moving.length, 'site') + '?'
       : id ? 'Send ' + plural(moving.length, 'site') + ' through ' + smtpProfileName(id) + '?'
-      : 'Send ' + plural(moving.length, 'site') + ' from this server?',
+      : 'Stop handling mail from ' + plural(moving.length, 'site') + '?',
     text: id === 'dont-send' ? 'Their mail is logged and never delivered.'
-      : id ? 'Their mail goes through this profile\'s SMTP account from now on.' : 'Their mail is no longer relayed.',
-    confirmLabel: id === 'dont-send' ? 'Discard' : 'Assign',
+      : id ? 'Their mail goes through this profile\'s SMTP account from now on.' : 'SMTP Relay leaves their mail to this server from now on.',
+    confirmLabel: id === 'dont-send' ? 'Discard' : id ? 'Assign' : 'Stop handling',
     danger: !id || id === 'dont-send',
   });
   if (!accepted) return;
   smtpPost('/api/assign', { domains: moving.map(function (row) { return row.dataset.domain; }), profileId: id },
-    'Mail from ' + plural(moving.length, 'site') + ' now ' + smtpWhere(id) + '.');
+    'Mail from ' + plural(moving.length, 'site') + ' ' + smtpWhere(id) + '.');
 }
 
 function smtpList(value) {

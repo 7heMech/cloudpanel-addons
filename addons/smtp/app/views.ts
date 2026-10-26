@@ -10,7 +10,7 @@ import type { SmtpProfileView, SmtpSiteView, SmtpState } from "../action";
 const BASE = mountPath("smtp");
 const STYLE = CSS.split("/* fleet-row-selection */").join(fleetRowSelectionStyle("smtp-site-table"));
 export const CLIENT = `${FLEET_ROW_SELECTION_JS}\n${CLIENT_BODY}`;
-const NO_PROFILE = "Don't relay (send from this server)";
+const NO_PROFILE = "Don't handle";
 const DONT_SEND = "dont-send";
 const DONT_SEND_LABEL = "Discard (never delivered)";
 /** Not a valid profile id, so no profile can be mistaken for it. */
@@ -29,7 +29,7 @@ function typeLabel(site: SmtpSiteView): string {
 
 const relays = (profiles: SmtpProfileView[]) => profiles.filter((profile) => profile.relay);
 
-/** Don't relay, relay through each profile, or discard: the three things a site's mail can do. */
+/** Don't handle, relay through each profile, or discard: the three things a site's mail can do. */
 function profileOptions(profiles: SmtpProfileView[], selected: string | null, none = ""): string {
   return [`<option value="${none}"${selected === null ? " selected" : ""}>${esc(NO_PROFILE)}</option>`]
     .concat(relays(profiles).map((profile) => `<option value="${esc(profile.id)}"${profile.id === selected ? " selected" : ""}>Relay through ${esc(profile.name)}</option>`))
@@ -124,7 +124,7 @@ export function dashboardContent(state: SmtpState): string {
         <button class="btn" id="assign-selected" type="button" disabled data-needs-selection onclick="smtpAssignSelected()">Assign selected</button>
       </div>
       ${fleetFilterHtml({ count: total, filters: [
-        { value: "unrelayed", label: "Not relayed" }, { value: "discarded", label: "Discarded" }, { value: "blocked", label: "Blocked" },
+        { value: "unrelayed", label: "Not handled" }, { value: "discarded", label: "Discarded" }, { value: "blocked", label: "Blocked" },
       ], summary: `${total} site${total === 1 ? "" : "s"}` })}
       <div class="table-scroll"><table class="fleet-table smtp-site-table"><thead><tr>
         <th class="site-select"><input id="select-all" type="checkbox" onchange="selectAllSites(this.checked)" aria-label="Select all sites"></th>

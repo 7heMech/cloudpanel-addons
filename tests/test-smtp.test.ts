@@ -269,7 +269,7 @@ test("routing a site binds every login, relays by sender, closes loopback, and i
   const html = dashboardContent(await act(b, "list") as SmtpState);
   expect(html).not.toContain("pa$1ss");
   expect(html).toContain("Node.js");
-  expect(html).toContain('<option value="-">Don&#x27;t relay (send from this server)</option>');
+  expect(html).toContain('<option value="-">Don&#x27;t handle</option>');
   expect(html).toContain('<option value="dont-send">Discard (never delivered)</option>');
 
   // A settled box reads Postfix once and writes nothing; the new-site watcher does not even read it.
