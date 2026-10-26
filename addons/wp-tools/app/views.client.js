@@ -182,8 +182,12 @@ async function setMainwpAutomatic(input) {
 function setMainwpDashboard(select) {
   if (!select.value) return;
   const automatic = CLP_ROOT.getElementById('mainwp-automatic');
-  change('/api/mainwp-settings', { enabled: Boolean(automatic && automatic.checked), dashboard: select.value }, function () {
-    return { text: select.value + ' is the MainWP Dashboard. Use Check now to see which sites are connected to it.' };
+  const enabled = Boolean(automatic && automatic.checked);
+  const remote = select.value === '@remote';
+  change('/api/mainwp-settings', remote ? { enabled: enabled, remote: true } : { enabled: enabled, dashboard: select.value }, function () {
+    return { text: remote
+      ? 'MainWP Child will be installed for a Dashboard on another server. Use Check now to see each site\'s MainWP Child.'
+      : select.value + ' is the MainWP Dashboard. Use Check now to see which sites are connected to it.' };
   });
 }
 
@@ -198,7 +202,8 @@ async function setMainwpSite(input) {
 }
 
 function mainwpSummary(data) {
-  let text = 'Checked ' + plural(data.checked, 'site') + '; ' + data.connected + ' connected, ' + data.removed + ' cleaned up.';
+  let text = 'Checked ' + plural(data.checked, 'site') + '; ' + (data.installed ? data.installed + ' installed, ' : '') +
+    data.connected + ' connected, ' + data.removed + ' cleaned up.';
   if (data.pending) text += ' ' + data.pending + ' still to check; check again to continue.';
   if (data.failed.length) text += ' ' + data.failed.length + ' failed; see the sites below.';
   return { text: text, kind: data.failed.length || data.pending ? 'warn' : 'ok' };
@@ -210,13 +215,19 @@ function checkMainwp() {
 
 async function connectMainwp(button) {
   const domain = button.dataset.domain;
-  const agreed = await confirmAction({
+  const remote = button.hasAttribute('data-remote');
+  const agreed = await confirmAction(remote ? {
+    title: button.textContent + ' MainWP Child on ' + domain + '?',
+    text: 'MainWP Child is installed from WordPress.org if it is missing, and activated. Add the site in your MainWP Dashboard now, with the site\'s administrator login: MainWP Child turns itself off when no Dashboard connects within its connection timeout, 20 minutes unless changed in its settings.',
+    confirmLabel: button.textContent,
+  } : {
     title: button.textContent + ' ' + domain + ' to MainWP?',
     text: 'MainWP Child is installed from WordPress.org if it is missing, activated, and connected as the site\'s first administrator. The Dashboard can then manage the site.',
     confirmLabel: button.textContent,
   });
   if (!agreed) return;
   change('/api/mainwp-connect', { domain: domain, confirm: true }, function (data) {
+    if (remote && data.installed) return { text: 'MainWP Child is active on ' + domain + '. Add the site in your MainWP Dashboard now.' };
     if (data.connected) return { text: domain + ' is connected to MainWP.' };
     return { text: data.failed.length ? data.failed[0] : domain + ' is not connected yet; see its status below.', kind: 'warn' };
   });

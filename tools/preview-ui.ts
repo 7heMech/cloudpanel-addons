@@ -980,7 +980,7 @@ function terminalPreview(req: Request, url: URL): Response | null {
 
 // The WordPress Tools API, acting on the sites the page was last drawn with.
 // ?mainwp=states turns automation on, ?mainwp=cleanup shows a pending cleanup,
-// ?mainwp=none has no Dashboard chosen yet.
+// ?mainwp=none has no Dashboard chosen yet, ?mainwp=remote a Dashboard on another server.
 function mainwpPreview(url: URL): MainwpView {
   const checkedAt = "2026-10-16T09:00:00Z";
   const entry = (status: MainwpSiteView["status"], ownedConnection = false, seen = true): MainwpSiteView => ({
@@ -988,11 +988,29 @@ function mainwpPreview(url: URL): MainwpView {
     error: status === "error" ? "the Dashboard could not connect; check the site's HTTPS, firewall and security plugins" : "",
   });
   if (url.searchParams.get("mainwp") === "none") {
-    return { enabled: false, dashboard: "", excluded: [], cleanup: false, owned: 0, connections: 0, sites: {} };
+    return { enabled: false, dashboard: "", remote: false, excluded: [], cleanup: false, owned: 0, connections: 0, sites: {} };
+  }
+  if (url.searchParams.get("mainwp") === "remote") {
+    return {
+      enabled: true, dashboard: "", remote: true, excluded: ["staging.newsletter.example-church-of-the-hills.com"],
+      cleanup: false, owned: 3, connections: 0,
+      sites: {
+        "shop.example.com": entry("connected"),
+        "www.example.com": entry("not-connected"),
+        "blog.example.com": entry("inactive"),
+        "staging.newsletter.example-church-of-the-hills.com": entry("inactive"),
+        "mainwp.example.com": entry("connected"),
+        "new.example.com": entry("missing", false, false),
+        "removed.example.com": entry("missing"),
+        "network.example.com": entry("unsupported"),
+        "retry.example.com": { ...entry("error"), error: "MainWP Child could not be activated; check the site in WordPress" },
+      },
+    };
   }
   return {
     enabled: url.searchParams.get("mainwp") === "states",
     dashboard: "mainwp.example.com",
+    remote: false,
     excluded: ["staging.newsletter.example-church-of-the-hills.com"],
     cleanup: url.searchParams.get("mainwp") === "cleanup",
     owned: 1, connections: 1,
@@ -1027,16 +1045,19 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
       return ok({ html: wpToolsDashboardBody(wpToolsPreviewData()) });
     case "mainwp-settings":
       wpToolsPreview.mainwp.enabled = body.enabled === true;
-      if (typeof body.dashboard === "string") wpToolsPreview.mainwp.dashboard = body.dashboard;
+      if (body.remote === true) Object.assign(wpToolsPreview.mainwp, { remote: true, dashboard: "" });
+      if (typeof body.dashboard === "string") Object.assign(wpToolsPreview.mainwp, { remote: false, dashboard: body.dashboard });
       return ok({});
     case "mainwp-site":
       wpToolsPreview.mainwp.excluded = wpToolsPreview.mainwp.excluded.filter((domain) => domain !== body.domain);
       if (body.excluded === true && typeof body.domain === "string") wpToolsPreview.mainwp.excluded.push(body.domain);
       return ok({});
-    case "mainwp-connect":
-      if (site) wpToolsPreview.mainwp.sites[site.domain] = { status: "connected", seen: true, ownedConnection: true, checkedAt: new Date().toISOString(), error: "" };
-      return ok({ checked: 1, connected: 1, removed: 0, pending: 0, failed: [] });
-    case "mainwp-sync": return ok({ checked: wpToolsPreview.sites.length, connected: 0, removed: 0, pending: 0, failed: [] });
+    case "mainwp-connect": {
+      const remote = wpToolsPreview.mainwp.remote;
+      if (site) wpToolsPreview.mainwp.sites[site.domain] = { status: remote ? "not-connected" : "connected", seen: true, ownedConnection: !remote, checkedAt: new Date().toISOString(), error: "" };
+      return ok({ checked: 1, installed: remote ? 1 : 0, connected: remote ? 0 : 1, removed: 0, pending: 0, failed: [] });
+    }
+    case "mainwp-sync": return ok({ checked: wpToolsPreview.sites.length, installed: 0, connected: 0, removed: 0, pending: 0, failed: [] });
     case "mainwp-cleanup":
       wpToolsPreview.mainwp.enabled = false;
       wpToolsPreview.mainwp.cleanup = false;

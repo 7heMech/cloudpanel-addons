@@ -254,6 +254,8 @@ test("MainWP routes require administrator, CSRF, and confirmation before reachin
   }
   const denied = await handle(new Request("https://panel.test/addons/wp-tools/api/mainwp-cleanup", { method: "POST", body: "{}" }), "/api/mainwp-cleanup", undefined, undefined, { user: "admin", roles: ["ROLE_ADMIN"] });
   expect(denied.status).toBe(403);
+  const notRemote = await handle(new Request("https://panel.test/addons/wp-tools/api/mainwp-settings", { method: "POST", headers: { Host: "panel.test", origin: "https://panel.test", cookie: `clp_addons_csrf=${"a".repeat(64)}`, "X-CLP-Addons-CSRF": "a".repeat(64), "Content-Type": "application/json" }, body: JSON.stringify({ enabled: true, remote: false }) }), "/api/mainwp-settings", undefined, undefined, { user: "admin", roles: ["ROLE_ADMIN"] });
+  expect(notRemote.status).toBe(400);
 });
 
 test("the UI has row Connect, a pause switch and explicit cleanup, with no secrets or selection UI", () => {
@@ -278,7 +280,7 @@ test("the page puts sites first and draws only the controls that do something", 
   expect(fresh).not.toContain("mainwp-automatic");
   expect(fresh).toContain('id="mainwp-dashboard"');
   expect(fresh).not.toContain("Application");
-  expect(fresh).not.toContain("On another server");
+  expect(fresh).toContain('<option value="">Choose a site</option><option value="@remote">On another server</option>');
   // A site without Varnish says so, and Automatic switches wait for their automation.
   expect(fresh).toContain('<td data-label="Varnish plugin"><span class="hint" title="Varnish Cache is off');
   expect(fresh).not.toContain("setSiteAutomatic(this)");
@@ -545,5 +547,106 @@ test("an unconfirmed registration ties the addon to its Dashboard until cleanup"
   expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ ownedConnection: false });
   expect(mainwpView(readMainwpState(run.statePath)).connections).toBe(1);
   await expect(configureMainwp(run, options, false, "manual.test")).rejects.toThrow("clean up the MainWP connections");
+  await expect(configureMainwp(run, options, false, undefined, true)).rejects.toThrow("clean up the MainWP connections");
+});
+
+const ops = () => commands.map((command) => command.stdin ? JSON.parse(command.stdin).op : command.argv.find((arg) => arg === "install"));
+
+test("a Dashboard on another server: automation installs the Child inactive and touches nothing else", async () => {
+  await configureMainwp(run, options, true, undefined, true);
+  expect(readMainwpState(run.statePath)).toMatchObject({ remote: true, dashboard: "", enabled: true });
+  commands = [];
+  const result = await syncMainwp({ ...run, dueOnly: true }, options);
+  expect(result).toMatchObject({ installed: 2, connected: 0, failed: [] });
+  expect(children["new.test"]).toMatchObject({ installed: true, active: false, securityId: "", auth: true });
+  const state = readMainwpState(run.statePath);
+  expect(state.sites["new.test"]).toMatchObject({ status: "inactive", seen: true, ownedPlugin: true, ownedConnection: false });
+  expect(state.sites["new.test"]!.phase).toBeUndefined();
+  expect(state.sites["manual.test"]).toMatchObject({ status: "inactive", seen: true, ownedPlugin: false });
+  expect(state.sites["connected.test"]).toMatchObject({ status: "connected" });
+  expect(state.sites["network.test"]!.status).toBe("unsupported");
+  expect(ops().filter((op) => /^(dashboard-|prepare|activate)/.test(String(op)))).toEqual([]);
+  expect(mainwpView(state)).toMatchObject({ remote: true, connections: 0 });
+
+  // Seen once, never reinstalled by automation.
+  children["new.test"]!.installed = false; children["new.test"]!.files = false;
+  commands = [];
+  await syncMainwp({ ...run, dueOnly: true }, options);
+  expect(ops()).not.toContain("install");
+});
+
+test("for a Dashboard elsewhere a failed download is retried, and an interrupted one needs Retry", async () => {
+  await configureMainwp(run, options, true, undefined, true);
+  fail = "install";
+  expect((await syncMainwp({ ...run, dueOnly: true }, options)).failed).toHaveLength(2);
+  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ status: "error", seen: false, ownedPlugin: false });
+  expect(readMainwpState(run.statePath).sites["new.test"]!.snapshot).toBeUndefined();
+  fail = "";
+
+  const state = readMainwpState(run.statePath);
+  state.sites["new.test"] = { status: "missing", seen: true, checkedAt: "", error: "", ownedPlugin: true, ownedConnection: false, phase: "child", snapshot: snapshot() };
+  saveMainwpState(run.statePath, state);
+  expect(() => requireMainwpSettled(run.statePath)).not.toThrow();
+  await syncMainwp({ ...run, dueOnly: true }, options);
+  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ status: "error", error: "Installation was interrupted. Retry to continue." });
+  expect(readMainwpState(run.statePath).sites["new.test"]!.phase).toBeUndefined();
+  expect(children["new.test"]!.installed).toBe(false);
+  expect((await syncMainwp({ ...run, domain: "new.test" }, options)).installed).toBe(1);
+  expect(children["new.test"]).toMatchObject({ installed: true, active: true });
+  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ status: "not-connected", ownedPlugin: true });
+});
+
+test("activating for a remote Dashboard changes no authentication, and cleanup undoes only what it did", async () => {
+  await configureMainwp(run, options, false, undefined, true);
+  expect((await mainwpAction(run, ["mainwp-connect", "--domain=new.test", "--confirm=new.test"], options, (d) => d) as { installed: number }).installed).toBe(1);
+  await mainwpAction(run, ["mainwp-connect", "--domain=manual.test", "--confirm=manual.test"], options, (d) => d);
+  expect(children["new.test"]).toMatchObject({ installed: true, active: true, securityId: "", auth: true });
+  expect(children["manual.test"]).toMatchObject({ active: true, securityId: "", auth: true });
+  expect(readMainwpState(run.statePath).sites["manual.test"]).toMatchObject({ status: "not-connected", ownedPlugin: false });
+  expect(ops()).toContain("activate");
+  expect(ops()).not.toContain("prepare");
+
+  // Someone connects one of them from their Dashboard.
+  children["new.test"]!.key = key;
+  expect((await syncMainwp(run, options, true)).failed).toEqual([]);
+  expect(children["new.test"]).toMatchObject({ installed: true, key });
+  expect(children["manual.test"]).toMatchObject({ installed: true, active: false });
+  const state = readMainwpState(run.statePath);
+  expect(state).toMatchObject({ cleanup: false, remote: true });
+  expect(state.sites["new.test"]).toMatchObject({ status: "connected", ownedPlugin: false });
+  expect(state.sites["manual.test"]!.status).toBe("inactive");
+});
+
+test("a Dashboard on another server needs this one's connections cleaned up first, but not the reverse", async () => {
+  await configured();
+  await mainwpAction(run, ["mainwp-connect", "--domain=manual.test", "--confirm=manual.test"], options, (d) => d);
+  await expect(configureMainwp(run, options, false, undefined, true)).rejects.toThrow("clean up the MainWP connections");
+  await syncMainwp(run, options, true);
+  await configureMainwp(run, options, false, undefined, true);
+  await syncMainwp({ ...run, domain: "new.test" }, options);
+  expect(readMainwpState(run.statePath).sites["new.test"]).toMatchObject({ ownedPlugin: true, ownedConnection: false });
+  const local = await configureMainwp(run, options, true, "dashboard.test");
+  expect(local).toMatchObject({ remote: false, dashboard: "dashboard.test" });
+  for (const argv of [["--remote=false"], ["--remote=true", "--dashboard=dashboard.test"]]) {
+    await expect(mainwpAction(run, ["mainwp-settings", "--enabled=true", ...argv], options, (d) => d)).rejects.toThrow("either");
+  }
+});
+
+test("the page offers a Dashboard on another server and Install or Activate per site", () => {
+  const state = { ...emptyMainwpState(), remote: true, enabled: true };
+  state.sites["new.test"] = { status: "inactive", seen: true, checkedAt: "", error: "", ownedPlugin: true, ownedConnection: false };
+  state.sites["connected.test"] = { status: "connected", seen: true, checkedAt: "", error: "", ownedPlugin: false, ownedConnection: false };
+  const page = dashboardView({ sites: run.sites.map((site) => ({ domain: site.domain, user: site.user, helper: false, varnishCache: false, varnishExcluded: false, varnishPlugin: null })),
+    varnish: { enabled: false, excluded: [], sites: {} }, varnishError: "", mainwp: mainwpView(state), mainwpError: "" });
+  expect(page).toContain('<option value="@remote" selected>On another server</option>');
+  expect(page).not.toContain("Choose a site");
+  expect(page).toContain('<th scope="col">MainWP Child</th>');
+  expect(page).toContain("Install MainWP Child automatically");
+  expect(page).not.toContain("Install and connect");
+  expect(page).toMatch(/data-domain="new.test" data-remote onclick="connectMainwp\(this\)">Activate</);
+  expect(page).toMatch(/data-domain="manual.test" data-remote onclick="connectMainwp\(this\)">Install</);
+  expect(page).not.toMatch(/data-domain="connected.test"[^>]*onclick="connectMainwp/);
+  expect(page).not.toContain(">Connect<");
+  expect(page).toContain('id="mainwp-auto-dashboard.test"');
 });
 
