@@ -68,7 +68,7 @@ function settingsCard(settings: Settings, users: UserKeysView[]): string {
     const note = count === 0 ? '<span class="hint">No keys</span>'
       : on ? `<span class="hint">${keys}</span>` : `<span class="sk-refused">${keys} refused</span>`;
     return `
-          <label class="sk-tile"><input id="role-${role}" type="checkbox" ${on ? "checked" : ""} onchange="saveSettings(this)"><span><strong>${label}</strong>${note}</span></label>`;
+          <label class="sk-tile"><input id="role-${role}" type="checkbox" ${on ? "checked" : ""} onchange="saveSettings(this)"><strong>${label}</strong>${note}</label>`;
   };
   const synced = users.reduce((total, entry) => total + entry.keys.filter((key) => key.synced).length, 0);
   const warning = settings.roles.length === 0

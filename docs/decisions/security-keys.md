@@ -9,12 +9,13 @@ everyone's keys on Addons → Security Keys, can remove any of them, and set the
 panel-wide settings below. Nobody else can change those.
 
 The page puts the keys first and the two settings, set once, in one card
-below. The roles are a pick-any list, not three settings, so each is a tile to
-tick that counts its accounts' keys, or the keys it refuses while it is off;
-synced passkeys are one switch. Until anyone has a key, a checklist takes the
-list's place: open the panel on its hostname (ticked by the browser), add your
-own key under Account → Security, sign in with it. That is the only place the
-page explains setup.
+below. The roles are a pick-any list, not three settings, so each is a tile
+that turns on and off, outlined while on, with no checkbox showing; it counts
+its accounts' keys, or the keys it refuses while it is off. Synced passkeys are
+one switch. Until anyone has a key, a checklist takes the list's place: open
+the panel on its hostname (ticked by the browser), add your own key under
+Account → Security, sign in with it. That is the only place the page explains
+setup.
 
 The list groups keys under the user they belong to, with the role only while
 the CloudPanel account is still the one the keys were made for. Every key that

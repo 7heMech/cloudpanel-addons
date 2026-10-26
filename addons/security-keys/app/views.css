@@ -12,16 +12,16 @@
 .settings-card h3 { margin: 0 0 6px; font-size: 16px; }
 .settings-card p.hint { margin: 0; }
 .sk-setting + .sk-setting { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--row-border); }
-/* The roles are a pick-any list: a tile each, outlined while ticked. */
+/* The roles are a pick-any list: a tile each, outlined while on. Its checkbox
+   stays for the keyboard and screen readers; only the tile shows the state. */
 .sk-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
-.sk-tile { display: flex; align-items: flex-start; gap: 12px; margin: 0; padding: 14px 16px; border: 1px solid var(--button-border);
-  border-radius: 6px; background: var(--panel); cursor: pointer; transition: border-color .15s, background-color .15s; }
-.sk-tile:hover, .sk-tile:has(input:checked) { border-color: var(--primary); }
-.sk-tile:has(input:checked) { background: rgb(38 125 221 / 6%); }
+.sk-tile { position: relative; display: block; margin: 0; padding: 14px 16px; border: 1px solid var(--button-border);
+  border-radius: 6px; background: var(--panel); cursor: pointer; transition: border-color .15s, background-color .15s, box-shadow .15s; }
+.sk-tile:hover { border-color: var(--muted); }
+.sk-tile:has(input:checked) { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); background: rgb(38 125 221 / 6%); }
 html.dark .sk-tile:has(input:checked) { background: rgb(38 125 221 / 14%); }
 .sk-tile:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
-.sk-tile input { margin: 4px 0 0; }
-.sk-tile input:focus { outline: 0; box-shadow: none; }
+.sk-tile input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
 .sk-tile strong { display: block; font-weight: 600; }
 .sk-tile .hint, .sk-tile .sk-refused { display: block; margin-top: 2px; font-size: 13px; }
 .sk-switch-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 24px; }
@@ -54,9 +54,7 @@ html.dark .sk-tile:has(input:checked) { background: rgb(38 125 221 / 14%); }
 @media (max-width: 760px) {
   /* A tile is a row, its keys at the end; the switch sits beside its title, with the wording below both. */
   .sk-tiles { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-  .sk-tile { align-items: center; padding: 12px 14px; }
-  .sk-tile input { margin: 0; }
-  .sk-tile > span { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; }
+  .sk-tile { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; padding: 12px 14px; }
   .sk-tile .hint, .sk-tile .sk-refused { margin: 0; }
   .sk-switch-row { row-gap: 10px; }
   .sk-switch-row > h3 { margin: 0; }
