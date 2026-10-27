@@ -78,8 +78,13 @@
           }
           if (!reply.data.managed) return [domain];
           if (reply.data.ready) return reply.data.certificateNames;
-          show('warning', 'DNS for ' + domain + ' is not ready: ' + reply.data.reason.replace(/\.?$/, '.') +
-            ' The certificate will be requested automatically once it is.', 'Open SSL/TLS');
+          if (reply.data.nameServers && reply.data.nameServers.length) {
+            clpNameserverNotice(alert, reply.data.zone, reply.data.nameServers,
+              'The Let\u2019s Encrypt certificate is requested automatically once Cloudflare sees them.');
+          } else {
+            show('warning', 'DNS for ' + domain + ' is not ready: ' + reply.data.reason.replace(/\.?$/, '.') +
+              ' The certificate will be requested automatically once it is.');
+          }
           return null;
         });
       });

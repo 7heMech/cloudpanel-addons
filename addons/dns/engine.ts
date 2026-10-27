@@ -787,14 +787,17 @@ function pointsOwnName(domain: string, op: RecordOp): boolean {
   return own && address(op.record.type) && (!op.current || address(op.current.type));
 }
 
-export function readiness(plan: SitePlan | undefined): { ready: boolean; reason: string } {
+export function readiness(plan: SitePlan | undefined): { ready: boolean; reason: string; zone?: string; nameServers?: string[] } {
   if (!plan?.profileId) return { ready: false, reason: "No DNS profile is assigned to this site" };
   if (plan.mode !== "enforce") return { ready: false, reason: "DNS is set to Ask first" };
   if (plan.problems.length) return { ready: false, reason: plan.problems.join("; ") };
   if (!plan.zone) return { ready: false, reason: "Its Cloudflare zone is being created" };
   if (plan.zone.status !== "active") {
     const servers = plan.zone.nameServers.length ? `: ${plan.zone.nameServers.join(", ")}` : "";
-    return { ready: false, reason: `Zone ${plan.zone.name} is ${plan.zone.status}; set its nameservers at the registrar${servers}` };
+    return {
+      ready: false, reason: `Zone ${plan.zone.name} is ${plan.zone.status}; set its nameservers at the registrar${servers}`,
+      zone: plan.zone.name, nameServers: plan.zone.nameServers,
+    };
   }
   if (plan.changes.some((change) => change.action !== "note" && !change.waits)) return { ready: false, reason: "Some DNS changes have not been made yet" };
   if (!plan.certificateNames.includes(plan.domain)) return { ready: false, reason: "The profile manages no address for this site" };

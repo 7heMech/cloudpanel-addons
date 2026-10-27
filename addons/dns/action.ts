@@ -147,6 +147,9 @@ export interface ProvisionReply {
   managed: boolean;
   ready: boolean;
   reason: string;
+  /** Only while the site's zone waits for its nameservers, for the page to show them. */
+  zone?: string;
+  nameServers?: string[];
   certificateNames: string[];
 }
 

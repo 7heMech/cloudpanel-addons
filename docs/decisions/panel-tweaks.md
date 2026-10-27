@@ -163,7 +163,9 @@ issues twice. When the DNS addon is installed, the script first asks it to
 write the new site's records (see [DNS](dns.md)). DNS answers with the names its
 records cover -- `www` only where it writes one -- or with why DNS is not ready
 yet, in which case no certificate is requested here and DNS retries as root
-later. Without DNS, or for a site DNS does not manage, the certificate is for
+later. The page says so with no link, as there is nothing to do on the SSL/TLS
+tab; a zone waiting for its nameservers gets DNS's own notice, the nameservers
+copyable. Without DNS, or for a site DNS does not manage, the certificate is for
 the created domain alone; the form's default `www` name needs DNS the operator
 may not have. DNS counts as absent only when its session route answers 404 or
 403; when it does not answer, or cannot write the records, nothing is requested
