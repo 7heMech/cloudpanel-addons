@@ -419,7 +419,7 @@ describe("the dedicated update page", () => {
     expect(html).toContain("v1.0.0");
     expect(html).toContain("v1.1.0");
     expect(html).toContain('onclick="updateNow(this)">Install update</button>');
-    expect(html).toContain("/releases/latest");
+    expect(html).toContain('href="https://github.com/7heMech/cloudpanel-addons/releases/tag/v1.1.0"');
     expect(response.headers.get("set-cookie")).toContain(csrfCookieHeader("update-token"));
     expect(response.headers.get("cache-control")).toBe("no-store");
     for (const script of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
@@ -439,6 +439,17 @@ describe("the dedicated update page", () => {
       expect(html).not.toContain('onclick="updateNow()"');
       expect(html).not.toContain('id="clp-addons-update-notice"');
     }
+  });
+
+  test("links the changelog of the offered release, a pre-release included", async () => {
+    const changelog = async (info: typeof release | null, version: string) =>
+      (await updatePage(info, version).text()).match(/href="([^"]+)"[^>]*>Changelog</)?.[1];
+    const releases = "https://github.com/7heMech/cloudpanel-addons/releases";
+    expect(await changelog({ current: "2.0.0-rc.1", latest: "2.0.0-rc.2", hasUpdate: true }, "2.0.0-rc.1"))
+      .toBe(`${releases}/tag/v2.0.0-rc.2`);
+    expect(await changelog({ current: "2.0.0-rc.2", latest: "2.0.0-rc.2", hasUpdate: false }, "2.0.0-rc.2"))
+      .toBe(`${releases}/tag/v2.0.0-rc.2`);
+    expect(await changelog(null, "0.0.0-dev")).toBe(releases);
   });
 
   test("resumes progress after navigation and prevents a second installation while a job runs", async () => {
