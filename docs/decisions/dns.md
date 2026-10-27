@@ -233,8 +233,10 @@ so a real certificate is never replaced; a site DNS stops writing drops it.
 
 A site's SSL/TLS tab, the one the panel's certificate badges link to, carries a
 notice while its zone waits for nameservers: the zone and the nameservers, each
-followed by a clipboard icon that copies it alone, since a registrar usually
-has a field per nameserver, and that is what the certificate is waiting for.
+with a clipboard icon. Each name and icon form one button that copies that
+nameserver alone, since a registrar usually has a field per nameserver, and
+that is what the certificate is waiting for. The buttons sit side by side on
+desktop, wrapping as needed, and stack at widths of 760px or less.
 It says the certificate is requested automatically only when DNS has recorded
 a request for the site; a site still on its self-signed placeholder without one
 is told to request it under Actions, and a site with a real certificate is told

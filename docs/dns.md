@@ -53,9 +53,9 @@ records within seconds, and the certificate is requested once they are in
 place. If the zone is new, the page says which nameservers to set at the
 registrar; the certificate is requested automatically once the zone is active.
 Until then the site's **SSL/TLS** tab shows the nameservers too, to anyone who
-can open the site, site managers and the site's own users included. The
-clipboard icon after each nameserver, there or in the site's **Details**,
-copies that one.
+can open the site, site managers and the site's own users included. Click a
+nameserver or its clipboard icon on the **SSL/TLS** tab to copy that one. In
+the site's **Details**, use the clipboard icon beside it.
 
 **Details** on a site shows its zone and every pending change. Drift is
 corrected every 15 minutes, or at once with **Check now**. **Change log** lists

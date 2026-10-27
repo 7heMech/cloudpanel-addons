@@ -22,9 +22,8 @@
     alert.appendChild(document.createTextNode(' At the domain\u2019s registrar, replace its nameservers with these.' + next));
     var list = document.createElement('div');
     list.className = 'clp-dns-nameservers';
-    // A clipboard after each: a registrar usually has a field per nameserver.
+    // Each name and its icon copy one value: registrars have a field per nameserver.
     data.nameServers.forEach(function (server) {
-      var row = document.createElement('div');
       var code = document.createElement('code');
       code.textContent = server;
       var copy = document.createElement('button');
@@ -32,6 +31,7 @@
       copy.title = 'Copy';
       copy.setAttribute('aria-label', 'Copy ' + server);
       copy.innerHTML = box.getAttribute('data-clipboard');
+      copy.insertBefore(code, copy.firstChild);
       // Without the clipboard, the nameserver is selected so Ctrl+C finishes the job.
       function select() {
         var range = document.createRange();
@@ -49,9 +49,7 @@
           copy.title = 'Copied';
         }, select);
       });
-      row.appendChild(code);
-      row.appendChild(copy);
-      list.appendChild(row);
+      list.appendChild(copy);
     });
     alert.appendChild(list);
     box.appendChild(alert);
