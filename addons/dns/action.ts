@@ -16,13 +16,14 @@ import {
 } from "../../cli/action-common";
 import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
+import { DEFAULT_SMTP_PATHS, smtpRelayAccounts, type SmtpRelayAccount } from "../smtp/action";
 import { detectAddresses, type Addresses } from "./addresses";
 import { DnsRun, readiness, type ConnectionReport, type ManagedRecords, type PanelSite, type SitePlan } from "./engine";
 import { type ApiFetch, redact } from "./http";
 import { MailcowApi } from "./mailcow";
 import {
   connectionId, hostname, parseMailcow, parsePolicy, parseProfile, parseSecrets, profileEffect, profileId, secretText,
-  ipAddress, cloudflareId, MAX_CONNECTIONS, type MailcowSettings, type Policy, type Profile, type Secrets,
+  ipAddress, cloudflareId, EMPTY_MAILCOW, MAX_CONNECTIONS, type MailcowSettings, type Policy, type Profile, type Secrets,
 } from "./model";
 import { PRESETS, seededPolicy, type Preset } from "./presets";
 import { describeRecord, renderProfile, sameRecord } from "./records";
@@ -31,11 +32,11 @@ import { readState, writeState } from "./store";
 import { tokenTemplate, type TokenTemplate } from "./token";
 
 export type DnsVerb = "list" | "check" | "save-profile" | "delete-profile" | "set-mode" | "assign" | "set-default" | "confirm"
-  | "save-connection" | "remove-connection" | "choose-zone" | "save-mailcow" | "save-server" | "remove-records" | "forget-records"
+  | "save-connection" | "remove-connection" | "choose-zone" | "save-mailcow" | "remove-mailcow" | "save-server" | "remove-records" | "forget-records"
   | "provision" | "reconcile" | "sync-sites";
 
 const VERBS: DnsVerb[] = ["list", "check", "save-profile", "delete-profile", "set-mode", "assign", "set-default", "confirm",
-  "save-connection", "remove-connection", "choose-zone", "save-mailcow", "save-server", "remove-records", "forget-records",
+  "save-connection", "remove-connection", "choose-zone", "save-mailcow", "remove-mailcow", "save-server", "remove-records", "forget-records",
   "provision", "reconcile", "sync-sites"];
 const NO_BODY: DnsVerb[] = ["list", "check", "provision", "reconcile", "sync-sites"];
 const MAX_BODY = 256 * 1024;
@@ -47,6 +48,8 @@ export interface DnsPaths {
   configFile: string;
   panelDb: string;
   stateDir: string;
+  /** SMTP Relay's configuration, read only for the relay accounts the Mailcow form offers. */
+  smtpConfig: string;
   lockFile: string;
   clpctl: string;
   rootUid: number;
@@ -69,6 +72,7 @@ export const DEFAULT_DNS_PATHS: DnsPaths = {
   configFile: `${CONFIG_DIR}/dns.conf`,
   panelDb: PANEL_DB,
   stateDir: `${STATE_DIR}/dns`,
+  smtpConfig: DEFAULT_SMTP_PATHS.stateFile,
   lockFile: "/run/lock/clp-addons/dns.lock",
   clpctl: "/usr/bin/clpctl",
   rootUid: 0,
@@ -104,6 +108,8 @@ export interface DnsState {
   connections: (ConnectionReport & { hasToken: boolean })[];
   accounts: { connectionId: string; accountId: string; label: string }[];
   mailcow: MailcowSettings & { hasKey: boolean };
+  /** SMTP Relay's accounts, which the Mailcow form can be filled from. */
+  smtpRelays: SmtpRelayAccount[];
   server: { ipv4: string; ipv6: string; detected: Addresses };
   orphans: { domain: string; zone: string; records: number }[];
   checkedAt: string | null;
@@ -392,6 +398,7 @@ class Action {
       }),
       accounts,
       mailcow: { ...policy.mailcow, hasKey: Boolean(secrets.mailcowKey) },
+      smtpRelays: smtpRelayAccounts(this.paths.smtpConfig, this.paths.rootUid),
       server: { ...policy.server, detected: this.addresses() },
       orphans: Object.entries(managed)
         .filter(([domain]) => !domains.has(domain))
@@ -770,8 +777,9 @@ class Action {
     const policy = this.files.policy();
     const secrets = this.files.secrets();
     const settings = parseMailcow(body);
-    if (!settings.url) failAction("Enter Mailcow's address, such as https://mail.example.com");
-    if (!settings.host) settings.host = new URL(settings.url).hostname;
+    if (!settings.url) failAction("Enter Mailcow's hostname, such as mail.example.com");
+    // Mailcow serves its API, webmail and mail on one hostname, so the address is also what {mailcow.host} is.
+    settings.host = new URL(settings.url).hostname;
     // A saved key is kept only for the Mailcow it was saved for.
     const key = body.key ? secretText(body.key, "The Mailcow API key") : settings.url === policy.mailcow.url ? secrets.mailcowKey : "";
     if (!key) failAction("Enter Mailcow's API key");
@@ -784,8 +792,22 @@ class Action {
       failAction(redact(reason(error), [key]));
     }
     const next = { ...structuredClone(policy), mailcow: settings };
-    const mailcowSites = this.sites().filter((site) => next.profiles.find((profile) => profile.id === next.assignments[site.domain])?.mailcow);
-    return this.change(next, "Mailcow saved.", mailcowSites.map((site) => site.domain), key);
+    return this.change(next, "Mailcow saved.", this.mailcowSites(next), key);
+  }
+
+  /** Like a Cloudflare connection, straight away: a site whose profile needs Mailcow stops being applied, and nothing is deleted. */
+  async removeMailcow(): Promise<DnsReply> {
+    const policy = this.files.policy();
+    const secrets = this.files.secrets();
+    if (!policy.mailcow.url && !secrets.mailcowKey) failAction("Mailcow is not set up");
+    this.files.saveSecrets({ ...secrets, mailcowKey: "" });
+    this.savePolicy({ ...structuredClone(policy), mailcow: { ...EMPTY_MAILCOW } });
+    await this.tryRefresh(this.mailcowSites(policy));
+    return this.reply({ notice: "Mailcow removed. Its API key stays valid in Mailcow until you delete it there." });
+  }
+
+  private mailcowSites(policy: Policy): string[] {
+    return this.sites().filter((site) => policy.profiles.find((profile) => profile.id === policy.assignments[site.domain])?.mailcow).map((site) => site.domain);
   }
 }
 
@@ -960,6 +982,8 @@ async function perform(
       return action.removeConnection(connectionId(body.id));
     case "save-mailcow":
       return action.saveMailcow(body);
+    case "remove-mailcow":
+      return action.removeMailcow();
     case "remove-records":
       return action.reviewRemoval(hostname(body.domain, "the site"));
     case "forget-records": {

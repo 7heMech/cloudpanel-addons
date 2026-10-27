@@ -13,13 +13,19 @@ checklist.
    token in Cloudflare** opens Cloudflare's token form. Check the permissions
    listed beside the link are there. Pick the accounts and zones there (All zones
    also covers zones you add later), limit it to the server addresses shown
-   under Client IP Address Filtering, create the token, and paste it back. DNS
+   under Client IP Address Filtering (**Copy** copies them space-separated, as
+   that field takes them), create the token, and paste it back. DNS
    finds the accounts and zones it reaches by itself. Add more connections for
    other Cloudflare logins.
-2. **Mailcow, if you use it.** Under **Settings**, set Mailcow's
-   address, a read-write API key (limit it to this server's IP in Mailcow), the
-   mail hostname, how new domains get a DKIM key, and optionally a shared
-   mailbox, such as the one SMTP Relay sends through.
+2. **Mailcow, if you use it.** Under **Settings**, set Mailcow's hostname,
+   such as `mail.example.com` (it is also the MX target), a read-write API key
+   (limit it to this server's IP in Mailcow), how new domains get a DKIM key, and
+   optionally a shared mailbox. If SMTP Relay already sends through Mailcow,
+   **Fill from SMTP Relay** takes its hostname and mailbox; with one SMTP Relay
+   profile and Mailcow not yet set up, they are filled in already. **Remove**
+   deletes the API key from this server; sites whose profile sets up Mailcow
+   then wait until it is set up again, and nothing in Cloudflare or Mailcow is
+   deleted.
 3. **Profiles.** Edit **Web** or **Web and Mailcow**, or create your own from the
    presets. Each row is a record every site in the profile gets; **TTL and apex
    only** shows the less common columns, and **Cloudflare zone** opens the

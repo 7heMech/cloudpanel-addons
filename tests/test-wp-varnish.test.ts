@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeWpToolsAction, reconcileWpVarnish, type WpToolsActionOptions, type WpSiteView } from "../addons/wp-tools/action";
+import { executeWpToolsAction, reconcileWpVarnish, type WpJobView, type WpToolsActionOptions, type WpSiteView } from "../addons/wp-tools/action";
 import { commandOutput, readVarnishState, type WpCommand, type VarnishSyncResult } from "../addons/wp-tools/varnish";
 import { handle } from "../addons/wp-tools/app/index";
 import { dashboardView, layout } from "../addons/wp-tools/app/views";
@@ -18,6 +18,7 @@ let commands: WpCommand[];
 let statuses: Record<string, "active" | "inactive" | "missing">;
 let multisite: Set<string>;
 let failures: Set<string>;
+let started: Parameters<NonNullable<WpToolsActionOptions["startJob"]>>[0][];
 
 function options(): WpToolsActionOptions {
   return {
@@ -26,7 +27,9 @@ function options(): WpToolsActionOptions {
       configFile: join(root, "wp-tools.conf"), panelDb: join(root, "panel.sq3"), passwd: join(root, "passwd"),
       lockFile: join(root, "wp.lock"), varnishState: join(root, "varnish.json"), varnishLockFile: join(root, "wp-varnish.lock"),
       mainwpState: join(root, "mainwp.json"), mainwpLockFile: join(root, "wp-mainwp.lock"),
+      jobsDir: join(root, "jobs"), jobsLockFile: join(root, "wp-jobs.lock"), actionBinary: "/usr/local/bin/clp-addons",
     },
+    startJob: (unit) => { started.push(unit); return { ok: true, stdout: "", stderr: "" }; },
     domainValidator: (domain) => domain,
     runWpCommand: async (command) => {
       commands.push(command);
@@ -56,6 +59,7 @@ beforeEach(() => {
   statuses = {};
   multisite = new Set();
   failures = new Set();
+  started = [];
   const db = new Database(join(root, "panel.sq3"), { create: true });
   db.exec(`
     CREATE TABLE site (id INTEGER PRIMARY KEY, type TEXT, domain_name TEXT, root_directory TEXT, user TEXT, application TEXT, varnish_cache INTEGER);
@@ -236,11 +240,16 @@ test("existing inactive plugins and subsequently removed plugins require explici
   expect(String(statuses["shop.example.com"])).toBe("active");
 });
 
-test("multisite and privileged Unix accounts cannot receive plugin installations", async () => {
+test("a multisite network gets the plugin network-activated, and privileged Unix accounts get nothing", async () => {
   multisite.add("shop.example.com");
-  expect((await act<VarnishSyncResult>("varnish-install", "--domain=shop.example.com")).installed).toBe(0);
-  expect(readVarnishState(join(root, "varnish.json")).sites["shop.example.com"]?.status).toBe("unsupported");
-  expect(commands).toHaveLength(1);
+  expect((await act<VarnishSyncResult>("varnish-install", "--domain=shop.example.com")).installed).toBe(1);
+  expect(commands.find((command) => command.argv.includes("install"))!.argv.slice(-4)).toEqual(["plugin", "install", "clp-varnish-cache", "--activate-network"]);
+  expect(readVarnishState(join(root, "varnish.json")).sites["shop.example.com"]).toMatchObject({ status: "active", network: true });
+  // A network where the plugin is active only on some of its sites counts as inactive, and Activate activates it network-wide.
+  statuses["shop.example.com"] = "inactive";
+  commands = [];
+  await act("varnish-install", "--domain=shop.example.com");
+  expect(commands[1]!.argv.slice(-4)).toEqual(["plugin", "activate", "clp-varnish-cache", "--network"]);
   multisite.clear();
   writeFileSync(join(root, "passwd"), `shop:x:0:0::${join(root, "home/shop") }:/bin/sh\n`);
   commands = [];
@@ -352,7 +361,9 @@ test("Varnish verbs reject missing, duplicate and unrelated arguments", async ()
     ["varnish-settings", "--enabled=true", "--enabled=false"],
     ["varnish-sync", "--enabled=true"], ["varnish-install", "--domain=shop.example.com", "--as-user=boss"],
   ]) await expect(act(...args)).rejects.toThrow();
-  for (const verb of ["varnish-settings", "varnish-install", "varnish-sync"]) expect(WP_TOOLS_ALLOWED_VERBS.has(verb)).toBe(true);
+  expect(WP_TOOLS_ALLOWED_VERBS.has("varnish-settings")).toBe(true);
+  // The page starts checks and installations as background jobs instead.
+  for (const verb of ["varnish-install", "varnish-sync"]) expect(WP_TOOLS_ALLOWED_VERBS.has(verb)).toBe(false);
 });
 
 test("Varnish routes remain administrator-only", async () => {
@@ -369,11 +380,83 @@ test("Varnish routes remain administrator-only", async () => {
 });
 
 test("the WordPress Tools page emits a valid script with sign-in and Varnish actions", () => {
-  const html = layout("WordPress Tools", dashboardView({ sites: [], varnish: { enabled: false, sites: {} }, varnishError: "", mainwp: mainwpView(emptyMainwpState()), mainwpError: "" }));
+  const html = layout("WordPress Tools", dashboardView({ sites: [], varnish: { enabled: false, sites: {} }, varnishError: "", mainwp: mainwpView(emptyMainwpState()), mainwpError: "", jobs: { varnish: null, mainwp: null } }));
   for (const source of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)) expect(() => new Function(source[1]!)).not.toThrow();
   expect(html).toContain("/api/sign-in");
   expect(html).toContain("/api/varnish-settings");
   expect(html).toContain("/api/dashboard");
   expect(html).not.toContain("location.reload");
   expect(readFileSync(join(import.meta.dir, "../addons/wp-tools/app/views.client.js"), "utf8")).toContain("target.close()");
+});
+
+test("Check now runs as a background job that the page can find again and follow to its result", async () => {
+  type Started = { job: WpJobView };
+  const { job } = await act<Started>("start", "--task=varnish-check");
+  expect(job).toMatchObject({ task: "varnish-check", policy: "varnish", state: "queued" });
+  expect(started).toEqual([{
+    addon: "wp-tools", id: job.id, description: "clp-addons: WordPress Tools varnish-check",
+    actionBinary: "/usr/local/bin/clp-addons", properties: ["RuntimeMaxSec=3600"],
+  }]);
+  // A reload finds it, and a second check is refused while it runs.
+  expect((await act<WpDashboard>("sites")).jobs.varnish?.id).toBe(job.id);
+  await expect(act("start", "--task=varnish-check")).rejects.toThrow("already running");
+  expect(commands).toEqual([]);
+
+  // systemd's half, as the unit calls it.
+  const done = await act<WpJobView>("run", "--job", job.id);
+  expect(done).toMatchObject({ state: "done", completed: 1, total: 1, site: "", result: { checked: 1, installed: 0, failed: [] } });
+  // With automation off a check only records what each site has.
+  expect(readVarnishState(join(root, "varnish.json")).sites["shop.example.com"]).toMatchObject({ status: "missing", seen: false });
+  expect(statuses["shop.example.com"]).toBeUndefined();
+  expect((await act<{ job: WpJobView }>("job", `--job=${job.id}`)).job.state).toBe("done");
+  expect((await act<WpDashboard>("sites")).jobs.varnish).toBeNull();
+  await expect(act("run", "--job", job.id)).rejects.toThrow("already done");
+  // The page's next check is a new job.
+  expect((await act<Started>("start", "--task=varnish-check")).job.id).not.toBe(job.id);
+});
+
+test("a job that fails says why, and the next one starts", async () => {
+  writeFileSync(join(root, "varnish.json"), '{"enabled":true,"sites":{"shop.example.com":{"status":"active"}}}');
+  const { job } = await act<{ job: WpJobView }>("start", "--task=varnish-install", "--domains=shop.example.com");
+  expect(await act<WpJobView>("run", `--job=${job.id}`)).toMatchObject({ state: "failed", error: "the WordPress Varnish site record is invalid" });
+  expect((await act<WpDashboard>("sites")).jobs.varnish).toBeNull();
+});
+
+test("a job starts only with its own fixed arguments", async () => {
+  for (const args of [
+    [], ["--task=varnish-sync"], ["--task=varnish-check", "--domains=shop.example.com"], ["--task=varnish-install"],
+    ["--task=varnish-install", "--domains=shop.example.com,blog.example.com"], ["--task=mainwp-connect", "--domains=shop.example.com"],
+    ["--task=mainwp-connect", "--confirm=connect"], ["--task=mainwp-cleanup"], ["--task=mainwp-check", "--confirm=mainwp"],
+    ["--task=varnish-check", "--task=mainwp-check"], ["--task=varnish-check", "--path=/etc"],
+  ]) await expect(act("start", ...args)).rejects.toThrow();
+  for (const args of [[], ["--job=../../etc"], ["--job"], ["--job=20260101T000000Z-abcdef", "--job=20260101T000000Z-abcdef"]]) {
+    await expect(act("run", ...args)).rejects.toThrow();
+  }
+  expect(started).toEqual([]);
+  rmSync(join(root, "wp-tools.conf"));
+  await expect(act("start", "--task=varnish-check")).rejects.toThrow("enabled");
+  for (const verb of ["start", "job", "watch-job"]) expect(WP_TOOLS_ALLOWED_VERBS.has(verb)).toBe(true);
+  expect(WP_TOOLS_ALLOWED_VERBS.has("run")).toBe(false);
+});
+
+test("multisite records an earlier version skipped are checked again", async () => {
+  writeFileSync(join(root, "varnish.json"), JSON.stringify({ enabled: true, sites: {
+    "shop.example.com": { status: "unsupported", seen: false, checkedAt: "2026-01-01T00:00:00Z", error: "" },
+  } }));
+  expect(readVarnishState(join(root, "varnish.json")).sites["shop.example.com"]).toBeUndefined();
+  multisite.add("shop.example.com");
+  expect((await reconcileWpVarnish(options(), { dueOnly: true })).installed).toBe(1);
+  expect(readVarnishState(join(root, "varnish.json")).sites["shop.example.com"]).toMatchObject({ status: "active", network: true });
+  expect(dashboardView(await act<WpDashboard>("sites"))).toContain("Network active");
+});
+
+test("an unchecked site offers no Install, and a running job disables what it would race", async () => {
+  const view = await act<WpDashboard>("sites");
+  expect(dashboardView(view)).toContain("Not checked");
+  expect(dashboardView(view)).not.toContain("installPlugin(this)");
+  const { job } = await act<{ job: WpJobView }>("start", "--task=varnish-check");
+  const running = dashboardView(await act<WpDashboard>("sites"));
+  expect(running).toContain(`data-job="${job.id}"`);
+  expect(running).toMatch(/id="varnish-check" type="button" disabled/);
+  expect(running).toMatch(/id="varnish-automatic"[^>]* disabled/);
 });

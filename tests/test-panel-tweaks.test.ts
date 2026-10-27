@@ -6,7 +6,8 @@ import { join } from "node:path";
 import {
   applicationLabel, DEFAULT_TWEAKS, DEFAULT_PANEL_TWEAKS_PATHS, executePanelTweaksAction,
   scanDiskUsage,
-  type PanelTweaksActionOptions, type PanelTweaksState, type ScanResult, type SetTweaksResult,
+  type MeasureJobView, type MeasureStarted, type PanelTweaksActionOptions, type PanelTweaksState, type ScanResult,
+  type SetTweaksResult,
 } from "../addons/panel-tweaks/action";
 import {
   PANEL_TWEAKS_TARGETS, deviceThemeSnippet, panelMobileSnippet, sitesSnippet,
@@ -19,6 +20,8 @@ import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout 
 import { STAGER_TARGETS } from "../addons/stager/inject/targets";
 import { MENU_ONLY_CLASS, MENU_ONLY_STYLE, ROW_ACTION_CLASS, ROW_MENU_CLASS } from "../lib/row-actions";
 import { withFileLock } from "../cli/action-common";
+import { jobDir, jobGet, jobSet } from "../cli/job-store";
+import { PANEL_TWEAKS_ALLOWED_VERBS, STREAM_ALLOWED_VERBS } from "../lib/gateway-protocol";
 import { CLOUDFLARE_ORIGIN } from "./fixtures/certificates";
 
 const loginTarget = PANEL_TWEAKS_TARGETS.find((target) => target.slug === "login-device-theme")!;
@@ -226,6 +229,7 @@ test("the preview frame is the panel's own page, with the injected block over it
   const state: PanelTweaksState = {
     tweaks: { ...DEFAULT_TWEAKS },
     diskMeasuredAt: "",
+    measuring: null,
     sites: Array.from({ length: 7 }, (_, index) => ({
       domain: `site${index}.example.com`, user: `site${index}`, type: "php", application: "WordPress",
       runtime: "PHP 8.3", createdAt: "2026-01-01 00:00:00", cloudflareOnly: false, varnish: false,
@@ -255,7 +259,7 @@ test("the preview frame is the panel's own page, with the injected block over it
 });
 
 test("the addon page keeps switches beside wrapping labels on a phone", () => {
-  const page = panelTweaksDashboardView({ tweaks: { ...DEFAULT_TWEAKS }, diskMeasuredAt: "", sites: [] });
+  const page = panelTweaksDashboardView({ tweaks: { ...DEFAULT_TWEAKS }, diskMeasuredAt: "", measuring: null, sites: [] });
   expect(page).toContain("CloudPanel mobile layout");
   expect(page).not.toContain("What it adds");
   expect(page).not.toContain("tweak-category");
@@ -264,7 +268,7 @@ test("the addon page keeps switches beside wrapping labels on a phone", () => {
   expect(page).toContain("Measure now");
   expect(page).not.toContain("<h2>Measured sizes</h2>");
   const measuredOn = panelTweaksDashboardView({
-    tweaks: { ...DEFAULT_TWEAKS, diskUsage: true }, diskMeasuredAt: "", sites: [],
+    tweaks: { ...DEFAULT_TWEAKS, diskUsage: true }, diskMeasuredAt: "", measuring: null, sites: [],
   });
   expect(measuredOn).toContain('class="tweak-row is-nested is-enabled"');
   // The Sites switches come first with their preview under them; the whole-panel
@@ -276,7 +280,7 @@ test("the addon page keeps switches beside wrapping labels on a phone", () => {
   // Measured sizes is unreachable while the table enhancement it belongs to is off.
   expect(page).toContain('data-tweak-parent="sitesTable" aria-label');
   const tableOff = panelTweaksDashboardView({
-    tweaks: { ...DEFAULT_TWEAKS, sitesTable: false }, diskMeasuredAt: "", sites: [],
+    tweaks: { ...DEFAULT_TWEAKS, sitesTable: false }, diskMeasuredAt: "", measuring: null, sites: [],
   });
   expect(tableOff).toContain('data-tweak-parent="sitesTable" disabled');
   const html = panelTweaksLayout("Panel Tweaks", page);
@@ -285,9 +289,9 @@ test("the addon page keeps switches beside wrapping labels on a phone", () => {
   expect(html).toContain("top: -16px; left: 8px; width: 18px; height: 28px;");
   expect(html).toContain("key === 'diskUsage' && wanted");
   expect(page).toContain("Enabling starts a low-priority scan now");
-  expect(page).toContain('</div>\n          <div class="tweak-scan"><span>Nothing measured yet.</span>');
+  expect(page).toContain('</div>\n          <div class="tweak-scan"><span class="tweak-scan-summary">Nothing measured yet.</span>');
   expect(page).not.toContain('<p>Enabling starts a low-priority scan now. It refreshes about every 6 hours, or whenever you choose Measure now. Each refresh walks the disk.</p><div class="tweak-scan">');
-  expect(html).toContain("summary.textContent = event.measured + ' of ' + total");
+  expect(html).toContain("parts.summary.textContent = result.measured + ' of ' + total");
   expect(html).toContain("sitesTable && sitesTable.checked && frame");
   expect(html).not.toContain("location.reload()");
   expect(html).toContain(".tweak-row .switch { flex: 0 0 auto;");
@@ -472,6 +476,9 @@ function options(extra: Partial<PanelTweaksActionOptions> = {}): PanelTweaksActi
       diskFile: join(panelRoot(), "state", "disk-usage.json"),
       lockFile: join(panelRoot(), "panel-tweaks.lock"),
       scanLockFile: join(panelRoot(), "panel-tweaks-scan.lock"),
+      jobsDir: join(panelRoot(), "state", "jobs"),
+      jobsLockFile: join(panelRoot(), "panel-tweaks-jobs.lock"),
+      actionBinary: "/usr/local/bin/clp-addons",
       mysqlDir: join(panelRoot(), "mysql"),
       passwd: join(panelRoot(), "passwd"),
       rootUid: process.getuid?.() ?? 0,
@@ -756,37 +763,135 @@ test("unattended measurements reuse the result for six hours", async () => {
   expect(measurements).toBe(4);
 });
 
-test("the operator-pressed sweep streams its progress as server-sent events", async () => {
-  const originalScanStream = panelTweaksService.scanStream;
-  const token = "panel-tweaks-test-token";
-  const req = new Request("https://panel.example:8443/addons/panel-tweaks/api/scan", {
-    method: "POST",
-    headers: {
-      host: "panel.example:8443",
-      origin: "https://panel.example:8443",
-      cookie: `clp_addons_csrf=${token}`,
-      "x-clp-addons-csrf": token,
+const UNIT_OK = { ok: true, stdout: "", stderr: "" };
+const du = (bytes: number) => () => ({ ok: true, stdout: `${bytes}\t/x\n`, stderr: "", exitCode: 0 });
+
+test("Measure now records a background job, and pressing it again follows that one", async () => {
+  const units: { addon: string; id: string; actionBinary: string }[] = [];
+  const startJob = (unit: { addon: string; id: string; actionBinary: string }) => { units.push(unit); return UNIT_OK; };
+  const first = await act<MeasureStarted>(["measure"], { startJob });
+  expect(first.attached).toBe(false);
+  expect(first.job.state).toBe("queued");
+  expect(units).toEqual([expect.objectContaining({ addon: "panel-tweaks", id: first.job.id, actionBinary: "/usr/local/bin/clp-addons" })]);
+
+  const again = await act<MeasureStarted>(["measure"], { startJob });
+  expect(again).toEqual({ job: expect.objectContaining({ id: first.job.id }), attached: true });
+  expect(units).toHaveLength(1);
+
+  // The administrator's page draws it; a narrowed reader is not told which site it is on.
+  expect((await act<PanelTweaksState>(["state"])).measuring?.id).toBe(first.job.id);
+  expect((await act<PanelTweaksState>(["state", "--as-user=shopkeeper"])).measuring).toBeNull();
+  expect((await act<{ job: MeasureJobView }>(["job", `--job=${first.job.id}`])).job.id).toBe(first.job.id);
+});
+
+test("a measurement systemd refuses to start is recorded as failed", async () => {
+  await expect(act(["measure"], { startJob: () => ({ ok: false, stdout: "", stderr: "no bus" }) }))
+    .rejects.toThrow("systemd-run refused to start the job: no bus");
+  expect((await act<PanelTweaksState>(["state"])).measuring).toBeNull();
+});
+
+test("the job measures every site, recording which one it is on", async () => {
+  const { job } = await act<MeasureStarted>(["measure"], { startJob: () => UNIT_OK });
+  const dir = jobDir(options().paths!.jobsDir!, job.id);
+  const steps: string[] = [];
+  const done = await act<MeasureJobView>(["run", "--job", job.id], {
+    run: (command, args) => {
+      steps.push(jobGet(dir, "step"));
+      return du(4096)();
     },
   });
+  expect(steps).toEqual(["Measuring 1 of 2: docs.example.com", "Measuring 2 of 2: shop.example.com"]);
+  expect(done).toEqual(expect.objectContaining({ state: "done", completed: 2, total: 2, site: "", step: "Finished" }));
+  expect(done.result).toEqual({ measured: 2, skipped: 0, measuredAt: expect.any(String) });
+  expect((await act<PanelTweaksState>(["state"])).diskMeasuredAt).toBe(done.result!.measuredAt);
+  // A job runs once.
+  await expect(act(["run", "--job", job.id])).rejects.toThrow("the job is already done");
+  await expect(act(["run", "--job=20260101T000000Z-abcdef"])).rejects.toThrow("no such job");
+  await expect(act(["run", "--job=../x"])).rejects.toThrow("a job takes exactly --job=<id>");
+});
 
+test("a measurement waits for a scheduled sweep, and that sweep's answer is its own", async () => {
+  const { job } = await act<MeasureStarted>(["measure"], { startJob: () => UNIT_OK });
+  const paths = options().paths!;
+  const dir = jobDir(paths.jobsDir!, job.id);
+  let measured = 0;
+  const running = await withFileLock(paths.scanLockFile!, 1, "scan locked", async () => {
+    const run = act<MeasureJobView>(["run", `--job=${job.id}`], { run: () => { measured++; return du(1)(); } });
+    while (jobGet(dir, "step") !== "Waiting for the scheduled measurement to finish") await Bun.sleep(10);
+    // The sweep that held the lock finishes and writes its answer.
+    mkdirSync(join(panelRoot(), "state"), { recursive: true });
+    writeFileSync(paths.diskFile!, JSON.stringify({
+      version: 1, measuredAt: "2026-09-20T12:00:00.000Z", skipped: 1,
+      sites: { "shop.example.com": { bytes: 9, databaseBytes: 0, measuredAt: "2026-09-20T12:00:00.000Z" } },
+    }), { mode: 0o600 });
+    // Wrapped, or the lock would be held until the run it is holding up ends.
+    return { run };
+  });
+  const done = await running.run;
+  expect(measured).toBe(0);
+  expect(done.result).toEqual({ measured: 1, skipped: 1, measuredAt: "2026-09-20T12:00:00.000Z" });
+});
+
+test("the scheduled sweep leaves the disk to a measurement an operator started", async () => {
+  await act<SetTweaksResult>(["set-tweaks"], { input: JSON.stringify({ diskUsage: true }) });
+  const { job } = await act<MeasureStarted>(["measure"], { startJob: () => UNIT_OK });
+  let measurements = 0;
+  const sweep = options({ run: () => { measurements++; return du(1)(); } });
+  expect(await scanDiskUsage(sweep)).toBeNull();
+  jobSet(jobDir(sweep.paths!.jobsDir!, job.id), "state", "done");
+  expect(await scanDiskUsage(sweep)).toBe("2 sites measured");
+  expect(measurements).toBe(2);
+});
+
+test("the page starts and follows a measurement through the gateway's job verbs only", async () => {
+  expect([...PANEL_TWEAKS_ALLOWED_VERBS].sort()).toEqual(["job", "measure", "set-tweaks", "state", "watch-job"]);
+  expect(STREAM_ALLOWED_VERBS.has("scan-stream")).toBe(false);
+
+  const original = { measure: panelTweaksService.measure, getJob: panelTweaksService.getJob };
+  const token = "panel-tweaks-test-token";
+  const headers = {
+    host: "panel.example:8443",
+    origin: "https://panel.example:8443",
+    cookie: `clp_addons_csrf=${token}`,
+    "x-clp-addons-csrf": token,
+  };
+  const job = {
+    id: "20260920T150000Z-abcdef", state: "running", step: "Measuring 12 of 40: one.example.com", error: "",
+    createdAt: "", startedAt: "", finishedAt: "", completed: 11, total: 40, site: "one.example.com", result: null,
+  };
   try {
-    panelTweaksService.scanStream = (handlers) => {
-      handlers.onEvent({
-        phase: "progress", completed: 0, total: 26, measured: 0, skipped: 0, site: "one.example.com",
-      });
-      handlers.onEvent({ phase: "complete", measured: 25, skipped: 1, measuredAt: "2026-09-20T15:00:00Z" });
-      return { close() {} };
-    };
-    const response = await handlePanelTweaks(req, "/api/scan", null);
-    expect(response.headers.get("Content-Type")).toBe("text/event-stream");
-    expect(response.headers.get("X-Accel-Buffering")).toBe("no");
-    const events = await response.text();
-    expect(events).toContain('\"phase\":\"progress\"');
-    expect(events).toContain('\"total\":26');
-    expect(events).toContain('\"phase\":\"complete\"');
+    panelTweaksService.measure = async () => ({ ok: true, data: { job, attached: true } });
+    panelTweaksService.getJob = async (id) => ({ ok: true, data: { job: { ...job, id }, log: "" } });
+    const started = await handlePanelTweaks(
+      new Request("https://panel.example:8443/addons/panel-tweaks/api/measure", { method: "POST", headers }), "/api/measure", null);
+    expect(await started.json()).toEqual({ ok: true, data: { job, attached: true } });
+    const polled = await handlePanelTweaks(
+      new Request(`https://panel.example:8443/addons/panel-tweaks/api/jobs/${job.id}`, { headers }), `/api/jobs/${job.id}`, null);
+    expect(((await polled.json()) as { data: { job: { completed: number } } }).data.job.completed).toBe(11);
+    const gone = await handlePanelTweaks(
+      new Request("https://panel.example:8443/addons/panel-tweaks/api/scan", { method: "POST", headers }), "/api/scan", null);
+    expect(gone.status).toBe(404);
   } finally {
-    panelTweaksService.scanStream = originalScanStream;
+    Object.assign(panelTweaksService, original);
   }
+});
+
+test("a running measurement is drawn in its row, and the page follows it", () => {
+  const measuring = panelTweaksDashboardView({
+    tweaks: { ...DEFAULT_TWEAKS, diskUsage: true }, diskMeasuredAt: "", sites: [],
+    measuring: {
+      id: "20260920T150000Z-abcdef", state: "running", step: "", error: "", createdAt: "", startedAt: "", finishedAt: "",
+      completed: 11, total: 40, site: "one.example.com", result: null,
+    },
+  });
+  expect(measuring).toContain('<span class="tweak-scan-summary" hidden>');
+  expect(measuring).toContain('data-job="20260920T150000Z-abcdef"');
+  expect(measuring).toContain("<strong>Measuring</strong><span class=\"job-progress-step hint\">12 of 40: one.example.com</span>");
+  expect(measuring).toContain('<progress class="job-progress-bar" max="40" value="11">');
+  expect(measuring).toContain('disabled>Measuring…</button>');
+  const idle = panelTweaksDashboardView({ tweaks: { ...DEFAULT_TWEAKS, diskUsage: true }, diskMeasuredAt: "", sites: [], measuring: null });
+  expect(idle).toContain('<div class="job-progress" data-job="" role="status" hidden>');
+  expect(panelTweaksLayout("Panel Tweaks", idle)).toContain("followJobProgress(measurementFinished);");
 });
 
 test("a site whose account has gone is skipped rather than guessed at", async () => {
@@ -822,13 +927,13 @@ test("a tweak that saved but could not be reinjected keeps its switch", () => {
   const load = (thrown: Error) => {
     const input = { checked: true, disabled: false, dataset: { tweak: "actionMenu" }, closest: () => row };
     const factory = new Function("document", "window", "CLP_BASE", "call", "busy", "notify", "clearNotice",
-      `${source}\nreturn { setTweak };`);
+      "followJobProgress", "paintJobProgress", `${source}\nreturn { setTweak };`);
     const client = factory(
       { getElementById: () => null, querySelectorAll: () => [] },
       { matchMedia: () => ({ matches: false, addEventListener: () => {} }) },
       "/addons/panel-tweaks",
       async () => { throw thrown; },
-      () => {}, () => {}, () => {},
+      () => {}, () => {}, () => {}, () => {}, () => {},
     );
     return { input, run: () => client.setTweak(input) };
   };

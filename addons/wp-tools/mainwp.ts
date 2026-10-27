@@ -75,7 +75,7 @@ export interface MainwpView {
   connections: number;
 }
 
-/** One pass: every site, only those automation can still act on, or one domain. */
+/** One pass: every site, only those automation can still act on, or the sites an operator chose. */
 export interface MainwpRun {
   statePath: string;
   runuser: string;
@@ -83,7 +83,13 @@ export interface MainwpRun {
   /** Every domain the panel has; state for any other is dropped. */
   domains: Set<string>;
   domain?: string;
+  /** Only these sites. */
+  targets?: string[];
+  /** The operator chose `targets` to connect, as `domain` is for one site. */
+  connect?: boolean;
   dueOnly?: boolean;
+  /** When the pass stops starting sites; a background job sets a long one. */
+  deadline?: number;
 }
 
 export interface MainwpResult {
@@ -343,7 +349,7 @@ function forget(record: MainwpRecord): void {
 
 async function startPass(run: MainwpRun, options: WpOptions, state: MainwpState, selected: WpSite[]): Promise<Pass> {
   // Keep periodic passes short; Check now has time to refresh the whole fleet.
-  const deadline = Date.now() + (run.dueOnly ? 25_000 : 90_000);
+  const deadline = run.deadline ?? Date.now() + (run.dueOnly ? 25_000 : 90_000);
   const pass: Pass = { run, options, deadline, state, result: emptyResult(), connections: {}, dashboardError: "", recoveryFailed: new Set() };
   await recoverAuthentication(pass, selected);
   if (state.remote) return pass;
@@ -362,8 +368,14 @@ async function startPass(run: MainwpRun, options: WpOptions, state: MainwpState,
   return pass;
 }
 
+/** Whether an operator asked for these sites, which lets a pass connect them. */
+function explicit(run: MainwpRun): boolean {
+  return Boolean(run.domain || run.connect);
+}
+
 function dueSites(run: MainwpRun, state: MainwpState): WpSite[] {
-  const sites = run.sites.filter((site) => site.domain !== state.dashboard && (!run.domain || site.domain === run.domain));
+  const wanted = run.targets ? new Set(run.targets) : run.domain ? new Set([run.domain]) : null;
+  const sites = run.sites.filter((site) => site.domain !== state.dashboard && (!wanted || wanted.has(site.domain)));
   if (run.domain && sites.length !== 1) throw new Error("that is not a WordPress site MainWP can manage");
   return sites.filter((site) => {
     const record = state.sites[site.domain];
@@ -391,11 +403,46 @@ export async function syncMainwp(run: MainwpRun, options: WpOptions = {}, cleanu
     const pass = await startPass(run, options, state, selected);
     result = pass.result;
     result.pending = due.length - selected.length;
-    for (const site of selected) await visit(pass, site);
+    for (const [index, site] of selected.entries()) {
+      options.onProgress?.({ completed: index, total: selected.length, site: site.domain });
+      await visit(pass, site);
+    }
     await retire(pass);
   }
   if (state.cleanup && ownedCount(state) === 0) state.cleanup = false;
   saveMainwpState(run.statePath, state);
+  return result;
+}
+
+/**
+ * A background job's run: every due site, least recently checked first, in
+ * passes of one Dashboard query's worth each.
+ */
+export async function syncMainwpAll(run: MainwpRun, options: WpOptions = {}, cleanup = false): Promise<MainwpResult> {
+  const state = readMainwpState(run.statePath);
+  prune(state, run.domains);
+  if (cleanup) state.cleanup = true;
+  else if (run.connect && state.cleanup) throw new Error("finish MainWP cleanup before connecting a site");
+  const due = leastRecentlyChecked(dueSites(run, state), state.sites).map((site) => site.domain);
+  const result = emptyResult();
+  const known = new Set(run.sites.map((site) => site.domain));
+  for (const domain of run.targets ?? []) {
+    if (!known.has(domain) || domain === state.dashboard) result.failed.push(`${domain}: that is not a WordPress site MainWP can manage`);
+  }
+  // One pass even with no site due, which still retires old Dashboard records.
+  for (let start = 0; start === 0 || start < due.length; start += BATCH) {
+    if (run.deadline !== undefined && Date.now() > run.deadline - 1_000) {
+      result.pending += due.length - start;
+      break;
+    }
+    const chunk = due.slice(start, start + BATCH);
+    const pass = await syncMainwp({ ...run, targets: chunk }, {
+      ...options,
+      onProgress: (progress) => options.onProgress?.({ completed: start + progress.completed, total: due.length, site: progress.site }),
+    }, cleanup);
+    for (const field of ["checked", "installed", "connected", "removed", "pending"] as const) result[field] += pass[field];
+    result.failed.push(...pass.failed);
+  }
   return result;
 }
 
@@ -446,14 +493,14 @@ async function checkSite(pass: Pass, site: WpSite, record: MainwpRecord, status:
     return;
   }
   record.status = status.installed ? "not-connected" : "missing";
-  const explicit = Boolean(pass.run.domain);
-  if (record.phase && !explicit) {
+  const asked = explicit(pass.run);
+  if (record.phase && !asked) {
     delete record.phase;
     throw new Error("Enrollment was interrupted. Retry to continue.");
   }
   const unseen = !record.seen;
   if (status.installed) record.seen = true;
-  if (explicit || (pass.state.enabled && unseen && !status.installed)) await enroll(pass, site, record, status, connection);
+  if (asked || (pass.state.enabled && unseen && !status.installed)) await enroll(pass, site, record, status, connection);
 }
 
 async function enroll(pass: Pass, site: WpSite, record: MainwpRecord, status: ChildStatus, connection: Connection | null): Promise<void> {
@@ -528,15 +575,15 @@ async function checkChildOnly(pass: Pass, site: WpSite, record: MainwpRecord, st
     return;
   }
   record.status = !status.installed ? "missing" : status.active ? "not-connected" : "inactive";
-  const explicit = Boolean(pass.run.domain);
+  const asked = explicit(pass.run);
   if (record.phase) {
     delete record.phase;
-    if (!explicit) throw new Error("Installation was interrupted. Retry to continue.");
+    if (!asked) throw new Error("Installation was interrupted. Retry to continue.");
   }
   const unseen = !record.seen;
   if (status.installed) record.seen = true;
-  if (explicit ? !status.active : pass.state.enabled && unseen && !status.installed) {
-    await installChild(pass, site, record, status, explicit);
+  if (asked ? !status.active : pass.state.enabled && unseen && !status.installed) {
+    await installChild(pass, site, record, status, asked);
   }
 }
 

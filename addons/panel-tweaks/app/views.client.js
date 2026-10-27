@@ -48,80 +48,68 @@ function syncDependents(key, on) {
   }
 }
 
+// A measurement runs as a background job. Its progress takes the summary's
+// place in the row, and the shared job progress script follows it until it
+// ends, after a reload too. Pressing the button while one runs, in another tab
+// say, follows that one.
 async function measureNow(button) {
   clearNotice();
-  busy(true);
-  const originalLabel = button.textContent;
-  let completed = false;
-  function showProgress(event) {
-    if (event.phase === 'complete') {
-      completed = true;
-      button.textContent = originalLabel;
-      const total = event.measured + event.skipped;
-      const summary = button.closest('.tweak-scan').querySelector('span');
-      if (summary) summary.textContent = event.measured + ' of ' + total +
-        ' site' + (total === 1 ? '' : 's') + ' measured, just now.';
-      const skipped = event.skipped ? ', ' + event.skipped + ' skipped' : '';
-      const sitesTable = document.querySelector('[data-tweak="sitesTable"]');
-      const frame = document.getElementById('preview-frame');
-      if (sitesTable && sitesTable.checked && frame) {
-        frame.src = CLP_BASE + '/preview?refresh=' + Date.now();
-      }
-      busy(false);
-      notify(event.measured + (event.measured === 1 ? ' site measured' : ' sites measured') + skipped + '.', 'ok');
-      return;
-    }
-    const current = Math.min(event.completed + 1, event.total);
-    const count = event.total ? current + ' of ' + event.total : 'sites';
-    button.textContent = event.total ? current + '/' + event.total : 'Measuring';
-    notify('Measuring ' + count + (event.site ? ' — ' + event.site : '') + '.', 'warn');
-    // A single large site may be quiet for longer than the ordinary flash.
-    clearTimeout(clpFlashTimer);
-  }
-
-  notify('Starting size measurement…', 'warn');
-  clearTimeout(clpFlashTimer);
+  button.disabled = true;
   try {
-    const res = await fetch(CLP_BASE + '/api/scan', {
-      method: 'POST',
-      headers: { 'X-CLP-Addons-CSRF': csrf() },
-    });
-    if (!res.ok || !res.body) {
-      let message = 'request failed with ' + res.status;
-      try { const body = await res.json(); if (body && body.error) message = body.error; } catch (e) {}
-      throw new Error(message);
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    for (;;) {
-      const chunk = await reader.read();
-      buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
-      let boundary;
-      while ((boundary = buffer.search(/\r?\n\r?\n/)) >= 0) {
-        const frame = buffer.slice(0, boundary);
-        const separator = /^\r\n\r\n/.test(buffer.slice(boundary)) ? 4 : 2;
-        buffer = buffer.slice(boundary + separator);
-        let eventName = 'message';
-        const data = [];
-        for (const line of frame.split(/\r?\n/)) {
-          if (line.startsWith('event:')) eventName = line.slice(6).trim();
-          if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
-        }
-        if (!data.length) continue;
-        const event = JSON.parse(data.join('\n'));
-        if (eventName === 'error') throw new Error(event.error || 'the scan failed');
-        showProgress(event);
-      }
-      if (chunk.done) break;
-    }
-    if (!completed) throw new Error('the scan ended before it completed');
+    const reply = await call('/api/measure', { method: 'POST' });
+    followMeasurement(reply.data.job);
+    notify(reply.data.attached
+      ? 'A measurement was already running; this follows it.'
+      : 'Measuring. It runs in the background, so you can keep using the page or reload it.', 'ok');
   } catch (error) {
-    button.textContent = originalLabel;
-    busy(false);
+    button.disabled = false;
     notify(error.message, 'error');
   }
+}
+
+function measureControls() {
+  const scan = document.querySelector('.tweak-scan');
+  return scan && {
+    summary: scan.querySelector('.tweak-scan-summary'),
+    progress: scan.querySelector('.job-progress'),
+    button: scan.querySelector('.btn'),
+  };
+}
+
+function followMeasurement(job) {
+  const parts = measureControls();
+  if (!parts) return;
+  parts.progress.dataset.job = job.id;
+  parts.progress.hidden = false;
+  parts.summary.hidden = true;
+  parts.button.disabled = true;
+  parts.button.textContent = 'Measuring…';
+  paintJobProgress(job);
+  followJobProgress(measurementFinished);
+}
+
+function measurementFinished(job) {
+  const parts = measureControls();
+  if (parts) {
+    parts.progress.hidden = true;
+    parts.progress.dataset.job = '';
+    parts.summary.hidden = false;
+    parts.button.disabled = false;
+    parts.button.textContent = 'Measure now';
+  }
+  if (job.state !== 'done' || !job.result) {
+    notify('The measurement failed: ' + (job.error || job.step), 'error');
+    return;
+  }
+  const result = job.result;
+  const total = result.measured + result.skipped;
+  if (parts) parts.summary.textContent = result.measured + ' of ' + total +
+    ' site' + (total === 1 ? '' : 's') + ' measured, just now.';
+  const sitesTable = document.querySelector('[data-tweak="sitesTable"]');
+  const frame = document.getElementById('preview-frame');
+  if (sitesTable && sitesTable.checked && frame) frame.src = CLP_BASE + '/preview?refresh=' + Date.now();
+  const skipped = result.skipped ? ', ' + result.skipped + ' skipped' : '';
+  notify(result.measured + (result.measured === 1 ? ' site measured' : ' sites measured') + skipped + '.', 'ok');
 }
 
 // Only the desktop Phone preview adds an inner gutter; an actual phone uses
@@ -165,3 +153,6 @@ function setPreviewWidth(button) {
   wrap.classList.toggle('is-phone', button.dataset.width !== '0');
   fitPreview();
 }
+
+// A page drawn while a measurement runs follows it from the start.
+followJobProgress(measurementFinished);

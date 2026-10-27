@@ -1,8 +1,8 @@
 import {
-  SECURITY_HEADERS, bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken,
-  policyHeaders, readJsonObject,
+  SECURITY_HEADERS, bodyErrorResponse, guardMutation, htmlResponse, jsonResponse, newCsrfToken, readJsonObject,
 } from "../../../lib/app-http";
 import { callGatewayAction } from "../../../lib/gateway-client";
+import { jobApiRoute } from "../../../lib/job-stream";
 import { panelTweaksService } from "./service";
 import { previewPage } from "./preview";
 import { dashboardView, layout } from "./views";
@@ -29,62 +29,6 @@ function pageCsp(): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** Bridge the privileged scan's compact JSON lines to browser-facing SSE. */
-function scanEventStream(req: Request): Response {
-  let transport: ReturnType<typeof panelTweaksService.scanStream> | null = null;
-  let closed = false;
-  const body = new ReadableStream<string>({
-    start(controller) {
-      const send = (chunk: string): boolean => {
-        if (closed) return false;
-        try {
-          controller.enqueue(chunk);
-          return true;
-        } catch {
-          closed = true;
-          transport?.close();
-          return false;
-        }
-      };
-      const finish = () => {
-        if (closed) return;
-        closed = true;
-        try { controller.close(); } catch {}
-      };
-
-      try {
-        transport = panelTweaksService.scanStream({
-          onEvent(event) {
-            if (!send(`data: ${JSON.stringify(event)}\n\n`)) return;
-            if (event.phase === "complete") finish();
-          },
-          onClose(error) {
-            if (closed) return;
-            if (error) send(`event: error\ndata: ${JSON.stringify({ error })}\n\n`);
-            else send(`event: error\ndata: ${JSON.stringify({ error: "the scan ended before it completed" })}\n\n`);
-            finish();
-          },
-        });
-      } catch (error) {
-        send(`event: error\ndata: ${JSON.stringify({ error: errorMessage(error) })}\n\n`);
-        finish();
-      }
-    },
-    cancel() {
-      closed = true;
-      transport?.close();
-    },
-  });
-
-  return new Response(body, {
-    headers: policyHeaders("text/event-stream", {
-      "Cache-Control": "no-cache, no-transform",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no",
-    }),
-  });
 }
 
 /**
@@ -159,6 +103,17 @@ export async function handle(
     return json({ ok: false, error: "Panel Tweaks is unavailable right now" }, 500);
   }
 
+  // The measurement the page follows. Behind the manager's administrator gate,
+  // as everything here is but `/api/panel`.
+  if (method === "GET" && path.startsWith("/api/jobs/")) {
+    const routed = await jobApiRoute({
+      req, path, method,
+      getJob: (id) => panelTweaksService.getJob(id),
+      watchJob: (id, handlers) => panelTweaksService.watchJob(id, handlers),
+    });
+    if (routed) return routed;
+  }
+
   if (method !== "POST") return json({ ok: false, error: "not found" }, 404);
   const denied = guardMutation(req);
   if (denied) return denied;
@@ -181,8 +136,9 @@ export async function handle(
     return json(result);
   }
 
-  if (path === "/api/scan") {
-    return scanEventStream(req);
+  if (path === "/api/measure") {
+    const result = await panelTweaksService.measure();
+    return json(result, result.ok ? 200 : 400);
   }
 
   return json({ ok: false, error: "not found" }, 404);

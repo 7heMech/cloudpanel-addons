@@ -1,11 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
-import { runWp as wp, type WpCommand } from "./wp-cli";
+import { runWp as wp, type WpCommand, type WpProgress } from "./wp-cli";
 export { commandOutput, type WpCommand } from "./wp-cli";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { leastRecentlyChecked, pruneFleet } from "./fleet";
 
 export const CLP_VARNISH_PLUGIN = "clp-varnish-cache";
-export type VarnishPluginStatus = "active" | "inactive" | "missing" | "unsupported" | "error";
+export type VarnishPluginStatus = "active" | "inactive" | "missing" | "error";
 
 export interface VarnishSiteRecord {
   status: VarnishPluginStatus;
@@ -13,6 +13,8 @@ export interface VarnishSiteRecord {
   seen: boolean;
   checkedAt: string;
   error: string;
+  /** A multisite network, where active means network-active. */
+  network?: boolean;
 }
 
 export interface WpVarnishState {
@@ -34,6 +36,8 @@ export interface VarnishOptions {
   /** Tests can substitute the site-user command, never supplied by requests. */
   runWpCommand?: (command: WpCommand) => Promise<string>;
   now?: () => Date;
+  /** Called before each site a pass checks. */
+  onProgress?: (progress: WpProgress) => void;
 }
 
 /** One pass: every eligible site, only the ones automation can still act on, or one domain. */
@@ -45,6 +49,8 @@ export interface VarnishRun {
   domains: Set<string>;
   domain?: string;
   dueOnly?: boolean;
+  /** When the pass stops starting sites; a background job sets a long one. */
+  deadline?: number;
 }
 
 export interface VarnishSyncResult {
@@ -61,11 +67,15 @@ export function readVarnishState(path: string): WpVarnishState {
     || !state.sites || typeof state.sites !== "object" || Array.isArray(state.sites)) {
     throw new Error("the WordPress Varnish settings are invalid");
   }
-  for (const record of Object.values(state.sites)) {
+  for (const [domain, record] of Object.entries(state.sites)) {
     if (!record || !["active", "inactive", "missing", "unsupported", "error"].includes(record.status)
-      || typeof record.seen !== "boolean" || typeof record.checkedAt !== "string" || typeof record.error !== "string") {
+      || typeof record.seen !== "boolean" || typeof record.checkedAt !== "string" || typeof record.error !== "string"
+      || (record.network !== undefined && typeof record.network !== "boolean")) {
       throw new Error("the WordPress Varnish site record is invalid");
     }
+    // Earlier versions skipped multisite networks without trying anything, so
+    // the next check starts them afresh.
+    if ((record.status as string) === "unsupported") delete state.sites[domain];
   }
   // Sites can no longer be excluded; the next save drops an old list.
   delete state.excluded;
@@ -89,47 +99,58 @@ const STATUS_PHP = `
 if (!function_exists('get_plugins')) { require_once ABSPATH . 'wp-admin/includes/plugin.php'; }
 $plugin = 'clp-varnish-cache/clp-varnish-cache.php';
 $plugins = get_plugins();
+$active = is_multisite() ? is_plugin_active_for_network($plugin) : is_plugin_active($plugin);
 echo "\\n" . '${STATUS_MARKER}' . wp_json_encode(array(
   'multisite' => is_multisite(),
-  'status' => !isset($plugins[$plugin]) ? 'missing' : (is_plugin_active($plugin) ? 'active' : 'inactive')
+  'status' => !isset($plugins[$plugin]) ? 'missing' : ($active ? 'active' : 'inactive')
 ));`;
 
-async function status(run: VarnishRun, site: VarnishSite, options: VarnishOptions, deadline: number): Promise<VarnishPluginStatus> {
+interface PluginStatus {
+  status: Exclude<VarnishPluginStatus, "error">;
+  multisite: boolean;
+}
+
+// On a multisite network only network activation counts: the plugin reads its
+// settings from the site account's ~/.varnish-cache and purges by host and by
+// the site's cache-tag prefix, so one activation serves every site in the
+// network, and the network is the one CloudPanel site whose files it is.
+async function status(run: VarnishRun, site: VarnishSite, options: VarnishOptions, deadline: number): Promise<PluginStatus> {
   const line = (await wp(run, site, ["eval", STATUS_PHP], options, deadline)).split("\n").findLast((text) => text.startsWith(STATUS_MARKER));
   let reply: { multisite?: unknown; status?: unknown } = {};
   try { reply = JSON.parse(line?.slice(STATUS_MARKER.length) ?? ""); } catch { /* reported below */ }
   if (typeof reply.multisite !== "boolean" || typeof reply.status !== "string" || !["active", "inactive", "missing"].includes(reply.status)) {
     throw new Error("WP-CLI returned no plugin status; check that the site loads in WordPress");
   }
-  // A shared network needs an activation policy of its own. Do not install or
-  // activate globally on behalf of just one CloudPanel domain.
-  return reply.multisite ? "unsupported" : reply.status as VarnishPluginStatus;
+  return { status: reply.status as PluginStatus["status"], multisite: reply.multisite };
 }
 
 export async function syncVarnish(run: VarnishRun, options: VarnishOptions = {}): Promise<VarnishSyncResult> {
   const state = readVarnishState(run.statePath);
   if (pruneVarnishState(state, run.domains)) saveVarnishState(run.statePath, state);
   const result: VarnishSyncResult = { installed: 0, checked: 0, pending: 0, failed: [] };
-  if (!state.enabled && !run.domain) return result;
+  if (!state.enabled && run.dueOnly) return result;
   const candidates = run.sites.filter((site) => site.eligible && (!run.domain || site.domain === run.domain));
   if (run.domain && candidates.length !== 1) throw new Error("that site is not eligible for Varnish installation");
   // Once a plugin has been seen, automation never touches that site again, so
   // the timer leaves it alone; Check now still refreshes what the page shows.
-  const due = run.dueOnly
-    ? candidates.filter((site) => !state.sites[site.domain]?.seen && state.sites[site.domain]?.status !== "unsupported")
-    : candidates;
+  const due = run.dueOnly ? candidates.filter((site) => !state.sites[site.domain]?.seen) : candidates;
   // Keep periodic passes short; Check now has time to refresh the whole fleet.
-  const deadline = Date.now() + (run.dueOnly ? 30_000 : 90_000);
-  for (const site of leastRecentlyChecked(due, state.sites)) {
+  const deadline = run.deadline ?? Date.now() + (run.dueOnly ? 30_000 : 90_000);
+  const ordered = leastRecentlyChecked(due, state.sites);
+  for (const [index, site] of ordered.entries()) {
     if (Date.now() > deadline - 1_000) { result.pending++; continue; }
+    options.onProgress?.({ completed: index, total: ordered.length, site: site.domain });
     const previous = state.sites[site.domain];
     const record: VarnishSiteRecord = {
       status: "error", seen: previous?.seen ?? false, checkedAt: (options.now?.() ?? new Date()).toISOString(), error: "",
     };
     try {
-      record.status = await status(run, site, options, deadline);
+      const found = await status(run, site, options, deadline);
+      record.status = found.status;
+      if (found.multisite) record.network = true;
       if (record.status === "active" || record.status === "inactive") record.seen = true;
-      const install = record.status === "missing" && (!record.seen || Boolean(run.domain));
+      // With automation off a check only records what each site has.
+      const install = record.status === "missing" && ((state.enabled && !record.seen) || Boolean(run.domain));
       const activate = record.status === "inactive" && Boolean(run.domain);
       if (install || activate) {
         // Mark intent before execution. If interrupted after installing, the
@@ -140,14 +161,15 @@ export async function syncVarnish(run: VarnishRun, options: VarnishOptions = {})
         state.sites[site.domain] = record;
         saveVarnishState(run.statePath, state);
         try {
+          const network = found.multisite ? ["--activate-network"] : ["--activate"];
           await wp(run, site, install
-            ? ["plugin", "install", CLP_VARNISH_PLUGIN, "--activate"]
-            : ["plugin", "activate", CLP_VARNISH_PLUGIN], options, deadline);
+            ? ["plugin", "install", CLP_VARNISH_PLUGIN, ...network]
+            : ["plugin", "activate", CLP_VARNISH_PLUGIN, ...(found.multisite ? ["--network"] : [])], options, deadline);
         } catch (error) {
           record.seen = seenBefore;
           throw error;
         }
-        record.status = await status(run, site, options, deadline);
+        record.status = (await status(run, site, options, deadline)).status;
         if (record.status !== "active") throw new Error("CLP Varnish Cache was not activated; check the site in WordPress");
         result.installed++;
       }

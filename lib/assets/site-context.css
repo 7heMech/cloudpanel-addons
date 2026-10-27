@@ -1,11 +1,14 @@
-
-.clp-addon-site-info { display: flex; flex-wrap: wrap; row-gap: 20px; margin: 5px 0 30px; }
-.clp-addon-site-box { min-width: 200px; max-width: 100%; margin: 0 60px 0 0; }
-.clp-addon-site-box h3 { font-size: 14px; font-weight: 500; color: #aaa; margin: 0 0 5px; }
-.clp-addon-site-value { font-size: 18px; overflow-wrap: anywhere; }
-.clp-addon-site-value svg { width: 12px; height: 12px; margin-left: 2px; fill: #aaa; }
-.clp-addon-site-value a:hover svg { fill: var(--accent); }
+/* v3's site information: one framed tile per fact, a spaced capital label over
+   the value, five to a row on a desktop and two on a phone. */
+.clp-addon-site-info { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 16px; margin: 4px 0 32px; }
+.clp-addon-site-box { min-width: 0; padding: 16px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); }
+.clp-addon-site-box h3 { margin: 0 0 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.clp-addon-site-value { font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.clp-addon-site-value a { color: var(--text); }
+.clp-addon-site-value svg { width: 12px; height: 12px; margin-left: 2px; fill: var(--muted); }
+.clp-addon-site-value a:hover svg { fill: var(--text); }
 @media (max-width: 760px) {
-  .clp-addon-site-info { margin: 0 0 24px; }
-  .clp-addon-site-box { min-width: 0; margin-right: 30px; }
+  .clp-addon-site-info { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0 0 20px; }
+  .clp-addon-site-box { padding: 12px; }
+  .clp-addon-site-box:first-child { grid-column: 1 / -1; }
 }

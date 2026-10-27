@@ -281,7 +281,7 @@ function streamReply<T>(line: string): ActionResult<T> | null {
  * direct-spawn fallback, because that fallback is the check it would skip.
  */
 export function streamGatewayAction<T = unknown>(options: {
-  addon: "stager" | "instatic" | "git" | "panel-tweaks" | "terminal" | "manager";
+  addon: "stager" | "instatic" | "git" | "panel-tweaks" | "terminal" | "wp-tools" | "manager";
   verb: string;
   args?: string[];
   sessionId?: string;

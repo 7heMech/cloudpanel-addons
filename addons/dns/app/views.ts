@@ -137,7 +137,10 @@ function settingsCard(state: DnsState): string {
         <td data-label="Actions" class="action-cell"><button class="btn" type="button" onclick="dnsEditServer()">Edit</button></td></tr>
       <tr><td class="site-cell"><strong>Mailcow</strong>${mailcow.url ? `<span class="hint">${esc(new URL(mailcow.url).host)}</span>` : ""}</td>
         <td class="wide-cell">${mailcowValue}</td>
-        <td data-label="Actions" class="action-cell"><button class="btn" type="button" onclick="dnsEditMailcow()">${mailcow.url ? "Edit" : "Set up"}</button></td></tr>
+        <td data-label="Actions" class="action-cell"><div class="actions">
+          <button class="btn" type="button" onclick="dnsEditMailcow()">${mailcow.url ? "Edit" : "Set up"}</button>
+          ${mailcow.url || mailcow.hasKey ? '<button class="btn btn-danger" type="button" onclick="dnsRemoveMailcow()">Remove</button>' : ""}
+        </div></td></tr>
     </tbody></table></div></div>`;
 }
 
@@ -281,7 +284,8 @@ const DIALOGS = `
     <ol class="dns-steps">
       <li id="dns-token-step"><strong>Create a token in Cloudflare</strong>
         <p class="hint">Check these permissions: <span id="dns-token-permissions"></span>. Choose the accounts and zones there; All zones also covers zones you add later.</p>
-        <p class="hint" id="dns-token-ips-hint">Under Client IP Address Filtering, allow only this server: <code id="dns-token-ips"></code>.</p>
+        <div id="dns-token-ips-hint"><p class="hint">Under Client IP Address Filtering, allow only this server:</p>
+          <div class="dns-inline dns-copy"><code id="dns-token-ips"></code><button class="btn" type="button" onclick="dnsCopyIps()">Copy</button></div></div>
         <a class="btn" id="dns-token-link" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Create token in Cloudflare ↗</a></li>
       <li><strong>Paste it here</strong>
         <div class="form-grid dns-token-grid">
@@ -294,9 +298,11 @@ const DIALOGS = `
   <dialog id="dns-mailcow-dialog" aria-labelledby="dns-mailcow-heading"><form id="dns-mailcow-form" onsubmit="dnsSaveMailcow(event)">
     <div class="dialog-header"><h2 id="dns-mailcow-heading">Mailcow</h2></div>
     <div class="form-grid">
-      ${field("dns-mailcow-url", "Address", '<input id="dns-mailcow-url" name="url" type="url" required placeholder="https://mail.example.com" autocomplete="off">')}
+      <div class="form-field" id="dns-mailcow-relay-field" hidden><label for="dns-mailcow-relay">Fill from SMTP Relay</label>
+        <select id="dns-mailcow-relay" onchange="dnsFillFromRelay()"></select>
+        <div class="hint">Takes the hostname and mailbox of an SMTP Relay profile.</div></div>
+      ${field("dns-mailcow-url", "Hostname", '<input id="dns-mailcow-url" name="url" required placeholder="mail.example.com" autocomplete="off" spellcheck="false">', "Mailcow's web address, and what <code>{mailcow.host}</code> is: the MX and autodiscover target.")}
       ${field("dns-mailcow-key", "API key", '<input id="dns-mailcow-key" name="key" type="password" autocomplete="new-password" spellcheck="false">', "A read-write key. Limit it to this server's IP in Mailcow.")}
-      ${field("dns-mailcow-host", "Mail hostname", '<input id="dns-mailcow-host" name="host" autocomplete="off" placeholder="mail.example.com">', "What <code>{mailcow.host}</code> is: the MX and autodiscover target.")}
       ${field("dns-mailcow-mailbox", "Shared mailbox", '<input id="dns-mailcow-mailbox" name="sharedMailbox" type="email" autocomplete="off" placeholder="relay@example.com">', "Optional. An existing mailbox allowed to send as every domain, such as SMTP Relay's.")}
       ${field("dns-mailcow-dkim", "DKIM key", '<select id="dns-mailcow-dkim" name="dkimMode" onchange="dnsSyncDkim()"><option value="generate">A new key for each domain</option><option value="share">The key of another domain</option></select>')}
       <div class="form-field" id="dns-dkim-generate"><label for="dns-mailcow-selector">Selector and size</label>

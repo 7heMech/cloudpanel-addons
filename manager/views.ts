@@ -1,6 +1,6 @@
 // The Addons page: the card list, the update page, and the job card a
 // mutation leaves behind.
-import { ADDONS, addonHandler } from "../cli/addon-catalog";
+import { ADDONS, addonHandler, addonNews } from "../cli/addon-catalog";
 import { CLI_VERSION } from "../cli/release";
 import { esc, escJs, htmlResponse } from "../lib/app-http";
 import { JOB_STYLE, JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
@@ -13,13 +13,8 @@ import MANAGER_INDEX_CSS from "./views.css" with { type: "text" };
 
 import MANAGER_INDEX_JS from "./views.client.js" with { type: "text" };
 
-/** The release line an addon first shipped in, as `2.0`, when that is the installed one. */
-function isNew(added: string | undefined, version: string): boolean {
-  return added !== undefined && version.split(".").slice(0, 2).join(".") === added;
-}
-
 /** One row of the Enabled or Available list, for a known addon, or nothing for an unknown name. */
-function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, version: string): string {
+function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, version: string, seen: string[]): string {
   const spec = ADDONS[name];
   if (!spec) return "";
   const title = spec.title ?? spec.name;
@@ -31,16 +26,29 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ve
     ? `${href ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>` : ""}
       <button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`
     : `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`;
-  return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}" data-find="${esc(`${title} ${spec.name} ${spec.description ?? ""}`)}">
+  // Opening the addon from this row reads it, for every administrator, until a later line marks it again.
+  const found = addonNews(spec.name, version);
+  const news = found && !seen.includes(found.key) ? found : null;
+  return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}"${news ? ` data-news="${esc(news.key)}"` : ""} data-find="${esc(`${title} ${spec.name} ${spec.description ?? ""}`)}">
+  <span class="addon-mark" aria-hidden="true">${esc(addonMark(title))}</span>
   <div class="addon-about">
-    <h3>${heading}${isNew(spec.added, version) ? ' <span class="badge state-queued">New</span>'
-      : spec.changed && isNew(spec.changed.in, version) ? ' <span class="badge">Changed</span>' : ""}</h3>
+    <h3>${heading}${news?.kind === "new" ? ' <span class="badge state-queued">New</span>'
+      : news?.kind === "changed" ? ' <span class="badge">Changed</span>' : ""}</h3>
     ${spec.description ? `<p>${esc(spec.description)}</p>` : ""}${
-  spec.changed && !isNew(spec.added, version) && isNew(spec.changed.in, version) ? `<p class="addon-changed">${esc(spec.changed.note)}</p>` : ""}
+  news?.note ? `<p class="addon-changed">${esc(news.note)}</p>` : ""}
   </div>
   <div class="addon-actions">${actions}</div>
   ${addonJob ? managerJobStatus(addonJob) : ""}
 </article>`;
+}
+
+/**
+ * The tile beside an addon's name, where v3 puts a site type's logo: addons have
+ * no logos, so it carries the initials of the name, "Git Deploy" as "GD".
+ */
+function addonMark(title: string): string {
+  const [first = "", second] = title.split(/\s+/).filter(Boolean);
+  return (second ? first.charAt(0) + second.charAt(0) : first.slice(0, 2)).toUpperCase();
 }
 
 function liveManagerJob(job: ManagerJobView | null): ManagerJobView | null {
@@ -105,11 +113,11 @@ type ManagerPageOptions = { job?: ManagerJobView | null; csrf?: string };
 export function indexPage(
   enabled: string[],
   update?: { current: string; latest: string } | null,
-  options: ManagerPageOptions & { available?: string[]; version?: string } = {},
+  options: ManagerPageOptions & { available?: string[]; version?: string; seen?: string[] } = {},
 ): Response {
   const available = options.available ?? [];
   const version = options.version ?? CLI_VERSION;
-  const rows = (names: string[], on: boolean) => names.map((name) => addonRow(name, on, options.job ?? null, version)).join("");
+  const rows = (names: string[], on: boolean) => names.map((name) => addonRow(name, on, options.job ?? null, version, options.seen ?? [])).join("");
   const list = (title: string, names: string[], on: boolean) =>
     `<section class="card addon-list"><h2>${title} <span class="hint">${names.length}</span></h2>${rows(names, on)}</section>`;
 

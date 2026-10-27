@@ -170,3 +170,19 @@ function dismissFailure(id) {
   try { seen = localStorage.getItem('clp-addons-seen-job'); } catch (e) {}
   if (seen === alertBox.getAttribute('data-job')) alertBox.remove();
 })();
+
+// New and Changed are for an addon nobody has opened since this release line
+// marked it. Opening it from its row is the read, recorded on the server so
+// every administrator and device stops seeing it. Kept alive past the
+// navigation the click starts; a lost one only leaves the badge up.
+function readNews(event) {
+  const link = event.target instanceof Element ? event.target.closest('[data-news] a[href]') : null;
+  if (!link) return;
+  const name = link.closest('[data-manager-job-card]').getAttribute('data-manager-job-card');
+  fetch(CLP_BASE + '/api/addons/' + encodeURIComponent(name) + '/news-seen', {
+    method: 'POST', keepalive: true, headers: { 'X-CLP-Addons-CSRF': csrf() },
+  }).catch(() => {});
+}
+document.addEventListener('click', readNews);
+// A middle click opens it in a tab without a click event.
+document.addEventListener('auxclick', readNews);

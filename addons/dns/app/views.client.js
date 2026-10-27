@@ -411,11 +411,29 @@ function dnsEditConnection(id) {
   CLP_ROOT.getElementById('dns-token-permissions').textContent = dnsState.token.permissions.join(', ');
   CLP_ROOT.getElementById('dns-token-link').href = dnsState.token.url;
   const ips = [dnsState.server.detected.ipv4, dnsState.server.detected.ipv6].filter(Boolean);
-  CLP_ROOT.getElementById('dns-token-ips').textContent = ips.join(', ');
+  CLP_ROOT.getElementById('dns-token-ips').textContent = ips.join(' ');
   CLP_ROOT.getElementById('dns-token-ips-hint').hidden = !ips.length;
   CLP_ROOT.getElementById('dns-connection-heading').textContent = connection ? 'Edit ' + connection.label : 'Connect Cloudflare';
   form.querySelector('[type="submit"]').textContent = connection ? 'Save' : 'Connect';
   dnsOpen('dns-connection-dialog');
+}
+
+/** Space-separated, as Cloudflare's IP filter takes several addresses at once. */
+function dnsCopyIps() {
+  const block = CLP_ROOT.getElementById('dns-token-ips');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(block.textContent).then(
+      function () { notify('Addresses copied.', 'ok'); },
+      function () { notify('Select the addresses and copy them.', 'warn'); }
+    );
+    return;
+  }
+  // No clipboard API: select them so one keystroke finishes the job.
+  const range = document.createRange();
+  range.selectNodeContents(block);
+  window.getSelection().removeAllRanges();
+  window.getSelection().addRange(range);
+  notify('Press Ctrl+C to copy the selection.', 'warn');
 }
 
 function dnsSaveConnection(event) {
@@ -448,8 +466,7 @@ function dnsEditMailcow() {
   const settings = dnsState.mailcow;
   const form = CLP_ROOT.getElementById('dns-mailcow-form');
   form.reset();
-  form.elements.namedItem('url').value = settings.url;
-  form.elements.namedItem('host').value = settings.host;
+  form.elements.namedItem('url').value = settings.url.replace(/^https:\/\//, '');
   form.elements.namedItem('sharedMailbox').value = settings.sharedMailbox;
   form.elements.namedItem('dkimMode').value = settings.dkimSource ? 'share' : 'generate';
   form.elements.namedItem('dkimSource').value = settings.dkimSource;
@@ -458,8 +475,36 @@ function dnsEditMailcow() {
   const key = form.elements.namedItem('key');
   key.required = !settings.hasKey;
   key.placeholder = settings.hasKey ? 'Leave empty to keep the saved key' : 'API key';
+  const relays = dnsState.smtpRelays;
+  const relay = CLP_ROOT.getElementById('dns-mailcow-relay');
+  relay.innerHTML = '<option value="">Choose a profile</option>' + relays.map(function (account, index) {
+    return '<option value="' + index + '">' + dnsEsc(account.profile + ': ' + account.username + ' at ' + account.host) + '</option>';
+  }).join('');
+  CLP_ROOT.getElementById('dns-mailcow-relay-field').hidden = !relays.length;
+  // Not set up yet and only one account to share: that is almost certainly the one.
+  if (!settings.url && relays.length === 1) {
+    relay.value = '0';
+    dnsFillFromRelay();
+  }
   dnsSyncDkim();
   dnsOpen('dns-mailcow-dialog');
+}
+
+function dnsFillFromRelay() {
+  const account = dnsState.smtpRelays[Number(CLP_ROOT.getElementById('dns-mailcow-relay').value)];
+  if (!CLP_ROOT.getElementById('dns-mailcow-relay').value || !account) return;
+  const form = CLP_ROOT.getElementById('dns-mailcow-form');
+  form.elements.namedItem('url').value = account.host;
+  form.elements.namedItem('sharedMailbox').value = account.username.includes('@') ? account.username : '';
+}
+
+async function dnsRemoveMailcow() {
+  const accepted = await confirmAction({
+    title: 'Remove Mailcow?',
+    text: 'Its API key is deleted from this server. Sites whose profile sets up Mailcow stop being applied until Mailcow is set up again; their records and Mailcow domains stay as they are.',
+    confirmLabel: 'Remove', danger: true,
+  });
+  if (accepted) dnsPost('/api/mailcow/remove', {});
 }
 
 function dnsSaveMailcow(event) {
@@ -468,7 +513,7 @@ function dnsSaveMailcow(event) {
   const value = function (name) { return form.elements.namedItem(name).value.trim(); };
   const share = value('dkimMode') === 'share';
   dnsPost('/api/mailcow', {
-    url: value('url'), key: value('key'), host: value('host'), sharedMailbox: value('sharedMailbox'),
+    url: value('url'), key: value('key'), sharedMailbox: value('sharedMailbox'),
     dkimSource: share ? value('dkimSource') : '', dkimSelector: value('dkimSelector') || 'dkim', dkimBits: Number(value('dkimBits')),
   }, CLP_ROOT.getElementById('dns-mailcow-dialog'));
 }

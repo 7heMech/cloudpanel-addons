@@ -16,17 +16,12 @@ import { UPDATE_STYLE, updateNoticeHtml } from "./update-ui";
  * The three of CloudPanel's own pages the shell's header links to.
  *
  * The header reproduces the panel's, so it carries the panel's controls: the
- * Admin Area, and an account menu of Settings and Logout. The avatar is a
- * icons are the panel's own paths, copied rather than approximated, so the same
- * control does not have two shapes depending on which page it is on.
- *
- * The avatar is Gravatar's own default, the image the panel itself shows for an
- * account with no gravatar, carried here as data rather than fetched: the
- * manager serves these pages behind the panel's session without ever being told
- * whose it is, so it has no address to ask about, and asking would tell
- * Gravatar which boxes an operator administers.
+ * Admin Area, and an account menu of Account Settings, the theme and Log Out.
+ * The account control is the panel's own person icon rather than the
+ * operator's gravatar: the manager serves these pages behind the panel's
+ * session without ever being told whose it is, so it has no address to ask
+ * about, and asking would tell Gravatar which boxes an operator administers.
  */
-const DEFAULT_AVATAR = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q1JFQVRPUjogZ2QtanBlZyB2MS4wICh1c2luZyBJSkcgSlBFRyB2NjIpLCBxdWFsaXR5ID0gOTAK/9sAQwADAgIDAgIDAwMDBAMDBAUIBQUEBAUKBwcGCAwKDAwLCgsLDQ4SEA0OEQ4LCxAWEBETFBUVFQwPFxgWFBgSFBUU/9sAQwEDBAQFBAUJBQUJFA0LDRQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU/8AAEQgARgBGAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/aAAwDAQACEQMRAD8A+uKKKKACiiigAooooAKKKKACiiigAooooAK7Hwx8NrzXYEurmT7FavypZcu49QOw9zVP4feH01/xDGky7raBfOkU9GweB+JI/AGvdQABgcCgDz2b4OaeYsR31ykn95wrD8sD+dcJ4n8G3/heUGcCa2c4S4j+6T6H0Ne/VS1TTYNWsJ7O5TfFKu0j09CPcdaAPnGirOp2D6XqFzaSffgkaMn1wetVqACiiigAooooA9J+DO37Rqufv7Y8fTLZ/pXqVeE+APECeH/EEckrbbaceTKx6KCeD+BA/DNe6BgwBByD0IoAdRRVHVtSg0ewmvLl9kUS7j6k9gPc9KAPFfiHt/4TLUtnTcv57Fz+tc5VnUr6TU9QuLuX/WTSNIfbJziq1ABRRRQAUUV1fgDwgPE2oPJcgixt8GTHG89lz/P/AOvQBh6XoWo6yxWys5bjHBZV+UfU9BXr/gLStc0qyMGqSxmFRiKLO50/4EOMe3P4V09tbRWcCQwRrFEgwqIMACpqACvNfiB4c8Sa1eExbLuwQ7ooYiFK/UE8n3/lXpVFAHzXeWVxYTmG6gkt5R1SRSp/WoK+iNc0Gy8QWbW15EHU/dcfeQ+oPavCPEGizeHtVnsZvmaM/K4HDKehoAzqKKKACvbfhfapbeEbZ1HzTu8jH33bf5KKKKAOuooooAKKKKACvK/jNaIl3plyB88iPGfoCCP/AEI0UUAecUUUUAf/2Q==";
 const PANEL_ADMIN_URL = "/admin/users";
 const PANEL_SETTINGS_URL = "/settings";
 const PANEL_LOGOUT_URL = "/logout";
@@ -112,15 +107,16 @@ export function fleetRowSelectionStyle(tableClass: string): string {
 import FLEET_ROW_SELECTION_JS from "./assets/fleet-row-selection.client.js" with { type: "text" };
 export { FLEET_ROW_SELECTION_JS };
 
-// Measured against CloudPanel 2.5.1's public demo: dashboard, sites, settings,
-// certificates, logs and new-site forms. Keep these rules independent of the
-// panel's private templates and versioned CSS bundles.
+// Measured against CloudPanel v3's preview at dummy.cloudpanel.io: dashboard,
+// sites, a site's settings, the admin area and the account menu. Keep these
+// rules independent of the panel's private templates and versioned CSS bundles.
 import BASE_STYLE from "./assets/app-ui.css" with { type: "text" };
 export { BASE_STYLE };
 
-// CloudPanel uses a session cookie named "theme"; absence means light. Read it
-// before CSS is painted, so moving between the panel and an addon never flashes
-// or silently switches to the operating system's preferred theme.
+// CloudPanel v3 keeps the theme in a cookie named "theme": "light", "dark", or
+// "auto" -- the default, and what anything else reads as -- for the device's
+// own preference. Read it before CSS is painted, so moving between the panel
+// and an addon never flashes the other theme.
 import THEME_INIT_JS from "./assets/theme-init.client.js" with { type: "text" };
 export { THEME_INIT_JS };
 
@@ -170,6 +166,40 @@ export { TWEAK_ROW_STYLE, TWEAK_ROW_JS };
 import JOB_WATCH_JS from "./assets/job-watch.client.js" with { type: "text" };
 export { JOB_WATCH_JS };
 
+/**
+ * A progress bar for a background job that works through sites, such as
+ * WordPress Tools' checks and Panel Tweaks' size measurement. The page draws
+ * it with `jobProgressHtml` and the client half follows every one it finds
+ * with `followJobProgress(onFinished)`, so a reload picks the job up again.
+ */
+import JOB_PROGRESS_STYLE from "./assets/job-progress.css" with { type: "text" };
+import JOB_PROGRESS_JS from "./assets/job-progress.client.js" with { type: "text" };
+export { JOB_PROGRESS_STYLE, JOB_PROGRESS_JS };
+
+/** What the bar needs of a job; both addons' job views carry it. */
+export interface SiteJobProgress {
+  id: string;
+  state: string;
+  step: string;
+  completed: number;
+  total: number;
+  site: string;
+}
+
+/** "12 of 40: site" beside the title; the client half writes the same. */
+export function jobProgressText(job: SiteJobProgress): string {
+  const count = job.total ? `${Math.min(job.completed + 1, job.total)} of ${job.total}: ` : "";
+  return job.state === "queued" ? "Waiting to start" : job.site ? `${count}${job.site}` : job.step;
+}
+
+/** `hidden` draws an empty bar the client fills in when it starts a job. */
+export function jobProgressHtml(job: SiteJobProgress, title: string, hidden = false): string {
+  return `<div class="job-progress" data-job="${esc(job.id)}" role="status"${hidden ? " hidden" : ""}>
+        <div class="job-progress-head"><strong>${esc(title)}</strong><span class="job-progress-step hint">${esc(jobProgressText(job))}</span></div>
+        <progress class="job-progress-bar" max="${Math.max(job.total, 1)}"${job.total ? ` value="${job.completed}"` : ""}></progress>
+      </div>`;
+}
+
 export interface Chrome {
   /** Product name for the contextual navigation, e.g. "Instatic". */
   brand: string;
@@ -193,9 +223,34 @@ export interface Chrome {
   site?: SiteContext & { activeSlug: string };
 }
 
-/** The panel's own moon and sun, for a `#theme-switch` button. */
-export const THEME_SWITCH_ICONS = `<svg class="moon" viewBox="0 0 384 512" fill="currentColor" aria-hidden="true"><path d="M223.5 32C100 32 0 132.3 0 256S100 480 223.5 480c60.6 0 115.5-24.2 155.8-63.4c5-4.9 6.3-12.5 3.1-18.7s-10.1-9.7-17-8.5c-9.8 1.7-19.8 2.6-30.1 2.6c-96.9 0-175.5-78.8-175.5-176c0-65.8 36-123.1 89.3-153.3c6.1-3.5 9.2-10.5 7.7-17.3s-7.3-11.9-14.3-12.5c-6.3-.5-12.6-.8-19-.8z"/></svg>
-<svg class="sun" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd"></path></svg>`;
+// v3's own theme icons, so the control has one shape on the panel's pages and on these.
+const AUTO_PATH = '<path fill-rule="evenodd" clip-rule="evenodd" d="M3 3.75C3 2.2835 4.2835 1 5.75 1H10.25C11.7165 1 13 2.2835 13 3.75V13.25V14H12.25H3.75H3V13.25V3.75ZM5.75 2.5C5.11193 2.5 4.5 3.11193 4.5 3.75V12.5H11.5V3.75C11.5 3.11193 10.8881 2.5 10.25 2.5H5.75ZM5.5 5C5.5 4.44772 5.94772 4 6.5 4H9.5C10.0523 4 10.5 4.44772 10.5 5V8.5H5.5V5ZM8 10.5H10.5V9H8V10.5Z"/>';
+const SUN_PATH = '<path fill-rule="evenodd" clip-rule="evenodd" d="M8 1.25V0.25H7V1.25V1.5V2.25H8V1.5V1.25ZM7.25 9.75C8.4926 9.75 9.5 8.7426 9.5 7.5C9.5 6.2574 8.4926 5.25 7.25 5.25C6.0074 5.25 5 6.2574 5 7.5C5 8.7426 6.0074 9.75 7.25 9.75ZM7.25 11.25C9.32107 11.25 11 9.57107 11 7.5C11 5.42893 9.32107 3.75 7.25 3.75C5.17893 3.75 3.5 5.42893 3.5 7.5C3.5 9.57107 5.17893 11.25 7.25 11.25ZM8 12.5V13.25V13.5V14.25H7V13.5V13.25V12.5H8ZM12.5 6.5H13.25H13.5H14.25V7.5H13.5H13.25H12.5V6.5ZM1.5 6.5H0.75V7.5H1.5H1.75H2.5V6.5H1.75H1.5ZM10.9697 3.28033L11.5 2.75L11.6768 2.57322L12.2071 2.04289L13.2678 3.10355L12.7374 3.63388L12.5607 3.81066L12.0303 4.34099L10.9697 3.28033ZM2.57322 11.6768L2.04289 12.2071L3.10355 13.2678L3.63388 12.7374L3.81066 12.5607L4.34099 12.0303L3.28033 10.9697L2.75 11.5L2.57322 11.6768ZM3.28033 4.34099L2.75 3.81066L2.57322 3.63388L2.04289 3.10355L3.10355 2.04289L3.63388 2.57322L3.81066 2.75L4.34099 3.28033L3.28033 4.34099ZM11.6768 12.7374L12.2071 13.2678L13.2678 12.2071L12.7374 11.6768L12.5607 11.5L12.0303 10.9697L10.9697 12.0303L11.5 12.5607L11.6768 12.7374Z"/>';
+const MOON_PATH = '<path fill-rule="evenodd" clip-rule="evenodd" d="M11 0.5V1.25V1.75H11.5L12.25 1.75V3.25H11.5H11V3.75V4.5H9.5V3.75V3.25H9H8.25V1.75H9H9.5V1.25V0.5H11ZM5.50514 3.00496C4.58413 3.78491 4 4.94972 4 6.25C4 8.59721 5.90279 10.5 8.25 10.5C9.55029 10.5 10.7151 9.91587 11.4951 8.99485C11.4138 8.99827 11.3321 9 11.25 9C8.07436 9 5.5 6.42563 5.5 3.25C5.5 3.16792 5.50172 3.08623 5.50514 3.00496ZM2.5 6.25C2.5 3.76072 4.08142 1.64271 6.292 0.842193L7.25256 1.80275C7.08933 2.25347 7 2.74047 7 3.25C7 5.5972 8.90279 7.5 11.25 7.5C11.7595 7.5 12.2465 7.41065 12.6973 7.24743L13.6578 8.20798C12.8573 10.4186 10.7393 12 8.25 12C5.07436 12 2.5 9.42564 2.5 6.25Z"/>';
+
+/** The panel's own moon and sun, for a `#theme-switch` button in a window with no account menu. */
+export const THEME_SWITCH_ICONS = `<svg class="moon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">${MOON_PATH}</svg>
+<svg class="sun" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">${SUN_PATH}</svg>`;
+
+/** The theme row of v3's account menu: follow the device, light, or dark. */
+const THEME_CHOOSER_HTML = `<div class="clp-addon-theme-row">
+            <span>Theme</span>
+            <fieldset class="clp-addon-theme-options">
+              <legend class="sr-only">Theme</legend>
+              ${[["auto", "Auto", AUTO_PATH], ["light", "Light", SUN_PATH], ["dark", "Dark", MOON_PATH]]
+  .map(([value, label, path]) => `<span><input type="radio" name="clp-theme" value="${value}" id="clp-theme-${value}" onchange="chooseTheme(this.value)"><label for="clp-theme-${value}" title="${label}"><span class="sr-only">${label}</span><svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">${path}</svg></label></span>`)
+  .join("")}
+            </fieldset>
+          </div>`;
+
+/** Bootstrap Icons' person-circle, the panel's account control. */
+const ACCOUNT_ICON = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0"/><path fill-rule="evenodd" d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8m8-7a7 7 0 0 0-5.468 11.37C3.242 11.226 4.805 10 8 10s4.757 1.225 5.468 2.37A7 7 0 0 0 8 1"/></svg>';
+
+/** Bootstrap Icons' gear, for Admin Area where a phone leaves room for its icon only. */
+const ADMIN_AREA_ICON = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492M5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0"/><path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52zm-2.633.283c.246-.835 1.428-.835 1.674 0l.094.319a1.873 1.873 0 0 0 2.693 1.115l.291-.16c.764-.415 1.6.42 1.184 1.185l-.159.292a1.873 1.873 0 0 0 1.116 2.692l.318.094c.835.246.835 1.428 0 1.674l-.319.094a1.873 1.873 0 0 0-1.115 2.693l.16.291c.415.764-.42 1.6-1.185 1.184l-.291-.159a1.873 1.873 0 0 0-2.693 1.116l-.094.318c-.246.835-1.428.835-1.674 0l-.094-.319a1.873 1.873 0 0 0-2.692-1.115l-.292.16c-.764.415-1.6-.42-1.184-1.185l.159-.291A1.873 1.873 0 0 0 1.945 8.93l-.319-.094c-.835-.246-.835-1.428 0-1.674l.319-.094A1.873 1.873 0 0 0 3.06 4.377l-.16-.292c-.415-.764.42-1.6 1.185-1.184l.292.159a1.873 1.873 0 0 0 2.692-1.115z"/></svg>';
+
+/** Bootstrap Icons' box-arrow-right, beside Log Out as the panel has it. */
+const LOGOUT_ICON = '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10 12.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5h8a.5.5 0 0 1 .5.5v2a.5.5 0 0 0 1 0v-2A1.5 1.5 0 0 0 9.5 2h-8A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h8a1.5 1.5 0 0 0 1.5-1.5v-2a.5.5 0 0 0-1 0z"/><path fill-rule="evenodd" d="M15.854 8.354a.5.5 0 0 0 0-.708l-3-3a.5.5 0 0 0-.708.708L14.293 7.5H5.5a.5.5 0 0 0 0 1h8.793l-2.147 2.146a.5.5 0 0 0 .708.708z"/></svg>';
 
 /** The inline notice holder every page carries, above its content. */
 const FLASH_HTML = '<div id="clp-flash" hidden></div>';
@@ -283,29 +338,29 @@ ${contextualNav}
 <header class="clp-addon-header">
   <div class="clp-addon-header-inner">
     <a class="clp-addon-brand" href="${esc("/")}" aria-label="${esc("CloudPanel home")}">
-      <img class="clp-addon-logo clp-addon-logo-light" src="/assets/images/logo.svg" alt="CloudPanel" width="155" height="31">
-      <img class="clp-addon-logo clp-addon-logo-dark" src="/assets/images/logo-dark.svg" alt="CloudPanel" width="155" height="31">
+      <img class="clp-addon-logo" src="/assets/images/logo.svg" alt="CloudPanel" width="126" height="26">
     </a>
     <nav class="clp-addon-primary-nav" aria-label="${esc("CloudPanel navigation")}">
 ${primaryNav}
     </nav>
     ${chrome.updateNotice ? updateNoticeHtml(chrome.updateNotice.latest) : ""}
     <div class="clp-addon-header-tools">
-      <button class="clp-addon-tool" id="theme-switch" type="button" onclick="toggleTheme()" aria-label="Switch to dark mode" aria-pressed="false">
-        ${THEME_SWITCH_ICONS}
-      </button>
-      ${chrome.admin !== false ? `<a class="clp-addon-tool" id="clp-admin-area" href="${esc(PANEL_ADMIN_URL)}" title="Admin Area">
-        <svg viewBox="0 0 640 512" aria-hidden="true"><path fill="currentColor" d="M315.3 255.5c6.8-19 16.4-36.5 28.4-52.2-7.4 3-15.4 4.7-23.8 4.7-35.3 0-64-28.7-64-64s28.7-64 64-64 64 28.7 64 64c0 8.4-1.7 16.4-4.7 23.8 15.7-12 33.2-21.7 52.2-28.4C429 79.7 380.3 32 320 32c-61.9 0-112 50.1-112 112 0 60.3 47.7 109 107.3 111.5zM96 224c44.2 0 80-35.8 80-80s-35.8-80-80-80-80 35.8-80 80 35.8 80 80 80zm0-112c17.6 0 32 14.4 32 32s-14.4 32-32 32-32-14.4-32-32 14.4-32 32-32zm244.3 320H176v-44.8c0-36.4 29.2-66.2 65.4-67.2 20.6 8.6 41.9 13.6 63.4 15.2-.7-9.3-2-24 2.3-48.6-16.8-1.5-33.1-4.9-48-11.2-5.1-2.1-10.4-3.4-15.9-3.4-63.6 0-115.2 51.6-115.2 115.2V432c0 26.5 21.5 48 48 48h214c-19.4-12.9-36.2-29.2-49.7-48zM154.8 270.3c-13.4-9-29.5-14.3-46.8-14.3H84c-46.3 0-84 37.7-84 84 0 13.2 10.8 24 24 24s24-10.8 24-24c0-19.8 16.2-36 36-36h24c4.4 0 8.5 1.1 12.3 2.5 9.3-14 21.1-26.1 34.5-36.2zm455.7 71c2.6-14.1 2.6-28.5 0-42.6l25.8-14.9c3-1.7 4.3-5.2 3.3-8.5-6.7-21.6-18.2-41.2-33.2-57.4-2.3-2.5-6-3.1-9-1.4l-25.8 14.9c-10.9-9.3-23.4-16.5-36.9-21.3v-29.8c0-3.4-2.4-6.4-5.7-7.1-22.3-5-45-4.8-66.2 0-3.3.7-5.7 3.7-5.7 7.1v29.8c-13.5 4.8-26 12-36.9 21.3l-25.8-14.9c-2.9-1.7-6.7-1.1-9 1.4-15 16.2-26.5 35.8-33.2 57.4-1 3.3.4 6.8 3.3 8.5l25.8 14.9c-2.6 14.1-2.6 28.5 0 42.6l-25.8 14.9c-3 1.7-4.3 5.2-3.3 8.5 6.7 21.6 18.2 41.1 33.2 57.4 2.3 2.5 6 3.1 9 1.4l25.8-14.9c10.9 9.3 23.4 16.5 36.9 21.3v29.8c0 3.4 2.4 6.4 5.7 7.1 22.3 5 45 4.8 66.2 0 3.3-.7 5.7-3.7 5.7-7.1v-29.8c13.5-4.8 26-12 36.9-21.3l25.8 14.9c2.9 1.7 6.7 1.1 9-1.4 15-16.2 26.5-35.8 33.2-57.4 1-3.3-.4-6.8-3.3-8.5l-25.8-14.9zM496 368.5c-26.8 0-48.5-21.8-48.5-48.5s21.8-48.5 48.5-48.5 48.5 21.8 48.5 48.5-21.7 48.5-48.5 48.5z"></path></svg>
+      ${chrome.admin !== false ? `<a class="btn btn-sm" id="clp-admin-area" href="${esc(PANEL_ADMIN_URL)}" title="Admin Area">
+        ${ADMIN_AREA_ICON}
         <span class="clp-addon-tool-label">Admin Area</span>
       </a>` : ""}
       <div class="clp-addon-account">
-        <button class="clp-addon-tool" id="clp-account-button" type="button" onclick="toggleAccountMenu()"
-          aria-haspopup="true" aria-expanded="false" aria-label="Account">
-          <img class="clp-addon-avatar" src="${DEFAULT_AVATAR}" alt="" width="35" height="35">
+        <button class="clp-addon-icon-button" id="clp-account-button" type="button" onclick="toggleAccountMenu()"
+          aria-haspopup="true" aria-expanded="false" aria-controls="clp-account-menu" aria-label="Account">
+          ${ACCOUNT_ICON}
         </button>
-        <div class="clp-addon-account-menu" id="clp-account-menu" hidden>
-          <a href="${esc(PANEL_SETTINGS_URL)}">Settings</a>
-          <a href="${esc(PANEL_LOGOUT_URL)}">Logout</a>
+        <div class="clp-addon-menu" id="clp-account-menu" hidden>
+          <a href="/dashboard">Dashboard</a>
+          <a href="${esc(PANEL_SETTINGS_URL)}">Account Settings</a>
+          <hr>
+          ${THEME_CHOOSER_HTML}
+          <hr>
+          <a href="${esc(PANEL_LOGOUT_URL)}">Log Out ${LOGOUT_ICON}</a>
         </div>
       </div>
     </div>

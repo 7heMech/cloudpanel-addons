@@ -256,6 +256,26 @@ function readPolicy(paths: SmtpPaths): SmtpPolicy {
   }
 }
 
+export interface SmtpRelayAccount {
+  profile: string;
+  host: string;
+  username: string;
+}
+
+/**
+ * The relay accounts DNS offers to fill its Mailcow settings from: never a
+ * password, and nothing at all when SMTP Relay's file is missing or not to be
+ * trusted.
+ */
+export function smtpRelayAccounts(stateFile = DEFAULT_SMTP_PATHS.stateFile, rootUid = 0): SmtpRelayAccount[] {
+  try {
+    return readPolicy({ ...DEFAULT_SMTP_PATHS, stateFile, rootUid }).profiles
+      .flatMap((profile) => profile.relay ? [{ profile: profile.name, host: profile.relay.host, username: profile.relay.username }] : []);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Discard is `dont-send` and nothing else. 1.5 let any profile discard and let
  * `dont-send` be given a relay: a discard profile's sites move to `dont-send`,

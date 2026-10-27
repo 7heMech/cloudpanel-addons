@@ -52,13 +52,16 @@ for (const { name, source } of SCRIPTS) {
 }
 
 
-// Native CloudPanel defaults to light and stores only its explicit dark choice.
-// The early script must also recognize the cookie after another cookie and
-// avoid confusing similarly named cookies or values with that preference.
+// CloudPanel v3 stores "light", "dark" or "auto", and anything else -- no
+// cookie at all included -- follows the device as "auto" does. The early
+// script must also recognize the cookie after another cookie and avoid
+// confusing similarly named cookies or values with that preference.
 test("addon theme follows CloudPanel's cookie before the page paints", () => {
-  for (const [cookie, expected] of [
-    ["", false], ["theme=dark", true], ["session=example; theme=dark; locale=en", true],
-    ["other_theme=dark", false], ["theme=darkened", false], ["theme=light", false],
+  for (const [cookie, deviceDark, expected] of [
+    ["", false, false], ["", true, true], ["theme=auto", true, true], ["theme=auto", false, false],
+    ["theme=dark", false, true], ["session=example; theme=dark; locale=en", false, true],
+    ["theme=light", true, false], ["other_theme=dark", false, false], ["theme=darkened", false, false],
+    ["theme=lightish", true, true],
   ] as const) {
     const classes = new Set<string>();
     const document = {
@@ -67,8 +70,9 @@ test("addon theme follows CloudPanel's cookie before the page paints", () => {
         if (enabled) classes.add(name); else classes.delete(name);
       } } },
     };
-    new Function("document", THEME_INIT_JS)(document);
-    expect(classes.has("dark"), cookie).toBe(expected);
+    const matchMedia = () => ({ matches: deviceDark });
+    new Function("document", "matchMedia", THEME_INIT_JS)(document, matchMedia);
+    expect(classes.has("dark"), `${cookie} on a ${deviceDark ? "dark" : "light"} device`).toBe(expected);
   }
 });
 
@@ -77,20 +81,21 @@ test("a switch sits on the line of whatever it is beside", () => {
   // input. Nothing sits under a switch, and that margin is what pushed every
   // one of them above the centre of its toolbar row or table cell.
   expect(BASE_STYLE).toContain(".switch-field { display: inline-flex; align-items: center; gap: 10px; margin: 0;");
-  expect(BASE_STYLE).toContain(".switch { position: relative; display: inline-flex; width: 50px; height: 28px; margin: 0;");
+  expect(BASE_STYLE).toContain(".switch { position: relative; display: inline-flex; width: 40px; height: 22px; margin: 0;");
   // One switch per row is a repeated control and comes down to the line height
   // beside it; a switch that decides the whole page keeps its full size.
-  expect(BASE_STYLE).toContain(".fleet-table .switch { width: 44px; height: 24px; }");
+  expect(BASE_STYLE).toContain(".fleet-table .switch { width: 32px; height: 18px; }");
 });
 
 test("a dialog is usable on a phone", () => {
   const narrow = BASE_STYLE.slice(BASE_STYLE.indexOf("@media (max-width: 940px)"));
-  // The frame gives up its desktop padding, and the buttons take the row so a
-  // confirmation label wraps inside its button rather than off the edge.
-  expect(narrow).toContain("dialog { padding: 20px; width: calc(100% - 20px);");
+  // A sheet from the bottom edge: it gives up its desktop padding, and the
+  // buttons take the row so a confirmation label wraps inside its button
+  // rather than off the edge.
+  expect(narrow).toContain("dialog { margin: auto 0 0; width: 100%; max-width: none; padding: 20px;");
   expect(narrow).toContain(".dialog-actions .btn { flex: 1 1 auto; }");
   // The visual viewport, so a collapsing address bar cannot cover the buttons.
-  expect(narrow).toContain("dialog { max-height: calc(100dvh - 20px); }");
+  expect(narrow).toContain("dialog { max-height: calc(100dvh - 24px); }");
   expect(BASE_STYLE).toContain("dialog { max-height: calc(100dvh - 40px); }");
 });
 

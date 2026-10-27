@@ -1,0 +1,3 @@
+.job-progress-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 6px; }
+.job-progress-step { overflow-wrap: anywhere; }
+.job-progress-bar { display: block; width: 100%; height: 8px; accent-color: var(--primary); }

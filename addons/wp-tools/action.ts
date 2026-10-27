@@ -26,7 +26,8 @@ import { join } from "node:path";
 import {
   ActionFailure, emitActionError, emitActionOk, failAction, validateDomain, withFileLock, type CommandResult,
 } from "../../cli/action-common";
-import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { CLI_BIN, CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { jobDir, jobIdArgument, pruneJobs, readJobLog, watchJobRecord, type startJobUnit } from "../../cli/job-store";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids, type UnixAccount } from "../../lib/site-accounts";
 import {
   DEFAULT_MAINTENANCE_ACTION_PATHS, addBypass, maintenanceBlocks, type MaintenanceActionPaths,
@@ -36,12 +37,21 @@ import {
   type VarnishRun, type VarnishSiteRecord, type VarnishOptions, type VarnishSyncResult, type WpVarnishState,
 } from "./varnish";
 import {
-  emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpView, readMainwpState, syncMainwp, type MainwpResult, type MainwpRun,
+  emptyMainwpState, mainwpAction, mainwpNeedsRepair, mainwpView, readMainwpState, syncMainwp, syncMainwpAll, type MainwpResult, type MainwpRun,
 } from "./mainwp";
+import {
+  JOB_BUDGET_MS, MAX_JOB_DOMAINS, WP_JOB_TASKS, activeWpJobs, policyOf, runWpJob, startWpJob, wpJobView,
+  type WpJobTask, type WpJobs, type WpJobView,
+} from "./jobs";
 
 import { basicAuthBlocks, basicAuthRewritable, withBasicAuthBypass, type reloadNginx } from "./basic-auth";
 
 export type WpToolsVerb = "sites" | "sign-in" | "remove" | "sync" | "varnish-settings" | "varnish-install" | "varnish-sync";
+export type { WpJobs, WpJobView } from "./jobs";
+
+/** How long a job's runner waits for a pass the timer started to finish. */
+const JOB_LOCK_WAIT_SECONDS = 240;
+const JOB_RETENTION_DAYS = 7;
 
 /** Where the loader and its one-time secret live inside a WordPress site. */
 const MU_PLUGINS = "wp-content/mu-plugins";
@@ -139,6 +149,11 @@ export interface WpToolsActionPaths {
   varnishLockFile: string;
   mainwpState: string;
   mainwpLockFile: string;
+  jobsDir: string;
+  /** Held while a job is recorded, so one policy never gets two. */
+  jobsLockFile: string;
+  /** What systemd runs for a job. */
+  actionBinary: string;
 }
 
 export interface WpToolsActionOptions extends VarnishOptions {
@@ -150,6 +165,8 @@ export interface WpToolsActionOptions extends VarnishOptions {
   reloadNginx?: typeof reloadNginx;
   /** Test-only; production always guards against the panel's own hostname. */
   domainValidator?: (value: string) => string;
+  /** Test-only; production hands a job to systemd. */
+  startJob?: typeof startJobUnit;
 }
 
 export const DEFAULT_WP_TOOLS_PATHS: WpToolsActionPaths = {
@@ -168,6 +185,9 @@ export const DEFAULT_WP_TOOLS_PATHS: WpToolsActionPaths = {
   varnishLockFile: "/run/lock/clp-addons/wp-varnish.lock",
   mainwpState: `${STATE_DIR}/wp-tools/mainwp.json`,
   mainwpLockFile: "/run/lock/clp-addons/wp-mainwp.lock",
+  jobsDir: `${STATE_DIR}/wp-tools/jobs`,
+  jobsLockFile: "/run/lock/clp-addons/wp-jobs.lock",
+  actionBinary: CLI_BIN,
 };
 
 function pathsFor(options: WpToolsActionOptions): WpToolsActionPaths {
@@ -319,7 +339,7 @@ function wordpressSites(paths: WpToolsActionPaths, state: WpVarnishState): WpSit
 }
 
 /** The sites and the panel's domains a Varnish pass works from. */
-function varnishRun(paths: WpToolsActionPaths, request: { domain?: string; dueOnly?: boolean } = {}): VarnishRun {
+function varnishRun(paths: WpToolsActionPaths, request: { domain?: string; dueOnly?: boolean; deadline?: number } = {}): VarnishRun {
   return {
     statePath: paths.varnishState,
     runuser: paths.runuser,
@@ -352,8 +372,9 @@ export async function reconcileWpVarnish(
 }
 
 /** MainWP works from the same sites; Varnish eligibility does not apply. */
-function mainwpRun(paths: WpToolsActionPaths, request: { dueOnly?: boolean } = {}): MainwpRun {
-  return { ...varnishRun(paths, request), statePath: paths.mainwpState };
+function mainwpRun(paths: WpToolsActionPaths, request: { dueOnly?: boolean; deadline?: number; targets?: string[] } = {}): MainwpRun {
+  const { targets, ...pass } = request;
+  return { ...varnishRun(paths, pass), statePath: paths.mainwpState, ...(targets ? { targets } : {}) };
 }
 
 /** Whether the timer has anything to queue: automation is on, or MainWP still owes a site work. */
@@ -638,12 +659,89 @@ function parseAction(argv: string[], options: WpToolsActionOptions): ParsedActio
   return { verb, domain, asUser, clientIp, addBypass, allowBasicAuth, enabled };
 }
 
+// --- background jobs ------------------------------------------------------
+
+const JOB_CONFIRMATION: Partial<Record<WpJobTask, string>> = { "mainwp-connect": "connect", "mainwp-cleanup": "mainwp" };
+
+/** `start --task=<task> [--domains=a,b] [--confirm=...]`, validated before anything is recorded. */
+function parseJobStart(rest: string[], options: WpToolsActionOptions): { task: WpJobTask; domains: string[] } {
+  const fields: Record<string, string> = {};
+  for (const argument of rest) {
+    const match = /^--(task|domains|confirm)=(.*)$/.exec(argument);
+    if (!match || fields[match[1]!] !== undefined) failAction(`unexpected argument '${argument}'`);
+    fields[match[1]!] = match[2]!;
+  }
+  const task = WP_JOB_TASKS.find((known) => known === fields.task);
+  if (!task) failAction("choose a job with --task");
+  const validate = options.domainValidator ?? ((value: string) => validateDomain(value));
+  const domains = fields.domains === undefined ? [] : [...new Set(fields.domains.split(",").map((domain) => validate(domain)))];
+  const wanted = task === "varnish-install" ? "one" : task === "mainwp-connect" ? "some" : "none";
+  if (wanted === "one" ? domains.length !== 1 : wanted === "some" ? domains.length === 0 : fields.domains !== undefined) {
+    failAction(wanted === "none" ? `'${task}' takes no --domains` : wanted === "one" ? `'${task}' takes one domain` : `'${task}' needs --domains`);
+  }
+  if (domains.length > MAX_JOB_DOMAINS) failAction(`a job takes at most ${MAX_JOB_DOMAINS} sites`);
+  const confirmation = JOB_CONFIRMATION[task];
+  if (fields.confirm !== confirmation) {
+    failAction(confirmation ? `confirm '${task}' with --confirm=${confirmation}` : `'${task}' takes no --confirm`);
+  }
+  return { task, domains };
+}
+
+async function startJob(paths: WpToolsActionPaths, rest: string[], options: WpToolsActionOptions): Promise<{ job: WpJobView }> {
+  const { task, domains } = parseJobStart(rest, options);
+  if (!existsSync(paths.configFile)) failAction("WordPress Tools must be enabled first");
+  if (policyOf(task) === "mainwp" && task !== "mainwp-cleanup" && readMainwpState(paths.mainwpState).cleanup) {
+    failAction("finish MainWP cleanup first");
+  }
+  return withFileLock(paths.jobsLockFile, 15, "another WordPress Tools job is being started", async () => ({
+    job: startWpJob({ jobsDir: paths.jobsDir, task, domains, actionBinary: paths.actionBinary, start: options.startJob }),
+  }));
+}
+
+/** systemd's half: wait for the policy's lock, which a timer pass may hold, then do the work. */
+async function runJob(paths: WpToolsActionPaths, id: string, options: WpToolsActionOptions): Promise<WpJobView | null> {
+  await runWpJob(paths.jobsDir, id, async (task, domains, onProgress) => {
+    const varnish = policyOf(task) === "varnish";
+    const lock = varnish ? paths.varnishLockFile : paths.mainwpLockFile;
+    const busy = varnish ? "a WordPress Varnish change is still running" : "a MainWP change is still running";
+    return withFileLock(lock, JOB_LOCK_WAIT_SECONDS, busy, async () => {
+      if (!existsSync(paths.configFile)) failAction("WordPress Tools is not enabled");
+      const deadline = Date.now() + JOB_BUDGET_MS;
+      const progressed = { ...options, onProgress };
+      if (task === "varnish-check") return syncVarnish(varnishRun(paths, { deadline }), progressed);
+      if (task === "varnish-install") return syncVarnish(varnishRun(paths, { deadline, domain: domains[0] }), progressed);
+      if (task === "mainwp-check") return syncMainwpAll(mainwpRun(paths, { deadline }), progressed);
+      if (task === "mainwp-connect") return syncMainwpAll({ ...mainwpRun(paths, { deadline, targets: domains }), connect: true }, progressed);
+      return syncMainwpAll(mainwpRun(paths, { deadline }), progressed, true);
+    });
+  });
+  return wpJobView(paths.jobsDir, id);
+}
+
+/** Expired job records go, and one whose runner died is marked failed. */
+export function pruneWpJobs(options: WpToolsActionOptions = {}): void {
+  pruneJobs({
+    addon: "wp-tools",
+    jobsDir: pathsFor(options).jobsDir,
+    retentionDays: JOB_RETENTION_DAYS,
+    stuckMessage: "the job stopped without recording a result",
+  });
+}
+
 export async function executeWpToolsAction(
   argv: string[],
   options: WpToolsActionOptions = {},
 ): Promise<unknown> {
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress Tools actions must run as root");
   const paths = pathsFor(options);
+  if (argv[0] === "start") return startJob(paths, argv.slice(1), options);
+  if (argv[0] === "run") return runJob(paths, jobIdArgument(argv.slice(1)), options);
+  if (argv[0] === "job") {
+    const id = jobIdArgument(argv.slice(1));
+    const view = wpJobView(paths.jobsDir, id);
+    if (!view) failAction(`no such job: ${id}`);
+    return { job: view, log: readJobLog(jobDir(paths.jobsDir, id)) };
+  }
   if (argv[0]?.startsWith("mainwp-")) {
     return withFileLock(paths.mainwpLockFile, 15, "a MainWP change is still running", () => {
       if (!existsSync(paths.configFile)) failAction("WordPress Tools must be enabled before a MainWP action");
@@ -669,7 +767,13 @@ export async function executeWpToolsAction(
     } catch (error) {
       mainwpError = `${paths.mainwpState} cannot be read: ${reason(error)}`;
     }
-    return { sites: wordpressSites(paths, varnish), varnish, varnishError, mainwp, mainwpError };
+    let jobs: WpJobs = { varnish: null, mainwp: null };
+    try {
+      jobs = activeWpJobs(paths.jobsDir);
+    } catch {
+      // A job the page cannot see still finishes; the page only loses its progress.
+    }
+    return { sites: wordpressSites(paths, varnish), varnish, varnishError, mainwp, mainwpError, jobs };
   }
   if (verb === "varnish-sync") return reconcileWpVarnish(options);
   if (verb === "varnish-settings" || verb === "varnish-install") {
@@ -719,6 +823,19 @@ export async function runWpToolsAction(
 ): Promise<number> {
   const emit = options.emitReply !== false;
   try {
+    if (argv[0] === "watch-job") {
+      if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress Tools actions must run as root");
+      const paths = pathsFor(options);
+      const id = jobIdArgument(argv.slice(1));
+      const dir = jobDir(paths.jobsDir, id);
+      if (!wpJobView(paths.jobsDir, id)) failAction(`no such job: ${id}`);
+      await watchJobRecord({
+        dir,
+        read: () => ({ job: wpJobView(paths.jobsDir, id), log: readJobLog(dir) }),
+        emit: (data) => { if (emit) emitActionOk(data); },
+      });
+      return 0;
+    }
     const data = await executeWpToolsAction(argv, options);
     if (emit) emitActionOk(data);
     return 0;
