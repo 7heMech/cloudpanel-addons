@@ -7,7 +7,10 @@
 @media (max-width: 760px) {
   body .site-content .card-table table.table:not(.table-sites),
   body .site-content .card-table table.table:not(.table-sites) > tbody { display: block; }
-  body .site-content .card-table table.table:not(.table-sites) > thead { display: none; }
+  /* Out of sight but not out of the accessibility tree, so a screen reader
+     still has the headings for the cells. */
+  body .site-content .card-table table.table:not(.table-sites) > thead { position: absolute; width: 1px; height: 1px;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   body .site-content .card-table table.table:not(.table-sites) > tbody > tr { display: block; position: relative;
     padding: 16px 20px; border-bottom: 1px solid #eaeaea; }
   body .site-content .card-table table.table:not(.table-sites) > tbody > tr:last-child { border-bottom: 0; }

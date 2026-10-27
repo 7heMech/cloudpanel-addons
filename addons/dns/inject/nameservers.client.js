@@ -15,7 +15,11 @@
     var title = document.createElement('strong');
     title.textContent = data.zone + ' is waiting for its nameservers.';
     alert.appendChild(title);
-    alert.appendChild(document.createTextNode(' At the domain\u2019s registrar, replace its nameservers with these. The Let\u2019s Encrypt certificate is requested automatically once Cloudflare sees them.'));
+    var next = {
+      automatic: ' The Let\u2019s Encrypt certificate is requested automatically once Cloudflare sees them.',
+      manual: ' Once Cloudflare sees them, request a Let\u2019s Encrypt certificate under Actions.',
+    }[data.certificate] || '';
+    alert.appendChild(document.createTextNode(' At the domain\u2019s registrar, replace its nameservers with these.' + next));
     var list = document.createElement('div');
     list.className = 'clp-dns-nameservers';
     // A clipboard after each: a registrar usually has a field per nameserver.
@@ -28,14 +32,22 @@
       copy.title = 'Copy';
       copy.setAttribute('aria-label', 'Copy ' + server);
       copy.innerHTML = box.getAttribute('data-clipboard');
+      // Without the clipboard, the nameserver is selected so Ctrl+C finishes the job.
+      function select() {
+        var range = document.createRange();
+        range.selectNodeContents(code);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+        copy.title = 'Selected; press Ctrl+C to copy';
+      }
       copy.addEventListener('click', function () {
-        if (!navigator.clipboard) return;
+        if (!navigator.clipboard || !navigator.clipboard.writeText) return select();
         navigator.clipboard.writeText(server).then(function () {
           var copied = list.querySelectorAll('.copied');
           for (var i = 0; i < copied.length; i++) copied[i].classList.remove('copied');
           copy.classList.add('copied');
           copy.title = 'Copied';
-        });
+        }, select);
       });
       row.appendChild(code);
       row.appendChild(copy);

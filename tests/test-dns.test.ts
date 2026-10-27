@@ -739,18 +739,33 @@ describe("zones and new sites", () => {
     env.cf.zones[0]!.status = "pending";
     await env.connect();
     const status = (args: string[]) => env.act<SiteDnsStatus>("site-status", undefined, args);
-    expect(await status(["--domain=shop.example.com", "--as-user=bob"])).toEqual({ zone: null, status: null, nameServers: [] });
+    expect(await status(["--domain=shop.example.com", "--as-user=bob"])).toEqual({ zone: null, status: null, nameServers: [], certificate: "installed" });
     await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
     await env.automatic();
     const calls = env.cf.calls.length;
     expect(await status(["--domain=shop.example.com", "--as-user=bob"]))
-      .toEqual({ zone: "example.com", status: "pending", nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"] });
+      .toEqual({ zone: "example.com", status: "pending", nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"], certificate: "installed" });
     expect(env.cf.calls.length).toBe(calls);
     await expect(status(["--domain=example.com", "--as-user=bob"])).rejects.toThrow("not one of yours");
     // Once active there is nothing to set.
     env.cf.zones[0]!.status = "active";
     await env.act("check");
-    expect(await status(["--domain=shop.example.com"])).toEqual({ zone: "example.com", status: "active", nameServers: [] });
+    expect(await status(["--domain=shop.example.com"])).toEqual({ zone: "example.com", status: "active", nameServers: [], certificate: "installed" });
+  });
+
+  test("the nameserver notice promises a certificate only where DNS will request one", async () => {
+    const env = setup();
+    env.cf.zones[0]!.status = "pending";
+    env.sites.push(site(9, "fresh.example.com", { createdAt: START - 60_000, selfSigned: true }));
+    env.sites.push(site(10, "old.example.com", { selfSigned: true }));
+    await env.connect();
+    await env.act("assign", { domains: ["fresh.example.com", "old.example.com"], profileId: "web" });
+    await env.automatic();
+    // A site created with automatic SSL asked for has its request recorded; an older one has none.
+    await env.act("provision", undefined, ["--domain=fresh.example.com", "--ssl"]);
+    const certificate = async (domain: string) => (await env.act<SiteDnsStatus>("site-status", undefined, [`--domain=${domain}`])).certificate;
+    expect(await certificate("fresh.example.com")).toBe("automatic");
+    expect(await certificate("old.example.com")).toBe("manual");
   });
 });
 
