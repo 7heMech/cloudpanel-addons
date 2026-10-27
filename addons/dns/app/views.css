@@ -19,8 +19,16 @@
 .dns-checklist strong { display:block; font-weight:600; }
 .dns-step-control { flex:0 0 240px; text-align:right; }
 .dns-step-control .btn { white-space:nowrap; }
-.dns-report-warning { display:flex; justify-content:space-between; align-items:center; gap:16px; }
-.dns-report-warning .btn { flex-shrink:0; white-space:nowrap; }
+.dns-mode-bar { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+.dns-mode-bar .btn { flex-shrink:0; white-space:nowrap; }
+/* Automatic is the settled state, not a warning. */
+.notice.dns-mode-on { color:var(--text); background:var(--panel); border-color:var(--card-border); }
+.dns-mode-on strong { color:var(--ok); }
+.dns-log-table td { vertical-align:top; }
+.dns-log-when { white-space:nowrap; width:1%; }
+.dns-log-table td.dns-change-detail { word-break:break-word; }
+.dns-log-more > summary { padding:12px 32px; cursor:pointer; color:var(--muted); }
+#dns-zone-account { width:auto; min-width:240px; max-width:100%; display:block; margin-bottom:4px; }
 .dns-profile-tools { display:flex; align-items:flex-end; gap:12px; flex-shrink:0; }
 .dns-default-field label { display:block; margin:0 0 4px; }
 .dns-default-field select { width:auto; min-width:200px; }
@@ -155,12 +163,11 @@ p.dns-dialog-note { margin:20px 0 0; }
   .fleet-table.dns-site-table td.dns-profile-cell { flex:1 1 0; order:1; }
   .fleet-table.dns-site-table td.action-cell:has(.btn) { flex:0 0 auto; order:2; align-self:flex-end; }
   /* A profile card: name, site count and its buttons on the first line;
-     records beside enforce; the zone settings last. */
+     records, then the zone settings. */
   .fleet-table.dns-profile-table td.site-cell { flex:1 1 calc(100% - 220px); }
   .fleet-table.dns-profile-table .dns-card-sites { display:inline; color:var(--muted); font-weight:400; }
   .fleet-table.dns-profile-table td.action-cell { flex:0 0 auto; order:-1; }
   .fleet-table.dns-profile-table td.action-cell::before { display:none; }
-  .fleet-table.dns-profile-table td.dns-enforce-cell { order:1; }
   .fleet-table.dns-profile-table td.wide-cell { order:2; }
   .fleet-table.dns-profile-table td.dns-sites-cell { display:none; }
   .dns-site-table td select { min-width:0; }
@@ -170,7 +177,7 @@ p.dns-dialog-note { margin:20px 0 0; }
 @media (max-width:760px) {
   .dns-checklist > li { display:grid; grid-template-columns:28px minmax(0,1fr); gap:10px 14px; align-items:start; }
   .dns-step-control { grid-column:2; text-align:left; }
-  .dns-report-warning { flex-direction:column; align-items:stretch; }
+  .dns-mode-bar { flex-direction:column; align-items:stretch; }
   .dns-profile-tools { width:100%; flex-wrap:wrap; }
   .dns-default-field { flex:1 1 200px; }
   .dns-default-field select { width:100%; min-width:0; }

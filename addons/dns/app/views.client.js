@@ -173,18 +173,13 @@ function dnsEditProfile(id) {
   form.reset();
   form.elements.namedItem('id').value = profile ? profile.id : '';
   form.elements.namedItem('name').value = profile ? profile.name : '';
-  const zone = profile ? profile.zone : { ssl: null, alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [], createIn: null };
+  const zone = profile ? profile.zone : { ssl: null, alwaysHttps: null, acmeFullSsl: false, webmailFullSsl: false, skipFirewallIps: [] };
   form.elements.namedItem('mailcow').checked = Boolean(profile && profile.mailcow);
   form.elements.namedItem('ssl').value = zone.ssl || '';
   form.elements.namedItem('alwaysHttps').value = zone.alwaysHttps === null ? '' : zone.alwaysHttps ? 'on' : 'off';
   form.elements.namedItem('acmeFullSsl').checked = zone.acmeFullSsl;
   form.elements.namedItem('webmailFullSsl').checked = zone.webmailFullSsl;
   form.elements.namedItem('skipFirewallIps').value = zone.skipFirewallIps.join('\n');
-  const createIn = form.elements.namedItem('createIn');
-  createIn.innerHTML = '<option value="">Report them</option>' + dnsState.accounts.map(function (account) {
-    return '<option value="' + dnsEsc(account.connectionId + '/' + account.accountId) + '">Create in ' + dnsEsc(account.label) + '</option>';
-  }).join('');
-  createIn.value = zone.createIn ? zone.createIn.connectionId + '/' + zone.createIn.accountId : '';
   CLP_ROOT.getElementById('dns-preset').innerHTML = '<option value="">Add a preset…</option>' + dnsState.presets.map(function (preset) {
     return '<option value="' + dnsEsc(preset.id) + '">' + dnsEsc(preset.label) + '</option>';
   }).join('');
@@ -210,7 +205,6 @@ function dnsSyncProfileSections() {
   const rules = [form.elements.namedItem('acmeFullSsl').checked && "Let's Encrypt", form.elements.namedItem('webmailFullSsl').checked && 'webmail',
     value('skipFirewallIps').trim() && 'firewall skip'].filter(Boolean);
   if (rules.length) parts.push('Rules: ' + rules.join(', '));
-  if (value('createIn')) parts.push('creates missing zones');
   CLP_ROOT.getElementById('dns-zone-summary').textContent = parts.join(' · ') || 'Left as it is';
 }
 
@@ -218,7 +212,6 @@ function dnsSaveProfile(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const value = function (name) { return form.elements.namedItem(name).value; };
-  const createIn = value('createIn').split('/');
   dnsPost('/api/profiles', {
     id: value('id') || null,
     name: value('name'),
@@ -230,7 +223,6 @@ function dnsSaveProfile(event) {
       acmeFullSsl: form.elements.namedItem('acmeFullSsl').checked,
       webmailFullSsl: form.elements.namedItem('webmailFullSsl').checked,
       skipFirewallIps: value('skipFirewallIps').split(/[\s,]+/).filter(Boolean),
-      createIn: createIn.length === 2 ? { connectionId: createIn[0], accountId: createIn[1] } : null,
     },
   }, CLP_ROOT.getElementById('dns-profile-dialog'));
 }
@@ -246,15 +238,16 @@ async function dnsDeleteProfile(id) {
   if (accepted) dnsPost('/api/profiles/delete', { id: id });
 }
 
-function dnsEnforce(id) {
-  dnsPost('/api/mode', { id: id, mode: 'enforce' });
+/** Turning Automatic on answers with the review of everything it would write; off is saved straight away. */
+function dnsSetAutomatic(on) {
+  dnsPost('/api/automatic', { automatic: on });
 }
 
-function dnsSetMode(input, id) {
-  const mode = input.checked ? 'enforce' : 'report';
-  // The switch shows the saved mode until the reply repaints it, after a review if one is needed.
-  input.checked = !input.checked;
-  dnsPost('/api/mode', { id: id, mode: mode });
+async function dnsSetZoneAccount(select) {
+  const parts = select.value.split('/');
+  const saved = dnsState.createIn;
+  select.value = saved ? saved.connectionId + '/' + saved.accountId : '';
+  await dnsPost('/api/zone-account', { createIn: parts.length === 2 ? { connectionId: parts[0], accountId: parts[1] } : null });
 }
 
 // --- sites ------------------------------------------------------------------
@@ -275,10 +268,10 @@ async function dnsAssignSelected() {
   const moving = rows.filter(function (row) { return (row.dataset.profileId || '') !== (id || '') || (id && row.dataset.held); });
   if (!moving.length) return notify('Those sites are already there; nothing to change.', 'ok');
   const profile = id ? dnsProfile(id) : null;
-  if (!profile || profile.mode !== 'enforce') {
+  if (!profile || !dnsState.automatic) {
     const accepted = await confirmAction({
       title: profile ? 'Put ' + plural(moving.length, 'site') + ' in ' + profile.name + '?' : 'Stop managing ' + plural(moving.length, 'site') + '?',
-      text: profile ? 'Report only: their DNS is checked against it and nothing is changed.' : 'Their DNS is left as it is.',
+      text: profile ? 'DNS asks first: their DNS is checked against it and nothing is changed.' : 'Their DNS is left as it is.',
       confirmLabel: profile ? 'Assign' : 'Stop managing',
     });
     if (!accepted) return;
@@ -341,7 +334,7 @@ function dnsShowSite(domain) {
   const plan = site.plan;
   dnsSiteShown = domain;
   CLP_ROOT.getElementById('dns-site-heading').textContent = domain;
-  let html = '<dl class="dns-facts"><dt>Profile</dt><dd>' + dnsEsc(profile ? profile.name : '—') + (profile ? ' · ' + (profile.mode === 'enforce' ? 'Enforce' : 'Report only') : '') + '</dd>';
+  let html = '<dl class="dns-facts"><dt>Profile</dt><dd>' + dnsEsc(profile ? profile.name : '—') + (profile ? ' · ' + (dnsState.automatic ? 'Automatic' : 'Ask first') : '') + '</dd>';
   if (plan && plan.zone) {
     html += '<dt>Zone</dt><dd>' + dnsEsc(plan.zone.name) + ' · ' + dnsEsc(plan.zone.status) + '</dd>' +
       '<dt>Through</dt><dd>' + dnsEsc(plan.zone.connection) + ' · ' + dnsEsc(plan.zone.account) + '</dd>';
@@ -362,13 +355,13 @@ function dnsShowSite(domain) {
       html += '<div class="notice">CloudPanel created this site, so its own address records went in straight away. The changes marked below reach further and wait until you review them.</div>';
     }
     if (!plan.problems.length) {
-      html += '<h3 class="dns-section">' + (profile && profile.mode === 'enforce' ? 'To change' : 'Differences, not changed in Report only') + '</h3>' + dnsChanges(plan.changes);
+      html += '<h3 class="dns-section">' + (dnsState.automatic ? 'To change' : 'Differences, not changed until DNS is Automatic') + '</h3>' + dnsChanges(plan.changes);
     }
   }
   CLP_ROOT.getElementById('dns-site-body').innerHTML = html;
   const pending = plan && !plan.problems.length && plan.changes.some(function (change) { return change.action !== 'note'; });
   const apply = CLP_ROOT.getElementById('dns-site-apply');
-  apply.hidden = !(profile && profile.mode === 'enforce' && pending);
+  apply.hidden = !(profile && dnsState.automatic && pending);
   apply.textContent = plan && plan.held ? 'Review changes' : 'Apply now';
   dnsOpen('dns-site-dialog');
 }
