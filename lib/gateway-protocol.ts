@@ -151,7 +151,6 @@ export const DNS_ALLOWED_VERBS = new Set([
 ]);
 
 /** `run` is absent for the same reason as the manager's: only the job's own unit starts it. */
-export const ARCHIVE_ALLOWED_VERBS = new Set(["list", "archive", "restore", "delete", "job", "watch-job"]);
 
 /**
  * The manager's own privileged verbs: enabling and disabling an addon that

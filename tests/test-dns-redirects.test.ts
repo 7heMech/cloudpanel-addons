@@ -272,29 +272,6 @@ describe("taking over the redirects Terraform left", () => {
   });
 });
 
-describe("a site Archive Sites deleted", () => {
-  test("becomes a redirect at once with the profile it had, and its records are not offered for removal", async () => {
-    const env = setup();
-    terraformZone(env.cf, env.account, "awakeningcentre.bg", "https://renaissance.bg");
-    env.cf.rulesets.clear();
-    env.sites.push({ id: 7, domain: "awakeningcentre.bg", type: "php", createdAt: 0, selfSigned: false, cloudflareOnly: false });
-    await env.act("save-connection", { token: TOKEN });
-    await env.act("assign", { domains: ["awakeningcentre.bg"], profileId: "web" });
-    await env.automatic();
-    expect((await env.act("list")).orphans).toEqual([]);
-
-    env.sites.splice(0);
-    expect((await env.act("list")).orphans).toEqual([expect.objectContaining({ domain: "awakeningcentre.bg" })]);
-    const result = await env.act<{ redirect: string; applied: boolean; reason: string }>("archive-redirect", found("awakeningcentre.bg", "https://renaissance.bg"));
-    expect(result).toEqual({ redirect: "awakeningcentre.bg", applied: true, reason: "" });
-    const state = await env.act("list");
-    expect(state.orphans).toEqual([]);
-    expect(state.sites).toEqual([expect.objectContaining({ domain: "awakeningcentre.bg", profileId: "web", plan: expect.objectContaining({ changes: [] }) })]);
-    expect(env.redirectRules("awakeningcentre.bg")).toHaveLength(1);
-    expect(state.log[0]).toMatchObject({ cause: "Archived site" });
-  });
-});
-
 describe("reading rules", () => {
   test("whole-host expressions are read with or without Let's Encrypt's path, and nothing else is", () => {
     expect(wholeHostHosts(`${apexHosts("newyou.bg")}${ACME}`)).toEqual(["newyou.bg", "www.newyou.bg"]);

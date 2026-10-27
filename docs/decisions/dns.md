@@ -209,15 +209,6 @@ a held new site, so a move between Cloudflare and this server is seen first. Onc
 stand-in site is deleted. Deleting a redirect domain deletes its stand-in at
 once.
 
-### Archived sites
-
-Archive Sites calls the `archive-redirect` verb after deleting a site. The
-redirect takes the profile the site had, and its records stop being the
-deleted site's, so neither Remove records nor Keep is offered for them. Like a
-new site, a plan that only changes the domain's own names -- the rule, its
-placeholders, a stand-in -- is applied at once when DNS is Automatic; one that
-reaches further is held for a review.
-
 ## Cloudflare connections
 
 A connection is one API token. The page links to Cloudflare's user-owned token
@@ -382,8 +373,8 @@ created, a record created, updated or deleted, a zone setting or rule, a
 redirect rule, a Mailcow domain, DKIM key or sender list, a stand-in site -- is
 logged once it succeeds, with the time, the sites it was
 for, the zone, what it was before where that is known, and what made it: a
-scheduled check, Check now, a new site, a confirmed review, Remove records, a
-deleted redirect or an archived site.
+scheduled check, Check now, a new site, a confirmed review, Remove records or a
+deleted redirect.
 Each run collects its writes and they are saved before the page's reply and
 again when the action ends, so writes made before a failure are kept. The log
 is the newest thousand writes; the page shows the newest ten and the rest of

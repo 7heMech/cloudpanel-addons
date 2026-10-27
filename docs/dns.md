@@ -85,7 +85,7 @@ second one beside it.
 
 Deleting a redirect domain once DNS is Automatic deletes its rule after a
 review; its records stay until a site's profile replaces them. To turn a site
-into a redirect, archive it with [Archive Sites](../README.md#addons).
+into a redirect, delete it in CloudPanel first.
 
 ## Leaving Terraform
 
