@@ -194,9 +194,11 @@ waits for a connection.
 `standins.json` records each one with its site user before CloudPanel creates
 it, so the new-site work of every addon already sees it, and adds CloudPanel's
 site id once the site exists. A record counts only while the panel site at its
-domain has that user and id (`cli/stand-ins.ts`): a site added there after the
-stand-in was deleted in CloudPanel is an ordinary site, which DNS never
-overwrites or deletes, and DNS makes no stand-in where a site already exists.
+domain has that user and id, or that user for the few minutes it is being
+created (`cli/stand-ins.ts`): a site added there after the stand-in was deleted
+in CloudPanel is an ordinary site. DNS changes or deletes only a site whose id
+it recorded, even when creating one fails, and makes no stand-in where a site
+already exists.
 DNS, Stager, Maintenance, SMTP
 Relay and Cloudflare IP Access leave stand-ins out of their site lists, PHP
 Resources and WordPress Tools never list a static site, and Panel Tweaks shows

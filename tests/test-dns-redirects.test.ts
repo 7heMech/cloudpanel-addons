@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import { seededPolicy } from "../addons/dns/presets";
 import { renderRedirect, type SiteVars } from "../addons/dns/records";
 import { foundRedirect, redirectRef, redirectRuleState, wholeHostHosts } from "../addons/dns/redirects";
 import { clpctlStandIns, readStandIns, standInBody, type StandInPaths } from "../addons/dns/stand-in";
+import { isStandInSite, ownsStandInSite } from "../cli/stand-ins";
 import type { CfRule } from "../addons/dns/cloudflare";
 import type { Redirect } from "../addons/dns/model";
 import { FakeCloudflare, FakeMailcow, hexId, MAILCOW_KEY, routed } from "./fixtures/dns-api";
@@ -414,16 +416,19 @@ describe("stand-in sites on this server", () => {
 });
 
 describe("stand-in sites in CloudPanel", () => {
-  function setup(sites: Record<string, { id: number; user: string }>) {
+  function setup(sites: Record<string, { id: number; user: string }>, clpctlExit = 0) {
     const dir = mkdtempSync(join(tmpdir(), "dns-stand-ins-"));
     dirs.push(dir);
     const clpctl = join(dir, "clpctl");
-    writeFileSync(clpctl, `#!/bin/sh\necho "$@" >> ${join(dir, "calls")}\n`);
+    writeFileSync(clpctl, `#!/bin/sh\necho "$1" >> ${join(dir, "calls")}\nexit ${clpctlExit}\n`);
     chmodSync(clpctl, 0o755);
     const paths: StandInPaths = {
       file: join(dir, "standins.json"), clpctl, rootUid: process.getuid!(),
       vhost: { panelDb: join(dir, "db.sq3"), sqlite3: "sqlite3", nginxVhostDir: dir, tempDir: dir },
     };
+    const db = new Database(paths.vhost.panelDb);
+    db.run("CREATE TABLE site (user TEXT)");
+    db.close();
     const record = (siteUser: string, siteId: number) => ({
       target: "https://hazon.bg", status: 301, keepPath: true, keepQuery: true, siteUser, siteId, createdAt: 0,
       certificate: { attempts: 0, nextAt: 0, done: false },
@@ -443,6 +448,23 @@ describe("stand-in sites in CloudPanel", () => {
     await standIns.remove("old.example");
     expect(calls()).toBe("");
     expect(Object.keys(readStandIns(paths))).toEqual(["hazon.uk"]);
+  });
+
+  test("a creation CloudPanel refuses deletes nothing, since someone else may have taken the domain meanwhile", async () => {
+    const { paths, standIns, calls } = setup({}, 1);
+    await expect(standIns.create(redirect("new.example"))).rejects.toThrow("CloudPanel did not create new.example");
+    expect(calls()).toBe("site:add:static\n");
+    expect(readStandIns(paths)["new.example"]).toBeUndefined();
+  });
+
+  test("a record without a site id hides its site only while it is being created, and never lets DNS delete it", () => {
+    const mark = { siteUser: "hazon", createdAt: 1_000_000 };
+    const site = { id: 7, user: "hazon" };
+    expect(isStandInSite(mark, site, 1_000_000 + 60_000)).toBe(true);
+    expect(isStandInSite(mark, site, 1_000_000 + 60 * 60_000)).toBe(false);
+    expect(ownsStandInSite(mark, site)).toBe(false);
+    expect(ownsStandInSite({ ...mark, siteId: 7 }, site)).toBe(true);
+    expect(ownsStandInSite({ ...mark, siteId: 7 }, { id: 8, user: "hazon" })).toBe(false);
   });
 });
 

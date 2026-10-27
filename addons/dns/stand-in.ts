@@ -10,7 +10,7 @@ import { Database } from "bun:sqlite";
 import { randomBytes } from "node:crypto";
 import { availableSiteUser, runCommand } from "../../cli/action-common";
 import { replaceSiteVhost, type SiteVhostPaths } from "../../cli/site-vhost";
-import { isStandInSite } from "../../cli/stand-ins";
+import { ownsStandInSite } from "../../cli/stand-ins";
 import type { StandIn, StandIns } from "./engine";
 import type { Redirect } from "./model";
 import { standInHosts } from "./redirects";
@@ -106,7 +106,7 @@ export function clpctlStandIns(
   const records = readStandIns(paths);
   const ours = (domain: string, record = readStandIns(paths)[domain]) => {
     const site = panelSite(domain);
-    return site !== undefined && isStandInSite(record, site);
+    return site !== undefined && ownsStandInSite(record, site);
   };
   const current: Record<string, StandIn> = {};
   for (const [domain, record] of Object.entries(records)) {
@@ -122,17 +122,22 @@ export function clpctlStandIns(
       const saved = readStandIns(paths);
       saved[redirect.source] = { ...spec(redirect), siteUser, createdAt: now(), certificate: { attempts: 0, nextAt: now(), done: false } };
       saveStandIns(paths, saved);
+      // Only a site known to be this one is deleted on failure: another may have taken the domain meanwhile.
+      let siteId: number | null = null;
       try {
         clpctl(paths, ["site:add:static", `--domainName=${redirect.source}`, `--siteUser=${siteUser}`,
           `--siteUserPassword=${randomBytes(24).toString("base64url")}`], `CloudPanel did not create ${redirect.source}`);
         const site = panelSite(redirect.source);
-        if (!site) throw new Error(`CloudPanel does not list ${redirect.source} after creating it`);
+        if (site?.user !== siteUser) throw new Error(`CloudPanel does not list ${redirect.source} as the site it created`);
+        siteId = site.id;
         const created = readStandIns(paths);
-        created[redirect.source] = { ...created[redirect.source]!, siteId: site.id };
+        created[redirect.source] = { ...created[redirect.source]!, siteId };
         saveStandIns(paths, created);
         replaceSiteVhost(paths.vhost, redirect.source, standInBody(redirect.source, redirect));
       } catch (error) {
-        runCommand(paths.clpctl, ["site:delete", `--domainName=${redirect.source}`, "--force"], 300_000);
+        if (siteId !== null && panelSite(redirect.source)?.id === siteId) {
+          runCommand(paths.clpctl, ["site:delete", `--domainName=${redirect.source}`, "--force"], 300_000);
+        }
         const after = readStandIns(paths);
         delete after[redirect.source];
         saveStandIns(paths, after);

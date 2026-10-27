@@ -350,7 +350,7 @@ class Action {
   sites(fresh = false): PanelSite[] {
     const records = readStandIns(this.standInPaths());
     const current = this.standIns().current;
-    return this.panelSites(fresh).filter((site) => !current[site.domain] && !isStandInSite(records[site.domain], site));
+    return this.panelSites(fresh).filter((site) => !current[site.domain] && !isStandInSite(records[site.domain], site, this.now));
   }
 
   standInPaths(): StandInPaths {
