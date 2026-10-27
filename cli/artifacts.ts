@@ -37,6 +37,16 @@ export function secureRegularFile(path: string, executable = false): boolean {
   }
 }
 
+/** The release the manifest records as installed, or null when nothing has been. */
+export function installedTag(): string | null {
+  try {
+    const tag = (JSON.parse(readFileSync(ARTIFACT_MANIFEST_PATH, "utf-8")) as { tag?: unknown }).tag;
+    return typeof tag === "string" ? tag : null;
+  } catch {
+    return null;
+  }
+}
+
 export function currentArtifactsMatch(tag: string): boolean {
   if (!secureRegularFile(ARTIFACT_MANIFEST_PATH)) return false;
 

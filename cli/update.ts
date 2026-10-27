@@ -9,6 +9,7 @@ import {
 import { reconcileAnchors, reconcileMaintenanceNginx, reconcileNginx } from "./reconcile";
 import { reconcilePhpGuard } from "./php-guard";
 import { type AddonSpec } from "./addon-catalog";
+import { recordNewsSince } from "./manager-action";
 import { operationLockEnv, withOperationLock } from "./operation-lock";
 import { CLI_BIN, LEGACY_GH, MANAGER_UNIT } from "./paths";
 import {
@@ -138,6 +139,7 @@ async function applyUpdate(argv: string[], options: { beforeManagerRestart?: () 
     ? flags["updated-from"].replace(/^v/, "")
     : current;
   const versionChanged = updatedFrom !== target;
+  if (versionChanged) recordNewsSince(updatedFrom);
   const specs = finalizeUpdate(options.beforeManagerRestart);
   if (specs.length === 0) {
     log.ok(versionChanged

@@ -293,6 +293,7 @@ mock.module("../lib/panel-snapshot", () => ({
 
 const { cmdInstall } = await import("../cli/install");
 const { cmdUpdate } = await import("../cli/update");
+const { NEWS_SINCE_FILE } = await import("../cli/manager-action");
 const handoffCall = (tag: string, ...args: string[]) =>
   `run:${CLI_BIN} ${["update", ...args, `--version=${tag}`, "--no-self-update", "--updated-from=1.2.3"].join(" ")}`;
 
@@ -602,6 +603,8 @@ test("the handed-off target binary finalizes all provisioning before restarting 
   expect(calls).toContain("writeConfig:stager");
   expect(calls.some((call) => call.startsWith(`run:${CLI_BIN} update`))).toBe(false);
   expect(calls).toContain("log.ok:clp-addons updated from 1.1.0 to 1.2.3");
+  // The Addons page badges start after the release this update replaced.
+  expect(calls).toContain(`writeAtomic:${NEWS_SINCE_FILE}`);
   expect(calls.indexOf("startUnits")).toBeGreaterThan(calls.indexOf("reconcile"));
   expect(calls.indexOf("startUnits")).toBeGreaterThan(calls.indexOf("reconcileNginxProxy"));
   expect(provisioning).toEqual({
