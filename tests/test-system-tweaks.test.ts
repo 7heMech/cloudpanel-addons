@@ -497,32 +497,76 @@ test("the gateway waits for the longest an install can take", async () => {
   expect(clock).toBeLessThan(gatewayTimeouts[0]!);
 });
 
-test("the install notice stays up until the reply, which repaints the page", async () => {
+/** The page's script against a stand-in DOM: each POST waits for `replies` to answer it. */
+function systemTweaksClient() {
   const source = readFileSync(join(import.meta.dir, "../addons/system-tweaks/app/views.client.js"), "utf8");
   const events: string[] = [];
-  let reply!: (body: unknown) => void;
-  const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer",
-    `${source}\nreturn { installUpdates };`)(
-    () => new Promise((resolve) => { reply = resolve; }),
-    () => {},
+  const replies: { path: string; body: string; answer: (body: unknown) => void }[] = [];
+  const lines: { textContent: string; removed: boolean }[] = [];
+  const row = {
+    querySelector: () => ({ after: (line: { textContent: string }) => events.push(`working: ${line.textContent}`) }),
+  };
+  const control = (label: string) => ({
+    dataset: {} as Record<string, string>, type: "checkbox", checked: true, id: "",
+    getAttribute: () => label, closest: (selector: string) => (selector === ".tweak-row" ? row : null),
+  });
+  const document = {
+    createElement: () => {
+      const line = { textContent: "", removed: false, className: "", innerHTML: "", setAttribute() {},
+        append(text: string) { line.textContent += text; }, remove() { line.removed = true; } };
+      lines.push(line);
+      return line;
+    },
+  };
+  const client = new Function("call", "busy", "notify", "clearNotice", "repaintView", "CLP_ROOT", "clpFlashTimer", "document",
+    `${source}\nreturn { installUpdates, setUpdates, setPanelPhp };`)(
+    (path: string, options: { body: string }) => new Promise((answer) => {
+      events.push(`POST ${path} ${options.body}`);
+      replies.push({ path, body: options.body, answer });
+    }),
+    (on: boolean) => events.push(on ? "busy" : "idle"),
     (message: string, kind: string) => events.push(`${kind}: ${message}`),
-    () => events.push("cleared"),
+    () => {},
     (_holder: unknown, html: string) => events.push(`repaint: ${html}`),
-    { getElementById: () => ({}) },
+    { getElementById: () => ({}), querySelector: () => null, querySelectorAll: () => [] },
     0,
-  ) as { installUpdates: () => Promise<void> };
+    document,
+  ) as Record<"installUpdates" | "setUpdates" | "setPanelPhp", (control: unknown) => Promise<void>>;
+  return { client, control, events, replies, lines };
+}
 
-  const pending = client.installUpdates();
-  await Promise.resolve();
-  expect(events).toEqual(["warn: Installing unattended-upgrades…"]);
-  reply({ ok: true, html: "<p>installed</p>" });
+test("a change says it is running on its own row, and repaints the page from its reply", async () => {
+  const { client, control, events, replies, lines } = systemTweaksClient();
+  const pending = client.installUpdates(control("Install unattended-upgrades"));
+  await Bun.sleep(0);
+  expect(events).toEqual(["busy", "working: Installing unattended-upgrades…", 'POST /api/install-updates {}']);
+  replies[0]!.answer({ ok: true, html: "<p>installed</p>" });
   await pending;
-  expect(events).toEqual([
-    "warn: Installing unattended-upgrades…",
-    "repaint: <p>installed</p>",
-    "ok: unattended-upgrades is installed.",
+  expect(events.slice(3)).toEqual(["idle", "repaint: <p>installed</p>", "ok: unattended-upgrades is installed."]);
+  expect(lines.every((line) => line.removed)).toBe(true);
+  expect(readFileSync(join(import.meta.dir, "../addons/system-tweaks/app/views.client.js"), "utf8")).not.toContain("location.reload");
+});
+
+// Switching updates on and then the panel's PHP, before the first answered, let
+// the first reply repaint the PHP picker back as if its change had stopped.
+test("a second change waits for the first, so neither reply repaints over the other", async () => {
+  const { client, control, events, replies } = systemTweaksClient();
+  const updates = control("Install updates automatically");
+  const php = { ...control("Panel PHP"), type: "select-one", value: "8.4", selectedIndex: 0, options: [{ textContent: "PHP 8.4" }] };
+  const first = client.setUpdates({ ...updates, dataset: { setting: "enabled" } });
+  const second = client.setPanelPhp(php);
+  await Bun.sleep(0);
+  expect(replies.map((reply) => reply.path)).toEqual(["/api/updates"]);
+  replies[0]!.answer({ ok: true, html: "<p>updates on</p>" });
+  await first;
+  await Bun.sleep(0);
+  expect(replies.map((reply) => reply.path)).toEqual(["/api/updates", "/api/panel-php"]);
+  expect(events).toContain("working: Switching the panel to PHP 8.4…");
+  replies[1]!.answer({ ok: true, html: "<p>php 8.4</p>" });
+  await second;
+  expect(events.filter((event) => event.startsWith("repaint") || event.startsWith("ok"))).toEqual([
+    "repaint: <p>updates on</p>", "ok: Saved.", "repaint: <p>php 8.4</p>", "ok: The panel answers on PHP 8.4.",
   ]);
-  expect(source).not.toContain("location.reload");
 });
 
 test("a missing package is reported, refused, and installed only when asked", async () => {
@@ -883,7 +927,8 @@ test("the page shows update options only once updates are on, and says what sile
   const now = Date.parse("2026-10-25T00:00:00Z");
   const outside = dashboardView(state, now);
   expect(outside).not.toContain('data-setting="nginx"');
-  expect(outside).toContain("Automatic updates skip CloudPanel's PHP");
+  expect(outside).toContain("Switch on Install updates automatically to also get CloudPanel's PHP security updates.");
+  expect(outside).not.toContain("skip CloudPanel's PHP");
   // Partly covered is not covered, and a pool that turns upload progress back on is not Off.
   expect(outside).toContain("Repositories: 1 of 3 covered, 1 partly");
   expect(outside).toContain('<span class="badge state-exited">Partly</span>');
@@ -900,4 +945,16 @@ test("the page shows update options only once updates are on, and says what sile
   expect(managed).toContain('<option value="now" selected>Right after the update run</option>');
   expect(managed).not.toContain("skip CloudPanel's PHP");
   expect(managed).not.toContain("A reboot has been needed");
+  expect(outside).not.toContain("Automatic reboot is on");
+  expect(managed).toContain("Automatic reboot is on: the next update run restarts the server.");
+
+  // A required reboot says when the box restarts by itself.
+  const rebootAt = (rebootTime: string, next = "Sat 2026-10-24 06:32:16 UTC") => dashboardView({
+    ...state,
+    settings: { ...DEFAULT_UPDATE_SETTINGS, enabled: true, reboot: true },
+    updates: { ...updates, managed: true, reboot: true, rebootTime, timezone: "Europe/Berlin", timer: { state: "enabled", next } },
+  }, now);
+  expect(rebootAt("04:00")).toContain(
+    "Automatic reboot is on: the next update run (Sat 2026-10-24 06:32:16 UTC) schedules a restart for 04:00 Europe/Berlin.");
+  expect(rebootAt("+15", "")).toContain("Automatic reboot is on: the server restarts 15 minutes after the next update run.");
 });

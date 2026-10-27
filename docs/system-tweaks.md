@@ -12,24 +12,29 @@
 3. Open **Repositories** to see every apt source and whether it is covered. An
    uncovered source still needs `apt upgrade`.
 
+The page makes one change at a time: while one runs, its row shows **Working**
+and the other settings are disabled until it finishes.
+
 **Last run** shows the last result from
 `/var/log/unattended-upgrades/unattended-upgrades.log`. Expand **Failure details**
 for the complete error, including the package URL if recorded. HTTP 404 means
 the repository did not provide the requested package; it is not a successful
-update. **Reboot** appears when an update such as a kernel needs a restart; after
-a week without one, the page warns.
+update. **Reboot** appears when an update such as a kernel needs a restart. With
+automatic reboot on, it says when the server restarts by itself; with it off,
+the page warns after a week.
 
 Switch on **Reboot when required** to allow automatic restarts, then choose
-**Right after the update run** or **At a set time**. Each change is saved at
-once. The time uses the server timezone shown next to it, not your browser's.
+**Right after the update run** or **At a set time**. A time is saved when you
+leave the field or stop typing. The time uses the server timezone shown next to it, not your browser's.
 Switching updates on the first time keeps the reboot policy your apt files
 already had. If a later apt file sets another time, the page says so under the
 control. Changes affect future update runs and do not reschedule or cancel an
 already queued shutdown.
 
 If updates were already on before System Tweaks, the page says **Configured
-outside System Tweaks** and names your file, and warns when that setup skips
-CloudPanel's PHP. Switching on adds it. Switching off removes only
+outside System Tweaks** and names your file. If that setup leaves out
+CloudPanel's PHP, the page suggests switching on **Install updates
+automatically**, which adds it. Switching off removes only
 `/etc/apt/apt.conf.d/52clp-addons-unattended-upgrades`, so your own setup is
 left as it was. Disabling System Tweaks removes it too.
 
