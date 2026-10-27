@@ -86,8 +86,8 @@ describe("Cloudflare", () => {
   });
 
   test("a zone create the token may not make names the permission the token form shows", async () => {
-    const refusal = Response.json({ success: false, errors: [{ code: 0, message: 'Requires permission "com.cloudflare.api.account.zone.create" to create zones for the selected account' }] }, { status: 403 });
-    const api = new CloudflareApi(USER_TOKEN, async () => refusal.clone());
+    const refusal = JSON.stringify({ success: false, errors: [{ code: 0, message: 'Requires permission "com.cloudflare.api.account.zone.create" to create zones for the selected account' }] });
+    const api = new CloudflareApi(USER_TOKEN, async () => new Response(refusal, { status: 403, headers: { "Content-Type": "application/json" } }));
     await expect(api.createZone("a".repeat(32), "example.com")).rejects.toThrow("the token lacks Zone: Edit for this account");
   });
 

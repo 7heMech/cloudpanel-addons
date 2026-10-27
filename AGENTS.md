@@ -14,6 +14,9 @@
   with its options and no explanation. Leave out `action` and the commands only
   systemd, Postfix or the gateway run. Update it in the same change as an
   operator command.
+- Type-check with `bun run typecheck` (`bun check`), not `tsc`: it is what CI
+  runs, and it covers `tools/` and `tests/`, which `tsc` on `tsconfig.json`
+  leaves out.
 
 ## Seeing the UI
 
