@@ -33,8 +33,12 @@ addon's `added` release line (`2.0`) marks it New for as long as that line is
 the one installed. An existing addon's `changed` line marks it Changed for the
 same time, with one line saying what changed; the rest is the changelog's, which
 the update page links. Opening the addon from its row clears both for that
-release line: the browser remembers the addon and line it opened, so nothing is
-stored on the server, and a later line that marks it again shows it again.
+release line, for every administrator and device: the box usually has one
+person who updates it, and a per-user record would need a panel identity for
+nothing. The page asks the manager's `mark-news-seen` verb, which takes only the
+addon name and works out the key (`dns@2.0`) itself, and keeps only keys for the
+installed line in `manager/news-seen.json` under the state directory. A later
+line that marks the addon again shows it again.
 
 ## One catalog, compiled in
 

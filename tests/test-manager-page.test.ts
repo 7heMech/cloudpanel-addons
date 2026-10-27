@@ -87,9 +87,9 @@ test("only a successful manager update reloads its replaced script", async () =>
     let navigations = 0;
     let repaints = 0;
     const notices: string[] = [];
-    const run = new Function("location", "repaintPage", "notify", "findAddons", "hideSeenNews",
+    const run = new Function("location", "repaintPage", "notify", "findAddons",
       `async ${fnBody("managerJobFinished")}\n}\nreturn managerJobFinished;`)(
-      { reload() { navigations++; } }, async () => { repaints++; return true; }, (message: string) => notices.push(message), () => {}, () => {},
+      { reload() { navigations++; } }, async () => { repaints++; return true; }, (message: string) => notices.push(message), () => {},
     );
     await run({ kind, state, addon: "git", error: "download failed" });
     expect(navigations).toBe(reloads);

@@ -91,7 +91,6 @@ async function managerJobFinished(job) {
     return;
   }
   const shown = await repaintPage();
-  hideSeenNews();
   findAddons();
   if (shown && job && job.state === 'done') {
     notify((job.kind === 'disable' ? 'Disabled ' : 'Enabled ') + (job.addon || 'the addon') + '.', 'ok');
@@ -173,30 +172,17 @@ function dismissFailure(id) {
 })();
 
 // New and Changed are for an addon nobody has opened since this release line
-// marked it. Opening it from its row is the read; the browser remembers it.
-const SEEN_NEWS = 'clp-addons-seen-news';
-
-function seenNews() {
-  try { return JSON.parse(localStorage.getItem(SEEN_NEWS) || '[]'); } catch (e) { return []; }
-}
-
-// Run again after a repaint, whose rows arrive with their badges.
-function hideSeenNews() {
-  const seen = seenNews();
-  document.querySelectorAll('[data-news]').forEach((row) => {
-    if (seen.includes(row.getAttribute('data-news'))) row.querySelectorAll('.addon-news').forEach((el) => el.remove());
-  });
-}
-
-// On the document, so a row a repaint replaced still records its click.
-document.addEventListener('click', (event) => {
+// marked it. Opening it from its row is the read, recorded on the server so
+// every administrator and device stops seeing it. Kept alive past the
+// navigation the click starts; a lost one only leaves the badge up.
+function readNews(event) {
   const link = event.target instanceof Element ? event.target.closest('[data-news] a[href]') : null;
   if (!link) return;
-  const key = link.closest('[data-news]').getAttribute('data-news');
-  const now = seenNews();
-  if (now.includes(key)) return;
-  now.push(key);
-  try { localStorage.setItem(SEEN_NEWS, JSON.stringify(now)); } catch (e) {}
-});
-
-hideSeenNews();
+  const name = link.closest('[data-manager-job-card]').getAttribute('data-manager-job-card');
+  fetch(CLP_BASE + '/api/addons/' + encodeURIComponent(name) + '/news-seen', {
+    method: 'POST', keepalive: true, headers: { 'X-CLP-Addons-CSRF': csrf() },
+  }).catch(() => {});
+}
+document.addEventListener('click', readNews);
+// A middle click opens it in a tab without a click event.
+document.addEventListener('auxclick', readNews);

@@ -158,6 +158,10 @@ export const MANAGER_ALLOWED_VERBS = new Set([
   "update",
   "job",
   "watch-job",
+  // Which New and Changed badges an administrator has opened. The key is
+  // computed here from the addon name, so the page cannot record anything else.
+  "news-seen",
+  "mark-news-seen",
   // Rendering the panel's templates again. It belongs to the manager rather
   // than to an addon because one pass regenerates every addon's block in a
   // shared file; an addon that reconciled only its own would strip the others.
