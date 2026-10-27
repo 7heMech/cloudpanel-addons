@@ -12,8 +12,11 @@ import { dashboardView as phpResourcesDashboardView, layout as phpResourcesLayou
 import { dashboardView as smtpDashboardView, layout as smtpLayout } from "../addons/smtp/app/views";
 import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addons/dns/app/views";
+import { dashboardView as archiveDashboardView, layout as archiveLayout } from "../addons/archive/app/views";
+import type { ArchiveState } from "../addons/archive/action";
 import type { DnsState, Review as DnsReview } from "../addons/dns/action";
 import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
+import type { Redirect as DnsRedirect } from "../addons/dns/model";
 import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
 import { tokenTemplate as dnsTokenTemplate } from "../addons/dns/token";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
@@ -81,9 +84,13 @@ function dnsPreviewState(url: URL): DnsState {
     domain, profileId: "web", mode, zone: zone("example.com"), changes: [], problems: [], zoneChoices: [],
     certificateNames: [domain], ...extra,
   });
-  const sites = setup ? [
+  const redirect = (source: string, target: string, extra: Partial<DnsRedirect & { standIn: boolean }> = {}): DnsRedirect & { standIn: boolean } =>
+    ({ source, target, status: 301, keepPath: true, keepQuery: true, profileId: null, standIn: false, ...extra });
+  const sites: DnsState["sites"] = setup ? [
     { domain: "example.com", type: "wordpress", profileId: null, plan: null, ssl: null },
     { domain: "shop.example.com", type: "php", profileId: null, plan: null, ssl: null },
+    { domain: "old-name.example.org", type: "redirect", profileId: null, ssl: null, redirect: redirect("old-name.example.org", "https://example.com", { standIn: true }),
+      plan: { ...plan("old-name.example.org", { profileId: null, zone: null, certificateNames: [] }), redirect: true as const } },
   ] : [
     { domain: "example.com", type: "wordpress", profileId: "web", plan: plan("example.com", { certificateNames: ["example.com", "www.example.com"] }), ssl: null },
     { domain: "shop.example.com", type: "php", profileId: "web", plan: plan("shop.example.com", { changes: [
@@ -112,7 +119,17 @@ function dnsPreviewState(url: URL): DnsState {
       { action: "create", subject: "A brand-new.example.co.uk", detail: "203.0.113.10 · proxied" },
     ] }), ssl: null },
     { domain: "docs.example.com", type: "static", profileId: null, plan: null, ssl: null },
-  ];
+    { domain: "example-brand.net", type: "redirect", profileId: "web-mailcow", ssl: null, redirect: redirect("example-brand.net", "https://example.com", { profileId: "web-mailcow" }),
+      plan: { ...plan("example-brand.net", { profileId: "web-mailcow", zone: zone("example-brand.net"), certificateNames: [] }), redirect: true as const } },
+    { domain: "book.example.com", type: "redirect", profileId: null, ssl: null,
+      redirect: redirect("book.example.com", "https://shop.example.org/products/the-example-handbook-second-edition", { keepPath: false, status: 302 }),
+      plan: { ...plan("book.example.com", { profileId: null, certificateNames: [], changes: [
+        { action: "update", subject: "Cloudflare redirect rule", detail: "book.example.com: 302 to https://shop.example.org/products/the-example-handbook-second-edition · keeps the query string",
+          before: "302 to https://shop.example.org/products/the-example-handbook-second-edition · keeps the path and query string · except Let's Encrypt checks · another tool's rule, taken over in place" },
+        { action: "update", subject: "AAAA book.example.com", detail: "100:: · proxied", before: "2001:db8::10 · proxied" },
+        { action: "delete", subject: "A book.example.com", detail: "203.0.113.10 · proxied" },
+      ] }), redirect: true as const } },
+  ].sort((a, b) => a.domain.localeCompare(b.domain));
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
   const log: DnsState["log"] = setup ? [] : [
     { at: at(3), cause: "New site", sites: ["new-client.example.org"], zone: "example.org", action: "create", subject: "Cloudflare zone",
@@ -151,6 +168,45 @@ function dnsPreviewState(url: URL): DnsState {
     token: dnsTokenTemplate([web, mailcow]),
     presets: DNS_PRESETS,
     log,
+  };
+}
+
+const dnsFoundRule = (source: string, target: string, keepPath = true) => ({ source, zone: source, target, status: 301 as const, keepPath, keepQuery: true });
+const DNS_PREVIEW_FOUND = {
+  redirects: [dnsFoundRule("example-old.org", "https://example.com"), dnsFoundRule("example-press.com", "https://shop.example.org/products/the-example-handbook-second-edition"),
+    dnsFoundRule("examplebooks.net", "https://example.com/books")],
+  notes: ["3 zones could not be read: Cloudflare: the token lacks Single Redirect: Edit for this zone; add it to the token in Cloudflare (Authentication error (10000))"],
+};
+
+function archivePreviewState(url: URL): ArchiveState {
+  const archived = (domain: string, days: number, extra: Partial<ArchiveState["archives"][number]> = {}): ArchiveState["archives"][number] => {
+    const at = new Date(Date.now() - days * 86_400_000).toISOString();
+    return {
+      version: 1, id: `${domain}--${at.replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z")}`, domain, archivedAt: at, type: "php", application: "WordPress",
+      siteUser: domain.split(".")[0]!, rootDirectory: domain, phpVersion: "8.3", nodejsVersion: "", pythonVersion: "", appPort: null, reverseProxyUrl: "",
+      databases: [`${domain.split(".")[0]}_wp`], sshUsers: [], ftpUsers: [], cronJobs: [], bytes: 412 * 1024 * 1024, redirect: null, ...extra,
+    };
+  };
+  return {
+    sites: [
+      { domain: "example.com", type: "php", application: "WordPress", databases: 1, blocked: "" },
+      { domain: "shop.example.com", type: "php", application: "WooCommerce", databases: 1, blocked: "" },
+      { domain: "docs.example.com", type: "static", application: "Static", databases: 0, blocked: "" },
+      { domain: "pages.example.com", type: "reverse-proxy", application: "ReverseProxy", databases: 0, blocked: "Instatic keeps its own final archive when it deletes a site; delete it there" },
+      { domain: "api.example.com", type: "nodejs", application: "Node.js", databases: 0, blocked: "" },
+    ],
+    archives: [
+      archived("spring-campaign.example.org", 3, { redirect: { target: "https://example.org/campaigns", applied: true, reason: "" } }),
+      archived("old-brand.example.net", 41, { type: "static", application: "Static", databases: [], bytes: 18 * 1024 * 1024, restoredAt: new Date(Date.now() - 12 * 86_400_000).toISOString() }),
+    ],
+    dns: true,
+    job: url.searchParams.has("job")
+      ? { id: "20261027T101500Z-ab12cd", task: "archive", targets: ["example.com", "shop.example.com"], state: "running", step: "Packing the site's files", error: "", completed: 0, total: 2, site: "example.com", result: null }
+      : null,
+    lastJob: url.searchParams.has("job") ? null : {
+      id: "20261024T101500Z-ab12cd", task: "archive", targets: ["spring-campaign.example.org"], state: "done", step: "Finished", error: "", completed: 1, total: 1, site: "",
+      result: { done: ["spring-campaign.example.org"], failed: [], notes: [] },
+    },
   };
 }
 
@@ -1576,7 +1632,7 @@ const server = Bun.serve({
           }
         : null;
       const page = indexPage(enabled, notice, {
-        available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp", "terminal", "security-keys"].filter((name) => !enabled.includes(name)),
+        available: ["cloudflare-ips", "dns", "instatic", "stager", "maintenance", "php-resources", "git", "panel-tweaks", "system-tweaks", "wp-tools", "smtp", "terminal", "security-keys", "archive"].filter((name) => !enabled.includes(name)),
         job: previewJob,
         csrf: "preview-csrf-token",
         version: "2.0.0",
@@ -1653,7 +1709,8 @@ const server = Bun.serve({
       html = phpResourcesLayout("PHP Resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/dns/" || path === "/addons/dns") {
-      // ?dialog=profile|advanced|new|review|site|pending|choose|connection|mailcow|server opens that dialog on load; ?ask shows DNS
+      // ?dialog=profile|advanced|new|review|site|pending|choose|connection|mailcow|server|redirect|new-redirect|redirect-site|found opens
+      // that dialog on load; ?ask shows DNS
       // before Automatic is turned on;
       // ?at=<selector> hides the cards above that one, for a phone screenshot of something below the fold; ?dark
       // draws the dark theme.
@@ -1671,6 +1728,10 @@ const server = Bun.serve({
         connection: "dnsEditConnection('')",
         mailcow: "dnsEditMailcow()",
         server: "dnsEditServer()",
+        redirect: "dnsEditRedirect('example-brand.net')",
+        "new-redirect": "dnsEditRedirect('')",
+        "redirect-site": "dnsShowSite('book.example.com')",
+        found: `dnsShowFound(${JSON.stringify(DNS_PREVIEW_FOUND)})`,
       };
       const opener = (dialog ? openers[dialog] ?? "" : at ? `const card=document.querySelector(${JSON.stringify(at)})?.closest("#dns-root > *");for(let el=document.getElementById("dns-root").firstElementChild;el&&el!==card;el=el.nextElementSibling)el.style.display="none"` : "");
       html = dnsLayout("DNS", dnsDashboardView(state), notice)
@@ -1683,6 +1744,12 @@ const server = Bun.serve({
         : url.searchParams.has("test") ? `smtpOpenTest(${arg("test")})` : "";
       html = smtpLayout("SMTP Relay", smtpDashboardView(smtpPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
+    } else if (path === "/addons/archive/" || path === "/addons/archive") {
+      // ?job shows an archive running, ?dialog the archive dialog for two selected sites.
+      html = archiveLayout("Archive Sites", archiveDashboardView(archivePreviewState(url)), notice)
+        .replace("</body>", () => url.searchParams.has("dialog")
+          ? `<script>addEventListener("DOMContentLoaded",function(){document.querySelectorAll(".site-checkbox:not(:disabled)").forEach(function(box,i){if(i<2)box.checked=true});paintFleetSelection();archiveOpen()})</script></body>`
+          : "</body>");
     } else if (path === "/addons/security-keys/" || path === "/addons/security-keys") {
       // ?hardware-only turns synced passkeys off; ?admins-only leaves one role on and ?no-roles none.
       html = securityKeysLayout("Security Keys", securityKeysDashboardView({

@@ -87,6 +87,7 @@ export function seededPolicy(): Policy {
     profiles: [seeded("web", "Web", ["web"]), seeded("web-mailcow", "Web and Mailcow", ["web", "mailcow"])],
     defaultProfileId: null,
     assignments: {},
+    redirects: [],
     knownSiteIds: [],
     held: [],
     connections: [],

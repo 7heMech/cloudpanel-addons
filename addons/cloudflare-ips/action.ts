@@ -8,6 +8,7 @@ import {
   type CommandResult,
 } from "../../cli/action-common";
 import { PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { standInDomains } from "../../cli/stand-ins";
 import {
   errorMessage, openPanelDatabase, trustedVhost, withNginxTransaction, withRecoveryFailures, writeAtomicOwned,
 } from "../../cli/nginx-transaction";
@@ -142,9 +143,11 @@ function writePolicy(path: string, policy: Policy, expectedUid: number): void {
 
 function siteRows(db: Database): SiteRow[] {
   try {
+    const standIns = standInDomains();
     return db.query<SiteRow, []>(
       "SELECT id, domain_name, user, allow_traffic_from_cloudflare_only FROM site ORDER BY domain_name;",
-    ).all().map((row) => ({ ...row, id: Number(row.id), domain_name: String(row.domain_name), user: String(row.user) }));
+    ).all().map((row) => ({ ...row, id: Number(row.id), domain_name: String(row.domain_name), user: String(row.user) }))
+      .filter((row) => !standIns.has(row.domain_name));
   } catch (error) {
     failAction(`CloudPanel does not expose the required Cloudflare site setting: ${error instanceof Error ? error.message : String(error)}`);
   }

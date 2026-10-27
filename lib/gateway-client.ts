@@ -219,7 +219,7 @@ async function callGatewaySocket<T>(
  * invokes directly. Otherwise dispatches securely through the root gateway daemon over UNIX socket.
  */
 export async function callGatewayAction<T = unknown>(
-  addon: "stager" | "instatic" | "cloudflare-ips" | "maintenance" | "php-resources" | "git" | "panel-tweaks" | "system-tweaks" | "wp-tools" | "smtp" | "dns" | "terminal" | "security-keys" | "manager",
+  addon: "stager" | "instatic" | "cloudflare-ips" | "maintenance" | "php-resources" | "git" | "panel-tweaks" | "system-tweaks" | "wp-tools" | "smtp" | "dns" | "terminal" | "security-keys" | "archive" | "manager",
   verb: string,
   args: string[] = [],
   input?: string,
@@ -281,7 +281,7 @@ function streamReply<T>(line: string): ActionResult<T> | null {
  * direct-spawn fallback, because that fallback is the check it would skip.
  */
 export function streamGatewayAction<T = unknown>(options: {
-  addon: "stager" | "instatic" | "git" | "panel-tweaks" | "terminal" | "wp-tools" | "manager";
+  addon: "stager" | "instatic" | "git" | "panel-tweaks" | "terminal" | "wp-tools" | "archive" | "manager";
   verb: string;
   args?: string[];
   sessionId?: string;

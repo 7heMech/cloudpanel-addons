@@ -147,8 +147,11 @@ export const SMTP_ALLOWED_VERBS = new Set([
 export const DNS_ALLOWED_VERBS = new Set([
   "list", "check", "save-profile", "delete-profile", "set-automatic", "zone-account", "assign", "set-default", "confirm",
   "save-connection", "remove-connection", "choose-zone", "save-mailcow", "remove-mailcow", "save-server", "remove-records", "forget-records",
-  "provision", "site-status",
+  "save-redirect", "delete-redirect", "find-redirects", "take-over", "provision", "site-status",
 ]);
+
+/** `run` is absent for the same reason as the manager's: only the job's own unit starts it. */
+export const ARCHIVE_ALLOWED_VERBS = new Set(["list", "archive", "restore", "delete", "job", "watch-job"]);
 
 /**
  * The manager's own privileged verbs: enabling and disabling an addon that

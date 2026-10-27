@@ -33,8 +33,9 @@ test("arrows move and Space toggles, wrapping at either end", async () => {
   // Down from the first addon reaches the second; up from the first, the last.
   const added = await pick("\x1b[B", " ", "\r").result;
   expect(added).toContain(ADDON_NAMES[1]!);
-  const removed = await pick("\x1b[A", " ", "\r").result;
-  expect(removed).not.toContain(ADDON_NAMES.at(-1)!);
+  const last = ADDON_NAMES.at(-1)!;
+  const flipped = await pick("\x1b[A", " ", "\r").result;
+  expect(flipped!.includes(last)).toBe(!PRESELECTED.includes(last));
 });
 
 test("n clears and a selects every addon", async () => {

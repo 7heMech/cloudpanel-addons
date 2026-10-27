@@ -3,7 +3,7 @@
 ## Scope
 
 DNS keeps each CloudPanel site's Cloudflare records to a profile, so that
-creating a site is enough to publish it. Mailcow is an optional integration of a
+creating a site is enough to publish it, and serves redirect domains. Mailcow is an optional integration of a
 profile: the site's domain, its DKIM key and a shared mailbox's permission to
 send as it. The addon is meant to replace infrastructure-as-code for these
 records rather than coexist with it: it follows the panel's site list, and once
@@ -71,7 +71,9 @@ the connections and settings that are set once, and last the change log, which
 is looked back at rather than worked in. The site
 list has the shared search from six sites and selection, as the other site
 lists do. Until a connection exists it opens with the three steps that make a
-new site publish itself: connect, choose the default, turn on Automatic.
+new site publish itself: connect, choose the default, turn on Automatic. The
+bar and the switch are there without a connection too once a redirect domain
+exists, since its stand-in site waits for Automatic.
 
 There is one switch for the whole addon, not one per profile: the operator
 decides once whether DNS may write, and every profile, zone option and missing
@@ -120,25 +122,120 @@ Cloudflare IP Access: Let's Encrypt's HTTP-01 request reaches the origin through
 Cloudflare with Full SSL while the origin still has CloudPanel's self-signed
 certificate.
 
+## Redirect domains
+
+A redirect domain is a source host, a target URL, a status (301, 302, 307 or
+308), keep path and keep query string, and optionally a profile. The source is a
+zone's apex, which covers its `www` too, or one host in a zone that holds other
+things; `www` is added only to an apex. A redirect domain is planned beside the
+sites, in the same table, through the same switch, reviews, log and lock, and
+can be assigned a profile in bulk like a site. It cannot be a CloudPanel site:
+adding one for a site's domain is refused, and a site created later at a
+redirect's domain stops the redirect with a problem.
+
+On Cloudflare it is one Single Redirect rule in the zone's
+`http_request_dynamic_redirect` entrypoint, with a `ref` of
+`clp_dns_redirect_` and a hash of the source, and a proxied `AAAA 100::` at each
+host it answers for. With keep path the target is
+`concat("<target>", http.request.uri.path)`, so a target that keeps the path
+may have no query string and loses a trailing slash; without it, a static URL.
+There is no ACME exclusion, since the origin is never reached. The rule is
+written before the placeholders, so a placeholder never answers without it.
+
+Its profile's web rows are left out and every other row applies, so mail and
+its DKIM key follow the profile as they do for a site. A web row is derived,
+not marked: an A, AAAA or CNAME row whose rendered name is the source or its
+`www`. Nothing else could live there, since the placeholder needs the name, so
+no row needs a flag and no profile needs editing. The placeholder claims A and
+AAAA at each host, and so any CNAME there, which is what replaces the A and
+AAAA records a site or Terraform left. Zone options apply as for a site, and a
+missing zone is created the same way.
+
+A rule another tool wrote is taken over in place. Matching by `ref`, or by an
+equivalent rule as `ruleState` does for zone rules, would add a second rule
+beside one that differs, as Terraform's do (they skip Let's Encrypt's path, and
+some append the path to a target that is one page). So the redirect's rule is
+the rule with its `ref`, or any rule whose expression quotes one of its hosts.
+One such rule that tests only whole hosts (`http.host eq`, `==` or `in`, with
+Let's Encrypt's path optionally left out), all of them the redirect's, is
+updated in place with our `ref`. Anything else -- two rules, or one that names a
+host another way -- is a problem on the plan, to be fixed in Cloudflare. A rule
+is found by its hosts on every check, so it is kept whether or not Cloudflare
+keeps the `ref` an update sets; should Cloudflare refuse to change a rule's
+`ref`, the update is made again with the rule's own.
+
+**Find redirects in Cloudflare** reads the redirect entrypoint of every zone
+the connections reach and lists the rules that redirect one whole host,
+or an apex and its `www`, to a fixed URL or one with the path appended, which
+no redirect domain or site has. Each fills a redirect's source, target, status,
+keep path and keep query string, and a selection is added in one change, which
+once Automatic is one review.
+
+Deleting a redirect domain while DNS asks first stops managing it. Once
+Automatic, a redirect Cloudflare serves is deleted through a review that
+deletes its rule; its records stay, for a site's profile to replace.
+
+### Stand-in sites
+
+With no Cloudflare connection, nothing in Cloudflare is DNS's, so a redirect is
+served from this server: a CloudPanel static site whose vhost returns the
+redirect for the source and, for a registrable domain, its `www`, and serves
+`/.well-known/acme-challenge/` from the site's root. The body is written to the
+panel database as well as nginx (`cli/site-vhost.ts`), since CloudPanel renders
+the file again from it, as it does when a certificate is installed. Each
+reconcile pass asks Let's Encrypt, through `clpctl`, for a stand-in still on
+its self-signed certificate: at the first pass after it is created, then 15
+minutes, an hour and six hours after a failed attempt, and daily from then on,
+since the domain may be pointed here at any time. A stand-in is a write
+like any other: it waits for Automatic, is logged, and a profile assigned to it
+waits for a connection.
+
+`standins.json` records each one before CloudPanel creates it, so the
+new-site work of every addon already sees it. DNS, Stager, Maintenance, SMTP
+Relay and Cloudflare IP Access leave stand-ins out of their site lists, PHP
+Resources and WordPress Tools never list a static site, and Panel Tweaks shows
+"Redirect" as its runtime on the Sites page. Global maintenance mode reaches a
+stand-in as it does every vhost.
+
+Adding a connection holds every redirect a stand-in serves, and removing the
+last one holds every redirect: its whole plan waits until it is reviewed, like
+a held new site, so a move between Cloudflare and this server is seen first. Once its rule and records are in and its zone is active, the
+stand-in site is deleted. Deleting a redirect domain deletes its stand-in at
+once.
+
+### Archived sites
+
+Archive Sites calls the `archive-redirect` verb after deleting a site. The
+redirect takes the profile the site had, and its records stop being the
+deleted site's, so neither Remove records nor Keep is offered for them. Like a
+new site, a plan that only changes the domain's own names -- the rule, its
+placeholders, a stand-in -- is applied at once when DNS is Automatic; one that
+reaches further is held for a review.
+
 ## Cloudflare connections
 
 A connection is one API token. The page links to Cloudflare's user-owned token
 template (`/profile/api-tokens` with `permissionGroupKeys`, `accountId=*` and
 `zoneId=all`), so the operator chooses accounts and zones on Cloudflare's own
-screen and never types an account ID. The permissions are the union of what the
-saved profiles use: Account Settings Read, Zone Edit, DNS Edit, then Zone
-Settings Edit, Config Rules Edit and Zone WAF Edit for the features that need
-them. Zone Edit is asked for whatever the profiles use, since Automatic creates
+screen and never types an account ID. The permissions are Account Settings
+Read, Zone Edit, DNS Edit and Single Redirect Edit, then the union of what the
+saved profiles use: Zone Settings Edit, Config Rules Edit and Zone WAF Edit for
+the features that need them. Single Redirect Edit is asked for before any
+redirect domain exists, so finding the redirects to take over works with the
+token first pasted. Zone Edit is asked for whatever the profiles use, since Automatic creates
 missing zones; Cloudflare refuses a zone
 create without it by naming an internal permission, `account.zone.create`,
 which the page reports as Zone Edit. The URL uses the keys in Cloudflare's
 [template reference](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/),
 plus `config_settings` and `zone_waf`, which the reference leaves out but the
-form accepts. The dashboard drops an unknown key without saying so, which is
+form accepts, and `dynamic_url_redirects` for Single Redirect, which the
+reference also leaves out. The dashboard drops an unknown key without saying so, which is
 why the page also lists the permissions. The template has no parameter for
 Client IP Address Filtering, so the page shows the server's detected addresses
 to paste there. Their API permissions are
-[Config Settings Write and Zone WAF Write](https://developers.cloudflare.com/ruleset-engine/rulesets-api/update/).
+[Config Settings Write and Zone WAF Write](https://developers.cloudflare.com/ruleset-engine/rulesets-api/update/),
+and Single Redirect's is
+[Dynamic URL Redirects Write](https://developers.cloudflare.com/rules/url-forwarding/single-redirects/create-api/).
 Cloudflare refuses a missing permission with a bare "Authentication error", so
 a refused settings or rules read or write is reported with the permission it needs.
 
@@ -274,11 +371,13 @@ refused if it still disagrees.
 
 ## Change log
 
-Every write DNS makes to Cloudflare or Mailcow -- a zone created, a record
-created, updated or deleted, a zone setting or rule, a Mailcow domain, DKIM key
-or sender list -- is logged once it succeeds, with the time, the sites it was
+Every write DNS makes to Cloudflare, Mailcow or a stand-in site -- a zone
+created, a record created, updated or deleted, a zone setting or rule, a
+redirect rule, a Mailcow domain, DKIM key or sender list, a stand-in site -- is
+logged once it succeeds, with the time, the sites it was
 for, the zone, what it was before where that is known, and what made it: a
-scheduled check, Check now, a new site, a confirmed review or Remove records.
+scheduled check, Check now, a new site, a confirmed review, Remove records, a
+deleted redirect or an archived site.
 Each run collects its writes and they are saved before the page's reply and
 again when the action ends, so writes made before a failure are kept. The log
 is the newest thousand writes; the page shows the newest ten and the rest of
@@ -289,7 +388,8 @@ repeat every check and are already on the site's plan.
 ## State, secrets and removal
 
 `/var/lib/clp-addons/dns/` holds `policy.json`, `secrets.json`, the last check,
-tracked records, a pending review, automatic SSL requests and the change log,
+tracked records, a pending review, automatic SSL requests, the stand-in sites
+and the change log,
 each root-owned,
 mode `0600`, replaced atomically, and refused if it is not a root-owned regular
 file of that mode. Tokens and the Mailcow key are read only by the root action
