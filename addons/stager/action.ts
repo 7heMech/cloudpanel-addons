@@ -9,6 +9,7 @@ import { CLI_BIN, CONFIG_DIR, PANEL_IDENTITY_PATH } from "../../cli/paths";
 import { executeSmtpAction } from "../smtp/action";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { learnVhostMapContent, renderVhostBodyResult } from "../../cli/site-vhost";
+import { standInDomains } from "../../cli/stand-ins";
 import {
   createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir as storeJobDir, jobGet, jobSet,
   jobTimestamp, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit, watchJobRecord,
@@ -1623,10 +1624,11 @@ function cmdSites(paths: StagerActionPaths): void {
   }
 
   const sites: Array<Record<string, unknown>> = [];
+  const standIns = standInDomains();
   for (const row of rows) {
     const domain = typeof row.domain_name === "string" ? row.domain_name : "";
     const type = typeof row.type === "string" ? row.type : "";
-    if (!domain) continue;
+    if (!domain || standIns.has(domain)) continue;
     if (type === "reverse-proxy" && !instaticBackendOf(paths, domain)) continue;
     sites.push({
       domain,

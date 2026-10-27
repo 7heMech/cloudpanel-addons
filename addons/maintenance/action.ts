@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { standInDomains } from "../../cli/stand-ins";
 import { isIP } from "node:net";
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync,
@@ -344,9 +345,10 @@ function allStatuses(paths: MaintenanceActionPaths): { global: GlobalMaintenance
   }
   try {
     db.exec("PRAGMA busy_timeout = 5000;");
+    const standIns = standInDomains();
     rows = db.query<{ domain_name: string; type: unknown; user: unknown }, []>(
       "SELECT domain_name, type, user FROM site ORDER BY domain_name",
-    ).all();
+    ).all().filter((row) => !standIns.has(String(row.domain_name)));
     try { gaps = maintenanceGaps(db, coveragePaths(paths)); } catch { gaps = new Map(); }
   } catch {
     failAction("CloudPanel's site database could not be read");
