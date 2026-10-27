@@ -136,6 +136,11 @@ export interface SiteDnsStatus {
   status: string | null;
   /** Only while the zone waits for them; an active zone needs nothing set. */
   nameServers: string[];
+  /**
+   * What happens to the certificate once the zone is active: DNS requests it,
+   * the site's own users have to, or it already has a real one.
+   */
+  certificate: "automatic" | "manual" | "installed";
 }
 
 export interface ProvisionReply {
@@ -579,12 +584,14 @@ class Action {
 
   /** From the last check alone, so opening a page never reaches Cloudflare. */
   siteStatus(domain: string): SiteDnsStatus {
-    this.site(domain);
+    const site = this.site(domain);
     const policy = this.files.policy();
     const plan = this.files.status().plans[domain];
+    const request = this.files.ssl()[domain];
+    const certificate = !site.selfSigned ? "installed" : request && request.siteId === site.id && !request.done ? "automatic" : "manual";
     const zone = policy.assignments[domain] && plan?.profileId === policy.assignments[domain] ? plan.zone : null;
-    if (!zone) return { zone: null, status: null, nameServers: [] };
-    return { zone: zone.name, status: zone.status, nameServers: zone.status === "active" ? [] : zone.nameServers };
+    if (!zone) return { zone: null, status: null, nameServers: [], certificate };
+    return { zone: zone.name, status: zone.status, nameServers: zone.status === "active" ? [] : zone.nameServers, certificate };
   }
 
   async retrySsl(plans: SitePlan[]): Promise<void> {

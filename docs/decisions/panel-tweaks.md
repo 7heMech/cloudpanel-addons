@@ -127,7 +127,9 @@ keyed on CloudPanel's own `site-content` and `table` classes, so it is in force
 from the first paint; the headings are copied onto the cells by a script in the
 same block that names rows while the page is parsed, not once it is ready, so
 the labels are there when the cards are painted. A translated panel gets its
-own headings. The Sites table is left to its own cards.
+own headings. The table's own heading row is hidden only visually, so a screen
+reader keeps the headings for the cells. The Sites table is left to its own
+cards.
 
 ## SSL after native site creation
 

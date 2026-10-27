@@ -338,7 +338,8 @@ test("the narrow-screen table, the row menu and the header are each in or out of
 // none of them.
 test("the mobile layout turns a site tab's tables into labelled cards", () => {
   const frontend = panelMobileSnippet(true);
-  expect(frontend).toContain("body .site-content .card-table table.table:not(.table-sites) > thead { display: none; }");
+  expect(frontend).toContain("table.table:not(.table-sites) > thead { position: absolute;");
+  expect(frontend).not.toContain("> thead { display: none; }");
   expect(frontend).toContain("td.table-actions { position: absolute;");
   expect(frontend).toContain('setAttribute("data-label", th.textContent.trim())');
   expect(panelMobileSnippet(true, true)).not.toContain("site-content");
