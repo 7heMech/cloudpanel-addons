@@ -68,7 +68,7 @@ Backups.
 
 ## Develop
 
-Requires Bun 1.4.3 and ShellCheck.
+Requires Bun 1.4.4 and ShellCheck.
 
 ```bash
 bun install
