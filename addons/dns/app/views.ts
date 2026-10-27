@@ -5,7 +5,7 @@ import { FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSel
 import { mountPath } from "../../../lib/mount";
 import type { DnsState, SiteView } from "../action";
 import type { Profile } from "../model";
-import { CLIPBOARD } from "../clipboard";
+import { CLIPBOARD } from "../../../lib/clipboard";
 import { SSL_LABELS } from "../zone";
 
 const BASE = mountPath("dns");
