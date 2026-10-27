@@ -168,8 +168,8 @@ The addon's page refuses form submissions, as every response does by default.
 Its sign-in window opens on the addon's page for that one site, whose policy
 lets a form go only to the site's HTTPS origin, and the token's form is written
 into it once it has loaded. This keeps the response header size independent
-of the site count and within the panel's proxy buffer. CloudPanel's Sites page
-sets no policy, so its link opens a blank window. Either way the window's
+of the site count and within the panel's proxy buffer. CloudPanel's own pages
+set no policy, so their links open a blank window. Either way the window's
 `opener` is cut before the form is submitted, so a page on the site cannot send
 the panel's tab elsewhere.
 
@@ -194,8 +194,9 @@ bypass behind. The address comes from the request, never the page, and the
 root action refuses
 `--add-bypass` with `--as-user`: lifting maintenance is an administrator's
 decision. Anyone else is told the site is in maintenance. The wording comes
-from the action, so both pages that sign in say the same thing. On the panel's
-Sites page it is shown in CloudPanel's own Bootstrap modal, as are failures.
+from the action, so every page that signs in says the same thing. On the
+panel's own pages it is shown in CloudPanel's own Bootstrap modal, as are
+failures.
 
 A browser that reaches the panel over IPv4 and the site over IPv6 is still
 turned away after the bypass, as it would be after adding the address by hand.
@@ -280,18 +281,17 @@ The addon's own page asks the disk: a site is WordPress when its root holds
 list and what will actually work are the same set, and a WordPress installed
 under the Generic vhost template is in it.
 
-The link on CloudPanel's Sites page cannot ask the disk. It is inside the
-template's site loop, so its condition has to be Twig, and what Twig has is the
-`application` column -- which for a PHP site is the vhost template the site was
-created from. So the link appears for the WordPress-family templates the panel
+The links on CloudPanel's pages cannot ask the disk. Their condition is Twig,
+and what Twig has is the `application` column -- which for a PHP site is the
+vhost template the site was created from. So the links appear for the WordPress-family templates the panel
 ships and the action refuses anything that turns out not to be one, the same
 bargain the Stager addon's own site-list condition made. The complete list is
-the addon's page; the link is the shortcut for the common case.
+the addon's page; the links are the shortcut for the common case.
 
 ## Every role that can see the site
 
-The link is not administrator-only. CloudPanel lists a `ROLE_USER` only the
-sites `user_sites` maps to their account, and that account already has the site
+The links are not administrator-only. CloudPanel lists and opens for a
+`ROLE_USER` only the sites `user_sites` maps to their account, and that account already has the site
 through the panel's file manager and its database, so signing in to its
 WordPress is a shortcut past work they can already do rather than authority they
 did not have. `ROLE_SITE_MANAGER` and `ROLE_ADMIN` see every site, and are not
@@ -304,7 +304,7 @@ account, and refuses a deactivated account whatever its role, because a session
 outlives the status change that should have ended it. An administrator's
 request carries no name and is not narrowed.
 
-Two things follow from the link living on a page this addon did not render. The
+Two things follow from the links living on pages this addon did not render. The
 manager's blanket administrator gate has to name the sign-in route as an
 exception, which `docs/decisions/security.md` describes; and the browser may
 hold no CSRF cookie, because the only responses that set one are addon pages a
@@ -312,10 +312,10 @@ non-administrator cannot open. So the script fetches `/api/session` -- which
 reads nothing and answers with the cookie and its token -- but only when there
 is no token to send.
 
-## Two blocks, neither required
+## Where the links go
 
-The link and the script are separate injections into the same template because
-the page has two places for them: anything put in the action cell is emitted
+On the Sites page the link and the script are separate injections into the same
+template because the page has two places for them: anything put in the action cell is emitted
 once per row, which suits a Twig condition and not a script. The script goes
 above the table, where it is emitted once, and binds one listener to the
 document rather than one per row -- the rows belong to CloudPanel, and the Panel
@@ -328,8 +328,13 @@ every WordPress row. The menu Panel Tweaks can build reads the other way and
 restores the order, so the link carries `clp-addons-row-action` from
 `lib/row-actions.ts` for it to sort on.
 
-Neither is `required`, so a CloudPanel release that renames the sites card or
-the Manage link costs the shortcut rather than stopping the addon from being
+On a site's own pages the link goes in the Domain box, after the panel's own
+link to the site, which keeps opening the site. That box is
+`Frontend/Site/Partial/site-info.html.twig`, rendered once per page on every
+site tab, so one injection carries the link, the script and its rule.
+
+None is `required`, so a CloudPanel release that renames the sites card, the
+Manage link or the Domain link costs the shortcut rather than stopping the addon from being
 enabled. The addon's own page signs in to the same sites either way.
 
 ## MainWP enrollment
