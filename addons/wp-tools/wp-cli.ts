@@ -1,14 +1,11 @@
 import { existsSync } from "node:fs";
+import type { JobSiteProgress } from "../../cli/job-store";
 
 export interface WpSite {
   domain: string; user: string; root: string; home: string; phpVersion: string;
 }
 /** Where a pass is: `completed` sites done of `total`, and the one it is on. */
-export interface WpProgress {
-  completed: number;
-  total: number;
-  site: string;
-}
+export type WpProgress = JobSiteProgress;
 
 export interface WpOptions {
   runWpCommand?: (command: WpCommand) => Promise<string>;

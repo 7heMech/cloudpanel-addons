@@ -88,6 +88,11 @@ background jobs whose runner the gateway cannot start; the page can only start
 one of a fixed set of tasks and watch it. The normal WordPress plugin remains installed when
 automation stops. See [WordPress Tools](wp-tools.md).
 
+Panel Tweaks' size measurement is the same kind of job: the page can start the
+one measurement and watch it, but not run it, and neither verb takes a path or
+a site. The unattended sweep is the repair timer's and has no gateway verb. See
+[Panel Tweaks](panel-tweaks.md#measure-now-is-a-background-job).
+
 CloudPanel's native basic-auth allowance inherits its global real-IP trust.
 Stock CloudPanel's `set_real_ip_from 0.0.0.0/0` accepts a forged `X-Real-IP` from
 any IPv4 peer, so anyone who knows an allowed IP can replay it to bypass

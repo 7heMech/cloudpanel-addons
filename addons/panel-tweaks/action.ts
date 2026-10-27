@@ -8,18 +8,22 @@
  * site list is assembled here and sent as data the injected script paints.
  *
  * A disk measurement walks every site's home directory, which only root can
- * read across accounts. It is a verb with a fixed shape, and it accepts no
- * path. Automatic SSL submits CloudPanel's own certificate form from the
+ * read across accounts. The page starts one as a background job with a fixed
+ * shape, and it accepts no path. Automatic SSL submits CloudPanel's own certificate form from the
  * browser; here it is only a switch.
  */
 import { Database } from "bun:sqlite";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  ActionFailure, emitActionError, emitActionOk, failAction, runCommand, withFileLock,
-  type CommandResult,
+  ActionFailure, acquireFileLock, emitActionError, emitActionOk, failAction, runCommand, withFileLock,
+  type CommandResult, type FileLockHandle,
 } from "../../cli/action-common";
-import { PANEL_DB, STATE_DIR } from "../../cli/paths";
+import {
+  jobCommonFields, jobDir, jobIdArgument, jobSiteProgress, listJobIds, pruneJobs, queueJob, readJobLog,
+  readJobResult, runSiteJob, watchJobRecord, type JobCommonFields, type JobSiteProgress, type startJobUnit,
+} from "../../cli/job-store";
+import { CLI_BIN, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { writeFileAtomic } from "../../lib/atomic-write";
 import { certificateIssuer, issuerLabel } from "../../lib/certificate-issuer";
 import { PANEL_USER_NAME_RE, panelUserSites } from "../../lib/panel-users";
@@ -28,7 +32,14 @@ const TWEAKS_VERSION = 1;
 const DISK_VERSION = 1;
 const DISK_SCAN_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "scan-stream";
+/** A measurement's unit is stopped after this long, waiting for a scheduled sweep included. */
+const MEASURE_RUNTIME_SECONDS = 3 * 60 * 60;
+/** How long a measurement waits for a scheduled sweep that holds the disk lock. */
+const MEASURE_LOCK_WAIT_SECONDS = 60 * 60;
+const JOB_RETENTION_DAYS = 7;
+
+/** `scan` is the repair timer's sweep; the page starts a `measure` job instead. */
+export type PanelTweaksVerb = "state" | "set-tweaks" | "scan" | "measure";
 
 /**
  * What the addon does, as independent modes.
@@ -195,6 +206,8 @@ export interface PanelTweaksState {
   sites: TweakSiteView[];
   /** When the disk sweep last completed; "" when it never has. */
   diskMeasuredAt: string;
+  /** The measurement an operator started and the page follows; an administrator's state only. */
+  measuring: MeasureJobView | null;
 }
 
 export interface ScanResult {
@@ -203,17 +216,11 @@ export interface ScanResult {
   measuredAt: string;
 }
 
-/** One compact update from an operator-pressed disk sweep. */
-export type ScanStreamEvent =
-  | {
-      phase: "progress";
-      completed: number;
-      total: number;
-      measured: number;
-      skipped: number;
-      site: string;
-    }
-  | ({ phase: "complete" } & ScanResult);
+/** A measurement an operator started, as the page follows it. */
+export interface MeasureJobView extends JobCommonFields, JobSiteProgress {
+  id: string;
+  result: ScanResult | null;
+}
 
 export interface PanelTweaksActionPaths {
   panelDb: string;
@@ -222,6 +229,11 @@ export interface PanelTweaksActionPaths {
   lockFile: string;
   /** Held for a whole disk measurement, so switches still change meanwhile. */
   scanLockFile: string;
+  jobsDir: string;
+  /** Held while a measurement is recorded, so there is never a second. */
+  jobsLockFile: string;
+  /** What systemd runs for a measurement. */
+  actionBinary: string;
   /** Where MySQL keeps one directory per database, when the box has MySQL. */
   mysqlDir: string;
   passwd: string;
@@ -235,7 +247,9 @@ export interface PanelTweaksActionOptions {
   processUid?: number;
   run?: (command: string, args: string[]) => CommandResult;
   now?: () => Date;
-  onProgress?: (event: Extract<ScanStreamEvent, { phase: "progress" }>) => void;
+  onProgress?: (progress: JobSiteProgress) => void;
+  /** Test-only; production hands a measurement to systemd. */
+  startJob?: typeof startJobUnit;
 }
 
 export const DEFAULT_PANEL_TWEAKS_PATHS: PanelTweaksActionPaths = {
@@ -244,6 +258,9 @@ export const DEFAULT_PANEL_TWEAKS_PATHS: PanelTweaksActionPaths = {
   diskFile: `${STATE_DIR}/panel-tweaks/disk-usage.json`,
   lockFile: "/run/lock/clp-addons/panel-tweaks.lock",
   scanLockFile: "/run/lock/clp-addons/panel-tweaks-scan.lock",
+  jobsDir: `${STATE_DIR}/panel-tweaks/jobs`,
+  jobsLockFile: "/run/lock/clp-addons/panel-tweaks-jobs.lock",
+  actionBinary: CLI_BIN,
   mysqlDir: "/var/lib/mysql",
   passwd: "/etc/passwd",
   rootUid: 0,
@@ -306,11 +323,13 @@ interface DiskCacheEntry {
 
 interface DiskCache {
   measuredAt: string;
+  /** Sites the sweep could not measure, for a measurement that waited on it to report. */
+  skipped: number;
   sites: Record<string, DiskCacheEntry>;
 }
 
 function readDiskCache(paths: PanelTweaksActionPaths): DiskCache {
-  const empty: DiskCache = { measuredAt: "", sites: {} };
+  const empty: DiskCache = { measuredAt: "", skipped: 0, sites: {} };
   const stored = readJsonFile(paths.diskFile, paths.rootUid, "disk usage");
   if (stored?.version !== DISK_VERSION || typeof stored.sites !== "object" || stored.sites === null) return empty;
   const sites: Record<string, DiskCacheEntry> = {};
@@ -324,7 +343,11 @@ function readDiskCache(paths: PanelTweaksActionPaths): DiskCache {
       measuredAt: entry.measuredAt,
     };
   }
-  return { measuredAt: typeof stored.measuredAt === "string" ? stored.measuredAt : "", sites };
+  return {
+    measuredAt: typeof stored.measuredAt === "string" ? stored.measuredAt : "",
+    skipped: Number.isSafeInteger(stored.skipped) && Number(stored.skipped) >= 0 ? Number(stored.skipped) : 0,
+    sites,
+  };
 }
 
 function writeDiskCache(paths: PanelTweaksActionPaths, cache: DiskCache): void {
@@ -536,6 +559,8 @@ function stateOf(paths: PanelTweaksActionPaths, asUser = ""): PanelTweaksState {
       tweaks: readTweaks(paths),
       sites: siteViews(rows, cache),
       diskMeasuredAt: cache.measuredAt,
+      // Which site it is on names a site, and the narrowed reader may not own it.
+      measuring: asUser ? null : activeMeasurement(paths.jobsDir),
     };
   } finally {
     db.close();
@@ -629,14 +654,7 @@ function scanDisk(
   let skipped = 0;
 
   for (const [index, row] of rows.entries()) {
-    options.onProgress?.({
-      phase: "progress",
-      completed: index,
-      total: rows.length,
-      measured: Object.keys(sites).length,
-      skipped,
-      site: row.domain_name,
-    });
+    options.onProgress?.({ completed: index, total: rows.length, site: row.domain_name });
     const account = accounts.get(row.user);
     if (!account || !ownedDirectory(account.home, account.uid)) {
       skipped++;
@@ -659,7 +677,7 @@ function scanDisk(
     sites[row.domain_name] = { bytes, databaseBytes, measuredAt };
   }
 
-  writeDiskCache(paths, { measuredAt, sites });
+  writeDiskCache(paths, { measuredAt, skipped, sites });
   return { measured: Object.keys(sites).length, skipped, measuredAt };
 }
 
@@ -675,7 +693,7 @@ interface ParsedAction {
 
 function parseAction(argv: string[]): ParsedAction {
   const [rawVerb, ...rest] = argv;
-  const verbs: PanelTweaksVerb[] = ["state", "set-tweaks", "scan", "scan-stream"];
+  const verbs: PanelTweaksVerb[] = ["state", "set-tweaks", "scan", "measure"];
   const verb = verbs.find((known) => known === rawVerb);
   if (!verb) failAction(`unknown panel tweaks verb '${rawVerb ?? ""}'`);
 
@@ -741,16 +759,109 @@ async function setTweaks(
   });
 }
 
+// --- the measurement an operator starts -------------------------------------
+//
+// A sweep can take minutes, longer than a page request should be held open,
+// so the page starts it as a background job and follows its record: a reload
+// or another tab finds it again, and pressing Measure now meanwhile follows
+// the one already running rather than starting a second.
+
+export function measureJobView(jobsDir: string, id: string): MeasureJobView | null {
+  const dir = jobDir(jobsDir, id);
+  const common = jobCommonFields(dir);
+  if (!common.state) return null;
+  return { id, ...common, ...jobSiteProgress(dir), result: readJobResult<ScanResult>(dir) };
+}
+
+export function activeMeasurement(jobsDir: string): MeasureJobView | null {
+  for (const id of listJobIds(jobsDir)) {
+    const view = measureJobView(jobsDir, id);
+    if (view && (view.state === "queued" || view.state === "running")) return view;
+  }
+  return null;
+}
+
+export interface MeasureStarted {
+  job: MeasureJobView;
+  /** The measurement was already running, and this is it. */
+  attached: boolean;
+}
+
+async function startMeasurement(paths: PanelTweaksActionPaths, options: PanelTweaksActionOptions): Promise<MeasureStarted> {
+  return withFileLock(paths.jobsLockFile, 15, "another measurement is being started", async () => {
+    const running = activeMeasurement(paths.jobsDir);
+    if (running) return { job: running, attached: true };
+    const id = queueJob({
+      addon: "panel-tweaks",
+      jobsDir: paths.jobsDir,
+      fields: {},
+      description: "clp-addons: Panel Tweaks site size measurement",
+      actionBinary: paths.actionBinary,
+      runtimeSeconds: MEASURE_RUNTIME_SECONDS,
+      start: options.startJob,
+    });
+    return { job: measureJobView(paths.jobsDir, id)!, attached: false };
+  });
+}
+
+/** The disk lock, saying so in the job's step when a scheduled sweep has it. */
+async function scanLock(paths: PanelTweaksActionPaths, wait: (step: string) => void): Promise<FileLockHandle> {
+  try {
+    return await acquireFileLock(paths.scanLockFile, 0, "the disk is being measured");
+  } catch (error) {
+    if (!(error instanceof ActionFailure)) throw error;
+  }
+  wait("Waiting for the scheduled measurement to finish");
+  return acquireFileLock(paths.scanLockFile, MEASURE_LOCK_WAIT_SECONDS, "the scheduled measurement did not finish in time");
+}
+
+/** systemd's half. A sweep that finished while this waited for it is the answer. */
+async function runMeasurement(paths: PanelTweaksActionPaths, id: string, options: PanelTweaksActionOptions): Promise<MeasureJobView | null> {
+  if (!measureJobView(paths.jobsDir, id)) failAction(`no such job: ${id}`);
+  await runSiteJob(jobDir(paths.jobsDir, id), "Measuring", async (onProgress, wait) => {
+    const before = readDiskCache(paths).measuredAt;
+    const lock = await scanLock(paths, wait);
+    try {
+      const cache = readDiskCache(paths);
+      if (cache.measuredAt && cache.measuredAt !== before) {
+        return { measured: Object.keys(cache.sites).length, skipped: cache.skipped, measuredAt: cache.measuredAt };
+      }
+      return scanDisk(paths, { ...options, onProgress });
+    } finally {
+      lock.release();
+    }
+  });
+  return measureJobView(paths.jobsDir, id);
+}
+
+/** Expired measurements go, and one whose runner died is marked failed. */
+function pruneMeasurements(paths: PanelTweaksActionPaths): void {
+  pruneJobs({
+    addon: "panel-tweaks",
+    jobsDir: paths.jobsDir,
+    retentionDays: JOB_RETENTION_DAYS,
+    stuckMessage: "the measurement stopped without recording a result",
+  });
+}
+
 export async function executePanelTweaksAction(
   argv: string[],
   options: PanelTweaksActionOptions = {},
 ): Promise<unknown> {
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("panel tweaks actions must run as root");
   const paths = pathsFor(options);
+  if (argv[0] === "run") return runMeasurement(paths, jobIdArgument(argv.slice(1)), options);
+  if (argv[0] === "job") {
+    const id = jobIdArgument(argv.slice(1));
+    const job = measureJobView(paths.jobsDir, id);
+    if (!job) failAction(`no such job: ${id}`);
+    return { job, log: readJobLog(jobDir(paths.jobsDir, id)) };
+  }
   const { verb, asUser } = parseAction(argv);
 
   if (verb === "state") return stateOf(paths, asUser);
   if (verb === "set-tweaks") return setTweaks(paths, options);
+  if (verb === "measure") return startMeasurement(paths, options);
   return withFileLock(paths.scanLockFile, 15, "a disk measurement is already running", async () =>
     scanDisk(paths, options));
 }
@@ -760,16 +871,22 @@ export async function runPanelTweaksAction(
   options: PanelTweaksActionOptions = {},
 ): Promise<number> {
   const emit = options.emitReply !== false;
-  const streaming = argv[0] === "scan-stream";
   try {
-    const data = await executePanelTweaksAction(argv, streaming && emit ? {
-      ...options,
-      onProgress(event) {
-        options.onProgress?.(event);
-        emitActionOk(event);
-      },
-    } : options);
-    if (emit) emitActionOk(streaming ? { phase: "complete", ...(data as ScanResult) } : data);
+    if (argv[0] === "watch-job") {
+      if ((options.processUid ?? process.getuid?.()) !== 0) failAction("panel tweaks actions must run as root");
+      const paths = pathsFor(options);
+      const id = jobIdArgument(argv.slice(1));
+      const dir = jobDir(paths.jobsDir, id);
+      if (!measureJobView(paths.jobsDir, id)) failAction(`no such job: ${id}`);
+      await watchJobRecord({
+        dir,
+        read: () => ({ job: measureJobView(paths.jobsDir, id), log: readJobLog(dir) }),
+        emit: (data) => { if (emit) emitActionOk(data); },
+      });
+      return 0;
+    }
+    const data = await executePanelTweaksAction(argv, options);
+    if (emit) emitActionOk(data);
     return 0;
   } catch (error) {
     const message = reason(error);
@@ -779,8 +896,10 @@ export async function runPanelTweaksAction(
   }
 }
 
-/** The repair hook: sweep the disk when due. */
+/** The repair hook: expire old measurements, and sweep the disk when due. */
 export async function panelTweaksUpkeep(options: PanelTweaksActionOptions = {}): Promise<string | null> {
+  // One whose runner died is marked failed, so the page stops following it.
+  pruneMeasurements(pathsFor(options));
   return scanDiskUsage(options);
 }
 
@@ -788,6 +907,8 @@ export async function panelTweaksUpkeep(options: PanelTweaksActionOptions = {}):
 export async function scanDiskUsage(options: PanelTweaksActionOptions = {}): Promise<string | null> {
   const paths = pathsFor(options);
   if (!readTweaks(paths).diskUsage) return null;
+  // The measurement an operator started is about to refresh every size anyway.
+  if (activeMeasurement(paths.jobsDir)) return null;
   const measuredAt = Date.parse(readDiskCache(paths).measuredAt);
   const now = (options.now ?? (() => new Date()))().getTime();
   const age = now - measuredAt;

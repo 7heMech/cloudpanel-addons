@@ -1,5 +1,8 @@
 import { esc } from "../../../lib/app-http";
-import { FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, fleetFilterHtml, fleetRowSelectionStyle, renderLayout } from "../../../lib/app-ui";
+import {
+  FLEET_FOOTER_HTML, FLEET_ROW_SELECTION_JS, JOB_PROGRESS_JS, JOB_PROGRESS_STYLE, fleetFilterHtml, fleetRowSelectionStyle,
+  jobProgressHtml, renderLayout,
+} from "../../../lib/app-ui";
 import { mountPath } from "../../../lib/mount";
 import type { WpJobView, WpSiteView } from "../action";
 import type { VarnishPluginStatus } from "../varnish";
@@ -22,8 +25,8 @@ export function layout(
     brand: "WordPress Tools",
     base: BASE,
     nav: [],
-    css: `${STYLE}${fleetRowSelectionStyle("wp-selectable")}`,
-    script: `${FLEET_ROW_SELECTION_JS}\n${SCRIPT}`,
+    css: `${JOB_PROGRESS_STYLE}${STYLE}${fleetRowSelectionStyle("wp-selectable")}`,
+    script: `${FLEET_ROW_SELECTION_JS}\n${JOB_PROGRESS_JS}\n${SCRIPT}`,
     updateNotice,
   });
 }
@@ -119,19 +122,10 @@ const JOB_TITLES: Record<WpJobView["task"], string> = {
   "mainwp-cleanup": "Cleaning up MainWP",
 };
 
-/** A running job's progress; the page follows each `data-job` and repaints when it ends. */
-function jobProgress(job: WpJobView): string {
-  const count = job.total ? `${Math.min(job.completed + 1, job.total)} of ${job.total}` : "";
-  return `
-      <div class="wp-job" data-job="${esc(job.id)}" data-policy="${job.policy}" data-site="${esc(job.site)}" role="status">
-        <div class="wp-job-head"><strong>${JOB_TITLES[job.task]}</strong><span class="wp-job-step hint">${esc(job.state === "queued" ? "Waiting to start" : job.site ? `${count ? `${count}: ` : ""}${job.site}` : job.step)}</span></div>
-        <progress class="wp-job-bar" max="${Math.max(job.total, 1)}"${job.total ? ` value="${job.completed}"` : ""}></progress>
-      </div>`;
-}
-
 function jobsStrip(data: WpDashboard): string {
   const jobs = [data.jobs.varnish, data.jobs.mainwp].filter((job): job is WpJobView => Boolean(job));
-  return jobs.length ? `<div class="wp-jobs">${jobs.map(jobProgress).join("")}
+  return jobs.length ? `<div class="wp-jobs">${jobs.map((job) => `
+      ${jobProgressHtml(job, JOB_TITLES[job.task])}`).join("")}
         <p class="hint">Runs in the background: you can leave or reload this page.</p></div>` : "";
 }
 

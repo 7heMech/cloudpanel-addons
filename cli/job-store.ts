@@ -20,14 +20,14 @@ import {
 } from "node:fs";
 import { writeFileAtomic } from "../lib/atomic-write";
 import { join } from "node:path";
-import { runCommand } from "./action-common";
+import { failAction, runCommand } from "./action-common";
 import { CLI_BIN } from "./paths";
 
 /** A job id is a UTC stamp plus six hex characters: 20260911T160031Z-35e759. */
 // Re-exported from its neutral home so the app services can check an id
 // without importing this module's job orchestration. See lib/job-id.ts.
 export { JOB_ID_RE, validateJobId } from "../lib/job-id";
-import { isTerminalJobState, JOB_ID_RE } from "../lib/job-id";
+import { isTerminalJobState, JOB_ID_RE, validateJobId } from "../lib/job-id";
 
 /**
  * The longest field value that will ever be read back.
@@ -364,4 +364,127 @@ export function pruneJobs(options: {
     }
   }
   return { removed, stuck };
+}
+
+// --- jobs that work through sites ------------------------------------------
+//
+// WordPress Tools' checks and Panel Tweaks' size measurement each visit one
+// site after another, and the page draws the same "12 of 40: site" bar for
+// both. The record fields and the step's wording are decided here, so the two
+// cannot drift apart the way Stager's and Instatic's job stores once did.
+
+/** `--job=<id>` from the page, or `--job <id>` as systemd and the stream pass it. */
+export function jobIdArgument(rest: string[]): string {
+  const value = rest.length === 1 && rest[0]!.startsWith("--job=") ? rest[0]!.slice("--job=".length)
+    : rest.length === 2 && rest[0] === "--job" ? rest[1]! : "";
+  const id = validateJobId(value);
+  if (!id) failAction("a job takes exactly --job=<id>");
+  return id;
+}
+
+/** Where a job that works through sites is: `completed` of `total` done, and the one it is on. */
+export interface JobSiteProgress {
+  completed: number;
+  total: number;
+  /** The site being worked on, or "" between sites. */
+  site: string;
+}
+
+function jobCount(dir: string, field: string): number {
+  const value = Number.parseInt(jobGet(dir, field), 10);
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+export function jobSiteProgress(dir: string): JobSiteProgress {
+  return { completed: jobCount(dir, "completed"), total: jobCount(dir, "total"), site: jobGet(dir, "site") };
+}
+
+/** What a finished job recorded, or null before it has. */
+export function readJobResult<T>(dir: string): T | null {
+  try {
+    return JSON.parse(readFileSync(join(dir, "result.json"), "utf8")) as T;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Record a queued job and hand it to systemd. `fields` are the addon's own,
+ * written before the state, so a reader never sees a queued job without them.
+ * A unit systemd refuses leaves the record failed and throws.
+ */
+export function queueJob(options: {
+  addon: string;
+  jobsDir: string;
+  fields: Record<string, string>;
+  description: string;
+  actionBinary: string;
+  runtimeSeconds: number;
+  start?: typeof startJobUnit;
+}): string {
+  const id = newJobId();
+  const dir = createJobDir(options.jobsDir, id);
+  for (const [field, value] of Object.entries(options.fields)) jobSet(dir, field, value);
+  jobSet(dir, "createdAt", jobTimestamp());
+  jobSet(dir, "step", "Waiting to start");
+  jobSet(dir, "state", "queued");
+  createJobLog(dir);
+  const started = (options.start ?? startJobUnit)({
+    addon: options.addon,
+    id,
+    description: options.description,
+    actionBinary: options.actionBinary,
+    properties: [`RuntimeMaxSec=${options.runtimeSeconds}`],
+  });
+  if (!started.ok) {
+    jobSet(dir, "error", "the background job could not be started");
+    jobSet(dir, "state", "failed");
+    throw new Error(`systemd-run refused to start the job${started.stderr.trim() ? `: ${started.stderr.trim()}` : ""}`);
+  }
+  return id;
+}
+
+/** "Measuring 12 of 40: site", or "Measuring site" when there is only the one. */
+export function siteProgressStep(verb: string, progress: JobSiteProgress): string {
+  return progress.total > 1
+    ? `${verb} ${Math.min(progress.completed + 1, progress.total)} of ${progress.total}: ${progress.site}`
+    : `${verb} ${progress.site}`;
+}
+
+/**
+ * Run a queued job to its end, writing its progress as it goes: `work` calls
+ * `onProgress` before each site, and what it returns is the job's result.
+ * `verb` words the step, and `wait` is what the step says until the first site.
+ */
+export async function runSiteJob<T>(
+  dir: string,
+  verb: string,
+  work: (onProgress: (progress: JobSiteProgress) => void, wait: (step: string) => void) => Promise<T>,
+): Promise<void> {
+  const state = jobGet(dir, "state");
+  if (state !== "queued") throw new Error(`the job is already ${state || "gone"}`);
+  jobSet(dir, "startedAt", jobTimestamp());
+  jobSet(dir, "state", "running");
+  const onProgress = (progress: JobSiteProgress) => {
+    jobSet(dir, "completed", String(progress.completed));
+    jobSet(dir, "total", String(progress.total));
+    jobSet(dir, "site", progress.site);
+    // Last, because the stream sends an update when the step changes.
+    jobSet(dir, "step", siteProgressStep(verb, progress));
+  };
+  try {
+    const result = await work(onProgress, (step) => jobSet(dir, "step", step));
+    writeFileAtomic(join(dir, "result.json"), `${JSON.stringify(result)}\n`, { mode: 0o600 });
+    jobSet(dir, "completed", jobGet(dir, "total") || "0");
+    jobSet(dir, "site", "");
+    jobSet(dir, "step", "Finished");
+    jobSet(dir, "finishedAt", jobTimestamp());
+    jobSet(dir, "state", "done");
+  } catch (error) {
+    jobSet(dir, "error", error instanceof Error ? error.message : String(error));
+    jobSet(dir, "site", "");
+    jobSet(dir, "step", "Failed");
+    jobSet(dir, "finishedAt", jobTimestamp());
+    jobSet(dir, "state", "failed");
+  }
 }

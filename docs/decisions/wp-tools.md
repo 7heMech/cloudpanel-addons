@@ -478,7 +478,8 @@ policy's job runs the page disables that policy's buttons, switch and Dashboard
 picker; sign-in and the other policy stay usable.
 
 The runner writes how many sites it has done, of how many, and which one it is
-on before each site. `sites` returns each policy's running job, so the page
+on before each site, through the shared per-site progress (see
+[Platform integration](platform.md)). `sites` returns each policy's running job, so the page
 draws a progress bar for it under the table on every load and repaint and
 follows it through the shared job event stream, polling where the stream drops,
 and marks the row being worked on. When it ends the page repaints and says what

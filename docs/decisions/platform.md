@@ -234,6 +234,16 @@ path it does -- so the addon's own router still decides what that is, and the
 HTML `/jobs/:id` page stays with each addon, because what a job looks like
 differs and how it is watched does not.
 
+A job that works through sites -- WordPress Tools' checks and connections,
+Panel Tweaks' size measurement -- records its progress the same way, through
+`runSiteJob` in `cli/job-store.ts`: how many sites are done of how many, the
+one it is on, and a step such as `Measuring 12 of 40: site`, then its result.
+The page draws that as `jobProgressHtml` from `lib/app-ui.ts`, and the client
+half, `followJobProgress`, follows every bar on the page through the routes
+above until the job ends. A page drawn while a job runs follows it again, so a
+reload picks it up. The addon keeps only what the job means: its title, what it
+disables meanwhile, and what it says when it ends.
+
 A job id is defined once, in `lib/job-id.ts`, which `cli/job-store.ts`
 re-exports. The app services needed the syntax without the CLI's job
 orchestration; three copies of the pattern is how the checking side and the
