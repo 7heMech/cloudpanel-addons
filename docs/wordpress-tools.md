@@ -16,13 +16,21 @@ Enable Varnish for a site in CloudPanel, then open WordPress Tools. Under
 **Automation**, turn on **Install CLP Varnish Cache automatically** to install and activate the
 [official CLP Varnish Cache plugin](https://www.cloudpanel.io/docs/v2/frontend-area/varnish-cache/wordpress/plugin/)
 on applicable WordPress sites. Automation starts off. Only actual WordPress
-installations with Varnish enabled qualify; multisite networks are left alone.
+installations with Varnish enabled qualify. On a multisite network the plugin
+is network-activated, which covers every site in it.
 
 Every 15 minutes the repair timer queues a background pass to install the
-plugin on sites that have not had it yet. **Check now** checks every site,
-applies the policy immediately and refreshes the status shown. Large fleets or
-slow downloads may leave sites pending; check again to continue. The status badge
-shows when it was checked.
+plugin on sites that have not had it yet. **Check now** checks every site and
+refreshes the status shown; with automation on it also installs where the
+policy says to, with it off it changes nothing. A site shows **Install** or
+**Activate** only once a check has found the plugin missing or inactive. The
+status badge shows when it was checked.
+
+Checks, installs and MainWP connections run in the background with a progress
+bar under the table. You can keep using the page, or leave and come back; the
+progress is still there. When the job ends the table updates and a message
+says what happened. A job stops starting sites after about an hour; check again
+to continue.
 
 An existing inactive plugin is never activated automatically. A plugin removed
 after a check is never installed again automatically, so removing it in
@@ -59,7 +67,10 @@ maintenance page blocks it too; allow the server's own address. **Check now**
 refreshes every site and, with automation on, connects new ones at once.
 
 A site that already has MainWP Child shows **Connect** instead; nothing connects
-it automatically. A Child connected to another Dashboard must be disconnected in
+it automatically, since that Child may be meant for another Dashboard. To
+connect several sites at once, tick them and choose **Connect selected to
+MainWP**, or choose **Connect all unconnected**. Sites already connected are
+left as they are. A Child connected to another Dashboard must be disconnected in
 MainWP first. A Child removed after a check is never installed again
 automatically; **Connect** puts it back. **Retry** repeats a failed connection.
 The Dashboard's own site and multisite networks are left alone.

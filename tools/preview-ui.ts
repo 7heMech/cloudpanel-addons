@@ -28,7 +28,7 @@ const CLONABLE_TYPES = ["php", "static", "reverse-proxy"];
 import { WP_TOOLS_TARGETS } from "../addons/wp-tools/inject/targets";
 import { dashboardBody as wpToolsDashboardBody, dashboardView as wpToolsDashboardView, layout as wpToolsLayout } from "../addons/wp-tools/app/views";
 import type { MainwpSiteView, MainwpView } from "../addons/wp-tools/mainwp";
-import { WORDPRESS_APPLICATIONS, type WpSiteView } from "../addons/wp-tools/action";
+import { WORDPRESS_APPLICATIONS, type WpJobView, type WpSiteView } from "../addons/wp-tools/action";
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
 import { PRESET_CATEGORIES, STOCK_PROFILE, type PhpResourcesState, type PoolSiteState } from "../addons/php-resources/action";
@@ -835,8 +835,13 @@ function injectedSitesBlocks(state: PanelTweaksState): string {
 function wpToolsPreviewSites(url: URL): WpSiteView[] {
   if (url.searchParams.has("empty")) return [];
   const status = url.searchParams.get("varnish");
-  const plugin = status && ["inactive", "missing", "unsupported", "error"].includes(status)
-    ? { status: status as "inactive" | "missing" | "unsupported" | "error", seen: true, checkedAt: "2026-10-09T08:45:00Z", error: status === "error" ? "WP-CLI timed out while checking the site. Retry to check again." : "" }
+  // ?varnish=network shows a network-activated multisite.
+  const plugin = status && ["inactive", "missing", "network", "error"].includes(status)
+    ? {
+      status: (status === "network" ? "active" : status) as "inactive" | "missing" | "active" | "error",
+      seen: true, checkedAt: "2026-10-09T08:45:00Z", ...(status === "network" ? { network: true } : {}),
+      error: status === "error" ? "WP-CLI timed out while checking the site. Retry to check again." : "",
+    }
     : null;
   return [
     { domain: "www.example.com", user: "example", helper: true, varnishCache: false, varnishPlugin: null },
@@ -1026,18 +1031,57 @@ function mainwpPreview(url: URL): MainwpView {
   };
 }
 let wpToolsPreview = { sites: [] as WpSiteView[], automatic: false, error: "", mainwp: mainwpPreview(new URL("http://localhost")), mainwpError: "" };
-const wpToolsPreviewData = () => ({
-  sites: wpToolsPreview.sites,
-  varnish: { enabled: wpToolsPreview.automatic, sites: {} },
-  varnishError: wpToolsPreview.error,
-  mainwp: wpToolsPreview.mainwp, mainwpError: wpToolsPreview.mainwpError,
-});
+// A job advances one site a second from when it was started; ?wpjob=varnish or
+// ?wpjob=mainwp draws the page with one part-way through.
+type PreviewJob = WpJobView & { startedMs: number; finish: () => void };
+let wpToolsJobs: Record<"varnish" | "mainwp", PreviewJob | null> = { varnish: null, mainwp: null };
+function wpToolsPreviewJob(task: WpJobView["task"], domains: string[], finish: () => void, startedMs = Date.now()): PreviewJob {
+  const id = `${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}Z-${Math.random().toString(16).slice(2, 8).padEnd(6, "0")}`;
+  const job: PreviewJob = {
+    id, task, policy: task.startsWith("varnish") ? "varnish" : "mainwp", domains, state: "running", step: "", error: "",
+    createdAt: "", startedAt: "", finishedAt: "", completed: 0, total: domains.length, site: domains[0] ?? "", result: null,
+    startedMs, finish,
+  };
+  wpToolsJobs[job.policy] = job;
+  return wpToolsPreviewTick(job);
+}
+function wpToolsPreviewTick(job: PreviewJob): PreviewJob {
+  if (job.state === "done") return job;
+  job.completed = Math.min(job.total, Math.floor((Date.now() - job.startedMs) / 1000));
+  job.site = job.domains[job.completed] ?? "";
+  if (job.completed < job.total) return job;
+  job.finish();
+  job.state = "done";
+  job.result = { checked: job.total, installed: 0, connected: job.task === "mainwp-connect" ? job.total : 0, removed: 0, pending: 0, failed: [] };
+  if (wpToolsJobs[job.policy] === job) wpToolsJobs[job.policy] = null;
+  return job;
+}
+const wpToolsPreviewData = () => {
+  for (const job of Object.values(wpToolsJobs)) if (job) wpToolsPreviewTick(job);
+  return {
+    sites: wpToolsPreview.sites,
+    varnish: { enabled: wpToolsPreview.automatic, sites: {} },
+    varnishError: wpToolsPreview.error,
+    mainwp: wpToolsPreview.mainwp, mainwpError: wpToolsPreview.mainwpError,
+    jobs: { varnish: wpToolsJobs.varnish, mainwp: wpToolsJobs.mainwp },
+  };
+};
 async function wpToolsPreviewApi(req: Request, path: string): Promise<Response | null> {
   if (!path.startsWith("/addons/wp-tools/api/")) return null;
   const body = req.method === "POST" ? await req.json().catch(() => ({})) as Record<string, unknown> : {};
   const ok = (data: unknown) => Response.json({ ok: true, data });
   const active = () => ({ status: "active" as const, seen: true, checkedAt: new Date().toISOString(), error: "" });
   const site = wpToolsPreview.sites.find((entry) => entry.domain === body.domain);
+  const jobPath = /^\/addons\/wp-tools\/api\/jobs\/([^/]+)$/.exec(path);
+  if (jobPath) {
+    const job = Object.values(wpToolsJobs).find((entry) => entry?.id === jobPath[1]) ?? finishedWpJobs.get(jobPath[1]!);
+    if (!job) return Response.json({ ok: false, error: "job not found" }, { status: 404 });
+    wpToolsPreviewTick(job);
+    if (job.state === "done") finishedWpJobs.set(job.id, job);
+    return ok({ job, log: "" });
+  }
+  const started = (job: PreviewJob) => ok({ job });
+  const mainwpTargets = () => wpToolsPreview.sites.map((entry) => entry.domain).filter((domain) => domain !== wpToolsPreview.mainwp.dashboard);
   switch (path.slice("/addons/wp-tools/api/".length)) {
     case "dashboard":
       return ok({ html: wpToolsDashboardBody(wpToolsPreviewData()) });
@@ -1048,11 +1092,13 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
       return ok({});
     case "mainwp-connect": {
       const remote = wpToolsPreview.mainwp.remote;
-      if (site) wpToolsPreview.mainwp.sites[site.domain] = { status: remote ? "not-connected" : "connected", seen: true, ownedConnection: !remote, checkedAt: new Date().toISOString(), error: "" };
-      return ok({ checked: 1, installed: remote ? 1 : 0, connected: remote ? 0 : 1, removed: 0, pending: 0, failed: [] });
+      const domains = Array.isArray(body.domains) ? body.domains as string[] : [];
+      return started(wpToolsPreviewJob("mainwp-connect", domains, () => {
+        for (const domain of domains) wpToolsPreview.mainwp.sites[domain] = { status: remote ? "not-connected" : "connected", seen: true, ownedConnection: !remote, checkedAt: new Date().toISOString(), error: "" };
+      }));
     }
-    case "mainwp-sync": return ok({ checked: wpToolsPreview.sites.length, installed: 0, connected: 0, removed: 0, pending: 0, failed: [] });
-    case "mainwp-cleanup":
+    case "mainwp-sync": return started(wpToolsPreviewJob("mainwp-check", mainwpTargets(), () => {}));
+    case "mainwp-cleanup": return started(wpToolsPreviewJob("mainwp-cleanup", ["shop.example.com"], () => {
       wpToolsPreview.mainwp.enabled = false;
       wpToolsPreview.mainwp.cleanup = false;
       wpToolsPreview.mainwp.owned = 0;
@@ -1061,18 +1107,20 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
         record.status = "missing";
         record.ownedConnection = false;
       }
-      return ok({ checked: 1, connected: 0, removed: 1, pending: 0, failed: [] });
+    }));
     case "varnish-settings":
       wpToolsPreview.automatic = body.enabled === true;
       return ok({});
     case "varnish-install":
-      if (site) site.varnishPlugin = active();
-      return ok({ installed: 1, checked: 1, pending: 0, failed: [] });
+      return started(wpToolsPreviewJob("varnish-install", site ? [site.domain] : [], () => { if (site) site.varnishPlugin = active(); }));
     case "varnish-sync": {
-      const due = wpToolsPreview.sites.filter((entry) => entry.varnishCache
-        && (!entry.varnishPlugin || (entry.varnishPlugin.status === "missing" && !entry.varnishPlugin.seen)));
-      due.forEach((entry) => { entry.varnishPlugin = active(); });
-      return ok({ installed: due.length, checked: wpToolsPreview.sites.filter((entry) => entry.varnishCache).length, pending: 0, failed: [] });
+      const eligible = wpToolsPreview.sites.filter((entry) => entry.varnishCache);
+      return started(wpToolsPreviewJob("varnish-check", eligible.map((entry) => entry.domain), () => {
+        for (const entry of eligible) {
+          if (!entry.varnishPlugin) entry.varnishPlugin = { status: "missing", seen: false, checkedAt: new Date().toISOString(), error: "" };
+          if (wpToolsPreview.automatic && entry.varnishPlugin.status === "missing" && !entry.varnishPlugin.seen) entry.varnishPlugin = active();
+        }
+      }));
     }
     case "remove": {
       const removed = wpToolsPreview.sites.filter((entry) => entry.helper);
@@ -1082,6 +1130,8 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
   }
   return Response.json({ ok: false, error: "the preview cannot sign in to WordPress" }, { status: 400 });
 }
+
+const finishedWpJobs = new Map<string, PreviewJob>();
 
 let panelAce: string | null = null;
 const panelCss: Record<string, string> = {};
@@ -1521,6 +1571,11 @@ const server = Bun.serve({
           domain, user: domain.split(".")[0]!, helper: false, varnishCache: false, varnishPlugin: null,
         });
       }
+      wpToolsJobs = { varnish: null, mainwp: null };
+      const job = url.searchParams.get("wpjob");
+      // Started a few seconds ago, and about a minute from done.
+      if (job === "varnish") wpToolsPreviewJob("varnish-check", Array.from({ length: 64 }, (_, i) => `site${i}.example.com`), () => {}, Date.now() - 17_400);
+      if (job === "mainwp") wpToolsPreviewJob("mainwp-connect", ["blog.example.com", "new.example.com", "waiting.example.com", "retry.example.com", "staging.newsletter.example-church-of-the-hills.com"], () => {}, Date.now() - 2_400);
       html = wpToolsLayout("WordPress Tools", wpToolsDashboardView(wpToolsPreviewData()), notice);
     } else if (path === "/addons/php-resources/" || path === "/addons/php-resources") {
       // ?dialog=new|edit opens the category dialog on load (edit: the first category), ?more with More limits open.

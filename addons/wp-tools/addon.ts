@@ -1,5 +1,5 @@
 import { handle } from "./app/index";
-import { runWpToolsAction, wpPoliciesActive, type WpToolsActionOptions } from "./action";
+import { pruneWpJobs, runWpToolsAction, wpPoliciesActive, type WpToolsActionOptions } from "./action";
 import { queueAddonPass } from "../../cli/job-store";
 import { WP_TOOLS_TARGETS } from "./inject/targets";
 import type { AddonDefinition } from "../../cli/addon-catalog";
@@ -15,6 +15,8 @@ export const WP_TOOLS_ADDON: AddonDefinition = {
   maintenance: {
     label: "WordPress plugins",
     run: (options) => {
+      // Job records expire, and one whose runner died is marked failed, so the page stops following it.
+      pruneWpJobs((options ?? {}) as WpToolsActionOptions);
       if (!wpPoliciesActive((options ?? {}) as WpToolsActionOptions)) return null;
       return queueAddonPass({ addon: "wp-tools", verb: "sync", description: "WordPress plugin policies", runtime: 180 })
         ? "plugin policy pass queued" : null;

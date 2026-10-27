@@ -83,7 +83,9 @@ Varnish automation runs fixed WP-CLI commands after dropping root to the site's
 Unix user, using its configured PHP version, for the same accounts sign-in
 accepts and under a deadline root enforces itself. Only administrators can manage
 that policy or install the official CLP plugin; sign-in's non-administrator
-exception does not apply. The normal WordPress plugin remains installed when
+exception does not apply. Checks, installations and MainWP connections run as
+background jobs whose runner the gateway cannot start; the page can only start
+one of a fixed set of tasks and watch it. The normal WordPress plugin remains installed when
 automation stops. See [WordPress Tools](wp-tools.md).
 
 CloudPanel's native basic-auth allowance inherits its global real-IP trust.
