@@ -5,8 +5,12 @@
   margin-top: 12px; color: var(--muted); font-size: 13px; }
 .tweak-row.is-enabled .tweak-scan { display: flex; }
 .tweak-scan .btn { flex: 0 0 auto; min-height: 32px; padding: 4px 10px; font-size: 13px; }
+.tweak-scan .job-progress { flex: 1 1 240px; max-width: 420px; }
+.tweak-scan .job-progress[hidden], .tweak-scan-summary[hidden] { display: none; }
+.tweak-scan .job-progress-head { margin-bottom: 4px; }
 @media (max-width: 760px) {
   .tweak-scan { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .tweak-scan .job-progress { flex: 0 0 auto; align-self: stretch; max-width: none; }
 }
 .preview-widths { display: flex; gap: 8px; }
 .preview-widths .btn { min-height: 36px; padding: 4px 14px; font-size: 13px; }

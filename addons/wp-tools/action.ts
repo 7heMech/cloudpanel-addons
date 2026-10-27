@@ -27,7 +27,7 @@ import {
   ActionFailure, emitActionError, emitActionOk, failAction, validateDomain, withFileLock, type CommandResult,
 } from "../../cli/action-common";
 import { CLI_BIN, CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
-import { jobDir, pruneJobs, readJobLog, watchJobRecord, validateJobId, type startJobUnit } from "../../cli/job-store";
+import { jobDir, jobIdArgument, pruneJobs, readJobLog, watchJobRecord, type startJobUnit } from "../../cli/job-store";
 import { readUnixAccounts, siteAccountProblem, splitSharedUids, type UnixAccount } from "../../lib/site-accounts";
 import {
   DEFAULT_MAINTENANCE_ACTION_PATHS, addBypass, maintenanceBlocks, type MaintenanceActionPaths,
@@ -661,15 +661,6 @@ function parseAction(argv: string[], options: WpToolsActionOptions): ParsedActio
 
 // --- background jobs ------------------------------------------------------
 
-/** `--job=<id>` from the page, or `--job <id>` as systemd and the stream pass it. */
-function jobArgument(rest: string[]): string {
-  const value = rest.length === 1 && rest[0]!.startsWith("--job=") ? rest[0]!.slice("--job=".length)
-    : rest.length === 2 && rest[0] === "--job" ? rest[1]! : "";
-  const id = validateJobId(value);
-  if (!id) failAction("a job takes exactly --job=<id>");
-  return id;
-}
-
 const JOB_CONFIRMATION: Partial<Record<WpJobTask, string>> = { "mainwp-connect": "connect", "mainwp-cleanup": "mainwp" };
 
 /** `start --task=<task> [--domains=a,b] [--confirm=...]`, validated before anything is recorded. */
@@ -744,9 +735,9 @@ export async function executeWpToolsAction(
   if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress Tools actions must run as root");
   const paths = pathsFor(options);
   if (argv[0] === "start") return startJob(paths, argv.slice(1), options);
-  if (argv[0] === "run") return runJob(paths, jobArgument(argv.slice(1)), options);
+  if (argv[0] === "run") return runJob(paths, jobIdArgument(argv.slice(1)), options);
   if (argv[0] === "job") {
-    const id = jobArgument(argv.slice(1));
+    const id = jobIdArgument(argv.slice(1));
     const view = wpJobView(paths.jobsDir, id);
     if (!view) failAction(`no such job: ${id}`);
     return { job: view, log: readJobLog(jobDir(paths.jobsDir, id)) };
@@ -835,7 +826,7 @@ export async function runWpToolsAction(
     if (argv[0] === "watch-job") {
       if ((options.processUid ?? process.getuid?.()) !== 0) failAction("WordPress Tools actions must run as root");
       const paths = pathsFor(options);
-      const id = jobArgument(argv.slice(1));
+      const id = jobIdArgument(argv.slice(1));
       const dir = jobDir(paths.jobsDir, id);
       if (!wpJobView(paths.jobsDir, id)) failAction(`no such job: ${id}`);
       await watchJobRecord({

@@ -32,7 +32,7 @@ import { WORDPRESS_APPLICATIONS, type WpJobView, type WpSiteView } from "../addo
 import { siteTabs, type SiteContext } from "../lib/site-context";
 import { DEFAULT_MAINTENANCE_TEMPLATE } from "../addons/maintenance/action";
 import { PRESET_CATEGORIES, STOCK_PROFILE, type PhpResourcesState, type PoolSiteState } from "../addons/php-resources/action";
-import type { PanelTweaksState } from "../addons/panel-tweaks/action";
+import type { MeasureJobView, PanelTweaksState } from "../addons/panel-tweaks/action";
 import type { PanelPhpStatus } from "../addons/system-tweaks/panel-php";
 import ACE_MODE_HTML from "../addons/maintenance/app/ace-mode-html.js" with { type: "text" };
 import type { InstanceView, InstaticJobView } from "../addons/instatic/app/service";
@@ -564,14 +564,17 @@ function panelPhpPreviewStatus(url: URL): PanelPhpStatus {
 /**
  * Panel Tweaks with every switch on and most sites measured, because that is
  * the widest the page gets: `?off` is the state an operator lands on after
- * enabling the addon, `?unmeasured` is the gap before the first sweep, and
- * `?nocards` keeps the table on a narrow screen.
+ * enabling the addon, `?unmeasured` is the gap before the first sweep,
+ * `?measuring` draws a measurement part-way through, and `?nocards` keeps the
+ * table on a narrow screen.
  */
 function panelTweaksPreviewState(url: URL): PanelTweaksState {
   const on = !url.searchParams.has("off");
   const measured = on && !url.searchParams.has("unmeasured");
   const at = "2026-09-17T08:45:00Z";
+  if (url.searchParams.has("measuring") && !panelTweaksMeasurement) panelTweaksPreviewMeasure(Date.now() - 12_000);
   return {
+    measuring: panelTweaksMeasurement ? panelTweaksPreviewTick(panelTweaksMeasurement) : null,
     tweaks: {
       deviceTheme: on,
       sitesTable: on,
@@ -1303,6 +1306,42 @@ function finishedPreviewStream(job: { state: string; id: string }, log: string, 
   return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
 }
 
+// A measurement advances one site a second from when it was started, through
+// a box of forty sites.
+type PreviewMeasurement = MeasureJobView & { startedMs: number };
+let panelTweaksMeasurement: PreviewMeasurement | null = null;
+const finishedMeasurements = new Map<string, PreviewMeasurement>();
+function panelTweaksPreviewMeasure(startedMs = Date.now()): PreviewMeasurement {
+  const id = `${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}Z-${Math.random().toString(16).slice(2, 8).padEnd(6, "0")}`;
+  panelTweaksMeasurement = {
+    id, state: "running", step: "", error: "", createdAt: "", startedAt: "", finishedAt: "",
+    completed: 0, total: 40, site: "", result: null, startedMs,
+  };
+  return panelTweaksPreviewTick(panelTweaksMeasurement);
+}
+function panelTweaksPreviewTick(job: PreviewMeasurement): PreviewMeasurement {
+  if (job.state === "done") return job;
+  job.completed = Math.min(job.total, Math.floor((Date.now() - job.startedMs) / 1000));
+  job.site = job.completed < job.total ? `site-${String(job.completed + 1).padStart(2, "0")}.example.com` : "";
+  if (job.completed < job.total) return job;
+  job.state = "done";
+  job.result = { measured: job.total - 2, skipped: 2, measuredAt: new Date().toISOString() };
+  finishedMeasurements.set(job.id, job);
+  if (panelTweaksMeasurement === job) panelTweaksMeasurement = null;
+  return job;
+}
+function panelTweaksPreviewApi(req: Request, path: string): Response | null {
+  if (req.method === "POST" && path === "/addons/panel-tweaks/api/measure") {
+    const attached = panelTweaksMeasurement !== null;
+    return Response.json({ ok: true, data: { job: panelTweaksMeasurement ?? panelTweaksPreviewMeasure(), attached } });
+  }
+  const jobPath = /^\/addons\/panel-tweaks\/api\/jobs\/([^/]+)$/.exec(path);
+  if (!jobPath) return null;
+  const job = panelTweaksMeasurement?.id === jobPath[1] ? panelTweaksMeasurement : finishedMeasurements.get(jobPath[1]!);
+  if (!job) return Response.json({ ok: false, error: "job not found" }, { status: 404 });
+  return Response.json({ ok: true, data: { job: panelTweaksPreviewTick(job), log: "" } });
+}
+
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: Number(process.env.PORT || 4100),
@@ -1313,6 +1352,8 @@ const server = Bun.serve({
     if (terminalReply) return terminalReply;
     const wpToolsApi = await wpToolsPreviewApi(req, path);
     if (wpToolsApi) return wpToolsApi;
+    const panelTweaksApi = panelTweaksPreviewApi(req, path);
+    if (panelTweaksApi) return panelTweaksApi;
     const repaintReply = await repaintPreviewMutation(req, url);
     if (repaintReply) return repaintReply;
     if (req.method !== "GET") return Response.json({ ok: false, error: "UI preview only; no changes were made." }, { status: 409 });

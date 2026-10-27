@@ -170,6 +170,40 @@ export { TWEAK_ROW_STYLE, TWEAK_ROW_JS };
 import JOB_WATCH_JS from "./assets/job-watch.client.js" with { type: "text" };
 export { JOB_WATCH_JS };
 
+/**
+ * A progress bar for a background job that works through sites, such as
+ * WordPress Tools' checks and Panel Tweaks' size measurement. The page draws
+ * it with `jobProgressHtml` and the client half follows every one it finds
+ * with `followJobProgress(onFinished)`, so a reload picks the job up again.
+ */
+import JOB_PROGRESS_STYLE from "./assets/job-progress.css" with { type: "text" };
+import JOB_PROGRESS_JS from "./assets/job-progress.client.js" with { type: "text" };
+export { JOB_PROGRESS_STYLE, JOB_PROGRESS_JS };
+
+/** What the bar needs of a job; both addons' job views carry it. */
+export interface SiteJobProgress {
+  id: string;
+  state: string;
+  step: string;
+  completed: number;
+  total: number;
+  site: string;
+}
+
+/** "12 of 40: site" beside the title; the client half writes the same. */
+export function jobProgressText(job: SiteJobProgress): string {
+  const count = job.total ? `${Math.min(job.completed + 1, job.total)} of ${job.total}: ` : "";
+  return job.state === "queued" ? "Waiting to start" : job.site ? `${count}${job.site}` : job.step;
+}
+
+/** `hidden` draws an empty bar the client fills in when it starts a job. */
+export function jobProgressHtml(job: SiteJobProgress, title: string, hidden = false): string {
+  return `<div class="job-progress" data-job="${esc(job.id)}" role="status"${hidden ? " hidden" : ""}>
+        <div class="job-progress-head"><strong>${esc(title)}</strong><span class="job-progress-step hint">${esc(jobProgressText(job))}</span></div>
+        <progress class="job-progress-bar" max="${Math.max(job.total, 1)}"${job.total ? ` value="${job.completed}"` : ""}></progress>
+      </div>`;
+}
+
 export interface Chrome {
   /** Product name for the contextual navigation, e.g. "Instatic". */
   brand: string;

@@ -85,11 +85,17 @@ export const PHP_RESOURCES_ALLOWED_VERBS = new Set([
   "set-default",
 ]);
 
+/**
+ * A size measurement is `measure`d as a background job, which `job` and
+ * `watch-job` follow. `scan` and `run` are absent: the sweep is the repair
+ * timer's, and only the unit `measure` launched may run a job.
+ */
 export const PANEL_TWEAKS_ALLOWED_VERBS = new Set([
   "state",
   "set-tweaks",
-  "scan",
-  "scan-stream",
+  "measure",
+  "job",
+  "watch-job",
 ]);
 
 /**
@@ -199,7 +205,7 @@ export const OWN_ACCOUNT_VERBS = new Set([
   "security-keys:remove",
 ]);
 
-export const STREAM_ALLOWED_VERBS = new Set(["watch-job", "scan-stream", "session"]);
+export const STREAM_ALLOWED_VERBS = new Set(["watch-job", "session"]);
 
 /**
  * The `addon:verb` pairs whose socket carries bytes both ways. Only these

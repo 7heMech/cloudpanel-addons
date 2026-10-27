@@ -128,37 +128,14 @@ function syncSummary(data) {
   return { text: text, kind: data.failed.length || data.pending ? 'warn' : 'ok' };
 }
 
-// Checks, installations, connections and cleanup run as background jobs. The
-// page draws a progress bar for each running one, from the server on every
-// load and repaint, and follows it here until it ends: a reload finds the job
-// in the page again, and nothing else on the page waits for it.
-const followedJobs = new Set();
-
+// Checks, installations, connections and cleanup run as background jobs, whose
+// bars the shared job progress script follows; the site being worked on also
+// says so in its own row.
 function followJobs() {
-  CLP_ROOT.querySelectorAll('.wp-job[data-job]').forEach(function (element) {
-    const id = element.dataset.job;
-    if (followedJobs.has(id)) return;
-    followedJobs.add(id);
-    followJob(id);
-  });
+  followJobProgress(jobFinished, markWorkingSite);
 }
 
-function jobElement(id) {
-  return CLP_ROOT.querySelector('.wp-job[data-job="' + id + '"]');
-}
-
-function paintJob(job) {
-  const element = jobElement(job.id);
-  if (!element) return;
-  const bar = element.querySelector('.wp-job-bar');
-  const step = element.querySelector('.wp-job-step');
-  if (bar) {
-    bar.max = Math.max(job.total, 1);
-    if (job.total) bar.value = job.completed; else bar.removeAttribute('value');
-  }
-  const count = job.total ? Math.min(job.completed + 1, job.total) + ' of ' + job.total + ': ' : '';
-  if (step) step.textContent = job.state === 'queued' ? 'Waiting to start' : job.site ? count + job.site : job.step;
-  // The site being worked on says so in its own row.
+function markWorkingSite(job) {
   CLP_ROOT.querySelectorAll('.wp-status[data-policy="' + job.policy + '"].is-working').forEach(function (cell) {
     cell.classList.remove('is-working');
   });
@@ -204,44 +181,6 @@ async function jobFinished(job) {
   }
   const done = JOB_SUMMARIES[job.task](job.result || { checked: 0, installed: 0, connected: 0, removed: 0, pending: 0, failed: [] }, job);
   notify(stale ? done.text + ' The page may be out of date: ' + stale : done.text, stale ? 'warn' : done.kind || 'ok');
-}
-
-// The live stream, and polling where it cannot be had or drops.
-function followJob(id) {
-  let finished = false;
-  const update = function (job) {
-    if (finished || !job) return;
-    paintJob(job);
-    if (job.state !== 'done' && job.state !== 'failed') return;
-    finished = true;
-    jobFinished(job);
-  };
-  const poll = async function () {
-    while (!finished) {
-      try {
-        update((await call('/api/jobs/' + encodeURIComponent(id))).data.job);
-      } catch (error) {
-        // A manager restarting answers again shortly.
-      }
-      if (!finished) await new Promise(function (resolve) { setTimeout(resolve, 2000); });
-    }
-  };
-  if (typeof EventSource === 'undefined') { poll(); return; }
-  const events = new EventSource(CLP_BASE + '/api/jobs/' + encodeURIComponent(id) + '/events');
-  events.onmessage = function (event) {
-    try { update(JSON.parse(event.data).job); } catch (error) {}
-    if (finished) events.close();
-  };
-  // The session ended under the stream; the job carries on without the page.
-  events.addEventListener('unauthorized', function () {
-    finished = true;
-    events.close();
-    notify('Your panel session ended. Sign in again to follow the job.', 'error');
-  });
-  events.onerror = function () {
-    events.close();
-    if (!finished) poll();
-  };
 }
 
 function jobStarted() {
