@@ -48,10 +48,13 @@ the enabled config under its own lock before reading state or discovering sites;
 disable and uninstall hold both locks while removing config and state. The
 Varnish pass checks only sites automation can still act on: no record yet, or a
 plugin not yet seen. It has a 30-second budget. **Check now** checks every
-eligible site within 90 seconds and refreshes what the page shows. An administrator can also request an
-installation for one site. Automatic checks do nothing while the policy is off. A single-site
-explicit installation can run while automation is off, but still honors
-eligibility. Only PHP sites with CloudPanel's `varnish_cache`
+eligible site in a background job (see below) and refreshes what the page
+shows. It is offered whether or not automation is on: with automation off it
+only records what each site has and installs nothing, which is what lets an
+operator see a site's state before choosing Install. An administrator can also
+request an installation for one site, also as a job. The timer's checks do
+nothing while the policy is off. A single-site explicit installation can run
+while automation is off, but still honors eligibility. Only PHP sites with CloudPanel's `varnish_cache`
 flag and `wp-includes` plus `wp-content` on disk are eligible. The page and
 installer share this discovery and eligibility calculation. A panel without
 the Varnish column contributes no eligible sites. Varnish itself is never
@@ -67,8 +70,20 @@ WP-CLI packages are skipped; WordPress still loads its config and must-use
 plugins, all after dropping root. WordPress resolves the plugin directory and
 activation status, supporting a customized plugin directory. The status is
 read from a marked line, so anything the site's own code prints does not break
-it. Multisite is
-reported as unsupported and never installed or activated.
+it.
+
+A multisite network is treated like any other site, except that activation is
+network activation: install uses `--activate-network`, Activate uses
+`--network`, and only `is_plugin_active_for_network` counts as active, so a
+plugin active on some of the network's sites reads as inactive. That is safe
+because of how the plugin works: it reads its settings from the site account's
+`~/.varnish-cache/settings.json`, which CloudPanel writes per site, purges by
+the request's host and by that site's cache-tag prefix, and puts its settings
+page in the network admin when network-activated. A network's sites are all in
+the one CloudPanel site whose files and Varnish settings they share, so one
+network activation is what that site's Varnish needs, not a decision on behalf
+of other CloudPanel sites. Records an earlier version stored as `unsupported`
+are dropped when read, so those networks are checked afresh.
 
 Automation installs the fixed WordPress.org slug `clp-varnish-cache` with
 `--activate` only when absent and never previously observed or attempted.
@@ -78,7 +93,7 @@ is saved before execution so interruption cannot erase that protection; an
 interrupted run therefore needs an explicit Retry. A command that fails
 outright put nothing there, so its intent is undone and the next pass retries.
 Explicit installation can reinstall an absent plugin or activate an inactive
-one. There is no force overwrite, plugin update or network activation.
+one. There is no force overwrite or plugin update.
 
 Policy changes and each check hold a dedicated Varnish lock, so a download
 does not block sign-in or helper removal. Each pass processes the least
@@ -98,7 +113,11 @@ The page opens with one sites table -- Site, CLP Varnish Cache, MainWP Child,
 Sign in -- since sign-in is the most-used action and the one the addon started
 with; each status has its Install, Activate, Connect or Retry beside it, on one
 line on a wide screen, so the table spreads across the page instead of stacking
-each cell. The two automation policies are set once, so they share one card
+each cell. A site that has not been checked shows Not checked and no button:
+until a check says the plugin is missing or inactive, Install is a guess, and
+the same holds for MainWP's Connect. With a Dashboard on this server the table
+also gets a selection column and **Connect selected to MainWP** and **Connect
+all unconnected** above it, for sites checked or not; see Background jobs. The two automation policies are set once, so they share one card
 below the table. A row has no automation switch of its own: automation acts
 only on a site it has never seen, so a listed site has normally been handled by
 a pass already, and removing the plugin in WordPress keeps a site out, since a
@@ -356,9 +375,15 @@ before each step that changes the site. The page gets a projection without
 snapshots, IDs or keys. Connected means the child's and the Dashboard's
 public-key fingerprints match; with no claim, that connection is the operator's.
 
-Automation installs only a Child that is absent and never seen. An installed
-Child is marked seen and needs Connect, as does a site whose existing
-connection or Dashboard record needs the operator. An attempt whose readback
+Automation installs only a Child that is absent and never seen, and with a
+Dashboard on this server that automation also connects it: installing and
+connecting are one step, since a Child installed for this Dashboard and left
+unconnected would only switch itself off. It does not extend to a site that
+already has a Child, connected or not. That Child is someone's: it may be
+waiting for a Dashboard elsewhere, or have been disconnected on purpose, and
+connecting it would take it over. So an installed Child is marked seen and
+needs Connect, as does a site whose existing connection or Dashboard record
+needs the operator; batch connection is how to choose many at once. An attempt whose readback
 shows nothing changed and no Dashboard record gives up its claim and is retried
 on the next pass, like a failed Varnish download. Otherwise the claim stays and
 Retry resumes it, undoing first its own registration the Dashboard never
@@ -408,17 +433,58 @@ Dashboard.
 
 MainWP has its own lock, separate from Varnish and sign-in. The queued pass
 looks only at unseen sites, unfinished phases, pending cleanup and retired
-records, and starts sites for 25 seconds; Check now and row actions get 90. An
-enrollment that has started gets up to a minute, so the budget never stops
-registration part-way. A pass asks the Dashboard about at most 64 sites, least
-recently checked first. A deleted site's owned Dashboard record is retired and
+records, and starts sites for 25 seconds; Check now, connections and cleanup
+run as background jobs. An enrollment that has started gets up to a minute, so
+the budget never stops registration part-way. A pass asks the Dashboard about
+at most 64 sites, least recently checked first; a job plans every due site up
+front and runs them in passes of 64, so a large fleet takes several passes
+without visiting a site twice. A deleted site's owned Dashboard record is retired and
 removed on a later pass; a deleted Dashboard took its records with it, and
 cleanup then finishes on the children.
+
+Connecting several sites is one job over the chosen domains, or over every
+site the page counts as unconnected: not the Dashboard, not connected, not a
+multisite network. A site that turns out to be connected already is recorded
+and left alone. Each site is still its own enrollment with its own claim and
+recovery, so one failure does not stop the rest. Batch connection is offered
+only for a Dashboard on this server: one elsewhere has to add each site itself
+within the Child's connection timeout, so activating many at once would only
+start their timers together.
 
 The switch only pauses automation. Disabling or uninstalling leaves the
 connections, as it leaves the Varnish plugin, and refuses only while an
 enrollment stopped before its temporary setting was restored. `--purge`
 forgets which connections the addon made.
+
+## Background jobs
+
+Check now for either policy, a row's Install, Activate or Connect, a batch
+connection and MainWP cleanup each start a job rather than holding the request:
+on a box with many sites a check takes minutes, and the page used to sit busy
+for all of it and forget it on a reload. The job store is the one Stager, Git
+Deploy and Instatic use. `start --task=<task>` records the job and hands it to a
+transient systemd unit, `clp-addons action wp-tools run --job <id>`, with an
+hour's `RuntimeMaxSec`; the pass inside stops starting sites five minutes
+before that and reports the rest as pending. `run` is not in the gateway's verb
+table, so only that unit runs a job, and `start` accepts only its fixed tasks,
+domains for the tasks that take them, and the same confirmations the routes
+require.
+
+Each policy runs one job at a time: `start` refuses a second while one is
+queued or running, under a lock of its own. The runner takes the policy's lock,
+waiting up to four minutes for a timer pass to finish, and holds it for the
+whole job, so nothing else changes that policy's state meanwhile. While a
+policy's job runs the page disables that policy's buttons, switch and Dashboard
+picker; sign-in and the other policy stay usable.
+
+The runner writes how many sites it has done, of how many, and which one it is
+on before each site. `sites` returns each policy's running job, so the page
+draws a progress bar for it under the table on every load and repaint and
+follows it through the shared job event stream, polling where the stream drops,
+and marks the row being worked on. When it ends the page repaints and says what
+it did, from the result the job saved. A job record is kept for seven days;
+repair's maintenance prunes older ones and marks failed a job whose unit is
+gone, as the other addons' upkeep does.
 
 ## Direction
 

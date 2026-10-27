@@ -2,6 +2,7 @@ import { signInWindow } from "./sign-in-window";
 import {
   bodyErrorResponse, clientIp, guardMutation, htmlResponse, jsonResponse, readJsonObject, newCsrfToken, safeDecodePathSegment,
 } from "../../../lib/app-http";
+import { jobApiRoute } from "../../../lib/job-stream";
 import { validateDomain, wpToolsService } from "./service";
 import { dashboardBody, dashboardView, layout } from "./views";
 
@@ -59,7 +60,17 @@ export async function handle(
     if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
     const result = await wpToolsService.sites();
     if (!result.ok || !result.data) return json(result, 400);
-    return json({ ok: true, data: { html: dashboardBody(result.data) } });
+    return json({ ok: true, data: { html: dashboardBody(result.data), jobs: result.data.jobs } });
+  }
+
+  if (method === "GET" && path.startsWith("/api/jobs/")) {
+    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
+    const routed = await jobApiRoute({
+      req, path, method,
+      getJob: (id) => wpToolsService.getJob(id),
+      watchJob: (id, handlers) => wpToolsService.watchJob(id, handlers),
+    });
+    if (routed) return routed;
   }
 
   if (method !== "POST") return json({ ok: false, error: "not found" }, 404);
@@ -96,10 +107,13 @@ export async function handle(
     return json(result, result.ok ? 200 : 400);
   }
 
-  if (path.startsWith("/api/mainwp-")) {
+  if (path.startsWith("/api/mainwp-") || path.startsWith("/api/varnish-")) {
+    // Only sign-in and its CSRF bootstrap are exceptions to the manager's
+    // administrator gate. Keep that boundary explicit here as well.
     if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
     let body: Record<string, unknown>;
-    try { body = await readJsonObject(req, 4 * 1024); }
+    // A batch connection names every site it is for.
+    try { body = await readJsonObject(req, path === "/api/mainwp-connect" ? 128 * 1024 : 4 * 1024); }
     catch (error) { return bodyErrorResponse(error); }
     let result;
     if (path === "/api/mainwp-settings") {
@@ -108,41 +122,25 @@ export async function handle(
       const dashboard = body.dashboard === undefined ? undefined : validateDomain(body.dashboard);
       if (dashboard === null) return json({ ok: false, error: "choose a valid Dashboard hostname" }, 400);
       result = await wpToolsService.mainwpSettings(body.enabled, dashboard, body.remote === true);
-    } else if (path === "/api/mainwp-sync") result = await wpToolsService.mainwpSync();
-    else if (path === "/api/mainwp-cleanup") {
-      if (body.confirm !== true) return json({ ok: false, error: "confirm MainWP cleanup" }, 400);
-      result = await wpToolsService.mainwpCleanup();
-    } else if (path === "/api/mainwp-connect") {
+    } else if (path === "/api/varnish-settings") {
+      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
+      result = await wpToolsService.varnishSettings(body.enabled);
+    } else if (path === "/api/varnish-sync") result = await wpToolsService.startJob("varnish-check");
+    else if (path === "/api/mainwp-sync") result = await wpToolsService.startJob("mainwp-check");
+    else if (path === "/api/varnish-install") {
       const domain = validateDomain(body.domain);
       if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
+      result = await wpToolsService.startJob("varnish-install", [domain]);
+    } else if (path === "/api/mainwp-cleanup") {
+      if (body.confirm !== true) return json({ ok: false, error: "confirm MainWP cleanup" }, 400);
+      result = await wpToolsService.startJob("mainwp-cleanup", [], "mainwp");
+    } else if (path === "/api/mainwp-connect") {
+      const domains = Array.isArray(body.domains) ? body.domains.map(validateDomain) : [];
+      if (!domains.length || domains.some((domain) => !domain)) return json({ ok: false, error: "choose the sites to connect" }, 400);
       if (body.confirm !== true) return json({ ok: false, error: "confirm the MainWP connection" }, 400);
-      result = await wpToolsService.mainwpConnect(domain);
+      result = await wpToolsService.startJob("mainwp-connect", domains as string[], "connect");
     }
     return result ? json(result, result.ok ? 200 : 400) : json({ ok: false, error: "not found" }, 404);
-  }
-
-  if (path.startsWith("/api/varnish-")) {
-    // Only sign-in and its CSRF bootstrap are exceptions to the manager's
-    // administrator gate. Keep that boundary explicit here as well.
-    if (!auth?.roles.includes("ROLE_ADMIN")) return json({ ok: false, error: "not found" }, 404);
-    if (path === "/api/varnish-sync") {
-      const result = await wpToolsService.varnishSync();
-      return json(result, result.ok ? 200 : 400);
-    }
-    let body: Record<string, unknown>;
-    try { body = await readJsonObject(req, 4 * 1024); }
-    catch (error) { return bodyErrorResponse(error); }
-    if (path === "/api/varnish-settings") {
-      if (typeof body.enabled !== "boolean") return json({ ok: false, error: "enabled must be true or false" }, 400);
-      const result = await wpToolsService.varnishSettings(body.enabled);
-      return json(result, result.ok ? 200 : 400);
-    }
-    if (path === "/api/varnish-install") {
-      const domain = validateDomain(body.domain);
-      if (!domain) return json({ ok: false, error: "that is not a valid hostname" }, 400);
-      const result = await wpToolsService.varnishInstall(domain);
-      return json(result, result.ok ? 200 : 400);
-    }
   }
 
   return json({ ok: false, error: "not found" }, 404);

@@ -3,8 +3,17 @@ import { existsSync } from "node:fs";
 export interface WpSite {
   domain: string; user: string; root: string; home: string; phpVersion: string;
 }
+/** Where a pass is: `completed` sites done of `total`, and the one it is on. */
+export interface WpProgress {
+  completed: number;
+  total: number;
+  site: string;
+}
+
 export interface WpOptions {
   runWpCommand?: (command: WpCommand) => Promise<string>;
+  /** Called before each site a pass visits. */
+  onProgress?: (progress: WpProgress) => void;
 }
 
 export interface WpCommand {
