@@ -61,7 +61,8 @@ export function wpJobView(jobsDir: string, id: string): WpJobView | null {
     id,
     task,
     policy: policyOf(task),
-    domains: jobGet(dir, "domains").split(",").filter(Boolean),
+    // Up to MAX_JOB_DOMAINS names, well past jobGet's usual cap.
+    domains: jobGet(dir, "domains", MAX_JOB_DOMAINS * 256).split(",").filter(Boolean),
     ...jobCommonFields(dir),
     ...jobSiteProgress(dir),
     result: readJobResult<WpJobView["result"]>(dir),

@@ -479,6 +479,7 @@ function systemTweaksPreviewState(url: URL): SystemTweaksState {
       listsUpdated: enabled,
       reboot: url.searchParams.has("reboot"),
       rebootTime: url.searchParams.get("at") ?? "",
+      rebootWithUsers: true,
       timezone: "Europe/Berlin",
       timer: { state: "enabled", next: "Sat 2026-10-24 06:32:16 UTC" },
       coverage: [
@@ -1057,6 +1058,7 @@ function wpToolsPreviewTick(job: PreviewJob): PreviewJob {
   job.finish();
   job.state = "done";
   job.result = { checked: job.total, installed: 0, connected: job.task === "mainwp-connect" ? job.total : 0, removed: 0, pending: 0, failed: [] };
+  finishedWpJobs.set(job.id, job);
   if (wpToolsJobs[job.policy] === job) wpToolsJobs[job.policy] = null;
   return job;
 }
@@ -1081,7 +1083,6 @@ async function wpToolsPreviewApi(req: Request, path: string): Promise<Response |
     const job = Object.values(wpToolsJobs).find((entry) => entry?.id === jobPath[1]) ?? finishedWpJobs.get(jobPath[1]!);
     if (!job) return Response.json({ ok: false, error: "job not found" }, { status: 404 });
     wpToolsPreviewTick(job);
-    if (job.state === "done") finishedWpJobs.set(job.id, job);
     return ok({ job, log: "" });
   }
   const started = (job: PreviewJob) => ok({ job });

@@ -21,7 +21,7 @@
 
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { withFileLock } from "./action-common";
+import { withFileLock, withFileLockSync } from "./action-common";
 import {
   createJobDir, createJobLog, findOlderThan, jobCommonFields, jobDir, jobGet, jobSet,
   jobTimestamp, jobUnitIsActive, listJobIds, newJobId, pruneJobs, readJobLog, startJobUnit,
@@ -127,12 +127,15 @@ export function readNewsSeen(file = NEWS_SEEN_FILE, version = CLI_VERSION): stri
 
 /** Records the addon's current badge as read; an addon with none records nothing. */
 export function markNewsSeen(addon: string, file = NEWS_SEEN_FILE, version = CLI_VERSION): string[] {
-  const seen = readNewsSeen(file, version);
-  const key = addonNews(addon, version)?.key;
-  if (!key || seen.includes(key)) return seen;
-  seen.push(key);
-  writeAtomic(file, `${JSON.stringify(seen)}\n`, 0o644);
-  return seen;
+  // Locked so two administrators opening different addons both keep their key.
+  return withFileLockSync(`${file}.lock`, 5, "another addon is being marked as read", () => {
+    const seen = readNewsSeen(file, version);
+    const key = addonNews(addon, version)?.key;
+    if (!key || seen.includes(key)) return seen;
+    seen.push(key);
+    writeAtomic(file, `${JSON.stringify(seen)}\n`, 0o644);
+    return seen;
+  });
 }
 
 function message(error: unknown): string {

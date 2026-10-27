@@ -184,5 +184,5 @@ function readNews(event) {
   }).catch(() => {});
 }
 document.addEventListener('click', readNews);
-// A middle click opens it in a tab without a click event.
-document.addEventListener('auxclick', readNews);
+// A middle click opens it in a tab without a click event; a right click opens nothing.
+document.addEventListener('auxclick', (event) => { if (event.button === 1) readNews(event); });

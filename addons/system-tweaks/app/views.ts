@@ -179,7 +179,8 @@ function selfReboot(status: UpdatesStatus): string {
   const when = time === "now" ? `${run} restarts the server.`
     : /^\+\d+$/.test(time) ? `the server restarts ${esc(time.slice(1))} minutes after ${run}.`
     : `${run} schedules a restart for ${esc(time)} ${esc(status.timezone)}.`;
-  return `<span class="hint st-detail">Automatic reboot is on: ${when}</span>`;
+  const users = status.rebootWithUsers ? "" : " It is skipped while anyone is logged in.";
+  return `<span class="hint st-detail">Automatic reboot is on: ${when}${users}</span>`;
 }
 
 function statusList(status: UpdatesStatus, now: number): string {

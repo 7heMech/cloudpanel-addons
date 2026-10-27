@@ -82,8 +82,8 @@ the request's host and by that site's cache-tag prefix, and puts its settings
 page in the network admin when network-activated. A network's sites are all in
 the one CloudPanel site whose files and Varnish settings they share, so one
 network activation is what that site's Varnish needs, not a decision on behalf
-of other CloudPanel sites. Records an earlier version stored as `unsupported`
-are dropped when read, so those networks are checked afresh.
+of other CloudPanel sites. A stored `unsupported` record is dropped when read,
+so such a network is checked afresh.
 
 Automation installs the fixed WordPress.org slug `clp-varnish-cache` with
 `--activate` only when absent and never previously observed or attempted.
@@ -460,8 +460,8 @@ forgets which connections the addon made.
 
 Check now for either policy, a row's Install, Activate or Connect, a batch
 connection and MainWP cleanup each start a job rather than holding the request:
-on a box with many sites a check takes minutes, and the page used to sit busy
-for all of it and forget it on a reload. The job store is the one Stager, Git
+on a box with many sites a check takes minutes, which a request cannot hold and
+a reload must not lose. The job store is the one Stager, Git
 Deploy and Instatic use. `start --task=<task>` records the job and hands it to a
 transient systemd unit, `clp-addons action wp-tools run --job <id>`, with an
 hour's `RuntimeMaxSec`; the pass inside stops starting sites five minutes
