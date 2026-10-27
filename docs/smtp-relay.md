@@ -64,6 +64,8 @@ one of its extra sending domains, or the profile's From.
 - While any site is in a profile, Discard included (as every Stager clone
   is), Postfix stops relaying unauthenticated SMTP from `localhost:25`. Point apps that used it at sendmail or PHP `mail()`.
 - Apps with their own SMTP settings keep connecting to their provider directly.
+- The DNS addon can fill its Mailcow settings from a profile here, so a Mailcow
+  relay mailbox is typed once, in SMTP Relay.
 - New sites are picked up seconds after CloudPanel creates them. Disabling the
   addon restores Postfix's previous settings and removes its PHP setting; the
   profiles are kept, and enabling it again applies them.

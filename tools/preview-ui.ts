@@ -124,6 +124,7 @@ function dnsPreviewState(url: URL): DnsState {
     mailcow: setup
       ? { url: "", host: "", dkimSource: "", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "", hasKey: false }
       : { url: "https://mail.example.net", host: "mail.example.net", dkimSource: "example.net", dkimSelector: "dkim", dkimBits: 2048, sharedMailbox: "relay@example.net", hasKey: true },
+    smtpRelays: [{ profile: "Mailcow", host: "mail.example.net", username: "relay@example.net" }],
     server: { ipv4: "", ipv6: "", detected: { ipv4: "203.0.113.10", ipv6: "2001:db8::10" } },
     orphans: setup ? [] : [{ domain: "retired.example.com", zone: "example.com", records: 4 }],
     checkedAt: setup ? null : new Date(Date.now() - 4 * 60_000).toISOString(),

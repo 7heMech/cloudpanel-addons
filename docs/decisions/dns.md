@@ -160,6 +160,28 @@ Mailcow replaces the whole list and has no compare-and-swap, so an edit made in
 between can be lost. A Mailcow that does not report the list is noted rather
 than overwritten. No Mailcow domain is ever deleted.
 
+The settings are the hostname, the API key, the DKIM policy and the shared
+mailbox. Mailcow serves its API, webmail and mail on one `MAILCOW_HOSTNAME`, so
+the address is entered as that hostname (an HTTPS origin, port included, is
+also accepted) and `{mailcow.host}` is always its hostname rather than a second
+field.
+
+SMTP Relay is where a Mailcow relay mailbox is entered, because it holds the
+mailbox's password; DNS reads it, not the other way round. The `list` reply
+carries each SMTP Relay profile's relay host, username and name, read from
+SMTP Relay's root-owned configuration with that addon's own parser and never
+its password; a missing or untrusted file gives none. The Mailcow form offers
+them, and fills the only one in when Mailcow is not yet set up. It is an import,
+not a link: the values are copied into DNS's settings when saved, so changing a
+relay in SMTP Relay never changes what DNS enforces without a review. The API
+key is DNS's alone, since SMTP Relay has no use for it.
+
+Removing Mailcow deletes the key and empties the settings at once, like
+removing a Cloudflare connection, with no review: nothing is written anywhere.
+Sites whose profile sets up Mailcow then plan with a problem, and a plan with a
+problem is never applied, so their records and Mailcow domains stay as they
+were.
+
 ## New sites and certificates
 
 DNS declares `newSites`, so the shared watcher (see

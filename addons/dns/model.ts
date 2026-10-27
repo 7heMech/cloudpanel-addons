@@ -73,7 +73,7 @@ export interface Connection {
 export interface MailcowSettings {
   /** The API's HTTPS origin; empty until Mailcow is set up. */
   url: string;
-  /** What `{mailcow.host}` stands for. */
+  /** What `{mailcow.host}` stands for: always the hostname of `url`. */
   host: string;
   /** A domain whose key new domains share, or empty to generate one per domain. */
   dkimSource: string;
@@ -294,16 +294,18 @@ export function dkimSelector(value: unknown): string {
   return value.trim().toLowerCase();
 }
 
+/** Mailcow's HTTPS origin, from either that origin or its bare hostname. */
 export function mailcowOrigin(value: unknown): string {
-  if (typeof value !== "string") failAction("the Mailcow address must be an HTTPS URL");
+  if (typeof value !== "string") failAction("the Mailcow address must be a hostname or an HTTPS URL");
+  const text = value.trim();
   let url: URL;
   try {
-    url = new URL(value.trim());
+    url = new URL(text.includes("://") ? text : `https://${text}`);
   } catch {
-    failAction("the Mailcow address must be an HTTPS URL");
+    failAction("the Mailcow address must be a hostname or an HTTPS URL");
   }
   if (url.protocol !== "https:" || url.username || url.password || (url.pathname !== "/" && url.pathname !== "") || url.search || url.hash) {
-    failAction("the Mailcow address must be an HTTPS origin, such as https://mail.example.com");
+    failAction("the Mailcow address must be a hostname, such as mail.example.com, or an HTTPS origin");
   }
   return url.origin;
 }
