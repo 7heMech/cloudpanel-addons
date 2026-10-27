@@ -3,6 +3,8 @@
  * Plugin Name: CloudPanel Addons MainWP guard
  * Description: Keeps MainWP Child connected to this server's MainWP Dashboard. Installed and removed by the WordPress Tools addon.
  */
+// WP-CLI is the server's own access, and its plugin commands list through all_plugins too.
+if (defined('WP_CLI') && WP_CLI) return;
 add_filter('all_plugins', function ($plugins) {
     unset($plugins['mainwp-child/mainwp-child.php']);
     return $plugins;
