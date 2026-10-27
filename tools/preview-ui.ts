@@ -1648,7 +1648,7 @@ const server = Bun.serve({
       html = phpResourcesLayout("PHP Resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/dns/" || path === "/addons/dns") {
-      // ?dialog=profile|advanced|new|review|site|choose|connection|mailcow|server opens that dialog on load; ?ask shows DNS
+      // ?dialog=profile|advanced|new|review|site|pending|choose|connection|mailcow|server opens that dialog on load; ?ask shows DNS
       // before Automatic is turned on;
       // ?at=<selector> hides the cards above that one, for a phone screenshot of something below the fold; ?dark
       // draws the dark theme.
@@ -1661,6 +1661,7 @@ const server = Bun.serve({
         new: "dnsEditProfile('')",
         review: `dnsShowReview(${JSON.stringify(dnsPreviewReview(state))})`,
         site: "dnsShowSite('shop.example.com')",
+        pending: "dnsShowSite('new-client.example.org')",
         choose: "dnsShowSite('a-rather-long-customer-hostname.staging.example.net')",
         connection: "dnsEditConnection('')",
         mailcow: "dnsEditMailcow()",

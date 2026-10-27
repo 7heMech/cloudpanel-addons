@@ -18,6 +18,8 @@
 import MENU_STYLE_SOURCE from "./menu.css" with { type: "text" };
 import SITES_SCRIPT_SOURCE from "./sites.client.js" with { type: "text" };
 import ADMIN_MOBILE_STYLE from "./admin-mobile.css" with { type: "text" };
+import SITE_TABLES_STYLE from "./site-tables.css" with { type: "text" };
+import SITE_TABLES_SCRIPT from "./site-tables.client.js" with { type: "text" };
 import type { AddonTarget } from "../../../lib/addon-target";
 import { headerWrapStyle } from "../../../lib/panel-nav";
 import { MENU_ONLY_CLASS, ROW_ACTION_CLASS, ROW_MENU_CLASS } from "../../../lib/row-actions";
@@ -301,9 +303,15 @@ export function deviceThemeSnippet(on: boolean): string {
   return on ? DEVICE_THEME_SCRIPT : "";
 }
 
-/** The narrow-screen rules for the relevant panel header, or nothing at all. */
+/**
+ * The narrow-screen rules for the relevant panel header, or nothing at all.
+ * The frontend's also turn the tables on a site's own tabs into cards, with the
+ * script that labels their cells; the Admin area has its sidebar instead.
+ */
 export function panelMobileSnippet(on: boolean, adminArea = false): string {
-  return on ? `<style>${PANEL_HEADER_STYLE}${NEW_SITE_STYLE}${adminArea ? ADMIN_MOBILE_STYLE : ""}</style>` : "";
+  if (!on) return "";
+  if (adminArea) return `<style>${PANEL_HEADER_STYLE}${NEW_SITE_STYLE}${ADMIN_MOBILE_STYLE}</style>`;
+  return `<style>${PANEL_HEADER_STYLE}${NEW_SITE_STYLE}${SITE_TABLES_STYLE}</style><script>${SITE_TABLES_SCRIPT}</script>`;
 }
 
 export const SITES_TEMPLATE = "Frontend/Site/index.html.twig";

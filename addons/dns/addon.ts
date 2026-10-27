@@ -3,13 +3,14 @@ import { queueAddonPass } from "../../cli/job-store";
 import { tryRun } from "../../cli/util";
 import { executeDnsAction, runDnsAction, type DnsActionOptions } from "./action";
 import { handle } from "./app/index";
+import { DNS_TARGETS } from "./inject/nameservers";
 
 export const DNS_ADDON: AddonDefinition = {
   name: "dns",
   title: "DNS",
   description: "Keep each site's Cloudflare DNS to a profile of records, with Mailcow set up for its mail.",
   added: "2.0",
-  targets: [],
+  targets: DNS_TARGETS,
   handler: handle,
   action: runDnsAction,
   withdrawn: () => {

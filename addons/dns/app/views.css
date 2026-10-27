@@ -150,8 +150,11 @@ p.dns-dialog-note { margin:20px 0 0; }
 .dns-steps p { margin:6px 0 12px; }
 .dns-token-grid { margin-top:12px; }
 #dns-token-link { white-space:normal; }
-.dns-copy { align-items:center; margin-bottom:12px; }
+.dns-copy { display:flex; align-items:center; gap:6px; margin-bottom:12px; }
 .dns-copy code { overflow-wrap:anywhere; }
+.dns-clip { display:inline-flex; flex-shrink:0; padding:4px; border:0; border-radius:4px; background:none; color:var(--muted); cursor:pointer; }
+.dns-clip:hover, .dns-clip:focus-visible { color:var(--accent); background:var(--surface); }
+.dns-nameservers .dns-copy { margin:0 0 2px; }
 /* fleet-row-selection */
 
 .dns-card-sites { display:none; }

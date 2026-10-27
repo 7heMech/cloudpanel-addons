@@ -1,0 +1,25 @@
+/* The tables on a site's own tabs -- certificates, databases, users, cron jobs,
+   security -- as one card per row, so a phone shows every column instead of
+   cutting the table off at its edge. Keyed on CloudPanel's own markup, so it
+   is the layout from the first paint. The first cell is the card's title, the
+   action menu sits at its top right, and every other cell is labelled with its
+   column's heading, which the script beside this copies onto it. */
+@media (max-width: 760px) {
+  body .site-content .card-table table.table:not(.table-sites),
+  body .site-content .card-table table.table:not(.table-sites) > tbody { display: block; }
+  body .site-content .card-table table.table:not(.table-sites) > thead { display: none; }
+  body .site-content .card-table table.table:not(.table-sites) > tbody > tr { display: block; position: relative;
+    padding: 16px 20px; border-bottom: 1px solid #eaeaea; }
+  body .site-content .card-table table.table:not(.table-sites) > tbody > tr:last-child { border-bottom: 0; }
+  html.dark body .site-content .card-table table.table:not(.table-sites) > tbody > tr { border-bottom-color: var(--clp-border-color); }
+  html.dark body .site-content .card-table table.table:not(.table-sites) > tbody > tr:last-child { border-bottom: 0; }
+  body .site-content .card .card-body-no-padding table.table:not(.table-sites) > tbody > tr > td { display: block; width: auto;
+    padding: 0; border: 0; text-align: left; overflow-wrap: anywhere; }
+  body .site-content .card-table table.table:not(.table-sites) > tbody > tr > td + td { margin-top: 10px; }
+  body .site-content .card-table table.table:not(.table-sites) > tbody > tr > td:first-child { padding-right: 48px; font-weight: 600; }
+  body .site-content .card-table table.table:not(.table-sites) > tbody > tr > td:not(:first-child):not(.table-actions)[data-label]::before {
+    content: attr(data-label); display: block; margin-bottom: 2px; color: #9bacb6; font-size: 12px; font-weight: 700;
+    text-transform: uppercase; }
+  body .site-content .card-table table.table:not(.table-sites) > tbody > tr > td.table-actions { position: absolute; top: 12px;
+    right: 16px; margin: 0; }
+}

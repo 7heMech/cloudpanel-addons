@@ -140,13 +140,14 @@ export const SMTP_ALLOWED_VERBS = new Set([
 ]);
 
 /**
- * `provision` admits ordinary panel users as well as site managers, and
- * carries `--as-user` so the action holds it to that account's own sites.
+ * `provision` and `site-status` admit ordinary panel users as well as site
+ * managers, and carry `--as-user` so the action holds them to that account's
+ * own sites.
  */
 export const DNS_ALLOWED_VERBS = new Set([
   "list", "check", "save-profile", "delete-profile", "set-automatic", "zone-account", "assign", "set-default", "confirm",
   "save-connection", "remove-connection", "choose-zone", "save-mailcow", "remove-mailcow", "save-server", "remove-records", "forget-records",
-  "provision",
+  "provision", "site-status",
 ]);
 
 /**
