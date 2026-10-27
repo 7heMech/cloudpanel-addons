@@ -1,8 +1,6 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { NATIVE_SSL_TYPES, sslFormSnippet, sslSitesSnippet, sslTargets, sslWordPressSnippet } from "../addons/panel-tweaks/inject/ssl";
+import { NATIVE_SSL_TYPES, SCRIPT as script, sslFormSnippet, sslSitesSnippet, sslTargets, sslWordPressSnippet } from "../addons/panel-tweaks/inject/ssl";
 
-const script = readFileSync(`${import.meta.dir}/../addons/panel-tweaks/inject/ssl.client.js`, "utf8");
 const ORIGIN = "https://panel.example:8443";
 const DOMAIN = "blog.example.com";
 const CERTIFICATES = `/site/${DOMAIN}/certificates`;
@@ -23,6 +21,18 @@ function cookieJar(initial = "") {
 
 interface Reply { url?: string; token?: boolean; error?: string }
 
+interface Element { tag: string; textContent: string; children: Element[] }
+
+function element(tag: string) {
+  return {
+    tag, href: "", textContent: "", innerHTML: "", children: [] as Element[],
+    appendChild(child: Element) { this.children.push(child); },
+    insertBefore(child: Element) { this.children.unshift(child); },
+    setAttribute() {},
+    addEventListener() {},
+  };
+}
+
 /** What the DNS addon's routes answer; absent means the addon is not installed. */
 interface Dns { provision?: unknown; sessionStatus?: number }
 
@@ -34,8 +44,10 @@ function run(options: { cookie?: string; domainInput?: string; box?: boolean; bo
     addEventListener: (_: string, handler: () => void) => { submit = handler; },
   };
   const choice = { checked: true, form };
-  const alert = { className: "alert alert-info", textContent: "", links: [] as string[],
-    append(_: string, a: { href: string }) { this.links.push(a.href); } };
+  /** What the alert reads, a copy button as its nameserver in brackets. */
+  const alert = { className: "alert alert-info", textContent: "", links: [] as string[], parts: [] as string[],
+    append(_: string, a: { href: string }) { this.links.push(a.href); },
+    appendChild(child: Element) { this.parts.push(child.tag === "button" ? `[${child.children[0]!.textContent}]` : child.textContent); } };
   const box = {
     querySelector: () => alert,
     getAttribute: (name: string) => ({ "data-clp-auto-ssl": options.boxDomain ?? DOMAIN, "data-certificates-url": CERTIFICATES, "data-issue-url": ISSUE })[name],
@@ -49,7 +61,9 @@ function run(options: { cookie?: string; domainInput?: string; box?: boolean; bo
     set cookie(raw: string) { jar.set(raw); },
     getElementById: (id: string) => (id === "clp-auto-ssl" && options.domainInput !== undefined ? choice : null),
     querySelectorAll: () => (options.box ? [box] : []),
-    createElement: () => ({ href: "", textContent: "" }),
+    createElement: (tag: string) => element(tag),
+    createTextNode: (text: string) => ({ ...element("#text"), textContent: text }),
+    head: element("head"),
   };
   const fetch = async (url: string, init: RequestInit) => {
     // The completion forgets its domain before it asks anything.
@@ -173,6 +187,19 @@ test("DNS that is not ready asks for no certificate and says why", async () => {
   expect(waiting.alert.className).toBe("alert alert-warning");
   expect(waiting.alert.textContent).toContain("Zone example.com is pending; set its nameservers.");
   expect(waiting.alert.textContent).toContain("requested automatically");
+  // DNS requests it on its own, so there is nothing to do on the SSL/TLS tab.
+  expect(waiting.alert.links).toEqual([]);
+});
+
+test("a zone waiting for its nameservers names them last, each a copy button", async () => {
+  const nameServers = ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"];
+  const waiting = run({ box: true, dns: { provision: { ok: true, data: { managed: true, ready: false, reason: "Zone example.com is pending", zone: "example.com", nameServers, certificateNames: [] } } } });
+  await waiting.settled();
+  expect(waiting.calls).toEqual([]);
+  expect(waiting.alert.className).toBe("alert alert-warning");
+  expect(waiting.alert.parts.join("")).toBe("example.com is waiting for its nameservers. The Let\u2019s Encrypt certificate is requested automatically "
+    + "once Cloudflare sees them. At the domain\u2019s registrar, set its nameservers to [ada.ns.cloudflare.com] and [bob.ns.cloudflare.com].");
+  expect(waiting.alert.links).toEqual([]);
 });
 
 test("a site DNS does not manage gets the created domain alone, and a DNS failure is reported", async () => {

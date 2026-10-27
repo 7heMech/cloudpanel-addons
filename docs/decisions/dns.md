@@ -217,7 +217,8 @@ asks for a certificate. The route, and its CSRF session route, are reachable by
 non-administrators: the action is told the panel user and refuses a site
 `panelUserOwnsSite` does not give them, and answers with readiness, a reason (a
 fixed one when a non-administrator's site has a problem, since a plan's problems
-can name other sites and quote provider errors) and the certificate names only -- the site and `www` where the profile writes an
+can name other sites and quote provider errors), a pending zone and its
+nameservers, and the certificate names only -- the site and `www` where the profile writes an
 address there. A site in no profile, or any site while DNS asks first, is not DNS's to hold up.
 A non-administrator's call checks Cloudflare only for a site created in the last
 fifteen minutes; for an older one it answers from the last check, so repeating
@@ -233,11 +234,13 @@ runs. A site whose certificate is no longer the placeholder ends its request,
 so a real certificate is never replaced; a site DNS stops writing drops it.
 
 A site's SSL/TLS tab, the one the panel's certificate badges link to, carries a
-notice while its zone waits for nameservers: the zone and the nameservers, each
-with a clipboard icon. Each name and icon form one button that copies that
-nameserver alone, since a registrar usually has a field per nameserver, and
-that is what the certificate is waiting for. The buttons sit side by side on
-desktop, wrapping as needed, and stack at widths of 760px or less.
+notice while its zone waits for nameservers, since that is what the certificate
+is waiting for. It says what happens to the certificate first and ends on the
+one thing to do: the sentence naming the nameservers. Each nameserver sits in
+that sentence with a clipboard icon, the two forming one button that copies
+that nameserver alone, since a registrar usually has a field per nameserver.
+The notice is `lib/nameserver-notice.ts`, shared with Panel Tweaks' completion
+page, which fills it from `provision`'s reply.
 It says the certificate is requested automatically only when DNS has recorded
 a request for the site; a site still on its self-signed placeholder without one
 is told to request it under Actions, and a site with a real certificate is told
