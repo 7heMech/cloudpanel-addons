@@ -24,7 +24,7 @@ export const INSTATIC_TARGETS: AddonTarget[] = [
               </svg>
             </div>
             <div class="deploy-application-container">
-              <a href="${url}/new" class="btn btn-white">Create an Instatic site</a>
+              <a href="${url}/new?from=new-site" class="btn btn-white">Create an Instatic site</a>
             </div>
           </div>
           {% endif %}`,

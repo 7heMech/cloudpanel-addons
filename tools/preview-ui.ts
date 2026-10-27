@@ -1700,7 +1700,10 @@ const server = Bun.serve({
       const opener = openers[url.searchParams.get("dialog") ?? ""];
       if (opener) html = html.replace("</body>", `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>`);
     } else if (path === "/addons/instatic/new") {
-      html = instaticLayout("New Instatic site", newInstanceView(url.searchParams.has("offline") ? { tags: ["0.0.18"], latest: null, source: "fallback" } : versions), notice);
+      html = instaticLayout("New Instatic site", newInstanceView(
+        url.searchParams.has("offline") ? { tags: ["0.0.18"], latest: null, source: "fallback" } : versions,
+        url.searchParams.get("from") === "new-site",
+      ), notice);
     } else if (path === "/addons/instatic/jobs/preview-instatic-job") {
       // ?cert=failed shows a creation whose certificate request failed.
       const certificate = url.searchParams.get("cert") === "failed" ? "failed" as const : "issued" as const;

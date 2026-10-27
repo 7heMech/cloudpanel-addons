@@ -38,7 +38,11 @@ newer versions. When ghcr.io cannot be reached, Update is disabled and no tag is
 called the latest; the failure is remembered for a minute, so repaints do not each
 wait out the 8 s timeout. Delete asks for the domain to be typed, and removes the
 CloudPanel site only when the addon created it. The New site form reads only the
-tag list: the port is chosen when the site is created.
+tag list: the port is chosen when the site is created. Its Back link returns to
+CloudPanel's site chooser (`/site/new`) when entered through the New Site tile,
+which adds `?from=new-site` to the form URL. Otherwise it returns to the Instatic
+dashboard. The query selects between these two fixed destinations and survives
+a reload.
 
 A creation job records `certificate` (`issued`, `failed` or `none`), and a failed
 request is a warning on the job page; records from 1.5.x, without it, keep the
