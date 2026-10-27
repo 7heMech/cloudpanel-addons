@@ -338,7 +338,12 @@ function dnsShowSite(domain) {
   if (plan && plan.zone) {
     html += '<dt>Zone</dt><dd>' + dnsEsc(plan.zone.name) + ' · ' + dnsEsc(plan.zone.status) + '</dd>' +
       '<dt>Through</dt><dd>' + dnsEsc(plan.zone.connection) + ' · ' + dnsEsc(plan.zone.account) + '</dd>';
-    if (plan.zone.status !== 'active' && plan.zone.nameServers.length) html += '<dt>Nameservers</dt><dd class="mono">' + plan.zone.nameServers.map(dnsEsc).join('<br>') + '</dd>';
+    if (plan.zone.status !== 'active' && plan.zone.nameServers.length) {
+      // One button each: a registrar usually has a field per nameserver.
+      html += '<dt>Nameservers</dt><dd class="dns-nameservers">' + plan.zone.nameServers.map(function (server) {
+        return '<button class="dns-chip" type="button" title="Copy" onclick="dnsCopyText(this.textContent)">' + dnsEsc(server) + '</button>';
+      }).join('') + '<span class="hint">Click one to copy it.</span></dd>';
+    }
   }
   if (site.ssl) html += '<dt>Certificate</dt><dd>' + dnsEsc(site.ssl) + '</dd>';
   html += '</dl>';
@@ -412,6 +417,14 @@ function dnsEditConnection(id) {
 }
 
 /** Space-separated, as Cloudflare's IP filter takes several addresses at once. */
+function dnsCopyText(text) {
+  if (!navigator.clipboard || !navigator.clipboard.writeText) return notify('Select ' + text + ' and copy it.', 'warn');
+  navigator.clipboard.writeText(text).then(
+    function () { notify(text + ' copied.', 'ok'); },
+    function () { notify('Select ' + text + ' and copy it.', 'warn'); }
+  );
+}
+
 function dnsCopyIps() {
   const block = CLP_ROOT.getElementById('dns-token-ips');
   if (navigator.clipboard && navigator.clipboard.writeText) {

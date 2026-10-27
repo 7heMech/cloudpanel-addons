@@ -232,8 +232,9 @@ runs. A site whose certificate is no longer the placeholder ends its request,
 so a real certificate is never replaced; a site DNS stops writing drops it.
 
 A site's SSL/TLS tab, the one the panel's certificate badges link to, carries a
-notice while its zone waits for nameservers: the zone and the nameservers, with
-a copy button, since that is what its certificate is waiting for. Anyone who
+notice while its zone waits for nameservers: the zone and the nameservers, each
+a button that copies it alone, since a registrar usually has a field per
+nameserver and that is what the certificate is waiting for. Anyone who
 can open the site's page sees it, so it is fetched from
 `GET /addons/dns/api/site`, the third route a non-administrator reaches; the
 action holds a non-administrator to their own sites as `provision` does. It

@@ -152,6 +152,9 @@ p.dns-dialog-note { margin:20px 0 0; }
 #dns-token-link { white-space:normal; }
 .dns-copy { align-items:center; margin-bottom:12px; }
 .dns-copy code { overflow-wrap:anywhere; }
+.dns-nameservers { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.dns-nameservers .dns-chip { font-family:var(--mono); }
+.dns-nameservers .hint { flex-basis:100%; margin:0; }
 /* fleet-row-selection */
 
 .dns-card-sites { display:none; }

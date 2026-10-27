@@ -15,23 +15,31 @@
     var title = document.createElement('strong');
     title.textContent = data.zone + ' is waiting for its nameservers.';
     alert.appendChild(title);
-    alert.appendChild(document.createTextNode(' At the domain’s registrar, replace its nameservers with these. The Let’s Encrypt certificate is requested automatically once Cloudflare sees them.'));
+    alert.appendChild(document.createTextNode(' At the domain\u2019s registrar, replace its nameservers with these. The Let\u2019s Encrypt certificate is requested automatically once Cloudflare sees them.'));
     var list = document.createElement('div');
     list.className = 'clp-dns-nameservers';
+    // One button each: a registrar usually has a field per nameserver.
     data.nameServers.forEach(function (server) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'btn btn-white btn-sm';
+      button.title = 'Copy';
       var code = document.createElement('code');
       code.textContent = server;
-      list.appendChild(code);
+      var state = document.createElement('span');
+      state.textContent = 'Copy';
+      button.appendChild(code);
+      button.appendChild(state);
+      button.addEventListener('click', function () {
+        if (!navigator.clipboard) return;
+        navigator.clipboard.writeText(server).then(function () {
+          var labels = list.querySelectorAll('button span');
+          for (var i = 0; i < labels.length; i++) labels[i].textContent = 'Copy';
+          state.textContent = 'Copied';
+        });
+      });
+      list.appendChild(button);
     });
-    var copy = document.createElement('button');
-    copy.type = 'button';
-    copy.className = 'btn btn-white btn-sm';
-    copy.textContent = 'Copy';
-    copy.addEventListener('click', function () {
-      if (!navigator.clipboard) return;
-      navigator.clipboard.writeText(data.nameServers.join('\n')).then(function () { copy.textContent = 'Copied'; });
-    });
-    list.appendChild(copy);
     alert.appendChild(list);
     box.appendChild(alert);
   }).catch(function () {});

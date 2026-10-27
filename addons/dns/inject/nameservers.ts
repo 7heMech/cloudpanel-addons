@@ -1,9 +1,10 @@
 import type { AddonTarget } from "../../../lib/addon-target";
 import SCRIPT from "./nameservers.client.js" with { type: "text" };
 
-const STYLE = `.clp-dns-nameservers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
-.clp-dns-nameservers code { padding: 4px 8px; border-radius: 4px; background: rgba(0,0,0,.06); color: inherit; font-size: 14px; }
-html.dark .clp-dns-nameservers code { background: rgba(255,255,255,.08); }`;
+const STYLE = `.clp-dns-nameservers { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.clp-dns-nameservers .btn { display: inline-flex; align-items: center; gap: 10px; max-width: 100%; }
+.clp-dns-nameservers code { color: inherit; font-size: 14px; overflow-wrap: anywhere; }
+.clp-dns-nameservers span { color: #0078d4; font-size: 13px; }`;
 
 /** Above the certificates card, where flash messages also sit, on every site's SSL/TLS tab. */
 export function nameserversSnippet(addonUrl: string): string {
