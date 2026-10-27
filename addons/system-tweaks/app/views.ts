@@ -37,7 +37,8 @@ const REBOOT_OVERDUE_DAYS = 7;
 interface Row {
   key: string;
   title: string;
-  description: string;
+  /** One paragraph, or a line each. */
+  description: string | string[];
   /** The switch's state; a row with `control` instead has none. */
   checked?: boolean;
   disabled?: boolean;
@@ -63,7 +64,7 @@ function settingRow(row: Row): string {
               aria-controls="${note}" aria-label="What ${esc(row.title.toLowerCase())} does"
               onclick="toggleNote(this)"></button></h3>${control}
           </div>
-          <div class="tweak-note" id="${note}"><p>${esc(row.description)}</p></div>${row.extra ?? ""}
+          <div class="tweak-note" id="${note}">${[row.description].flat().map((line) => `<p>${esc(line)}</p>`).join("")}</div>${row.extra ?? ""}
         </div>
       </div>`;
 }
@@ -92,13 +93,17 @@ function updatesLine(status: UpdatesStatus): string {
   return `${badge("Off", "warn")} <span>${why}</span>`;
 }
 
-/** Updates that run but leave CloudPanel's PHP to a manual apt upgrade. */
-function phpGapWarning(status: UpdatesStatus): string {
+/**
+ * Updates that run but leave CloudPanel's PHP to a manual apt upgrade. Under
+ * System Tweaks' own file that is a fault; under someone else's it is only
+ * what the switch would add.
+ */
+function phpGap(status: UpdatesStatus): string {
   const php = status.coverage.find((row) => row.name === "CloudPanel PHP");
   if (!status.enabled || !php || php.covered === "all") return "";
-  return warning(status.managed
-    ? "apt's configuration leaves CloudPanel's PHP out of automatic updates, so its security fixes wait for apt upgrade."
-    : "Automatic updates skip CloudPanel's PHP, so its security fixes wait for apt upgrade. Switch on Install updates automatically to add it.");
+  return status.managed
+    ? warning("apt's configuration leaves CloudPanel's PHP out of automatic updates, so its security fixes wait for apt upgrade.")
+    : `<p class="hint st-suggest">Switch on Install updates automatically to also get CloudPanel's PHP security updates.</p>`;
 }
 
 function rebootTiming(status: UpdatesStatus, settings: UpdateSettings): string {
@@ -110,11 +115,12 @@ function rebootTiming(status: UpdatesStatus, settings: UpdateSettings): string {
     : "";
   return `
           <div class="st-reboot-time">
-            <select id="reboot-mode" aria-label="When to reboot" onchange="setRebootTime(this)">
+            <select id="reboot-mode" aria-label="When to reboot" data-current="${at ? "time" : "now"}" onchange="setRebootTime(this)">
               <option value="now"${at ? "" : " selected"}>Right after the update run</option>
               <option value="time"${at ? " selected" : ""}>At a set time</option>
             </select>
-            <input type="time" id="reboot-time" aria-label="Reboot time" value="${esc(at ? settings.rebootTime : "03:00")}"${at ? "" : " hidden"} onchange="setRebootTime(this)">
+            <input type="time" id="reboot-time" aria-label="Reboot time" value="${esc(at ? settings.rebootTime : "03:00")}"
+              data-current="${esc(at ? settings.rebootTime : "03:00")}"${at ? "" : " hidden"} onchange="setRebootTime(this)" onblur="flushRebootTime()">
             <span class="hint">${esc(status.timezone)}</span>
           </div>${overridden}`;
 }
@@ -148,7 +154,7 @@ function updateRows(status: UpdatesStatus, settings: UpdateSettings): string {
     checked: status.managed,
     disabled: !status.installed,
     onchange: "setUpdates(this)",
-    extra: `<p class="st-status" id="updates-status">${updatesLine(status)}</p>${phpGapWarning(status)}${lists}${install}${options}`,
+    extra: `<p class="st-status" id="updates-status">${updatesLine(status)}</p>${phpGap(status)}${lists}${install}${options}`,
   });
 }
 
@@ -165,6 +171,17 @@ function lastRunText(run: LastRun | null): string {
   return `${at}: no result logged yet.`;
 }
 
+/** When the box restarts by itself: the next update run sees the flag and reboots, then or at its set time. */
+function selfReboot(status: UpdatesStatus): string {
+  if (!status.enabled || !status.reboot) return "";
+  const run = `the next update run${status.timer.next ? ` (${esc(status.timer.next)})` : ""}`;
+  const time = status.rebootTime || "now";
+  const when = time === "now" ? `${run} restarts the server.`
+    : /^\+\d+$/.test(time) ? `the server restarts ${esc(time.slice(1))} minutes after ${run}.`
+    : `${run} schedules a restart for ${esc(time)} ${esc(status.timezone)}.`;
+  return `<span class="hint st-detail">Automatic reboot is on: ${when}</span>`;
+}
+
 function statusList(status: UpdatesStatus, now: number): string {
   if (!status.installed) return "";
   const required = status.rebootRequired;
@@ -178,7 +195,7 @@ function statusList(status: UpdatesStatus, now: number): string {
       <dl class="kv st-kv">
         <dt>Last run</dt><dd>${esc(lastRunText(status.lastRun))}${failure}</dd>${required ? `
         <dt>Reboot</dt><dd>${badge("Required", "warn")} since ${esc(required.since.slice(0, 10))}${required.packages.length
-          ? ` for ${esc(required.packages.join(", "))}` : ""}.</dd>` : ""}
+          ? ` for ${esc(required.packages.join(", "))}` : ""}.${selfReboot(status)}</dd>` : ""}
       </dl>${overdue}`;
 }
 
@@ -306,7 +323,10 @@ function settingsCard(state: SystemTweaksState): string {
       })}${settingRow({
         key: "blockForgedRealIp",
         title: "Block forged visitor IPs",
-        description: "Stops any client from naming its own IP with a header to PHP, logs, basic auth and Cloudflare-only access. Local proxies stay trusted, and the panel also trusts Cloudflare. Switch it off only behind another public proxy.",
+        description: [
+          "Stops any client from naming its own IP with a header to PHP, logs, basic auth and Cloudflare-only access.",
+          "Local proxies stay trusted, and the panel also trusts Cloudflare. Switch it off only behind another public proxy.",
+        ],
         checked: state.realIp.blockForged,
         onchange: "setRealIp(this)",
         extra: `<p class="st-status">${realIpLine(state.realIp)}</p>`,
