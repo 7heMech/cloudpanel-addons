@@ -341,8 +341,9 @@ function dnsShowSite(domain) {
     if (plan.zone.status !== 'active' && plan.zone.nameServers.length) {
       // One button each: a registrar usually has a field per nameserver.
       html += '<dt>Nameservers</dt><dd class="dns-nameservers">' + plan.zone.nameServers.map(function (server) {
-        return '<button class="dns-chip" type="button" title="Copy" onclick="dnsCopyText(this.textContent)">' + dnsEsc(server) + '</button>';
-      }).join('') + '<span class="hint">Click one to copy it.</span></dd>';
+        return '<div class="dns-copy"><code>' + dnsEsc(server) + '</code><button class="dns-clip" type="button" title="Copy" aria-label="Copy ' + dnsEsc(server) +
+          '" onclick="dnsCopyText(this.previousElementSibling.textContent)">' + DNS_CLIPBOARD + '</button></div>';
+      }).join('') + '</dd>';
     }
   }
   if (site.ssl) html += '<dt>Certificate</dt><dd>' + dnsEsc(site.ssl) + '</dd>';

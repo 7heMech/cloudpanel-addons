@@ -13,8 +13,8 @@ checklist.
    token in Cloudflare** opens Cloudflare's token form. Check the permissions
    listed beside the link are there. Pick the accounts and zones there (All zones
    also covers zones you add later), limit it to the server addresses shown
-   under Client IP Address Filtering (**Copy** copies them space-separated, as
-   that field takes them), create the token, and paste it back. DNS
+   under Client IP Address Filtering (the clipboard icon copies them
+   space-separated, as that field takes them), create the token, and paste it back. DNS
    finds the accounts and zones it reaches by itself. Add more connections for
    other Cloudflare logins.
 2. **Mailcow, if you use it.** Under **Settings**, set Mailcow's hostname,
@@ -53,8 +53,9 @@ records within seconds, and the certificate is requested once they are in
 place. If the zone is new, the page says which nameservers to set at the
 registrar; the certificate is requested automatically once the zone is active.
 Until then the site's **SSL/TLS** tab shows the nameservers too, to anyone who
-can open the site, site managers and the site's own users included. Click a
-nameserver there, or in the site's **Details**, to copy it.
+can open the site, site managers and the site's own users included. The
+clipboard icon after each nameserver, there or in the site's **Details**,
+copies that one.
 
 **Details** on a site shows its zone and every pending change. Drift is
 corrected every 15 minutes, or at once with **Check now**. **Change log** lists

@@ -18,27 +18,28 @@
     alert.appendChild(document.createTextNode(' At the domain\u2019s registrar, replace its nameservers with these. The Let\u2019s Encrypt certificate is requested automatically once Cloudflare sees them.'));
     var list = document.createElement('div');
     list.className = 'clp-dns-nameservers';
-    // One button each: a registrar usually has a field per nameserver.
+    // A clipboard after each: a registrar usually has a field per nameserver.
     data.nameServers.forEach(function (server) {
-      var button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'btn btn-white btn-sm';
-      button.title = 'Copy';
+      var row = document.createElement('div');
       var code = document.createElement('code');
       code.textContent = server;
-      var state = document.createElement('span');
-      state.textContent = 'Copy';
-      button.appendChild(code);
-      button.appendChild(state);
-      button.addEventListener('click', function () {
+      var copy = document.createElement('button');
+      copy.type = 'button';
+      copy.title = 'Copy';
+      copy.setAttribute('aria-label', 'Copy ' + server);
+      copy.innerHTML = box.getAttribute('data-clipboard');
+      copy.addEventListener('click', function () {
         if (!navigator.clipboard) return;
         navigator.clipboard.writeText(server).then(function () {
-          var labels = list.querySelectorAll('button span');
-          for (var i = 0; i < labels.length; i++) labels[i].textContent = 'Copy';
-          state.textContent = 'Copied';
+          var copied = list.querySelectorAll('.copied');
+          for (var i = 0; i < copied.length; i++) copied[i].classList.remove('copied');
+          copy.classList.add('copied');
+          copy.title = 'Copied';
         });
       });
-      list.appendChild(button);
+      row.appendChild(code);
+      row.appendChild(copy);
+      list.appendChild(row);
     });
     alert.appendChild(list);
     box.appendChild(alert);
