@@ -31,12 +31,16 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ve
     ? `${href ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>` : ""}
       <button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`
     : `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`;
-  return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}" data-find="${esc(`${title} ${spec.name} ${spec.description ?? ""}`)}">
+  const added = isNew(spec.added, version);
+  const changed = !added && spec.changed && isNew(spec.changed.in, version) ? spec.changed : null;
+  // Keyed by release line, so opening the addon clears it until a later line marks it again.
+  const news = added ? `${spec.name}@${spec.added}` : changed ? `${spec.name}@${changed.in}` : null;
+  return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}"${news ? ` data-news="${esc(news)}"` : ""} data-find="${esc(`${title} ${spec.name} ${spec.description ?? ""}`)}">
   <div class="addon-about">
-    <h3>${heading}${isNew(spec.added, version) ? ' <span class="badge state-queued">New</span>'
-      : spec.changed && isNew(spec.changed.in, version) ? ' <span class="badge">Changed</span>' : ""}</h3>
+    <h3>${heading}${added ? ' <span class="badge state-queued addon-news">New</span>'
+      : changed ? ' <span class="badge addon-news">Changed</span>' : ""}</h3>
     ${spec.description ? `<p>${esc(spec.description)}</p>` : ""}${
-  spec.changed && !isNew(spec.added, version) && isNew(spec.changed.in, version) ? `<p class="addon-changed">${esc(spec.changed.note)}</p>` : ""}
+  changed ? `<p class="addon-changed addon-news">${esc(changed.note)}</p>` : ""}
   </div>
   <div class="addon-actions">${actions}</div>
   ${addonJob ? managerJobStatus(addonJob) : ""}
