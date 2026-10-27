@@ -307,6 +307,17 @@ runtime column is not a phone's decision. Only the keys somebody moved are
 stored, so a column a later release adds arrives at its own default rather than
 switched off by an old answer.
 
+The download arrow after the picker saves the sites the search and the filter
+leave, in the table's current order, as CSV. It is built in the browser from the
+reply the table was painted from, so it needs no route of its own and carries
+nothing the reader's page does not already have. It has every column, shown or
+not, because a spreadsheet is where an operator picks columns. Values are as the
+panel recorded them -- UTC timestamps and bytes -- rather than as the cells
+paint them. A value that starts like a spreadsheet formula gets a leading
+quote, so it is read as text. The file starts with a byte-order mark so Excel
+reads it as UTF-8. The arrow is part of the toolbar, so it appears only when the
+Sites table enhancement is on.
+
 The rule sheet is written while the browser is still parsing the table, from a
 choice `localStorage` can answer immediately, so a column that is off is never
 painted at all -- the same reason the card layout is keyed on CloudPanel's own
