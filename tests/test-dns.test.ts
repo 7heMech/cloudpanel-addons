@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { executeDnsAction, panelSites, type DnsReply, type ProvisionReply } from "../addons/dns/action";
+import { executeDnsAction, panelSites, type DnsReply, type ProvisionReply, type SiteDnsStatus } from "../addons/dns/action";
 import { detectAddresses, type Addresses } from "../addons/dns/addresses";
 import { DNS_ADDON } from "../addons/dns/addon";
 import type { PanelSite, SitePlan } from "../addons/dns/engine";
@@ -724,6 +724,33 @@ describe("zones and new sites", () => {
     env.cf.zones[0]!.status = "pending";
     expect((await env.act<ProvisionReply>("provision", undefined, ["--domain=shop.example.com", "--as-user=bob"])).reason)
       .toContain("set its nameservers at the registrar");
+  });
+
+  test("a site's own pages see its zone's nameservers from the last check, and only the owner's", async () => {
+    const env = setup();
+    const db = new Database(join(env.dir, "db.sq3"));
+    db.exec(`CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER);
+      CREATE TABLE site (id INTEGER PRIMARY KEY, domain_name TEXT);
+      CREATE TABLE user_sites (user_id INTEGER, site_id INTEGER);
+      INSERT INTO user VALUES (1, 'bob', 'ROLE_USER', 1);
+      INSERT INTO site VALUES (1, 'example.com'), (2, 'shop.example.com');
+      INSERT INTO user_sites VALUES (1, 2);`);
+    db.close();
+    env.cf.zones[0]!.status = "pending";
+    await env.connect();
+    const status = (args: string[]) => env.act<SiteDnsStatus>("site-status", undefined, args);
+    expect(await status(["--domain=shop.example.com", "--as-user=bob"])).toEqual({ zone: null, status: null, nameServers: [] });
+    await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
+    await env.automatic();
+    const calls = env.cf.calls.length;
+    expect(await status(["--domain=shop.example.com", "--as-user=bob"]))
+      .toEqual({ zone: "example.com", status: "pending", nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"] });
+    expect(env.cf.calls.length).toBe(calls);
+    await expect(status(["--domain=example.com", "--as-user=bob"])).rejects.toThrow("not one of yours");
+    // Once active there is nothing to set.
+    env.cf.zones[0]!.status = "active";
+    await env.act("check");
+    expect(await status(["--domain=shop.example.com"])).toEqual({ zone: "example.com", status: "active", nameServers: [] });
   });
 });
 

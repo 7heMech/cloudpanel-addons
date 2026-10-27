@@ -33,12 +33,12 @@ import { tokenTemplate, type TokenTemplate } from "./token";
 
 export type DnsVerb = "list" | "check" | "save-profile" | "delete-profile" | "set-automatic" | "zone-account" | "assign" | "set-default" | "confirm"
   | "save-connection" | "remove-connection" | "choose-zone" | "save-mailcow" | "remove-mailcow" | "save-server" | "remove-records" | "forget-records"
-  | "provision" | "reconcile" | "sync-sites";
+  | "provision" | "site-status" | "reconcile" | "sync-sites";
 
 const VERBS: DnsVerb[] = ["list", "check", "save-profile", "delete-profile", "set-automatic", "zone-account", "assign", "set-default", "confirm",
   "save-connection", "remove-connection", "choose-zone", "save-mailcow", "remove-mailcow", "save-server", "remove-records", "forget-records",
-  "provision", "reconcile", "sync-sites"];
-const NO_BODY: DnsVerb[] = ["list", "check", "provision", "reconcile", "sync-sites"];
+  "provision", "site-status", "reconcile", "sync-sites"];
+const NO_BODY: DnsVerb[] = ["list", "check", "provision", "site-status", "reconcile", "sync-sites"];
 const MAX_BODY = 256 * 1024;
 const REVIEW_LIFETIME = 15 * 60_000;
 /** How many writes the change log keeps, newest first; the page is sent the first PAGE_LOG of them. */
@@ -129,6 +129,14 @@ export interface DnsState {
 }
 
 export type DnsReply = DnsState & { review?: Review; notice?: string };
+
+/** What a site's own pages may show anyone who can open them: its zone, and the nameservers it waits for. */
+export interface SiteDnsStatus {
+  zone: string | null;
+  status: string | null;
+  /** Only while the zone waits for them; an active zone needs nothing set. */
+  nameServers: string[];
+}
 
 export interface ProvisionReply {
   managed: boolean;
@@ -569,6 +577,16 @@ class Action {
     return { managed: true, ...ready, certificateNames: ready.ready ? plan!.certificateNames : [] };
   }
 
+  /** From the last check alone, so opening a page never reaches Cloudflare. */
+  siteStatus(domain: string): SiteDnsStatus {
+    this.site(domain);
+    const policy = this.files.policy();
+    const plan = this.files.status().plans[domain];
+    const zone = policy.assignments[domain] && plan?.profileId === policy.assignments[domain] ? plan.zone : null;
+    if (!zone) return { zone: null, status: null, nameServers: [] };
+    return { zone: zone.name, status: zone.status, nameServers: zone.status === "active" ? [] : zone.nameServers };
+  }
+
   async retrySsl(plans: SitePlan[]): Promise<void> {
     const requests = this.files.ssl();
     if (!Object.keys(requests).length) return;
@@ -952,7 +970,7 @@ function provisionArguments(args: string[]): { domain: string; asUser: string; s
     else if (arg === "--ssl") ssl = true;
     else failAction(`unexpected argument '${arg}'`);
   }
-  if (!domain) failAction("provision needs --domain");
+  if (!domain) failAction("this needs --domain");
   if (asUser && !PANEL_USER_NAME_RE.test(asUser)) failAction("that is not a valid panel user name");
   return { domain, asUser, ssl };
 }
@@ -962,9 +980,10 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
   const [rawVerb, ...args] = argv;
   const verb = VERBS.find((candidate) => candidate === rawVerb);
   if (!verb) failAction(`usage: clp-addons action dns {${VERBS.join("|")}}`);
-  if (verb !== "provision" && args.length) failAction(`'${verb}' takes no arguments`);
+  const forSite = verb === "provision" || verb === "site-status";
+  if (!forSite && args.length) failAction(`'${verb}' takes no arguments`);
   const paths = { ...DEFAULT_DNS_PATHS, ...options.paths };
-  const provision = verb === "provision" ? provisionArguments(args) : null;
+  const provision = forSite ? provisionArguments(args) : null;
   const body = NO_BODY.includes(verb) ? {} : await bodyOf(options);
   const action = new Action(paths, options);
   if (verb === "list") return action.state();
@@ -977,6 +996,7 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
       db.close();
     }
   }
+  if (verb === "site-status") return action.siteStatus(provision!.domain);
 
   mkdirSync(dirname(paths.lockFile), { recursive: true, mode: 0o700 });
   // Long enough for a check of the whole fleet; a page action waits less and says so.

@@ -118,6 +118,17 @@ the shared class names do not alter frontend pages.
 All changes are CSS present before the content is parsed; navigation and forms
 keep CloudPanel's own markup and behavior, and desktop retains its sidebar.
 
+The frontend header carries the same switch's rules for the tables on a site's
+own tabs -- certificates, databases, users, cron jobs and security -- whose
+fixed column widths cut off the last columns and the action menu on a phone.
+Below 760px each row is a card: the first cell its title, the action cell at
+its top right, and every other cell under its column's heading. The layout is
+keyed on CloudPanel's own `site-content` and `table` classes, so it is in force
+from the first paint; the headings are copied onto the cells by a script in the
+same block that names rows while the page is parsed, not once it is ready, so
+the labels are there when the cards are painted. A translated panel gets its
+own headings. The Sites table is left to its own cards.
+
 ## SSL after native site creation
 
 `autoSsl` is off by default. It adds a checked, unnamed checkbox to the

@@ -332,6 +332,18 @@ test("the narrow-screen table, the row menu and the header are each in or out of
   expect(panelMobileSnippet(true)).toContain("@media (max-width: 760px)");
 });
 
+// A site's own tabs -- certificates, databases, users, cron jobs, security --
+// have tables wider than a phone, which cut off their last columns. They become
+// one card per row, labelled from the table's own headings; the Admin area has
+// none of them.
+test("the mobile layout turns a site tab's tables into labelled cards", () => {
+  const frontend = panelMobileSnippet(true);
+  expect(frontend).toContain("body .site-content .card-table table.table:not(.table-sites) > thead { display: none; }");
+  expect(frontend).toContain("td.table-actions { position: absolute;");
+  expect(frontend).toContain('setAttribute("data-label", th.textContent.trim())');
+  expect(panelMobileSnippet(true, true)).not.toContain("site-content");
+});
+
 // The new-site pages are a fixed 800px of two-column cards and unstacking
 // halves, so the mobile layout fits those too: one centred column of cards,
 // and whole-row fields below Bootstrap's own stacking point.
