@@ -180,7 +180,8 @@ deletes its rule; its records stay, for a site's profile to replace.
 With no Cloudflare connection, nothing in Cloudflare is DNS's, so a redirect is
 served from this server: a CloudPanel static site whose vhost returns the
 redirect for the source and, for a registrable domain, its `www`, and serves
-`/.well-known/acme-challenge/` from the site's root. The body is written to the
+`/.well-known/acme-challenge/` from the site's root; a target with a query
+string gets the request's after `&`. The body is written to the
 panel database as well as nginx (`cli/site-vhost.ts`), since CloudPanel renders
 the file again from it, as it does when a certificate is installed. Each
 reconcile pass asks Let's Encrypt, through `clpctl`, for a stand-in still on
@@ -190,8 +191,13 @@ since the domain may be pointed here at any time. A stand-in is a write
 like any other: it waits for Automatic, is logged, and a profile assigned to it
 waits for a connection.
 
-`standins.json` records each one before CloudPanel creates it, so the
-new-site work of every addon already sees it. DNS, Stager, Maintenance, SMTP
+`standins.json` records each one with its site user before CloudPanel creates
+it, so the new-site work of every addon already sees it, and adds CloudPanel's
+site id once the site exists. A record counts only while the panel site at its
+domain has that user and id (`cli/stand-ins.ts`): a site added there after the
+stand-in was deleted in CloudPanel is an ordinary site, which DNS never
+overwrites or deletes, and DNS makes no stand-in where a site already exists.
+DNS, Stager, Maintenance, SMTP
 Relay and Cloudflare IP Access leave stand-ins out of their site lists, PHP
 Resources and WordPress Tools never list a static site, and Panel Tweaks shows
 "Redirect" as its runtime on the Sites page. Global maintenance mode reaches a

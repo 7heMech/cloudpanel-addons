@@ -310,7 +310,7 @@ function archives(paths: ArchivePaths): ArchiveMeta[] {
 
 /** A final backup, read back before anything is deleted; then the site goes. */
 export async function archiveSite(paths: ArchivePaths, domain: string, step: (text: string) => void): Promise<ArchiveMeta> {
-  const reason = blockedReason(paths, domain, standInDomains(paths.standIns, paths.rootUid));
+  const reason = blockedReason(paths, domain, standInDomains(paths.standIns, paths.rootUid, paths.panelDb));
   if (reason) throw new Error(reason);
   const site = withPanel(paths, (db) => siteRow(db, domain));
   if (!site) throw new Error(`CloudPanel has no site ${domain}`);
@@ -485,7 +485,7 @@ function dnsEnabled(paths: ArchivePaths): boolean {
 }
 
 export function archiveState(paths: ArchivePaths): ArchiveState {
-  const standIns = standInDomains(paths.standIns, paths.rootUid);
+  const standIns = standInDomains(paths.standIns, paths.rootUid, paths.panelDb);
   const sites = withPanel(paths, (db) => db.query<{ domain_name: string; type: string; application: string | null; databases: number }, []>(`
     SELECT s.domain_name, s.type, s.application, (SELECT COUNT(*) FROM database d WHERE d.site_id = s.id) AS databases
       FROM site s ORDER BY s.domain_name`).all())
@@ -619,7 +619,7 @@ export async function executeArchiveAction(argv: string[], options: ArchiveOptio
       const domains = body.domains.map((domain) => {
         const valid = validateDomain(domain);
         if (!valid || !siteExists(paths, valid)) failAction(`CloudPanel has no site ${String(domain)}`);
-        const blocked = blockedReason(paths, valid, standInDomains(paths.standIns, paths.rootUid));
+        const blocked = blockedReason(paths, valid, standInDomains(paths.standIns, paths.rootUid, paths.panelDb));
         if (blocked) failAction(`${valid}: ${blocked}`);
         return valid;
       });

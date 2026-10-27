@@ -68,7 +68,11 @@ function setup() {
   }
   mkdirSync(join(dir, "instatic", "cms.example"), { recursive: true });
   writeFileSync(join(dir, "instatic", "cms.example", "meta.json"), "{}");
-  writeFileSync(join(dir, "standins.json"), JSON.stringify({ "old-name.example": {} }), { mode: 0o600 });
+  writeFileSync(join(dir, "standins.json"), JSON.stringify({
+    "old-name.example": { siteUser: "oldname", siteId: 4 },
+    // A stand-in deleted in CloudPanel, whose domain is a real site now.
+    "docs.example": { siteUser: "docs", siteId: 9 },
+  }), { mode: 0o600 });
   writeFileSync(join(dir, "dns.conf"), "enabled");
   const paths: Partial<ArchivePaths> = {
     panelDb, clpctl: fakeClpctl(dir, panelDb), homeRoot: join(dir, "home"), archiveDir: join(dir, "archives"), jobsDir: join(dir, "jobs"),

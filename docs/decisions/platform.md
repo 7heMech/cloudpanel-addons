@@ -36,9 +36,9 @@ with one line saying what changed; the rest is the changelog's, which the update
 page links. So a box updated from 1.5.2 to 2.0.0 sees what every 2.0.0 release
 candidate declared, and one that already ran 2.0.0-rc.1 sees none of it. The
 previous release is `manager/news-since` under the state directory: an update
-writes the release it replaced, and `install --local` writes the one its
-artifact manifest named, or the installed release itself on a fresh install,
-where nothing is new to whoever installed it. A box without the file was updated
+writes the release it replaced, and puts the file back if it rolls back, and
+`install --local` writes the one its artifact manifest named, or the installed
+release itself on a fresh install, where nothing is new to whoever installed it. A box without the file was updated
 from a release that kept none, so it sees every notice up to the installed one.
 Opening the addon from its row clears its badge and note, for every
 administrator and device: the box usually has one person who updates it, and a

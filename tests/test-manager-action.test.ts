@@ -12,7 +12,7 @@ import { MANAGER_ALLOWED_VERBS } from "../lib/gateway-protocol";
 import { createAuthActionServer } from "../cli/auth-action";
 import {
   activeManagerJob, createJob, type CreateJobOptions, latestManagerJob, markNewsSeen, parseManagerFlags, pruneManagerJobs,
-  readManagerJob, readNewsSeen, readNewsSince, recordNewsSince, runManagerJob, type ManagerOps,
+  keepNewsSince, readManagerJob, readNewsSeen, readNewsSince, recordNewsSince, runManagerJob, type ManagerOps,
 } from "../cli/manager-action";
 import { installedInjections } from "../cli/reconcile";
 import { handleManagerRoute } from "../manager/index";
@@ -353,6 +353,17 @@ describe("opened badges", () => {
       recordNewsSince("v1.5.2", file, "2.0.0");
       expect(readNewsSince(file)).toBe("1.5.2");
       writeFileSync(file, "garbage\n");
+      expect(readNewsSince(file)).toBe("0.0.0");
+      // An update that rolls back leaves the record as it found it.
+      writeFileSync(file, "2.0.0-rc.3\n");
+      const restore = keepNewsSince(file);
+      recordNewsSince("2.0.0-rc.4", file, "2.0.0-rc.5");
+      restore();
+      expect(readNewsSince(file)).toBe("2.0.0-rc.3");
+      rmSync(file);
+      const restoreNone = keepNewsSince(file);
+      recordNewsSince("2.0.0-rc.4", file, "2.0.0-rc.5");
+      restoreNone();
       expect(readNewsSince(file)).toBe("0.0.0");
     } finally {
       rmSync(dir, { recursive: true, force: true });

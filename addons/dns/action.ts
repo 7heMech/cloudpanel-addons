@@ -31,6 +31,7 @@ import {
 import { PRESETS, seededPolicy, type Preset } from "./presets";
 import { describeRecord, renderProfile, sameRecord } from "./records";
 import type { FoundRedirect } from "./redirects";
+import { isStandInSite } from "../../cli/stand-ins";
 import { clpctlStandIns, readStandIns, retryStandInCertificates, type StandInPaths } from "./stand-in";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "./store";
@@ -292,8 +293,8 @@ export function panelSites(panelDb: string): PanelSite[] {
     db.exec("PRAGMA busy_timeout = 5000");
     const site = columns(db, "site");
     const certificate = site.has("certificate_id") && columns(db, "certificate").has("type");
-    const rows = db.query<{ id: number; domain_name: string; type: string; created_at: string | null; cf: number | null; cert: string | null }, []>(
-      `SELECT s.id, s.domain_name, s.type,
+    const rows = db.query<{ id: number; domain_name: string; type: string; created_at: string | null; cf: number | null; cert: string | null; user: string | null }, []>(
+      `SELECT s.id, s.domain_name, s.type, ${site.has("user") ? "s.user" : "NULL"} AS user,
               ${site.has("created_at") ? "s.created_at" : "NULL"} AS created_at,
               ${site.has("allow_traffic_from_cloudflare_only") ? "s.allow_traffic_from_cloudflare_only" : "0"} AS cf,
               ${certificate ? "c.type" : "NULL"} AS cert
@@ -309,7 +310,7 @@ export function panelSites(panelDb: string): PanelSite[] {
         continue;
       }
       sites.push({
-        id: Number(row.id), domain, type: String(row.type), createdAt: panelTime(row.created_at),
+        id: Number(row.id), domain, type: String(row.type), ...(row.user ? { user: row.user } : {}), createdAt: panelTime(row.created_at),
         selfSigned: String(row.cert) === SELF_SIGNED, cloudflareOnly: Boolean(row.cf),
       });
     }
@@ -347,8 +348,9 @@ class Action {
 
   /** CloudPanel's sites, without the stand-ins that serve redirects. */
   sites(fresh = false): PanelSite[] {
-    const standIns = new Set([...Object.keys(readStandIns(this.standInPaths())), ...Object.keys(this.standIns().current)]);
-    return this.panelSites(fresh).filter((site) => !standIns.has(site.domain));
+    const records = readStandIns(this.standInPaths());
+    const current = this.standIns().current;
+    return this.panelSites(fresh).filter((site) => !current[site.domain] && !isStandInSite(records[site.domain], site));
   }
 
   standInPaths(): StandInPaths {
@@ -358,7 +360,7 @@ class Action {
 
   standIns(): StandIns {
     this.cachedStandIns ??= this.options.standIns?.()
-      ?? clpctlStandIns(this.standInPaths(), (domain) => this.panelSites(true).some((site) => site.domain === domain), () => Date.now());
+      ?? clpctlStandIns(this.standInPaths(), (domain) => this.panelSites(true).find((site) => site.domain === domain), () => Date.now());
     return this.cachedStandIns;
   }
 
@@ -665,7 +667,8 @@ class Action {
   /** Run in the periodic pass only: a certificate request can take minutes. */
   async retryStandInCertificates(): Promise<void> {
     if (this.options.standIns) return;
-    const selfSigned = (domain: string) => this.panelSites(true).find((site) => site.domain === domain)?.selfSigned ?? null;
+    const current = this.standIns().current;
+    const selfSigned = (domain: string) => (current[domain] ? this.panelSites(true).find((site) => site.domain === domain)?.selfSigned ?? null : null);
     await retryStandInCertificates(this.standInPaths(), selfSigned, this.options.issue ?? clpctlIssue(this.paths.clpctl), Date.now());
   }
 

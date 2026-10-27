@@ -7,7 +7,7 @@ export const ARCHIVE_ADDON: AddonDefinition = {
   name: "archive",
   title: "Archive Sites",
   description: "Back up a site and delete it, keep the archive restorable, and optionally redirect its domain.",
-  added: "2.1.0",
+  added: "2.0.0-rc.5",
   targets: ARCHIVE_TARGETS,
   handler: handle,
   action: runArchiveAction,
