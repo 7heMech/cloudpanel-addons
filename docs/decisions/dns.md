@@ -278,7 +278,8 @@ scheduled check, Check now, a new site, a confirmed review or Remove records.
 Each run collects its writes and they are saved before the page's reply and
 again when the action ends, so writes made before a failure are kept. The log
 is the newest thousand writes; the page shows the newest ten and the rest of
-the first two hundred under a disclosure. Provider errors are not logged: they
+the first two hundred under a disclosure. With nothing logged the card still
+shows, saying so, and while DNS asks first that this is why. Provider errors are not logged: they
 repeat every check and are already on the site's plan.
 
 ## State, secrets and removal

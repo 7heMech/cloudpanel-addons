@@ -204,7 +204,11 @@ two: the addon does not know what is in the action cell, only that it is a link.
 The table keeps 20px at its outer edges and 10px on each side between columns,
 leaving the action menu visible with the default columns at desktop width.
 With the narrow layout enabled, rows become cards at 1100px, before those
-columns squeeze hostnames into fragments. Additional columns can still use the
+columns squeeze hostnames into fragments. A phone's desktop mode lays the page out about
+980px wide and still gets the table: the block switches the cards' sheets off
+when the page is wider than the screen, which only that mode does, since a
+desktop window is never wider than its screen at any zoom. It runs before the
+table is parsed, and the script takes the desktop column set there too. Additional columns can still use the
 scroller when the table layout is active. With it off, a narrow screen keeps the
 desktop table and its column choice: the narrow column set belongs to the cards,
 so the script is told the switch and treats no width as narrow.

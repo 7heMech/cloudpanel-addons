@@ -251,11 +251,28 @@ function storedTweaks(): PanelTweaks {
  * there is no Twig and no administrator test to make: the route that serves it
  * is already behind the same gate as every other route the manager has.
  */
+/**
+ * A phone's "Desktop site" lays the page out about 980px wide, inside the
+ * 1100px at which the Sites table becomes cards, so desktop mode used to get the
+ * cards it was asked not to. Only then is the page wider than the screen: a
+ * desktop window is at most its screen at any zoom, and a phone in its own mode
+ * is exactly as wide. Run before the table is parsed, so it is never drawn as
+ * cards first; the script below reads the same answer for its column set.
+ */
+const DESKTOP_SITE_JS = `if (document.documentElement.clientWidth > screen.width) {
+  document.documentElement.classList.add("clp-tweaks-desktop-site");
+  document.querySelectorAll("style[data-clp-tweaks-narrow]").forEach(function (sheet) { sheet.media = "not all"; });
+}`;
+
 export function sitesBlock(url: string, tweaks: PanelTweaks = storedTweaks()): string {
-  const style = SITES_STYLE
-    + (tweaks.sitesMobile ? SITES_MOBILE_STYLE : "")
-    + (tweaks.actionMenu ? MENU_STYLE : "")
-    + (tweaks.actionMenu && tweaks.sitesMobile ? MENU_MOBILE_STYLE : "");
+  // The cards' rules are sheets of their own, in the same cascade order, so a
+  // phone's desktop mode can switch them off whole: see DESKTOP_SITE_JS.
+  const narrow = (css: string) => `<style data-clp-tweaks-narrow>${css}</style>`;
+  const style = `<style>${SITES_STYLE}</style>`
+    + (tweaks.sitesMobile ? narrow(SITES_MOBILE_STYLE) : "")
+    + (tweaks.actionMenu ? `<style>${MENU_STYLE}</style>` : "")
+    + (tweaks.actionMenu && tweaks.sitesMobile ? narrow(MENU_MOBILE_STYLE) : "")
+    + (tweaks.sitesMobile ? `<script>${DESKTOP_SITE_JS}</script>` : "");
   // Set here rather than when the script below runs, so the rule that hides the
   // panel's own action links is already in force when the table is parsed.
   const menuClass = tweaks.actionMenu
@@ -266,7 +283,7 @@ export function sitesBlock(url: string, tweaks: PanelTweaks = storedTweaks()): s
   // script hides it again on a page whose table it does not recognise.
   const toolbarHidden = tweaks.sitesTable ? "" : " hidden";
   return `
-          <style>${style}</style>${menuClass}
+          ${style}${menuClass}
           <div class="clp-tweaks-toolbar" id="clp-tweaks-toolbar"${toolbarHidden}>
             <input type="search" id="clp-tweaks-search" class="form-control" placeholder="Search sites" aria-label="Search sites">
             <select id="clp-tweaks-type" class="form-select" aria-label="Filter by application">

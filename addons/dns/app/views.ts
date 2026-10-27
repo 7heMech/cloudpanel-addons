@@ -221,12 +221,16 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
           <button class="btn btn-danger" type="button" onclick="dnsRemoveRecords('${esc(orphan.domain)}')">Remove records</button>
         </div></td></tr>`).join("")}</tbody></table></div></div>` : "";
 
-  const log = state.log.length ? `<div class="card card-table"><div class="card-header"><div><h2>Change log</h2>
+  // Shown empty too: a missing card read as a log that was never added, when
+  // the usual reason is that DNS still asks first and so has written nothing.
+  const log = `<div class="card card-table"><div class="card-header"><div><h2>Change log</h2>
       <p class="hint">Every record, zone and Mailcow change DNS made, newest first.</p></div></div>
-      <div class="table-scroll"><table class="fleet-table dns-log-table"><tbody>${state.log.slice(0, 10).map(logRow).join("")}</tbody></table></div>
+      ${state.log.length ? `<div class="table-scroll"><table class="fleet-table dns-log-table"><tbody>${state.log.slice(0, 10).map(logRow).join("")}</tbody></table></div>
       ${state.log.length > 10 ? `<details class="dns-log-more"><summary>Show ${plural(state.log.length - 10, "earlier change")}</summary>
-        <div class="table-scroll"><table class="fleet-table dns-log-table"><tbody>${state.log.slice(10).map(logRow).join("")}</tbody></table></div></details>` : ""}
-    </div>` : "";
+        <div class="table-scroll"><table class="fleet-table dns-log-table"><tbody>${state.log.slice(10).map(logRow).join("")}</tbody></table></div></details>` : ""}`
+    : `<div class="empty">${state.automatic ? "No changes yet."
+      : "No changes yet. DNS asks first, so it writes nothing until you turn on Automatic."}</div>`}
+    </div>`;
 
   return `<script type="application/json" id="dns-state">${data}</script>
     <div class="page-heading"><div><h1>DNS</h1>

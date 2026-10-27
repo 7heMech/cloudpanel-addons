@@ -174,9 +174,35 @@ test("the sites block serves every panel user and degrades rather than blocking 
 // painted CloudPanel's four columns and then jumped to cards when the reply
 // landed. The rules are keyed on the panel's own class instead, and are in
 // force from the moment the browser parses them.
+// A phone's "Desktop site" lays the page out about 980px wide, inside the 1100px
+// at which the table becomes cards. The cards' sheets are switched off when the
+// page is wider than the screen, which only that mode does.
+test("a phone's desktop mode keeps the desktop table", () => {
+  const snippet = sites({ sitesMobile: true, actionMenu: true });
+  expect(snippet.match(/<style data-clp-tweaks-narrow>/g)).toHaveLength(2);
+  expect(snippet.indexOf("<style data-clp-tweaks-narrow>")).toBeLessThan(snippet.indexOf('id="clp-tweaks-toolbar"'));
+  const at = snippet.indexOf("<script>if (document.documentElement.clientWidth > screen.width)");
+  expect(at).toBeGreaterThan(-1);
+  const script = snippet.slice(at + "<script>".length, snippet.indexOf("</script>", at));
+  const run = (clientWidth: number, screenWidth: number) => {
+    const classes = new Set<string>();
+    const sheets = [{ media: "" }, { media: "" }];
+    new Function("document", "screen", script)({
+      documentElement: { clientWidth, classList: { add: (name: string) => classes.add(name) } },
+      querySelectorAll: () => sheets,
+    }, { width: screenWidth });
+    return { desktop: classes.has("clp-tweaks-desktop-site"), media: sheets.map((sheet) => sheet.media) };
+  };
+  expect(run(980, 412)).toEqual({ desktop: true, media: ["not all", "not all"] });
+  expect(run(412, 412)).toEqual({ desktop: false, media: ["", ""] });
+  expect(run(1000, 1920)).toEqual({ desktop: false, media: ["", ""] });
+  expect(sites({ sitesMobile: false })).not.toContain("clientWidth > screen.width");
+});
+
 test("the narrow-screen layout needs no data and no class the script adds", () => {
   const snippet = sites({ sitesMobile: true });
-  const mobile = snippet.slice(snippet.indexOf("table.table-sites, table.table-sites tbody"), snippet.indexOf("</style>"));
+  const start = snippet.indexOf("table.table-sites, table.table-sites tbody");
+  const mobile = snippet.slice(start, snippet.indexOf("</style>", start));
   // Details always use the full card width, while Application can use either a fitting
   // hostname row or the spare end of a detail heading.
   expect(mobile).toContain(".clp-tweaks-domain.clp-tweaks-type-at-host { display: grid");
@@ -219,8 +245,8 @@ test("the column picker is in the block, and a switched-off column is never pain
   // Off, the whole thing is inert: no choice is read and no rule is written.
   expect(sites({ sitesTable: false })).toContain("var COLUMNS_ON = false;");
   // Without the cards a narrow screen keeps the desktop table and its columns.
-  expect(sites({ sitesMobile: true })).toContain('var NARROW_QUERY = true ? "(max-width: 1100px)" : "not all";');
-  expect(sites({ sitesMobile: false })).toContain('var NARROW_QUERY = false ? "(max-width: 1100px)" : "not all";');
+  expect(sites({ sitesMobile: true })).toContain('var NARROW_QUERY = true && !desktopSite ? "(max-width: 1100px)" : "not all";');
+  expect(sites({ sitesMobile: false })).toContain('var NARROW_QUERY = false && !desktopSite ? "(max-width: 1100px)" : "not all";');
 });
 
 // The addon's own page shows the panel's Sites page in a frame, so an operator
