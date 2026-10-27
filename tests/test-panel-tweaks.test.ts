@@ -338,7 +338,13 @@ test("the narrow-screen table, the row menu and the header are each in or out of
 // none of them.
 test("the mobile layout turns a site tab's tables into labelled cards", () => {
   const frontend = panelMobileSnippet(true);
-  expect(frontend).toContain("table.table:not(.table-sites) > thead { position: absolute;");
+  expect(frontend).toContain("table.table:not(.table-sites):has(> thead) > thead { position: absolute;");
+  // The Logs tab's lines are a table with no headings: they keep CloudPanel's
+  // rows, with the date stacked above the line, rather than becoming cards.
+  const style = frontend.slice(0, frontend.indexOf("</style>"));
+  expect(style).not.toMatch(/table\.table:not\(\.table-sites\)(?!:has\(> thead\))/);
+  expect(frontend).toContain("table.log-messages tr.log-message { display: grid;");
+  expect(frontend).toContain(".log-selection-container .col { flex: 1 1 calc(50% - 5px);");
   expect(frontend).not.toContain("> thead { display: none; }");
   expect(frontend).toContain("td.table-actions { position: absolute;");
   expect(frontend).toContain('setAttribute("data-label", th.textContent.trim())');

@@ -128,8 +128,11 @@ from the first paint; the headings are copied onto the cells by a script in the
 same block that names rows while the page is parsed, not once it is ready, so
 the labels are there when the cards are painted. A translated panel gets its
 own headings. The table's own heading row is hidden only visually, so a screen
-reader keeps the headings for the cells. The Sites table is left to its own
-cards.
+reader keeps the headings for the cells. Only a table with a heading row
+becomes cards, which leaves out the Logs tab's lines: they are a headless table
+and were cards titled by their colour bar. On a phone that tab instead puts its
+four controls two to a row and an access log's date above its line, so the line
+has the card's width. The Sites table is left to its own cards.
 
 ## SSL after native site creation
 
