@@ -347,7 +347,7 @@ export class DnsRun {
   private mailChanges(domain: string, profile: Profile, plan: SitePlan): void {
     const settings = this.context.policy.mailcow;
     if (!this.mailcow || !settings.host) {
-      plan.problems.push("This profile sets up Mailcow; add Mailcow's address, API key and mail hostname first");
+      plan.problems.push("This profile sets up Mailcow; set up Mailcow's hostname and API key first");
       return;
     }
     const mail = this.mail.get(domain);

@@ -94,6 +94,12 @@ of the operator's existing `smtp_sasl_password_maps`, `smtp_tls_policy_maps`,
 `sender_dependent_default_transport_maps` and `sender_canonical_maps`; an
 operator `transport_maps` is refused, because it overrides sender routing.
 
+DNS's root action reads the same file, through `smtpRelayAccounts`, for each
+relay profile's name, host and username, so a Mailcow relay mailbox entered
+here can fill DNS's Mailcow settings (see [DNS](dns.md#mailcow)). Nothing flows
+back: SMTP Relay never reads DNS's settings, since it needs the mailbox password
+DNS does not have.
+
 A save applies the new policy (`postfix check`, a Postfix reload, `php-fpm -t`
 and a reload of each changed PHP version) and only then writes it. If any step
 fails, the previous policy is applied again. Disabling withdraws everything and

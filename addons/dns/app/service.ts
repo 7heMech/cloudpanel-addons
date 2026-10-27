@@ -2,7 +2,7 @@ import { callGatewayAction, type ActionResult } from "../../../lib/gateway-clien
 import type { DnsReply, ProvisionReply } from "../action";
 
 /** Verbs that read Cloudflare and Mailcow wait for them; everything else is a file write. */
-const SLOW = new Set(["check", "confirm", "save-connection", "remove-connection", "save-mailcow", "save-server", "remove-records"]);
+const SLOW = new Set(["check", "confirm", "save-connection", "remove-connection", "save-mailcow", "remove-mailcow", "save-server", "remove-records"]);
 
 export const dnsService = {
   state: (): Promise<ActionResult<DnsReply>> => callGatewayAction<DnsReply>("dns", "list"),

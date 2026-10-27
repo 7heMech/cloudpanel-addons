@@ -142,6 +142,8 @@ p.dns-dialog-note { margin:20px 0 0; }
 .dns-steps p { margin:6px 0 12px; }
 .dns-token-grid { margin-top:12px; }
 #dns-token-link { white-space:normal; }
+.dns-copy { align-items:center; margin-bottom:12px; }
+.dns-copy code { overflow-wrap:anywhere; }
 /* fleet-row-selection */
 
 .dns-card-sites { display:none; }

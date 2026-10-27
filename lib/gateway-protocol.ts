@@ -139,7 +139,7 @@ export const SMTP_ALLOWED_VERBS = new Set([
  */
 export const DNS_ALLOWED_VERBS = new Set([
   "list", "check", "save-profile", "delete-profile", "set-mode", "assign", "set-default", "confirm",
-  "save-connection", "remove-connection", "choose-zone", "save-mailcow", "save-server", "remove-records", "forget-records",
+  "save-connection", "remove-connection", "choose-zone", "save-mailcow", "remove-mailcow", "save-server", "remove-records", "forget-records",
   "provision",
 ]);
 

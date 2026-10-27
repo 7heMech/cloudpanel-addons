@@ -45,7 +45,7 @@ function setup() {
     dir, cf, mc, agency, church, sites, issued, clock, addresses, latency,
     async act<T = DnsReply>(verb: string, body?: unknown, args: string[] = []): Promise<T> {
       return await executeDnsAction([verb, ...args], {
-        paths: { configFile: join(dir, "dns.conf"), stateDir: join(dir, "state"), lockFile: join(dir, "dns.lock"), panelDb: join(dir, "db.sq3"), rootUid: process.getuid!(), clpctl: "/bin/false" },
+        paths: { configFile: join(dir, "dns.conf"), stateDir: join(dir, "state"), smtpConfig: join(dir, "smtp.json"), lockFile: join(dir, "dns.lock"), panelDb: join(dir, "db.sq3"), rootUid: process.getuid!(), clpctl: "/bin/false" },
         processUid: 0,
         input: body === undefined ? undefined : JSON.stringify(body),
         fetch: async (address, init) => {
@@ -413,6 +413,41 @@ describe("Mailcow", () => {
     const confirmed = await env.act("confirm", { token: review.review!.token });
     expect(confirmed.mailcow.url).toBe("https://mail2.example.net");
     expect(secrets()).toContain(env.mc.apiKey);
+  });
+
+  test("a bare hostname is Mailcow's address and what {mailcow.host} is", async () => {
+    const env = setup();
+    env.mc.mailboxes.set("relay@example.net", { sender_acl: [] });
+    const reply = await env.act("save-mailcow", { url: "mail.example.net", key: MAILCOW_KEY, sharedMailbox: "relay@example.net" });
+    expect([reply.mailcow.url, reply.mailcow.host]).toEqual(["https://mail.example.net", "mail.example.net"]);
+  });
+
+  test("Mailcow is removed with its key, and its sites wait for it without anything being deleted", async () => {
+    const env = await mailSetup();
+    await env.enforce("web-mailcow");
+    const records = env.records();
+    const reply = await env.act("remove-mailcow", {});
+    expect(reply.mailcow).toMatchObject({ url: "", host: "", sharedMailbox: "", hasKey: false });
+    expect(readFileSync(join(env.dir, "state", "secrets.json"), "utf8")).not.toContain(MAILCOW_KEY);
+    expect(reply.sites.find((entry) => entry.domain === "example.com")!.plan!.problems.join(" ")).toContain("set up Mailcow's");
+    expect(env.records()).toEqual(records);
+    expect(env.mc.writes().some((call) => call.path.startsWith("/delete"))).toBe(false);
+    await expect(env.act("remove-mailcow", {})).rejects.toThrow("Mailcow is not set up");
+  });
+
+  test("SMTP Relay's accounts are offered to fill Mailcow from, without their passwords", async () => {
+    const env = setup();
+    const relay = { host: "mail.example.net", port: 587, username: "relay@example.net", password: "relay-password-0123" };
+    writeFileSync(join(env.dir, "smtp.json"), JSON.stringify({
+      version: 2, defaultProfileId: null, assignments: {}, grants: {}, knownSiteIds: [],
+      profiles: [{ id: "dont-send", name: "Don't send", relay: null, sender: "noreply@{site}" }, { id: "mailcow", name: "Mailcow", relay, sender: "noreply@{site}" }],
+    }));
+    chmodSync(join(env.dir, "smtp.json"), 0o600);
+    const state = await env.act("list");
+    expect(state.smtpRelays).toEqual([{ profile: "Mailcow", host: "mail.example.net", username: "relay@example.net" }]);
+    expect(JSON.stringify(state)).not.toContain(relay.password);
+    chmodSync(join(env.dir, "smtp.json"), 0o666);
+    expect((await env.act("list")).smtpRelays).toEqual([]);
   });
 });
 

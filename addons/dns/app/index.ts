@@ -14,6 +14,7 @@ const CHANGES: Record<string, string> = {
   "/api/connections": "save-connection",
   "/api/connections/remove": "remove-connection",
   "/api/mailcow": "save-mailcow",
+  "/api/mailcow/remove": "remove-mailcow",
   "/api/server": "save-server",
   "/api/records/remove": "remove-records",
   "/api/records/forget": "forget-records",
