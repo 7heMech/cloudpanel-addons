@@ -229,6 +229,7 @@ test("the preview frame is the panel's own page, with the injected block over it
   const state: PanelTweaksState = {
     tweaks: { ...DEFAULT_TWEAKS },
     diskMeasuredAt: "",
+    measuring: null,
     sites: Array.from({ length: 7 }, (_, index) => ({
       domain: `site${index}.example.com`, user: `site${index}`, type: "php", application: "WordPress",
       runtime: "PHP 8.3", createdAt: "2026-01-01 00:00:00", cloudflareOnly: false, varnish: false,
@@ -258,7 +259,7 @@ test("the preview frame is the panel's own page, with the injected block over it
 });
 
 test("the addon page keeps switches beside wrapping labels on a phone", () => {
-  const page = panelTweaksDashboardView({ tweaks: { ...DEFAULT_TWEAKS }, diskMeasuredAt: "", sites: [] });
+  const page = panelTweaksDashboardView({ tweaks: { ...DEFAULT_TWEAKS }, diskMeasuredAt: "", measuring: null, sites: [] });
   expect(page).toContain("CloudPanel mobile layout");
   expect(page).not.toContain("What it adds");
   expect(page).not.toContain("tweak-category");
@@ -267,7 +268,7 @@ test("the addon page keeps switches beside wrapping labels on a phone", () => {
   expect(page).toContain("Measure now");
   expect(page).not.toContain("<h2>Measured sizes</h2>");
   const measuredOn = panelTweaksDashboardView({
-    tweaks: { ...DEFAULT_TWEAKS, diskUsage: true }, diskMeasuredAt: "", sites: [],
+    tweaks: { ...DEFAULT_TWEAKS, diskUsage: true }, diskMeasuredAt: "", measuring: null, sites: [],
   });
   expect(measuredOn).toContain('class="tweak-row is-nested is-enabled"');
   // The Sites switches come first with their preview under them; the whole-panel
@@ -279,7 +280,7 @@ test("the addon page keeps switches beside wrapping labels on a phone", () => {
   // Measured sizes is unreachable while the table enhancement it belongs to is off.
   expect(page).toContain('data-tweak-parent="sitesTable" aria-label');
   const tableOff = panelTweaksDashboardView({
-    tweaks: { ...DEFAULT_TWEAKS, sitesTable: false }, diskMeasuredAt: "", sites: [],
+    tweaks: { ...DEFAULT_TWEAKS, sitesTable: false }, diskMeasuredAt: "", measuring: null, sites: [],
   });
   expect(tableOff).toContain('data-tweak-parent="sitesTable" disabled');
   const html = panelTweaksLayout("Panel Tweaks", page);
@@ -866,7 +867,7 @@ test("the page starts and follows a measurement through the gateway's job verbs 
     expect(await started.json()).toEqual({ ok: true, data: { job, attached: true } });
     const polled = await handlePanelTweaks(
       new Request(`https://panel.example:8443/addons/panel-tweaks/api/jobs/${job.id}`, { headers }), `/api/jobs/${job.id}`, null);
-    expect((await polled.json()).data.job.completed).toBe(11);
+    expect(((await polled.json()) as { data: { job: { completed: number } } }).data.job.completed).toBe(11);
     const gone = await handlePanelTweaks(
       new Request("https://panel.example:8443/addons/panel-tweaks/api/scan", { method: "POST", headers }), "/api/scan", null);
     expect(gone.status).toBe(404);
