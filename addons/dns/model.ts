@@ -51,14 +51,11 @@ export interface ZoneOptions {
   webmailFullSsl: boolean;
   /** Addresses that skip Super Bot Fight Mode and managed WAF rules, such as a MainWP Dashboard. */
   skipFirewallIps: string[];
-  /** Where a missing zone is created, or null to report it instead. */
-  createIn: AccountRef | null;
 }
 
 export interface Profile {
   id: string;
   name: string;
-  mode: "report" | "enforce";
   records: RecordTemplate[];
   /** Add each site's domain to Mailcow, with DKIM and the shared mailbox's sender permission. */
   mailcow: boolean;
@@ -90,6 +87,10 @@ export interface ZoneChoice {
 
 export interface Policy {
   version: 1;
+  /** Off is Ask first: DNS reads and shows what differs, and writes nothing until this is turned on through a review. */
+  automatic: boolean;
+  /** The account a missing zone is created in; null uses the only account the connections reach. */
+  createIn: AccountRef | null;
   profiles: Profile[];
   defaultProfileId: string | null;
   /** Domain to profile id. A site that is absent is left alone. */
@@ -232,20 +233,20 @@ function parseZoneOptions(value: unknown): ZoneOptions {
   if (raw.skipFirewallIps != null && !Array.isArray(raw.skipFirewallIps)) failAction("the firewall skip list must be a list");
   const ips = [...new Set(((raw.skipFirewallIps ?? []) as unknown[]).map(anyIp))];
   if (ips.length > MAX_SKIP_IPS) failAction(`at most ${MAX_SKIP_IPS} addresses can skip the firewall`);
-  let createIn: AccountRef | null = null;
-  if (raw.createIn != null && raw.createIn !== "") {
-    const ref = raw.createIn as Record<string, unknown>;
-    if (typeof ref !== "object") failAction("the account for new zones is malformed");
-    createIn = { connectionId: connectionId(ref.connectionId), accountId: cloudflareId(ref.accountId, "the account for new zones") };
-  }
   return {
     ssl,
     alwaysHttps,
     acmeFullSsl: flag(raw.acmeFullSsl ?? false, "the Let's Encrypt rule"),
     webmailFullSsl: flag(raw.webmailFullSsl ?? false, "the webmail rule"),
     skipFirewallIps: ips,
-    createIn,
   };
+}
+
+export function parseAccountRef(value: unknown): AccountRef | null {
+  if (value == null || value === "") return null;
+  if (typeof value !== "object" || Array.isArray(value)) failAction("the account for new zones is malformed");
+  const ref = value as Record<string, unknown>;
+  return { connectionId: connectionId(ref.connectionId), accountId: cloudflareId(ref.accountId, "the account for new zones") };
 }
 
 export function parseProfile(value: unknown): Profile {
@@ -253,18 +254,16 @@ export function parseProfile(value: unknown): Profile {
   const raw = value as Record<string, unknown>;
   if (!Array.isArray(raw.records)) failAction("the profile's records must be a list");
   if (raw.records.length > MAX_RECORDS) failAction(`a profile can hold at most ${MAX_RECORDS} records`);
-  if (raw.mode !== "report" && raw.mode !== "enforce") failAction("the mode must be Report only or Enforce");
   return {
     id: profileId(raw.id),
     name: oneLine(raw.name, "the profile name", NAME_MAX, true),
-    mode: raw.mode,
     records: raw.records.map((record, index) => parseRecord(record, index + 1)),
     mailcow: flag(raw.mailcow ?? false, "Mailcow setup"),
     zone: parseZoneOptions(raw.zone),
   };
 }
 
-/** What changes a site's DNS or Mailcow, as opposed to the name or the mode. */
+/** What changes a site's DNS or Mailcow, as opposed to the name. */
 export function profileEffect(profile: Profile): string {
   return JSON.stringify([profile.records, profile.mailcow, profile.zone]);
 }
@@ -319,12 +318,28 @@ export function parseConnections(value: unknown): Connection[] {
   });
 }
 
+/**
+ * A policy saved with a mode on each profile is Automatic only when every
+ * profile that has sites enforced; anything less asks first, so no site starts
+ * being written without a review. Its account for new zones is the first a
+ * profile named.
+ */
+function legacyAutomatic(raw: Partial<Policy>): { automatic: boolean; createIn: unknown } {
+  const profiles = raw.profiles as unknown as { id?: unknown; mode?: unknown; zone?: { createIn?: unknown } }[];
+  const used = profiles.filter((profile) => Object.values(raw.assignments ?? {}).includes(profile.id as string));
+  return {
+    automatic: used.length > 0 && used.every((profile) => profile.mode === "enforce"),
+    createIn: profiles.map((profile) => profile.zone?.createIn).find((ref) => ref) ?? null,
+  };
+}
+
 export function parsePolicy(value: unknown): Policy {
   const raw = (value ?? {}) as Partial<Policy>;
   if (raw.version !== 1 || !Array.isArray(raw.profiles) || !raw.assignments || typeof raw.assignments !== "object") {
     failAction("the DNS policy is malformed");
   }
   try {
+    const legacy = typeof raw.automatic === "boolean" ? { automatic: raw.automatic, createIn: raw.createIn } : legacyAutomatic(raw);
     const profiles = raw.profiles.map(parseProfile);
     if (profiles.length > MAX_PROFILES) failAction(`at most ${MAX_PROFILES} profiles`);
     const ids = new Set(profiles.map((profile) => profile.id));
@@ -335,8 +350,11 @@ export function parsePolicy(value: unknown): Policy {
     const assignments: Record<string, string> = Object.fromEntries(Object.entries(raw.assignments)
       .filter(([, id]) => ids.has(id))
       .map(([domain, id]) => [hostname(domain, "an assigned site"), id]));
+    const createIn = parseAccountRef(legacy.createIn);
     return {
       version: 1,
+      automatic: legacy.automatic,
+      createIn: createIn && parseConnections(raw.connections ?? []).some((connection) => connection.id === createIn.connectionId) ? createIn : null,
       profiles,
       defaultProfileId: raw.defaultProfileId && ids.has(raw.defaultProfileId) ? raw.defaultProfileId : null,
       assignments,

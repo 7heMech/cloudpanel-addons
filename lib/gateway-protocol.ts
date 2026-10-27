@@ -144,7 +144,7 @@ export const SMTP_ALLOWED_VERBS = new Set([
  * carries `--as-user` so the action holds it to that account's own sites.
  */
 export const DNS_ALLOWED_VERBS = new Set([
-  "list", "check", "save-profile", "delete-profile", "set-mode", "assign", "set-default", "confirm",
+  "list", "check", "save-profile", "delete-profile", "set-automatic", "zone-account", "assign", "set-default", "confirm",
   "save-connection", "remove-connection", "choose-zone", "save-mailcow", "remove-mailcow", "save-server", "remove-records", "forget-records",
   "provision",
 ]);

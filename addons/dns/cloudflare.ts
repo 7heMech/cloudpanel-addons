@@ -362,7 +362,13 @@ export class CloudflareApi {
   }
 
   async createZone(accountId: string, name: string): Promise<CfZone> {
-    const { result } = await this.call("/zones", "POST", { name, account: { id: id(accountId) }, type: "full" });
-    return parseZone(result);
+    try {
+      const { result } = await this.call("/zones", "POST", { name, account: { id: id(accountId) }, type: "full" });
+      return parseZone(result);
+    } catch (error) {
+      // Cloudflare names the internal permission, which the token form does not show.
+      if (!(error instanceof ProviderError) || !/account\.zone\.create/.test(error.message)) throw error;
+      throw new ProviderError("Cloudflare", "the token lacks Zone: Edit for this account; edit the token in Cloudflare to add it", 403);
+    }
   }
 }

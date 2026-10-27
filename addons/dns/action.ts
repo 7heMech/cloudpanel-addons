@@ -2,10 +2,10 @@
  * DNS's privileged verbs. Only these read the Cloudflare tokens and the
  * Mailcow key, and nothing they return to the manager contains either.
  *
- * Changes that alter what an enforcing profile writes are not saved straight
- * away: they come back as a review of every create, update and delete they
- * would make, and only a confirmation of that same plan saves and applies
- * them.
+ * Changes that alter what DNS writes once it is Automatic -- turning that on
+ * included -- are not saved straight away: they come back as a review of every
+ * create, update and delete they would make, and only a confirmation of that
+ * same plan saves and applies them.
  */
 import { Database } from "bun:sqlite";
 import { createHash, randomBytes } from "node:crypto";
@@ -18,11 +18,11 @@ import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { DEFAULT_SMTP_PATHS, smtpRelayAccounts, type SmtpRelayAccount } from "../smtp/action";
 import { detectAddresses, type Addresses } from "./addresses";
-import { DnsRun, readiness, type ConnectionReport, type ManagedRecords, type PanelSite, type SitePlan } from "./engine";
+import { DnsRun, readiness, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan } from "./engine";
 import { type ApiFetch, redact } from "./http";
 import { MailcowApi } from "./mailcow";
 import {
-  connectionId, hostname, parseMailcow, parsePolicy, parseProfile, parseSecrets, profileEffect, profileId, secretText,
+  connectionId, hostname, parseAccountRef, parseMailcow, parsePolicy, parseProfile, parseSecrets, profileEffect, profileId, secretText,
   ipAddress, cloudflareId, EMPTY_MAILCOW, MAX_CONNECTIONS, type MailcowSettings, type Policy, type Profile, type Secrets,
 } from "./model";
 import { PRESETS, seededPolicy, type Preset } from "./presets";
@@ -31,16 +31,19 @@ import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue
 import { readState, writeState } from "./store";
 import { tokenTemplate, type TokenTemplate } from "./token";
 
-export type DnsVerb = "list" | "check" | "save-profile" | "delete-profile" | "set-mode" | "assign" | "set-default" | "confirm"
+export type DnsVerb = "list" | "check" | "save-profile" | "delete-profile" | "set-automatic" | "zone-account" | "assign" | "set-default" | "confirm"
   | "save-connection" | "remove-connection" | "choose-zone" | "save-mailcow" | "remove-mailcow" | "save-server" | "remove-records" | "forget-records"
   | "provision" | "reconcile" | "sync-sites";
 
-const VERBS: DnsVerb[] = ["list", "check", "save-profile", "delete-profile", "set-mode", "assign", "set-default", "confirm",
+const VERBS: DnsVerb[] = ["list", "check", "save-profile", "delete-profile", "set-automatic", "zone-account", "assign", "set-default", "confirm",
   "save-connection", "remove-connection", "choose-zone", "save-mailcow", "remove-mailcow", "save-server", "remove-records", "forget-records",
   "provision", "reconcile", "sync-sites"];
 const NO_BODY: DnsVerb[] = ["list", "check", "provision", "reconcile", "sync-sites"];
 const MAX_BODY = 256 * 1024;
 const REVIEW_LIFETIME = 15 * 60_000;
+/** How many writes the change log keeps, newest first; the page is sent the first PAGE_LOG of them. */
+const MAX_LOG = 1000;
+const PAGE_LOG = 200;
 /** CloudPanel's Certificate::TYPE_SELF_SIGNED. */
 const SELF_SIGNED = "1";
 
@@ -101,7 +104,12 @@ export interface Review {
   danger: boolean;
 }
 
+/** A write DNS made, and what made it. */
+export type LogLine = LogEntry & { cause: string };
+
 export interface DnsState {
+  automatic: boolean;
+  createIn: Policy["createIn"];
   profiles: (Profile & { sites: number })[];
   defaultProfileId: string | null;
   sites: SiteView[];
@@ -116,6 +124,8 @@ export interface DnsState {
   waitUntil: number;
   token: TokenTemplate;
   presets: Preset[];
+  /** Newest first. */
+  log: LogLine[];
 }
 
 export type DnsReply = DnsState & { review?: Review; notice?: string };
@@ -203,6 +213,15 @@ class Files {
     writeState(this.path("pending"), pending, this.paths.rootUid);
   }
 
+  log(): LogLine[] {
+    return readState<LogLine[]>(this.path("log"), this.paths.rootUid, () => []);
+  }
+
+  appendLog(lines: LogLine[]): void {
+    if (!lines.length) return;
+    writeState(this.path("log"), [...lines.reverse(), ...this.log()].slice(0, MAX_LOG), this.paths.rootUid);
+  }
+
   ssl(): Record<string, SslRequest> {
     return readState(this.path("ssl"), this.paths.rootUid, () => ({}));
   }
@@ -271,6 +290,8 @@ class Action {
   private cachedAddresses: Addresses | null = null;
   private readonly runs: DnsRun[] = [];
   private mailcowTrial: MailcowApi | null = null;
+  /** What the change log says made this invocation's writes. */
+  cause = "Scheduled check";
 
   constructor(readonly paths: DnsPaths, readonly options: DnsActionOptions) {
     this.files = new Files(paths);
@@ -307,6 +328,11 @@ class Action {
     return run;
   }
 
+  /** Appends what every run wrote, so writes made before a failure are logged too. */
+  writeLog(): void {
+    this.files.appendLog(this.runs.flatMap((run) => run.log.splice(0).map((entry) => ({ ...entry, cause: this.cause }))));
+  }
+
   rememberBackoff(): void {
     if (!this.runs.length && !this.mailcowTrial) return;
     const status = this.files.status();
@@ -330,8 +356,7 @@ class Action {
     const managed = this.files.managed();
     let forgot = false;
     for (const site of this.sites()) {
-      const profile = next.profiles.find((candidate) => candidate.id === next.assignments[site.domain]);
-      if (!managed[site.domain] || profile?.mode === "enforce") continue;
+      if (!managed[site.domain] || (next.automatic && next.assignments[site.domain])) continue;
       delete managed[site.domain];
       forgot = true;
     }
@@ -374,6 +399,8 @@ class Action {
     })));
     const managed = this.files.managed();
     return {
+      automatic: policy.automatic,
+      createIn: policy.createIn,
       profiles: policy.profiles.map((profile) => ({
         ...profile, sites: Object.values(policy.assignments).filter((id) => id === profile.id).length,
       })),
@@ -407,10 +434,12 @@ class Action {
       waitUntil: Math.max(status.backoff.cloudflare, status.backoff.mailcow),
       token: tokenTemplate(policy.profiles),
       presets: PRESETS,
+      log: this.files.log().slice(0, PAGE_LOG),
     };
   }
 
   reply(extra: { review?: Review; notice?: string } = {}): DnsReply {
+    this.writeLog();
     return { ...this.state(), ...extra };
   }
 
@@ -430,7 +459,7 @@ class Action {
     this.record(run, run.planAll(this.sites()), domains === "all" ? "all" : chosen.map((site) => site.domain));
   }
 
-  /** Every site: read, enforce what enforces, and record the result. */
+  /** Every site: read, write what Automatic writes, and record the result. */
   async check(retrySsl: boolean): Promise<void> {
     const before = this.files.policy();
     const policy = this.adoptNewSites(before);
@@ -511,8 +540,8 @@ class Action {
     const site = this.site(domain);
     const policy = this.files.policy();
     const profile = policy.profiles.find((candidate) => candidate.id === policy.assignments[domain]);
-    if (!profile || profile.mode !== "enforce") {
-      return { managed: false, ready: false, reason: profile ? "Its DNS profile is Report only" : "No DNS profile is assigned to this site", certificateNames: [] };
+    if (!profile || !policy.automatic) {
+      return { managed: false, ready: false, reason: profile ? "DNS is set to Ask first" : "No DNS profile is assigned to this site", certificateNames: [] };
     }
     // A site owner's call reaches Cloudflare only for a site made in the last
     // few minutes, the moment it is for; for any other the last check answers.
@@ -554,16 +583,19 @@ class Action {
   // Reviews
   // -------------------------------------------------------------------------
 
-  /** The enforcing sites whose records would change if `after` replaced `before`. */
+  /** The sites whose records would change if `after` replaced `before`, once DNS is Automatic. */
   affected(before: Policy, after: Policy): string[] {
+    if (!after.automatic) return [];
     const mailcowBefore = JSON.stringify(before.mailcow);
     const mailcowAfter = JSON.stringify(after.mailcow);
+    const createIn = JSON.stringify(before.createIn) !== JSON.stringify(after.createIn);
     return this.sites().map((site) => site.domain).filter((domain) => {
       const next = after.profiles.find((profile) => profile.id === after.assignments[domain]);
-      if (!next || next.mode !== "enforce") return false;
+      if (!next) return false;
+      if (!before.automatic || createIn) return true;
       if (before.held.includes(domain) && !after.held.includes(domain)) return true;
       const previous = before.profiles.find((profile) => profile.id === before.assignments[domain]);
-      if (!previous || previous.mode !== "enforce" || previous.id !== next.id) return true;
+      if (!previous || previous.id !== next.id) return true;
       if (profileEffect(previous) !== profileEffect(next)) return true;
       if (JSON.stringify(before.server) !== JSON.stringify(after.server)) return true;
       if (next.mailcow && mailcowBefore !== mailcowAfter) return true;
@@ -609,17 +641,20 @@ class Action {
       token, expiresAt: this.now + REVIEW_LIFETIME, base: hash(before), digest: this.digest(plans), domains, policy: next, mailcowKey,
     });
     const changes = plans.reduce((count, plan) => count + plan.changes.filter((change) => change.action !== "note").length, 0);
+    const turningOn = !before.automatic;
     return this.reply({
       notice,
       review: {
         token,
-        title: blocked ? "Resolve these first" : `Enforce on ${plans.length} site${plans.length === 1 ? "" : "s"}`,
+        title: blocked ? "Resolve these first" : turningOn ? "Turn on Automatic" : `Apply to ${plans.length} site${plans.length === 1 ? "" : "s"}`,
         text: blocked
-          ? "Enforcing cannot start while a site below has a problem. Fix it, or take the site out of this profile."
-          : `${changes} change${changes === 1 ? "" : "s"} will be made now, and the profile will keep these records as they are from then on. Records at names the profile does not write are left alone.`,
+          ? "This cannot be applied while a site below has a problem. Fix it, or take the site out of its profile."
+          : `${changes} change${changes === 1 ? "" : "s"} will be made now${turningOn
+            ? ". From then on DNS keeps every site's records to its profile, and creates a missing zone, on its own"
+            : ", and kept from then on"}. Records at names a profile does not write are left alone.`,
         sites: plans,
         blocked,
-        confirmLabel: "Confirm and enforce",
+        confirmLabel: turningOn ? "Apply and turn on Automatic" : "Apply",
         danger: plans.some((plan) => plan.changes.some((change) => change.action === "delete")),
       },
     });
@@ -644,9 +679,10 @@ class Action {
     this.savePolicy(next);
     if (pending.mailcowKey !== undefined) this.files.saveSecrets(this.secretsWith(pending.mailcowKey));
     this.files.savePending(null);
+    this.cause = "Confirmed review";
     await run.enforce(this.sites().filter((site) => pending.domains.includes(site.domain)));
     this.record(run, run.planAll(this.sites()), pending.domains);
-    return this.reply({ notice: `Enforcing on ${pending.domains.length} site${pending.domains.length === 1 ? "" : "s"}.` });
+    return this.reply({ notice: `Applied to ${pending.domains.length} site${pending.domains.length === 1 ? "" : "s"}.${current.automatic ? "" : " DNS is Automatic."}` });
   }
 
   /** The tracked records of a site CloudPanel no longer has, that are unchanged and no current site writes. */
@@ -704,7 +740,8 @@ class Action {
     const { run, entry, ids, plans } = await this.removable(domain);
     if (this.digest(plans) !== pending.digest) return this.reviewRemoval(domain);
     this.files.savePending(null);
-    await run.deleteRecords(entry.connectionId, entry.zoneId, ids);
+    this.cause = "Remove records";
+    await run.deleteRecords(domain, entry, ids);
     const managed = this.files.managed();
     delete managed[domain];
     this.files.saveManaged(managed);
@@ -762,7 +799,7 @@ class Action {
     const next = structuredClone(policy);
     next.connections = next.connections.filter((connection) => connection.id !== id);
     for (const [zone, choice] of Object.entries(next.zoneChoices)) if (choice.connectionId === id) delete next.zoneChoices[zone];
-    for (const profile of next.profiles) if (profile.zone.createIn?.connectionId === id) profile.zone.createIn = null;
+    if (next.createIn?.connectionId === id) next.createIn = null;
     const secrets = this.files.secrets();
     delete secrets.cloudflare[id];
     this.files.saveSecrets(secrets);
@@ -834,11 +871,11 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
     const taken = new Set(policy.profiles.map((profile) => profile.id));
     let id = existing?.id ?? nameSlug(String(body.name ?? ""), "the profile name");
     for (let n = 2; !existing && taken.has(id); n++) id = `${nameSlug(String(body.name), "the profile name", 36)}-${n}`;
-    const profile = parseProfile({ ...body, id, mode: existing?.mode ?? "report" });
+    const profile = parseProfile({ ...body, id });
     action.checkProfile(profile);
     if (existing) next.profiles = next.profiles.map((candidate) => candidate.id === id ? profile : candidate);
     else next.profiles.push(profile);
-    return action.change(next, existing ? `Saved ${profile.name}.` : `Created ${profile.name}. It starts in Report only.`, sitesOf(next, id));
+    return action.change(next, existing ? `Saved ${profile.name}.` : `Created ${profile.name}.`, sitesOf(next, id));
   }
   if (verb === "delete-profile") {
     const profile = profileById(policy, body.id);
@@ -847,11 +884,16 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
     if (next.defaultProfileId === profile.id) next.defaultProfileId = null;
     return action.change(next, `Deleted ${profile.name}. Its sites' DNS is left as it is.`);
   }
-  if (verb === "set-mode") {
-    const profile = next.profiles.find((candidate) => candidate.id === profileById(policy, body.id).id)!;
-    if (body.mode !== "report" && body.mode !== "enforce") failAction("The mode must be Report only or Enforce");
-    profile.mode = body.mode;
-    return action.change(next, body.mode === "enforce" ? `${profile.name} enforces.` : `${profile.name} is Report only. Nothing in Cloudflare or Mailcow was changed.`);
+  if (verb === "set-automatic") {
+    if (typeof body.automatic !== "boolean") failAction("Say whether DNS is Automatic");
+    next.automatic = body.automatic;
+    return action.change(next, body.automatic ? "DNS is Automatic." : "DNS asks first. Nothing in Cloudflare or Mailcow was changed.");
+  }
+  if (verb === "zone-account") {
+    const ref = parseAccountRef(body.createIn);
+    if (ref && !policy.connections.some((connection) => connection.id === ref.connectionId)) failAction("That connection no longer exists");
+    next.createIn = ref;
+    return action.change(next, "New zones go to the chosen account.", "all");
   }
   if (verb === "assign") {
     if (!Array.isArray(body.domains) || !body.domains.length) failAction("Select at least one site");
@@ -955,7 +997,12 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
       if (message === error.message) throw error;
       failAction(message);
     } finally {
-      try { action.rememberBackoff(); } catch (backoffError) { if (!failed) throw backoffError; }
+      try {
+        action.writeLog();
+        action.rememberBackoff();
+      } catch (afterError) {
+        if (!failed) throw afterError;
+      }
     }
   });
 }
@@ -965,14 +1012,17 @@ async function perform(
 ): Promise<unknown> {
   switch (verb) {
     case "check":
+      action.cause = "Check now";
       await action.check(false);
       return action.reply({ notice: "Checked every site." });
     case "reconcile":
       await action.check(true);
       return { checked: action.sites().length };
     case "sync-sites":
+      action.cause = "New site";
       return { joined: await action.syncSites() };
     case "provision":
+      action.cause = "New site";
       return action.provision(provision!.domain, provision!.ssl, provision!.asUser);
     case "confirm":
       return action.confirm(body.token);

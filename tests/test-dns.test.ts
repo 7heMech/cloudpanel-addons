@@ -66,9 +66,9 @@ function setup() {
     async connect(token = TOKEN): Promise<DnsReply> {
       return env.act("save-connection", { token });
     },
-    /** Enforce a profile through its review, as the page does. */
-    async enforce(id: string): Promise<DnsReply> {
-      const reply = await env.act("set-mode", { id, mode: "enforce" });
+    /** Turn on Automatic through its review, as the page does. */
+    async automatic(): Promise<DnsReply> {
+      const reply = await env.act("set-automatic", { automatic: true });
       if (!reply.review) return reply;
       expect(reply.review.blocked).toBe(false);
       return env.act("confirm", { token: reply.review.token });
@@ -108,7 +108,7 @@ test("queued DNS work does nothing after DNS has been disabled", async () => {
   const env = setup();
   await env.connect();
   await env.act("assign", { domains: ["example.com"], profileId: "web" });
-  await env.enforce("web");
+  await env.automatic();
   const before = readFileSync(join(env.dir, "state", "status.json"), "utf8");
   const calls = env.cf.calls.length;
   rmSync(join(env.dir, "dns.conf"));
@@ -120,10 +120,11 @@ test("queued DNS work does nothing after DNS has been disabled", async () => {
 });
 
 describe("connecting Cloudflare", () => {
-  test("a first visit offers the seeded profiles in Report only", async () => {
+  test("a first visit offers the seeded profiles and asks first", async () => {
     const env = setup();
     const state = await env.act("list");
-    expect(state.profiles.map((profile) => [profile.name, profile.mode])).toEqual([["Web", "report"], ["Web and Mailcow", "report"]]);
+    expect(state.profiles.map((profile) => profile.name)).toEqual(["Web", "Web and Mailcow"]);
+    expect(state.automatic).toBe(false);
     expect(state.connections).toEqual([]);
     expect(env.cf.calls).toEqual([]);
   });
@@ -152,8 +153,8 @@ describe("connecting Cloudflare", () => {
   });
 });
 
-describe("Report only and Enforce", () => {
-  test("Report only reads and writes nothing", async () => {
+describe("Ask first and Automatic", () => {
+  test("Ask first reads and writes nothing", async () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
@@ -163,16 +164,20 @@ describe("Report only and Enforce", () => {
     expect(plan.changes.map((change) => `${change.action} ${change.subject}`)).toContain("create A example.com");
   });
 
-  test("Enforce starts only once its plan is confirmed, then makes it and keeps it", async () => {
+  test("Automatic starts only once its plan is confirmed, then makes it, keeps it and logs it", async () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    const review = await env.act("set-mode", { id: "web", mode: "enforce" });
+    const review = await env.act("set-automatic", { automatic: true });
     expect(review.review!.sites.map((plan) => plan.domain)).toEqual(["example.com"]);
-    expect(review.profiles.find((profile) => profile.id === "web")!.mode).toBe("report");
+    expect(review.review!.confirmLabel).toBe("Apply and turn on Automatic");
+    expect(review.automatic).toBe(false);
     expect(env.cf.writes()).toEqual([]);
 
-    await env.act("confirm", { token: review.review!.token });
+    const confirmed = await env.act("confirm", { token: review.review!.token });
+    expect(confirmed.automatic).toBe(true);
+    expect(confirmed.log.map((line) => `${line.cause}: ${line.action} ${line.subject}`)).toContain("Confirmed review: create A example.com");
+    expect(confirmed.log.find((line) => line.subject === "Zone setting, whole zone")).toMatchObject({ sites: [], zone: "example.com" });
     expect(env.records()).toEqual([
       "A example.com 203.0.113.10 proxied", "A www.example.com 203.0.113.10 proxied",
       "AAAA example.com 2001:db8::10 proxied", "AAAA www.example.com 2001:db8::10 proxied",
@@ -189,9 +194,16 @@ describe("Report only and Enforce", () => {
     const state = await env.act("check");
     expect(env.cf.writes().length).toBe(writes);
     expect(state.sites.find((entry) => entry.domain === "example.com")!.plan!.changes).toEqual([]);
+    expect(state.log).toHaveLength(confirmed.log.length);
+
+    // Asking first again is saved at once and writes nothing.
+    const off = await env.act("set-automatic", { automatic: false });
+    expect(off.review).toBeUndefined();
+    expect(off.automatic).toBe(false);
+    expect(env.cf.writes().length).toBe(writes);
   });
 
-  test("Enforce deletes conflicting records at the names it writes, and nothing else", async () => {
+  test("Automatic deletes conflicting records at the names it writes, and nothing else", async () => {
     const env = setup();
     env.cf.record("example.com", { type: "A", name: "example.com", content: "198.51.100.4" });
     env.cf.record("example.com", { type: "CNAME", name: "www.example.com", content: "old-host.example.net" });
@@ -200,7 +212,7 @@ describe("Report only and Enforce", () => {
     env.cf.record("example.com", { type: "A", name: "legacy.example.com", content: "198.51.100.4" });
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    const review = await env.act("set-mode", { id: "web", mode: "enforce" });
+    const review = await env.act("set-automatic", { automatic: true });
     expect(review.review!.sites[0]!.changes.filter((change) => change.action === "delete").map((change) => change.subject)).toEqual(["CNAME www.example.com"]);
     await env.act("confirm", { token: review.review!.token });
     expect(env.records()).toEqual([
@@ -223,7 +235,7 @@ describe("Report only and Enforce", () => {
     const web = state.profiles.find((profile) => profile.id === "web")!;
     await env.act("save-profile", { ...web, zone: { ...web.zone, skipFirewallIps: ["203.0.113.7", "2001:db8::7"] } });
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     expect(env.cf.rulesets.get(`${zone.id}:http_config_settings`)!.rules.map((rule) => rule.ref)).toEqual(["tf", "other"]);
     expect(env.cf.rulesets.get(`${zone.id}:http_request_firewall_custom`)!.rules).toEqual([expect.objectContaining({
       ref: "clp_dns_skip", action: "skip", expression: "ip.src in {2001:db8::7 203.0.113.7}",
@@ -231,37 +243,20 @@ describe("Report only and Enforce", () => {
     })]);
   });
 
-  test("a Report only profile in the same zone adds nothing to what is written there", async () => {
-    const env = setup();
-    await env.connect();
-    const state = await env.act("list");
-    const web = state.profiles.find((profile) => profile.id === "web")!;
-    await env.act("save-profile", { ...web, zone: { ...web.zone, ssl: null, alwaysHttps: null, acmeFullSsl: false } });
-    await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    await env.act("assign", { domains: ["shop.example.com"], profileId: "web-mailcow" });
-    await env.enforce("web");
-    const zone = env.cf.zones[0]!;
-    expect(env.cf.settings.get(`${zone.id}:ssl`)).toBeUndefined();
-    expect(env.cf.rulesets.size).toBe(0);
-    expect(env.records()).not.toContain("A shop.example.com 203.0.113.10 proxied");
-  });
-
-  test("a profile that wants another SSL mode than what its zone enforces is stopped", async () => {
+  test("profiles in one zone that want different SSL modes stop each other", async () => {
     const env = setup();
     await env.connect();
     const state = await env.act("list");
     const mailcow = state.profiles.find((profile) => profile.id === "web-mailcow")!;
     await env.act("save-profile", { ...mailcow, mailcow: false, records: mailcow.records.filter((row) => !/mailcow/.test(row.name + row.content)), zone: { ...mailcow.zone, ssl: "full" } });
     await env.act("assign", { domains: ["shop.example.com"], profileId: "web-mailcow" });
-    await env.enforce("web-mailcow");
-    await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    // Report only, it may disagree, and is told so; it stops nothing.
-    const checked = await env.act("check");
-    expect(checked.sites.find((entry) => entry.domain === "example.com")!.plan!.problems).toContain("The profiles in this zone ask for different SSL/TLS modes");
-    expect(checked.sites.find((entry) => entry.domain === "shop.example.com")!.plan!.problems).toEqual([]);
-    const blocked = await env.act("set-mode", { id: "web", mode: "enforce" });
+    await env.automatic();
+    // Putting a site that wants Full (strict) in the same zone is refused at its review.
+    const blocked = await env.act("assign", { domains: ["example.com"], profileId: "web" });
     expect(blocked.review!.blocked).toBe(true);
-    expect(env.cf.settings.get(`${env.cf.zones[0]!.id}:ssl`)).toBe("full");
+    expect(blocked.review!.sites.find((plan) => plan.domain === "example.com")!.problems).toContain("The profiles in this zone ask for different SSL/TLS modes");
+    // The zone stays at the Full it already had: Full (strict) is never written.
+    expect(env.cf.settings.get(`${env.cf.zones[0]!.id}:ssl`)).toBeUndefined();
   });
 
   test("records another current site writes at are never removed with a deleted site's", async () => {
@@ -272,7 +267,7 @@ describe("Report only and Enforce", () => {
     // Both sites publish the same verification value at the zone's own name.
     await env.act("save-profile", { ...web, records: [...web.records, { type: "TXT", name: "_verify.{zone}", content: "token=1", ttl: 1 }] });
     await env.act("assign", { domains: ["example.com", "shop.example.com"], profileId: "web" });
-    const enforced = await env.enforce("web");
+    const enforced = await env.automatic();
     // The second site finds the record the first one wrote, rather than creating it again.
     expect(enforced.sites.flatMap((entry) => entry.plan!.problems)).toEqual([]);
     expect(env.records().filter((record) => record.startsWith("TXT _verify."))).toEqual(['TXT _verify.example.com "token=1"']);
@@ -285,7 +280,7 @@ describe("Report only and Enforce", () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     const a = env.cf.recordsOf("example.com").find((record) => record.type === "A" && record.name === "example.com")!;
     a.content = "198.51.100.99";
     a.proxied = false;
@@ -297,7 +292,7 @@ describe("Report only and Enforce", () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     const before = env.records();
     // CloudPanel's cached public IPv4 expired on a server behind NAT, and a second IPv6 appeared.
     env.addresses.ipv4 = null;
@@ -312,18 +307,18 @@ describe("Report only and Enforce", () => {
     expect(env.records().filter((record) => record.startsWith("AAAA"))).toEqual([]);
   });
 
-  test("editing an enforcing profile's records is reviewed, renaming it is not", async () => {
+  test("editing a profile's records once Automatic is reviewed, renaming it is not", async () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     const web = (await env.act("list")).profiles.find((profile) => profile.id === "web")!;
     const renamed = await env.act("save-profile", { ...web, name: "Websites" });
     expect(renamed.review).toBeUndefined();
     expect(renamed.profiles.find((profile) => profile.id === "web")!.name).toBe("Websites");
     const changed = await env.act("save-profile", { ...web, records: [...web.records, { type: "TXT", name: "_dmarc.{domain}", content: "v=DMARC1; p=none", ttl: 1 }] });
     expect(changed.review!.sites[0]!.changes.map((change) => `${change.action} ${change.subject}`)).toEqual(["create TXT _dmarc.example.com"]);
-    // A row taken out stops being enforced; what it wrote stays.
+    // A row taken out stops being kept; what it wrote stays.
     const fewer = await env.act("save-profile", { ...web, records: web.records.filter((record) => record.type === "A") });
     expect(fewer.review!.sites[0]!.changes).toEqual([]);
   });
@@ -332,7 +327,7 @@ describe("Report only and Enforce", () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    const review = await env.act("set-mode", { id: "web", mode: "enforce" });
+    const review = await env.act("set-automatic", { automatic: true });
     env.cf.record("example.com", { type: "CNAME", name: "www.example.com", content: "someone.example.net" });
     const again = await env.act("confirm", { token: review.review!.token });
     expect(again.notice).toContain("changed after the plan was shown");
@@ -344,7 +339,7 @@ describe("Report only and Enforce", () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    const review = await env.act("set-mode", { id: "web", mode: "enforce" });
+    const review = await env.act("set-automatic", { automatic: true });
     env.clock.now += 16 * 60_000;
     await expect(env.act("confirm", { token: review.review!.token })).rejects.toThrow("expired");
   });
@@ -368,7 +363,7 @@ describe("Mailcow", () => {
 
   test("the domain is added, the shared key duplicated, the mailbox allowed, and DNS gets Mailcow's own key", async () => {
     const env = await mailSetup();
-    await env.enforce("web-mailcow");
+    await env.automatic();
     expect(env.mc.domains.has("example.com")).toBe(true);
     expect(env.mc.dkim.get("example.com")!.pubkey).toBe(env.mc.dkim.get("example.net")!.pubkey);
     expect(env.mc.mailboxes.get("relay@example.net")!.sender_acl).toEqual(["@example.net", "alerts@other.example", "@example.com"]);
@@ -382,7 +377,7 @@ describe("Mailcow", () => {
     expect(env.mc.writes().some((call) => call.path.startsWith("/delete"))).toBe(false);
   });
 
-  test("Report only reads Mailcow and shows what it would do without doing it", async () => {
+  test("Ask first reads Mailcow and shows what it would do without doing it", async () => {
     const env = await mailSetup();
     const state = await env.act("check");
     const changes = state.sites.find((entry) => entry.domain === "example.com")!.plan!.changes.map((change) => change.subject);
@@ -393,14 +388,14 @@ describe("Mailcow", () => {
   test("a sender list this Mailcow does not report is left for a person, and nothing else waits for it", async () => {
     const env = await mailSetup();
     env.mc.reportsAcl = false;
-    await env.enforce("web-mailcow");
+    await env.automatic();
     expect(env.mc.writes().some((call) => call.path === "/edit/mailbox")).toBe(false);
     expect(env.records()).toContain("MX example.com mail.example.net");
   });
 
   test("a new Mailcow address and key are saved together, once their review is confirmed", async () => {
     const env = await mailSetup();
-    await env.enforce("web-mailcow");
+    await env.automatic();
     const secrets = () => readFileSync(join(env.dir, "state", "secrets.json"), "utf8");
     env.mc.apiKey = "MC-NEW-KEY-0123456789ABCDEF";
     const review = await env.act("save-mailcow", {
@@ -424,7 +419,7 @@ describe("Mailcow", () => {
 
   test("Mailcow is removed with its key, and its sites wait for it without anything being deleted", async () => {
     const env = await mailSetup();
-    await env.enforce("web-mailcow");
+    await env.automatic();
     const records = env.records();
     const reply = await env.act("remove-mailcow", {});
     expect(reply.mailcow).toMatchObject({ url: "", host: "", sharedMailbox: "", hasKey: false });
@@ -458,7 +453,7 @@ describe("several connections", () => {
     await env.connect();
     await env.act("save-connection", { token: SECOND_TOKEN, label: "Church" });
     await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     expect(env.records("shop.example.com")).toContain("A shop.example.com 203.0.113.10 proxied");
     expect(env.records("example.com")).toEqual([]);
   });
@@ -468,7 +463,7 @@ describe("several connections", () => {
     await env.connect();
     await env.act("save-connection", { token: SECOND_TOKEN, label: "Church" });
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     expect(env.cf.writes().every((call) => env.cf.calls.find((entry) => entry === call)!.token === TOKEN)).toBe(true);
   });
 
@@ -478,7 +473,7 @@ describe("several connections", () => {
     await env.act("save-connection", { token: SECOND_TOKEN, label: "Church" });
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
     env.latency.set(TOKEN, 25);
-    await env.enforce("web");
+    await env.automatic();
     expect(env.cf.writes().length).toBeGreaterThan(0);
     expect(env.cf.writes().every((call) => env.cf.calls.find((entry) => entry === call)!.token === TOKEN)).toBe(true);
   });
@@ -490,11 +485,10 @@ describe("several connections", () => {
     await env.connect();
     await env.act("save-connection", { token: SECOND_TOKEN, label: "Church" });
     const state = await env.act("list");
-    const web = state.profiles.find((profile) => profile.id === "web")!;
-    await env.act("save-profile", { ...web, zone: { ...web.zone, createIn: { connectionId: state.connections[0]!.id, accountId: env.agency } } });
+    await env.act("zone-account", { createIn: { connectionId: state.connections[0]!.id, accountId: env.agency } });
     await env.act("assign", { domains: ["example.net"], profileId: "web" });
     env.cf.tokens.delete(SECOND_TOKEN);
-    const reply = await env.act("set-mode", { id: "web", mode: "enforce" });
+    const reply = await env.act("set-automatic", { automatic: true });
     if (reply.review && !reply.review.blocked) await env.act("confirm", { token: reply.review.token });
     expect(env.cf.zones.filter((zone) => zone.name === "example.net")).toHaveLength(1);
   });
@@ -507,7 +501,7 @@ describe("several connections", () => {
     await env.connect();
     const second = await env.act("save-connection", { token: SECOND_TOKEN, label: "Church" });
     await env.act("assign", { domains: ["example.net"], profileId: "web" });
-    const blocked = await env.act("set-mode", { id: "web", mode: "enforce" });
+    const blocked = await env.act("set-automatic", { automatic: true });
     expect(blocked.review!.blocked).toBe(true);
     const plan = blocked.review!.sites[0]!;
     // The agency's zone is reachable through both tokens, so it is offered twice: once per connection.
@@ -515,7 +509,7 @@ describe("several connections", () => {
     expect([...new Set(plan.zoneChoices.map((choice) => choice.zoneId))].sort()).toEqual([theirs.id, ours.id].sort());
     const church = second.connections.find((connection) => connection.label === "Church")!;
     await env.act("choose-zone", { zone: "example.net", connectionId: church.id, zoneId: ours.id });
-    await env.enforce("web");
+    await env.automatic();
     expect(env.cf.records.get(ours.id)!.length).toBeGreaterThan(0);
     expect(env.cf.records.get(theirs.id)).toEqual([]);
 
@@ -529,28 +523,71 @@ describe("several connections", () => {
 });
 
 describe("zones and new sites", () => {
-  test("a missing zone is created in the chosen account, and DNS is not ready until it is active", async () => {
+  test("a missing zone is created in the only account there is, and DNS is not ready until it is active", async () => {
     const env = setup();
     env.sites.push(site(3, "new-client.example.org"));
     await env.connect();
-    const state = await env.act("list");
-    const web = state.profiles.find((profile) => profile.id === "web")!;
-    await env.act("save-profile", { ...web, zone: { ...web.zone, createIn: { connectionId: state.connections[0]!.id, accountId: env.agency } } });
     await env.act("assign", { domains: ["new-client.example.org"], profileId: "web" });
-    await env.enforce("web");
+    const review = await env.act("set-automatic", { automatic: true });
+    expect(review.review!.sites[0]!.changes[0]).toMatchObject({ action: "create", subject: "Cloudflare zone" });
+    const reply = await env.act("confirm", { token: review.review!.token });
     const zone = env.cf.zones.find((candidate) => candidate.name === "example.org")!;
     expect(zone.status).toBe("pending");
     expect(env.records("example.org")).toContain("A new-client.example.org 203.0.113.10 proxied");
+    expect(reply.log.find((line) => line.subject === "Cloudflare zone")).toMatchObject({
+      sites: ["new-client.example.org"], zone: "example.org", cause: "Confirmed review", detail: expect.stringContaining("ada.ns.cloudflare.com"),
+    });
     const provision = await env.act<ProvisionReply>("provision", undefined, ["--domain=new-client.example.org"]);
     expect(provision.ready).toBe(false);
     expect(provision.reason).toContain("ada.ns.cloudflare.com");
+  });
+
+  test("with several accounts, a missing zone waits until one is chosen for new zones", async () => {
+    const env = setup();
+    env.sites.push(site(3, "new-client.example.org"));
+    await env.connect();
+    const second = await env.act("save-connection", { token: SECOND_TOKEN, label: "Church" });
+    await env.act("assign", { domains: ["new-client.example.org"], profileId: "web" });
+    const blocked = await env.act("set-automatic", { automatic: true });
+    expect(blocked.review!.blocked).toBe(true);
+    expect(blocked.review!.sites[0]!.problems).toEqual(["example.org is not in Cloudflare; choose the account for new zones under Settings"]);
+    const first = second.connections.find((connection) => connection.label !== "Church")!;
+    await env.act("zone-account", { createIn: { connectionId: first.id, accountId: env.agency } });
+    await env.automatic();
+    expect(env.cf.zones.find((candidate) => candidate.name === "example.org")!.account.id).toBe(env.agency);
+    // A removed connection takes the choice with it.
+    const after = await env.act("remove-connection", { id: first.id });
+    expect(after.createIn).toBeNull();
+  });
+
+  test("a policy saved with a mode on each profile is Automatic only if every profile with sites enforced", async () => {
+    const env = setup();
+    const connected = await env.connect();
+    const id = connected.connections[0]!.id;
+    const policyFile = join(env.dir, "state", "policy.json");
+    const saved = JSON.parse(readFileSync(policyFile, "utf8"));
+    delete saved.automatic;
+    delete saved.createIn;
+    const legacy = (modes: string[]) => ({
+      ...saved,
+      profiles: saved.profiles.map((profile: object, index: number) => ({ ...profile, mode: modes[index], zone: { createIn: index ? { connectionId: id, accountId: env.agency } : null } })),
+    });
+    const read = async (policy: unknown) => {
+      writeFileSync(policyFile, JSON.stringify(policy));
+      return env.act("list");
+    };
+    expect((await read({ ...legacy(["enforce", "report"]), assignments: { "example.com": "web" } })).automatic).toBe(true);
+    const mixed = await read({ ...legacy(["enforce", "report"]), assignments: { "example.com": "web", "shop.example.com": "web-mailcow" } });
+    expect(mixed.automatic).toBe(false);
+    expect(mixed.createIn).toEqual({ connectionId: id, accountId: env.agency });
+    expect((await read({ ...legacy(["enforce", "enforce"]), assignments: {} })).automatic).toBe(false);
   });
 
   test("a new site joins the default profile and is written at once; existing sites stay where they are", async () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     await env.act("set-default", { profileId: "web" });
     env.sites.push(site(7, "fresh.example.com", { createdAt: START }));
     const synced = await env.act<{ joined: string[] }>("sync-sites");
@@ -573,7 +610,7 @@ describe("zones and new sites", () => {
     env.cf.record("client.org", { type: "CNAME", name: "mail.client.org", content: "mx.mailhost.example" });
     await env.connect();
     await env.act("set-default", { profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     env.sites.push(site(8, "mail.client.org", { createdAt: START }));
     await env.act("sync-sites");
     expect(env.records("client.org")).toContain("A mail.client.org 203.0.113.10 proxied");
@@ -601,7 +638,7 @@ describe("zones and new sites", () => {
     const zone = env.cf.zone("client.org", env.agency);
     await env.connect();
     await env.act("set-default", { profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     const token = env.cf.tokens.get(TOKEN)!;
     env.cf.tokens.delete(TOKEN);
     env.sites.push(site(8, "mail.client.org", { createdAt: START }));
@@ -617,7 +654,7 @@ describe("zones and new sites", () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     await env.act("set-default", { profileId: "web" });
     env.sites.push(site(7, "fresh.example.com", { createdAt: START }));
     await env.act("sync-sites");
@@ -628,7 +665,7 @@ describe("zones and new sites", () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     await env.act("set-default", { profileId: "web" });
     const sites = env.sites.splice(0);
     await env.act("sync-sites");
@@ -642,13 +679,13 @@ describe("zones and new sites", () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["example.com", "shop.example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     expect(await env.act<ProvisionReply>("provision", undefined, ["--domain=example.com"]))
       .toEqual({ managed: true, ready: true, reason: "DNS is in place", certificateNames: ["example.com", "www.example.com"] });
     expect((await env.act<ProvisionReply>("provision", undefined, ["--domain=shop.example.com"])).certificateNames).toEqual(["shop.example.com"]);
   });
 
-  test("a site with no profile, or a Report only one, is not DNS's to hold up", async () => {
+  test("a site with no profile, or any site while DNS asks first, is not DNS's to hold up", async () => {
     const env = setup();
     await env.connect();
     expect(await env.act<ProvisionReply>("provision", undefined, ["--domain=example.com"])).toMatchObject({ managed: false });
@@ -674,7 +711,7 @@ describe("zones and new sites", () => {
 
     // Why DNS is not ready can quote Cloudflare's errors; only an administrator reads it.
     await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     env.cf.tokens.delete(TOKEN);
     const admin = await env.act<ProvisionReply>("provision", undefined, ["--domain=shop.example.com"]);
     expect(admin).toMatchObject({ managed: true, ready: false });
@@ -697,7 +734,7 @@ describe("automatic SSL", () => {
     env.sites.push(site(9, "brand-new.example.com", { createdAt: START - 60_000, selfSigned: true }));
     await env.connect();
     await env.act("assign", { domains: ["brand-new.example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     const provision = await env.act<ProvisionReply>("provision", undefined, ["--domain=brand-new.example.com", "--ssl"]);
     expect(provision.ready).toBe(false);
     return env;
@@ -733,7 +770,7 @@ describe("automatic SSL", () => {
 
   test("is dropped once DNS no longer enforces the site", async () => {
     const env = await pending();
-    await env.act("set-mode", { id: "web", mode: "report" });
+    await env.act("set-automatic", { automatic: false });
     await env.act("reconcile");
     expect((await env.act("list")).sites.find((entry) => entry.domain === "brand-new.example.com")!.ssl).toBeNull();
   });
@@ -743,7 +780,7 @@ describe("automatic SSL", () => {
     env.sites.push(site(9, "old.example.com", { createdAt: START - 3_600_000, selfSigned: true }));
     await env.connect();
     await env.act("assign", { domains: ["old.example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     await env.act("provision", undefined, ["--domain=old.example.com", "--ssl"]);
     expect((await env.act("list")).sites.find((entry) => entry.domain === "old.example.com")!.ssl).toBeNull();
   });
@@ -761,7 +798,7 @@ describe("sites CloudPanel no longer has", () => {
       { type: "TXT", name: "{domain}", content: "verify-me", ttl: 300 },
     ] });
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     const records = env.cf.recordsOf("example.com");
     records.find((record) => record.type === "A" && record.name === "example.com")!.proxied = false;
     records.find((record) => record.type === "TXT")!.ttl = 600;
@@ -776,7 +813,7 @@ describe("sites CloudPanel no longer has", () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     env.sites.push(site(3, "www.example.com"));
     const assignment = await env.act("assign", { domains: ["www.example.com"], profileId: "web" });
     await env.act("confirm", { token: assignment.review!.token });
@@ -792,7 +829,7 @@ describe("sites CloudPanel no longer has", () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["example.com", "shop.example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     env.sites.splice(env.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
     expect((await env.act("list")).orphans).toEqual([{ domain: "shop.example.com", zone: "example.com", records: 2 }]);
     env.cf.recordsOf("example.com").find((record) => record.type === "AAAA" && record.name === "shop.example.com")!.content = "2001:db8::99";
@@ -810,7 +847,7 @@ describe("sites CloudPanel no longer has", () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     const db = new Database(join(env.dir, "db.sq3"), { create: true });
     db.exec("CREATE TABLE user (id INTEGER PRIMARY KEY, user_name TEXT, role TEXT, status INTEGER)");
     db.exec("INSERT INTO user VALUES (1, 'bob', 'ROLE_ADMIN', 1)");
@@ -828,7 +865,7 @@ describe("sites CloudPanel no longer has", () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     await env.act("assign", { domains: ["shop.example.com"], profileId: null });
     env.sites.splice(env.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
     expect((await env.act("list")).orphans).toEqual([]);
@@ -838,7 +875,7 @@ describe("sites CloudPanel no longer has", () => {
     const env = setup();
     await env.connect();
     await env.act("assign", { domains: ["shop.example.com"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     env.sites.splice(env.sites.findIndex((entry) => entry.domain === "shop.example.com"), 1);
     const writes = env.cf.writes().length;
     expect((await env.act("forget-records", { domain: "shop.example.com" })).orphans).toEqual([]);
@@ -875,7 +912,7 @@ describe("limits and failures", () => {
     env.sites.push(site(4, "example.org"));
     await env.connect();
     await env.act("assign", { domains: ["example.com", "example.org"], profileId: "web" });
-    await env.enforce("web");
+    await env.automatic();
     const broken = env.cf.zones.find((zone) => zone.name === "example.org")!;
     const inner = env.cf.fetch;
     env.cf.fetch = async (url, init) => new URL(url).pathname.includes(`/zones/${broken.id}/dns_records`)
@@ -936,5 +973,5 @@ test("state that cannot be read while redacting does not hide the failure", asyn
   const env = setup();
   await env.connect();
   chmodSync(join(env.dir, "state", "secrets.json"), 0o666);
-  await expect(env.act("set-mode", { id: "web", mode: "sometimes" })).rejects.toThrow("The mode must be Report only or Enforce");
+  await expect(env.act("set-automatic", { automatic: "sometimes" })).rejects.toThrow("Say whether DNS is Automatic");
 });

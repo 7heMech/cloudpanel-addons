@@ -65,18 +65,20 @@ const sites: SiteSummary[] = [
 const siteVarnish: Record<string, boolean> = { "www.example.com": true };
 const PREVIEW_PUBLIC_IP = "203.0.113.10";
 
-/** Two connections and a mixed fleet. ?setup shows a first visit with nothing connected. */
+/** Two connections and a mixed fleet. ?setup shows a first visit with nothing connected, ?ask DNS before Automatic. */
 function dnsPreviewState(url: URL): DnsState {
   const setup = url.searchParams.has("setup");
+  const automatic = !setup && !url.searchParams.has("ask");
+  const mode = automatic ? "enforce" as const : "report" as const;
   const seeded = dnsSeededPolicy().profiles;
-  const web = { ...seeded[0]!, mode: "enforce" as const };
+  const web = seeded[0]!;
   const mailcow = { ...seeded[1]!, zone: { ...seeded[1]!.zone, skipFirewallIps: ["203.0.113.7"] } };
   const zone = (name: string, status = "active") => ({
     id: "0".repeat(32), name, status, nameServers: ["ada.ns.cloudflare.com", "bob.ns.cloudflare.com"],
     account: "Example Agency", connection: "Agency",
   });
   const plan = (domain: string, extra: Partial<DnsSitePlan>): DnsSitePlan => ({
-    domain, profileId: "web", mode: "enforce", zone: zone("example.com"), changes: [], problems: [], zoneChoices: [],
+    domain, profileId: "web", mode, zone: zone("example.com"), changes: [], problems: [], zoneChoices: [],
     certificateNames: [domain], ...extra,
   });
   const sites = setup ? [
@@ -92,25 +94,42 @@ function dnsPreviewState(url: URL): DnsState {
     { domain: "new-client.example.org", type: "wordpress", profileId: "web", plan: plan("new-client.example.org", { zone: zone("example.org", "pending") }),
       ssl: "Waiting for DNS: Zone example.org is pending; set its nameservers at the registrar" },
     { domain: "a-rather-long-customer-hostname.staging.example.net", type: "nodejs", profileId: "web-mailcow", plan: plan("a-rather-long-customer-hostname.staging.example.net", {
-      profileId: "web-mailcow", mode: "report", zone: null,
+      profileId: "web-mailcow", zone: null,
       problems: ["example.net is reachable through more than one connection; choose which one manages it"],
       zoneChoices: [
         { zone: "example.net", connectionId: "cf-1", zoneId: "1".repeat(32), label: "Agency · Example Agency (active)" },
         { zone: "example.net", connectionId: "cf-2", zoneId: "1".repeat(32), label: "Church · Church account (active)" },
       ] }), ssl: null },
     { domain: "mail.example.org", type: "php", profileId: "web-mailcow", plan: plan("mail.example.org", {
-      profileId: "web-mailcow", mode: "report", zone: zone("example.org"),
+      profileId: "web-mailcow", zone: zone("example.org"),
       changes: [
         { action: "create", subject: "Mailcow domain", detail: "mail.example.org" },
         { action: "create", subject: "MX mail.example.org", detail: "mail.example.net · priority 10" },
         { action: "update", subject: "TXT mail.example.org", detail: "v=spf1 include:_spf.mlsend.com mx ~all", before: "v=spf1 include:_spf.mlsend.com ~all" },
       ] }), ssl: null },
+    { domain: "brand-new.example.co.uk", type: "wordpress", profileId: "web", plan: plan("brand-new.example.co.uk", { zone: null, changes: [
+      { action: "create", subject: "Cloudflare zone", detail: "example.co.uk in Example Agency; then set its nameservers at the registrar" },
+      { action: "create", subject: "A brand-new.example.co.uk", detail: "203.0.113.10 · proxied" },
+    ] }), ssl: null },
     { domain: "docs.example.com", type: "static", profileId: null, plan: null, ssl: null },
+  ];
+  const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const log: DnsState["log"] = setup ? [] : [
+    { at: at(3), cause: "New site", sites: ["new-client.example.org"], zone: "example.org", action: "create", subject: "Cloudflare zone",
+      detail: "In Example Agency; nameservers ada.ns.cloudflare.com, bob.ns.cloudflare.com" },
+    { at: at(3), cause: "New site", sites: ["new-client.example.org"], zone: "example.org", action: "create", subject: "A new-client.example.org", detail: "203.0.113.10 · proxied" },
+    { at: at(64), cause: "Scheduled check", sites: ["example.com"], zone: "example.com", action: "update", subject: "A www.example.com",
+      detail: "203.0.113.10 · proxied", before: "198.51.100.4 · DNS only" },
+    { at: at(64), cause: "Scheduled check", sites: [], zone: "example.com", action: "update", subject: "Zone setting, whole zone", detail: "SSL/TLS Full (strict)", before: "Flexible" },
+    ...Array.from({ length: 12 }, (_, n) => ({ at: at(1440 + n), cause: "Confirmed review", sites: [`site-${n}.example.com`], zone: "example.com",
+      action: "create" as const, subject: `A site-${n}.example.com`, detail: "203.0.113.10 · proxied" })),
   ];
   const profiles = [web, mailcow].map((profile) => ({ ...profile, sites: sites.filter((site) => site.profileId === profile.id).length }));
   return {
+    automatic,
+    createIn: null,
     profiles,
-    defaultProfileId: setup ? null : url.searchParams.has("report") ? "web-mailcow" : "web",
+    defaultProfileId: setup ? null : "web",
     sites,
     connections: setup ? [] : [
       { id: "cf-1", label: "Agency", active: true, status: "active", accounts: [{ id: "a".repeat(32), name: "Example Agency" }, { id: "b".repeat(32), name: "Clients" }], zones: 42, error: null, hasToken: true },
@@ -131,15 +150,16 @@ function dnsPreviewState(url: URL): DnsState {
     waitUntil: 0,
     token: dnsTokenTemplate([web, mailcow]),
     presets: DNS_PRESETS,
+    log,
   };
 }
 
 function dnsPreviewReview(state: DnsState): DnsReview {
   const sites = state.sites.filter((site) => site.plan).map((site) => ({ ...site.plan!, problems: [], zoneChoices: [] }));
   return {
-    token: "preview", title: `Enforce on ${sites.length} sites`,
-    text: "4 changes will be made now, and the profile will keep these records as they are from then on. Records at names the profile does not write are left alone.",
-    sites, blocked: false, confirmLabel: "Confirm and enforce", danger: true,
+    token: "preview", title: "Turn on Automatic",
+    text: "8 changes will be made now. From then on DNS keeps every site's records to its profile, and creates a missing zone, on its own. Records at names a profile does not write are left alone.",
+    sites, blocked: false, confirmLabel: "Apply and turn on Automatic", danger: true,
   };
 }
 
@@ -1628,8 +1648,8 @@ const server = Bun.serve({
       html = phpResourcesLayout("PHP Resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/dns/" || path === "/addons/dns") {
-      // ?dialog=profile|advanced|new|review|site|choose|connection|mailcow|server opens that dialog on load; ?report makes the
-      // Report only profile the default for new sites;
+      // ?dialog=profile|advanced|new|review|site|choose|connection|mailcow|server opens that dialog on load; ?ask shows DNS
+      // before Automatic is turned on;
       // ?at=<selector> hides the cards above that one, for a phone screenshot of something below the fold; ?dark
       // draws the dark theme.
       const state = dnsPreviewState(url);
