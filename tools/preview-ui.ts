@@ -14,6 +14,7 @@ import type { SmtpState } from "../addons/smtp/action";
 import { dashboardView as dnsDashboardView, layout as dnsLayout } from "../addons/dns/app/views";
 import type { DnsState, Review as DnsReview } from "../addons/dns/action";
 import type { SitePlan as DnsSitePlan } from "../addons/dns/engine";
+import type { Redirect as DnsRedirect } from "../addons/dns/model";
 import { PRESETS as DNS_PRESETS, seededPolicy as dnsSeededPolicy } from "../addons/dns/presets";
 import { tokenTemplate as dnsTokenTemplate } from "../addons/dns/token";
 import { dashboardView as panelTweaksDashboardView, layout as panelTweaksLayout } from "../addons/panel-tweaks/app/views";
@@ -81,9 +82,13 @@ function dnsPreviewState(url: URL): DnsState {
     domain, profileId: "web", mode, zone: zone("example.com"), changes: [], problems: [], zoneChoices: [],
     certificateNames: [domain], ...extra,
   });
-  const sites = setup ? [
+  const redirect = (source: string, target: string, extra: Partial<DnsRedirect & { standIn: boolean }> = {}): DnsRedirect & { standIn: boolean } =>
+    ({ source, target, status: 301, keepPath: true, keepQuery: true, profileId: null, standIn: false, ...extra });
+  const sites: DnsState["sites"] = setup ? [
     { domain: "example.com", type: "wordpress", profileId: null, plan: null, ssl: null },
     { domain: "shop.example.com", type: "php", profileId: null, plan: null, ssl: null },
+    { domain: "old-name.example.org", type: "redirect", profileId: null, ssl: null, redirect: redirect("old-name.example.org", "https://example.com", { standIn: true }),
+      plan: { ...plan("old-name.example.org", { profileId: null, zone: null, certificateNames: [] }), redirect: true as const } },
   ] : [
     { domain: "example.com", type: "wordpress", profileId: "web", plan: plan("example.com", { certificateNames: ["example.com", "www.example.com"] }), ssl: null },
     { domain: "shop.example.com", type: "php", profileId: "web", plan: plan("shop.example.com", { changes: [
@@ -112,7 +117,17 @@ function dnsPreviewState(url: URL): DnsState {
       { action: "create", subject: "A brand-new.example.co.uk", detail: "203.0.113.10 · proxied" },
     ] }), ssl: null },
     { domain: "docs.example.com", type: "static", profileId: null, plan: null, ssl: null },
-  ];
+    { domain: "example-brand.net", type: "redirect", profileId: "web-mailcow", ssl: null, redirect: redirect("example-brand.net", "https://example.com", { profileId: "web-mailcow" }),
+      plan: { ...plan("example-brand.net", { profileId: "web-mailcow", zone: zone("example-brand.net"), certificateNames: [] }), redirect: true as const } },
+    { domain: "book.example.com", type: "redirect", profileId: null, ssl: null,
+      redirect: redirect("book.example.com", "https://shop.example.org/products/the-example-handbook-second-edition", { keepPath: false, status: 302 }),
+      plan: { ...plan("book.example.com", { profileId: null, certificateNames: [], changes: [
+        { action: "update", subject: "Cloudflare redirect rule", detail: "book.example.com: 302 to https://shop.example.org/products/the-example-handbook-second-edition · keeps the query string",
+          before: "302 to https://shop.example.org/products/the-example-handbook-second-edition · keeps the path and query string · except Let's Encrypt checks · another tool's rule, taken over in place" },
+        { action: "update", subject: "AAAA book.example.com", detail: "100:: · proxied", before: "2001:db8::10 · proxied" },
+        { action: "delete", subject: "A book.example.com", detail: "203.0.113.10 · proxied" },
+      ] }), redirect: true as const } },
+  ].sort((a, b) => a.domain.localeCompare(b.domain));
   const at = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
   const log: DnsState["log"] = setup ? [] : [
     { at: at(3), cause: "New site", sites: ["new-client.example.org"], zone: "example.org", action: "create", subject: "Cloudflare zone",
@@ -153,6 +168,13 @@ function dnsPreviewState(url: URL): DnsState {
     log,
   };
 }
+
+const dnsFoundRule = (source: string, target: string, keepPath = true) => ({ source, zone: source, target, status: 301 as const, keepPath, keepQuery: true });
+const DNS_PREVIEW_FOUND = {
+  redirects: [dnsFoundRule("example-old.org", "https://example.com"), dnsFoundRule("example-press.com", "https://shop.example.org/products/the-example-handbook-second-edition"),
+    dnsFoundRule("examplebooks.net", "https://example.com/books")],
+  notes: ["3 zones could not be read: Cloudflare: the token lacks Single Redirect: Edit for this zone; add it to the token in Cloudflare (Authentication error (10000))"],
+};
 
 function dnsPreviewReview(state: DnsState): DnsReview {
   const sites = state.sites.filter((site) => site.plan).map((site) => ({ ...site.plan!, problems: [], zoneChoices: [] }));
@@ -1653,7 +1675,8 @@ const server = Bun.serve({
       html = phpResourcesLayout("PHP Resources", phpResourcesDashboardView(phpChanges ?? phpResourcesPreviewState(url)), notice)
         .replace("</body>", () => opener ? `<script>addEventListener("DOMContentLoaded",function(){${opener}})</script></body>` : "</body>");
     } else if (path === "/addons/dns/" || path === "/addons/dns") {
-      // ?dialog=profile|advanced|new|review|site|pending|choose|connection|mailcow|server opens that dialog on load; ?ask shows DNS
+      // ?dialog=profile|advanced|new|review|site|pending|choose|connection|mailcow|server|redirect|new-redirect|redirect-site|found opens
+      // that dialog on load; ?ask shows DNS
       // before Automatic is turned on;
       // ?at=<selector> hides the cards above that one, for a phone screenshot of something below the fold; ?dark
       // draws the dark theme.
@@ -1671,6 +1694,10 @@ const server = Bun.serve({
         connection: "dnsEditConnection('')",
         mailcow: "dnsEditMailcow()",
         server: "dnsEditServer()",
+        redirect: "dnsEditRedirect('example-brand.net')",
+        "new-redirect": "dnsEditRedirect('')",
+        "redirect-site": "dnsShowSite('book.example.com')",
+        found: `dnsShowFound(${JSON.stringify(DNS_PREVIEW_FOUND)})`,
       };
       const opener = (dialog ? openers[dialog] ?? "" : at ? `const card=document.querySelector(${JSON.stringify(at)})?.closest("#dns-root > *");for(let el=document.getElementById("dns-root").firstElementChild;el&&el!==card;el=el.nextElementSibling)el.style.display="none"` : "");
       html = dnsLayout("DNS", dnsDashboardView(state), notice)

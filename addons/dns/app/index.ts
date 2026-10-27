@@ -19,6 +19,10 @@ const CHANGES: Record<string, string> = {
   "/api/server": "save-server",
   "/api/records/remove": "remove-records",
   "/api/records/forget": "forget-records",
+  "/api/redirects": "save-redirect",
+  "/api/redirects/delete": "delete-redirect",
+  "/api/redirects/find": "find-redirects",
+  "/api/redirects/take-over": "take-over",
 };
 
 /**
