@@ -910,6 +910,8 @@ class Action {
     if (!policy.connections.some((connection) => connection.id === id)) failAction("That connection no longer exists");
     const next = structuredClone(policy);
     next.connections = next.connections.filter((connection) => connection.id !== id);
+    // Moving redirects onto stand-in sites on this server is reviewed first, as moving them to Cloudflare is.
+    if (!next.connections.length) next.held = [...new Set([...next.held, ...next.redirects.map((redirect) => redirect.source)])];
     for (const [zone, choice] of Object.entries(next.zoneChoices)) if (choice.connectionId === id) delete next.zoneChoices[zone];
     if (next.createIn?.connectionId === id) next.createIn = null;
     const secrets = this.files.secrets();

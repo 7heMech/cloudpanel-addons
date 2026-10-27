@@ -395,6 +395,20 @@ describe("stand-in sites on this server", () => {
     expect(env.sites).toEqual([]);
   });
 
+  test("removing the last connection moves redirects onto stand-ins only through a review", async () => {
+    const env = setup();
+    terraformZone(env.cf, env.account, "newyou.bg", "https://bg.maksimasenov.com/nyny");
+    const connected = await env.act("save-connection", { token: TOKEN });
+    await env.automatic();
+    await env.confirmed(await env.act("take-over", { redirects: [found("newyou.bg", "https://bg.maksimasenov.com/nyny")] }));
+    await env.act("remove-connection", { id: connected.connections[0]!.id });
+    await env.act("check");
+    expect(env.standIns.calls).toEqual([]);
+    expect((await env.act("list")).sites[0]!.plan!.changes).toEqual([expect.objectContaining({ subject: "Stand-in site", waits: true })]);
+    await env.confirmed(await env.act("assign", { domains: ["newyou.bg"], profileId: null }));
+    expect(env.standIns.calls).toEqual(["create newyou.bg"]);
+  });
+
   test("a deleted redirect takes its stand-in site with it", async () => {
     const env = setup();
     await env.automatic();

@@ -189,6 +189,14 @@ describe("restoring", () => {
     expect(job.error).toBe("docs.example: CloudPanel already has a site docs.example");
   });
 
+  test("the page reports the last job that finished", async () => {
+    const env = setup();
+    await env.runJob(["archive"], { domains: ["docs.example"] });
+    await Bun.sleep(1100);
+    await env.runJob(["archive"], { domains: ["old-shop.example"] });
+    expect((await env.act<ArchiveState>(["list"])).lastJob!.targets).toEqual(["old-shop.example"]);
+  });
+
   test("deleting an archive removes its files", async () => {
     const env = setup();
     await env.runJob(["archive"], { domains: ["docs.example"] });

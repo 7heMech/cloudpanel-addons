@@ -16,7 +16,7 @@ import {
 } from "../../cli/action-common";
 import { validateDomain } from "../../lib/app-http";
 import {
-  jobCommonFields, jobDir, jobGet, jobIdArgument, jobSiteProgress, listJobIds, queueJob, readJobLog, readJobResult, runSiteJob,
+  jobCommonFields, jobDir, jobGet, jobIdArgument, jobSiteProgress, listJobIds, pruneJobs, queueJob, readJobLog, readJobResult, runSiteJob,
   watchJobRecord, type startJobUnit,
 } from "../../cli/job-store";
 import { CLI_BIN, CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
@@ -499,7 +499,7 @@ export function archiveState(paths: ArchivePaths): ArchiveState {
     archives: archives(paths).map(({ vhost: _vhost, databases, ...meta }) => ({ ...meta, databases: databases.map((database) => database.name) })),
     dns: dnsEnabled(paths),
     job: all.find((job) => job.state === "queued" || job.state === "running") ?? null,
-    lastJob: all.filter((job) => job.state === "done" || job.state === "failed").at(-1) ?? null,
+    lastJob: all.find((job) => job.state === "done" || job.state === "failed") ?? null,
   };
 }
 
@@ -623,6 +623,14 @@ export async function executeArchiveAction(argv: string[], options: ArchiveOptio
     const id = typeof body.id === "string" ? body.id : "";
     readMeta(paths, id);
     return { job: queue(paths, options, verb, [id]) };
+  });
+}
+
+/** Drops job records after 30 days, and fails a job whose runner died, so it stops blocking the next. */
+export function pruneArchiveJobs(paths: Partial<ArchivePaths> = {}): void {
+  pruneJobs({
+    addon: "archive", jobsDir: { ...DEFAULT_ARCHIVE_PATHS, ...paths }.jobsDir, retentionDays: 30,
+    stuckMessage: "The job stopped before it finished; check the site and its archive",
   });
 }
 
