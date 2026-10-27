@@ -120,9 +120,12 @@ A connection is one API token. The page links to Cloudflare's user-owned token
 template (`/profile/api-tokens` with `permissionGroupKeys`, `accountId=*` and
 `zoneId=all`), so the operator chooses accounts and zones on Cloudflare's own
 screen and never types an account ID. The permissions are the union of what the
-saved profiles use: Account Settings Read, DNS Edit, Zone Read (Zone Edit if a
-profile creates zones), Zone Settings Edit, Config Rules Edit and Zone WAF Edit
-for the features that need them. The URL uses the keys in Cloudflare's
+saved profiles use: Account Settings Read, Zone Edit, DNS Edit, then Zone
+Settings Edit, Config Rules Edit and Zone WAF Edit for the features that need
+them. Zone Edit is asked for even before a profile creates zones, so turning
+that on later works with the token already pasted; Cloudflare refuses a zone
+create without it by naming an internal permission, `account.zone.create`,
+which the page reports as Zone Edit. The URL uses the keys in Cloudflare's
 [template reference](https://developers.cloudflare.com/fundamentals/api/how-to/account-owned-token-template/),
 plus `config_settings` and `zone_waf`, which the reference leaves out but the
 form accepts. The dashboard drops an unknown key without saying so, which is

@@ -17,10 +17,11 @@ interface Permission {
 }
 
 export function tokenTemplate(profiles: Profile[]): TokenTemplate {
-  const createsZones = profiles.some((profile) => profile.zone.createIn !== null);
+  // Zone: Edit even before a profile creates zones, so switching that on later
+  // works with the token already pasted.
   const permissions: Permission[] = [
     { key: "account_settings", type: "read", label: "Account Settings: Read" },
-    createsZones ? { key: "zone", type: "edit", label: "Zone: Edit" } : { key: "zone", type: "read", label: "Zone: Read" },
+    { key: "zone", type: "edit", label: "Zone: Edit" },
     { key: "dns", type: "edit", label: "DNS: Edit" },
   ];
   if (profiles.some((profile) => profile.zone.ssl !== null || profile.zone.alwaysHttps !== null)) {

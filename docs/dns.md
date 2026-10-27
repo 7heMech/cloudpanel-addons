@@ -38,8 +38,8 @@ checklist.
 6. **New sites.** Choose the profile under **New sites join**. If it is Report
    only, the page warns that new sites get no records.
 
-If you later turn on a feature that needs another permission, such as creating
-zones or skipping the firewall, edit the token in Cloudflare to add it.
+If you later turn on a feature that needs another permission, such as skipping
+the firewall, edit the token in Cloudflare to add it.
 
 ## Everyday use
 
