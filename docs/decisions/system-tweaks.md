@@ -24,11 +24,13 @@ suggests the switch in a plain hint rather than a warning; under System Tweaks'
 own file it is a fault and gets one. A required reboot with automatic reboot on
 says when the box restarts by itself: unattended-upgrades checks for the flag
 at the end of every run, even one that installs nothing, so the next run reboots
-right away, after the set minutes, or at the set time.
+right away, after the set minutes, or at the set time. System Tweaks' file leaves
+`Automatic-Reboot-WithUsers` alone, so when another file turns it off the page
+adds that the reboot is skipped while anyone is logged in.
 
 The page makes one change at a time. Every change answers with the whole page
-as it stands, so a second change started while the first ran was repainted over
-by the first reply, its controls put back as if it had stopped. While a change
+as it stands, so a second change running beside it would be repainted over by
+the first reply, its controls put back as if it had stopped. While a change
 runs, every control on the page is disabled, the row it belongs to says what is
 running, and a change slower than a moment also says so over the page, naming
 it and that the other settings wait. Descriptions stop short of the switch

@@ -79,9 +79,9 @@ export function createJobDir(jobsDir: string, id: string): string {
   return dir;
 }
 
-export function jobGet(dir: string, field: string): string {
+export function jobGet(dir: string, field: string, maxBytes = MAX_FIELD_BYTES): string {
   try {
-    return readFileSync(join(dir, field)).subarray(0, MAX_FIELD_BYTES).toString("utf8").replaceAll("\n", "");
+    return readFileSync(join(dir, field)).subarray(0, maxBytes).toString("utf8").replaceAll("\n", "");
   } catch {
     return "";
   }

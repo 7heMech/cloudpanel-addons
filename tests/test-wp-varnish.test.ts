@@ -12,6 +12,8 @@ import { WP_TOOLS_ADDON } from "../addons/wp-tools/addon";
 import type { WpDashboard } from "../addons/wp-tools/app/service";
 import { WP_TOOLS_ALLOWED_VERBS } from "../lib/gateway-protocol";
 import { withFileLock } from "../cli/action-common";
+import { jobDir, jobSet } from "../cli/job-store";
+import { wpJobView } from "../addons/wp-tools/jobs";
 
 let root = "";
 let commands: WpCommand[];
@@ -459,4 +461,19 @@ test("an unchecked site offers no Install, and a running job disables what it wo
   expect(running).toContain(`data-job="${job.id}"`);
   expect(running).toMatch(/id="varnish-check" type="button" disabled/);
   expect(running).toMatch(/id="varnish-automatic"[^>]* disabled/);
+});
+
+test("a batch job reads back every site it was given", () => {
+  const jobsDir = mkdtempSync(join(tmpdir(), "wp-jobs-"));
+  try {
+    const domains = Array.from({ length: 400 }, (_, index) => `site-${index}.customer-example.com`);
+    const id = "20260101T000000Z-abcdef";
+    const dir = jobDir(jobsDir, id);
+    mkdirSync(dir, { recursive: true });
+    jobSet(dir, "task", "mainwp-connect");
+    jobSet(dir, "domains", domains.join(","));
+    expect(wpJobView(jobsDir, id)?.domains).toEqual(domains);
+  } finally {
+    rmSync(jobsDir, { recursive: true, force: true });
+  }
 });

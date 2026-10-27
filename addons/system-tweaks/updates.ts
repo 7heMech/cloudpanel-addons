@@ -103,6 +103,8 @@ export interface UpdatesStatus {
   listsUpdated: boolean;
   reboot: boolean;
   rebootTime: string;
+  /** Off when apt is set to skip the reboot while someone is logged in. */
+  rebootWithUsers: boolean;
   timezone: string;
   timer: { state: string; next: string };
   coverage: CoverageRow[];
@@ -493,6 +495,8 @@ export function updatesStatus(options: UpdatesOptions = {}): UpdatesStatus {
     listsUpdated: lists !== "" && lists !== "0",
     reboot: truthy(scalar(config, "Unattended-Upgrade::Automatic-Reboot")),
     rebootTime: scalar(config, "Unattended-Upgrade::Automatic-Reboot-Time"),
+    rebootWithUsers: scalar(config, "Unattended-Upgrade::Automatic-Reboot-WithUsers") === ""
+      || truthy(scalar(config, "Unattended-Upgrade::Automatic-Reboot-WithUsers")),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     timer,
     coverage: coverageOf(policy.ok ? parsePolicy(policy.stdout) : [], allowedPatterns(config), distro),

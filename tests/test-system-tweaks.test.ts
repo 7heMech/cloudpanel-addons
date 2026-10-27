@@ -909,7 +909,7 @@ test("systemTweaksMaintenance reports a /tmp cleanup that cannot read CloudPanel
 test("the page shows update options only once updates are on, and says what silently goes uncovered", () => {
   const updates: UpdatesStatus = {
     installed: true, version: "2.9.1", distro: { id: "Debian", codename: "bookworm" }, managed: false, enabled: true,
-    outsideSource: "20auto-upgrades", overriddenBy: "", listsUpdated: true, reboot: false, rebootTime: "", timezone: "UTC",
+    outsideSource: "20auto-upgrades", overriddenBy: "", listsUpdated: true, reboot: false, rebootTime: "", rebootWithUsers: true, timezone: "UTC",
     timer: { state: "enabled", next: "" },
     coverage: [
       { name: "CloudPanel PHP", detail: "8.3", covered: "none" }, { name: "Debian bookworm-security", detail: "main", covered: "all" },
@@ -957,4 +957,11 @@ test("the page shows update options only once updates are on, and says what sile
   expect(rebootAt("04:00")).toContain(
     "Automatic reboot is on: the next update run (Sat 2026-10-24 06:32:16 UTC) schedules a restart for 04:00 Europe/Berlin.");
   expect(rebootAt("+15", "")).toContain("Automatic reboot is on: the server restarts 15 minutes after the next update run.");
+  expect(rebootAt("04:00")).not.toContain("logged in");
+  // apt can be told to skip the reboot while someone is logged in.
+  expect(dashboardView({
+    ...state,
+    settings: { ...DEFAULT_UPDATE_SETTINGS, enabled: true, reboot: true },
+    updates: { ...updates, managed: true, reboot: true, rebootTime: "now", rebootWithUsers: false },
+  }, now)).toContain("restarts the server. It is skipped while anyone is logged in.");
 });
