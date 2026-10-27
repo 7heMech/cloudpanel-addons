@@ -175,6 +175,16 @@ describe("archiving", () => {
     await expect(other.act(["archive"], { domains: ["docs.example"], redirect: { target: "https://example.com" } }))
       .rejects.toThrow("Enable DNS to make an archived site a redirect");
   });
+
+  test("a redirect DNS would refuse is refused before any site is queued", async () => {
+    const env = setup();
+    await expect(env.act(["archive"], { domains: ["old-shop.example"], redirect: { target: "https://shop.example", status: 200 } }))
+      .rejects.toThrow("The status must be 301, 302, 307 or 308");
+    await expect(env.act(["archive"], { domains: ["old-shop.example"], redirect: { target: "https://www.old-shop.example" } }))
+      .rejects.toThrow("old-shop.example cannot redirect to itself");
+    expect(env.calls().some((call) => call.startsWith("site:delete"))).toBe(false);
+    await env.act(["archive"], { domains: ["old-shop.example"] });
+  });
 });
 
 describe("restoring", () => {

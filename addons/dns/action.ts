@@ -1272,7 +1272,7 @@ export async function executeDnsAction(argv: string[], options: DnsActionOptions
 
   mkdirSync(dirname(paths.lockFile), { recursive: true, mode: 0o700 });
   // Long enough for a check of the whole fleet; a page action waits less and says so.
-  const wait = verb === "reconcile" || verb === "sync-sites" || verb === "provision" ? 240 : 30;
+  const wait = verb === "reconcile" || verb === "sync-sites" || verb === "provision" || verb === "archive-redirect" ? 240 : 30;
   return withFileLock(paths.lockFile, wait, "DNS is busy checking Cloudflare; try again in a moment", async () => {
     if ((verb === "reconcile" || verb === "sync-sites") && !existsSync(paths.configFile)) return { checked: 0, joined: [] };
     let failed = false;

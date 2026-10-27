@@ -33,8 +33,14 @@ export interface StandInPaths {
 const CERTIFICATE_DELAYS = [15 * 60_000, 60 * 60_000, 6 * 60 * 60_000, 24 * 60 * 60_000];
 
 export function standInTarget(redirect: StandIn): string {
-  const path = redirect.keepPath ? (redirect.keepQuery ? "$request_uri" : "$uri") : (redirect.keepQuery ? "$is_args$args" : "");
+  const path = redirect.keepPath ? (redirect.keepQuery ? "$request_uri" : "$1") : (redirect.keepQuery ? "$is_args$args" : "");
   return `${redirect.target}${path}`;
+}
+
+/** The path without the query is captured from the raw `$request_uri`: `$uri` is decoded, so an encoded CR/LF would split the response. */
+function standInReturn(redirect: StandIn): string {
+  const line = `return ${redirect.status} "${standInTarget(redirect)}";`;
+  return redirect.keepPath && !redirect.keepQuery ? `if ($request_uri ~ "^([^?]*)") {\n      ${line}\n    }` : line;
 }
 
 export function standInBody(source: string, redirect: StandIn): string {
@@ -62,7 +68,7 @@ export function standInBody(source: string, redirect: StandIn): string {
   }
 
   location / {
-    return ${redirect.status} "${standInTarget(redirect)}";
+    ${standInReturn(redirect)}
   }
 }`;
 }
@@ -105,14 +111,15 @@ export function clpctlStandIns(paths: StandInPaths, siteExists: (domain: string)
       const saved = readStandIns(paths);
       saved[redirect.source] = { ...spec(redirect), siteUser, createdAt: now(), certificate: { attempts: 0, nextAt: now(), done: false } };
       saveStandIns(paths, saved);
+      const added = !siteExists(redirect.source);
       try {
-        if (!siteExists(redirect.source)) {
+        if (added) {
           clpctl(paths, ["site:add:static", `--domainName=${redirect.source}`, `--siteUser=${siteUser}`,
             `--siteUserPassword=${randomBytes(24).toString("base64url")}`], `CloudPanel did not create ${redirect.source}`);
         }
         replaceSiteVhost(paths.vhost, redirect.source, standInBody(redirect.source, redirect));
       } catch (error) {
-        runCommand(paths.clpctl, ["site:delete", `--domainName=${redirect.source}`, "--force"], 300_000);
+        if (added) runCommand(paths.clpctl, ["site:delete", `--domainName=${redirect.source}`, "--force"], 300_000);
         const after = readStandIns(paths);
         delete after[redirect.source];
         saveStandIns(paths, after);

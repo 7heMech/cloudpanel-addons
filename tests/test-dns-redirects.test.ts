@@ -423,7 +423,8 @@ describe("stand-in sites on this server", () => {
     const body = (keepPath: boolean, keepQuery: boolean) =>
       standInBody("thepastormax.com", { target: "https://maksimasenov.com", status: 301, keepPath, keepQuery });
     expect(body(true, true)).toContain('return 301 "https://maksimasenov.com$request_uri";');
-    expect(body(true, false)).toContain('return 301 "https://maksimasenov.com$uri";');
+    expect(body(true, false)).toContain('if ($request_uri ~ "^([^?]*)") {\n      return 301 "https://maksimasenov.com$1";');
+    expect(body(true, false)).not.toContain("$uri\"");
     expect(body(false, true)).toContain('return 301 "https://maksimasenov.com$is_args$args";');
     expect(body(false, false)).toContain('return 301 "https://maksimasenov.com";');
     expect(body(true, true)).toContain("server_name thepastormax.com www.thepastormax.com;");

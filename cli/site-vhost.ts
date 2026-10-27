@@ -147,6 +147,16 @@ export function storedVhost(panelDb: string, domain: string): string {
   }
 }
 
+function storedRoot(panelDb: string, domain: string): string | undefined {
+  const db = new Database(panelDb, { readonly: true });
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+    return db.query<{ root_directory: string | null }, [string]>("SELECT root_directory FROM site WHERE domain_name = ?").get(domain)?.root_directory ?? undefined;
+  } finally {
+    db.close();
+  }
+}
+
 const sqlLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
 /**
@@ -157,6 +167,7 @@ const sqlLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`
 export function replaceSiteVhost(paths: SiteVhostPaths, domain: string, body: string, rootDirectory?: string): void {
   const conf = join(paths.nginxVhostDir, `${domain}.conf`);
   const stored = storedVhost(paths.panelDb, domain);
+  const storedRootDirectory = rootDirectory === undefined ? undefined : storedRoot(paths.panelDb, domain);
   const previous = readFileSync(conf, "utf8");
   const learned = learnVhostMapContent(stored, previous);
   if (!learned.map) throw new Error(`the vhost of ${domain} could not be read: ${learned.reason}`);
@@ -180,7 +191,11 @@ export function replaceSiteVhost(paths: SiteVhostPaths, domain: string, body: st
   }
   if (!runCommand("systemctl", ["reload", "nginx"]).ok) {
     restore();
-    writePanelVhost(paths, domain, stored, body);
+    try {
+      writePanelVhost(paths, domain, stored, body, storedRootDirectory);
+    } catch {
+      // The reload failure below is the error the caller needs.
+    }
     runCommand("systemctl", ["reload", "nginx"]);
     throw new Error(`nginx did not reload with the vhost for ${domain}`);
   }

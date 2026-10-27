@@ -22,6 +22,7 @@ import {
 import { CLI_BIN, CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
 import { DEFAULT_SITE_VHOST_PATHS, replaceSiteVhost } from "../../cli/site-vhost";
 import { standInDomains } from "../../cli/stand-ins";
+import { parseRedirect } from "../dns/model";
 import { writeFileAtomic } from "../../lib/atomic-write";
 
 export type ArchiveVerb = "list" | "archive" | "restore" | "delete" | "run" | "job" | "watch-job";
@@ -229,8 +230,8 @@ function master(paths: ArchivePaths): Master {
 }
 
 function mysql(credentials: Master, sql: string): string {
-  const result = Bun.spawnSync(["mysql", `-h${credentials.host}`, `-P${credentials.port || "3306"}`, `-u${credentials.user}`, "-N", "-B", "-e", sql], {
-    stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 60_000,
+  const result = Bun.spawnSync(["mysql", `-h${credentials.host}`, `-P${credentials.port || "3306"}`, `-u${credentials.user}`, "-N", "-B"], {
+    stdin: Buffer.from(sql), stdout: "pipe", stderr: "pipe", timeout: 60_000,
     env: { PATH: "/usr/sbin:/usr/bin:/sbin:/bin", MYSQL_PWD: credentials.password },
   });
   if (!result.success) throw new Error(`MySQL refused a query: ${result.stderr.toString().trim().split("\n").pop() ?? ""}`);
@@ -503,11 +504,17 @@ export function archiveState(paths: ArchivePaths): ArchiveState {
   };
 }
 
-function parseRedirectChoice(value: unknown): RedirectChoice | null {
+/** Checked with DNS's own rules against every site, before any is deleted. */
+function parseRedirectChoice(value: unknown, domains: string[]): RedirectChoice | null {
   if (value == null || value === "") return null;
   const raw = value as Record<string, unknown>;
   if (typeof raw.target !== "string" || !raw.target.trim()) failAction("Enter the URL to redirect to");
-  return { target: raw.target.trim(), status: Number(raw.status ?? 301), keepPath: raw.keepPath !== false, keepQuery: raw.keepQuery !== false };
+  let choice: RedirectChoice | null = null;
+  for (const source of domains) {
+    const { target, status, keepPath, keepQuery } = parseRedirect({ ...raw, source, profileId: null });
+    choice = { target, status, keepPath, keepQuery };
+  }
+  return choice;
 }
 
 async function defaultDns(verb: string, body: unknown): Promise<unknown> {
@@ -519,7 +526,7 @@ async function runJob(paths: ArchivePaths, id: string, options: ArchiveOptions):
   const view = jobView(paths, id);
   if (!view) failAction(`no such job: ${id}`);
   const dir = jobDir(paths.jobsDir, id);
-  const redirect = view.task === "archive" ? parseRedirectChoice(JSON.parse(jobGet(dir, "redirect") || "null")) : null;
+  const redirect = view.task === "archive" ? parseRedirectChoice(JSON.parse(jobGet(dir, "redirect") || "null"), view.targets) : null;
   const dns = options.dns ?? defaultDns;
   const verb = { archive: "Archiving", restore: "Restoring", delete: "Deleting" }[view.task];
   await runSiteJob(dir, verb, async (onProgress, wait) => {
@@ -616,7 +623,7 @@ export async function executeArchiveAction(argv: string[], options: ArchiveOptio
         if (blocked) failAction(`${valid}: ${blocked}`);
         return valid;
       });
-      const redirect = parseRedirectChoice(body.redirect);
+      const redirect = parseRedirectChoice(body.redirect, domains);
       if (redirect && !dnsEnabled(paths)) failAction("Enable DNS to make an archived site a redirect");
       return { job: queue(paths, options, "archive", domains, { redirect: JSON.stringify(redirect) }) };
     }
