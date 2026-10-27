@@ -450,6 +450,8 @@ async function dnsDeleteRedirect() {
   const source = CLP_ROOT.getElementById('dns-redirect-form').elements.namedItem('source').value;
   const site = dnsState.sites.find(function (candidate) { return candidate.domain === source; });
   dialog.close();
+  // Once Automatic, deleting a redirect Cloudflare serves is a review of the rule it deletes.
+  if (!site.redirect.standIn && dnsState.automatic && dnsState.connections.length) return dnsPost('/api/redirects/delete', { source: source });
   const accepted = await confirmAction({
     title: 'Delete the redirect for ' + source + '?',
     text: site.redirect.standIn

@@ -38,11 +38,11 @@ import { tokenTemplate, type TokenTemplate } from "./token";
 
 export type DnsVerb = "list" | "check" | "save-profile" | "delete-profile" | "set-automatic" | "zone-account" | "assign" | "set-default" | "confirm"
   | "save-connection" | "remove-connection" | "choose-zone" | "save-mailcow" | "remove-mailcow" | "save-server" | "remove-records" | "forget-records"
-  | "save-redirect" | "delete-redirect" | "find-redirects" | "take-over" | "provision" | "site-status" | "reconcile" | "sync-sites";
+  | "save-redirect" | "delete-redirect" | "find-redirects" | "take-over" | "archive-redirect" | "provision" | "site-status" | "reconcile" | "sync-sites";
 
 const VERBS: DnsVerb[] = ["list", "check", "save-profile", "delete-profile", "set-automatic", "zone-account", "assign", "set-default", "confirm",
   "save-connection", "remove-connection", "choose-zone", "save-mailcow", "remove-mailcow", "save-server", "remove-records", "forget-records",
-  "save-redirect", "delete-redirect", "find-redirects", "take-over", "provision", "site-status", "reconcile", "sync-sites"];
+  "save-redirect", "delete-redirect", "find-redirects", "take-over", "archive-redirect", "provision", "site-status", "reconcile", "sync-sites"];
 const NO_BODY: DnsVerb[] = ["list", "check", "find-redirects", "provision", "site-status", "reconcile", "sync-sites"];
 const MAX_BODY = 256 * 1024;
 const REVIEW_LIFETIME = 15 * 60_000;
@@ -197,6 +197,8 @@ interface Pending {
   /** A Mailcow key saved with `policy`, so it is not used before that policy is. */
   mailcowKey?: string;
   removal?: { domain: string; ids: string[] };
+  /** A redirect domain whose rule the confirmation deletes. */
+  redirect?: string;
 }
 
 const emptyStatus = (): Status => ({ checkedAt: null, connections: [], plans: {}, backoff: { cloudflare: 0, mailcow: 0 } });
@@ -775,6 +777,7 @@ class Action {
     }
     if (pending.base !== hash(current)) failAction("The settings changed after this review; make the change again to see a fresh plan");
     if (pending.removal) return this.confirmRemoval(pending);
+    if (pending.redirect) return this.confirmRedirectDeletion(pending);
     const next = parsePolicy(pending.policy);
     const run = this.run(next, this.secretsWith(pending.mailcowKey));
     await run.discover();
@@ -972,10 +975,61 @@ class Action {
     return this.change(next, existing ? `Saved ${redirect.source}.` : `Added ${redirect.source}.`, [redirect.source]);
   }
 
-  /** At once: nothing in Cloudflare is deleted, and a stand-in site serves nothing else. */
+  /** The redirect rule deleting `source` would delete, read now; a plan for the review. */
+  private async redirectDeletion(source: string): Promise<{ run: DnsRun; found: ReturnType<DnsRun["redirectRuleOf"]>; plans: SitePlan[] }> {
+    const policy = this.files.policy();
+    const run = this.run(policy);
+    await run.discover();
+    await run.load([source]);
+    const found = run.redirectRuleOf(source);
+    const plans: SitePlan[] = [{
+      domain: source, profileId: null, mode: "enforce", zone: found && "zone" in found ? found.zone : null, zoneChoices: [], certificateNames: [], redirect: true,
+      problems: found && "problem" in found ? [found.problem] : [],
+      changes: found && "rule" in found ? [{ action: "delete", subject: "Cloudflare redirect rule", detail: found.rule.description || found.rule.expression }] : [],
+    }];
+    return { run, found, plans };
+  }
+
+  /**
+   * Once DNS is Automatic, a redirect Cloudflare serves is deleted with its
+   * rule, through a review; its records stay, for a site's profile to replace.
+   * Otherwise at once: Ask first writes nothing, and a stand-in serves nothing else.
+   */
   async deleteRedirect(source: string): Promise<DnsReply> {
     const policy = this.files.policy();
     if (!policy.redirects.some((redirect) => redirect.source === source)) failAction("That redirect no longer exists");
+    const standIns = this.standIns();
+    const standIn = standIns.current[source];
+    if (!standIn && policy.automatic && policy.connections.length) {
+      const { plans } = await this.redirectDeletion(source);
+      if (plans[0]!.changes.length || plans[0]!.problems.length) {
+        const token = plans[0]!.problems.length ? "" : randomBytes(24).toString("hex");
+        this.files.savePending(token ? { token, expiresAt: this.now + REVIEW_LIFETIME, base: hash(policy), digest: this.digest(plans), domains: [], redirect: source } : null);
+        return this.reply({
+          review: {
+            token, title: `Delete the redirect for ${source}`,
+            text: token ? `Its rule is deleted from Cloudflare, so ${source} stops redirecting. Its records stay until a site's profile replaces them.`
+              : "This cannot be deleted while its rule cannot be read. Fix the problem, or delete the rule in Cloudflare.",
+            sites: plans, blocked: !token, confirmLabel: "Delete redirect", danger: true,
+          },
+        });
+      }
+    }
+    return this.dropRedirect(source, standIn ? `Deleted ${source} and its stand-in site.` : `${source} is no longer managed.`);
+  }
+
+  private async confirmRedirectDeletion(pending: Pending): Promise<DnsReply> {
+    const source = pending.redirect!;
+    const { run, found, plans } = await this.redirectDeletion(source);
+    if (this.digest(plans) !== pending.digest) return this.deleteRedirect(source);
+    this.files.savePending(null);
+    this.cause = "Redirect deleted";
+    if (found && "rule" in found) await run.deleteRedirectRule(source, found.zone.id, found.rulesetId, found.rule.id);
+    return this.dropRedirect(source, `Deleted the redirect for ${source}.`);
+  }
+
+  private async dropRedirect(source: string, notice: string): Promise<DnsReply> {
+    const policy = this.files.policy();
     const standIns = this.standIns();
     const standIn = standIns.current[source];
     if (standIn) {
@@ -990,7 +1044,7 @@ class Action {
     const status = this.files.status();
     delete status.plans[source];
     this.files.saveStatus(status);
-    return this.reply({ notice: standIn ? `Deleted ${source} and its stand-in site.` : `${source} is no longer managed. Its rule and records stay in Cloudflare.` });
+    return this.reply({ notice });
   }
 
   async findRedirects(): Promise<DnsReply> {
@@ -1001,6 +1055,52 @@ class Action {
     const found = await run.findRedirects();
     const taken = new Set([...policy.redirects.map((redirect) => redirect.source), ...this.sites().map((site) => site.domain)]);
     return this.reply({ found: { redirects: found.redirects.filter((redirect) => !taken.has(redirect.source)), notes: found.notes } });
+  }
+
+  /**
+   * A site Archive Sites just deleted, made a redirect with the profile it had.
+   * Like a new site, what it changes at its own names -- the rule, the
+   * placeholders, a stand-in -- is written at once once DNS is Automatic; a
+   * plan that reaches further waits for a review.
+   */
+  async archiveRedirect(body: Record<string, unknown>): Promise<{ redirect: string; applied: boolean; reason: string }> {
+    const policy = this.files.policy();
+    const ids = new Set(policy.profiles.map((profile) => profile.id));
+    const source = hostname(body.source, "The redirect's domain");
+    const redirect = parseRedirect({ ...body, profileId: policy.assignments[source] ?? null }, ids);
+    this.refuseSite(redirect.source);
+    const next = structuredClone(policy);
+    next.redirects = parseRedirects([...next.redirects.filter((candidate) => candidate.source !== source), redirect], ids);
+    delete next.assignments[source];
+    if (!next.automatic) {
+      this.savePolicy(next);
+      await this.tryRefresh([source]);
+      return { redirect: source, applied: false, reason: "DNS asks first, so nothing is written until it is Automatic" };
+    }
+    next.held = [...new Set([...next.held, source])];
+    this.savePolicy(next);
+    const run = this.run(next);
+    await run.discover();
+    await run.load([source]);
+    const plan = run.planAll().find((candidate) => candidate.domain === source)!;
+    const own = new Set([source, `www.${source}`]);
+    const ownName = (change: SitePlan["changes"][number]) => change.action === "note" || ["Cloudflare redirect rule", "Stand-in site"].includes(change.subject)
+      || (/^(A|AAAA|CNAME) /.test(change.subject) && own.has(change.subject.split(" ")[1]!));
+    if (plan.problems.length || !plan.changes.every(ownName)) {
+      this.record(run, run.planAll(), [source]);
+      return { redirect: source, applied: false, reason: plan.problems[0] ?? "Its plan changes more than its own names; review it on the DNS page" };
+    }
+    next.held = next.held.filter((domain) => domain !== source);
+    this.savePolicy(next);
+    this.cause = "Archived site";
+    const write = this.run(next);
+    await write.discover();
+    await write.load([source]);
+    await write.enforce([source]);
+    const after = write.planAll();
+    this.record(write, after, [source]);
+    const problems = after.find((candidate) => candidate.domain === source)?.problems ?? [];
+    return { redirect: source, applied: !problems.length, reason: problems[0] ?? "" };
   }
 
   /** Adds several redirect domains at once, such as the rules another tool left in Cloudflare. */
@@ -1235,6 +1335,8 @@ async function perform(
       return action.findRedirects();
     case "take-over":
       return action.takeOver(body);
+    case "archive-redirect":
+      return action.archiveRedirect(body);
     case "forget-records": {
       const domain = hostname(body.domain, "the site");
       const managed = action.files.managed();

@@ -205,6 +205,9 @@ export class FakeCloudflare {
         if (!current) return this.error(404, 10003, "rule not found");
         if (this.keepsRefs && body!.ref !== undefined && body!.ref !== current.ref) return this.error(400, 20021, "the rule's ref cannot be changed");
         ruleset.rules = ruleset.rules.map((candidate) => candidate === current ? { ...body, id: rule[2], ref: body!.ref ?? current.ref } : candidate);
+      } else if (method === "DELETE") {
+        if (!ruleset.rules.some((candidate) => candidate.id === rule[2])) return this.error(404, 10003, "rule not found");
+        ruleset.rules = ruleset.rules.filter((candidate) => candidate.id !== rule[2]);
       }
       return this.ok(ruleset);
     }

@@ -244,10 +244,54 @@ describe("taking over the redirects Terraform left", () => {
     expect(env.cf.writes().length).toBe(writes);
   });
 
+  test("deleting a redirect deletes its rule through a review once Automatic, and only stops managing it before", async () => {
+    const env = setup();
+    terraformZone(env.cf, env.account, "renaissancechurch.uk", "https://renaissancechurch.com");
+    terraformZone(env.cf, env.account, "rnschurch.com", "https://renaissancechurch.com");
+    await env.act("save-connection", { token: TOKEN });
+    await env.act("take-over", { redirects: [found("rnschurch.com", "https://renaissancechurch.com")] });
+    expect((await env.act("delete-redirect", { source: "rnschurch.com" })).notice).toBe("rnschurch.com is no longer managed.");
+    expect(env.redirectRules("rnschurch.com")).toHaveLength(1);
+
+    await env.automatic();
+    await env.confirmed(await env.act("take-over", { redirects: [found("renaissancechurch.uk", "https://renaissancechurch.com")] }));
+    const review = (await env.act("delete-redirect", { source: "renaissancechurch.uk" })).review!;
+    expect(review.sites[0]!.changes).toEqual([expect.objectContaining({ action: "delete", subject: "Cloudflare redirect rule" })]);
+    expect(env.redirectRules("renaissancechurch.uk")).toHaveLength(1);
+    const reply = await env.act("confirm", { token: review.token });
+    expect(reply.sites).toEqual([]);
+    expect(env.redirectRules("renaissancechurch.uk")).toEqual([]);
+    expect(env.cf.recordsOf("renaissancechurch.uk").filter((record) => record.content === "100::")).toHaveLength(2);
+    expect(reply.log[0]).toMatchObject({ action: "delete", subject: "Cloudflare redirect rule", cause: "Redirect deleted" });
+  });
+
   test("a redirect domain cannot be a CloudPanel site, and a site deleted into a redirect leaves no records to remove", async () => {
     const env = setup();
     env.sites.push({ id: 1, domain: "hazon.uk", type: "php", createdAt: 0, selfSigned: false, cloudflareOnly: false });
     await expect(env.act("save-redirect", found("hazon.uk", "https://hazon.bg"))).rejects.toThrow("hazon.uk is a CloudPanel site");
+  });
+});
+
+describe("a site Archive Sites deleted", () => {
+  test("becomes a redirect at once with the profile it had, and its records are not offered for removal", async () => {
+    const env = setup();
+    terraformZone(env.cf, env.account, "awakeningcentre.bg", "https://renaissance.bg");
+    env.cf.rulesets.clear();
+    env.sites.push({ id: 7, domain: "awakeningcentre.bg", type: "php", createdAt: 0, selfSigned: false, cloudflareOnly: false });
+    await env.act("save-connection", { token: TOKEN });
+    await env.act("assign", { domains: ["awakeningcentre.bg"], profileId: "web" });
+    await env.automatic();
+    expect((await env.act("list")).orphans).toEqual([]);
+
+    env.sites.splice(0);
+    expect((await env.act("list")).orphans).toEqual([expect.objectContaining({ domain: "awakeningcentre.bg" })]);
+    const result = await env.act<{ applied: boolean }>("archive-redirect", found("awakeningcentre.bg", "https://renaissance.bg"));
+    expect(result).toEqual({ redirect: "awakeningcentre.bg", applied: true, reason: "" });
+    const state = await env.act("list");
+    expect(state.orphans).toEqual([]);
+    expect(state.sites).toEqual([expect.objectContaining({ domain: "awakeningcentre.bg", profileId: "web", plan: expect.objectContaining({ changes: [] }) })]);
+    expect(env.redirectRules("awakeningcentre.bg")).toHaveLength(1);
+    expect(state.log[0]).toMatchObject({ cause: "Archived site" });
   });
 });
 

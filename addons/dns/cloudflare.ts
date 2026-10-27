@@ -362,6 +362,10 @@ export class CloudflareApi {
     return parseRuleset(result);
   }
 
+  async deleteRule(zoneId: string, phase: string, rulesetId: string, ruleId: string): Promise<void> {
+    await needs(rulesPermission(phase), () => this.call(`/zones/${id(zoneId)}/rulesets/${id(rulesetId)}/rules/${id(ruleId)}`, "DELETE"));
+  }
+
   async createZone(accountId: string, name: string): Promise<CfZone> {
     try {
       const { result } = await this.call("/zones", "POST", { name, account: { id: id(accountId) }, type: "full" });

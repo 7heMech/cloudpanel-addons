@@ -921,6 +921,26 @@ export class DnsRun {
   // What the run leaves behind
   // -------------------------------------------------------------------------
 
+  /** The rule a redirect domain's deletion would delete, from what `load` read; null when there is none to delete. */
+  redirectRuleOf(source: string): { zone: ZoneView; rulesetId: string; rule: CfRuleset["rules"][number] } | { problem: string } | null {
+    const redirect = this.redirects.get(source);
+    const resolved = this.resolve(source);
+    if (!redirect || resolved.kind !== "zone") return null;
+    const state = this.zones.get(resolved.ref.zone.id);
+    if (!state?.records || state.error) return { problem: state?.error ?? `${resolved.ref.zone.name} could not be read` };
+    const ruleset = state.rulesets.get(REDIRECT_PHASE);
+    const found = redirectRuleState(ruleset ?? null, redirect, redirectHosts(source, resolved.ref.zone.name));
+    if (found.state === "problem") return { problem: found.problem };
+    if (found.state === "create" || !ruleset) return null;
+    return { zone: this.zoneView(resolved.ref), rulesetId: ruleset.id, rule: found.rule };
+  }
+
+  async deleteRedirectRule(source: string, zoneId: string, rulesetId: string, ruleId: string): Promise<void> {
+    const ref = this.zoneRefs.find((candidate) => candidate.zone.id === zoneId)!;
+    await this.cloudflare.get(ref.connectionId)!.deleteRule(zoneId, REDIRECT_PHASE, rulesetId, ruleId);
+    this.logged([source], ref.zone.name, "delete", "Cloudflare redirect rule", `${source}: the redirect domain was deleted`);
+  }
+
   /** Whole-host redirect rules in every zone the connections reach, each zone read through its first connection. */
   async findRedirects(): Promise<{ redirects: FoundRedirect[]; notes: string[] }> {
     const zones = new Map<string, ZoneRef>();

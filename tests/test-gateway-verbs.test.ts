@@ -40,6 +40,7 @@ const ROOT_ONLY: Record<string, { verb: string; why: string }[]> = {
   dns: [
     { verb: "reconcile", why: "the full check, run by the worker repair queues" },
     { verb: "sync-sites", why: "run by the new-site watcher" },
+    { verb: "archive-redirect", why: "run by Archive Sites' job, once it has deleted the site" },
   ],
   smtp: [
     { verb: "reconcile", why: "run by repair and on enable" },
