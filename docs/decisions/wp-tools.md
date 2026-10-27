@@ -394,7 +394,8 @@ connecting are one step, since a Child left unconnected would only switch
 itself off. A Child connected to another Dashboard, or holding a key no
 Dashboard has any more, is disconnected the way the Child's own Disconnect does
 and connected here; so is one the operator chooses with Connect while automation
-is off. Turning automation on, or choosing a Dashboard with it on, asks first,
+is off. A takeover whose registration does not land gives the Child back the
+connection it had. Turning automation on, or choosing a Dashboard with it on, asks first,
 since it takes sites from any other Dashboard. An attempt whose readback shows
 nothing changed and no Dashboard record gives up its claim and is retried on
 the next pass, like a failed Varnish download. Otherwise the claim stays, and
@@ -406,21 +407,21 @@ A connected site gets a guard, `clp-addons-mainwp.php` in `mu-plugins`, written
 and removed as the site's user through the adapter. It hides MainWP Child from
 the Plugins list, refuses `deactivate_plugin` for it, removes the Child's
 settings page and drops its Disconnect post, so a site administrator cannot
-undo the connection between passes; WP-CLI and the Dashboard's own requests are
+undo the connection between passes. A site whose `wp-config.php` moves the
+must-use folder reports that instead, since the guard would not load. WP-CLI and the Dashboard's own requests are
 unaffected, so checks see the site as it is. The guard is beside the Child, not
 the Child itself as a must-use plugin: the Child sets itself up in an activation
 hook and finds its own path in the plugins directory, and WordPress does not
 update must-use plugins, so the Dashboard could no longer update it. Deletion
 over SSH or SFTP is not something WordPress can stop; the next pass puts the
 Child back. Once nothing enforces the connection -- automation paused, cleanup,
-or a Dashboard elsewhere -- the next passes remove each guard. Withdrawing the
+a Dashboard elsewhere or none usable -- the next passes remove each guard. Withdrawing the
 addon removes them without WordPress, as it removes the sign-in helper.
 
 A connection the addon takes over is never in its snapshot, so cleanup leaves
 that Child disconnected rather than handing it back to the other Dashboard. A
-Dashboard record it reconnected was the operator's and stays theirs: once the
-connection is verified the addon forgets the site, so cleanup leaves it
-connected. Cleanup acts on a child only if its key is the recorded one, comes from the
+Dashboard record it reconnected was the operator's and stays theirs, so cleanup
+leaves it; only a Child the addon installed for it is removed, as anywhere else. Cleanup acts on a child only if its key is the recorded one, comes from the
 addon's Security ID, or is gone. A Child someone has connected since is left as
 it is and only forgotten. Where the addon installed the plugin, cleanup deletes
 it and restores every MainWP option (`mainwp_`, `wp_mainwp_` and their

@@ -38,7 +38,10 @@ const options = { runWpCommand: async (command: WpCommand) => {
     case "dashboard-ready": reply = { ready: httpsReady }; break;
     case "prepare":
       if (fail === "prepare") throw new Error("activation unavailable");
+      reply = { ok: true, released: child!.key ? { mainwp_child_pubkey: child!.key } : [] };
       child!.key = ""; child!.active = true; child!.auth = false; child!.securityId = input.token; break;
+    case "give-back":
+      if (!child!.key) child!.key = input.options.mainwp_child_pubkey; break;
     case "guard":
       if (fail === "guard") throw new Error("read-only site");
       child!.guard = input.code ? createHash("sha256").update(input.code).digest("hex") : ""; break;
@@ -57,6 +60,7 @@ const options = { runWpCommand: async (command: WpCommand) => {
       break;
     }
     case "dashboard-add":
+      if (fail === "refused") throw new Error("the Dashboard could not connect");
       children[input.name]!.key = key;
       connections[input.name] = { id: nextId++, key };
       if (fail === "add") throw new Error("interrupted after registration");
@@ -153,6 +157,36 @@ test("a Child connected to another Dashboard is taken over, without recording th
   expect(readMainwpState(run.statePath).sites["manual.test"]).toMatchObject({ status: "connected", ownedConnection: true });
   const request = commands.find((c) => c.stdin?.includes('"op":"snapshot"') && c.argv.includes("wp2"))!;
   expect(JSON.parse(request.stdin!)).toMatchObject({ release: true });
+});
+
+test("a takeover whose registration does not land gives the Child back its connection", async () => {
+  await paused(); fail = "refused";
+  children["manual.test"]!.active = true; children["manual.test"]!.key = "b".repeat(64);
+  expect((await syncMainwp({ ...run, domain: "manual.test" }, options)).failed).toHaveLength(1);
+  expect(children["manual.test"]!.key).toBe("b".repeat(64));
+  expect(children["manual.test"]!.auth).toBe(true);
+  fail = "";
+  await syncMainwp({ ...run, domain: "manual.test" }, options);
+  expect(children["manual.test"]!.key).toBe(key);
+});
+
+test("a Child installed for an operator's record is the addon's to clean up, and the record stays", async () => {
+  await configured();
+  children["connected.test"] = { ...status(), admin: "owner" };
+  await syncMainwp({ ...run, domain: "connected.test" }, options);
+  expect(connections["connected.test"]).toEqual({ id: 1, key });
+  expect(readMainwpState(run.statePath).sites["connected.test"]).toMatchObject({ ownedPlugin: true, ownedConnection: false });
+  expect(mainwpView(readMainwpState(run.statePath)).connections).toBe(0);
+  await syncMainwp(run, options, true);
+  expect(children["connected.test"]!.installed).toBe(false);
+  expect(connections["connected.test"]).toEqual({ id: 1, key });
+});
+
+test("guards come out even when the Dashboard cannot be used", async () => {
+  await configured(); await syncMainwp(run, options);
+  run.domains.delete("dashboard.test"); run.sites = run.sites.filter((s) => s.domain !== "dashboard.test");
+  await syncMainwp({ ...run, dueOnly: true }, options);
+  expect(guarded()).toEqual([]);
 });
 
 test("an operator's record whose Child lost its connection is reconnected in place and stays the operator's", async () => {

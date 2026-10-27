@@ -156,6 +156,7 @@ const FAILURES: Record<string, string> = {
   "admin-changed": "the site's first administrator changed during the connection; check again",
   "already-connected": "MainWP Child is already connected to a Dashboard; disconnect it in MainWP first",
   "guard-failed": "the MainWP guard could not be written into the site's mu-plugins folder",
+  "guard-moved": "wp-config.php moves the must-use plugins folder, so the MainWP guard cannot be placed",
   "constant-id": "wp-config.php sets MAINWP_CHILD_UNIQUEID; connect this site from MainWP instead",
   "activation-failed": "MainWP Child could not be activated; check the site in WordPress",
   "auth-not-restored": "the temporary MainWP connection setting could not be restored; check again",
@@ -482,14 +483,14 @@ async function visit(pass: Pass, site: WpSite): Promise<void> {
   pass.state.sites[site.domain] = record;
   try {
     if (record.snapshot && record.phase === "cleanup") await restoreAuth(pass, site, record);
-    // Cleanup restores the child without the Dashboard; only its record there waits.
-    if (pass.dashboardError && !pass.state.cleanup) throw new Error(pass.dashboardError);
     const status = await childStatus(pass, site);
     if (!enforcing(pass.state)) {
       // Withdrawing the addon removes guards without WordPress, so one may be gone already.
       if (status.guard) await setGuard(pass, site, record, false);
       else delete record.guard;
     }
+    // Cleanup restores the child without the Dashboard; only its record there waits.
+    if (pass.dashboardError && !pass.state.cleanup) throw new Error(pass.dashboardError);
     if (pass.state.cleanup) await cleanupSite(pass, site, record, status);
     else if (status.multisite) record.status = "unsupported";
     else if (pass.state.remote) await checkChildOnly(pass, site, record, status);
@@ -536,17 +537,21 @@ async function checkSite(pass: Pass, site: WpSite, record: MainwpRecord, status:
 
 /**
  * A connection the addon registered is its own. One it reconnected was the
- * operator's record and stays theirs, with nothing for cleanup to withdraw.
+ * operator's record and stays theirs: cleanup leaves it, and withdraws only a
+ * Child the addon installed for it, which the kept key lets cleanup recognise.
  */
 function adopt(record: MainwpRecord, connection: Connection): void {
   const operators = record.reconnect === connection.id && !(record.ownedConnection && record.connection?.id === connection.id);
   delete record.reconnect;
-  if (operators) {
+  if (!operators) {
+    record.ownedConnection = true;
+    record.connection = connection;
+  } else if (record.ownedPlugin) {
+    record.ownedConnection = false;
+    record.connection = connection;
+  } else {
     forget(record);
-    return;
   }
-  record.ownedConnection = true;
-  record.connection = connection;
 }
 
 /**
@@ -588,11 +593,13 @@ async function enroll(pass: Pass, site: WpSite, record: MainwpRecord, status: Ch
 
 async function connect(pass: Pass, site: WpSite, record: MainwpRecord, status: ChildStatus): Promise<void> {
   let fresh: Connection;
+  let released: Record<string, string> = {};
   try {
     if (!status.installed) await downloadChild(pass, site, status);
     record.phase = "connect";
     saveMainwpState(pass.run.statePath, pass.state);
-    await bridge(pass, site, { op: "prepare", token: record.token, admin: record.snapshot!.admin });
+    const prepared = await bridge<{ released?: unknown }>(pass, site, { op: "prepare", token: record.token, admin: record.snapshot!.admin });
+    if (isStringMap(prepared.released)) released = prepared.released as Record<string, string>;
     const url = `https://${site.domain}`;
     await bridge(pass, pass.dashboard!, record.reconnect
       ? { op: "dashboard-reconnect", id: record.reconnect, url, admin: status.admin, token: record.token }
@@ -607,6 +614,10 @@ async function connect(pass: Pass, site: WpSite, record: MainwpRecord, status: C
     }
     record.status = "connected";
     pass.result.connected++;
+  } catch (error) {
+    // A takeover that did not land leaves the site with the connection it had.
+    if (Object.keys(released).length) await bridge(pass, site, { op: "give-back", options: released }).catch(() => {});
+    throw error;
   } finally {
     await restoreAuth(pass, site, record);
     // Only a crash before this point leaves the phase for repair to find.

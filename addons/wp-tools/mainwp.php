@@ -141,16 +141,30 @@ function clp_mainwp_restore_meta($snapshot, $keys) {
 }
 
 // The ID-only connection is allowed only while this is off for the administrator.
-// A connection to any other Dashboard is dropped first, as the Child's own Disconnect does.
+// A connection to any other Dashboard is dropped first, as the Child's own Disconnect
+// does; the reply carries it, so a registration that fails can give it back.
 function clp_mainwp_prepare($admin, $input) {
     if (is_multisite() || !$admin || (int) $admin->ID !== (int) $input['admin']) clp_mainwp_fail('admin-changed');
     if (defined('MAINWP_CHILD_UNIQUEID')) clp_mainwp_fail('constant-id');
+    $released = array();
+    if (get_option('mainwp_child_pubkey')) {
+        foreach (clp_mainwp_disconnect_options() as $name) {
+            $value = clp_mainwp_option($name);
+            if ($value !== null) $released[$name] = $value;
+        }
+    }
     foreach (clp_mainwp_disconnect_options() as $name) delete_option($name);
     update_option('mainwp_child_uniqueId', $input['token']);
     update_user_option($admin->ID, 'mainwp_child_user_enable_passwd_auth_connect', 0);
     // Activation reports output as an error even after it has activated.
     activate_plugin(CLP_MAINWP_CHILD);
     if (!is_plugin_active(CLP_MAINWP_CHILD)) clp_mainwp_fail('activation-failed');
+    return array('ok' => true, 'released' => $released);
+}
+
+// Only while no registration has landed, which would have set a key of its own.
+function clp_mainwp_give_back($input) {
+    if (!get_option('mainwp_child_pubkey')) clp_mainwp_restore_options(array('options' => $input['options']), clp_mainwp_disconnect_options());
     return array('ok' => true);
 }
 
@@ -175,6 +189,7 @@ function clp_mainwp_restore_auth($input) {
 // Written and removed as the site's user; WP-CLI loads it, but nothing in it acts there.
 function clp_mainwp_guard($input) {
     $file = ABSPATH . CLP_MAINWP_GUARD;
+    if (!empty($input['code']) && wp_normalize_path(untrailingslashit(WPMU_PLUGIN_DIR)) !== wp_normalize_path(dirname($file))) clp_mainwp_fail('guard-moved');
     if (empty($input['code'])) {
         if (file_exists($file) && !unlink($file)) clp_mainwp_fail('guard-failed');
         return array('ok' => true);
@@ -375,6 +390,7 @@ try {
         case 'restore-auth': $reply = clp_mainwp_restore_auth($input); break;
         case 'cleanup': $reply = clp_mainwp_cleanup($admin, $input); break;
         case 'guard': $reply = clp_mainwp_guard($input); break;
+        case 'give-back': $reply = clp_mainwp_give_back($input); break;
         case 'dashboard-status': $reply = clp_mainwp_dashboard_status($input); break;
         case 'dashboard-ready': $reply = clp_mainwp_dashboard_ready($input); break;
         case 'dashboard-add': $reply = clp_mainwp_dashboard_add($input); break;

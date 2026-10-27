@@ -86,7 +86,8 @@ and an otherwise empty uploads folder; and, on a Child you had installed, the
 connection, Security ID and activation it changed. That plugin and its other
 settings stay; a Child taken from another Dashboard is left disconnected, not
 handed back. Connections you made, including Dashboard records it reconnected,
-or anyone made since, are left alone. **Cleanup pending** means a site or the
+or anyone made since, are left alone, though a Child it installed for one is
+removed. **Cleanup pending** means a site or the
 Dashboard needs attention; fix it and retry. Cleanup does not undo work done
 through MainWP or end WordPress sessions it opened.
 
