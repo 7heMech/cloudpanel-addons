@@ -142,7 +142,7 @@ describe("the addon's own layout", () => {
     const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
     expect(header).toInclude("Addons \u00b7 v0.9.4 available");
     expect(header).toInclude('href="/addons/update"');
-    expect(header).toInclude(">Changelog</a>");
+    expect(header).toInclude('href="https://github.com/7heMech/cloudpanel-addons/releases/tag/v0.9.4"');
     // The header carries it; a second banner in the content would repeat it.
     expect(html).not.toInclude('class="notice update-banner"');
   });
@@ -172,7 +172,7 @@ describe("the snippet injected into CloudPanel's header", () => {
   test("offers separate changelog and update links", () => {
     const snip = snippet();
     expect(snip).toInclude("https://addons.example.com/addons/update");
-    expect(snip).toInclude("github.com/7heMech/cloudpanel-addons/releases/latest");
+    expect(snip).toInclude('.href = "https://github.com/7heMech/cloudpanel-addons/releases/tag/v" + encodeURIComponent(latest)');
   });
 
   test("keeps narrow-screen navigation above the update row", () => {

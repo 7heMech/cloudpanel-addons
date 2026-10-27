@@ -5,7 +5,7 @@ import { CLI_VERSION } from "../cli/release";
 import { esc, escJs, htmlResponse } from "../lib/app-http";
 import { JOB_STYLE, JOB_WATCH_JS, renderLayout } from "../lib/app-ui";
 import { mountPath } from "../lib/mount";
-import { CHANGELOG_URL, UPDATE_PATH } from "../lib/update-ui";
+import { UPDATE_PATH, changelogUrl } from "../lib/update-ui";
 import type { CliUpdateInfo } from "../lib/update-check";
 import type { ManagerJobView } from "../cli/manager-action";
 
@@ -160,7 +160,7 @@ export function updatePage(
     </dl>
     <p>${message}</p>
     <div class="actions update-actions">
-      <a class="btn" href="${CHANGELOG_URL}" target="_blank" rel="noopener noreferrer">Changelog</a>
+      <a class="btn" href="${esc(changelogUrl(update ? update.latest : info?.current ?? currentVersion))}" target="_blank" rel="noopener noreferrer">Changelog</a>
       ${update ? `<button class="btn btn-primary" type="button" onclick="updateNow(this)"${live ? " disabled" : ""}>Install update</button>` : ""}
     </div>
     ${live && live.kind === "update" ? managerJobStatus(live) : ""}
