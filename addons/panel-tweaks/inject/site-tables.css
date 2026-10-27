@@ -3,26 +3,41 @@
    cutting the table off at its edge. Keyed on CloudPanel's own markup, so it
    is the layout from the first paint. The first cell is the card's title, the
    action menu sits at its top right, and every other cell is labelled with its
-   column's heading, which the script beside this copies onto it. */
+   column's heading, which the script beside this copies onto it. Only a
+   table with a heading row qualifies: the Logs tab's lines are a table too,
+   with none, and as cards each line was a card titled by its colour bar. */
 @media (max-width: 760px) {
-  body .site-content .card-table table.table:not(.table-sites),
-  body .site-content .card-table table.table:not(.table-sites) > tbody { display: block; }
+  body .site-content .card-table table.table:not(.table-sites):has(> thead),
+  body .site-content .card-table table.table:not(.table-sites):has(> thead) > tbody { display: block; }
   /* Out of sight but not out of the accessibility tree, so a screen reader
      still has the headings for the cells. */
-  body .site-content .card-table table.table:not(.table-sites) > thead { position: absolute; width: 1px; height: 1px;
+  body .site-content .card-table table.table:not(.table-sites):has(> thead) > thead { position: absolute; width: 1px; height: 1px;
     overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-  body .site-content .card-table table.table:not(.table-sites) > tbody > tr { display: block; position: relative;
+  body .site-content .card-table table.table:not(.table-sites):has(> thead) > tbody > tr { display: block; position: relative;
     padding: 16px 20px; border-bottom: 1px solid #eaeaea; }
-  body .site-content .card-table table.table:not(.table-sites) > tbody > tr:last-child { border-bottom: 0; }
-  html.dark body .site-content .card-table table.table:not(.table-sites) > tbody > tr { border-bottom-color: var(--clp-border-color); }
-  html.dark body .site-content .card-table table.table:not(.table-sites) > tbody > tr:last-child { border-bottom: 0; }
-  body .site-content .card .card-body-no-padding table.table:not(.table-sites) > tbody > tr > td { display: block; width: auto;
+  body .site-content .card-table table.table:not(.table-sites):has(> thead) > tbody > tr:last-child { border-bottom: 0; }
+  html.dark body .site-content .card-table table.table:not(.table-sites):has(> thead) > tbody > tr { border-bottom-color: var(--clp-border-color); }
+  html.dark body .site-content .card-table table.table:not(.table-sites):has(> thead) > tbody > tr:last-child { border-bottom: 0; }
+  body .site-content .card .card-body-no-padding table.table:not(.table-sites):has(> thead) > tbody > tr > td { display: block; width: auto;
     padding: 0; border: 0; text-align: left; overflow-wrap: anywhere; }
-  body .site-content .card-table table.table:not(.table-sites) > tbody > tr > td + td { margin-top: 10px; }
-  body .site-content .card-table table.table:not(.table-sites) > tbody > tr > td:first-child { padding-right: 48px; font-weight: 600; }
-  body .site-content .card-table table.table:not(.table-sites) > tbody > tr > td:not(:first-child):not(.table-actions)[data-label]::before {
+  body .site-content .card-table table.table:not(.table-sites):has(> thead) > tbody > tr > td + td { margin-top: 10px; }
+  body .site-content .card-table table.table:not(.table-sites):has(> thead) > tbody > tr > td:first-child { padding-right: 48px; font-weight: 600; }
+  body .site-content .card-table table.table:not(.table-sites):has(> thead) > tbody > tr > td:not(:first-child):not(.table-actions)[data-label]::before {
     content: attr(data-label); display: block; margin-bottom: 2px; color: #9bacb6; font-size: 12px; font-weight: 700;
     text-transform: uppercase; }
-  body .site-content .card-table table.table:not(.table-sites) > tbody > tr > td.table-actions { position: absolute; top: 12px;
+  body .site-content .card-table table.table:not(.table-sites):has(> thead) > tbody > tr > td.table-actions { position: absolute; top: 12px;
     right: 16px; margin: 0; }
+
+  /* The Logs tab: its four controls two to a row rather than squeezed into
+     one, and an access log's date above its line so the line gets the width. */
+  body .site-content .log-selection-container .row { gap: 10px; }
+  body .site-content .log-selection-container .col { flex: 1 1 calc(50% - 5px); margin-right: 0; }
+  body .site-content .log-selection-container .col .btn { width: 100%; }
+  body .site-content table.log-messages,
+  body .site-content table.log-messages > tbody { display: block; }
+  body .site-content table.log-messages tr.log-message { display: grid; grid-template-columns: 16px minmax(0, 1fr); }
+  body .site-content table.log-messages tr.log-message > td:first-child { grid-row: 1 / span 2; }
+  body .site-content table.log-messages tr.log-message > td + td { grid-column: 2; width: auto; }
+  body .site-content table.log-messages tr.log-message > td + td:not(:last-child) { border-bottom: 0; }
+  body .site-content table.log-messages tr.log-message > td + td + td { border-top: 0; padding-top: 0; }
 }

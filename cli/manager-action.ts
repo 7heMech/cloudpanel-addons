@@ -113,7 +113,7 @@ function failReply(error: string, data?: unknown, emit = true): number {
 }
 
 /**
- * The badges already opened that still mean something: a key whose line is no
+ * The badges already opened that still mean something: a key whose release is no
  * longer the installed one, or a name no longer in the catalog, is dropped,
  * so the file never outgrows the catalog.
  */

@@ -8,6 +8,7 @@ import { detectAddresses, type Addresses } from "../addons/dns/addresses";
 import { DNS_ADDON } from "../addons/dns/addon";
 import type { PanelSite, SitePlan } from "../addons/dns/engine";
 import { MAX_ATTEMPTS, retryCertificates, type SslRequest } from "../addons/dns/ssl";
+import { dashboardContent } from "../addons/dns/app/views";
 import { FakeCloudflare, FakeMailcow, MAILCOW_KEY, routed } from "./fixtures/dns-api";
 
 const TOKEN = "cf-agency-token-0123456789abcdef";
@@ -127,6 +128,18 @@ describe("connecting Cloudflare", () => {
     expect(state.automatic).toBe(false);
     expect(state.connections).toEqual([]);
     expect(env.cf.calls).toEqual([]);
+  });
+
+  // A missing card read as a log that was never added. Empty, it says why.
+  test("the change log shows before DNS has written anything, and says why it is empty", async () => {
+    const state = await setup().act("list");
+    expect(state.log).toEqual([]);
+    const asking = dashboardContent(state);
+    expect(asking).toContain("<h2>Change log</h2>");
+    expect(asking).toContain("DNS asks first, so it writes nothing until you turn on Automatic.");
+    expect(asking).not.toContain("dns-log-table");
+    const automatic = dashboardContent({ ...state, automatic: true });
+    expect(automatic).toContain('<div class="empty">No changes yet.</div>');
   });
 
   test("a token is verified, its accounts and zones found, and it never comes back to the page", async () => {

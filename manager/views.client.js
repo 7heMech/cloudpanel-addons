@@ -171,7 +171,7 @@ function dismissFailure(id) {
   if (seen === alertBox.getAttribute('data-job')) alertBox.remove();
 })();
 
-// New and Changed are for an addon nobody has opened since this release line
+// New and Changed are for an addon nobody has opened since this release
 // marked it. Opening it from its row is the read, recorded on the server so
 // every administrator and device stops seeing it. Kept alive past the
 // navigation the click starts; a lost one only leaves the badge up.

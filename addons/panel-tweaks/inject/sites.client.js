@@ -31,8 +31,10 @@
     { key: "varnish", label: "Varnish", wide: false, narrow: false }
   ];
   // The narrow column set belongs to the cards; without them a narrow screen
-  // keeps the desktop table, and its columns.
-  var NARROW_QUERY = SITES_MOBILE_JSON ? "(max-width: 1100px)" : "not all";
+  // keeps the desktop table, and its columns. A phone's desktop mode has no
+  // cards either: the block switched their sheets off before the table.
+  var desktopSite = document.documentElement.classList.contains("clp-tweaks-desktop-site");
+  var NARROW_QUERY = SITES_MOBILE_JSON && !desktopSite ? "(max-width: 1100px)" : "not all";
   var COLUMNS_ON = SITES_TABLE_JSON;
   var columnStyle = null;
   var tagged = false;

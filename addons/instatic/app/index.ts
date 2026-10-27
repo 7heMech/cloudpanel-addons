@@ -71,7 +71,8 @@ export async function handle(
       if (path === "/") {
         return html(page("Instatic instances", await dashboard()), csrf);
       }
-      return html(page("New Instatic site", newInstanceView(await listAvailableTags())), csrf);
+      const fromNewSite = new URL(req.url).searchParams.get("from") === "new-site";
+      return html(page("New Instatic site", newInstanceView(await listAvailableTags(), fromNewSite)), csrf);
     } catch (err) {
       return html(page("Error", errorBlock(err)), csrf, 500);
     }

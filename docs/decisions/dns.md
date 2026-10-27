@@ -233,8 +233,10 @@ so a real certificate is never replaced; a site DNS stops writing drops it.
 
 A site's SSL/TLS tab, the one the panel's certificate badges link to, carries a
 notice while its zone waits for nameservers: the zone and the nameservers, each
-followed by a clipboard icon that copies it alone, since a registrar usually
-has a field per nameserver, and that is what the certificate is waiting for.
+with a clipboard icon. Each name and icon form one button that copies that
+nameserver alone, since a registrar usually has a field per nameserver, and
+that is what the certificate is waiting for. The buttons sit side by side on
+desktop, wrapping as needed, and stack at widths of 760px or less.
 It says the certificate is requested automatically only when DNS has recorded
 a request for the site; a site still on its self-signed placeholder without one
 is told to request it under Actions, and a site with a real certificate is told
@@ -276,7 +278,8 @@ scheduled check, Check now, a new site, a confirmed review or Remove records.
 Each run collects its writes and they are saved before the page's reply and
 again when the action ends, so writes made before a failure are kept. The log
 is the newest thousand writes; the page shows the newest ten and the rest of
-the first two hundred under a disclosure. Provider errors are not logged: they
+the first two hundred under a disclosure. With nothing logged the card still
+shows, saying so, and while DNS asks first that this is why. Provider errors are not logged: they
 repeat every check and are already on the site's plan.
 
 ## State, secrets and removal

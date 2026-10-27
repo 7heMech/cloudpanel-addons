@@ -15,7 +15,7 @@ export const PHP_RESOURCES_ADDON: AddonDefinition = {
   name: "php-resources",
   title: "PHP Resources",
   description: "Give groups of PHP sites the same PHP-FPM limits.",
-  changed: { in: "2.0", note: "Sites first, and new sites get their limits within seconds." },
+  changed: { in: "2.0.0-rc.1", note: "Sites first, and new sites get their limits within seconds." },
   targets: PHP_RESOURCES_TARGETS,
   handler: handle,
   action: runPhpResourcesAction,

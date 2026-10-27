@@ -294,8 +294,9 @@ export function jobView(job: InstaticJobView, logText: string): string {
     ${finished ? "" : `<div id="job-watch" data-job="${esc(job.id)}" hidden></div>`}`;
 }
 
-/** Renders the new-site form with the available versions. */
-export function newInstanceView(available: AvailableTags): string {
+/** Renders the new-site form, returning to the panel's chooser when opened there. */
+export function newInstanceView(available: AvailableTags, fromNewSite = false): string {
+  const backHref = fromNewSite ? "/site/new" : `${BASE}/`;
   // A fallback list is a guess, so nothing in it is called the latest.
   const options = available.tags.map((t, idx) =>
     `<option value="${esc(t)}"${idx === 0 ? " selected" : ""}>${esc(t)}${idx === 0 && available.source !== "fallback" ? " (latest)" : ""}</option>`
@@ -336,7 +337,7 @@ ${notice}<div class="card">
       <div class="hint" id="tls-hint">Works once the domain resolves to this server; otherwise issue one later in Site → SSL/TLS.</div>
     </div>
     <div class="form-actions">
-      <a class="btn btn-lg" href="${BASE}/">Cancel</a>
+      <a class="btn btn-lg" href="${backHref}">Back</a>
       <button type="submit" class="btn btn-primary btn-lg">Create site</button>
     </div>
   </form>

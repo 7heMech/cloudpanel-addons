@@ -7,7 +7,7 @@ export const SECURITY_KEYS_ADDON: AddonDefinition = {
   name: "security-keys",
   title: "Security Keys",
   description: "Sign in to CloudPanel with a passkey or a hardware key such as a YubiKey, instead of a password.",
-  added: "2.0",
+  added: "2.0.0-rc.1",
   preselected: true,
   targets: SECURITY_KEYS_TARGETS,
   handler: handle,
