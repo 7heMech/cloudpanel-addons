@@ -134,7 +134,7 @@ describe("Gateway Protocol & Server", () => {
           },
         });
       });
-      await Bun.sleep(25);
+      for (const deadline = Date.now() + 2_000; !childRef.current?.killed && Date.now() < deadline;) await Bun.sleep(10);
       expect(childRef.current?.killed).toBe(true);
       await new Promise<void>((resolve) => server.close(() => resolve()));
     } finally {
