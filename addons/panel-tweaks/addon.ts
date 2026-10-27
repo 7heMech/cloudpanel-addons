@@ -7,7 +7,7 @@ export const PANEL_TWEAKS_ADDON: AddonDefinition = {
   name: "panel-tweaks",
   title: "Panel Tweaks",
   description: "Site search and columns, automatic SSL for native sites, mobile layouts and theme improvements.",
-  changed: { in: "2.0", note: "Site switches first; the panel PHP version moved to System Tweaks." },
+  changed: { in: "2.0.0-rc.1", note: "Site switches first; the panel PHP version moved to System Tweaks." },
   preselected: true,
   targets: PANEL_TWEAKS_TARGETS,
   handler: handle,

@@ -7,7 +7,7 @@ export const MAINTENANCE_ADDON: AddonDefinition = {
   name: "maintenance",
   title: "Maintenance Mode",
   description: "Show a per-site maintenance page with instant toggles and IP bypasses.",
-  changed: { in: "2.0", note: "Sites first, with bulk on and off and a check that each site is covered." },
+  changed: { in: "2.0.0-rc.1", note: "Sites first, with bulk on and off and a check that each site is covered." },
   preselected: true,
   targets: MAINTENANCE_TARGETS,
   handler: handle,

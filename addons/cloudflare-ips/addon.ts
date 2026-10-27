@@ -14,7 +14,7 @@ export const CLOUDFLARE_IPS_ADDON: AddonDefinition = {
   name: "cloudflare-ips",
   title: "Cloudflare IP Access",
   description: "Manage CloudPanel's Cloudflare-only traffic setting across every site.",
-  changed: { in: "2.0", note: "Sites come first, and new sites are picked up within seconds." },
+  changed: { in: "2.0.0-rc.1", note: "Sites come first, and new sites are picked up within seconds." },
   targets: [],
   handler: handle,
   action: runCloudflareAction,

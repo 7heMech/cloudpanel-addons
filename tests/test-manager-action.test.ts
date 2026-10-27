@@ -17,6 +17,7 @@ import {
 import { installedInjections } from "../cli/reconcile";
 import { handleManagerRoute } from "../manager/index";
 import { indexPage, updatePage } from "../manager/views";
+import { ADDONS } from "../cli/addon-catalog";
 import { listJobIds } from "../cli/job-store";
 import { csrfCookieHeader, newCsrfToken, safeDecodePathSegment } from "../lib/app-http";
 
@@ -298,32 +299,60 @@ describe("the panel's Addons entry", () => {
 });
 
 describe("opened badges", () => {
-  test("are recorded once per addon and release line, and only for an addon that has one", () => {
+  test("are recorded once per addon and exact release, and survive a reinstall", () => {
     const dir = mkdtempSync(join(tmpdir(), "clp-news-"));
     const file = join(dir, "news-seen.json");
     try {
-      expect(readNewsSeen(file, "2.0.3")).toEqual([]);
-      expect(markNewsSeen("dns", file, "2.0.3")).toEqual(["dns@2.0"]);
-      expect(markNewsSeen("dns", file, "2.0.4")).toEqual(["dns@2.0"]);
-      expect(markNewsSeen("stager", file, "2.0.3")).toEqual(["dns@2.0", "stager@2.0"]);
-      expect(readNewsSeen(file, "2.0.9")).toEqual(["dns@2.0", "stager@2.0"]);
-      // Nothing is marked in 2.1, so there is nothing to read.
-      expect(markNewsSeen("dns", file, "2.1.0")).toEqual([]);
+      expect(readNewsSeen(file, "2.0.0-rc.1")).toEqual([]);
+      expect(markNewsSeen("dns", file, "2.0.0-rc.1")).toEqual(["dns@2.0.0-rc.1"]);
+      expect(markNewsSeen("dns", file, "v2.0.0-rc.1")).toEqual(["dns@2.0.0-rc.1"]);
+      expect(markNewsSeen("stager", file, "2.0.0-rc.1")).toEqual(["dns@2.0.0-rc.1", "stager@2.0.0-rc.1"]);
+      expect(readNewsSeen(file, "2.0.0-rc.1")).toEqual(["dns@2.0.0-rc.1", "stager@2.0.0-rc.1"]);
+      // Updating cannot mark an older release's notice as read.
+      expect(markNewsSeen("dns", file, "2.0.0-rc.2")).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("from an older line, an unknown addon or a hand-edited file are dropped", () => {
+  test("from another release, an old release-line key or an invalid file are ignored", () => {
     const dir = mkdtempSync(join(tmpdir(), "clp-news-"));
     const file = join(dir, "news-seen.json");
     try {
-      writeFileSync(file, JSON.stringify(["dns@2.0", "nope@2.0", 7, "dns@1.5"]));
-      expect(readNewsSeen(file, "2.0.0")).toEqual(["dns@2.0"]);
-      expect(readNewsSeen(file, "2.1.0")).toEqual([]);
+      writeFileSync(file, JSON.stringify(["dns@2.0.0-rc.1", "dns@2.0", "nope@2.0.0-rc.1", 7, "dns@2.0.0-rc.2"]));
+      expect(readNewsSeen(file, "2.0.0-rc.1")).toEqual(["dns@2.0.0-rc.1"]);
+      expect(readNewsSeen(file, "2.0.0-rc.2")).toEqual([]);
       writeFileSync(file, "{not json");
-      expect(readNewsSeen(file, "2.0.0")).toEqual([]);
+      expect(readNewsSeen(file, "2.0.0-rc.1")).toEqual([]);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a fresh notice appears after an update even when the previous release's was opened", async () => {
+    const original = ADDONS.dns!;
+    const dir = mkdtempSync(join(tmpdir(), "clp-news-"));
+    try {
+      for (const [previous, current] of [["2.0.0-rc.1", "2.0.0-rc.2"], ["2.0.0", "2.0.1"]] as const) {
+        const file = join(dir, `news-${current}.json`);
+        ADDONS.dns = { ...original, added: previous, changed: { in: current, note: "New DNS controls." } };
+        const openedBefore = markNewsSeen("dns", file, previous);
+        expect(openedBefore).toEqual([`dns@${previous}`]);
+        expect(readNewsSeen(file, current)).toEqual([]);
+        const render = (seen: string[]) => indexPage(["dns"], null, { version: current, seen }).text();
+        const fresh = await render(openedBefore);
+        expect(fresh).not.toContain(">New<");
+        expect(fresh).toContain(">Changed<");
+        expect(fresh).toContain("New DNS controls.");
+        expect(fresh).toContain(`data-news="dns@${current}"`);
+        const openedNow = markNewsSeen("dns", file, current);
+        expect(openedNow).toEqual([`dns@${current}`]);
+        const seen = await render(openedNow);
+        expect(seen).not.toContain(">Changed<");
+        expect(seen).not.toContain("New DNS controls.");
+      }
+    } finally {
+      ADDONS.dns = original;
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -344,17 +373,25 @@ describe("the manager index", () => {
     expect(html).toContain(`disableAddon('instatic', 'Instatic CMS', this)`);
   });
 
-  test("marks addons first shipped in the installed release line as new", async () => {
-    const html = await render([], null, { available: ["dns", "stager"], version: "2.0.3" });
+  test("shows new and changed notices only for their exact installed release", async () => {
+    const html = await render(["dns"], null, { available: ["stager"], version: "2.0.0-rc.1" });
     expect(html.match(/>New</g)).toHaveLength(1);
-    expect(html).toMatch(/DNS <span class="badge state-queued">New<\/span>/);
-    // The release line keys it, so opening the addon reads it for that line only.
-    expect(html).toContain('data-news="dns@2.0"');
-    expect(await render([], null, { available: ["dns"], version: "2.1.0" })).not.toContain(">New<");
+    expect(html.match(/>Changed</g)).toHaveLength(1);
+    expect(html).toContain('data-news="dns@2.0.0-rc.1"');
+    expect(html).toContain('data-news="stager@2.0.0-rc.1"');
+    expect(html).toContain('<p class="addon-changed">');
+    // Unopened badges expire too, including between release candidates.
+    for (const version of ["2.0.0-rc.2", "2.0.0-rc.3", "2.0.0-rc.4", "2.0.0", "2.0.1", "2.1.0"]) {
+      const updated = await render(["dns"], null, { available: ["stager"], version });
+      expect(updated).not.toContain(">New<");
+      expect(updated).not.toContain(">Changed<");
+      expect(updated).not.toContain('data-news="');
+      expect(updated).not.toContain('<p class="addon-changed">');
+    }
   });
 
   test("leaves out a badge an administrator has opened", async () => {
-    const html = await render([], null, { available: ["dns"], version: "2.0.3", seen: ["dns@2.0"] });
+    const html = await render([], null, { available: ["dns"], version: "2.0.0-rc.1", seen: ["dns@2.0.0-rc.1"] });
     expect(html).not.toContain(">New<");
     expect(html).not.toContain("data-news=");
   });

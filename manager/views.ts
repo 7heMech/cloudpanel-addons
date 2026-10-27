@@ -26,7 +26,7 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ve
     ? `${href ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>` : ""}
       <button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`
     : `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`;
-  // Opening the addon from this row reads it, for every administrator, until a later line marks it again.
+  // Opening the addon from this row reads this release's notice for every administrator.
   const found = addonNews(spec.name, version);
   const news = found && !seen.includes(found.key) ? found : null;
   return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}"${news ? ` data-news="${esc(news.key)}"` : ""} data-find="${esc(`${title} ${spec.name} ${spec.description ?? ""}`)}">

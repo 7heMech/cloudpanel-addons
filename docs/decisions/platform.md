@@ -29,16 +29,22 @@ The Addons page is two lists, Enabled and Available, one row per addon with its
 one-line description and its buttons, so the whole catalog fits on a screen. A
 search above them keeps only the rows whose name and description contain every
 one of its words, and hides a list it empties. An
-addon's `added` release line (`2.0`) marks it New for as long as that line is
-the one installed. An existing addon's `changed` line marks it Changed for the
-same time, with one line saying what changed; the rest is the changelog's, which
-the update page links. Opening the addon from its row clears both for that
-release line, for every administrator and device: the box usually has one
-person who updates it, and a per-user record would need a panel identity for
-nothing. The page asks the manager's `mark-news-seen` verb, which takes only the
-addon name and works out the key (`dns@2.0`) itself, and keeps only keys for the
-installed line in `manager/news-seen.json` under the state directory. A later
-line that marks the addon again shows it again.
+addon's `added` version (`2.0.0-rc.1`, for example) marks it New only in that
+exact installed release. An existing addon's `changed.in` version marks it
+Changed on the same terms, with one line saying what changed; the rest is the
+changelog's, which the update page links. Release candidates and patch releases
+are distinct: updating drops older notices, even ones nobody opened. Only
+notices declared for the installed release appear. Opening the addon from its
+row clears its badge and note for that release, for every administrator and
+device: the box usually has one person who updates it, and a per-user record
+would need a panel identity for nothing. The page asks the manager's
+`mark-news-seen` verb, which takes only the
+addon name and works out the key (`dns@2.0.0-rc.1`) itself. It reads only keys
+for current notices from `manager/news-seen.json` under the state directory,
+discarding other keys when it records a new read. A later release that marks
+the addon again shows its new notice. The version comes from the running
+binary, so replacing it changes which notices are eligible without the updater
+deleting read state. Reinstalling the same version keeps read notices cleared.
 
 ## One catalog, compiled in
 

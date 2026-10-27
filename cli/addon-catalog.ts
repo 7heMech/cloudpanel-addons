@@ -53,9 +53,9 @@ export interface AddonDefinition {
   description: string;
   /** systemd units this addon cannot work without, such as `docker`. */
   requiresUnits?: string[];
-  /** The release line it first shipped in, such as `2.0`; the Addons page marks it New there. */
+  /** The exact release it first shipped in, such as `2.0.0-rc.1`; the Addons page marks it New there. */
   added?: string;
-  /** What changed in a release line, shown as Changed on the Addons page while that line is installed. */
+  /** What changed in one exact release, shown as Changed only while that release is installed. */
   changed?: { in: string; note: string };
   /** Ticked when the installer asks which addons to install. */
   preselected?: boolean;
@@ -128,11 +128,10 @@ export const ADDONS: Record<string, AddonSpec> = Object.fromEntries(
 
 export const ADDON_NAMES: string[] = DEFINITIONS.map((definition) => definition.name);
 
-/** The addon's manager handler, or undefined when it mounts no routes. */
-/** What the Addons page says is new about an addon in the installed release line, keyed by that line. */
+/** What the Addons page says is new about an addon in the installed release, keyed by that version. */
 export interface AddonNews {
   kind: "new" | "changed";
-  /** `dns@2.0`: the operator who opens the addon has read it until a later line marks it again. */
+  /** `dns@2.0.0-rc.1`: opening the addon reads this release's notice only. */
   key: string;
   note?: string;
 }
@@ -140,12 +139,13 @@ export interface AddonNews {
 export function addonNews(name: string, version: string): AddonNews | null {
   const spec = ADDONS[name];
   if (!spec) return null;
-  const line = version.split(".").slice(0, 2).join(".");
-  if (spec.added === line) return { kind: "new", key: `${name}@${line}` };
-  if (spec.changed?.in === line) return { kind: "changed", key: `${name}@${line}`, note: spec.changed.note };
+  const release = version.replace(/^v/, "");
+  if (spec.added === release) return { kind: "new", key: `${name}@${release}` };
+  if (spec.changed?.in === release) return { kind: "changed", key: `${name}@${release}`, note: spec.changed.note };
   return null;
 }
 
+/** The addon's manager handler, or undefined when it mounts no routes. */
 export function addonHandler(name: string): AddonHandler | undefined {
   return ADDONS[name]?.handler;
 }

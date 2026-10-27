@@ -9,7 +9,7 @@ export const DNS_ADDON: AddonDefinition = {
   name: "dns",
   title: "DNS",
   description: "Keep each site's Cloudflare DNS to a profile of records, with Mailcow set up for its mail.",
-  added: "2.0",
+  added: "2.0.0-rc.1",
   targets: DNS_TARGETS,
   handler: handle,
   action: runDnsAction,
