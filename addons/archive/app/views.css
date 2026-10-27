@@ -1,3 +1,6 @@
+.card-header p.hint { margin:5px 0 0; }
+.fleet-table .hint { display:block; }
+.archive-table .numeric, .archive-table td[data-label="Archived"] { white-space:nowrap; }
 .archive-last { margin-bottom:24px; }
 .archive-site-table .type-cell, .archive-table td[data-label="Runs"] { color:var(--muted); }
 .archive-site-table tr:has(.site-checkbox:disabled) { cursor:default; }
@@ -9,5 +12,6 @@
 .job-progress { margin-bottom:24px; }
 @media (max-width:940px) {
   .fleet-table.archive-site-table td.site-select { display:none; }
+  .fleet-table.archive-table td.site-cell { flex-basis:100%; }
   .fleet-table.archive-table td.action-cell { flex:1 1 100%; }
 }

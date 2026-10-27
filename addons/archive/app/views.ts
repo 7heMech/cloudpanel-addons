@@ -38,7 +38,7 @@ function lastJob(job: ArchiveJobView | null): string {
     ...result?.failed.map((entry) => `${name(entry.target)}: ${entry.error}`) ?? (job.error ? [job.error] : []),
     ...result?.notes ?? [],
   ];
-  const tone = job.state === "failed" || result?.failed.length ? "alert" : "notice";
+  const tone = job.state === "failed" || result?.failed.length ? "alert" : result?.notes.length ? "notice" : "alert alert-ok";
   return `<div class="${tone} archive-last" role="status">${lines.map(esc).join("<br>")}</div>`;
 }
 
