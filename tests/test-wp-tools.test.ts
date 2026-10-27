@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  executeWpToolsAction, WP_LOGIN_FIELD, WORDPRESS_APPLICATIONS,
+  DEFAULT_WP_TOOLS_PATHS, executeWpToolsAction, removeMainwpGuards, WP_LOGIN_FIELD, WORDPRESS_APPLICATIONS,
   type WpBasicAuthReply, type WpToolsActionOptions, type WpLoginResult, type WpMaintenanceReply, type WpRemoveResult, type WpSiteView,
 } from "../addons/wp-tools/action";
 import { DEFAULT_MAINTENANCE_ACTION_PATHS } from "../addons/maintenance/action";
@@ -292,6 +292,17 @@ test("remove takes the loader back out of every site that has it", async () => {
   expect(existsSync(join(siteDir("shop", "shop.example.com"), "wp-content"))).toBe(true);
 
   expect((await act<WpRemoveResult>(["remove"])).removed).toBe(0);
+});
+
+test("withdrawing the addon takes the MainWP guard out as each site's user", () => {
+  const muPlugins = join(siteDir("shop", "shop.example.com"), "wp-content", "mu-plugins");
+  mkdirSync(muPlugins, { recursive: true });
+  writeFileSync(join(muPlugins, "clp-addons-mainwp.php"), "<?php\n");
+  const paths = options().paths!;
+  expect(removeMainwpGuards({ ...DEFAULT_WP_TOOLS_PATHS, ...paths })).toEqual({ removed: 1, failed: [] });
+  expect(existsSync(join(muPlugins, "clp-addons-mainwp.php"))).toBe(false);
+  expect(runuserLog()).toEqual(["shop PATH"]);
+  expect(removeMainwpGuards({ ...DEFAULT_WP_TOOLS_PATHS, ...paths }).removed).toBe(0);
 });
 
 // The site's user controls every name under its root, so a symlink there would

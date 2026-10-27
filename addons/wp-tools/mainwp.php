@@ -4,6 +4,7 @@
 // a failure replies with a code, which the addon turns into its own message.
 
 const CLP_MAINWP_CHILD = 'mainwp-child/mainwp-child.php';
+const CLP_MAINWP_GUARD = 'wp-content/mu-plugins/clp-addons-mainwp.php';
 
 class Clp_Mainwp_Failure extends Exception {}
 
@@ -19,14 +20,18 @@ function clp_mainwp_key($pubkey) {
     return $pubkey ? hash('sha256', base64_decode($pubkey)) : '';
 }
 
-// What registration writes, the same options MainWP Child's own disconnect
-// deletes plus the Security ID. Connecting an existing plugin owns only these.
-function clp_mainwp_connection_options() {
+// What MainWP Child's own disconnect deletes.
+function clp_mainwp_disconnect_options() {
     return array(
         'mainwp_child_pubkey', 'mainwp_child_nonce', 'mainwp_security', 'mainwp_child_server',
         'mainwp_child_connected_admin', 'mainwp_ext_snippets_enabled', 'mainwp_ext_code_snippets',
-        'mainwp_child_openssl_sign_algo', 'mainwp_child_uniqueId',
+        'mainwp_child_openssl_sign_algo',
     );
+}
+
+// What registration writes. Connecting an existing plugin owns only these.
+function clp_mainwp_connection_options() {
+    return array_merge(clp_mainwp_disconnect_options(), array('mainwp_child_uniqueId'));
 }
 
 // Everything MainWP Child, and the Dashboard through it, stores in a site's options.
@@ -72,10 +77,13 @@ function clp_mainwp_uploads() {
 
 // What the addon may change. Before installing a plugin that is absent this is
 // all of MainWP's settings; before connecting an existing one, only its connection.
-function clp_mainwp_snapshot($admin, $whole) {
+// A connection the addon takes over is not recorded, so cleanup never restores it.
+function clp_mainwp_snapshot($admin, $whole, $release = false) {
     global $wpdb;
     $options = array();
-    foreach ($whole ? clp_mainwp_option_names() : clp_mainwp_connection_options() as $name) {
+    $names = $whole ? clp_mainwp_option_names() : clp_mainwp_connection_options();
+    if ($release) $names = array_diff($names, clp_mainwp_disconnect_options());
+    foreach ($names as $name) {
         $value = clp_mainwp_option($name);
         if ($value !== null) $options[$name] = $value;
     }
@@ -109,6 +117,7 @@ function clp_mainwp_status($admin) {
         'securityId' => (string) get_option('mainwp_child_uniqueId', ''),
         'admin' => $admin ? $admin->user_login : '',
         'fingerprint' => hash('sha256', wp_json_encode(array($snapshot['options'], $snapshot['meta'], $snapshot['active']))),
+        'guard' => is_file(ABSPATH . CLP_MAINWP_GUARD) ? (string) hash_file('sha256', ABSPATH . CLP_MAINWP_GUARD) : '',
     );
 }
 
@@ -132,10 +141,11 @@ function clp_mainwp_restore_meta($snapshot, $keys) {
 }
 
 // The ID-only connection is allowed only while this is off for the administrator.
+// A connection to any other Dashboard is dropped first, as the Child's own Disconnect does.
 function clp_mainwp_prepare($admin, $input) {
     if (is_multisite() || !$admin || (int) $admin->ID !== (int) $input['admin']) clp_mainwp_fail('admin-changed');
-    if (get_option('mainwp_child_pubkey')) clp_mainwp_fail('already-connected');
     if (defined('MAINWP_CHILD_UNIQUEID')) clp_mainwp_fail('constant-id');
+    foreach (clp_mainwp_disconnect_options() as $name) delete_option($name);
     update_option('mainwp_child_uniqueId', $input['token']);
     update_user_option($admin->ID, 'mainwp_child_user_enable_passwd_auth_connect', 0);
     // Activation reports output as an error even after it has activated.
@@ -159,6 +169,22 @@ function clp_mainwp_restore_auth($input) {
     $snapshot = $input['snapshot'];
     if (!clp_mainwp_restore_meta($snapshot, array(clp_mainwp_meta_keys()['auth']))) clp_mainwp_fail('auth-not-restored');
     if (!$snapshot['active'] && !get_option('mainwp_child_pubkey')) deactivate_plugins(CLP_MAINWP_CHILD);
+    return array('ok' => true);
+}
+
+// Written and removed as the site's user; WP-CLI loads it, but nothing in it acts there.
+function clp_mainwp_guard($input) {
+    $file = ABSPATH . CLP_MAINWP_GUARD;
+    if (empty($input['code'])) {
+        if (file_exists($file) && !unlink($file)) clp_mainwp_fail('guard-failed');
+        return array('ok' => true);
+    }
+    if (!wp_mkdir_p(dirname($file))) clp_mainwp_fail('guard-failed');
+    $temp = $file . '.' . wp_generate_password(8, false) . '.tmp';
+    if (file_put_contents($temp, $input['code']) === false || !chmod($temp, 0644) || !rename($temp, $file)) {
+        if (file_exists($temp)) unlink($temp);
+        clp_mainwp_fail('guard-failed');
+    }
     return array('ok' => true);
 }
 
@@ -261,6 +287,23 @@ function clp_mainwp_dashboard_add($input) {
     return array('ok' => true);
 }
 
+// A record the Dashboard already has keeps its id, groups and notes: MainWP's own
+// reconnect registers it again, with the Security ID the child was just given.
+function clp_mainwp_dashboard_reconnect($input) {
+    $db = clp_mainwp_dashboard();
+    $site = clp_mainwp_find($db, $input['url']);
+    if (!$site || (int) $site->id !== (int) $input['id']) clp_mainwp_fail('connection-changed');
+    add_filter('mainwp_fetch_url_site_timeout', function () { return 20; });
+    $db->update_website_values((int) $site->id, array('uniqueId' => $input['token'], 'adminname' => $input['admin'], 'verify_certificate' => 1));
+    try {
+        $done = \MainWP\Dashboard\MainWP_Manage_Sites_View::m_reconnect_site($db->get_website_by_id((int) $site->id), false);
+    } catch (Throwable $error) {
+        $done = false;
+    }
+    if (!$done) clp_mainwp_fail('connect-failed');
+    return array('ok' => true);
+}
+
 function clp_mainwp_cookie_files($id) {
     $dir = \MainWP\Dashboard\MainWP_System_Utility::get_mainwp_dir()[0] . 'cookies/';
     $files = array();
@@ -326,14 +369,16 @@ try {
     $admin = $admins ? $admins[0] : null;
     switch ($input['op']) {
         case 'status': $reply = clp_mainwp_status($admin); break;
-        case 'snapshot': $reply = array('snapshot' => clp_mainwp_snapshot($admin, !empty($input['whole']))); break;
+        case 'snapshot': $reply = array('snapshot' => clp_mainwp_snapshot($admin, !empty($input['whole']), !empty($input['release']))); break;
         case 'prepare': $reply = clp_mainwp_prepare($admin, $input); break;
         case 'activate': $reply = clp_mainwp_activate(); break;
         case 'restore-auth': $reply = clp_mainwp_restore_auth($input); break;
         case 'cleanup': $reply = clp_mainwp_cleanup($admin, $input); break;
+        case 'guard': $reply = clp_mainwp_guard($input); break;
         case 'dashboard-status': $reply = clp_mainwp_dashboard_status($input); break;
         case 'dashboard-ready': $reply = clp_mainwp_dashboard_ready($input); break;
         case 'dashboard-add': $reply = clp_mainwp_dashboard_add($input); break;
+        case 'dashboard-reconnect': $reply = clp_mainwp_dashboard_reconnect($input); break;
         case 'dashboard-remove': $reply = clp_mainwp_dashboard_remove($input); break;
         default: clp_mainwp_fail('invalid-input');
     }

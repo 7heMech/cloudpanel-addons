@@ -213,7 +213,7 @@ function dashboardPicker(sites: WpSiteView[], state: MainwpView, busy = false): 
 }
 
 function mainwpSection(sites: WpSiteView[], state: MainwpView, error: string, job: WpJobView | null): string {
-  const title = state.remote ? "Install MainWP Child automatically" : "Install and connect MainWP Child automatically";
+  const title = state.remote ? "Install MainWP Child automatically" : "Keep every site connected to MainWP";
   if (error) return `<div class="wp-section"><h3>${title}</h3><div class="alert" role="alert">${esc(error)}</div></div>`;
   const cleanable = state.owned > 0 || state.cleanup;
   const busy = job ? " disabled" : "";
@@ -238,7 +238,7 @@ function mainwpSection(sites: WpSiteView[], state: MainwpView, error: string, jo
   }
   const summary = state.remote
     ? "On every WordPress site that has never had MainWP Child, checked every 15 minutes. It stays inactive, since it turns itself off when no Dashboard connects soon after activation: activate a site just before adding it in your Dashboard. A Child removed in WordPress is left alone."
-    : "On every WordPress site that has never had MainWP Child, once it answers over HTTPS, checked every 15 minutes. A site that already has a Child, or had one removed, is connected only when you choose it above.";
+    : "Checked every 15 minutes: each WordPress site gets MainWP Child installed, activated and connected to this Dashboard once it answers over HTTPS, even if it was connected to another one. Site administrators cannot see, deactivate or disconnect it.";
   return `
       <div class="wp-section">
         <div class="split-card">
