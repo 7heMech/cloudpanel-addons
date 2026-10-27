@@ -39,25 +39,24 @@ strict compiler options. Bun supplies the checker and standard library types;
 dependency is unnecessary.
 
 `bun run test` uses
-`bun test --isolate --max-concurrency=1 --parallel=4 --timeout=20000 --timings=tests/timings.json`.
+`bun test --isolate --max-concurrency=1 --parallel --timeout=20000 --timings=tests/timings.json`.
 Each test file gets a fresh global object and module registry, containing its
 `mock.module` overrides and cleaning up its timers and I/O. Tests stay
 sequential within a file because some fixtures share mutable state, and because
 the code under test spawns commands and waits on SQLite locks synchronously, so
 overlapping tests in one process would not save time. Files share nothing on
-disk or network beyond their own temporary directories, so they run in four
-worker processes at once. The suite waits on child processes and deadlines more
-than the CPU, so four workers beat one per core on a two-core box, and two
-suites can still run there at the same time. More workers starve the
-timing-sensitive tests past their timeouts when two suites overlap. Several
-tests need most of a second of CPU, so when four suites share two cores they
-pass Bun's default 5-second limit; the 20-second limit lets an overloaded run
-finish slowly instead of failing. Tests that check their own deadlines set them
-explicitly. `tests/timings.json` holds measured per-file durations so the
-slowest files start first; refresh it with `bun run test --update-timings` after
-adding a slow file. Bun discovers the suite and accepts file filters through
-`bun run test ./tests/test-update.test.ts`; a failure returns a nonzero exit
-code to CI.
+disk or network beyond their own temporary directories, so they run in one
+worker process per CPU core. A fixed, larger count would waste a large machine
+or overload a small one when several suites run there at once; more workers
+than cores starve the timing-sensitive tests past their timeouts when suites
+overlap. Several tests need most of a second of CPU, so when four suites share
+two cores they pass Bun's default 5-second limit; the 20-second limit lets an
+overloaded run finish slowly instead of failing. Tests that check their own
+deadlines set them explicitly. `tests/timings.json` holds measured per-file
+durations so the slowest files start first; refresh it with
+`bun run test --update-timings` after adding a slow file. Bun discovers the
+suite and accepts file filters through `bun run test ./tests/test-update.test.ts`;
+a failure returns a nonzero exit code to CI.
 
 ## Verified artifacts
 
