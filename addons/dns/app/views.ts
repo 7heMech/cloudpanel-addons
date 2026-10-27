@@ -265,8 +265,8 @@ export function dashboardContent(state: DnsState, now = Date.now()): string {
       ${profiles ? `<div class="table-scroll"><table class="fleet-table dns-profile-table"><thead><tr><th>Profile</th><th>Records</th><th>Zone</th><th class="numeric">Sites</th><th class="action-cell">Actions</th></tr></thead><tbody>${profiles}</tbody></table></div>`
         : '<div class="empty">No profiles yet. Create one from the Web and Mailcow presets.</div>'}
     </div>
-    ${log}
-    ${settingsCard(state)}`;
+    ${settingsCard(state)}
+    ${log}`;
 }
 
 const field = (id: string, label: string, control: string, hint = "", full = false): string =>

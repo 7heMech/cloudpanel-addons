@@ -67,7 +67,8 @@ every sender is left exactly as written.
 ## Ask first and Automatic
 
 The page puts the sites first, then the profiles with the choice of default,
-the change log, and the connections and settings that are set once. The site
+the connections and settings that are set once, and last the change log, which
+is looked back at rather than worked in. The site
 list has the shared search from six sites and selection, as the other site
 lists do. Until a connection exists it opens with the three steps that make a
 new site publish itself: connect, choose the default, turn on Automatic.
