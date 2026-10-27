@@ -14,31 +14,36 @@ import { dirname } from "node:path";
 import {
   ActionFailure, emitActionError, emitActionOk, failAction, nameSlug, oneLine, withFileLock,
 } from "../../cli/action-common";
+import { queueAddonPass } from "../../cli/job-store";
 import { CONFIG_DIR, PANEL_DB, STATE_DIR } from "../../cli/paths";
+import { DEFAULT_SITE_VHOST_PATHS } from "../../cli/site-vhost";
 import { PANEL_USER_NAME_RE, panelUserOwnsSite } from "../../lib/panel-users";
 import { DEFAULT_SMTP_PATHS, smtpRelayAccounts, type SmtpRelayAccount } from "../smtp/action";
 import { detectAddresses, type Addresses } from "./addresses";
-import { DnsRun, readiness, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan } from "./engine";
+import { DnsRun, readiness, type ConnectionReport, type LogEntry, type ManagedRecords, type PanelSite, type SitePlan, type StandIns } from "./engine";
 import { type ApiFetch, redact } from "./http";
 import { MailcowApi } from "./mailcow";
 import {
-  connectionId, hostname, parseAccountRef, parseMailcow, parsePolicy, parseProfile, parseSecrets, profileEffect, profileId, secretText,
-  ipAddress, cloudflareId, EMPTY_MAILCOW, MAX_CONNECTIONS, type MailcowSettings, type Policy, type Profile, type Secrets,
+  connectionId, hostname, parseAccountRef, parseMailcow, parsePolicy, parseProfile, parseRedirect, parseRedirects, parseSecrets, profileEffect,
+  profileId, secretText, ipAddress, cloudflareId, EMPTY_MAILCOW, MAX_CONNECTIONS, type MailcowSettings, type Policy, type Profile, type Redirect,
+  type Secrets,
 } from "./model";
 import { PRESETS, seededPolicy, type Preset } from "./presets";
 import { describeRecord, renderProfile, sameRecord } from "./records";
+import { foundRedirect, REDIRECT_PHASE, type FoundRedirect } from "./redirects";
+import { clpctlStandIns, readStandIns, retryStandInCertificates, type StandInPaths } from "./stand-in";
 import { clpctlIssue, NEW_SITE_WINDOW, requestSsl, retryCertificates, type Issue, type SslRequest } from "./ssl";
 import { readState, writeState } from "./store";
 import { tokenTemplate, type TokenTemplate } from "./token";
 
 export type DnsVerb = "list" | "check" | "save-profile" | "delete-profile" | "set-automatic" | "zone-account" | "assign" | "set-default" | "confirm"
   | "save-connection" | "remove-connection" | "choose-zone" | "save-mailcow" | "remove-mailcow" | "save-server" | "remove-records" | "forget-records"
-  | "provision" | "site-status" | "reconcile" | "sync-sites";
+  | "save-redirect" | "delete-redirect" | "find-redirects" | "take-over" | "provision" | "site-status" | "reconcile" | "sync-sites";
 
 const VERBS: DnsVerb[] = ["list", "check", "save-profile", "delete-profile", "set-automatic", "zone-account", "assign", "set-default", "confirm",
   "save-connection", "remove-connection", "choose-zone", "save-mailcow", "remove-mailcow", "save-server", "remove-records", "forget-records",
-  "provision", "site-status", "reconcile", "sync-sites"];
-const NO_BODY: DnsVerb[] = ["list", "check", "provision", "site-status", "reconcile", "sync-sites"];
+  "save-redirect", "delete-redirect", "find-redirects", "take-over", "provision", "site-status", "reconcile", "sync-sites"];
+const NO_BODY: DnsVerb[] = ["list", "check", "find-redirects", "provision", "site-status", "reconcile", "sync-sites"];
 const MAX_BODY = 256 * 1024;
 const REVIEW_LIFETIME = 15 * 60_000;
 /** How many writes the change log keeps, newest first; the page is sent the first PAGE_LOG of them. */
@@ -55,6 +60,9 @@ export interface DnsPaths {
   smtpConfig: string;
   lockFile: string;
   clpctl: string;
+  sqlite3: string;
+  nginxVhostDir: string;
+  tempDir: string;
   rootUid: number;
 }
 
@@ -69,6 +77,8 @@ export interface DnsActionOptions {
   addresses?: () => Addresses;
   issue?: Issue;
   now?: () => number;
+  /** Test fixtures may stand in for CloudPanel's stand-in sites. */
+  standIns?: () => StandIns;
 }
 
 export const DEFAULT_DNS_PATHS: DnsPaths = {
@@ -78,6 +88,9 @@ export const DEFAULT_DNS_PATHS: DnsPaths = {
   smtpConfig: DEFAULT_SMTP_PATHS.stateFile,
   lockFile: "/run/lock/clp-addons/dns.lock",
   clpctl: "/usr/bin/clpctl",
+  sqlite3: DEFAULT_SITE_VHOST_PATHS.sqlite3,
+  nginxVhostDir: DEFAULT_SITE_VHOST_PATHS.nginxVhostDir,
+  tempDir: DEFAULT_SITE_VHOST_PATHS.tempDir,
   rootUid: 0,
 };
 
@@ -91,6 +104,8 @@ export interface SiteView {
   profileId: string | null;
   plan: SitePlan | null;
   ssl: string | null;
+  /** A redirect domain, and whether a stand-in site on this server serves it now. */
+  redirect?: Redirect & { standIn: boolean };
 }
 
 export interface Review {
@@ -128,7 +143,14 @@ export interface DnsState {
   log: LogLine[];
 }
 
-export type DnsReply = DnsState & { review?: Review; notice?: string };
+/** Whole-host redirect rules in reachable zones that no redirect domain manages yet. */
+export interface Found {
+  redirects: FoundRedirect[];
+  /** Zones that could not be read, and why. */
+  notes: string[];
+}
+
+export type DnsReply = DnsState & { review?: Review; notice?: string; found?: Found };
 
 /** What a site's own pages may show anyone who can open them: its zone, and the nameservers it waits for. */
 export interface SiteDnsStatus {
@@ -303,6 +325,7 @@ class Action {
   readonly files: Files;
   readonly now: number;
   private cachedSites: PanelSite[] | null = null;
+  private cachedStandIns: StandIns | null = null;
   private cachedAddresses: Addresses | null = null;
   private readonly runs: DnsRun[] = [];
   private mailcowTrial: MailcowApi | null = null;
@@ -314,9 +337,27 @@ class Action {
     this.now = options.now?.() ?? Date.now();
   }
 
-  sites(fresh = false): PanelSite[] {
+  /** CloudPanel's sites as the panel lists them, stand-ins included. */
+  panelSites(fresh = false): PanelSite[] {
     if (!this.cachedSites || fresh) this.cachedSites = this.options.sites?.() ?? panelSites(this.paths.panelDb);
     return this.cachedSites;
+  }
+
+  /** CloudPanel's sites, without the stand-ins that serve redirects. */
+  sites(fresh = false): PanelSite[] {
+    const standIns = new Set([...Object.keys(readStandIns(this.standInPaths())), ...Object.keys(this.standIns().current)]);
+    return this.panelSites(fresh).filter((site) => !standIns.has(site.domain));
+  }
+
+  standInPaths(): StandInPaths {
+    const { panelDb, sqlite3, nginxVhostDir, tempDir } = this.paths;
+    return { file: `${this.paths.stateDir}/standins.json`, clpctl: this.paths.clpctl, vhost: { panelDb, sqlite3, nginxVhostDir, tempDir }, rootUid: this.paths.rootUid };
+  }
+
+  standIns(): StandIns {
+    this.cachedStandIns ??= this.options.standIns?.()
+      ?? clpctlStandIns(this.standInPaths(), (domain) => this.panelSites(true).some((site) => site.domain === domain), () => Date.now());
+    return this.cachedStandIns;
   }
 
   addresses(): Addresses {
@@ -338,7 +379,7 @@ class Action {
   run(policy: Policy, secrets = this.files.secrets()): DnsRun {
     const run = new DnsRun({
       policy, secrets, sites: this.sites(), addresses: this.addresses(), fetch: this.options.fetch,
-      backoff: this.files.status().backoff,
+      backoff: this.files.status().backoff, standIns: this.standIns(),
     });
     this.runs.push(run);
     return run;
@@ -376,17 +417,23 @@ class Action {
       delete managed[site.domain];
       forgot = true;
     }
+    // A deleted site that became a redirect domain keeps its records: they are the redirect's now.
+    for (const redirect of next.redirects) {
+      if (!managed[redirect.source]) continue;
+      delete managed[redirect.source];
+      forgot = true;
+    }
     if (forgot) this.files.saveManaged(managed);
   }
 
   /** Writes what a run found for `domains`, keeping what it did not look at. */
   record(run: DnsRun, plans: SitePlan[], domains: string[] | "all"): void {
     const status = this.files.status();
-    const current = new Set(this.sites().map((site) => site.domain));
+    const current = new Set(run.entries.map((site) => site.domain));
     const plansByDomain = domains === "all" ? {} : Object.fromEntries(Object.entries(status.plans).filter(([domain]) => current.has(domain)));
     for (const plan of plans) {
       if (domains !== "all" && !domains.includes(plan.domain)) continue;
-      if (plan.profileId) plansByDomain[plan.domain] = plan;
+      if (plan.profileId || plan.redirect) plansByDomain[plan.domain] = plan;
       else delete plansByDomain[plan.domain];
     }
     this.files.saveStatus({
@@ -409,7 +456,8 @@ class Action {
     const status = this.files.status();
     const ssl = this.files.ssl();
     const sites = this.sites();
-    const domains = new Set(sites.map((site) => site.domain));
+    const domains = new Set([...sites.map((site) => site.domain), ...policy.redirects.map((redirect) => redirect.source)]);
+    const standIns = this.standIns().current;
     const accounts = status.connections.flatMap((connection) => connection.accounts.map((account) => ({
       connectionId: connection.id, accountId: account.id, label: `${account.name || account.id} (${connection.label})`,
     })));
@@ -418,19 +466,31 @@ class Action {
       automatic: policy.automatic,
       createIn: policy.createIn,
       profiles: policy.profiles.map((profile) => ({
-        ...profile, sites: Object.values(policy.assignments).filter((id) => id === profile.id).length,
+        ...profile,
+        sites: Object.values(policy.assignments).filter((id) => id === profile.id).length
+          + policy.redirects.filter((redirect) => redirect.profileId === profile.id).length,
       })),
       defaultProfileId: policy.defaultProfileId,
-      sites: sites.map((site) => {
-        const profileId = policy.assignments[site.domain] ?? null;
-        const plan = status.plans[site.domain];
-        const request = ssl[site.domain];
-        return {
-          domain: site.domain, type: site.type, profileId,
-          plan: plan && plan.profileId === profileId ? plan : null,
-          ssl: request && request.siteId === site.id ? request.state : null,
-        };
-      }),
+      sites: [
+        ...sites.filter((site) => !policy.redirects.some((redirect) => redirect.source === site.domain)).map((site): SiteView => {
+          const profileId = policy.assignments[site.domain] ?? null;
+          const plan = status.plans[site.domain];
+          const request = ssl[site.domain];
+          return {
+            domain: site.domain, type: site.type, profileId,
+            plan: plan && !plan.redirect && plan.profileId === profileId ? plan : null,
+            ssl: request && request.siteId === site.id ? request.state : null,
+          };
+        }),
+        ...policy.redirects.map((redirect): SiteView => {
+          const plan = status.plans[redirect.source];
+          return {
+            domain: redirect.source, type: "redirect", profileId: redirect.profileId,
+            plan: plan?.redirect && plan.profileId === redirect.profileId ? plan : null, ssl: null,
+            redirect: { ...redirect, standIn: Boolean(standIns[redirect.source]) },
+          };
+        }),
+      ].sort((a, b) => a.domain.localeCompare(b.domain)),
       connections: policy.connections.map((connection) => {
         const report = status.connections.find((entry) => entry.id === connection.id);
         return {
@@ -454,7 +514,7 @@ class Action {
     };
   }
 
-  reply(extra: { review?: Review; notice?: string } = {}): DnsReply {
+  reply(extra: { review?: Review; notice?: string; found?: Found } = {}): DnsReply {
     this.writeLog();
     return { ...this.state(), ...extra };
   }
@@ -466,13 +526,13 @@ class Action {
   /** Reads and plans `domains` without writing anything. */
   async refresh(domains: string[] | "all"): Promise<void> {
     const policy = this.files.policy();
-    const assigned = this.sites().filter((site) => policy.assignments[site.domain]);
-    const chosen = domains === "all" ? assigned : assigned.filter((site) => domains.includes(site.domain));
-    if (!chosen.length && domains !== "all") return;
     const run = this.run(policy);
+    const planned = run.plannedDomains();
+    const chosen = domains === "all" ? planned : planned.filter((domain) => domains.includes(domain));
+    if (!chosen.length && domains !== "all") return;
     await run.discover();
-    await run.load(chosen.map((site) => site.domain));
-    this.record(run, run.planAll(this.sites()), domains === "all" ? "all" : chosen.map((site) => site.domain));
+    await run.load(chosen);
+    this.record(run, run.planAll(), domains === "all" ? "all" : chosen);
   }
 
   /** Every site: read, write what Automatic writes, and record the result. */
@@ -481,18 +541,21 @@ class Action {
     const policy = this.adoptNewSites(before);
     const run = this.run(policy);
     await run.discover();
-    const assigned = this.sites().filter((site) => policy.assignments[site.domain]);
-    await run.load(assigned.map((site) => site.domain));
+    const planned = run.plannedDomains();
+    await run.load(planned);
     this.hold(run, policy, this.joined(before, policy).map((site) => site.domain));
     const released = run.releaseHeld();
     if (released.length) {
       policy.held = policy.held.filter((domain) => !released.includes(domain));
       this.savePolicy(policy);
     }
-    await run.enforce(assigned);
-    const plans = run.planAll(this.sites());
+    await run.enforce(planned);
+    const plans = run.planAll();
     this.record(run, plans, "all");
-    if (retrySsl) await this.retrySsl(plans);
+    if (retrySsl) {
+      await this.retrySsl(plans);
+      await this.retryStandInCertificates();
+    }
   }
 
   /** Puts sites CloudPanel created since the last look into the default profile. */
@@ -509,7 +572,7 @@ class Action {
       if (!sites.some((site) => site.domain === domain)) delete next.assignments[domain];
     }
     next.knownSiteIds = sites.map((site) => site.id);
-    next.held = next.held.filter((domain) => next.assignments[domain]);
+    next.held = next.held.filter((domain) => next.assignments[domain] || next.redirects.some((redirect) => redirect.source === domain));
     if (JSON.stringify(next) !== JSON.stringify(policy)) this.savePolicy(next);
     return next;
   }
@@ -545,8 +608,8 @@ class Action {
     await run.discover();
     await run.load(joined.map((site) => site.domain));
     this.hold(run, policy, joined.map((site) => site.domain));
-    await run.enforce(joined);
-    this.record(run, run.planAll(this.sites()), joined.map((site) => site.domain));
+    await run.enforce(joined.map((site) => site.domain));
+    this.record(run, run.planAll(), joined.map((site) => site.domain));
     return joined.map((site) => site.domain);
   }
 
@@ -572,8 +635,8 @@ class Action {
       const run = this.run(policy);
       await run.discover();
       await run.load([domain]);
-      await run.enforce([site]);
-      const plans = run.planAll(this.sites());
+      await run.enforce([domain]);
+      const plans = run.planAll();
       this.record(run, plans, [domain]);
       plan = plans.find((candidate) => candidate.domain === domain);
     }
@@ -597,6 +660,13 @@ class Action {
     return { zone: zone.name, status: zone.status, nameServers: zone.status === "active" ? [] : zone.nameServers, certificate };
   }
 
+  /** Run in the periodic pass only: a certificate request can take minutes. */
+  async retryStandInCertificates(): Promise<void> {
+    if (this.options.standIns) return;
+    const selfSigned = (domain: string) => this.panelSites(true).find((site) => site.domain === domain)?.selfSigned ?? null;
+    await retryStandInCertificates(this.standInPaths(), selfSigned, this.options.issue ?? clpctlIssue(this.paths.clpctl), Date.now());
+  }
+
   async retrySsl(plans: SitePlan[]): Promise<void> {
     const requests = this.files.ssl();
     if (!Object.keys(requests).length) return;
@@ -611,18 +681,27 @@ class Action {
   // Reviews
   // -------------------------------------------------------------------------
 
-  /** The sites whose records would change if `after` replaced `before`, once DNS is Automatic. */
+  /** The sites and redirect domains whose records would change if `after` replaced `before`, once DNS is Automatic. */
   affected(before: Policy, after: Policy): string[] {
     if (!after.automatic) return [];
     const mailcowBefore = JSON.stringify(before.mailcow);
     const mailcowAfter = JSON.stringify(after.mailcow);
     const createIn = JSON.stringify(before.createIn) !== JSON.stringify(after.createIn);
-    return this.sites().map((site) => site.domain).filter((domain) => {
-      const next = after.profiles.find((profile) => profile.id === after.assignments[domain]);
-      if (!next) return false;
+    const redirectOf = (policy: Policy, domain: string) => policy.redirects.find((redirect) => redirect.source === domain);
+    const profileOf = (policy: Policy, domain: string) => {
+      const redirect = redirectOf(policy, domain);
+      return policy.profiles.find((profile) => profile.id === (redirect ? redirect.profileId : policy.assignments[domain]));
+    };
+    const domains = [...this.sites().map((site) => site.domain), ...after.redirects.map((redirect) => redirect.source)];
+    return [...new Set(domains)].filter((domain) => {
+      const redirect = redirectOf(after, domain);
+      const next = profileOf(after, domain);
+      if (!next && !redirect) return false;
       if (!before.automatic || createIn) return true;
       if (before.held.includes(domain) && !after.held.includes(domain)) return true;
-      const previous = before.profiles.find((profile) => profile.id === before.assignments[domain]);
+      if (redirect && JSON.stringify(redirectOf(before, domain)) !== JSON.stringify(redirect)) return true;
+      const previous = profileOf(before, domain);
+      if (!next) return false;
       if (!previous || previous.id !== next.id) return true;
       if (profileEffect(previous) !== profileEffect(next)) return true;
       if (JSON.stringify(before.server) !== JSON.stringify(after.server)) return true;
@@ -662,7 +741,7 @@ class Action {
     const run = this.run(next, this.secretsWith(mailcowKey));
     await run.discover();
     await run.load(domains);
-    const plans = run.planAll(this.sites()).filter((plan) => domains.includes(plan.domain));
+    const plans = run.planAll().filter((plan) => domains.includes(plan.domain));
     const blocked = plans.some((plan) => plan.problems.length > 0);
     const token = blocked ? "" : randomBytes(24).toString("hex");
     this.files.savePending(blocked ? null : {
@@ -700,7 +779,7 @@ class Action {
     const run = this.run(next, this.secretsWith(pending.mailcowKey));
     await run.discover();
     await run.load(pending.domains);
-    const plans = run.planAll(this.sites()).filter((plan) => pending.domains.includes(plan.domain));
+    const plans = run.planAll().filter((plan) => pending.domains.includes(plan.domain));
     if (this.digest(plans) !== pending.digest) {
       return this.review(current, next, pending.domains, "Cloudflare or Mailcow changed after the plan was shown. This is the plan now.", pending.mailcowKey);
     }
@@ -708,8 +787,8 @@ class Action {
     if (pending.mailcowKey !== undefined) this.files.saveSecrets(this.secretsWith(pending.mailcowKey));
     this.files.savePending(null);
     this.cause = "Confirmed review";
-    await run.enforce(this.sites().filter((site) => pending.domains.includes(site.domain)));
-    this.record(run, run.planAll(this.sites()), pending.domains);
+    await run.enforce(pending.domains);
+    this.record(run, run.planAll(), pending.domains);
     return this.reply({ notice: `Applied to ${pending.domains.length} site${pending.domains.length === 1 ? "" : "s"}.${current.automatic ? "" : " DNS is Automatic."}` });
   }
 
@@ -721,9 +800,8 @@ class Action {
     const policy = this.files.policy();
     const run = this.run(policy);
     await run.discover();
-    const assigned = this.sites().filter((site) => policy.assignments[site.domain]).map((site) => site.domain);
-    await run.load(assigned);
-    const currentPlans = run.planAll(this.sites());
+    await run.load(run.plannedDomains());
+    const currentPlans = run.planAll();
     if (run.unread(entry.zoneId)) failAction(`${entry.zoneName} could not be read for the sites in it; check again before removing records`);
     const uncertain = currentPlans.some((plan) => plan.profileId && plan.problems.length
       && (plan.zone ? plan.zone.id === entry.zoneId : plan.domain === entry.zoneName || plan.domain.endsWith(`.${entry.zoneName}`)));
@@ -814,6 +892,9 @@ class Action {
     const next = structuredClone(policy);
     if (existing) next.connections = next.connections.map((connection) => connection.id === id ? { id, label } : connection);
     else next.connections.push({ id, label });
+    // A redirect a stand-in serves moves to Cloudflare through its review, not on the next check.
+    const standIns = Object.keys(this.standIns().current).filter((domain) => next.redirects.some((redirect) => redirect.source === domain));
+    if (!existing && standIns.length) next.held = [...new Set([...next.held, ...standIns])];
     this.files.saveSecrets({ ...secrets, cloudflare: { ...secrets.cloudflare, [id]: token } });
     this.savePolicy(next);
     await this.tryRefresh("all");
@@ -871,8 +952,79 @@ class Action {
     return this.reply({ notice: "Mailcow removed. Its API key stays valid in Mailcow until you delete it there." });
   }
 
+  // -------------------------------------------------------------------------
+  // Redirect domains
+  // -------------------------------------------------------------------------
+
+  private refuseSite(source: string): void {
+    if (this.sites().some((site) => site.domain === source)) failAction(`${source} is a CloudPanel site; archive or delete the site first`);
+  }
+
+  async saveRedirect(body: Record<string, unknown>): Promise<DnsReply> {
+    const policy = this.files.policy();
+    const ids = new Set(policy.profiles.map((profile) => profile.id));
+    const redirect = parseRedirect(body, ids);
+    if (body.profileId && !redirect.profileId) failAction("That profile no longer exists");
+    const existing = policy.redirects.some((candidate) => candidate.source === redirect.source);
+    if (!existing) this.refuseSite(redirect.source);
+    const next = structuredClone(policy);
+    next.redirects = parseRedirects([...next.redirects.filter((candidate) => candidate.source !== redirect.source), redirect], ids);
+    return this.change(next, existing ? `Saved ${redirect.source}.` : `Added ${redirect.source}.`, [redirect.source]);
+  }
+
+  /** At once: nothing in Cloudflare is deleted, and a stand-in site serves nothing else. */
+  async deleteRedirect(source: string): Promise<DnsReply> {
+    const policy = this.files.policy();
+    if (!policy.redirects.some((redirect) => redirect.source === source)) failAction("That redirect no longer exists");
+    const standIns = this.standIns();
+    const standIn = standIns.current[source];
+    if (standIn) {
+      await standIns.remove(source);
+      this.files.appendLog([{ at: new Date(this.now).toISOString(), sites: [source], zone: "", action: "delete", subject: "Stand-in site",
+        detail: "The redirect domain was deleted", cause: "Redirect deleted" }]);
+    }
+    const next = structuredClone(policy);
+    next.redirects = next.redirects.filter((redirect) => redirect.source !== source);
+    next.held = next.held.filter((domain) => domain !== source);
+    this.savePolicy(next);
+    const status = this.files.status();
+    delete status.plans[source];
+    this.files.saveStatus(status);
+    return this.reply({ notice: standIn ? `Deleted ${source} and its stand-in site.` : `${source} is no longer managed. Its rule and records stay in Cloudflare.` });
+  }
+
+  async findRedirects(): Promise<DnsReply> {
+    const policy = this.files.policy();
+    if (!policy.connections.length) failAction("Connect Cloudflare first");
+    const run = this.run(policy);
+    await run.discover();
+    const found = await run.findRedirects();
+    const taken = new Set([...policy.redirects.map((redirect) => redirect.source), ...this.sites().map((site) => site.domain)]);
+    return this.reply({ found: { redirects: found.redirects.filter((redirect) => !taken.has(redirect.source)), notes: found.notes } });
+  }
+
+  /** Adds several redirect domains at once, such as the rules another tool left in Cloudflare. */
+  async takeOver(body: Record<string, unknown>): Promise<DnsReply> {
+    const policy = this.files.policy();
+    if (!Array.isArray(body.redirects) || !body.redirects.length) failAction("Select at least one redirect");
+    const profile = body.profileId == null || body.profileId === "" ? null : profileById(policy, body.profileId).id;
+    const ids = new Set(policy.profiles.map((candidate) => candidate.id));
+    const added = body.redirects.map((entry) => parseRedirect({ ...(entry as Record<string, unknown>), profileId: profile }, ids));
+    for (const redirect of added) {
+      if (policy.redirects.some((candidate) => candidate.source === redirect.source)) failAction(`${redirect.source} is already a redirect domain`);
+      this.refuseSite(redirect.source);
+    }
+    const next = structuredClone(policy);
+    next.redirects = parseRedirects([...next.redirects, ...added], ids);
+    return this.change(next, `Added ${added.length} redirect domain${added.length === 1 ? "" : "s"}.`, added.map((redirect) => redirect.source));
+  }
+
   private mailcowSites(policy: Policy): string[] {
-    return this.sites().filter((site) => policy.profiles.find((profile) => profile.id === policy.assignments[site.domain])?.mailcow).map((site) => site.domain);
+    const uses = (id: string | null | undefined) => policy.profiles.find((profile) => profile.id === id)?.mailcow;
+    return [
+      ...this.sites().filter((site) => uses(policy.assignments[site.domain])).map((site) => site.domain),
+      ...policy.redirects.filter((redirect) => uses(redirect.profileId)).map((redirect) => redirect.source),
+    ];
   }
 }
 
@@ -909,6 +1061,7 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
     const profile = profileById(policy, body.id);
     next.profiles = next.profiles.filter((candidate) => candidate.id !== profile.id);
     for (const domain of sitesOf(next, profile.id)) delete next.assignments[domain];
+    for (const redirect of next.redirects) if (redirect.profileId === profile.id) redirect.profileId = null;
     if (next.defaultProfileId === profile.id) next.defaultProfileId = null;
     return action.change(next, `Deleted ${profile.name}. Its sites' DNS is left as it is.`);
   }
@@ -926,17 +1079,24 @@ async function changeVerb(action: Action, verb: DnsVerb, body: Record<string, un
   if (verb === "assign") {
     if (!Array.isArray(body.domains) || !body.domains.length) failAction("Select at least one site");
     const id = body.profileId == null || body.profileId === "" ? null : profileById(policy, body.profileId).id;
-    const domains = body.domains.map((domain) => action.site(hostname(domain, "a site")).domain);
+    const domains = body.domains.map((domain) => hostname(domain, "a site"));
+    const sites: string[] = [];
     for (const domain of domains) {
+      const redirect = next.redirects.find((candidate) => candidate.source === domain);
+      if (redirect) {
+        redirect.profileId = id;
+        continue;
+      }
+      sites.push(action.site(domain).domain);
       if (id) next.assignments[domain] = id;
       else delete next.assignments[domain];
     }
     // Placing a site by hand is its review.
     next.held = next.held.filter((domain) => !domains.includes(domain));
     // A site placed by hand is not a new site for the default to claim.
-    next.knownSiteIds = [...new Set([...next.knownSiteIds, ...domains.map((domain) => action.site(domain).id)])];
+    next.knownSiteIds = [...new Set([...next.knownSiteIds, ...sites.map((domain) => action.site(domain).id)])];
     const name = id ? next.profiles.find((profile) => profile.id === id)!.name : "no profile";
-    return action.change(next, `${domains.length} site${domains.length === 1 ? "" : "s"} now in ${name}.`, id ? domains : []);
+    return action.change(next, `${domains.length} site${domains.length === 1 ? "" : "s"} now in ${name}.`, domains);
   }
   if (verb === "set-default") {
     next.defaultProfileId = body.profileId == null || body.profileId === "" ? null : profileById(policy, body.profileId).id;
@@ -1066,6 +1226,15 @@ async function perform(
       return action.removeMailcow();
     case "remove-records":
       return action.reviewRemoval(hostname(body.domain, "the site"));
+    case "save-redirect":
+      return action.saveRedirect(body);
+    case "delete-redirect":
+      action.cause = "Redirect deleted";
+      return action.deleteRedirect(hostname(body.source, "the redirect's domain"));
+    case "find-redirects":
+      return action.findRedirects();
+    case "take-over":
+      return action.takeOver(body);
     case "forget-records": {
       const domain = hostname(body.domain, "the site");
       const managed = action.files.managed();

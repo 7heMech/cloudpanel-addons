@@ -192,6 +192,7 @@ function recordBody(record: RecordWrite): Record<string, unknown> {
 const PHASE_PERMISSIONS: Record<string, string> = {
   http_config_settings: "Config Rules: Edit",
   http_request_firewall_custom: "Zone WAF: Edit",
+  http_request_dynamic_redirect: "Single Redirect: Edit",
 };
 const rulesPermission = (phase: string) => PHASE_PERMISSIONS[phase] ?? "rules permissions";
 

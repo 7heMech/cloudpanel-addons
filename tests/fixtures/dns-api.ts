@@ -38,6 +38,8 @@ export class FakeCloudflare {
   calls: { method: string; path: string; token: string; body?: unknown }[] = [];
   /** After this many more calls, answer 429 with this Retry-After. */
   limit: { after: number; retryAfter: string } | null = null;
+  /** Refuse an update that changes a rule's ref, in case Cloudflare keeps the one a rule has. */
+  keepsRefs = false;
 
   account(name: string): string {
     const id = hexId();
@@ -195,8 +197,15 @@ export class FakeCloudflare {
     if (rule) {
       const ruleset = [...this.rulesets.entries()].find(([key, set]) => key.startsWith(zone.id) && set.id === rule[1])?.[1];
       if (!ruleset) return this.error(404, 10003, "ruleset not found");
-      if (method === "POST") ruleset.rules.push({ ...body, id: hexId() });
-      else if (method === "PATCH") ruleset.rules = ruleset.rules.map((candidate) => candidate.id === rule[2] ? { ...body, id: rule[2] } : candidate);
+      if (method === "POST") {
+        const id = hexId();
+        ruleset.rules.push({ ...body, id, ref: body!.ref ?? id });
+      } else if (method === "PATCH") {
+        const current = ruleset.rules.find((candidate) => candidate.id === rule[2]);
+        if (!current) return this.error(404, 10003, "rule not found");
+        if (this.keepsRefs && body!.ref !== undefined && body!.ref !== current.ref) return this.error(400, 20021, "the rule's ref cannot be changed");
+        ruleset.rules = ruleset.rules.map((candidate) => candidate === current ? { ...body, id: rule[2], ref: body!.ref ?? current.ref } : candidate);
+      }
       return this.ok(ruleset);
     }
     return this.error(404, 7000, "No route for that URI");
