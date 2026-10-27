@@ -34,7 +34,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 | PHP Resources | Categories of PHP-FPM worker limits, assigned in bulk and to new sites. |
 | [SMTP Relay](docs/smtp-relay.md) | Send each site's mail through SMTP relay profiles, WordPress and PHP included. |
 | Git Deploy | Deploys from a Git remote, from the panel or from a push. |
-| Panel Tweaks | Site search and columns, automatic SSL for native sites, mobile layouts and themes. |
+| Panel Tweaks | Site search, columns and CSV download, automatic SSL for native sites, mobile layouts and themes. |
 | [System Tweaks](docs/system-tweaks.md) | Automatic security updates, the panel’s PHP version, the PHP upload-progress mitigation, forged visitor-IP blocking and clearing abandoned PHP temp files from /tmp. |
 | [WordPress Tools](docs/wordpress-tools.md) | One-click WordPress sign-in, optional CLP Varnish Cache installation and MainWP Child enrollment. |
 | Terminal | A shell as a site's own user, in its own window, for administrators. |
@@ -42,7 +42,7 @@ When it finishes, open the new **Addons** tab in CloudPanel.
 
 Only CloudPanel administrators see the Addons tab. Site managers can also use
 Git Deploy and create and manage Instatic sites. Other panel users get Panel
-Tweaks' site search and columns and the WP Login link on the Sites page, for
+Tweaks' site search, columns and CSV download and the WP Login link on the Sites page, for
 their own sites. Panel users add their own security keys under Account →
 Security, in the roles an administrator allows.
 

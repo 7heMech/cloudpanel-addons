@@ -294,6 +294,11 @@ export function sitesBlock(url: string, tweaks: PanelTweaks = storedTweaks()): s
                 aria-haspopup="true" aria-expanded="false">Columns</button>
               <div class="clp-tweaks-columns-menu" id="clp-tweaks-columns-menu" role="group" aria-label="Columns" hidden></div>
             </div>
+            <button type="button" class="form-control clp-tweaks-download" id="clp-tweaks-download"
+              title="Download the sites shown as CSV" aria-label="Download the sites shown as CSV"${toolbarHidden}>
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor"
+                stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M4.5 6.5 8 10l3.5-3.5M2.5 13.5h11"/></svg>
+            </button>
             <span class="clp-tweaks-summary" id="clp-tweaks-summary" role="status"></span>
           </div>
           <script>${SITES_SCRIPT.split("ADDON_URL").join(url)
