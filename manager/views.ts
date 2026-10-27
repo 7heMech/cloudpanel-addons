@@ -14,7 +14,7 @@ import MANAGER_INDEX_CSS from "./views.css" with { type: "text" };
 import MANAGER_INDEX_JS from "./views.client.js" with { type: "text" };
 
 /** One row of the Enabled or Available list, for a known addon, or nothing for an unknown name. */
-function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, version: string, seen: string[]): string {
+function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, news: { version: string; since: string; seen: string[] }): string {
   const spec = ADDONS[name];
   if (!spec) return "";
   const title = spec.title ?? spec.name;
@@ -26,15 +26,15 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ve
     ? `${href ? `<a class="btn btn-primary" href="${esc(href)}" aria-label="Open ${esc(title)}">Open</a>` : ""}
       <button class="btn" type="button" onclick="disableAddon('${escJs(spec.name)}', '${escJs(title)}', this)" aria-label="Disable ${esc(title)}">Disable</button>`
     : `<button class="btn" type="button" onclick="enableAddon('${escJs(spec.name)}', this)" aria-label="Enable ${esc(title)}">Enable</button>`;
-  // Opening the addon from this row reads this release's notice for every administrator.
-  const found = addonNews(spec.name, version);
-  const news = found && !seen.includes(found.key) ? found : null;
-  return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}"${news ? ` data-news="${esc(news.key)}"` : ""} data-find="${esc(`${title} ${spec.name} ${spec.description ?? ""}`)}">
+  // Opening the addon from this row reads its notice for every administrator.
+  const found = addonNews(spec.name, news.version, news.since);
+  const notice = found && !news.seen.includes(found.key) ? found : null;
+  return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}"${notice ? ` data-news="${esc(notice.key)}"` : ""} data-find="${esc(`${title} ${spec.name} ${spec.description ?? ""}`)}">
   <div class="addon-about">
-    <h3>${heading}${news?.kind === "new" ? ' <span class="badge state-queued">New</span>'
-      : news?.kind === "changed" ? ' <span class="badge">Changed</span>' : ""}</h3>
+    <h3>${heading}${notice?.kind === "new" ? ' <span class="badge state-queued">New</span>'
+      : notice?.kind === "changed" ? ' <span class="badge">Changed</span>' : ""}</h3>
     ${spec.description ? `<p>${esc(spec.description)}</p>` : ""}${
-  news?.note ? `<p class="addon-changed">${esc(news.note)}</p>` : ""}
+  notice?.note ? `<p class="addon-changed">${esc(notice.note)}</p>` : ""}
   </div>
   <div class="addon-actions">${actions}</div>
   ${addonJob ? managerJobStatus(addonJob) : ""}
@@ -103,11 +103,11 @@ type ManagerPageOptions = { job?: ManagerJobView | null; csrf?: string };
 export function indexPage(
   enabled: string[],
   update?: { current: string; latest: string } | null,
-  options: ManagerPageOptions & { available?: string[]; version?: string; seen?: string[] } = {},
+  options: ManagerPageOptions & { available?: string[]; version?: string; since?: string; seen?: string[] } = {},
 ): Response {
   const available = options.available ?? [];
-  const version = options.version ?? CLI_VERSION;
-  const rows = (names: string[], on: boolean) => names.map((name) => addonRow(name, on, options.job ?? null, version, options.seen ?? [])).join("");
+  const news = { version: options.version ?? CLI_VERSION, since: options.since ?? "0.0.0", seen: options.seen ?? [] };
+  const rows = (names: string[], on: boolean) => names.map((name) => addonRow(name, on, options.job ?? null, news)).join("");
   const list = (title: string, names: string[], on: boolean) =>
     `<section class="card addon-list"><h2>${title} <span class="hint">${names.length}</span></h2>${rows(names, on)}</section>`;
 

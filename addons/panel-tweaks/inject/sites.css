@@ -13,6 +13,11 @@
   min-width: 190px; max-height: 60vh; overflow-y: auto; padding: 6px 0; border: 1px solid #eaeaea;
   border-radius: 6px; background: #fff; box-shadow: 0 8px 28px rgba(0, 0, 0, .16); }
 .clp-tweaks-columns-menu[hidden] { display: none; }
+/* The download is an icon in a control of the same height, so it reads as one
+   more control in the row rather than as a call to action. */
+.clp-tweaks-download { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center;
+  width: auto; align-self: stretch; padding-left: 12px; padding-right: 12px; cursor: pointer; }
+.clp-tweaks-download[hidden] { display: none; }
 .clp-tweaks-columns-menu label { display: flex; align-items: center; gap: 10px; margin: 0;
   padding: 9px 16px; font-size: 14px; font-weight: 400; white-space: nowrap; cursor: pointer; }
 /* A finger leaves the hover behind it: a tapped row stayed lit until something

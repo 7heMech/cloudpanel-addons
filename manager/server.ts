@@ -153,11 +153,11 @@ export async function handleRequest(req: Request, server: Server<unknown>): Prom
     // process, and a page that still denied the addon existed would be
     // wrong for exactly as long as anybody was likely to look at it.
     const enabled = ADDON_NAMES.filter((name) => existsSync(ADDONS[name]!.configFile));
-    const [job, seen] = await Promise.all([latestManagerJobView(), seenNews()]);
+    const [job, news] = await Promise.all([latestManagerJobView(), seenNews()]);
     return indexPage(enabled, notice, {
       available: ADDON_NAMES.filter((name) => !enabled.includes(name)),
       job,
-      seen,
+      ...news,
       csrf: newCsrfToken(),
     });
   }

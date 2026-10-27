@@ -1,9 +1,10 @@
 // `clp-addons install`.
 
 import { dashboardUrl, installedAddons, migrateOldAddonNames, resolveAddon } from "./addons";
-import { artifactNames, installArtifacts } from "./artifacts";
+import { artifactNames, installArtifacts, installedTag } from "./artifacts";
 import { bootstrapProvision, applyEnable } from "./toggle";
 import { ADDONS, ADDON_NAMES, type AddonSpec } from "./addon-catalog";
+import { recordNewsSince } from "./manager-action";
 import { pickAddons } from "./menu";
 import { withOperationLock } from "./operation-lock";
 import { ensureDirs, ensureRequiredUnits, ensureServiceUser } from "./provision";
@@ -50,6 +51,7 @@ function applyLocal(spec: AddonSpec, dir: string): void {
   const artifacts = loadLocal(dir, artifactNames());
   ensureServiceUser();
   ensureDirs(specs, true);
+  recordNewsSince(installedTag());
   installArtifacts(artifacts, CLI_VERSION.replace(/^v/, ""));
   bootstrapProvision(specs);
   spec.activate?.();

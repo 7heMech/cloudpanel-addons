@@ -15,8 +15,12 @@ export async function latestManagerJobView(): Promise<ManagerJobView | null> {
   return result.ok && result.data ? result.data.job : null;
 }
 
-/** The badges an administrator has opened; none when the gateway cannot say, so a badge shows rather than hides. */
-export async function seenNews(): Promise<string[]> {
-  const result = await managerAction<string[]>("news-seen");
-  return result.ok && Array.isArray(result.data) ? result.data : [];
+/**
+ * The release badges start after and the ones an administrator has opened.
+ * When the gateway cannot say, every notice shows rather than hides.
+ */
+export async function seenNews(): Promise<{ since: string; seen: string[] }> {
+  const result = await managerAction<{ since: string; seen: string[] }>("news-seen");
+  const data = result.ok ? result.data : null;
+  return typeof data?.since === "string" && Array.isArray(data.seen) ? data : { since: "0.0.0", seen: [] };
 }
