@@ -32,7 +32,9 @@ one of its words, and hides a list it empties. An
 addon's `added` release line (`2.0`) marks it New for as long as that line is
 the one installed. An existing addon's `changed` line marks it Changed for the
 same time, with one line saying what changed; the rest is the changelog's, which
-the update page links.
+the update page links. Opening the addon from its row clears both for that
+release line: the browser remembers the addon and line it opened, so nothing is
+stored on the server, and a later line that marks it again shows it again.
 
 ## One catalog, compiled in
 

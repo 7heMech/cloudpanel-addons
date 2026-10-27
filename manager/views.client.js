@@ -170,3 +170,25 @@ function dismissFailure(id) {
   try { seen = localStorage.getItem('clp-addons-seen-job'); } catch (e) {}
   if (seen === alertBox.getAttribute('data-job')) alertBox.remove();
 })();
+
+// New and Changed are for an addon nobody has opened since this release line
+// marked it. Opening it from its row is the read; the browser remembers it.
+const SEEN_NEWS = 'clp-addons-seen-news';
+
+function seenNews() {
+  try { return JSON.parse(localStorage.getItem(SEEN_NEWS) || '[]'); } catch (e) { return []; }
+}
+
+(function () {
+  const seen = seenNews();
+  document.querySelectorAll('[data-news]').forEach((row) => {
+    const key = row.getAttribute('data-news');
+    if (seen.includes(key)) row.querySelectorAll('.addon-news').forEach((el) => el.remove());
+    row.querySelectorAll('a[href]').forEach((link) => link.addEventListener('click', () => {
+      const now = seenNews();
+      if (now.includes(key)) return;
+      now.push(key);
+      try { localStorage.setItem(SEEN_NEWS, JSON.stringify(now)); } catch (e) {}
+    }));
+  });
+})();

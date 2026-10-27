@@ -315,7 +315,9 @@ describe("the manager index", () => {
   test("marks addons first shipped in the installed release line as new", async () => {
     const html = await render([], null, { available: ["dns", "stager"], version: "2.0.3" });
     expect(html.match(/>New</g)).toHaveLength(1);
-    expect(html).toMatch(/DNS <span class="badge state-queued">New<\/span>/);
+    expect(html).toMatch(/DNS <span class="badge state-queued addon-news">New<\/span>/);
+    // The release line keys it, so the browser can drop it once the addon is opened.
+    expect(html).toContain('data-news="dns@2.0"');
     expect(await render([], null, { available: ["dns"], version: "2.1.0" })).not.toContain(">New<");
   });
 
