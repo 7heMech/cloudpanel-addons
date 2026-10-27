@@ -134,8 +134,10 @@ function batchToolbar(data: WpDashboard, count: number): string {
   return `
         <span class="toolbar-note" id="site-selection">No sites selected</span>
         <button class="btn mobile-select-all" id="select-all-btn" type="button" onclick="toggleAllSites()">Select all</button>
-        <button class="btn toolbar-end" type="button" data-needs-selection disabled onclick="connectMainwpSelected()">Connect selected to MainWP</button>
-        <button class="btn" type="button" data-count="${count}"${count && !busy ? "" : " disabled"} onclick="connectMainwpAll(this)">Connect all unconnected (${count})</button>`;
+        <div class="toolbar-end wp-batch">
+          <button class="btn" type="button" data-needs-selection disabled onclick="connectMainwpSelected()"><span class="wp-long">Connect selected to MainWP</span><span class="wp-short">Connect selected</span></button>
+          <button class="btn" type="button" data-count="${count}"${count && !busy ? "" : " disabled"} onclick="connectMainwpAll(this)"><span class="wp-long">Connect all unconnected (${count})</span><span class="wp-short">Connect all (${count})</span></button>
+        </div>`;
 }
 
 function helperLine(sites: WpSiteView[]): string {
