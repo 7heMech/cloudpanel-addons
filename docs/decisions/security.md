@@ -137,8 +137,8 @@ gate by a credential of their own.
 
 Nine routes are named as exceptions. Two are WordPress Tools':
 `POST /wp-tools/api/sign-in` and the `GET /wp-tools/api/session` that hands out
-the CSRF pair, because the link that uses them is injected into CloudPanel's own
-Sites page, which a non-administrator sees too. The third is Panel Tweaks'
+the CSRF pair, because the links that use them are injected into CloudPanel's
+own Sites page and site pages, which a non-administrator sees too. The third is Panel Tweaks'
 read-only `GET /panel-tweaks/api/panel`, which answers the script injected into
 that same page with the sites CloudPanel would list for the caller. The last two
 are DNS's `POST /dns/api/provision` and its `GET /dns/api/session`, which Panel

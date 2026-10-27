@@ -13,6 +13,7 @@ import { ROW_ACTION_CLASS } from "../lib/row-actions";
 
 const scriptTarget = WP_TOOLS_TARGETS.find((target) => target.slug === "sites-script")!;
 const linkTarget = WP_TOOLS_TARGETS.find((target) => target.slug === "sites-action")!;
+const siteInfoTarget = WP_TOOLS_TARGETS.find((target) => target.slug === "site-info-link")!;
 
 // --- what goes into CloudPanel's own page ---------------------------------
 
@@ -44,9 +45,38 @@ test("the link is per-site Twig for every role, and the script is emitted once",
   expect(script).toContain('document.addEventListener("click"');
 });
 
-// Neither block may stop an install: the addon's own page signs in to the same
+// CloudPanel's Frontend/Site/Partial/site-info.html.twig, up to the Site User box.
+const SITE_INFO = `<div class="site-info-container">
+  <div class="site-info-box">
+    <h3>{% trans %}Domain{% endtrans %}</h3>
+    <div class="site-info-value">
+      <a class="view-site-link" target="_blank" href="https://{{ site.domainName }}">
+        {{ site.domainName }}
+        <svg width="12" height="12" viewBox="0 0 512 512"><path d="M440,256Z"></path></svg>
+      </a>
+    </div>
+  </div>
+  <div class="site-info-box">`;
+
+test("the site pages' link sits after the Domain link, with its own script", () => {
+  const anchor = siteInfoTarget.anchorAfter!;
+  expect(SITE_INFO.split(anchor).length).toBe(2);
+  // Inside the Domain box, after the panel's own link, which keeps opening the site.
+  const at = SITE_INFO.indexOf(anchor) + anchor.length;
+  expect(SITE_INFO.slice(0, at)).toContain('class="view-site-link"');
+  expect(SITE_INFO.slice(at)).toMatch(/^\n    <\/div>/);
+
+  const block = siteInfoTarget.snippet("/addons/wp-tools");
+  expect(block).not.toContain("is_granted");
+  expect(block).toContain('data-clp-domain="{{ site.domainName }}"');
+  for (const application of WORDPRESS_APPLICATIONS) expect(block).toContain(`'${application}'`);
+  // The partial is rendered once per page, so the script rides with the link.
+  expect(block).toContain("/addons/wp-tools/api/sign-in");
+});
+
+// No block may stop an install: the addon's own page signs in to the same
 // sites whether or not CloudPanel's markup still matches.
-test("neither block is required", () => {
+test("no block is required", () => {
   for (const target of WP_TOOLS_TARGETS) expect(target.required).toBe(false);
 });
 

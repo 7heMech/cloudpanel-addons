@@ -688,6 +688,8 @@ html.dark a { color: #fff; }
 .site-info-box { margin: 0 60px 0 0; min-width: 200px; }
 .site-info-box h3 { font-size: 14px; color: #aaa; margin: 0 0 5px; font-weight: 500; }
 .site-info-value { font-size: 18px; }
+a.view-site-link svg { margin: 0 0 0 2px; fill: #aaa; }
+a.view-site-link:hover svg { fill: #0078d4; }
 .tab-container { border: 1px solid #e2e2e2; background: #fff; margin: 0 0 30px; }
 html.dark .tab-container { background: #25282f; border-color: #a8b3cf33; }
 .tab-container ul { padding: 0 20px; margin: 0; list-style: none; }
@@ -700,7 +702,7 @@ html.dark .tab-container ul li.active a { color: #fff; }
 .preview-banner button { margin-left: 12px; }
 `;
 
-function panelSiteStub(site: SiteContext, activeSlug: string): string {
+function panelSiteStub(site: SiteContext, activeSlug: string, wordpress: boolean): string {
   const tabs = siteTabs(site, activeSlug)
     .map((tab) => `      <li${tab.active ? ' class="active"' : ""}><a href="${tab.href}">${tab.label}</a></li>`)
     .join("\n");
@@ -721,7 +723,7 @@ function panelSiteStub(site: SiteContext, activeSlug: string): string {
   <div class="container-fluid container-limited-width">
     <div class="site-container">
       <div class="site-info-container">
-        <div class="site-info-box"><h3>Domain</h3><div class="site-info-value"><a href="https://${site.domain}">${site.domain}</a></div></div>
+        <div class="site-info-box"><h3>Domain</h3><div class="site-info-value"><a class="view-site-link" target="_blank" href="https://${site.domain}">${site.domain} ${PANEL_EXTERNAL_ICON}</a>${wordpress ? twigForSite(WP_TOOLS_SITE_INFO.snippet("/addons/wp-tools").replace(/\{% if site\.application[^%]*%\}/, ""), site.domain) : ""}</div></div>
         <div class="site-info-box"><h3>Site User</h3><div class="site-info-value">${site.user}</div></div>
         <div class="site-info-box"><h3>IP Address</h3><div class="site-info-value">${PREVIEW_PUBLIC_IP}</div></div>
       </div>
@@ -825,6 +827,8 @@ function panelSecurityStub(dark: boolean): string {
  * panel's own from assets/css/style.css and assets/css/frontend/sites.css.
  */
 const WP_TOOLS_SITES_SCRIPT = WP_TOOLS_TARGETS.find((target) => target.slug === "sites-script")!;
+const WP_TOOLS_SITE_INFO = WP_TOOLS_TARGETS.find((target) => target.slug === "site-info-link")!;
+const PANEL_EXTERNAL_ICON = '<svg width="12" height="12" aria-hidden="true" viewBox="0 0 512 512"><path d="M440,256H424a8,8,0,0,0-8,8V464a16,16,0,0,1-16,16H48a16,16,0,0,1-16-16V112A16,16,0,0,1,48,96H248a8,8,0,0,0,8-8V72a8,8,0,0,0-8-8H48A48,48,0,0,0,0,112V464a48,48,0,0,0,48,48H400a48,48,0,0,0,48-48V264A8,8,0,0,0,440,256ZM500,0,364,.34a12,12,0,0,0-12,12v10a12,12,0,0,0,12,12L454,34l.7.71L131.51,357.86a12,12,0,0,0,0,17l5.66,5.66a12,12,0,0,0,17,0L477.29,57.34l.71.7-.34,90a12,12,0,0,0,12,12h10a12,12,0,0,0,12-12L512,12A12,12,0,0,0,500,0Z"></path></svg>';
 const TERMINAL_SITES_SCRIPT = TERMINAL_TARGETS.find((target) => target.slug === "sites-script")!;
 const TERMINAL_SITES_ACTION = TERMINAL_TARGETS.find((target) => target.slug === "sites-action")!;
 const TERMINAL_SITE_BUTTON = TERMINAL_TARGETS.find((target) => target.slug === "site-button")!;
@@ -1450,6 +1454,7 @@ const server = Bun.serve({
         panelSiteStub(
           { domain: site.domain, user: site.siteUser, type: site.siteType, varnishCache: siteVarnish[site.domain] === true },
           panelSite[2]!,
+          WORDPRESS_APPLICATIONS.includes(site.application),
         ),
         { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
       );
