@@ -30,6 +30,7 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ve
   const found = addonNews(spec.name, version);
   const news = found && !seen.includes(found.key) ? found : null;
   return `<article class="addon-row" data-manager-job-card="${esc(spec.name)}"${news ? ` data-news="${esc(news.key)}"` : ""} data-find="${esc(`${title} ${spec.name} ${spec.description ?? ""}`)}">
+  <span class="addon-mark" aria-hidden="true">${esc(addonMark(title))}</span>
   <div class="addon-about">
     <h3>${heading}${news?.kind === "new" ? ' <span class="badge state-queued">New</span>'
       : news?.kind === "changed" ? ' <span class="badge">Changed</span>' : ""}</h3>
@@ -39,6 +40,15 @@ function addonRow(name: string, enabled: boolean, job: ManagerJobView | null, ve
   <div class="addon-actions">${actions}</div>
   ${addonJob ? managerJobStatus(addonJob) : ""}
 </article>`;
+}
+
+/**
+ * The tile beside an addon's name, where v3 puts a site type's logo: addons have
+ * no logos, so it carries the initials of the name, "Git Deploy" as "GD".
+ */
+function addonMark(title: string): string {
+  const [first = "", second] = title.split(/\s+/).filter(Boolean);
+  return (second ? first.charAt(0) + second.charAt(0) : first.slice(0, 2)).toUpperCase();
 }
 
 function liveManagerJob(job: ManagerJobView | null): ManagerJobView | null {

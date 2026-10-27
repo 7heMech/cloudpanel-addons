@@ -1,37 +1,46 @@
-
 .addon-list { padding: 0; }
-.addon-list > h2 { margin: 0; padding: 18px 24px; border-bottom: 1px solid var(--border); font-size: 16px; }
-.addon-list > h2 .hint { margin-left: 4px; font-weight: 400; }
-.addon-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 24px;
-  padding: 16px 24px; border-top: 1px solid var(--row-border); }
+.addon-list > h2 { display: flex; align-items: center; gap: 8px; margin: 0; padding: 14px 20px;
+  border-bottom: 1px solid var(--border); font-size: 18px; font-weight: 500; }
+.addon-list > h2 .hint { margin: 0; padding: 0 7px; border-radius: 99px; background: var(--hover);
+  color: var(--muted); font-size: 12px; font-weight: 500; line-height: 20px; }
+/* One addon a row, as v3 lists the site types it can create: a tile, the name
+   and what it does, and its actions at the end of the row. */
+.addon-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px 16px;
+  padding: 16px 20px; border-top: 1px solid var(--row-border); }
 .addon-list > .addon-row:nth-child(1 of .addon-row:not([hidden])) { border-top: 0; }
+.addon-mark { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; align-self: start;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  color: var(--muted); font-size: 13px; font-weight: 600; letter-spacing: .02em; }
 .addon-find { margin: 0 0 20px; }
 .addon-find input { max-width: 320px; }
 .addon-about h3 { margin: 0; font-size: 15px; font-weight: 600; }
 .addon-about h3 a { color: inherit; text-decoration: none; }
-.addon-about h3 a:hover { color: var(--link); }
+.addon-about h3 a:hover { text-decoration: underline; }
 .addon-about h3 .badge { margin-left: 6px; vertical-align: 1px; }
-.addon-about p { margin: 3px 0 0; color: var(--muted); font-size: 14px; }
+.addon-about p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
 .addon-about .addon-changed { color: var(--text); font-size: 13px; }
 .addon-actions { display: flex; gap: 8px; }
 .addon-row .manager-job-status { grid-column: 1 / -1; margin-top: 8px; }
 @media (max-width: 575px) {
   .addon-find input { max-width: none; }
   .addon-list > h2, .addon-row { padding-left: 16px; padding-right: 16px; }
-  .addon-row { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .addon-row { grid-template-columns: auto minmax(0, 1fr); gap: 10px 12px; }
+  .addon-mark { width: 36px; height: 36px; font-size: 12px; }
+  .addon-actions { grid-column: 2; }
 }
 .manager-job-status { width: 100%; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
 .manager-job-status .job-summary { justify-content: space-between; }
 .manager-job-status .step { margin: 6px 0 0; overflow-wrap: anywhere; }
 .job-log-details { margin-top: 10px; }
-.job-log-details summary { color: var(--muted); font-size: 14px; cursor: pointer; }
+.job-log-details summary { color: var(--muted); font-size: 13px; cursor: pointer; }
 .job-log-details pre { max-height: 240px; margin: 10px 0 0; }
 .update-page { max-width: 800px; margin: 0 auto; }
-.update-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin: 0 0 25px; }
-.update-versions dt { color: var(--muted); font-size: 14px; margin-bottom: 8px; }
-.update-versions dd { margin: 0; font-family: var(--mono); font-size: 22px; overflow-wrap: anywhere; }
+.update-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 0 0 20px; }
+.update-versions > div { padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); }
+.update-versions dt { margin-bottom: 8px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.update-versions dd { margin: 0; font-family: var(--mono); font-size: 20px; overflow-wrap: anywhere; }
 .update-page .card-header { flex-wrap: wrap; }
-.update-page .update-actions { border-top: 1px solid var(--border); padding-top: 20px; margin-top: 25px; }
+.update-page .update-actions { border-top: 1px solid var(--border); padding-top: 20px; margin-top: 20px; }
 @media (max-width: 480px) {
   .update-versions { grid-template-columns: minmax(0, 1fr); }
 }

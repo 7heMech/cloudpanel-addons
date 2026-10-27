@@ -1357,10 +1357,19 @@ const server = Bun.serve({
     const repaintReply = await repaintPreviewMutation(req, url);
     if (repaintReply) return repaintReply;
     if (req.method !== "GET") return Response.json({ ok: false, error: "UI preview only; no changes were made." }, { status: 409 });
-    // These are the same two logo URLs the installed manager gets from its
-    // CloudPanel origin. Only this development preview fetches the public demo.
+    // The logo and Inter the installed manager's pages get from their CloudPanel
+    // origin. Only this development preview fetches them, from v3's public
+    // preview, whose look the shell follows; the dark logo is the v2 demo's.
+    if (path.startsWith("/assets/fonts/inter/") && path.endsWith(".woff2")) {
+      const upstream = await fetch(`https://dummy.cloudpanel.io${path}`);
+      return new Response(await upstream.arrayBuffer(), {
+        status: upstream.status,
+        headers: { "Content-Type": "font/woff2", "Cache-Control": "public, max-age=86400" },
+      });
+    }
     if (["/assets/images/logo.svg", "/assets/images/logo-dark.svg"].includes(path)) {
-      const upstream = await fetch(`https://demo.cloudpanel.io${path}`);
+      const origin = path === "/assets/images/logo.svg" ? "https://dummy.cloudpanel.io" : "https://demo.cloudpanel.io";
+      const upstream = await fetch(`${origin}${path}`);
       // fetch decodes compression; do not forward the original Content-Encoding.
       return new Response(await upstream.arrayBuffer(), {
         status: upstream.status,

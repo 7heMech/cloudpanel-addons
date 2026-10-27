@@ -258,36 +258,51 @@ would look current. What a given age means stays with each addon.
 
 ## Shared interface
 
-The shell's header reproduces CloudPanel's: the logo, the panel's own
-navigation, and the three controls the panel puts on the right -- the theme
-switch, the Admin Area, and an account menu of Settings and Logout, pointing at
-the panel's own `/admin/users`, `/settings` and `/logout`. The avatar is a
-drawing rather than the operator's gravatar, because the manager serves these
-pages behind the panel's session without ever being told whose it is. The theme
-and Admin Area icons are the panel's own paths rather than approximations of
-them, so one control does not have two shapes depending on the page. Below
-940px the logo and the three controls share one 64px row and the navigation
-takes the row beneath; that shape is what Panel Tweaks gives the panel's own
-header on a phone, so moving between the two does not move the header.
+The shell follows CloudPanel v3, measured against its public preview at
+`dummy.cloudpanel.io`: a neutral zinc palette, Inter, 8px cards with a hairline
+frame, 32px buttons, pill tabs in a framed strip, and tables framed a second
+time inside their card. The tokens at the top of `lib/assets/app-ui.css` keep
+this project's names (`--muted` is muted text, `--accent` the link blue,
+`--primary` the primary button) rather than v3's shadcn ones, where the same
+names mean a background tint, a hover fill and black; every addon stylesheet
+was written against these. Inter is declared from the panel's own
+`/assets/fonts/inter/` files, so a page served behind the panel uses the
+panel's face and anywhere else falls back to the system one.
+
+The header reproduces v3's top bar: the logo behind a divider, the panel's
+navigation as pills, the Admin Area as a small outlined button, and an account
+menu holding Dashboard, Account Settings, the theme and Log Out, pointing at the
+panel's own `/admin/users`, `/settings` and `/logout`. The account control is
+the panel's person icon rather than the operator's gravatar, because the manager
+serves these pages behind the panel's session without ever being told whose it
+is. The theme is v3's three-way choice -- Auto, Light, Dark -- kept in the same
+`theme` cookie the panel writes; a missing or unknown value is Auto and follows
+the device. The theme icons are the panel's own paths, so one control does not
+have two shapes depending on the page. v3 keeps its desktop bar at every width
+and on a phone its tools run off the edge; below 768px the shell puts the logo
+and the tools on one row, brings Admin Area down to an icon, and gives the
+navigation a scrolling row of pills beneath.
 
 Every addon renders into one shell in `lib/app-ui.ts`: palette, cards, tables,
 badges, switches, toolbars, one confirmation dialog and one inline notice per
 page. A badge names what something is rather than being read for itself, so it
 is set a size below the smallest body text wherever it appears. A switch that
 decides one thing for a whole page keeps its full size; one repeated per table
-row comes down to the height of the line beside it, so the control does not set
-the row's height. An addon supplies its brand, its own tabs, its script and any rule only it
+row comes down to v3's own 32x18 toggle, so the control does not set the row's
+height. A destructive button inside a table row is outlined in red rather than
+filled, as v3 keeps a row's Delete quiet, so a column of them is not a column of
+red. An addon supplies its brand, its own tabs, its script and any rule only it
 draws. The manager's own pages use the same two: disabling an addon asks through
 that dialog, naming the addon as its card does and saying that its data is kept,
 and a manager job that fails to start reports through the inline notice. The
 browser's `confirm` and `alert` survive only as what the shell degrades to where
 there is no `<dialog>` or no notice holder. Below 940px the shell tightens: a fleet table's rows become cards, a dialog
-gives up its desktop padding and its buttons take the row, and the dialog is
+becomes a sheet from the bottom edge whose buttons take the row, and the dialog is
 bounded by the visual viewport so a phone's collapsing address bar cannot cover
 them. 940px rather than a phone width because a fleet table is five or six
 columns wide: below that the columns are narrower than the hostnames in them and
-a domain wrapped a character at a time. Cell padding comes down from 1200px for
-the same reason. Instatic's instance and inventory lists and Stager's clone,
+a domain wrapped a character at a time. On a coarse pointer buttons grow from
+v3's 32px to 40px, which a finger needs. Instatic's instance and inventory lists and Stager's clone,
 source and promotion lists use the same fleet rows, with labels on secondary
 cells so their meaning survives the hidden table heading. Empty cells disappear
 and the site and type lead each card. A ticked row is tinted, and clicking
@@ -324,9 +339,9 @@ tab active, and the page belongs to Sites rather than to Addons. `lib/site-conte
 is the only description of that strip -- order, per-type conditions and routes
 mirror `Frontend/Site/Partial/tab-container.html.twig` -- and both the shell and
 the injected Twig snippet read it, so a tab cannot be labelled two ways. The
-reproduced site information takes its column width, gutter and label styling
-from the panel's own `assets/css/frontend/site.css`, so the blocks land where
-the panel puts them.
+reproduced site information is v3's: one framed tile per fact with a small
+spaced capital label, as the panel's own `assets/css/frontend/site.css` draws
+them, two to a row on a phone with the domain across both.
 
 A page that opens in a window of its own, such as the terminal, uses
 `renderToolWindow`: the same head, palette, theme switch and base script as the

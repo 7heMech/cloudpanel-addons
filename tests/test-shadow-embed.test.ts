@@ -18,7 +18,7 @@ test("the stylesheet is rewritten for a shadow root", () => {
   expect(css).not.toMatch(/(^|\n)html\.dark/);
   expect(css).toContain(":host {");
   expect(css).toContain(":host(.dark) {");
-  expect(css).toContain(":host(.dark) .card-header");
+  expect(css).toContain(":host(.dark) .switch span");
   // The document belongs to CloudPanel on an embedded page.
   expect(css).not.toMatch(/(^|\n)body \{/);
   expect(css).toContain(":host { display: block;");

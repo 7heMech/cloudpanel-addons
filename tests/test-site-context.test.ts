@@ -119,13 +119,12 @@ test("a site manager's shell offers its addon tabs without administrator links",
 });
 
 test("the reproduced site information carries the panel's own measurements", () => {
-  // CloudPanel's assets/css/frontend/site.css. A reproduction that only looks
-  // approximately right is what makes an addon page read as a different page:
-  // the columns have to start where the panel starts them.
-  expect(SITE_CONTEXT_STYLE).toContain("min-width: 200px");
-  expect(SITE_CONTEXT_STYLE).toContain("margin: 0 60px 0 0");
-  expect(SITE_CONTEXT_STYLE).toContain("font-size: 14px; font-weight: 500; color: #aaa");
-  expect(SITE_CONTEXT_STYLE).toContain(".clp-addon-site-value { font-size: 18px");
+  // CloudPanel v3's site.css: a framed tile per fact with an 11px spaced
+  // capital label. A reproduction that only looks approximately right is what
+  // makes an addon page read as a different page.
+  expect(SITE_CONTEXT_STYLE).toContain("border: 1px solid var(--border); border-radius: var(--radius);");
+  expect(SITE_CONTEXT_STYLE).toContain("font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;");
+  expect(SITE_CONTEXT_STYLE).toContain(".clp-addon-site-value { font-size: 15px; font-weight: 600;");
   // The panel's own strip keeps that column too; only a narrow screen gives it up.
   const snippet = siteLayoutTarget().snippet("/addons/");
   expect(snippet).toContain(".site-info-box { max-width: 100%; }");
